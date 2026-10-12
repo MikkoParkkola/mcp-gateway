@@ -151,9 +151,18 @@ impl CallbackClient {
         body: Vec<u8>,
         read: ReadBody,
     ) -> Result<Answer, CallbackFailure> {
-        self.post_tracked(url, subscription_id, webhook_id, keys, body, read)
-            .await
-            .map_err(|(failure, _)| failure)
+        // The challenge POST's own reading dates its signature (MIK-8202).
+        let now = crate::clock::utc_now();
+        self.post_tracked(
+            url,
+            subscription_id,
+            webhook_id,
+            Signing { keys, now },
+            body,
+            read,
+        )
+        .await
+        .map_err(|(failure, _)| failure)
     }
 
     /// [`Self::post`], and with a failure whether it came before any byte of
@@ -164,12 +173,18 @@ impl CallbackClient {
         url: &url::Url,
         subscription_id: &str,
         webhook_id: &str,
-        keys: &[&[u8]],
+        signing: Signing<'_>,
         body: Vec<u8>,
         read: ReadBody,
     ) -> Result<Answer, (CallbackFailure, bool)> {
+        let Signing { keys, now } = signing;
         self.check_literal(url).map_err(|failure| (failure, true))?;
-        let timestamp = chrono::Utc::now().timestamp().to_string();
+        // The sender's reading dates the signature. A signer refuses on a
+        // clock that cannot be read (before 1970): nothing is sent (MIK-8202).
+        let timestamp = now
+            .map_err(|_| (CallbackFailure::ClockUnreadable, true))?
+            .timestamp()
+            .to_string();
         let signature = sign(keys, webhook_id, &timestamp, &body);
         let mut response = self
             .http
@@ -188,7 +203,7 @@ impl CallbackClient {
             .headers()
             .get(reqwest::header::RETRY_AFTER)
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| retry_after(v, chrono::Utc::now()));
+            .and_then(|v| retry_after(v, crate::clock::utc_now().ok()));
         let mut answer = Answer {
             status: status.as_u16(),
             retry_after,
@@ -232,6 +247,13 @@ fn classify(error: &reqwest::Error) -> CallbackFailure {
 
 /// Standard Webhooks `webhook-signature`: one `v1,<base64 HMAC-SHA256>` per
 /// key over `id.timestamp.body`, space-separated, newest key first.
+/// What signs one POST: the keys, and the sender's one reading of the clock,
+/// which dates the signature (MIK-8202).
+pub(crate) struct Signing<'a> {
+    pub keys: &'a [&'a [u8]],
+    pub now: Result<chrono::DateTime<chrono::Utc>, crate::clock::ClockBeforeEpoch>,
+}
+
 pub(crate) fn sign(keys: &[&[u8]], id: &str, timestamp: &str, body: &[u8]) -> String {
     keys.iter()
         .map(|key| {
@@ -260,11 +282,15 @@ pub(crate) fn decode_whsec(secret: &str) -> Option<Vec<u8>> {
 
 /// A `Retry-After` value: delta-seconds, or an HTTP-date (RFC 9110
 /// section 10.2.3), as the wait from `now`. A date in the past waits zero.
-fn retry_after(value: &str, now: chrono::DateTime<chrono::Utc>) -> Option<Duration> {
+/// `now` is `None` on a clock that cannot be read: a delay in seconds still
+/// stands, and only an HTTP date, which needs the clock, is ignored
+/// (MIK-8202).
+fn retry_after(value: &str, now: Option<chrono::DateTime<chrono::Utc>>) -> Option<Duration> {
     let value = value.trim();
     if let Ok(seconds) = value.parse::<u64>() {
         return Some(Duration::from_secs(seconds));
     }
+    let now = now?;
     let at = chrono::DateTime::parse_from_rfc2822(value).ok()?;
     Some(
         (at.with_timezone(&chrono::Utc) - now)

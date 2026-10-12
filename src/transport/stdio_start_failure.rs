@@ -93,6 +93,12 @@ impl StdioTransport {
             max_frame_bytes: AtomicUsize::new(DEFAULT_MAX_FRAME_BYTES),
             failure: FailureRecord::default(),
             assigned_cache,
+            #[cfg(test)]
+            slow_host_bound: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            stderr_bound: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            request_timeouts: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 

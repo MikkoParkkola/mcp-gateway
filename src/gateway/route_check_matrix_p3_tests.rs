@@ -115,6 +115,106 @@ fn mcp_withheld_surfaced_task_answers_as_a_missing_name() {
     assert_eq!(withheld.backend_calls, 0, "{}", withheld.body);
 }
 
+/// MIK-8326.X14.1 and X14.5 on `/mcp`, with the production firewall on: a
+/// withheld surfaced task call leaves the audit log a missing name leaves,
+/// and is refused before the request firewall (no `request` row), X14 and
+/// admission (no idempotency key stored, no task committed). Control: the
+/// same call by a caller the tool is visible to writes a `request` row and
+/// gets X14's challenge, so the absent row is the refusal's, not the fixture's.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn mcp_withheld_surfaced_task_leaves_what_a_missing_name_leaves() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let traced = |key: &'static str, surfacing, file: &str| {
+        let audit = dir.path().join(file);
+        async move { Box::pin(router::task_submit_traced(key, surfacing, &audit)).await }
+    };
+    let visible = traced("k-std", Surfacing::On, "visible.jsonl").await;
+    assert_visible_control(&visible.body, &visible.events);
+    let withheld = traced("k-deny", Surfacing::On, "withheld.jsonl").await;
+    let missing = traced("k-std", Surfacing::Off, "missing.jsonl").await;
+    assert_eq!(withheld.status, missing.status, "HTTP status differs");
+    assert_refused_as_missing(
+        (&withheld.body, &withheld.events),
+        (&missing.body, &missing.events),
+        (
+            withheld.backend_calls,
+            withheld.stored_keys,
+            withheld.admitted,
+            withheld.committed,
+        ),
+    );
+}
+
+/// MIK-8326.X14.2 and X14.5 on stdio, with the production firewall on: the
+/// sibling of the `/mcp` row above, with the same control.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn stdio_withheld_surfaced_task_leaves_what_a_missing_name_leaves() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let denying = crate::security::ToolPolicy::from_config(&crate::security::ToolPolicyConfig {
+        deny: vec!["echo".to_string()],
+        ..crate::security::ToolPolicyConfig::default()
+    });
+    let traced = |policy, surfacing, file: &str| {
+        let audit = dir.path().join(file);
+        async move { Box::pin(stdio::stdio_task_traced(policy, surfacing, &audit)).await }
+    };
+    let visible = traced(None, Surfacing::On, "visible.jsonl").await;
+    assert_visible_control(&visible.body, &visible.events);
+    let withheld = traced(Some(denying), Surfacing::On, "withheld.jsonl").await;
+    let missing = traced(None, Surfacing::Off, "missing.jsonl").await;
+    assert_refused_as_missing(
+        (&withheld.body, &withheld.events),
+        (&missing.body, &missing.events),
+        (
+            withheld.backend_calls,
+            withheld.stored_keys,
+            withheld.admitted,
+            withheld.committed,
+        ),
+    );
+}
+
+/// The X14.5 control: a visible destructive surfaced task call passes the
+/// request firewall (a `request` row) and reaches X14's challenge.
+#[cfg(feature = "firewall")]
+fn assert_visible_control(body: &serde_json::Value, events: &[String]) {
+    assert!(
+        events.iter().any(|event| event == "request"),
+        "control: no request row for a visible call: {events:?}; {body}"
+    );
+    assert!(
+        body.to_string().contains(X14_PROMPT),
+        "control: no X14 challenge for a visible call: {body}"
+    );
+}
+
+/// A withheld call answered and audited as the missing name was, refused
+/// before the request firewall, X14 and admission: no `request` row, no
+/// challenge, and no backend call, key (legacy cache or execution admission)
+/// or committed task.
+#[cfg(feature = "firewall")]
+fn assert_refused_as_missing(
+    (withheld, withheld_events): (&serde_json::Value, &[String]),
+    (missing, missing_events): (&serde_json::Value, &[String]),
+    (calls, cached, admitted, tasks): (usize, usize, usize, usize),
+) {
+    assert_eq!(missing["error"]["code"], -32601, "premise: {missing}");
+    assert_eq!(withheld["error"], missing["error"], "{withheld}");
+    assert_eq!(withheld_events, missing_events, "audit rows differ");
+    assert!(
+        !withheld_events.iter().any(|event| event == "request"),
+        "the request firewall ran: {withheld_events:?}"
+    );
+    assert!(!withheld.to_string().contains(X14_PROMPT), "{withheld}");
+    assert_eq!(
+        (calls, cached, admitted, tasks),
+        (0, 0, 0, 0),
+        "(backend calls, legacy cached keys, admission entries, tasks): {withheld}"
+    );
+}
+
 /// [`stdio::stdio_task_read`] on a current-thread runtime, with the warnings
 /// it logged on this thread.
 fn stdio_logged(

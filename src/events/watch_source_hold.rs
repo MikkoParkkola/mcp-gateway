@@ -3,8 +3,6 @@
 //! MIK-8122: a watch that is not watchable now is held, never withdrawn.
 //! A row's recorded class governs its poller, hold and resume.
 
-use chrono::Utc;
-
 use serde_json::Value;
 
 use super::super::store::Store;
@@ -68,8 +66,10 @@ impl Run {
             Charge::Global => WatchClass::Free,
             Charge::Holder => WatchClass::Keyed,
         };
+        // One reading for the back-fill and the holds (MIK-8202).
+        let now = crate::clock::utc_now();
         let written = if held.is_none() {
-            hub.store.backfill_watch_class(&self.name, class)
+            hub.store.backfill_watch_class(&self.name, class, now)
         } else {
             Ok(())
         };
@@ -80,7 +80,7 @@ impl Run {
             })
         };
         if let Err(error) =
-            written.and_then(|()| hub.store.apply_holds(&judge, Utc::now(), hub.hold_bound()))
+            written.and_then(|()| hub.store.apply_holds(&judge, now, hub.hold_bound()))
         {
             tracing::warn!(%error, "events: a watch hold stamp was not written; retried at the next poll");
         }
@@ -101,11 +101,17 @@ impl WatchSource {
     /// admits the capability under now, else (a held watch) a stored row's
     /// class, else keyed. A held row keeps its own key (`row_key`),
     /// so a key started here for another class finds no row and retires.
-    pub(super) fn class_for(&self, principal: &str, name: &str, arguments: &Value) -> WatchClass {
+    pub(super) fn class_for(
+        &self,
+        principal: &str,
+        name: &str,
+        arguments: &Value,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> WatchClass {
         self.watch_class(name)
             .or_else(|| {
                 let hub = self.hub.upgrade()?;
-                Self::rows(&hub, principal, name, arguments)
+                Self::rows(&hub, principal, name, arguments, now)
                     .first()
                     .map(|row| self.effective_class(row))
             })
@@ -137,24 +143,32 @@ impl WatchSource {
             .collect();
         names.sort();
         names.dedup();
+        // One reading for the whole pass (MIK-8202).
+        let now = crate::clock::utc_now();
         // Read once, and only when a row's capability offers no class.
         let mut read = None;
         for name in names {
             let Some(class) = self.watch_class(&name) else {
                 let read = read.get_or_insert_with(|| self.host.catalogue());
                 if self.host.catalogue_generation() == read.generation && !unread(read, &name) {
-                    self.hold_unclassed(store, &name, &why_not_watchable(read, &name));
+                    self.hold_unclassed(store, &name, &why_not_watchable(read, &name), now);
                 }
                 continue;
             };
-            if let Err(error) = store.backfill_watch_class(&name, class) {
+            if let Err(error) = store.backfill_watch_class(&name, class, now) {
                 tracing::warn!(%error, "events: a watch class was not recorded; retried at the next replay");
             }
         }
     }
 
     /// Hold the live rows of `name` that have no recorded class.
-    fn hold_unclassed(&self, store: &Store, name: &str, why: &Held) {
+    fn hold_unclassed(
+        &self,
+        store: &Store,
+        name: &str,
+        why: &Held,
+        now: Result<chrono::DateTime<chrono::Utc>, crate::clock::ClockBeforeEpoch>,
+    ) {
         let Some(hub) = self.hub.upgrade() else {
             return;
         };
@@ -164,7 +178,7 @@ impl WatchSource {
                 ..Judged::default()
             })
         };
-        if let Err(error) = store.apply_holds(&judge, Utc::now(), hub.hold_bound()) {
+        if let Err(error) = store.apply_holds(&judge, now, hub.hold_bound()) {
             tracing::warn!(%error, "events: a watch hold stamp was not written; retried at the next replay");
         }
     }

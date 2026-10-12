@@ -16,6 +16,8 @@ use crate::config::{BackendConfig, FailsafeConfig};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
+#[cfg(feature = "firewall")]
+pub(crate) use super::signing_allocation_tests::route_matrix_stdio_tasks::stdio_task_traced;
 pub(crate) use super::signing_allocation_tests::route_matrix_stdio_tasks::{
     served_sanitizing, served_sanitizing_call, served_sanitizing_with, stdio_blocked_task,
     stdio_sanitizing, stdio_task_read, stdio_task_refused_without_a_grant, stdio_task_surfaced,

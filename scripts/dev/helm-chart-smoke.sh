@@ -379,6 +379,12 @@ fi
 # shellcheck source=scripts/dev/helm-chart-auth-modes.sh
 source "$(dirname "${BASH_SOURCE[0]}")/helm-chart-auth-modes.sh"
 
+echo "== helm_renders_only_keep_keys (MIK-8044.SURF.2) =="
+# One render per auth mode from tests/fixtures/helm/, each setting every chart
+# value it allows: no hidden or retired gateway key may reach the config.
+HELM="$HELM" python3 "$(dirname "${BASH_SOURCE[0]}")/../release/surface_docs.py" --helm \
+  || fail "the chart renders a non-KEEP gateway key or leaves a value uncovered"
+
 [ "$fails" -eq 0 ] || { echo "helm chart smoke: $fails startup check(s) failed" >&2; exit 1; }
 
 echo "helm chart smoke passed"

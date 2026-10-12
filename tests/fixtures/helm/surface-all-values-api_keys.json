@@ -1,0 +1,27 @@
+{
+  "auth": {
+    "mode": "api_keys",
+    "existingSecret": "gw-keys",
+    "apiKeys": [
+      {
+        "name": "ci",
+        "secretKey": "k0",
+        "backends": [
+          "*"
+        ],
+        "admin": true,
+        "rateLimit": 120,
+        "allowedTools": [
+          "gateway_search_tools"
+        ],
+        "deniedTools": [
+          "gateway_reload_config"
+        ],
+        "expiresAt": "2027-01-01T00:00:00Z"
+      }
+    ]
+  },
+  "audit": {
+    "existingClaim": "audit-pvc"
+  }
+}

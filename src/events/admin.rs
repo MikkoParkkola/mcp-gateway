@@ -120,9 +120,10 @@ impl EventsHub {
             .dead_letter_by_id(event_id)
             .ok_or(ReplayRefusal::NotFound)?;
         // A lease is not judged on a clock before 1970: nothing is replayed
-        // to a subscription it cannot date (MIK-8202).
+        // to a subscription it cannot date, and the refusal is transient, not
+        // a subscription gone (MIK-8202).
         let Ok(now) = crate::clock::utc_now() else {
-            return Err(ReplayRefusal::SubscriptionGone);
+            return Err(ReplayRefusal::Unavailable);
         };
         let sub = self
             .store
@@ -131,8 +132,11 @@ impl EventsHub {
             .find(|s| s.id == dead.record.subscription_id && s.live(now))
             .ok_or(ReplayRefusal::SubscriptionGone)?;
         let grant = (!dead.record.owner_scoped).then_some(dead.record.backend.as_str());
-        if !services.admits_subscription(&sub, grant).await {
-            return Err(ReplayRefusal::AccessRevoked);
+        match services.admission(&sub, grant).await {
+            super::services::AccessVerdict::Admits => {}
+            super::services::AccessVerdict::Refuses => return Err(ReplayRefusal::AccessRevoked),
+            // No verdict on the access: the clock cannot be read (MIK-8202).
+            super::services::AccessVerdict::Undated => return Err(ReplayRefusal::Unavailable),
         }
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&dead.record.body_b64)
@@ -203,7 +207,7 @@ impl EventsHub {
             Some(Revived::Full) => Err(ReplayRefusal::OutboxFull),
             Some(Revived::AlreadyPending) => Err(ReplayRefusal::AlreadyPending),
             Some(Revived::Missing) => Err(ReplayRefusal::NotFound),
-            None => Err(ReplayRefusal::Unavailable),
+            Some(Revived::Undated) | None => Err(ReplayRefusal::Unavailable),
         }
     }
 

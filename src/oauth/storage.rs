@@ -7,7 +7,9 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+#[cfg(test)]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -129,7 +131,9 @@ impl std::fmt::Debug for TokenInfo {
 }
 
 impl TokenInfo {
-    /// Create token info from OAuth token response
+    /// [`Self::from_response_at`] on the test thread's clock, for tests that
+    /// build a token without a request.
+    #[cfg(test)]
     pub fn from_response(
         access_token: String,
         token_type: Option<String>,
@@ -137,16 +141,34 @@ impl TokenInfo {
         expires_in: Option<u64>,
         scope: Option<String>,
     ) -> Self {
+        let now = crate::clock::unix_secs().expect("tests build tokens on a readable clock");
+        Self::from_response_at(
+            access_token,
+            token_type,
+            refresh_token,
+            expires_in,
+            scope,
+            now,
+        )
+    }
+
+    /// Create token info from an OAuth token response, its expiry dated from
+    /// `now`: the one clock reading the request was checked against before it
+    /// was sent, so a clock that cannot be read refuses the request rather
+    /// than dating a token from the epoch (MIK-8202).
+    pub fn from_response_at(
+        access_token: String,
+        token_type: Option<String>,
+        refresh_token: Option<String>,
+        expires_in: Option<u64>,
+        scope: Option<String>,
+        now: u64,
+    ) -> Self {
         // MIK-8207: never wraps. An `expires_in` above the bound gives a token
         // that is already expired; the gateway's own callers refuse such an
         // answer before it gets here.
-        let expires_at = expires_in.map(|secs| {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            crate::duration_bound::expiry_from_expires_in(now, secs).unwrap_or(now)
-        });
+        let expires_at = expires_in
+            .map(|secs| crate::duration_bound::expiry_from_expires_in(now, secs).unwrap_or(now));
 
         Self {
             access_token,
@@ -164,13 +186,17 @@ impl TokenInfo {
     #[must_use]
     pub fn is_expired(&self) -> bool {
         if let Some(expires_at) = self.expires_at {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-
-            // Consider expired 60 seconds before actual expiry
-            now + 60 >= expires_at
+            // Expired 60 seconds early, and on a clock that cannot be read
+            // (before 1970) whatever the stamp: an access check fails closed,
+            // so the caller refreshes or refuses (MIK-8202).
+            use crate::clock::{Validity, expired_by};
+            expired_by(|now| {
+                if now.saturating_add(60) >= expires_at {
+                    Validity::Expired
+                } else {
+                    Validity::Live
+                }
+            }) == Validity::Expired
         } else {
             // No expiry = doesn't expire
             false
@@ -181,10 +207,8 @@ impl TokenInfo {
     #[must_use]
     pub fn time_until_expiry(&self) -> Option<Duration> {
         self.expires_at.and_then(|expires_at| {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
+            // None on a clock that cannot be read (MIK-8202).
+            let now = crate::clock::unix_secs().ok()?;
 
             if expires_at > now {
                 Some(Duration::from_secs(expires_at - now))

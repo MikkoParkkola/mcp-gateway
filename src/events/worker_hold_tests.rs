@@ -140,6 +140,7 @@ impl crate::events::EventSource for Vanishing {
         _principal: &str,
         _arguments: &serde_json::Value,
         _event: &crate::events::fanout::SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
     ) -> bool {
         true
     }
@@ -200,6 +201,7 @@ async fn a_not_found_authorize_holds_the_record() {
             _principal: &str,
             _arguments: &serde_json::Value,
             _event: &crate::events::fanout::SourceEvent,
+            _now: chrono::DateTime<chrono::Utc>,
         ) -> bool {
             true
         }
