@@ -101,6 +101,10 @@ fn a_dark_cancel_past_its_ttl_is_held_counted_once_then_sent_once() {
                     .expiry_pass_for_test()
                     .await
                     .expect("an expiry pass");
+                assert!(
+                    r.service.store.get(&r.owner_digest, &r.id).is_ok(),
+                    "the held row was deleted"
+                );
                 if pass == 0 {
                     // The first pass's flush has started the held send: the
                     // second pass runs while it is in flight and unsent.
@@ -108,10 +112,6 @@ fn a_dark_cancel_past_its_ttl_is_held_counted_once_then_sent_once() {
                         .await
                         .expect("the held send reached the peer");
                 }
-                assert!(
-                    r.service.store.get(&r.owner_digest, &r.id).is_ok(),
-                    "the held row was deleted"
-                );
             }
             assert_eq!(counted.load(Ordering::SeqCst), 1, "held-past-ttl count");
             assert_eq!(*warns.borrow(), 1, "held-past-ttl WARNs");
