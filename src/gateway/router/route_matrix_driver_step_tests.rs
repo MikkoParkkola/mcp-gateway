@@ -79,33 +79,6 @@ async fn playbook_run(
     (answers, fx.calls.load(Ordering::SeqCst))
 }
 
-/// A propagation strategy that counts every credential it mints.
-#[derive(Default)]
-struct Minting(std::sync::atomic::AtomicUsize);
-
-#[async_trait::async_trait]
-impl crate::identity_propagation::IdentityPropagation for Minting {
-    async fn propagate(
-        &self,
-        identity: &crate::key_server::oidc::VerifiedIdentity,
-        backend: &crate::identity_propagation::BackendDescriptor,
-    ) -> Result<
-        crate::identity_propagation::PropagatedCredential,
-        crate::identity_propagation::PropagationError,
-    > {
-        self.0.fetch_add(1, Ordering::SeqCst);
-        let binding = format!("{}@{}", identity.subject, backend.audience);
-        Ok(crate::identity_propagation::PropagatedCredential {
-            headers: vec![("Authorization".to_string(), "Bearer minted".to_string())],
-            expires_at: i64::MAX,
-            cache_binding: binding,
-            subject_key: identity.subject.clone(),
-            audience: backend.audience.clone(),
-            scopes: Vec::new(),
-        })
-    }
-}
-
 /// MIK-8362 STEPFW.3: `runs` `/mcp` `gateway_run_playbook` calls of `definition`
 /// (steps on `alpha`, a backend requiring per-user identity propagation) as the
 /// verified identity `alice`, under a call budget of `budget` per window.
@@ -117,7 +90,8 @@ pub(crate) async fn playbook_minting(
     (definition, runs): (Value, usize),
 ) -> (Vec<Value>, Vec<usize>, usize) {
     let definition = serde_json::from_value(definition).expect("the playbook deserialises");
-    let minting = std::sync::Arc::new(Minting::default());
+    let minting =
+        std::sync::Arc::new(crate::gateway::router::direct_guards_fixture::Minting::default());
     let strategy = std::sync::Arc::clone(&minting);
     let fx = crate::gateway::router::direct_guards_fixture::fixture_propagating_budgeted(
         (audit.to_path_buf(), budget),
@@ -172,7 +146,7 @@ pub(crate) async fn playbook_minting(
             .await
             .expect("a body");
         answers.push(serde_json::from_slice(&body).unwrap_or(Value::Null));
-        minted.push(minting.0.load(Ordering::SeqCst));
+        minted.push(minting.count());
     }
     (answers, minted, fx.calls.load(Ordering::SeqCst))
 }
