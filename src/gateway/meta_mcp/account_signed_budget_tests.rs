@@ -62,21 +62,34 @@ fn budget(meta: MetaMcp) -> MetaMcp {
     meta.with_cost_governance(enforcer, registry)
 }
 
+/// Alice's slot on `mail` before the call (MIK-8356): a per-user call judges
+/// the caller's own catalogue first, so a cold slot is filled.
+#[derive(Clone, Copy)]
+enum Slot {
+    /// Seeded under the seeded and the refreshed grant's binding: the refresh
+    /// is the call's only effect.
+    Warm,
+    /// Unfilled: the catalogue fill is a second effect.
+    Cold,
+}
+
+/// What a refused call left behind.
+struct Refused {
+    wire: Value,
+    refreshes: usize,
+    fills: u64,
+    dispatched: bool,
+    nonce_free: bool,
+}
+
 /// K-spend-refresh: alice's work grant is expired, so resolving the account
-/// credential refreshes it; the spend budget then refuses the call. Red on
-/// base: the refusal refunds the nonce though the refresh took effect. On an
-/// account-bound MCP backend the account credential reaches the call as its
-/// propagated credential (`cache_binding` set), so this row pins the
-/// `minted` arm (mF-mint); the capability route's twin,
-/// `account_rest_signed_budget_tests.rs`, pins the `account` arm. The context
-/// holds the witness as admission leaves it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_spend_refusal_after_a_refresh_keeps_the_nonce() {
+/// credential refreshes it; the spend budget then refuses the call. The
+/// context holds the witness as admission leaves it.
+async fn a_spend_refusal_after_a_refresh(slot: Slot) -> Refused {
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, 0))]);
     let installed = custody.installed();
-    // The schema check off, so the refresh is the call's only effect: a
-    // first call on a cold slot would fill its tool list and spend the
-    // witness by itself (mF-account survived run 38177519271 that way).
+    // The schema check off, so no argument-key fill adds an effect of its own
+    // (mF-account survived run 38177519271 that way).
     super::gateway::SCHEMA_OFF.with(|off| off.set(true));
     let (mut meta, dispatches) = gateway(
         &[("mail", Bind::Account(WORK))],
@@ -99,6 +112,19 @@ async fn a_spend_refusal_after_a_refresh_keeps_the_nonce() {
     let alice = identity("alice");
     let mut caller = caller_as(Some(&alice), None);
     caller.api_key_name = Some("k-budget");
+    if matches!(slot, Slot::Warm) {
+        let read: crate::protocol::Tool =
+            serde_json::from_value(json!({"name": "read", "inputSchema": {"type": "object"}}))
+                .expect("a tool");
+        for revision in [super::SEEDED_REVISION, super::SEEDED_REVISION + 1] {
+            meta.seed_caller_catalogue_for_test(
+                "mail",
+                MetaMcp::proof_of(&caller),
+                &super::expected_identity_key("alice", WORK, revision),
+                vec![read.clone()],
+            );
+        }
+    }
     let call = json!({"server": "mail", "tool": "read", "arguments": {}});
     let (mut signing, arguments) = captured("gateway_invoke", &call);
     meta.prepare_signing_for_call(
@@ -114,7 +140,7 @@ async fn a_spend_refusal_after_a_refresh_keeps_the_nonce() {
         "premise: the nonce was admitted"
     );
     // What admission does on both adapters (`admit_meta_sync`): the context
-    // holds the witness, so only the refresh can cost the refund.
+    // holds the witness, so only the call's own effects can cost the refund.
     signing.keep_witness(RefundWitness::at_capture());
     caller.signing = Some(&signing);
     let response = Box::pin(meta.handle_tools_call(
@@ -126,21 +152,57 @@ async fn a_spend_refusal_after_a_refresh_keeps_the_nonce() {
     ))
     .await;
     let wire = serde_json::to_value(&response).expect("a response serializes");
-
     assert!(
         wire.to_string().to_lowercase().contains("budget exceeded"),
-        "the spend refusal: {wire}"
+        "premise: the spend refusal: {wire}"
     );
-    assert_eq!(
-        custody.refreshes(),
-        1,
-        "the refused call refreshed the grant"
-    );
-    let mail = meta.backends.get("mail").expect("fixture backend");
-    assert_eq!(mail.list_fills(), 0, "premise: the check filled nothing");
-    assert!(dispatches.calls().is_empty(), "nothing reached the backend");
+    Refused {
+        wire,
+        refreshes: custody.refreshes(),
+        fills: meta
+            .backends
+            .get("mail")
+            .expect("fixture backend")
+            .list_fills(),
+        dispatched: !dispatches.calls().is_empty(),
+        nonce_free: nonce_is_free(&meta),
+    }
+}
+
+/// Warm: the refresh is the only effect. Red on base: the refusal refunds the
+/// nonce though the refresh took effect. On an account-bound MCP backend the
+/// account credential reaches the call as its propagated credential
+/// (`cache_binding` set), so this row pins the `minted` arm (mF-mint); the
+/// capability route's twin, `account_rest_signed_budget_tests.rs`, pins the
+/// `account` arm.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_spend_refusal_after_a_refresh_keeps_the_nonce() {
+    let refused = a_spend_refusal_after_a_refresh(Slot::Warm).await;
+    assert_eq!(refused.refreshes, 1, "the refused call refreshed the grant");
+    assert_eq!(refused.fills, 0, "premise: the check filled nothing");
+    assert!(!refused.dispatched, "nothing reached the backend");
     assert!(
-        !nonce_is_free(&meta),
-        "the nonce was given back after a refresh: {wire}"
+        !refused.nonce_free,
+        "the nonce was given back after a refresh: {}",
+        refused.wire
+    );
+}
+
+/// Cold (MIK-8356): the caller's own catalogue is filled before the refusal,
+/// a second effect beside the refresh; the nonce stays spent. Pins the
+/// catalogue fill's carry (`schema_effect`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_spend_refusal_after_a_refresh_and_a_cold_fill_keeps_the_nonce() {
+    let refused = a_spend_refusal_after_a_refresh(Slot::Cold).await;
+    assert_eq!(refused.refreshes, 1, "the refused call refreshed the grant");
+    assert_eq!(
+        refused.fills, 1,
+        "premise: the caller's own catalogue was filled"
+    );
+    assert!(!refused.dispatched, "nothing reached the backend");
+    assert!(
+        !refused.nonce_free,
+        "the nonce was given back after a refresh and a fill: {}",
+        refused.wire
     );
 }
