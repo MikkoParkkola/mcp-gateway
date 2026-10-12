@@ -280,6 +280,9 @@ pub(super) enum McpAccess {
     /// `/mcp` is a public path: a caller that presents nothing is admitted
     /// anonymously.
     PublicPath,
+    /// An mTLS policy admits any presented certificate to `alpha` and
+    /// nothing else: a caller that presents none is shown nothing.
+    MtlsCert,
 }
 
 impl World {
@@ -363,7 +366,9 @@ impl World {
         let auth = AuthConfig {
             enabled: true,
             public_paths: match access {
-                McpAccess::Authenticated => AuthConfig::default().public_paths,
+                McpAccess::Authenticated | McpAccess::MtlsCert => {
+                    AuthConfig::default().public_paths
+                }
                 McpAccess::PublicPath => vec!["/mcp".to_string()],
             },
             api_keys: vec![
@@ -421,6 +426,25 @@ impl World {
             st.live_config = Arc::new(crate::config_reload::LiveConfig::new(config));
             dir
         });
+        if matches!(access, McpAccess::MtlsCert) {
+            st.mtls_policy = Arc::new(crate::mtls::MtlsPolicy::from_config(
+                &crate::mtls::MtlsConfig {
+                    enabled: true,
+                    policies: vec![crate::mtls::config::PolicyRuleConfig {
+                        match_criteria: crate::mtls::config::CertMatchConfig {
+                            any: Some(true),
+                            ..Default::default()
+                        },
+                        allow: crate::mtls::config::ToolScopeConfig {
+                            backends: vec!["alpha".to_string()],
+                            tools: vec!["*".to_string()],
+                        },
+                        deny: Default::default(),
+                    }],
+                    ..Default::default()
+                },
+            ));
+        }
         st.backends.set_change_feed(feed.clone());
         for backend in [
             shared_backend("alpha", &probe),
