@@ -21,6 +21,15 @@ impl MetaMcp {
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
         (server, tool): (&str, &str),
     ) -> Result<Option<String>> {
+        // A resolution the caller verdict carried for this step is the one
+        // its dispatch will use: derive from it, with no second mint (fold F6).
+        if let Some(binding) = super::super::visible::with_carried(server, tool, |carried| {
+            carried.resolved.binding.clone()
+        }) {
+            return Ok(crate::protocol::mrtr::source_fingerprint(
+                caller.principal_source(binding.as_deref()),
+            ));
+        }
         let backend = self.backends.get(server);
         let proof = CallerProof::new(caller.verified_identity, caller.provenance());
         let resolved = self
@@ -31,8 +40,23 @@ impl MetaMcp {
                 caller.verified_identity,
             )
             .await?;
-        Ok(crate::protocol::mrtr::source_fingerprint(
+        let fingerprint = crate::protocol::mrtr::source_fingerprint(
             caller.principal_source(resolved.binding.as_deref()),
-        ))
+        );
+        // A resume runs no caller verdict (its step is known only at run
+        // time): this resolution is the step's, carried to its invocation so
+        // the resume resolves once (MIK-8356 C13).
+        if let Some(backend) = backend {
+            super::super::visible::carry_dispatch(
+                server,
+                tool,
+                super::super::visible::Carried {
+                    backend,
+                    resolved,
+                    fill_error: None,
+                },
+            );
+        }
+        Ok(fingerprint)
     }
 }

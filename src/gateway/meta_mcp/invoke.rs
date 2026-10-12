@@ -213,54 +213,18 @@ impl MetaMcp {
         // MIK-8353 3a: the refund witness, carried through every may-effect
         // step below; any exit hands back what survived.
         let mut witness = nonce_settle::Witnessed::take(caller);
-        // A caller verdict taken earlier in this request carries its backend
-        // instance and resolution here (MIK-8356 R5.2): one resolution per
-        // call, consumed by this invocation only.
-        let (backend, resolved) = match super::visible::take_carried(server, tool) {
-            // The verdict's fill failed: answered as a failed dispatch is,
-            // with nothing filled or sent again (F13, A11-c). The verdict
-            // resolved and tried a fill: it acted.
-            Some(super::visible::Carried {
-                fill_error: Some(error),
-                ..
-            }) => {
-                witness.spend();
-                let checked = (std::time::Instant::now(), surface);
-                let value = self.account_refused_fill(server, tool, &error, checked);
-                if crate::personal_accounts::refusal::marked(&error).is_some() {
-                    return self.with_connect_offer(Err(error), verified_identity).await;
-                }
-                return Ok(GuardedValue::sealed_by_guard(value));
-            }
-            // The verdict resolved and filled the caller's catalogue: it acted.
-            Some(carried) => {
-                witness.spend();
-                (Some(carried.backend), carried.resolved)
-            }
-            None => {
-                let backend = self.backends.get(server);
-                // No principal on a required per-user backend: an absent name,
-                // answered before any resolution (lead ruling 2026-10-11).
-                if backend
-                    .as_deref()
-                    .is_some_and(|b| self.lacks_principal_on_required(b, caller_proof))
-                {
-                    return Err(super::visible::absent_name(tool));
-                }
-                let resolved = self
-                    .resolve_dispatch(
-                        (server, tool),
-                        backend.as_deref(),
-                        caller_proof,
-                        verified_identity,
-                    )
-                    .await;
-                if resolved.is_err() {
-                    // A failed resolution may have minted or refreshed before it failed.
-                    witness.spend();
-                }
-                (backend, resolved?)
-            }
+        // MIK-8356 R5.2: the resolution a caller verdict carried, or a fresh one.
+        let (backend, resolved) = match self
+            .dispatch_resolution(
+                (server, tool),
+                (caller_proof, verified_identity),
+                surface,
+                &mut witness,
+            )
+            .await?
+        {
+            std::ops::ControlFlow::Continue(resolution) => resolution,
+            std::ops::ControlFlow::Break(answer) => return Ok(answer),
         };
         let target = (server, backend.as_ref().map(|backend| backend.instance()));
         let propagation::ResolvedDispatch {
