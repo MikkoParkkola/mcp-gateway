@@ -32,7 +32,7 @@ pub(crate) const STAGES: &[(&str, bool, usize, usize)] = &[
     ("stdio_batch_tiny", false, 16, BATCH),
 ];
 
-/// The gate's per-row budget ceiling (per_call_gate.py's CEILING_NS): the
+/// The gate's per-row budget ceiling (`per_call_gate.py`'s `CEILING_NS`): the
 /// smallest slowdown the gate claims it can detect, so the size of the
 /// negative-control spin below.
 const CEILING_NS: u64 = 4000;
