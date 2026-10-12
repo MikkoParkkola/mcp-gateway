@@ -198,6 +198,26 @@ pub fn write_config(home: &Path, backend_url: &str) {
         .expect("write gateway.yaml");
 }
 
+/// [`write_config`] with the backend rate limiter off (MIK-8411).
+///
+/// A call the limiter declines after admission ends and frees its inflight
+/// slot, so on a loaded runner the burst's tail is admitted instead of refused
+/// and an inflight-cap row cannot tell its cap apart from the limiter. The
+/// limiter is not what such a row is about, so it is taken out of the run.
+pub fn write_config_without_rate_limit(home: &Path, backend_url: &str) {
+    write_config(home, backend_url);
+    let path = home.join("gateway.yaml");
+    let mut yaml = std::fs::read_to_string(&path).expect("read gateway.yaml");
+    yaml.push_str("failsafe:\n  rate_limit:\n    enabled: false\n");
+    let parsed: mcp_gateway::config::Config =
+        serde_yaml::from_str(&yaml).expect("gateway.yaml parses");
+    assert!(
+        !parsed.failsafe.rate_limit.enabled,
+        "the rate limiter switch did not bind where the child reads it"
+    );
+    mcp_gateway::gateway::test_helpers::write_owner_only(path, yaml).expect("write gateway.yaml");
+}
+
 pub fn initialize_request(id: i64) -> Value {
     json!({
         "jsonrpc": "2.0",
