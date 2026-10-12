@@ -461,3 +461,69 @@ async fn t23_an_unrun_conditional_step_does_not_block_the_read() {
         "T23: an unrun step's withheld tool blocked the read: {read}"
     );
 }
+
+/// Working control (M32): a task still running under a withheld target has
+/// no output yet, so its read answers the ordinary status envelope, never a
+/// refusal.
+#[tokio::test]
+async fn a_working_task_under_a_withheld_target_answers_its_status() {
+    let (mock, mut gate) = MockBackend::holding(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+    let created = post(&state, "key-a", task_invoke(1, "s1-wc", json!({ "q": 1 }))).await;
+    let id = task_id(&created);
+    gate.wait_for_dispatch().await;
+    withhold_by_schema(&state);
+    let read = get_task(&state, "key-a", &id).await;
+    std::assert_eq!(status_of(&read), "working", "working control: {read}");
+    assert!(
+        read.get("error").is_none(),
+        "working control refused: {read}"
+    );
+    gate.release_all();
+}
+
+/// Cancelled control (M32): a cancelled task carries no output, so its read
+/// under a withheld target answers the ordinary status envelope.
+#[tokio::test]
+async fn a_cancelled_task_under_a_withheld_target_answers_its_status() {
+    let (mock, mut gate) = MockBackend::holding(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+    let created = post(&state, "key-a", task_invoke(1, "s1-cc", json!({ "q": 1 }))).await;
+    let id = task_id(&created);
+    gate.wait_for_dispatch().await;
+    let _ = post(
+        &state,
+        "key-a",
+        task_method(6, "tasks/cancel", json!({ "taskId": id })),
+    )
+    .await;
+    gate.release_all();
+    let settled = poll_until_terminal(&state, "key-a", &id).await;
+    std::assert_eq!(status_of(&settled), "cancelled", "premise: {settled}");
+    withhold_by_schema(&state);
+    let read = get_task(&state, "key-a", &id).await;
+    std::assert_eq!(status_of(&read), "cancelled", "cancelled control: {read}");
+    assert!(
+        read.get("error").is_none(),
+        "cancelled control refused: {read}"
+    );
+}
+
+/// F3 (M34): a Created answer never carries backend output; one built from a
+/// seeded completed record trips the check.
+#[tokio::test]
+async fn f3_a_created_answer_carrying_output_trips_the_check() {
+    use crate::gateway::task_service::execution::{BeginOutcome, CREATED_SERVING_OUTPUT};
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+    let id = finished(&state, "s1-f3").await;
+    let store = &state.task_executor.service.store;
+    let digest = store.owner_digest_for_test(&id).expect("an owner");
+    let completed = store.get(&digest, &id).expect("the completed record");
+    let before = CREATED_SERVING_OUTPUT.load(std::sync::atomic::Ordering::SeqCst);
+    let _ = BeginOutcome::Created(completed).into_response(crate::protocol::RequestId::Number(1));
+    assert!(
+        CREATED_SERVING_OUTPUT.load(std::sync::atomic::Ordering::SeqCst) > before,
+        "F3: the check fired"
+    );
+}
