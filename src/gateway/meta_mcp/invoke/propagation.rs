@@ -70,14 +70,31 @@ impl MetaMcp {
         backend: Option<&crate::backend::Backend>,
         caller: CallerProof<'_>,
     ) -> Result<HeldCredential> {
+        self.resolve_propagation_credential_attempted_for(server, backend, caller)
+            .await
+            .map(|(held, _attempted)| held)
+    }
+
+    /// [`Self::resolve_propagation_credential_held_for`], and whether a mint
+    /// was attempted whatever came of it: the direct route's refund rule
+    /// counts an attempt as an effect (MIK-8379 H1).
+    pub(crate) async fn resolve_propagation_credential_attempted_for(
+        &self,
+        server: &str,
+        backend: Option<&crate::backend::Backend>,
+        caller: CallerProof<'_>,
+    ) -> Result<(HeldCredential, bool)> {
         let Some(idp_cfg) = backend.and_then(|b| b.identity_propagation_config().cloned()) else {
             Self::refuse_unbound_account_backend(server, backend)?;
-            return Ok((Vec::new(), None, None));
+            return Ok(((Vec::new(), None, None), false));
         };
         let cred = self
             .resolve_caller_credential_as(server, backend, &idp_cfg, caller)
             .await?;
-        Ok((cred.headers, cred.cache_binding, cred.managed))
+        Ok((
+            (cred.headers, cred.cache_binding, cred.managed),
+            cred.attempted,
+        ))
     }
 
     /// Fail closed for a backend that names an `accounts.descriptors` entry but
@@ -240,46 +257,60 @@ impl MetaMcp {
         // instance as `strategy` (`account_strategies.rs` `InstalledAccount`),
         // whose `propagate` is `prepare` minus the lease. Keeping the lease is
         // the only difference: headers, binding, refusals and audit are unchanged.
-        match account_mint::mint_held(managed_vault.as_ref(), &strategy, principal, &descriptor)
-            .await
-        {
-            Ok((cred, managed)) => {
-                // Validate every header parses BEFORE dispatch, so an invalid
-                // minted credential fails closed rather than silently letting the
-                // static Authorization through (MIK-6734 review carry-forward).
-                for (k, v) in &cred.headers {
-                    if k.parse::<reqwest::header::HeaderName>().is_err()
-                        || v.parse::<reqwest::header::HeaderValue>().is_err()
-                    {
-                        return refuse(format!("minted credential header '{k}' is invalid")).await;
+        let minted =
+            account_mint::mint_held(managed_vault.as_ref(), &strategy, principal, &descriptor)
+                .await;
+        // Every outcome from here on followed a strategy call, so each counts as
+        // an attempt in one place (MIK-8379 H1): a mint, a failed mint that
+        // falls back to static credentials, or an invalid minted header that
+        // does. An attempt may have reached the issuer.
+        let outcome = async {
+            match minted {
+                Ok((cred, managed)) => {
+                    // Validate every header parses BEFORE dispatch, so an invalid
+                    // minted credential fails closed rather than silently letting the
+                    // static Authorization through (MIK-6734 review carry-forward).
+                    for (k, v) in &cred.headers {
+                        if k.parse::<reqwest::header::HeaderName>().is_err()
+                            || v.parse::<reqwest::header::HeaderValue>().is_err()
+                        {
+                            return refuse(format!("minted credential header '{k}' is invalid"))
+                                .await;
+                        }
                     }
+                    // cache_binding distinguishes user AND audience (collision-safe),
+                    // so per-user results cache in isolation instead of being dropped
+                    // (IDP.8 — replaces the earlier blanket cache bypass).
+                    if !cred.headers.is_empty() {
+                        Self::audit_minted_credential(
+                            server,
+                            idp_cfg,
+                            audit_logger,
+                            &subject_id,
+                            audience,
+                        )
+                        .await?;
+                    }
+                    Ok(CallerCredential {
+                        headers: cred.headers,
+                        cache_binding: Some(cred.cache_binding),
+                        managed,
+                        attempted: false,
+                    })
                 }
-                // cache_binding distinguishes user AND audience (collision-safe),
-                // so per-user results cache in isolation instead of being dropped
-                // (IDP.8 — replaces the earlier blanket cache bypass).
-                if !cred.headers.is_empty() {
-                    Self::audit_minted_credential(
-                        server,
-                        idp_cfg,
-                        audit_logger,
-                        &subject_id,
-                        audience,
-                    )
-                    .await?;
-                }
-                Ok(CallerCredential {
-                    headers: cred.headers,
-                    cache_binding: Some(cred.cache_binding),
-                    managed,
-                })
+                Err(e) => refuse(format!("credential minting failed: {e}"))
+                    .await
+                    .map_err(|refused| {
+                        let account_id = backend.and_then(|b| b.account_descriptor_id());
+                        crate::personal_accounts::refusal::mark(refused, &e, account_id)
+                    }),
             }
-            Err(e) => refuse(format!("credential minting failed: {e}"))
-                .await
-                .map_err(|refused| {
-                    let account_id = backend.and_then(|b| b.account_descriptor_id());
-                    crate::personal_accounts::refusal::mark(refused, &e, account_id)
-                }),
         }
+        .await;
+        outcome.map(|cred| CallerCredential {
+            attempted: true,
+            ..cred
+        })
     }
 
     /// Fail-closed hardening: a minted credential must never reach the caller

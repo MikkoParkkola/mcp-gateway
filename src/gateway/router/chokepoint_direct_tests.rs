@@ -298,29 +298,101 @@ async fn a_non_call_method_is_forwarded_without_a_permit() {
     assert_eq!(dispatched(&fx), 1, "ping was not forwarded: {body}");
 }
 
-/// F2d-giveback, nonce (grok t2 HIGH): a signed direct retry the chokepoint
-/// refuses consumes no signing nonce, so a fresh signed call under that nonce
-/// is served, as R18 shows for a refused redeem. Red on base: the hostile
-/// retry was sent. Mutant m6: the nonce kept on the chokepoint refusal.
+/// F2d, nonce (MIK-8379.DIRECTREFUND.2; was F2d-giveback, grok t2 HIGH): a
+/// signed direct retry consumes its continuation, then the chokepoint refuses
+/// it. The consume is an effect, so the nonce stays spent: a fresh signed call
+/// under it is refused as a replay, as on /mcp (K-choke-consume). The consume
+/// is asserted: the same continuation, honestly answered under a fresh nonce,
+/// is refused as already redeemed. Red on base (the direct route refunded).
+/// Mutant mC: the chokepoint refusal releases the nonce unconditionally.
 #[cfg(feature = "firewall")]
 #[tokio::test]
-async fn f2d_giveback_a_refused_direct_send_consumes_no_nonce() {
-    use super::direct_continuation_tests::signed_call;
+async fn f2d_a_chokepoint_refusal_after_a_consume_keeps_the_nonce() {
+    use super::direct_continuation_tests::{answers, signed_call};
     use super::direct_guards_fixture::fixture_hardened_signed_firewalled;
     for backend in BACKENDS {
         let fx = fixture_hardened_signed_firewalled(Answer::AskOnce).await;
         let who = ("k-std", backend);
         let (_, asked) = signed_call(&fx, who, &format!("{backend}-n1"), json!({})).await;
+        let state = state_of(&asked);
         let n2 = format!("{backend}-n2");
-        let hostile =
-            json!({"requestState": state_of(&asked), "inputResponses": answering(BLOCKED)});
+        let hostile = json!({"requestState": state, "inputResponses": answering(BLOCKED)});
         let (_, refused) = signed_call(&fx, who, &n2, hostile).await;
         assert_eq!(code(&refused), Some(-32600), "{backend}: {refused}");
         assert_eq!(dispatched(&fx), 1, "{backend}: the hostile answer was sent");
+
         let (status, fresh) = signed_call(&fx, who, &n2, json!({})).await;
-        assert_eq!(status, StatusCode::OK, "{backend}: nonce burned: {fresh}");
-        assert!(fresh.get("error").is_none(), "{backend}: {fresh}");
-        assert_eq!(dispatched(&fx), 2, "{backend}: the fresh call was not sent");
+        assert!(
+            fresh.to_string().to_lowercase().contains("replay"),
+            "{backend}: the nonce was given back after a consume ({status}): {fresh}"
+        );
+        assert_eq!(
+            dispatched(&fx),
+            1,
+            "{backend}: the replay reached the backend"
+        );
+
+        let honest = json!({"requestState": state, "inputResponses": answers()});
+        let (_, again) = signed_call(&fx, who, &format!("{backend}-n3"), honest).await;
+        assert_eq!(
+            code(&again),
+            Some(-32602),
+            "{backend}: the continuation was consumed: {again}"
+        );
+        assert_eq!(dispatched(&fx), 1, "{backend}");
+    }
+}
+
+/// C-refund (MIK-8379.DIRECTREFUND.3/.4, site C): a chokepoint refusal with
+/// nothing acted before it (the schema warm from the first call, no mint, no
+/// continuation) gives the nonce back: the same call re-sent is served, and a
+/// third send is a replay. The direct twin of R-choke-fresh. Mutant mCKeep:
+/// the chokepoint refusal never releases.
+#[tokio::test]
+async fn a_direct_chokepoint_refusal_with_nothing_acted_gives_the_nonce_back() {
+    use super::backend_handlers::direct_permit_seams as seams;
+    use super::direct_continuation_tests::signed_call;
+    use super::direct_guards_fixture::fixture_hardened_signed;
+    for backend in super::direct_continuation_tests::BACKENDS {
+        let fx = fixture_hardened_signed(Answer::Ok, true).await;
+        let who = ("k-std", backend);
+        let (_, first) = signed_call(&fx, who, &format!("{backend}-n1"), json!({})).await;
+        assert!(
+            first.get("error").is_none(),
+            "{backend}: the warm-up: {first}"
+        );
+        let warm = fx.state.backends.get(backend).expect("fixture backend");
+        let fills = warm.list_fills();
+
+        let n2 = format!("{backend}-n2");
+        seams::refuse_next_permit();
+        let (_, refused) = signed_call(&fx, who, &n2, json!({})).await;
+        assert!(
+            refused.to_string().contains(seams::REFUSED),
+            "{backend}: the chokepoint refusal: {refused}"
+        );
+        assert_eq!(
+            warm.list_fills(),
+            fills,
+            "{backend}: premise: nothing filled"
+        );
+        assert_eq!(
+            dispatched(&fx),
+            1,
+            "{backend}: the refused call was not sent"
+        );
+
+        let (_, again) = signed_call(&fx, who, &n2, json!({})).await;
+        assert!(
+            again.get("error").is_none(),
+            "{backend}: the nonce was kept though nothing acted: {again}"
+        );
+        assert_eq!(dispatched(&fx), 2, "{backend}: the re-send was sent");
+        let (_, third) = signed_call(&fx, who, &n2, json!({})).await;
+        assert!(
+            third.to_string().to_lowercase().contains("replay"),
+            "{backend}: the nonce was given back twice: {third}"
+        );
     }
 }
 

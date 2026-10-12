@@ -99,6 +99,12 @@ pub(super) fn boot_cost_governance(
 #[cfg(feature = "cost-governance")]
 pub(super) const COST_SAVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
 
+/// How often a stdio session saves its protocol-revision window (MIK-8364).
+/// A hard crash loses the observations since the last completed save:
+/// normally at most this interval plus one write's duration.
+pub(super) const PROTOCOL_TELEMETRY_SAVE_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(1);
+
 /// Save today's spend to `<data_dir>/costs.json`.
 #[cfg(feature = "cost-governance")]
 pub(super) fn save_costs(enforcer: &BudgetEnforcer, data_dir: &Path) {
@@ -162,10 +168,30 @@ pub(super) fn spawn_cost_saver(
     every: std::time::Duration,
     shutdown: Option<tokio::sync::broadcast::Receiver<()>>,
 ) -> tokio::task::JoinHandle<()> {
+    spawn_periodic_save("cost save", every, shutdown, move || {
+        save_costs_unless_busy(&enforcer, &data_dir);
+    })
+}
+
+/// Run `save` every `every` until `shutdown` fires, or until the returned
+/// task is aborted when `shutdown` is `None`. One loop for every periodic
+/// saver (the cost saver, the stdio protocol-telemetry saver; MIK-8364).
+///
+/// The first tick is consumed, so the first save comes one interval after
+/// start. Each save runs on its own named, detached thread: a write stuck on
+/// a stalled mount blocks neither a runtime thread nor, being off the
+/// blocking pool, the runtime's drop (MIK-8157). `save` keeps at most one
+/// write in flight itself (a busy guard), so a slow write skips ticks rather
+/// than piling up threads.
+pub(super) fn spawn_periodic_save(
+    name: &'static str,
+    every: std::time::Duration,
+    shutdown: Option<tokio::sync::broadcast::Receiver<()>>,
+    save: impl Fn() + Send + Sync + 'static,
+) -> tokio::task::JoinHandle<()> {
+    let save = Arc::new(save);
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(every);
-        // Consume the immediate first tick, so the first save comes one
-        // interval after start rather than before anything is spent.
         interval.tick().await;
         let stopped = async move {
             match shutdown {
@@ -176,16 +202,13 @@ pub(super) fn spawn_cost_saver(
         tokio::pin!(stopped);
         loop {
             tokio::select! {
-                // On a detached thread: a write stuck on a stalled mount
-                // blocks neither a runtime thread nor, being off the blocking
-                // pool, the runtime's drop (MIK-8157).
                 _ = interval.tick() => {
-                    let (enforcer, data_dir) = (Arc::clone(&enforcer), data_dir.clone());
+                    let save = Arc::clone(&save);
                     let spawned = std::thread::Builder::new()
-                        .name("cost save".to_owned())
-                        .spawn(move || save_costs_unless_busy(&enforcer, &data_dir));
+                        .name(name.to_owned())
+                        .spawn(move || save());
                     if let Err(error) = spawned {
-                        warn!(%error, "periodic cost save could not start a thread; skipped");
+                        warn!(%error, saver = name, "periodic save could not start a thread; skipped");
                     }
                 }
                 () = &mut stopped => break,

@@ -368,9 +368,19 @@ async fn signed_invoke(
     nonce: &str,
     args: Value,
 ) -> Value {
+    signed_invoke_on(fx, (key, "alpha"), nonce, args).await
+}
+
+/// [`signed_invoke`] against `server`.
+async fn signed_invoke_on(
+    fx: &super::direct_guards_fixture::Fx,
+    (key, server): (&str, &str),
+    nonce: &str,
+    args: Value,
+) -> Value {
     let params = serde_json::json!({
         "name": "gateway_invoke",
-        "arguments": {"server": "alpha", "tool": "read", "arguments": args, "nonce": nonce},
+        "arguments": {"server": server, "tool": "read", "arguments": args, "nonce": nonce},
         "_meta": {
             "io.modelcontextprotocol/protocolVersion": "2026-07-28",
             "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}}}
@@ -394,17 +404,44 @@ async fn signed_invoke(
     .1
 }
 
+/// What [`invoke_relay_then_resend`] saw.
+pub(crate) struct RelayResend {
+    /// The relay refusal.
+    pub(crate) relayed: Value,
+    /// The clean re-send under the refused nonce.
+    pub(crate) resent: Value,
+    /// A third send under that nonce.
+    pub(crate) third: Value,
+    /// Tool-list fills admitted on the target across the relayed call.
+    pub(crate) fills: u64,
+    /// Backend `tools/call` sends made by the clean re-send.
+    pub(crate) resent_calls: usize,
+}
+
 /// R1, MIK-8150 NONCE.3: on the signed, relayed fixture whose backend answers
-/// `text`, `k-std` reads it (the receipt), then `k-budget` relays it under
-/// nonce `b1` and is refused, then re-sends a clean call under `b1`. Returns
-/// (the relay refusal, the clean re-send).
-pub(crate) async fn invoke_relay_then_resend(text: &'static str) -> (Value, Value) {
+/// `text`, `k-std` reads it from `alpha` (the receipt, and the warm schema),
+/// then `k-budget` relays it to `server` under nonce `b1` and is refused,
+/// then re-sends a clean call under `b1`, then sends once more under it.
+pub(crate) async fn invoke_relay_then_resend(text: &'static str, server: &str) -> RelayResend {
     let fx = super::direct_guards_fixture::fixture_signed_relayed(Answer::Text(text)).await;
     let read = signed_invoke(&fx, "k-std", "a1", serde_json::json!({})).await;
     assert!(read.get("error").is_none(), "premise: the read ran: {read}");
-    let relayed = signed_invoke(&fx, "k-budget", "b1", serde_json::json!({ "cmd": text })).await;
-    let resent = signed_invoke(&fx, "k-budget", "b1", serde_json::json!({})).await;
-    (relayed, resent)
+    let target = fx.state.backends.get(server).expect("fixture backend");
+    let before = target.list_fills();
+    let who = ("k-budget", server);
+    let relayed = signed_invoke_on(&fx, who, "b1", serde_json::json!({ "cmd": text })).await;
+    let fills = target.list_fills() - before;
+    let sent = fx.calls.load(std::sync::atomic::Ordering::SeqCst);
+    let resent = signed_invoke_on(&fx, who, "b1", serde_json::json!({})).await;
+    let resent_calls = fx.calls.load(std::sync::atomic::Ordering::SeqCst) - sent;
+    let third = signed_invoke_on(&fx, who, "b1", serde_json::json!({})).await;
+    RelayResend {
+        relayed,
+        resent,
+        third,
+        fills,
+        resent_calls,
+    }
 }
 
 /// R3, R20: on the signed fixture with a spend budget, `k-budget` runs once

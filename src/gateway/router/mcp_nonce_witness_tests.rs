@@ -17,7 +17,7 @@ const SUBJECT: &str = "alice";
 /// Seed `SUBJECT`'s per-user slot on each backend with the scripted
 /// transport, so a propagated call dispatches to it (as
 /// `slot_quota_direct_tests.rs` does).
-fn seed_caller_slots(fx: &Fx) {
+pub(super) fn seed_caller_slots(fx: &Fx) {
     for backend in ["alpha", "alpha-pt"] {
         let registered = fx.state.backends.get(backend).expect("fixture backend");
         let shared = registered
@@ -35,7 +35,7 @@ fn seed_caller_slots(fx: &Fx) {
 /// A signed `gateway_invoke read` on `/mcp` as `key` against `backend`, under
 /// `nonce`, carrying `SUBJECT`'s verified identity (so the backend's required
 /// propagation mints), from a modern client that declares form elicitation.
-async fn signed_call(
+pub(super) async fn signed_call(
     fx: &Fx,
     (key, backend): (&str, &str),
     nonce: &str,
@@ -287,5 +287,45 @@ async fn a_chokepoint_refusal_after_a_consume_keeps_the_nonce() {
             "{label}: the continuation was consumed: {again}"
         );
         assert_eq!(dispatched(&fx), 1);
+    }
+}
+
+/// K-optional-mint (MIK-8379 H1): an optional propagating backend whose mint
+/// fails, or succeeds with a header that does not parse, falls back to the
+/// static credential, so no binding comes back; the mint was still attempted
+/// (it may have reached the issuer), so the spend refusal that follows keeps
+/// the nonce. Red on slice 3a: `minted` read the binding only.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn a_spend_refusal_after_a_failed_optional_mint_keeps_the_nonce() {
+    use super::direct_continuation_tests::budget;
+    use super::direct_guards_fixture::{MINT_MODES, fixture_optional_failing_mint};
+    for (mode, mint) in MINT_MODES {
+        let (fx, failing) = fixture_optional_failing_mint(Answer::Ok, mint(), budget).await;
+        let who = ("k-budget", "alpha");
+        let (_, first) = signed_call(&fx, who, "n1", json!({})).await;
+        assert!(
+            first.get("error").is_none(),
+            "{mode}: the paying call fell back: {first}"
+        );
+
+        let before = failing.count();
+        let (_, refused) = signed_call(&fx, who, "n2", json!({})).await;
+        assert_eq!(
+            code(&refused),
+            Some(-32003),
+            "{mode}: the spend refusal: {refused}"
+        );
+        assert!(
+            failing.count() > before,
+            "{mode}: the refused call attempted a mint"
+        );
+
+        let (_, again) = signed_call(&fx, who, "n2", json!({})).await;
+        assert!(
+            refused_as_replay(&again),
+            "{mode}: the nonce was given back after the attempt: {again}"
+        );
+        assert_eq!(dispatched(&fx), 1, "{mode}");
     }
 }

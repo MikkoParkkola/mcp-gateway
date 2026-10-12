@@ -64,27 +64,34 @@ async fn r23_a_question_refused_at_delivery_gives_its_slot_back() {
     }
 }
 
-/// R24 (MIK-7698, both arms): a call whose backend could not be reached sent
-/// nothing, so it consumes no signing nonce: re-sent under that nonce it is
-/// not refused as a replay. Mutant: the nonce kept on a failure before
-/// sending.
+/// R24 (MIK-8379 D4, supersedes MIK-7698's refund on this route; both arms):
+/// a call whose backend could not be reached keeps its signing nonce, as on
+/// `/mcp`: a start attempt may have sent bytes (a connect can succeed and a
+/// write fail midway), so re-sent under that nonce it is refused as a replay
+/// and not attempted again. The schema is warmed first, so the KEEP comes from
+/// the send, not a tool-list fill. The other pre-dispatch classes are pinned
+/// one per row in `nonce_failure_class_tests.rs`. Mutants: mP (the failure
+/// site releases unconditionally), mDispatch (the send keeps the witness).
 #[tokio::test]
-async fn r24_a_failure_before_sending_consumes_no_nonce() {
+async fn r24_an_unreachable_backend_keeps_the_nonce() {
     use super::direct_guards_fixture::fixture_hardened_signed;
     for backend in BACKENDS {
         let fx = fixture_hardened_signed(Answer::Unreachable, true).await;
+        let target = fx.state.backends.get(backend).expect("fixture backend");
+        target.get_tools_shared().await.expect("warm the tool list");
+        let fills = target.list_fills();
         let who = ("k-std", backend);
         let nonce = format!("{backend}-n1");
         let (_, failed) = signed_call(&fx, who, &nonce, json!({})).await;
         assert!(failed.get("error").is_some(), "{backend}: {failed}");
-        assert_eq!(dispatched(&fx), 1, "{backend}: not attempted");
-        let (status, again) = signed_call(&fx, who, &nonce, json!({})).await;
-        assert_ne!(status, StatusCode::BAD_REQUEST, "{backend}: {again}");
-        assert_eq!(dispatched(&fx), 2, "{backend}: not re-attempted");
+        assert_eq!(target.list_fills(), fills, "{backend}: premise: no fill");
+        assert_eq!(dispatched(&fx), 1, "{backend}: attempted");
+        let (_, again) = signed_call(&fx, who, &nonce, json!({})).await;
         assert!(
-            !again.to_string().to_lowercase().contains("nonce"),
-            "{backend}: nonce burned: {again}"
+            again.to_string().to_lowercase().contains("replay"),
+            "{backend}: the nonce was given back after a start attempt: {again}"
         );
+        assert_eq!(dispatched(&fx), 1, "{backend}: re-attempted");
     }
 }
 
