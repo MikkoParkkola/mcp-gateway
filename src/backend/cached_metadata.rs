@@ -288,7 +288,6 @@ impl<T> CachedMetadata<T> {
             |_| async move { fetch().await.map(|v| (v, ())) },
             |()| {},
             |_| {},
-            None,
         )
         .await
     }
@@ -301,10 +300,27 @@ impl<T> CachedMetadata<T> {
     /// `fetch` gets its fill's [`FillMark`]; `waiting` is told, before each
     /// wait, the mark of the fill this caller now waits on, and `None` when
     /// it runs the fill itself, so it never reads a fill it left (MIK-8046).
-    ///
-    /// `on_abandon` runs if the fill this caller leads ends without an
-    /// answer (error, cancellation, unwind), before its waiters are woken.
     pub(crate) async fn get_or_fetch_shared_then<A, F, Fut, S, W>(
+        &self,
+        ttl: Duration,
+        fetch: F,
+        on_stored: S,
+        waiting: W,
+    ) -> Result<Arc<T>>
+    where
+        F: Fn(FillMark) -> Fut,
+        Fut: Future<Output = Result<(T, A)>>,
+        S: FnOnce(A),
+        W: Fn(Option<FillMark>),
+    {
+        self.get_or_fetch_shared_abandoning(ttl, fetch, on_stored, waiting, None)
+            .await
+    }
+
+    /// [`Self::get_or_fetch_shared_then`], whose `on_abandon` runs if the
+    /// fill this caller leads ends without an answer (error, cancellation,
+    /// unwind), before its waiters are woken (MIK-8399).
+    pub(crate) async fn get_or_fetch_shared_abandoning<A, F, Fut, S, W>(
         &self,
         ttl: Duration,
         fetch: F,
@@ -622,7 +638,6 @@ mod tests {
             },
             |()| {},
             |mark| heard.lock().push(("owner", mark)),
-            None,
         );
         let waiter = async {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -632,7 +647,6 @@ mod tests {
                     |_| async { Ok((vec![2u8], ())) },
                     |()| {},
                     |mark| heard.lock().push(("waiter", mark)),
-                    None,
                 )
                 .await
         };
@@ -667,7 +681,6 @@ mod tests {
                 },
                 |()| {},
                 |_| {},
-                None,
             )
             .await
             .unwrap();

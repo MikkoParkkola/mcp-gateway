@@ -33,7 +33,7 @@ async fn s16_an_errored_fill_runs_its_hook_while_it_holds_the_flight() {
     let cache = Arc::new(Cache::new());
     let (hook, seen) = recording(&cache);
     let result = cache
-        .get_or_fetch_shared_then(
+        .get_or_fetch_shared_abandoning(
             TTL,
             |_| async { Err::<(Vec<u8>, ()), _>(crate::Error::Transport("lost".into())) },
             |()| {},
@@ -56,7 +56,7 @@ async fn s16_an_answered_fill_never_runs_its_hook() {
     let cache = Arc::new(Cache::new());
     let (hook, seen) = recording(&cache);
     cache
-        .get_or_fetch_shared_then(
+        .get_or_fetch_shared_abandoning(
             TTL,
             |_| async { Ok((vec![1u8], ())) },
             |()| {},
@@ -79,7 +79,7 @@ async fn s16_a_dropped_fill_runs_its_hook_while_it_holds_the_flight() {
         let (cache, started) = (Arc::clone(&cache), Arc::clone(&started));
         async move {
             cache
-                .get_or_fetch_shared_then(
+                .get_or_fetch_shared_abandoning(
                     TTL,
                     |_| {
                         let started = Arc::clone(&started);
@@ -111,7 +111,7 @@ async fn s16_a_fill_whose_generation_moved_does_not_run_its_hook() {
     let cache = Arc::new(Cache::new());
     let (hook, seen) = recording(&cache);
     let result = cache
-        .get_or_fetch_shared_then(
+        .get_or_fetch_shared_abandoning(
             TTL,
             |_| {
                 let cache = Arc::clone(&cache);
