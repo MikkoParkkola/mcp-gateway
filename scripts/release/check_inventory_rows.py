@@ -80,11 +80,12 @@ def git(*args: str) -> str:
     ).stdout
 
 
-def code(line: str) -> str:
-    """The line without comments, string and char literals (for brace counts)."""
-    line = re.sub(r'"(?:\\.|[^"\\])*"', '""', line)
-    line = re.sub(r"'(?:\\.|[^'\\])'", "''", line)
-    return line.split("//", 1)[0]
+def blanked(lines: list[str]) -> list[str]:
+    """`lines` with every comment and string or char literal blanked by the
+    orphan gate's `blank()` (block comments nested and multi-line included),
+    one entry per line, so a `#[cfg(test)]` or brace inside one is never read
+    as code (MIK-8405.SPLIT.5). The one lexer for both release checks."""
+    return orphan_gate().blank("\n".join(lines))[0].split("\n")
 
 
 def test_only(text: str) -> bool:
@@ -92,7 +93,7 @@ def test_only(text: str) -> bool:
     only under test, by the orphan gate's one cfg judgement (`cfg_is_test`).
     Several attributes may share the line (`#[cfg(test)] #[cfg(unix)]`), so
     each expression is read to its balancing `)`."""
-    text = re.sub(r"/\*.*?\*/", " ", text).strip()
+    text = text.strip()
     if not text.startswith("#["):
         return False
     gate = orphan_gate()
@@ -104,10 +105,11 @@ def test_only(text: str) -> bool:
 
 def bodyless(lines: list[str], line: int) -> bool:
     """The signature at 1-based `line` ends in `;` before any `{`: a trait
-    declaration, which has no lines of its own to cover."""
+    declaration, which has no lines of its own to cover. `lines` are
+    [`blanked`]."""
     square = 0  # a `;` inside `[u8; 16]` does not end the signature
     for raw in lines[line - 1 :]:
-        for ch in code(raw):
+        for ch in raw:
             square += (ch == "[") - (ch == "]")
             if ch == "{" or (ch == ";" and square == 0):
                 return ch == ";"
@@ -115,13 +117,14 @@ def bodyless(lines: list[str], line: int) -> bool:
 
 
 def test_lines(lines: list[str]) -> set[int]:
-    """1-based line numbers inside a `#[cfg(test)]` item (a module, fn or impl)."""
+    """1-based line numbers inside a `#[cfg(test)]` item (a module, fn or
+    impl). `lines` are [`blanked`]."""
     inside: set[int] = set()
     pending = False
     depth = 0
     start_depth: int | None = None
     for n, raw in enumerate(lines, 1):
-        text = code(raw).strip()
+        text = raw.strip()
         if start_depth is not None:
             inside.add(n)
         elif test_only(text):
@@ -274,6 +277,7 @@ def added_functions(base: str, head: str) -> list[tuple[str, str, int, int]]:
     found: list[tuple[str, str, int, int]] = []
     path = None
     lines: list[str] = []
+    code: list[str] = []
     tests: set[int] = set()
     new_line = 0
     for line in diff.splitlines():
@@ -283,12 +287,13 @@ def added_functions(base: str, head: str) -> list[tuple[str, str, int, int]]:
                 path = None
             if path:
                 lines = (show(head, path) or "").splitlines()
-                tests = test_lines(lines)
+                code = blanked(lines)
+                tests = test_lines(code)
         elif line.startswith("@@"):
             new_line = int(re.match(r"@@ -\S+ \+(\d+)", line).group(1))
         elif line.startswith("+") and path:
             match = FN.match(line[1:])
-            if match and new_line not in tests and not bodyless(lines, new_line):
+            if match and new_line not in tests and not bodyless(code, new_line):
                 name = match.group(1)
                 found.append((path, name, new_line, occurrence(lines, name, new_line)))
             new_line += 1

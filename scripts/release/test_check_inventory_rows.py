@@ -337,6 +337,17 @@ class TestNamedFiles(unittest.TestCase):
         self.repo.commit("add")
         self.assertEqual(self.repo.missing(), ["live"])
 
+    def test_a_cfg_test_and_a_brace_in_a_block_comment_hide_no_function(self) -> None:
+        # #3860 round 3 (muse CRITICAL, lead ruling): a nested, multi-line
+        # block comment holding `#[cfg(test)]` and a `{` before a live fn.
+        self.repo.write(
+            "src/oauth/mod.rs",
+            "pub fn existing() {}\n/* outer\n   /* #[cfg(test)] */\n#[cfg(test)]\n   {\n*/\n"
+            "pub fn live() {}\nconst C: &str = \"#[cfg(test)] {\";\npub fn after() {}\n",
+        )
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), ["after", "live"])
+
 class PathspecShape(unittest.TestCase):
     """`--all` hands the prefixes to git as pathspecs, and a pathspec names
     one path: a bare stem matched `task_confirmation/` and never scanned
