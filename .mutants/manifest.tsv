@@ -1,0 +1,17 @@
+head_sha	cf48221e54dedb269fba05e7bf479fe3f7bf3c60
+# MIK-8399 design r5 mutants; m2 and m4 are equivalent (see PR).
+m1_no_resend_leg	linux	m1_no_resend_leg.patch	--lib --all-features -- backend::input_keys::resend_revoke_tests::s1_a_truncated_page_relisting_a_write_revokes_its_resend --exact
+m3_narrow_without_invalidating	linux	m3_narrow_without_invalidating.patch	--lib --all-features -- backend::input_keys::resend_revoke_tests::s8_a_fill_in_flight_cannot_grant_what_a_page_revoked --exact
+m5_resend_not_narrowed	linux	m5_resend_not_narrowed.patch	--lib --all-features -- backend::input_keys::resend_revoke_tests::s1_a_truncated_page_relisting_a_write_revokes_its_resend --exact
+m6_intersect_wrong_set	linux	m6_intersect_wrong_set.patch	--lib --all-features -- backend::input_keys::resend_revoke_tests::s3_an_idempotent_relist_keeps_resend_and_loses_cache_admission --exact
+m7_shared_slot_always	linux	m7_shared_slot_always.patch	--lib --all-features -- backend::input_keys::resend_revoke_tests::s11_a_callers_page_revokes_in_that_callers_slot_only --exact
+m8_fill_never_narrows	linux	m8_fill_never_narrows.patch	--lib --all-features -- backend::input_keys::resend_revoke_tests::s13_an_abandoned_refresh_narrows_from_what_it_read --exact
+m9_fill_narrow_invalidates	linux	m9_fill_narrow_invalidates.patch	--lib --all-features -- backend::input_keys::resend_revoke_tests::s13_an_abandoned_refresh_narrows_from_what_it_read --exact
+m10_direct_guard_never_armed	linux	m10_direct_guard_never_armed.patch	--lib --all-features -- gateway::router::backend_handlers::direct_list::abandon_tests::s7a_an_error_frame_after_a_write_revokes_it --exact
+m11_hook_after_clear	linux	m11_hook_after_clear.patch	--lib --all-features -- backend::cached_metadata::abandon_tests::s16_an_errored_fill_runs_its_hook_while_it_holds_the_flight --exact
+m12_unwrap_in_drop	linux	m12_unwrap_in_drop.patch	--lib --all-features -- gateway::router::backend_handlers::direct_list::abandon_tests::s10_an_abandoned_page_with_a_malformed_entry_revokes_the_rest --exact
+m13_hook_armed_on_success	linux	m13_hook_armed_on_success.patch	--lib --all-features -- backend::cached_metadata::abandon_tests::s16_an_answered_fill_never_runs_its_hook --exact
+m14_clear_not_intersect	linux	m14_clear_not_intersect.patch	--lib --all-features -- gateway::router::backend_handlers::direct_list::abandon_tests::s17_an_abandoned_direct_page_keeps_only_what_it_declares_safe --exact
+m15_fill_narrows_resend_only	linux	m15_fill_narrows_resend_only.patch	--lib --all-features -- backend::input_keys::resend_revoke_tests::s13b_an_abandoned_refresh_narrows_cache_admission_too --exact
+m16_one_safe_occurrence_wins	linux	m16_one_safe_occurrence_wins.patch	--lib --all-features -- backend::input_keys::resend_revoke_tests::s12_one_unsafe_occurrence_keeps_a_name_out --exact
+m17_names_after_the_gates	linux	m17_names_after_the_gates.patch	--lib --all-features -- backend::input_keys::resend_revoke_tests::s6a_a_header_invalid_write_still_revokes_its_resend --exact

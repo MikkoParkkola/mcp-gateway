@@ -1,0 +1,13 @@
+diff --git a/src/backend/metadata_read_only.rs b/src/backend/metadata_read_only.rs
+index 9992afdeb..5d7b00d51 100644
+--- a/src/backend/metadata_read_only.rs
++++ b/src/backend/metadata_read_only.rs
+@@ -180,7 +180,7 @@ impl Backend {
+             entry
+                 .read_only_declared
+                 .write()
+-                .retain(|t| !listed.contains(t) || read_only.contains(t));
++                .retain(|_| true);
+         })
+     }
+ }

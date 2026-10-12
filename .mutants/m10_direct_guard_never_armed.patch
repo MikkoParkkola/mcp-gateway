@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/direct_list.rs b/src/gateway/router/backend_handlers/direct_list.rs
+index 6f80696fe..af2fd5759 100644
+--- a/src/gateway/router/backend_handlers/direct_list.rs
++++ b/src/gateway/router/backend_handlers/direct_list.rs
+@@ -53,7 +53,7 @@ pub(super) async fn drain(
+         backend,
+         identity_key,
+         tools: Vec::new(),
+-        armed: true,
++        armed: false,
+     };
+     // An unreadable list (see `readable_page`), or a page without a tools
+     // array, says nothing about which tools exist: it is answered, judged as a

@@ -1,0 +1,13 @@
+diff --git a/src/backend/input_keys.rs b/src/backend/input_keys.rs
+index 641a3a17a..85c790222 100644
+--- a/src/backend/input_keys.rs
++++ b/src/backend/input_keys.rs
+@@ -307,7 +307,7 @@ impl Backend {
+         // own catalogue the page is (a blocked name is per backend).
+         let credentialed_shared = matches!(key, PoolKey::Shared) && sent_caller_credential;
+         if credentialed_shared || listing == super::descriptor_gate::Listing::Truncated {
+-            self.revoke_from_page(&key, &listed, &read_only, &safe);
++            self.revoke_from_page(&PoolKey::Shared, &listed, &read_only, &safe);
+             let source = match &key {
+                 PoolKey::PerUser { binding } => binding.as_str(),
+                 PoolKey::Shared => identity_key.unwrap_or("credentialed"),

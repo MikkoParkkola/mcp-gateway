@@ -1,0 +1,13 @@
+diff --git a/src/backend/metadata_read_only.rs b/src/backend/metadata_read_only.rs
+index 9992afdeb..a6c3a3cff 100644
+--- a/src/backend/metadata_read_only.rs
++++ b/src/backend/metadata_read_only.rs
+@@ -95,7 +95,7 @@ impl Backend {
+                     .any(|t| !resend_safe.contains(t) && permitted.contains(t))
+             };
+         if revokes {
+-            slot.tools_cache.invalidate_then(|| {
++            (|f: &dyn Fn()| f())(&|| {
+                 slot.resend_permitted
+                     .write()
+                     .retain(|t| resend_safe.contains(t));

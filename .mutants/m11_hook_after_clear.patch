@@ -1,0 +1,12 @@
+diff --git a/src/backend/cached_metadata.rs b/src/backend/cached_metadata.rs
+index 2e23e82b0..a68cdeb65 100644
+--- a/src/backend/cached_metadata.rs
++++ b/src/backend/cached_metadata.rs
+@@ -81,6 +81,7 @@ impl<T> Drop for FetchPermit<'_, T> {
+         // generation means a store or an invalidation already supplied newer
+         // state, so the hook stands down (MIK-8399 r4-r5).
+         let current = self.cache.state.read().generation == self.generation;
++        self.cache.state.write().in_flight = None;
+         if let Some(hook) = self.on_abandon.take()
+             && current
+         {
