@@ -9,31 +9,91 @@ use std::time::Duration;
 
 use super::super::StdioTransport;
 
-/// Far longer than any row may take: a row that waits it out has regressed to
-/// the timeout this change removes.
+/// The child's request timeout. An early exit must be reported as one, never
+/// as this timeout; a row tells them apart by the error's kind, not by the
+/// clock (MIK-8360).
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const ROW_LIMIT: Duration = Duration::from_secs(5);
+/// The test-only bound for the start's drain window, its tree wait and the
+/// reap deadline: waited for as events, so only a real hang reaches it.
+const SLOW_HOST: Duration = Duration::from_secs(20);
+/// The hang guard's margin over the request timeout. Every guard is
+/// `REQUEST_TIMEOUT + MARGIN`, derived from the request timeout so the two
+/// cannot invert: a start that waits out the request timeout still finishes
+/// inside its guard, and fails on its kind (MIK-8360, lead ruling).
+const MARGIN: Duration = Duration::from_secs(15);
 
 fn transport(script: &str, env: &[(&str, &str)]) -> Arc<StdioTransport> {
     let env: HashMap<String, String> = env
         .iter()
         .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
         .collect();
-    StdioTransport::new(
+    let t = StdioTransport::new(
         &format!("sh -c '{script}'"),
         env,
         None,
         REQUEST_TIMEOUT,
         None,
-    )
+    );
+    slow_host(&t);
+    t
 }
 
-async fn start_err(t: &Arc<StdioTransport>) -> String {
-    tokio::time::timeout(ROW_LIMIT, t.start())
+/// Give `t` the slow-host bound for its exit wait, reap deadline and stderr
+/// drain, so a row waits for the child's real exit and stderr end.
+fn slow_host(t: &StdioTransport) {
+    *t.slow_host_bound.lock() = Some(SLOW_HOST);
+    *t.stderr_bound.lock() = Some(SLOW_HOST);
+}
+
+/// As [`transport`], for a child that never exits: the real 1 s windows, as
+/// the row's subject is them expiring. Load can only lengthen that, never
+/// flip the outcome (the leader never exits, so its status never arrives).
+fn transport_live_child(script: &str) -> Arc<StdioTransport> {
+    let t = transport(script, &[]);
+    *t.slow_host_bound.lock() = None;
+    *t.stderr_bound.lock() = None;
+    t
+}
+
+/// As [`transport`], for a grandchild holding stderr: the leader's exit and
+/// reap stay on the slow-host bound (the row asserts the reaped status),
+/// while the stderr drain keeps its real 1 s window, which the row's
+/// subject is (the reader is aborted and what it read is kept).
+fn transport_held_stderr(script: &str) -> Arc<StdioTransport> {
+    let t = transport(script, &[]);
+    *t.stderr_bound.lock() = None;
+    t
+}
+
+/// `start()` to completion, under the hang guard.
+async fn start_outcome(t: &Arc<StdioTransport>) -> crate::Result<()> {
+    tokio::time::timeout(REQUEST_TIMEOUT + MARGIN, t.start())
         .await
-        .expect("start must fail fast, not wait out the request timeout")
-        .expect_err("a child that died before initialize cannot start")
-        .to_string()
+        .expect("start hung past the request timeout plus its margin")
+}
+
+/// The early-exit report a failed start must give: never the request
+/// timeout, and noticed before any request waited it out. The second is the
+/// fast-fail property itself, read from the transport rather than a clock.
+async fn start_err(t: &Arc<StdioTransport>) -> String {
+    start_error(t).await.to_string()
+}
+
+/// As [`start_err`], keeping the error itself for rows that inspect it.
+async fn start_error(t: &Arc<StdioTransport>) -> crate::Error {
+    let err = start_outcome(t)
+        .await
+        .expect_err("a child that died before initialize cannot start");
+    assert!(
+        !matches!(err, crate::Error::BackendTimeout(_)),
+        "an early exit was reported as the request timeout: {err}"
+    );
+    assert_eq!(
+        t.request_timeouts.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the early exit was noticed only after the start's request timed out: {err}"
+    );
+    err
 }
 
 /// T1: the cause, over exit status 0 and 3. The caller sees the status and
@@ -150,9 +210,8 @@ async fn t2d_an_overlong_line_does_not_hide_the_next() {
 /// T4b: a grandchild that keeps stderr open does not erase what was read.
 #[tokio::test]
 async fn t4b_a_held_stderr_pipe_keeps_the_tail() {
-    let t = transport(
-        "(sleep 3 >/dev/null </dev/null &); echo \"Permission denied\" >&2; exit 3",
-        &[],
+    let t = transport_held_stderr(
+        "(sleep 30 >/dev/null </dev/null &); echo \"Permission denied\" >&2; exit 3",
     );
     let err = start_err(&t).await;
     assert!(err.contains("exit status: 3"), "{err}");
@@ -166,7 +225,7 @@ async fn t4b_a_held_stderr_pipe_keeps_the_tail() {
 /// does not outlive the failed start.
 #[tokio::test]
 async fn t4_a_child_that_closes_stdout_and_stays_is_reported_and_killed() {
-    let t = transport("exec 1>&-; exec sleep 30", &[]);
+    let t = transport_live_child("exec 1>&-; exec sleep 30");
     let err = start_err(&t).await;
     assert!(err.contains("closed its stdout before initialize"), "{err}");
     assert!(
@@ -194,9 +253,7 @@ async fn t6_a_child_that_answered_is_not_an_early_exit() {
     // the time, so enough iterations make that ordering a certain failure.
     for _ in 0..50 {
         let t = transport(&format!("read line; echo {reply:?}; exit 0"), &[]);
-        let outcome = tokio::time::timeout(ROW_LIMIT, t.start())
-            .await
-            .expect("an answered start settles well inside the row limit");
+        let outcome = start_outcome(&t).await;
         if let Err(err) = outcome {
             assert!(!err.to_string().contains("before initialize"), "{err}");
         }
@@ -224,7 +281,7 @@ async fn t8_a_restart_after_an_early_exit_is_judged_on_its_own_child() {
 #[tokio::test]
 async fn non_utf8_stdout_fails_start_without_waiting_for_the_timeout() {
     use crate::transport::Transport as _;
-    let t = transport("printf \"\\377\\n\"; sleep 30", &[]);
+    let t = transport_live_child("printf \"\\377\\n\"; sleep 30");
     start_err(&t).await;
     assert!(!t.is_connected());
 }
@@ -283,10 +340,7 @@ async fn an_early_exit_keeps_a_sanitized_tail_for_the_doctor_only() {
         "echo \"Error: Cannot find module tail-7978\" >&2; echo \"Authorization: Bearer tok-7978\" >&2; exit 3",
         &[],
     );
-    let err = tokio::time::timeout(ROW_LIMIT, t.start())
-        .await
-        .expect("start must fail fast")
-        .expect_err("an early exit");
+    let err = start_error(&t).await;
     let shown = t.last_failure_stderr();
     assert_eq!(
         shown.first().map(String::as_str),
@@ -402,10 +456,11 @@ async fn a_spawn_failure_clears_the_previous_tail() {
         REQUEST_TIMEOUT,
         None,
     );
+    slow_host(&t);
     let _ = start_err(&t).await;
     assert_eq!(t.last_failure_stderr(), vec!["first-run-7980".to_string()]);
     std::fs::remove_dir(&cwd).expect("remove cwd");
-    let spawn = tokio::time::timeout(ROW_LIMIT, t.start()).await;
+    let spawn = tokio::time::timeout(REQUEST_TIMEOUT + MARGIN, t.start()).await;
     assert!(matches!(spawn, Ok(Err(_))), "the spawn must fail");
     assert!(
         t.last_failure_stderr().is_empty(),

@@ -24,7 +24,7 @@ use crate::mtls::CertIdentity;
 use crate::protocol::{JsonRpcResponse, RequestId};
 #[cfg(feature = "firewall")]
 use crate::security::firewall::FirewallAction;
-use crate::security::{sanitize_json_value, validate_tool_name};
+use crate::security::validate_tool_name;
 
 type BackendRejection = (StatusCode, Json<Value>);
 type BackendSecurityResult = Result<Option<Value>, BackendRejection>;
@@ -65,7 +65,9 @@ use relay::{
 /// Order of checks matches `meta_mcp_handler`:
 /// 1. `validate_tool_name` — rejects dangerous names before any policy lookup.
 /// 2. `tool_policy.check` — enforces global allow/deny rules.
-/// 3. `sanitize_json_value` — strips/rejects dangerous byte sequences.
+///
+/// Sanitization is not here: the whole request is sanitized at intake
+/// (MIK-8154 SAN.1, `direct_caller::read_envelope`).
 #[allow(clippy::result_large_err)]
 async fn apply_backend_tool_call_security(
     state: &AppState,
@@ -160,13 +162,10 @@ async fn apply_backend_tool_call_security(
         return Ok(None);
     }
 
-    match sanitize_json_value(params) {
-        Ok(sanitized) => Ok(Some(sanitized)),
-        Err(e) => {
-            warn!(backend = %backend_name, tool = %tool_name, "Input sanitization failed");
-            Err(backend_security_error(id, &e.to_string()))
-        }
-    }
+    // The request was sanitized as a whole at intake when the setting is on
+    // (MIK-8154 SAN.1, `direct_caller::read_envelope`); these are the params
+    // to forward.
+    Ok(Some(params.clone()))
 }
 
 /// What a direct-route call's token must grant (MIK-7570.ATTEST.1 part 3).
@@ -384,7 +383,14 @@ pub(super) async fn backend_handler(
         ));
     }
 
-    direct_audit::audited_call(Arc::clone(&state), name, request).await
+    // The request's scope for what intake judges (MIK-8154 F2: the exempt
+    // instance the send compares), boxed so the scope wraps a pointer.
+    crate::gateway::meta_mcp::visible::with_visibility_memo(Box::pin(direct_audit::audited_call(
+        Arc::clone(&state),
+        name,
+        request,
+    )))
+    .await
 }
 
 /// The direct backend route, as an ordered sequence of stages. Each stage

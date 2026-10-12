@@ -6,6 +6,8 @@
 //! run red on the release line before the fix. MIK-8149.REQFW.2 (stdio
 //! sanitize) is driven by `rows::sanitize_rows`.
 
+use serde_json::{Value, json};
+
 use super::Route;
 use super::rows::{BLOCKED, X14_PROMPT, audit_rows, blocked_call, message};
 use crate::gateway::router::route_matrix_driver_tests::{self as router, Surfacing};
@@ -113,6 +115,106 @@ fn mcp_withheld_surfaced_task_answers_as_a_missing_name() {
     assert_eq!(withheld.backend_calls, 0, "{}", withheld.body);
 }
 
+/// MIK-8326.X14.1 and X14.5 on `/mcp`, with the production firewall on: a
+/// withheld surfaced task call leaves the audit log a missing name leaves,
+/// and is refused before the request firewall (no `request` row), X14 and
+/// admission (no idempotency key stored, no task committed). Control: the
+/// same call by a caller the tool is visible to writes a `request` row and
+/// gets X14's challenge, so the absent row is the refusal's, not the fixture's.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn mcp_withheld_surfaced_task_leaves_what_a_missing_name_leaves() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let traced = |key: &'static str, surfacing, file: &str| {
+        let audit = dir.path().join(file);
+        async move { Box::pin(router::task_submit_traced(key, surfacing, &audit)).await }
+    };
+    let visible = traced("k-std", Surfacing::On, "visible.jsonl").await;
+    assert_visible_control(&visible.body, &visible.events);
+    let withheld = traced("k-deny", Surfacing::On, "withheld.jsonl").await;
+    let missing = traced("k-std", Surfacing::Off, "missing.jsonl").await;
+    assert_eq!(withheld.status, missing.status, "HTTP status differs");
+    assert_refused_as_missing(
+        (&withheld.body, &withheld.events),
+        (&missing.body, &missing.events),
+        (
+            withheld.backend_calls,
+            withheld.stored_keys,
+            withheld.admitted,
+            withheld.committed,
+        ),
+    );
+}
+
+/// MIK-8326.X14.2 and X14.5 on stdio, with the production firewall on: the
+/// sibling of the `/mcp` row above, with the same control.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn stdio_withheld_surfaced_task_leaves_what_a_missing_name_leaves() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let denying = crate::security::ToolPolicy::from_config(&crate::security::ToolPolicyConfig {
+        deny: vec!["echo".to_string()],
+        ..crate::security::ToolPolicyConfig::default()
+    });
+    let traced = |policy, surfacing, file: &str| {
+        let audit = dir.path().join(file);
+        async move { Box::pin(stdio::stdio_task_traced(policy, surfacing, &audit)).await }
+    };
+    let visible = traced(None, Surfacing::On, "visible.jsonl").await;
+    assert_visible_control(&visible.body, &visible.events);
+    let withheld = traced(Some(denying), Surfacing::On, "withheld.jsonl").await;
+    let missing = traced(None, Surfacing::Off, "missing.jsonl").await;
+    assert_refused_as_missing(
+        (&withheld.body, &withheld.events),
+        (&missing.body, &missing.events),
+        (
+            withheld.backend_calls,
+            withheld.stored_keys,
+            withheld.admitted,
+            withheld.committed,
+        ),
+    );
+}
+
+/// The X14.5 control: a visible destructive surfaced task call passes the
+/// request firewall (a `request` row) and reaches X14's challenge.
+#[cfg(feature = "firewall")]
+fn assert_visible_control(body: &serde_json::Value, events: &[String]) {
+    assert!(
+        events.iter().any(|event| event == "request"),
+        "control: no request row for a visible call: {events:?}; {body}"
+    );
+    assert!(
+        body.to_string().contains(X14_PROMPT),
+        "control: no X14 challenge for a visible call: {body}"
+    );
+}
+
+/// A withheld call answered and audited as the missing name was, refused
+/// before the request firewall, X14 and admission: no `request` row, no
+/// challenge, and no backend call, key (legacy cache or execution admission)
+/// or committed task.
+#[cfg(feature = "firewall")]
+fn assert_refused_as_missing(
+    (withheld, withheld_events): (&serde_json::Value, &[String]),
+    (missing, missing_events): (&serde_json::Value, &[String]),
+    (calls, cached, admitted, tasks): (usize, usize, usize, usize),
+) {
+    assert_eq!(missing["error"]["code"], -32601, "premise: {missing}");
+    assert_eq!(withheld["error"], missing["error"], "{withheld}");
+    assert_eq!(withheld_events, missing_events, "audit rows differ");
+    assert!(
+        !withheld_events.iter().any(|event| event == "request"),
+        "the request firewall ran: {withheld_events:?}"
+    );
+    assert!(!withheld.to_string().contains(X14_PROMPT), "{withheld}");
+    assert_eq!(
+        (calls, cached, admitted, tasks),
+        (0, 0, 0, 0),
+        "(backend calls, legacy cached keys, admission entries, tasks): {withheld}"
+    );
+}
+
 /// [`stdio::stdio_task_read`] on a current-thread runtime, with the warnings
 /// it logged on this thread.
 fn stdio_logged(
@@ -171,6 +273,42 @@ async fn served_stdio_honours_sanitize_input_from_config() {
         "not the sanitizer's refusal: {body}"
     );
     assert_eq!(calls, 0, "the NUL reached the backend: {body}");
+}
+
+/// MIK-8154 P2 (option (a)): over the real stdio serve loop with sanitizing
+/// on, a `gateway_invoke` whose target backend is `passthrough` forwards the
+/// NUL: no refusal, and the backend runs. The sanitizer refuses a NUL rather
+/// than stripping it, so a run proves it was forwarded.
+#[tokio::test]
+async fn p2_stdio_passthrough_forwards_a_nul() {
+    let (body, calls) = Box::pin(stdio::served_sanitizing_with(true)).await;
+    assert!(body.get("error").is_none(), "p2: {body}");
+    assert_eq!(calls, 1, "p2: the backend did not run: {body}");
+}
+
+/// S2d on stdio (critical coverage of `prepare_signing`'s protocol-field
+/// refusal): a control character in `method` is refused before anything
+/// reads it, with no id (the envelope may be what is dirty), and nothing
+/// reaches the backend. Without the check the sanitize step would strip it
+/// into `tools/call` and dispatch.
+#[tokio::test]
+async fn s2d_stdio_refuses_a_control_character_in_the_method() {
+    let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/\u{7}call", "params": {
+        "name": "gateway_list_servers", "arguments": {}}});
+    let (body, calls) = Box::pin(stdio::served_sanitizing_call(false, call)).await;
+    assert_eq!(
+        body.pointer("/error/code"),
+        Some(&json!(-32600)),
+        "s2d stdio: {body}"
+    );
+    assert!(
+        body.pointer("/error/message")
+            .and_then(Value::as_str)
+            .is_some_and(|m| m.contains("control characters")),
+        "s2d stdio: {body}"
+    );
+    assert_eq!(body.get("id"), Some(&Value::Null), "s2d stdio: {body}");
+    assert_eq!(calls, 0, "s2d stdio: reached the backend");
 }
 
 /// The one firewall refusal wording every route answers (P3): an ASI10 block

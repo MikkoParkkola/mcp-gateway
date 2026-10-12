@@ -183,6 +183,75 @@ pub fn sanitize_json_value(value: &Value) -> Result<Value> {
     }
 }
 
+/// Whether `security.sanitize_input` sanitizes requests: the one switch every
+/// entry route reads (MIK-8154 SAN.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InputSanitizing {
+    /// Requests pass to dispatch as received.
+    Off,
+    /// Every request is sanitized before it is judged: a NUL is refused,
+    /// control characters are stripped.
+    On,
+}
+
+impl InputSanitizing {
+    /// The mode the `security.sanitize_input` setting selects.
+    pub(crate) const fn from_setting(on: bool) -> Self {
+        if on { Self::On } else { Self::Off }
+    }
+}
+
+/// A protocol field (`id`, a nonce) is validated, never rewritten, so a
+/// correlation id or nonce identity cannot change under the caller (MIK-8154
+/// S2'): a NUL or a character the sanitizer would strip is refused.
+///
+/// # Errors
+///
+/// `Error::Protocol` naming what the field contains.
+pub(crate) fn validate_protocol_text(text: &str) -> Result<()> {
+    if contains_null_byte(text) {
+        return Err(Error::Protocol(
+            "Input contains null bytes which are not allowed".to_string(),
+        ));
+    }
+    if text.chars().any(is_unsafe_control) {
+        return Err(Error::Protocol(
+            "Input contains control characters which are not allowed in a protocol field"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+mod protocol;
+pub(crate) use protocol::{ProtocolRoute, validate_protocol_fields};
+
+/// The one sanitize step (MIK-8154 SAN.1): the whole request, `id` kept as is
+/// (validated); a request whose every target is `passthrough` skips it.
+///
+/// # Errors
+///
+/// `Error::Protocol` for a NUL anywhere, or a control character in `id`.
+pub(crate) fn sanitize_request(request: &Value, route: ProtocolRoute) -> Result<Value> {
+    let Some(map) = request.as_object() else {
+        return sanitize_json_value(request);
+    };
+    if let Some(Value::String(id)) = map.get("id") {
+        validate_protocol_text(id)?;
+    }
+    let mut sanitized = serde_json::Map::with_capacity(map.len());
+    for (key, value) in map {
+        let clean_key = sanitize_string(key)?;
+        let clean = if key == "id" {
+            value.clone()
+        } else {
+            protocol::sanitize_value(&clean_key, value, route)?
+        };
+        sanitized.insert(clean_key, clean);
+    }
+    Ok(Value::Object(sanitized))
+}
+
 /// Sanitize an optional JSON value, returning `None` unchanged.
 ///
 /// # Errors

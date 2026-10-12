@@ -292,6 +292,12 @@ fn identity(subject: &str, email: &str) -> VerifiedIdentity {
     }
 }
 
+/// The caller of a keyed direct call: a verified execution principal, which
+/// the direct route requires as `/mcp` does (MIK-8154 ANON.1).
+fn principal() -> VerifiedIdentity {
+    identity("keyed", "keyed@id.local")
+}
+
 fn key(value: &str) -> Value {
     json!({ IDEMPOTENCY_KEY_META: value })
 }
@@ -306,8 +312,10 @@ async fn direct_route_suppresses_a_keyed_duplicate() {
     let (state, _store_dir) = state_with_idempotency().await;
     register_backend(&state, &url);
 
-    let (first_status, first) = post_direct(&state, call_body(1, Some(key("k1"))), None).await;
-    let (second_status, second) = post_direct(&state, call_body(2, Some(key("k1"))), None).await;
+    let (first_status, first) =
+        post_direct(&state, call_body(1, Some(key("k1"))), Some(principal())).await;
+    let (second_status, second) =
+        post_direct(&state, call_body(2, Some(key("k1"))), Some(principal())).await;
 
     assert_eq!(first_status, StatusCode::OK, "first call: {first}");
     assert_eq!(second_status, StatusCode::OK, "second call: {second}");
@@ -439,8 +447,18 @@ async fn direct_route_keeps_the_key_of_a_dispatched_call_that_errored() {
     let (state, _store_dir) = state_with_idempotency().await;
     register_backend(&state, &url);
 
-    let (_, first) = post_direct(&state, call_body(1, Some(key("k-error"))), None).await;
-    let (_, second) = post_direct(&state, call_body(2, Some(key("k-error"))), None).await;
+    let (_, first) = post_direct(
+        &state,
+        call_body(1, Some(key("k-error"))),
+        Some(principal()),
+    )
+    .await;
+    let (_, second) = post_direct(
+        &state,
+        call_body(2, Some(key("k-error"))),
+        Some(principal()),
+    )
+    .await;
 
     assert_eq!(
         calls.load(Ordering::SeqCst),

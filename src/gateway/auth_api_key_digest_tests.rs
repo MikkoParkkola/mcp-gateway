@@ -180,3 +180,31 @@ fn a_clock_before_the_epoch_refuses_a_live_key_on_its_behalf() {
         "an unreadable clock resolved an API key's caller"
     );
 }
+
+/// MIK-8202 A6: `client_for_key_at` judges a key's expiry at the caller's
+/// reading and reads no clock of its own: live at a reading before
+/// `expires_at`, refused at one after it, with the thread's clock unreadable
+/// throughout.
+#[test]
+fn a_key_is_judged_at_the_callers_reading() {
+    let now = crate::clock::utc_now().expect("a readable clock");
+    let config = digest_key(Some(
+        (now + crate::duration_bound::delta!(hours, 1)).to_rfc3339(),
+    ));
+    let principal = &hex_of(KEY)[..12];
+    let _clock = crate::clock::test_clock::before_epoch();
+    assert!(
+        config.client_for_key_at("ops", principal, now).is_some(),
+        "refused at a reading before its expiry"
+    );
+    assert!(
+        config
+            .client_for_key_at(
+                "ops",
+                principal,
+                now + crate::duration_bound::delta!(hours, 2)
+            )
+            .is_none(),
+        "resolved at a reading after its expiry"
+    );
+}

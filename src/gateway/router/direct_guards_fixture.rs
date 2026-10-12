@@ -25,7 +25,8 @@ use crate::transport::Transport;
 pub(crate) enum Answer {
     /// Ordinary success, `isError: false`.
     Ok,
-    /// Like `Ok`, its `tools/list` also naming a second tool, `note`.
+    /// Like `Ok`, its `tools/list` also naming a second tool, `note`, and an
+    /// open-schema backend tool named `gateway_invoke` (MIK-8154 S9f).
     WithNote,
     /// Success envelope, `isError: true` (a tool refusing a request).
     IsError,
@@ -284,6 +285,15 @@ pub(crate) async fn fixture(answer: Answer, arm: impl FnOnce(&mut MetaMcp)) -> F
 pub(crate) async fn fixture_sanitizing(answer: Answer, on: bool) -> Fx {
     SANITIZE.with(|s| s.set(on));
     let fx = fixture_inner(answer, false, |meta| meta).await;
+    SANITIZE.with(|s| s.set(false));
+    fx
+}
+
+/// Any fixture builder, run with `security.sanitize_input` = `on` (MIK-8154
+/// rows: the firewalled and code-mode fixtures under sanitization).
+pub(crate) async fn sanitizing<T, F: std::future::Future<Output = T>>(on: bool, build: F) -> T {
+    SANITIZE.with(|s| s.set(on));
+    let fx = build.await;
     SANITIZE.with(|s| s.set(false));
     fx
 }
@@ -672,5 +682,32 @@ async fn fixture_inner(
         calls,
         seen,
         _store: store,
+    }
+}
+
+/// MIK-8154 F2 rows: a reload of `name` as config reload does it, the old
+/// instance removed and a new one registered with `passthrough`, sending
+/// through the fixture's counting transport. Returned as a hook to run at a
+/// seam.
+pub(crate) fn reload_for_test(
+    fx: &Fx,
+    name: &'static str,
+    passthrough: bool,
+) -> impl FnOnce() + use<> {
+    let (state, calls, seen) = (
+        Arc::clone(&fx.state),
+        Arc::clone(&fx.calls),
+        Arc::clone(&fx.seen),
+    );
+    move || {
+        let backend = Arc::new(Backend::new(
+            name,
+            fixture_backend_config(name, passthrough),
+            &fixture_failsafe(),
+            Duration::from_secs(60),
+        ));
+        backend.set_transport_for_test(backend_transport((&calls, &seen), Answer::Ok));
+        state.backends.remove(name);
+        assert!(state.backends.register(backend), "reload registration");
     }
 }

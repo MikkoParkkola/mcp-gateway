@@ -9,7 +9,6 @@ use tracing::debug;
 use super::Gateway;
 use super::StdioNonce;
 use super::stdio_route_stage::RouteStage;
-use super::stdio_single::InputSanitizing;
 use super::{
     STDIO_CREDENTIAL_PRINCIPAL, StdioClient, stdio_catalogue, stdio_delivery,
     stdio_routing_keys_only, stdio_take_merged_client_meta, stdio_tasks,
@@ -17,6 +16,7 @@ use super::{
 use crate::gateway::authz::ToolPolicyAuthorizer;
 use crate::gateway::meta_mcp::refund_witness::RefundWitness;
 use crate::gateway::meta_mcp::{InvokeScope, MetaMcp, MetaMcpCallerContext};
+use crate::security::sanitize::InputSanitizing;
 
 impl Gateway {
     #[expect(
@@ -36,7 +36,10 @@ impl Gateway {
         use crate::protocol::JsonRpcResponse;
 
         let session_id = client.session_id;
-        let prepared = Self::prepare_signing(meta_mcp, &mut request, client.sanitize);
+        let policy = ToolPolicyAuthorizer { tool_policy };
+        let scope = InvokeScope::stdio(&policy);
+        let view = super::super::meta_mcp::visible::TargetView::Caller(scope, Some(session_id));
+        let prepared = Self::prepare_signing(meta_mcp, &mut request, (client.sanitize, view));
         let (mut signing_context, chain_nonce) = match prepared {
             Ok(prepared) => prepared,
             Err(response) => return Some(stdio_delivery::StdioAnswer::Built(response)),
@@ -48,8 +51,6 @@ impl Gateway {
             Err(early) => return early.map(stdio_delivery::StdioAnswer::Built),
         };
 
-        let policy = ToolPolicyAuthorizer { tool_policy };
-        let scope = InvokeScope::stdio(&policy);
         let (external_tool, response_targets) = {
             // Response targets are derived here, before dispatch, so live backend
             // state cannot move an accepted call's provenance. The mapping is fed
@@ -207,7 +208,10 @@ impl Gateway {
     fn prepare_signing(
         meta_mcp: &Arc<MetaMcp>,
         request: &mut serde_json::Value,
-        sanitize: InputSanitizing,
+        (sanitize, view): (
+            InputSanitizing,
+            super::super::meta_mcp::visible::TargetView<'_>,
+        ),
     ) -> std::result::Result<
         (
             Option<super::super::meta_mcp::signing::SigningInvocationContext>,
@@ -223,6 +227,18 @@ impl Gateway {
             JsonRpcResponse::error(id, error.to_rpc_code(), wire_error_message(error))
                 .to_value_lossy()
         };
+        // MIK-8154 S2': the protocol fields, before anything takes them off.
+        if sanitize == InputSanitizing::On {
+            crate::security::sanitize::validate_protocol_fields(
+                request,
+                &crate::gateway::PROTOCOL_NONCES,
+                crate::security::sanitize::ProtocolRoute::Meta,
+            )
+            .map_err(|error| {
+                JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string())
+                    .to_value_lossy()
+            })?;
+        }
         let mut signing_context = meta_mcp.signing_enabled().then(|| {
             super::super::meta_mcp::signing::SigningInvocationContext::capture_scoped(
                 request,
@@ -231,11 +247,16 @@ impl Gateway {
         });
         let chain_nonce = crate::protocol::mrtr::take_chain_nonce(request)
             .map_err(|error| refuse(raw_id.clone(), &error))?;
-        if sanitize == InputSanitizing::On {
-            *request =
-                crate::security::sanitize::sanitize_json_value(request).map_err(|error| {
-                    JsonRpcResponse::error(None, -32600, error.to_string()).to_value_lossy()
-                })?;
+        // MIK-8154 SAN.1: mapped on the caller's view (the request's memo),
+        // then sanitized unless every target is `passthrough` (option (a)).
+        if sanitize == InputSanitizing::On
+            && !super::super::router::sanitize_exempt(meta_mcp, request, view)
+        {
+            *request = crate::security::sanitize::sanitize_request(
+                request,
+                crate::security::sanitize::ProtocolRoute::Meta,
+            )
+            .map_err(|error| refuse(raw_id.clone(), &error))?;
         }
         if let Some(context) = signing_context.as_mut() {
             context

@@ -78,23 +78,9 @@ impl StdioClient<'_> {
     }
 }
 
-/// Whether stdio intake sanitizes each request (`security.sanitize_input`).
-/// An enum, not a `bool`, because it selects behaviour.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum InputSanitizing {
-    /// Requests pass to dispatch as received.
-    Off,
-    /// Every request is sanitized before it is judged: a NUL is refused,
-    /// control characters are stripped (`security::sanitize`).
-    On,
-}
-
-impl InputSanitizing {
-    /// The mode the `security.sanitize_input` setting selects.
-    pub(super) const fn from_setting(on: bool) -> Self {
-        if on { Self::On } else { Self::Off }
-    }
-}
+/// The one sanitize switch, shared with `/mcp` and the direct route
+/// (MIK-8154 SAN.1); kept at this path for stdio's callers.
+pub(crate) use crate::security::sanitize::InputSanitizing;
 
 /// Copy only the fields backend target mapping routes on.
 ///
@@ -346,9 +332,10 @@ impl Gateway {
         crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
     ) {
         // One visibility judgement per request (MIK-8340), as on HTTP.
-        let dispatch = crate::gateway::meta_mcp::visible::with_visibility_memo(
+        // Boxed first, as on HTTP: the memo wraps a pointer, not a copy.
+        let dispatch = crate::gateway::meta_mcp::visible::with_visibility_memo(Box::pin(
             Self::dispatch_relay_scoped(meta_mcp, tool_policy, mtls_policy, request, client),
-        );
+        ));
         if meta_mcp.relay_active() {
             return meta_mcp.collecting_staged(Box::pin(dispatch)).await;
         }
