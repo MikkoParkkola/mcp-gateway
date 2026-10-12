@@ -102,14 +102,19 @@ fn the_gateway_starts_on_the_real_clock() {
 /// One `trust lab evaluate` run that updates the baseline registry, on the
 /// real clock or (`dark`) on one that reads before 1970.
 fn update_trust_baseline(root: &Path, dark: bool) -> std::process::Output {
+    trust_baseline_command(root, dark, Some("weather"))
+}
+
+/// `trust lab evaluate [name] --update-baseline-registry`; `name: None` evaluates
+/// every card under `caps`, which is none when the directory is empty.
+fn trust_baseline_command(root: &Path, dark: bool, name: Option<&str>) -> std::process::Output {
     let mut command = gateway_bin::command(root, gateway_bin::Inherit::Environment);
+    command.current_dir(root).args(["trust", "lab", "evaluate"]);
+    if let Some(name) = name {
+        command.arg(name);
+    }
     command
-        .current_dir(root)
         .args([
-            "trust",
-            "lab",
-            "evaluate",
-            "weather",
             "--capabilities",
             "caps",
             "--baseline-registry",
@@ -181,6 +186,32 @@ fn the_trust_baseline_cli_writes_nothing_on_a_clock_before_1970() {
             &std::fs::read(file).expect("output kept"),
             before,
             "{} is unchanged",
+            file.display()
+        );
+    }
+}
+
+/// R11b (MIK-8202.AC.16; final review): with no capability cards the
+/// evaluation reads no clock, so the baseline writer's own read is the only
+/// guard. On a clock before 1970 the command fails and creates nothing: no
+/// baseline file and no manifest. Mutant M11 (the clock read moved after the
+/// baseline write) creates the baseline file before it refuses.
+#[test]
+fn a_zero_card_baseline_update_creates_nothing_on_a_clock_before_1970() {
+    let root = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(root.path().join("caps")).expect("empty caps dir");
+
+    let dark = trust_baseline_command(root.path(), true, None);
+    let stderr = String::from_utf8_lossy(&dark.stderr);
+    assert!(!dark.status.success(), "a dark clock must fail: {stderr}");
+    let registry = root.path().join("registry");
+    for file in [
+        registry.join("baselines").join("weather-baseline.json"),
+        registry.join("manifest.json"),
+    ] {
+        assert!(
+            !file.exists(),
+            "{} was written on a dark clock",
             file.display()
         );
     }

@@ -68,9 +68,9 @@ impl TaskExecutor {
     /// that time for every later attempt, so the clock is read for a wait at
     /// most once. Budgets: one conflict retry and one clock wait. An expired
     /// wait hands the ORIGINAL outcome to [`Self::settle_dated_last_known`].
-    /// So at most 3 commits here, or 2 here and 2 there (r4.1), and the only
-    /// losses are a second lost compare-and-set and a store that cannot be
-    /// re-read, both logged.
+    /// So at most 3 commits here, or 2 here and 2 there (r4.1). The outcome is
+    /// lost only on a second lost compare-and-set, a store that cannot be
+    /// re-read, or a store write that fails, and each is logged.
     pub(in crate::gateway::task_service::execution) async fn settle_cas_by(
         &self,
         (principal, id, revision): (&str, &str, u64),
@@ -99,7 +99,7 @@ impl TaskExecutor {
                     self.reread(principal, id)
                 }
                 Err(CommitFailure::RevisionConflict) => {
-                    tracing::warn!(task_id = %id, "task settlement lost a second compare-and-set");
+                    tracing::error!(task_id = %id, "task settlement lost a second compare-and-set: outcome not stored");
                     Next::Done(false)
                 }
                 // Only a `None` commit reads the clock, so with `at` set this
@@ -181,7 +181,7 @@ impl TaskExecutor {
                 Ok(stored) => return stored_backend_output(&stored),
                 Err(CommitFailure::RevisionConflict) if !retried => retried = true,
                 Err(CommitFailure::RevisionConflict) => {
-                    tracing::warn!(task_id = %id, "task settlement lost a second compare-and-set");
+                    tracing::error!(task_id = %id, "task settlement lost a second compare-and-set: outcome not stored");
                     return false;
                 }
                 // A commit dated `Some` never reads the clock: unreachable by
