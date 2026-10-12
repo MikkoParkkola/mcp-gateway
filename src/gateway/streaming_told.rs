@@ -197,7 +197,9 @@ pub(crate) enum Judged<T> {
 pub(crate) enum DeadReason {
     /// The held credential no longer authenticates.
     Bearer,
-    /// The Open WebUI assertion the stream was admitted under has expired.
+    /// The Open WebUI assertion the stream was admitted under has expired. An
+    /// unreadable clock is folded in here: `jwt_window` answers Expired for
+    /// it, and a broken host clock alerts elsewhere.
     Adapter,
 }
 
