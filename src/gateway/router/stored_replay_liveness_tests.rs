@@ -613,6 +613,82 @@ async fn t7_revoked_vault_plan_repeat_answers_as_a_missing_name() {
     // two are different operations, not a leak; R4 carries the strict twin.
 }
 
+/// A keyed task-augmented `gateway_invoke` that completed, for T8/T9.
+async fn completed_task(fx: &Fx, key: &str) -> String {
+    answer_marker(fx);
+    let made = send(fx, "tools/call", "gateway_invoke", invoke_params(Some(key), true)).await;
+    let id = made
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("premise: a task was made: {made}"))
+        .to_owned();
+    let done = wait_terminal(fx, &id).await;
+    assert_eq!(
+        done.pointer("/result/status").and_then(Value::as_str),
+        Some("completed"),
+        "premise: {done}"
+    );
+    id
+}
+
+/// T8 (E9): with custody failing (the account `Unavailable`), a repeated task
+/// call answers exactly as the live call does (retryable), not as a missing
+/// name: byte-identical after normalising only `id` to the same call made
+/// live with a fresh key. M37 (the catalogue refusal kept first) must fail
+/// this row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t8_unavailable_repeat_answers_as_the_live_call() {
+    let fx = fixture(false).await;
+    completed_task(&fx, "t8").await;
+    let sent = fx.gateway.tool_calls().len();
+    fx.gateway.fail_custody_for_test(true);
+    let again = send(&fx, "tools/call", "gateway_invoke", invoke_params(Some("t8"), true)).await;
+    let live = send(&fx, "tools/call", "gateway_invoke", invoke_params(Some("t8-live"), false)).await;
+    eprintln!("T8 repeat: {again}");
+    eprintln!("T8 live: {live}");
+    assert!(live.get("error").is_some(), "premise: the live call is refused: {live}");
+    let (mut again_id, mut live_id) = (again.clone(), live.clone());
+    again_id["id"] = Value::Null;
+    live_id["id"] = Value::Null;
+    assert_eq!(again_id, live_id, "T8: the repeat differs from the live call: {again} vs {live}");
+    assert!(!again.to_string().contains(MARKER), "T8: stored output served: {again}");
+    assert_eq!(fx.gateway.tool_calls().len(), sent, "T8: the call reached the backend: {again}");
+}
+
+/// T9 (E9 guard): the same outage, but the tool is ALSO withheld for a reason
+/// that is not its account (its description is blocked). E9 must not fire:
+/// the repeat answers exactly as the live call to that blocked tool does
+/// (byte-identical after normalising only `id`), never the outage's retryable
+/// answer. M37's leak variant (E9 applied to any withholding) must fail this
+/// row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t9_unavailable_never_unhides_a_tool_hidden_for_another_reason() {
+    let fx = fixture(false).await;
+    completed_task(&fx, "t9").await;
+    let sent = fx.gateway.tool_calls().len();
+    fx.gateway
+        .backends()
+        .get(BACKEND)
+        .expect("the backend")
+        .block_tool_for_test(TOOL);
+    fx.gateway.fail_custody_for_test(true);
+    let again = send(&fx, "tools/call", "gateway_invoke", invoke_params(Some("t9"), true)).await;
+    let live = send(&fx, "tools/call", "gateway_invoke", invoke_params(Some("t9-live"), false)).await;
+    eprintln!("T9 repeat: {again}");
+    eprintln!("T9 live: {live}");
+    let (mut again_id, mut live_id) = (again.clone(), live.clone());
+    again_id["id"] = Value::Null;
+    live_id["id"] = Value::Null;
+    assert_eq!(again_id, live_id, "T9: the blocked tool's repeat differs from its live call: {again} vs {live}");
+    assert_ne!(
+        again.pointer("/error/code").and_then(Value::as_i64),
+        Some(-32603),
+        "T9: the outage answer leaked for a tool withheld for another reason: {again}"
+    );
+    assert!(!again.to_string().contains(MARKER), "T9: stored output served: {again}");
+    assert_eq!(fx.gateway.tool_calls().len(), sent, "T9: the call reached the backend: {again}");
+}
+
 /// G1 (guard; mutant M31): on the direct route a revoked grant's keyed replay
 /// is refused at stage 5 (the identity mint), before 7a/7b can serve a stored
 /// answer; nothing is sent.

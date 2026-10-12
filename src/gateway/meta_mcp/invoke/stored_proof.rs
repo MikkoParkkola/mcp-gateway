@@ -31,6 +31,58 @@ impl crate::gateway::meta_mcp::MetaMcp {
         .map(|_| ())
     }
 
+    /// E9 (MIK-8392): a repeated task call whose target is hidden ONLY because
+    /// its account cannot be read right now answers as the live call does.
+    ///
+    /// The trigger is narrow: the catalogue verdict is `Lacked` (the caller's
+    /// own per-user catalogue does not list it) AND the account outcome is
+    /// `Unavailable` (custody failing). Then the withholding is a symptom of
+    /// the outage, not lost access, and the live call's resolution answers
+    /// (retryable). A Schema, Descriptor or Refused verdict, a `NoView`
+    /// (revoked) or `Live` account, or no open memo (outcome `None`) leaves
+    /// the catalogue refusal in place, so a hidden or revoked tool still
+    /// answers as a missing name. Run before `refuse_stored_repeat`.
+    pub(crate) async fn unavailable_repeat_answer(
+        &self,
+        id: &crate::protocol::RequestId,
+        stored: &crate::gateway::task_service::CommittedTask,
+        session: Option<&str>,
+        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+    ) -> Option<crate::protocol::JsonRpcResponse> {
+        use crate::gateway::meta_mcp::visible::{
+            self, AccountOutcome, Visibility, Withholding,
+        };
+        let targets: Vec<(&str, &str)> = stored
+            .targets
+            .iter()
+            .map(|target| (target.server.as_str(), target.tool.as_str()))
+            .collect();
+        let proof = CallerProof::new(caller.verified_identity, caller.provenance());
+        self.fill_account_outcomes(&targets, proof).await;
+        for &(server, tool) in &targets {
+            let Some(account) = self.target_account(server, tool) else {
+                continue;
+            };
+            if visible::account_outcome(server, &account) != Some(AccountOutcome::Unavailable) {
+                continue;
+            }
+            if self.stored_target_view(server, tool, caller.scope(), session)
+                != Some(Visibility::Withheld(Withholding::Lacked))
+            {
+                continue;
+            }
+            if let Err(error) = self.prove_target_live((server, tool), caller).await {
+                return Some(
+                    crate::gateway::meta_mcp::response_security::error_response_preserving_status(
+                        id.clone(),
+                        &error,
+                    ),
+                );
+            }
+        }
+        None
+    }
+
     /// The answer a failed dispatch gives for a carried fill failure (E4),
     /// as `dispatch_resolution`'s Break arm answers it: the connect offer
     /// when the failure is a marked refusal, else the refused-fill tool

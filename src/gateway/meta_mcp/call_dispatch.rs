@@ -386,6 +386,15 @@ impl MetaMcp {
                 } else {
                     caller.retry.attestation.as_deref()
                 };
+                // E9: a target hidden only because its account cannot be read
+                // now answers as the live call does (retryable), before the
+                // catalogue refusal; every other withholding is unchanged.
+                if let Some(answer) = self
+                    .unavailable_repeat_answer(&id, &stored, session_id, caller)
+                    .await
+                {
+                    return answer;
+                }
                 // MIK-8392 site-5 split: the catalogue is judged here; an
                 // account that is not live is the call's own live path.
                 if let Some(refusal) =
