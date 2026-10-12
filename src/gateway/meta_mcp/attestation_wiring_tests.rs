@@ -251,6 +251,9 @@ fn provenance_test_backend() -> Arc<BackendRegistry> {
         result: json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
     });
     backend.set_transport_for_test(transport);
+    // MIK-8393: only a declared read is cached; `search` is declared
+    // read-only so the cache-hit receipt case has a hit to stamp.
+    backend.set_read_only_declared_for_test(&["search"]);
     let _ = registry.register(backend);
     registry
 }

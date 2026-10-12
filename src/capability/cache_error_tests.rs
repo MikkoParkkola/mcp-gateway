@@ -64,6 +64,8 @@ async fn scripted_executor(
         r"
 name: cache_error_probe
 description: Shared cacheable probe
+metadata:
+  read_only: true
 cache:
   ttl: 60
   strategy: memory

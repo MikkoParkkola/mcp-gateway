@@ -45,6 +45,8 @@ async fn cacheable_counting_executor()
         r"
 name: cache_probe
 description: Shared cacheable probe
+metadata:
+  read_only: true
 cache:
   ttl: 60
   strategy: memory
@@ -164,6 +166,8 @@ async fn cache_4_executor_loopback_context_is_not_cached() {
         r"
 name: loopback_probe
 description: Loopback cacheable probe
+metadata:
+  read_only: true
 cache:
   ttl: 60
   strategy: memory
@@ -331,6 +335,37 @@ async fn cache_4_executor_same_context_hits() {
         hits.load(Ordering::SeqCst),
         1,
         "same revision, profile, and epoch must hit"
+    );
+}
+
+/// MIK-8393 R13: the executor's own cache serves only a capability declared
+/// `read_only: true`. The same context as the hit control above, with the
+/// declaration taken away: an author-set `cache` block on a write must not turn
+/// a second call into a no-op reported as done.
+#[tokio::test]
+async fn cache_4_executor_a_capability_not_declared_read_only_is_never_cached() {
+    let (mut executor, mut capability, hits) = cacheable_counting_executor().await;
+    capability.metadata.read_only = false;
+    executor = executor.with_policy_epoch(Arc::new(std::sync::atomic::AtomicU64::new(0)));
+    let params = serde_json::json!({});
+    let context = with_snapshot(
+        alice(),
+        Some(crate::protocol::PROTOCOL_VERSION),
+        Some("default"),
+        Some(0),
+    );
+    executor
+        .execute_with_context(&capability, params.clone(), context.clone())
+        .await
+        .unwrap();
+    executor
+        .execute_with_context(&capability, params, context)
+        .await
+        .unwrap();
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        2,
+        "a capability not declared read-only was answered from the executor cache"
     );
 }
 

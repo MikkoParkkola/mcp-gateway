@@ -617,6 +617,7 @@ schema:
       ok:
         type: boolean
 metadata:
+  read_only: true
   exposure: personal
   identity_owner:
     authority: cloudflare_access

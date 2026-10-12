@@ -176,3 +176,30 @@ fn prepare_tool_metadata_grants_resend_only_to_explicit_hints() {
     permitted.sort_unstable();
     assert_eq!(permitted, ["idempotent_only", "read_true"]);
 }
+
+/// MIK-8393 R5: the cache's set admits only an explicit `readOnlyHint: true`.
+/// `get_status` is unannotated and reads as a getter by name, so a set read
+/// after normalisation would admit it; an idempotent write is retry-safe and
+/// still a write.
+#[test]
+fn prepare_tool_metadata_admits_to_the_cache_only_a_declared_read() {
+    let mut tools = vec![
+        sample_tool("get_status"),
+        annotated("read_true", Some(true), None),
+        annotated("read_false", Some(false), None),
+        annotated("idempotent_write", Some(false), Some(true)),
+        annotated("idempotent_only", None, Some(true)),
+    ];
+    let prepared = prepare_tool_metadata(
+        "beeper",
+        &std::collections::BTreeMap::new(),
+        crate::backend::Judging::Judge,
+        &mut tools,
+    );
+    let admitted: Vec<&str> = prepared
+        .read_only_declared
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(admitted, ["read_true"]);
+}

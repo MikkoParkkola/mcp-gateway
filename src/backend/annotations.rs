@@ -185,9 +185,23 @@ pub(crate) fn prepare_tool_metadata(
         })
         .map(|tool| tool.name.clone())
         .collect();
+    // MIK-8393 (#3773): read from the declarations before the inference below
+    // fills omitted hints, so a `get_`-named tool the backend never declared
+    // read-only stays out. Only an explicit `readOnlyHint: true` counts; an
+    // idempotent write may be retried, but must never be answered from cache.
+    let read_only_declared = tools
+        .iter()
+        .filter(|tool| {
+            tool.annotations
+                .as_ref()
+                .is_some_and(|annotations| annotations.read_only_hint == Some(true))
+        })
+        .map(|tool| tool.name.clone())
+        .collect();
     normalize_tool_annotations(server, tools);
     PreparedTools {
         resend_permitted,
+        read_only_declared,
         verdicts,
     }
 }
@@ -196,5 +210,8 @@ pub(crate) fn prepare_tool_metadata(
 /// the tool-poisoning verdicts to commit once the listing's store is accepted.
 pub(crate) struct PreparedTools {
     pub(crate) resend_permitted: HashSet<String>,
+    /// The tools declared `readOnlyHint: true`: the only ones the response
+    /// cache may store or serve (MIK-8393).
+    pub(crate) read_only_declared: HashSet<String>,
     pub(crate) verdicts: super::descriptor_gate::Verdicts,
 }
