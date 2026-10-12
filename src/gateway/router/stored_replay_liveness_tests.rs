@@ -1440,3 +1440,54 @@ async fn s2b_token_exchange_replay_is_lifted_when_the_mint_succeeds() {
     assert_eq!(sends.load(Ordering::SeqCst), 1, "S2b: the replay was re-sent: {again}");
     drop(idp);
 }
+
+/// L4' (mutants M8, M2b): a lifted replay writes ONE invocation record, and
+/// it reads as the first execution's did: the same request hash (the
+/// envelope the route stage passes, `gateway_invoke`'s own arguments) and the
+/// same response hash (the stored execution's facts). A wrong envelope (M8)
+/// changes the request hash; a replay answered by the idempotency cache
+/// instead of the lift (M2b) writes no such record.
+#[tokio::test]
+async fn l4_a_lifted_replay_records_the_first_execution_s_hashes() {
+    let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
+    let idp = r6m_token_exchange::LiveIdp::start(&key).await;
+    let alice = r6m_token_exchange::alice();
+    let (router, _sends, dirs) = r6m_token_exchange::gateway(&key, idp.endpoint(), &alice).await;
+    let log = dirs.0.path().join("audit.jsonl");
+    let call = || {
+        json!({"name": "gateway_invoke",
+            "arguments": {"server": r6m_token_exchange::TX, "tool": TOOL,
+                "arguments": {"folder": "inbox"}},
+            "_meta": meta(Some("l4"), false)})
+    };
+    // The invocation records (those carrying a request hash) since `skip`.
+    let invocations = |skip: usize| -> Vec<Value> {
+        std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .skip(skip)
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|record| record.get("request_hash").is_some())
+            .collect()
+    };
+    let start = std::fs::read_to_string(&log).unwrap_or_default().lines().count();
+    let first = r6m_token_exchange::send_as(&router, &alice, call()).await;
+    assert!(first.to_string().contains(MARKER), "premise: dispatched: {first}");
+    let original = invocations(start);
+    assert_eq!(original.len(), 1, "premise: one first-run record: {original:?}");
+    let before = std::fs::read_to_string(&log).unwrap_or_default().lines().count();
+    let again = r6m_token_exchange::send_as(&router, &alice, call()).await;
+    assert!(again.to_string().contains(MARKER), "premise: the lifted replay was served: {again}");
+    let replayed = invocations(before);
+    eprintln!("L4' first: {original:?}");
+    eprintln!("L4' replay: {replayed:?}");
+    assert_eq!(replayed.len(), 1, "L4': not one replay record: {replayed:?}");
+    for field in ["request_hash", "response_hash", "outcome"] {
+        assert_eq!(
+            replayed[0].get(field),
+            original[0].get(field),
+            "L4': the replay's {field} differs from the first execution's"
+        );
+    }
+    drop(idp);
+}
