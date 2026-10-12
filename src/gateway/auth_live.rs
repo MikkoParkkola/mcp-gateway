@@ -469,7 +469,7 @@ mod tests {
     /// on whether an `Authorization` header of another scheme rode along.
     #[test]
     fn g_digest_the_ownership_digest_ignores_the_authorization_flag() {
-        let cookie = format!("{SESSION_COOKIE}=handle");
+        let cookie = format!("{}=handle", crate::gateway::auth::SESSION_COOKIE);
         let mut plain = axum::http::HeaderMap::new();
         plain.insert(
             axum::http::header::COOKIE,
