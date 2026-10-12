@@ -697,32 +697,10 @@ fn settle_parked(
     }
 }
 
-/// A replay is scanned like a fresh answer: the idempotency cache is shared
-/// across routes, and the meta route settles before its delivery scan, so an
-/// entry's provenance proves nothing (design round 2).
-pub(super) fn replay_scan(
-    state: &AppState,
-    (call, envelope): (&BackendCall<'_>, &Envelope),
-    client: Option<&crate::gateway::auth::AuthenticatedClient>,
-    response: &mut JsonRpcResponse,
-) {
-    let method = envelope.method.as_str();
-    let target = screen_target(call, method);
-    super::super::direct_guards::scan_direct_egress(
-        state,
-        (
-            &target,
-            crate::gateway::meta_mcp::invoke::egress::ContentChecks::for_method(method),
-        ),
-        client,
-        response,
-    );
-}
-
 /// The policy target an answer of `method` is screened under (MIK-8139):
 /// the named tool for `tools/call`, otherwise the method itself, as the
 /// result scans target it.
-fn screen_target<'a>(call: &BackendCall<'a>, method: &'a str) -> BackendCall<'a> {
+pub(super) fn screen_target<'a>(call: &BackendCall<'a>, method: &'a str) -> BackendCall<'a> {
     BackendCall {
         server: call.server,
         tool: if method == "tools/call" {

@@ -141,10 +141,10 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
     ) -> Option<(Arc<Vec<Tool>>, bool)> {
         match self.listing_view(backend, scope) {
-            ListingView::Shared => Some(backend.cached_tools_snapshot_and_truncated()),
+            ListingView::Shared => Some(backend.cached_tools_snapshot_and_truncated(None)),
             ListingView::Cold | ListingView::NoView => None,
             ListingView::Caller(binding) => {
-                Some(backend.cached_tools_snapshot_and_truncated_for(Some(&binding)))
+                Some(backend.cached_tools_snapshot_and_truncated(Some(&binding)))
             }
         }
     }

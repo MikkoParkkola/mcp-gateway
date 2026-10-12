@@ -468,7 +468,7 @@ mod tests {
         );
         assert!(judged(&backend, "a").await.is_some());
         assert!(
-            !backend.cached_tools_snapshot_and_truncated().1,
+            !backend.cached_tools_snapshot_and_truncated(None).1,
             "a drained list is complete; the truncated mark must not survive it"
         );
     }
