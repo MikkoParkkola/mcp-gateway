@@ -252,8 +252,18 @@ pub(crate) fn per_user_shared(slot: CallerSlot, shared_slot: SharedSlot) -> PerU
 /// `backend/slot_eviction_tests.rs` `rearm`). Its catalogue lists `TOOL`
 /// valid; the returned counts are the new upstream's.
 pub(crate) fn rearm_alpha_slot(backend: &Backend) -> Arc<Asked> {
+    rearm_alpha_slot_with(backend, &valid(), false)
+}
+
+/// [`rearm_alpha_slot`] with `read`'s schema chosen and, with `fail_list`,
+/// every `tools/list` refused (MIK-8392 C2, L1).
+pub(crate) fn rearm_alpha_slot_with(
+    backend: &Backend,
+    schema: &Value,
+    fail_list: bool,
+) -> Arc<Asked> {
     let asked = Arc::new(Asked::default());
-    let tools = vec![tool(SIBLING, &valid()), tool(TOOL, &valid())];
+    let tools = vec![tool(SIBLING, &valid()), tool(TOOL, schema)];
     backend.set_pooled_transport_for_test(
         &PoolKey::PerUser {
             binding: BINDING.to_string(),
@@ -261,7 +271,7 @@ pub(crate) fn rearm_alpha_slot(backend: &Backend) -> Arc<Asked> {
         Arc::new(Upstream {
             tools: serde_json::to_value(&tools).expect("tools"),
             asked: Arc::clone(&asked),
-            fail_list: false,
+            fail_list,
         }),
     );
     asked

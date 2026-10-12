@@ -261,3 +261,6 @@ async fn c1r_a_read_after_a_real_eviction_resolves_once_and_serves() {
         "C1r: warm polls after the refill resolve nothing"
     );
 }
+
+#[path = "stored_read_lease_tests.rs"]
+mod lease;
