@@ -250,26 +250,28 @@ fn a_budget_named_other_never_sees_overflow_spend() {
 #[test]
 fn a_restore_applies_the_cap_and_keeps_the_saved_overflow() {
     use super::super::persistence::{PersistedCosts, ToolTotal, now_secs};
-    // GIVEN: a same-day snapshot saved before the cap, with 400 tool names
-    let mut saved = PersistedCosts {
-        saved_at: now_secs(),
-        tool_overflow_usd: 0.5,
-        ..PersistedCosts::default()
-    };
-    for i in 0..400 {
-        let total = ToolTotal {
-            call_count: 1,
-            total_cost_usd: 0.01,
-            avg_cost_usd: 0.01,
+    let (rows, snap) = crate::test_day::same_utc_day(|| {
+        // GIVEN: a same-day snapshot saved before the cap, with 400 tool names
+        let mut saved = PersistedCosts {
+            saved_at: now_secs(),
+            tool_overflow_usd: 0.5,
+            ..PersistedCosts::default()
         };
-        saved.tool_totals.insert(format!("t{i}"), total);
-    }
-    // WHEN: it is restored
-    let e = enforcer_with(true, None, &[], &[], &[]);
-    e.restore(&saved);
+        for i in 0..400 {
+            let total = ToolTotal {
+                call_count: 1,
+                total_cost_usd: 0.01,
+                avg_cost_usd: 0.01,
+            };
+            saved.tool_totals.insert(format!("t{i}"), total);
+        }
+        // WHEN: it is restored
+        let e = enforcer_with(true, None, &[], &[], &[]);
+        e.restore(&saved);
+        (e.tool_daily.len(), e.snapshot())
+    });
     // THEN: the map holds the cap; nothing is lost from the day's spend
-    assert_eq!(e.tool_daily.len(), MAX_UNBUDGETED_ROWS);
-    let snap = e.snapshot();
+    assert_eq!(rows, MAX_UNBUDGETED_ROWS);
     #[allow(clippy::cast_precision_loss)]
     let past_cap = (400 - MAX_UNBUDGETED_ROWS) as f64 * 0.01;
     assert!((snap.tool_overflow_usd - (0.5 + past_cap)).abs() < 1e-9);
@@ -359,35 +361,37 @@ fn the_first_spend_of_a_new_day_sweeps_whatever_the_minute_throttle_says() {
 #[test]
 fn a_restore_skips_rows_that_hold_no_spend() {
     use super::super::persistence::{PersistedCosts, ToolTotal, now_secs};
-    // GIVEN: a same-day save holding zero rows left from the day before
-    let mut saved = PersistedCosts {
-        saved_at: now_secs(),
-        ..PersistedCosts::default()
-    };
-    for i in 0..300 {
-        let zero = ToolTotal {
-            call_count: 0,
-            total_cost_usd: 0.0,
-            avg_cost_usd: 0.0,
+    let (tools, keys, snap) = crate::test_day::same_utc_day(|| {
+        // GIVEN: a same-day save holding zero rows left from the day before
+        let mut saved = PersistedCosts {
+            saved_at: now_secs(),
+            ..PersistedCosts::default()
         };
-        saved.tool_totals.insert(format!("idle-{i}"), zero);
-        saved.key_totals.insert(format!("idle-key-{i}"), 0.0);
-    }
-    // AND: one tool and one key that did spend today
-    let used = ToolTotal {
-        call_count: 1,
-        total_cost_usd: 0.02,
-        avg_cost_usd: 0.02,
-    };
-    saved.tool_totals.insert("used".to_string(), used);
-    saved.key_totals.insert("used-key".to_string(), 0.03);
-    // WHEN: it is restored
-    let e = enforcer_with(true, None, &[], &[], &[]);
-    e.restore(&saved);
+        for i in 0..300 {
+            let zero = ToolTotal {
+                call_count: 0,
+                total_cost_usd: 0.0,
+                avg_cost_usd: 0.0,
+            };
+            saved.tool_totals.insert(format!("idle-{i}"), zero);
+            saved.key_totals.insert(format!("idle-key-{i}"), 0.0);
+        }
+        // AND: one tool and one key that did spend today
+        let used = ToolTotal {
+            call_count: 1,
+            total_cost_usd: 0.02,
+            avg_cost_usd: 0.02,
+        };
+        saved.tool_totals.insert("used".to_string(), used);
+        saved.key_totals.insert("used-key".to_string(), 0.03);
+        // WHEN: it is restored
+        let e = enforcer_with(true, None, &[], &[], &[]);
+        e.restore(&saved);
+        (e.tool_daily.len(), e.key_daily.len(), e.snapshot())
+    });
     // THEN: only the rows with spend are back; no zero row takes a cap place
-    let snap = e.snapshot();
-    assert_eq!(e.tool_daily.len(), 1);
-    assert_eq!(e.key_daily.len(), 1);
+    assert_eq!(tools, 1);
+    assert_eq!(keys, 1);
     assert!((snap.tool_daily["used"] - 0.02).abs() < 1e-9);
     assert!((snap.key_daily["used-key"] - 0.03).abs() < 1e-9);
 }
