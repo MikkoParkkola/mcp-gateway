@@ -574,3 +574,41 @@ fn a_dangling_refresh_state_link_reads_as_damaged() {
     assert!(state.may_rotate());
     assert!(state.damaged);
 }
+
+/// MIK-8202 P3: a refresh on a clock before 1970 cannot date the token it
+/// would get, so nothing is sent: the refresh token stays stored and unspent
+/// (`NotSent`, never `Uncertain`, which would spend it on a rotating server),
+/// the marker is settled, and the next refresh on a readable clock sends it.
+#[tokio::test]
+async fn a_refresh_on_an_unreadable_clock_sends_nothing_and_keeps_its_token() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let owned = client(dir.path(), &server);
+    rotating(&owned);
+    hold(&owned, &token("a1", Some("r1"), true));
+
+    let refused = {
+        let _clock = crate::clock::test_clock::before_epoch();
+        headless(&owned).await
+    };
+
+    assert!(refused.is_err(), "refused on an unreadable clock");
+    assert_eq!(
+        server.requests(),
+        0,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
+    assert_eq!(
+        stored(&owned).and_then(|t| t.refresh_token).as_deref(),
+        Some("r1")
+    );
+    assert_eq!(marker(&owned), None, "the exchange settled");
+    assert!(
+        !flight_of(&owned).is_spent("r1"),
+        "an unsent token is not spent"
+    );
+
+    headless(&owned).await.expect("the kept token refreshes");
+    assert_eq!(server.uses("r1"), 1);
+}

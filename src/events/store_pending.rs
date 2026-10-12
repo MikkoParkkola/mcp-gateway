@@ -106,6 +106,8 @@ pub(crate) enum Revived {
     AlreadyPending,
     /// The dead letter was swept, evicted or replayed meanwhile.
     Missing,
+    /// A clock before 1970 dated no lease: transient (MIK-8202).
+    Undated,
 }
 
 /// Whether `sub` may be attempted at `now`.
@@ -132,7 +134,9 @@ impl Store {
         caps: OutboxCaps,
     ) -> std::io::Result<Enqueued> {
         let mut state = self.state.lock();
-        self.enqueue_locked(&mut state, record, caps)
+        // The record's fan-out stamp is the one reading that matched it.
+        let now = record.created_at;
+        self.enqueue_locked(&mut state, record, caps, now)
     }
 
     fn enqueue_locked(
@@ -140,6 +144,7 @@ impl Store {
         state: &mut State,
         record: OutboxRecord,
         caps: OutboxCaps,
+        now: DateTime<Utc>,
     ) -> std::io::Result<Enqueued> {
         // An expired row kept for its burials takes no new record, so the
         // worker can always settle it (MIK-8061); nor does a held one: what
@@ -147,8 +152,8 @@ impl Store {
         if !state
             .subs
             .get(&record.subscription_id)
-            // A clock before 1970 reads no lease live (MIK-8202).
-            .is_some_and(Subscription::live_now)
+            // Judged on the caller's reading, never a second read (MIK-8202).
+            .is_some_and(|sub| sub.live(now))
             || state.held.contains_key(&record.subscription_id)
         {
             return Ok(Enqueued::NoSubscription);
@@ -244,9 +249,10 @@ impl Store {
     ) -> std::io::Result<Revived> {
         let mut state = self.state.lock();
         // Read under the lock: an expiry that lands while this waits counts.
-        // A clock before 1970 dates no lease: nothing is revived (MIK-8202).
+        // A clock before 1970 dates no lease: nothing is revived, and the
+        // replay is refused as transient (MIK-8202).
         let Ok(now) = clock() else {
-            return Ok(Revived::NoSubscription);
+            return Ok(Revived::Undated);
         };
         let Some(stamp) = state
             .dead
@@ -282,7 +288,7 @@ impl Store {
         if state.outbox.contains_key(event_id) {
             return Ok(Revived::AlreadyPending);
         }
-        let placed = self.enqueue_locked(&mut state, record, caps);
+        let placed = self.enqueue_locked(&mut state, record, caps, now);
         match placed {
             Ok(Enqueued::Written) => {}
             Ok(Enqueued::NoSubscription) => return Ok(Revived::NoSubscription),
@@ -420,14 +426,17 @@ impl Store {
     /// on the wire stays cancelled: nothing is written back for it. A
     /// settlement the disk refused leaves the record pending, due after
     /// [`SETTLE_RETRY`], never stranded in flight.
+    /// On a clock that cannot be read (MIK-8202) nothing is dated; a burial
+    /// waits, pending with `dead_as`, for the next readable attempt.
     pub(crate) fn settle(
         &self,
         event_id: &str,
         created_at: DateTime<Utc>,
         outcome: Settle,
-        now: DateTime<Utc>,
+        now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
         policy: DeadPolicy,
     ) -> std::io::Result<Settled> {
+        let now = now.ok();
         let mut state = self.state.lock();
         // Only the claimed occurrence: a later one under the same id, admitted
         // after the claim was cancelled, is not settled by the old answer.
@@ -463,7 +472,8 @@ impl Store {
                 });
             } else if let Some(left) = state.outbox.get_mut(event_id) {
                 left.state = OutboxState::Pending;
-                left.next_attempt_at = now + SETTLE_RETRY;
+                // Undated, the record keeps its own date, never 1969.
+                left.next_attempt_at = now.map_or(left.next_attempt_at, |n| n + SETTLE_RETRY);
                 match outcome {
                     Settle::Dead { reason, .. } => left.dead_as = Some(reason),
                     // Still not a send: the refusal counts even if its write failed.
@@ -489,8 +499,8 @@ impl Store {
         // The subscription's delivery history is a status line: a failed
         // write of it never undoes the settlement.
         if let Err(error) = self.touch(&mut state, &sub_id, |s| {
-            if delivered {
-                s.last_delivery_at = Some(now);
+            if delivered && now.is_some() {
+                s.last_delivery_at = now;
             }
             s.last_error = error.map(str::to_owned);
         }) {
@@ -506,7 +516,7 @@ impl Store {
         state: &mut State,
         mut record: OutboxRecord,
         outcome: Settle,
-        now: DateTime<Utc>,
+        now: Option<DateTime<Utc>>,
         policy: DeadPolicy,
     ) -> std::io::Result<Settled> {
         let event_id = record.event_id.clone();
@@ -532,6 +542,15 @@ impl Store {
                 if let Some(status) = status {
                     record.last_status = Some(status.to_owned());
                 }
+                let Some(now) = now else {
+                    // No dead_at of 1969: the burial waits, pending with its
+                    // reason and its date, for the next readable attempt.
+                    record.state = OutboxState::Pending;
+                    record.dead_as = Some(reason);
+                    write_record(&self.outbox_dir, &file, &record)?.durable()?;
+                    state.outbox.insert(event_id, record);
+                    return Ok(Settled::default());
+                };
                 // Entombed first: once the dead letter is durable, load drops
                 // the outbox file even if the unlink below never happens.
                 // Eviction runs last, so it never removes that marker first.
@@ -567,26 +586,6 @@ impl Store {
     ) -> std::io::Result<Settled> {
         let mut state = self.state.lock();
         self.bury(&mut state, record, reason, now, policy)
-    }
-
-    /// Apply retention and the dead-letter caps now.
-    pub(crate) fn sweep_dead(
-        &self,
-        now: DateTime<Utc>,
-        policy: DeadPolicy,
-    ) -> std::io::Result<Vec<Evicted>> {
-        let mut state = self.state.lock();
-        let mut evicted = Vec::new();
-        match self.evict_dead(&mut state, now, policy, &mut evicted) {
-            Ok(()) => Ok(evicted),
-            // What was evicted before the failure is gone: its receipts are
-            // returned, and the next sweep retries the rest.
-            Err(error) if !evicted.is_empty() => {
-                tracing::warn!(%error, "events store: eviction stopped early");
-                Ok(evicted)
-            }
-            Err(error) => Err(error),
-        }
     }
 
     /// Suspend subscription `id` after sustained failure; its records stay

@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 
@@ -161,7 +160,13 @@ impl EventSource for BackendSource {
             .await
     }
 
-    fn matches(&self, _principal: &str, arguments: &Value, event: &SourceEvent) -> bool {
+    fn matches(
+        &self,
+        _principal: &str,
+        arguments: &Value,
+        event: &SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
         match parse_name(&event.name) {
             Some((_, Kind::ResourceUpdated)) => {
                 arguments.get("uri").is_some() && arguments.get("uri") == event.data.get("uri")
@@ -376,14 +381,14 @@ impl EventsHub {
                 }
                 latest.remove(&backend);
             }
-            hub.emit(SourceEvent {
+            hub.emit_dated(|occurred_at| SourceEvent {
                 kind: SourceKind::BackendNotification,
                 name: event_name(&backend),
                 backend: backend.clone(),
                 scope: Visibility::Backend(backend),
                 owner: None,
                 upstream_id: uuid::Uuid::new_v4().to_string(),
-                occurred_at: Utc::now(),
+                occurred_at,
                 data: json!({}),
                 lifecycle_key: None,
             });

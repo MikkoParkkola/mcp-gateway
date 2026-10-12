@@ -12,7 +12,7 @@ below hits real HTTP endpoints, no mocks.
   and `key_server.oidc[0]` to your own IdP tenant before running this).
 - `GATEWAY_OIDC_CLIENT_ID` set to that IdP's client/audience id.
 - A backend to receive the propagated token. The sample config points
-  `backends.mail-svc.http_url` at a placeholder; point it at any MCP server
+  `backends.mail-svc.url` at a placeholder; point it at any MCP server
   you control, or just watch the exchange happen and expect the final
   backend call to fail once it reaches an unreachable placeholder host, the
   token exchange itself completes before that.

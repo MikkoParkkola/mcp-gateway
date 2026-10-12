@@ -309,7 +309,7 @@ impl ScheduleSource {
     }
 
     /// The principals holding the timer `key` in live subscriptions.
-    fn holders(&self, key: &str) -> std::collections::BTreeSet<String> {
+    fn holders(&self, key: &str, now: DateTime<Utc>) -> std::collections::BTreeSet<String> {
         let Some(hub) = self.hub.upgrade() else {
             return std::collections::BTreeSet::new();
         };
@@ -317,7 +317,7 @@ impl ScheduleSource {
         hub.store
             .subscriptions()
             .into_iter()
-            .filter(|s| s.name == NAME && s.live_now())
+            .filter(|s| s.name == NAME && s.live(now))
             .filter(|s| parts(&s.arguments).is_ok_and(|p| p.key == key))
             .map(|s| s.principal)
             .collect()
@@ -325,14 +325,14 @@ impl ScheduleSource {
 
     /// The distinct timer keys `principal` holds in live subscriptions, each
     /// with the earliest time one of them was granted.
-    fn held_by(&self, principal: &str) -> HashMap<String, DateTime<Utc>> {
+    fn held_by(&self, principal: &str, now: DateTime<Utc>) -> HashMap<String, DateTime<Utc>> {
         let Some(hub) = self.hub.upgrade() else {
             return HashMap::new();
         };
         let mut held: HashMap<String, DateTime<Utc>> = HashMap::new();
         for sub in hub.store.subscriptions() {
             // A clock before 1970 reads none live (MIK-8202).
-            if sub.name != NAME || sub.principal != principal || !sub.live_now() {
+            if sub.name != NAME || sub.principal != principal || !sub.live(now) {
                 continue;
             }
             if let Ok(Parts { key, .. }) = parts(&sub.arguments) {
@@ -398,7 +398,14 @@ impl EventSource for ScheduleSource {
         arguments: &Value,
     ) -> Result<(), RpcError> {
         let Parts { key, .. } = parts(arguments)?;
-        let held = self.held_by(principal);
+        // One reading judges every lease the cap ranks: a clock that fails
+        // during the scan would drop a key's earliest row, rank the key past
+        // the cap and answer -32012, which revokes. On a clock before 1970 the
+        // answer is no verdict at all (MIK-8202).
+        let Ok(now) = crate::clock::utc_now() else {
+            return Err(RpcError::clock_unreadable());
+        };
+        let held = self.held_by(principal, now);
         if held.contains_key(&key) {
             // Two subscribes that join running timers at once both pass the
             // check below; here, at every fan-out, a principal past the cap
@@ -425,7 +432,13 @@ impl EventSource for ScheduleSource {
         Ok(())
     }
 
-    fn matches(&self, _principal: &str, arguments: &Value, event: &SourceEvent) -> bool {
+    fn matches(
+        &self,
+        _principal: &str,
+        arguments: &Value,
+        event: &SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
         let Ok(Parts { key, .. }) = parts(arguments) else {
             return false;
         };
@@ -436,7 +449,13 @@ impl EventSource for ScheduleSource {
     }
 
     /// The timer key, so spellings of one timer share it.
-    fn lifecycle_key(&self, _principal: &str, name: &str, arguments: &Value) -> String {
+    fn lifecycle_key(
+        &self,
+        _principal: &str,
+        name: &str,
+        arguments: &Value,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> String {
         parts(arguments).map_or_else(
             |_| {
                 String::from_utf8(
@@ -456,17 +475,20 @@ impl EventSource for ScheduleSource {
         arguments: &Value,
     ) -> Result<(), RpcError> {
         let (_, timer) = canonical(arguments)?;
+        let Ok(now) = crate::clock::utc_now() else {
+            return Err(RpcError::clock_unreadable());
+        };
         // Again under the lifecycle lock, against committed rows: two
         // concurrent subscribes for new timers cannot both pass the cap, and
         // after a restart or a lowered cap the earliest timers still start.
-        let held = self.held_by(principal);
+        let held = self.held_by(principal, now);
         let within = if held.contains_key(key) {
             // A held key (a replay, or one a refusal left unstarted) starts
             // when any live holder ranks it within that holder's own cap:
             // the replay asks for whichever row it read first.
-            self.holders(key)
+            self.holders(key, now)
                 .iter()
-                .any(|p| within_cap(&self.held_by(p), key, self.max_per_principal))
+                .any(|p| within_cap(&self.held_by(p, now), key, self.max_per_principal))
         } else {
             held.len() < self.max_per_principal
         };
@@ -509,18 +531,34 @@ impl EventsHub {
         let ticker = Arc::downgrade(&source);
         tokio::spawn(async move {
             loop {
-                let now = Utc::now();
-                let next = now
-                    .duration_trunc(crate::duration_bound::delta!(minutes, 1))
-                    .unwrap_or(now)
-                    + crate::duration_bound::delta!(minutes, 1);
-                let wait = (next - now).to_std().unwrap_or_default();
+                // A clock that cannot be read (before 1970) waits a plain
+                // minute and skips the tick: nothing fires, nothing is
+                // recorded as fired, nothing is pruned (MIK-8202).
+                let wait =
+                    crate::clock::utc_now().map_or(std::time::Duration::from_secs(60), |now| {
+                        let next = now
+                            .duration_trunc(crate::duration_bound::delta!(minutes, 1))
+                            .unwrap_or(now)
+                            + crate::duration_bound::delta!(minutes, 1);
+                        (next - now).to_std().unwrap_or_default()
+                    });
                 tokio::time::sleep(wait).await;
+                let Ok(minute) = crate::clock::utc_now() else {
+                    tracing::warn!(
+                        clock_unreadable = true,
+                        "events: schedule tick skipped; the host clock reads before 1970"
+                    );
+                    // Counted with the other occurrences a clock drops.
+                    if let Some(hub) = ticker.upgrade().and_then(|source| source.hub.upgrade()) {
+                        hub.count_clock_drop();
+                    }
+                    continue;
+                };
                 let Some(source) = ticker.upgrade() else {
                     return;
                 };
                 // Off the runtime: a minute with many due timers syncs a file each.
-                let joined = tokio::task::spawn_blocking(move || source.tick_at(Utc::now())).await;
+                let joined = tokio::task::spawn_blocking(move || source.tick_at(minute)).await;
                 if let Err(error) = joined {
                     tracing::warn!(%error, "events: schedule tick task failed");
                 }

@@ -104,7 +104,7 @@ async fn an_expiry_tick_before_1970_judges_nothing_and_loses_nothing() {
     // would notice runs on the unreadable clock.
     assert!(
         hub.store
-            .remove("sub_w", at(start), tail_policy(&config))
+            .remove("sub_w", Ok(at(start)), tail_policy(&config))
             .expect("io"),
         "removed"
     );

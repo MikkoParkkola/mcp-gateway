@@ -223,7 +223,7 @@ async fn t07_a_row_re_made_during_a_withdraw_survives() {
     crate::test_pause::within("the withdraw judging", reached.notified()).await;
     let tail = tail_policy(&hub.config);
     hub.store
-        .remove("sub_x_tools_changed", chrono::Utc::now(), tail)
+        .remove("sub_x_tools_changed", Ok(chrono::Utc::now()), tail)
         .expect("unsubscribed");
     admit_kind(&hub, "tools_changed");
     release.notify_one();
@@ -332,7 +332,7 @@ fn t10_every_row_removal_is_counted_for_the_tick() {
     let tail = tail_policy(&hub.config);
     assert!(
         hub.store
-            .remove("sub_x_tools_changed", now, tail)
+            .remove("sub_x_tools_changed", Ok(now), tail)
             .expect("removed")
     );
     let (_, _, after) = hub.store.lapses(now, now);
@@ -356,7 +356,7 @@ async fn t07_a_re_grant_in_the_same_tick_survives() {
     crate::test_pause::within("the withdraw judging", reached.notified()).await;
     let tail = tail_policy(&hub.config);
     hub.store
-        .remove("sub_x_tools_changed", chrono::Utc::now(), tail)
+        .remove("sub_x_tools_changed", Ok(chrono::Utc::now()), tail)
         .expect("unsubscribed");
     admit_on_at(&hub, "x", "tools_changed", tick);
     let regranted = hub.store.subscriptions();
@@ -401,7 +401,7 @@ async fn t07_a_re_grant_after_a_restart_survives() {
     crate::test_pause::within("the withdraw judging", reached.notified()).await;
     let tail = tail_policy(&hub.config);
     hub.store
-        .remove("sub_x_tools_changed", chrono::Utc::now(), tail)
+        .remove("sub_x_tools_changed", Ok(chrono::Utc::now()), tail)
         .expect("unsubscribed");
     admit_kind(&hub, "tools_changed");
     assert!(
@@ -471,7 +471,7 @@ async fn t07_a_stale_revocation_leaves_a_re_grant() {
     let judged = hub.store.subscriptions()[0].clone();
     let tail = tail_policy(&hub.config);
     hub.store
-        .remove("sub_x_tools_changed", chrono::Utc::now(), tail)
+        .remove("sub_x_tools_changed", Ok(chrono::Utc::now()), tail)
         .expect("unsubscribed");
     admit_kind(&hub, "tools_changed");
     hub.revoke(&judged).await;

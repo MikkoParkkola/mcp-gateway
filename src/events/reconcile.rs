@@ -57,10 +57,14 @@ impl EventsHub {
     /// The sweep's lifecycle half, every `SWEEP_EVERY` (design r3 L8): a
     /// safety net that no row relies on.
     pub(super) async fn sweep_lifecycle(&self) {
-        // Gone subscriptions take their rate and failure state along.
-        let held = self.store.live_subscription_ids(chrono::Utc::now());
-        self.runtime.rates.retain(&held);
-        self.runtime.failures.retain(&held);
+        // Gone subscriptions take their rate and failure state along; on a
+        // clock that cannot be read (before 1970) nothing is pruned this pass
+        // (MIK-8202).
+        if let Ok(now) = crate::clock::utc_now() {
+            let held = self.store.live_subscription_ids(now);
+            self.runtime.rates.retain(&held);
+            self.runtime.failures.retain(&held);
+        }
         self.reconcile_stops().await;
         // After the stops, so freed slots are free: a watch key whose
         // capability is offered again (the startup scan finished, a reload
@@ -75,8 +79,9 @@ impl EventsHub {
     /// worker's tick rather than the sweep (design r3 D4, L5); expiry
     /// settlement still buries their records and removes the rows.
     pub(super) async fn stop_expired_keys(&self) {
-        // On the one clock (MIK-8202), so a test can move it: a clock before
-        // 1970 judges no lease, and the tick is skipped.
+        // No lapse is judged and the watermark does not move on a clock that
+        // cannot be read (before 1970); the stop it would trigger refuses on
+        // that clock anyway (MIK-8202).
         let Ok(now) = crate::clock::utc_now() else {
             return;
         };
