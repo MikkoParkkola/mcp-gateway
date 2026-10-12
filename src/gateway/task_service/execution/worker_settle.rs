@@ -127,15 +127,16 @@ impl TaskExecutor {
                         }
                     }
                 }
-                Err(CommitFailure::ClockUnreadable) => {
+                // `ClockUnreadable` past this point cannot happen: only a `None`
+                // commit reads the clock, and a wait either dates `at` or
+                // returns. It stays named, beside the `Service` failure it
+                // shares its ending with, so no wildcard takes it.
+                Err(error @ (CommitFailure::ClockUnreadable | CommitFailure::Service(_))) => {
                     tracing::error!(
                         task_id = %id,
-                        "unreadable clock after the clock wait: outcome not stored"
+                        ?error,
+                        "task settlement write failed: outcome not stored"
                     );
-                    Next::Done(false)
-                }
-                Err(CommitFailure::Service(error)) => {
-                    tracing::warn!(task_id = %id, ?error, "task settlement write failed");
                     Next::Done(false)
                 }
             };
@@ -184,17 +185,16 @@ impl TaskExecutor {
                     tracing::error!(task_id = %id, "task settlement lost a second compare-and-set: outcome not stored");
                     return false;
                 }
-                // A commit dated `Some` never reads the clock: unreachable by
-                // construction, and named so no wildcard swallows it.
-                Err(CommitFailure::ClockUnreadable) => {
+                // A commit dated `Some` never reads the clock, so a
+                // `ClockUnreadable` here is unreachable by construction. It
+                // stays named, beside the `Service` failure it shares its
+                // ending with, so no wildcard swallows it.
+                Err(error @ (CommitFailure::ClockUnreadable | CommitFailure::Service(_))) => {
                     tracing::error!(
                         task_id = %id,
-                        "unreadable clock on a dated settle: outcome not stored"
+                        ?error,
+                        "task settlement write failed: outcome not stored"
                     );
-                    return false;
-                }
-                Err(CommitFailure::Service(error)) => {
-                    tracing::warn!(task_id = %id, ?error, "task settlement write failed");
                     return false;
                 }
             }
