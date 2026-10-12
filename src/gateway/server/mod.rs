@@ -36,6 +36,7 @@ mod replica_state_tests;
 pub(super) mod route_matrix_driver_tests;
 mod run;
 mod run_steps;
+mod run_wiring;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 pub(crate) mod signing_allocation_tests;
