@@ -1,0 +1,1 @@
+src/gateway/task_service/execution.rs	created_serves_no_output	1	Asserts the invariant that a just-created task serves no backend output (a debug assertion, counted in tests); it refuses nothing in a release build (MIK-8392 F3)
