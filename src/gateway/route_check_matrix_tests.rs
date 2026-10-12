@@ -87,6 +87,13 @@ pub(crate) enum Na {
     /// `AdmissionOwner::local_operator()` (`stdio_dispatch.rs`), so it has no
     /// keyed-principal check (MIK-8382 design r2, R2-8 "stdio: no site").
     /// Premise pinned by `keyed::stdio_owner_is_the_local_operator_for_any_key`.
+    /// Mutant proof (run 8382-mut-owner4): with admission's owner principal
+    /// forced to none (`admission.rs`, `owner_principal`), the row fails at
+    /// its "refused" assert with -32003. Narrower cuts survive by design:
+    /// stdio's principal has three sources (the call site's
+    /// `local_operator()`, the stdio-transport fallback in
+    /// `caller_context.rs` `owner_principal`, and the stdio credential), and
+    /// any one keeps it a principal.
     AlwaysLocalOperator,
 }
 
