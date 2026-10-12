@@ -350,13 +350,13 @@ impl Backend {
                                 super::lifecycle::pre_send_start_error(&self.name, e)
                             })?;
                             Provenance::mark_started();
-                            let (merged, truncated) = drain_list_pages(
+                            let (merged, truncated) = Box::pin(drain_list_pages(
                                 transport.as_ref(),
                                 &self.name,
                                 &family,
                                 (fetch_headers, identity_key),
                                 tools.then_some(&*seen),
-                            )
+                            ))
                             .await?;
                             let (items, prepared) = match merged {
                                 Some(result) => parse(result)?,

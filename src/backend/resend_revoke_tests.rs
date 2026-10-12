@@ -198,8 +198,6 @@ enum Page {
     Tools(Vec<Value>, bool),
     /// A JSON-RPC error frame.
     ErrorFrame,
-    /// A transport failure.
-    Lost,
     /// Wait until released, then answer these tools as the last page.
     Held(Vec<Value>),
     /// The transport panics.
@@ -258,7 +256,6 @@ impl crate::transport::Transport for Wire {
                     "upstream failed",
                 ));
             }
-            Page::Lost => return Err(crate::Error::Transport("stream reset".into())),
             Page::Held(tools) => {
                 self.entered.notify_one();
                 self.release.notified().await;
