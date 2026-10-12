@@ -293,3 +293,23 @@ async fn r5_repeated_task_call_after_revocation_is_not_served_the_stored_task() 
     assert!(again.pointer("/result/taskId").is_none(), "R5: a new task was made: {again}");
     assert_eq!(fx.gateway.tool_calls().len(), sent, "R5: the call reached the backend: {again}");
 }
+
+/// R4: a keyed call by the SURFACED name dispatches while connected; after
+/// revocation the repeat must be refused with nothing sent. RED on the release
+/// line (ef0e22e72): the retained result is served. With MIK-8356's withheld
+/// name it is refused at the route stage, so this row then guards that answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn r4_revoked_surfaced_name_is_not_served_the_retained_result() {
+    let fx = fixture(true).await;
+    answer_marker(&fx);
+    let call = || {
+        json!({"name": TOOL, "arguments": {"folder": "inbox"}, "_meta": meta(Some("r4"), false)})
+    };
+    let first = send(&fx, "tools/call", TOOL, call()).await;
+    assert!(first.to_string().contains(MARKER), "premise: dispatched: {first}");
+    let sent = fx.gateway.tool_calls().len();
+    fx.gateway.revoke_operator_grant().await;
+    let again = send(&fx, "tools/call", TOOL, call()).await;
+    eprintln!("R4 answer: {again}");
+    assert_refused_unsent(&fx, "R4", &again, sent);
+}
