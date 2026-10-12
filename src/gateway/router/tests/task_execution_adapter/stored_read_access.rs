@@ -527,3 +527,26 @@ async fn f3_a_created_answer_carrying_output_trips_the_check() {
         "F3: the check fired"
     );
 }
+
+/// T9c (M35): the backend's catalogue was never listed (a fresh instance
+/// under the same name): it proves nothing about the tool, so the read is
+/// judged on the other reasons and serves.
+#[tokio::test]
+async fn t9c_a_never_listed_catalogue_still_delivers() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+    let id = finished(&state, "s1-t9c").await;
+    assert!(state.backends.remove(BACKEND), "premise: removed");
+    register(&state, BACKEND, &mock);
+    assert_carries_the_backend_result(&get_task(&state, "key-a", &id).await);
+}
+
+/// T9d: a listed, COMPLETE, empty catalogue lacks the tool: -32601.
+#[tokio::test]
+async fn t9d_a_complete_empty_catalogue_answers_absent() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+    let id = finished(&state, "s1-t9d").await;
+    let _ = backend(&state).remember_listed_tools(None, false, &[]);
+    assert_absent(&state, &get_task(&state, "key-a", &id).await, "T9d").await;
+}
