@@ -400,18 +400,7 @@ impl Backend {
                     // Only this accepted store's own set and verdicts (F13,
                     // #1441).
                     if let Some(prepared) = prepared {
-                        *entry.resend_permitted.write() = prepared.resend_permitted;
-                        *entry.read_only_declared.write() = prepared.read_only_declared;
-                        let listing = if truncated {
-                            super::descriptor_gate::Listing::Truncated
-                        } else {
-                            super::descriptor_gate::Listing::Complete
-                        };
-                        self.commit_verdicts(
-                            identity_key.unwrap_or(""),
-                            listing,
-                            prepared.verdicts,
-                        );
+                        self.store_prepared(&entry, identity_key, truncated, prepared);
                     }
                     // The only place a guard reaches `Stored`: a voided store
                     // drops it unrun, still `Drained`, and so stamps (F13).
