@@ -120,7 +120,10 @@ async fn resolve_caller(
         caller_identity: state.meta_mcp.caller_identity(),
         cf_verifier: state.meta_mcp.access_verifier(),
     };
-    if let Err(reason) = subject.live(&ctx).await {
+    if let Err(reason) = match subject.verify_held_cf(&ctx).await {
+        Ok(()) => subject.live(&ctx),
+        dead => dead,
+    } {
         return Judged::Dead(reason);
     }
     Judged::Live(ResolvedCaller {
@@ -205,6 +208,12 @@ fn baseline_for(
             (name, digest)
         })
         .collect()
+}
+
+/// The answer for a caller that no longer resolves when its stream opens:
+/// what the auth layer says to an invalid credential, with no reason in it.
+pub(super) fn dead_attach_refusal() -> axum::response::Response {
+    crate::gateway::middleware::bearer_unauthorized_response("Invalid token")
 }
 
 /// Whether the URL asked for Code Mode by `?codemode=search_and_execute`: the

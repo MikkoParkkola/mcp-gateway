@@ -97,5 +97,20 @@ async fn a_plain_bearer_subject_is_live_with_an_empty_context() {
         caller_identity: &crate::security::caller_identity::CallerIdentityConfig::default(),
         cf_verifier: None,
     };
-    assert_eq!(ViewSubject::default().live(&ctx).await, Ok(()));
+    assert_eq!(ViewSubject::default().live(&ctx), Ok(()));
+}
+
+#[tokio::test]
+async fn a_held_assertion_with_no_verifier_is_refused_and_none_held_is_not() {
+    let ctx = LiveCtx {
+        agent: None,
+        caller_identity: &crate::security::caller_identity::CallerIdentityConfig::default(),
+        cf_verifier: None,
+    };
+    assert_eq!(ViewSubject::default().verify_held_cf(&ctx).await, Ok(()));
+    let held = ViewSubject {
+        cf_assertion: Some(Redacted::new("a.b.c")),
+        ..ViewSubject::default()
+    };
+    assert_eq!(held.verify_held_cf(&ctx).await, Err(DeadReason::Adapter));
 }

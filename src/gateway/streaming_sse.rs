@@ -65,9 +65,7 @@ pub(crate) fn create_sse_response_with_view(
     // Create the stream with owned data
     let stream = stream! {
         // Send initial connection event
-        yield Ok(Event::default()
-            .event("connected")
-            .data(json!({ "session_id": session_id_owned }).to_string()));
+        yield Ok(connected_event(&session_id_owned));
 
         loop {
             match rx.recv().await {
@@ -173,6 +171,13 @@ pub(crate) fn create_sse_response_with_view(
     };
 
     Some(Sse::new(stream).keep_alive(KeepAlive::new().interval(keep_alive_interval).text("ping")))
+}
+
+/// The event a stream opens with, naming its session.
+fn connected_event(session_id: &str) -> Event {
+    Event::default()
+        .event("connected")
+        .data(json!({ "session_id": session_id }).to_string())
 }
 
 #[cfg(test)]

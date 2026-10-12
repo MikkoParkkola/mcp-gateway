@@ -186,10 +186,6 @@ pub(crate) struct ViewSubject {
     pub(crate) cert_not_after: Option<u64>,
     /// The raw Cloudflare Access assertion, when that is the identity source;
     /// re-verified per decision by MIK-8377 and dropped with the stream.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by MIK-8377's live() clause")
-    )]
     pub(crate) cf_assertion: Option<Redacted>,
     /// The trusted proxy's peer address, when that is the identity source.
     #[expect(dead_code, reason = "read by MIK-8377's live() clause")]
@@ -222,10 +218,31 @@ impl ViewSubject {
         )
     }
 
+    /// Re-verify the held Cloudflare Access assertion against the verifier's
+    /// current keys, as admission did, so a rotated or revoked key ends the
+    /// stream. Nothing to check for a stream that holds no assertion; a
+    /// missing verifier refuses, as admission does.
+    pub(crate) async fn verify_held_cf(&self, ctx: &LiveCtx<'_>) -> Result<(), DeadReason> {
+        let Some(assertion) = &self.cf_assertion else {
+            return Ok(());
+        };
+        let Some(verifier) = ctx.cf_verifier else {
+            return Err(DeadReason::Adapter);
+        };
+        let age = crate::config::KeyServerOidcConfig {
+            token_age: crate::key_server::TokenAgeCap::ExpOnly,
+        };
+        verifier
+            .verify(assertion.expose(), &age)
+            .await
+            .map(drop)
+            .map_err(|_| DeadReason::Adapter)
+    }
+
     /// Whether the identity the stream was admitted under is still good, or
     /// why not. The adapter assertion's window is judged here; MIK-8377 adds
     /// its clauses, which need the live handles in [`LiveCtx`].
-    pub(crate) async fn live(&self, _ctx: &LiveCtx<'_>) -> Result<(), DeadReason> {
+    pub(crate) fn live(&self, _ctx: &LiveCtx<'_>) -> Result<(), DeadReason> {
         match &self.adapter {
             Some(adapter) if !adapter.live() => Err(DeadReason::Adapter),
             _ => Ok(()),
