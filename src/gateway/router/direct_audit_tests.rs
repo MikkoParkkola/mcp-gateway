@@ -24,6 +24,7 @@ use crate::security::transparency_log::TransparencyLogConfig;
 use crate::transport::Transport;
 
 mod anon_key;
+mod backend_oracle;
 mod delivery;
 mod delivery_who;
 mod lost_round;
@@ -192,6 +193,8 @@ enum MetaMode {
     Idempotent,
     /// `alpha`'s tool `t` is surfaced, so it is called by name on `/mcp`.
     SurfacedT,
+    /// Code mode is on, so `gateway_execute` runs chains (MIK-8387 rows).
+    CodeMode,
 }
 
 impl MetaMode {
@@ -205,6 +208,7 @@ impl MetaMode {
                 Arc::new(crate::idempotency::IdempotencyCache::new()),
                 crate::idempotency::CLEANUP_INTERVAL,
             ),
+            Self::CodeMode => return meta.with_code_mode(true),
             Self::SurfacedT => {
                 return meta.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
                     server: "alpha".to_string(),
