@@ -20,15 +20,22 @@ use tower::ServiceExt;
 
 use crate::gateway::router::create_router;
 
-/// The rows this harness measures, one per per-call stage the family gates.
-/// `scripts/ci/check_per_call_stages.py` keeps this table in step with the
-/// tools/call path.
-pub(crate) const STAGES: &[&str] = &[
-    "http_invoke_tiny",
-    "http_invoke_64k",
-    "stdio_invoke_tiny",
-    "stdio_batch_tiny",
+/// The rows this harness measures, one per per-call stage the family gates:
+/// each entry keeps its name with the parameters that produce it, as
+/// `(name, over_http, blob_bytes, calls_per_frame)`, so a reorder cannot
+/// mislabel a row. `scripts/ci/check_per_call_stages.py` keeps this table in
+/// step with the tools/call path.
+pub(crate) const STAGES: &[(&str, bool, usize, usize)] = &[
+    ("http_invoke_tiny", true, 16, 1),
+    ("http_invoke_64k", true, 64 * 1024, 1),
+    ("stdio_invoke_tiny", false, 16, 1),
+    ("stdio_batch_tiny", false, 16, BATCH),
 ];
+
+/// The gate's per-row budget ceiling (per_call_gate.py's CEILING_NS): the
+/// smallest slowdown the gate claims it can detect, so the size of the
+/// negative-control spin below.
+const CEILING_NS: u64 = 4000;
 
 /// Calls per batch frame in the `stdio_batch_tiny` row; its time is reported
 /// per call.
@@ -236,12 +243,13 @@ impl StdioLoop {
     }
 }
 
-/// One `gateway_invoke` of the bench backend's `search`, as a stdio frame.
-fn stdio_invoke(id: &str) -> Value {
+/// One `gateway_invoke` of the bench backend's `search`, as a stdio frame,
+/// its argument carrying a `blob`-byte string.
+fn stdio_invoke(id: &str, blob: usize) -> Value {
     json!({
         "jsonrpc": "2.0", "id": id, "method": "tools/call",
         "params": {"name": "gateway_invoke", "arguments": {
-            "server": "bench", "tool": "search", "arguments": {"blob": "x".repeat(16)},
+            "server": "bench", "tool": "search", "arguments": {"blob": "x".repeat(blob)},
         }},
     })
 }
@@ -250,15 +258,15 @@ fn stdio_invoke(id: &str) -> Value {
 /// written to its stdin to the answer read from its stdout, so the request
 /// task's spawn and its `CountOnly` hold (MIK-8176) are on the timed path.
 /// `batch` calls go in one array frame; the time is reported per call.
-async fn stdio_median_ns(stdio: &mut StdioLoop, batch: usize) -> u128 {
+async fn stdio_median_ns(stdio: &mut StdioLoop, blob: usize, batch: usize) -> u128 {
     let mut samples = Vec::with_capacity(CALLS);
     for round in 0..WARMUP + CALLS {
         let line = if batch == 1 {
-            stdio_invoke(&format!("t{round}")).to_string()
+            stdio_invoke(&format!("t{round}"), blob).to_string()
         } else {
             Value::Array(
                 (0..batch)
-                    .map(|i| stdio_invoke(&format!("b{round}-{i}")))
+                    .map(|i| stdio_invoke(&format!("b{round}-{i}"), blob))
                     .collect(),
             )
             .to_string()
@@ -291,21 +299,21 @@ async fn stdio_median_ns(stdio: &mut StdioLoop, batch: usize) -> u128 {
 #[ignore = "timing harness: run by scripts/perf/per_call_gate.py on the bench host"]
 fn per_call_timing() {
     if std::env::var_os("PER_CALL_NEGATIVE_CONTROL").is_some() {
-        NEGATIVE_CONTROL_SPIN_NS.store(10_000, std::sync::atomic::Ordering::Relaxed);
+        // Exactly the ceiling the gate claims it can detect (F5): a larger
+        // spin would prove less sensitivity than the gate asserts.
+        NEGATIVE_CONTROL_SPIN_NS.store(CEILING_NS, std::sync::atomic::Ordering::Relaxed);
     }
     super::signing_nonce_allocations_support::runtime().block_on(async {
         let (state, _store) = bench_state().await;
-        for (stage, blob) in STAGES.iter().zip([16, 64 * 1024]) {
+        for &(stage, _, blob, _) in STAGES.iter().filter(|stage| stage.1) {
             println!("PER_CALL_NS {stage} {}", median_ns(&state, blob).await);
         }
         let mut stdio = StdioLoop::start().await;
-        println!(
-            "PER_CALL_NS stdio_invoke_tiny {}",
-            stdio_median_ns(&mut stdio, 1).await
-        );
-        println!(
-            "PER_CALL_NS stdio_batch_tiny {}",
-            stdio_median_ns(&mut stdio, BATCH).await
-        );
+        for &(stage, _, blob, batch) in STAGES.iter().filter(|stage| !stage.1) {
+            println!(
+                "PER_CALL_NS {stage} {}",
+                stdio_median_ns(&mut stdio, blob, batch).await
+            );
+        }
     });
 }

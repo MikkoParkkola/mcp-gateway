@@ -4,8 +4,8 @@
 """MIK-8014 per-call timing gate (design: docs/internal/design/2026-10-09-mik-8014-perf-per-call-family.md).
 
 Runs ON the bench host, never on shared CI runners. For BASE and HEAD it builds
-the lib test binary (the harness's test-only files overlaid on BASE, so BASE's
-production code is what is measured), then:
+the lib test binary (only the harness file overlaid on BASE and mounted with
+its `mod` line, so BASE's production code is what is measured), then:
 
   * every comparison is the same statistic: per row, the median over ABBA
     blocks (start arm seeded) of the second arm's mean minus the first's;
@@ -19,6 +19,18 @@ VOID (exit 2, no verdict): a row's budget above CEILING_NS in any run, a
 negative control that did not fail every row, a busy host, or any error.
 FAIL (exit 1): a row OVER in the run and in one confirmation with a fresh
 null arm. Else PASS (exit 0). The whole job holds one bench lock.
+
+Statistical assumptions, and a limit that is NOT corrected (F4): the null
+arm runs ONE binary on both sides, while the head arm compares two separate
+builds. A fixed code-layout (or link-order) bias between the two builds
+therefore never enters a row's budget: a layout shift alone can push a row
+OVER, and can also mask a real slowdown of the same size. No second base
+build is made to measure that bias (it would double the build cost to bound
+a term the family accepts as unmeasured). Per row, the false-alarm rate is
+~1/(K+1) and the smallest detectable slowdown is that row's budget (itself
+capped at CEILING_NS, above which the run is VOID). `print_assumptions`
+repeats this with every verdict, VOID included, so no verdict is read
+without it.
 """
 
 import argparse
@@ -34,17 +46,26 @@ import statistics
 import subprocess
 import sys
 import tempfile
+import threading
 
 CEILING_NS = 4000
 # The bench host also builds other work; a run under load is VOID, never PASS.
 MAX_LOAD = 4.0
+# Host load is re-sampled this often while a harness process runs.
+LOAD_SAMPLE_S = 0.5
+# The one build profile a measurement may use; a cached binary built with
+# another profile (or another rustc) is stale (F7).
+PROFILE = "release"
 TEST = "gateway::server::signing_allocation_tests::per_call_timing::per_call_timing"
-# Test-only files the harness needs; overlaid onto BASE so both arms run it.
+# The only file overlaid onto BASE (F2). Everything else in BASE's test
+# tree -- its whole tests/mod.rs and the shared helpers per_call_timing
+# calls -- stays BASE's own, so a later PR cannot break the BASE build or
+# confound the comparison through the overlay; ensure_harness_mounted adds
+# only the `mod` line that mounts this file when BASE predates it.
 HARNESS = [
     "src/gateway/server/tests/per_call_timing.rs",
-    "src/gateway/server/tests/invoke_argument_copies.rs",
-    "src/gateway/server/tests/mod.rs",
 ]
+TESTS_MOD = "src/gateway/server/tests/mod.rs"
 # One harness run takes seconds; a hang is no measurement.
 RUN_TIMEOUT_S = 300
 LOCK = os.path.expanduser("~/mirrors/.locks/bench.lock")
@@ -92,12 +113,14 @@ def build(repo, ref, work, key, commits, overlay_from=None):
             raise Void(f"git show {overlay_from[:12]}:{path} exited {blob.returncode}")
         with open(os.path.join(tree, path), "wb") as f:
             f.write(blob.stdout)
+    if overlay_from:
+        ensure_harness_mounted(tree)
     # Release: debug timings are dominated by unoptimised code, and the 4 us
     # ceiling would be meaningless there. One target dir for both arms, so the
     # second build reuses the dependencies; the binary is copied out because
     # the next build writes the same path.
     env = dict(os.environ, CARGO_TARGET_DIR=os.path.join(work, "target"))
-    out = sh(["cargo", "test", "--release", "--lib", "--no-run", "--message-format=json"], cwd=tree, env=env)
+    out = sh(["cargo", "test", f"--{PROFILE}", "--lib", "--no-run", "--message-format=json"], cwd=tree, env=env)
     exe = [m.group(1) for m in re.finditer(r'"executable":"([^"]+mcp_gateway-[^"]+)"', out)]
     if not exe:
         raise Void(f"no lib test binary for {ref}")
@@ -105,6 +128,29 @@ def build(repo, ref, work, key, commits, overlay_from=None):
     os.replace(binary + ".partial", binary)
     write_manifest(binary, commits)
     return tree, binary
+
+
+def ensure_harness_mounted(tree):
+    """Mount the overlaid harness in BASE's own tests/mod.rs (F2): add the
+    `mod per_call_timing;` line when BASE predates it, and change nothing
+    else in the file."""
+    path = os.path.join(tree, TESTS_MOD)
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError:
+        raise Void(f"{TESTS_MOD} missing in the BASE tree; cannot mount the harness") from None
+    mounted = re.search(
+        rb"(?m)^[ \t]*(?:#\[[^\]\n]*\][ \t]*)*"
+        rb"(?:pub(?:\([^)]*\))?[ \t]+)?mod[ \t]+per_call_timing[ \t]*;",
+        data,
+    )
+    if mounted:
+        return
+    # Append only the mounting line: every existing byte stays as it was.
+    separator = b"" if not data or data.endswith(b"\n") else b"\n"
+    with open(path, "wb") as f:
+        f.write(data + separator + b"mod per_call_timing;\n")
 
 
 def digest(path):
@@ -115,15 +161,46 @@ def digest(path):
     return h.hexdigest()
 
 
-def write_manifest(binary, commits):
+def current_rustc():
+    """This host's `rustc -V`. Fails closed (F7): when the current compiler
+    cannot be determined there is no usable identity to certify or compare
+    against, so the run is VOID rather than silently unverified."""
+    try:
+        done = subprocess.run(["rustc", "-V"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as why:
+        raise Void(f"current rustc version unavailable: cannot run rustc -V ({why})") from None
+    version = done.stdout.strip() if done.returncode == 0 else ""
+    if not version:
+        raise Void(
+            f"current rustc version unavailable: rustc -V exited {done.returncode} "
+            "without a usable version"
+        )
+    return version
+
+
+def write_manifest(binary, commits, rustc_version=None, profile=None):
+    """Record what the binary was built from (F7): the commits, the digest,
+    the compiler version and the build profile. Never certifies an unknown
+    compiler: an unavailable or empty version is VOID before anything is
+    written."""
+    version = current_rustc() if rustc_version is None else rustc_version
+    if not version or not str(version).strip():
+        raise Void(f"refusing to certify {binary}: rustc version unavailable or empty")
     with open(binary + ".json.partial", "w") as f:
-        json.dump({"commits": commits, "sha256": digest(binary)}, f)
+        json.dump({
+            "commits": commits,
+            "sha256": digest(binary),
+            "rustc_version": version,
+            "profile": PROFILE if profile is None else profile,
+        }, f)
     os.replace(binary + ".json.partial", binary + ".json")
 
 
-def verified(binary, commits):
-    """`binary` if its manifest names exactly `commits` and its bytes still
-    hash to the recorded digest; else Void (a measure-only run never builds)."""
+def verified(binary, commits, rustc_version=None, profile=None):
+    """`binary` if its manifest names exactly `commits`, its bytes still
+    hash to the recorded digest, and it was built by this host's rustc with
+    this profile; else Void. A stale binary is rebuilt by `build` and
+    refused (VOID) under --measure-only, which never builds (F7)."""
     try:
         with open(binary + ".json") as f:
             manifest = json.load(f)
@@ -131,6 +208,22 @@ def verified(binary, commits):
         raise Void(f"no prebuilt binary for {commits} (run --prebuild-only first)") from None
     if manifest.get("commits") != commits:
         raise Void(f"{binary} was built from {manifest.get('commits')}, not {commits}")
+    want_profile = PROFILE if profile is None else profile
+    if manifest.get("profile") != want_profile:
+        raise Void(
+            f"{binary} is stale: built with profile {manifest.get('profile')!r}, not {want_profile!r}"
+        )
+    want_rustc = current_rustc() if rustc_version is None else rustc_version
+    if not want_rustc or not str(want_rustc).strip():
+        raise Void(f"{binary} cannot be verified: current rustc version unavailable or empty")
+    built_rustc = manifest.get("rustc_version")
+    if not built_rustc or not str(built_rustc).strip():
+        raise Void(
+            f"{binary} is stale: built with unknown rustc "
+            f"(manifest compiler missing or empty), not {want_rustc!r}"
+        )
+    if built_rustc != want_rustc:
+        raise Void(f"{binary} is stale: built with {built_rustc!r}, not {want_rustc!r}")
     if not os.path.exists(binary) or manifest.get("sha256") != digest(binary):
         raise Void(f"{binary} does not match its manifest")
     return binary
@@ -138,23 +231,60 @@ def verified(binary, commits):
 
 @functools.cache
 def STAGES_FROM_HARNESS():  # noqa: N802 - names the Rust constant it reads
-    """The harness's STAGES table: every row a run must print."""
+    """The harness's STAGES table: every row a run must print. Each entry
+    keeps its name with its parameters (F6); the name is its only string."""
     path = os.path.join(os.path.dirname(__file__), "../../src/gateway/server/tests/per_call_timing.rs")
     with open(path) as f:
-        block = re.search(r"const STAGES: &\[&str\] = &\[(.*?)\];", f.read(), re.S)
+        block = re.search(r"const STAGES\b[^=]*=\s*&\[(.*?)\];", f.read(), re.S)
     return set(re.findall(r'"([^"]+)"', block.group(1)))
 
 
-# The highest 1-minute load seen before any harness run in this job.
+# The highest 1-minute load sampled anywhere in this job, before, during
+# and after harness runs. Any sample above MAX_LOAD voids the job.
 PEAK_LOAD = [0.0]
 
 
-def run(binary, negative=False):
+def sample_load():
+    """Fold this host's 1-minute load into the job's peak; returns it."""
     PEAK_LOAD[0] = max(PEAK_LOAD[0], os.getloadavg()[0])
+    return PEAK_LOAD[0]
+
+
+def _sample_while(stop, errors):
+    while True:
+        try:
+            sample_load()
+        except Exception as why:  # noqa: BLE001 - a failed observation is VOID
+            # Record, do not swallow: run() refuses after joining this
+            # thread, so one failed sample cannot pass as a quiet host.
+            errors.append(why)
+            return
+        if stop.wait(LOAD_SAMPLE_S):
+            return
+
+
+def run(binary, negative=False):
+    # Sample before, during and after the harness process (F3): a breach
+    # while it runs must void the job, not pass unseen between runs.
+    sample_load()
     env = dict(os.environ)
     if negative:
         env["PER_CALL_NEGATIVE_CONTROL"] = "1"
-    out = sh([binary, "--ignored", "--exact", TEST, "--nocapture", "--test-threads=1"], env=env, timeout=RUN_TIMEOUT_S)
+    stop = threading.Event()
+    sampler_errors = []
+    sampler = threading.Thread(
+        target=_sample_while, args=(stop, sampler_errors), daemon=True
+    )
+    sampler.start()
+    try:
+        out = sh([binary, "--ignored", "--exact", TEST, "--nocapture", "--test-threads=1"], env=env, timeout=RUN_TIMEOUT_S)
+    finally:
+        stop.set()
+        sampler.join()
+    if sampler_errors:
+        why = sampler_errors[0]
+        raise Void(f"host load sampler failed during the run: {type(why).__name__}: {why}")
+    sample_load()
     rows = dict(re.findall(r"PER_CALL_NS (\S+) (\d+)", out))
     stages = STAGES_FROM_HARNESS()
     if set(rows) != stages:
@@ -198,6 +328,22 @@ def judge(budget, delta, label="head-base"):
     return verdict
 
 
+def print_assumptions(k, budgets=None):
+    """The statistical assumptions and the uncorrected layout limit (F4),
+    printed with every verdict, VOID included."""
+    print(f"assumptions: K={k}; per-row false-alarm rate ~1/(K+1) = {1 / (k + 1):.1%}; "
+          f"budget ceiling {CEILING_NS} ns (a row above it is VOID)")
+    if budgets:
+        smallest = ", ".join(f"{row} {budgets[row]:.0f} ns" for row in sorted(budgets))
+        print(f"assumptions: per-row minimum detectable delta (= the row's budget): {smallest}")
+    else:
+        print("assumptions: per-row minimum detectable delta = the row's budget "
+              "(no budget was measured in this run)")
+    print("limit: the A/A null arm runs one binary on both sides, the head arm two "
+          "separate builds; a fixed code-layout bias between builds is not in any "
+          "budget and is not corrected")
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--base", required=True)
@@ -237,9 +383,11 @@ def main():
                 return measure(a, rng, builds(repo, a, work))
     except Void as why:
         print(f"VOID: {why}")
+        print_assumptions(a.k)
         return 2
     except Exception as why:  # noqa: BLE001 - any crash is no measurement
         print(f"VOID: {type(why).__name__}: {why}")
+        print_assumptions(a.k)
         return 2
 
 
@@ -249,7 +397,7 @@ def shas(repo, a):
 
 
 def keys(base_sha, head_sha):
-    """BASE carries HEAD's harness files, so its key and manifest name both."""
+    """BASE carries HEAD's harness file, so its key and manifest name both."""
     return (f"{base_sha[:12]}+{head_sha[:12]}", [base_sha, head_sha]), (head_sha[:12], [head_sha])
 
 
@@ -282,21 +430,28 @@ def measure(a, rng, binaries):
     # judged against unarmed HEAD so HEAD's own change cannot mask it.
     control = judge(budget, paired((head, False), (head, True), a.blocks, rng), "control armed-unarmed")
     verdicts = [judge(budget, paired((base, False), (head, False), a.blocks, rng))]
+    budgets = budget
     if "OVER" in verdicts[0].values():
         print("confirmation run with a fresh null arm")
-        verdicts.append(judge(null_budget(base, a.k, a.blocks, rng),
+        budgets = null_budget(base, a.k, a.blocks, rng)
+        verdicts.append(judge(budgets,
                               paired((base, False), (head, False), a.blocks, rng)))
 
-    # Load is sampled before every harness run; any breach anywhere is VOID.
-    peak = max(PEAK_LOAD[0], os.getloadavg()[0])
+    # Load is sampled before, during and after every harness run (F3);
+    # any sample above MAX_LOAD anywhere in the job is VOID.
+    peak = sample_load()
     print(f"host load: peak {peak:.1f} over the run (max {MAX_LOAD})")
     if peak > MAX_LOAD:
         print("VOID: the bench host was busy; rerun when it is quiet")
+        print_assumptions(a.k, budgets)
         return 2
     if any(v != "OVER" for v in control.values()):
         print("VOID: the negative control did not fail every row")
+        print_assumptions(a.k, budgets)
         return 2
-    return decide(verdicts)
+    verdict = decide(verdicts)
+    print_assumptions(a.k, budgets)
+    return verdict
 
 
 def decide(verdicts):

@@ -1,85 +1,403 @@
 # MIK-8014: every fn on the tools/call path files -> the per-call timing row that covers it, or - with a reason.
-# The http_invoke rows time a whole HTTP gateway_invoke end to end, so a function on that path is inside them.
+# Part 1 of 2 (meta/router rows). Companion part: per_call_stages_stdio.tsv (src/gateway/server/ rows). Both parts are required; the checker reads them together.
+# The http_invoke rows time a whole HTTP gateway_invoke end to end, and the stdio rows a whole stdio call, so a function on those paths is inside them.
+# A "-" reason starting "on-path, untimed" is a per-call production cost the harness does not exercise; it is not a claim that the cost is zero.
 # file	fn	row (or -)	reason
-src/gateway/meta_mcp/invoke/dispatch.rs	accounted_dispatch	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/invoke/dispatch.rs	admit_spend	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/invoke/dispatch.rs	dispatch_to_backend	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/grant_audit.rs	allow_unslotted_check_for_test	-	test-only helper
-src/gateway/meta_mcp/grant_audit.rs	check_or_stamp	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/grant_audit.rs	dispatch_below_gate_shaped	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/grant_audit.rs	drop	-	slot guard drop: a guard exists only with a transparency logger; the bench has none
-src/gateway/meta_mcp/grant_audit.rs	envelope	-	audit write path: runs only with a transparency logger and an identity-grant decision; the bench has neither (no audited row)
-src/gateway/meta_mcp/grant_audit.rs	eq	-	equality impl; not on the dispatch path
-src/gateway/meta_mcp/grant_audit.rs	fingerprint	-	audit write path: runs only with a transparency logger and an identity-grant decision; the bench has neither (no audited row)
-src/gateway/meta_mcp/grant_audit.rs	fmt	-	Debug formatting; not called per call
-src/gateway/meta_mcp/grant_audit.rs	grant_bookkeeping_for_test	-	test-only helper
-src/gateway/meta_mcp/grant_audit.rs	in_repeat_scope	-	task replay only
-src/gateway/meta_mcp/grant_audit.rs	invoke_tool	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/grant_audit.rs	is_repeat	-	audit write path: runs only with a transparency logger and an identity-grant decision; the bench has neither (no audited row)
-src/gateway/meta_mcp/grant_audit.rs	note_answer_id	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/grant_audit.rs	note_grant_decision	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/grant_audit.rs	project	-	audit write path: runs only with a transparency logger and an identity-grant decision; the bench has neither (no audited row)
-src/gateway/meta_mcp/grant_audit.rs	remember	-	audit write path: runs only with a transparency logger and an identity-grant decision; the bench has neither (no audited row)
-src/gateway/meta_mcp/grant_audit.rs	select_records	-	audit write path: runs only with a transparency logger and an identity-grant decision; the bench has neither (no audited row)
-src/gateway/meta_mcp/grant_audit.rs	slot_http	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/grant_audit.rs	slot_result	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/grant_audit.rs	slot_rpc	-	stdio/RPC transport slot; the HTTP path opens slot_http
-src/gateway/meta_mcp/grant_audit.rs	spawn_write	-	audit write path: runs only with a transparency logger and an identity-grant decision; the bench has neither (no audited row)
-src/gateway/meta_mcp/grant_audit.rs	stamp_prepared	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/grant_audit.rs	with_grant_slot	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/grant_audit.rs	write_records	-	audit write path: runs only with a transparency logger and an identity-grant decision; the bench has neither (no audited row)
 src/gateway/meta_mcp/call_dispatch.rs	begin_task	-	task-augmented calls only
 src/gateway/meta_mcp/call_dispatch.rs	dispatch_below_gate	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/call_dispatch.rs	dispatch_below_gate_native_result	-	task worker and watch poll only
 src/gateway/meta_mcp/call_dispatch.rs	dispatch_below_gate_shaped_in_slot	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/call_dispatch.rs	handle_tools_call	-	by-value wrapper kept for tests; both request paths call handle_tools_call_ref
+src/gateway/meta_mcp/call_dispatch.rs	handle_tools_call_ref	http_invoke_tiny	the tools/call entry both transports call
+src/gateway/meta_mcp/call_dispatch.rs	handle_tools_call_unsettled	http_invoke_tiny	the tools/call gates before dispatch
 src/gateway/meta_mcp/call_dispatch.rs	invoke_named_backend_tool	-	direct and retry-to-origin routes only
 src/gateway/meta_mcp/call_dispatch.rs	route_direct_backend_call	-	direct /mcp/{backend} route, not the meta tools/call path
 src/gateway/meta_mcp/call_dispatch.rs	route_retry_to_origin_backend	-	retry-to-origin path only
 src/gateway/meta_mcp/call_dispatch.rs	task_backend_name	-	task-augmented calls only
+src/gateway/meta_mcp/grant_audit.rs	allow_unslotted_check_for_test	-	test-only helper
+src/gateway/meta_mcp/grant_audit.rs	check_or_stamp	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/grant_audit.rs	dispatch_below_gate_shaped	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/grant_audit.rs	drop	-	on-path, untimed: a grant slot guard exists only with a transparency logger, which the harness does not configure; the other drop is the test-only guard
+src/gateway/meta_mcp/grant_audit.rs	envelope	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
+src/gateway/meta_mcp/grant_audit.rs	eq	-	equality impl; not on the dispatch path
+src/gateway/meta_mcp/grant_audit.rs	fingerprint	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
+src/gateway/meta_mcp/grant_audit.rs	flush_open_slot	-	on-path, untimed: grant-audit write path; flushes the open slot before task work, only with a transparency logger and noted decisions, which the harness does not configure
+src/gateway/meta_mcp/grant_audit.rs	fmt	-	Debug formatting; not called per call
+src/gateway/meta_mcp/grant_audit.rs	grant_bookkeeping_for_test	-	test-only helper
+src/gateway/meta_mcp/grant_audit.rs	in_repeat_scope	-	finished-task re-checks only, off the timed dispatch path
+src/gateway/meta_mcp/grant_audit.rs	invoke_tool	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/grant_audit.rs	invoke_tool_with_source	http_invoke_tiny	on the HTTP gateway_invoke path (invoke_tool delegates to it)
+src/gateway/meta_mcp/grant_audit.rs	is_repeat	-	finished-task re-check dedupe only, off the timed dispatch path
+src/gateway/meta_mcp/grant_audit.rs	note_answer_id	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/grant_audit.rs	note_grant_decision	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/grant_audit.rs	note_withheld_best_effort	-	on-path, untimed: the withheld surfaced call's grant-record write; only with a transparency logger, which the harness does not configure
+src/gateway/meta_mcp/grant_audit.rs	project	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
+src/gateway/meta_mcp/grant_audit.rs	remember	-	finished-task re-check dedupe only, off the timed dispatch path
+src/gateway/meta_mcp/grant_audit.rs	select_records	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
+src/gateway/meta_mcp/grant_audit.rs	slot_http	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/grant_audit.rs	slot_result	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/grant_audit.rs	slot_rpc	stdio_invoke_tiny	the slot wrap the stdio tools/call dispatch runs inside
+src/gateway/meta_mcp/grant_audit.rs	spawn_write	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
+src/gateway/meta_mcp/grant_audit.rs	stamp_prepared	-	on-path, untimed: signed calls only, when signing prepared the call; the timed rows are unsigned
+src/gateway/meta_mcp/grant_audit.rs	with_grant_slot	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/grant_audit.rs	write_owned	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
+src/gateway/meta_mcp/grant_audit.rs	write_records	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
 src/gateway/meta_mcp/invoke.rs	invoke_tool_traced	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/server/mod.rs	account_custody	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	build_meta_mcp	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	build_stdio_caller_context	stdio_invoke_tiny	on the stdio single-request path
-src/gateway/server/mod.rs	config_installs_minting_strategy	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	configured_minting_strategy_kind	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	dispatch_batch	-	test-only wrapper (cfg(test)) over dispatch_batch_read
-src/gateway/server/mod.rs	dispatch_relay_scoped	-	relay egress scope: only when a relay is active
-src/gateway/server/mod.rs	dispatch_single	-	test-only (cfg(test)); the stdio loop calls dispatch_single_staged
-src/gateway/server/mod.rs	dispatch_single_staged	stdio_invoke_tiny	on the stdio single-request path
-src/gateway/server/mod.rs	dispatch_single_with_sink	-	test-only (cfg(test)); the stdio loop calls dispatch_single_staged
-src/gateway/server/mod.rs	dispatch_tools_call	stdio_invoke_tiny	on the stdio single-request path
-src/gateway/server/mod.rs	drop	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	expand_home_path	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	leaky_single_user_backends	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	new	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	new_evaluated_inner	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	new_evaluated_with_account_http	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	new_with_env	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	new_with_path	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	observe_stdio_inbound	stdio_invoke_tiny	on the stdio single-request path
-src/gateway/server/mod.rs	parse_and_observe	stdio_invoke_tiny	on the stdio single-request path
-src/gateway/server/mod.rs	poll_export_source	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	prepare_signing	stdio_invoke_tiny	on the stdio single-request path
-src/gateway/server/mod.rs	reload_path	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	response_firewall	stdio_invoke_tiny	on the stdio single-request path
-src/gateway/server/mod.rs	run_stdio	-	starts the stdio loop once
-src/gateway/server/mod.rs	run_stdio_on	stdio_invoke_tiny	the stdio read loop, the request task's spawn and its CountOnly hold
-src/gateway/server/mod.rs	shutdown_account_custody	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	spawn_export_task	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	spawn_health_loop	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	spawn_idle_reaper	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	start_account_custody	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	start_account_custody_inner	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	stdio_caller_context	stdio_invoke_tiny	on the stdio single-request path
-src/gateway/server/mod.rs	stdio_routing_keys_only	stdio_invoke_tiny	on the stdio single-request path
-src/gateway/server/mod.rs	stdio_take_merged_client_meta	stdio_invoke_tiny	on the stdio single-request path
-src/gateway/server/mod.rs	with_env	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	with_watched_config	-	startup or lifecycle, not per call
-src/gateway/server/stdio_notify.rs	dispatch_batch_read	stdio_batch_tiny	on the stdio batch path
-src/gateway/server/stdio_notify.rs	dispatch_batch_with_sink	-	test-only wrapper (cfg(test)) over dispatch_batch_read
-src/gateway/server/stdio_notify.rs	dispatch_streaming_notifications	stdio_invoke_tiny	wraps each stdio dispatch inside run_stdio_on
-src/gateway/server/stdio_notify.rs	queue_notification	-	only when a dispatch emits a notification; the rows' backend emits none
+src/gateway/meta_mcp/invoke.rs	spend_witness	-	on-path, untimed: gateway_execute chain resumes only; the timed rows invoke gateway_invoke with no presented resume
+src/gateway/meta_mcp/invoke/account_mint.rs	mint_held	-	on-path, untimed: identity-propagation mints only; the timed backend has no propagation config
+src/gateway/meta_mcp/invoke/admin.rs	cost_section	-	the gateway_get_stats cost section only, not the tools/call path
+src/gateway/meta_mcp/invoke/admin.rs	get_cost_report	-	gateway_get_cost_report meta-tool only, not the tools/call path
+src/gateway/meta_mcp/invoke/admin.rs	get_stats	-	gateway_get_stats meta-tool only, not the tools/call path
+src/gateway/meta_mcp/invoke/admin.rs	kill_server	-	gateway_kill_server meta-tool only, not the tools/call path
+src/gateway/meta_mcp/invoke/admin.rs	list_disabled_capabilities	-	gateway_list_disabled_capabilities meta-tool only, not the tools/call path
+src/gateway/meta_mcp/invoke/admin.rs	reload_capabilities	-	capability reload (admin/watcher) only, not per call
+src/gateway/meta_mcp/invoke/admin.rs	reload_config	-	gateway_reload_config meta-tool only, not the tools/call path
+src/gateway/meta_mcp/invoke/admin.rs	revive_server	-	gateway_revive_server meta-tool only, not the tools/call path
+src/gateway/meta_mcp/invoke/admin.rs	run_playbook	-	gateway_run_playbook meta-tool only, not the tools/call path
+src/gateway/meta_mcp/invoke/admin.rs	set_playbook_engine	-	startup wiring, set once when the gateway is built
+src/gateway/meta_mcp/invoke/admin.rs	webhook_status	-	gateway_webhook_status meta-tool only, not the tools/call path
+src/gateway/meta_mcp/invoke/audit.rs	attributes_tenants	-	on-path, untimed: read only by the chain-refusal note (note_uninspected); the timed backend is not chained
+src/gateway/meta_mcp/invoke/audit.rs	attribution	-	on-path, untimed: invocation-record attribution, built only with a transparency logger, which the harness does not configure
+src/gateway/meta_mcp/invoke/audit.rs	audit_invocation	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/audit.rs	audit_refused_credential	-	on-path, untimed: identity-propagation refusals only; the timed backend propagates no credential
+src/gateway/meta_mcp/invoke/audit.rs	audit_replay	-	on-path, untimed: replayed executions only; the timed rows execute fresh
+src/gateway/meta_mcp/invoke/audit.rs	audit_settlement	-	test-only shorthand (cfg(test))
+src/gateway/meta_mcp/invoke/audit.rs	audit_settlement_kept	-	upstream task settlement (tasks/get recovery) only, not a live dispatch
+src/gateway/meta_mcp/invoke/audit.rs	delivered_value	-	on-path, untimed: relay receipt rebuilds of delivered answers, with relay detection active; the harness stages no receipt
+src/gateway/meta_mcp/invoke/audit.rs	from_caller	-	on-path, untimed: invocation-record writer, only with a transparency logger, which the harness does not configure
+src/gateway/meta_mcp/invoke/audit.rs	invoke_value	-	on-path, untimed: replayed and relay-rebuilt answers only
+src/gateway/meta_mcp/invoke/audit.rs	note	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/audit.rs	note_cached	-	on-path, untimed: cache hits only; the timed rows dispatch fresh every round
+src/gateway/meta_mcp/invoke/audit.rs	note_cached_failure	-	on-path, untimed: idempotent replays of a stored failure only
+src/gateway/meta_mcp/invoke/audit.rs	note_dispatch_failure	-	on-path, untimed: dispatch failures only; the timed rows succeed
+src/gateway/meta_mcp/invoke/audit.rs	note_process	-	on-path, untimed: only when a call starts a child process; the timed backend is in-process
+src/gateway/meta_mcp/invoke/audit.rs	note_refusal	-	upstream task recovery (tasks/get) only, not a live dispatch
+src/gateway/meta_mcp/invoke/audit.rs	note_uninspected	-	on-path, untimed: raw-receipt chain refusals only; the timed backend is not chained
+src/gateway/meta_mcp/invoke/audit.rs	note_upstream_task	-	on-path, untimed: upstream task submissions only; the timed rows carry no task member
+src/gateway/meta_mcp/invoke/audit.rs	noted_classes	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/audit.rs	noted_response	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/audit.rs	outcome	-	on-path, untimed: invocation and settlement records, only with a transparency logger, which the harness does not configure
+src/gateway/meta_mcp/invoke/audit.rs	request_tenants	-	on-path, untimed: tenant attribution under a firewall tenant guard (arg_keys); the harness configures none
+src/gateway/meta_mcp/invoke/audit.rs	responded	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/audit.rs	response_reading	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/audit.rs	response_tenants	-	on-path, untimed: transparency-logger attribution of cached deliveries only
+src/gateway/meta_mcp/invoke/audit.rs	response_uninspected	-	on-path, untimed: transparency-logger attribution of cached deliveries only
+src/gateway/meta_mcp/invoke/audit.rs	rewritten_text	-	on-path, untimed: relay receipts for wrappers a final pass rewrote, with relay detection active
+src/gateway/meta_mcp/invoke/audit.rs	settled_outcome	-	upstream task settlement (tasks/get recovery) only, not a live dispatch
+src/gateway/meta_mcp/invoke/audit.rs	sha256_of	-	on-path, untimed: audit-record hashes, only with a transparency logger, which the harness does not configure
+src/gateway/meta_mcp/invoke/audit.rs	stored_failure	-	on-path, untimed: raw-receipt chain refusals stored under an idempotency key only
+src/gateway/meta_mcp/invoke/audit.rs	with_dispatch_scope	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/audit.rs	write_invocation	-	on-path, untimed: only with a transparency logger, which the harness does not configure
+src/gateway/meta_mcp/invoke/bridge_dispatch.rs	admit	-	on-path, untimed: bridged input rounds (legacy client, backend asking for input) only; the timed backend answers at once
+src/gateway/meta_mcp/invoke/bridge_dispatch.rs	delivered_challenge	-	on-path, untimed: bridged input rounds only; the timed backend answers at once
+src/gateway/meta_mcp/invoke/bridge_dispatch.rs	invoke	-	on-path, untimed: bridged re-dispatch rounds only; the timed backend answers at once
+src/gateway/meta_mcp/invoke/bridge_dispatch.rs	record	-	on-path, untimed: bridged input rounds only; the timed backend answers at once
+src/gateway/meta_mcp/invoke/bridge_dispatch.rs	run_input_bridge	-	on-path, untimed: bridged input rounds only; the timed backend answers at once
+src/gateway/meta_mcp/invoke/bridge_dispatch.rs	undeclared_input_request	-	on-path, untimed: interim results asking for undeclared input only; the timed backend never asks
+src/gateway/meta_mcp/invoke/bridge_settle.rs	arm	-	on-path, untimed: bridged input rounds only; the timed backend answers at once
+src/gateway/meta_mcp/invoke/bridge_settle.rs	arm_for_dispatch	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/bridge_settle.rs	classify_bridged_dispatch_error	-	on-path, untimed: bridged dispatch failures only; the timed rows succeed in one round
+src/gateway/meta_mcp/invoke/bridge_settle.rs	refuse_if_killed	-	on-path, untimed: bridged input rounds only; the timed backend answers at once
+src/gateway/meta_mcp/invoke/budget.rs	apply_context_integrity	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/budget.rs	attach_context_integrity_metadata	-	on-path, untimed: only when context integrity finds or enforces on a result; the timed result is clean and passes through
+src/gateway/meta_mcp/invoke/budget.rs	capability_context_flags	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/budget.rs	context_integrity_delivered_result	-	on-path, untimed: only when context integrity enforces on a result; the timed result is clean and passes through
+src/gateway/meta_mcp/invoke/budget.rs	context_integrity_enforces	-	on-path, untimed: the egress scan's content check, on error frames and non-tools/call answers; a tools/call result met it at dispatch
+src/gateway/meta_mcp/invoke/budget.rs	context_integrity_input	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/budget.rs	grant_subject_from_api_key	-	on-path, untimed: capability-backend identity-grant checks only; the timed rows dispatch to an MCP backend
+src/gateway/meta_mcp/invoke/budget.rs	record_and_predict	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/budget.rs	record_error_budget	http_invoke_tiny	recorded at every accounted dispatch (account_dispatch)
+src/gateway/meta_mcp/invoke/cache_reads.rs	dispatch_reading	-	on-path, untimed: only when a result is stored (a read-only cache write or an idempotency completion); the timed rows store neither
+src/gateway/meta_mcp/invoke/cache_reads.rs	note_delivered_reading	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/cache_reads.rs	reading	-	on-path, untimed: only when a result is stored (a read-only cache write or an idempotency completion); the timed rows store neither
+src/gateway/meta_mcp/invoke/cache_reads.rs	restore	-	on-path, untimed: response-cache hits only; the timed rows dispatch fresh every round
+src/gateway/meta_mcp/invoke/caller_credential.rs	fmt	-	Debug formatting (redacting); not called per call
+src/gateway/meta_mcp/invoke/caller_verdict.rs	caller_verdict	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/caller_verdict.rs	caller_verdict_acting	-	on-path, untimed: per-user-catalogue backends only; the timed backend keeps none
+src/gateway/meta_mcp/invoke/caller_verdict.rs	caller_verdicts	http_invoke_tiny	on the HTTP gateway_invoke path (the route stage's verdicts)
+src/gateway/meta_mcp/invoke/caller_verdict.rs	dispatch_resolution	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/caller_verdict.rs	judge_caller_slot	-	on-path, untimed: per-user-catalogue backends only; the timed backend keeps none
+src/gateway/meta_mcp/invoke/caller_verdict.rs	of	http_invoke_tiny	on the HTTP gateway_invoke path (TargetNaming::of, per route target)
+src/gateway/meta_mcp/invoke/chokepoint.rs	as_str	-	on-path, untimed: firewall warn/block verdicts at the chokepoint only; the timed blob is allowed
+src/gateway/meta_mcp/invoke/chokepoint.rs	authorize_route_target	http_invoke_tiny	on the HTTP gateway_invoke path (the route stage authorize)
+src/gateway/meta_mcp/invoke/chokepoint.rs	chokepoint	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/chokepoint.rs	direct_send_permit	-	direct /mcp/{backend} route only, not the meta tools/call path
+src/gateway/meta_mcp/invoke/chokepoint.rs	for_test	-	test-only helper (cfg(test))
+src/gateway/meta_mcp/invoke/chokepoint.rs	of_call	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/chokepoint.rs	rank	-	on-path, untimed: retry and bridged rounds carrying answers only; the timed rows carry none
+src/gateway/meta_mcp/invoke/chokepoint.rs	recheck_target	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/chokepoint.rs	rescan_outbound	http_invoke_tiny	on the HTTP gateway_invoke path (the chokepoint rescan, firewall builds)
+src/gateway/meta_mcp/invoke/chokepoint.rs	route_request_scan	stdio_invoke_tiny	the stdio route stage's request scan (firewall builds)
+src/gateway/meta_mcp/invoke/continuation.rs	apply	http_invoke_tiny	on the HTTP gateway_invoke path (OutboundRetry::apply, every dispatch's params)
+src/gateway/meta_mcp/invoke/continuation.rs	bind	-	on-path, untimed: interim rounds the backend stopped to ask on only; the timed backend answers at once
+src/gateway/meta_mcp/invoke/continuation.rs	continuation_error_reason	-	on-path, untimed: continuation mint and redemption failures only
+src/gateway/meta_mcp/invoke/continuation.rs	continuation_target	-	on-path, untimed: interim mints and presented continuations only; the timed rows are fresh calls
+src/gateway/meta_mcp/invoke/continuation.rs	direct_call_parts	-	direct /mcp/{backend} route only, not the meta tools/call path
+src/gateway/meta_mcp/invoke/continuation.rs	direct_quota_key	-	direct /mcp/{backend} route only, not the meta tools/call path
+src/gateway/meta_mcp/invoke/continuation.rs	direct_source	-	direct /mcp/{backend} route only, not the meta tools/call path
+src/gateway/meta_mcp/invoke/continuation.rs	mint_continuation	-	on-path, untimed: interim rounds the backend stopped to ask on only; the timed backend answers at once
+src/gateway/meta_mcp/invoke/continuation.rs	record_continuation_mint	-	on-path, untimed: interim mint attempts only; the timed backend answers at once
+src/gateway/meta_mcp/invoke/continuation.rs	record_continuation_rejection	-	on-path, untimed: presented continuations that are refused only; the timed rows present none
+src/gateway/meta_mcp/invoke/continuation.rs	redeem_direct_retry	-	direct /mcp/{backend} route only, not the meta tools/call path
+src/gateway/meta_mcp/invoke/continuation.rs	redeem_retry	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/continuation.rs	rejected_continuation	-	on-path, untimed: presented continuations that are refused only; the timed rows present none
+src/gateway/meta_mcp/invoke/continuation.rs	release_unsent	-	on-path, untimed: sealed questions that never reach the client (refused mints) only
+src/gateway/meta_mcp/invoke/continuation.rs	retry_origin_backend	-	on-path, untimed: surfaced-tool retries presenting a continuation only; the timed rows call gateway_invoke fresh
+src/gateway/meta_mcp/invoke/continuation.rs	seal_direct_interim	-	direct /mcp/{backend} route only, not the meta tools/call path
+src/gateway/meta_mcp/invoke/continuation.rs	seal_exchange	-	on-path, untimed: interim rounds and task-worker late mints only; the timed backend answers at once
+src/gateway/meta_mcp/invoke/continuation.rs	set_continuation_for_test	-	test-only helper (cfg(test))
+src/gateway/meta_mcp/invoke/continuation.rs	share_keyring_with_for_test	-	test-only helper (cfg(test))
+src/gateway/meta_mcp/invoke/continuation.rs	unbindable_continuation	-	on-path, untimed: interim rounds that cannot be bound to their caller only
+src/gateway/meta_mcp/invoke/continuation.rs	withhold_unsealed_state	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/dispatch.rs	accounted_dispatch	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/dispatch.rs	admit_spend	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/dispatch.rs	dispatch_to_backend	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	account_dispatch	http_invoke_tiny	S3 accounting at every accounted dispatch
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_spend_for	http_invoke_tiny	S2 spend admission before every dispatch
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_target	http_invoke_tiny	S1 policy before every dispatch
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	class_and_spend	http_invoke_tiny	unpacked by account_dispatch at every dispatch
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	firewall_refusal_body	-	on-path, untimed: builds a stored firewall refusal for idempotent replay; the timed rows are fresh successful calls
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	from_class	http_invoke_tiny	classifies every meta dispatch outcome
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	from_response	-	direct /mcp/{backend} route only, not the meta tools/call path
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	gate_payload	http_invoke_tiny	S4 response gates on every dispatch result
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	hold	-	on-path, untimed: cost-governance settle with a budget enforcer; the harness configures no enforcer
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	is_firewall_refusal	-	on-path, untimed: recognises a stored firewall refusal on replay; the timed rows are fresh successful calls
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	new	-	on-path, untimed: cost-governance admission with a budget enforcer; the harness configures no enforcer
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	of	http_invoke_tiny	classifies every meta dispatch outcome
+src/gateway/meta_mcp/invoke/egress.rs	admit	-	on-path, untimed: backend notifications streamed during a call only; the timed backend emits none
+src/gateway/meta_mcp/invoke/egress.rs	backend_error_screens_clean	-	on-path, untimed: marked account refusals on dispatch errors only; the timed rows succeed
+src/gateway/meta_mcp/invoke/egress.rs	bind	http_invoke_tiny	bound to the authenticated caller once per HTTP request's notification scope
+src/gateway/meta_mcp/invoke/egress.rs	content_refuses	-	on-path, untimed: error frames and non-tools/call answers; a tools/call result met these checks at dispatch
+src/gateway/meta_mcp/invoke/egress.rs	content_refuses_value	-	on-path, untimed: undeclared-key refusals only; the timed arguments are declared
+src/gateway/meta_mcp/invoke/egress.rs	decoded_text	-	on-path, untimed: the egress content check's text walk, on error frames and non-tools/call answers only
+src/gateway/meta_mcp/invoke/egress.rs	firewall_outcome	-	on-path, untimed: only frames a configured firewall instance judges; the harness routes configure none for this scan
+src/gateway/meta_mcp/invoke/egress.rs	firewall_result	http_invoke_tiny	on the HTTP gateway_invoke path (the egress scan of every result)
+src/gateway/meta_mcp/invoke/egress.rs	for_method	http_invoke_tiny	on the HTTP gateway_invoke path (ContentChecks::for_method, per answer)
+src/gateway/meta_mcp/invoke/egress.rs	frame	http_invoke_tiny	on the HTTP gateway_invoke path (the egressed frame every HTTP answer is built from)
+src/gateway/meta_mcp/invoke/egress.rs	gateway_own	-	on-path, untimed: frames the gateway built with no backend text (its own refusals and notices) only
+src/gateway/meta_mcp/invoke/egress.rs	inspect_discovery_value	-	gateway_list_tools and gateway_search_tools only, not the tools/call path
+src/gateway/meta_mcp/invoke/egress.rs	notification_screen	http_invoke_tiny	built once per HTTP request's notification scope
+src/gateway/meta_mcp/invoke/egress.rs	of	http_invoke_tiny	on the HTTP gateway_invoke path (Egressed::of, every scanned HTTP answer)
+src/gateway/meta_mcp/invoke/egress.rs	scan_backend_error	-	on-path, untimed: backend errors held outside a frame (task recovery, marked account errors) only
+src/gateway/meta_mcp/invoke/egress.rs	scan_egress	http_invoke_tiny	on the HTTP gateway_invoke path (every delivered frame, once)
+src/gateway/meta_mcp/invoke/egress.rs	scan_error	-	on-path, untimed: error frames only; the timed rows deliver results
+src/gateway/meta_mcp/invoke/egress.rs	scan_notification	-	on-path, untimed: backend notifications streamed during a call only; the timed backend emits none
+src/gateway/meta_mcp/invoke/egress.rs	scan_result	http_invoke_tiny	on the HTTP gateway_invoke path (the egress scan of every result)
+src/gateway/meta_mcp/invoke/egress.rs	scan_stored_task	-	tasks/get and task-notification reads only, not a live tools/call
+src/gateway/meta_mcp/invoke/egress.rs	scan_task_read	-	tasks/get reads only, not a live tools/call
+src/gateway/meta_mcp/invoke/egress.rs	stored_targets	-	tasks/get and task-notification reads only, not a live tools/call
+src/gateway/meta_mcp/invoke/errors.rs	classify_dispatch_error	-	on-path, untimed: dispatch errors only; the timed rows succeed
+src/gateway/meta_mcp/invoke/errors.rs	classify_from_detail	-	on-path, untimed: tool-level and dispatch errors only; the timed result is not an error
+src/gateway/meta_mcp/invoke/errors.rs	dispatch_error_result	-	on-path, untimed: dispatch errors only; the timed rows succeed
+src/gateway/meta_mcp/invoke/errors.rs	hint_surface	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/errors.rs	of	http_invoke_tiny	classifies every accounted dispatch outcome (BudgetOutcome::of)
+src/gateway/meta_mcp/invoke/errors.rs	of_error	-	on-path, untimed: failed dispatches only; the timed rows succeed
+src/gateway/meta_mcp/invoke/errors.rs	of_value	http_invoke_tiny	classifies every answered dispatch (BudgetOutcome::of_value)
+src/gateway/meta_mcp/invoke/gateway_writes.rs	built_task_envelope	-	on-path, untimed: task-envelope answers under relay detection only; the timed rows carry no task member
+src/gateway/meta_mcp/invoke/gateway_writes.rs	decode_entry	-	on-path, untimed: only when a stored write record is read back (task rows, admission entries); a plain timed invoke keeps its record in memory
+src/gateway/meta_mcp/invoke/gateway_writes.rs	deserialize	-	on-path, untimed: only when a stored write record is read back (task rows, admission entries); a plain timed invoke keeps its record in memory
+src/gateway/meta_mcp/invoke/gateway_writes.rs	digest	http_invoke_tiny	on the HTTP gateway_invoke path (every gateway-written member note)
+src/gateway/meta_mcp/invoke/gateway_writes.rs	index	-	on-path, untimed: array-member write notes (composite and stored records) only; the timed trace note is an object member
+src/gateway/meta_mcp/invoke/gateway_writes.rs	is_empty	-	on-path, untimed: stored-record bookkeeping for task rows and admission entries only
+src/gateway/meta_mcp/invoke/gateway_writes.rs	mapping_paths	-	gateway_execute and playbook output mappings only, not a single gateway_invoke
+src/gateway/meta_mcp/invoke/gateway_writes.rs	mark	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/gateway_writes.rs	member	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/gateway_writes.rs	member_mut	-	on-path, untimed: relay-receipt, cache-hit and task-row stripping of gateway members only
+src/gateway/meta_mcp/invoke/gateway_writes.rs	note	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/gateway_writes.rs	note_contract	-	on-path, untimed: response-contract annotations only; the timed rows configure no contract that annotates
+src/gateway/meta_mcp/invoke/gateway_writes.rs	note_task_envelope	-	on-path, untimed: task-augmented calls only; the timed rows carry no task member
+src/gateway/meta_mcp/invoke/gateway_writes.rs	owns	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/gateway_writes.rs	projected	-	gateway_execute and playbook step projections only, not a single gateway_invoke
+src/gateway/meta_mcp/invoke/gateway_writes.rs	push	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/gateway_writes.rs	rebased	-	gateway_execute and playbook composite steps only, not a single gateway_invoke
+src/gateway/meta_mcp/invoke/gateway_writes.rs	rebind	-	on-path, untimed: answers a final check rewrote in place, under relay detection only
+src/gateway/meta_mcp/invoke/gateway_writes.rs	recorded	stdio_invoke_tiny	read when every stdio answer is finalized
+src/gateway/meta_mcp/invoke/gateway_writes.rs	remove_owned	-	on-path, untimed: relay-receipt, cache-hit and task-row stripping of gateway members only
+src/gateway/meta_mcp/invoke/gateway_writes.rs	restore	-	on-path, untimed: cache hits and composite steps only; the timed rows dispatch fresh
+src/gateway/meta_mcp/invoke/gateway_writes.rs	scope	http_invoke_tiny	wraps every HTTP delivery in a write record
+src/gateway/meta_mcp/invoke/gateway_writes.rs	segments	-	on-path, untimed: only when a stored write record is read back (task rows, admission entries)
+src/gateway/meta_mcp/invoke/gateway_writes.rs	serialize	-	on-path, untimed: only when a write record is stored (task rows, admission entries); a plain timed invoke keeps its record in memory
+src/gateway/meta_mcp/invoke/gateway_writes.rs	snapshot_since	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/gateway_writes.rs	strip	-	on-path, untimed: relay receipt building with a firewall instance only; the harness stages no receipt
+src/gateway/meta_mcp/invoke/gateway_writes.rs	strip_noted	-	direct /mcp/{backend} route only, not the meta tools/call path
+src/gateway/meta_mcp/invoke/gateway_writes.rs	strip_recorded	-	task-row storage only, not a live tools/call
+src/gateway/meta_mcp/invoke/gateway_writes.rs	take_since	-	gateway_execute and playbook composite steps only, not a single gateway_invoke
+src/gateway/meta_mcp/invoke/gateway_writes.rs	walk	-	gateway_execute and playbook output mappings only, not a single gateway_invoke
+src/gateway/meta_mcp/invoke/gateway_writes.rs	without	-	on-path, untimed: cache and replay hits' receipts only; the timed rows dispatch fresh
+src/gateway/meta_mcp/invoke/guarded.rs	augment	-	on-path, untimed: cache and idempotent-replay hits only; the timed rows dispatch fresh every round
+src/gateway/meta_mcp/invoke/guarded.rs	backend	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/guarded.rs	from_cache	-	on-path, untimed: cache and idempotent-replay hits only; the timed rows dispatch fresh every round
+src/gateway/meta_mcp/invoke/guarded.rs	into_parts	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/guarded.rs	sealed_by_guard	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	code_mode_execute_fails_closed_without_identity	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	code_mode_execute_propagates_identity_to_backend	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	direct_route_fails_closed_without_identity	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	direct_route_resolves_bearer_for_identity	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	direct_route_unconfigured_backend_yields_no_headers	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	distinct_identities_get_distinct_cache_bindings	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	meta_with_token_exchange_strategy	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	mint_audit_write_failure_returns_generic_error_no_leak	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	mints_bearer_credential_for_identity	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	optional_backend_on_stdio_transport_yields_no_headers	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	optional_backend_without_identity_yields_no_headers	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	required_backend_on_stdio_transport_fails_closed_before_mint	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	required_backend_without_identity_fails_closed	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	required_backend_without_strategy_fails_closed	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	required_mint_without_transparency_log_fails_closed	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	resolve_caller_credential_wires_token_exchange_endpoint_and_scope	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	token_exchange_idp_cfg	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	http_invoke_tiny	checked on every invoke; bridges only a legacy interim ask
+src/gateway/meta_mcp/invoke/nonce_settle.rs	ask_refund	-	on-path, untimed: signed calls refused before dispatch only; the timed rows are unsigned
+src/gateway/meta_mcp/invoke/nonce_settle.rs	carry	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/nonce_settle.rs	drop	http_invoke_tiny	on the HTTP gateway_invoke path (the witness is taken and dropped per invoke)
+src/gateway/meta_mcp/invoke/nonce_settle.rs	give_back_unsent	-	on-path, untimed: pre-dispatch refusals (redeem, chokepoint) only; the timed rows dispatch
+src/gateway/meta_mcp/invoke/nonce_settle.rs	mark_dispatched	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/nonce_settle.rs	spend	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/nonce_settle.rs	take	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/output_shape.rs	apply_validated_output	-	on-path, untimed: tools declaring an output schema, and capability transforms, only; the timed tool declares none
+src/gateway/meta_mcp/invoke/output_shape.rs	enforce_output_schema	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/output_shape.rs	extract_output_validation_target	-	on-path, untimed: tools declaring an output schema, and capability transforms, only; the timed tool declares none
+src/gateway/meta_mcp/invoke/output_shape.rs	is_mcp_envelope	-	on-path, untimed: tools declaring an output schema, and capability transforms, only; the timed tool declares none
+src/gateway/meta_mcp/invoke/output_shape.rs	json_type	-	on-path, untimed: output-schema mismatch logging only
+src/gateway/meta_mcp/invoke/output_shape.rs	mismatch_shape	-	on-path, untimed: output-schema mismatch logging only
+src/gateway/meta_mcp/invoke/policy.rs	apply_response_contract_gate	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/policy.rs	apply_response_gates	-	upstream task recovery (tasks/get) only; live dispatch uses apply_response_gates_effect
+src/gateway/meta_mcp/invoke/policy.rs	apply_response_gates_effect	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/policy.rs	authorize_invocation	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/policy.rs	check_attestation	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/policy.rs	check_attestation_scoped	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/policy.rs	inspect_backend_text	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/policy.rs	invoke_tool_sourced	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/policy.rs	refuse_unattested_plan	-	gateway_execute and playbook plans under attestation enforce only, not a single gateway_invoke
+src/gateway/meta_mcp/invoke/post_dispatch.rs	attach_tool_error_recovery	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/post_dispatch.rs	inject_cost_advice	http_invoke_tiny	on the HTTP gateway_invoke path (cost-governance builds)
+src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_dispatch_error	-	on-path, untimed: dispatch errors only; the timed rows succeed
+src/gateway/meta_mcp/invoke/post_dispatch.rs	store_response	-	on-path, untimed: only read-only-declared tools may be stored; the timed tool declares no read-only hint
+src/gateway/meta_mcp/invoke/pre_dispatch.rs	admit_idempotency_key	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/pre_dispatch.rs	answer_undeclared_key	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/pre_dispatch.rs	cache_admits	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/pre_dispatch.rs	derive_prompt_cache_key	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/pre_dispatch.rs	log_tool_invoked	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/pre_dispatch.rs	refuse_shared_oauth_login	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/pre_dispatch.rs	serve_cached_response	-	on-path, untimed: only read-only-declared tools may be served from cache; the timed tool declares no read-only hint, and the harness proves a dispatch per round
+src/gateway/meta_mcp/invoke/projection.rs	apply_capability_projection	-	on-path, untimed: capability-backend calls with a projection spec only; the timed rows dispatch to an MCP backend
+src/gateway/meta_mcp/invoke/projection.rs	call_capability_tool_with_identity	-	on-path, untimed: capability-backend calls only; the timed rows dispatch to an MCP backend
+src/gateway/meta_mcp/invoke/projection.rs	emit_projection_ab_event	-	on-path, untimed: projection A/B (experimental mode) on capability calls only
+src/gateway/meta_mcp/invoke/projection.rs	extract_client_claim	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/projection.rs	json_is_populated	-	on-path, untimed: capability response transforms only; the timed rows dispatch to an MCP backend
+src/gateway/meta_mcp/invoke/projection.rs	principal_source	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/projection.rs	quota_key	-	on-path, untimed: interim continuation mints only; the timed backend answers at once
+src/gateway/meta_mcp/invoke/propagation.rs	audit_minted_credential	-	on-path, untimed: minted propagation credentials only; the timed backend has no propagation config
+src/gateway/meta_mcp/invoke/propagation.rs	caller_principal	-	on-path, untimed: identity-propagation backends only; the timed backend has no propagation config
+src/gateway/meta_mcp/invoke/propagation.rs	refuse_unbound_account_backend	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/propagation.rs	resolve_caller_credential	-	test-only helper (cfg(test))
+src/gateway/meta_mcp/invoke/propagation.rs	resolve_caller_credential_as	-	on-path, untimed: identity-propagation backends only; the timed backend has no propagation config
+src/gateway/meta_mcp/invoke/propagation.rs	resolve_capability_account_credential	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/propagation.rs	resolve_dispatch	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_credential	-	direct /mcp/{backend} route only, not the meta tools/call path
+src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_credential_attempted_for	-	direct /mcp/{backend} route only, not the meta tools/call path
+src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_credential_held_for	-	direct /mcp/{backend} route only, not the meta tools/call path
+src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_headers	-	direct /mcp/{backend} route only, not the meta tools/call path
+src/gateway/meta_mcp/invoke/provenance_stamp.rs	maybe_stamp_provenance	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/provenance_stamp.rs	stamp_direct_result	-	direct /mcp/{backend} route only, not the meta tools/call path
+src/gateway/meta_mcp/invoke/provenance_stamp.rs	stamp_recovered_result	-	upstream task recovery (tasks/get) only, not a live dispatch
+src/gateway/meta_mcp/invoke/r2_check.rs	absent_on_slot	-	on-path, untimed: per-user-catalogue backends withholding the tool only
+src/gateway/meta_mcp/invoke/r2_check.rs	account_refused_fill	-	on-path, untimed: cold-slot catalogue fills the failsafe refused only
+src/gateway/meta_mcp/invoke/r2_check.rs	answer_refused_fill	-	on-path, untimed: cold-slot catalogue fills that failed only
+src/gateway/meta_mcp/invoke/r2_check.rs	bridged_refused_fill	-	on-path, untimed: bridged rounds whose cold-slot fill failed only
+src/gateway/meta_mcp/invoke/r2_check.rs	miss_hint_pool	-	on-path, untimed: unknown-tool misses only; the timed tool is listed on its backend
+src/gateway/meta_mcp/invoke/r2_check.rs	miss_with_hint	-	on-path, untimed: unknown-tool misses only; the timed tool is listed on its backend
+src/gateway/meta_mcp/invoke/r2_check.rs	undeclared_key_refusal	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/receipt_test_support.rs	backend_failure	-	test-only support (the module is cfg(all(test, firewall)))
+src/gateway/meta_mcp/invoke/receipt_test_support.rs	detectable	-	test-only support (the module is cfg(all(test, firewall)))
+src/gateway/meta_mcp/invoke/receipt_test_support.rs	distinct_prose	-	test-only support (the module is cfg(all(test, firewall)))
+src/gateway/meta_mcp/invoke/receipt_test_support.rs	own_hint_text	-	test-only support (the module is cfg(all(test, firewall)))
+src/gateway/meta_mcp/invoke/relay.rs	collecting	-	direct-route and task-executor receipt scopes only; meta HTTP uses collecting_http and stdio collecting_staged
+src/gateway/meta_mcp/invoke/relay.rs	collecting_http	http_invoke_tiny	wraps every HTTP delivery (collects only with relay detection on)
+src/gateway/meta_mcp/invoke/relay.rs	collecting_staged	-	on-path, untimed: only with relay detection active; the harness routes configure none
+src/gateway/meta_mcp/invoke/relay.rs	commit	stdio_invoke_tiny	commits or drops the staged receipts of every judged stdio answer
+src/gateway/meta_mcp/invoke/relay.rs	commit_staged_relay	-	task-executor executions only, not a live request-thread call
+src/gateway/meta_mcp/invoke/relay.rs	commit_with	-	direct-route and task-executor receipt commits only
+src/gateway/meta_mcp/invoke/relay.rs	delivered_form	-	on-path, untimed: bridged prompts and their records only; the timed backend asks nothing
+src/gateway/meta_mcp/invoke/relay.rs	discard_staged	-	task executions and task replays only, not a live tools/call
+src/gateway/meta_mcp/invoke/relay.rs	in_plan_step	-	on-path, untimed: read on interim and task-worker clock checks only
+src/gateway/meta_mcp/invoke/relay.rs	new	-	on-path, untimed: relay-detection constructions (a relay key, deferred receipts) only; relay detection is off in the harness
+src/gateway/meta_mcp/invoke/relay.rs	none	stdio_invoke_tiny	the no-receipts staged value each stdio dispatch returns with relay detection off
+src/gateway/meta_mcp/invoke/relay.rs	outbound_params	http_invoke_tiny	on the HTTP gateway_invoke path (every dispatch's backend params)
+src/gateway/meta_mcp/invoke/relay.rs	plan_step	-	gateway_execute and playbook steps only, not a single gateway_invoke
+src/gateway/meta_mcp/invoke/relay.rs	receipt	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/relay.rs	receipt_with	-	on-path, untimed: receipt building with a firewall instance and relay detection active only
+src/gateway/meta_mcp/invoke/relay.rs	recorded_prompt	-	on-path, untimed: bridged input prompts only; the timed backend asks nothing
+src/gateway/meta_mcp/invoke/relay.rs	recording_channel	-	on-path, untimed: bridged input rounds (legacy client) only; the timed backend answers at once
+src/gateway/meta_mcp/invoke/relay.rs	refuse_relay	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/relay.rs	refuse_relaying_round	-	on-path, untimed: bridged input rounds only; the timed backend answers at once
+src/gateway/meta_mcp/invoke/relay.rs	relay_active	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/relay.rs	relay_caller	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/relay.rs	relay_refusal	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/relay.rs	relay_snapshot	http_invoke_tiny	on the HTTP gateway_invoke path (the egress scan's before-copy)
+src/gateway/meta_mcp/invoke/relay.rs	send_request	-	on-path, untimed: bridged input prompts only; the timed backend asks nothing
+src/gateway/meta_mcp/invoke/relay.rs	settle_relay_receipts	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/relay.rs	stage_relay_receipt	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/relay.rs	stage_replay	-	on-path, untimed: replayed executions only; the timed rows execute fresh
+src/gateway/meta_mcp/invoke/relay.rs	stage_upstream_result	-	upstream task settlement (tasks/get recovery) only, not a live dispatch
+src/gateway/meta_mcp/invoke/relay.rs	stage_with	-	direct /mcp/{backend} route only, not the meta tools/call path
+src/gateway/meta_mcp/invoke/relay.rs	take_staged_for_test	-	test-only helper (cfg(test))
+src/gateway/meta_mcp/invoke/relay.rs	unkeyed_for_test	-	test-only helper (cfg(test))
+src/gateway/meta_mcp/invoke/relay_catalogue.rs	as_caller	-	prompts/get and resources/read only, not the tools/call path
+src/gateway/meta_mcp/invoke/relay_catalogue.rs	catalogue_refusal	-	prompts/get and resources/read only, not the tools/call path
+src/gateway/meta_mcp/invoke/relay_catalogue.rs	forward_catalogue	-	prompts/get and resources/read only, not the tools/call path
+src/gateway/meta_mcp/invoke/relay_catalogue.rs	stage_catalogue_result	-	prompts/get and resources/read only, not the tools/call path
+src/gateway/meta_mcp/invoke/relay_delivered.rs	as_built	-	on-path, untimed: relay-active receipt rebuilds and final-check rewrites only
+src/gateway/meta_mcp/invoke/relay_delivered.rs	closing_quote	-	on-path, untimed: relay receipts for wrappers a final pass rewrote only
+src/gateway/meta_mcp/invoke/relay_delivered.rs	delivery_commit	-	on-path, untimed: bridged prompt deliveries under relay detection only
+src/gateway/meta_mcp/invoke/relay_delivered.rs	escape_at	-	on-path, untimed: relay receipts for wrappers a final pass rewrote only
+src/gateway/meta_mcp/invoke/relay_delivered.rs	hex4	-	on-path, untimed: relay receipts for wrappers a final pass rewrote only
+src/gateway/meta_mcp/invoke/relay_delivered.rs	keep_plan_receipts	-	gateway_execute and playbook plan answers only, not a single gateway_invoke
+src/gateway/meta_mcp/invoke/relay_delivered.rs	keep_to_rewritten	-	on-path, untimed: relay receipts for wrappers a final pass rewrote only
+src/gateway/meta_mcp/invoke/relay_delivered.rs	last_open_quote	-	on-path, untimed: relay receipts for wrappers a final pass rewrote only
+src/gateway/meta_mcp/invoke/relay_delivered.rs	line_literals	-	on-path, untimed: relay receipts for wrappers a final pass rewrote only
+src/gateway/meta_mcp/invoke/relay_delivered.rs	of	http_invoke_tiny	on the HTTP gateway_invoke path (AnswerShape::of, per egress scan)
+src/gateway/meta_mcp/invoke/relay_delivered.rs	plan_answer	-	gateway_execute and playbook plan answers only, not a single gateway_invoke
+src/gateway/meta_mcp/invoke/relay_delivered.rs	rebuild_receipt_from_final	http_invoke_tiny	on the HTTP gateway_invoke path (the final-delivery receipt pass)
+src/gateway/meta_mcp/invoke/relay_delivered.rs	receipt_copy	-	on-path, untimed: relay-active receipt rebuilds only; the harness stages no receipt
+src/gateway/meta_mcp/invoke/relay_delivered.rs	restage_if_changed	http_invoke_tiny	on the HTTP gateway_invoke path (the egress scan's restage check)
+src/gateway/meta_mcp/invoke/relay_delivered.rs	rewritten_answer	-	on-path, untimed: relay receipts for wrappers a final pass rewrote only
+src/gateway/meta_mcp/invoke/relay_delivered.rs	strip_gateway_stamps	-	on-path, untimed: relay-active receipt copies only; the harness stages no receipt
+src/gateway/meta_mcp/invoke/relay_delivered.rs	task_slot	-	on-path, untimed: task-envelope answers under relay detection only; the timed rows carry no task member
+src/gateway/meta_mcp/invoke/relay_delivered.rs	tool_value	-	on-path, untimed: relay-active receipt rebuilds only; the harness stages no receipt
+src/gateway/meta_mcp/invoke/relay_delivered.rs	unescape	-	on-path, untimed: relay receipts for wrappers a final pass rewrote only
+src/gateway/meta_mcp/invoke/relay_seams.rs	note_plan_member	-	gateway_execute and playbook plan deliveries only, not a single gateway_invoke
+src/gateway/meta_mcp/invoke/relay_seams.rs	noting_plan_members	-	test-only helper (cfg(test))
+src/gateway/meta_mcp/invoke/relay_seams.rs	pointer_token	-	gateway_execute and playbook plan deliveries only, not a single gateway_invoke
+src/gateway/meta_mcp/invoke/relay_seams.rs	scope	http_invoke_tiny	wraps every HTTP delivery in a plan-member record
+src/gateway/meta_mcp/invoke/relay_seams.rs	with_plan_members	-	test-only helper (cfg(all(test, firewall)))
+src/gateway/meta_mcp/invoke/relay_seams_record.rs	add_seams	-	gateway_execute and playbook plan answers only, not a single gateway_invoke
+src/gateway/meta_mcp/invoke/relay_seams_record.rs	add_subset_seams	-	gateway_execute and playbook plan answers only, not a single gateway_invoke
+src/gateway/meta_mcp/invoke/relay_seams_record.rs	answer_parts	-	gateway_execute and playbook plan answers only, not a single gateway_invoke
+src/gateway/meta_mcp/invoke/relay_seams_record.rs	composite	-	gateway_execute and playbook plan answers only, not a single gateway_invoke
+src/gateway/meta_mcp/invoke/relay_seams_record.rs	seam_fingerprints	-	gateway_execute and playbook plan answers only, not a single gateway_invoke
+src/gateway/meta_mcp/invoke/relay_seams_record.rs	walk	-	gateway_execute and playbook plan answers only, not a single gateway_invoke
+src/gateway/meta_mcp/invoke/side_effect_markers.rs	is_gateway_notice	-	on-path, untimed: idempotent replays serving a stored notice only
+src/gateway/meta_mcp/invoke/side_effect_markers.rs	settle_lost_round	-	on-path, untimed: lost dispatch rounds (a send with no answer) only; the timed rows are answered
+src/gateway/meta_mcp/invoke/side_effect_markers.rs	uncertain_side_effect	-	on-path, untimed: idempotency-keyed calls only; the timed rows carry no key
+src/gateway/meta_mcp/invoke/side_effect_markers.rs	withheld_side_effect	-	on-path, untimed: idempotency-keyed calls only; the timed rows carry no key
+src/gateway/meta_mcp/invoke/step_fingerprint.rs	step_fingerprint	-	gateway_execute chain resumes only, not a single gateway_invoke
+src/gateway/meta_mcp/invoke/undeclared_gate.rs	asked_requests	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/undeclared_gate.rs	bridge_refusal	-	on-path, untimed: bridged rounds asking for undeclared input only
+src/gateway/meta_mcp/invoke/undeclared_gate.rs	refusal	-	on-path, untimed: interim results asking for undeclared input only; the timed backend never asks
+src/gateway/meta_mcp/invoke/undeclared_gate.rs	refuse_undeclared	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/withheld_evidence.rs	delivered	-	on-path, untimed: context-integrity findings on a result only; the timed result is clean
+src/gateway/meta_mcp/invoke/worker_clock.rs	arm	-	task-worker executions only, not a request-thread call
+src/gateway/meta_mcp/invoke/worker_clock.rs	armed	-	on-path, untimed: interim and task-worker clock checks only
+src/gateway/meta_mcp/invoke/worker_clock.rs	hand_to_worker	-	on-path, untimed: interim rounds a task worker must seal later only
+src/gateway/meta_mcp/invoke/worker_clock.rs	mint_or_withhold	-	on-path, untimed: interim rounds the backend stopped to ask on only; the timed backend answers at once
+src/gateway/meta_mcp/invoke/worker_clock.rs	note_refusal	-	on-path, untimed: presented continuations refused on a task worker only
+src/gateway/meta_mcp/invoke/worker_clock.rs	redemption_sample	-	on-path, untimed: presented continuations redeemed on a task worker only
+src/gateway/meta_mcp/invoke/worker_clock.rs	seal	-	task-worker late sealing of an interim round only, not a request-thread call
+src/gateway/meta_mcp/invoke/worker_clock.rs	take_redemption_expired	-	task-worker executions only, not a request-thread call
+src/gateway/meta_mcp/invoke/worker_clock.rs	take_redemption_unreadable	-	task-worker executions only, not a request-thread call
+src/gateway/meta_mcp/invoke/worker_clock.rs	take_withheld	-	task-worker executions only, not a request-thread call
 src/gateway/router/handlers.rs	catalogue_caller	-	prompts/get and resources/read only
 src/gateway/router/handlers.rs	listened_task_ids	-	subscriptions/listen only
 src/gateway/router/handlers.rs	meta_mcp_dispatch	http_invoke_tiny	the HTTP /mcp dispatcher
@@ -87,8 +405,45 @@ src/gateway/router/handlers.rs	meta_mcp_handler	http_invoke_tiny	the HTTP /mcp e
 src/gateway/router/handlers.rs	reaches_tasks_extension	http_invoke_tiny	checked on every HTTP request at intake
 src/gateway/router/handlers.rs	refusal_status	http_invoke_tiny	read on every HTTP answer
 src/gateway/router/handlers.rs	session_id_header	http_invoke_tiny	read on every HTTP request at intake
+src/gateway/router/handlers/dispatch_intake.rs	external_tool	http_invoke_tiny	the tool name the response policy keys on, read per HTTP request
 src/gateway/router/handlers/dispatch_intake.rs	intake	http_invoke_tiny	the HTTP request prelude
+src/gateway/router/handlers/dispatch_intake.rs	mcp_cancel_key	http_invoke_tiny	registered for every HTTP tools/call so its caller can cancel it
 src/gateway/router/handlers/dispatch_intake.rs	params	http_invoke_tiny	the request params accessor
 src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	http_invoke_tiny	the HTTP tools/call arm
-src/gateway/meta_mcp/call_dispatch.rs	handle_tools_call_ref	http_invoke_tiny	the tools/call entry both transports call
-src/gateway/meta_mcp/call_dispatch.rs	handle_tools_call_unsettled	http_invoke_tiny	the tools/call gates before dispatch
+src/gateway/router/handlers/events.rs	answer	-	events/list, events/subscribe and events/unsubscribe only, not the tools/call path
+src/gateway/router/handlers/events.rs	api_key	-	events/* subscription credentials only, not the tools/call path
+src/gateway/router/handlers/events.rs	capture	http_invoke_tiny	captured at intake on every HTTP request, before the body is read
+src/gateway/router/handlers/events.rs	credential	-	events/* subscription credentials only, not the tools/call path
+src/gateway/router/handlers/events.rs	digests_for_test	-	test-only helper (cfg(test))
+src/gateway/router/handlers/events.rs	principal	-	events/* methods only, not the tools/call path
+src/gateway/router/handlers/events.rs	static_bearer_binding	-	events/* subscription credentials only, not the tools/call path
+src/gateway/router/handlers/health.rs	backends_overall_healthy	-	GET /health only, not the tools/call path
+src/gateway/router/handlers/health.rs	health_handler	-	GET /health only, not the tools/call path
+src/gateway/router/handlers/metrics_scrape.rs	metrics_handler	-	GET /metrics only, not the tools/call path
+src/gateway/router/handlers/modern_response.rs	build_modern_response	-	test-only adapter (cfg(test))
+src/gateway/router/handlers/modern_response.rs	shape_modern_response	-	on-path, untimed: modern-era (2026-07-28) answers only; the timed rows are legacy era
+src/gateway/router/handlers/owner.rs	owner_of	http_invoke_tiny	on the HTTP gateway_invoke path (the session owner resolved at intake)
+src/gateway/router/handlers/owner.rs	request_session_owner	http_invoke_tiny	on the HTTP gateway_invoke path (resolved at intake)
+src/gateway/router/handlers/owner.rs	session_owner	http_invoke_tiny	the no-subject arm of owner_of at intake; the timed rows present no subject
+src/gateway/router/handlers/request_checks.rs	request_check_refusal	http_invoke_tiny	run at intake on every HTTP request
+src/gateway/router/handlers/session_end.rs	mcp_delete_handler	-	DELETE /mcp session termination only, not the tools/call path
+src/gateway/router/handlers/session_end.rs	sse_deprecated_handler	-	the retired /sse endpoint only, not the tools/call path
+src/gateway/router/handlers/sse.rs	get_era_refusal	-	GET /mcp only, not the POST tools/call path
+src/gateway/router/handlers/sse.rs	mcp_sse_handler	-	GET /mcp SSE stream only, not the POST tools/call path
+src/gateway/router/handlers/tasks.rs	agent_task_owner	-	on-path, untimed: the validated-agent arm of route_task_owner at intake; the timed rows present no agent identity
+src/gateway/router/handlers/tasks.rs	delivered	-	subscriptions/listen task notifications only, not the tools/call path
+src/gateway/router/handlers/tasks.rs	frame	-	subscriptions/listen task notifications only, not the tools/call path
+src/gateway/router/handlers/tasks.rs	recover_from_upstream	-	tasks/get upstream recovery only, not a live tools/call
+src/gateway/router/handlers/tasks.rs	route	-	tasks/* methods only, not the tools/call path
+src/gateway/router/handlers/tasks.rs	route_owners	http_invoke_tiny	resolved at intake on every HTTP request
+src/gateway/router/handlers/tasks.rs	route_task_owner	http_invoke_tiny	resolved at intake on every HTTP request (via route_owners)
+src/gateway/router/handlers/tasks.rs	session_owner_key	http_invoke_tiny	resolved at intake on every HTTP request (via task_owner_key)
+src/gateway/router/handlers/tasks.rs	task_frames	-	subscriptions/listen task notifications only, not the tools/call path
+src/gateway/router/handlers/tasks.rs	task_intent_for_call	-	on-path, untimed: task-augmented calls only (a task member in params); the timed rows carry none
+src/gateway/router/handlers/tasks.rs	task_owner_key	http_invoke_tiny	resolved at intake on every HTTP request (via route_owners)
+src/gateway/router/handlers/tasks.rs	task_principal	-	on-path, untimed: the owner-key arm of route_task_owner (authenticated callers with an owner key); the timed anonymous caller takes another arm
+src/gateway/router/handlers/tasks.rs	tasks_cancel	-	tasks/cancel only, not the tools/call path
+src/gateway/router/handlers/tasks.rs	tasks_get	-	tasks/get only, not the tools/call path
+src/gateway/router/handlers/tasks.rs	tasks_update	-	tasks/update only, not the tools/call path
+src/gateway/router/handlers/tasks.rs	update_caller	-	tasks/update only, not the tools/call path
+src/gateway/router/handlers/tasks.rs	with_policy_caller	-	tasks/get recovery and task-frame re-checks only, not a live tools/call
