@@ -263,6 +263,11 @@ pub struct NotificationMultiplexer {
     /// The cross-tenant read judge of every session stream (MIK-7116.MIN.2);
     /// unset when the verdict is off, which is the plain fast path.
     reads: std::sync::OnceLock<crate::gateway::outbound::SessionJudge>,
+    /// Test pause between a frame leaving the session queue and the write-time
+    /// credential check (MIK-8350): a row revokes the credential there, so the
+    /// frame is withheld at write and not at the decision.
+    #[cfg(test)]
+    pub(crate) before_write_check: Arc<crate::test_pause::Slot>,
 }
 
 impl NotificationMultiplexer {
@@ -280,6 +285,8 @@ impl NotificationMultiplexer {
             event_counter: std::sync::atomic::AtomicU64::new(1),
             authorizer: RwLock::new(None),
             reads: std::sync::OnceLock::new(),
+            #[cfg(test)]
+            before_write_check: Arc::default(),
         }
     }
 

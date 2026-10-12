@@ -154,6 +154,14 @@ pub(super) fn principal_token(subject: &str) -> TemporaryToken {
     }
 }
 
+/// As [`principal_token`], narrowed to the tools in `tools`: the token sees
+/// those and no others.
+pub(super) fn scoped_token(subject: &str, tools: &[&str]) -> TemporaryToken {
+    let mut token = principal_token(subject);
+    token.scopes.tools = tools.iter().map(|t| (*t).to_string()).collect();
+    token
+}
+
 pub(in crate::gateway::server) fn per_user_backend(name: &str, required: bool) -> Arc<Backend> {
     let backend = Arc::new(Backend::new(
         name,
@@ -709,6 +717,63 @@ impl World {
             .expect("the acknowledgement opens the stream");
         Ear::Listen(events)
     }
+
+    /// A legacy GET stream held by `bearer`, opened through the real route
+    /// (`mcp_sse_handler`), so the write path (`credential_at_write`, the write
+    /// acknowledgement) runs for every frame it is sent. [`Self::legacy`] reads
+    /// a bare receiver and never reaches it.
+    pub(super) async fn sse(&self, bearer: &str) -> Ear {
+        self.sse_as(bearer, None).await
+    }
+
+    /// As [`Self::sse`], with an Open `WebUI` `assertion`.
+    pub(super) async fn sse_as(&self, bearer: &str, assertion: Option<&str>) -> Ear {
+        self.sse_open(bearer, assertion, None).await
+    }
+
+    /// Reopen the GET stream of `session` under `bearer`: the same session,
+    /// resumed by the credential that owns it.
+    pub(super) async fn sse_resume(&self, bearer: &str, session: &str) -> Ear {
+        self.sse_open(bearer, None, Some(session)).await
+    }
+
+    async fn sse_open(&self, bearer: &str, assertion: Option<&str>, resume: Option<&str>) -> Ear {
+        let mut builder = axum::http::Request::builder()
+            .method("GET")
+            .uri("/mcp")
+            .header("authorization", format!("Bearer {bearer}"))
+            .header("accept", "text/event-stream");
+        if let Some(session) = resume {
+            builder = builder.header("mcp-session-id", session);
+        }
+        let mut request = builder.body(Body::empty()).expect("a request");
+        asserted(&mut request, assertion);
+        let response = self.router.clone().oneshot(request).await.expect("served");
+        assert!(
+            response.status().is_success(),
+            "sse refused: {}",
+            response.status()
+        );
+        let session = response
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|v| v.to_str().ok())
+            .expect("the stream names its session")
+            .to_string();
+        let mut body = Events {
+            stream: Box::pin(response.into_body().into_data_stream()),
+            buffer: String::new(),
+        };
+        let (tx, events) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(event) = body.next_unbounded().await {
+                if tx.send(event).is_err() {
+                    break;
+                }
+            }
+        });
+        Ear::Sse { events, session }
+    }
 }
 
 /// A listen response body read as SSE `data:` events.
@@ -721,6 +786,17 @@ impl Events {
     /// The next event, or `None` if the stream ends or `ARRIVAL` passes.
     pub(super) async fn next(&mut self) -> Option<Value> {
         let deadline = tokio::time::Instant::now() + ARRIVAL;
+        self.next_by(Some(deadline)).await
+    }
+
+    /// The next event, waiting without a deadline; `None` only when the
+    /// stream ends. A real client reads continuously, which is what drives
+    /// the server's write loop.
+    async fn next_unbounded(&mut self) -> Option<Value> {
+        self.next_by(None).await
+    }
+
+    async fn next_by(&mut self, deadline: Option<tokio::time::Instant>) -> Option<Value> {
         loop {
             if let Some(end) = self.buffer.find("\n\n") {
                 let block: String = self.buffer.drain(..end + 2).collect();
@@ -731,22 +807,39 @@ impl Events {
                 }
                 continue;
             }
-            let chunk = tokio::time::timeout_at(deadline, self.stream.next())
-                .await
-                .ok()??
-                .ok()?;
+            let chunk = match deadline {
+                Some(deadline) => tokio::time::timeout_at(deadline, self.stream.next())
+                    .await
+                    .ok()??
+                    .ok()?,
+                None => self.stream.next().await?.ok()?,
+            };
             self.buffer.push_str(&String::from_utf8_lossy(&chunk));
         }
     }
 }
 
-/// One listener: a legacy GET session or a listen stream.
+/// One listener: a legacy GET session, a real GET stream or a listen stream.
 pub(super) enum Ear {
     Legacy(Receiver<SessionFrame>),
+    /// A GET stream read through the real route: the write path runs. A task
+    /// reads its body continuously into `events`, as a real client does.
+    Sse {
+        events: tokio::sync::mpsc::UnboundedReceiver<Value>,
+        session: String,
+    },
     Listen(Events),
 }
 
 impl Ear {
+    /// The session a GET stream belongs to.
+    pub(super) fn session_id(&self) -> &str {
+        match self {
+            Self::Sse { session, .. } => session,
+            _ => panic!("only a GET stream has a session id"),
+        }
+    }
+
     /// The methods of every frame this listener was sent since the last call,
     /// once the drain has delivered all queued changes.
     pub(super) async fn frames(&mut self, world: &World) -> Vec<String> {
@@ -761,6 +854,32 @@ impl Ear {
                             .unwrap_or_default()
                             .to_string(),
                     );
+                }
+                methods
+            }
+            Self::Sse { events, session } => {
+                // The sentinel rides this session's own stream, past the same
+                // write check as every frame, so everything queued before it
+                // is read first. A stream the write check closed ends here.
+                world.state.multiplexer.send_to_session(
+                    session,
+                    crate::gateway::streaming::TaggedNotification {
+                        source: "gateway".to_string(),
+                        event_type: "message".to_string(),
+                        data: json!({ "jsonrpc": "2.0", "method": SENTINEL }),
+                        event_id: None,
+                    },
+                );
+                let mut methods = Vec::new();
+                while let Ok(Some(event)) = tokio::time::timeout(ARRIVAL, events.recv()).await {
+                    let method = event["method"].as_str().unwrap_or_default().to_string();
+                    if method == SENTINEL {
+                        return methods;
+                    }
+                    // The stream's own `connected` event carries no method.
+                    if !method.is_empty() {
+                        methods.push(method);
+                    }
                 }
                 methods
             }

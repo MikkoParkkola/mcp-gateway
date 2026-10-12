@@ -55,6 +55,8 @@ pub fn create_sse_response(
         loop {
             match rx.recv().await {
                 Ok(item) => {
+                    #[cfg(test)]
+                    multiplexer.before_write_check.pause().await;
                     // G6: judged again as it is written, not only as it was
                     // queued, so a credential that died in between is written
                     // nothing.
