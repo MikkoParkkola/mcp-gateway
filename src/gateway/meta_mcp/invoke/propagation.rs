@@ -70,14 +70,31 @@ impl MetaMcp {
         backend: Option<&crate::backend::Backend>,
         caller: CallerProof<'_>,
     ) -> Result<HeldCredential> {
+        self.resolve_propagation_credential_attempted_for(server, backend, caller)
+            .await
+            .map(|(held, _attempted)| held)
+    }
+
+    /// [`Self::resolve_propagation_credential_held_for`], and whether a mint
+    /// was attempted whatever came of it: the direct route's refund rule
+    /// counts an attempt as an effect (MIK-8379 H1).
+    pub(crate) async fn resolve_propagation_credential_attempted_for(
+        &self,
+        server: &str,
+        backend: Option<&crate::backend::Backend>,
+        caller: CallerProof<'_>,
+    ) -> Result<(HeldCredential, bool)> {
         let Some(idp_cfg) = backend.and_then(|b| b.identity_propagation_config().cloned()) else {
             Self::refuse_unbound_account_backend(server, backend)?;
-            return Ok((Vec::new(), None, None));
+            return Ok(((Vec::new(), None, None), false));
         };
         let cred = self
             .resolve_caller_credential_as(server, backend, &idp_cfg, caller)
             .await?;
-        Ok((cred.headers, cred.cache_binding, cred.managed))
+        Ok((
+            (cred.headers, cred.cache_binding, cred.managed),
+            cred.attempted,
+        ))
     }
 
     /// Fail closed for a backend that names an `accounts.descriptors` entry but
@@ -271,10 +288,15 @@ impl MetaMcp {
                     headers: cred.headers,
                     cache_binding: Some(cred.cache_binding),
                     managed,
+                    attempted: true,
                 })
             }
             Err(e) => refuse(format!("credential minting failed: {e}"))
                 .await
+                .map(|fallback| CallerCredential {
+                    attempted: true,
+                    ..fallback
+                })
                 .map_err(|refused| {
                     let account_id = backend.and_then(|b| b.account_descriptor_id());
                     crate::personal_accounts::refusal::mark(refused, &e, account_id)

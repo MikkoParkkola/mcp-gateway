@@ -229,6 +229,8 @@ pub(super) struct Propagation {
     /// admission can tell whether anything before it filled a tool list
     /// (MIK-8379).
     pub(super) fills_before: u64,
+    /// A mint was attempted, whatever came of it (MIK-8379 H1).
+    pub(super) attempted: bool,
 }
 
 type IdpConfig = crate::identity_propagation::IdentityPropagationConfig;
@@ -242,6 +244,7 @@ struct Resolution {
     identity_key: Option<String>,
     managed: Option<crate::personal_accounts::ManagedLease>,
     typed: Option<crate::Error>,
+    attempted: bool,
 }
 
 /// Passthrough (ADR-008 rung 2, MIK-6746) forwards the caller's OWN credential
@@ -260,6 +263,7 @@ async fn resolve_headers(
         identity_key: None,
         managed: None,
         typed: None,
+        attempted: false,
     };
     let passthrough_cfg = idp_cfg.filter(|c| {
         c.strategy == crate::identity_propagation::PropagationStrategyKind::Passthrough
@@ -291,13 +295,14 @@ async fn resolve_headers(
     }
     resolution.result = match state
         .meta_mcp
-        .resolve_propagation_credential_held_for(name, Some(&route.backend), caller.proof())
+        .resolve_propagation_credential_attempted_for(name, Some(&route.backend), caller.proof())
         .await
     {
-        Ok((headers, binding, held)) => {
+        Ok(((headers, binding, held), attempted)) => {
             // Bind the upstream session bucket to this caller (MIK-6784).
             resolution.identity_key = binding;
             resolution.managed = held;
+            resolution.attempted = attempted;
             Ok(headers)
         }
         Err(e) => {
@@ -422,6 +427,7 @@ pub(super) async fn propagate_identity(
         managed: None,
         headers: Vec::new(),
         fills_before: route.backend.list_fills(),
+        attempted: false,
     };
     if !preflight.isolation_guarded {
         return Ok(propagation);
@@ -432,8 +438,10 @@ pub(super) async fn propagate_identity(
         identity_key,
         managed,
         typed,
+        attempted,
     } = resolve_headers(state, name, caller, route, idp_cfg).await;
     propagation.identity_key = identity_key;
+    propagation.attempted = attempted;
     // MIK-8063: an A2A agent's question (an opaque, one-shot token) is bound
     // to the caller this gateway authenticated whenever no propagated identity
     // names them. The continuation seal (MIK-8078) binds the same callers; this

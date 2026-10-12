@@ -28,6 +28,10 @@ pub(super) struct CallerCredential {
     /// released under, kept to the post-dispatch 401 site. Only a vault mint
     /// produces one; every other strategy leaves it `None`.
     pub(super) managed: Option<crate::personal_accounts::ManagedLease>,
+    /// The resolver called a strategy to mint, whatever came of it: an
+    /// optional backend's failed mint falls back to static credentials
+    /// with nothing else set, yet may have reached the issuer (MIK-8379 H1).
+    pub(super) attempted: bool,
 }
 
 /// Headers, cache binding and, for a managed account, the lease they were

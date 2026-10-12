@@ -221,7 +221,8 @@ impl MetaMcp {
             account_credential,
             binding: dispatch_binding,
         } = resolved?;
-        let minted = caller_credential.cache_binding.is_some();
+        // A failed optional mint counts too: it may have reached the issuer.
+        let minted = caller_credential.cache_binding.is_some() || caller_credential.attempted;
         witness.carry(rw::dispatch_effect(minted, account_credential.is_some()));
         // Who the response cache keys on, in one place and one namespace per
         // source (`support::caller_cache_principal`). The binding when identity
