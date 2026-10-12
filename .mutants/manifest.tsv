@@ -1,0 +1,4 @@
+head_sha	11b0d7ddb49d9f4d4056fddf61089b58619037ea
+m06	linux	m06.patch	--lib -- security::firewall::collusion_gate::tests::p3_units::retention_through_the_view_keeps_what_the_full_set_keeps --exact
+m12	linux	m12.patch	--lib -- security::firewall::collusion_gate::tests::p3::unread_holders_never_make_text_common --exact
+m15	linux	m15.patch	--lib -- gateway::meta_mcp::invoke::relay::delivered::p3_tests::a_key_delivered_as_a_value_gets_no_seam_on_an_over_bound_answer --exact

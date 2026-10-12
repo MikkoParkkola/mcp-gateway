@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_holders.rs b/src/security/firewall/collusion_holders.rs
+index ea3327c3c..c7db18c80 100644
+--- a/src/security/firewall/collusion_holders.rs
++++ b/src/security/firewall/collusion_holders.rs
+@@ -88,7 +88,7 @@ impl Tracked {
+         room: usize,
+     ) -> Added {
+         // `MIK-8066` D6: an unread holder is evidence, never a caller.
+-        if !new.unread {
++        if true || !new.unread {
+             self.note_caller(new.principal, now);
+         }
+         if let Some(r) = self
