@@ -201,6 +201,12 @@ fn baseline_for(
     if let Some(capabilities) = state.meta_mcp.get_capabilities() {
         names.push(capabilities.name.clone());
     }
+    // With no backend at all the served-list digest would go unrecorded, and
+    // the first backend added later would read as a change. A nameless entry
+    // carries it: no backend admits the empty name, so it shows nothing.
+    if names.is_empty() {
+        names.push(String::new());
+    }
     names
         .into_iter()
         .map(|name| {
