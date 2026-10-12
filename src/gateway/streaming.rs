@@ -28,7 +28,7 @@ use crate::Result;
 use crate::backend::BackendRegistry;
 use crate::config::StreamingConfig;
 use crate::gateway::auth::AuthState;
-use crate::gateway::auth::live::{Audience, Delivery, HeldCredential, delivery};
+use crate::gateway::auth::live::HeldCredential;
 use crate::gateway::session_id::{SessionId, SessionOwner, session_fp};
 use crate::gateway::session_lifecycle::{SessionLifecycle, now_unix};
 

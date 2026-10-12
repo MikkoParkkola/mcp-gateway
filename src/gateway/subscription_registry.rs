@@ -176,9 +176,31 @@ impl Listener {
         }
     }
 
-    /// Whether this listener judges views, and so is owed the attach hint.
-    pub(crate) fn judges_views_at_attach(&self) -> bool {
-        self.views.is_some()
+    /// The constant hint owed right after the acknowledgement (MIK-8350 B10),
+    /// when this listener judges views, wants `tools/list_changed` and its
+    /// credential still authenticates: a dead one receives no frame after its
+    /// acknowledgement (MIK-7798 G5). It carries nothing about any backend.
+    pub(crate) async fn attach_hint(
+        &self,
+        filter: &crate::protocol::subscriptions::ListenRequest,
+    ) -> Option<Value> {
+        let hint = tools_list_changed();
+        (self.views.is_some() && delivers(filter, &hint) && self.current_client().await.is_some())
+            .then_some(hint)
+    }
+
+    /// The record to make once `published` is written: `None` when the
+    /// listener is not owed it (its view did not move), `Some(None)` when it
+    /// is not a view hint at all.
+    pub(crate) async fn owed(&mut self, published: &Published) -> Option<Option<(String, String)>> {
+        match self.view_verdict(published).await {
+            ViewVerdict::Quiet => None,
+            ViewVerdict::Owed {
+                backend,
+                fingerprint,
+            } => Some(Some((backend, fingerprint))),
+            ViewVerdict::NotAView => Some(None),
+        }
     }
 
     /// Whether `published` is a `tools/list_changed` this listener judges by

@@ -39,7 +39,10 @@ pub(super) struct OwnedViewJudge {
 }
 
 impl OwnedViewJudge {
-    pub(super) fn new(state: &Arc<AppState>, subject: Option<GrantSubject>) -> Arc<dyn ViewJudge> {
+    pub(super) fn shared(
+        state: &Arc<AppState>,
+        subject: Option<GrantSubject>,
+    ) -> Arc<dyn ViewJudge> {
         Arc::new(Self {
             state: Arc::clone(state),
             subject,
@@ -201,7 +204,7 @@ impl AppState {
         mut listener: crate::gateway::subscription_registry::Listener,
         subject: Option<GrantSubject>,
     ) -> crate::gateway::subscription_registry::Listener {
-        listener.set_views(OwnedViewJudge::new(self, subject));
+        listener.set_views(OwnedViewJudge::shared(self, subject));
         listener
     }
 
@@ -220,5 +223,14 @@ impl AppState {
         if switched && response.error.is_none() {
             self.refresh_told(session_id).await;
         }
+    }
+}
+
+impl AppState {
+    /// Record what `session_id`'s caller is shown now, as a stream opens.
+    pub(super) async fn take_baseline(&self, session_id: &str) {
+        self.multiplexer
+            .take_baseline(session_id, &RouterViewJudge::new(self))
+            .await;
     }
 }

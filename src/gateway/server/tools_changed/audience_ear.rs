@@ -27,7 +27,7 @@ impl Events {
     /// The next event, waiting without a deadline; `None` only when the
     /// stream ends. A real client reads continuously, which is what drives
     /// the server's write loop.
-    async fn next_unbounded(&mut self) -> Option<Value> {
+    pub(super) async fn next_unbounded(&mut self) -> Option<Value> {
         self.next_by(None).await
     }
 

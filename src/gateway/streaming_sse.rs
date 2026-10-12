@@ -269,21 +269,15 @@ pub(crate) fn subscription_stream(
         yield Ok::<_, Infallible>(Event::default().event("message").data(ack));
 
         // MIK-8350 B10: one constant hint after the acknowledgement, so a
-        // client that attaches re-lists once whatever changed while it was
-        // away; it carries nothing about any backend's data.
-        // Only to a credential that still authenticates: a dead one receives no
-        // frame after its acknowledgement (MIK-7798 G5).
-        if listener.judges_views_at_attach() && listener.current_client().await.is_some() {
-            let hint = crate::gateway::subscription_registry::tools_list_changed();
-            if delivers(&filter, &hint)
-                && let Some(frame) = judge.judge_document(subscription.tag(hint))
+        // client that attaches re-lists once whatever changed while it was away.
+        if let Some(hint) = listener.attach_hint(&filter).await
+            && let Some(frame) = judge.judge_document(subscription.tag(hint))
+        {
+            let recorded = judge.record(frame).await;
+            if !recorded.is_withheld()
+                && let Some(data) = sse_data(&recorded)
             {
-                let recorded = judge.record(frame).await;
-                if !recorded.is_withheld()
-                    && let Some(data) = sse_data(&recorded)
-                {
-                    yield Ok(Event::default().event("message").data(data));
-                }
+                yield Ok(Event::default().event("message").data(data));
             }
         }
 
@@ -319,13 +313,8 @@ pub(crate) fn subscription_stream(
                     }
                     // MIK-8350: a `tools/list_changed` is owed only to a listener
                     // whose own view of that backend moved since it was told.
-                    let owed = match listener.view_verdict(&published).await {
-                        crate::gateway::subscription_registry::ViewVerdict::Quiet => continue,
-                        crate::gateway::subscription_registry::ViewVerdict::Owed {
-                            backend,
-                            fingerprint,
-                        } => Some((backend, fingerprint)),
-                        crate::gateway::subscription_registry::ViewVerdict::NotAView => None,
+                    let Some(owed) = listener.owed(&published).await else {
+                        continue;
                     };
                     // A task notification is built for THIS reader at delivery
                     // (full state, re-authorized); every other kind is the

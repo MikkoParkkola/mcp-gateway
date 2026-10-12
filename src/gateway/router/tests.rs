@@ -494,7 +494,7 @@ pub(crate) async fn audience_owner(
 pub(crate) fn view_judge_for(
     state: &Arc<AppState>,
 ) -> Arc<dyn crate::gateway::streaming::ViewJudge> {
-    super::view_judge::OwnedViewJudge::new(state, None)
+    super::view_judge::OwnedViewJudge::shared(state, None)
 }
 
 /// Authenticated fixture whose executor capacity comes from the supplied config.
