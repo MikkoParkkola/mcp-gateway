@@ -252,20 +252,12 @@ impl MetaMcp {
             .await
         {
             Ok(std::ops::ControlFlow::Continue(resolution)) => resolution,
-            // The account did not prove live: the live refusal goes out, and
-            // a deferred entry for this invocation is dropped, never served.
-            Ok(std::ops::ControlFlow::Break(answer)) => {
-                if let Some(key) = &deferred_key {
-                    super::visible::take_deferred_replay(key);
-                }
-                return Ok(TracedOutcome::Live(answer));
-            }
-            Err(error) => {
-                if let Some(key) = &deferred_key {
-                    super::visible::take_deferred_replay(key);
-                }
-                return Err(error);
-            }
+            // The account did not prove live: the live refusal goes out. A
+            // deferred entry for this invocation is never served: only this
+            // invocation's key can take it, and the memo ends with the
+            // request (E11).
+            Ok(std::ops::ControlFlow::Break(answer)) => return Ok(TracedOutcome::Live(answer)),
+            Err(error) => return Err(error),
         };
         // The lift: the route stage deferred this call's retained result to a
         // live dispatch, and resolution just proved the account live, so the

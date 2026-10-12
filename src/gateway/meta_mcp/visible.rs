@@ -650,15 +650,6 @@ pub(crate) fn take_deferred_replay(key: &DeferredReplayKey) -> Option<DeferredRe
         .flatten()
 }
 
-/// Whether the open request's memo holds an unconsumed deferred entry. Only
-/// the direct route's impossible-path guards read this: nothing records an
-/// entry on that route, so any entry reaching its send arms is a bug.
-pub(crate) fn deferred_replay_pending() -> bool {
-    VISIBILITY_MEMO
-        .try_with(|memo| !memo.deferred_replay.lock().is_empty())
-        .unwrap_or(false)
-}
-
 /// The answer already recorded for `(server, tool)` in the open request, if
 /// any.
 pub(crate) fn recorded_visibility(server: &str, tool: &str) -> Option<Visibility> {

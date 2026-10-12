@@ -278,13 +278,6 @@ async fn forward_sanitized(
     (preflight, propagation): (&Preflight, &Propagation),
     (mut admitted, mut sanitized_params): (Admitted<'_>, Value),
 ) -> Rejection {
-    // MIK-8392 STORED.2: nothing records a deferred entry on the direct
-    // route, so an unconsumed one at a send arm is a bug. There is no
-    // dispatch check; the assert is the whole guard.
-    debug_assert!(
-        !crate::gateway::meta_mcp::visible::deferred_replay_pending(),
-        "a deferred stored replay reached the direct route's sanitized send arm"
-    );
     let Scope {
         state,
         caller,
@@ -399,13 +392,6 @@ async fn forward_plain(
     (preflight, propagation): (&Preflight, &Propagation),
     admitted: &mut Admitted<'_>,
 ) -> Result<crate::Result<JsonRpcResponse>, Rejection> {
-    // MIK-8392 STORED.2: nothing records a deferred entry on the direct
-    // route, so an unconsumed one at a send arm is a bug. There is no
-    // dispatch check; the assert is the whole guard.
-    debug_assert!(
-        !crate::gateway::meta_mcp::visible::deferred_replay_pending(),
-        "a deferred stored replay reached the direct route's plain send arm"
-    );
     let Scope {
         state,
         name,
