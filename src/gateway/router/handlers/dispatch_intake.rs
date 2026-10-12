@@ -154,7 +154,7 @@ pub(super) async fn intake(
     let headers = std::mem::take(&mut parts.headers);
     let http_request = axum::http::Request::from_parts(parts, body);
     let view_facts = view_facts::ViewFacts::capture(
-        &state,
+        state,
         (&headers, http_request.extensions()),
         verified_identity.as_ref(),
     );
