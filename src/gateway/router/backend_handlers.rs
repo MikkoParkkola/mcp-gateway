@@ -638,6 +638,8 @@ mod direct_idempotency;
 pub(super) use direct_idempotency::seams as direct_lease_seams;
 mod direct_list;
 mod direct_permit;
+#[cfg(test)]
+pub(super) use direct_permit::seams as direct_permit_seams;
 mod direct_preflight;
 mod direct_send;
 mod key_check;
