@@ -20,14 +20,14 @@ pub(crate) enum Judged {
     #[default]
     Pending,
     /// A plan step past the plan bound, staged (`MIK-8066.BIG.3`).
-    Staged(Box<super::collusion::big::BigStep>),
+    Staged(Box<super::super::collusion::big::BigStep>),
     /// Kept to a read answer; the step's evidence and excuse, if a step.
-    Kept(Option<super::collusion::big::KeptStep>),
+    Kept(Option<super::super::collusion::big::KeptStep>),
     /// The answer could not be read (D6): the receipt's capped evidence and
     /// the step's whole evidence, recorded under an unread holder.
     Unread {
         receipt: UnreadReceipt,
-        step: Option<super::collusion::big::UnreadStep>,
+        step: Option<super::super::collusion::big::UnreadStep>,
     },
 }
 
@@ -244,7 +244,7 @@ impl DeliveryDigest {
                 .cut_refusals
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             telemetry_metrics::counter!(
-                super::collusion::CAPACITY_METRIC,
+                super::super::collusion::CAPACITY_METRIC,
                 "bound" => "plan_view_cut_budget"
             )
             .increment(1);
