@@ -454,6 +454,9 @@ pub(super) type ViewEntry = (String, Arc<ViewSubject>, Arc<ViewRecord>);
 pub(crate) struct ViewRecord {
     state: parking_lot::Mutex<ToldState>,
     stamps: std::sync::atomic::AtomicU64,
+    /// Bumped each time the caller changes: a read made under an earlier
+    /// epoch describes the old caller and is never recorded (rekey).
+    epoch: std::sync::atomic::AtomicU64,
     gate: tokio::sync::Mutex<()>,
 }
 
@@ -471,9 +474,15 @@ impl ViewRecord {
         self.state.lock()
     }
 
+    /// How many times the caller has changed under this record.
+    pub(crate) fn epoch(&self) -> u64 {
+        self.epoch.load(Ordering::Acquire)
+    }
+
     /// The caller changed: forget what it was told and refuse every write read
     /// before now.
     pub(crate) fn clear(&self) {
+        self.epoch.fetch_add(1, Ordering::AcqRel);
         let floor = self.stamps.fetch_add(1, Ordering::AcqRel) + 1;
         self.state.lock().clear(floor);
     }
@@ -514,13 +523,15 @@ fn is_tools_list_changed(notification: &TaggedNotification) -> bool {
 /// A refresh read before an answer was built, held until the answer is known
 /// to have been delivered.
 #[derive(Default)]
-pub(crate) struct PendingRefresh(Option<(Arc<ViewRecord>, u64, HashMap<String, ViewDigest>)>);
+pub(crate) struct PendingRefresh(Option<(Arc<ViewRecord>, u64, u64, HashMap<String, ViewDigest>)>);
 
 impl PendingRefresh {
     /// Record the view as told when the answer was `delivered`; a withheld
     /// answer leaves the record alone, so the change is still owed.
     pub(crate) fn settle(self, delivered: bool) {
-        if let (true, Some((record, stamp, view))) = (delivered, self.0) {
+        if let (true, Some((record, epoch, stamp, view))) = (delivered, self.0)
+            && record.epoch() == epoch
+        {
             record.state().refresh(stamp, view);
         }
     }
@@ -576,6 +587,8 @@ pub(crate) struct Owed {
     backend: String,
     digest: ViewDigest,
     stamp: u64,
+    /// The record's epoch when the view was read.
+    epoch: u64,
 }
 
 impl StreamView {
@@ -589,6 +602,9 @@ impl StreamView {
         session_id: &str,
         backend: &str,
     ) -> Judged<Option<Owed>> {
+        // The epoch is read before anything else: a caller change after this
+        // point makes the read stale, and `commit` refuses it.
+        let epoch = self.record.epoch();
         // Resolved before the gate: the credential's validation can reach an
         // identity provider, and the gate covers cache reads only.
         let caller = match self.judge.resolve(auth, (credential, &self.subject)).await {
@@ -614,12 +630,16 @@ impl StreamView {
             backend: backend.to_owned(),
             digest,
             stamp,
+            epoch,
         }))
     }
 
     /// Make the record for a hint that has been written. `false` when a newer
     /// write already told the caller (the frame is then not written).
     pub(crate) fn commit(&self, owed: &Owed) -> bool {
+        if self.record.epoch() != owed.epoch {
+            return false;
+        }
         self.record
             .state()
             .commit(owed.stamp, &owed.backend, &owed.digest)

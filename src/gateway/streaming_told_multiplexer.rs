@@ -89,6 +89,7 @@ impl NotificationMultiplexer {
         let Some((_, record)) = session.existing_record(subject) else {
             return PendingRefresh::default();
         };
+        let epoch = record.epoch();
         let credential = session.credential.read().clone();
         let Judged::Live(caller) = judge
             .resolve(&authorizer, (credential.as_ref(), subject))
@@ -99,7 +100,7 @@ impl NotificationMultiplexer {
         let (stamp, view) = record
             .read(async { judge.baseline(&caller, subject, session_id) })
             .await;
-        PendingRefresh(Some((record, stamp, view)))
+        PendingRefresh(Some((record, epoch, stamp, view)))
     }
 
     /// Deliver to every session whose caller may access `backend` now; returns the count.

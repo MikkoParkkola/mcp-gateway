@@ -199,6 +199,7 @@ fn a_withheld_listing_leaves_the_record_alone_and_a_delivered_one_moves_it() {
     let held = |record: &Arc<ViewRecord>| {
         PendingRefresh(Some((
             Arc::clone(record),
+            record.epoch(),
             5,
             HashMap::from([("a".to_owned(), moved.clone())]),
         )))
@@ -365,5 +366,70 @@ async fn a_hint_for_a_backend_out_of_scope_is_still_judged() {
     assert_eq!(
         reached, 1,
         "alpha is out of the key's scope, yet its view moved"
+    );
+}
+
+/// A hint read for one caller, then the session's credential is replaced: the
+/// read describes the old caller and is never recorded for the new one, even
+/// though its stamp is newer than the new caller's baseline.
+#[tokio::test]
+async fn a_hint_read_before_a_rekey_is_not_recorded_after_it() {
+    let judge = Fake::answering("s0", "x");
+    let view = view(&judge);
+    let old_epoch = view.record.epoch();
+    view.record.clear();
+    let new_view = ViewDigest {
+        served: "s0".to_owned(),
+        shown: "x".to_owned(),
+    };
+    view.record
+        .state()
+        .baseline(10, HashMap::from([("a".to_owned(), new_view.clone())]));
+    let stale = Owed {
+        backend: "a".to_owned(),
+        digest: ViewDigest {
+            served: "s9".to_owned(),
+            shown: "y".to_owned(),
+        },
+        stamp: 50,
+        epoch: old_epoch,
+    };
+    assert!(!view.commit(&stale), "a read of the old caller is refused");
+    assert_eq!(
+        view.record.state().peek(51, "a", &new_view),
+        Peek::Quiet,
+        "the new caller's record is untouched"
+    );
+}
+
+/// The same for a refresh read before a rekey and settled after it.
+#[tokio::test]
+async fn a_refresh_read_before_a_rekey_is_not_settled_after_it() {
+    let judge = Fake::answering("s0", "x");
+    let view = view(&judge);
+    let old_epoch = view.record.epoch();
+    view.record.clear();
+    let new_view = ViewDigest {
+        served: "s0".to_owned(),
+        shown: "x".to_owned(),
+    };
+    view.record
+        .state()
+        .baseline(10, HashMap::from([("a".to_owned(), new_view.clone())]));
+    let stale = ViewDigest {
+        served: "s9".to_owned(),
+        shown: "y".to_owned(),
+    };
+    PendingRefresh(Some((
+        Arc::clone(&view.record),
+        old_epoch,
+        50,
+        HashMap::from([("a".to_owned(), stale)]),
+    )))
+    .settle(true);
+    assert_eq!(
+        view.record.state().peek(51, "a", &new_view),
+        Peek::Quiet,
+        "a refresh of the old caller does not overwrite the new record"
     );
 }
