@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8408 R3s/R4s over stdio: a keyed plan repeated is served from the
+//! MIK-8408 R3s/R4s/R9s over stdio: a keyed plan repeated is served from the
 //! retained answer, and that second delivery renews the operator's receipt for
 //! each step it delivered. The row lets the live receipt lapse on the frozen
 //! clock (P1), proves the repeat dispatched nothing (P2), then asserts.
@@ -113,6 +113,7 @@ fn stdio_meta(playbook: Option<&str>) -> (Arc<MetaMcp>, Arc<Firewall>, Arc<Atomi
         .keyed_for_test()
         .keeping_every_kgram(),
     );
+    firewall.advance_collusion_clock_for_test(Duration::ZERO);
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
@@ -154,15 +155,19 @@ async fn keyed_plan_replay_renews(playbook: Option<&str>, name: &str, arguments:
         2,
         "premise: both steps dispatched"
     );
-    assert!(
-        relayed_by_bob(&firewall, PROSE),
-        "premise: the live receipt holds"
-    );
+    for text in [PROSE, OTHER_PROSE] {
+        assert!(
+            relayed_by_bob(&firewall, text),
+            "premise P0: the live receipt holds for {text:.40}"
+        );
+    }
     firewall.advance_collusion_clock_for_test(Duration::from_secs(WINDOW_SECS + 1));
-    assert!(
-        !relayed_by_bob(&firewall, PROSE),
-        "premise P1: the live receipt lapsed"
-    );
+    for text in [PROSE, OTHER_PROSE] {
+        assert!(
+            !relayed_by_bob(&firewall, text),
+            "premise P1: the live receipt lapsed for {text:.40}"
+        );
+    }
     let replay = dispatch(&meta, &keyed_request(2, name, arguments.clone())).await;
     assert!(replay.get("error").is_none(), "base: replayed: {replay}");
     assert_eq!(
@@ -170,10 +175,16 @@ async fn keyed_plan_replay_renews(playbook: Option<&str>, name: &str, arguments:
         2,
         "premise P2: the repeat was served from the retained answer"
     );
-    assert!(
-        relayed_by_bob(&firewall, PROSE),
-        "the stdio replay renewed no receipt for step A"
+    assert_eq!(
+        replay["result"], first["result"],
+        "premise P2: the replay delivered the retained result unchanged"
     );
+    for text in [PROSE, OTHER_PROSE] {
+        assert!(
+            relayed_by_bob(&firewall, text),
+            "the stdio replay renewed no receipt for {text:.40}"
+        );
+    }
 }
 
 /// R3s (REPLAY.6).
@@ -199,4 +210,117 @@ async fn a_keyed_playbook_replay_renews_each_step_receipt_over_stdio() {
         &json!({"name": "replay", "arguments": {}}),
     )
     .await;
+}
+
+/// The gateway's recovery advice for a tool error it reads as a parameter
+/// problem: the gateway's own text, longer than a k-gram.
+const SUGGEST: &str =
+    "Check the tool's input schema, correct the offending parameter(s), and retry.";
+
+/// Backend `alpha` whose every call is a tool error carrying [`PROSE`];
+/// counted.
+struct Erring(Arc<AtomicUsize>);
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for Erring {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<JsonRpcResponse> {
+        let id = RequestId::Number(1);
+        if method == "tools/list" {
+            return Ok(JsonRpcResponse::success(
+                id,
+                json!({"tools": [{"name": "a", "inputSchema": {"type": "object"}}]}),
+            ));
+        }
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(JsonRpcResponse::success(
+            id,
+            json!({"content": [{"type": "text", "text": PROSE}], "isError": true}),
+        ))
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// R9s (REPLAY.3, D5): a keyed stdio call answered with relay detection off is
+/// retained without the record of the gateway's own advice; replayed with
+/// detection on (the same retained answers), the advice must not be receipted
+/// as the backend's text.
+#[tokio::test]
+async fn a_detection_off_answer_replayed_on_never_receipts_gateway_text_over_stdio() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(Backend::new(
+        "alpha",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    backend.set_transport_for_test(Arc::new(Erring(Arc::clone(&calls))));
+    assert!(registry.register(backend));
+    let off = Arc::new(MetaMcp::new(Arc::clone(&registry)));
+    let call = json!({"server": "alpha", "tool": "a", "arguments": {}});
+    let first = dispatch(&off, &keyed_request(1, "gateway_invoke", call.clone())).await;
+    assert!(
+        first.to_string().contains(SUGGEST),
+        "premise: the gateway wrote its advice into the answer: {first}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "premise: dispatched once");
+
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    min_matches: 1,
+                    sources: vec!["alpha:*".to_string()],
+                    window_secs: WINDOW_SECS,
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .keyed_for_test()
+        .keeping_every_kgram(),
+    );
+    firewall.advance_collusion_clock_for_test(Duration::ZERO);
+    let mut on = MetaMcp::new(registry);
+    on.share_execution_admission_for_test(Arc::clone(off.execution_admission()));
+    on.set_firewall(Some(Arc::clone(&firewall)));
+    on.share_keyring_with_for_test(&firewall);
+    let on = Arc::new(on);
+    assert!(
+        !relayed_by_bob(&firewall, PROSE),
+        "premise P1: nothing is receipted on the new gateway yet"
+    );
+    let replay = dispatch(&on, &keyed_request(2, "gateway_invoke", call)).await;
+    assert!(
+        replay.to_string().contains(SUGGEST),
+        "premise: the retained answer, advice included, was replayed: {replay}"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "premise P2: the replay was served from the retained answer"
+    );
+    assert!(
+        relayed_by_bob(&firewall, PROSE),
+        "control: the replay renewed the backend's own text"
+    );
+    assert!(
+        !relayed_by_bob(&firewall, SUGGEST),
+        "the replay receipted the gateway's own advice as the backend's text"
+    );
 }
