@@ -293,6 +293,14 @@ pub(crate) async fn apply_change_with(
         .cloned()
         .ok_or_else(|| ChangeError::Refused(format!("grant id '{grant_id}' not written")))?;
 
+    // The journal entry's time, read before the grant write (MIK-8202 P4a):
+    // on a clock before 1970 the change is refused with nothing written,
+    // never a written grant left unjournalled.
+    let at = crate::clock::utc_now().map_err(|_| {
+        ChangeError::Refused(
+            "grant change refused: the gateway clock reads before 1970".to_string(),
+        )
+    })?;
     if hooks.fail_grant_write {
         return Err(ChangeError::Refused(
             "injected grant-file write failure".to_string(),
@@ -323,7 +331,7 @@ pub(crate) async fn apply_change_with(
         grant_id,
         digest: grant_digest(&row),
         expires_at: row.expires_at,
-        at: Utc::now(),
+        at,
         actor: UNKNOWN_ACTOR.to_string(),
         os_account,
     };

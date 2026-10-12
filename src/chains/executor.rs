@@ -186,14 +186,21 @@ impl ChainExecutor {
                 Ok((output, attempts)) => {
                     obs.step_completed(&step.name, idx, attempts, duration_ms);
 
-                    // Persist checkpoint
+                    // Persist checkpoint. A clock before 1970 is a checkpoint
+                    // write failure, like a failed append (MIK-8202 P4a).
+                    let completed_at = crate::clock::utc_now().map_err(|_| {
+                        crate::Error::Internal(
+                            "chain checkpoint not written: the host clock reads before 1970"
+                                .to_string(),
+                        )
+                    })?;
                     self.store
                         .append(&ChainCheckpoint {
                             chain_id: chain.id.clone(),
                             step_name: step.name.clone(),
                             output: output.clone(),
                             attempts,
-                            completed_at: chrono::Utc::now(),
+                            completed_at,
                             duration_ms,
                         })
                         .await?;

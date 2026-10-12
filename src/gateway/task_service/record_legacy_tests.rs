@@ -46,7 +46,7 @@ fn row(task: &Task, version: u32, upstream: Option<UpstreamRecord>) -> Record {
 }
 
 fn targets(tool: &str, version: u32, upstream: Option<UpstreamRecord>) -> Vec<Target> {
-    let task = Task::create(tool);
+    let task = Task::create(tool).expect("the test clock reads after 1970");
     let record = row(&task, version, upstream);
     CommittedTask::of(task, &record).targets
 }
@@ -104,7 +104,7 @@ fn a_current_row_keeps_its_own_targets() {
 
 #[test]
 fn a_current_row_keeps_recorded_targets_over_its_descriptor() {
-    let task = Task::create("gateway_invoke");
+    let task = Task::create("gateway_invoke").expect("the test clock reads after 1970");
     let mut record = row(&task, TARGET_VERSION, Some(upstream(DIGEST)));
     let recorded = Target {
         server: "sdk".to_owned(),
@@ -134,15 +134,19 @@ fn a_row_serves_backend_output_by_status() {
         owner_digest: String::new(),
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
     };
-    let working = Task::create("t");
+    let working = Task::create("t").expect("the test clock reads after 1970");
     let mut completed = working.clone();
-    completed.complete(json!({"content": []}));
+    completed
+        .complete(&json!({"content": []}))
+        .expect("a live task takes its outcome");
     let mut failed = working.clone();
-    failed.fail(JsonRpcError {
-        code: -32000,
-        message: "backend".into(),
-        data: None,
-    });
+    failed
+        .fail(&JsonRpcError {
+            code: -32000,
+            message: "backend".into(),
+            data: None,
+        })
+        .expect("a live task takes its outcome");
     let mut asking = working.clone();
     asking
         .transition(
@@ -190,7 +194,7 @@ fn a_row_serves_backend_output_by_status() {
 fn a_gateway_authored_result_is_not_backend_output() {
     use crate::protocol::tasks::TaskTransition;
     let complete = |result: serde_json::Value, output_free: bool| {
-        let mut task = Task::create("gateway_invoke");
+        let mut task = Task::create("gateway_invoke").expect("the test clock reads after 1970");
         task.transition(TaskTransition::Complete(result), chrono::Utc::now())
             .expect("a working task completes");
         let mut record = row(&task, TARGET_VERSION, None);
@@ -209,7 +213,7 @@ fn a_gateway_authored_result_is_not_backend_output() {
 /// told of a commit needs no later read of a row that may have expired.
 #[test]
 fn a_committed_snapshot_carries_its_owner_digest() {
-    let task = Task::create("probe");
+    let task = Task::create("probe").expect("the test clock reads after 1970");
     let record = row(&task, 3, None);
     assert_eq!(CommittedTask::of(task, &record).owner_digest, "principal");
 }
@@ -220,7 +224,7 @@ fn a_committed_snapshot_carries_its_owner_digest() {
 #[test]
 fn the_error_author_is_private_record_state() {
     use super::ErrorAuthor;
-    let task = Task::create("gateway_invoke");
+    let task = Task::create("gateway_invoke").expect("the test clock reads after 1970");
     let mut record = row(&task, TARGET_VERSION, None);
 
     let unset = serde_json::to_value(&record).expect("serializes");

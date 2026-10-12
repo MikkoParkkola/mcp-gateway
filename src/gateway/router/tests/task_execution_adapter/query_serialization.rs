@@ -43,6 +43,9 @@ use crate::gateway::task_service::{
     CancelDelivery, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
 };
 
+/// R2h (MIK-8202 P4a): a read queued behind a worker's dark-clock settle.
+mod dark_clock_settle;
+
 /// The opaque handle the peer answers the task-augmented call with.
 const UPSTREAM_HANDLE: &str = "upstream-job-serialization";
 

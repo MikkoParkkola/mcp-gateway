@@ -60,6 +60,10 @@ pub(crate) struct Bound {
     /// clear itself rather than polling for it (MIK-8294).
     #[cfg(test)]
     cleared: std::sync::Condvar,
+    /// MIK-8202 P4a R6: the blocking closure reads a clock before 1970 on
+    /// its own thread (a per-thread override cannot reach it from a test).
+    #[cfg(test)]
+    blocking_clock_before_epoch: std::sync::atomic::AtomicBool,
 }
 
 impl Default for Bound {
@@ -82,6 +86,8 @@ impl Default for Bound {
             before_mark: std::sync::Mutex::new(None),
             #[cfg(test)]
             cleared: std::sync::Condvar::new(),
+            #[cfg(test)]
+            blocking_clock_before_epoch: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -175,6 +181,15 @@ impl TransparencyLogger {
         let task = tokio::task::spawn_blocking(move || {
             #[cfg(test)]
             logger.bound.closures_entered.fetch_add(1, Ordering::AcqRel);
+            // Installed on this blocking thread and held across `op`'s read;
+            // dropped with the closure, so the pooled thread reads the real
+            // clock again.
+            #[cfg(test)]
+            let _dark = logger
+                .bound
+                .blocking_clock_before_epoch
+                .load(Ordering::Acquire)
+                .then(crate::clock::test_clock::before_epoch);
             let result = op(&logger);
             // Record first, then clear the stall, then free the permit, so a
             // caller that sees the log unstalled also sees this result.
@@ -300,6 +315,14 @@ impl TransparencyLogger {
     /// lets a cell prove a spawned write took the bounded path.
     pub(crate) fn refused_under_stall_for_test(&self) -> usize {
         self.bound.refused_under_stall.load(Ordering::SeqCst)
+    }
+
+    /// MIK-8202 P4a R6: while `on`, each bounded append's blocking closure
+    /// reads a clock before 1970 on its own thread.
+    pub(crate) fn set_blocking_clock_before_epoch_for_test(&self, on: bool) {
+        self.bound
+            .blocking_clock_before_epoch
+            .store(on, Ordering::Release);
     }
 
     /// Whether an injected fault fails this append: the kind-scoped one-shot,

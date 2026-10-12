@@ -418,7 +418,7 @@ impl EraCache {
     /// Silence is not a finding. A probe that never came back leaves the era
     /// [`EraSource::Assumed`], so a backend briefly unreachable is not pinned
     /// to the legacy path for the life of the process — while still stamping
-    /// `probed_at`, because a probe did run.
+    /// `probed_at` (when the clock reads; MIK-8202), because a probe did run.
     async fn resolve_triggered<F, Fut>(&self, trigger: ProbeTrigger, probe: F) -> Era
     where
         F: FnOnce() -> Fut,
@@ -681,11 +681,14 @@ impl EraObservation {
     /// Silence is the one case where a probe ran and the era stays
     /// [`EraSource::Assumed`]: the peer told us nothing, so pinning it to the
     /// legacy default would outlive the outage that caused it.
+    ///
+    /// `probed_at` is `None` when the probe ran on a clock that could not be
+    /// read (before 1970): the observation is kept undated, never 1969.
     #[must_use]
     pub fn from_outcome(
         outcome: &ProbeOutcome,
         trigger: ProbeTrigger,
-        probed_at: chrono::DateTime<chrono::Utc>,
+        probed_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Self {
         let era = classify(outcome);
         let (source, evidence) = match outcome {
@@ -707,14 +710,14 @@ impl EraObservation {
             source,
             evidence,
             trigger: Some(trigger),
-            probed_at: Some(probed_at),
+            probed_at,
         }
     }
 
-    /// [`Self::from_outcome`] stamped with the current time: the era
-    /// module's one clock read (MIK-8202 baseline).
+    /// [`Self::from_outcome`] stamped with the current time, or undated on a
+    /// clock before 1970 (MIK-8202 P4a: chrono's own clock read panics there).
     pub(super) fn observed_now(outcome: &ProbeOutcome, trigger: ProbeTrigger) -> Self {
-        Self::from_outcome(outcome, trigger, chrono::Utc::now())
+        Self::from_outcome(outcome, trigger, crate::clock::utc_now().ok())
     }
 
     /// The operator-facing fields, for merging into a `gateway_list_servers`

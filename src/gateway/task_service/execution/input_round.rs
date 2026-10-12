@@ -29,9 +29,8 @@ use crate::protocol::{JsonRpcError, JsonRpcResponse, RequestId};
 
 #[path = "input_round_clock.rs"]
 mod clock;
-use clock::{
-    ClockWait, Resealed, clock_expired, readable_now, readable_or_fail, redeeming_dispatch,
-};
+pub(super) use clock::{ClockWait, readable_now};
+use clock::{Resealed, readable_or_fail, redeeming_dispatch};
 
 /// Consecutive state-only rounds one worker resumes before it gives up. A
 /// fixed ceiling that stops a backend looping the gateway forever.
@@ -105,16 +104,18 @@ impl<'a> Settling<'a> {
                         crate::gateway::gateway_writes::snapshot_since,
                     );
                     return self
-                        .settle_with(TaskTransition::Complete(result), true, writes)
+                        .settle_with(TaskTransition::Complete(result), true, writes, cancel_rx)
                         .await;
                 }
                 DispatchSettlement::Fail(error) => {
-                    return self.settle(TaskTransition::Fail(error), false).await;
+                    return self
+                        .settle(TaskTransition::Fail(error), false, cancel_rx)
+                        .await;
                 }
                 // The gateway's own sentence: nothing the backend said was delivered.
                 DispatchSettlement::Abandoned => {
                     let abandoned = TaskTransition::Complete(abandoned_input_round());
-                    return self.settle(abandoned, false).await;
+                    return self.settle(abandoned, false, cancel_rx).await;
                 }
                 DispatchSettlement::Input(round) => round,
             };
@@ -127,7 +128,11 @@ impl<'a> Settling<'a> {
             state_only += 1;
             if state_only > STATE_ONLY_CEILING {
                 return self
-                    .settle(TaskTransition::Complete(abandoned_input_round()), false)
+                    .settle(
+                        TaskTransition::Complete(abandoned_input_round()),
+                        false,
+                        cancel_rx,
+                    )
                     .await;
             }
             // A state-only round reached nobody: what it staged was not delivered.
@@ -167,13 +172,14 @@ impl<'a> Settling<'a> {
 
     /// Settle `event`. Staged relay receipts are recorded only when it is
     /// the dispatched result (`dispatched`) and the store kept it as such.
-    async fn settle(&self, event: TaskTransition, dispatched: bool) {
-        self.settle_with(
-            event,
-            dispatched,
-            crate::gateway::gateway_writes::WriteRecord::default(),
-        )
-        .await;
+    async fn settle(
+        &self,
+        event: TaskTransition,
+        dispatched: bool,
+        cancel_rx: &mut watch::Receiver<bool>,
+    ) {
+        let writes = crate::gateway::gateway_writes::WriteRecord::default();
+        self.settle_with(event, dispatched, writes, cancel_rx).await;
     }
 
     /// [`Self::settle`], storing `writes`: the members of a dispatched
@@ -183,16 +189,13 @@ impl<'a> Settling<'a> {
         event: TaskTransition,
         dispatched: bool,
         writes: crate::gateway::gateway_writes::WriteRecord,
+        cancel_rx: &mut watch::Receiver<bool>,
     ) {
+        let ids = (self.principal, self.id, self.revision);
+        let outcome = (event, self.plan_targets());
         let stored = self
             .executor
-            .settle_cas_with(
-                self.principal,
-                self.id,
-                self.revision,
-                (event, self.plan_targets()),
-                writes,
-            )
+            .settle_cas_with(ids, outcome, writes, cancel_rx)
             .await;
         self.state
             .meta_mcp()
@@ -228,12 +231,20 @@ impl<'a> Settling<'a> {
     ) {
         if !self.park_targets().await {
             return self
-                .settle(TaskTransition::Complete(abandoned_input_round()), false)
+                .settle(
+                    TaskTransition::Complete(abandoned_input_round()),
+                    false,
+                    cancel_rx,
+                )
                 .await;
         }
         let Ok(owner) = self.executor.service.owner(self.principal) else {
             return self
-                .settle(TaskTransition::Complete(abandoned_input_round()), false)
+                .settle(
+                    TaskTransition::Complete(abandoned_input_round()),
+                    false,
+                    cancel_rx,
+                )
                 .await;
         };
         // The continuation the resume will redeem dies at its own deadline;
@@ -245,11 +256,7 @@ impl<'a> Settling<'a> {
             None => match readable_now(store, self.id, cancel_rx).await {
                 ClockWait::Read(at, now) => (at, now),
                 ClockWait::Stopped => return,
-                ClockWait::Expired => {
-                    return self
-                        .settle(TaskTransition::Fail(clock_expired()), false)
-                        .await;
-                }
+                ClockWait::Expired => return self.settle_expired().await,
             },
         };
         let continuation = self.state.meta_mcp().continuation();
@@ -257,7 +264,11 @@ impl<'a> Settling<'a> {
             round_deadline(continuation.keyring(), round.request_state.as_deref(), now)
         else {
             return self
-                .settle(TaskTransition::Complete(abandoned_input_round()), false)
+                .settle(
+                    TaskTransition::Complete(abandoned_input_round()),
+                    false,
+                    cancel_rx,
+                )
                 .await;
         };
         let stored = InputRound {
@@ -287,13 +298,18 @@ impl<'a> Settling<'a> {
                         data: None,
                     }),
                     false,
+                    cancel_rx,
                 )
                 .await;
             }
             // The continuation does not fit the record: today's abandoned result.
             Err(StoreError::Capacity) => {
-                self.settle(TaskTransition::Complete(abandoned_input_round()), false)
-                    .await;
+                self.settle(
+                    TaskTransition::Complete(abandoned_input_round()),
+                    false,
+                    cancel_rx,
+                )
+                .await;
             }
             // A cancel already moved the row; its commit is the answer.
             Err(StoreError::RevisionConflict | StoreError::NotFound) => {}
@@ -305,8 +321,12 @@ impl<'a> Settling<'a> {
                 // graded as run (MIK-7725).
                 let task_id = self.id;
                 tracing::warn!(task_id = %task_id, %error, "input round not committed");
-                self.settle(TaskTransition::Complete(abandoned_input_round()), false)
-                    .await;
+                self.settle(
+                    TaskTransition::Complete(abandoned_input_round()),
+                    false,
+                    cancel_rx,
+                )
+                .await;
             }
         }
     }
@@ -563,9 +583,12 @@ async fn resume(resume: Resume, cancel_rx: watch::Receiver<bool>) {
 async fn settle_interrupted(
     executor: &TaskExecutor,
     (principal, id, revision): (&str, &str, u64),
+    cancel_rx: &mut watch::Receiver<bool>,
 ) -> Option<()> {
     let event = TaskTransition::Complete(interrupted_before_dispatch());
-    executor.settle_cas(principal, id, revision, event).await;
+    executor
+        .settle_cas(principal, id, revision, event, cancel_rx)
+        .await;
     None
 }
 
@@ -586,7 +609,7 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
     let _slot = slot;
     let ids = (principal.as_str(), id.as_str(), revision);
     let Some(state) = owned.host().upgrade() else {
-        return settle_interrupted(&executor, ids).await;
+        return settle_interrupted(&executor, ids, &mut cancel_rx).await;
     };
     // An answer taken in time can still reach dispatch late; redeeming then
     // could only fail, so the round is closed as the sweep would close it.
@@ -763,31 +786,8 @@ impl TaskExecutor {
 mod deadline_tests;
 
 #[cfg(test)]
-mod mapping_tests {
-    use super::{InputOutcome, StoreError, input_outcome_of};
-
-    /// Each store refusal means one thing to the caller of `provide_input`,
-    /// whether the read or the write raised it.
-    #[test]
-    fn a_store_refusal_maps_to_one_input_outcome() {
-        assert!(matches!(
-            input_outcome_of(StoreError::InvalidTransition),
-            InputOutcome::NotOutstanding
-        ));
-        assert!(matches!(
-            input_outcome_of(StoreError::Capacity),
-            InputOutcome::TooLarge
-        ));
-        assert!(matches!(
-            input_outcome_of(StoreError::NotFound),
-            InputOutcome::NotFound
-        ));
-        assert!(matches!(
-            input_outcome_of(StoreError::Unavailable),
-            InputOutcome::Unavailable
-        ));
-    }
-}
+#[path = "input_round_mapping_tests.rs"]
+mod mapping_tests;
 
 #[cfg(test)]
 #[path = "input_round_exit_tests.rs"]

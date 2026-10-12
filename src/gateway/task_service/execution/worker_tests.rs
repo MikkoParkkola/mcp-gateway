@@ -22,20 +22,31 @@ use crate::gateway::task_service::{
 };
 use crate::idempotency::admission::{ExecutionAdmission, Mode, Request};
 
-const OWNER: &str = "verified-owner";
+pub(super) const OWNER: &str = "verified-owner";
 const BACKEND: &str = "peer";
 
-struct Fixture {
-    service: Arc<TaskService>,
-    executor: Arc<TaskExecutor>,
-    id: String,
-    revision: u64,
-    owner_digest: String,
+pub(super) struct Fixture {
+    pub(super) service: Arc<TaskService>,
+    pub(super) executor: Arc<TaskExecutor>,
+    pub(super) id: String,
+    pub(super) revision: u64,
+    pub(super) owner_digest: String,
     _dir: tempfile::TempDir,
 }
 
 /// A freshly created working row, owned by [`OWNER`].
 async fn fixture(key: &str) -> Fixture {
+    let now = crate::clock::utc_now().expect("the test host's clock reads after 1970");
+    fixture_with(key, now, 86_400_000).await
+}
+
+/// [`fixture`] created at `created_at` with `ttl_ms` (MIK-8202 P4a: the
+/// clock-settle rows date against a known creation time and a 1 ms TTL).
+pub(super) async fn fixture_with(
+    key: &str,
+    created_at: chrono::DateTime<chrono::Utc>,
+    ttl_ms: u64,
+) -> Fixture {
     let dir = tempfile::tempdir().expect("a fixture store root");
     let admission = ExecutionAdmission::new(Arc::new(|| 1_000));
     let service = Arc::new(
@@ -55,9 +66,9 @@ async fn fixture(key: &str) -> Fixture {
     let workers = Arc::new(tokio::sync::Semaphore::new(1));
     let task = Task::create_at(
         "echo",
-        crate::clock::utc_now().expect("the test host's clock reads after 1970"),
+        created_at,
         TaskOptions {
-            ttl_ms: Some(86_400_000),
+            ttl_ms: Some(ttl_ms),
             poll_interval_ms: Some(1_000),
         },
     );
@@ -96,7 +107,7 @@ async fn fixture(key: &str) -> Fixture {
 }
 
 impl Fixture {
-    fn status(&self) -> TaskStatus {
+    pub(super) fn status(&self) -> TaskStatus {
         self.service
             .get(OWNER, &self.id)
             .expect("the owner reads its task")
@@ -104,7 +115,7 @@ impl Fixture {
             .status()
     }
 
-    fn stored_revision(&self) -> u64 {
+    pub(super) fn stored_revision(&self) -> u64 {
         self.service
             .get(OWNER, &self.id)
             .expect("the owner reads its task")
@@ -113,7 +124,7 @@ impl Fixture {
 
     /// Move the row on at `revision` without settling it, so a settlement
     /// holding the old revision loses its first compare-and-set.
-    async fn move_on(&self, event: TaskTransition) {
+    pub(super) async fn move_on(&self, event: TaskTransition) {
         self.service
             .store
             .transition(
@@ -127,8 +138,9 @@ impl Fixture {
             .expect("the row moves on at the revision read");
     }
 
-    /// Fail every store write from now on, counting the attempts.
-    async fn fail_writes(&self) -> Arc<AtomicUsize> {
+    /// Fail every store write from now on, counting the attempts. Shared with
+    /// the P4a loss-arm rows (MIK-8202), which fail a settle's dated commit.
+    pub(super) async fn fail_writes(&self) -> Arc<AtomicUsize> {
         let attempts = Arc::new(AtomicUsize::new(0));
         let seen = Arc::clone(&attempts);
         self.service
@@ -145,7 +157,14 @@ impl Fixture {
     }
 }
 
-fn complete() -> TaskTransition {
+/// A cancel receiver nothing will signal (MIK-8202 P4a: settles take one).
+/// Its sender is dropped, so a clock wait would stop at once; these rows never
+/// meet a dark clock.
+fn rx() -> tokio::sync::watch::Receiver<bool> {
+    tokio::sync::watch::channel(false).1
+}
+
+pub(super) fn complete() -> TaskTransition {
     TaskTransition::Complete(json!({"content": [{"type": "text", "text": "done"}]}))
 }
 
@@ -161,7 +180,7 @@ async fn a_settlement_that_lost_its_revision_retries_at_the_current_one() {
 
     let delivered = fx
         .executor
-        .settle_cas(OWNER, &fx.id, fx.revision, complete())
+        .settle_cas(OWNER, &fx.id, fx.revision, complete(), &mut rx())
         .await;
 
     assert!(delivered, "the retried settlement stored backend output");
@@ -180,7 +199,7 @@ async fn a_settlement_that_lost_to_a_terminal_row_leaves_it_alone() {
 
     let delivered = fx
         .executor
-        .settle_cas(OWNER, &fx.id, fx.revision, complete())
+        .settle_cas(OWNER, &fx.id, fx.revision, complete(), &mut rx())
         .await;
 
     assert!(!delivered, "the later settlement delivered nothing");
@@ -209,7 +228,7 @@ async fn a_settlement_whose_retry_also_fails_reports_nothing_delivered() {
 
     let delivered = fx
         .executor
-        .settle_cas(OWNER, &fx.id, fx.revision, complete())
+        .settle_cas(OWNER, &fx.id, fx.revision, complete(), &mut rx())
         .await;
 
     assert!(!delivered);
@@ -232,7 +251,7 @@ async fn a_settlement_whose_first_write_fails_does_not_retry() {
 
     let delivered = fx
         .executor
-        .settle_cas(OWNER, &fx.id, fx.revision, complete())
+        .settle_cas(OWNER, &fx.id, fx.revision, complete(), &mut rx())
         .await;
 
     assert!(!delivered);
@@ -269,7 +288,7 @@ async fn a_marker_on_a_moved_or_settled_row_is_refused() {
 
     assert!(
         fx.executor
-            .settle_cas(OWNER, &fx.id, fx.stored_revision(), complete())
+            .settle_cas(OWNER, &fx.id, fx.stored_revision(), complete(), &mut rx())
             .await
     );
     let settled = fx
