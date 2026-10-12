@@ -201,6 +201,35 @@ impl Ear {
 }
 
 impl World {
+    /// As [`Self::start`], with OAuth agent auth on against `registry` and
+    /// gateway auth off: with gateway auth on, an agent-only bearer is refused
+    /// before agent auth sees it (MIK-8377).
+    pub(super) async fn start_agents(
+        registry: std::sync::Arc<crate::gateway::oauth::AgentRegistry>,
+    ) -> Self {
+        let key_server = std::sync::Arc::new(crate::key_server::KeyServer::new(
+            crate::config::KeyServerConfig::default(),
+        ));
+        Self::start_on(
+            key_server,
+            None,
+            Some(registry),
+            |meta| meta,
+            super::audience_fixture::McpAccess::Authenticated,
+        )
+        .await
+    }
+
+    /// A GET stream as [`Self::sse`], with `extend` applied to the request
+    /// first (the TLS layer's extensions; MIK-8377).
+    pub(super) async fn sse_with(
+        &self,
+        bearer: &str,
+        extend: impl FnOnce(&mut axum::http::Request<axum::body::Body>),
+    ) -> Ear {
+        self.sse_request(bearer, None, ("/mcp", None), extend).await
+    }
+
     /// A gateway whose `/mcp` is a public path.
     pub(super) async fn start_public() -> Self {
         let key_server = std::sync::Arc::new(crate::key_server::KeyServer::new(

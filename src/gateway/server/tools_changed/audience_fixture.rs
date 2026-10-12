@@ -356,21 +356,6 @@ impl World {
         )
     }
 
-    /// As [`Self::start`], with OAuth agent auth on against `registry` and
-    /// gateway auth off: with gateway auth on, an agent-only bearer is refused
-    /// before agent auth sees it (MIK-8377).
-    pub(super) async fn start_agents(registry: Arc<crate::gateway::oauth::AgentRegistry>) -> Self {
-        let key_server = Arc::new(KeyServer::new(crate::config::KeyServerConfig::default()));
-        Self::start_on(
-            key_server,
-            None,
-            Some(registry),
-            |meta| meta,
-            McpAccess::Authenticated,
-        )
-        .await
-    }
-
     pub(super) async fn start_on(
         key_server: Arc<KeyServer>,
         live: Option<(crate::config::Config, tempfile::TempDir)>,
@@ -761,17 +746,7 @@ impl World {
         self.sse_request(bearer, None, (uri, resume), |_| {}).await
     }
 
-    /// A GET stream as [`Self::sse`], with `extend` applied to the request
-    /// first (the TLS layer's extensions; MIK-8377).
-    pub(super) async fn sse_with(
-        &self,
-        bearer: &str,
-        extend: impl FnOnce(&mut axum::http::Request<Body>),
-    ) -> Ear {
-        self.sse_request(bearer, None, ("/mcp", None), extend).await
-    }
-
-    async fn sse_request(
+    pub(super) async fn sse_request(
         &self,
         bearer: &str,
         assertion: Option<&str>,
