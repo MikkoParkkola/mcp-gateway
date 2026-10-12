@@ -500,6 +500,12 @@ one, two certificates with the same CN count as one caller, so identity relies o
 unique CNs. A certificate with neither is not an identity for the per-caller limits
 (UPGRADING-4.0 item 94).
 
+A `tools/list_changed` stream (a `GET /mcp` stream or `subscriptions/listen`) opened under a client
+certificate closes once the certificate's `notAfter` passes, checked at each notification it would
+be sent. Revocation is not re-checked on an open stream: the gateway reads the CRL at startup and
+checks it only at the TLS handshake, with no OCSP. To cut off a revoked certificate's open stream,
+restart the gateway with the new CRL, or issue short-lived client certificates.
+
 ### Strict validation and existing certificate generations
 
 Newly generated 4.0 CA certificates include certificate-signing and CRL-signing
@@ -791,6 +797,13 @@ prometheus-operator ServiceMonitor that sends it through `bearerTokenSecret`.
   `mcp_backend_requests_total{status="rate_limited"}`. At most one series per configured
   backend; a backend's series appears on its first refusal, so an absent series means zero.
 - `mcp_circuit_breaker_opened_total` -- breaker trips
+- `mcp_view_liveness_dead_total` -- `tools/list_changed` streams closed because the identity
+  they were opened under no longer holds, by `reason`, a fixed label: `bearer` (the credential no
+  longer authenticates), `adapter` (the Open WebUI assertion expired), `cf` (the Cloudflare Access
+  assertion no longer verifies), `agent` (the bearer now validates as another OAuth agent, or as
+  one where the stream had none), `cert` (the client certificate's `notAfter` passed, or the
+  clock could not be read), `proxy` (the trusted proxy is no longer in `trusted_proxies`). One
+  count per closed stream.
 - `mcp_input_schema_events_total` -- undeclared-argument-key check (R2) events by
   `kind`, a fixed label, never a tool or key name:
   - check outcomes: `input_schema_refused_unavailable`, `input_schema_refused_truncated`,
