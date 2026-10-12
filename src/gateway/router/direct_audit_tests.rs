@@ -23,6 +23,7 @@ use crate::security::audit::AuditFailurePolicy;
 use crate::security::transparency_log::TransparencyLogConfig;
 use crate::transport::Transport;
 
+mod anon_intake;
 mod anon_key;
 mod delivery;
 mod delivery_who;
@@ -41,6 +42,11 @@ mod tenants;
 /// else with a text result, or with a JSON-RPC error when `error` is set.
 struct Scripted {
     calls: Arc<AtomicUsize>,
+    /// MIK-8382: every `tools/list`, which `calls` skips.
+    lists: Arc<AtomicUsize>,
+    /// MIK-8382: `tools/list` fails at the transport, as an unreachable
+    /// backend's cold list does.
+    list_fail: bool,
     error: Option<i32>,
     /// MIK-7979: the call is counted, then the transport fails with this.
     fail: Option<fn() -> crate::Error>,
@@ -63,6 +69,10 @@ impl Transport for Scripted {
         // F13: a cold `tools/call` lists the backend first. The list names the
         // tool the rows call, and it is not a call, so `calls` skips it.
         if method == "tools/list" {
+            self.lists.fetch_add(1, Ordering::SeqCst);
+            if self.list_fail {
+                return Err(crate::Error::Transport("connection refused".into()));
+            }
             let tool = json!({"name": "t", "inputSchema": {"type": "object"}});
             return Ok(JsonRpcResponse::success(id, json!({ "tools": [tool] })));
         }
@@ -103,6 +113,7 @@ struct Fixture {
     log: Arc<TransparencyLogger>,
     path: std::path::PathBuf,
     calls: Arc<AtomicUsize>,
+    lists: Arc<AtomicUsize>,
     _dirs: (tempfile::TempDir, tempfile::TempDir),
 }
 
@@ -164,6 +175,10 @@ struct Setup {
     meta_mode: MetaMode,
     /// The backends refuse every notification (L1254).
     notify_refused: bool,
+    /// MIK-8382: every backend's `tools/list` fails at the transport.
+    list_fail: bool,
+    /// MIK-8382: `security.sanitize_input` (the router's default here is off).
+    sanitize: bool,
     /// The backends' chain policy; under `Require` the gateway also has a
     /// chain identity, so their unchained answers are refused unread (MIK-7636).
     chain: crate::config::ChainMode,
@@ -240,7 +255,9 @@ async fn fixture(setup: Setup) -> Fixture {
         None => super::tests::test_router_app_state().await,
     };
     let calls = Arc::new(AtomicUsize::new(0));
+    let lists = Arc::new(AtomicUsize::new(0));
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
+    state_mut.sanitize_input = setup.sanitize;
     for name in ["alpha", "beta"] {
         let backend = Arc::new(Backend::new(
             name,
@@ -253,6 +270,8 @@ async fn fixture(setup: Setup) -> Fixture {
         ));
         backend.set_transport_for_test(Arc::new(Scripted {
             calls: Arc::clone(&calls),
+            lists: Arc::clone(&lists),
+            list_fail: setup.list_fail,
             error: setup.backend_error,
             fail: setup.backend_fail,
             reply: setup.reply.clone(),
@@ -307,6 +326,7 @@ async fn fixture(setup: Setup) -> Fixture {
         log,
         path,
         calls,
+        lists,
         _dirs: (audit, store),
     }
 }
@@ -385,6 +405,20 @@ async fn post(fx: &Fixture, backend: &str, body: &str, caller: &Caller) -> (Stat
 }
 
 async fn post_to(fx: &Fixture, uri: &str, body: &str, caller: &Caller) -> (StatusCode, Value) {
+    let (status, bytes) = post_to_raw(fx, uri, body, caller).await;
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// [`post_to`] with the response body as sent, for byte-identity rows.
+async fn post_to_raw(
+    fx: &Fixture,
+    uri: &str,
+    body: &str,
+    caller: &Caller,
+) -> (StatusCode, axum::body::Bytes) {
     let mut builder = axum::http::Request::builder()
         .method("POST")
         .uri(uri)
@@ -423,10 +457,9 @@ async fn post_to(fx: &Fixture, uri: &str, body: &str, caller: &Caller) -> (Statu
     insert_identity(&mut request, caller);
     let response = fx.router.clone().oneshot(request).await.unwrap();
     let status = response.status();
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     (
         status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        to_bytes(response.into_body(), usize::MAX).await.unwrap(),
     )
 }
 
