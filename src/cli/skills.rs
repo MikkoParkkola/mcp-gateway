@@ -46,14 +46,8 @@ pub enum SkillsCommand {
     #[command(about = "Generate agent skill bundles from capability definitions")]
     Generate {
         /// Capabilities directory to load from
-        #[arg(
-            short = 'C',
-            hide = true,
-            long,
-            default_value = "capabilities",
-            env = "MCP_GATEWAY_CAPABILITIES"
-        )]
-        capabilities: PathBuf,
+        #[arg(short = 'C', hide = true, long, env = "MCP_GATEWAY_CAPABILITIES")]
+        capabilities: Option<PathBuf>,
 
         /// Only generate skills for capabilities whose name starts with this prefix
         /// (useful when multiple backends share the same capabilities directory)

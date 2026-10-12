@@ -58,6 +58,9 @@ mod playbook_retry_stdio;
 
 mod stdio_catalogue_sole_operator;
 
+// MIK-8364: stdio saves protocol telemetry off the request path.
+mod stdio_telemetry_save;
+
 #[cfg(feature = "cost-governance")]
 mod stdio_cost_persistence;
 
@@ -98,6 +101,9 @@ mod stdio_replay_audit;
 
 // MIK-7324.COV.3: the stdio chain-nonce refusal in `prepare_signing`.
 mod stdio_chain_nonce_refusal;
+
+// MIK-8378: envelope rows over stdio (ENV.2, ENV.4).
+mod mik8378_stdio;
 
 // MIK-7324.COV.3: the firewall `response_firewall` builds carries anomaly blocking.
 #[cfg(feature = "firewall")]

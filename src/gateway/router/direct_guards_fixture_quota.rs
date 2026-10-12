@@ -101,12 +101,167 @@ pub(super) fn fixture_backend_config(name: &str, passthrough: bool) -> BackendCo
             crate::identity_propagation::IdentityPropagationConfig {
                 strategy: crate::identity_propagation::PropagationStrategyKind::SignedAssertion,
                 audience: format!("aud-{name}"),
-                required: true,
+                required: !super::OPTIONAL.with(std::cell::Cell::get),
                 session_mode: crate::identity_propagation::SessionMode::Stateless,
                 token_exchange_endpoint: None,
                 token_exchange_scope: None,
             }
         }),
+        input_schema_enforcement: if super::SCHEMA_OFF.with(std::cell::Cell::get) {
+            crate::config::InputSchemaEnforcement::Off
+        } else {
+            crate::config::InputSchemaEnforcement::default()
+        },
         ..BackendConfig::default()
     }
+}
+
+/// A propagation strategy that counts every credential it mints. Mints are
+/// never cached (`invoke/account_mint.rs`), so each propagated call mints once.
+#[derive(Default)]
+pub(crate) struct Minting(std::sync::atomic::AtomicUsize);
+
+impl Minting {
+    /// Credentials minted so far.
+    pub(crate) fn count(&self) -> usize {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::identity_propagation::IdentityPropagation for Minting {
+    async fn propagate(
+        &self,
+        identity: &crate::key_server::oidc::VerifiedIdentity,
+        backend: &crate::identity_propagation::BackendDescriptor,
+    ) -> Result<
+        crate::identity_propagation::PropagatedCredential,
+        crate::identity_propagation::PropagationError,
+    > {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let binding = format!("{}@{}", identity.subject, backend.audience);
+        Ok(crate::identity_propagation::PropagatedCredential {
+            headers: vec![("Authorization".to_string(), "Bearer minted".to_string())],
+            expires_at: i64::MAX,
+            cache_binding: binding,
+            subject_key: identity.subject.clone(),
+            audience: backend.audience.clone(),
+            scopes: Vec::new(),
+        })
+    }
+}
+
+/// The hardened, signed (nonce required) fixture whose backends require
+/// identity propagation, minting through a counting [`Minting`] strategy
+/// (MIK-8353 slice 3a). `build` arms the signed `MetaMcp` further, e.g. with a
+/// spend budget. Returns the fixture and the strategy, so a row reads mints.
+pub(crate) async fn fixture_propagating_signed(
+    answer: Answer,
+    firewalled: bool,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> (Fx, Arc<Minting>) {
+    let minting = Arc::new(Minting::default());
+    let strategy = Arc::clone(&minting);
+    super::HARDENED.with(|h| h.set(true));
+    super::PROPAGATING.with(|p| p.set(true));
+    let fx = super::fixture_inner(answer, firewalled, |meta| {
+        let mut meta = build(super::signing(meta, true));
+        meta.enable_transparency_log(leaked_transparency_log());
+        meta.set_identity_propagation(strategy);
+        meta
+    })
+    .await;
+    super::PROPAGATING.with(|p| p.set(false));
+    super::HARDENED.with(|h| h.set(false));
+    (fx, minting)
+}
+
+/// A propagation strategy whose every mint fails after it was attempted, as a
+/// token exchange that reached its issuer and errored (MIK-8379 H1); or, with
+/// `bad_header`, succeeds with a header that does not parse, which the
+/// resolver refuses the same way. Counts its attempts.
+#[derive(Default)]
+pub(crate) struct FailingMint {
+    attempts: std::sync::atomic::AtomicUsize,
+    bad_header: bool,
+}
+
+impl FailingMint {
+    /// A mint that succeeds with an invalid header name.
+    pub(crate) fn with_bad_header() -> Self {
+        Self {
+            attempts: std::sync::atomic::AtomicUsize::new(0),
+            bad_header: true,
+        }
+    }
+
+    /// Mints attempted so far.
+    pub(crate) fn count(&self) -> usize {
+        self.attempts.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::identity_propagation::IdentityPropagation for FailingMint {
+    async fn propagate(
+        &self,
+        identity: &crate::key_server::oidc::VerifiedIdentity,
+        backend: &crate::identity_propagation::BackendDescriptor,
+    ) -> Result<
+        crate::identity_propagation::PropagatedCredential,
+        crate::identity_propagation::PropagationError,
+    > {
+        self.attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.bad_header {
+            return Ok(crate::identity_propagation::PropagatedCredential {
+                headers: vec![("bad header".to_string(), "minted".to_string())],
+                expires_at: i64::MAX,
+                cache_binding: format!("{}@{}", identity.subject, backend.audience),
+                subject_key: identity.subject.clone(),
+                audience: backend.audience.clone(),
+                scopes: Vec::new(),
+            });
+        }
+        Err(crate::identity_propagation::PropagationError::Refuse(
+            "the issuer refused the exchange".to_string(),
+        ))
+    }
+}
+
+/// A named way for a [`FailingMint`] to fail.
+pub(crate) type MintMode = (&'static str, fn() -> FailingMint);
+
+/// Both failure modes the H1 rows run: a failed mint, and a mint whose header
+/// does not parse.
+pub(crate) const MINT_MODES: [MintMode; 2] = [
+    ("failed mint", FailingMint::default),
+    ("invalid header", FailingMint::with_bad_header),
+];
+
+/// The hardened, signed fixture whose backends declare OPTIONAL identity
+/// propagation through a [`FailingMint`]: every propagated call attempts a
+/// mint, fails, and falls back to the static credential (IDP.5). `build` arms
+/// the signed `MetaMcp` further (a spend budget).
+pub(crate) async fn fixture_optional_failing_mint(
+    answer: Answer,
+    mint: FailingMint,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> (Fx, Arc<FailingMint>) {
+    let failing = Arc::new(mint);
+    let strategy = Arc::clone(&failing);
+    super::HARDENED.with(|h| h.set(true));
+    super::PROPAGATING.with(|p| p.set(true));
+    super::OPTIONAL.with(|o| o.set(true));
+    let fx = super::fixture_inner(answer, false, |meta| {
+        let mut meta = build(super::signing(meta, true));
+        meta.enable_transparency_log(leaked_transparency_log());
+        meta.set_identity_propagation(strategy);
+        meta
+    })
+    .await;
+    super::OPTIONAL.with(|o| o.set(false));
+    super::PROPAGATING.with(|p| p.set(false));
+    super::HARDENED.with(|h| h.set(false));
+    (fx, failing)
 }

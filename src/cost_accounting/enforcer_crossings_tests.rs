@@ -30,17 +30,20 @@ fn crossing(scope: &str, percent: u8) -> BudgetCrossing {
 
 #[test]
 fn each_threshold_is_reported_once_on_the_spend_that_crosses_it() {
-    let mut cfg = CostGovernanceConfig {
-        enabled: true,
-        ..Default::default()
-    };
-    cfg.budgets.daily = Some(1.0);
-    let (enforcer, seen) = observed(cfg);
-    for usd in [0.4, 0.2, 0.3, 0.2, 0.5] {
-        enforcer.record_spend("search", None, usd);
-    }
+    let seen = crate::test_day::same_utc_day(|| {
+        let mut cfg = CostGovernanceConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        cfg.budgets.daily = Some(1.0);
+        let (enforcer, seen) = observed(cfg);
+        for usd in [0.4, 0.2, 0.3, 0.2, 0.5] {
+            enforcer.record_spend("search", None, usd);
+        }
+        seen.lock().clone()
+    });
     assert_eq!(
-        *seen.lock(),
+        seen,
         [
             crossing("global", 50),
             crossing("global", 80),

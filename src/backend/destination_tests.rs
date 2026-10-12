@@ -136,7 +136,7 @@ async fn hardened_backend_oauth_discovery_is_pinned() {
                 callback_host: None,
                 callback_port: None,
                 callback_path: None,
-                token_refresh_buffer_secs: 300,
+                token_refresh_buffer_secs: Some(300),
                 shared_account: false,
             }),
             ..BackendConfig::default()
@@ -566,7 +566,7 @@ fn refused_before_connecting() -> Arc<Backend> {
         callback_host: None,
         callback_port: None,
         callback_path: None,
-        token_refresh_buffer_secs: 300,
+        token_refresh_buffer_secs: Some(300),
         shared_account: false,
     };
     Arc::new(Backend::new(
@@ -661,7 +661,7 @@ async fn oauth_at_loopback() -> (Arc<Backend>, Arc<AtomicUsize>) {
                 callback_host: None,
                 callback_port: None,
                 callback_path: None,
-                token_refresh_buffer_secs: 300,
+                token_refresh_buffer_secs: Some(300),
                 shared_account: false,
             }),
             ..BackendConfig::default()

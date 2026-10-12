@@ -414,6 +414,24 @@ impl SketchStore {
         self.drop_if_empty(reservation.pair);
     }
 
+    /// `MIK-8066` D9: move `reservation`'s evidence bytes (`extra`) off it
+    /// and off its pair, still charged to the store total until
+    /// [`Self::release_extra`]. The reservation then holds only its sketch,
+    /// so publishing or abandoning it never touches the evidence's charge:
+    /// evidence outlives an abandoned sketch until recorded, never its charge.
+    pub(super) fn split_extra(&mut self, reservation: &mut Reservation) -> usize {
+        let extra = std::mem::take(&mut reservation.extra);
+        if let Some(state) = self.by_pair.get_mut(&reservation.pair) {
+            state.bytes -= extra;
+        }
+        extra
+    }
+
+    /// Release evidence bytes [`Self::split_extra`] moved off a reservation.
+    pub(super) fn release_extra(&mut self, extra: usize) {
+        self.bytes -= extra;
+    }
+
     /// Reserve, build and publish in one step (tests).
     #[cfg(test)]
     pub(super) fn insert(&mut self, pair: Pair, fps: &[u64], at: Instant) -> bool {

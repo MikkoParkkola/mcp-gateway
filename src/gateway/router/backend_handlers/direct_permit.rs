@@ -24,6 +24,14 @@ pub(super) fn mint_permit(
     scope: Scope<'_>,
     params: Option<&Value>,
 ) -> crate::Result<crate::gateway::meta_mcp::invoke::DirectPermit> {
+    #[cfg(test)]
+    if seams::take_refusal() {
+        return Err(crate::Error::Forbidden {
+            code: -32003,
+            status: 403,
+            message: seams::REFUSED.to_string(),
+        });
+    }
     let caller = scope.caller;
     let client = caller.client.as_ref();
     let authorizer = super::super::authorization::RouterAuthorizer {
@@ -65,7 +73,7 @@ pub(super) fn mint_permit(
 /// drop), and the spend admission and continuation slot, which the caller
 /// drops with the refusal.
 fn give_back_refused(state: &AppState, admitted: &mut Admitted<'_>) {
-    DirectRouteGuards::release_nonce(state, admitted.nonce.take());
+    DirectRouteGuards::release_nonce(state, admitted.nonce.take(), admitted.witness.take());
     if let Some(mut reservation) = admitted.idem_reservation.take() {
         // Today the reservation is unarmed here (it is armed only in
         // `dispatch_armed`, after the permit), so its drop would release the
@@ -140,4 +148,25 @@ pub(super) fn plain_send<'a>(
     Ok(Box::pin(super::direct_send::dispatch_non_call(
         other, backend, id, params, headers,
     )))
+}
+
+/// MIK-8379: a chokepoint refusal on demand, so a row can reach it with
+/// nothing acted before it (a warm schema, no mint, no consume). Test only.
+#[cfg(test)]
+pub(crate) mod seams {
+    /// The message the forced refusal carries.
+    pub(crate) const REFUSED: &str = "permit refused by the test seam";
+
+    thread_local! {
+        static REFUSE_NEXT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// The next permit minted on this thread is refused. One call only.
+    pub(crate) fn refuse_next_permit() {
+        REFUSE_NEXT.with(|refuse| refuse.set(true));
+    }
+
+    pub(super) fn take_refusal() -> bool {
+        REFUSE_NEXT.with(std::cell::Cell::take)
+    }
 }

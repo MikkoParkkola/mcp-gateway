@@ -578,7 +578,7 @@ pub(crate) fn stdio_admission_then_resend() -> (Value, Value, Value, usize) {
                             IDEMPOTENCY_KEY_META: key,
                         }}
                 });
-                super::Gateway::dispatch_single_with_sink(
+                super::Gateway::dispatch_single_for_client(
                     &fixture.meta,
                     &fixture.tool_policy,
                     &fixture.mtls_policy,
@@ -592,7 +592,6 @@ pub(crate) fn stdio_admission_then_resend() -> (Value, Value, Value, usize) {
                         discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
                         sanitize: super::stdio_single::InputSanitizing::Off,
                     },
-                    &super::StdioTelemetry::default(),
                 )
                 .await
                 .expect("a request carrying an id must produce a response")
@@ -632,6 +631,14 @@ pub(crate) fn stdio_refund_through_delivery() -> [Delivered; 3] {
     const NONCE: &str = "stdio-settle-nonce-0001";
     runtime().block_on(async {
         let fixture = Fixture::start_hardened().await;
+        // The refusal must be effect-free to earn a refund (NONCEFX.9): a
+        // cold schema slot would fetch `tools/list` first and keep the nonce.
+        let backend = fixture.meta.backends.get(BACKEND).expect("backend");
+        backend
+            .get_tools_shared()
+            .await
+            .expect("warm the schema slot");
+        assert!(backend.has_cached_tools(), "premise: the schema is warm");
         let send = |extra: Value| {
             let fixture = &fixture;
             async move {
@@ -662,7 +669,6 @@ pub(crate) fn stdio_refund_through_delivery() -> [Delivered; 3] {
                                 crate::gateway::server::stdio_single::DiscoverListing::Configured,
                             sanitize: super::stdio_single::InputSanitizing::Off,
                         },
-                        &super::StdioTelemetry::default(),
                     )),
                 )
                 .await;

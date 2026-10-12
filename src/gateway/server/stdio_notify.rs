@@ -84,7 +84,6 @@ impl Gateway {
             super::stdio_single::InputSanitizing,
             super::stdio_single::ModernServing,
         ),
-        protocol_telemetry_sink: &super::StdioTelemetry,
         reads: &StdioReads,
     ) -> Vec<OutboundFrame> {
         let invalid = || {
@@ -126,7 +125,6 @@ impl Gateway {
                         // Each item is sanitized as a single request is.
                         sanitize,
                     },
-                    protocol_telemetry_sink,
                 )),
             )
             .await;
@@ -149,13 +147,12 @@ impl Gateway {
 
     /// [`Self::dispatch_batch_read`] without the readings.
     #[cfg(test)]
-    pub(super) async fn dispatch_batch_with_sink(
+    pub(super) async fn dispatch_batch_for_client(
         meta_mcp: &std::sync::Arc<crate::gateway::meta_mcp::MetaMcp>,
         tool_policy: &std::sync::Arc<crate::security::ToolPolicy>,
         mtls_policy: &std::sync::Arc<crate::mtls::MtlsPolicy>,
         batch: serde_json::Value,
         session_id: &str,
-        protocol_telemetry_sink: &super::StdioTelemetry,
     ) -> Vec<serde_json::Value> {
         let reads = meta_mcp.stdio_reads();
         Self::dispatch_batch_read(
@@ -168,7 +165,6 @@ impl Gateway {
                 super::stdio_single::InputSanitizing::Off,
                 super::stdio_single::ModernServing::Enabled,
             ),
-            protocol_telemetry_sink,
             &reads,
         )
         .await

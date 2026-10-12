@@ -236,7 +236,7 @@ fn signing_config_base(backend_url: &str, require_nonce: bool) -> Config {
 }
 
 /// Exactly the three values `run_stdio` holds and hands to
-/// `dispatch_single_with_sink`, obtained from the production builder rather
+/// `dispatch_single_for_client`, obtained from the production builder rather
 /// than assembled by hand.
 ///
 /// `build_meta_mcp` is used directly, not `build_meta_mcp_for_test`, because

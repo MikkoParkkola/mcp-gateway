@@ -92,6 +92,10 @@ struct NonceRefund {
     /// Something this call did may have acted (MIK-8353): a veto, never a
     /// grant. A witness still decides; this only stops a give-back.
     spent: std::sync::atomic::AtomicBool,
+    /// The refund witness, kept from a successful admission until a may-effect
+    /// step takes it, and handed back by a refusal that still holds it
+    /// (MIK-8353 slice 3a). A give-back needs it.
+    witness: std::sync::Mutex<Option<super::refund_witness::RefundWitness>>,
 }
 
 // How many nonces this thread gave back (MIK-8353 STDIO-SETTLE): the release
@@ -145,10 +149,39 @@ impl SigningInvocationContext {
         (self.refund.wanted).store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
-    /// A step asked for the nonce back and no step dispatched.
+    /// Keep `witness` for this call's settle (MIK-8353 slice 3a).
+    pub(crate) fn keep_witness(&self, witness: super::refund_witness::RefundWitness) {
+        let mut slot = self
+            .refund
+            .witness
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(old) = slot.replace(witness) {
+            old.spend();
+        }
+    }
+
+    /// Take the witness, for a may-effect step to carry by value.
+    pub(crate) fn take_witness(&self) -> Option<super::refund_witness::RefundWitness> {
+        self.refund
+            .witness
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+
+    /// A step asked for the nonce back, no step dispatched, and the call still
+    /// holds its witness: no may-effect step reported an effect (MIK-8353 3a).
     fn refund_due(&self) -> bool {
         use std::sync::atomic::Ordering::SeqCst;
-        self.refund.wanted.load(SeqCst) && !self.refund.dispatched.load(SeqCst)
+        self.refund.wanted.load(SeqCst)
+            && !self.refund.dispatched.load(SeqCst)
+            && self
+                .refund
+                .witness
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
     }
 
     /// Move protocol metadata out of the raw request. Invalid nonce values are
@@ -515,10 +548,15 @@ impl super::MetaMcp {
     ) -> crate::Result<super::admission::SyncAdmission> {
         let admitted =
             self.admit_meta_sync_unrefunded(owner, caller, tool_name, arguments, session, id);
-        if admitted.is_err()
-            && let Some(witness) = witness
-        {
-            self.release_witnessed_nonce(caller, witness);
+        match (&admitted, witness) {
+            (Err(_), Some(witness)) => self.release_witnessed_nonce(caller, witness),
+            // Admitted: the witness stays with the call for its settle; the
+            // invoke path carries it through its may-effect steps (MIK-8353 3a).
+            (Ok(_), Some(witness)) => match caller.signing {
+                Some(signing) => signing.keep_witness(witness),
+                None => witness.spend(),
+            },
+            (_, None) => {}
         }
         admitted
     }

@@ -42,7 +42,7 @@ async fn stdio_admission_refusal_writes_one_record() {
         }
     });
 
-    let response = super::super::Gateway::dispatch_single_with_sink(
+    let response = super::super::Gateway::dispatch_single_for_client(
         &meta,
         &tool_policy,
         &mtls_policy,
@@ -56,7 +56,6 @@ async fn stdio_admission_refusal_writes_one_record() {
             discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
             sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
-        &super::super::StdioTelemetry::default(),
     )
     .await
     .expect("a request carrying an id is answered");
