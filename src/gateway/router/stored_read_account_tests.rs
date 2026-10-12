@@ -432,6 +432,18 @@ async fn t10pf_a_plan_tasks_frame_after_its_accounts_revoke_carries_status_only(
                 carries,
                 "control: the frame carries the plan's output: {completed}"
             );
+            // N1 (M16): the frame is read outside any request scope, opens its
+            // own memo, and its account pre-pass ran (the N0 count stays 0).
+            assert_eq!(
+                fx.gateway
+                    .backends()
+                    .get(BACKEND)
+                    .expect("the backend")
+                    .unfilled_outcome_reads
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "N1: the frame's pre-pass ran"
+            );
         }
     }
 }

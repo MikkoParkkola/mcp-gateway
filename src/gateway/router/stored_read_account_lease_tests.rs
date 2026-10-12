@@ -228,3 +228,26 @@ async fn l2_a_stale_warm_forget_leaves_a_newer_lease() {
     assert!(b.to_string().contains(MARKER), "L2: B serves: {b}");
     assert_eq!(fx.gateway.releases() - releases, 1, "L2: one resolver");
 }
+
+/// N0: a stored read whose account pre-pass did not run fails closed (no
+/// output, retryable) and the broken invariant is counted (M33: the sync
+/// site serves on an unfilled memo).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn n0_a_read_without_the_account_prepass_fails_closed() {
+    let fx = fixture().await;
+    let id = finished(&fx, "s1-n0").await;
+    let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
+    backend
+        .skip_account_prepass
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let read = task_get(&fx, &id).await;
+    assert!(!read.to_string().contains(MARKER), "N0: output: {read}");
+    assert!(read.get("error").is_some(), "N0: refused: {read}");
+    assert!(
+        backend
+            .unfilled_outcome_reads
+            .load(std::sync::atomic::Ordering::SeqCst)
+            >= 1,
+        "N0: the unfilled read is counted"
+    );
+}
