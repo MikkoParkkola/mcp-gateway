@@ -262,6 +262,8 @@ fn webhooks_off_holds_and_stamps_webhook_subscriptions() {
 #[test]
 fn a_failed_reconcile_attempt_logs_a_warning_and_the_next_one_finishes() {
     use std::os::unix::fs::PermissionsExt;
+    // Real-time bound on each event wait: only a hang reaches it.
+    const HANG_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
     let dir = tempfile::tempdir().expect("dir");
     let config = crate::config::EventsConfig::default();
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
@@ -288,38 +290,40 @@ fn a_failed_reconcile_attempt_logs_a_warning_and_the_next_one_finishes() {
         return;
     }
 
-    let records = crate::test_log_capture::records(|| {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-            .expect("runtime");
-        runtime.block_on(async {
-            let unlock = subs.clone();
-            let task = tokio::spawn({
-                let hub = Arc::clone(&hub);
-                async move {
-                    hub.reconcile_until_done(
-                        "test",
-                        Arc::new(|| CatalogueScan::Complete),
-                        std::time::Duration::from_millis(20),
-                    )
-                    .await;
-                }
-            });
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            std::fs::set_permissions(&unlock, std::fs::Permissions::from_mode(0o700))
-                .expect("unlock");
-            tokio::time::timeout(std::time::Duration::from_secs(10), task)
-                .await
-                .expect("the reconcile finishes once the removal can succeed")
-                .expect("task");
+    // The failed attempt is waited for as an event, its logged warning, not
+    // a sleep that a loaded host can end before the first attempt (MIK-8360).
+    // Level and target are part of the matched line, so the same message at
+    // debug does not count as the warning.
+    let (_logs, mut warned) = crate::test_log_capture::live_count(
+        "WARN mcp_gateway::events::fanout: events: startup reconcile could not remove",
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let task = tokio::spawn({
+            let hub = Arc::clone(&hub);
+            async move {
+                hub.reconcile_until_done(
+                    "test",
+                    Arc::new(|| CatalogueScan::Complete),
+                    std::time::Duration::from_millis(20),
+                )
+                .await;
+            }
         });
+        tokio::time::timeout(HANG_BOUND, warned.wait_for(|n| *n >= 1))
+            .await
+            .expect("a failed attempt is logged as a warning")
+            .expect("the log counter is alive");
+        std::fs::set_permissions(&subs, std::fs::Permissions::from_mode(0o700)).expect("unlock");
+        tokio::time::timeout(HANG_BOUND, task)
+            .await
+            .expect("the reconcile finishes once the removal can succeed")
+            .expect("task");
     });
 
-    assert!(
-        crate::test_log_capture::count(&records, "WARN", "startup reconcile could not remove") >= 1,
-        "a failed attempt is logged: {records:?}"
-    );
     assert!(hub.store.subscriptions().is_empty(), "then withdrawn");
 }
 
