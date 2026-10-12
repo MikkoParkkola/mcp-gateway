@@ -441,8 +441,8 @@ impl MetaMcp {
         &self,
         id: RequestId,
         tool_name: &str,
-        targets: &[crate::gateway::task_service::record::Target],
-        held: super::sealed_hold::Held<crate::gateway::task_service::record::CommittedTask>,
+        targets: &[crate::gateway::task_service::Target],
+        held: super::sealed_hold::Held<crate::gateway::task_service::CommittedTask>,
         caller: &MetaMcpCallerContext<'_>,
     ) -> JsonRpcResponse {
         use super::visible::{self, AccountOutcome};
