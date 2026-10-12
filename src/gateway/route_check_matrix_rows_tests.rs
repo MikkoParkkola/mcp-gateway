@@ -456,6 +456,15 @@ async fn nonce_give_back_invoke_relay_row() {
         seen.resent
     );
     assert_eq!(
+        seen.resent_calls, 1,
+        "R1: the re-send reached the backend once"
+    );
+    assert_eq!(
+        seen.resent["result"]["isError"], false,
+        "R1: the re-send was served: {}",
+        seen.resent
+    );
+    assert_eq!(
         seen.third["error"]["message"], REPLAY,
         "R1: the nonce was given back more than once: {}",
         seen.third

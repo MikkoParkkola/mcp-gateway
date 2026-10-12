@@ -414,6 +414,8 @@ pub(crate) struct RelayResend {
     pub(crate) third: Value,
     /// Tool-list fills admitted on the target across the relayed call.
     pub(crate) fills: u64,
+    /// Backend `tools/call` sends made by the clean re-send.
+    pub(crate) resent_calls: usize,
 }
 
 /// R1, MIK-8150 NONCE.3: on the signed, relayed fixture whose backend answers
@@ -429,13 +431,16 @@ pub(crate) async fn invoke_relay_then_resend(text: &'static str, server: &str) -
     let who = ("k-budget", server);
     let relayed = signed_invoke_on(&fx, who, "b1", serde_json::json!({ "cmd": text })).await;
     let fills = target.list_fills() - before;
+    let sent = fx.calls.load(std::sync::atomic::Ordering::SeqCst);
     let resent = signed_invoke_on(&fx, who, "b1", serde_json::json!({})).await;
+    let resent_calls = fx.calls.load(std::sync::atomic::Ordering::SeqCst) - sent;
     let third = signed_invoke_on(&fx, who, "b1", serde_json::json!({})).await;
     RelayResend {
         relayed,
         resent,
         third,
         fills,
+        resent_calls,
     }
 }
 
