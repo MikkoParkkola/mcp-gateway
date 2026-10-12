@@ -267,10 +267,18 @@ async fn ac_sub_1_a_lagged_listener_is_closed_without_a_graceful_end() {
     for _ in 0..300 {
         state.announce_tools_changed("any").await;
     }
-    assert_eq!(
-        next_data(&mut stream).await,
-        None,
-        "a lagged stream closes with no response"
+    // The constant attach hint (MIK-8350 B10) may precede the close; nothing
+    // else is delivered, and never a response.
+    let mut frames = Vec::new();
+    while let Some(frame) = next_data(&mut stream).await {
+        frames.push(frame);
+    }
+    assert!(
+        frames.len() <= 1
+            && frames.iter().all(|f| {
+                f["method"] == "notifications/tools/list_changed" && f.get("id").is_none()
+            }),
+        "a lagged stream closes with no response: {frames:?}"
     );
     assert!(
         matches!(

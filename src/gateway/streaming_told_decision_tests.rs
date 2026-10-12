@@ -206,7 +206,13 @@ async fn a_caller_dead_at_attach_gets_no_stream_and_is_counted() {
     );
     multiplexer.set_authorizer(auth());
     let owner = crate::gateway::session_id::SessionOwner::Credential("k".to_owned());
-    let (session, _rx) = multiplexer.get_or_create_session_scoped(Some("s"), &owner, None);
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::AUTHORIZATION,
+        axum::http::HeaderValue::from_static("Bearer dead"),
+    );
+    let held = crate::gateway::auth::live::held_credential(&headers);
+    let (session, _rx) = multiplexer.get_or_create_session_scoped(Some("s"), &owner, held);
     let judge = Fake::answering("s0", "x");
     judge.die();
     let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
@@ -229,4 +235,21 @@ async fn a_caller_dead_at_attach_gets_no_stream_and_is_counted() {
         ),
         "{text}"
     );
+}
+
+#[tokio::test]
+async fn a_caller_that_presented_nothing_keeps_its_stream_at_attach() {
+    let multiplexer = NotificationMultiplexer::new(
+        Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::StreamingConfig::default(),
+    );
+    multiplexer.set_authorizer(auth());
+    let owner = crate::gateway::session_id::SessionOwner::Anonymous;
+    let (session, _rx) = multiplexer.get_or_create_session_scoped(Some("s"), &owner, None);
+    let judge = Fake::answering("s0", "x");
+    judge.die();
+    let attached = multiplexer
+        .attach_view(&session, ViewSubject::default(), judge)
+        .await;
+    assert!(matches!(attached, Ok(Some(_))));
 }
