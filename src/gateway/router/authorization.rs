@@ -10,6 +10,7 @@ use crate::gateway::auth::AuthenticatedClient;
 pub(super) use crate::gateway::authz::{AuthorizationError, CallTarget, ToolTarget};
 use crate::gateway::authz::{Decision, Emit, ToolAuthorizer, Transport};
 use crate::gateway::meta_mcp::MetaMcp;
+use crate::gateway::meta_mcp::invoke::TargetNaming;
 use crate::gateway::oauth::{
     Action, AgentIdentity as OAuthAgentIdentity, check_scopes, record_agent_scope_decision,
 };
@@ -39,7 +40,6 @@ pub(crate) fn sanitize_exempt(
     };
     let empty = Value::Object(serde_json::Map::new());
     let arguments = params.and_then(|p| p.get("arguments")).unwrap_or(&empty);
-    use crate::gateway::meta_mcp::invoke::TargetNaming;
     let servers: Vec<(String, TargetNaming)> = if name == "gateway_run_playbook" {
         let playbook = arguments.get("name").and_then(Value::as_str).unwrap_or("");
         let Some((servers, digest)) = meta_mcp.playbook_step_servers(playbook) else {
@@ -81,12 +81,8 @@ pub(crate) fn sanitize_exempt(
 /// runs before the caller's own catalogue is read, so exempting it would let
 /// the answer tell a withheld name from a missing one. Judged on the instance
 /// the exemption records.
-fn per_user_surfaced(
-    backend: &crate::backend::Backend,
-    naming: crate::gateway::meta_mcp::invoke::TargetNaming,
-) -> bool {
-    naming == crate::gateway::meta_mcp::invoke::TargetNaming::SurfacedName
-        && backend.keeps_per_user_catalogues()
+fn per_user_surfaced(backend: &crate::backend::Backend, naming: TargetNaming) -> bool {
+    naming == TargetNaming::SurfacedName && backend.keeps_per_user_catalogues()
 }
 
 pub(crate) fn backend_tool_targets_for_call<'a>(
