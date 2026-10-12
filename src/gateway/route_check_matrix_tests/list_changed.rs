@@ -27,6 +27,9 @@ pub(crate) enum ViewCheck {
     OwnView,
     /// The identities the stream was opened under are part of that view.
     SubjectAtAttach,
+    /// Those identities are re-checked at every decision; one that has lapsed
+    /// closes the stream, never judged with less identity (MIK-8377).
+    IdentityLiveness,
 }
 
 /// What a route does about a check.
@@ -43,7 +46,8 @@ impl NotifyRoute {
 }
 
 impl ViewCheck {
-    pub(crate) const ALL: [Self; 2] = [Self::OwnView, Self::SubjectAtAttach];
+    pub(crate) const ALL: [Self; 3] =
+        [Self::OwnView, Self::SubjectAtAttach, Self::IdentityLiveness];
 }
 
 /// Exhaustive: a new route or check without a row does not compile.
@@ -65,6 +69,15 @@ pub(crate) const fn expect_notify(route: NotifyRoute, check: ViewCheck) -> Notif
             NotifyExpect::Applies("audience_l2_tests::l2_grant_subject_one_key_two_adapter_users")
         }
         (NotifyRoute::Stdio, ViewCheck::SubjectAtAttach) => {
+            NotifyExpect::NotApplicable(super::Na::AlwaysLocalOperator)
+        }
+        (NotifyRoute::GetStream, ViewCheck::IdentityLiveness) => NotifyExpect::Applies(
+            "audience_liveness_tests::live_1_cert_a_get_stream_past_its_certificate_not_after_is_closed",
+        ),
+        (NotifyRoute::Listen, ViewCheck::IdentityLiveness) => NotifyExpect::Applies(
+            "audience_liveness_tests::live_1_cert_a_stream_past_its_certificate_not_after_is_closed",
+        ),
+        (NotifyRoute::Stdio, ViewCheck::IdentityLiveness) => {
             NotifyExpect::NotApplicable(super::Na::AlwaysLocalOperator)
         }
     }

@@ -160,8 +160,23 @@ impl Ear {
     /// Whether a listen stream has been closed by the server: after the
     /// sentinel is published, the stream ends before the sentinel arrives.
     pub(super) async fn closed(&mut self, world: &World) -> bool {
+        if let Self::Sse { events, .. } = self {
+            // A GET stream's body task drops its sender when the body ends:
+            // closed is the channel ending. The bound only decides "still
+            // open", the failing outcome, so a passing death row never waits
+            // on it (MIK-8377).
+            world.settle().await;
+            loop {
+                match tokio::time::timeout(std::time::Duration::from_secs(10), events.recv()).await
+                {
+                    Ok(None) => return true,
+                    Ok(Some(_)) => {}
+                    Err(_) => return false,
+                }
+            }
+        }
         let Self::Listen(events) = self else {
-            panic!("closed() reads a listen stream");
+            panic!("closed() reads a listen or GET stream");
         };
         world.settle().await;
         world.state.subscriptions.publish(json!({

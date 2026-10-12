@@ -22,9 +22,9 @@ fn alpha(read: &str) -> Vec<crate::protocol::Tool> {
     ]
 }
 
-/// The listen stream k-std opens under a certificate valid until `not_after`.
-async fn certified(w: &World, not_after: u64) -> super::audience_ear::Ear {
-    w.listen_with("k-std", |request| {
+/// The TLS layer's extensions for a certificate valid until `not_after`.
+fn with_cert(not_after: u64) -> impl FnOnce(&mut axum::http::Request<axum::body::Body>) {
+    move |request| {
         let extensions = request.extensions_mut();
         extensions.insert(CertIdentity {
             common_name: Some("listener".to_string()),
@@ -32,8 +32,12 @@ async fn certified(w: &World, not_after: u64) -> super::audience_ear::Ear {
             ..CertIdentity::default()
         });
         extensions.insert(CertNotAfter(not_after));
-    })
-    .await
+    }
+}
+
+/// The listen stream k-std opens under a certificate valid until `not_after`.
+async fn certified(w: &World, not_after: u64) -> super::audience_ear::Ear {
+    w.listen_with("k-std", with_cert(not_after)).await
 }
 
 /// LIVE.1-cert: while the certificate is valid a visible change is told; one
@@ -85,5 +89,21 @@ async fn live_1_clock_an_unreadable_clock_closes_a_certified_stream() {
     assert!(
         ear.closed(&w).await,
         "an unreadable clock closes the stream"
+    );
+}
+
+/// LIVE.1-cert over the legacy GET stream, through the real route: past
+/// `notAfter` the GET stream is closed (its body ends), not told.
+#[tokio::test]
+async fn live_1_cert_a_get_stream_past_its_certificate_not_after_is_closed() {
+    let w = World::start().await;
+    let not_after = crate::clock::unix_secs().expect("clock after 1970") + VALID_FOR;
+    let mut ear = w.sse_with("k-std", with_cert(not_after)).await;
+
+    let _past = crate::clock::test_clock::at_secs(not_after + 1);
+    w.store_shared("alpha", alpha("r2"));
+    assert!(
+        ear.closed(&w).await,
+        "past notAfter the GET stream is closed"
     );
 }
