@@ -225,6 +225,10 @@ pub(super) struct Propagation {
     /// site.
     pub(super) managed: Option<crate::personal_accounts::ManagedLease>,
     pub(super) headers: Vec<(String, String)>,
+    /// The backend's admitted list fills when propagation began, so nonce
+    /// admission can tell whether anything before it filled a tool list
+    /// (MIK-8379).
+    pub(super) fills_before: u64,
 }
 
 type IdpConfig = crate::identity_propagation::IdentityPropagationConfig;
@@ -417,6 +421,7 @@ pub(super) async fn propagate_identity(
         identity_key: None,
         managed: None,
         headers: Vec::new(),
+        fills_before: route.backend.list_fills(),
     };
     if !preflight.isolation_guarded {
         return Ok(propagation);
