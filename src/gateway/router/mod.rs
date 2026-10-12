@@ -80,6 +80,9 @@ mod chokepoint_tests;
 /// MIK-8202 P2: task creation on a clock before 1970.
 #[cfg(test)]
 mod clock_p2_tests;
+/// MIK-8392.STORED.1 T10: a revoked account's stored task read.
+#[cfg(test)]
+mod stored_read_account_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod collusion_direct_tests;
 #[cfg(test)]
