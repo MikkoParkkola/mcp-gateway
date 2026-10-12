@@ -21,6 +21,9 @@ const BACKEND: &str = "pinned";
 const TOOL: &str = "rows";
 /// A revision older than the gateway's latest, so a pin is visible.
 const PINNED: &str = "2025-06-18";
+/// The stdio client's own revision: neither the pin nor the gateway's
+/// latest, so what the backend sees cannot be the client's echo.
+const CLIENT: &str = "2024-11-05";
 
 /// What the backend saw: `initialize`'s proposed revision, and the
 /// `MCP-Protocol-Version` header of each `tools/call`.
@@ -31,7 +34,7 @@ struct Seen {
 }
 
 /// A Streamable HTTP backend that selects whatever revision is proposed.
-async fn spawn_backend(seen: Arc<Mutex<Seen>>) -> String {
+async fn spawn_backend(seen: Arc<Mutex<Seen>>) -> (String, tokio::task::JoinHandle<()>) {
     let app = axum::Router::new().route(
         "/",
         axum::routing::post(
@@ -76,15 +79,15 @@ async fn spawn_backend(seen: Arc<Mutex<Seen>>) -> String {
         .await
         .expect("bind fixture backend");
     let address = listener.local_addr().expect("fixture address");
-    tokio::spawn(async move { drop(axum::serve(listener, app).await) });
-    format!("http://{address}/")
+    let server = tokio::spawn(async move { drop(axum::serve(listener, app).await) });
+    (format!("http://{address}/"), server)
 }
 
 /// Load `extra` (indented backend keys) into a gateway.yaml, start the real
 /// stdio loop on it, call the backend's tool once, and return what it saw.
 async fn call_through_config(extra: &str) -> Seen {
     let seen = Arc::new(Mutex::new(Seen::default()));
-    let url = spawn_backend(Arc::clone(&seen)).await;
+    let (url, server) = spawn_backend(Arc::clone(&seen)).await;
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
     let store = serde_json::to_string(&dir.path().join("tasks").display().to_string())
@@ -107,7 +110,7 @@ async fn call_through_config(extra: &str) -> Seen {
     let mut lines = BufReader::new(reader).lines();
     let frames = [
         json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
-            "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+            "params": {"protocolVersion": CLIENT, "capabilities": {},
                        "clientInfo": {"name": "surf2", "version": "0"}}}),
         json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
             "params": {"name": "gateway_invoke",
@@ -135,6 +138,7 @@ async fn call_through_config(extra: &str) -> Seen {
         }
     }
     task.abort();
+    server.abort();
     std::mem::take(&mut *seen.lock().expect("lock"))
 }
 
@@ -144,12 +148,22 @@ async fn call_through_config(extra: &str) -> Seen {
 /// pin is what made the difference.
 #[tokio::test]
 async fn a_protocol_version_set_in_gateway_yaml_reaches_the_http_transport() {
-    let control = call_through_config("").await;
-    let latest = control.proposed.first().cloned().unwrap_or_default();
+    let latest = crate::protocol::PROTOCOL_VERSION;
+    assert_ne!(latest, PINNED, "premise: the pin differs from the latest");
     assert_ne!(
-        latest, PINNED,
-        "premise: unset, the gateway proposes its own latest, not {PINNED}: {:?}",
-        control.proposed
+        latest, CLIENT,
+        "premise: the client differs from the latest"
+    );
+    let control = call_through_config("").await;
+    assert_eq!(
+        control.proposed,
+        vec![latest.to_string()],
+        "premise: unset, initialize proposes the gateway's latest"
+    );
+    assert_eq!(
+        control.call_headers,
+        vec![Some(latest.to_string())],
+        "premise: unset, the tools/call carries the gateway's latest"
     );
     let pinned = call_through_config(&format!("    protocol_version: \"{PINNED}\"\n")).await;
     assert_eq!(
