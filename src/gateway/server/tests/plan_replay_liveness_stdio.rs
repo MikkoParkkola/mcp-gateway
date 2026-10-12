@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8406 P4: stdio's route stage (stdio_dispatch.rs) serves no retained
+//! MIK-8406 P4: stdio's route stage (`stdio_dispatch.rs`) serves no retained
 //! plan result to an operator whose grant was revoked (test plan t0). The
-//! HTTP rows are in gateway/router/plan_replay_liveness_tests.rs.
+//! HTTP rows are in `gateway/router/plan_replay_liveness_tests.rs`.
 
 use std::sync::Arc;
 

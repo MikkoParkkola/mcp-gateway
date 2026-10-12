@@ -295,20 +295,20 @@ async fn refused_after_revoke(row: &str, plan: Plan) {
     );
 }
 
-/// P1 (HTTP, keyed gateway_run_playbook): revoked after the run, the replay
+/// P1 (HTTP, keyed `gateway_run_playbook`): revoked after the run, the replay
 /// is refused. Red on the release line: the retained result is served.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn p1_keyed_playbook_replay_after_revocation_is_refused() {
     refused_after_revoke("P1", Plan::Playbook).await;
 }
 
-/// P2: the same for a gateway_execute chain.
+/// P2: the same for a `gateway_execute` chain.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn p2_keyed_code_mode_chain_replay_after_revocation_is_refused() {
     refused_after_revoke("P2", Plan::Chain).await;
 }
 
-/// P3: the same for the single gateway_execute form.
+/// P3: the same for the single `gateway_execute` form.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn p3_keyed_code_mode_single_replay_after_revocation_is_refused() {
     refused_after_revoke("P3", Plan::Single).await;
@@ -346,7 +346,7 @@ async fn p5_control_live_plan_replay_is_served_stored() {
 }
 
 /// A keyed `gateway_run_playbook` of `playbook` with `inputs`.
-fn playbook_params(playbook: &str, key: &str, inputs: Value) -> Value {
+fn playbook_params(playbook: &str, key: &str, inputs: &Value) -> Value {
     json!({"name": "gateway_run_playbook",
            "arguments": {"name": playbook, "arguments": inputs}, "_meta": meta(key)})
 }
@@ -361,7 +361,7 @@ async fn run_two_account(fx: &Fx, playbook: &str, key: &str, steps: usize) {
     let first = send(
         fx,
         "gateway_run_playbook",
-        playbook_params(playbook, key, json!({})),
+        playbook_params(playbook, key, &json!({})),
     )
     .await;
     assert!(
@@ -394,7 +394,7 @@ async fn p1b_second_target_revoked_refuses_the_replay() {
     let again = send(
         &fx,
         "gateway_run_playbook",
-        playbook_params("personal_then_work", "P1b", json!({})),
+        playbook_params("personal_then_work", "P1b", &json!({})),
     )
     .await;
     assert_refused_unsent(&fx, "P1b", &again, sent);
@@ -412,7 +412,7 @@ async fn p7_first_declared_revoked_target_answers() {
     let again = send(
         &fx,
         "gateway_run_playbook",
-        playbook_params("work_then_personal", "P7", json!({})),
+        playbook_params("work_then_personal", "P7", &json!({})),
     )
     .await;
     assert_refused_unsent(&fx, "P7", &again, sent);
@@ -440,7 +440,7 @@ async fn p8_control_unrun_conditional_step_revoked_does_not_block() {
     let again = send(
         &fx,
         "gateway_run_playbook",
-        playbook_params("conditional", "P8", json!({})),
+        playbook_params("conditional", "P8", &json!({})),
     )
     .await;
     assert!(
@@ -459,7 +459,7 @@ async fn run_playbook(fx: &Fx, playbook: &str, key: &str) -> Value {
     send(
         fx,
         "gateway_run_playbook",
-        playbook_params(playbook, key, json!({})),
+        playbook_params(playbook, key, &json!({})),
     )
     .await
 }
