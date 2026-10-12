@@ -545,3 +545,18 @@ mod unguarded {
         assert_eq!(fx.calls.load(Ordering::SeqCst), sent, "U2: re-sent: {again}");
     }
 }
+
+/// The fixture's scripted backend failure (MIK-8406 P8i): with the account
+/// live, the next call reaches the backend and fails; the one after succeeds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fixture_fail_next_fails_one_call_with_the_account_live() {
+    let fx = fixture(false).await;
+    fx.gateway.fail_next(503);
+    let failed = send(&fx, "tools/call", "gateway_invoke", invoke_params(None, false)).await;
+    assert!(failed.get("error").is_some() || failed.pointer("/result/isError") == Some(&json!(true)),
+        "the scripted failure did not surface: {failed}");
+    assert_eq!(fx.gateway.tool_calls().len(), 1, "the failing call reached the backend: {failed}");
+    answer_marker(&fx);
+    let ok = send(&fx, "tools/call", "gateway_invoke", invoke_params(None, false)).await;
+    assert!(ok.to_string().contains(MARKER), "the next call succeeds: {ok}");
+}
