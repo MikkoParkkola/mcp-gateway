@@ -183,17 +183,19 @@ async fn r12_a_plain_stream_attached_first_leaves_the_code_mode_one_quiet() {
 /// caller with an uncached credential and a cold slot on a per-user backend
 /// is told of a visible change and not of a hidden one, with the fixture's
 /// minter armed to hang and no backend `tools/list` made. The control first
-/// shows the counters move when discovery does the work.
+/// shows the fetch counter moves when discovery does the work (the minter is
+/// armed so a mint under the record gate would hang the row instead).
 async fn judging_stays_on_caches(listen: bool) {
     use std::sync::atomic::Ordering::SeqCst;
     let (w, _a, _b) = duo().await;
     let (cold, control) = (w.principal("C").await, w.principal("D").await);
+    w.slot_serves("beta", "D", vec![tool("d_tool", "d")]);
     let before = (w.probe.mints.load(SeqCst), w.probe.fetches.load(SeqCst));
     let _ = w.discovered(&control, "beta").await;
     let after = (w.probe.mints.load(SeqCst), w.probe.fetches.load(SeqCst));
     assert!(
-        after.0 > before.0 && after.1 > before.1,
-        "control: discovery mints and fetches ({before:?} -> {after:?})"
+        after.1 > before.1,
+        "control: discovery fetches ({before:?} -> {after:?})"
     );
     w.probe.hang_mints.store(true, SeqCst);
     let mut ear = if listen {
