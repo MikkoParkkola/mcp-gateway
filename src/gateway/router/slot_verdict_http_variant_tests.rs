@@ -711,4 +711,34 @@ async fn x1_per_user_surfaced_names_are_always_sanitized() {
         1,
         "X1 control: not dispatched: {invoked:?}"
     );
+    // Control 2: the same surfaced name on a passthrough backend that keeps
+    // one shared catalogue stays exempt; only per-user backends lose it.
+    let shared = gateway_tuned(
+        (
+            CallerSlot::Valid,
+            &crate::gateway::meta_mcp::slot_verdict_fixture::valid(),
+            Warmth::Warm,
+        ),
+        CLOSED,
+        Surfaced::Yes,
+        (
+            |c: &mut crate::config::BackendConfig| {
+                c.passthrough = true;
+                c.identity_propagation = None;
+            },
+            |_: &mut _| {},
+        ),
+        |state: &mut super::AppState| state.sanitize_input = true,
+    )
+    .await;
+    let exempt = nul_call(&shared, TOOL, true).await;
+    assert!(
+        !exempt.1.to_string().contains(NUL_REFUSAL),
+        "X1 control 2: a shared passthrough surfaced name lost its exemption: {exempt:?}"
+    );
+    assert_eq!(
+        shared.dispatched(),
+        1,
+        "X1 control 2: not dispatched: {exempt:?}"
+    );
 }
