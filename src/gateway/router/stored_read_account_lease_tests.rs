@@ -183,3 +183,48 @@ async fn l5_a_reconnected_grant_reclaims_a_no_view_entry() {
     assert!(read.to_string().contains(MARKER), "L5: served: {read}");
     assert_eq!(fx.gateway.releases() - releases, 1, "L5: one resolution");
 }
+
+/// L2: after a grant rotation, warm read A sees its indexed slot no longer
+/// matches the grant and is parked before its forget; read B forgets, claims
+/// and is held as winner. A's forget then finds B's lease, not the entry it
+/// saw, and leaves it: A answers retryable, B serves, one resolver in all
+/// (M18: an unconditional forget lets A claim too).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn l2_a_stale_warm_forget_leaves_a_newer_lease() {
+    let fx = std::sync::Arc::new(fixture().await);
+    let id = finished(&fx, "s1-l2").await;
+    fx.gateway.rotate_operator_grant().await;
+    let binding = fx
+        .state
+        .meta_mcp
+        .account_strategies()
+        .managed_vault(Some("work-gmail"))
+        .expect("the managed vault")
+        .view_binding(crate::personal_accounts::identity::Principal::SoleOperator)
+        .await
+        .expect("premise: the rotated grant has a view");
+    fx.gateway.rearm_operator_slot_at_for_test(&binding);
+    let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
+    let releases = fx.gateway.releases();
+    let read = |fx: &std::sync::Arc<Fx>| {
+        let (fx, id) = (std::sync::Arc::clone(fx), id.clone());
+        tokio::spawn(async move { task_get(&fx, &id).await })
+    };
+    let (a_reached, a_release) = backend.after_warm_capture.arm();
+    let a = read(&fx);
+    a_reached.notified().await;
+    let (b_reached, b_release) = backend.cold_winner.arm();
+    let b = read(&fx);
+    b_reached.notified().await;
+    a_release.notify_one();
+    let a = a.await.expect("A's read");
+    assert_eq!(
+        a.pointer("/error/data/retryable"),
+        Some(&json!(true)),
+        "L2: A retries: {a}"
+    );
+    b_release.notify_one();
+    let b = b.await.expect("B's read");
+    assert!(b.to_string().contains(MARKER), "L2: B serves: {b}");
+    assert_eq!(fx.gateway.releases() - releases, 1, "L2: one resolver");
+}
