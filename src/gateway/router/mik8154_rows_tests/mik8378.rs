@@ -269,6 +269,11 @@ async fn e2h_a_dirty_directive_in_every_invoked_slot_is_refused() {
             "arguments": {"tool": "alpha:read", "arguments": dirty}}),
         ),
         (
+            "execute single, JSON string",
+            json!({"name": "gateway_execute",
+            "arguments": {"tool": "alpha:read", "arguments": dirty.to_string()}}),
+        ),
+        (
             "execute chain",
             json!({"name": "gateway_execute",
             "arguments": {"chain": [{"tool": "alpha:read", "arguments": dirty}]}}),
@@ -292,4 +297,26 @@ async fn e2h_a_dirty_directive_in_every_invoked_slot_is_refused() {
         assert!(refused_dirty(&body), "e2h {case}: {body}");
         assert_eq!(calls(&fx), 0, "e2h {case}: dispatched");
     }
+}
+
+/// A3 scope (code seat delta): in chain mode `gateway_execute` reads only
+/// `chain` (search.rs `code_mode_execute` takes the chain branch first), never
+/// the single-call `arguments`. A dirty directive key there is in a slot
+/// nobody reads, so it is not refused, and the chain runs.
+#[tokio::test]
+async fn e2i_a_chain_does_not_refuse_its_unread_single_call_arguments() {
+    let fx = Box::pin(sanitizing(
+        true,
+        fixture_built(Answer::Ok, |meta| meta.with_code_mode(true)),
+    ))
+    .await;
+    let params = json!({"name": "gateway_execute", "arguments": {
+        "chain": [{"tool": "alpha:read", "arguments": {}}],
+        "arguments": {"_fu\u{7}ll": true}}});
+    let (_, body) = send(&fx, "/mcp", "k-std", "tools/call", params, None).await;
+    assert!(
+        body.get("error").is_none(),
+        "e2i: a valid chain was refused: {body}"
+    );
+    assert_eq!(calls(&fx), 1, "e2i: the chain did not run: {body}");
 }

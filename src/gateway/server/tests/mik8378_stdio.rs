@@ -72,3 +72,23 @@ async fn e2a_a_dirty_gateway_invoke_key_is_refused_on_stdio() {
         .unwrap_or("");
     assert!(message.contains("control characters"), "{response}");
 }
+
+/// ENV.2 position 3 on stdio: a dirty key cleaning to a gateway directive in
+/// `gateway_invoke`'s tool arguments is refused with the protocol refusal.
+#[tokio::test]
+async fn e2f_a_dirty_directive_is_refused_on_stdio() {
+    let request = json!({"jsonrpc": "2.0", "id": "e2f", "method": "tools/call",
+        "params": {"name": "gateway_invoke", "arguments":
+            {"server": "alpha", "tool": "read", "arguments": {"_fu\u{7}ll": true}}}});
+    let response = dispatch(request).await.expect("a refusal is answered");
+    assert_eq!(
+        response.pointer("/error/code"),
+        Some(&json!(-32600)),
+        "{response}"
+    );
+    let message = response
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    assert!(message.contains("control characters"), "{response}");
+}
