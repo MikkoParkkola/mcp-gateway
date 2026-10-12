@@ -30,6 +30,13 @@
 //! Nothing here changes admission capacity or replay policy, and nothing closes
 //! the executor: `drain` must remain a join, so a drained-then-reused executor
 //! is one of the controls below.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::super::*;
 use super::support::*;
 

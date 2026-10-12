@@ -699,7 +699,7 @@ async fn half_open(lister: &Arc<Lister>) -> Arc<Backend> {
     let reset = Duration::from_millis(200);
     let backend = backend(InputSchemaEnforcement::Closed, &hair_trigger(reset), lister);
     backend.trip_circuit_breaker_for_test();
-    // The breaker reads the wall clock, so this sleep is real.
+    // The breaker ages on tokio's clock (MIK-8202 P4b); this test is not paused, so this sleep runs in real time.
     tokio::time::sleep(Duration::from_millis(300)).await;
     backend
 }

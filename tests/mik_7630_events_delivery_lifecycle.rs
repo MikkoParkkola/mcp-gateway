@@ -7,6 +7,10 @@
 //! Today the inbound route emits nothing, so each row goes red at its first
 //! delivery assertion. Unix; the child
 //! trusts the receiver's CA through `Receiver::trust_env` (MIK-8188).
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code reads the host clock (MIK-8202 AC.14)"
+)]
 #![cfg(unix)]
 
 #[path = "mik_7630_events/delivery.rs"]

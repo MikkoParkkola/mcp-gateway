@@ -19,12 +19,14 @@ use crate::protocol::tasks::Task;
 /// The one shape both the claim and the dispatch preflight's reservation
 /// use, so what is reserved is what is written. The descriptor leaves the
 /// row; a legacy row keeps its call as a target first, and the pending
-/// cancel names its backend through that target where one does.
+/// cancel names its backend through that target where one does. `None` is a
+/// claim made on a dark clock: undated, due at once, with no age yet
+/// (MIK-8202 P4b).
 pub(super) fn record_pending_claim(
     task: &Task,
     record: &mut Record,
     descriptor: &UpstreamRecord,
-    now: i64,
+    now: Option<i64>,
 ) {
     record.upstream = Some(descriptor.clone());
     let _ = super::targets::keep_provenance(task, record);
@@ -46,9 +48,10 @@ pub(super) fn record_pending_claim(
 }
 
 /// The widest encoding of [`record_pending_claim`]'s result: counters and
-/// instants at their longest decimal spellings.
+/// instants at their longest decimal spellings (`Some(i64::MIN)` still
+/// spells longer than `None`).
 pub(super) fn widest_pending_claim(task: &Task, record: &mut Record, descriptor: &UpstreamRecord) {
-    record_pending_claim(task, record, descriptor, i64::MIN);
+    record_pending_claim(task, record, descriptor, Some(i64::MIN));
     if let Some(pending) = record.upstream_cancel_pending.as_mut() {
         pending.attempts = u8::MAX;
     }
@@ -78,14 +81,19 @@ pub(crate) struct PendingSend {
     /// `None` when the row names no resolvable backend: give it up.
     pub(crate) backend: Option<String>,
     pub(crate) handle: String,
-    pub(crate) next_after: i64,
-    pub(crate) claimed_at: i64,
+    /// `None` when the claim met a dark clock: due at once (MIK-8202 P4b).
+    pub(crate) next_after: Option<i64>,
+    /// `None` until the first readable reading dates it: no age yet
+    /// (MIK-8202 P4b).
+    pub(crate) claimed_at: Option<i64>,
 }
 
 impl PendingSend {
-    /// Whether the age cap has passed at `now`.
+    /// Whether the age cap has passed at `now`. An undated record has no
+    /// age yet, so it is never aged (MIK-8202 P4b).
     pub(crate) fn aged(&self, now: i64) -> bool {
-        now.saturating_sub(self.claimed_at) >= age_secs()
+        self.claimed_at
+            .is_some_and(|claimed| now.saturating_sub(claimed) >= age_secs())
     }
 }
 
@@ -115,7 +123,8 @@ impl TaskStore {
     }
 
     /// Rows with a pending cancel: `backend`'s rows whatever their back-off,
-    /// or with `None`, every row due at `now` by back-off or by age.
+    /// or with `None`, every row due at `now` by back-off or by age. An
+    /// undated record is due at once (MIK-8202 P4b).
     pub(crate) fn pending_cancels(&self, backend: Option<&str>, now: i64) -> Vec<(String, String)> {
         let state = self.0.state();
         state
@@ -125,7 +134,7 @@ impl TaskStore {
                 let send = send_of(&entry.record)?;
                 let wanted = match backend {
                     Some(backend) => send.backend.as_deref() == Some(backend),
-                    None => send.next_after <= now || send.aged(now),
+                    None => send.next_after.is_none_or(|due| due <= now) || send.aged(now),
                 };
                 wanted.then(|| (entry.record.admission.principal_digest.clone(), id.clone()))
             })
@@ -181,11 +190,15 @@ impl Shared {
             Some(CancelDelivery::Confirmed) => Some(None),
             Some(CancelDelivery::Failed) => {
                 pending.attempts = pending.attempts.saturating_add(1);
-                pending.next_after = now.saturating_add(backoff_after(pending.attempts));
+                pending.next_after = Some(now.saturating_add(backoff_after(pending.attempts)));
+                // The first readable outcome dates an undated record, so the
+                // age cap counts from here (MIK-8202 P4b).
+                pending.claimed_at = pending.claimed_at.or(Some(now));
                 (pending.attempts >= MAX_CANCEL_ATTEMPTS).then_some(Some(GiveUp::Attempts))
             }
             Some(CancelDelivery::NotReady) => {
-                pending.next_after = now.saturating_add(NOT_READY_RETRY);
+                pending.next_after = Some(now.saturating_add(NOT_READY_RETRY));
+                pending.claimed_at = pending.claimed_at.or(Some(now));
                 None
             }
             None => None,

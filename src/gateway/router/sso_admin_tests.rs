@@ -10,6 +10,13 @@
 //! group `staff`, which the key-server policy admits; the role rule keys on a
 //! different group, so admission and admin are decided apart.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::Arc;
 
 use axum::body::to_bytes;

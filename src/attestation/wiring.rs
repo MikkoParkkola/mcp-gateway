@@ -189,6 +189,10 @@ pub(crate) fn enforce_from_env_file(
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )]
     use super::*;
 
     fn mode_of(raw: Option<&str>) -> Result<Option<AttestationMode>, String> {

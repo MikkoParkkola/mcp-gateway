@@ -3,6 +3,13 @@
 //! Grant-change auditor: append failures, gap marking and crash recovery
 //! (MIK-7570.AUDIT.4, cells T6-T8b). Harness in `grant_audit_tests.rs`.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::atomic::Ordering;
 
 use super::grant_audit::{GrantAuditFault, Recorded};

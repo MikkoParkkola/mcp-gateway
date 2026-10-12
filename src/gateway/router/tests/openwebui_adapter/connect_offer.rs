@@ -6,6 +6,13 @@
 //! answers read ONE store. The store-level H1 half of T-OFFER3 is in
 //! `personal_accounts/journey/tests_offer.rs`.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::Arc;
 
 use axum::body::Body;

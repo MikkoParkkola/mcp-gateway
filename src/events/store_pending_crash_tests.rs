@@ -9,6 +9,13 @@
 //! spends that attempt whether or not its POST went out. The clock here is
 //! the `now` each call is given, never the wall clock.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use chrono::{DateTime, Utc};
 
 use super::super::super::Store;

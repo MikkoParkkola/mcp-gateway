@@ -122,11 +122,6 @@ jobs:
       - name: Every added COV.3 function has an inventory row (MIK-8169)
         if: github.event_name == 'pull_request'
         run: python3 scripts/release/check_inventory_rows.py "origin/${{ github.base_ref }}"
-      # A clock before 1970 makes a raw read admit what expired; new code reads
-      # the wall clock through crate::clock only (MIK-8202).
-      - name: No new raw wall-clock read (MIK-8202)
-        if: github.event_name == 'pull_request'
-        run: python3 scripts/release/check_clock_baseline.py "origin/${{ github.base_ref }}"
       # A caller identity is built only by its checked constructor, so one that
       # names no one can never be made (MIK-8286, identity-collapse).
       - name: Caller identities are built only through their checked constructors (MIK-8286)
@@ -458,6 +453,11 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
       - run: cargo clippy --all-targets --all-features -- -D warnings
+      # The wall clock is read only in src/clock.rs (MIK-8202 AC.9). Clippy
+      # ignores a disallowed path it cannot resolve, so each clippy.toml clock
+      # entry is proven to still bite by planting a read in a scratch copy.
+      - name: The clock lint still bites (MIK-8202)
+        run: scripts/dev/check_clock_lint.sh --self-test
       # Here because this job is a required Linux check: the futures' depth
       # margin below rustc's recursion limit, which Windows and Kani exceed
       # first (MIK-7678).
@@ -1029,8 +1029,6 @@ jobs:
         run: python3 scripts/release/test_prune_coverage_grades.py
       - name: Test the C6 obligation resolver (MIK-8245)
         run: python3 scripts/release/test_c6_resolve.py
-      - name: Test the raw clock-read check (MIK-8202)
-        run: python3 scripts/release/test_check_clock_baseline.py
       - name: Test the identity-source check (MIK-8286)
         run: python3 scripts/release/test_check_identity_sources.py
       - name: Test the macOS exclusion check (MIK-8174)

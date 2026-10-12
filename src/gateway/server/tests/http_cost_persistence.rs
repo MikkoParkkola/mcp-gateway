@@ -37,7 +37,7 @@ async fn answers_livez(port: u16) -> bool {
 
 fn seed(costs: &Path) {
     let mut seeded = PersistedCosts {
-        saved_at: cost_persistence::now_secs(),
+        saved_at: crate::clock::unix_secs().expect("a readable clock"),
         ..PersistedCosts::default()
     };
     seeded.tool_totals.insert(

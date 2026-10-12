@@ -3,6 +3,13 @@
 //! `watch.<capability>.changed` rows of the event-sources design (§7: U1-U4,
 //! U11, U12), against a fake host so each poll's answer is scripted.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::collections::VecDeque;
 use std::sync::Arc;
 
