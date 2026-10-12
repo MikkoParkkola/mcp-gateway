@@ -282,11 +282,11 @@ impl MetaMcp {
 /// instance the verdict judged; and it keeps what intake judged the sanitize
 /// exemption on ([`Judged`], MIK-8154).
 #[derive(Default)]
-pub(crate) struct VisibilityMemo(
-    parking_lot::Mutex<std::collections::HashMap<(String, String), Visibility>>,
-    parking_lot::Mutex<std::collections::HashMap<(String, String), Carried>>,
-    parking_lot::Mutex<Judged>,
-);
+pub(crate) struct VisibilityMemo {
+    visibility: parking_lot::Mutex<std::collections::HashMap<(String, String), Visibility>>,
+    carried_credential: parking_lot::Mutex<std::collections::HashMap<(String, String), Carried>>,
+    judged: parking_lot::Mutex<Judged>,
+}
 
 /// A caller verdict's resolution, waiting for the first invocation on its
 /// server in the same request.
@@ -315,7 +315,7 @@ pub(crate) struct Judged {
 
 impl VisibilityMemo {
     fn recorded(&self, server: &str, tool: &str) -> Option<Visibility> {
-        self.0
+        self.visibility
             .lock()
             .get(&(server.to_owned(), tool.to_owned()))
             .copied()
@@ -325,7 +325,7 @@ impl VisibilityMemo {
     /// recorded answer, so the first judgement wins.
     fn record(&self, server: &str, tool: &str, judged: Visibility) -> Visibility {
         *self
-            .0
+            .visibility
             .lock()
             .entry((server.to_owned(), tool.to_owned()))
             .or_insert(judged)
@@ -335,7 +335,7 @@ impl VisibilityMemo {
 /// Record the digest of the playbook definition intake judged, in the open
 /// request's memo. Outside a memo there is no request to bind it to.
 pub(crate) fn record_judged_playbook(digest: String) {
-    let _ = VISIBILITY_MEMO.try_with(|memo| memo.2.lock().playbook = Some(digest));
+    let _ = VISIBILITY_MEMO.try_with(|memo| memo.judged.lock().playbook = Some(digest));
 }
 
 /// Record the backend instances an exempt call's targets were judged on.
@@ -344,7 +344,7 @@ pub(crate) fn record_exempt_instances(instances: &[std::sync::Arc<crate::backend
         .iter()
         .map(|backend| (backend.name.clone(), std::sync::Arc::downgrade(backend)))
         .collect();
-    let _ = VISIBILITY_MEMO.try_with(|memo| memo.2.lock().instances = judged);
+    let _ = VISIBILITY_MEMO.try_with(|memo| memo.judged.lock().instances = judged);
 }
 
 /// What this request's intake judged, or what a task worker carries from its
@@ -352,7 +352,7 @@ pub(crate) fn record_exempt_instances(instances: &[std::sync::Arc<crate::backend
 pub(crate) fn judged() -> Judged {
     // An empty memo (one a worker's dispatch opened) defers to the worker's.
     let memo = VISIBILITY_MEMO
-        .try_with(|memo| memo.2.lock().clone())
+        .try_with(|memo| memo.judged.lock().clone())
         .unwrap_or_default();
     if memo.playbook.is_some() || !memo.instances.is_empty() {
         return memo;
@@ -377,7 +377,7 @@ pub(crate) fn changed_instance(backend: &crate::backend::Backend) -> Option<Stri
             .find(|(name, _)| *name == backend.name)
             .map(|(_, instance)| !std::ptr::eq(instance.as_ptr(), backend))
     };
-    let request = VISIBILITY_MEMO.try_with(|memo| differs(&memo.2.lock()));
+    let request = VISIBILITY_MEMO.try_with(|memo| differs(&memo.judged.lock()));
     let differs = request
         .ok()
         .flatten()
@@ -415,7 +415,7 @@ pub(crate) fn record_visibility(server: &str, tool: &str, judged: Visibility) ->
 /// Outside a request scope it is dropped, and the dispatch resolves itself.
 pub(crate) fn carry_dispatch(server: &str, tool: &str, carried: Carried) {
     let key = (server.to_owned(), tool.to_owned());
-    let _ = VISIBILITY_MEMO.try_with(|memo| memo.1.lock().insert(key, carried));
+    let _ = VISIBILITY_MEMO.try_with(|memo| memo.carried_credential.lock().insert(key, carried));
 }
 
 /// Read the resolution carried for `server` without consuming it: the step
@@ -428,7 +428,7 @@ pub(crate) fn with_carried<R>(
 ) -> Option<R> {
     let key = (server.to_owned(), tool.to_owned());
     VISIBILITY_MEMO
-        .try_with(|memo| memo.1.lock().get(&key).map(read))
+        .try_with(|memo| memo.carried_credential.lock().get(&key).map(read))
         .ok()
         .flatten()
 }
@@ -438,7 +438,7 @@ pub(crate) fn with_carried<R>(
 pub(crate) fn take_carried(server: &str, tool: &str) -> Option<Carried> {
     let key = (server.to_owned(), tool.to_owned());
     VISIBILITY_MEMO
-        .try_with(|memo| memo.1.lock().remove(&key))
+        .try_with(|memo| memo.carried_credential.lock().remove(&key))
         .ok()
         .flatten()
 }
