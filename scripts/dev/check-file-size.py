@@ -19,8 +19,17 @@ lines and skipped test files was retired, so a file has one verdict. Test
 files are held to the ceiling like any other.
 
 With `--base <ref>` the baseline is also a ratchet against the baseline
-committed at `ref`: a row may shrink or leave, never be added or raised, so
-the number of files allowed over the ceiling only falls.
+committed at `ref`: the total excess over the ceiling may not rise (each
+row's excess counted from 0) and a listed row may not grow. A new row is
+allowed only for a move (MIK-8291, split-baselines): a rename, or a split
+that leaves a part over the ceiling, names its donors with one or more
+`# moved-from <path>` lines directly above the row, and each donor must be a
+row that shrank or left in the same change. A human reviewer judges the move,
+as with `git diff --color-moved`; `--update` keeps the annotations.
+
+Still refused: a new oversized row with no annotation, or one naming a path
+that is not a listed row that shrank or left; a listed row that grows; a
+total excess that rises (a split may not add more excess than it removed).
 
 Usage:
     check-file-size.py                 # check, exit 1 on a regression
@@ -39,6 +48,8 @@ from pathlib import Path
 CEILING = 800
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE = Path(__file__).with_name("file-size-baseline.txt")
+# A new row's donor: `# moved-from <path>` directly above the row (MIK-8291).
+MOVED_FROM = re.compile(r"^#\s*moved-from\s+(\S+)\s*$")
 SCANNED = ("src", "tests", "crates")
 
 DECLARATION = re.compile(r"^\s*(pub(\([^)]*\))?\s+)?mod\s+\w+\s*;\s*$")
@@ -87,38 +98,88 @@ def parse_baseline(text: str) -> dict[str, int]:
     return entries
 
 
+def parse_moved(text: str) -> dict[str, list[str]]:
+    """Each row's donors: the `# moved-from <path>` lines directly above it."""
+    moved: dict[str, list[str]] = {}
+    pending: list[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if match := MOVED_FROM.match(line):
+            pending.append(match.group(1))
+        elif line and not line.startswith("#"):
+            if pending:
+                moved[line.split(None, 1)[1]] = pending
+            pending = []
+        else:
+            pending = []
+    return moved
+
+
 def load_baseline() -> dict[str, int]:
     if not BASELINE.exists():
         return {}
     return parse_baseline(BASELINE.read_text(encoding="utf-8"))
 
 
-def write_baseline(sizes: dict[str, int]) -> None:
-    body = "\n".join(f"{n} {p}" for p, n in sorted(sizes.items(), key=lambda kv: -kv[1]))
+def load_moved() -> dict[str, list[str]]:
+    return parse_moved(BASELINE.read_text(encoding="utf-8")) if BASELINE.exists() else {}
+
+
+def write_baseline(sizes: dict[str, int], moved: dict[str, list[str]] | None = None) -> None:
+    """Rewrite the baseline, keeping each surviving row's `moved-from` lines."""
+    moved = moved or {}
+    rows = []
+    for path, n in sorted(sizes.items(), key=lambda kv: -kv[1]):
+        rows.extend(f"# moved-from {donor}" for donor in moved.get(path, []))
+        rows.append(f"{n} {path}")
     excess = sum(n - CEILING for n in sizes.values())
     BASELINE.write_text(
         f"# Rust files over the {CEILING}-line ceiling, with the count when recorded.\n"
         f"# The gate ratchets: a listed file may shrink, never grow, and nothing new\n"
-        f"# may cross. Delete a row once the file drops under the ceiling.\n"
+        f"# may cross, except a move: a new row with `# moved-from <path>` above it,\n"
+        f"# naming a row that shrank or left. Delete a row once the file drops under.\n"
         f"# {len(sizes)} files, {excess} lines of excess.\n"
-        f"{body}\n",
+        + "\n".join(rows)
+        + "\n",
         encoding="utf-8",
     )
 
 
-def check_ratchet(base: dict[str, int], head: dict[str, int]) -> list[str]:
-    """Errors for a head baseline that adds a row or raises an allowance over `base`.
+def check_ratchet(
+    base: dict[str, int], head: dict[str, int], moved: dict[str, list[str]] | None = None
+) -> list[str]:
+    """Errors for a head baseline that grew over `base` (MIK-8210, MIK-8291).
 
-    The baseline is the count ratchet (MIK-8210): the number of files allowed
-    over the ceiling may only fall. A row may shrink or leave; `--update` must
-    not be the way a PR admits a new offender or buys an old one more lines.
+    The total excess over the ceiling may not rise (each row's excess counted
+    from 0, so a row under the ceiling cannot cancel growth), and a listed row
+    may not grow. A new row is a move only when it names its donors with
+    `# moved-from <path>` lines (`moved`) and every donor is a base row that
+    shrank or left in the same change. A reviewer judges the move itself.
     """
+    moved = moved or {}
     errors = []
+
+    def excess(rows: dict[str, int]) -> int:
+        return sum(max(n - CEILING, 0) for n in rows.values())
+
+    if excess(head) > excess(base):
+        errors.append(f"FAIL the total excess rises {excess(base)} -> {excess(head)} lines; it may only fall")
     for path, count in sorted(head.items()):
-        if path not in base:
-            errors.append(f"FAIL {path}: the baseline gains a row ({count} lines); split the file instead")
-        elif count > base[path]:
-            errors.append(f"FAIL {path}: the baseline allowance rises {base[path]} -> {count}; it may only fall")
+        if path in base:
+            if count > base[path]:
+                errors.append(f"FAIL {path}: the baseline allowance rises {base[path]} -> {count}; it may only fall")
+            continue
+        donors = moved.get(path, [])
+        if not donors:
+            errors.append(
+                f"FAIL {path}: the baseline gains a row ({count} lines); split the file instead,"
+                " or mark a move with `# moved-from <path>` above the row"
+            )
+        for donor in donors:
+            if donor not in base or head.get(donor, 0) >= base[donor]:
+                errors.append(
+                    f"FAIL {path}: moved-from {donor}, which is not a baseline row that shrank or left in this change"
+                )
     return errors
 
 
@@ -147,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
     sizes = measure()
 
     if args.update:
-        write_baseline(sizes)
+        write_baseline(sizes, load_moved())
         print(f"baseline updated: {len(sizes)} files over {CEILING} lines")
         return 0
 
@@ -169,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
         if base is None:
             print(f"FAIL cannot read the baseline at base {args.base!r}; the ratchet is not skipped")
             return 1
-        ratchet = check_ratchet(base, baseline)
+        ratchet = check_ratchet(base, baseline, load_moved())
         for line in ratchet:
             print(line)
 

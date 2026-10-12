@@ -72,6 +72,10 @@ pub enum ContinuationError {
     /// says the deadline was never one this gateway is willing to offer, so an
     /// operator seeing it is looking at a minting bug, not at a slow client.
     LifetimeExceeded,
+    /// The host clock reads before 1970, so a deadline cannot be judged
+    /// (MIK-8202 AC13). Distinct from [`Self::Expired`]: nothing was spent
+    /// and the same continuation may be redeemed once the clock reads.
+    ClockUnreadable,
 }
 
 impl ContinuationError {
@@ -104,6 +108,7 @@ impl std::fmt::Display for ContinuationError {
             Self::LifetimeExceeded => {
                 write!(f, "continuation outlives the permitted lifetime")
             }
+            Self::ClockUnreadable => write!(f, "the clock cannot date this continuation"),
         }
     }
 }
@@ -113,6 +118,8 @@ impl std::error::Error for ContinuationError {}
 mod keyring;
 mod ledger;
 mod payload;
+mod probe;
+mod quota;
 
 pub use keyring::Keyring;
 pub use ledger::{ConsumedLedger, ContinuationState, InFlight, Routing};
@@ -121,3 +128,6 @@ pub(crate) use payload::clock_now;
 pub(crate) use payload::now_unix_secs;
 use payload::{CONTINUATION_LIFETIME_SECS, CONTINUATION_ROTATION_SECS, expiry_for};
 pub use payload::{ContinuationPurpose, Payload};
+pub(crate) use probe::PROBE_OPENS_PER_STEP;
+pub use probe::{ProbeBudget, ProbeRefusal, sealed_state_in};
+pub use quota::{PRINCIPAL_SLOTS, QuotaKey, QuotaSource};

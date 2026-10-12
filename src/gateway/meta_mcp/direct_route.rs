@@ -88,6 +88,73 @@ impl MetaMcp {
         crate::idempotency::enforce(cache, &key, &format!("{base}{discriminator}")).map(Some)
     }
 
+    /// Stage 7b on the direct route (MIK-8154.LEASE.1, gap 11): the shared
+    /// execution lease `/mcp`, stdio and tasks take, so one key covers one
+    /// backend operation whichever route sends it.
+    ///
+    /// The owner is spelled as `admit_meta_sync` spells it (MIK-8193): the
+    /// routed task owner, else the caller's credential or proven subject. The
+    /// operation is the one `gateway_invoke` of the same target admits under,
+    /// built from the same parse of `arguments`, so the two routes collide in
+    /// the store instead of each admitting the operation once. The
+    /// representation names the direct route: a stored result replays only to
+    /// a request that would have produced it, and a cross-route reuse of the
+    /// key is the store's mismatch refusal.
+    ///
+    /// # Errors
+    ///
+    /// The store's refusals (in flight, mismatch, sealed, unavailable) and a
+    /// malformed retry, each before anything dispatched.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn direct_route_admission(
+        &self,
+        owner: super::AdmissionOwner<'_>,
+        (credential_principal, grant_subject, caller_key): (
+            Option<&str>,
+            Option<&crate::identity_grants::GrantSubject>,
+            Option<&str>,
+        ),
+        is_modern: bool,
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+        retry: &crate::protocol::mrtr::RetryFields,
+        (server, tool, params): (&str, &str, Option<&Value>),
+        id: &crate::protocol::RequestId,
+    ) -> Result<super::admission::SyncAdmission> {
+        let owner_principal = owner.principal().or_else(|| {
+            support::credential_or_subject_owner(credential_principal, grant_subject, caller_key)
+        });
+        let empty = Value::Object(serde_json::Map::new());
+        let params = params.unwrap_or(&empty);
+        // The direct route forwards `arguments` as sent and never refused a
+        // malformed one; it keeps that, keyed by the value as sent.
+        let mut arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments_cow(params)
+            .unwrap_or_else(|_| {
+                std::borrow::Cow::Borrowed(params.get("arguments").unwrap_or(&empty))
+            });
+        // The operation is spelled as `gateway_invoke` spells it, so the two
+        // routes collide. That spelling drops `_claim` and `_full` (gateway
+        // controls there) and parses string arguments; here those are the
+        // backend's own bytes. So the representation binds the arguments as
+        // sent: two direct requests that differ only there never replay each
+        // other.
+        super::admission::execution_arguments_cow(&mut arguments);
+        let sent = params.get("arguments").unwrap_or(&Value::Null);
+        self.admit_sync(
+            is_modern,
+            verified_identity,
+            owner_principal,
+            retry,
+            server,
+            tool,
+            &arguments,
+            || {
+                serde_json::json!({"route": "direct", "server": server, "tool": tool,
+                    "arguments": crate::hashing::canonical_json_sha256(sent)})
+            },
+            id,
+        )
+    }
+
     /// #1962: arm a direct-route reservation for its backend dispatch, so a
     /// caller that disconnects mid-call does not free the key.
     pub(crate) fn arm_direct_dispatch(
@@ -137,6 +204,76 @@ impl MetaMcp {
     ) -> Option<crate::personal_accounts::identity::Principal<'a>> {
         self.caller_principal(backend.account_descriptor_id(), caller)
     }
+
+    /// Record that `caller`'s own catalogue is the one in per-user slot
+    /// `binding` on `backend`, after a fill that read it (design R3.5). A
+    /// Passthrough backend is never indexed: its caller's credential reaches
+    /// the gateway only on the direct route, so no name-only reader could
+    /// select its slot (design R4.2).
+    pub(crate) fn remember_caller_slot(
+        &self,
+        backend: &crate::backend::Backend,
+        caller: crate::identity_propagation::CallerProof<'_>,
+        binding: Option<&str>,
+    ) {
+        let Some(binding) = binding else {
+            return;
+        };
+        if backend.identity_propagation_config().is_some_and(|idp| {
+            matches!(
+                idp.strategy,
+                crate::identity_propagation::PropagationStrategyKind::Passthrough
+            )
+        }) {
+            return;
+        }
+        if let Some(principal) = self.principal_for(backend, caller) {
+            backend.record_caller_slot(&principal.stable_actor_id(), binding);
+        }
+    }
+
+    /// Seed `caller`'s own slot on `server` as a real fill leaves it: the
+    /// catalogue stored in per-user slot `binding`, and the caller-slot index
+    /// pointing at it (MIK-8356). A row whose premise is "this caller's
+    /// catalogue holds X" uses this, never a bare store the index cannot see.
+    #[cfg(test)]
+    pub(crate) fn seed_caller_catalogue_for_test(
+        &self,
+        server: &str,
+        caller: crate::identity_propagation::CallerProof<'_>,
+        binding: &str,
+        tools: Vec<crate::protocol::Tool>,
+    ) {
+        let backend = self.backends.get(server).expect("the backend");
+        backend.store_per_user_tools_for_test(binding, tools);
+        self.remember_caller_slot(&backend, caller, Some(binding));
+        assert!(
+            backend
+                .indexed_bindings_for_test()
+                .iter()
+                .any(|b| b == binding),
+            "seed: the index does not point {server}'s caller at {binding}"
+        );
+    }
+
+    /// The binding of the slot holding `caller`'s own catalogue on `backend`,
+    /// if warm (MIK-8356 design R3.5; the read API agreed with MIK-8350).
+    /// Synchronous and side-effect free: no mint, no fill, no slot creation.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "MIK-8356: read by its rows until readers adopt it"
+        )
+    )]
+    pub(crate) fn caller_slot_binding_for(
+        &self,
+        backend: &crate::backend::Backend,
+        caller: crate::identity_propagation::CallerProof<'_>,
+    ) -> Option<String> {
+        let principal = self.principal_for(backend, caller)?;
+        backend.caller_slot_binding(&principal.stable_actor_id())
+    }
 }
 
 // T9 (test plan "Shared fixture"): counts every reservation attempt into
@@ -157,6 +294,16 @@ impl MetaMcp {
     /// Reset the T9 counter for this thread.
     pub(crate) fn reset_reservation_attempts() {
         RESERVATION_ATTEMPTS.with(|count| count.set(0));
+    }
+
+    /// Test-only: every completed value the idempotency cache retains
+    /// (MIK-8176 cache guards). Read-only; compiled only under
+    /// `cfg(test)`, so no production caller reaches the cache through it.
+    pub(crate) fn idempotency_completed_for_test(&self) -> Vec<Value> {
+        self.idempotency_cache
+            .as_ref()
+            .map(|cache| cache.completed_values_for_test())
+            .unwrap_or_default()
     }
 
     /// Test-only entry to `invoke_tool` for router cells that must drive a

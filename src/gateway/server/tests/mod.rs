@@ -15,11 +15,12 @@ mod admission_allocations;
 pub(crate) mod alloc_meter;
 mod input_key_allocations;
 mod invoke_argument_copies;
+mod is_connected_count;
 #[cfg(feature = "firewall")]
 mod judge_allocations;
 mod per_call_timing;
 mod signing_nonce_allocations;
-mod signing_nonce_allocations_support;
+pub(in crate::gateway::server) mod signing_nonce_allocations_support;
 mod trust_card_list_allocations;
 mod visibility_allocations;
 mod visibility_reload_race;
@@ -41,6 +42,7 @@ mod collusion_stdio_plan;
 mod egress_matrix_stdio;
 mod r2_stdio_keys;
 mod stdio_cache_scope;
+mod stdio_list_changed;
 mod stdio_listing_scope;
 #[cfg(feature = "firewall")]
 mod stdio_response_firewall;
@@ -48,20 +50,26 @@ mod stdio_response_firewall;
 mod stdio_initialize_order;
 #[cfg(feature = "firewall")]
 mod stdio_tenant_reads;
+/// MIK-8044.SURF.2: a gateway.yaml `protocol_version` reaches the HTTP transport.
+mod surf2_protocol_version_config;
 
 mod stdio_hardened_signing;
 
 mod stdio_sole_operator;
 
+mod playbook_retry_stdio;
+
 mod stdio_catalogue_sole_operator;
+
+// MIK-8364: stdio saves protocol telemetry off the request path.
+mod stdio_telemetry_save;
 
 #[cfg(feature = "cost-governance")]
 mod stdio_cost_persistence;
 
+mod grant_decision_stdio;
 #[cfg(feature = "cost-governance")]
 mod http_cost_persistence;
-
-mod grant_decision_stdio;
 
 // MIK-7272.OWNER.3 and OWNER.5 (docs/design/2026-09-30-sub4-stdio-owner-test-plan.md, I1).
 mod owner3_stdio_keying;
@@ -74,9 +82,15 @@ mod owner4_stdio_policy;
 
 // MIK-7272.LIFE.1 (docs/design/2026-09-30-sub4-stdio-owner-test-plan.md, I3).
 mod life1_stdio_cancel;
+// MIK-8176 stage 3: stdio slots kept when written, given back otherwise.
+mod stdio_slot_release;
 // MIK-7642.PR.B: a client cancel reaches the backend by its own request id.
 mod mik7642_backend_cancel;
 mod owner2_stdio_tasks;
+#[cfg(feature = "firewall")]
+pub(super) mod route_matrix_stdio_tasks;
+mod stdio_task_policy_recheck;
+mod submit_authz_stdio;
 // MIK-7839.CANCEL.3: a dropped run_stdio future stops its task workers.
 mod stdio_session_drop;
 // MIK-7757: a drain timeout cancels the running workers on both shutdown paths.
@@ -91,6 +105,9 @@ mod stdio_replay_audit;
 // MIK-7324.COV.3: the stdio chain-nonce refusal in `prepare_signing`.
 mod stdio_chain_nonce_refusal;
 
+// MIK-8378: envelope rows over stdio (ENV.2, ENV.4).
+mod mik8378_stdio;
+
 // MIK-7324.COV.3: the firewall `response_firewall` builds carries anomaly blocking.
 #[cfg(feature = "firewall")]
 mod response_firewall_anomaly;
@@ -103,3 +120,9 @@ mod stdio_teardown_bound;
 
 // MIK-7684: the stdio reader never waits for stdout room.
 mod stdio_reader_unparked;
+/// MIK-8340: a withheld surfaced name answers on stdio as an absent one.
+#[cfg(feature = "firewall")]
+mod withheld_parity_stdio;
+
+// MIK-8356 C3, C10: a stdio call judged by the sole operator's own slot.
+mod slot_verdict_g2_stdio;

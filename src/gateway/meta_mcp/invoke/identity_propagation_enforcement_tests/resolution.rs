@@ -83,8 +83,11 @@ async fn code_mode_execute_fails_closed_without_identity() {
         .code_mode_execute(&args, Some("s1"), &caller)
         .await
         .expect_err("must refuse without identity");
+    // No principal on a `required` per-user backend lacks the tool: the
+    // refusal is the absent-name answer, made before any resolution
+    // (MIK-8356, lead ruling 2026-10-11).
     assert!(
-        err.to_string().contains("required"),
+        err.to_string().contains("-32601"),
         "fail-closed error: {err}"
     );
 }

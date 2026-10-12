@@ -110,6 +110,10 @@ impl MetaMcp {
         chain: &super::super::response_security::chain_receipt::ChainSlot,
         // The call's admission: its reservation is settled with the spend.
         admission: &dispatch_guards::Admission,
+        // MIK-8137 b1 (MX): proof this send passed the chokepoint. Only
+        // `chokepoint()` can make one, so a send that skipped it does not
+        // compile.
+        _permit: super::chokepoint::Permit,
     ) -> Result<Value> {
         let dispatch_start = Instant::now();
         let dispatch_result = self
@@ -430,7 +434,9 @@ impl MetaMcp {
             // When we have cached names and the tool wasn't in them, enrich
             // the error with Levenshtein-based suggestions.
             let message = if !cached_names.is_empty() && !tool_is_cached {
-                let candidates = self.miss_hint_pool(&cached_names, server, (scope, session_id));
+                let tools = backend.get_cached_tools_snapshot_for(identity_key);
+                let candidates =
+                    self.miss_hint_pool((&cached_names, &tools), server, (scope, session_id));
                 miss_with_hint(server, tool, &candidates, &error.message)
             } else {
                 error.message

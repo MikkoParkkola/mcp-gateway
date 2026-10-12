@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use serde_json::{Map, Value, json};
 
 use super::records::{ApiKeyRef, LiveBinding, Subscription};
@@ -84,12 +85,19 @@ impl Services {
     /// an API key has no live scope to re-read, so its subscribe-time check
     /// stands.
     pub(crate) fn admits(&self, key: Option<&ApiKeyRef>, backend: &str) -> bool {
-        self.admits_grant(key, Some(backend))
+        self.admits_grant(key, Some(backend), crate::clock::utc_now())
     }
 
     /// As [`Self::admits`]; `None` asks only that the key be live, for
     /// owner-scoped events that need no backend grant.
-    fn admits_grant(&self, key: Option<&ApiKeyRef>, backend: Option<&str>) -> bool {
+    /// A key with an expiry is judged on `now`, and refused on a clock that
+    /// cannot be read (MIK-8202).
+    fn admits_grant(
+        &self,
+        key: Option<&ApiKeyRef>,
+        backend: Option<&str>,
+        now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
+    ) -> bool {
         let Some(key) = key else {
             return true;
         };
@@ -99,7 +107,7 @@ impl Services {
             .api_keys
             .iter()
             .find(|k| k.name == key.name)
-            .filter(|k| !k.is_expired_now())
+            .filter(|k| k.expires_at.is_none() || now.is_ok_and(|now| !k.is_expired_at(now)))
             .filter(|k| {
                 k.key_sha256
                     .as_deref()
@@ -116,25 +124,51 @@ impl Services {
     /// key is re-read from live config; any other credential must still be
     /// live where it was issued (design F9). A row stored before keys were
     /// bound to their secret, or a bound kind without its binding, is
-    /// refused.
-    pub(crate) async fn admits_subscription(
+    /// refused. A refusal the clock may have caused is told apart from one
+    /// that stands (MIK-8202). The clock is read once,
+    /// and every expiry the check judges (an API key, a delegated bearer's
+    /// age, a key-server token, a dashboard session) is judged on that one
+    /// reading: a clock that fails and recovers inside the check cannot turn
+    /// into a standing refusal. Nothing destructive (a revocation) may follow
+    /// [`AccessVerdict::Undated`].
+    pub(crate) async fn admission(
         &self,
         sub: &Subscription,
         backend: Option<&str>,
+    ) -> AccessVerdict {
+        #[cfg(test)]
+        if let Some(verdict) = forced_verdict::forced() {
+            return verdict;
+        }
+        let Ok(now) = crate::clock::utc_now() else {
+            return AccessVerdict::Undated;
+        };
+        if self.admits_at(sub, backend, now).await {
+            AccessVerdict::Admits
+        } else {
+            AccessVerdict::Refuses
+        }
+    }
+
+    async fn admits_at(
+        &self,
+        sub: &Subscription,
+        backend: Option<&str>,
+        now: DateTime<Utc>,
     ) -> bool {
         use crate::security::audit::CredentialKind as Kind;
         match sub.credential_kind {
             None | Some(Kind::ApiKey) => {
                 sub.legacy_api_key_name.is_none()
                     && sub.api_key.is_some()
-                    && self.admits_grant(sub.api_key.as_ref(), backend)
+                    && self.admits_grant(sub.api_key.as_ref(), backend, Ok(now))
             }
             // No credential was presented: authentication is off.
             Some(Kind::None | Kind::LocalTransport) => true,
             Some(kind) => match &sub.binding {
                 // The binding must be the one this kind is re-checked by.
                 Some(binding) if binding.kind() == kind => {
-                    self.binding_live(binding, sub, backend).await
+                    self.binding_live(binding, sub, backend, now).await
                 }
                 _ => false,
             },
@@ -146,11 +180,16 @@ impl Services {
         binding: &LiveBinding,
         sub: &Subscription,
         backend: Option<&str>,
+        now: DateTime<Utc>,
     ) -> bool {
         let credentials = &self.credentials;
         match binding {
             LiveBinding::KeyServerToken { jti } => match &credentials.key_server {
-                Some(ks) => ks.store.live_jti(jti).await,
+                // Judged on the admission's one reading (MIK-8202).
+                Some(ks) => match u64::try_from(now.timestamp()) {
+                    Ok(now) => ks.store.live_jti(jti, now).await,
+                    Err(_) => false,
+                },
                 None => false,
             },
             LiveBinding::OidcBearer {
@@ -161,23 +200,29 @@ impl Services {
                 issued_at,
                 provider_sha256,
             } => credentials.key_server.as_ref().is_some_and(|ks| {
-                let identity = crate::key_server::oidc::VerifiedIdentity {
-                    subject: subject.clone(),
-                    email: email.clone(),
-                    name: None,
-                    groups: groups.clone(),
-                    issuer: issuer.clone(),
+                // A binding that names no one never stays live (MIK-8286).
+                let Some(identity) = crate::key_server::oidc::VerifiedIdentity::checked(
+                    issuer.clone(),
+                    subject.clone(),
+                    email.clone(),
+                    None,
+                    groups.clone(),
+                ) else {
+                    return false;
                 };
                 // The provider must still accept what it accepted, and the
                 // bearer must still be young enough for the running max age.
                 let provider_same = provider_sha256.is_some()
                     && crate::gateway::auth::live::provider_fingerprint(ks, issuer)
                         == *provider_sha256;
-                let now = u64::try_from(chrono::Utc::now().timestamp()).unwrap_or(u64::MAX);
                 // The verifier requires `iat`, so a binding without one is
-                // refused rather than exempt.
-                let young = issued_at
-                    .is_some_and(|iat| iat.saturating_add(ks.config.max_oidc_token_age_secs) > now);
+                // refused rather than exempt. `now` is the check's one reading
+                // of a clock that could be read (MIK-8202).
+                let young = issued_at.is_some_and(|iat| {
+                    u64::try_from(now.timestamp()).is_ok_and(|now| {
+                        iat.saturating_add(ks.config.max_oidc_token_age_secs) > now
+                    })
+                });
                 ks.config.delegated_bearer
                     && provider_same
                     && young
@@ -210,11 +255,13 @@ impl Services {
                     let limits = crate::gateway::auth::SessionLimits::from(
                         &self.live.get().auth.dashboard_session,
                     );
-                    dashboard.live_digest(
-                        session_sha256,
-                        crate::gateway::auth::Now::read(),
-                        &limits,
-                    )
+                    // The admission's one wall reading; the monotonic half
+                    // is not a wall clock and is read here (MIK-8202).
+                    let now = crate::gateway::auth::Now {
+                        mono: std::time::Instant::now(),
+                        wall: std::time::SystemTime::from(now),
+                    };
+                    dashboard.live_digest(session_sha256, now, &limits)
                 })
             }
         }
@@ -222,12 +269,14 @@ impl Services {
 
     /// The provenance receipt for one occurrence, as `_meta` carries it:
     /// signed when stamping is on, the bare receipt otherwise (§3.6).
-    pub(crate) fn provenance(&self, backend: &str, name: &str) -> Value {
-        let receipt = crate::trust::RuntimeProvenanceReceipt::event(
-            backend,
-            name,
-            chrono::Utc::now().to_rfc3339(),
-        );
+    pub(crate) fn provenance(
+        &self,
+        backend: &str,
+        name: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Value {
+        let receipt =
+            crate::trust::RuntimeProvenanceReceipt::event(backend, name, now.to_rfc3339());
         match &self.provenance {
             Some(signer) => serde_json::to_value(receipt.sign(signer)),
             None => serde_json::to_value(json!({ "receipt": receipt })),
@@ -355,6 +404,50 @@ pub(crate) const SENDING: &str = "sending";
 
 /// One delivery attempt, as the attributed audit record states it: never
 /// the body, the secret or the callback path.
+/// What a subscription's access check concluded (MIK-8202).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AccessVerdict {
+    Admits,
+    /// Refused on a clock that could be read: the refusal stands.
+    Refuses,
+    /// Refused, but the clock could not be read: the refusal may be the
+    /// clock's, so the row is kept and nothing is sent.
+    Undated,
+}
+
+/// Test-only: this thread's access checks answer a fixed verdict, so a
+/// caller's handling of each [`AccessVerdict`] is tested on its own.
+#[cfg(test)]
+pub(crate) mod forced_verdict {
+    use std::cell::Cell;
+
+    use super::AccessVerdict;
+
+    thread_local! {
+        static FORCED: Cell<Option<AccessVerdict>> = const { Cell::new(None) };
+    }
+
+    pub(super) fn forced() -> Option<AccessVerdict> {
+        FORCED.with(Cell::get)
+    }
+
+    /// Restores the real check when dropped.
+    #[must_use]
+    pub(crate) struct Forced(());
+
+    impl Drop for Forced {
+        fn drop(&mut self) {
+            FORCED.with(|f| f.set(None));
+        }
+    }
+
+    /// Every access check on this thread answers `verdict` until the guard drops.
+    pub(crate) fn answer(verdict: AccessVerdict) -> Forced {
+        FORCED.with(|f| f.set(Some(verdict)));
+        Forced(())
+    }
+}
+
 pub(crate) struct Attempt<'a> {
     pub subscription_id: &'a str,
     pub event_id: &'a str,
@@ -467,7 +560,7 @@ impl Services {
         };
         let mut fields = Map::new();
         fields.insert("action".into(), "events.delivery_outcome".into());
-        fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
+        crate::clock::stamp_audit_row(&mut fields);
         fields.insert("event_id".into(), attempt.event_id.into());
         fields.insert("subscription_id".into(), attempt.subscription_id.into());
         fields.insert("outcome_of_attempt".into(), attempt.number.into());
@@ -500,7 +593,7 @@ impl Services {
         for e in evicted {
             let mut fields = Map::new();
             fields.insert("action".into(), "events.dead_letter_evicted".into());
-            fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
+            crate::clock::stamp_audit_row(&mut fields);
             fields.insert("event_id".into(), e.event_id.into());
             fields.insert("subscription_id".into(), e.subscription_id.into());
             fields.insert("reason".into(), e.reason.into());

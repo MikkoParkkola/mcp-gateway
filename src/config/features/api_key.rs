@@ -82,15 +82,18 @@ pub struct ApiKeyConfig {
     /// Rate limit (requests per minute, 0 = unlimited).
     #[serde(default)]
     pub rate_limit: u32,
-    /// Allowed backends. `["*"]` is all; empty or absent is none.
+    /// Allowed backends: exact names, or `["*"]` for all; empty or absent is
+    /// none. Any other `*` is refused at load (MIK-8298).
     #[serde(default)]
     pub backends: Vec<String>,
-    /// Allowed tools (if Some, ONLY these tools are accessible).
-    /// Supports glob patterns. Acts as an allowlist.
+    /// Allowed tools (if Some, ONLY these tools are accessible): exact names or
+    /// a trailing `prefix*`; any other `*` is refused at load (MIK-8298). Acts as
+    /// an allowlist.
     #[serde(default)]
     pub allowed_tools: Option<Vec<String>>,
-    /// Denied tools (if Some, these tools are blocked).
-    /// Supports glob patterns. Acts as a blocklist on top of global policy.
+    /// Denied tools (if Some, these tools are blocked): exact names or a trailing
+    /// `prefix*`; any other `*` is refused at load (MIK-8298). Acts as a
+    /// blocklist on top of global policy.
     #[serde(default)]
     pub denied_tools: Option<Vec<String>>,
     /// Whether this API key can use admin-only HTTP UI and management tools.
@@ -146,12 +149,6 @@ impl ApiKeyConfig {
     #[must_use]
     pub(crate) fn is_expired_at(&self, now: DateTime<Utc>) -> bool {
         api_key_expired(self.expires_at, now)
-    }
-
-    /// [`api_key_expired_now`] for this key.
-    #[must_use]
-    pub(crate) fn is_expired_now(&self) -> bool {
-        api_key_expired_now(self.expires_at)
     }
 }
 

@@ -7,7 +7,6 @@ use serde_json::{Value, json};
 
 use crate::idempotency::admission::{Admission, Lease, Mode, Refusal, Request};
 use crate::protocol::{JsonRpcResponse, RequestId};
-use crate::security::audit::AuditOutcome;
 use crate::{Error, Result};
 
 use super::MetaMcp;
@@ -15,6 +14,10 @@ use super::effects::{Effect, meta_tool_effect};
 
 #[path = "admission_plan.rs"]
 mod plan;
+#[path = "admission_stored.rs"]
+mod stored;
+pub(crate) use stored::ReplayAudit;
+use stored::{StoredChain, StoredDelivery, stored_response};
 
 /// Borrowed by inner dispatches, owned by the outer request future. Dropping the
 /// future drops its one lease, including after a transport cancellation.
@@ -128,125 +131,17 @@ impl SyncLease {
     }
 }
 
-/// What a sync admission stores: the secured response plus its server-owned
-/// chain eligibility, which the response's own serialization never carries.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct StoredDelivery {
-    response: Value,
-    /// Absent in records written before the chain existed: never eligible.
-    #[serde(default)]
-    chain: StoredChain,
-    /// Absent in records written before #2472, and for calls that wrote no
-    /// invocation record.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    audit: Option<ReplayAudit>,
-    /// MIK-7116.MIN.2: what the first execution read before any transform,
-    /// restored into a replay's read scope; absent, a replay is unread.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    read: Option<crate::security::tenant_reads::ReadAttribution>,
-    /// MIK-7991: the members the gateway wrote into `response`, restored
-    /// into a replay's record so its receipt leaves them out; absent, none.
-    #[serde(
-        default,
-        skip_serializing_if = "crate::gateway::gateway_writes::WriteRecord::is_empty"
-    )]
-    writes: crate::gateway::gateway_writes::WriteRecord,
+// MIK-8154 L0: the operation the last keyed admission on this thread keyed,
+// so a row can compare what two routes admit for one target.
+#[cfg(test)]
+thread_local! {
+    static LAST_OPERATION: std::cell::RefCell<Option<Value>> = const { std::cell::RefCell::new(None) };
 }
 
-/// #2472: the first execution's invocation-record outcome and response hash,
-/// stored server-side beside its secured response. The response a replay
-/// delivers is the wrapped, post-delivery form, so neither can be derived
-/// from it: a wrapped tool error reads as a success.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub(crate) struct ReplayAudit {
-    outcome: StoredOutcome,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    response_hash: Option<String>,
-    /// MIK-7641: the request hash the first record carried. A retry admitted
-    /// as the same operation may send an equivalent but different envelope
-    /// (`arguments` as a JSON string), so it is never re-derived from it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    request_hash: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum StoredOutcome {
-    Ok,
-    ToolError,
-    Denied(i32),
-    Invalid(i32),
-    Error(i32),
-}
-
-impl ReplayAudit {
-    pub(crate) fn new(outcome: AuditOutcome, response_hash: Option<String>) -> Self {
-        let outcome = match outcome {
-            AuditOutcome::Ok => StoredOutcome::Ok,
-            AuditOutcome::ToolError => StoredOutcome::ToolError,
-            AuditOutcome::Denied(code) => StoredOutcome::Denied(code),
-            AuditOutcome::Invalid(code) => StoredOutcome::Invalid(code),
-            AuditOutcome::Error(code) => StoredOutcome::Error(code),
-        };
-        Self {
-            outcome,
-            response_hash,
-            request_hash: None,
-        }
-    }
-
-    /// These facts with the request hash their record was written under.
-    pub(crate) fn with_request_hash(mut self, request_hash: String) -> Self {
-        self.request_hash = Some(request_hash);
-        self
-    }
-
-    pub(crate) fn request_hash(&self) -> Option<&str> {
-        self.request_hash.as_deref()
-    }
-
-    pub(crate) fn outcome(&self) -> AuditOutcome {
-        match self.outcome {
-            StoredOutcome::Ok => AuditOutcome::Ok,
-            StoredOutcome::ToolError => AuditOutcome::ToolError,
-            StoredOutcome::Denied(code) => AuditOutcome::Denied(code),
-            StoredOutcome::Invalid(code) => AuditOutcome::Invalid(code),
-            StoredOutcome::Error(code) => AuditOutcome::Error(code),
-        }
-    }
-
-    pub(crate) fn response_hash(&self) -> Option<&str> {
-        self.response_hash.as_deref()
-    }
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum StoredChain {
-    Backend,
-    /// A chained backend's result (inc3 R8): its upstream links answered
-    /// another request's nonce, so a replay is never linked.
-    ChainedBackend,
-    #[default]
-    NotEligible,
-}
-
-/// Decode a stored delivery; a bare response is a record from before the
-/// envelope and replays without a link.
-fn stored_response(bytes: &[u8]) -> Option<(JsonRpcResponse, Option<ReplayAudit>)> {
-    if let Ok(stored) = serde_json::from_slice::<StoredDelivery>(bytes) {
-        crate::security::tenant_reads::note_restored(stored.read.as_ref());
-        crate::gateway::gateway_writes::restore(&stored.writes);
-        let mut response: JsonRpcResponse = serde_json::from_value(stored.response).ok()?;
-        if stored.chain == StoredChain::Backend {
-            response.chain_source = crate::protocol::ChainSource::Replay;
-        }
-        return Some((response, stored.audit));
-    }
-    crate::security::tenant_reads::note_restored(None);
-    serde_json::from_slice(bytes)
-        .ok()
-        .map(|response| (response, None))
+/// Take the operation the last keyed admission on this thread built (L0).
+#[cfg(test)]
+pub(crate) fn take_last_operation() -> Option<Value> {
+    LAST_OPERATION.with(|last| last.borrow_mut().take())
 }
 
 pub(crate) enum SyncAdmission {
@@ -256,6 +151,11 @@ pub(crate) enum SyncAdmission {
     Replay(JsonRpcResponse, Option<ReplayAudit>),
 }
 
+/// The gateway's own directives inside a tool's arguments: read and removed
+/// here, so the sanitize step refuses a dirty key that cleans to one
+/// (MIK-8378 ENV.2) from this one list.
+pub(crate) const EXECUTION_DIRECTIVES: [&str; 2] = ["_full", "_claim"];
+
 /// Gateway controls have the same meaning at both external execution routes.
 pub(crate) fn execution_arguments(arguments: &mut Value) -> bool {
     let full = arguments
@@ -263,16 +163,20 @@ pub(crate) fn execution_arguments(arguments: &mut Value) -> bool {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     if let Some(object) = arguments.as_object_mut() {
-        object.remove("_full");
-        object.remove("_claim");
+        for directive in EXECUTION_DIRECTIVES {
+            object.remove(directive);
+        }
     }
     full
 }
 
 /// [`execution_arguments`] on a possibly borrowed value: it is copied only
 /// when there is a control key to strip (MIK-8014).
-fn execution_arguments_cow(arguments: &mut std::borrow::Cow<'_, Value>) -> bool {
-    if arguments.get("_full").is_some() || arguments.get("_claim").is_some() {
+pub(super) fn execution_arguments_cow(arguments: &mut std::borrow::Cow<'_, Value>) -> bool {
+    if EXECUTION_DIRECTIVES
+        .iter()
+        .any(|directive| arguments.get(directive).is_some())
+    {
         return execution_arguments(arguments.to_mut());
     }
     false
@@ -380,6 +284,8 @@ impl MetaMcp {
             })
             .ok_or_else(|| Error::json_rpc(-32003, "A verified execution principal is required"))?;
         let operation = operation();
+        #[cfg(test)]
+        LAST_OPERATION.with(|last| *last.borrow_mut() = Some(operation.clone()));
         let representation = representation();
         let request = Request {
             principal: &principal,
@@ -453,15 +359,22 @@ impl MetaMcp {
                 crate::gateway::meta_mcp_helpers::parse_tool_arguments_cow(arguments)?,
             ))
         } else {
-            self.surfaced_tool_server(tool_name)
+            // A name withheld from this caller has no target here: it takes
+            // the absent-name path (MIK-8340).
+            self.surfaced_for(tool_name, caller.scope(), session)
+                .visible_server()
                 .map(|server| (server, tool_name, std::borrow::Cow::Borrowed(arguments)))
         };
         if let Some((server, tool, operation_arguments)) = &target {
             let (server, tool) = (*server, *tool);
-            if !caller
+            if caller
                 .signing
                 .is_some_and(|context| context.prepared_for(server, tool))
             {
+                // Signing ran the policy before the route stage could record
+                // this request's verdict (stdio): refuse a withheld name here.
+                super::visible::refuse_withheld(server, tool)?;
+            } else {
                 // `gateway_invoke` already arrives as a policy envelope, and it
                 // carries fields the synthesized one cannot reconstruct — the
                 // attestation token among them. Rebuilding it here dropped the
@@ -475,39 +388,15 @@ impl MetaMcp {
                     synthesized = named_tool_envelope(server, tool, operation_arguments, caller);
                     &synthesized
                 };
-                if tool_name != "gateway_invoke"
-                    && let Some(absent) = self.withheld_surfaced(server, tool, caller, session)
-                {
-                    return Err(absent);
-                }
                 self.check_invocation_policy(envelope, session, caller)?;
             }
         }
         Ok(target)
     }
 
-    /// #2450: a task-augmented call skips `admit_meta_sync`, but its durable
-    /// admission can answer a repeat from the stored task, so the same policy
-    /// runs first: the target's invocation policy, else the keyed plan check.
-    pub(crate) fn check_task_admission_policy(
-        &self,
-        caller: &super::MetaMcpCallerContext<'_>,
-        tool_name: &str,
-        arguments: &Value,
-        session: Option<&str>,
-    ) -> Result<()> {
-        if self
-            .check_target_policy(caller, tool_name, arguments, session)?
-            .is_none()
-        {
-            self.authorize_execution_plan(caller, tool_name, arguments, session)?;
-        }
-        Ok(())
-    }
-
-    /// Protect one outer logical meta invocation, including all its inner steps.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn admit_meta_sync(
+    /// Protect one outer logical meta invocation, including its inner steps.
+    #[allow(clippy::too_many_arguments)] // The nonce wrapper: `signing::admit_meta_sync`.
+    pub(crate) fn admit_meta_sync_unrefunded(
         &self,
         owner: super::AdmissionOwner<'_>,
         caller: &super::MetaMcpCallerContext<'_>,
@@ -518,15 +407,28 @@ impl MetaMcp {
     ) -> Result<SyncAdmission> {
         // One admission authority per key, for every transport: a task is
         // admitted durably under `Mode::Task` by its handoff (a lease too would
-        // self-mismatch); it runs no backend work here, and its worker's own
-        // dispatch re-applies policy. Signing admission owns its own calls.
-        if caller.task.is_some() || caller.awaits_signing_admission() {
+        // self-mismatch). Signing admission owns its own calls, and a signed
+        // call was authorized when signing prepared it.
+        if caller.awaits_signing_admission() {
             return Ok(SyncAdmission::Unprotected);
         }
-        let is_modern = caller.is_modern;
+        // A task passes the policy the synchronous call passes below (the
+        // target's invocation policy, else the keyed plan check), here, before
+        // a task or its key exists; its worker checks again at dispatch
+        // (MIK-8315). A repeat is answered from the stored task only after it.
+        if caller.task.is_some() {
+            if self
+                .check_target_policy(caller, tool_name, arguments, session)?
+                .is_none()
+            {
+                self.authorize_execution_plan(caller, tool_name, arguments, session)?;
+            }
+            return Ok(SyncAdmission::Unprotected);
+        }
+        caller.retry.refuse_on_playbook_run(tool_name)?; // MIK-8341: before any reservation
         // These operations cannot execute on a sessionless protocol. Preserve
         // their protocol refusal before asking for or reserving a retry key.
-        if is_modern {
+        if caller.is_modern {
             match tool_name {
                 "gateway_set_profile" => {
                     return Err(Error::Protocol(super::NO_SESSION_FOR_PROFILE.to_string()));
@@ -551,7 +453,7 @@ impl MetaMcp {
         {
             let full = execution_arguments_cow(&mut operation_arguments);
             return self.admit_sync(
-                is_modern,
+                caller.is_modern,
                 verified_identity,
                 owner_principal,
                 retry,
@@ -578,7 +480,7 @@ impl MetaMcp {
             operation["playbook"] = json!(crate::hashing::canonical_json_sha256(&value));
         }
         let mut admission = self.admit_operation(
-            is_modern,
+            caller.is_modern,
             verified_identity,
             owner_principal,
             retry,

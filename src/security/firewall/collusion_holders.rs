@@ -87,7 +87,10 @@ impl Tracked {
         window: Duration,
         room: usize,
     ) -> Added {
-        self.note_caller(new.principal, now);
+        // `MIK-8066` D6: an unread holder is evidence, never a caller.
+        if !new.unread {
+            self.note_caller(new.principal, now);
+        }
         if let Some(r) = self
             .records
             .iter_mut()

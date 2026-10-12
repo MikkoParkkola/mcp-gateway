@@ -27,8 +27,8 @@ pub(super) struct Preflight {
     pub(super) isolation_guarded: bool,
 }
 
-/// The chain nonce and the signing nonce come off the params before
-/// sanitization (ASI07). Hardened signs every `tools/call` here too
+/// The chain nonce and the signing nonce come off the params after the intake
+/// sanitize step validated them, never rewritten (MIK-8154 S2'; ASI07). Hardened signs every `tools/call` here too
 /// (GH1942.HARDEN.1 row 7); its nonce is checked as the meta route checks it.
 fn take_nonces(
     state: &AppState,
@@ -70,6 +70,37 @@ fn take_nonces(
         None
     };
     Ok((chain_nonce, signing_scope, signs, signing_nonce))
+}
+
+/// MIK-8226 SCAN.4: the meta route's one parse
+/// ([`crate::gateway::meta_mcp_helpers::parse_tool_arguments_cow`]) applied to
+/// a direct `tools/call`: a JSON string becomes its object and is forwarded as
+/// that object; anything that is not an object (or a string of one) is
+/// refused -32602 before anything is sent, as F7b refuses it on the meta
+/// route. Absent `arguments` are left as they are.
+fn parse_direct_arguments(envelope: &mut Envelope, id: &RequestId) -> Result<(), Rejection> {
+    let Some(params) = envelope.params.as_mut() else {
+        return Ok(());
+    };
+    if params.get("arguments").is_none() {
+        return Ok(());
+    }
+    let parsed = match crate::gateway::meta_mcp_helpers::parse_tool_arguments_cow(params) {
+        Ok(std::borrow::Cow::Borrowed(_)) => return Ok(()),
+        Ok(std::borrow::Cow::Owned(parsed)) => parsed,
+        Err(e) => {
+            return Err(build_http_error_response(
+                Some(id.clone()),
+                e.to_rpc_code(),
+                e.to_string(),
+                StatusCode::BAD_REQUEST,
+            ));
+        }
+    };
+    if let Some(map) = params.as_object_mut() {
+        map.insert("arguments".to_owned(), parsed);
+    }
+    Ok(())
 }
 
 /// MIK-7570.ATTEST.1: every method that reaches the backend is attested, on
@@ -140,6 +171,12 @@ pub(super) fn preflight(
         ));
     }
     let (chain_nonce, signing_scope, signs, signing_nonce) = take_nonces(state, envelope, id)?;
+    // MIK-8226 SCAN.4 (with MIK-8351): string-form arguments become the object
+    // the backend would parse, before any check reads them, so the entry scan,
+    // the chokepoint and the send judge one value, as on the meta route.
+    if envelope.method == "tools/call" {
+        parse_direct_arguments(envelope, id)?;
+    }
     // Then this dispatch's own challenge for a chained backend (ASI07 R7).
     let mut challenge = None;
     if let (Some(sent), "tools/call") = (envelope.params.as_mut(), envelope.method.as_str()) {
@@ -188,6 +225,12 @@ pub(super) struct Propagation {
     /// site.
     pub(super) managed: Option<crate::personal_accounts::ManagedLease>,
     pub(super) headers: Vec<(String, String)>,
+    /// The backend's admitted list fills when propagation began, so nonce
+    /// admission can tell whether anything before it filled a tool list
+    /// (MIK-8379).
+    pub(super) fills_before: u64,
+    /// A mint was attempted, whatever came of it (MIK-8379 H1).
+    pub(super) attempted: bool,
 }
 
 type IdpConfig = crate::identity_propagation::IdentityPropagationConfig;
@@ -201,6 +244,7 @@ struct Resolution {
     identity_key: Option<String>,
     managed: Option<crate::personal_accounts::ManagedLease>,
     typed: Option<crate::Error>,
+    attempted: bool,
 }
 
 /// Passthrough (ADR-008 rung 2, MIK-6746) forwards the caller's OWN credential
@@ -219,6 +263,7 @@ async fn resolve_headers(
         identity_key: None,
         managed: None,
         typed: None,
+        attempted: false,
     };
     let passthrough_cfg = idp_cfg.filter(|c| {
         c.strategy == crate::identity_propagation::PropagationStrategyKind::Passthrough
@@ -250,13 +295,14 @@ async fn resolve_headers(
     }
     resolution.result = match state
         .meta_mcp
-        .resolve_propagation_credential_held_for(name, Some(&route.backend), caller.proof())
+        .resolve_propagation_credential_attempted_for(name, Some(&route.backend), caller.proof())
         .await
     {
-        Ok((headers, binding, held)) => {
+        Ok(((headers, binding, held), attempted)) => {
             // Bind the upstream session bucket to this caller (MIK-6784).
             resolution.identity_key = binding;
             resolution.managed = held;
+            resolution.attempted = attempted;
             Ok(headers)
         }
         Err(e) => {
@@ -380,6 +426,8 @@ pub(super) async fn propagate_identity(
         identity_key: None,
         managed: None,
         headers: Vec::new(),
+        fills_before: route.backend.list_fills(),
+        attempted: false,
     };
     if !preflight.isolation_guarded {
         return Ok(propagation);
@@ -390,8 +438,10 @@ pub(super) async fn propagate_identity(
         identity_key,
         managed,
         typed,
+        attempted,
     } = resolve_headers(state, name, caller, route, idp_cfg).await;
     propagation.identity_key = identity_key;
+    propagation.attempted = attempted;
     // MIK-8063: an A2A agent's question (an opaque, one-shot token) is bound
     // to the caller this gateway authenticated whenever no propagated identity
     // names them. The continuation seal (MIK-8078) binds the same callers; this

@@ -80,3 +80,59 @@ async fn a_chain_question_replaced_by_the_grant_audit_gives_its_slot_back() {
         "the replaced question kept its slot: {answer}"
     );
 }
+
+/// The chain posted by a client that offers an event stream: the answer is
+/// framed as SSE. Returns the body as text.
+async fn post_sse(state: &Arc<AppState>, body: &Value) -> String {
+    let mut request = http_request(Some("key-a"), body);
+    request.headers_mut().insert(
+        axum::http::header::ACCEPT,
+        axum::http::HeaderValue::from_static("application/json, text/event-stream"),
+    );
+    let response = create_router(Arc::clone(state))
+        .oneshot(request)
+        .await
+        .expect("the router must answer");
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("the body must read");
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// SLOT.3, SSE arm (stage 3): delivered over a stream, the question keeps its
+/// slot.
+#[tokio::test]
+async fn a_delivered_streamed_chain_question_keeps_its_slot() {
+    let row = armed(true, false, AuditFailurePolicy::FailClosed, |meta| meta).await;
+    register(
+        &row.state,
+        BACKEND,
+        &MockBackend::answering(Answer::Result(question())),
+    );
+    let body = post_sse(&row.state, &chain(7)).await;
+    assert!(
+        body.contains("requestState") && !body.contains("backend-state"),
+        "control: the stream delivers a sealed question: {body}"
+    );
+    std::assert_eq!(held(&row.state).await, 1, "{body}");
+}
+
+/// SLOT.3, SSE arm (stage 3): replaced by the grant-audit refusal, the
+/// streamed question never leaves, so its slot is given back.
+#[tokio::test]
+async fn a_streamed_chain_question_replaced_by_the_grant_audit_gives_its_slot_back() {
+    let row = armed(true, false, AuditFailurePolicy::FailClosed, |meta| meta).await;
+    register(
+        &row.state,
+        BACKEND,
+        &MockBackend::answering(Answer::Result(question())),
+    );
+    row.log.fail_next_append_of_kind_for_test(DECISION_KIND);
+    let body = post_sse(&row.state, &chain(7)).await;
+    assert!(body.contains("-32005"), "{body}");
+    std::assert_eq!(
+        held(&row.state).await,
+        0,
+        "the replaced streamed question kept its slot: {body}"
+    );
+}

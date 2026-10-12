@@ -35,8 +35,15 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 ///
 /// Every failure is [`ProbeOutcome::NoAnswer`] rather than an error, so a probe
 /// can never fail a start: the era is an optimisation, the connection is not.
+///
+/// Never interactive (MIK-8269): a token that lapsed before the probe would
+/// otherwise lead a login, open the browser, and end it `Cancelled` when this
+/// bound drops the request, failing the start behind it. Meeting a lapsed
+/// token, the probe reads as silence instead.
 async fn probe(transport: &Arc<dyn Transport>, timeout: Duration) -> ProbeOutcome {
-    match tokio::time::timeout(timeout, transport.request(DISCOVER_METHOD, None)).await {
+    let request =
+        crate::oauth::login_gate::non_interactive(transport.request(DISCOVER_METHOD, None));
+    match tokio::time::timeout(timeout, request).await {
         Ok(Ok(response)) => outcome_of(response),
         Ok(Err(_)) | Err(_) => ProbeOutcome::NoAnswer,
     }
@@ -246,6 +253,17 @@ impl Backend {
         entry: &PooledEntry,
     ) {
         self.resolve_era(transport, entry).await;
+    }
+
+    /// A build-first restart's era probe of its candidate (MIK-8012): run
+    /// without the slot cache's lock, so the transport still serving keeps its
+    /// verdict, and installed only when the candidate is published.
+    pub(super) async fn probe_candidate_era(
+        &self,
+        transport: &Arc<dyn Transport>,
+    ) -> crate::protocol::era::DetachedProbe {
+        let timeout = self.probe_timeout();
+        crate::protocol::era::EraCache::probe_detached(|| probe(transport, timeout)).await
     }
 
     /// Resolve the era of a freshly started peer, probing at most once.

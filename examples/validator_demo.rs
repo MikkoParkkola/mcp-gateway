@@ -6,6 +6,10 @@
 //! agent-UX best practices.
 //!
 //! Run with: `cargo run --example validator_demo`
+//!
+//! It uses the crate's internal library, which has no supported or stable
+//! API (every crate-root item is `#[doc(hidden)]`); paths may change in any
+//! release.
 
 use mcp_gateway::protocol::Tool;
 use mcp_gateway::validator::{AgentUxValidator, Severity};

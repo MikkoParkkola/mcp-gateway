@@ -61,6 +61,7 @@ impl Gateway {
             cap_backend.register_directories(&capability_dirs);
 
             let cap_backend_for_load = Arc::clone(&cap_backend);
+            let registry_for_load = Arc::clone(&self.backends);
             let webhook_registry_for_load = Arc::clone(webhook_registry);
             let webhooks_enabled = self.config.webhooks.enabled;
 
@@ -117,8 +118,9 @@ impl Gateway {
                     }
                 }
 
-                // Readiness waits on this (MIK-7268); refusals are reported below.
-                cap_backend_for_load.mark_initial_scan_complete();
+                // Readiness waits on this (MIK-7268), and clients served during the
+                // scan hear of its catalogue; refusals are reported below.
+                cap_backend_for_load.finish_initial_scan(&registry_for_load);
                 if total_caps > 0 {
                     info!(capabilities = total_caps, name = %capability_name, "Capability backend ready");
                 }
@@ -150,6 +152,7 @@ impl Gateway {
                 });
             }
 
+            cap_backend.spawn_listing_watch(Arc::clone(&self.backends), shutdown_tx.subscribe());
             // Start file watcher for hot-reload
             match CapabilityWatcher::start(
                 Arc::clone(&cap_backend),
@@ -226,6 +229,7 @@ impl Gateway {
         &self,
         live_config: &Arc<LiveConfig>,
         identity_grant_sink: Option<Arc<IdentityGrantSink>>,
+        capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
         shutdown_tx: &tokio::sync::broadcast::Sender<()>,
         warmer: &WarmerGuard,
     ) -> Option<ConfigWatcher> {
@@ -237,6 +241,7 @@ impl Gateway {
                 &self.config,
                 Arc::clone(&self.env),
                 identity_grant_sink,
+                capabilities,
                 shutdown_tx.subscribe(),
                 Some(warmer.hook()),
             ) {

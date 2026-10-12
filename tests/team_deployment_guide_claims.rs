@@ -207,7 +207,13 @@ fn gateway_config_block_loads() {
         config.server.cleartext_http,
         CleartextHttp::TlsTerminatedUpstream
     );
-    assert!(config.auth.enabled && config.security.transparency_log.enabled);
+    assert!(
+        config.auth.enabled
+            && config
+                .security
+                .transparency_log
+                .is_enabled(config.auth.enabled)
+    );
 }
 
 #[test]
@@ -396,6 +402,10 @@ fn cleartext_table_lists_every_variant() {
     );
 }
 
+/// How the defaults table spells an unset audit-log switch (MIK-8044 P2c2),
+/// backticks stripped as `table` strips them.
+const UNSET_AUDIT_DEFAULT: &str = "on when auth.enabled, else false";
+
 #[test]
 fn defaults_table_matches_the_code() {
     let d = Config::default();
@@ -408,7 +418,11 @@ fn defaults_table_matches_the_code() {
             "server.cleartext_http" => to_yaml(&d.server.cleartext_http),
             "server.replicas" => d.server.replicas.to_string(),
             "security.caller_identity.mode" => to_yaml(&d.security.caller_identity.mode),
-            "security.transparency_log.enabled" => d.security.transparency_log.enabled.to_string(),
+            "security.transparency_log.enabled" => d
+                .security
+                .transparency_log
+                .enabled
+                .map_or_else(|| UNSET_AUDIT_DEFAULT.to_string(), |v| v.to_string()),
             "key_server.enabled" => d.key_server.enabled.to_string(),
             other => panic!("defaults table row `{other}` has no check; add one"),
         };

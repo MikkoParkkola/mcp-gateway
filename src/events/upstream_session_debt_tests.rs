@@ -22,6 +22,9 @@ fn a_failed_refill_is_retried_once_after_the_cooldown() {
         unannounced: true,
     };
     assert!(state.take_due_refill(), "the notice's refill is due");
+    // Read before the failure is recorded: the retry is due a full cooldown
+    // after it, with no slack for how long the check itself takes (MIK-8222).
+    let failed_at = Instant::now();
     state.refill_ended(false);
     assert!(
         state.tools_pending,
@@ -29,7 +32,10 @@ fn a_failed_refill_is_retried_once_after_the_cooldown() {
     );
     state.tools_pending = false;
     let retry = due().expect("the failed refill is retried");
-    assert!(retry + Duration::from_secs(1) >= Instant::now() + REFILL_RETRY);
+    assert!(
+        retry >= failed_at + REFILL_RETRY,
+        "retried a cooldown after the failure"
+    );
     // A new session keeps the retry and its time.
     let mut state = State::new(&shared, Era::Modern);
     assert!(!state.take_due_refill(), "no retry inside the cooldown");

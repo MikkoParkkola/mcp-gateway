@@ -263,6 +263,9 @@ COSIGN_ANY = re.compile(r"cosign\s+\w")
 # The one command that makes a name resolvable. Every tag the release exposes
 # is created by it, so the ordering assertions anchor on it rather than on the
 # tag strings, which also appear in `inspect` calls and log lines.
+# One `apt-get install` command naming tini (MIK-8352): the command runs on
+# through escaped newlines and ends at `&&` or at a newline that is not.
+TINI_INSTALLED = r"apt-get install(?:[^&\n\\]|\\.|\\\n)*?\btini\b"
 IMAGETOOLS_CREATE = re.compile(r"docker\s+buildx\s+imagetools\s+create(?![-\w])")
 # The gate, however it is spelled. Shared by the assertion that it runs at all
 # and by the one that protects the steps running it, so a step cannot be
@@ -1645,15 +1648,15 @@ class WorkflowWiring(unittest.TestCase):
             ["dockerfile", "rust-version"],
             "release-compile must compile on both the Dockerfile's toolchain and the rust-version",
         )
-        self.assertIn("sed -n 's/^FROM rust:", body, "the Dockerfile row no longer reads the Dockerfile")
+        self.assertIn("sed -n 's/^FROM mirror\\.gcr\\.io\\/library\\/rust:", body, "the Dockerfile row no longer reads the Dockerfile")
         self.assertIn("sed -n 's/^rust-version = ", body, "the rust-version row no longer reads Cargo.toml")
         # The Dockerfile row builds the binary (MIK-8188) so the next step can
         # grep it for the debug-only test trust roots; the rust-version row
         # still only checks.
         self.assertRegex(body, r'(?m)^            cargo \+"\$TOOLCHAIN" build --release --locked --bin mcp-gateway$')
         self.assertRegex(body, r'(?m)^            cargo \+"\$TOOLCHAIN" check --release --locked$')
-        self.assertIn("if: matrix.source == 'dockerfile'", body, "the trust-roots grep must run on the built row")
-        self.assertIn("grep -qa MCP_GATEWAY_TEST_TRUST_CA", body, "the release binary is no longer grepped")
+        self.assertIn("if: matrix.source == 'dockerfile'", body, "the test-hook check must run on the built row")
+        self.assertIn("scripts/release/grep_no_test_hook.sh target/release/mcp-gateway", body, "the release binary is no longer checked")
         self.assertNotRegex(body, r"continue-on-error:\s*true", "the compile must be fatal")
         scope = jobs("docker.yml")["scope"]
         self.assertRegex(scope, r"compile_check: \$\{\{ steps\.decide\.outputs\.compile_check \}\}")
@@ -2469,6 +2472,7 @@ class WorkflowWiring(unittest.TestCase):
             "test_check_tag_manifest.py",
             "test_check_nfr_demo_1_recordings.py",
             "test_workflow_wiring_mutations.py",
+            "test_grep_no_test_hook.py",
         )
         body = jobs("ci.yml").get("release-script-tests")
         self.assertIsNotNone(body, "ci.yml has no release-script-tests job")
@@ -2485,6 +2489,36 @@ class WorkflowWiring(unittest.TestCase):
                  for command in joined(block) for script in unit if f"scripts/release/{script}" in command}
         self.assertEqual(stray, set(), "a unit test left in the report-only job is swallowed off a tag")
         self.assertIn("release-script-tests", needs_of(jobs("ci.yml")["docker-build"]) or "")
+
+    def test_every_c6_obligation_is_resolved_on_every_pull_request_and_release_push(self):
+        # MIK-8245: an obligation whose function moved, or whose patched lines
+        # changed, would be scored VOID at gate day and replaced silently. The
+        # resolver catches it in the change that caused it, so it must run on
+        # every pull request and every release-line push, unconditionally, and
+        # fail the run: no filter, no `if:`, nothing that swallows its status.
+        path = WORKFLOWS / "c6-obligations.yml"
+        doc = yaml.load(path.read_text(encoding="utf-8"), Loader=_StrictLoader)
+        on = doc.get("on", doc.get(True))
+        self.assertIsInstance(on, dict, "c6-obligations.yml must name its triggers")
+        self.assertIn("pull_request", on, "the resolver must run on pull requests")
+        self.assertFalse(on["pull_request"], "the pull_request trigger must carry no branch or path filter")
+        push = on.get("push") or {}
+        self.assertIn("docs/ranking-1-release-line", push.get("branches", []), "the resolver must run on release-line pushes")
+        self.assertNotIn("paths", push, "the push trigger must carry no path filter")
+        self.assertNotIn("paths-ignore", push, "the push trigger must carry no path filter")
+        resolving = []
+        for name, job in doc["jobs"].items():
+            for step in job.get("steps", []):
+                if "c6_resolve.py" in str(step.get("run", "")):
+                    resolving.append((name, job, step))
+        self.assertEqual(len(resolving), 1, "exactly one step must run the C6 resolver")
+        name, job, step = resolving[0]
+        self.assertNotIn("if", job, f"job {name} must not be conditional")
+        self.assertNotIn("if", step, "the resolver step must not be conditional")
+        self.assertFalse(job.get("continue-on-error") or step.get("continue-on-error"),
+                         "the resolver's failure must fail the run")
+        self.assertEqual(step["run"].strip(), "python3 scripts/release/c6_resolve.py --tree HEAD",
+                         "the resolver must run alone, on the checked-out head, with its exit status")
 
     def test_the_ranking_corpus_is_regenerated_and_compared_every_ref(self):
         # MIK-7850: the held-out corpus must stay what gen_corpus.py derives
@@ -3064,6 +3098,192 @@ class VariantStage(unittest.TestCase):
             "the variant stage does not pin the NodeSource signing key fingerprint",
         )
 
+    def test_the_variant_installs_what_a_deployment_declares(self):
+        stage = self.variant_stage()
+        self.assertRegex(
+            stage,
+            r"COPY[^\n]*docker/entrypoint-full\.sh",
+            "the variant does not copy the entrypoint into the image",
+        )
+        self.assertRegex(
+            stage,
+            r"ENTRYPOINT \[[^\]]*entrypoint-full\.sh",
+            "the variant does not run its own entrypoint",
+        )
+        script = (
+            pathlib.Path(__file__).parents[2] / "docker" / "entrypoint-full.sh"
+        ).read_text()
+        self.assertIn(
+            "EXTRA_APT_PACKAGES",
+            script,
+            "the entrypoint ignores the packages a deployment declares",
+        )
+        self.assertRegex(
+            script,
+            r"apt-get install",
+            "the entrypoint never installs anything",
+        )
+        # Installing needs root, but the image must not *default* to it: a
+        # deployment asks for root itself, and the entrypoint drops back.
+        self.assertEqual(
+            re.findall(r"(?m)^USER\s+(\S+)\s*$", stage)[-1],
+            "gateway",
+            "the variant leaves the image declaring root as its user",
+        )
+
+    def test_a_deployment_gets_its_startup_steps_before_the_gateway(self):
+        script = (
+            pathlib.Path(__file__).parents[2] / "docker" / "entrypoint-full.sh"
+        ).read_text()
+        self.assertRegex(
+            script,
+            r"/docker-entrypoint\.d",
+            "the entrypoint has no drop-in directory for a deployment's steps",
+        )
+        self.assertRegex(
+            script,
+            r"\.envsh\)\s*\.\s*\"\$f\"|\.\s*\"\$f\"",
+            "the entrypoint does not source an envsh drop-in",
+        )
+        self.assertRegex(
+            script,
+            r"\[ ! -x \"\$f\" \]",
+            "the entrypoint runs a drop-in that arrived without the exec bit",
+        )
+        run = script.index("run_dropins\n")
+        drop = script.index("setpriv --reuid=gateway")
+        self.assertLess(
+            run,
+            drop,
+            "the entrypoint drops privileges before a deployment's steps run, "
+            "so a step that needs root would fail",
+        )
+        self.assertEqual(
+            script.count("run_dropins\n"),
+            2,
+            "a path through the entrypoint skips the drop-ins: root and "
+            "non-root each call them once",
+        )
+
+    def test_tini_is_pid_1_of_the_variant_only(self):
+        # MIK-8352 TINI.1: tini -g in front of the entrypoint, so a stop reaches
+        # a sourced step's foreground command. The default image keeps the
+        # gateway itself as PID 1.
+        stage = self.variant_stage()
+        self.assertRegex(
+            stage,
+            TINI_INSTALLED,
+            "the variant does not install tini",
+        )
+        self.assertRegex(
+            stage,
+            r'(?m)^ENTRYPOINT \["/usr/bin/tini", "-g", "--", '
+            r'"/usr/local/bin/entrypoint-full\.sh"\]$',
+            "the variant's PID 1 is not tini -g in front of its entrypoint",
+        )
+        base = self.body[: self.body.index("FROM runtime AS runtime-full")]
+        self.assertRegex(
+            base,
+            r'(?m)^ENTRYPOINT \["mcp-gateway"\]$',
+            "the default image's PID 1 is no longer the gateway",
+        )
+
+    def test_the_tini_pin_reads_only_the_install_command(self):
+        # The command ends at `&&` or at a newline that is not escaped: a
+        # `tini` after it (the ENTRYPOINT, a comment) installs nothing.
+        installs = (
+            "RUN apt-get install -y \\\n    curl \\\n    tini \\\n    && rm -rf x\n",
+            "RUN apt-get install -y curl tini\n",
+        )
+        for stage in installs:
+            with self.subTest(stage=stage):
+                self.assertRegex(stage, TINI_INSTALLED)
+        installs_nothing = (
+            "RUN apt-get install -y curl\n"
+            'ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/x"]\n',
+            "RUN apt-get install -y curl \\\n    && echo tini\n",
+        )
+        for stage in installs_nothing:
+            with self.subTest(stage=stage):
+                self.assertNotRegex(stage, TINI_INSTALLED)
+
+    def test_the_variant_keeps_the_default_invocation(self):
+        # An ENTRYPOINT declared in the stage resets the CMD the base stage set.
+        # The variant's own invocation carries no arguments, so a variant
+        # without it execs a gateway with no config that starts and never exits.
+        self.assertRegex(
+            self.variant_stage(),
+            r'(?m)^CMD \["--config", "/config\.yaml"\]',
+            "the variant declares an ENTRYPOINT without the base stage's CMD, "
+            "so its default invocation is not the image's",
+        )
+
+    def test_a_startup_that_cannot_finish_stops_the_container(self):
+        script = self.entrypoint_script()
+        self.assertRegex(
+            script,
+            r"apt-get update[^\n]*&&[^\n]*apt-get install",
+            "the entrypoint does not run the update and install as one chain",
+        )
+        # `set -e` does not end the script on a failing link of an `&&` list, so
+        # the chain's status has to be carried to an explicit exit.
+        self.assertRegex(
+            script,
+            r"install failed[^\n]*\n\s*exit 1",
+            "the entrypoint does not stop the container when the install fails",
+        )
+        self.assertRegex(
+            script,
+            r"DEBIAN_FRONTEND=noninteractive",
+            "the entrypoint lets apt prompt, which no container can answer",
+        )
+        self.assertRegex(
+            script,
+            r"timeout -k \d+ \"\$INSTALL_TIMEOUT\"",
+            "the entrypoint leaves the install unbounded",
+        )
+        # PID 1 ignores SIGTERM with no handler installed, so without a trap a
+        # stop during the install waits out the grace period and SIGKILLs.
+        self.assertRegex(
+            script,
+            r"trap \w+ TERM",
+            "the entrypoint does not handle a stop while the install runs",
+        )
+
+    def test_the_privilege_drop_names_the_user_it_drops_to(self):
+        script = self.entrypoint_script()
+        # A numeric group id is whatever this distribution put in it, and Debian
+        # puts an unrelated `users` there.
+        self.assertRegex(
+            script,
+            r"setpriv --reuid=gateway --regid=gateway --init-groups",
+            "the entrypoint drops to a fixed id rather than the image's user",
+        )
+        self.assertNotRegex(
+            script,
+            r"--groups=\d",
+            "the entrypoint drops to a fixed group id",
+        )
+
+    def test_the_lists_cleanup_removes_the_directory(self):
+        script = self.entrypoint_script()
+        self.assertRegex(
+            script,
+            r"(?m)^\s*rm -rf /var/lib/apt/lists\s*$",
+            "the entrypoint leaves the apt indexes it fetched in the image",
+        )
+        self.assertNotRegex(
+            script,
+            r"/var/lib/apt/lists/\*",
+            "the cleanup globs a directory whose indexes stay while globbing is "
+            "off in that shell",
+        )
+
+    def entrypoint_script(self):
+        return (
+            pathlib.Path(__file__).parents[2] / "docker" / "entrypoint-full.sh"
+        ).read_text()
+
     def test_the_node_and_npm_assertions_are_at_build_time(self):
         self.assertRegex(
             self.body,
@@ -3191,6 +3411,55 @@ class VariantGateCoverage(unittest.TestCase):
             self.body,
             r"(?s)probe\(\)\s*\{.*?did not finish within",
             "the variant gate never reports which probe timed out",
+        )
+
+    def test_the_gate_exercises_the_root_path(self):
+        # Every other run of this image is the image's own user, so the root
+        # path -- install, steps as root, drop, exec -- is untested without a
+        # leg of its own.
+        for probe, label in (
+            (r"\-\-user root", "the root path"),
+            (r"EXTRA_APT_PACKAGES=iproute2", "a declared package"),
+            (r"/docker-entrypoint\.d", "a mounted startup step"),
+        ):
+            self.assertRegex(
+                self.body, probe, f"the variant gate never exercises {label}"
+            )
+        # The two failures a deployment has to hear about: a step that exits
+        # non-zero, and an install that cannot complete.
+        self.assertRegex(
+            self.body,
+            r"(?s)exit 7.*?FAIL_LOG|FAIL_LOG.*?exit 7",
+            "the variant gate never runs a startup step that fails",
+        )
+        self.assertRegex(
+            self.body,
+            r"BAD_LOG",
+            "the variant gate never runs an install that cannot complete",
+        )
+        # A stop during startup is the case PID 1 hangs on.
+        self.assertRegex(
+            self.body,
+            r"docker stop -t \d+",
+            "the variant gate never stops the image while startup is running",
+        )
+        # PID 1 is tini, so the gateway's uid is read from the process named
+        # mcp-gateway, and PID 1 is checked to be tini (MIK-8352).
+        self.assertRegex(
+            self.body,
+            r'= mcp-gateway \] && exec grep -m1 "\^Uid:"',
+            "the variant gate never checks which user the gateway runs as",
+        )
+        self.assertRegex(
+            self.body,
+            r'cat /proc/1/comm',
+            "the variant gate never checks that tini is PID 1",
+        )
+        # A stop during a sourced step: the case tini -g exists for.
+        self.assertRegex(
+            self.body,
+            r"(?s)10-slow\.envsh.*?docker stop -t \d+.*?!= 143",
+            "the variant gate never stops the image during a sourced step",
         )
 
 

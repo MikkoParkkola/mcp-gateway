@@ -294,3 +294,42 @@ fn the_reserved_owner_value_stays_in_the_reserved_prefix() {
     assert!(LOCAL_OPERATOR_PRINCIPAL.len() > LOCAL_OPERATOR_PREFIX.len_utf8());
     assert!(!crate::gateway::STDIO_CREDENTIAL_PRINCIPAL.starts_with(LOCAL_OPERATOR_PREFIX));
 }
+
+/// MIK-8286 R8 (pins): a named grant subject and a named OIDC identity keep
+/// today's cache principal byte for byte. Literals copied from the code
+/// before the change.
+#[test]
+fn named_callers_keep_their_cache_principal_byte_for_byte() {
+    let subject = GrantSubject::new("mtls", "agent-a", None);
+    assert_eq!(
+        caller_cache_principal(
+            None,
+            None,
+            Some(&subject),
+            None,
+            Authentication::Authenticated
+        ),
+        CachePrincipal::Caller("grant:4:mtls:7:agent-a".to_owned())
+    );
+    let identity = crate::key_server::oidc::VerifiedIdentity {
+        subject: "alice".to_owned(),
+        email: String::new(),
+        name: None,
+        groups: vec![],
+        issuer: "https://idp-a.example".to_owned(),
+    };
+    assert_eq!(
+        identity.stable_actor_id(),
+        "oidc:21:https://idp-a.example:5:alice"
+    );
+    assert_eq!(
+        caller_cache_principal(
+            None,
+            Some(&identity),
+            None,
+            None,
+            Authentication::Authenticated
+        ),
+        CachePrincipal::Caller("oidc:37:oidc:21:https://idp-a.example:5:alice".to_owned())
+    );
+}

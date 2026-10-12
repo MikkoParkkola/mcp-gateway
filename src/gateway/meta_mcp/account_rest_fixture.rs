@@ -272,7 +272,17 @@ pub(super) fn installed_gateway(
     descriptors: &[(&str, crate::personal_accounts::config::AccountDescriptor)],
     custody: &Arc<dyn crate::personal_accounts::AccountCustody>,
 ) -> (Arc<MetaMcp>, Arc<AccountStrategyRegistry>) {
-    let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    installed_gateway_built(descriptors, custody, |meta| meta)
+}
+
+/// [`installed_gateway`] with `build` applied to the `MetaMcp` before the
+/// installer runs (signing, cost governance).
+fn installed_gateway_built(
+    descriptors: &[(&str, crate::personal_accounts::config::AccountDescriptor)],
+    custody: &Arc<dyn crate::personal_accounts::AccountCustody>,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> (Arc<MetaMcp>, Arc<AccountStrategyRegistry>) {
+    let mut meta = build(MetaMcp::new(Arc::new(BackendRegistry::new())));
     meta.enable_transparency_log(leaked_transparency_logger());
     let gateway_key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
     let config = rest_config(descriptors);
@@ -391,6 +401,8 @@ pub(super) fn cacheable_capability(
     parse_capability(&format!(
         "name: {TOOL}\n\
          description: Read one folder through a personal account\n\
+         metadata:\n\
+         \x20 read_only: true\n\
          cache:\n\
          \x20 ttl: 60\n\
          \x20 strategy: memory\n\
@@ -681,6 +693,12 @@ pub(super) async fn meta_execute(meta: &MetaMcp, subject: Option<&str>) -> crate
 /// A11: the rejected-upstream-token cells, which drive this fixture.
 #[path = "upstream_401_tests.rs"]
 mod upstream_401;
+
+// MIK-8353 3a: an account refresh on the capability route keeps a refused
+// call's nonce spent. Beside the fixture for its private `caller`.
+#[cfg(feature = "cost-governance")]
+#[path = "account_rest_signed_budget_tests.rs"]
+mod signed_budget_tests;
 
 // Lives beside the REST fixture rather than in a REST test file: those files
 // are split by topic and this case spans custody, registry and cache together.

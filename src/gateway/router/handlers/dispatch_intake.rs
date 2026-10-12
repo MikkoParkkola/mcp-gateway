@@ -33,8 +33,7 @@ use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
 use crate::protocol::RequestId;
 use crate::security::{
-    AgentIdentity, extract_agent_identity, log_agent_identity, sanitize_json_value,
-    validate_agent_identity,
+    AgentIdentity, extract_agent_identity, log_agent_identity, validate_agent_identity,
 };
 
 /// What the prelude hands the frame judge: consumed by value on the listen
@@ -73,7 +72,6 @@ pub(super) struct Intake<'r> {
     pub(super) owner: String,
     pub(super) events_owner: String,
     pub(super) admission_owner: String,
-    pub(super) external_tool: String,
     // Held, never read: the in-flight permit drops when the dispatcher
     // returns. The dispatcher binds `Intake` after `JudgeInputs`, so the
     // permit drops before the read guard, as the two locals did.
@@ -88,6 +86,36 @@ impl Intake<'_> {
             .as_ref()
             .or_else(|| self.request.get("params"))
     }
+
+    /// The name the response policy and answer shape key on: the tool for a
+    /// `tools/call`, else the method. Read from the request, not copied
+    /// (MIK-8014 design item 5).
+    pub(super) fn external_tool(&self) -> &str {
+        if self.method == "tools/call" {
+            extract_tools_call_params_ref(self.params()).0
+        } else {
+            &self.method
+        }
+    }
+}
+
+/// The key a `/mcp` caller's explicit cancel of its own call `id` is
+/// registered and looked up under (MIK-7642 PR.C, design r6 PR.C): the route,
+/// the caller's key (`identity::caller_key`: its subject, else its
+/// authenticated credential), its session (none for a modern-by-header
+/// caller, whose session id is empty), and the client's id.
+pub(super) fn mcp_cancel_key(
+    caller: (
+        Option<&crate::identity_grants::GrantSubject>,
+        Option<&CertIdentity>,
+        Option<&AuthenticatedClient>,
+    ),
+    session_id: &str,
+    id: &Value,
+) -> Option<crate::gateway::router::inflight_calls::CallKey> {
+    let owner = crate::gateway::router::identity::caller_key(caller.0, caller.1, caller.2);
+    let session = (!session_id.is_empty()).then_some(session_id);
+    crate::gateway::router::inflight_calls::CallKey::new("/mcp", Some(&owner), session, id)
 }
 
 /// The prelude, run once per request. `Err` is a finished answer the
@@ -101,8 +129,7 @@ pub(super) async fn intake(
     state: &Arc<AppState>,
     http_request: axum::http::Request<axum::body::Body>,
 ) -> Result<(JudgeInputs, Option<SigningInvocationContext>, Intake<'_>), axum::response::Response> {
-    // Extract headers and authenticated client from request
-    let headers = http_request.headers().clone();
+    // Extract the authenticated client from the request.
     let client = http_request
         .extensions()
         .get::<AuthenticatedClient>()
@@ -117,6 +144,13 @@ pub(super) async fn intake(
     let verified_identity = http_request.extensions().get::<VerifiedIdentity>().cloned();
     // MCP Events caps a subscription at the credential's own expiry.
     let presented = events::Presented::capture(&http_request);
+    // The headers are taken, not copied. `Presented::capture` above is the last
+    // reader of the request's own headers; below, the request is read only for
+    // its URI, its extensions and its body, and the body read takes its limit
+    // from the extensions (`DefaultBodyLimit`), not from a header.
+    let (mut parts, body) = http_request.into_parts();
+    let headers = std::mem::take(&mut parts.headers);
+    let http_request = axum::http::Request::from_parts(parts, body);
 
     // === OWASP ASI03: per-agent identity ===
     //
@@ -242,6 +276,24 @@ pub(super) async fn intake(
     // Get or create session for this client
     let existing_session_id = session_id_header(&headers).map(String::from);
 
+    // MIK-8154 S2': the protocol fields are validated before anything reads
+    // them (the session and hardened checks below; signing and the chain
+    // nonce take theirs off later), and never rewritten. No session yet.
+    if state.sanitize_input
+        && let Err(e) = crate::security::sanitize::validate_protocol_fields(
+            &request,
+            &crate::gateway::PROTOCOL_NONCES,
+            crate::security::sanitize::ProtocolRoute::Meta,
+        )
+    {
+        return Err(build_error_response(
+            None,
+            -32600,
+            e.to_string(),
+            "",
+            StatusCode::BAD_REQUEST,
+        ));
+    }
     // Not a stream reader, so no branch subscribes: a held subscription
     // fakes a deliverable prompt.
     let opened = if declares_modern_by_header {
@@ -322,14 +374,52 @@ pub(super) async fn intake(
             ));
         }
     };
-    // Optionally sanitize input
-    let mut request = if state.sanitize_input {
-        match sanitize_json_value(&request) {
+    // MIK-8154 SAN.1: one sanitize step, after the call's backend targets are
+    // mapped on the caller's view (a surfaced name judged through the request's
+    // visibility memo) and before restore and every check; a request whose
+    // every target is `passthrough` is exempt (option (a)).
+    let exempt = state.sanitize_input && {
+        let authorizer = super::super::RouterAuthorizer {
+            state,
+            client: client.as_ref(),
+            oauth_agent_identity: oauth_agent_identity.as_ref(),
+            cert_identity: cert_identity.as_ref(),
+            principal: super::super::authorization::refusal_principal(
+                client.as_ref(),
+                oauth_agent_identity.as_ref(),
+                cert_identity.as_ref(),
+            ),
+        };
+        let scope = crate::gateway::meta_mcp::InvokeScope {
+            authorizer: &authorizer,
+            is_admin: client.as_ref().is_some_and(|c| c.admin),
+            api_key_name: client.as_ref().map(|c| c.name.as_str()),
+            agent_id: agent_identity.proven_agent_id(),
+            grant_subject: grant_subject.as_ref(),
+            caller: crate::identity_propagation::CallerProof::new(
+                verified_identity.as_ref(),
+                crate::identity_propagation::CallerProvenance::classify(
+                    client.as_ref().map(|client| client.principal.as_str()),
+                ),
+            ),
+        };
+        let view = crate::gateway::meta_mcp::visible::TargetView::Caller(scope, Some(&session_id));
+        super::super::sanitize_exempt(&state.meta_mcp, &request, view)
+    };
+    // Intake has judged; the window a catalogue change must not reach (NP3).
+    #[cfg(test)]
+    crate::gateway::meta_mcp::visible::seams::intake_judged();
+    let mut request = if state.sanitize_input && !exempt {
+        match crate::security::sanitize::sanitize_request(
+            &request,
+            crate::security::sanitize::ProtocolRoute::Meta,
+        ) {
             Ok(sanitized) => sanitized,
+            // The protocol fields passed validation, so the id is answered.
             Err(e) => {
                 return Err(build_error_response(
-                    None,
-                    -32600,
+                    raw_id.clone(),
+                    e.to_rpc_code(),
                     e.to_string(),
                     &session_id,
                     StatusCode::BAD_REQUEST,
@@ -511,6 +601,23 @@ pub(super) async fn intake(
     // era, version, mirrored-header and removed-method checks ran accepted a
     // malformed or disabled modern notification as though it had been honoured.
     if method.starts_with("notifications/") {
+        // MIK-7642 PR.C: a cancel aborts this caller's own in-flight call
+        // under that id, if one is running; never forwarded (MIK-8072).
+        if method == "notifications/cancelled" {
+            let aborted = request
+                .get("params")
+                .and_then(|params| params.get("requestId"))
+                .and_then(|id| {
+                    let caller = (
+                        grant_subject.as_ref(),
+                        cert_identity.as_ref(),
+                        client.as_ref(),
+                    );
+                    mcp_cancel_key(caller, &session_id, id)
+                })
+                .is_some_and(|key| state.meta_mcp.inflight_calls().cancel(&key));
+            debug!(aborted, "Client cancel never forwarded");
+        }
         debug!(notification = %method, "Handling notification");
         return Err(build_accepted_response(&session_id));
     }
@@ -636,14 +743,6 @@ pub(super) async fn intake(
         }
     }
 
-    let params = narrowed_listen.as_ref().or(params);
-
-    let external_tool = if method == "tools/call" {
-        extract_tools_call_params_ref(params).0.to_owned()
-    } else {
-        method.clone()
-    };
-
     Ok((
         JudgeInputs {
             read_guard,
@@ -676,8 +775,15 @@ pub(super) async fn intake(
             owner,
             events_owner,
             admission_owner,
-            external_tool,
             _inflight_permit: inflight_permit,
         },
     ))
 }
+
+#[cfg(test)]
+#[path = "dispatch_intake_cancel_key_tests.rs"]
+mod cancel_key_tests;
+
+#[cfg(test)]
+#[path = "dispatch_intake_presented_tests.rs"]
+mod presented_tests;

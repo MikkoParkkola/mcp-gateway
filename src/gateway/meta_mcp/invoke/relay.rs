@@ -4,7 +4,7 @@
 //! `2026-09-28-asi10-verbatim-relay.md` §13.3: the egress check on what a
 //! backend receives, and the per-call receipts committed at delivery.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 
 use serde_json::Value;
 
@@ -253,11 +253,20 @@ enum Kind {
     Seam,
 }
 
+/// A delivery's plan staging state (`MIK-8066.BIG.3`); a bare counter when
+/// the firewall is compiled out, where nothing stages.
+#[cfg(feature = "firewall")]
+type Staging = crate::security::firewall::PlanStaging;
+#[cfg(not(feature = "firewall"))]
+type Staging = std::cell::Cell<usize>;
+
 tokio::task_local! {
     /// The receipts of the delivery this task owns (§13.3 "Recording").
     static RELAY_RECEIPTS: RefCell<Vec<Receipt>>;
-    static RELAY_STAGED: Cell<usize>; // What it staged so far (MIK-7992).
-    /// Set while one step of a plan dispatches, with the step's label.
+    // What it staged so far, and for whom (MIK-7992, `MIK-8066.BIG.3`).
+    static RELAY_STAGED: Staging;
+    /// Set while one step of a plan dispatches, with the step's label. Also
+    /// turns off the task worker's clock deferral (`worker_clock::armed`).
     static PLAN_STEP: Option<u32>;
 }
 
@@ -270,6 +279,14 @@ pub(crate) async fn plan_step<F: std::future::Future>(label: Option<u32>, step: 
     PLAN_STEP.scope(label, step).await
 }
 
+/// Whether this task is inside a plan step: a `gateway_execute` chain step or
+/// a playbook step. Set on the step's call, so anything nested in it inherits
+/// it. The task worker's clock wait is for a single direct call only
+/// (MIK-8202 AC12/AC13): a composite keeps refusing on a clock before 1970.
+pub(crate) fn in_plan_step() -> bool {
+    PLAN_STEP.try_with(|_| ()).is_ok()
+}
+
 /// Run `delivery` with a receipt collector: the HTTP and stdio dispatches
 /// (finalize included) and a task's execution. Dropping the scope discards
 /// what was staged; only a commit records.
@@ -278,7 +295,7 @@ pub(crate) async fn collecting<F: std::future::Future>(delivery: F) -> F::Output
         .scope(
             RefCell::new(Vec::new()),
             RELAY_STAGED.scope(
-                Cell::new(0),
+                Staging::default(),
                 super::gateway_writes::scope(seams::scope(delivery)),
             ),
         )
@@ -393,7 +410,7 @@ impl MetaMcp {
         let (output, receipts) = RELAY_RECEIPTS
             .scope(RefCell::new(Vec::new()), async {
                 let writes = super::gateway_writes::scope(seams::scope(delivery));
-                let output = RELAY_STAGED.scope(Cell::new(0), writes).await;
+                let output = RELAY_STAGED.scope(Staging::default(), writes).await;
                 let staged = RELAY_RECEIPTS.with(|r| std::mem::take(&mut *r.borrow_mut()));
                 (output, staged)
             })
@@ -508,7 +525,8 @@ impl MetaMcp {
         let target = if tool_name == "gateway_invoke" {
             field("server").zip(field("tool"))
         } else {
-            self.surfaced_tool_server(tool_name)
+            self.surfaced_tools_map
+                .unscoped(tool_name)
                 .map(|server| (server, tool_name))
         };
         let Some(result) = replay.result.as_ref() else {
@@ -580,8 +598,12 @@ fn receipt_with(
     super::gateway_writes::strip(&mut value, super::gateway_writes::Layer::Value);
     let plan = PLAN_STEP.try_with(|label| *label);
     let in_plan = plan.is_ok();
-    let digest =
-        RELAY_STAGED.with(|s| fw.receipt_digest(server, tool, &value, in_plan.then_some(s)))?;
+    let digest = RELAY_STAGED.with(|s| {
+        // `MIK-8066.BIG.3` F1: a step past the plan bound reserves its
+        // caller's sketch position at staging.
+        s.set_caller(who.key);
+        fw.receipt_digest(server, tool, &value, in_plan.then_some(s))
+    })?;
     Some(Receipt {
         key: who.key.to_owned(),
         keyed: who.keyed,

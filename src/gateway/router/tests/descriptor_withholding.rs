@@ -118,7 +118,17 @@ pub(super) async fn build(
     tools: Vec<Value>,
     firewall: Option<Arc<crate::security::firewall::Firewall>>,
 ) -> Env {
-    assemble(config, tools, |state| state.firewall = firewall).await
+    assemble(config, tools, |state| {
+        // The gateway mints with the keyring the firewall exempts, as startup
+        // pairs them (#2210, MIK-8276).
+        if let Some(fw) = &firewall {
+            Arc::get_mut(&mut state.meta_mcp)
+                .expect("the fixture's gateway is not shared yet")
+                .share_keyring_with_for_test(fw);
+        }
+        state.firewall = firewall;
+    })
+    .await
 }
 
 /// The fixture, with `wire` applied to the state before the router is built.

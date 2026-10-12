@@ -40,10 +40,6 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ("src/cli/invoke.rs", "reads stdin, not a file"),
     ("src/commands/cap.rs", "capability YAML pinning; public"),
     (
-        "src/commands/config_write.rs",
-        "gateway.yaml before and after a CLI write, compared for comment line numbers; no text printed",
-    ),
-    (
         "src/commands/config_export/mod.rs",
         "third-party MCP client config JSON edited to add the gateway entry; no gateway secret",
     ),
@@ -140,6 +136,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "writability probe",
     ),
     (
+        "src/gateway/meta_mcp/sealed_hold_guards.rs",
+        "cfg(test) source scanner reading the crate's own src/gateway files (MIK-8176 A1); no secret",
+    ),
+    (
         "src/gateway/task_service/store_unix.rs",
         "task records: O_NOFOLLOW open, fstat mode 0600 checked (RECORD_MODE)",
     ),
@@ -177,7 +177,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "playbook YAML definitions; public",
     ),
     (
-        "src/protocol_revision_telemetry.rs",
+        "src/protocol_revision_telemetry/durable.rs",
         "telemetry window counters in a 0700 directory; no secret",
     ),
     ("src/ranking/ranker.rs", "tool usage counts JSON; no secret"),

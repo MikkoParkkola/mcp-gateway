@@ -127,9 +127,13 @@ jobs:
       - name: No new raw wall-clock read (MIK-8202)
         if: github.event_name == 'pull_request'
         run: python3 scripts/release/check_clock_baseline.py "origin/${{ github.base_ref }}"
-      # Every function in the swept areas has a row, whenever it was added
-      # (MIK-8195); the area list grows with each wave until it is removed.
-      - name: Every function in a swept COV.3 area has an inventory row (MIK-8195)
+      # A caller identity is built only by its checked constructor, so one that
+      # names no one can never be made (MIK-8286, identity-collapse).
+      - name: Caller identities are built only through their checked constructors (MIK-8286)
+        run: python3 scripts/release/check_identity_sources.py
+      # Every function on the COV.3 paths has a row, whenever it was added
+      # (MIK-8195).
+      - name: Every function on the COV.3 paths has an inventory row (MIK-8195)
         run: python3 scripts/release/check_inventory_rows.py --all
       # A new stage on the tools/call path gets a per-call timing row or a
       # stated reason (MIK-8014); the gate's verdict rules have their own test.
@@ -150,6 +154,15 @@ jobs:
         run: scripts/ci/check-hosted-runners.sh --self-test
       - name: Require GitHub-hosted runners (plus the one trusted label)
         run: scripts/ci/check-hosted-runners.sh
+      # Every image CI pulls names its registry; Docker Hub content comes from
+      # mirror.gcr.io, so the anonymous pull limit cannot fail a merge (MIK-8256).
+      - name: No anonymous Docker Hub pull
+        run: python3 scripts/ci/check_docker_hub_pulls.py
+      # Under pipefail `x | grep -q` fails the pipeline on a match (MIK-8333).
+      - name: No piped quiet grep
+        run: |
+          python3 scripts/ci/check-pipefail-grep-q.py
+          python3 scripts/dev/test_pipefail_quiet_grep.py
       - name: Validate the trusted runner's admission rules
         run: scripts/ci/trusted-runner/job-started.sh --self-test
       - name: Validate the mutant batch classifier
@@ -325,7 +338,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       registry:
-        image: registry:2
+        image: mirror.gcr.io/library/registry:2
         ports:
           - 5000:5000
     steps:
@@ -347,7 +360,8 @@ jobs:
           mkdir -p "$out/pulled"
           helm pull oci://localhost:5000/charts/mcp-gateway --version "$ver" -d "$out/pulled" --plain-http
           test -f "$out/pulled/mcp-gateway-$ver.tgz"
-          helm template t "$out/pulled/mcp-gateway-$ver.tgz" | grep -q '^kind: Deployment'
+          helm template t "$out/pulled/mcp-gateway-$ver.tgz" > "$out/rendered.yaml"
+          grep -q '^kind: Deployment' "$out/rendered.yaml"
           echo "OCI round-trip ok: pushed + pulled + rendered mcp-gateway $ver"
 
   helm-supply-chain:
@@ -357,7 +371,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       registry:
-        image: registry:2
+        image: mirror.gcr.io/library/registry:2
         ports:
           - 5000:5000
     steps:
@@ -383,11 +397,11 @@ jobs:
     runs-on: ubuntu-latest
     services:
       registry:
-        image: registry:2
+        image: mirror.gcr.io/library/registry:2
         ports:
           - 5000:5000
       airgap:
-        image: registry:2
+        image: mirror.gcr.io/library/registry:2
         ports:
           - 5001:5000
     steps:
@@ -419,6 +433,8 @@ jobs:
         uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
         with:
           cluster_name: mcp-gateway-rollback-smoke
+          # kind v0.33.0's own default node image, through the mirror (MIK-8256).
+          node_image: mirror.gcr.io/kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
       - name: Apply, upgrade, and roll back on the real cluster
         env:
           # kind-action already created the cluster and set the kube context;
@@ -493,11 +509,10 @@ jobs:
       # The Windows-only modules (`win_acl`, the one module allowed `unsafe`
       # under ADR-016, and `private_fs`) compile nowhere else, so the Linux
       # clippy jobs never see them. Lint them where they compile.
-      # `unnecessary_wraps` is allowed here only: it fires on the existing
-      # non-unix no-op stubs, which keep the unix signature on purpose.
-      - run: >-
-          cargo clippy --all-targets --all-features --
-          -D warnings -A clippy::unnecessary_wraps
+      # No job-wide allow: each non-unix no-op stub that keeps the unix
+      # signature carries its own #[expect(clippy::unnecessary_wraps)]
+      # (MIK-8223).
+      - run: cargo clippy --all-targets --all-features -- -D warnings
       # Symlink creation for the no-follow row (W-T6): Developer Mode lets a
       # non-elevated token create symlinks, so the row runs rather than skips.
       - name: Allow symlink creation
@@ -1011,14 +1026,28 @@ jobs:
         run: python3 scripts/release/test_scope_acceptance.py
       - name: Test the Critical function coverage grader
         run: python3 scripts/release/test_critical_function_coverage.py
+      - name: Test the critical path coverage grader
+        run: python3 scripts/release/test_critical_path_coverage.py
       - name: Test the inventory-row check (MIK-8169)
         run: python3 scripts/release/test_check_inventory_rows.py
+      - name: Test the inventory ledger and its fragments (MIK-8279)
+        run: python3 scripts/release/test_inventory_ledger.py
+      - name: Test the coverage grade download pruning
+        run: python3 scripts/release/test_prune_coverage_grades.py
+      - name: Test the C6 obligation resolver (MIK-8245)
+        run: python3 scripts/release/test_c6_resolve.py
       - name: Test the raw clock-read check (MIK-8202)
         run: python3 scripts/release/test_check_clock_baseline.py
+      - name: Test the identity-source check (MIK-8286)
+        run: python3 scripts/release/test_check_identity_sources.py
       - name: Test the macOS exclusion check (MIK-8174)
         run: python3 scripts/release/test_check_macos_exclusions.py
+      - name: Test the release-binary test-hook check, and that every workflow calls it
+        run: python3 scripts/release/test_grep_no_test_hook.py
       - name: Test the tag/manifest publish gate
         run: python3 scripts/release/test_check_tag_manifest.py
+      - name: Run the -full image entrypoint against stub commands
+        run: python3 scripts/release/test_entrypoint_full.py
       - name: Test the burndown summary drift check
         run: python3 scripts/release/test_check_burndown_summary.py
       - name: Burndown summary and publish gate match the ledger checks (MIK-7730, MIK-7932)
@@ -1037,8 +1066,12 @@ jobs:
         run: python3 scripts/release/test_c6_mutation_sample.py
       - name: Every user-facing surface item is classified (MIK-8044)
         run: python3 scripts/release/test_check_surface_inventory.py
+      - name: User docs and examples list only KEEP keys (MIK-8044.SURF.2)
+        run: python3 scripts/release/test_surface_docs.py
       - name: Test the UPGRADING fragment assembler (MIK-8185)
         run: python3 scripts/release/test_upgrading_fragments.py
+      - name: UPGRADING covers every non-KEEP surface row (MIK-8044.SURF.6)
+        run: python3 scripts/release/test_surface_upgrading.py
       - name: Every pending UPGRADING fragment is well formed, and no new item is numbered (MIK-8185)
         run: python3 scripts/release/upgrading_fragments.py check
       # Proves the workflow-wiring assertions still discriminate: each case
@@ -1356,6 +1389,9 @@ jobs:
         run: python3 scripts/release/check_tag_manifest.py
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        # buildx bootstraps BuildKit from this image; the default is on Docker Hub (MIK-8256).
+        with:
+          driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -1515,6 +1551,9 @@ jobs:
         run: python3 scripts/release/check_tag_manifest.py
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        # buildx bootstraps BuildKit from this image; the default is on Docker Hub (MIK-8256).
+        with:
+          driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0

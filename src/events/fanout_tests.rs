@@ -262,6 +262,8 @@ fn webhooks_off_holds_and_stamps_webhook_subscriptions() {
 #[test]
 fn a_failed_reconcile_attempt_logs_a_warning_and_the_next_one_finishes() {
     use std::os::unix::fs::PermissionsExt;
+    // Real-time bound on each event wait: only a hang reaches it.
+    const HANG_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
     let dir = tempfile::tempdir().expect("dir");
     let config = crate::config::EventsConfig::default();
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
@@ -288,38 +290,40 @@ fn a_failed_reconcile_attempt_logs_a_warning_and_the_next_one_finishes() {
         return;
     }
 
-    let records = crate::test_log_capture::records(|| {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-            .expect("runtime");
-        runtime.block_on(async {
-            let unlock = subs.clone();
-            let task = tokio::spawn({
-                let hub = Arc::clone(&hub);
-                async move {
-                    hub.reconcile_until_done(
-                        "test",
-                        Arc::new(|| CatalogueScan::Complete),
-                        std::time::Duration::from_millis(20),
-                    )
-                    .await;
-                }
-            });
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            std::fs::set_permissions(&unlock, std::fs::Permissions::from_mode(0o700))
-                .expect("unlock");
-            tokio::time::timeout(std::time::Duration::from_secs(10), task)
-                .await
-                .expect("the reconcile finishes once the removal can succeed")
-                .expect("task");
+    // The failed attempt is waited for as an event, its logged warning, not
+    // a sleep that a loaded host can end before the first attempt (MIK-8360).
+    // Level and target are part of the matched line, so the same message at
+    // debug does not count as the warning.
+    let (_logs, mut warned) = crate::test_log_capture::live_count(
+        "WARN mcp_gateway::events::fanout: events: startup reconcile could not remove",
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let task = tokio::spawn({
+            let hub = Arc::clone(&hub);
+            async move {
+                hub.reconcile_until_done(
+                    "test",
+                    Arc::new(|| CatalogueScan::Complete),
+                    std::time::Duration::from_millis(20),
+                )
+                .await;
+            }
         });
+        tokio::time::timeout(HANG_BOUND, warned.wait_for(|n| *n >= 1))
+            .await
+            .expect("a failed attempt is logged as a warning")
+            .expect("the log counter is alive");
+        std::fs::set_permissions(&subs, std::fs::Permissions::from_mode(0o700)).expect("unlock");
+        tokio::time::timeout(HANG_BOUND, task)
+            .await
+            .expect("the reconcile finishes once the removal can succeed")
+            .expect("task");
     });
 
-    assert!(
-        crate::test_log_capture::count(&records, "WARN", "startup reconcile could not remove") >= 1,
-        "a failed attempt is logged: {records:?}"
-    );
     assert!(hub.store.subscriptions().is_empty(), "then withdrawn");
 }
 
@@ -344,10 +348,22 @@ impl super::super::EventSource for PerPrincipal {
             kind: SourceKind::RestWatch,
         }]
     }
-    fn matches(&self, _principal: &str, _arguments: &Value, _event: &SourceEvent) -> bool {
+    fn matches(
+        &self,
+        _principal: &str,
+        _arguments: &Value,
+        _event: &SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
         true
     }
-    fn lifecycle_key(&self, principal: &str, name: &str, arguments: &Value) -> String {
+    fn lifecycle_key(
+        &self,
+        principal: &str,
+        name: &str,
+        arguments: &Value,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> String {
         json!([principal, name, arguments]).to_string()
     }
 }
@@ -408,7 +424,12 @@ async fn an_occurrence_with_a_lifecycle_key_reaches_only_its_holders() {
         data: json!({}),
         lifecycle_key,
     };
-    let alices = PerPrincipal.lifecycle_key("alice", name, &arguments);
+    let alices = PerPrincipal.lifecycle_key(
+        "alice",
+        name,
+        &arguments,
+        crate::clock::utc_now().expect("clock"),
+    );
     hub.fan_out(&services, &event("t1", Some(alices))).await;
     let outbox = |dir: &std::path::Path| -> Vec<String> {
         std::fs::read_dir(dir.join("outbox"))
@@ -481,7 +502,13 @@ async fn an_operator_record_asks_no_backend_grant() {
         data: json!({}),
         lifecycle_key: None,
     };
-    hub.offer(&services, &event, &sub).await;
+    hub.offer(
+        &services,
+        &event,
+        &sub,
+        crate::clock::utc_now().expect("clock"),
+    )
+    .await;
     let due = hub
         .store
         .due(
@@ -553,11 +580,132 @@ async fn a_clock_before_the_epoch_delivers_nothing_on_a_live_lease() {
         "control: a live lease receives the event on the real clock"
     );
 
-    let _clock = crate::clock::test_clock::before_epoch();
-    hub.fan_out(&services, &event("t2")).await;
+    {
+        let _clock = crate::clock::test_clock::before_epoch();
+        hub.fan_out(&services, &event("t2")).await;
+    }
     assert_eq!(
         outbox(dir.path()),
         1,
         "an unreadable clock delivered an event on a lease it cannot date"
     );
+
+    assert_eq!(
+        hub.runtime.clock_drops(),
+        1,
+        "the occurrence the clock could not date is counted"
+    );
+
+    // An access check that answers `Undated` (the refusal may be the
+    // clock's): the row is kept and the occurrence dropped and counted
+    // (MIK-8202).
+    {
+        let _undated = crate::events::services::forced_verdict::answer(
+            crate::events::services::AccessVerdict::Undated,
+        );
+        hub.fan_out(&services, &event("t3")).await;
+    }
+    assert_eq!(outbox(dir.path()), 1, "delivered on an undated check");
+    assert_eq!(hub.runtime.clock_drops(), 2, "the drop is counted");
+    assert_eq!(
+        hub.store.subscriptions().len(),
+        1,
+        "revoked on a refusal the clock may have caused"
+    );
+}
+
+/// A task source admits a stored subscription at delivery even once the task
+/// row has expired: fan-out matched the occurrence to its carried owner, and
+/// asking the store now would refuse the owner's own settlement (MIK-7940).
+/// Subscribing still asks the store.
+#[tokio::test]
+async fn a_task_source_admits_at_delivery_after_the_row_expired() {
+    use crate::events::task_source::TaskSource;
+    use crate::gateway::task_service::{StoreLimits, TaskService};
+    let dir = tempfile::tempdir().expect("dir");
+    let admission = crate::idempotency::admission::ExecutionAdmission::new(Arc::new(|| 1_000));
+    let source = TaskSource {
+        service: Arc::new(
+            TaskService::open(&dir.path().join("tasks"), StoreLimits::default(), admission)
+                .await
+                .expect("service"),
+        ),
+    };
+    let mut sub = subscription("task.settled");
+    sub.arguments = json!({"taskId": "task-gone"});
+    assert_eq!(
+        source
+            .authorize(&sub.principal, &sub.name, &sub.arguments)
+            .await
+            .expect_err("subscribe asks the store")
+            .code,
+        -32012
+    );
+    source.authorize_row(&sub).await.expect("delivery admits");
+}
+
+/// What a reconcile left: each row's name, whether it is held, and whether
+/// its hold is stamped to lapse.
+fn reconciled_state(scan: CatalogueScan, webhooks_on: bool) -> Vec<(String, bool, bool)> {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig::default();
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let now = crate::clock::utc_now().expect("clock after 1970");
+    let tail = super::super::tail_policy(&config);
+    let caps = super::super::store::Caps {
+        per_principal: 10,
+        global: 10,
+    };
+    for name in ["webhook.gone.route.received", "task.settled"] {
+        hub.store
+            .admit(
+                subscription(name),
+                true,
+                caps,
+                chrono::Duration::zero(),
+                now,
+                tail,
+            )
+            .expect("io")
+            .expect("admitted");
+    }
+    if webhooks_on {
+        hub.set_webhook_registry(std::sync::Arc::new(parking_lot::RwLock::new(
+            crate::gateway::WebhookRegistry::new(crate::config::WebhookConfig::default()),
+        )));
+    }
+    assert!(hub.reconcile_catalogue(scan));
+    let mut state: Vec<_> = hub
+        .store
+        .subscriptions()
+        .into_iter()
+        .map(|s| {
+            let held = hub.store.held(&s.id).is_some();
+            (s.name, held, s.held_until.is_some())
+        })
+        .collect();
+    state.sort();
+    state
+}
+
+/// MIK-8050 (superseded by MIK-8057): a partial catalogue only names itself in
+/// the log. With webhooks on or off, a startup reconcile told `Partial`
+/// leaves the same rows, holds and hold stamps as one told `Complete`; since
+/// MIK-8057 neither withdraws a webhook type it does not see.
+#[test]
+fn a_partial_scan_leaves_what_a_complete_one_does() {
+    for webhooks_on in [false, true] {
+        let complete = reconciled_state(CatalogueScan::Complete, webhooks_on);
+        let names: Vec<_> = complete.iter().map(|(name, ..)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["task.settled", "webhook.gone.route.received"],
+            "premise: nothing deleted ({webhooks_on})"
+        );
+        assert_eq!(
+            reconciled_state(CatalogueScan::Partial, webhooks_on),
+            complete,
+            "Partial changed what the reconcile left (webhooks on: {webhooks_on})"
+        );
+    }
 }

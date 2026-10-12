@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! 4.0.0 item D1-a: with auth on, the audit log is required (D1-T1, T2, T13).
+//!
+//! MIK-8044 P2c2: with auth on, an unset `security.transparency_log.enabled`
+//! now means on, so an authenticated config no longer needs the line. Writing
+//! `enabled: false` with auth on still fails the load: D1-a is unchanged.
 
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
@@ -9,6 +13,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 const AUTH_ON: &str = "auth:\n  enabled: true\n  bearer_token: d1-required-test-token-0123456789\n";
+const LOG_OFF: &str = "security:\n  transparency_log:\n    enabled: false\n";
 
 fn write_config(dir: &tempfile::TempDir, body: &str) -> std::path::PathBuf {
     let path = dir.path().join("gateway.yaml");
@@ -16,16 +21,68 @@ fn write_config(dir: &tempfile::TempDir, body: &str) -> std::path::PathBuf {
     path
 }
 
-/// D1-T1.
+/// D1-T1, as P2c2 left it: auth on with the log turned off does not load.
 #[test]
-fn auth_enabled_without_audit_log_fails_to_load() {
+fn auth_enabled_with_the_audit_log_turned_off_fails_to_load() {
     let dir = tempfile::tempdir().unwrap();
-    let path = write_config(&dir, AUTH_ON);
+    let path = write_config(&dir, &format!("{AUTH_ON}{LOG_OFF}"));
     let err = mcp_gateway::config::Config::load(Some(&path))
-        .expect_err("auth on with no audit log must not load");
+        .expect_err("auth on with the audit log turned off must not load");
     assert!(
         err.to_string().contains("security.transparency_log"),
-        "the error must name the missing block: {err}"
+        "the error must name the block: {err}"
+    );
+}
+
+/// P2c2: auth on with no `transparency_log` section loads with the log on.
+#[test]
+fn auth_enabled_without_an_audit_section_turns_the_log_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, AUTH_ON);
+    let config = mcp_gateway::config::Config::load(Some(&path))
+        .expect("auth on with no audit section must load");
+    assert!(
+        config
+            .security
+            .transparency_log
+            .is_enabled(config.auth.enabled),
+        "the log is on"
+    );
+}
+
+/// P2c2: a section that sets only the path also leaves `enabled` unset, so
+/// the log is on.
+#[test]
+fn auth_enabled_with_a_section_that_omits_enabled_turns_the_log_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("audit").join("transparency.jsonl");
+    let body = format!(
+        "{AUTH_ON}security:\n  transparency_log:\n    path: {}\n",
+        log.display()
+    );
+    let path = write_config(&dir, &body);
+    let config = mcp_gateway::config::Config::load(Some(&path)).expect("loads");
+    assert!(
+        config
+            .security
+            .transparency_log
+            .is_enabled(config.auth.enabled),
+        "the log is on"
+    );
+}
+
+/// P2c2 guard: the default follows auth, so auth off leaves the log off.
+#[test]
+fn auth_disabled_leaves_the_audit_log_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, "auth:\n  enabled: false\n");
+    let config = mcp_gateway::config::Config::load(Some(&path)).expect("loads");
+    assert!(
+        !config
+            .security
+            .transparency_log
+            .is_enabled(config.auth.enabled),
+        "the log stays off"
     );
 }
 
@@ -56,7 +113,7 @@ fn auth_enabled_with_audit_log_loads() {
 #[tokio::test]
 async fn stdio_serve_obeys_audit_required() {
     let dir = tempfile::tempdir().unwrap();
-    let path = write_config(&dir, AUTH_ON);
+    let path = write_config(&dir, &format!("{AUTH_ON}{LOG_OFF}"));
     let mut command = tokio::process::Command::from(gateway_bin::command(
         dir.path(),
         gateway_bin::Inherit::Environment,
@@ -82,4 +139,77 @@ async fn stdio_serve_obeys_audit_required() {
         stderr.contains("security.transparency_log"),
         "must name the D1-a rule: {stderr}"
     );
+}
+
+/// P2c2: the derived default is not written back. The CLI writers load the
+/// file literally and re-serialise the whole config (`edit_config` with
+/// `CommentLoss::Rewrite`), so a value resolved at load would add an
+/// `enabled` line nobody wrote. The edit changes the port so the write
+/// cannot be skipped as a no-op.
+#[test]
+fn a_rewrite_does_not_write_the_derived_audit_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, AUTH_ON);
+    mcp_gateway::config_persistence::edit_config(
+        &path,
+        mcp_gateway::config_persistence::CommentLoss::Rewrite,
+        |config| {
+            config.server.port = 39_401;
+            Ok(())
+        },
+    )
+    .expect("the rewrite succeeds");
+    let text = std::fs::read_to_string(&path).expect("read back");
+    let written: serde_yaml::Value = serde_yaml::from_str(&text).expect("valid YAML");
+    let log = &written["security"]["transparency_log"];
+    assert!(
+        log.as_mapping()
+            .is_none_or(|m| !m.contains_key(serde_yaml::Value::from("enabled"))),
+        "the rewrite wrote an `enabled` key (null counts too):\n{text}"
+    );
+    let reloaded = mcp_gateway::config::Config::load(Some(&path)).expect("the rewrite loads");
+    assert_eq!(
+        reloaded.server.port, 39_401,
+        "the rewrite happened:\n{text}"
+    );
+    assert_eq!(
+        reloaded.security.transparency_log.enabled, None,
+        "the reload materialised the switch:\n{text}"
+    );
+    assert!(
+        reloaded
+            .security
+            .transparency_log
+            .is_enabled(reloaded.auth.enabled)
+    );
+}
+
+/// P2c2: the switch still arrives from the environment, as `Option<bool>`.
+/// Routed through `env_files` so no process variable leaks into the tests
+/// running beside this one, and loaded with `load_evaluated` so an env file
+/// that fails to apply is an error, not a skipped warning.
+#[test]
+fn the_environment_sets_the_audit_switch_both_ways() {
+    let env_var = "MCP_GATEWAY_SECURITY__TRANSPARENCY_LOG__ENABLED";
+    let config = |auth: &str, value: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        let env = dir.path().join("audit.env");
+        mcp_gateway::gateway::test_helpers::write_owner_only(&env, format!("{env_var}={value}\n"))
+            .expect("write env file");
+        let body = format!("env_files:\n  - {}\n{auth}", env.display());
+        let path = write_config(&dir, &body);
+        let loaded = mcp_gateway::config::Config::load_evaluated(Some(&path)).map(|e| e.config);
+        (dir, loaded)
+    };
+    let (_dir, off) = config(AUTH_ON, "false");
+    let err = off.expect_err("auth on with the variable set to false must not load");
+    assert!(
+        err.to_string().contains("security.transparency_log"),
+        "{err}"
+    );
+
+    let (_dir, on) = config("auth:\n  enabled: false\n", "true");
+    let on = on.expect("auth off with the variable set to true loads");
+    assert_eq!(on.security.transparency_log.enabled, Some(true));
+    assert!(on.security.transparency_log.is_enabled(on.auth.enabled));
 }

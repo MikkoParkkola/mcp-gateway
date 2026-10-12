@@ -19,7 +19,8 @@ spec = importlib.util.spec_from_file_location("rows", HERE / "check_inventory_ro
 rows = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rows)
 
-HEADER = "path\tfn\toccurrence\ttier\tcategory\tname\treason\n"
+HEADER = "path\tfn\toccurrence\ttier\tcategory\tqualified\treason\n"
+UNENFORCING_HEADER = "path\tfn\toccurrence\treason\n"
 
 
 class Repo:
@@ -31,12 +32,16 @@ class Repo:
         self.git("config", "user.name", "t")
         self.write(rows.INVENTORY, HEADER)
         self.write("src/oauth/mod.rs", "pub fn existing() {}\n")
+        # A crate root: mounts are judged by a walk from the roots (the
+        # orphan gate's resolver), so the tree needs one.
+        self.write("src/lib.rs", "pub mod oauth;\npub mod cli;\n")
+        self.write("src/cli/mod.rs", "")
         self.commit("base")
         self.git("checkout", "-q", "-b", "change")
 
     def git(self, *args: str) -> str:
         return subprocess.run(
-            ["git", *args], cwd=self.root, check=True, capture_output=True, text=True
+            ["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", *args], cwd=self.root, check=True, capture_output=True, text=True
         ).stdout
 
     def write(self, path: str, text: str) -> None:
@@ -50,7 +55,17 @@ class Repo:
 
     def missing(self) -> list[str]:
         rows.ROOT = self.root
+        rows.mount_status.cache_clear()
         return sorted(name for _, name, _, _ in rows.missing_rows("base", "HEAD"))
+
+    def problems(self) -> list[str]:
+        """Test-named files the change touches that are mounted nowhere or
+        outside tests (MIK-8405.SPLIT.5). Empty on a script without the check,
+        so a red row fails at its own assertion."""
+        rows.ROOT = self.root
+        rows.mount_status.cache_clear()
+        check = getattr(rows, "test_file_problems", lambda _base, _head: [])
+        return check("base", "HEAD")
 
 
 class CheckInventoryRows(unittest.TestCase):
@@ -66,7 +81,7 @@ class CheckInventoryRows(unittest.TestCase):
     def test_a_row_in_either_file_passes(self) -> None:
         self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\nfn a() {}\nfn b() {}\n")
         self.repo.write(rows.INVENTORY, HEADER + "src/oauth/mod.rs\ta\t1\tcritical\tb\ta\tr\n")
-        self.repo.write(rows.UNENFORCING, "src/oauth/mod.rs\tb\t1\tformats a message\n")
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\tb\t1\tformats a message\n")
         self.repo.commit("add")
         self.assertEqual(self.repo.missing(), [])
 
@@ -81,8 +96,16 @@ class CheckInventoryRows(unittest.TestCase):
             "pub fn existing() {}\n#[cfg(test)]\nmod tests {\n    fn helper() {}\n}\n",
         )
         self.repo.write("src/oauth/x_tests.rs", "fn case() {}\n")
+        # Mounted for tests: an unmounted test file is a finding of its own
+        # (MIK-8405.SPLIT.5), not a pass.
+        self.repo.write(
+            "src/oauth/mod.rs",
+            'pub fn existing() {}\n#[cfg(test)]\nmod tests {\n    fn helper() {}\n}\n'
+            '#[cfg(test)]\n#[path = "x_tests.rs"]\nmod x;\n',
+        )
         self.repo.commit("add")
         self.assertEqual(self.repo.missing(), [])
+        self.assertEqual(self.repo.problems(), [])
 
     def test_a_file_declared_only_for_tests_needs_no_row(self) -> None:
         # Declared by `#[path]` under cfg(test), and from a test file in turn.
@@ -156,10 +179,17 @@ class CheckInventoryRows(unittest.TestCase):
         self.assertEqual(self.repo.missing(), ["hook"])
 
     def test_an_unenforcing_row_without_a_reason_does_not_count(self) -> None:
+        # MIK-8279: a row without its reason is no longer skipped quietly (which
+        # left the function reported missing); it is a malformed row, named.
         self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\nfn a() {}\nfn b() {}\n")
-        self.repo.write(rows.UNENFORCING, "src/oauth/mod.rs\ta\t1\t\nsrc/oauth/mod.rs\tb\t1\n")
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\ta\t1\t\nsrc/oauth/mod.rs\tb\t1\n")
         self.repo.commit("add")
-        self.assertEqual(self.repo.missing(), ["a", "b"])
+        with self.assertRaises(rows.ledger.LedgerError) as raised:
+            self.repo.missing()
+        found = raised.exception.problems
+        self.assertEqual(len(found), 2, found)
+        self.assertIn(f"{rows.UNENFORCING}:2: the reason must not be empty", found[0])
+        self.assertIn(f"{rows.UNENFORCING}:3: 3 columns", found[1])
 
     def test_the_whole_tree_mode_sees_a_function_older_than_the_change(self) -> None:
         # MIK-8195: `existing` came in with the base, so the diff check never
@@ -167,12 +197,8 @@ class CheckInventoryRows(unittest.TestCase):
         self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\nfn added() {}\n")
         self.repo.commit("add")
         rows.ROOT = self.repo.root
-        self.addCleanup(setattr, rows, "SWEPT_AREAS", rows.SWEPT_AREAS)
-        rows.SWEPT_AREAS = ("src/cli/",)
-        self.assertEqual(rows.missing_rows(rows.ALL, "HEAD"), [], "an unswept area is not enforced yet")
-        rows.SWEPT_AREAS = ("src/oauth/",)
         self.assertEqual(sorted(f[1] for f in rows.missing_rows(rows.ALL, "HEAD")), ["added", "existing"])
-        self.repo.write(rows.UNENFORCING, "src/oauth/mod.rs\texisting\t1\tr\nsrc/oauth/mod.rs\tadded\t1\tr\n")
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\texisting\t1\tr\nsrc/oauth/mod.rs\tadded\t1\tr\n")
         self.repo.commit("rows")
         self.assertEqual(rows.missing_rows(rows.ALL, "HEAD"), [])
 
@@ -181,6 +207,208 @@ class CheckInventoryRows(unittest.TestCase):
         self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\nfn helper() {}\n")
         self.repo.commit("add")
         self.assertEqual(self.repo.missing(), ["helper"])
+
+
+class TestNamedFiles(unittest.TestCase):
+    """MIK-8405.SPLIT.5: a file named like a test is skipped only when it is
+    mounted, and mounted only under `#[cfg(test)]`. Before, the name alone
+    skipped it, so production code in a `*_tests.rs` escaped the inventory and
+    an unmounted one lost its tests silently."""
+
+    def setUp(self) -> None:
+        self.repo = Repo()
+        self.addCleanup(self.repo.dir.cleanup)
+
+    def test_a_test_named_file_mounted_outside_tests_is_inventoried_and_reported(self) -> None:
+        self.repo.write(
+            "src/oauth/mod.rs",
+            'pub fn existing() {}\n#[path = "store_tests.rs"]\nmod store;\n',
+        )
+        self.repo.write("src/oauth/store_tests.rs", "pub fn refuse() {}\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), ["refuse"])
+        self.assertEqual(
+            self.repo.problems(),
+            ["src/oauth/store_tests.rs: named like a test file but compiled outside tests"],
+        )
+
+    def test_a_test_named_file_mounted_nowhere_is_left_to_the_orphan_gate(self) -> None:
+        # Not compiled at all, so it has no functions to inventory; the orphan
+        # gate (scripts/dev/check-orphan-test-modules.py, CI) reports it.
+        self.repo.write("src/oauth/orphan_tests.rs", "fn case() {}\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), [])
+        self.assertEqual(self.repo.problems(), [])
+
+    def test_a_production_file_declared_from_a_test_named_one_is_inventoried(self) -> None:
+        # The declarer's name used to make its children test-only too.
+        self.repo.write(
+            "src/oauth/mod.rs",
+            'pub fn existing() {}\n#[path = "outer_tests.rs"]\nmod outer;\n',
+        )
+        self.repo.write("src/oauth/outer_tests.rs", '#[path = "inner.rs"]\nmod inner;\n')
+        self.repo.write("src/oauth/inner.rs", "pub fn deep() {}\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), ["deep"])
+
+    def test_a_same_named_module_elsewhere_is_not_a_mount(self) -> None:
+        # `store_tests/admission.rs` is mounted by `store_tests.rs` under a
+        # cfg(test) parent; an unrelated production `mod admission;` in
+        # another directory must not count as its mount.
+        self.repo.write(
+            "src/oauth/mod.rs",
+            "pub fn existing() {}\nmod admission;\n#[cfg(test)]\nmod store_tests;\n",
+        )
+        self.repo.write("src/oauth/admission.rs", "fn a() {}\n")
+        self.repo.write("src/oauth/store_tests.rs", "mod admission;\n")
+        self.repo.write("src/oauth/store_tests/admission.rs", "fn case() {}\n")
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/admission.rs\ta\t1\tformats\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), [])
+        self.assertEqual(self.repo.problems(), [])
+
+    def test_a_file_mounted_inside_an_inline_test_module_passes(self) -> None:
+        # server/mod.rs mounts server/tests/*.rs as `mod x;` inside an inline
+        # `#[cfg(test)] mod tests { .. }`: the inline name is a directory.
+        self.repo.write(
+            "src/oauth/mod.rs",
+            "pub fn existing() {}\n#[cfg(test)]\nmod tests {\n    mod boot;\n"
+            '    #[path = "nested/deep_tests.rs"]\n    mod deep;\n}\n',
+        )
+        self.repo.write("src/oauth/tests/boot.rs", "fn case() {}\n")
+        self.repo.write("src/oauth/tests/nested/deep_tests.rs", "fn other() {}\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), [])
+        self.assertEqual(self.repo.problems(), [])
+
+    def test_a_test_named_file_mounted_under_cfg_test_passes(self) -> None:
+        self.repo.write(
+            "src/oauth/mod.rs",
+            'pub fn existing() {}\n#[cfg(all(test, feature = "x"))]\n#[path = "case_tests.rs"]\nmod case;\n',
+        )
+        self.repo.write("src/oauth/case_tests.rs", "fn helper() {}\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), [])
+        self.assertEqual(self.repo.problems(), [])
+
+
+    def test_mounts_are_read_at_head_not_from_the_working_tree(self) -> None:
+        # #3860 round 2 (gpt HIGH, muse): an uncommitted cfg(test) on the
+        # mount must not clear a committed test-named production source.
+        self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\npub mod case_tests;\n")
+        self.repo.write("src/oauth/case_tests.rs", "pub fn shipped() {}\n")
+        self.repo.commit("add")
+        self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\n#[cfg(test)]\nmod case_tests;\n")
+        self.assertEqual(self.repo.missing(), ["shipped"])
+        self.assertEqual(len(self.repo.problems()), 1)
+
+    def test_a_cfg_test_beside_another_attribute_on_one_line_is_test_only(self) -> None:
+        # #3860 round 2 (gpt): the greedy match read `test)] #[cfg(unix`.
+        self.repo.write(
+            "src/oauth/mod.rs",
+            "pub fn existing() {}\n#[cfg(test)] #[cfg(unix)]\nfn probe() {}\n#[cfg(unix)] #[inline]\nfn live() {}\n",
+        )
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), ["live"])
+
+    def test_a_path_mount_through_another_directory_is_followed(self) -> None:
+        # #3860 round 3 (muse HIGH): only src/tests/benches/examples were
+        # written out, so a chain through gen/ read as unreachable.
+        self.repo.write("src/lib.rs", 'pub mod cli;\n#[path = "../gen/hub.rs"]\npub mod hub;\n')
+        self.repo.write("gen/hub.rs", '#[path = "../src/oauth/mod.rs"]\npub mod oauth;\n')
+        self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\npub fn routed() {}\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), ["routed"])
+
+    def test_an_export_ignored_source_is_still_judged(self) -> None:
+        # #3860 round 3 (gpt): git archive honours export-ignore.
+        self.repo.write(".gitattributes", "src/oauth/** export-ignore\n")
+        self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\npub fn hidden() {}\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), ["hidden"])
+
+    def test_a_commented_cfg_test_does_not_hide_a_function(self) -> None:
+        # #3860 round 3 (gpt): `/* #[cfg(test)] */` beside an attribute.
+        self.repo.write(
+            "src/oauth/mod.rs",
+            "pub fn existing() {}\n#[inline] /* #[cfg(test)] */\nfn live() {}\n"
+            "#[cfg(all (test, unix))]\nfn probe() {}\n",
+        )
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), ["live"])
+
+    def test_a_cfg_test_and_a_brace_in_a_block_comment_hide_no_function(self) -> None:
+        # #3860 round 3 (muse CRITICAL, lead ruling): a nested, multi-line
+        # block comment holding `#[cfg(test)]` and a `{` before a live fn.
+        self.repo.write(
+            "src/oauth/mod.rs",
+            "pub fn existing() {}\n/* outer\n   /* #[cfg(test)] */\n#[cfg(test)]\n   {\n*/\n"
+            "pub fn live() {}\nconst C: &str = \"#[cfg(test)] {\";\npub fn after() {}\n",
+        )
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), ["after", "live"])
+
+class PathspecShape(unittest.TestCase):
+    """`--all` hands the prefixes to git as pathspecs, and a pathspec names
+    one path: a bare stem matched `task_confirmation/` and never scanned
+    `task_confirmation.rs` (MIK-8195). Every entry is a directory or a file."""
+
+    def test_every_prefix_is_a_directory_or_a_rust_file(self) -> None:
+        stems = [p for p in rows.PREFIXES if not p.endswith(("/", ".rs"))]
+        self.assertEqual(stems, [], "spell a module as both `x.rs` and `x/`")
+
+    def test_every_file_the_grade_reads_is_scanned(self) -> None:
+        # The grade matches by prefix, git by pathspec: any spelling that
+        # parts them leaves a graded file the inventory check never reads.
+        root = HERE.parent.parent
+        grader_spec = importlib.util.spec_from_file_location(
+            "grader", HERE / "critical_path_coverage.py"
+        )
+        grader = importlib.util.module_from_spec(grader_spec)
+        grader_spec.loader.exec_module(grader)
+        prefixes = tuple(p for _, group, _ in grader.PATHS for p in group)
+
+        def tracked(*pathspecs: str) -> set[str]:
+            out = subprocess.run(
+                ["git", "ls-files", "--", *pathspecs],
+                cwd=root, check=True, capture_output=True, text=True,
+            ).stdout
+            return {line for line in out.splitlines() if line.endswith(".rs")}
+
+        graded = {f for f in tracked("src") if f.startswith(prefixes)}
+        self.assertEqual(sorted(graded - tracked(*rows.PREFIXES)), [])
+
+
+class CoverageGradeTrigger(unittest.TestCase):
+    """The CI grade's pull_request paths name exactly the COV.3 prefixes
+    (MIK-8217): a prefix missing there lets a PR on that path merge ungraded.
+    A GitHub `*` does not cross `/`, so a bare stem needs both its file and
+    its directory form."""
+
+    def test_the_pull_request_paths_cover_every_cov3_prefix(self) -> None:
+        text = (HERE.parent.parent / ".github/workflows/coverage-probe.yml").read_text()
+        block = text.split("  pull_request:", 1)[1].split("  workflow_dispatch:", 1)[0]
+        listed = {line.strip()[3:-1] for line in block.splitlines()
+                  if line.strip().startswith('- "')}
+        wanted = set()
+        for prefix in rows.PREFIXES:
+            if prefix.endswith("/"):
+                wanted.add(prefix + "**")
+            elif prefix.endswith(".rs"):
+                wanted.add(prefix)
+            else:
+                wanted |= {prefix + ".rs", prefix + "/**"}
+        # What the grade itself reads: a change to any of these is graded too.
+        wanted |= {
+            "docs/release/v4.0.0-critical-functions.tsv",
+            "docs/release/v4.0.0-unenforcing-functions.tsv",
+            "docs/release/inventory.d/**",
+            "scripts/release/inventory_ledger.py",
+            "scripts/release/critical_function_coverage.py",
+            "scripts/release/critical_path_coverage.py",
+            ".github/workflows/coverage-probe.yml",
+        }
+        self.assertEqual(listed, wanted)
 
 
 if __name__ == "__main__":

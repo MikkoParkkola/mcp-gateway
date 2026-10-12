@@ -125,12 +125,17 @@ pub enum BackendRuntimeState {
     Denied,
 }
 
+/// Start events a slow listener may fall behind by before it lags; a lagged
+/// listener retries every pending cancel instead (MIK-8347).
+const STARTED_FEED: usize = 64;
+
 /// Backend registry - manages all backends
 pub struct BackendRegistry {
     /// Backends by name
     backends: DashMap<String, Arc<Backend>>,
     /// Where a changed backend name goes so listeners hear `tools/list_changed`
-    /// (F24). Unset outside the HTTP server, which is the only mode that delivers it.
+    /// (F24). Set by the HTTP server, and by a stdio session (MIK-8278); unset
+    /// in a registry no server runs.
     change_feed: std::sync::OnceLock<super::tools_nudge::NudgeFeed>,
     /// Whether shutdown has begun. Set once by [`BackendRegistry::stop_all`] and
     /// never cleared.
@@ -191,6 +196,8 @@ pub struct BackendRegistry {
     /// Handed to the shared slot's breaker of every backend registered, so
     /// one observer hears each backend's health once (not per user slot).
     breaker_observer: crate::observer::Observer<crate::failsafe::HealthChange>,
+    /// Names of backends whose shared start just succeeded (MIK-8347).
+    started: tokio::sync::broadcast::Sender<String>,
 }
 
 impl BackendRegistry {
@@ -205,7 +212,13 @@ impl BackendRegistry {
             reload_read: Arc::new(tokio::sync::Semaphore::new(1)),
             breaker_observer: crate::observer::Observer::default(),
             destination: std::sync::OnceLock::new(),
+            started: tokio::sync::broadcast::channel(STARTED_FEED).0,
         }
+    }
+
+    /// Hear the name of each backend whose shared start succeeds from now on.
+    pub(crate) fn subscribe_started(&self) -> tokio::sync::broadcast::Receiver<String> {
+        self.started.subscribe()
     }
 
     /// The slot a config-reload file read holds until it returns (#1808).
@@ -284,6 +297,7 @@ impl BackendRegistry {
             }
             backend.stamp_destination(destinations.for_backend(&backend.name));
         }
+        backend.stamp_started(self.started.clone());
         let name = backend.name.clone();
         let breaker = Arc::clone(&backend.shared_entry().failsafe.circuit_breaker);
         if let Some(observer) = self.breaker_observer.get() {
@@ -392,7 +406,8 @@ impl BackendRegistry {
     }
 
     /// Route every change to the tools discovery shows to one consumer (F24).
-    /// Set once, by the HTTP server; backends already held are attached too, so
+    /// Set once, by the HTTP server or the stdio session; backends already held
+    /// are attached too, so
     /// a list they store from now on is seen.
     pub(crate) fn set_change_feed(&self, feed: super::tools_nudge::NudgeFeed) {
         if self.change_feed.set(feed).is_err() {
@@ -422,6 +437,16 @@ impl BackendRegistry {
     pub(crate) fn nudge_catalogue(&self, name: &str) {
         if let Some(feed) = self.change_feed.get() {
             let _ = feed.send(super::tools_nudge::ToolsNudge::Catalogue {
+                name: name.to_string(),
+            });
+        }
+    }
+
+    /// Report that the capability catalogue `name` finished its startup scan:
+    /// announced whatever it lists. A no-op until a feed is set.
+    pub(crate) fn nudge_catalogue_scanned(&self, name: &str) {
+        if let Some(feed) = self.change_feed.get() {
+            let _ = feed.send(super::tools_nudge::ToolsNudge::CatalogueScanned {
                 name: name.to_string(),
             });
         }

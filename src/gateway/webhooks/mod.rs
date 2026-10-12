@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
     Router,
@@ -75,11 +74,10 @@ impl EndpointStats {
 
     fn record_received(&self) {
         self.received.fetch_add(1, Ordering::Relaxed);
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        self.last_received_at.store(ts, Ordering::Relaxed);
+        // A statistic: on a clock before 1970 the previous time is kept, never 0.
+        if let Ok(ts) = crate::clock::unix_secs() {
+            self.last_received_at.store(ts, Ordering::Relaxed);
+        }
     }
 }
 
@@ -506,7 +504,20 @@ async fn webhook_handler(
     };
 
     // An `event:` route emits an MCP event whether or not it notifies.
-    events::emit(&state, &headers, &body, &payload, &notification.event_type).await;
+    // On a clock that cannot date the event (before 1970) the POST is
+    // refused before any session is told, so the sender's retry runs it once
+    // (MIK-8202).
+    if events::emit(&state, &headers, &body, &payload, &notification.event_type)
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(axum::http::header::RETRY_AFTER, "60")],
+            "the gateway's clock reads before 1970; retry later",
+        )
+            .into_response();
+    }
 
     // Deliver to in-scope SSE sessions if enabled: a webhook carries one
     // integration's data, so a caller without access to the capability
@@ -704,6 +715,8 @@ fn extract_json_path<'a>(path: &str, payload: &'a Value) -> Option<&'a Value> {
 // Tests
 // ============================================================================
 
+#[cfg(test)]
+mod clock_tests;
 #[cfg(test)]
 mod hmac_tests;
 #[cfg(test)]

@@ -10,7 +10,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::super::MetaMcp;
-use super::{NONCE_META, SigningInvocationContext, SigningScope};
+use super::{NONCE_META, RefundWitness, SigningInvocationContext, SigningScope};
 use crate::gateway::authz::AllowAll;
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
 use crate::gateway::meta_mcp::authz_tests::{counted_backend, ctx};
@@ -216,6 +216,7 @@ fn nonce_is_free(meta: &MetaMcp) -> bool {
         &ctx(&AllowAll),
     )
     .is_ok()
+        && later.admitted
 }
 
 /// MIK-7869.NONCE.1: the question could not be delivered, the call is refused,
@@ -331,5 +332,169 @@ async fn a_delivered_question_left_unanswered_keeps_the_nonce_spent() {
     assert!(
         !delivered_then_unanswered(false).await,
         "a timed-out, delivered question gave the nonce back"
+    );
+}
+
+/// Signs `gateway_run_playbook` of an unknown playbook under `elicit-nonce`,
+/// keyed, with or without a task intent, and has execution admission refuse it
+/// (the plan check) holding `witness`, with the spent veto set per `veto`.
+/// Returns whether the nonce is free afterwards.
+async fn admission_refusal_frees_nonce(
+    task: bool,
+    witness: Option<RefundWitness>,
+    veto: Veto,
+) -> bool {
+    use crate::gateway::subscription_registry::{DEFAULT_MAX_LISTENERS, SubscriptionRegistry};
+    use crate::gateway::task_service::{StoreLimits, TaskExecutor, TaskIntent, TaskService};
+    use crate::idempotency::admission::ExecutionAdmission;
+    use std::sync::Arc;
+    const TOOL: &str = "gateway_run_playbook";
+    const OWNER: &str = "unspent-owner";
+    const KEY: &str = "unspent-key";
+    let meta = meta();
+    let dir = tempfile::tempdir().expect("a task store root");
+    let service = Arc::new(
+        TaskService::open(
+            &dir.path().join("tasks"),
+            StoreLimits::default(),
+            ExecutionAdmission::new(Arc::new(|| 1_000)),
+        )
+        .await
+        .expect("the task store opens"),
+    );
+    let refused = json!({"name": "absent-plan"});
+    let intent = task.then(|| TaskIntent {
+        executor: TaskExecutor::new(
+            Arc::clone(&service),
+            Arc::new(SubscriptionRegistry::new(
+                DEFAULT_MAX_LISTENERS,
+                crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+            )),
+            1,
+        ),
+        owned: crate::gateway::task_service::execution::OwnedCallerContext::new(
+            crate::gateway::task_service::host::TaskHost::Http(std::sync::Weak::new()),
+            crate::gateway::router::OwnedRouterAuthorizer::capture(None, None, None),
+            None,
+            None,
+            None,
+            None,
+            None,
+            OWNER.to_owned(),
+            crate::gateway::meta_mcp::Authentication::Anonymous,
+            crate::security::audit::CredentialKind::None,
+            false,
+            crate::protocol::meta::Declared::NONE,
+            None,
+            None,
+            None,
+        ),
+        request: crate::gateway::meta_mcp::task_admission_request(
+            OWNER.to_owned(),
+            KEY.to_owned(),
+            TOOL,
+            &refused,
+        ),
+        options: crate::protocol::tasks::TaskOptions {
+            ttl_ms: Some(86_400_000),
+            poll_interval_ms: Some(1_000),
+        },
+    });
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some(KEY.to_owned()),
+        ..crate::protocol::mrtr::RetryFields::default()
+    };
+    let (mut signing, arguments) = captured(TOOL, &refused, "elicit-nonce");
+    let mut caller = ctx(&AllowAll);
+    caller.retry = &retry;
+    caller.task = intent;
+    meta.prepare_signing_for_call(&mut signing, TOOL, &arguments, None, &caller)
+        .expect("signing admits the call; admission is the one to refuse it");
+    assert!(signing.admitted, "premise: the nonce was admitted");
+    if matches!(veto, Veto::Marked) {
+        signing.mark_spent();
+    }
+    caller.signing = Some(&signing);
+    let admitted = meta.admit_meta_sync(
+        crate::gateway::meta_mcp::AdmissionOwner::for_test(caller.owner_principal()),
+        &caller,
+        TOOL,
+        &arguments,
+        None,
+        &crate::protocol::RequestId::Number(7),
+        witness,
+    );
+    assert!(admitted.is_err(), "premise: admission refused the call");
+    nonce_is_free(&meta)
+}
+
+/// MIK-8353 (r4 amendment L2): a task call refused by admission that no longer
+/// holds its witness (X14 spent its grant) keeps the nonce spent. Mutant: the
+/// give-back taken without the witness.
+#[tokio::test]
+async fn a_task_call_refused_without_its_witness_keeps_its_nonce() {
+    assert!(
+        !admission_refusal_frees_nonce(true, None, Veto::Clear).await,
+        "a refusal with no witness gave the nonce back"
+    );
+}
+
+/// MIK-8353.NONCEFX.4a: the same task call, still holding its witness (nothing
+/// consumed), gets its nonce back. Mutant mGuard: MIK-8150's task guard kept.
+#[tokio::test]
+async fn a_task_call_refused_with_its_witness_gives_its_nonce_back() {
+    let witness = Some(RefundWitness::at_capture());
+    assert!(
+        admission_refusal_frees_nonce(true, witness, Veto::Clear).await,
+        "a task call refused with nothing spent kept its nonce"
+    );
+}
+
+/// Control: the same refusal of a synchronous call gives the nonce back
+/// (MIK-8150 NONCE.1).
+#[tokio::test]
+async fn a_sync_call_refused_by_admission_gives_its_nonce_back() {
+    let witness = Some(RefundWitness::at_capture());
+    assert!(
+        admission_refusal_frees_nonce(false, witness, Veto::Clear).await,
+        "a synchronous call's admission refusal kept its nonce"
+    );
+}
+
+/// Whether a test marks the call spent before admission refuses it.
+enum Veto {
+    Clear,
+    Marked,
+}
+
+/// MIK-8353 VETO-1: a call marked spent gives nothing back, even holding its
+/// witness: the veto only ever stops a refund. Mutant mVeto: the veto check in
+/// `give_back_nonce` removed.
+#[tokio::test]
+async fn a_spent_mark_vetoes_a_witnessed_refund() {
+    let witness = Some(RefundWitness::at_capture());
+    assert!(
+        !admission_refusal_frees_nonce(false, witness, Veto::Marked).await,
+        "a call marked spent gave its nonce back"
+    );
+}
+
+/// MIK-8353 slice 3a (W3): a refund asked with nothing dispatched is due only
+/// while the call still holds its witness. Without one (a may-effect step
+/// dropped it), the nonce stays spent.
+#[test]
+fn a_refund_is_due_only_with_the_witness() {
+    let (context, _) = captured("gateway_invoke", &json!({}), "w3-nonce");
+    context.want_refund();
+    assert!(!context.refund_due(), "a refund with no witness was due");
+    context.keep_witness(RefundWitness::at_capture());
+    assert!(context.refund_due(), "the witness was kept");
+    assert!(
+        context.take_witness().is_some(),
+        "and can be taken by the next step"
+    );
+    assert!(
+        !context.refund_due(),
+        "a taken witness no longer covers the refund"
     );
 }

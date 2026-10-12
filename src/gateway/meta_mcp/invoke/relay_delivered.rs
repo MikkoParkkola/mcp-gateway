@@ -249,15 +249,39 @@ fn keep_plan_receipts(
         receipts.retain(|r| !r.in_plan && r.kind != super::Kind::Seam);
         return;
     };
+    // `MIK-8066` 2b: an over-bound answer is read through a view (no leaf
+    // order: no cross-step seams, B4s) or not at all (D6: no walk past the
+    // preflight, no seam pass). Subset seams on a view are D4's.
+    let leaves = delivered.view().is_none() && !delivered.unread();
+    let read = !delivered.unread();
+    // `MIK-8209` K7: each answer leaf's step, so a receipt matches its own
+    // span first; the same walk as the seam pass.
+    let labels = if delivered.unread() {
+        Vec::new()
+    } else {
+        super::seams::answer_parts(answer)
+            .map(|parts| parts.into_iter().map(|(_, label)| label).collect())
+            .unwrap_or_default()
+    };
+    let delivered = delivered.with_labels(labels);
     for r in receipts.iter_mut().filter(|r| r.in_plan) {
         let digest = std::mem::take(&mut r.digest);
-        r.digest = fw.retain_delivered(digest, &delivered);
+        r.digest = fw.retain_delivered(digest, &delivered, r.step);
         r.pending_retain = false;
     }
-    super::seams::add_seams(fw, receipts, answer);
+    if leaves {
+        super::seams::add_seams(fw, receipts, answer);
+    }
     for r in receipts.iter_mut().filter(|r| r.in_plan) {
         let digest = std::mem::take(&mut r.digest);
         r.digest = fw.cap_kept(digest);
+    }
+    // `MIK-8205` (S4): after capping, which rebuilds each digest without
+    // seams, and against the capped receipts, so a piece the cap cut is no
+    // step's. On a view, ownership is by exact leaf hash (`MIK-8066` D4);
+    // an unread answer gets no seam pass (D6).
+    if read {
+        super::seams::add_subset_seams(fw, receipts, answer);
     }
 }
 
@@ -283,7 +307,7 @@ fn keep_to_rewritten(
     match staged.unwrap_or_else(|_| fw.delivered_preferring(&read, &flat, None)) {
         Some(delivered) => {
             let digest = std::mem::take(&mut one.digest);
-            one.digest = fw.retain_delivered(digest, &delivered);
+            one.digest = fw.retain_delivered(digest, &delivered, one.step);
         }
         None => receipts.clear(),
     }
@@ -711,3 +735,7 @@ mod tests {
         .await;
     }
 }
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "relay_delivered_p3_tests.rs"]
+mod p3_tests;

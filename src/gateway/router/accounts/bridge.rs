@@ -101,13 +101,8 @@ impl OwuiSessionBridge {
         headers: &HeaderMap,
     ) -> Option<VerifiedIdentity> {
         let (issuer, subject) = self.principal(session, headers).await?;
-        Some(VerifiedIdentity {
-            subject,
-            email: String::new(),
-            name: None,
-            groups: Vec::new(),
-            issuer,
-        })
+        // A principal that names nobody is no principal (MIK-8286).
+        VerifiedIdentity::checked(issuer, subject, String::new(), None, Vec::new())
     }
 
     async fn session_user(&self, endpoint: &str, token: &str) -> Option<String> {

@@ -25,6 +25,8 @@ const CACHE_LIST_DRAIN_BUDGET: Duration = Duration::from_secs(120);
 
 mod annotations;
 mod cached_metadata;
+mod caller_slots;
+mod catalogue_verdict;
 mod descriptor_gate;
 mod era;
 mod fill_check;
@@ -61,12 +63,14 @@ impl Backend {
     }
 }
 
+pub(crate) use catalogue_verdict::CatalogueVerdict;
 pub(crate) use era::removed_method_refusal_message;
 #[cfg(test)]
 pub(crate) use pool::PoolKey;
 #[cfg(not(test))]
 use pool::PoolKey;
 use pool::PooledEntry;
+pub(crate) use probe::HealthTicker;
 
 pub(crate) use annotations::prepare_tool_metadata;
 // Read only by the `firewall`-gated direct-route redaction rows.
@@ -99,6 +103,11 @@ pub struct Backend {
     /// not spawn duplicate connections for the same slot and distinct users
     /// never share a session (IDP.7).
     pool: DashMap<PoolKey, Arc<PooledEntry>>,
+    /// Which per-user slot holds each caller's own catalogue (MIK-8356,
+    /// design R3.5): caller principal id to that slot's binding and entry.
+    /// Written when a fill stores into the slot, removed with the entry
+    /// (`retire`), so an entry lives exactly as long as its slot.
+    caller_slots: DashMap<String, caller_slots::CallerSlot>,
     /// Failsafe configuration, cloned so a freshly created pool slot
     /// (`pooled_entry`) can build its own independent `Failsafe` (MIK-6735
     /// fix 1). The per-backend `Failsafe` this replaced is gone; every slot,
@@ -145,6 +154,10 @@ pub struct Backend {
     semaphore: Semaphore,
     /// Request counter
     request_count: AtomicU64,
+    /// List fills that passed admission and so may start or contact the
+    /// backend: a caller reads it around a check to learn whether that check
+    /// reached outside the gateway (MIK-8353 3a).
+    list_fills: AtomicU64,
     /// Cleanup tasks for transports that `force_restart` replaced while
     /// requests were still using them, plus the shutdown latch that stops new
     /// ones being created.
@@ -229,6 +242,9 @@ pub struct Backend {
     /// Where this backend's transports may connect; stamped by its registry.
     /// Unstamped means `Configured`: a backend no config governs.
     destination: std::sync::OnceLock<crate::security::ssrf::DestinationPolicy>,
+    /// Where this backend says its shared start succeeded; stamped by its
+    /// registry (MIK-8347). Unstamped: nobody listens.
+    started: std::sync::OnceLock<tokio::sync::broadcast::Sender<String>>,
     /// Set, and never cleared, when a start began before any stamp: whatever
     /// that start built may still be alive somewhere (pooled, closing, held
     /// by a request), so a hardened pairing refuses this backend (MIK-7700).
@@ -249,6 +265,38 @@ pub struct Backend {
     /// published (the publish order of MIK-7897 LIFE.3a).
     #[cfg(test)]
     pub(crate) publish_gate: parking_lot::Mutex<Option<Arc<MarkWindowGate>>>,
+    /// A test's pause point in `force_restart`, past its login and stopping
+    /// checks and before it builds or takes anything (MIK-8258 RACE.1).
+    #[cfg(test)]
+    pub(crate) restart_take_gate: parking_lot::Mutex<Option<Arc<MarkWindowGate>>>,
+    /// A test's pause point in `health_probe`, after its start failed and
+    /// before it decides whether to rebuild (MIK-8258 RACE.5).
+    #[cfg(test)]
+    pub(crate) probe_error_gate: parking_lot::Mutex<Option<Arc<MarkWindowGate>>>,
+    /// How many forced restarts reached their rebuild: a test's observable
+    /// for "the probe restarted", which a failed rebuild that keeps the old
+    /// transport pooled cannot show through the slot (MIK-8012).
+    #[cfg(test)]
+    pub(crate) rebuilds_attempted: std::sync::atomic::AtomicUsize,
+    /// The OAuth client of the last HTTP transport a start built: a row ages
+    /// its token on demand instead of sleeping one out (MIK-8269).
+    #[cfg(test)]
+    pub(crate) last_oauth_client:
+        parking_lot::Mutex<Option<Arc<tokio::sync::Mutex<crate::oauth::OAuthClient>>>>,
+    /// Run once by the next publish between its era install and its slot
+    /// write: where a concurrent era writer must not land (MIK-8012 HOLD.1).
+    #[cfg(test)]
+    pub(crate) between_install_and_write: parking_lot::Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Run once by the next publish after it writes the listen handle and
+    /// before it writes the transport: inside the swap a reader of the slot's
+    /// detected flavour must not see (MIK-8125).
+    #[cfg(test)]
+    pub(crate) between_listen_and_transport: parking_lot::Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// The slot's era (`cached_now`) just before each publish makes a
+    /// transport reachable: the dialect its first request is shaped in
+    /// (MIK-8012 boundary rows).
+    #[cfg(test)]
+    pub(crate) era_at_publish: parking_lot::Mutex<Vec<Option<crate::protocol::era::Era>>>,
     /// A test's stand-ins for the user's token store and browser, used by the
     /// OAuth client [`Backend::create_oauth_client`] builds.
     #[cfg(test)]
@@ -291,6 +339,19 @@ pub(crate) struct MarkWindowGate {
 }
 
 impl Backend {
+    /// Set by [`BackendRegistry`]; the first stamp wins.
+    pub(crate) fn stamp_started(&self, feed: tokio::sync::broadcast::Sender<String>) {
+        let _ = self.started.set(feed);
+    }
+
+    /// Tell the registry this backend's shared start succeeded. No listener
+    /// is not an error.
+    pub(super) fn announce_started(&self) {
+        if let Some(feed) = self.started.get() {
+            let _ = feed.send(self.name.clone());
+        }
+    }
+
     /// Set by [`BackendRegistry`]; the first stamp wins.
     pub(crate) fn stamp_destination(&self, policy: crate::security::ssrf::DestinationPolicy) {
         let _ = self.destination.set(policy);
@@ -478,15 +539,23 @@ mod list_paging_tests;
 #[cfg(test)]
 mod pool_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
 #[path = "resend_isolation_tests.rs"]
 mod resend_isolation_tests;
 
 #[cfg(test)]
+#[path = "silence_resend_tests.rs"]
+mod silence_resend_tests;
+
+#[cfg(test)]
 #[path = "slot_eviction_tests.rs"]
 mod slot_eviction_tests;
+
+#[cfg(test)]
+#[path = "caller_slots_g3_tests.rs"]
+mod caller_slots_g3_tests;
 
 #[cfg(test)]
 #[path = "grant_reload_eviction_tests.rs"]
@@ -542,6 +611,10 @@ mod destination_tests;
 #[cfg(test)]
 #[path = "publish_order_tests.rs"]
 mod publish_order_tests;
+
+#[cfg(test)]
+#[path = "started_feed_tests.rs"]
+mod started_feed_tests;
 #[cfg(test)]
 #[path = "stop_race_tests.rs"]
 mod stop_race_tests;

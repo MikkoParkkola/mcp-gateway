@@ -119,6 +119,28 @@ pub(crate) fn meta_response_targets(
     targets
 }
 
+/// `targets` once this request's caller verdicts are taken (MIK-8356 fold
+/// kimi F2): a target the request's memo records as withheld is dropped, so a
+/// name answered as absent is attributed exactly as an absent name is (the
+/// gateway's own target when none is left). The memo is fixed for the
+/// request, so live backend state still cannot move the attribution.
+pub(crate) fn without_withheld(
+    external_tool: &str,
+    mut targets: Vec<ResponsePolicyTarget>,
+) -> Vec<ResponsePolicyTarget> {
+    let before = targets.len();
+    targets.retain(|target| {
+        !matches!(
+            super::visible::recorded_visibility(&target.server, &target.tool),
+            Some(super::visible::Visibility::Withheld(_))
+        )
+    });
+    if targets.is_empty() && before > 0 {
+        return meta_response_targets(external_tool, &[]);
+    }
+    targets
+}
+
 pub(crate) use crate::protocol::{ChainSource, UpstreamState};
 
 /// Server-owned delivery metadata supplied after wrapping and protocol shaping.
@@ -208,7 +230,6 @@ impl super::MetaMcp {
             _ => own,
         };
 
-        let sealed = self.sealed_question(context.method, &response);
         // One egress scan, every method and every part (MIK-8139 family):
         // a frame another pass already screened carries the mark.
         let at = super::invoke::egress::Egress {
@@ -265,14 +286,6 @@ impl super::MetaMcp {
                     -32603,
                     "Response signing failed",
                 );
-            }
-        }
-        // MIK-8131: a sealed question this finalization did not let out
-        // (refused or replaced) leaves its slot for the caller to give back.
-        if let Some((envelope, hold_key)) = sealed {
-            let state = response.result.as_ref().and_then(|r| r.get("requestState"));
-            if state.and_then(serde_json::Value::as_str) != Some(envelope.as_str()) {
-                response.unsent_hold = Some(hold_key);
             }
         }
         response
@@ -395,10 +408,17 @@ impl super::MetaMcp {
             return;
         }
         let nonce = chain_nonce.or(invoke_nonce);
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        // A link that must be emitted and cannot be dated is a refused
+        // delivery: never a link at 0, never an unlinked success, and a
+        // verified prefix is never relabelled (MIK-8202).
+        let Ok(ts) = crate::clock::unix_secs() else {
+            *response = crate::protocol::JsonRpcResponse::delivery_refusal_error(
+                response.id.take(),
+                -32001,
+                "Result cannot carry a signature chain link: the host clock reads before 1970",
+            );
+            return;
+        };
         // No upstream outcome: an origin link. Otherwise preserve the verified
         // upstream links and append, or declare the upstream unverified.
         let hop = match upstream.as_deref() {

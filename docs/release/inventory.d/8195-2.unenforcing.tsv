@@ -1,0 +1,26 @@
+src/gateway/server/warmstart.rs	default	1	Constructs the default WarmStartPolicy timing constants; no decision.
+src/gateway/server/warmstart.rs	gap_before_attempt	1	Pure arithmetic computing the retry back-off gap from elapsed time; schedules, decides no access.
+src/gateway/server/warmstart.rs	is_readiness_error	1	Classifies an Error as retryable-not-ready versus permanent; it only picks whether warm-start keeps retrying, while auth and backend gating are decided elsewhere (Backend::ensure_started and the transport).
+src/gateway/server/warmstart.rs	is_transient_io	1	Pure match of io::ErrorKind values as transient for retry purposes; no security decision.
+src/gateway/server/warmstart.rs	dormant_action	1	Pure choice between Done, Yield and FetchAnyway from a tool count and yield counter; scheduling only.
+src/gateway/server/warmstart.rs	effective_attempt_timeout	1	Pure max/saturating-multiply deriving a hang-detector timeout from the backend's own timeout; no enforcement.
+src/gateway/server/warmstart.rs	jittered	1	Random jitter on a retry gap; no decision.
+src/gateway/server/warmstart.rs	retry_warm_start_attempts	1	Generic retry loop that sleeps and re-invokes an attempt closure under a timeout; the actual backend call and any refusal are in Backend::ensure_started and warm_tools.
+src/gateway/server/warmstart.rs	build_warm_start_list	1	Collects backend names into the warm-start list via resolve_warm_start_names; plain selection plumbing.
+src/gateway/server/warmstart.rs	warm_start_prefetches_tools	1	Const matches! that is true for both modes; no decision.
+src/gateway/server/warmstart.rs	warm_start_until_cached	1	Retry orchestration that resolves the backend by name, skips a superseded instance and calls ensure_started and warm_tools; it carries no auth decision, which is made in Backend::ensure_started and the transport (borderline: it gates the warm-start backend call on instance identity).
+src/gateway/server/warmstart.rs	drop	2	SettleOnExit::drop nudges tool listeners with NudgeKind::Resolved when an attempt ends; notification plumbing only.
+src/gateway/server/warmstart.rs	resolve_warm_start_names	1	Returns the configured backend names or all names and logs the choice; selection plumbing, no decision.
+src/gateway/server/support.rs	new	1	Stores the inner RustlsAcceptor in PeerCertIdentityAcceptor; pure constructor, the identity decision is in client_identity_from_peer_chain and PeerCertIdentityService::call.
+src/gateway/server/support.rs	poll_ready	1	Delegates poll_ready to the inner service; readiness plumbing, no decision (the refusal is in PeerCertIdentityService::call).
+src/gateway/server/support.rs	shutdown_signal	1	Waits for Ctrl+C or SIGTERM and broadcasts shutdown; lifecycle plumbing that decides no allow or deny.
+src/gateway/server/support.rs	build_persisted_costs	1	Converts an EnforcerSnapshot into the PersistedCosts persistence struct field by field; the budget decision is made in the cost enforcer, not here.
+src/gateway/server/support.rs	url_authority	1	Formats host and port as a URL authority, bracketing IPv6; string formatting only.
+src/gateway/server/support.rs	dashboard_link_handoff	1	Builds a log hint string for the one-time-code handoff when public_url is HTTPS; the link gating itself is in log_startup_banner and the handoff routes.
+src/gateway/server/task_runtime.rs	within	1	Splits a shutdown window into drain, cancel and close durations; arithmetic only.
+src/gateway/server/task_runtime.rs	settle_store	1	Stops the expiry sweep and closes or retains the task store within a timeout; cleanup ordering with no allow or deny decision (sealing is in TaskExecutor).
+src/gateway/server/tools_changed.rs	fingerprint	1	Hashes a tool list into a digest for change detection; no access decision.
+src/gateway/server/tools_changed.rs	spawn_drain	1	Spawns the task that feeds nudges to decide() and announces list_changed; who hears a change is decided by Announced::backend and Announced::catalogue (critical c, MIK-8350), not here.
+src/gateway/server/tools_changed.rs	drain_until	1	Select loop over nudge channel and shutdown signal calling an announce closure; plumbing.
+src/gateway/server/cleartext.rs	cleartext_http_warning	1	Formats the startup WARN text for a non-refuse cleartext_http mode and decides nothing; cleartext_credential_refusal makes the allow or deny decision.
+src/gateway/server/identity_grants.rs	from	1	Converts a String into StartupFailure::Unrecorded, pure error-type plumbing; start_identity_grant_audit makes the serve-no-grants decision.

@@ -69,6 +69,8 @@ impl Backend {
         // which is no fault to rebuild and which the health loop skips.
         let started = crate::oauth::login_gate::non_interactive(self.ensure_started()).await;
         if let Err(e) = started {
+            #[cfg(test)]
+            super::lifecycle::hold_at(&self.probe_error_gate).await;
             if !e.is_authorization_wait() {
                 self.rebuild_from_probe().await;
             }
@@ -234,5 +236,35 @@ impl Backend {
     /// neither ends a login in flight nor opens one (MIK-7982).
     async fn rebuild_from_probe(&self) {
         let _ = crate::oauth::login_gate::non_interactive(self.force_restart()).await;
+    }
+}
+
+/// Paces the health loop (MIK-8012 PACE): the first tick returns at once, and
+/// every later one a full `period` after the previous pass ENDED.
+///
+/// A `tokio::time::interval` schedules on a fixed grid, so after a pass slower
+/// than the period (a failing rebuild can spend two discovery timeouts) the
+/// next tick is already due and the rebuild is retried with no gap.
+/// `MissedTickBehavior::Delay` still fires that overdue tick at once. The loop
+/// creates this future after each pass, so the sleep starts when the pass ends.
+pub(crate) struct HealthTicker {
+    period: Duration,
+    first: bool,
+}
+
+impl HealthTicker {
+    pub(crate) const fn new(period: Duration) -> Self {
+        Self {
+            period,
+            first: true,
+        }
+    }
+
+    /// Wait for the next pass.
+    pub(crate) async fn tick(&mut self) {
+        if std::mem::take(&mut self.first) {
+            return;
+        }
+        tokio::time::sleep(self.period).await;
     }
 }

@@ -48,6 +48,18 @@ fn now() -> u64 {
         .as_secs()
 }
 
+/// The key set that trusts exactly the signer every test installs.
+pub(crate) fn trusted_self() -> BTreeMap<String, TrustedRemoteServerKeyConfig> {
+    let pair = Ed25519KeyPair::from_seed_unchecked(&SEED).expect("seed");
+    BTreeMap::from([(
+        KEY_ID.to_owned(),
+        TrustedRemoteServerKeyConfig {
+            algorithm: RemoteServerSignatureAlgorithm::Ed25519,
+            public_key: STANDARD.encode(pair.public_key().as_ref()),
+        },
+    )])
+}
+
 /// Verify `chain` as a one-link origin chain from this gateway to itself.
 /// `received` is the digest of the result the link covers.
 pub(crate) fn verify_self(
@@ -55,14 +67,7 @@ pub(crate) fn verify_self(
     received: &str,
     nonce: &str,
 ) -> Result<Vec<ChainLink>, crate::security::signature_chain::ChainRefusal> {
-    let pair = Ed25519KeyPair::from_seed_unchecked(&SEED).expect("seed");
-    let trusted: BTreeMap<String, TrustedRemoteServerKeyConfig> = BTreeMap::from([(
-        KEY_ID.to_owned(),
-        TrustedRemoteServerKeyConfig {
-            algorithm: RemoteServerSignatureAlgorithm::Ed25519,
-            public_key: STANDARD.encode(pair.public_key().as_ref()),
-        },
-    )]);
+    let trusted = trusted_self();
     let origins = [KEY_ID.to_owned()];
     let policy = ChainPolicy {
         trusted_keys: &trusted,

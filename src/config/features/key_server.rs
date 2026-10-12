@@ -335,11 +335,13 @@ pub struct PolicyMatchConfig {
 /// Scopes granted by a policy rule.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PolicyScopesConfig {
-    /// Allowed backends. `["*"]` = all; empty or absent = none, and the key
-    /// server refuses to issue a token for the rule.
+    /// Allowed backends: exact names, or `["*"]` for all; any other `*` is
+    /// refused at load (MIK-8298). Empty or absent = none, and the key server
+    /// refuses to issue a token for the rule.
     #[serde(default)]
     pub backends: Vec<String>,
-    /// Allowed tools. `["*"]` or empty = all.
+    /// Allowed tools: exact names or a trailing `prefix*`; `["*"]` or empty =
+    /// all. Any other `*` is refused at load (MIK-8298).
     #[serde(default)]
     pub tools: Vec<String>,
     /// Rate limit in requests/minute (0 = unlimited).

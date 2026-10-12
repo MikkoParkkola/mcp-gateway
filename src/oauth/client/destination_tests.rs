@@ -725,7 +725,7 @@ async fn background_renewal_stops_at_a_refused_client_credentials_grant() {
 }
 
 async fn assert_renewal_stops_at_the_refusal(mut client: OAuthClient) {
-    client.token_refresh_buffer_secs = 300;
+    client.token_refresh_buffer_secs = Some(300);
     let (guard, buffer) = crate::oauth::callback::tests::capture();
     let ended = tokio::time::timeout(
         Duration::from_secs(10),

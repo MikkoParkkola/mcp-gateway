@@ -17,9 +17,9 @@
 //! - `support.rs` — free functions: tag collection, ranking helpers, `MetaMcpInvoker`, augment
 //! - `surfaced.rs` — `with_surfaced_tools`, `resolve_surfaced_tool`, `list_servers`
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use std::{collections::HashMap, sync::Arc};
 
 #[cfg(feature = "spec-preview")]
 use dashmap::DashMap;
@@ -60,7 +60,7 @@ use crate::{stats::UsageStats, tool_registry::ToolRegistry};
 
 use super::meta_mcp_helpers::{
     build_code_mode_tools, build_discovery_preamble, build_initialize_result,
-    build_routing_instructions, extract_client_version, extract_required_str,
+    extract_client_version, extract_required_str,
 };
 use super::meta_mcp_tool_defs::{MetaToolExposure, ToolTotal};
 use super::meta_mcp_tool_total::tool_total;
@@ -98,6 +98,7 @@ mod interim_promotion_tests;
 pub(crate) mod invoke;
 mod prompt_cache;
 mod protocol;
+pub(crate) mod refund_witness;
 mod resources;
 pub(crate) mod response_security;
 pub(crate) use response_security::error_response_preserving_status;
@@ -106,21 +107,28 @@ mod response_security_tests;
 pub(crate) mod sealed_hold;
 mod search;
 pub(crate) mod signing;
+#[cfg(test)]
+mod slot_quota_release_tests;
 #[cfg(feature = "spec-preview")]
 mod spec_preview;
 mod support;
 mod surfaced;
+pub(crate) use surfaced::{ArgsPolicy, args_policy};
 mod task_confirmation;
 pub(crate) mod task_notify;
 mod task_replay;
 pub(crate) mod upstream;
 mod visibility;
+pub(crate) mod visible;
 
 pub use visibility::InvokeScope;
 
 pub use prompt_cache::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerprint};
-pub(crate) use support::Authentication;
 pub use support::prune_constant_signals;
+pub(crate) use support::{
+    Authentication, STEP_NOT_PERMITTED, STEP_NOT_PERMITTED_CODE, STEP_NOT_PERMITTED_STATUS,
+    step_not_permitted,
+};
 pub(crate) use task_confirmation::{
     AdmissionOwner, TaskConfirmation, TaskConfirmationRequest, task_admission_request,
 };
@@ -130,6 +138,7 @@ mod builders;
 mod call_dispatch;
 mod caller_context;
 mod handlers;
+pub(crate) mod passthrough;
 mod session_tools;
 pub use caller_context::MetaMcpCallerContext;
 
@@ -280,8 +289,9 @@ pub struct MetaMcp {
     /// Fast lookup map for surfaced tool dispatch: tool name → server name.
     ///
     /// Pre-built from `surfaced_tools` so `handle_tools_call` only pays one
-    /// `HashMap` lookup instead of a linear scan on every call.
-    pub(super) surfaced_tools_map: HashMap<String, String>,
+    /// `HashMap` lookup instead of a linear scan on every call. Read through
+    /// [`MetaMcp::surfaced_for`] for any decision about a caller (MIK-8340).
+    pub(super) surfaced_tools_map: visible::SurfacedMap,
 
     /// Which meta-tools this gateway exposes, from `MetaMcpConfig::exposed_meta_tools`.
     ///
@@ -362,7 +372,7 @@ pub struct MetaMcp {
 
     /// Tamper-evident hash-chain transparency log (issue #133, D3).
     ///
-    /// `Some` when `security.transparency_log.enabled = true`; `None` otherwise.
+    /// `Some` when the audit log (`security.transparency_log`) is on; `None` otherwise.
     /// Zero overhead when `None` — no allocation or I/O on the hot path.
     pub(super) transparency_logger: Option<Arc<crate::security::TransparencyLogger>>,
 
@@ -440,6 +450,9 @@ pub struct MetaMcp {
     /// config as the direct `tools/call` path. `None` (the default, and the
     /// stdio path) disables scanning — a zero-cost no-op on the hot path.
     pub(super) firewall: Option<Arc<invoke::egress::Firewall>>,
+    /// Calls a client may cancel explicitly by its own request id (MIK-7642
+    /// PR.C). Held here because both HTTP routes dispatch through this handler.
+    pub(super) inflight_calls: Arc<crate::gateway::router::inflight_calls::InFlightCalls>,
 }
 
 // ============================================================================
@@ -502,7 +515,7 @@ impl MetaMcp {
             #[cfg(feature = "cost-governance")]
             cost_registry: None,
             surfaced_tools: Vec::new(),
-            surfaced_tools_map: HashMap::new(),
+            surfaced_tools_map: visible::SurfacedMap::default(),
             meta_tool_exposure: MetaToolExposure::expose_all(),
             meta_catalogues: catalogue_cache::MetaCatalogues::default(),
             meta_projections: crate::trust::SharedProjections::default(),
@@ -530,7 +543,15 @@ impl MetaMcp {
             access_verifier: None,
             context_integrity_kernel: RwLock::new(ContextIntegrityKernel::default()),
             firewall: None,
+            inflight_calls: Arc::default(),
         }
+    }
+
+    /// The registry a client's explicit cancel is looked up in.
+    pub(crate) fn inflight_calls(
+        &self,
+    ) -> &Arc<crate::gateway::router::inflight_calls::InFlightCalls> {
+        &self.inflight_calls
     }
 
     /// Create a new Meta-MCP handler.
@@ -794,11 +815,37 @@ mod grant_decision_slot_tests;
 #[cfg(test)]
 mod grant_replay_dedupe_tests;
 #[cfg(test)]
+mod grant_slot_wrap_tests;
+/// MIK-8340 row 7: a failed grant record on a withheld name answers as absent.
+#[cfg(test)]
+mod grant_withheld_parity_tests;
+#[cfg(test)]
+mod guide_alloc_tests;
+#[cfg(test)]
 #[path = "policy_epoch_tests.rs"]
 mod policy_epoch_tests;
+/// MIK-8356: a per-user call is judged by the caller's own catalogue slot.
+#[cfg(test)]
+pub(crate) mod slot_verdict_fixture;
+#[cfg(test)]
+mod slot_verdict_g3_tests;
+#[cfg(test)]
+mod slot_verdict_g3_tip_tests;
+#[cfg(test)]
+mod slot_verdict_index_tests;
+#[cfg(test)]
+mod slot_verdict_listing_tests;
+#[cfg(test)]
+mod slot_verdict_listing_variant_tests;
+#[cfg(test)]
+mod slot_verdict_tests;
 #[cfg(test)]
 mod task_notify_tests;
+/// MIK-8340 row 10: a listing follows the caller's own catalogue.
+#[cfg(test)]
+mod withheld_catalogue_tests;
 
+mod listing_view;
 mod session_end;
 
 #[cfg(test)]

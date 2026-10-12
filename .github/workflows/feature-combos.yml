@@ -67,6 +67,16 @@ jobs:
               --no-default-features --features tool-profiles
               --no-default-features --features runtime-substrate
               --no-default-features --features webui
+          # Windows target, cross-linted on ubuntu (MIK-8223): code under
+          # cfg(windows) / cfg(not(unix)) is linted here as well as by the
+          # per-PR windows-check. Both ends of the feature range, not the
+          # full product: a Windows-only break that depends on a feature
+          # combination adds rows here when one is found.
+          - shard: windows target
+            target: x86_64-pc-windows-gnu
+            combos: |
+              --all-features --target x86_64-pc-windows-gnu
+              --no-default-features --target x86_64-pc-windows-gnu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -74,13 +84,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           components: clippy
-      # One shared cache (saved by the first shard to finish), not one per
-      # shard: four extra entries would crowd the 10 GB repository cache the
-      # required jobs depend on. The key is explicit so the shards cannot
-      # drift into separate entries.
+          targets: ${{ matrix.target }}
+      # ring and aws-lc-sys build C for the target.
+      - name: Install the mingw C toolchain
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+      # One shared cache for the Linux shards (saved by the first to finish),
+      # not one per shard: extra entries would crowd the 10 GB repository
+      # cache the required jobs depend on. The Windows-target shard keeps its
+      # own key, so cross artifacts never displace the Linux ones.
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
-          shared-key: feature-combos
+          shared-key: ${{ matrix.target && 'feature-combos-windows' || 'feature-combos' }}
       # Every target, tests included: a test names a gated item only under
       # its gate. Every combination runs even after one fails; the step fails
       # at the end, naming them all.
@@ -135,3 +150,31 @@ jobs:
             echo "::error::the refusal does not name the firewall feature and key"
             exit 1
           fi
+
+  # Every test target must compile with debug assertions off (MIK-8223): an
+  # item gated on `debug_assertions` that a plain `cfg(test)` module uses
+  # compiles in debug and breaks `cargo test --release`. The row turns
+  # debug_assertions off in the test profile instead of building `--release`:
+  # the cfg is the same, and the release profile (thin LTO, one codegen unit)
+  # over 200 test binaries ran the runner out of memory. Default features.
+  # Not reproduced, on purpose: panic = "abort", overflow checks and
+  # opt-level differ from --release, but no code here is gated on them at
+  # compile time. Add a row for one before restoring --release.
+  release-test-compile:
+    name: Test compile without debug assertions
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      # Its own key: these artifacts differ in cfg from the clippy shards'.
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: feature-combos-no-debug-assertions
+      - name: Compile every test target with debug assertions off
+        run: >-
+          cargo test --all-targets --no-run
+          --config profile.dev.debug-assertions=false
+          --config profile.test.debug-assertions=false

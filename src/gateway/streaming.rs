@@ -10,7 +10,12 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+// Session age is read on the runtime's clock, the one the reaper's ticker
+// runs on: identical in production (the real clock), and a paused test
+// clock moves both together (MIK-8288).
+use tokio::time::Instant;
 
 use parking_lot::RwLock;
 use serde::Serialize;
@@ -376,7 +381,9 @@ impl NotificationMultiplexer {
                     lifecycle.on_disconnect(&id);
                 }
 
-                let reclaimed = lifecycle.reap(now_unix());
+                // A clock before 1970 cannot tell what has gone idle: the
+                // pass reclaims nothing and the next one runs (MIK-8202).
+                let reclaimed = now_unix().map_or(0, |now| lifecycle.reap(now));
                 if reclaimed > 0 {
                     info!(reclaimed, "Session lifecycle reaper completed");
                 }
@@ -530,71 +537,6 @@ impl NotificationMultiplexer {
         let session = self.open_session_for(session_id, owner);
         *session.credential.write() = credential;
         session
-    }
-
-    /// Test seam: an anonymous session under a chosen id, which production
-    /// never creates (every production id is minted, F9).
-    #[cfg(test)]
-    pub(crate) fn seed_session(&self, id: &str) -> broadcast::Receiver<SessionFrame> {
-        self.insert_session(&mut self.sessions.write(), id, SessionOwner::Anonymous)
-            .subscribe()
-    }
-
-    /// Deliver to every session whose caller may access `backend` now; returns the count.
-    ///
-    /// Each session's credential is re-validated at delivery, so a revoked or
-    /// expired token receives nothing even on a stream opened while it was valid.
-    pub(crate) async fn broadcast_to_backend(
-        &self,
-        notification: &TaggedNotification,
-        backend: &str,
-    ) -> usize {
-        self.broadcast_to_backend_raw(notification, backend, None)
-            .await
-    }
-
-    /// [`Self::broadcast_to_backend`] for an item transformed from a raw
-    /// inbound value (a webhook body): each copy is also judged on what
-    /// `raw` named before the transform dropped it (MIK-7116.MIN.2, §4.4).
-    pub(crate) async fn broadcast_to_backend_raw(
-        &self,
-        notification: &TaggedNotification,
-        backend: &str,
-        raw: Option<&Value>,
-    ) -> usize {
-        let hidden = raw.and_then(|raw| self.reads.get().and_then(|judge| judge.raw(raw)));
-        let Some(authorizer) = self.authorizer.read().clone() else {
-            return 0;
-        };
-        // Copied out so no lock is held across the re-validation awaits. The
-        // session itself is held, not its sender, so an unopened one stays
-        // unopened and a stream that subscribes meanwhile is still reached.
-        let targets: Vec<_> = self
-            .sessions
-            .read()
-            .values()
-            .map(|s| (Arc::clone(s), s.credential.read().clone()))
-            .collect();
-        let audience = CopyAudience::Backend(Arc::from(backend));
-        let mut reached = 0;
-        for (session, credential) in targets {
-            let verdict =
-                delivery(&authorizer, credential.as_ref(), Audience::Backend(backend)).await;
-            if verdict == Delivery::Deliver
-                && self
-                    .enqueue(
-                        &session,
-                        notification.clone(),
-                        hidden.as_ref(),
-                        None,
-                        audience.clone(),
-                    )
-                    .is_ok()
-            {
-                reached += 1;
-            }
-        }
-        reached
     }
 
     /// Remove a session
@@ -767,6 +709,8 @@ impl NotificationMultiplexer {
 /// already names.
 const STREAMING_TARGET: &str = module_path!();
 
+#[path = "streaming_fanout.rs"]
+mod fanout;
 #[path = "streaming_sse.rs"]
 mod sse;
 pub use sse::{TaskFrame, TaskFrameDelivery, TaskFrames, create_sse_response};

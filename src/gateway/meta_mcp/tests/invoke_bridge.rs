@@ -238,23 +238,26 @@ async fn a_dispatched_round_refused_by_the_firewall_settles_the_key_as_a_refusal
     let _ = registry.register(backend);
 
     let mut meta = MetaMcp::new(registry);
-    meta.set_firewall(Some(Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled: true,
-            scan_responses: true,
-            // The rule blocks on a finding, not on the tool: round one's
-            // question is clean and must be carried, or the row would pass
-            // without ever reaching a dispatched round.
-            rules: vec![FirewallRule {
-                tool_match: "book".into(),
-                action: FirewallAction::Block,
-                scan: vec![],
-                reason: None,
-            }],
-            ..FirewallConfig::default()
-        },
-        None,
-    ))));
+    meta.set_firewall(Some(Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                enabled: true,
+                scan_responses: true,
+                // The rule blocks on a finding, not on the tool: round one's
+                // question is clean and must be carried, or the row would pass
+                // without ever reaching a dispatched round.
+                rules: vec![FirewallRule {
+                    tool_match: "book".into(),
+                    action: FirewallAction::Block,
+                    scan: vec![],
+                    reason: None,
+                }],
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .with_continuations(meta.continuation()),
+    )));
     meta.enable_idempotency(
         Arc::new(crate::idempotency::IdempotencyCache::new()),
         Duration::from_secs(300),
@@ -477,50 +480,58 @@ fn question() -> serde_json::Value {
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn a_budget_refused_bridged_round_releases_the_idempotency_key() {
-    let (mut meta, _, script) = budgeted(vec![question()], 0.015);
-    let cache = Arc::new(crate::idempotency::IdempotencyCache::new());
-    meta.enable_idempotency(Arc::clone(&cache), Duration::from_secs(300));
+    let (refused, calls, cache_empty) = crate::test_day::same_utc_day_async(|| async {
+        // A second answer, so a midnight between the two rounds (which admits
+        // the bridged round) ends in a result the helper reruns, not in the
+        // script running out (MIK-8395).
+        let booked = json!({"content": [{"type": "text", "text": "booked"}]});
+        let (mut meta, _, script) = budgeted(vec![question(), booked], 0.015);
+        let cache = Arc::new(crate::idempotency::IdempotencyCache::new());
+        meta.enable_idempotency(Arc::clone(&cache), Duration::from_secs(300));
 
-    let channel = AcceptingChannel {
-        asked: std::sync::Mutex::new(Vec::new()),
-    };
-    let retry = crate::protocol::mrtr::RetryFields {
-        idempotency_key: Some("budget-refused-key".to_string()),
-        ..Default::default()
-    };
-    let mut ctx = allow_all_ctx();
-    ctx.era = crate::protocol::meta::Era::Legacy;
-    ctx.input_capabilities = crate::protocol::meta::classify_request(
-        Some(&json!({
-            "_meta": {
-                crate::protocol::meta::KEY_PROTOCOL_VERSION: "2026-07-28",
-                crate::protocol::meta::KEY_CLIENT_CAPABILITIES: {"elicitation": {"form": {}}}
-            }
-        })),
-        None,
-    )
-    .declared_capabilities();
-    ctx.channel = &channel;
-    ctx.retry = &retry;
-
-    let refused = meta
-        .invoke_tool(
-            &json!({"server": "asking_backend", "tool": "book", "arguments": {}}),
-            Some("session-wire-3"),
-            &ctx,
+        let channel = AcceptingChannel {
+            asked: std::sync::Mutex::new(Vec::new()),
+        };
+        let retry = crate::protocol::mrtr::RetryFields {
+            idempotency_key: Some("budget-refused-key".to_string()),
+            ..Default::default()
+        };
+        let mut ctx = allow_all_ctx();
+        ctx.era = crate::protocol::meta::Era::Legacy;
+        ctx.input_capabilities = crate::protocol::meta::classify_request(
+            Some(&json!({
+                "_meta": {
+                    crate::protocol::meta::KEY_PROTOCOL_VERSION: "2026-07-28",
+                    crate::protocol::meta::KEY_CLIENT_CAPABILITIES: {"elicitation": {"form": {}}}
+                }
+            })),
+            None,
         )
-        .await
-        .expect_err("a bridged round the budget refuses is not a result");
+        .declared_capabilities();
+        ctx.channel = &channel;
+        ctx.retry = &retry;
+
+        let refused = meta
+            .invoke_tool(
+                &json!({"server": "asking_backend", "tool": "book", "arguments": {}}),
+                Some("session-wire-3"),
+                &ctx,
+            )
+            .await
+            .map(drop);
+        (refused, script.calls(), cache.is_empty())
+    })
+    .await;
+    let refused = refused.expect_err("a bridged round the budget refuses is not a result");
     assert_eq!(refused.to_rpc_code(), -32003);
 
     assert_eq!(
-        script.calls().len(),
+        calls.len(),
         1,
-        "the refused round must not have reached the backend: {:#?}",
-        script.calls()
+        "the refused round must not have reached the backend: {calls:#?}"
     );
     assert!(
-        cache.is_empty(),
+        cache_empty,
         "a round refused above the dispatch leaves no settled key behind"
     );
 }

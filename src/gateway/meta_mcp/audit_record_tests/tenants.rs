@@ -39,16 +39,19 @@ fn reply_naming(tenant: &str, extra_text: &str) -> Value {
 
 /// Attribution on: `arg_keys` set, the guard itself off (observe-only).
 fn attributing(mut meta: MetaMcp) -> MetaMcp {
-    meta.set_firewall(Some(Arc::new(Firewall::from_config(
-        FirewallConfig {
-            tenant_guard: TenantGuardConfig {
-                arg_keys: vec!["customer_id".to_string()],
-                ..TenantGuardConfig::default()
+    meta.set_firewall(Some(Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                tenant_guard: TenantGuardConfig {
+                    arg_keys: vec!["customer_id".to_string()],
+                    ..TenantGuardConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ))));
+            None,
+        )
+        .with_continuations(meta.continuation()),
+    )));
     meta
 }
 
@@ -152,6 +155,22 @@ async fn attributed_meta_record_verifies() {
     assert!(verified.ok, "{verified:?}");
 }
 
+/// MIK-8393: only a declared read is cached. The F13 fill a cold call would
+/// run is run here first, so the declaration seeded after it stands. Not in
+/// the fixture's listing: a read-only `read` may also be resent, which the
+/// lost-round case below must not do.
+async fn declare_read_only(meta: &MetaMcp) {
+    let alpha = meta
+        .backends
+        .get("alpha")
+        .expect("the fixture registers alpha");
+    alpha
+        .get_tools_shared()
+        .await
+        .expect("the fixture lists its tool");
+    alpha.set_read_only_declared_for_test(&["read"]);
+}
+
 /// T25. A response-cache hit records the delivered value's tenants, marked
 /// as a cached delivery, without data classes: a post-gate value cannot be
 /// re-classified as the raw response was.
@@ -161,6 +180,7 @@ async fn cache_hit_record_carries_delivered_tenants() {
     let mut cached = meta(Ok(reply_naming("cust-9", "")), &dir);
     cached.cache = Some(Arc::new(crate::cache::ResponseCache::new()));
     cached.default_cache_ttl = Duration::from_secs(300);
+    declare_read_only(&cached).await;
     let meta = attributing(cached);
     let who = api_key_caller();
     for _ in 0..2 {
@@ -229,6 +249,7 @@ async fn oversize_cache_hit_record_says_both() {
     let mut cached = meta(Ok(oversize_reply_naming("cust-9")), &dir);
     cached.cache = Some(Arc::new(crate::cache::ResponseCache::new()));
     cached.default_cache_ttl = Duration::from_secs(300);
+    declare_read_only(&cached).await;
     let meta = attributing(cached);
     let who = api_key_caller();
     for _ in 0..2 {
@@ -567,20 +588,24 @@ async fn a_replayed_lost_round_notice_puts_nothing_in_the_receipt() {
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     backend.set_transport_for_test(Arc::new(CountedLost(Arc::clone(&calls))));
     let _ = registry.register(Arc::clone(&backend));
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
-            collusion: CollusionConfig {
-                action: CollusionAction::Block,
-                sources: vec!["alpha:*".to_string()],
-                ..CollusionConfig::default()
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    sources: vec!["alpha:*".to_string()],
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+            None,
+        )
+        .keyed_for_test(),
+    );
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
+    meta.share_keyring_with_for_test(&firewall);
     let meta = idempotent(meta);
     let who = api_key_caller();
     let retry = keyed("lost-round-notice");

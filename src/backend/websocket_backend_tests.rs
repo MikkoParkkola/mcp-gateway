@@ -16,6 +16,7 @@ use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
 use crate::transport::websocket_test_server::{Behaviour, WsPeer};
 
 const WAIT: Duration = Duration::from_secs(10);
+const HANG_GUARD: Duration = Duration::from_secs(30);
 const THRESHOLD: u32 = 2;
 
 fn failsafe() -> FailsafeConfig {
@@ -84,14 +85,20 @@ async fn call(backend: &Backend, params: Value) -> crate::Result<crate::protocol
 #[tokio::test]
 async fn t6_the_next_call_after_a_dropped_socket_reconnects() {
     let peer = WsPeer::start(Behaviour::CloseFirstCall).await;
-    let backend = ws_backend(&peer.url, WAIT);
-    let started = Instant::now();
-    call(&backend, json!({"name": "echo"}))
-        .await
-        .expect_err("the first call dies with its socket");
+    // The call's own timeout outlasts the hang guard, so a first call that
+    // waited it out fails the guard: the oracle is that it fails on the close,
+    // not how fast it failed (MIK-8222).
+    let backend = ws_backend(&peer.url, HANG_GUARD * 2);
+    let first = tokio::time::timeout(
+        HANG_GUARD,
+        backend.request_with_headers("tools/call", Some(json!({"name": "echo"})), &[], None),
+    )
+    .await
+    .expect("fail fast, not at the timeout")
+    .expect_err("the first call dies with its socket");
     assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "fail fast, not at the timeout"
+        !matches!(first, Error::BackendTimeout(_)),
+        "the call failed on the close, not on its timeout: {first:?}"
     );
     let response = call(&backend, json!({"name": "echo"}))
         .await

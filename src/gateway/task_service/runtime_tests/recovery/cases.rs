@@ -241,6 +241,9 @@ async fn a_recovered_task_still_answers_the_owner_and_key_that_created_it() {
     let mut problems = Vec::new();
     match replay {
         CreateOutcome::Existing(committed) => {
+            // A store-facade read, outside any request scope: adopts nothing.
+            let committed =
+                committed.deliver(crate::gateway::meta_mcp::sealed_hold::HoldSink::Scope);
             if committed.task.id() != row.id {
                 problems.push(format!(
                     "a replay must return the recovered task {}, not {}",

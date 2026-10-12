@@ -11,12 +11,18 @@ use crate::config::Config;
 /// Auth on, and the log path's parent is a regular file, so the open fails
 /// for every user including root.
 async fn gateway(auth: bool, dir: &tempfile::TempDir) -> Gateway {
+    gateway_with(auth, Some(true), dir).await
+}
+
+/// [`gateway`] with the audit switch as given, so the unset row (MIK-8044
+/// P2c2) shares the blocked-path fixture with the explicit one.
+async fn gateway_with(auth: bool, enabled: Option<bool>, dir: &tempfile::TempDir) -> Gateway {
     let blocker = dir.path().join("not-a-dir");
     std::fs::write(&blocker, b"x").expect("blocker file");
     let mut config = Config::default();
     config.auth.enabled = auth;
     config.auth.bearer_token = Some("d1-start-test-token-0123456789abcdef".to_string());
-    config.security.transparency_log.enabled = true;
+    config.security.transparency_log.enabled = enabled;
     config.security.transparency_log.path =
         blocker.join("audit.jsonl").to_string_lossy().into_owned();
     Gateway::new(config)
@@ -31,6 +37,23 @@ async fn audit_log_open_failure_refuses_serve_with_auth() {
     assert!(
         gateway.build_meta_mcp().await.is_err(),
         "auth is on and the audit log cannot open, so the gateway must not start"
+    );
+}
+
+/// MIK-8044 P2c2: with the switch unset and auth on, startup opens the log
+/// all the same. The path cannot open, so a start that skipped the log would
+/// succeed and this would fail.
+#[tokio::test]
+async fn an_unset_audit_switch_opens_the_log_with_auth() {
+    let dir = tempfile::tempdir().unwrap();
+    let gateway = gateway_with(true, None, &dir).await;
+    let err = match gateway.build_meta_mcp().await {
+        Ok(_) => panic!("auth is on and the switch unset, so the log must open (and fail here)"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        err.contains("security.transparency_log"),
+        "failed for another reason than the audit log: {err}"
     );
 }
 
@@ -59,7 +82,7 @@ async fn refused_while_leased(auth: bool) {
     let mut config = Config::default();
     config.auth.enabled = auth;
     config.auth.bearer_token = Some("d1-start-test-token-0123456789abcdef".to_string());
-    config.security.transparency_log.enabled = true;
+    config.security.transparency_log.enabled = Some(true);
     config.security.transparency_log.path = path.to_string_lossy().into_owned();
     let gateway = Gateway::new(config).await.expect("the config is valid");
     let err = match gateway.build_meta_mcp().await {
@@ -84,4 +107,55 @@ async fn a_leased_log_refuses_start_with_auth_on() {
 #[tokio::test]
 async fn a_leased_log_refuses_start_with_auth_off() {
     refused_while_leased(false).await;
+}
+
+/// MIK-8044 P2c2: `Config::audit_log` carries every configured field onto the
+/// runtime config, so a `..Default` slipped into its literal cannot drop one
+/// silently. Off with auth off and the switch unset.
+#[test]
+fn audit_log_maps_every_configured_field() {
+    let mut config = Config::default();
+    assert!(
+        config.audit_log().is_none(),
+        "auth off, switch unset: no log"
+    );
+    config.auth.enabled = true;
+    let log = &mut config.security.transparency_log;
+    log.path = "/var/audit/custom.jsonl".to_string();
+    log.key_id = "rotated-key-7".to_string();
+    log.shared_secret = "audit-map-test-secret".to_string();
+    log.rotation.max_segment_bytes = 1_048_576;
+    log.rotation.max_segment_age_secs = 3_600;
+    log.rotation.retain_segments = 9;
+    log.rotation.on_disk_full = crate::security::audit_rotation_config::OnDiskFull::Refuse;
+    let runtime = config
+        .audit_log()
+        .expect("auth on, switch unset: the log is on");
+    assert!(runtime.enabled);
+    assert_eq!(runtime.path, "/var/audit/custom.jsonl");
+    assert_eq!(runtime.key_id, "rotated-key-7");
+    assert_eq!(runtime.shared_secret, "audit-map-test-secret");
+    assert_eq!(runtime.rotation.max_segment_bytes, 1_048_576);
+    assert_eq!(runtime.rotation.max_segment_age_secs, 3_600);
+    assert_eq!(runtime.rotation.retain_segments, 9);
+    assert_eq!(
+        runtime.rotation.on_disk_full,
+        crate::security::audit_rotation_config::OnDiskFull::Refuse
+    );
+}
+
+/// MIK-8044 P2c2: auth off and the switch unset leave the log closed. The path
+/// is writable, so a start that opened the log would create the file.
+#[tokio::test]
+async fn an_unset_audit_switch_without_auth_writes_no_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("audit").join("audit.jsonl");
+    let mut config = Config::default();
+    config.security.transparency_log.path = path.to_string_lossy().into_owned();
+    let gateway = Gateway::new(config).await.expect("the config is valid");
+    assert!(gateway.build_meta_mcp().await.is_ok());
+    assert!(
+        !dir.path().join("audit").exists(),
+        "auth off and the switch unset, yet the audit log was opened"
+    );
 }

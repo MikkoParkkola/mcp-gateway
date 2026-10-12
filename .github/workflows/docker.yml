@@ -150,7 +150,7 @@ jobs:
         run: |
           set -euo pipefail
           case "$SOURCE" in
-            dockerfile) version="$(sed -n 's/^FROM rust:\([0-9][0-9.]*\)-slim .*/\1/p' Dockerfile)" ;;
+            dockerfile) version="$(sed -n 's/^FROM mirror\.gcr\.io\/library\/rust:\([0-9][0-9.]*\)-slim .*/\1/p' Dockerfile)" ;;
             rust-version) version="$(sed -n 's/^rust-version = "\([0-9][0-9.]*\)"$/\1/p' Cargo.toml)" ;;
           esac
           if [ -z "${version:-}" ] || [ "$(wc -l <<<"$version")" -ne 1 ]; then
@@ -172,18 +172,9 @@ jobs:
           else
             cargo +"$TOOLCHAIN" check --release --locked
           fi
-      - name: The release binary carries no debug test trust roots
+      - name: The release binary carries no debug-only test hook
         if: matrix.source == 'dockerfile'
-        run: |
-          set -uo pipefail
-          bin=target/release/mcp-gateway
-          # A grep that cannot see the binary's content would pass it, so the
-          # crate name must be found first; then only "no match" (exit 1) passes.
-          grep -qa mcp-gateway "$bin" || { echo "::error::$bin could not be inspected"; exit 1; }
-          # The step shell runs with -e, and "no match" is exit 1: capture the
-          # status without letting -e end the step on the passing case.
-          found=0; grep -qa MCP_GATEWAY_TEST_TRUST_CA "$bin" || found=$?
-          if [ "$found" -ne 1 ]; then echo "::error::$bin carries the debug test trust roots, or could not be read (grep exit $found)"; exit 1; fi
+        run: scripts/release/grep_no_test_hook.sh target/release/mcp-gateway
 
   # Dependency-vulnerability gate for the image build. ci.yml runs `cargo audit`
   # on every PR/push; this re-scans the Cargo.lock against OSV so the published
@@ -288,6 +279,9 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        # buildx bootstraps BuildKit from this image; the default is on Docker Hub (MIK-8256).
+        with:
+          driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
 
       - name: Log in to Container Registry
         # Main and tags only: a release-line push builds and scans but publishes
@@ -377,21 +371,17 @@ jobs:
       - name: Smoke test the image (it must start and report healthy)
         run: scripts/ci/smoke-image.sh "${REGISTRY}/mikkoparkkola/mcp-gateway:scan"
 
-      # The image's own binary carries no debug-only test trust roots
-      # (MIK-8188, src/debug_trust_roots.rs). release.yml greps the release
-      # artifacts and release-compile greps a per-PR build, but neither is the
-      # binary the Dockerfile built, under its own environment.
-      - name: The image's binary carries no debug test trust roots
+      # The image's own binary carries no debug-only test hook (MIK-8188).
+      # release.yml checks the release artifacts and release-compile a per-PR
+      # build, but neither is the binary the Dockerfile built, under its own
+      # environment.
+      - name: The image's binary carries no debug-only test hook
         run: |
-          set -uo pipefail
+          set -euo pipefail
           id="$(docker create "${REGISTRY}/mikkoparkkola/mcp-gateway:scan")"
           docker cp "$id:/usr/local/bin/mcp-gateway" image-mcp-gateway
           docker rm "$id" >/dev/null
-          # A grep that cannot see the binary's content would pass it, so the
-          # crate name must be found first; then only "no match" (exit 1) passes.
-          grep -qa mcp-gateway image-mcp-gateway || { echo "::error::the image's binary could not be inspected"; exit 1; }
-          found=0; grep -qa MCP_GATEWAY_TEST_TRUST_CA image-mcp-gateway || found=$?
-          if [ "$found" -ne 1 ]; then echo "::error::the image's binary carries the debug test trust roots, or could not be read (grep exit $found)"; exit 1; fi
+          scripts/release/grep_no_test_hook.sh image-mcp-gateway
 
       # The documented run recipe (README, QUICKSTART, DEPLOYMENT: publish on
       # 127.0.0.1, bind 0.0.0.0, the unauthenticated-bind opt-in), held in
@@ -421,6 +411,8 @@ jobs:
         uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
         with:
           cluster_name: mcp-gateway-real-image
+          # kind v0.33.0's own default node image, through the mirror (MIK-8256).
+          node_image: mirror.gcr.io/kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
       - name: The Helm chart starts the real image (Ready, /livez 200)
         if: matrix.arch == 'amd64'
         env:
@@ -599,6 +591,9 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        # buildx bootstraps BuildKit from this image; the default is on Docker Hub (MIK-8256).
+        with:
+          driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
 
       - name: Log in to Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0

@@ -43,7 +43,7 @@ pub(super) fn prepare(home: &Path, failure: Failure) -> PathBuf {
     if matches!(failure, Failure::Dangling) {
         dangling_symlink(&parent.join("missing-target.yaml"), &path);
     } else {
-        write_config(&path, &baseline()).unwrap();
+        write_config_fixture(&path, &baseline()).unwrap();
         assert!(Config::load_literal(Some(&path)).is_ok());
     }
     path

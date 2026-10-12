@@ -11,6 +11,15 @@ mod differential;
 mod http_error;
 pub mod input_bridge;
 mod meta_mcp;
+
+/// The nonce fields every entry route validates before taking them off a
+/// request (MIK-8154 S2'): the signing nonce and the chain nonce.
+pub(crate) const PROTOCOL_NONCES: [&str; 2] = [
+    meta_mcp::signing::NONCE_META,
+    crate::protocol::mrtr::CHAIN_NONCE_META,
+];
+/// The gateway directives the sanitize step refuses dirty (MIK-8378 ENV.2).
+pub(crate) use meta_mcp::admission::EXECUTION_DIRECTIVES;
 /// Where the CLI runner notes a child it started for the call's invocation
 /// record (MIK-7926.FIX.2), without `meta_mcp` becoming crate-visible.
 pub(crate) use meta_mcp::invoke::audit::note_process;
@@ -22,11 +31,24 @@ pub(crate) use meta_mcp::invoke::gateway_writes;
 /// Same shape as `STDIO_CREDENTIAL_PRINCIPAL`. A second copy of those four
 /// lines is how the `Release` ordering gets dropped in a later edit.
 pub(crate) use meta_mcp::publish_identity_grants;
+/// MIK-8176: execution admission (`idempotency::admission`) co-owns the holds
+/// of a stored delivery and adopts them on replay.
+pub(crate) use meta_mcp::sealed_hold;
+/// The send point's check that an exempt call is sent by the backend instance
+/// intake judged it on (MIK-8154 F2), for `backend::ops`.
+pub(crate) use meta_mcp::visible::changed_instance;
+/// How a tool call's own `arguments` are read, resolved once (MIK-8154).
+pub(crate) use meta_mcp::{ArgsPolicy, args_policy};
 /// The notes scope and the gateway, for the CLI process audit rows
 /// (MIK-7926.FIX.2), which run a real child in `capability::executor`.
 #[cfg(test)]
 pub(crate) use meta_mcp::{MetaMcp, invoke::audit::with_dispatch_scope};
+/// The gateway's one decode of a tool call's `arguments` (an object, or a
+/// JSON string holding one), shared with the sanitize step so what it checks
+/// is what dispatch uses (MIK-8154).
+pub(crate) use meta_mcp_helpers::parse_tool_arguments_cow;
 mod meta_mcp_helpers;
+mod meta_mcp_helpers_routing;
 mod meta_mcp_helpers_text;
 mod meta_mcp_search_schema;
 mod meta_mcp_tool_defs;
@@ -49,6 +71,8 @@ mod proxy_scope_tests;
 #[cfg(test)]
 mod proxy_session_tests;
 pub mod recovery;
+#[cfg(test)]
+mod route_check_matrix_tests;
 mod router;
 pub(crate) mod routes;
 #[cfg(test)]
@@ -78,9 +102,9 @@ pub(crate) use server::StdioNonce;
 pub(crate) use server::account_bindings::declare_account_descriptors;
 pub(crate) use server::account_bindings::{ServeMode, sole_operator_asserted};
 /// The test-only allocation meter, for allocation rows outside `gateway`
-/// (`MIK-8201`), without `server` becoming crate-visible. Its one reader
-/// outside `gateway` is a `firewall`-gated row.
-#[cfg(all(test, feature = "firewall"))]
+/// (`MIK-8201`), without `server` becoming crate-visible. The meter needs
+/// only `cfg(test)`; its readers include rows built without `firewall`.
+#[cfg(test)]
 pub(crate) use server::signing_allocation_tests::alloc_meter;
 pub(crate) mod session_id;
 pub mod session_lifecycle;
@@ -138,6 +162,12 @@ pub mod test_helpers {
         ServiceError, StoreLimits, TaskExecutor, TaskService, open_runtime,
     };
 
+    /// The one bound a test uses to say "this wait is a hang guard"
+    /// (MIK-8247, MIK-8288): long enough that a loaded runner never reaches
+    /// it on a green run, so it costs nothing until something is truly stuck.
+    /// Lib tests reach it as `crate::test_wait::HANG_BOUND`.
+    pub const HANG_BOUND: std::time::Duration = std::time::Duration::from_secs(30);
+
     /// Bind `meta` to the HTTP server's change feed, as `serve` does (F24), so
     /// an in-process fixture advertises what the HTTP server advertises.
     pub fn bind_http_change_feed(meta: &MetaMcp) {
@@ -161,6 +191,40 @@ pub mod test_helpers {
                 std::sync::Arc::default(),
             ),
         }
+    }
+
+    /// Writes a whole `config` to `path` for a test fixture, through the
+    /// deprecated snapshot writer on purpose: a fixture sets up a file, it
+    /// does not race another writer.
+    ///
+    /// # Errors
+    ///
+    /// The writer's own error message.
+    pub fn write_config_fixture(
+        path: &std::path::Path,
+        config: &crate::config::Config,
+    ) -> Result<(), String> {
+        #[allow(deprecated)] // test fixture writes a whole config on purpose
+        crate::config_persistence::write_config(path, config)
+    }
+
+    /// Writes config `text` to `path` for a test fixture, through the
+    /// deprecated unlocked text writer on purpose (see
+    /// [`write_config_fixture`]).
+    ///
+    /// # Errors
+    ///
+    /// The writer's own error message.
+    pub fn write_config_text_fixture(path: &std::path::Path, text: &str) -> Result<(), String> {
+        #[allow(deprecated)] // test fixture writes a whole config on purpose
+        crate::config_persistence::write_config_text(path, text)
+    }
+
+    /// A receiver told once when a CLI config writer next starts waiting for
+    /// `config`'s lock: a concurrency test overlaps two writers by it instead
+    /// of a fixed sleep.
+    pub fn when_waiting_for_config_lock(config: &std::path::Path) -> std::sync::mpsc::Receiver<()> {
+        crate::config_persistence::when_waiting_for_lock(config)
     }
 
     /// Writes a fixture owner-only (0600 on Unix), as the gateway requires of

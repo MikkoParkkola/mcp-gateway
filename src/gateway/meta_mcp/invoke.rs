@@ -38,14 +38,28 @@ use super::super::meta_mcp_helpers::{extract_required_str, parse_tool_arguments}
 #[cfg(test)]
 use super::super::recovery::ErrorCategory;
 use super::MetaMcp;
+use super::refund_witness as rw;
 mod side_effect_markers;
 mod undeclared_gate;
 // D1: the invocation record, written around `invoke_tool_traced`.
 pub(crate) mod audit;
+mod chokepoint; // MIK-8137 b1: the dispatch chokepoint every send passes
+// MIK-8351: the direct route's tools/call send passes it too.
+#[cfg(feature = "firewall")]
+pub(crate) use chokepoint::ScanTarget;
+pub(in crate::gateway) use chokepoint::{DirectPermit, Outbound};
 pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2.1)
 pub(crate) mod egress;
 mod nonce_settle; // MIK-8150: refund requests and dispatch marks of a signed execution
+
+/// The only entry outside `invoke` that spends a refund witness (MIK-8353
+/// 3b): something outside the invoke path consumed or acted for this call (a
+/// chain resume's handle), so no later refusal of it may give the nonce back.
+pub(super) fn spend_witness(caller: &super::MetaMcpCallerContext<'_>) {
+    nonce_settle::Witnessed::take(caller).spend();
+}
 mod r2_check;
+mod step_fingerprint;
 // #1962: settlement of a bridged round's key, kept out of this file's size baseline.
 mod bridge_settle;
 pub(crate) mod cache_reads;
@@ -69,6 +83,7 @@ pub(crate) mod receipt_test_support;
 mod admin;
 mod bridge_dispatch;
 mod budget;
+mod caller_verdict;
 mod continuation;
 mod dispatch;
 mod errors;
@@ -77,13 +92,16 @@ mod policy;
 mod post_dispatch;
 mod pre_dispatch;
 mod projection;
+pub(crate) use caller_verdict::{CallerVerdict, TargetNaming};
 mod propagation;
+pub(crate) use propagation::ResolvedDispatch;
+pub(crate) mod worker_clock; // MIK-8202 AC12/AC13: the task worker's clock channel
 use bridge_dispatch::{BridgeDispatcher, run_input_bridge, undeclared_input_request};
 pub(super) use bridge_dispatch::{
     REQUIRED_CAPABILITIES_DATA_KEY, UNSUPPORTED_ELICITATION_MODE_DATA_KEY,
 };
 pub(super) use continuation::retry_origin_backend;
-use continuation::{OutboundRetry, mint_continuation, redeem_retry, unbindable_continuation};
+use continuation::{OutboundRetry, redeem_retry, unbindable_continuation};
 pub(super) use errors::BudgetOutcome;
 #[cfg(test)]
 use errors::classify_dispatch_error;
@@ -187,54 +205,36 @@ impl MetaMcp {
         // into the other (a non-`_full` caller could hit a cached full payload
         // and receive fields the projection was meant to drop). A `_full` call
         // is therefore always a fresh, uncached dispatch.
-        // Resolve the per-user propagation credential ONCE (MIK-6734 / ADR-007).
-        // Single identity gate: fail-closed here for a required backend, and the
-        // resolved `cache_binding` (user+audience) is mixed into every cache key
-        // so per-user results cache in ISOLATION rather than leaking across users
-        // (IDP.3/8) — reused verbatim at dispatch so there is no re-mint or drift.
-        let backend = self.backends.get(server);
-        let target = (server, backend.as_ref().map(|backend| backend.instance()));
-        let caller_credential = if let Some(idp_cfg) = backend
-            .as_ref()
-            .and_then(|b| b.identity_propagation_config().cloned())
+        // Resolve the per-user propagation credential ONCE (MIK-6734 / ADR-007),
+        // and the capability's account credential, before the outer response
+        // cache is consulted: a cache key built before the caller's credential
+        // is known cannot name the caller. Reused verbatim at dispatch so there
+        // is no re-mint or drift.
+        // MIK-8353 3a: the refund witness, carried through every may-effect
+        // step below; any exit hands back what survived.
+        let mut witness = nonce_settle::Witnessed::take(caller);
+        // MIK-8356 R5.2: the resolution a caller verdict carried, or a fresh one.
+        let (backend, resolved) = match self
+            .dispatch_resolution(
+                (server, tool),
+                (caller_proof, verified_identity),
+                surface,
+                &mut witness,
+            )
+            .await?
         {
-            let resolved = self.resolve_caller_credential_as(
-                server,
-                backend.as_deref(),
-                &idp_cfg,
-                caller_proof,
-            );
-            self.with_connect_offer(resolved.await, verified_identity)
-                .await?
-        } else {
-            Self::refuse_unbound_account_backend(server, backend.as_deref())?;
-            CallerCredential::default()
+            std::ops::ControlFlow::Continue(resolution) => resolution,
+            std::ops::ControlFlow::Break(answer) => return Ok(answer),
         };
-
-        self.refuse_shared_oauth_login(server, tool, &caller_credential, backend.as_deref())?;
-        // THE CAPABILITY ROUTE'S ACCOUNT BOUNDARY, RESOLVED HERE — BEFORE THE
-        // OUTER RESPONSE CACHE IS CONSULTED.
-        //
-        // The MCP route resolves its credential above for the same reason: a
-        // cache key built before the caller's credential is known cannot name
-        // the caller. A REST capability's credential comes from its own
-        // `auth.account` (its PRIMARY auth), not the BACKEND-keyed map, and must
-        // resolve here, not in the executor, which runs after this lookup. It is
-        // rechecked at dispatch, never minted twice; a refusal returns now.
-        let resolving = self.resolve_capability_account_credential(server, tool, caller_proof);
-        let account_credential = self
-            .with_connect_offer(resolving.await, verified_identity)
-            .await?;
-        // ONE binding for both cache layers and for the transport's session
-        // partitioning. The MCP route's propagation binding when there is one,
-        // otherwise the account credential's — they are never both present,
-        // because one describes a backend's propagation config and the other a
-        // capability's account reference.
-        let dispatch_binding = caller_credential.cache_binding.clone().or_else(|| {
-            account_credential
-                .as_ref()
-                .map(|prepared| prepared.cache_binding().to_owned())
-        });
+        let target = (server, backend.as_ref().map(|backend| backend.instance()));
+        let propagation::ResolvedDispatch {
+            caller_credential,
+            account_credential,
+            binding: dispatch_binding,
+        } = resolved;
+        // A failed optional mint counts too: it may have reached the issuer.
+        let minted = caller_credential.cache_binding.is_some() || caller_credential.attempted;
+        witness.carry(rw::dispatch_effect(minted, account_credential.is_some()));
         // Who the response cache keys on, in one place and one namespace per
         // source (`support::caller_cache_principal`). The binding when identity
         // propagation is minting per-user credentials, then the verified OIDC
@@ -262,7 +262,7 @@ impl MetaMcp {
         // exactly what the `_full` stripping above says must not be possible.
         let idem_key = idempotency_key_for(
             caller.retry.idempotency_key.as_deref(),
-            &projection_key_suffix,
+            &super::support::step_scoped(&projection_key_suffix),
             &caller_principal,
             self.idempotency_cache.as_ref(),
             "meta",
@@ -310,7 +310,11 @@ impl MetaMcp {
             .protocol_revision
             .and_then(crate::protocol::meta::served_revision);
 
-        if let Some(refusal) = self
+        // Whether the check below fills a list from the backend: counted at
+        // the fill, so a slot that expires mid-check still counts.
+        let fills = || backend.as_ref().map_or(0, |b| b.list_fills());
+        let fills_before = fills();
+        let checked = self
             .answer_undeclared_key(
                 caller,
                 session_id,
@@ -322,8 +326,11 @@ impl MetaMcp {
                 verified_identity,
                 &mut idem_reservation,
             )
-            .await?
-        {
+            .await;
+        // Carried before either exit below, so neither hands back a witness
+        // the check's fill spent.
+        witness.carry(rw::schema_effect(fills() != fills_before));
+        if let Some(refusal) = checked? {
             return Ok(refusal);
         }
 
@@ -334,21 +341,33 @@ impl MetaMcp {
         }
         // A chained backend's answer is bound to one challenge: no cache (D7).
         let chained = self.is_chained(backend.as_deref());
-        if let Some(cached) = self.serve_cached_response(
-            caller,
-            session_id,
+        // MIK-8393 (#3773): a stored result may stand in for a call only when
+        // this caller's slot declared the tool read-only, so the call it
+        // replaces had no effect to lose. Absent means deny: an unannotated
+        // tool, an undiscovered slot and a write all go to the backend, and
+        // their answers are never stored.
+        let read_only = self.cache_admits(
             (server, tool),
-            trace_id,
-            (want_full, chained),
-            protocol_revision,
-            &arguments,
-            (&projection_key_suffix, &caller_principal),
-            (&profile.name, policy_epoch),
-            (arm_key, &tool_key),
-            api_key_name,
-            client_claim.as_ref(),
-            &mut idem_reservation,
-        ) {
+            backend.as_deref(),
+            dispatch_binding.as_deref(),
+        );
+        if read_only
+            && let Some(cached) = self.serve_cached_response(
+                caller,
+                session_id,
+                (server, tool),
+                trace_id,
+                (want_full, chained),
+                protocol_revision,
+                &arguments,
+                (&projection_key_suffix, &caller_principal),
+                (&profile.name, policy_epoch),
+                (arm_key, &tool_key),
+                api_key_name,
+                client_claim.as_ref(),
+                &mut idem_reservation,
+            )
+        {
             return Ok(cached);
         }
 
@@ -366,16 +385,22 @@ impl MetaMcp {
         // Returns the warnings to inject post-dispatch and blocks when the
         // budget is exceeded (returns JSON-RPC -32003 error).
         #[cfg(feature = "cost-governance")]
-        let mut admission = self
-            .admit_spend_for(&dispatch_guards::BackendCall {
-                server,
-                tool,
-                session_id,
-                api_key_name,
-                trace_id,
-                caller_key: None,
-            })
-            .inspect_err(|_| nonce_settle::ask_refund(caller))?;
+        let mut admission = match self.admit_spend_for(&dispatch_guards::BackendCall {
+            server,
+            tool,
+            session_id,
+            api_key_name,
+            trace_id,
+            caller_key: None,
+        }) {
+            Ok(admission) => admission,
+            Err(error) => {
+                // The refusal records nothing outside the gateway; whatever
+                // witness survived the steps above decides the refund.
+                nonce_settle::ask_refund(caller);
+                return Err(error);
+            }
+        };
         #[cfg(feature = "cost-governance")]
         let cost_warnings = std::mem::take(&mut admission.warnings);
         #[cfg(not(feature = "cost-governance"))]
@@ -403,11 +428,15 @@ impl MetaMcp {
                     // Refused before the backend was reached, so it has not
                     // acted: the key is released rather than settled (settling
                     // would answer an honest retry with a side effect nothing
-                    // performed), and the signing nonce is asked back.
+                    // performed), and the signing nonce is asked back. A
+                    // refused redeem consumed nothing, so the witness stands.
                     nonce_settle::give_back_unsent(caller, &mut idem_reservation);
                     return Err(error);
                 }
             };
+        // Redeemed: a continuation the caller presented was consumed, whatever
+        // state the backend issued with it.
+        witness.carry(rw::retry_effect(caller.retry.request_state.is_some()));
 
         let egress = relay::Egress {
             arguments: &arguments,
@@ -416,7 +445,36 @@ impl MetaMcp {
             retry: &outbound_retry,
         };
         let reservation = idem_reservation.as_mut();
-        self.refuse_relay(caller, session_id, (server, tool), &egress, reservation)?;
+        if let Err(error) =
+            self.refuse_relay(caller, session_id, (server, tool), &egress, reservation)
+        {
+            // Refused before anything is sent: the witness that survived the
+            // steps above decides the refund (MIK-8353 3b, NONCEFX.3).
+            nonce_settle::ask_refund(caller);
+            return Err(error);
+        }
+        // MIK-8137 b1: the chokepoint, before anything marks this send.
+        let answers = outbound_retry.input_responses.as_ref();
+        let outbound = chokepoint::Outbound {
+            arguments: &arguments,
+            answers,
+        };
+        let source = chokepoint::Source::of_call(answers);
+        let permit = match self.chokepoint(
+            caller.scope(),
+            session_id,
+            (server, tool),
+            &outbound,
+            source,
+        ) {
+            Ok(permit) => permit,
+            Err(error) => {
+                nonce_settle::give_back_unsent(caller, &mut idem_reservation);
+                return Err(error);
+            }
+        };
+        // Dispatch: the witness goes with the send (the nonce stays spent).
+        witness.spend();
         nonce_settle::mark_dispatched(caller);
         // Boxed: the dispatch future is the largest thing this frame ever
         // holds, and inlining it puts `invoke_tool_traced` over
@@ -451,6 +509,7 @@ impl MetaMcp {
             backend.clone(),
             &chain_slot,
             &admission,
+            permit,
         ))
         .await;
         // The spend is settled; an unsettled reservation is given back here.
@@ -571,36 +630,56 @@ impl MetaMcp {
         // Minted here, where the capability gate has just decided the question
         // may be asked at all: a continuation for a question the client will
         // never be shown is a redeemable envelope for an exchange that cannot
-        // happen.
-        let mut sealed = None;
+        // happen. Its slot is held in this request's scope: released with the
+        // scope unless the answer carrying it is handed off (MIK-8176).
+        let mut withheld = None;
         if let Some(interim) = interim {
-            let Some((envelope, hold_key)) = mint_continuation(
-                &self.continuation,
-                caller.principal_source(dispatch_binding.as_deref()),
-                target,
-                tool,
-                &arguments,
-                interim.request_state,
-            )
-            .await
-            else {
+            // The caller the slot is charged to (MIK-8293); a caller no
+            // quota key names is refused like an unbindable one.
+            let Some(quota) = caller.quota_key() else {
                 warn!(
                     server,
                     tool, trace_id, "Cannot mint a continuation for this caller; refusing"
                 );
                 return Err(unbindable_continuation(server, tool));
             };
-            result["requestState"] = json!(&envelope);
-            sealed = Some((envelope, hold_key));
-            // MIK-7994: the envelope is the gateway's text, up to 8 KiB, and
-            // must not take the receipt's capped budget from the backend's
-            // prompt. Noted at the value layer: `tool_value` still reads
-            // `requestState` to know the answer is interim, not wrapped.
-            gateway_writes::note(
-                gateway_writes::Layer::Value,
-                gateway_writes::REQUEST_STATE,
-                &result,
-            );
+            match worker_clock::mint_or_withhold(
+                &self.continuation,
+                caller.principal_source(dispatch_binding.as_deref()),
+                &quota,
+                target,
+                tool,
+                &arguments,
+                interim.request_state,
+            )
+            .await
+            {
+                worker_clock::Minted::Sealed(envelope) => {
+                    result["requestState"] = json!(&envelope);
+                    // MIK-7994: the envelope is the gateway's text, up to 8 KiB, and
+                    // must not take the receipt's capped budget from the backend's
+                    // prompt. Noted at the value layer: `tool_value` still reads
+                    // `requestState` to know the answer is interim, not wrapped.
+                    gateway_writes::note(
+                        gateway_writes::Layer::Value,
+                        gateway_writes::REQUEST_STATE,
+                        &result,
+                    );
+                }
+                // MIK-8202 AC12: a task worker seals this later. The backend's
+                // state is withheld from the payload meanwhile (MRTR.2).
+                worker_clock::Minted::Withheld(binding, state) => {
+                    result["requestState"] = Value::Null;
+                    withheld = Some((binding, state));
+                }
+                worker_clock::Minted::Refused => {
+                    warn!(
+                        server,
+                        tool, trace_id, "Cannot mint a continuation for this caller; refusing"
+                    );
+                    return Err(unbindable_continuation(server, tool));
+                }
+            }
         } else {
             // MRTR.2a holds for an unusable round too (MIK-8078).
             continuation::withhold_unsealed_state(&mut result);
@@ -614,10 +693,13 @@ impl MetaMcp {
             trace_id,
             caller_key: None,
         };
-        let gated = self.gate_payload(&call, result);
-        let kept = gated.as_ref().ok().map(|(gated, _)| gated);
-        continuation::release_unless_carried(&self.continuation, sealed, kept).await;
-        let (gated, effect) = gated?;
+        let (gated, effect) = self.gate_payload(&call, result)?;
+        // The gates have run on the payload; the worker takes it, unminted.
+        if let Some(withheld) = withheld
+            && worker_clock::hand_to_worker(withheld, gated.clone())
+        {
+            return Err(unbindable_continuation(server, tool));
+        }
         result = gated;
         self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &result);
         // A chained backend is eligible only with a checked upstream outcome.
@@ -632,18 +714,20 @@ impl MetaMcp {
         self.inject_cost_advice(&mut result, &cost_warnings, tool, caller, session_id);
         let written = gateway_writes::snapshot_since(writes_mark);
 
-        self.store_response(
-            caller,
-            args,
-            (server, tool),
-            trace_id,
-            (want_full, stopped_to_ask, chained),
-            protocol_revision,
-            &arguments,
-            (&projection_key_suffix, &caller_principal),
-            (&profile.name, policy_epoch),
-            (&result, &written),
-        );
+        if read_only {
+            self.store_response(
+                caller,
+                args,
+                (server, tool),
+                trace_id,
+                (want_full, stopped_to_ask, chained),
+                protocol_revision,
+                &arguments,
+                (&projection_key_suffix, &caller_principal),
+                (&profile.name, policy_epoch),
+                (&result, &written),
+            );
+        }
 
         if let Some(reservation) = idem_reservation.as_mut()
             && reservation.complete_read(&result, (self.dispatch_reading(args), written))
@@ -738,6 +822,9 @@ mod caller_cost_tests;
 
 #[cfg(test)]
 mod f13_hint_scope_tests;
+
+#[cfg(test)]
+mod caller_verdict_label_tests;
 
 #[cfg(test)]
 mod session_fp_tests;

@@ -182,7 +182,7 @@ async fn a_queued_edit_does_not_erase_the_edit_it_waited_for() {
     // GIVEN: a config file with no backends in it
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("gateway.yaml");
-    crate::config_persistence::write_config(&config_path, &Config::default()).unwrap();
+    crate::gateway::test_helpers::write_config_fixture(&config_path, &Config::default()).unwrap();
 
     let ctx = Arc::new(
         ReloadContext::new(
@@ -219,7 +219,7 @@ async fn a_queued_edit_does_not_erase_the_edit_it_waited_for() {
     won_the_lock
         .backends
         .insert("alpha".to_string(), test_backend());
-    crate::config_persistence::write_config(&config_path, &won_the_lock).unwrap();
+    crate::gateway::test_helpers::write_config_fixture(&config_path, &won_the_lock).unwrap();
     drop(guard);
 
     let result = tokio::time::timeout(Duration::from_secs(5), queued_edit)
@@ -255,6 +255,7 @@ fn test_backend() -> crate::config::BackendConfig {
 
 /// Without a live gateway there is nothing to reload, so the write still has
 /// to land on disk and report no reload outcome rather than failing.
+#[allow(deprecated)] // tests the deprecated snapshot writer itself
 #[tokio::test]
 async fn write_config_and_reload_without_context_persists_yaml() {
     let dir = tempfile::tempdir().unwrap();
@@ -268,6 +269,7 @@ async fn write_config_and_reload_without_context_persists_yaml() {
     assert_eq!(loaded.backends.len(), config.backends.len());
 }
 
+#[allow(deprecated)] // tests the deprecated snapshot writer itself
 #[tokio::test]
 async fn write_config_and_reload_outcome_without_context_returns_none() {
     let dir = tempfile::tempdir().unwrap();

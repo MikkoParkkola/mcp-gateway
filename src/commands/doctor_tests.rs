@@ -156,34 +156,6 @@ fn format_badge_color_contains_ansi_codes() {
     assert!(format_badge(&CheckStatus::Warn, true).contains("[WARN]"));
 }
 
-// ── check_port ────────────────────────────────────────────────────────────
-
-#[test]
-fn check_port_on_free_port_passes() {
-    // GIVEN: a free port no parallel port-0 bind can take (MIK-8211)
-    let free_port = crate::test_ports::reserved_port();
-
-    // WHEN: checking it
-    let result = check_port(free_port);
-
-    // THEN: the check passes
-    assert_eq!(result.status, CheckStatus::Pass, "{}", result.detail);
-}
-
-#[test]
-fn check_port_occupied_fails() {
-    // GIVEN: a TcpListener holds a port open
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-
-    // WHEN: the same port is checked
-    let result = check_port(port);
-
-    // THEN: the check fails because the port is in use
-    assert_eq!(result.status, CheckStatus::Fail, "occupied port must fail");
-    drop(listener);
-}
-
 // ── resolve_config_path ───────────────────────────────────────────────────
 
 #[test]
@@ -228,4 +200,54 @@ fn check_backend_env_unknown_server_returns_empty() {
     let backend = mcp_gateway::config::BackendConfig::default();
     let results = check_backend_env("totally-unknown-server-xyz", &backend);
     assert!(results.is_empty());
+}
+
+// ── MIK-8375: a config that will not load ─────────────────────────────────
+
+/// A 0600 config at `dir/gateway.yaml` whose port holds `sentinel`.
+fn unloadable_config(dir: &Path, sentinel: &str) -> PathBuf {
+    let path = dir.join("gateway.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        &path,
+        format!("server:\n  port: {sentinel}\n"),
+    )
+    .expect("write config");
+    path
+}
+
+/// CFGLEAK.2: doctor prints the load error, so it must not carry the value.
+#[test]
+fn doctor_does_not_print_the_value_a_config_refused() {
+    let sentinel = "cfgleak-sentinel-r9";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = unloadable_config(dir.path(), sentinel);
+    let (result, config) = check_config(Some(&path), false);
+    assert!(config.is_none());
+    assert_eq!(result.status, CheckStatus::Fail);
+    assert!(!result.detail.contains(sentinel), "{}", result.detail);
+    assert!(result.detail.contains("server.port"), "{}", result.detail);
+}
+
+/// The fix doctor suggests is a command that re-checks this same file: it
+/// is parsed by the CLI itself, and must reach `doctor` with the path.
+/// `validate` lints capability files and never loads the gateway config.
+#[test]
+fn doctor_suggests_a_command_that_rechecks_the_same_config() {
+    use clap::Parser as _;
+    let dir = tempfile::tempdir().expect("tempdir");
+    // A space and a quote in the path: the hint must still copy as one word.
+    let nested = dir.path().join("my config's dir");
+    std::fs::create_dir(&nested).expect("dir");
+    let path = unloadable_config(&nested, "x");
+    let (result, _) = check_config(Some(&path), false);
+    let fix = result.fix_command.expect("a fix is suggested");
+    let words = shlex::split(&fix).unwrap_or_else(|| panic!("`{fix}` does not tokenise"));
+    let cli = mcp_gateway::cli::Cli::try_parse_from(words)
+        .unwrap_or_else(|e| panic!("`{fix}` does not parse: {e}"));
+    match cli.command {
+        Some(mcp_gateway::cli::Command::Doctor { config, .. }) => {
+            assert_eq!(config.as_deref(), Some(path.as_path()), "{fix}");
+        }
+        other => panic!("`{fix}` runs {other:?}, not doctor"),
+    }
 }

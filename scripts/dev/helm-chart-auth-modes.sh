@@ -103,7 +103,9 @@ grep -q 'type: Recreate' <<<"$(render --set persistence.enabled=true --set confi
   || fail "persistence keeps a rolling strategy"
 grep -qE '^ +fsGroupChangePolicy: OnRootMismatch$' <<<"$pv" || fail "no fsGroupChangePolicy: OnRootMismatch"
 grep -qE '^ +store_dir: /var/lib/mcp-gateway/control-plane$' <<<"$pv" || fail "control_plane.store_dir not on the claim"
-! grep -q 'store_dir: /var/lib/mcp-gateway/control-plane' <<<"$(render)" || fail "default render sets control_plane.store_dir"
+# Checked first: a failed render's error text would let the negated match pass.
+default="$(render)" || fail "default render failed: $default"
+! grep -q 'store_dir: /var/lib/mcp-gateway/control-plane' <<<"$default" || fail "default render sets control_plane.store_dir"
 refused "persistence with two replicas" "persistence" --set persistence.enabled=true --set replicaCount=2 \
   --set config.server.modern_protocol=false
 ex="$(render --set persistence.enabled=true --set persistence.existingClaim=mine || true)"

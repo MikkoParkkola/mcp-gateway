@@ -28,7 +28,9 @@ use serde_json::{Value, json};
 
 use super::MetaMcp;
 use crate::backend::{Backend, BackendRegistry};
-use crate::gateway::task_service::{UpstreamAnswer, UpstreamHandle, UpstreamRecovery};
+use crate::gateway::task_service::{
+    CancelDelivery, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
+};
 use crate::protocol::extensions::Extension;
 use crate::protocol::{JsonRpcError, JsonRpcResponse};
 
@@ -122,11 +124,12 @@ fn failed_answer(error: Option<&Value>) -> UpstreamAnswer {
     }
 }
 
-/// The trusted, query-only adapter.
+/// The trusted recovery adapter.
 ///
 /// It holds a backend registry and a set of configured names, and its whole
-/// vocabulary is one `tasks/get`. It cannot name a tool or arguments, so it
-/// could not resubmit the original operation if it tried to.
+/// vocabulary is one read, `tasks/get`, and one write, `tasks/cancel` of a
+/// handle whose task the owner cancelled (MIK-7642). It cannot name a tool or
+/// arguments, so it could not resubmit the original operation if it tried to.
 pub(crate) struct NativeUpstreamTasks {
     backends: Arc<BackendRegistry>,
     /// Names from `tasks.recovery_adapters`. Read on every claim, so an
@@ -179,6 +182,10 @@ impl NativeUpstreamTasks {
         let deadline = QUERY_DEADLINE.min(backend.request_timeout());
         let answer = tokio::time::timeout(
             deadline,
+            // The caller's own mode (MIK-8269): a dispatch's claim runs where
+            // its own `tools/call` will, and `query`/`cancel` run this under
+            // `non_interactive`. A non-interactive discovery is refused while a
+            // start holds the backend, which would silently disarm recovery.
             backend.request_with_headers("server/discover", None, &[], None),
         )
         .await;
@@ -208,35 +215,106 @@ impl UpstreamRecovery for NativeUpstreamTasks {
         self.eligible(backend).await.is_some()
     }
 
+    fn started(&self) -> Option<tokio::sync::broadcast::Receiver<String>> {
+        Some(self.backends.subscribe_started())
+    }
+
     async fn query(&self, handle: &UpstreamHandle, deadline: Duration) -> UpstreamAnswer {
-        let Some(backend) = self.eligible(&handle.backend).await else {
-            return UpstreamAnswer::Unavailable;
-        };
-        let deadline = deadline.min(backend.request_timeout());
-        // The declaration is the transport's, and `tasks/get` is one of the two
-        // methods it will carry it on. One attempt, no retry loop, no other
-        // method, and nothing that writes upstream.
-        match tokio::time::timeout(
-            deadline,
-            backend.request_with_task_capability(
-                "tasks/get",
-                Some(json!({ "taskId": handle.handle })),
-                &[],
-                None,
-            ),
-        )
+        // Never interactive (MIK-8269), its discovery included: recovery is
+        // background upkeep under a bound, and a bound that fires mid-login
+        // would end a login this request opened.
+        crate::oauth::login_gate::non_interactive(async {
+            let Some(backend) = self.eligible(&handle.backend).await else {
+                return UpstreamAnswer::Unavailable;
+            };
+            let deadline = deadline.min(backend.request_timeout());
+            // The declaration is the transport's, and `tasks/get` is one of the two
+            // methods it will carry it on. One attempt, no retry loop, no other
+            // method, and nothing that writes upstream.
+            match tokio::time::timeout(
+                deadline,
+                backend.request_with_task_capability(
+                    "tasks/get",
+                    Some(json!({ "taskId": handle.handle })),
+                    &[],
+                    None,
+                ),
+            )
+            .await
+            {
+                Ok(Ok(response)) => read_query(response),
+                Ok(Err(error)) => {
+                    tracing::warn!(backend = %handle.backend, %error, "upstream tasks/get unavailable");
+                    UpstreamAnswer::Unavailable
+                }
+                Err(_) => {
+                    tracing::warn!(backend = %handle.backend, "upstream tasks/get timed out");
+                    UpstreamAnswer::Unavailable
+                }
+            }
+        })
         .await
-        {
-            Ok(Ok(response)) => read_query(response),
-            Ok(Err(error)) => {
-                tracing::warn!(backend = %handle.backend, %error, "upstream tasks/get unavailable");
-                UpstreamAnswer::Unavailable
+    }
+
+    async fn cancel(&self, handle: &UpstreamHandle, deadline: Duration) -> CancelDelivery {
+        // Never interactive (MIK-8269), as `query`.
+        crate::oauth::login_gate::non_interactive(async {
+            // A start in flight (a restarted gateway reconnecting) is waited
+            // for within the deadline; one still holding the slot after it is
+            // a login or a slow peer, and the attempt is not counted
+            // (MIK-8347): the holder retries when that start succeeds.
+            if let Some(backend) = self.backends.get(&handle.backend)
+                && tokio::time::timeout(deadline, backend.start_settled())
+                    .await
+                    .is_err()
+            {
+                let name = handle.backend.as_str();
+                tracing::warn!(
+                    backend = name,
+                    "upstream tasks/cancel not sent yet: backend still starting"
+                );
+                return CancelDelivery::NotReady;
             }
-            Err(_) => {
-                tracing::warn!(backend = %handle.backend, "upstream tasks/get timed out");
-                UpstreamAnswer::Unavailable
+            let Some(backend) = self.eligible(&handle.backend).await else {
+                let name = handle.backend.as_str();
+                tracing::warn!(
+                    backend = name,
+                    "upstream tasks/cancel not sent yet: backend unclaimed"
+                );
+                return CancelDelivery::NotReady;
+            };
+            let deadline = deadline.min(backend.request_timeout());
+            // One attempt on the same trusted path `query` uses. Any answer,
+            // a JSON-RPC error included, means the peer received it.
+            let sent = tokio::time::timeout(
+                deadline,
+                backend.request_with_task_capability(
+                    "tasks/cancel",
+                    Some(json!({ "taskId": handle.handle })),
+                    &[],
+                    None,
+                ),
+            )
+            .await;
+            let name = handle.backend.as_str();
+            match sent {
+                Ok(Ok(_)) => CancelDelivery::Confirmed,
+                // A login is needed first (an expired token on a connected
+                // backend): not sent, so not counted against the bound.
+                Ok(Err(error)) if error.is_authorization_wait() => {
+                    tracing::warn!(
+                        backend = name,
+                        "upstream tasks/cancel not sent yet: login required"
+                    );
+                    CancelDelivery::NotReady
+                }
+                _ => {
+                    tracing::warn!(backend = name, "upstream tasks/cancel not confirmed");
+                    CancelDelivery::Failed
+                }
             }
-        }
+        })
+        .await
     }
 }
 
@@ -399,7 +477,7 @@ impl MetaMcp {
         }
         // A multi-step meta-tool is deliberately absent from this match.
         Some(DirectJob {
-            server: self.surfaced_tool_server(tool_name)?.to_owned(),
+            server: self.surfaced_tools_map.unscoped(tool_name)?.to_owned(),
             tool: tool_name.to_owned(),
             arguments: arguments.clone(),
         })
@@ -549,6 +627,14 @@ mod error_policy_tests;
 #[cfg(test)]
 #[path = "upstream/provenance_tests.rs"]
 mod provenance_tests;
+
+#[cfg(test)]
+#[path = "upstream/login_scope_tests.rs"]
+mod login_scope_tests;
+
+#[cfg(test)]
+#[path = "upstream/cancel_delivery_tests.rs"]
+mod cancel_delivery_tests;
 
 #[cfg(test)]
 mod tests {

@@ -94,20 +94,27 @@ fn meta_asking(
         request,
     }));
     let _ = registry.register(backend);
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
-            collusion: CollusionConfig {
-                action: CollusionAction::Block,
-                sources,
-                ..CollusionConfig::default()
+    // With a keyring its gateway mints with, as the gateway pairs them
+    // (#2210, MIK-8276).
+    let keys = Arc::new(crate::protocol::continuation::ContinuationState::new());
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    sources,
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+            None,
+        )
+        .with_continuations(Arc::clone(&keys)),
+    );
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
+    meta.set_continuation_for_test(keys);
     meta.enable_idempotency(
         Arc::new(crate::idempotency::IdempotencyCache::new()),
         Duration::from_secs(60),

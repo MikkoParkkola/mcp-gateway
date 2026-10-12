@@ -17,11 +17,13 @@ use super::super::direct_guards::{AdmittedNonce, DirectRouteGuards, refusal};
 use super::super::helpers::{build_http_error_response, build_http_response};
 use super::direct_caller::{Caller, Envelope, Rejection, Route};
 use super::direct_failure::DirectFailure;
+use super::direct_idempotency::idempotency_outcome;
 use super::direct_preflight::{Preflight, Propagation};
 use super::{BackendAuthContext, sign_and_record};
 use crate::gateway::meta_mcp::invoke::dispatch_guards::{Admission, BackendCall};
 use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use crate::gateway::meta_mcp::invoke::relay::GatewayStamps;
+use crate::gateway::meta_mcp::refund_witness::{self as rw, RefundWitness};
 use crate::protocol::meta::Era;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
@@ -44,16 +46,48 @@ pub(super) struct Admitted<'a> {
     pub(super) auth: BackendAuthContext<'a>,
     pub(super) sanitized: Option<Value>,
     pub(super) idem_reservation: Option<crate::idempotency::IdempotencyReservation>,
+    /// Stage 7b's execution lease (`direct_idempotency`), held through dispatch.
+    pub(super) lease: Option<crate::gateway::meta_mcp::admission::SyncLease>,
     /// The signing nonce this call registered, if it registered one.
     pub(super) nonce: Option<AdmittedNonce>,
-    /// An interim answer's sealed envelope and hold key (MIK-8078).
-    pub(super) sealed: Option<(String, String)>,
+    /// The refund witness (MIK-8379): minted with the nonce only when nothing
+    /// before it acted; dropped by a consume; spent at the send.
+    pub(super) witness: Option<RefundWitness>,
+    /// MIK-7642 PR.C: this call's explicit-cancel registration, held for the
+    /// request's life so the caller's own cancel can find it.
+    pub(super) cancel_entry: Option<crate::gateway::router::inflight_calls::Registered>,
+    /// Its abort half, taken by the one dispatch this call makes.
+    pub(super) cancel_on: Option<crate::gateway::router::inflight_calls::CancelOn>,
 }
 
 /// A refusal before dispatch: give back the nonce this call admitted
 /// (MIK-7698).
 fn give_back_nonce(state: &AppState, admitted: &mut Admitted<'_>) {
-    DirectRouteGuards::release_nonce(state, admitted.nonce.take());
+    DirectRouteGuards::release_nonce(state, admitted.nonce.take(), admitted.witness.take());
+}
+
+/// The witness for a nonce admitted after propagation and the schema check:
+/// only when neither may have acted, by `/mcp`'s classifiers (MIK-8379).
+fn admission_witness(
+    nonce: Option<&AdmittedNonce>,
+    propagation: &Propagation,
+    backend: &crate::backend::Backend,
+) -> Option<RefundWitness> {
+    nonce?;
+    let credential = rw::dispatch_effect(
+        propagation.identity_key.is_some() || propagation.attempted,
+        propagation.managed.is_some(),
+    );
+    let filled = rw::schema_effect(backend.list_fills() != propagation.fills_before);
+    let witness = RefundWitness::carry(Some(RefundWitness::at_capture()), credential);
+    RefundWitness::carry(witness, filled)
+}
+
+/// The send is about to happen: the nonce stays spent whatever follows.
+fn spend_witness(admitted: &mut Admitted<'_>) {
+    if let Some(witness) = admitted.witness.take() {
+        witness.spend();
+    }
 }
 
 /// SECURITY: apply tool policy, name validation, and input sanitization to
@@ -97,50 +131,6 @@ async fn guard_and_sanitize(
         }
     }
     Ok(())
-}
-
-/// MIK-7272.SUB.4: the bypass re-enforces the idempotency guard locally, the
-/// same shape as the isolation guard. A broken stream forces re-issue with a
-/// NEW request id, so without this the duplicate side effect lands twice on
-/// the one route that never reaches `invoke_tool_traced`.
-fn idempotency_outcome(
-    scope: Scope<'_>,
-    envelope: &Envelope,
-    preflight: &Preflight,
-    propagation: &Propagation,
-) -> Result<Option<crate::idempotency::GuardOutcome>, Rejection> {
-    if envelope.method != "tools/call" {
-        return Ok(None);
-    }
-    let caller = scope.caller;
-    match scope.state.meta_mcp.direct_route_idempotency(
-        preflight.retry.idempotency_key.as_deref(),
-        scope.name,
-        propagation.identity_key.as_deref(),
-        caller.verified_identity.as_ref(),
-        caller.grant_subject.as_ref(),
-        caller
-            .client
-            .as_ref()
-            .map(|client| client.principal.as_str()),
-        crate::gateway::meta_mcp::Authentication::of(caller.client.as_ref()),
-        envelope.params.as_ref(),
-    ) {
-        Ok(outcome) => Ok(outcome),
-        Err(e) => {
-            let code = e.to_rpc_code();
-            let status = u16::try_from(code)
-                .ok()
-                .and_then(|c| StatusCode::from_u16(c).ok())
-                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Err(build_http_error_response(
-                Some(scope.id.clone()),
-                code,
-                e.to_string(),
-                status,
-            ))
-        }
-    }
 }
 
 /// Admitted once, here: after every refusal above and the idempotency guard,
@@ -221,14 +211,6 @@ pub(super) async fn admit<'a>(
         trace_id: "",
         caller_key,
     };
-    if envelope.method == "tools/call"
-        && let Err(e) = DirectRouteGuards::run(&state.meta_mcp, &call, preflight.signing_scope)
-    {
-        return Err(build_http_response(
-            &Egressed::gateway_own(refusal(Some(id.clone()), &e)),
-            StatusCode::OK,
-        ));
-    }
     let auth = BackendAuthContext {
         client,
         oauth_agent_identity: caller.oauth_agent_identity.as_ref(),
@@ -236,40 +218,55 @@ pub(super) async fn admit<'a>(
         #[cfg(feature = "firewall")]
         grant_subject: caller.grant_subject.as_ref(),
     };
+    // Registered before the dispatch exists: a cancel that arrives first
+    // aborts it before anything reaches the backend.
+    let (cancel_entry, cancel_on) = serde_json::to_value(scope.id)
+        .ok()
+        .and_then(|id| {
+            super::direct_caller::explicit_cancel_key(
+                scope.name,
+                scope.caller,
+                scope.route.session_id,
+                &id,
+            )
+        })
+        .and_then(|key| scope.state.meta_mcp.inflight_calls().register(key))
+        .unzip();
     let mut admitted = Admitted {
         failed,
         call,
         auth,
         sanitized: None,
         idem_reservation: None,
+        lease: None,
         nonce: None,
-        sealed: None,
+        witness: None,
+        cancel_entry,
+        cancel_on,
     };
     guard_and_sanitize(scope, envelope, propagation, &mut admitted).await?;
-    let guarded = idempotency_outcome(scope, envelope, preflight, propagation)?;
-    admitted.nonce = admit_signing_nonce(scope, preflight)?;
-    match guarded {
-        Some(crate::idempotency::GuardOutcome::CachedResult(cached)) => {
-            crate::gateway::meta_mcp::invoke::audit::note_cached();
-            // A replay is a delivery too: it renews this caller's own copy,
-            // shaped for this request's era (MIK-8022).
-            let mut response = JsonRpcResponse::success(id.clone(), cached);
-            replay_scan(state, (&admitted.call, envelope), client, &mut response);
-            let auth = (admitted.auth, admitted.call.tool);
-            let response = finish_tail(scope, envelope, preflight, auth, response);
-            return Err(build_http_response(&Egressed::of(response), StatusCode::OK));
-        }
-        Some(crate::idempotency::GuardOutcome::CachedError(error)) => {
-            crate::gateway::meta_mcp::invoke::audit::note_cached_failure(&error);
-            let mut response = super::cached_error_response(Some(id.clone()), &error);
-            replay_scan(state, (&admitted.call, envelope), client, &mut response);
-            return Err(build_http_response(&Egressed::of(response), StatusCode::OK));
-        }
-        Some(crate::idempotency::GuardOutcome::Proceed(reservation)) => {
-            admitted.idem_reservation = Some(reservation);
-        }
-        None => {}
+    // After authorize, the firewall and the caller's catalogue (MIK-8356 F3).
+    if envelope.method == "tools/call"
+        && let Err(e) =
+            DirectRouteGuards::run(&state.meta_mcp, &admitted.call, preflight.signing_scope)
+    {
+        return Err(build_http_response(
+            &Egressed::gateway_own(refusal(Some(id.clone()), &e)),
+            StatusCode::OK,
+        ));
     }
+    let mut guarded = idempotency_outcome(scope, envelope, preflight, propagation)?;
+    let (lease, replay) =
+        super::direct_idempotency::execution_lease(scope, envelope, preflight, &mut guarded)?;
+    admitted.lease = lease;
+    admitted.nonce = admit_signing_nonce(scope, preflight)?;
+    admitted.witness = admission_witness(admitted.nonce.as_ref(), propagation, &route.backend);
+    super::direct_idempotency::deliver_replay(
+        scope,
+        (envelope, preflight),
+        &mut admitted,
+        (guarded, replay),
+    )?;
     Ok(admitted)
 }
 
@@ -312,16 +309,36 @@ async fn forward_sanitized(
         drop(admission);
         return refused;
     }
+    // Redeemed: a continuation the caller presented was consumed.
+    admitted.witness = RefundWitness::carry(
+        admitted.witness.take(),
+        rw::retry_effect(preflight.retry.request_state.is_some()),
+    );
+    // After redeem, on the exact bytes sent: the answers are in the params now.
+    let permit = match super::direct_permit::mint_permit(scope, Some(&sanitized_params)) {
+        Ok(permit) => permit,
+        Err(e) => {
+            let answer = (&mut admitted, Some(admission));
+            return super::direct_permit::refused_send(state, answer, id, &e);
+        }
+    };
     // Forward the sanitized params to the backend
+    spend_witness(&mut admitted);
+    #[cfg(test)]
+    super::direct_idempotency::seams::before_mark().await;
+    super::direct_idempotency::mark(admitted.lease.as_ref());
+    let cancel_on = admitted.cancel_on.take();
     let forward = Box::pin(super::dispatch_armed(
         admitted.idem_reservation.as_mut(),
-        super::dispatch_in_scope(
-            &route.backend,
-            &envelope.method,
-            id,
-            Some(sanitized_params),
-            &propagation.headers,
-            propagation.identity_key.as_deref(),
+        crate::gateway::router::inflight_calls::explicitly_cancellable(
+            cancel_on,
+            super::direct_send::dispatch_tool_call(
+                permit,
+                &route.backend,
+                id,
+                Some(sanitized_params),
+                (&propagation.headers, propagation.identity_key.as_deref()),
+            ),
         ),
     ))
     .await;
@@ -343,9 +360,14 @@ async fn forward_sanitized(
             envelope.declared,
         ),
     );
-    let guards = (client, &mut admitted.sealed);
-    let forward =
-        DirectRouteGuards::after_dispatch(state, (seen, seal), guards, &admission, forward).await;
+    let forward = DirectRouteGuards::after_dispatch(
+        state,
+        (seen, seal),
+        client,
+        (&admission, admitted.cancel_entry.as_ref()),
+        forward,
+    )
+    .await;
     settle_parked(parked, &forward, &mut admitted);
     // The spend is settled; an unsettled reservation is given back here.
     drop(admission);
@@ -383,15 +405,24 @@ async fn forward_plain(
         let (headers, key) = (&propagation.headers, propagation.identity_key.as_deref());
         // Success is recorded after the firewall pass: a listing it refuses is
         // not a client success (MIK-7708).
-        return Ok(super::direct_list::drain(
+        let drain = super::direct_list::drain(
             &route.backend,
             id,
             envelope.params.as_ref(),
             headers,
             key,
             name,
+        );
+        let drained = crate::gateway::router::inflight_calls::explicitly_cancellable(
+            admitted.cancel_on.take(),
+            drain,
         )
-        .await);
+        .await;
+        // Index the slot a complete drain stored (MIK-8356 R3.5).
+        state
+            .meta_mcp
+            .remember_caller_slot(&route.backend, caller.proof(), key);
+        return Ok(drained);
     }
     let admission = if method == "tools/call" {
         match DirectRouteGuards::before_dispatch(&state.meta_mcp, &admitted.call) {
@@ -407,17 +438,22 @@ async fn forward_plain(
     } else {
         Admission::default()
     };
-    let dispatch = super::dispatch_in_scope(
-        &route.backend,
-        method,
-        id,
-        envelope.params.clone(),
-        &propagation.headers,
-        propagation.identity_key.as_deref(),
-    );
+    let dispatch = match super::direct_permit::plain_send(scope, envelope, propagation, admitted) {
+        Ok(dispatch) => dispatch,
+        Err(refused) => {
+            // Not dispatched: the spend admission is given back on drop.
+            drop(admission);
+            return Err(refused);
+        }
+    };
+    spend_witness(admitted);
+    #[cfg(test)]
+    super::direct_idempotency::seams::before_mark().await;
+    super::direct_idempotency::mark(admitted.lease.as_ref());
+    let cancel_on = admitted.cancel_on.take();
     let forward = Box::pin(super::dispatch_armed(
         admitted.idem_reservation.as_mut(),
-        dispatch,
+        crate::gateway::router::inflight_calls::explicitly_cancellable(cancel_on, dispatch),
     ))
     .await;
     let answered = if method == "tools/call" {
@@ -438,10 +474,14 @@ async fn forward_plain(
                 envelope.declared,
             ),
         );
-        let guards = (client, &mut admitted.sealed);
-        let guarded =
-            DirectRouteGuards::after_dispatch(state, (seen, seal), guards, &admission, forward)
-                .await;
+        let guarded = DirectRouteGuards::after_dispatch(
+            state,
+            (seen, seal),
+            client,
+            (&admission, admitted.cancel_entry.as_ref()),
+            forward,
+        )
+        .await;
         settle_parked(parked, &guarded, admitted);
         guarded
     } else {
@@ -516,6 +556,10 @@ async fn finish_response(
     // Settled before shaping: the cache holds no era-specific member, so a
     // replay is shaped for its own request's era (MIK-8022).
     super::settle_direct_idempotency(admitted.idem_reservation.as_mut(), &response);
+    // 7b on the same answer, unshaped and unsigned, as 7a stores it.
+    if let Some(lease) = admitted.lease.take() {
+        lease.complete_delivery(&response, None);
+    }
     if method == "tools/list"
         && envelope.era != Era::Modern
         && let Some(result) = response.result.as_mut().and_then(Value::as_object_mut)
@@ -526,11 +570,6 @@ async fn finish_response(
     }
     let auth = (admitted.auth, admitted.call.tool);
     let response = finish_tail(scope, envelope, preflight, auth, response);
-    // MIK-8078: a sealed question keeps its slot only if the answer that
-    // leaves still carries it; every step that could refuse or replace it ran.
-    let sealed = admitted.sealed.take();
-    let delivered = response.result.as_ref();
-    state.meta_mcp.release_direct_hold(sealed, delivered).await;
     build_http_response(&Egressed::of(response), StatusCode::OK)
 }
 
@@ -543,7 +582,7 @@ async fn finish_response(
 ///
 /// MIK-8025/MIK-8011 (secE) wrap this tail and the fresh steps in a
 /// `gateway_writes` scope.
-fn finish_tail(
+pub(super) fn finish_tail(
     scope: Scope<'_>,
     envelope: &Envelope,
     preflight: &Preflight,
@@ -632,6 +671,7 @@ fn park_if_interim(
         .and_then(|response| response.result.as_ref())
         .is_some_and(crate::protocol::mrtr::InputRequired::claims_input_required);
     if asked {
+        super::direct_idempotency::withdraw(admitted.lease.as_ref());
         admitted.idem_reservation.take()
     } else {
         None
@@ -648,38 +688,19 @@ fn settle_parked(
     admitted: &mut Admitted<'_>,
 ) {
     match (parked, guarded) {
-        (Some(reservation), Err(_)) => admitted.idem_reservation = Some(reservation),
+        (Some(reservation), Err(_)) => {
+            super::direct_idempotency::mark(admitted.lease.as_ref());
+            admitted.idem_reservation = Some(reservation);
+        }
         (Some(mut reservation), Ok(_)) => reservation.release(),
         (None, _) => {}
     }
 }
 
-/// A replay is scanned like a fresh answer: the idempotency cache is shared
-/// across routes, and the meta route settles before its delivery scan, so an
-/// entry's provenance proves nothing (design round 2).
-fn replay_scan(
-    state: &AppState,
-    (call, envelope): (&BackendCall<'_>, &Envelope),
-    client: Option<&crate::gateway::auth::AuthenticatedClient>,
-    response: &mut JsonRpcResponse,
-) {
-    let method = envelope.method.as_str();
-    let target = screen_target(call, method);
-    super::super::direct_guards::scan_direct_egress(
-        state,
-        (
-            &target,
-            crate::gateway::meta_mcp::invoke::egress::ContentChecks::for_method(method),
-        ),
-        client,
-        response,
-    );
-}
-
 /// The policy target an answer of `method` is screened under (MIK-8139):
 /// the named tool for `tools/call`, otherwise the method itself, as the
 /// result scans target it.
-fn screen_target<'a>(call: &BackendCall<'a>, method: &'a str) -> BackendCall<'a> {
+pub(super) fn screen_target<'a>(call: &BackendCall<'a>, method: &'a str) -> BackendCall<'a> {
     BackendCall {
         server: call.server,
         tool: if method == "tools/call" {
@@ -700,15 +721,35 @@ async fn answer_failure(mut admitted: Admitted<'_>, e: crate::Error, method: &st
     // Nothing reached the backend, so the nonce is given back (MIK-7698).
     if e.is_pre_dispatch() {
         give_back_nonce(admitted.failed.state, &mut admitted);
+        super::direct_idempotency::withdraw(admitted.lease.as_ref());
+    }
+    // MIK-7642 PR.C: the caller's own cancel is its choice, not a failure: no
+    // breaker strike, and answered 200 as on `/mcp`. The key still settles as
+    // dispatched (ADR-012 consequence 1), so a retry never re-runs the call.
+    let entry = admitted.cancel_entry.as_ref();
+    if crate::gateway::router::inflight_calls::cancelled_by_caller(entry, Some(&e)) {
+        let response = JsonRpcResponse::error(
+            Some(admitted.failed.id.clone()),
+            crate::gateway::router::inflight_calls::CLIENT_CANCELLED_CODE,
+            crate::gateway::router::inflight_calls::CLIENT_CANCELLED_MESSAGE,
+        );
+        let settle = (admitted.idem_reservation.as_mut(), admitted.lease.take());
+        super::settle_direct_failure(settle, &e, &response);
+        return build_http_response(&Egressed::gateway_own(response), StatusCode::OK);
     }
     let Admitted {
         failed,
         call,
         mut idem_reservation,
+        lease,
         ..
     } = admitted;
     failed
-        .answer(idem_reservation.as_mut(), e, &screen_target(&call, method))
+        .answer(
+            (idem_reservation.as_mut(), lease),
+            e,
+            &screen_target(&call, method),
+        )
         .await
 }
 

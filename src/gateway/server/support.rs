@@ -55,19 +55,8 @@ pub(super) fn log_startup_banner(
         // Authorization header, so without this an operator with a perfectly
         // good credential still cannot open the dashboard. The value is
         // single-use and is not the credential itself.
-        // Loopback only. The link carries an admin-granting value and the log
-        // it is printed to may be shipped elsewhere; on a network listener the
-        // reader of that log would not even need to be on the machine.
-        if crate::gateway::router::is_loopback_bind(&config.server.host)
-            && let Some(value) = bootstrap.and_then(DashboardBootstrap::peek)
-        {
-            info!(
-                "DASHBOARD (opens once, then remembered in this browser): \
-                 {}://{}/dashboard?bootstrap={}",
-                if config.mtls.enabled { "https" } else { "http" },
-                url_authority(&config.server.host, port),
-                value
-            );
+        if let Some(link) = dashboard_link(config, port, bootstrap) {
+            info!("{link}");
             if let Some(note) = dashboard_link_handoff(config) {
                 info!("DASHBOARD {note}");
             }
@@ -259,6 +248,17 @@ impl<S> Layer<S> for PeerCertIdentityLayer {
     }
 }
 
+/// The answer to every request on a connection whose client certificate
+/// names no subject (MIK-8286): such a certificate is a presented identity
+/// that names nobody, so it is refused as unauthenticated rather than served
+/// as anonymous or as the placeholder every such certificate shares. Checked
+/// before the inner service runs; `/health` included.
+const NAMELESS_CERTIFICATE: &str = "client certificate names no subject (no SAN URI and no CN)";
+
+fn names_nobody(identity: Option<&CertIdentity>) -> bool {
+    identity.is_some_and(|identity| identity.subject_id().is_none())
+}
+
 #[derive(Debug, Clone)]
 struct PeerCertIdentityService<S> {
     inner: S,
@@ -267,22 +267,36 @@ struct PeerCertIdentityService<S> {
 
 impl<S, B> Service<axum::http::Request<B>> for PeerCertIdentityService<S>
 where
-    S: Service<axum::http::Request<B>>,
+    S: Service<axum::http::Request<B>, Response = axum::response::Response>,
 {
     type Response = S::Response;
     type Error = S::Error;
-    type Future = S::Future;
+    type Future = futures::future::Either<
+        S::Future,
+        std::future::Ready<Result<axum::response::Response, S::Error>>,
+    >;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx)
     }
 
     fn call(&mut self, mut request: axum::http::Request<B>) -> Self::Future {
+        if names_nobody(self.identity.as_ref()) {
+            telemetry_metrics::counter!(
+                "mcp_identity_refused_total",
+                "reason" => "nameless_certificate"
+            )
+            .increment(1);
+            warn!("Client certificate names no subject; refused");
+            return futures::future::Either::Right(std::future::ready(Ok(
+                crate::gateway::middleware::errors::unauthenticated_response(NAMELESS_CERTIFICATE),
+            )));
+        }
         if let Some(identity) = self.identity.clone() {
             request.extensions_mut().insert(identity);
         }
 
-        self.inner.call(request)
+        futures::future::Either::Left(self.inner.call(request))
     }
 }
 
@@ -372,6 +386,28 @@ fn url_authority(host: &str, port: u16) -> String {
     } else {
         format!("{host}:{port}")
     }
+}
+
+/// The dashboard link the startup banner prints, or `None` when it must not
+/// be printed. Loopback only: the link carries an admin-granting value and
+/// the log it is printed to may be shipped elsewhere; on a network listener
+/// the reader of that log would not even need to be on the machine. With auth
+/// off there is no admin to grant, and without a bootstrap value no link.
+fn dashboard_link(
+    config: &Config,
+    port: u16,
+    bootstrap: Option<&DashboardBootstrap>,
+) -> Option<String> {
+    if !config.auth.enabled || !crate::gateway::router::is_loopback_bind(&config.server.host) {
+        return None;
+    }
+    let value = bootstrap.and_then(DashboardBootstrap::peek)?;
+    let scheme = if config.mtls.enabled { "https" } else { "http" };
+    let authority = url_authority(&config.server.host, port);
+    Some(format!(
+        "DASHBOARD (opens once, then remembered in this browser): \
+         {scheme}://{authority}/dashboard?bootstrap={value}"
+    ))
 }
 
 /// Where the link's code is entered, when this listener is plain HTTP behind an

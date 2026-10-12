@@ -71,9 +71,6 @@ it for a gateway token. It is off by default.
 ```yaml
 key_server:
   enabled: true
-  token_ttl_secs: 3600
-  max_tokens_per_identity: 5
-  max_oidc_token_age_secs: 300        # replay window for the incoming OIDC token
   admin_token: env:GATEWAY_ADMIN_TOKEN
   oidc:
     - issuer: https://accounts.google.com
@@ -135,7 +132,7 @@ key_server:
 
 Clients present the provider's JWT access token, so the provider must issue
 JWT access tokens whose `aud` is one of the `audiences` above, whose age is
-within `max_oidc_token_age_secs`, and for an identity that a
+within the key server's 5-minute replay window, and for an identity that a
 `key_server.policies` rule grants access to. The provider must also let the client register (dynamic client registration or a
 client metadata document) and publish its metadata at the issuer; the gateway
 does not run an authorization server of its own. Check the result with
@@ -233,7 +230,7 @@ security:
 
 backends:
   github:
-    http_url: https://mcp.example-backend.invalid/mcp
+    url: https://mcp.example-backend.invalid/mcp
     identity_propagation:
       strategy: passthrough           # signed_assertion | passthrough | token_exchange | vault
       audience: https://api.github.com
@@ -283,6 +280,13 @@ one transport is safe to share because identity travels per request.
 `(backend, user, audience)`. If you are not certain the backend is stateless,
 it is not stateless — a backend that binds anything to the session will leak it
 across users.
+
+Each caller of such a backend also has its own tool catalogue. A call is judged
+by the caller's own catalogue, never another user's: a tool it does not offer
+answers `-32601`, as an unknown name. Listings that name tools without fetching
+them (the disabled list, counts, `gateway_list_servers`) leave the backend's
+tools out until the caller's own catalogue has been read once, for example by
+`gateway_list_tools`.
 
 ## One principal per call
 
@@ -436,19 +440,17 @@ keeps going to the chat client as before. The routes under the prefix:
 - `GET /accounts/v1/complete`, `GET /accounts/v1/assets/complete.js` — the outcome/manage page
 - `DELETE /accounts/v1/connections/{account_id}` — disconnect, called from the manage page
 
-### Limits (`accounts.limits`)
+### Limits
 
-| Field | Default | Meaning |
-|---|---|---|
-| `journeys_total` | 1024 | Active (`pending`/`started`) journeys, gateway-wide |
-| `journeys_per_user` | 8 | Journey creations per principal, sliding 10-minute window |
-| `starts_per_minute_per_user` | 10 | `start` invocations per principal, sliding 60 s window |
-| `journeys_created_per_minute` | 120 | Journey creations gateway-wide, sliding 60 s window |
-| `store_entries` | 10000 | Existing cap on the connected-account credential store, unrelated to the journey table |
-| `authority_bytes` | 16777216 | Existing byte cap on the same credential store |
+The connect flow has fixed limits in 4.0. Each window slides:
 
-Every field rejects zero and overflow; there is no way to disable a limit,
-only raise it.
+- 1024 active (`pending`/`started`) journeys gateway-wide;
+- 8 journey creations per principal in 10 minutes;
+- 10 `start` invocations per principal per minute;
+- 120 journey creations gateway-wide per minute;
+- 10000 entries and 16 MiB (16777216 bytes) in the connected-account credential store.
+
+A 3.x config that raised one still applies it, and `mcp-gateway doctor` lists it.
 
 ### Google OAuth web-client checklist
 
@@ -489,8 +491,8 @@ only raise it.
   verified user, `(issuer, sub)`, and records refused and failed calls too. On
   Kubernetes give the log a PersistentVolumeClaim (`audit.existingClaim`) or
   export it, because the chart's default `emptyDir` dies with the pod.
-- The dashboard: sessions end after 30 minutes idle or 8 hours total
-  (`auth.dashboard_session`), and live in each replica's memory. Serve the dashboard
+- The dashboard: sessions end after 30 minutes idle or 8 hours total,
+  and live in each replica's memory. Serve the dashboard
   from one replica or behind sticky sessions (UPGRADING-4.0 section 71).
 - Alerts on the security counters, scraped with `server.metrics_token`. Their
   labels are fixed words, never a key name, subject, backend, tool or path:

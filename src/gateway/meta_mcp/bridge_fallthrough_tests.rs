@@ -489,16 +489,23 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
         .set_transport_for_test(Arc::new(AsksThenAnswers {
             calls: parking_lot::Mutex::new(0),
         }));
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled: true,
-            scan_responses: true,
-            scan_requests: false,
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+    // With a keyring its gateway mints with, as the gateway pairs them
+    // (#2210, MIK-8276).
+    let keys = Arc::new(crate::protocol::continuation::ContinuationState::new());
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                enabled: true,
+                scan_responses: true,
+                scan_requests: false,
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .with_continuations(Arc::clone(&keys)),
+    );
     m.set_firewall(Some(Arc::clone(&firewall)));
+    m.set_continuation_for_test(keys);
 
     let channel = NoSessionCounted::default();
     let first = json!({"server": "asks", "tool": "gateway_list_tools", "arguments": {}});
@@ -598,7 +605,7 @@ async fn t4_a_bridged_undeclared_last_round_is_not_kept_by_the_lease() {
     let owner = AdmissionOwner::for_test(caller.owner_principal());
     let id = crate::protocol::RequestId::Number(1);
     let Ok(SyncAdmission::Owned(lease)) =
-        m.admit_meta_sync(owner, &caller, "gateway_invoke", &args(), None, &id)
+        m.admit_meta_sync_for_test(owner, &caller, "gateway_invoke", &args(), None, &id)
     else {
         panic!("a keyed call takes the lease");
     };
@@ -611,7 +618,7 @@ async fn t4_a_bridged_undeclared_last_round_is_not_kept_by_the_lease() {
         .await
         .expect_err("the undeclared last round is refused");
     lease.complete_secured(&error_response_preserving_status(id.clone(), &error));
-    let again = m.admit_meta_sync(owner, &caller, "gateway_invoke", &args(), None, &id);
+    let again = m.admit_meta_sync_for_test(owner, &caller, "gateway_invoke", &args(), None, &id);
     assert!(
         matches!(again, Ok(SyncAdmission::Owned(_))),
         "the refusal was kept by the lease and would be replayed"

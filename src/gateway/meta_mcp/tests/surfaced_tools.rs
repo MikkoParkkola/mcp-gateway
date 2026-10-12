@@ -43,7 +43,7 @@ fn with_surfaced_tools_stores_valid_entries() {
     assert_eq!(mm.surfaced_tools.len(), 1);
     assert_eq!(mm.surfaced_tools[0].tool, "my_custom_tool");
     assert_eq!(
-        mm.surfaced_tools_map.get("my_custom_tool").unwrap(),
+        mm.surfaced_tools_map.unscoped("my_custom_tool").unwrap(),
         "backend_a"
     );
 }
@@ -66,31 +66,16 @@ fn with_surfaced_tools_drops_collision_with_meta_tool() {
     // THEN: only the non-colliding entry is kept
     assert_eq!(mm.surfaced_tools.len(), 1);
     assert_eq!(mm.surfaced_tools[0].tool, "my_real_tool");
-    assert!(!mm.surfaced_tools_map.contains_key("gateway_invoke"));
+    assert!(!mm.surfaced_tools_map.contains("gateway_invoke"));
 }
 
 #[test]
 fn with_surfaced_tools_drops_all_known_meta_tool_names() {
     // GIVEN: all known meta-tool names as surfaced tools
-    let meta_names = vec![
-        "gateway_search",
-        "gateway_execute",
-        "gateway_list_servers",
-        "gateway_list_tools",
-        "gateway_search_tools",
-        "gateway_invoke",
-        "gateway_get_stats",
-        "gateway_cost_report",
-        "gateway_webhook_status",
-        "gateway_run_playbook",
-        "gateway_kill_server",
-        "gateway_revive_server",
-        "gateway_list_disabled_capabilities",
-        "gateway_set_profile",
-        "gateway_get_profile",
-        "gateway_list_profiles",
-        "gateway_reload_config",
-    ];
+    let meta_names: Vec<&str> = super::super::surfaced::META_TOOLS
+        .iter()
+        .map(|(name, _)| *name)
+        .collect();
     let tools: Vec<SurfacedToolConfig> = meta_names
         .iter()
         .map(|name| SurfacedToolConfig {
@@ -325,6 +310,34 @@ async fn tools_call_surfaced_tool_on_missing_backend_returns_error() {
     }
 }
 
+/// MIK-8159 N5 (guard): a surfaced call that fails keeps no chain source,
+/// read on the answer before finalisation. The finaliser skips JSON-RPC errors
+/// on its own, so only this field shows whether the named path set a source
+/// on a failure (mutant M2). Green before and after the fix.
+#[tokio::test]
+async fn a_failed_surfaced_call_carries_no_chain_source() {
+    let surfaced = vec![SurfacedToolConfig {
+        server: "nonexistent_server".to_string(),
+        tool: "pinned_tool".to_string(),
+    }];
+    let mm = MetaMcp::new(Arc::new(BackendRegistry::new())).with_surfaced_tools(surfaced);
+    let resp = Box::pin(mm.handle_tools_call(
+        RequestId::Number(1),
+        "pinned_tool",
+        json!({}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
+    assert_eq!(
+        resp.chain_source,
+        crate::protocol::ChainSource::NotEligible,
+        "{:?}",
+        resp.error
+    );
+    assert!(resp.chain_upstream.is_none(), "{:?}", resp.error);
+}
+
 #[tokio::test]
 async fn tools_call_unknown_non_surfaced_tool_returns_32601() {
     // GIVEN: no surfaced tools, calling a completely unknown tool
@@ -514,18 +527,21 @@ fn inspect_discovery_value_redacts_credentials_when_not_blocking() {
         "tools": [{"name": "t", "description": format!("token: {token} for auth")}]
     });
     let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
-    meta.set_firewall(Some(Arc::new(Firewall::from_config(
-        FirewallConfig {
-            rules: vec![FirewallRule {
-                tool_match: "tools/list".to_string(),
-                action: FirewallAction::Warn,
-                reason: None,
-                scan: Vec::new(),
-            }],
-            ..FirewallConfig::default()
-        },
-        None,
-    ))));
+    meta.set_firewall(Some(Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                rules: vec![FirewallRule {
+                    tool_match: "tools/list".to_string(),
+                    action: FirewallAction::Warn,
+                    reason: None,
+                    scan: Vec::new(),
+                }],
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .with_continuations(meta.continuation()),
+    )));
 
     meta.inspect_discovery_value(&mut surface)
         .expect("a Warn verdict serves the list");
@@ -535,4 +551,117 @@ fn inspect_discovery_value_redacts_credentials_when_not_blocking() {
         "{description}"
     );
     assert!(!description.contains("ghp_"), "{description}");
+}
+
+/// MIK-8154 (lead, on review finding muse 3): the meta-tool names surfacing
+/// refuses are exactly the names dispatch's meta match routes on, one source
+/// checked against the other. A new meta tool added to the match but not to
+/// the list (or the reverse) fails here, before a surfaced backend tool could
+/// shadow it and receive the gateway's meta decoding.
+#[test]
+fn meta_tool_names_are_the_dispatch_arms() {
+    let source = include_str!("../call_dispatch.rs");
+    // Each arm's pattern must be one string literal, with no guard: one name,
+    // one handler, so two names of different policies cannot share an arm.
+    // Anything else (an `|`, a constant, a guard) fails here rather than
+    // reading as a name the arm may not route.
+    let mut arms = std::collections::BTreeSet::new();
+    for pattern in match_arm_patterns(source, "let result = match tool_name {") {
+        if pattern == "_" {
+            continue;
+        }
+        let name = pattern
+            .strip_prefix('"')
+            .and_then(|rest| rest.strip_suffix('"'))
+            .filter(|name| !name.contains('"'))
+            .unwrap_or_else(|| panic!("a meta arm that is not one literal: {pattern}"));
+        assert!(arms.insert(name), "a meta name with two arms: {name}");
+    }
+    let listed: std::collections::BTreeSet<&str> = super::super::surfaced::META_TOOLS
+        .iter()
+        .map(|(name, _)| *name)
+        .collect();
+    assert_eq!(arms, listed, "the dispatch arms and META_TOOLS differ");
+    assert!(
+        arms.contains("gateway_invoke"),
+        "the meta match was not read: {arms:?}"
+    );
+}
+
+/// Exactly three meta tools decode an inner `arguments` (MIK-8154), and only
+/// `gateway_execute` a `chain` (MIK-8378): a new meta tool takes its policy in
+/// `META_TOOLS`, and a parsing one shows here.
+#[test]
+fn exactly_the_three_parsing_meta_tools_decode_inside() {
+    use super::super::surfaced::{ArgsPolicy, META_TOOLS};
+    let parsed: Vec<&str> = META_TOOLS
+        .iter()
+        .filter(|(_, policy)| {
+            matches!(
+                policy,
+                ArgsPolicy::MetaParsedInner | ArgsPolicy::MetaParsedChain
+            )
+        })
+        .map(|(name, _)| *name)
+        .collect();
+    assert_eq!(
+        parsed,
+        ["gateway_execute", "gateway_invoke", "gateway_run_playbook"]
+    );
+    let chained: Vec<&str> = META_TOOLS
+        .iter()
+        .filter(|(_, policy)| *policy == ArgsPolicy::MetaParsedChain)
+        .map(|(name, _)| *name)
+        .collect();
+    assert_eq!(chained, ["gateway_execute"]);
+}
+
+/// The pattern of every arm of the `match` that opens with `head` in
+/// `source`, whitespace-trimmed, read by depth: an arm ends at a comma or a
+/// block body's closing brace at the match's own depth, so a pattern split
+/// across lines is still one pattern. String literals and line comments are
+/// skipped, and a comment before an arm is left out of its pattern. Limit: a
+/// char literal holding a bracket would skew the depth; the meta match has
+/// none, and a skew fails the comparison rather than passing it.
+fn match_arm_patterns<'a>(source: &'a str, head: &str) -> Vec<&'a str> {
+    let open = source.find(head).expect("the match") + head.len();
+    let bytes = source.as_bytes();
+    let (mut patterns, mut depth, mut start, mut i) = (Vec::new(), 0usize, Some(open), open);
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                i += 1;
+                while bytes[i] != b'"' {
+                    i += if bytes[i] == b'\\' { 2 } else { 1 };
+                }
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                let eol = source[i..].find('\n').map_or(bytes.len(), |n| i + n);
+                // A comment before an arm is not part of its pattern.
+                if start.is_some_and(|from| source[from..i].trim().is_empty()) {
+                    start = Some(eol);
+                }
+                i = eol;
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' => depth -= 1,
+            b'}' if depth == 0 => break,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 && start.is_none() {
+                    start = Some(i + 1);
+                }
+            }
+            b',' if depth == 0 => start = Some(i + 1),
+            b'=' if depth == 0 && bytes.get(i + 1) == Some(&b'>') => {
+                if let Some(from) = start.take() {
+                    patterns.push(source[from..i].trim());
+                }
+                i += 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    patterns
 }

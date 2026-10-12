@@ -50,11 +50,17 @@ pub(crate) struct TaskRoute<'a> {
 pub(crate) fn is_task_dispatchable(
     meta_mcp: &crate::gateway::meta_mcp::MetaMcp,
     tool_name: &str,
+    (scope, session_id): (crate::gateway::meta_mcp::InvokeScope<'_>, Option<&str>),
 ) -> bool {
+    // A surfaced name withheld from this caller makes no task: it answers as
+    // a name that matches no tool (MIK-8340).
     matches!(
         tool_name,
         "gateway_invoke" | "gateway_execute" | "gateway_run_playbook"
-    ) || meta_mcp.surfaced_tool_server(tool_name).is_some()
+    ) || meta_mcp
+        .surfaced_for(tool_name, scope, session_id)
+        .visible_server()
+        .is_some()
 }
 
 /// The `taskId` a task method names, if it names one.
@@ -72,13 +78,21 @@ pub(crate) fn missing_task_error(id: RequestId) -> JsonRpcResponse {
     JsonRpcResponse::error(Some(id), -32602, "no such task")
 }
 
-/// `Task::wire()` plus the envelope discriminator the arm supplies.
-pub(crate) fn task_envelope(task: &Task, result_type: &str) -> Value {
-    let mut value = serde_json::to_value(task.wire()).unwrap_or(Value::Null);
+/// A stored task delivered to this request: its holds adopted into the
+/// request's scope (MIK-8176 D4), then `Task::wire()` plus the envelope
+/// discriminator the arm supplies. The task comes back for the arm's own
+/// decisions; refusing after this only drops the request's clones, and the
+/// row keeps the slot.
+pub(crate) fn task_envelope(
+    held: crate::gateway::meta_mcp::sealed_hold::Held<CommittedTask>,
+    result_type: &str,
+) -> (CommittedTask, Value) {
+    let current = held.deliver(crate::gateway::meta_mcp::sealed_hold::HoldSink::Scope);
+    let mut value = serde_json::to_value(current.task.wire()).unwrap_or(Value::Null);
     if let Some(object) = value.as_object_mut() {
         object.insert("resultType".into(), json!(result_type));
     }
-    value
+    (current, value)
 }
 
 fn ack_complete() -> Value {
@@ -93,6 +107,14 @@ impl TaskRoute<'_> {
     fn lookup(&self, task_id: &str) -> Result<CommittedTask, ServiceError> {
         let owner = self.owner.text().ok_or(ServiceError::NotFound)?;
         self.service.get(owner, task_id)
+    }
+
+    fn lookup_held(
+        &self,
+        task_id: &str,
+    ) -> Result<crate::gateway::meta_mcp::sealed_hold::Held<CommittedTask>, ServiceError> {
+        let owner = self.owner.text().ok_or(ServiceError::NotFound)?;
+        self.service.get_held(owner, task_id)
     }
 
     /// `tasks/get`. The owner-scoped lookup comes FIRST, so a foreign or
@@ -123,19 +145,21 @@ impl TaskRoute<'_> {
         if committed.task.status() == crate::protocol::tasks::TaskStatus::Working {
             recover(task_id).await;
         }
-        match self.lookup(task_id) {
-            Ok(current) => refuse(&current).unwrap_or_else(|| {
-                // MIK-7116.MIN.2 (design §4.9): a stored task row keeps no
-                // reading of its output yet, so serving one counts as unread.
-                // A working row serves no backend output and reads nothing.
-                if current.serves_backend_output() {
-                    crate::security::tenant_reads::note_restored(None);
-                }
-                let mut frame =
-                    JsonRpcResponse::success(id, task_envelope(&current.task, "complete"));
-                screen(&current, &mut frame);
-                frame
-            }),
+        match self.lookup_held(task_id) {
+            Ok(held) => {
+                let (current, envelope) = task_envelope(held, "complete");
+                refuse(&current).unwrap_or_else(|| {
+                    // MIK-7116.MIN.2 (design §4.9): a stored task row keeps no
+                    // reading of its output yet, so serving one counts as unread.
+                    // A working row serves no backend output and reads nothing.
+                    if current.serves_backend_output() {
+                        crate::security::tenant_reads::note_restored(None);
+                    }
+                    let mut frame = JsonRpcResponse::success(id, envelope);
+                    screen(&current, &mut frame);
+                    frame
+                })
+            }
             Err(ServiceError::NotFound) => missing_task_error(id),
             Err(_) => store_unavailable(id),
         }
@@ -206,6 +230,12 @@ impl TaskRoute<'_> {
             ),
             InputOutcome::NotFound => missing_task_error(id),
             InputOutcome::Unavailable => store_unavailable(id),
+            InputOutcome::AuditUnavailable => {
+                crate::gateway::meta_mcp::response_security::error_response_preserving_status(
+                    id,
+                    &crate::Error::AuditUnavailable,
+                )
+            }
         }
     }
 
@@ -237,17 +267,17 @@ impl TaskRoute<'_> {
 /// A late answer to a settled task is told how it settled, with the reason it
 /// carries (#2429); a live task without a round gets the plain refusal.
 fn settled_or_no_round(id: RequestId, task: &Task) -> JsonRpcResponse {
-    let wire = serde_json::to_value(task.wire()).unwrap_or_default();
-    let status = wire
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if !matches!(status, "completed" | "failed" | "cancelled") {
-        return no_round(id);
-    }
-    let reason = wire
-        .get("statusMessage")
-        .and_then(Value::as_str)
+    // Read through accessors, never the wire form: this refusal names the
+    // status only, so it must not be able to carry the payload (MIK-8176 A1).
+    use crate::protocol::tasks::TaskStatus;
+    let status = match task.status() {
+        TaskStatus::Completed => "completed",
+        TaskStatus::Failed => "failed",
+        TaskStatus::Cancelled => "cancelled",
+        TaskStatus::Working | TaskStatus::InputRequired => return no_round(id),
+    };
+    let reason = task
+        .status_message()
         .map_or_else(String::new, |message| format!(": {message}"));
     JsonRpcResponse::error(
         Some(id),

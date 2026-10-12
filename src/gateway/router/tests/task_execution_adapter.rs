@@ -77,10 +77,14 @@ mod relay_settlement;
 #[cfg(feature = "firewall")]
 mod relay_upstream;
 
+mod grant_audit_order;
 /// D3-a: grant decision records at the route.
 mod grant_decision_tasks;
 mod grant_decisions;
 mod grant_slot_release;
+pub(crate) mod submit_authz;
+mod submit_authz_audit;
+pub(crate) mod x14_authorize_order;
 
 mod admission_identity;
 /// MIK-7570.ATTEST.1 part 3: surfaced-tool tasks carry their attestation token.
@@ -95,7 +99,10 @@ mod confirmation;
 mod dedupe;
 mod drain;
 /// MIK-7311.LIFECYCLE.1 increment 1b: the input round on `/mcp`.
+mod enforced_round;
 mod input_round;
+mod input_round_clock;
+mod input_round_clock_composite;
 mod input_round_deadline;
 mod input_round_races;
 mod interlock;
@@ -114,6 +121,7 @@ mod settlement;
 #[cfg(feature = "firewall")]
 mod settlement_record;
 mod signing_joint;
+mod slot_release_tasks;
 /// `MIK-7993.STORE.1`/`.2`: a task row records the members the gateway wrote.
 #[cfg(feature = "firewall")]
 mod stored_gateway_writes;
@@ -122,6 +130,7 @@ mod stored_result_policy;
 mod surface_hints;
 #[cfg(feature = "metrics")]
 mod unkeyed_task;
+mod upstream_cancel;
 /// I5's before-the-wire half: the recovery descriptor's capacity, decided
 /// before the first `tools/call` rather than after the handle comes back.
 mod upstream_descriptor;

@@ -15,7 +15,7 @@ Add this to your `gateway.yaml`:
 ```yaml
 backends:
   gitmcp_docs:
-    http_url: "https://gitmcp.io/docs/sse"
+    url: "https://gitmcp.io/docs/sse"
     description: "GitMCP — on-demand docs + code search for any GitHub repo"
     timeout: 30s
 ```
@@ -30,13 +30,12 @@ The gateway infers transport from the shape of the backend entry:
 | Entry field | Transport | When to use |
 |---|---|---|
 | `command:` | stdio | Subprocess you spawn locally |
-| `http_url:` ending in `/sse` | SSE | Server-Sent Events handshake |
-| `http_url:` with `streamable_http: true` | Streamable HTTP | Direct POST, no SSE |
-| `http_url:` (other) | Plain HTTP | Legacy HTTP MCP servers |
+| `url:` with `http://` or `https://` | Streamable HTTP, or SSE | Remote MCP servers: the gateway POSTs first and falls back to the SSE handshake when the server answers 4xx |
+| `url:` with `ws://` or `wss://` | WebSocket | Servers that speak MCP over one shared socket |
 
 See [`src/config/mod.rs`](../src/config/mod.rs) `TransportConfig` for the exact
-rules. GitMCP supports SSE, so the `/sse` suffix is the right choice — you get
-streaming notifications and long-lived sessions for free.
+rules. GitMCP serves SSE at its `/sse` URL; the gateway detects that at connect, so
+you get streaming notifications and long-lived sessions for free.
 
 ## Dynamic vs. repo-pinned routes
 
@@ -55,17 +54,17 @@ GitMCP exposes two URL shapes:
      `fetch_mcp_gateway_documentation`, `search_mcp_gateway_code`.
    - Best when the gateway backs one project and you want clean tool names.
 
-Both variants are just different `http_url` values. You can even define both in
+Both variants are just different `url` values. You can even define both in
 the same config:
 
 ```yaml
 backends:
   gitmcp_docs:
-    http_url: "https://gitmcp.io/docs/sse"
+    url: "https://gitmcp.io/docs/sse"
     description: "GitMCP — any GitHub repo (dynamic)"
 
   gitmcp_self:
-    http_url: "https://gitmcp.io/MikkoParkkola/mcp-gateway/sse"
+    url: "https://gitmcp.io/MikkoParkkola/mcp-gateway/sse"
     description: "GitMCP — pinned to mcp-gateway"
 ```
 
@@ -162,13 +161,12 @@ For remote servers that need auth, add headers or OAuth:
 ```yaml
 backends:
   my_saas:
-    http_url: "https://mcp.example.com/sse"
+    url: "https://mcp.example.com/sse"
     headers:
       Authorization: "Bearer ${MY_SAAS_TOKEN}"
 
   my_google:
-    http_url: "https://mcp.googleapis.com/mcp"
-    streamable_http: true
+    url: "https://mcp.googleapis.com/mcp"
     oauth:
       enabled: true
       scopes:
@@ -176,7 +174,7 @@ backends:
       client_id: "env:GOOGLE_CLIENT_ID"
 ```
 
-Credentials require TLS. An enabled backend whose `http_url` or `a2a_url` is
+Credentials require TLS. An enabled backend whose `url` or `a2a_url` is
 `http://` against a host off this machine is refused at config load when its
 configuration is credential-bearing — an `oauth` section (including one with
 `enabled: false`), identity propagation, secret injection, any static header
@@ -218,6 +216,12 @@ lists the backend's tools once, as that caller, before judging the call (see
 | `closed` (default) | An object level that lists `properties` or `patternProperties` without stating `additionalProperties` is closed. `{"type": "object"}` and `properties: {}` stay free maps. |
 | `standard` | JSON Schema's default: only `additionalProperties: false` closes a level. |
 | `off` | No check. |
+
+On a backend with identity propagation (each caller has its own catalogue), the mode governs only
+the argument keys. Whatever its value, a tool the caller's own catalogue withholds (an invalid
+`inputSchema`, a poisoned description) or does not list answers JSON-RPC `-32601`, exactly as a
+name the gateway does not know, and nothing is sent. The shared catalogue is never consulted for
+it. See [`upgrading.d/8356.md`](../upgrading.d/8356.md).
 
 ## Tools with a poisoned description
 

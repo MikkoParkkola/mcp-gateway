@@ -126,7 +126,7 @@ pub(super) fn route_task_owner(
 /// anonymous owner, which is no principal (a keyed sync call stays refused).
 /// The synchronous lease admits under it, so one key cannot admit one
 /// operation once per spelling (MIK-8193).
-pub(super) fn route_owners(
+pub(in crate::gateway::router) fn route_owners(
     state: &AppState,
     verified_identity: Option<&VerifiedIdentity>,
     agent: Option<&OAuthAgentIdentity>,
@@ -203,6 +203,9 @@ pub(super) struct TaskIntentRequest<'a> {
     pub grant_subject: Option<crate::identity_grants::GrantSubject>,
     /// Whether the caller holds admin rights on this gateway.
     pub is_admin: bool,
+    /// What this caller may invoke: a surfaced name withheld from it makes no
+    /// task (MIK-8340).
+    pub scope: crate::gateway::meta_mcp::InvokeScope<'a>,
     /// Capabilities the client declared on initialize.
     pub input_capabilities: Declared,
     /// Session the call arrived on; an empty one is treated as absent.
@@ -225,7 +228,7 @@ pub(super) fn task_intent_for_call(
     if req.retry.request_state.is_some() || req.retry.input_responses.is_some() {
         return Ok(None);
     }
-    if !is_task_dispatchable(&state.meta_mcp, req.tool_name) {
+    if !is_task_dispatchable(&state.meta_mcp, req.tool_name, (req.scope, req.session_id)) {
         return Ok(None);
     }
     // A gateway that HAS identities must not create a task for a caller that
@@ -545,8 +548,7 @@ fn update_caller(
     if let Some(ref lifecycle) = state.session_lifecycle
         && !resume_key.is_empty()
     {
-        use crate::gateway::session_lifecycle::{IDLE_TTL, now_unix};
-        lifecycle.track(resume_key.clone(), now_unix() + IDLE_TTL.as_secs());
+        lifecycle.renew(resume_key.clone());
     }
     OwnedCallerContext::new(
         crate::gateway::task_service::host::TaskHost::Http(Arc::downgrade(state)),
@@ -680,7 +682,7 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
                         .as_ref()
                         .is_none_or(|opened_as| *opened_as == reader.principal)
             })
-            .and_then(|id| self.state.tasks.get(&self.owner, id).ok());
+            .and_then(|id| self.state.tasks.get_held(&self.owner, id).ok());
         let live = RecoveryCaller {
             client: Some(reader),
             oauth_agent_identity: self.oauth_agent_identity.as_ref(),
@@ -706,14 +708,16 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
                     .is_some()
             })
         };
-        let pending = self
+        let mut pending = self
             .state
             .meta_mcp
-            .task_notification_frame(notification, stored.as_ref(), refused, subscription)
+            .task_notification_frame(notification, stored, refused, subscription)
             .await?;
+        let holds = std::mem::take(&mut pending.holds);
         Some(crate::gateway::streaming::TaskFrame {
             frame: pending.frame.clone(),
             restored_output: pending.restored_output,
+            holds,
             delivery: Box::new(FrameDelivery {
                 state: Arc::clone(&self.state),
                 pending,

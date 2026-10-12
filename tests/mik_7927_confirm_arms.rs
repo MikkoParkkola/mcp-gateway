@@ -280,7 +280,17 @@ async fn a_full_exchange_table_is_refused_and_not_run() {
     let in_flight = state.continuation.in_flight();
     let mut held = 0;
     while in_flight
-        .hold("mik7927-filler", now + 600, now)
+        .hold(
+            "mik7927-filler",
+            // A caller per hold: the table fills, not one caller's share.
+            &mcp_gateway::protocol::continuation::QuotaKey::new(
+                mcp_gateway::protocol::continuation::QuotaSource::KeyName(&format!(
+                    "filler-{held}"
+                )),
+            ),
+            now + 600,
+            now,
+        )
         .await
         .is_some()
     {

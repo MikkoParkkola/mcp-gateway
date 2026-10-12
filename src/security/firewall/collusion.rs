@@ -102,6 +102,18 @@ struct Holder {
     /// The `allowed_flows` entries this copy may leave through without being
     /// a relay.
     flows: Flows,
+    /// `MIK-8066` D6: an unread plan's evidence holder. Never a caller, so it
+    /// never counts toward `Common`.
+    unread: bool,
+}
+
+/// Who a record is held under: a presented caller's digest, or an unread
+/// plan's holder (D6), keyed under [`unread_key`] so no presented identity
+/// maps to it.
+#[derive(Clone, Copy)]
+struct HolderId {
+    key: u64,
+    unread: bool,
 }
 
 /// Which `allowed_flows` entries (one bit per entry) let a held copy leave
@@ -172,6 +184,9 @@ struct State {
     sketches: sketch::SketchStore,
     /// "Excuse lost" markers, apart from the sketches (`MIK-8201`).
     markers: sketch::Markers,
+    /// A caller's own subset-forward seams: excuse only, apart from the
+    /// evidence entries (`MIK-8205`).
+    seams: seam::seam_excuse::SeamExcuses,
 }
 
 impl State {
@@ -185,6 +200,7 @@ impl State {
         }
         self.sketches.sweep(now, window);
         self.markers.sweep(now);
+        self.seams.sweep(now, window);
     }
 
     /// Remove `fp`'s entry, releasing its pool records: every removal goes
@@ -234,6 +250,8 @@ pub(crate) struct CollusionDetector {
     source_truncated: AtomicU64,
     /// Pool records allowed across every fingerprint.
     pool_capacity: usize,
+    /// `MIK-8066` 2b: the answer views' budget, caps and counters (D8).
+    pub(crate) views: budget::ViewLimits,
 }
 
 /// A sketch position held while its sketch is built outside the lock; if
@@ -260,6 +278,20 @@ fn key() -> &'static RandomState {
     KEY.get_or_init(RandomState::new)
 }
 
+/// `MIK-8066` D6: a second, independent per-process key, used only by
+/// [`CollusionDetector::unread_holder`]. Every presented identity is digested
+/// under [`key`], so it reaches an unread holder only by a keyed collision.
+fn unread_key() -> &'static RandomState {
+    static KEY: OnceLock<RandomState> = OnceLock::new();
+    KEY.get_or_init(RandomState::new)
+}
+
+/// What one record holds: the receipt's fingerprints; what the caller
+/// received (sketched as excuse, and its middle sampled as evidence); and
+/// exact evidence candidates sampled but never sketched (`MIK-8066.BIG.3`),
+/// borrowed: recording reads them synchronously and copies none (D9).
+pub(super) type Recorded<'a> = (Vec<u64>, Option<std::sync::Arc<[u64]>>, Option<&'a [u64]>);
+
 fn count(n: usize) -> u64 {
     u64::try_from(n).unwrap_or(u64::MAX)
 }
@@ -274,7 +306,18 @@ impl CollusionDetector {
             capped: AtomicU64::new(0),
             source_truncated: AtomicU64::new(0),
             pool_capacity: holders::EXTRA_RECORD_POOL,
+            views: budget::ViewLimits::new(),
         }
+    }
+
+    /// `MIK-8066` D4: the keyed hash of a value leaf, exact: a strict
+    /// substring of a leaf hashes differently.
+    #[expect(
+        clippy::unused_self,
+        reason = "the key is per process; a method keeps callers from hashing with any other"
+    )]
+    pub(crate) fn leaf_hash(&self, leaf: &str) -> u64 {
+        key().hash_one((leaf, false))
     }
 
     /// Keyed 64-bit digest of an id (source, principal), as findings carry it.
@@ -405,7 +448,7 @@ impl CollusionDetector {
             source,
             principal,
             (sensitive, Flows::Any(flows)),
-            (fps, None),
+            (fps, None, None),
             now,
         );
     }
@@ -426,7 +469,7 @@ impl CollusionDetector {
             source,
             principal,
             (sensitive, Flows::Any(flows)),
-            (fps, cut),
+            (fps, cut, None),
             now,
         );
     }
@@ -447,99 +490,28 @@ impl CollusionDetector {
         masks.sort_unstable();
         masks.dedup();
         let flows = Flows::Each(masks.into());
-        self.record_held_at(source, principal, (sensitive, flows), (fps, None), now);
+        self.record_held_at(
+            source,
+            principal,
+            (sensitive, flows),
+            (fps, None, None),
+            now,
+        );
     }
 
     fn record_held_at(
         &self,
         source: &str,
         principal: &str,
-        (sensitive, flows): (bool, Flows),
-        (mut fps, cut): (Vec<u64>, Option<std::sync::Arc<[u64]>>),
+        held: (bool, Flows),
+        recorded: Recorded<'_>,
         now: Instant,
     ) {
-        if self.params.action == RelayAction::Off {
-            return;
-        }
-        // `MIK-8066.EXCUSE.1`: what a cut or truncation drops is still the
-        // caller's own copy, so it is sketched, one sketch per delivery.
-        let mut sketched: Vec<u64> = cut.as_deref().map(<[u64]>::to_vec).unwrap_or_default();
-        if fps.len() > MAX_SOURCE_FINGERPRINTS {
-            let cut_off = count(fps.len() - MAX_SOURCE_FINGERPRINTS);
-            self.source_truncated.fetch_add(cut_off, Ordering::Relaxed);
-            telemetry_metrics::counter!(CAPACITY_METRIC, "bound" => "receipt_truncated")
-                .increment(cut_off);
-            sketched.extend_from_slice(&fps);
-            fps.truncate(MAX_SOURCE_FINGERPRINTS);
-        }
-        sketched.sort_unstable();
-        sketched.dedup();
-        let pair = (self.digest(source), self.digest(principal));
-        let window = self.params.window;
-        // `MIK-8200`: the position is reserved under the lock, the sketch
-        // built outside it, then published with the receipt in one step.
-        let mut pending = Pending {
-            state: &self.state,
-            reservation: None,
+        let id = HolderId {
+            key: self.digest(principal),
+            unread: false,
         };
-        if !sketched.is_empty() {
-            let mut state = self.state.lock();
-            state.sweep(now, window);
-            pending.reservation = state.sketches.reserve(pair, sketched.len());
-            // A loss is marked under the lock that caused it, so no egress
-            // checked during the build sees it unmarked (`MIK-8201`).
-            for lost in state.sketches.take_lost() {
-                state.markers.mark(lost, now + window);
-            }
-        }
-        let built = pending
-            .reservation
-            .as_ref()
-            .map(|r| std::sync::Arc::new(sketch::Sketch::build(&sketched, r.shape)));
-        let holder = |at| Holder {
-            source: self.digest(source),
-            principal: self.digest(principal),
-            copies: Copies::one(at),
-            sensitive: sensitive.then(|| Copies::one(at)),
-            flows: flows.clone(),
-        };
-        let mut state = self.state.lock();
-        state.sweep(now, window);
-        if let (Some(reservation), Some(sketch)) = (pending.reservation.take(), built) {
-            state.sketches.publish(&reservation, sketch, now);
-        }
-        let until = now + window;
-        for lost in state.sketches.take_lost() {
-            state.markers.mark(lost, until);
-        }
-        let me = self.digest(principal);
-        for fp in fps {
-            // Calls can reach the lock out of time order; an entry's age only
-            // ever moves forward.
-            let mut touched = now;
-            let holders = if let Some(entry) = state.remove(fp) {
-                state.order.remove(&entry.order);
-                touched = touched.max(entry.order.0);
-                entry.holders
-            } else {
-                if state.entries.len() >= self.params.max_fingerprints
-                    && let Some((_, oldest)) = state.order.pop_first()
-                {
-                    state.remove(oldest);
-                    self.evicted.fetch_add(1, Ordering::Relaxed);
-                    telemetry_metrics::counter!(CAPACITY_METRIC, "bound" => "fingerprint_evicted")
-                        .increment(1);
-                }
-                Holders::Tracked(holders::Tracked::default())
-            };
-            let room = self.pool_capacity.saturating_sub(state.pool);
-            let (holders, lost) = self.add(holders, holder(now), now, room);
-            if let Some(source) = lost {
-                state.markers.mark((source, me), until);
-            }
-            let order = state.stamp(touched, fp);
-            state.insert(fp, Entry { holders, order });
-        }
+        self.record_holder_at(source, id, held, recorded, now);
     }
 
     /// `new` added to `holders`; `room` is how many pool records this
@@ -599,15 +571,26 @@ impl CollusionDetector {
     pub(crate) fn check_egress_flows_at(
         &self,
         principal: &str,
-        (tool, egress_flows): (&str, u64),
+        flows: (&str, u64),
         args: &str,
+        now: Instant,
+    ) -> Option<RelayFinding> {
+        self.check_egress_fingerprints_at(principal, flows, self.fingerprints(args), now)
+    }
+
+    /// [`Self::check_egress_flows_at`] for fingerprints already taken: the
+    /// gateway's egress, less its glue windows (`MIK-8290`).
+    pub(crate) fn check_egress_fingerprints_at(
+        &self,
+        principal: &str,
+        (tool, egress_flows): (&str, u64),
+        fps: Vec<u64>,
         now: Instant,
     ) -> Option<RelayFinding> {
         if self.params.action == RelayAction::Off {
             return None;
         }
         let sender = self.digest(principal);
-        let fps = self.fingerprints(args);
         let window = self.params.window;
         // Held at `now`: some copy delivered by then, inside the window.
         let live = |t: &&Holder| t.copies.held(now, window);
@@ -632,6 +615,7 @@ impl CollusionDetector {
                     .filter(live)
                     .any(|t| t.source == source && t.principal == sender)
                     || state.sketches.holds((source, sender), fp, now, window)
+                    || state.seams.holds((source, sender), fp, now, window)
             };
             let sensitive =
                 |t: &&Holder| t.sensitive.is_some_and(|copies| copies.held(now, window));
@@ -705,6 +689,28 @@ impl CollusionDetector {
         self.state.lock().entries.contains_key(&fp)
     }
 
+    /// Distinct unread holders recorded for `fp` (`MIK-8066` A4).
+    #[cfg(test)]
+    pub(crate) fn unread_holders_of(&self, fp: u64) -> usize {
+        let state = self.state.lock();
+        let Some(Entry {
+            holders: Holders::Tracked(tracked),
+            ..
+        }) = state.entries.get(&fp)
+        else {
+            return 0;
+        };
+        let mut keys: Vec<u64> = tracked
+            .records
+            .iter()
+            .filter(|h| h.unread)
+            .map(|h| h.principal)
+            .collect();
+        keys.sort_unstable();
+        keys.dedup();
+        keys.len()
+    }
+
     pub(crate) fn tracked_fingerprints(&self) -> usize {
         self.state.lock().entries.len()
     }
@@ -732,16 +738,31 @@ mod reason;
 #[cfg(test)]
 #[path = "collusion_reason_tests.rs"]
 mod reason_tests;
-use reason::CAPACITY_METRIC;
+#[path = "collusion_record.rs"]
+mod record;
+pub(super) use reason::CAPACITY_METRIC;
 pub(crate) use reason::RelayReason;
+#[path = "collusion_margin.rs"]
+mod margin;
 #[path = "collusion_seam.rs"]
 mod seam;
+pub(crate) use margin::egress_parts;
+#[cfg(test)]
+pub(crate) use margin::egress_text;
+#[path = "collusion_big.rs"]
+pub(super) mod big;
+#[path = "collusion_budget.rs"]
+pub(super) mod budget;
 #[cfg(test)]
 #[path = "collusion_seam_tests.rs"]
 mod seam_tests;
 #[path = "collusion_sketch.rs"]
 pub(super) mod sketch;
-pub(crate) use seam::SeamFingerprint;
+#[path = "collusion_stream.rs"]
+mod stream;
+#[path = "collusion_thin.rs"]
+mod thin;
+pub(crate) use seam::{SeamFingerprint, SeamForms};
 
 #[cfg(test)]
 #[path = "collusion_holders_tests.rs"]

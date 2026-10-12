@@ -1,0 +1,10 @@
+src/gateway/server/mod.rs	expand_home_path	1	Expands a leading ~ to the home directory for configured paths; path plumbing with no allow or deny.
+src/gateway/server/persistence.rs	standard_data_dir	1	Returns the gateway data directory path; plumbing.
+src/gateway/server/persistence.rs	ensure_data_dir	1	Creates the data directory and logs a failure; no decision.
+src/gateway/server/persistence.rs	load_if_exists	1	Generic helper that runs a loader when the file exists and logs the outcome; the restore it runs is decided by its caller.
+src/gateway/server/persistence.rs	save_with_logging	1	Generic helper that runs a saver and logs the outcome; decides nothing.
+src/gateway/server/persistence.rs	spawn_cost_saver	1	Schedules the periodic cost save on an interval until shutdown; the write itself is save_costs_unless_busy and write_costs.
+src/transport/stdio.rs	new	1	StdioTransport::new delegates to new_with_assigned_cache with no cache; inert constructor.
+src/transport/stdio.rs	notify	1	Serialises and writes a notification to the child; no allow or deny.
+src/transport/stdio.rs	is_connected	1	Liveness check (connected flag plus a non-blocking waitpid) that lets a dead child be restarted; availability, not a security refusal.
+src/transport/stdio.rs	close	1	Kills the child's process tree and releases the transport; resource cleanup.

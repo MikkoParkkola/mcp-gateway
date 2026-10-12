@@ -16,10 +16,13 @@ mod backend_transport;
 mod config_file;
 mod env_overlay;
 mod features;
+pub(crate) mod load_error;
+pub(crate) use features::DEFAULT_TASK_TTL_MS;
 mod flagged_tools;
 mod input_schema;
 pub(crate) mod log_once;
 mod meta_mcp_config;
+mod pattern_grammar;
 mod remote_provenance_posture;
 mod secret_file;
 mod secret_ref;
@@ -75,10 +78,19 @@ pub use features::{
 pub use features::{
     EventsConfig, EventsRateLimit, EventsScheduleConfig, EventsSourcesConfig, EventsWatchConfig,
 };
-pub(crate) use features::{api_key_expired_now, parse_api_key_digest, parse_cidr};
+pub(crate) use features::{api_key_expired, api_key_expired_now, parse_api_key_digest, parse_cidr};
 
 // Personal-account custody DTO only — not the rest of `personal_accounts`.
 pub use crate::personal_accounts::config::{AccountsConfig, AccountsLimits};
+
+/// A YAML null (an empty section) as the type's default.
+fn null_as_default<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
 
 // ── Root config ───────────────────────────────────────────────────────────────
 
@@ -103,7 +115,10 @@ pub struct Config {
     pub failsafe: FailsafeConfig,
     /// Error-budget / kill-switch thresholds (GH #475).
     pub error_budget: ErrorBudgetSection,
-    /// Backend configurations.
+    /// Backend configurations. An empty `backends:` section, which is what a
+    /// section with every entry commented out reads as, is no backends rather
+    /// than a load error (MIK-8299).
+    #[serde(deserialize_with = "null_as_default")]
     pub backends: HashMap<String, BackendConfig>,
     /// Capability configuration (direct REST API integration).
     pub capabilities: CapabilityConfig,
@@ -191,6 +206,25 @@ struct OverlayEnv<'a> {
     overlay: &'a EnvOverlay,
 }
 
+/// The `MCP_GATEWAY_*` names a CLI flag owns (clap `env = ...`). They are not
+/// config overrides: `MCP_GATEWAY_CAPABILITIES` names a directory for the tool
+/// subcommands, and read as the `capabilities` key it failed every config load
+/// (MIK-8367). A test walks `Cli::command()` and requires this list to equal
+/// its env names, so a new flag's variable cannot reach the overlay unlisted.
+pub(crate) const CLI_OWNED_ENV: &[&str] = &[
+    "MCP_GATEWAY_CA_CERT",
+    "MCP_GATEWAY_CAPABILITIES",
+    "MCP_GATEWAY_CLIENT_CERT",
+    "MCP_GATEWAY_CLIENT_KEY",
+    "MCP_GATEWAY_CONFIG",
+    "MCP_GATEWAY_CONFIG_DIR",
+    "MCP_GATEWAY_HOST",
+    "MCP_GATEWAY_LOG_FORMAT",
+    "MCP_GATEWAY_LOG_LEVEL",
+    "MCP_GATEWAY_PORT",
+    "MCP_GATEWAY_SKILLS_REGISTRY",
+];
+
 impl<'a> OverlayEnv<'a> {
     const PREFIX: &'static str = "MCP_GATEWAY_";
 
@@ -258,6 +292,11 @@ impl Provider for OverlayEnv<'_> {
     fn data(&self) -> figment::Result<Map<Profile, Dict>> {
         let mut dict = Dict::new();
         for (key, value) in self.merged_vars(std::env::vars_os()) {
+            // Whole names only: `MCP_GATEWAY_CAPABILITIES__NAME` is still a
+            // nested override of `capabilities.name`.
+            if CLI_OWNED_ENV.contains(&key.as_str()) {
+                continue;
+            }
             let Some(rest) = key.strip_prefix(Self::PREFIX) else {
                 continue;
             };
@@ -499,7 +538,7 @@ impl Config {
     ) -> Result<Evaluated> {
         let spec: EnvFileConfig = Self::figment(path, &EnvOverlay::none())
             .extract()
-            .map_err(|e| Error::Config(e.to_string()))?;
+            .map_err(load_error::from_figment)?;
 
         let mut overlay = EnvOverlay::none();
         let mut paths = Vec::with_capacity(spec.env_files.len());
@@ -567,9 +606,7 @@ impl Config {
             // `env:`.
             Expansion::Literal => Self::yaml(path),
         };
-        let mut config: Self = figment
-            .extract()
-            .map_err(|e| Error::Config(e.to_string()))?;
+        let mut config: Self = figment.extract().map_err(load_error::from_figment)?;
         // Before any validation, so a misspelt key is reported rather than the
         // validation error its absence causes.
         strict_keys::refuse_unrecognised_keys(path, &figment)?;
@@ -598,8 +635,11 @@ impl Config {
         }
         let (mut secret_refs, mut files) = match expansion {
             Expansion::Resolve => {
-                let refs = config.expand_env_vars(&overlay)?;
+                let mut refs = config.expand_env_vars(&overlay)?;
                 posture::resolve(&mut config, posture::FirewallBuild::CURRENT)?;
+                let auth_enabled = config.auth.enabled;
+                let log = &mut config.security.transparency_log;
+                log.resolve_secret(auth_enabled, &overlay, &mut refs)?;
                 config.security.message_signing =
                     config.security.message_signing.resolve_with_env(&overlay)?;
                 let chain = &mut config.security.signature_chain;
@@ -753,8 +793,8 @@ fn remote_transport_identity(transport: &TransportConfig) -> Option<(&'static st
     }
 }
 
+use backend_config::default_true;
 pub use backend_config::{BackendConfig, OAuthConfig, TransportConfig};
-use backend_config::{default_token_refresh_buffer, default_true};
 pub use meta_mcp_config::{MetaMcpConfig, SurfacedToolConfig};
 pub use server_config::{CleartextHttp, IdempotencyKeyMode, ServerConfig};
 

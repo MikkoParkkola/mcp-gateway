@@ -17,6 +17,12 @@ mod gateway;
 #[path = "mik_7630_events/receiver.rs"]
 #[allow(dead_code, reason = "shared receiver; each binary uses a subset")]
 mod receiver;
+// The day is read through the crate's cost persistence clock, which only a
+// cost-governance build has.
+#[cfg(feature = "cost-governance")]
+#[path = "common/same_utc_day.rs"]
+#[allow(dead_code, reason = "shared helper; each binary uses a subset")]
+mod same_utc_day;
 
 use std::time::Duration;
 
@@ -393,25 +399,41 @@ async fn budget_refusal_dead_letters_with_reason_budget() {
 /// T28, charge clause: a delivery is charged through cost governance. A key
 /// budget of 1.5 against a 1.0 charge covers the first delivery and not the
 /// second: the first is posted and spends, the second is dead-lettered
-/// `budget`.
+/// `budget`. The spend and the refusal it causes are judged on one UTC day
+/// (MIK-8395): the key's budget rolls at 00:00 UTC.
+#[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn a_delivery_is_charged_against_the_key_budget() {
-    let root = tempfile::tempdir().expect("root");
-    let rx = Receiver::start(root.path()).await;
-    let mut cfg = delivery_config(root.path(), &json!({"cost_per_delivery_usd": 1.0}));
-    cfg["cost_governance"] = json!({"enabled": true, "budgets": {"per_key": {"alice": 1.5}}});
-    let gw = start_cfg(root.path(), &rx, cfg).await;
-    subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;
-    fire(&gw, "d-28c-1", "o/r").await;
-    events_at_least(&rx, 1).await;
-    fire(&gw, "d-28c-2", "o/r").await;
-    dead_with_reason(root.path(), "budget").await;
-    tokio::time::sleep(SETTLE).await;
-    assert_eq!(
-        rx.events().len(),
-        1,
-        "the charged delivery posted, the next did not"
+    let (refused, store, posted) = same_utc_day::same_utc_day_async(|| async {
+        let root = tempfile::tempdir().expect("root");
+        let rx = Receiver::start(root.path()).await;
+        let mut cfg = delivery_config(root.path(), &json!({"cost_per_delivery_usd": 1.0}));
+        cfg["cost_governance"] = json!({"enabled": true, "budgets": {"per_key": {"alice": 1.5}}});
+        let mut gw = start_cfg(root.path(), &rx, cfg).await;
+        subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;
+        fire(&gw, "d-28c-1", "o/r").await;
+        events_at_least(&rx, 1).await;
+        fire(&gw, "d-28c-2", "o/r").await;
+        // Waited for, not asserted: after a rollover the second delivery is
+        // posted, and the helper runs the scenario again.
+        let refused = wait_until(DEADLINE, || {
+            dead_letters(root.path())
+                .iter()
+                .any(|d| d["reason"] == "budget")
+        })
+        .await;
+        // timing: absence
+        tokio::time::sleep(SETTLE).await;
+        let posted = rx.events().len();
+        gw.stop().await;
+        (refused, dead_letters(root.path()), posted)
+    })
+    .await;
+    assert!(
+        refused,
+        "expected a dead letter with reason \"budget\", store has {store:?}"
     );
+    assert_eq!(posted, 1, "the charged delivery posted, the next did not");
 }
 
 /// T28, zero clause: a zero per-key budget is no limit, as for a tool call,

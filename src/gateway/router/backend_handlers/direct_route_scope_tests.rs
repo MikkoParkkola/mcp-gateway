@@ -60,13 +60,12 @@ fn recording_backend() -> (Arc<Backend>, Arc<Recorder>) {
 async fn a_call_on_this_route_sends_the_backend_a_minted_token() {
     let (backend, recorder) = recording_backend();
 
-    dispatch_in_scope(
+    super::direct_send::dispatch_tool_call(
+        crate::gateway::meta_mcp::invoke::DirectPermit::for_test(),
         &backend,
-        "tools/call",
         &RequestId::Number(1),
         Some(json!({ "name": "t", "_meta": { "progressToken": 7 } })),
-        &[],
-        None,
+        (&[], None),
     )
     .await
     .expect("the recording transport answers");

@@ -63,7 +63,7 @@ async fn stdio_initialize_records_requested_revision() {
 }
 
 #[tokio::test]
-async fn stdio_dispatch_persists_operator_readable_protocol_counters() {
+async fn a_saved_stdio_observation_is_operator_readable() {
     let data_dir = tempfile::tempdir().expect("temporary data directory");
     let sink = super::super::StdioTelemetry::new(Some(
         crate::protocol_revision_telemetry::DurableTelemetrySink::open(data_dir.path())
@@ -71,7 +71,7 @@ async fn stdio_dispatch_persists_operator_readable_protocol_counters() {
     ));
     Gateway::persist_stdio_protocol_telemetry(&sink);
 
-    Gateway::dispatch_single_with_sink(
+    Gateway::dispatch_single_for_client(
         &test_meta_mcp(),
         &test_tool_policy(),
         &test_mtls_policy(),
@@ -89,12 +89,16 @@ async fn stdio_dispatch_persists_operator_readable_protocol_counters() {
             channel: &crate::gateway::input_bridge::NoClientChannel,
             handshake_capabilities: crate::protocol::meta::Declared::NONE,
             tasks: None,
-            modern: false,
+            serving: crate::gateway::server::stdio_single::ModernServing::Disabled,
+            discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
+            sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
-        &sink,
     )
     .await
     .expect("initialize returns a response");
+    // MIK-8364: the request only records in memory; the session's saver (or
+    // the final save at teardown) persists it. This is that save.
+    Gateway::persist_stdio_protocol_telemetry(&sink);
 
     let window = crate::protocol_revision_telemetry::load_durable_window(data_dir.path())
         .expect("load durable stdio aggregate");

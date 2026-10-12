@@ -12,7 +12,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-pub use crate::config_persistence::{load_config_or_default, write_config};
+pub use crate::config_persistence::load_config_or_default;
+#[allow(deprecated)] // the deprecated writer stays reachable by name until 5.0
+pub use crate::config_persistence::write_config;
 use crate::{
     config::{BackendConfig, Config, TransportConfig},
     registry::server_registry,

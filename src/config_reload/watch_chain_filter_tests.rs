@@ -153,8 +153,27 @@ fn a_broken_chain_keeps_only_watched_paths_on_record() {
     assert_eq!(chain.names.take_gone(), BTreeSet::from([on_ledger]));
 }
 
-// Linux-only (W-L9): the real-watcher rows run on inotify.
-#[cfg(target_os = "linux")]
+/// MIK-8181: a chain unresolvable at startup, named through a linked
+/// directory, is watched at its directory's canonical name, as every resolved
+/// chain directory is (`/var` and `/private/var` on macOS are one directory).
+#[cfg(unix)]
+#[test]
+fn a_broken_chain_named_through_a_link_starts_on_the_canonical_directory() {
+    let root = tempfile::tempdir().expect("root");
+    let c = root.path().join("real").join("c");
+    std::fs::create_dir_all(&c).unwrap();
+    crate::test_symlink::symlink(root.path().join("real"), root.path().join("alias")).unwrap();
+    crate::test_symlink::symlink(root.path().join("missing.yaml"), c.join("l")).unwrap();
+    let named = root.path().join("alias").join("c").join("l");
+    assert!(
+        resolve_chain(&named).is_err(),
+        "premise: the chain is broken"
+    );
+    assert_eq!(super::startup_dirs(&named), BTreeSet::from([canonical(&c)]));
+}
+
+// Linux and macOS (MIK-8181), as the other real-watcher rows.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod real_watcher {
     use std::path::Path;
     use std::sync::atomic::Ordering;
@@ -194,10 +213,10 @@ mod real_watcher {
     }
 
     /// MIK-8013.WATCH.2: 1000 files written beside the config run no chain
-    /// re-resolution. The config edit after them is the barrier: notify
-    /// delivers events in order and the callback wakes the task before it
-    /// sends the reload, so once the reload arrives every earlier event was
-    /// judged. Multi-threaded, so the rewatch task resolves while the files
+    /// re-resolution on Linux (elsewhere they wake it; see below). The config
+    /// edit after them is the barrier: notify delivers events in order and
+    /// the callback wakes the task before it sends the reload, so once the
+    /// reload arrives every earlier event was judged. Multi-threaded, so the rewatch task resolves while the files
     /// are written: on one thread every wake would coalesce after the writes.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn watch2_unrelated_files_beside_the_config_resolve_nothing() {
@@ -213,20 +232,35 @@ mod real_watcher {
         std::fs::write(&cfg, "a: 2\n").unwrap();
         assert!(h.triggered_within(10).await, "the config edit reloads");
 
-        // Every unrelated file reached the callback and was dropped there, so
-        // none woke the task (each wake is one re-resolution); only the
-        // edit's own events passed.
+        // On Linux every unrelated file reached the callback and was dropped
+        // there, so none woke the task (each wake is one re-resolution); only
+        // the edit's own events passed. Elsewhere the filter is off by design
+        // (`ChainNames::may_move_chain`: an entry can be reported under
+        // another spelling), so nothing is dropped and the unrelated writes
+        // wake the task; the reload above still came (MIK-8181).
         let dropped = h.chain.names.dropped.load(Ordering::SeqCst) - dropped_before;
-        assert!(
-            dropped >= 1000,
-            "only {dropped} unrelated events were judged"
-        );
         let config = std::fs::canonicalize(&cfg).unwrap();
         let passed = h.chain.names.passed.lock().clone();
-        assert!(
-            !passed.is_empty() && passed.iter().all(|paths| paths.contains(&config)),
-            "events that woke the task: {passed:?}"
-        );
+        if cfg!(target_os = "linux") {
+            assert!(
+                dropped >= 1000,
+                "only {dropped} unrelated events were judged"
+            );
+            assert!(
+                !passed.is_empty() && passed.iter().all(|paths| paths.contains(&config)),
+                "events that woke the task: {passed:?}"
+            );
+        } else {
+            assert_eq!(dropped, 0, "the path filter is off outside Linux");
+            let unrelated = |path: &std::path::PathBuf| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("perf-"))
+            };
+            assert!(
+                passed.iter().flatten().any(unrelated),
+                "unrelated writes wake the task outside Linux: {passed:?}"
+            );
+        }
         let _ = h.shutdown.send(());
     }
 
@@ -270,6 +304,43 @@ mod real_watcher {
         settled_wakes(&h).await;
         h.drain_idle().await;
         (root, cfg, h)
+    }
+
+    /// MIK-8181 (T18c): a chain broken at startup, named through a linked
+    /// directory higher up (macOS `/var` is one), stays heard after its
+    /// repair. The startup watch must be the directory's canonical name, as
+    /// every other ledger entry is; a second spelling of one directory is one
+    /// inotify watch, and unwatching the stale spelling would drop the watch
+    /// the repaired chain still needs.
+    #[tokio::test]
+    async fn t18c_a_repaired_chain_named_through_a_linked_directory_stays_heard() {
+        let root = tempfile::tempdir().expect("root");
+        let real = root.path().join("real");
+        let (a, b, c) = (real.join("a"), real.join("b"), real.join("c"));
+        for dir in [&a, &b, &c] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        std::fs::write(b.join("cfg.yaml"), "b: 1\n").unwrap();
+        crate::test_symlink::symlink(&real, root.path().join("alias")).unwrap();
+        crate::test_symlink::symlink(a.join("cfg.yaml"), c.join("l")).unwrap();
+        let mut h = start(&root.path().join("alias").join("c").join("l"));
+        h.wait_wakes_above(0).await;
+        std::fs::write(a.join("cfg.yaml"), "a: 1\n").unwrap();
+        h.wait_watched(&a).await;
+        h.drain_idle().await;
+        let c_real = std::fs::canonicalize(&c).unwrap();
+        assert!(
+            h.chain.watched().contains(&c_real),
+            "premise: the repaired chain watches the link's directory by its canonical name"
+        );
+
+        super::super::tests::retarget(&c.join("l"), &b.join("cfg.yaml"));
+        assert!(
+            h.triggered_within(10).await,
+            "a retarget in the link's directory was not heard after the repair"
+        );
+        h.wait_watched(&b).await;
+        let _ = h.shutdown.send(());
     }
 
     /// `MIK-8024.WATCHDIR.1`: the config's directory deleted and recreated at

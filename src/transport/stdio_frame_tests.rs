@@ -181,7 +181,7 @@ async fn a_dropped_request_leaves_no_partial_frame_for_the_next_caller() {
         "while IFS= read -r line; do\n\
          case \"$line\" in\n\
          *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
-         *'notifications/initialized'*) sleep 2; break ;;\n\
+         *'notifications/initialized'*) while [ ! -e release ]; do sleep 0.05; done; break ;;\n\
          esac\ndone\n\
          while IFS= read -r line; do printf '%s\\n' \"$line\" >> \"{log}\"; done\n",
         log = log.display()
@@ -196,8 +196,12 @@ async fn a_dropped_request_leaves_no_partial_frame_for_the_next_caller() {
     );
     transport.start().await.expect("start");
 
-    // Far over a pipe buffer, so the write blocks while the backend sleeps.
+    // Far over a pipe buffer, so the write blocks until the backend is
+    // released: it reads nothing more until the test creates `release`, so
+    // both give-up windows below expire however loaded the runner is
+    // (MIK-8266: this used to race a 2 s sleep in the backend).
     let big = serde_json::json!({ "name": "x", "arguments": { "blob": "a".repeat(256 * 1024) } });
+    // timing: precondition
     let dropped = tokio::time::timeout(
         std::time::Duration::from_millis(300),
         transport.request("tools/call", Some(big)),
@@ -209,12 +213,14 @@ async fn a_dropped_request_leaves_no_partial_frame_for_the_next_caller() {
     );
 
     // A caller queued behind the stuck write and then cancelled sends nothing.
+    // timing: precondition
     let queued = tokio::time::timeout(
         std::time::Duration::from_millis(200),
         transport.request("resources/list", None),
     )
     .await;
     assert!(queued.is_err(), "precondition: the queued request gave up");
+    std::fs::write(dir.path().join("release"), "").unwrap();
 
     transport
         .notify("notifications/roots/list_changed", None)
@@ -736,17 +742,25 @@ async fn a_dropped_initialize_is_never_cancelled() {
         std::time::Duration::from_secs(30),
         None,
     );
-    let started =
-        tokio::time::timeout(std::time::Duration::from_millis(500), transport.start()).await;
-    assert!(
-        started.is_err(),
-        "precondition: initialize was still waiting"
-    );
+    // Dropped once the child has logged the initialize, not after a fixed
+    // window: a slow spawn on a loaded runner would otherwise drop it unsent.
+    let mut start = Box::pin(transport.start());
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while !std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .contains("\"method\":\"initialize\"")
+        {
+            tokio::select! {
+                started = &mut start => panic!("precondition: initialize was still waiting: {started:?}"),
+                () = tokio::time::sleep(std::time::Duration::from_millis(20)) => {}
+            }
+        }
+    })
+    .await
+    .expect("precondition: the child logged the initialize");
+    drop(start);
+    // Grace for a cancel frame to be written: load can only hide one here.
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     let frames = std::fs::read_to_string(&log).unwrap_or_default();
-    assert!(
-        frames.contains("\"method\":\"initialize\""),
-        "precondition: sent: {frames}"
-    );
     assert!(!frames.contains("notifications/cancelled"), "{frames}");
 }

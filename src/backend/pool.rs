@@ -115,6 +115,16 @@ pub(crate) struct PooledEntry {
     /// be resent (ADR-012 A1). Absent means deny, so an unfilled slot denies
     /// every resend, which is the safe direction.
     pub(crate) resend_permitted: RwLock<std::collections::HashSet<String>>,
+    /// Tools this slot's upstream declared `readOnlyHint: true`, as of its
+    /// last `tools/list` (MIK-8393, from #3773).
+    ///
+    /// Membership is the only thing that lets the response cache serve a
+    /// stored result in place of a call, or store one. Narrower than
+    /// `resend_permitted` on purpose: a retry re-executes, so idempotence is
+    /// enough for it; a cache hit does not run at all, so it needs a call with
+    /// no effect to lose. Per slot for the same reason as that set, and absent
+    /// means deny: an unfilled slot caches nothing.
+    pub(crate) read_only_declared: RwLock<std::collections::HashSet<String>>,
     /// Set when the last drain (MIK 7570 PAGING.1) stopped before the
     /// catalogue was exhausted (page cap, repeated cursor, or the fill
     /// budget); cleared by the next complete fill. Tools and resources only.
@@ -227,6 +237,7 @@ impl PooledEntry {
             era: Arc::new(crate::protocol::era::EraCache::for_slot(name, "shared")),
             tools_cache: CachedMetadata::new(),
             resend_permitted: RwLock::default(),
+            read_only_declared: RwLock::default(),
             tools_truncated: AtomicBool::new(false),
             resources_truncated: AtomicBool::new(false),
             tools_fill_failed_at: parking_lot::Mutex::new(None),
@@ -254,6 +265,13 @@ impl Backend {
             .identity_propagation
             .as_ref()
             .map(|c| c.session_mode)
+    }
+
+    /// Whether this backend keeps one catalogue per caller: with identity
+    /// propagation configured, a caller that resolves a binding gets its own
+    /// slot (MIK-8356). The predicate visibility judgements key on.
+    pub(crate) fn keeps_per_user_catalogues(&self) -> bool {
+        self.session_mode().is_some()
     }
 
     /// Derive the pool slot for a request carrying `identity_key`.
@@ -412,6 +430,13 @@ impl Backend {
         self.pool
             .get(&PoolKey::Shared)
             .and_then(|entry| entry.value().transport.read().clone())
+    }
+
+    /// Test-only: the shared slot, so a test can hold its start lock as a
+    /// start in flight does.
+    #[cfg(test)]
+    pub(crate) fn shared_entry_for_test(&self) -> Arc<PooledEntry> {
+        self.shared_entry()
     }
 
     #[cfg(test)]

@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::*;
 
+mod refresh_buffer;
+mod resource_indicator;
+
 // =========================================================================
 // PKCE generation
 // =========================================================================
@@ -119,7 +122,7 @@ fn new_client_has_no_valid_token() {
         vec!["read".to_string()],
         storage,
         OAuthClientConfig {
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -137,7 +140,7 @@ fn client_with_valid_token_returns_true() {
         vec![],
         storage,
         OAuthClientConfig {
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -166,7 +169,7 @@ fn client_with_expired_token_returns_false() {
         vec![],
         storage,
         OAuthClientConfig {
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -195,7 +198,7 @@ fn backend_name_returns_configured_name() {
         vec![],
         storage,
         OAuthClientConfig {
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -219,7 +222,7 @@ fn needs_proactive_refresh_false_when_no_token() {
         vec![],
         storage,
         OAuthClientConfig {
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -241,7 +244,7 @@ fn needs_proactive_refresh_false_when_token_no_expiry() {
         vec![],
         storage,
         OAuthClientConfig {
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -265,7 +268,7 @@ fn needs_proactive_refresh_true_when_within_buffer() {
         vec![],
         storage,
         OAuthClientConfig {
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -296,7 +299,7 @@ fn needs_proactive_refresh_false_when_outside_buffer() {
         vec![],
         storage,
         OAuthClientConfig {
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -327,7 +330,7 @@ fn purge_keeps_configured_static_client_on_invalid_client() {
         OAuthClientConfig {
             client_id: Some("configured-static-id".to_string()),
             client_secret: Some("configured-secret".to_string()),
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -370,7 +373,7 @@ fn purge_keeps_public_configured_client_without_secret_on_invalid_client() {
         OAuthClientConfig {
             client_id: Some("configured-public-id".to_string()),
             client_secret: None,
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -405,7 +408,7 @@ fn purge_clears_dynamically_registered_client_on_invalid_client() {
         Arc::clone(&storage),
         OAuthClientConfig {
             client_secret: None,
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -458,7 +461,7 @@ fn restore_persisted_client_id_tags_loaded_id_as_registered_and_purgeable() {
         Arc::clone(&storage),
         OAuthClientConfig {
             client_secret: None,
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -502,7 +505,7 @@ fn restore_persisted_client_id_never_overwrites_configured_id() {
         OAuthClientConfig {
             client_id: Some("configured-id".to_string()),
             client_secret: None,
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -538,7 +541,7 @@ fn purge_is_noop_without_invalid_client_marker() {
         OAuthClientConfig {
             client_id: Some("keep-me".to_string()),
             client_secret: None,
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -548,203 +551,6 @@ fn purge_is_noop_without_invalid_client_marker() {
 
     // THEN: nothing is purged.
     assert_eq!(client.client_id.read().clone(), Some("keep-me".to_string()));
-}
-
-// =========================================================================
-// RFC 8707 Resource Indicator (issue #369)
-// =========================================================================
-
-fn resource_test_client(resource_url: &str) -> OAuthClient {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
-    OAuthClient::new(
-        Client::new(),
-        "res-test".to_string(),
-        resource_url.to_string(),
-        vec!["openid".to_string()],
-        storage,
-        OAuthClientConfig {
-            token_refresh_buffer_secs: 300,
-            ..Default::default()
-        },
-    )
-}
-
-fn protected_resource(resource: &str) -> ProtectedResourceMetadata {
-    ProtectedResourceMetadata {
-        resource: resource.to_string(),
-        authorization_servers: vec![],
-        bearer_methods_supported: vec![],
-        scopes_supported: vec![],
-    }
-}
-
-/// The authorization URL MUST carry the RFC 8707 `resource` parameter, using
-/// the canonical identifier from discovered protected-resource metadata. This
-/// is the exact regression from issue #369: without it, strict providers
-/// (e.g. kapa.ai) reject the flow with `server_error`.
-#[test]
-fn authorize_url_includes_resource_indicator_from_metadata() {
-    let mut client = resource_test_client("https://influxdb-docs.mcp.kapa.ai");
-    client.resource_metadata = Some(protected_resource("https://influxdb-docs.mcp.kapa.ai/"));
-
-    let url = client
-        .build_authorize_url(
-            "https://mcp.kapa.ai/auth/public/authorize",
-            "client-abc",
-            "http://localhost:36721/oauth/callback",
-            "state-xyz",
-            "challenge-123",
-        )
-        .expect("URL should build");
-
-    let resource = url
-        .query_pairs()
-        .find(|(k, _)| k == "resource")
-        .map(|(_, v)| v.into_owned());
-    assert_eq!(
-        resource.as_deref(),
-        Some("https://influxdb-docs.mcp.kapa.ai/"),
-        "authorize URL must include the RFC 8707 resource indicator (issue #369)"
-    );
-
-    // Sanity: the pre-existing params survive the extraction refactor.
-    let keys: Vec<String> = url.query_pairs().map(|(k, _)| k.into_owned()).collect();
-    for expected in [
-        "response_type",
-        "client_id",
-        "redirect_uri",
-        "state",
-        "code_challenge",
-        "code_challenge_method",
-        "scope",
-        "resource",
-    ] {
-        assert!(keys.contains(&expected.to_string()), "missing {expected}");
-    }
-}
-
-/// When protected-resource metadata was never discovered, the indicator falls
-/// back to the configured MCP endpoint URL rather than being dropped.
-#[test]
-fn authorize_url_resource_falls_back_to_endpoint_url() {
-    let client = resource_test_client("https://example.test/mcp");
-
-    let url = client
-        .build_authorize_url(
-            "https://auth.example.test/authorize",
-            "cid",
-            "http://localhost:5000/oauth/callback",
-            "st",
-            "ch",
-        )
-        .expect("URL should build");
-
-    let resource = url
-        .query_pairs()
-        .find(|(k, _)| k == "resource")
-        .map(|(_, v)| v.into_owned());
-    assert_eq!(resource.as_deref(), Some("https://example.test/mcp"));
-}
-
-/// Metadata `resource` wins over the raw endpoint URL when both are available.
-#[test]
-fn resource_indicator_prefers_metadata_over_url() {
-    let mut client = resource_test_client("https://raw.example.test/mcp");
-    assert_eq!(client.resource_indicator(), "https://raw.example.test/mcp");
-
-    client.resource_metadata = Some(protected_resource("https://canonical.example.test/"));
-    assert_eq!(
-        client.resource_indicator(),
-        "https://canonical.example.test/"
-    );
-}
-
-fn param<'a>(params: &'a [(&'static str, String)], key: &str) -> Option<&'a str> {
-    params
-        .iter()
-        .find(|(k, _)| *k == key)
-        .map(|(_, v)| v.as_str())
-}
-
-fn secret_client(resource_url: &str, secret: &str) -> OAuthClient {
-    let dir = tempfile::tempdir().unwrap();
-    let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
-    OAuthClient::new(
-        Client::new(),
-        "res-test".to_string(),
-        resource_url.to_string(),
-        vec!["openid".to_string()],
-        storage,
-        OAuthClientConfig {
-            client_secret: Some(secret.to_string()),
-            token_refresh_buffer_secs: 300,
-            ..Default::default()
-        },
-    )
-}
-
-/// The `authorization_code` token-exchange body MUST carry `resource` (issue
-/// #369) alongside the standard grant params.
-#[test]
-fn token_exchange_params_include_resource() {
-    let mut client = resource_test_client("https://mcp.example.test/");
-    client.resource_metadata = Some(protected_resource("https://canonical.example.test/"));
-
-    let params = client.token_exchange_params(
-        "auth-code",
-        "http://localhost:9/oauth/callback",
-        "cid",
-        "verifier",
-    );
-
-    assert_eq!(param(&params, "grant_type"), Some("authorization_code"));
-    assert_eq!(param(&params, "code"), Some("auth-code"));
-    assert_eq!(param(&params, "code_verifier"), Some("verifier"));
-    assert_eq!(
-        param(&params, "resource"),
-        Some("https://canonical.example.test/"),
-        "token exchange must send the RFC 8707 resource indicator"
-    );
-    // No secret configured -> no client_secret leaked into the body.
-    assert_eq!(param(&params, "client_secret"), None);
-}
-
-/// The `refresh_token` body MUST carry `resource` so refreshed tokens stay
-/// audience-bound (issue #369), and forward a configured `client_secret`.
-#[test]
-fn refresh_params_include_resource_and_secret() {
-    let client = secret_client("https://mcp.example.test/", "s3cr3t");
-
-    let params = client.refresh_params("refresh-abc", "cid");
-
-    assert_eq!(param(&params, "grant_type"), Some("refresh_token"));
-    assert_eq!(param(&params, "refresh_token"), Some("refresh-abc"));
-    assert_eq!(param(&params, "client_secret"), Some("s3cr3t"));
-    assert_eq!(
-        param(&params, "resource"),
-        Some("https://mcp.example.test/"),
-        "refresh must send the RFC 8707 resource indicator"
-    );
-}
-
-/// The `client_credentials` body MUST carry `resource` — the exact gap the
-/// external review caught before ship (issue #369).
-#[test]
-fn client_credentials_params_include_resource() {
-    let mut client = resource_test_client("https://mcp.example.test/");
-    client.resource_metadata = Some(protected_resource("https://canonical.example.test/"));
-
-    let params = client.client_credentials_params("cid");
-
-    assert_eq!(param(&params, "grant_type"), Some("client_credentials"));
-    assert_eq!(param(&params, "client_id"), Some("cid"));
-    assert_eq!(param(&params, "scope"), Some("openid"));
-    assert_eq!(
-        param(&params, "resource"),
-        Some("https://canonical.example.test/"),
-        "client_credentials must send the RFC 8707 resource indicator"
-    );
 }
 
 // =========================================================================
@@ -923,164 +729,4 @@ fn a_configured_client_id_belongs_to_the_operator_and_survives() {
         Some("cid-the-operator-configured"),
         "a configured client id is not the previous issuer's to take away"
     );
-}
-
-// =========================================================================
-// Issuer provenance through `initialize`
-// =========================================================================
-
-/// What the protected-resource document says, which is what decides where
-/// `initialize` gets its issuer string from. Three states because there are
-/// three assignment sites, and an `Option` collapses two of them.
-#[derive(Clone)]
-enum ResourceDocument {
-    /// No document at all: the endpoint answers 404.
-    Absent,
-    /// A valid document that names no authorization server.
-    WithoutAuthorizationServer,
-    /// A valid document advertising this authorization server identifier.
-    Advertising(String),
-}
-
-/// Serve both well-known documents from one address: the protected-resource
-/// document described by `resource_document`, and authorization-server
-/// metadata claiming `issuer_claimed`.
-///
-/// Serving address and claimed identity are separate parameters so a test can
-/// make them differ by exactly one character.
-async fn serve_oauth_documents(
-    listener: tokio::net::TcpListener,
-    resource_document: ResourceDocument,
-    issuer_claimed: &str,
-) -> String {
-    use axum::{Router, response::IntoResponse, routing::get};
-
-    let base = format!("http://{}", listener.local_addr().unwrap());
-
-    let as_body = serde_json::json!({
-        "issuer": issuer_claimed,
-        "authorization_endpoint": format!("{issuer_claimed}authorize"),
-        "token_endpoint": format!("{issuer_claimed}token"),
-    });
-    let resource = base.clone();
-    let prm_body = match resource_document {
-        ResourceDocument::Absent => None,
-        ResourceDocument::WithoutAuthorizationServer => {
-            Some(serde_json::json!({ "resource": resource }))
-        }
-        ResourceDocument::Advertising(auth_server) => Some(
-            serde_json::json!({ "resource": resource, "authorization_servers": [auth_server] }),
-        ),
-    };
-
-    let app = Router::new()
-        .route(
-            "/.well-known/oauth-authorization-server",
-            get(move || {
-                let body = as_body.clone();
-                async move { axum::Json(body) }
-            }),
-        )
-        .route(
-            "/.well-known/oauth-protected-resource",
-            get(move || {
-                let body = prm_body.clone();
-                async move {
-                    // No document is the fallback path, not an empty one: an
-                    // empty body would parse into metadata advertising nothing.
-                    body.map_or_else(
-                        || axum::http::StatusCode::NOT_FOUND.into_response(),
-                        |b| axum::Json(b).into_response(),
-                    )
-                }
-            }),
-        );
-
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-    base
-}
-
-fn client_for(resource_url: &str, dir: &std::path::Path) -> OAuthClient {
-    OAuthClient::new(
-        Client::new(),
-        "issuer-provenance".to_string(),
-        resource_url.to_string(),
-        vec![],
-        Arc::new(TokenStorage::new(dir.to_path_buf()).unwrap()),
-        OAuthClientConfig::default(),
-    )
-}
-
-/// Bind and keep an ephemeral port: no parallel test can take it (MIK-7984).
-async fn bound_base() -> (tokio::net::TcpListener, String) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
-    (listener, base)
-}
-
-/// The comparison arm is only half the control: which arm runs is decided by
-/// three assignments in `initialize`, and a mis-tagged advertised identifier
-/// would leave every metadata test green. Driven end to end from the resource
-/// URL so the classification itself is under test.
-#[tokio::test]
-async fn an_issuer_advertised_by_protected_resource_metadata_is_compared_exactly() {
-    let (listener, base) = bound_base().await;
-    let served = serve_oauth_documents(
-        listener,
-        ResourceDocument::Advertising(base.clone()),
-        &format!("{base}/"),
-    )
-    .await;
-    let dir = tempfile::tempdir().unwrap();
-    let mut client = client_for(&format!("{served}/mcp"), dir.path());
-
-    let err = client
-        .initialize()
-        .await
-        .expect_err("an advertised identifier differing by a trailing slash must be refused");
-    assert!(
-        err.to_string().contains("issuer mismatch"),
-        "unexpected error: {err}"
-    );
-}
-
-/// Same documents, minus the advertisement. Nothing then reflects the server's
-/// own spelling, so the synthesised origin tolerates the slash and an Auth0-
-/// shaped server stays reachable.
-#[tokio::test]
-async fn an_issuer_reached_by_the_origin_fallback_tolerates_a_trailing_slash() {
-    let (listener, base) = bound_base().await;
-    let served =
-        serve_oauth_documents(listener, ResourceDocument::Absent, &format!("{base}/")).await;
-    let dir = tempfile::tempdir().unwrap();
-    let mut client = client_for(&format!("{served}/mcp"), dir.path());
-
-    client
-        .initialize()
-        .await
-        .expect("the origin fallback tolerates a trailing slash");
-}
-
-/// The third assignment site: a valid protected-resource document that names no
-/// authorization server. It reaches the same fallback as a missing document,
-/// but by a different branch, and a mis-tag there would be invisible to both
-/// tests above.
-#[tokio::test]
-async fn resource_metadata_naming_no_authorization_server_falls_back_to_the_origin() {
-    let (listener, base) = bound_base().await;
-    let served = serve_oauth_documents(
-        listener,
-        ResourceDocument::WithoutAuthorizationServer,
-        &format!("{base}/"),
-    )
-    .await;
-    let dir = tempfile::tempdir().unwrap();
-    let mut client = client_for(&format!("{served}/mcp"), dir.path());
-
-    client
-        .initialize()
-        .await
-        .expect("a document naming no authorization server falls back to the origin");
 }

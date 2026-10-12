@@ -1,0 +1,28 @@
+src/personal_accounts/migration_source.rs	not_private	1	Builds the NotPrivate refusal value for a path; the mode/owner decision is made in privately_owned and read_legacy_source.
+src/personal_accounts/mod.rs	deref	1	AuthorityGuard::deref returns a reference to the guarded Option<Authority>; plain accessor, refusal on None happens in the callers.
+src/personal_accounts/mod.rs	deref_mut	1	AuthorityGuard::deref_mut returns a mutable reference to the guarded Option<Authority>; plain accessor with no decision.
+src/personal_accounts/mod.rs	new	1	AuthoritySlot::new wraps an Authority in a mutex slot with default journeys; inert constructor, no decision.
+src/personal_accounts/mod.rs	on_release	1	AccountReleaseAudit::on_release emits a debug log of backend, resource and non-secret revision after the release recheck; observer only, the release decision is made in service.
+src/personal_accounts/refusal.rs	code	1	Maps an AccountState to its accounts.v1 code string; a plain getter.
+src/personal_accounts/refusal.rs	data	1	Serialises error_code and retry flag for the client and omits the seal; formatting only.
+src/personal_accounts/refusal.rs	from_code	1	Inverse lookup of code() over the two states; conversion only, marked() decides whether to trust the data.
+src/personal_accounts/refusal.rs	mark	1	Rewrites a resolver Error::Config into a typed JsonRpc refusal; the refusal was already decided by the resolver and this only tags it.
+src/personal_accounts/refusal.rs	refusal_text	1	Renders the caller-visible text of an error; display only.
+src/personal_accounts/refusal.rs	unmark	1	Converts a marked refusal back to its original Error::Config; the refusal stays a refusal, nothing is decided.
+src/personal_accounts/storage.rs	sync_directory	1	Flushes a directory to disk for durability; decides nothing, privacy is judged elsewhere (private_directory).
+src/personal_accounts/storage_windows.rs	sync_directory	1	Windows directory flush mapped to StorageUnavailable; durability only, privacy judged by private_fs.
+src/personal_accounts/vault.rs	authorization_value	1	Formats the Authorization header value from scheme and token; allow or deny was decided before release.
+src/personal_accounts/vault.rs	now_secs	1	Stamps PropagatedCredential::expires_at with the current Unix time and decides nothing. The in-process sibling SignedAssertionStrategy::now_secs (identity_propagation, critical d) refuses a pre-1970 clock itself; for this strategy that refusal happens downstream in account_strategies via clock::utc_now.
+src/personal_accounts/vault.rs	refresh_after_rejection	2	Trait impl forwarding to CustodyHandle::refresh_after_rejection; the decision lives in the custody service.
+src/personal_accounts/vault.rs	refresh_if_expired	2	Trait impl forwarding to CustodyHandle::refresh_if_expired; the decision lives in the custody service.
+src/personal_accounts/vault.rs	release	2	Trait impl forwarding to CustodyHandle::release; the lease recheck is made in the custody service.
+src/personal_accounts/vault.rs	resolve	2	Trait impl forwarding to CustodyHandle::resolve with no added behaviour; the decision lives in the custody service.
+src/personal_accounts/worker_callback.rs	complete_callback	1	Unwraps run_callback's Result into its outcome; the checks run inside run_callback and its steps.
+src/personal_accounts/worker_callback.rs	finish	1	Writes the terminal reason for an already-refused journey via the store and renders the page; the refusal was decided by the caller.
+src/personal_accounts/worker_callback.rs	journey_op	1	Runs a store closure via offload and maps offload failure to Unavailable; plumbing, the closure holds the decision.
+src/personal_accounts/worker_callback.rs	page	1	Journey::page builds a Page outcome from admitted journey fields; plain constructor.
+src/personal_accounts/worker_callback.rs	plain_page	1	Builds a Page outcome with a root return path; inert constructor.
+src/personal_accounts/worker_callback.rs	provider_error	1	Maps the provider's error string to a journey status and reason; classification for display and record, no grant is allowed by any arm.
+src/personal_accounts/worker_callback.rs	reason_text	1	Serialises a JourneyReason to its wire string; formatting.
+src/personal_accounts/worker_callback.rs	refused	1	Maps an already-made store refusal (Replay, Expired, BrowserMismatch) to a page or Invalid outcome; the decision is made in the store's admit_callback.
+src/personal_accounts/worker_callback.rs	revocation_text	1	Maps a ProviderRevocation outcome to a status string; formatting.

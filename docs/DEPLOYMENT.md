@@ -123,8 +123,86 @@ runtimes a stdio backend shells out to — Node.js 24, `uv`, `git` and
 `openssh-client` (for `git+https://` and `git+ssh://` package specs). It also
 leaves `curl` behind, which the builds above it use, and picks up `python3` as
 a hard dependency of the NodeSource package; neither is there to be spawned.
-`pnpm`, `yarn` and `bunx` are not installed: a backend naming one of those
-needs a layer of its own.
+`pnpm`, `yarn` and `bunx` are not installed. A backend that needs one of them —
+or a deployment that needs a package the image has no reason to carry, such as
+`iproute2` to route a backend's egress through a tunnel — has two ways to get it
+without forking the image.
+
+**Declare the packages.** `EXTRA_APT_PACKAGES` names apt packages the entrypoint
+installs before the gateway starts:
+
+```bash
+docker run --user root -e EXTRA_APT_PACKAGES="iproute2 net-tools" \
+  ghcr.io/mikkoparkkola/mcp-gateway:latest-full
+```
+
+Installing needs root, so the container runs as root and the entrypoint drops to
+the gateway user before exec'ing it; run as the image's own user the variable
+does nothing. The install is non-interactive and bounded at five minutes, and an
+update or install that fails, or that outlives the bound, stops the container
+instead of starting without the packages it was told to carry. The variable takes
+package names only, optionally pinned (`name=version`). A word that starts with `-`
+is an apt option and is refused, as is a word that ends in `-`: `apt-get install`
+reads `name-` as "remove name", so a list could otherwise uninstall a package and
+still start the container.
+
+That couples startup to the apt mirror and resolves versions at every start, so
+a restart can pick up a different build of a package. Name a version
+(`EXTRA_APT_PACKAGES="iproute2=6.12.0-1"`) when that matters. Where neither
+trade is acceptable — and in every Helm deployment, whose chart runs non-root
+with a read-only root filesystem, where this cannot work at all — derive an
+image instead: two lines, reproducible, and never running as root.
+
+```dockerfile
+FROM ghcr.io/mikkoparkkola/mcp-gateway:latest-full
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+USER gateway
+```
+
+**Mount the startup steps.** Executable `*.sh` files in `/docker-entrypoint.d`
+run, and `*.envsh` files are sourced, in name order, before the gateway starts.
+A container that starts as root runs them as root, after the packages are
+installed and before it drops to the gateway user, so a step that needs root — a
+route, a NAT rule — works; a container run as the image's user runs them as that
+user. A file that is not executable is skipped with a message rather than
+half-run, and a step that fails stops the container. A step that changes routes
+or NAT rules also needs `--cap-add=NET_ADMIN`; root alone does not grant it. Both
+follow the convention nginx and postgres ship:
+
+```bash
+docker run --user root -e EXTRA_APT_PACKAGES="iproute2" \
+  -v ./startup:/docker-entrypoint.d:ro \
+  ghcr.io/mikkoparkkola/mcp-gateway:latest-full
+```
+
+Mount the directory read-only and own it as root: its steps run with the
+privileges the container started with, so write access to it is write access to
+root's next startup step.
+
+A sourced `.envsh` runs in the entrypoint's shell immediately before the gateway
+is exec'd, so a variable it exports is part of the environment the gateway
+inherits, and one it only assigns is not. One exception: in a container started
+as root the gateway is exec'd with `HOME=/home/gateway`, so an exported `HOME`
+does not reach it. It is a startup step, not a configuration channel; the
+gateway's own settings belong in `-e` or the config file.
+
+**Stopping during startup.** The `-full` image runs `tini -g` as PID 1 in front
+of the entrypoint, so `docker stop` sends `SIGTERM` to every process in the
+entrypoint's process group: the install, a `*.sh` step, and the command a sourced
+`.envsh` step is running. The container then stops at once with exit status 143.
+A step that ignores or traps `SIGTERM` and is still running when Docker's stop
+timeout (`--stop-timeout`, 10 s by default) runs out is ended with a `SIGKILL`
+(exit status 137).
+Once the gateway is running, tini passes the stop to it, and the gateway
+coordinates its backends' shutdown; each stdio backend runs in its own process
+group, so tini does not signal it directly. The default image is unchanged: the gateway itself is PID 1.
+
+The `-full` health check allows 60 s before an unanswered probe counts. An
+install that takes longer can still finish (it is bounded at 300 s), but the
+container reads as unhealthy meanwhile; raise the start period with
+`--health-start-period` when a deployment's packages take that long.
 
 ```bash
 docker pull ghcr.io/mikkoparkkola/mcp-gateway:latest-full
@@ -512,7 +590,7 @@ gateway does not verify inbound signatures at all. To rotate:
 3. Once no client needs the old key, remove it from the clients.
 
 Every `security.message_signing` field (`enabled`, `shared_secret`,
-`previous_secret`, `key_id`, `require_nonce`, `replay_window`) needs a restart. A
+`previous_secret`, `key_id`, `require_nonce`, and the replay window) needs a restart. A
 config reload that changes any of them is refused with
 `config reload refused: security.message_signing.<field> requires restart` and
 leaves the running config untouched.
@@ -607,7 +685,8 @@ WantedBy=multi-user.target
 sudo useradd -r -s /usr/sbin/nologin mcp-gateway
 sudo cp target/release/mcp-gateway /usr/local/bin/
 sudo mkdir -p /etc/mcp-gateway
-sudo cp gateway.yaml /etc/mcp-gateway/
+# Owner-only: the gateway refuses a config other users can read.
+sudo install -m 600 gateway.yaml /etc/mcp-gateway/gateway.yaml
 sudo chown -R mcp-gateway:mcp-gateway /etc/mcp-gateway
 sudo systemctl daemon-reload
 sudo systemctl enable --now mcp-gateway
@@ -1002,7 +1081,7 @@ sha256, so a short or guessable key can be recovered from a leaked config by off
 guessing; a 32-byte random key cannot.
 
 `hash-key` reads the key from stdin (at most 64 KiB), strips one trailing newline, and reads no config. A
-plaintext `key` field, or an `env:` variable that holds a key rather than a digest, fails the
+plaintext API key in `auth.api_keys`, or an `env:` variable that holds a key rather than a digest, fails the
 load with an error that names the entry or variable but never the value. See
 [UPGRADING-4.0.md](UPGRADING-4.0.md) item 41.
 
@@ -1309,10 +1388,9 @@ origin. Keep request bodies for that path out of the proxy's logs.
 A session ends after 30 minutes without activity or 8 hours after sign-in,
 whichever comes first; the cookie's `Max-Age` matches the 8 hours. The
 dashboard's own 5-second refresh is checked but is not activity, so an unattended
-tab signs out at the idle limit. Change the limits under `auth.dashboard_session`
-(`idle_timeout_secs`, `absolute_timeout_secs`); a reload applies them to open
-sessions. A browser keeps the `Max-Age` its cookie was issued with, so a longer
-absolute limit reaches sessions opened after the reload.
+tab signs out at the idle limit. These limits are fixed defaults in 4.0; a
+hidden setting a 3.x config still carries keeps applying, and
+`mcp-gateway doctor` lists it.
 
 **Log out** on `/dashboard` sends `POST /dashboard/logout`, which ends the session
 on the server as well as in the browser and redirects to `/ui`. It answers `303`
@@ -1460,16 +1538,6 @@ For horizontal scaling (organizational isolation, not throughput): run separate 
 ### Resource Tuning
 
 ```yaml
-failsafe:
-  rate_limit:
-    requests_per_second: 100   # Per-backend; adjust for backend capacity
-    burst_size: 50
-  circuit_breaker:
-    failure_threshold: 5       # Lower = faster isolation
-    reset_timeout: 30s
-cache:
-  default_ttl: 60s             # Higher = fewer calls, staler data
-  max_entries: 10000           # In-memory; scale with available RAM
 error_budget:
   threshold: 0.8               # Failure rate that disables a backend
   window_size: 100             # Calls in the sliding window

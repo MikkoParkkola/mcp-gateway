@@ -107,19 +107,18 @@ question is refused.
 Tasks are kept on disk under `tasks.store_dir`. One gateway holds the store at a time. Back it up
 only while every gateway that writes to it is stopped.
 
-| Setting | Default | Meaning |
-|---|---|---|
-| `tasks.store_dir` | `~/.mcp-gateway/tasks` | Where tasks are stored |
-| `tasks.default_ttl_ms` | `86400000` (24 hours) | How long a task is kept; `0` keeps it indefinitely |
-| `tasks.poll_interval_ms` | `1000` | Suggested poll interval; `0` omits it |
-| `tasks.max_records` | `256` | Live tasks in the whole store |
-| `tasks.max_per_principal` | `32` | Live tasks per caller |
-| `tasks.max_workers` | `16` | Tasks running at once |
-| `tasks.max_record_bytes` | `524288` (512 KiB) | Largest stored task |
-| `tasks.expiry_interval` | `60s` | How often expired tasks are swept |
+The other limits are fixed defaults in 4.0:
 
-At shutdown, a task that is still running when `server.shutdown_timeout` runs out is cancelled.
-To let long tasks finish, raise that timeout.
+- a task is kept for 24 hours;
+- clients are told to poll once a second;
+- the store holds at most 256 live tasks, 32 per caller, and runs 16 at once;
+- a stored task is at most 512 KiB;
+- expired tasks are swept once a minute.
+
+A 3.x config that set one of these still applies it, and `mcp-gateway doctor` lists it.
+
+At shutdown, a task that is still running when the 30-second shutdown window runs out is
+cancelled.
 
 **stdio.** A gateway started with `mcp-gateway serve --stdio` keeps tasks for the client that
 launched it in `<tasks.store_dir>/stdio`, apart from the HTTP store. No HTTP caller can reach

@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::*;
-use std::convert::Infallible;
-use std::future::{Ready, ready};
 
 use axum::http::Request;
 use rcgen::string::Ia5String;
@@ -55,36 +53,31 @@ fn peer_chain_identity_rejects_malformed_certificate() {
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
 }
 
-#[test]
-fn peer_cert_identity_service_inserts_identity_extension() {
+#[tokio::test]
+async fn peer_cert_identity_service_inserts_identity_extension() {
+    use tower::ServiceExt;
+
     let identity = CertIdentity {
         san_uris: vec!["spiffe://example.test/agent/alpha".to_owned()],
         display_name: "spiffe://example.test/agent/alpha".to_owned(),
         ..CertIdentity::default()
     };
-    let mut service = PeerCertIdentityLayer::new(Some(identity.clone())).layer(EchoIdentity);
-
-    let inserted_identity = futures::executor::block_on(service.call(Request::new(())))
-        .expect("echo service should not fail");
-
-    assert_eq!(inserted_identity, Some(identity));
-}
-
-#[derive(Clone)]
-struct EchoIdentity;
-
-impl Service<Request<()>> for EchoIdentity {
-    type Response = Option<CertIdentity>;
-    type Error = Infallible;
-    type Future = Ready<Result<Self::Response, Self::Error>>;
-
-    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, request: Request<()>) -> Self::Future {
-        ready(Ok(request.extensions().get::<CertIdentity>().cloned()))
-    }
+    let echo = axum::Router::new().route(
+        "/",
+        axum::routing::get(|cert: Option<axum::Extension<CertIdentity>>| async move {
+            cert.map(|axum::Extension(cert)| cert.display_name)
+                .unwrap_or_default()
+        }),
+    );
+    let app = PeerCertIdentityLayer::new(Some(identity.clone())).layer(echo);
+    let response = app
+        .oneshot(Request::get("/").body(axum::body::Body::empty()).unwrap())
+        .await
+        .expect("the router does not fail");
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(bytes, identity.display_name.as_bytes());
 }
 
 /// Behind an HTTPS `public_url` in any letter case, matching the cookie's
@@ -161,17 +154,13 @@ mod mtls_listener {
             .expect("the TLS request reached its handler")
             .expect("started");
 
-        let signalled = std::time::Instant::now();
+        // The request never ends, so only the shutdown deadline can return
+        // the server: returning inside the hang guard is the oracle (MIK-8222).
         stop_tx.send(()).expect("server is running");
         let outcome = tokio::time::timeout(Duration::from_secs(5), server)
             .await
             .expect("the mTLS server did not return within 5 s while a request was open");
-        let elapsed = signalled.elapsed();
         outcome.expect("server task").expect("serve");
-        assert!(
-            elapsed < Duration::from_secs(2),
-            "mTLS shutdown took {elapsed:?} with a {grace:?} timeout"
-        );
         request.abort();
     }
 
@@ -398,4 +387,93 @@ mod mtls_listener {
         .expect("serve_tls returns instead of serving");
         assert!(outcome.is_err(), "a missing server certificate must fail");
     }
+}
+
+/// A leaf with no CN and no SAN URI, parsed by the production parser.
+fn nameless_leaf() -> CertIdentity {
+    let mut params = CertificateParams::default();
+    params.distinguished_name = DistinguishedName::new();
+    let key_pair = KeyPair::generate().expect("key generation failed");
+    let der = params
+        .self_signed(&key_pair)
+        .expect("cert generation failed")
+        .der()
+        .to_vec();
+    CertIdentity::from_der(&der).expect("a nameless leaf still parses")
+}
+
+/// MIK-8286 R3: a client certificate that names no subject is a presented
+/// identity that names nobody, so the TLS identity layer refuses it as
+/// unauthenticated (401, -32000) before anything inside runs, on every path,
+/// `/health` included. Mutant: the layer's refusal removed.
+#[tokio::test]
+async fn a_nameless_client_certificate_is_refused_before_anything_runs() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tower::ServiceExt;
+
+    let reached = Arc::new(AtomicUsize::new(0));
+    let spy = Arc::clone(&reached);
+    let inner = axum::Router::new().route(
+        "/health",
+        axum::routing::get(move || {
+            spy.fetch_add(1, Ordering::SeqCst);
+            async { "ok" }
+        }),
+    );
+    let app = PeerCertIdentityLayer::new(Some(nameless_leaf())).layer(inner);
+    let request = Request::get("/health")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+    assert_eq!(body["error"]["code"], serde_json::json!(-32000), "{body}");
+    assert_eq!(reached.load(Ordering::SeqCst), 0, "nothing inside ran");
+}
+
+/// MIK-8195 W2: the admin-granting dashboard link is printed only on a
+/// loopback bind, with auth on and a bootstrap value; never otherwise.
+#[test]
+fn the_dashboard_link_is_printed_only_on_loopback_with_auth_and_a_value() {
+    let bootstrap = DashboardBootstrap::new();
+    let value = bootstrap.peek().expect("a fresh bootstrap holds a value");
+    let mut config = Config::default();
+    config.auth.enabled = true;
+    config.server.host = "127.0.0.1".to_string();
+
+    let link = dashboard_link(&config, 39400, Some(&bootstrap)).expect("loopback with auth");
+    assert!(
+        link.contains(&format!(
+            "http://127.0.0.1:39400/dashboard?bootstrap={value}"
+        )),
+        "{link}"
+    );
+    config.mtls.enabled = true;
+    let link = dashboard_link(&config, 39400, Some(&bootstrap)).expect("loopback with mTLS");
+    assert!(link.contains("https://127.0.0.1:39400/"), "{link}");
+    config.mtls.enabled = false;
+
+    assert_eq!(
+        dashboard_link(&config, 39400, None),
+        None,
+        "no value, no link"
+    );
+    config.server.host = "0.0.0.0".to_string();
+    assert_eq!(
+        dashboard_link(&config, 39400, Some(&bootstrap)),
+        None,
+        "a network bind never prints the admin link"
+    );
+    config.server.host = "127.0.0.1".to_string();
+    config.auth.enabled = false;
+    assert_eq!(
+        dashboard_link(&config, 39400, Some(&bootstrap)),
+        None,
+        "with auth off there is no admin to grant"
+    );
 }

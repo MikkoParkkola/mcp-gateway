@@ -138,15 +138,19 @@ async fn g4b_a_pre_send_refusal_after_a_step_ran_keeps_the_outcome() {
 async fn m2_a_refused_interim_answer_keeps_its_spend() {
     use super::direct_continuation_tests::budget;
     use super::direct_guards_fixture::fixture_built;
-    let fx = fixture_built(Answer::AskOnce, budget).await;
-    let refused = meta_call(&fx, "k-budget", "alpha", keyed("op-m2", &json!({}))).await;
+    let (refused, retried, sent) = crate::test_day::same_utc_day_async(|| async {
+        let fx = fixture_built(Answer::AskOnce, budget).await;
+        let refused = meta_call(&fx, "k-budget", "alpha", keyed("op-m2", &json!({}))).await;
+        let declared = json!({"elicitation": {"form": {}}});
+        let retried = meta_call(&fx, "k-budget", "alpha", keyed("op-m2b", &declared)).await;
+        (refused, retried, dispatched(&fx))
+    })
+    .await;
     assert_eq!(code(&refused), Some(-32021), "MRTR.9 refusal: {refused}");
-    let declared = json!({"elicitation": {"form": {}}});
-    let retried = meta_call(&fx, "k-budget", "alpha", keyed("op-m2b", &declared)).await;
     assert_eq!(
         code(&retried),
         Some(-32003),
         "the refused call was refunded: {retried}"
     );
-    assert_eq!(dispatched(&fx), 1, "the budget refused before the backend");
+    assert_eq!(sent, 1, "the budget refused before the backend");
 }

@@ -33,14 +33,16 @@ impl MetaMcp {
         // A presented resume decides where the chain starts and how many rounds
         // this exchange has already spent. Both are sealed, so neither is a
         // number the caller can choose.
-        let resume = presented_resume(
-            &self.continuation,
-            caller.retry,
-            &chain,
-            caller.verified_identity,
-            now,
-        )
-        .await?;
+        let fingerprint = self
+            .resume_fingerprint(&chain, session_id, caller, now)
+            .await?;
+        let resume =
+            presented_resume(&self.continuation, caller.retry, &chain, fingerprint, now).await?;
+        // Planning the resume spent the chain handle: the pending step's
+        // refusal must not give the nonce back (MIK-8353 3b).
+        if resume.is_some() {
+            crate::gateway::meta_mcp::invoke::spend_witness(caller);
+        }
         let (start_step, rounds_used) = resume
             .as_ref()
             .map_or((0, 0), |plan| (plan.next_step, plan.rounds_used));
@@ -140,6 +142,65 @@ impl MetaMcp {
             .await
             .inspect(note_chain_members)
     }
+
+    /// The presenting caller's binding at the step its handle is pending at,
+    /// derived as that step's own dispatch minted it (`step_fingerprint`,
+    /// MIK-8137), or `None` when nothing was presented or the caller has
+    /// neither an identity nor a key.
+    ///
+    /// The handle is opened, not redeemed: nothing is spent until
+    /// `plan_chain_resume` has checked this binding, so a caller refused here
+    /// or there burns nothing. Resolving the step's binding can mint the
+    /// caller's credential, so nothing is resolved for a step that is not the
+    /// one that stopped: the handle must open as a chain resume sealed over
+    /// THIS chain, and the step must pass the same invocation policy every
+    /// dispatch passes before it may mint (authorization, kill switch,
+    /// withheld tools). Anything else gets the step-less binding, and the
+    /// plan refuses it.
+    async fn resume_fingerprint(
+        &self,
+        chain: &[Value],
+        session_id: Option<&str>,
+        caller: &super::super::MetaMcpCallerContext<'_>,
+        now: u64,
+    ) -> Result<Option<String>> {
+        use crate::protocol::continuation::ContinuationPurpose;
+
+        let Some(token) = caller.retry.request_state.as_deref() else {
+            return Ok(None);
+        };
+        let sealed_over_this_chain = super::super::chain_interim::chain_digest(chain);
+        let pending = self
+            .continuation
+            .keyring()
+            .open(token, now)
+            .ok()
+            .filter(|payload| {
+                payload
+                    .require_purpose(ContinuationPurpose::ChainResume)
+                    .is_ok()
+                    && payload.original_request_digest == sealed_over_this_chain
+            })
+            .and_then(|payload| payload.next_step)
+            .and_then(|step| chain.get(step));
+        // The step as `drive_chain` will dispatch it: absent arguments are `{}`.
+        let target = pending.and_then(|step| {
+            let (tool, server) = parse_code_mode_tool_ref(step.get("tool")?.as_str()?);
+            let arguments = step.get("arguments").cloned().unwrap_or_else(|| json!({}));
+            Some((server?, tool, arguments))
+        });
+        let Some((server, tool, arguments)) = target else {
+            return Ok(crate::protocol::mrtr::source_fingerprint(
+                caller.principal_source(None),
+            ));
+        };
+        self.check_invocation_policy(
+            &json!({ "server": server, "tool": tool, "arguments": arguments }),
+            session_id,
+            caller,
+        )?;
+        self.step_fingerprint(caller, (server, tool)).await
+    }
 }
 
 /// A chain step's plan label: its execution index, as the chain's answer
@@ -211,6 +272,12 @@ fn step_failure(idx: usize, tool_ref: &str, error: Error) -> Error {
             message: format!("Chain step {idx} ({tool_ref}) refused: {message}"),
             data,
         },
+        // A step naming a tool this caller cannot see answers exactly as an
+        // absent name, unchanged (MIK-8356 fold F5).
+        e @ Error::JsonRpc { code: -32601, .. } => e,
+        // The content gate's delivery refusal keeps its type, and so its
+        // -32600 and its audit projection, like a denial (MIK-8325).
+        Error::ResponseFirewallRefused => Error::ResponseFirewallRefused,
         e => Error::json_rpc(-32603, format!("Chain step {idx} ({tool_ref}) failed: {e}")),
     }
 }

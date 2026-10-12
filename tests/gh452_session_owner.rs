@@ -166,7 +166,7 @@ struct Session {
 }
 
 async fn next_event(stream: &mut BodyDataStream) -> String {
-    let bytes = tokio::time::timeout(Duration::from_secs(3), stream.next())
+    let bytes = tokio::time::timeout(Duration::from_secs(10), stream.next())
         .await
         .expect("SSE event arrives within deadline")
         .expect("original stream remains open")

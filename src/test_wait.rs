@@ -7,6 +7,8 @@
 use std::ops::ControlFlow;
 use std::time::Duration;
 
+pub(crate) use crate::gateway::test_helpers::HANG_BOUND;
+
 /// How often [`wait_until`] polls.
 const POLL: Duration = Duration::from_millis(20);
 
@@ -57,6 +59,32 @@ pub(crate) async fn wait_real_time(
         }
         tokio::task::yield_now().await;
         std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// Run `row` on its own current-thread runtime on a spawned thread, failing
+/// with `hung` if it has not finished within `bound` of real time. The row
+/// may pause its runtime's clock; this watchdog runs outside it, so a hang
+/// still fails the test (the stuck thread is leaked, not joined) (MIK-8360).
+pub(crate) fn watched_row<F>(bound: Duration, hung: &str, row: impl FnOnce() -> F + Send + 'static)
+where
+    F: std::future::Future<Output = ()>,
+{
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime")
+            .block_on(row());
+        let _ = done.send(());
+    });
+    match finished.recv_timeout(bound) {
+        Ok(()) => {}
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!("{hung}"),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("the row panicked; its message is above")
+        }
     }
 }
 

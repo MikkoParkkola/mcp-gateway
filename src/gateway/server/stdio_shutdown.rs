@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::time::Instant;
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 
 use super::{Gateway, StdioTelemetry, stdio_tasks, task_runtime, warmstart::WarmerGuard};
 
@@ -86,11 +86,35 @@ pub(super) async fn final_cost_save(
 }
 
 impl Gateway {
+    /// Save the protocol-revision window, waiting for a save already in
+    /// flight. The final save at shutdown: after the saver's ticks stop, it
+    /// takes the sink lock as soon as the last tick's write ends and saves
+    /// what is left. Every save runs under this one lock, so no two overlap
+    /// and no delta is counted twice (MIK-8364).
     pub(super) fn persist_stdio_protocol_telemetry(sink: &StdioTelemetry) {
         let mut sink = sink
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(sink) = sink.as_mut()
+        Self::persist_held(sink.as_mut());
+    }
+
+    /// The saver's tick: save the window unless a save is still in flight,
+    /// in which case skip; the next tick carries this tick's delta, because a
+    /// save advances its baseline only after a successful write (MIK-8364).
+    pub(super) fn save_stdio_protocol_telemetry_unless_busy(sink: &StdioTelemetry) {
+        match sink.try_lock() {
+            Ok(mut held) => Self::persist_held(held.as_mut()),
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+                Self::persist_held(poisoned.into_inner().as_mut());
+            }
+            Err(std::sync::TryLockError::WouldBlock) => {
+                debug!("stdio protocol telemetry save skipped: the previous save has not finished");
+            }
+        }
+    }
+
+    fn persist_held(sink: Option<&mut crate::protocol_revision_telemetry::DurableTelemetrySink>) {
+        if let Some(sink) = sink
             && let Err(error) = sink.persist_global()
         {
             warn!(

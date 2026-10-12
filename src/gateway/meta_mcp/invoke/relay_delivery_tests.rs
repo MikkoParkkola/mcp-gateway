@@ -662,6 +662,11 @@ async fn a_built_task_envelope_is_read_as_one() {
     let ((), receipts) = meta
         .collecting_staged(async {
             meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "send"), &stored);
+            // No sealed question here, so no holds to carry.
+            let replay = crate::gateway::meta_mcp::sealed_hold::Held::new(
+                replay,
+                crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
+            );
             let answer = BeginOutcome::Existing(replay).into_response(RequestId::Number(1));
             meta.rebuild_receipt_from_final(
                 answer.result.as_ref(),

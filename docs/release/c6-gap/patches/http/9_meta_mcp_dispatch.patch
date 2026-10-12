@@ -1,13 +1,15 @@
-diff --git a/src/gateway/router/handlers.rs b/src/gateway/router/handlers.rs
-index e43e90115..faaa83010 100644
---- a/src/gateway/router/handlers.rs
-+++ b/src/gateway/router/handlers.rs
-@@ -561,8 +561,7 @@ async fn meta_mcp_dispatch(
+diff --git a/src/gateway/router/handlers/dispatch_intake.rs b/src/gateway/router/handlers/dispatch_intake.rs
+index 0000000..0000000 100644
+--- a/src/gateway/router/handlers/dispatch_intake.rs
++++ b/src/gateway/router/handlers/dispatch_intake.rs
+@@ -154,10 +154,7 @@ pub(super) async fn intake(
                  crate::security::IdentityAudit::Clean,
                  Some(&reason),
              );
--            return build_http_error_response(None, -32600, reason, StatusCode::FORBIDDEN)
--                .into_response();
+-            return Err(
+-                build_http_error_response(None, -32600, reason, StatusCode::FORBIDDEN)
+-                    .into_response(),
+-            );
 +            let _ = build_http_error_response(None, -32600, reason, StatusCode::FORBIDDEN);
          }
      }

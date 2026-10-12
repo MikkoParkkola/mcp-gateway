@@ -369,14 +369,7 @@ async fn logged(run: impl std::future::Future<Output = ()>) -> String {
     }
     // A callsite first reached with no subscriber caches "never", which skips
     // its field expressions here too; a TRACE-level global keeps interest live.
-    static INTEREST: std::sync::Once = std::sync::Once::new();
-    INTEREST.call_once(|| {
-        use tracing_subscriber::prelude::*;
-        let _ = tracing::subscriber::set_global_default(
-            tracing_subscriber::Registry::default()
-                .with(tracing::level_filters::LevelFilter::TRACE),
-        );
-    });
+    crate::test_log_capture::keep_interest_open();
     let sink = Sink::default();
     let writer = sink.clone();
     let subscriber = tracing_subscriber::fmt()

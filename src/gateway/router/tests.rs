@@ -4,6 +4,7 @@ use super::helpers::{
     attach_session_header, build_accepted_response, build_error_response,
     build_http_error_response, build_json_response, extract_request_id, extract_tools_call_params,
     is_notification_method, merge_client_meta, parse_elicitation_params, parse_request,
+    parse_sampling_params,
 };
 use super::{AppState, create_router, create_router_with};
 use super::{authorization, handlers, helpers};
@@ -50,7 +51,9 @@ mod mcp_malformed_hardened;
 mod meta_firewall_verdict;
 mod meta_fixture;
 mod order2_fsm;
-mod task_execution_adapter;
+// pub(crate): the route-check matrix drives TaskSubmit x Authorize through
+// `submit_authz` (MIK-8315).
+pub(crate) mod task_execution_adapter;
 
 mod issue_555_listing_scope;
 /// C7: `/metrics` behind a dedicated scrape token (MIK 7570 METRICS.1).
@@ -66,6 +69,7 @@ mod origin_gate;
 mod playbook_authz;
 /// MIK-8158: no authorization server, no protected-resource metadata.
 mod prm_without_issuer;
+mod quota_principal;
 mod request_parsing;
 mod responses;
 mod session_hold_direct;
@@ -481,7 +485,14 @@ pub(super) async fn test_router_app_state_with_auth_and_config(
     let (task_service, task_executor) = crate::gateway::task_service::open_runtime_with_admission(
         &store_dir.path().join("tasks"),
         config.tasks.max_workers,
-        crate::gateway::task_service::StoreLimits::default(),
+        // The configured limits, built as production builds them
+        // (server/task_runtime.rs), so a row that sets a task limit gets it.
+        crate::gateway::task_service::StoreLimits {
+            records: config.tasks.max_records,
+            per_principal: config.tasks.max_per_principal,
+            record_bytes: config.tasks.max_record_bytes,
+            logical_bytes: config.tasks.logical_budget_bytes,
+        },
         Arc::clone(&subscriptions),
         Arc::clone(meta_mcp.execution_admission()),
     )
@@ -764,4 +775,17 @@ pub(super) fn direct_route_call(agent_id: Option<&str>) -> axum::http::Request<a
             .to_string(),
         ))
         .unwrap()
+}
+
+/// The `_meta` of a modern call declaring form elicitation and tasks. One
+/// copy for the router rows (the MIK-8340 twins and MIK-8356's entry rows);
+/// not feature-gated, so a no-default-features build keeps its users.
+pub(crate) fn modern_meta() -> serde_json::Value {
+    serde_json::json!({
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {
+            "elicitation": {"form": {}},
+            "extensions": {"io.modelcontextprotocol/tasks": {}}
+        }
+    })
 }

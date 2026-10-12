@@ -24,7 +24,7 @@ mod tasks;
 mod webhooks;
 
 pub use api_key::{ApiKeyConfig, ApiKeyKind, api_key_digest_spec};
-pub(crate) use api_key::{api_key_expired_now, parse_api_key_digest};
+pub(crate) use api_key::{api_key_expired, api_key_expired_now, parse_api_key_digest};
 pub use auth::{AgentAuthConfig, AgentDefinitionConfig, AuthConfig, DashboardSessionConfig};
 pub use cache::CacheConfig;
 pub use capability::{CapabilityConfig, FileRoots, ProcessCommand, ProcessExecution};
@@ -52,5 +52,6 @@ pub use security::{
 pub(crate) use signature_chain::validate_backend_chains;
 pub use signature_chain::{ChainEmit, ChainMode, SignatureChainConfig};
 pub use streaming::StreamingConfig;
+pub(crate) use tasks::DEFAULT_TTL_MS as DEFAULT_TASK_TTL_MS;
 pub use tasks::{DEFAULT_MAX_WORKERS, TasksConfig};
 pub use webhooks::WebhookConfig;

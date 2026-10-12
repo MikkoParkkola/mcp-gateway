@@ -38,8 +38,9 @@ fn a_plan_step_digest_is_capped_later_as_a_delivery_is_now() {
 }
 
 /// MIK-7992: a plan step's digest recorded without being kept to its plan's
-/// answer is capped where it is recorded: the cut is counted and the middle
-/// of an over-cap text is not recorded, as for any other delivery.
+/// answer is capped where it is recorded: the cut is counted. Its middle is
+/// then evidence through the thinned sample (`MIK-8066.CAP.2`), as for any
+/// other cut delivery, and its holder stays excused.
 #[test]
 fn a_deferred_digest_is_capped_where_it_is_recorded() {
     let (fw, _dir) = observing(|_| {});
@@ -51,15 +52,24 @@ fn a_deferred_digest_is_capped_where_it_is_recorded() {
     };
     let step = json!({"a": pad("head"), "body": PROSE, "z": pad("tail")});
     let digest = fw
-        .receipt_digest("alpha", "read", &step, Some(&std::cell::Cell::new(0)))
+        .receipt_digest(
+            "alpha",
+            "read",
+            &step,
+            Some(&crate::security::firewall::PlanStaging::default()),
+        )
         .expect("relay detection is on");
     assert_eq!(fw.relay_text_cuts(), 0, "premise: staged whole");
     fw.record_digest(RelayCaller::Keyed("carol"), "alpha", "read", &digest);
 
     assert_eq!(fw.relay_text_cuts(), 1, "the cap applied at the sink");
     assert!(
-        egress(&fw, RelayCaller::Keyed("bob")).findings.is_empty(),
-        "the dropped middle was recorded"
+        !egress(&fw, RelayCaller::Keyed("bob")).findings.is_empty(),
+        "the cut middle was never receipted"
+    );
+    assert!(
+        egress(&fw, RelayCaller::Keyed("carol")).findings.is_empty(),
+        "the holder was refused"
     );
 }
 
@@ -167,15 +177,17 @@ fn a_split_run_keeps_exactly_its_original_delivered_fingerprints() {
         // Each kept run in both forms, newline-joined and run together. A
         // deferred receipt keeps leaves in delivered order (MIK-7992), so its
         // run is the answer's: left beside right, as the caller received it.
-        let mut forms = vec![
+        // The answer's own values forms are delivered text too (`MIK-8209`
+        // K3), so a k-gram the answer carries across left and right is
+        // delivered whichever receipt shape kept the leaves.
+        let forms = [
             left.join("\n"),
             left.concat(),
             right.join("\n"),
             right.concat(),
+            shown.join("\n"),
+            shown.concat(),
         ];
-        if round % 2 == 1 {
-            forms.extend([shown.join("\n"), shown.concat()]);
-        }
         let allowed: HashSet<u64> = forms
             .iter()
             .flat_map(|run| detector.kgram_hashes(run))
@@ -279,11 +291,335 @@ fn a_reading_over_the_bound_falls_back_to_the_whole_text() {
             .collect::<Vec<_>>()
             .join(" ")
     );
+    // `MIK-8066` 2b: over 1 MiB a reading is a view; the fallback applies
+    // only while the fuller reading cannot be read (D7). A cap below the
+    // field-by-field reading and above the flat text makes that so.
+    fw.collusion_detector()
+        .expect("relay detection on")
+        .set_answer_text_cap(1024 * 1024);
     assert!(
-        fw.delivered_for_plan(&answer, None).is_none(),
-        "premise: field by field is over the bound"
+        fw.delivered_for_plan(&answer, None)
+            .is_some_and(|d| d.is_unread()),
+        "the field-by-field reading past the cap was not unread"
     );
     let drops = fw.relay_plan_drops();
-    assert!(fw.delivered_preferring(&answer, &flat, None).is_some());
+    assert!(
+        fw.delivered_preferring(&answer, &flat, None)
+            .is_some_and(|d| !d.is_unread()),
+        "the readable flat fallback was not used"
+    );
     assert_eq!(fw.relay_plan_drops(), drops, "no drop while the text fits");
+}
+
+/// `MIK-8209` K7: two steps each staged a shared `kind` and their own piece;
+/// the answer repeats `kind`. Kept to its own span first, each step keeps its
+/// own piece whole. (The unlabelled control is gone: since MIK-8251 a leaf is
+/// kept at most as often as staged, so that crowd-out cannot happen.)
+#[test]
+fn a_repeated_leaf_from_another_step_never_crowds_out_a_steps_own_piece() {
+    let detector = CollusionDetector::new(RelayParams::default());
+    let (a, b) = ("piece of step zero", "piece of step one");
+    let shown = vec!["chunk", a, "chunk", b];
+    let labels = vec![Some(0), Some(0), Some(1), Some(1)];
+    let (staged, _) = DeliveryDigest::of_plan_step_leaves(&["chunk", b], false);
+    let labelled = Delivered::of_leaves(shown)
+        .expect("bounded")
+        .with_labels(labels);
+    let kept = staged.retaining_for(&detector, &labelled, Some(1));
+    assert!(kept.whole_values().any(|v| v == b), "own piece lost");
+}
+
+/// `MIK-8209` K7 keeps the MIK-7992 cap: a step's own long leaf after many
+/// copies of its short staged leaf from another step stays whole, and the
+/// kept receipt stages no more than before.
+#[test]
+fn own_span_first_keeps_the_staging_cap() {
+    let detector = CollusionDetector::new(RelayParams::default());
+    let long = "the long leaf this step delivered, well past one k-gram in length";
+    let mut shown = vec!["x"; 50];
+    let mut labels = vec![Some(0); 50];
+    shown.extend(["x", long]);
+    labels.extend([Some(1), Some(1)]);
+    let (staged, _) = DeliveryDigest::of_plan_step_leaves(&["x", long], false);
+    let before = staged.staged_len();
+    let delivered = Delivered::of_leaves(shown)
+        .expect("bounded")
+        .with_labels(labels);
+    let kept = staged.retaining_for(&detector, &delivered, Some(1));
+    let whole: Vec<&str> = kept.whole_values().collect();
+    assert!(whole.contains(&long), "own long leaf lost");
+    assert!(kept.staged_len() <= before, "retention grew the receipt");
+}
+
+/// `MIK-8209` K7 with duplicates in the step's own span: the room is still
+/// what the step staged, so the receipt never grows. (Copies inside one span
+/// are still kept in answer order while room lasts, as MIK-7992 keeps them.)
+#[test]
+fn duplicates_in_a_steps_own_span_never_grow_its_receipt() {
+    let detector = CollusionDetector::new(RelayParams::default());
+    let long = "the long leaf this step delivered, well past one k-gram in length";
+    let shown = vec!["x", "x", "x", long];
+    let labels = vec![Some(1); 4];
+    let (staged, _) = DeliveryDigest::of_plan_step_leaves(&["x", long], false);
+    let before = staged.staged_len();
+    let delivered = Delivered::of_leaves(shown)
+        .expect("bounded")
+        .with_labels(labels);
+    let kept = staged.retaining_for(&detector, &delivered, Some(1));
+    assert!(kept.staged_len() <= before, "retention grew the receipt");
+}
+
+/// `MIK-8251` DUP.1: a step repeating a short leaf within its own span still
+/// keeps its later long piece whole, so the seam pass can own it. Before the
+/// count cap the extra copies spent the room first.
+#[test]
+fn a_repeated_leaf_in_a_steps_own_span_keeps_its_later_piece_whole() {
+    let detector = CollusionDetector::new(RelayParams::default());
+    let long = "the long leaf this step delivered, well past one k-gram in length";
+    let (staged, _) = DeliveryDigest::of_plan_step_leaves(&["x", long], false);
+    let delivered = Delivered::of_leaves(vec!["x", "x", "x", long])
+        .expect("bounded")
+        .with_labels(vec![Some(1); 4]);
+    let kept = staged.retaining_for(&detector, &delivered, Some(1));
+    assert!(
+        kept.whole_values().any(|v| v == long),
+        "own long piece lost"
+    );
+}
+
+/// `MIK-8209` K3 keeps the delivered-set bound unchanged: the joins are
+/// hashed, never charged to it, so a 600 KiB answer still keeps its plan
+/// receipts.
+#[test]
+fn a_large_answer_keeps_its_receipts_under_the_unchanged_bound() {
+    let leaf = "z".repeat(1_000);
+    let answer = vec![leaf.as_str(); 600];
+    assert!(Delivered::of_leaves(answer).is_some(), "the bound shrank");
+}
+
+/// `MIK-8209` Q2, gpt's input: three steps each staged `{part: p, x: "x"}`;
+/// each step's span of the answer repeats `x` twenty times before `part`.
+/// Each step must keep its own `part` whole (the seam pass owns it only then).
+/// MIK-8251 keeps each leaf only as often as staged; a chain reaches this through late redaction (route row
+/// `late_redaction_copies_keep_the_cross_step_join`).
+#[test]
+fn twenty_repeats_before_part_keep_each_steps_part_whole() {
+    let detector = CollusionDetector::new(RelayParams::default());
+    let parts = ["a".repeat(32), "b".repeat(32), "c".repeat(32)];
+    let (mut shown, mut labels) = (Vec::new(), Vec::new());
+    for (step, part) in parts.iter().enumerate() {
+        let label = u32::try_from(step).ok();
+        shown.extend(std::iter::repeat_n("x", 20));
+        labels.extend(std::iter::repeat_n(label, 20));
+        shown.push(part.as_str());
+        labels.push(label);
+    }
+    for (step, part) in parts.iter().enumerate() {
+        let (staged, _) = DeliveryDigest::of_plan_step_leaves(&[part.as_str(), "x"], false);
+        let delivered = Delivered::of_leaves(shown.clone())
+            .expect("bounded")
+            .with_labels(labels.clone());
+        let kept = staged.retaining_for(&detector, &delivered, u32::try_from(step).ok());
+        assert!(
+            kept.whole_values().any(|v| v == part),
+            "step {step} lost its part"
+        );
+    }
+}
+
+/// A guard for any MIK-8251 fix (gpt, K8 design review): a step staged
+/// `[M, P, T, Q]`; a late redaction turns `T` into a second `M`, so it
+/// delivered `[M, P, M, Q]`. Its receipt must still carry the delivered run
+/// across the second `M`, so the holder relaying what it got is excused.
+/// K8 (keep `M` only as often as staged) broke it.
+#[test]
+fn a_dropped_extra_copy_keeps_the_delivered_run_across_it() {
+    let mut detector = CollusionDetector::new(RelayParams::default());
+    detector.keep_every_kgram();
+    let (m, p, q) = ("[REDACTED:credential]", "p".repeat(32), "q".repeat(32));
+    let t = "a token the router redacts after staging, forty";
+    let (staged, _) = DeliveryDigest::of_plan_step_leaves(&[m, &p, t, &q], false);
+    let delivered = Delivered::of_leaves(vec![m, &p, m, &q])
+        .expect("bounded")
+        .with_labels(vec![Some(0); 4]);
+    let kept = staged.retaining_for(&detector, &delivered, Some(0));
+    let fps = kept.fingerprints(&detector);
+    let run = detector.fingerprints(&format!("{p}{m}{q}"));
+    assert!(!run.is_empty(), "premise: the run holds k-grams");
+    assert!(
+        run.iter().all(|f| fps.contains(f)),
+        "the delivered run across the extra copy was lost"
+    );
+}
+
+/// MIK-8251, the short-original case: the guard above with `T` an AWS access
+/// key ID (always 20 bytes), shorter than the 21-byte marker
+/// that replaces it. The delivered `[M, P, M, Q]` then costs one byte more
+/// than the step staged, so a byte-room pass drops `Q`, and a
+/// reserve-then-admit pass (K8′) drops the second `M`; either way the run
+/// across the marker is lost.
+#[test]
+fn a_short_redacted_original_keeps_the_delivered_run_across_its_marker() {
+    let mut detector = CollusionDetector::new(RelayParams::default());
+    detector.keep_every_kgram();
+    let (m, p, q) = ("[REDACTED:credential]", "p".repeat(32), "q".repeat(32));
+    // An AWS-shaped access key ID, built from parts so no key literal sits in
+    // the source. Premise: the real redactor turns the whole leaf into `m`,
+    // and the original is shorter than the marker.
+    let t = concat!("AK", "IA", "ABCDEFGHIJKLMNOP").to_owned();
+    let mut leaf = serde_json::Value::String(t.clone());
+    let findings = crate::security::firewall::redactor::Redactor::new().scan_and_redact(&mut leaf);
+    assert!(
+        !findings.is_empty(),
+        "premise: the redactor matched the key"
+    );
+    assert_eq!(
+        leaf.as_str(),
+        Some(m),
+        "premise: the whole leaf became the marker"
+    );
+    assert!(t.len() < m.len(), "premise: shorter than its marker");
+    let (staged, _) = DeliveryDigest::of_plan_step_leaves(&[m, &p, &t, &q], false);
+    let delivered = Delivered::of_leaves(vec![m, &p, m, &q])
+        .expect("bounded")
+        .with_labels(vec![Some(0); 4]);
+    let kept = staged.retaining_for(&detector, &delivered, Some(0));
+    let fps = kept.fingerprints(&detector);
+    let run = detector.fingerprints(&format!("{p}{m}{q}"));
+    assert!(!run.is_empty(), "premise: the run holds k-grams");
+    assert!(
+        run.iter().all(|f| fps.contains(f)),
+        "the delivered run across the marker was lost"
+    );
+    let newline = detector.fingerprints(&format!("{p}\n{m}\n{q}"));
+    assert!(
+        newline.iter().all(|f| fps.contains(f)),
+        "the newline-joined delivered run was lost"
+    );
+}
+
+/// MIK-8251 R5, end to end with the short original: the holder of
+/// `[M, P, M, Q]` forwarding `P+M+Q` is not reported, while a non-holder
+/// forwarding it is, against a third caller who holds the same text.
+#[test]
+fn a_holder_of_a_short_redacted_run_forwards_it_unrefused() {
+    let (fw, _dir) = observing(|_| {});
+    let fw = fw.keeping_every_kgram();
+    let detector = fw.relay_detector().expect("relay detection on");
+    let (m, p, q) = ("[REDACTED:credential]", "p".repeat(32), "q".repeat(32));
+    let t = "t".repeat(20);
+    let (staged, _) = DeliveryDigest::of_plan_step_leaves(&[m, &p, &t, &q], false);
+    let delivered = Delivered::of_leaves(vec![m, &p, m, &q])
+        .expect("bounded")
+        .with_labels(vec![Some(0); 4]);
+    let kept = staged.retaining_for(detector, &delivered, Some(0));
+    fw.record_digest(RelayCaller::Keyed("holder"), "alpha", "read", &kept);
+    let run = format!("{p}{m}{q}");
+    fw.record_delivery(
+        RelayCaller::Keyed("carol"),
+        "alpha",
+        "read",
+        &json!({ "note": run }),
+    );
+    let reported = |who: &str| {
+        let params = json!({"name": "send", "arguments": {"text": run}});
+        fw.check_relay(
+            RelayCaller::Keyed(who),
+            "alpha",
+            "send",
+            &params,
+            ("s", who),
+        )
+        .findings
+        .iter()
+        .any(|f| f.scan_type == crate::security::firewall::ScanType::CollusionRelay)
+    };
+    assert!(reported("dave"), "control: a non-holder is reported");
+    assert!(
+        !reported("holder"),
+        "the holder of the delivered run was refused"
+    );
+}
+
+/// Under-K leaves for the join rows: each 32 chars, so a join of two holds
+/// k-grams that neither leaf holds alone.
+fn leaf32(c: char) -> String {
+    std::iter::repeat_n(c, 32).collect()
+}
+
+/// MIK-8251 G3 (grok F2): a step's run never joins its fields across another
+/// step's field. Step 0 staged `[c, a]` (so no staged-order a-then-c join);
+/// the answer reads `a, b, c` with `b` from step 1.
+#[test]
+fn a_run_never_joins_a_steps_fields_across_another_steps_field() {
+    let mut detector = CollusionDetector::new(RelayParams::default());
+    detector.keep_every_kgram();
+    let (a, b, c) = (leaf32('a'), leaf32('b'), leaf32('c'));
+    let (staged, _) = DeliveryDigest::of_plan_step_leaves(&[&c, &a], false);
+    let delivered = Delivered::of_leaves(vec![&a, &b, &c])
+        .expect("bounded")
+        .with_labels(vec![Some(0), Some(1), Some(0)]);
+    let kept = staged.retaining_for(&detector, &delivered, Some(0));
+    let fps = kept.fingerprints(&detector);
+    let joined = detector.fingerprints(&format!("{a}{c}"));
+    assert!(!joined.is_empty(), "premise: a+c holds k-grams");
+    assert!(
+        joined.iter().all(|f| !fps.contains(f)),
+        "a run joined step 0's fields across step 1's"
+    );
+}
+
+/// MIK-8251 G4: a run breaks at a leaf of the step that it did not stage
+/// whole, so nothing joins across it.
+#[test]
+fn a_run_breaks_at_a_leaf_the_step_did_not_stage_whole() {
+    let mut detector = CollusionDetector::new(RelayParams::default());
+    detector.keep_every_kgram();
+    let (a, x, c) = (leaf32('a'), leaf32('x'), leaf32('c'));
+    let (staged, _) = DeliveryDigest::of_plan_step_leaves(&[&c, &a], false);
+    let delivered = Delivered::of_leaves(vec![&a, &x, &c])
+        .expect("bounded")
+        .with_labels(vec![Some(0); 3]);
+    let kept = staged.retaining_for(&detector, &delivered, Some(0));
+    let fps = kept.fingerprints(&detector);
+    let across = detector.fingerprints(&format!("{a}{x}"));
+    assert!(!across.is_empty(), "premise: a+x holds k-grams");
+    assert!(
+        across.iter().all(|f| !fps.contains(f)),
+        "a run joined across a leaf the step did not stage"
+    );
+    let joined = detector.fingerprints(&format!("{a}{c}"));
+    assert!(!joined.is_empty(), "premise: a+c holds k-grams");
+    assert!(
+        joined.iter().all(|f| !fps.contains(f)),
+        "a run joined a and c across the unstaged leaf"
+    );
+}
+
+/// MIK-8251, sampling: with the production sample, the delivered run's
+/// fingerprints in the kept digest are exactly `fingerprints`, never the
+/// unsampled k-grams.
+#[test]
+fn delivered_run_fingerprints_are_sampled() {
+    let detector = CollusionDetector::new(RelayParams::default());
+    let (m, p, q) = ("[REDACTED:credential]", "p".repeat(32), "q".repeat(32));
+    let t = "t".repeat(20);
+    let (staged, _) = DeliveryDigest::of_plan_step_leaves(&[m, &p, &t, &q], false);
+    let delivered = Delivered::of_leaves(vec![m, &p, m, &q])
+        .expect("bounded")
+        .with_labels(vec![Some(0); 4]);
+    let kept = staged.retaining_for(&detector, &delivered, Some(0));
+    let fps: std::collections::HashSet<u64> = kept.fingerprints(&detector).into_iter().collect();
+    let run = format!("{p}{m}{q}");
+    let sampled: std::collections::HashSet<u64> = detector.fingerprints(&run).into_iter().collect();
+    let all: std::collections::HashSet<u64> = detector.kgram_hashes(&run).into_iter().collect();
+    assert!(
+        all.len() > sampled.len(),
+        "premise: sampling drops some k-grams"
+    );
+    let unsampled: Vec<&u64> = all.difference(&sampled).collect();
+    assert!(
+        unsampled.iter().all(|f| !fps.contains(f)),
+        "an unsampled k-gram of the run was kept"
+    );
 }

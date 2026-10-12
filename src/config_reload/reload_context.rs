@@ -258,12 +258,13 @@ impl ReloadContext {
     /// Publish `overlay` and, when it changes what the capability backend
     /// lists, send the same tools-changed notice a registry change sends.
     fn publish_overlay(&self, overlay: Arc<crate::config::EnvOverlay>) {
-        let before = self.capabilities.as_ref().map(|c| c.listed_names());
-        self.env.set(overlay);
-        if let (Some(capabilities), Some(before)) = (&self.capabilities, before)
-            && capabilities.listed_names() != before
-        {
-            self.registry.nudge_catalogue(&capabilities.name);
+        match &self.capabilities {
+            // Under the backend's listing lock, which an expired login's
+            // announcement takes too, so one change is announced once.
+            Some(capabilities) => {
+                capabilities.announce_listing_change(&self.registry, || self.env.set(overlay));
+            }
+            None => self.env.set(overlay),
         }
     }
 

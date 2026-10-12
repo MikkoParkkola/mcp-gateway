@@ -109,6 +109,19 @@ pub(super) fn two_principal_auth() -> AuthConfig {
     }
 }
 
+/// [`two_principal_auth`] plus `key-c` (`principal-c`), a third ordinary
+/// caller: a row whose non-holder control is key-b can give the competing
+/// holder its own key (`MIK-8205`).
+#[cfg(feature = "firewall")]
+pub(super) fn three_principal_auth() -> AuthConfig {
+    let mut auth = two_principal_auth();
+    let mut c = auth.api_keys[0].clone();
+    c.key_sha256 = Some(crate::config::api_key_digest_spec(b"key-c"));
+    c.name = "principal-c".to_string();
+    auth.api_keys.push(c);
+    auth
+}
+
 /// The suite's `AppState`.
 ///
 /// Deliberately the router suite's own fixture and not a local copy. Lane 1
@@ -275,7 +288,10 @@ pub(super) fn task_method(id: i64, method: &str, params: Value) -> Value {
 /// `Mcp-Name` is derived from `mcp_name_body_field` — the production rule — so a
 /// request is never refused by the header/body mirror check for a reason no row
 /// is about.
-fn http_request(principal: Option<&str>, body: &Value) -> axum::http::Request<axum::body::Body> {
+pub(super) fn http_request(
+    principal: Option<&str>,
+    body: &Value,
+) -> axum::http::Request<axum::body::Body> {
     let method = body["method"].as_str().unwrap_or_default().to_string();
     let mut builder = axum::http::Request::builder()
         .method("POST")

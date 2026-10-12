@@ -18,7 +18,7 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 
 use crate::personal_accounts::StoreConfig;
-use crate::personal_accounts::consent::{GuardedCommit, GuardedCommitError};
+use crate::personal_accounts::consent::GuardedCommit;
 
 use super::{
     AccountError, AccountKey, AccountLookup, AccountService, AccountServiceError,
@@ -233,20 +233,6 @@ fn refuse_scaffold<T>(
 #[track_caller]
 fn domain_err<T>(result: Result<T, AccountServiceError>, what: &str) -> AccountServiceError {
     refuse_scaffold(result, what).err().expect(what)
-}
-
-/// The same rule one layer down, for the guarded store entrypoint.
-#[track_caller]
-fn refuse_guarded_scaffold(
-    result: Result<GuardedCommit, GuardedCommitError>,
-    what: &str,
-) -> Result<GuardedCommit, GuardedCommitError> {
-    match result {
-        Err(GuardedCommitError::RuntimeNotImplemented) => {
-            panic!("{what}: the guarded store entrypoint is a scaffold, not a domain outcome")
-        }
-        other => other,
-    }
 }
 
 fn lookup_kind(lookup: &AccountLookup) -> &'static str {

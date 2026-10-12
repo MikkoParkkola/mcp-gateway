@@ -214,7 +214,10 @@ fn repair_corrupt_final_adopts_valid_final_without_removing_it() {
 
     // WHEN: we attempt to repair what we believed (from a stale read)
     // was corrupt.
-    let result = store.repair_corrupt_final(backend, resource, &path, &tmp, "our-id");
+    let held =
+        crate::fs_lock::ExclusiveFileLock::acquire(&store.client_lock_path(backend, resource))
+            .expect("repair lock");
+    let result = store.repair_corrupt_final(backend, resource, &path, &tmp, "our-id", &held);
 
     // THEN: we adopt the winner instead of overwriting it...
     assert_eq!(result.unwrap(), "winner-id");
@@ -373,6 +376,7 @@ fn debug_redacts_secret_fields() {
         token_endpoint: Some("https://idp.example/token".to_string()),
         client_id: Some("public-client-id".to_string()),
         client_secret: Some("CLIENT-SECRET-VALUE".to_string()),
+        lifetime_secs: None,
     };
 
     let dbg = format!("{token:?}");
@@ -696,5 +700,82 @@ fn saving_a_token_replaces_the_file_rather_than_writing_into_it() {
         after.permissions().mode() & 0o777,
         0o600,
         "the token file must be owner-only"
+    );
+}
+
+/// MIK-8344: the async save gives up on a repair lock another process never
+/// releases, at its bound, and leaves the final and no temp file behind.
+#[tokio::test]
+async fn a_polled_save_gives_up_on_a_held_repair_lock_at_its_bound() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TokenStorage::new(dir.path().to_path_buf()).expect("create store");
+    let (backend, resource) = ("held", "http://127.0.0.1:1/mcp");
+    let path = store.client_path(backend, resource);
+    std::fs::write(&path, "not json").unwrap();
+    let _held =
+        crate::fs_lock::ExclusiveFileLock::acquire(&store.client_lock_path(backend, resource))
+            .expect("another process holds the repair lock");
+
+    let saved = store
+        .save_client_id_polled(backend, resource, "ours", Duration::from_millis(200))
+        .await;
+
+    assert!(
+        matches!(&saved, Err(Error::OAuth(m)) if m.contains("still held")),
+        "{saved:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "not json");
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|name| name.contains(".tmp."))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+/// MIK-8344: with the repair lock free, the async save heals a corrupt
+/// final exactly as the synchronous one does.
+#[tokio::test]
+async fn a_polled_save_heals_a_corrupt_final_when_the_lock_is_free() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TokenStorage::new(dir.path().to_path_buf()).expect("create store");
+    let (backend, resource) = ("healed", "http://127.0.0.1:1/mcp");
+    std::fs::write(store.client_path(backend, resource), "not json").unwrap();
+
+    let saved = store
+        .save_client_id_polled(backend, resource, "ours", Duration::from_secs(20))
+        .await;
+
+    assert_eq!(saved.unwrap(), "ours");
+    assert_eq!(
+        store.load_client_id(backend, resource).as_deref(),
+        Some("ours")
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|name| name.contains(".tmp."))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+/// MIK-8202 P3 O1 (access): on a clock before 1970, a backend token reads as
+/// expired whatever its stamp, so the caller refreshes or refuses rather than
+/// using it. Red on the seam: the unreadable clock reads as 0 and
+/// `0 + 60 >= expires_at` is false, so a token that expired an hour ago is
+/// used. Mutant: an unreadable clock answers Live.
+#[test]
+fn an_unreadable_clock_reads_every_token_as_expired() {
+    let now = crate::clock::unix_secs().expect("now");
+    let token = |expires_at| TokenInfo {
+        expires_at: Some(expires_at),
+        ..TokenInfo::from_response("tok".to_string(), None, None, None, None)
+    };
+    let (stale, fresh) = (token(now - 3600), token(now + 86_400));
+    let _clock = crate::clock::test_clock::before_epoch();
+    assert!(stale.is_expired(), "a token that expired an hour ago");
+    assert!(
+        fresh.is_expired(),
+        "an unreadable clock cannot date a live one"
     );
 }

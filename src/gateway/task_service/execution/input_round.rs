@@ -10,7 +10,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
 use serde_json::{Map, Value};
 use tokio::sync::{OwnedSemaphorePermit, watch};
 
@@ -27,6 +26,12 @@ use crate::gateway::task_service::store::input::{ProvideOutcome, RoundClosed};
 use crate::protocol::mrtr::{InputRequired, RetryFields};
 use crate::protocol::tasks::{TaskStatus, TaskTransition};
 use crate::protocol::{JsonRpcError, JsonRpcResponse, RequestId};
+
+#[path = "input_round_clock.rs"]
+mod clock;
+use clock::{
+    ClockWait, Resealed, clock_expired, readable_now, readable_or_fail, redeeming_dispatch,
+};
 
 /// Consecutive state-only rounds one worker resumes before it gives up. A
 /// fixed ceiling that stops a backend looping the gateway forever.
@@ -83,6 +88,16 @@ impl<'a> Settling<'a> {
         // described.
         let mut round_mark: Option<crate::gateway::gateway_writes::Mark> = None;
         loop {
+            // MIK-8202 AC12: a round the funnel could not date is sealed here.
+            let mut minted_at = None;
+            match self.reseal_withheld(cancel_rx).await {
+                Resealed::Nothing => {}
+                Resealed::Sealed(sealed, at) => {
+                    response = *sealed;
+                    minted_at = Some(at);
+                }
+                Resealed::Done => return,
+            }
             let round = match classify_dispatch(response) {
                 DispatchSettlement::Complete(result) => {
                     let writes = round_mark.map_or_else(
@@ -104,7 +119,7 @@ impl<'a> Settling<'a> {
                 DispatchSettlement::Input(round) => round,
             };
             if !round.requests.is_empty() {
-                return self.park(round).await;
+                return self.park(round, minted_at, cancel_rx).await;
             }
             // ponytail: the counter is loop-local, not on the record: a client
             // round ends this worker, so a resumed worker starts at zero,
@@ -119,15 +134,17 @@ impl<'a> Settling<'a> {
             crate::gateway::meta_mcp::invoke::relay::discard_staged();
             let retry = self.owned.continuation(round.request_state, None);
             round_mark = Some(crate::gateway::gateway_writes::mark());
-            let Some(next) = dispatch(self.state, self.owned, self.call, &retry, cancel_rx).await
+            let Some(next) = redeeming_dispatch(
+                (self.state, self.owned, self.call, &retry),
+                self.executor,
+                (self.principal, self.id, self.revision),
+                cancel_rx,
+            )
+            .await
             else {
                 return;
             };
             response = inspect_settled(self.state, self.call, self.id, next);
-            self.state
-                .meta_mcp()
-                .release_unsent_hold(&mut response)
-                .await; // MIK-8131
         }
     }
 
@@ -203,7 +220,12 @@ impl<'a> Settling<'a> {
 
     /// Commit `input_required` with the continuation, then release: the worker
     /// returns and the row waits with no owner.
-    async fn park(&self, round: InputRequired) {
+    async fn park(
+        &self,
+        round: InputRequired,
+        minted_at: Option<(chrono::DateTime<chrono::Utc>, u64)>,
+        cancel_rx: &mut watch::Receiver<bool>,
+    ) {
         if !self.park_targets().await {
             return self
                 .settle(TaskTransition::Complete(abandoned_input_round()), false)
@@ -216,7 +238,20 @@ impl<'a> Settling<'a> {
         };
         // The continuation the resume will redeem dies at its own deadline;
         // a round that could only fail is settled now, never parked.
-        let now = unix_secs(self.executor.service.store.now());
+        let store = &self.executor.service.store;
+        // A round sealed after a wait parks at the very time it was sealed at.
+        let (at, now) = match minted_at {
+            Some(read) => read,
+            None => match readable_now(store, self.id, cancel_rx).await {
+                ClockWait::Read(at, now) => (at, now),
+                ClockWait::Stopped => return,
+                ClockWait::Expired => {
+                    return self
+                        .settle(TaskTransition::Fail(clock_expired()), false)
+                        .await;
+                }
+            },
+        };
         let continuation = self.state.meta_mcp().continuation();
         let Ok(continuation_deadline) =
             round_deadline(continuation.keyring(), round.request_state.as_deref(), now)
@@ -232,18 +267,8 @@ impl<'a> Settling<'a> {
             accepted_inputs: Map::new(),
             continuation_deadline,
         };
-        let parked = self
-            .executor
-            .service
-            .store
-            .require_input(
-                owner.as_digest(),
-                self.id,
-                self.revision,
-                round,
-                stored,
-                Utc::now(),
-            )
+        let parked = store
+            .require_input(owner.as_digest(), self.id, self.revision, round, stored, at)
             .await;
         match parked {
             Ok(committed) => {
@@ -276,7 +301,10 @@ impl<'a> Settling<'a> {
             // owner, so returning would leave it `working` with nobody to
             // finish it: settle the abandoned result instead.
             Err(error) => {
-                tracing::warn!(task_id = %self.id, %error, "input round not committed");
+                // Bound to a local: a field access on the head line cannot be
+                // graded as run (MIK-7725).
+                let task_id = self.id;
+                tracing::warn!(task_id = %task_id, %error, "input round not committed");
                 self.settle(TaskTransition::Complete(abandoned_input_round()), false)
                     .await;
             }
@@ -298,16 +326,20 @@ async fn dispatch(
     let authorizer = state.authorizer(owned.authorizer());
     let _key_hold = owned.hold_caller_key(state);
     let caller = owned.dispatch_context_retrying(state, &authorizer, retry);
+    let (arguments, judged) = match state.readmit(call, &caller, owned.session_id()).await {
+        Ok(readmitted) => readmitted,
+        Err(refused) => return Some(*refused),
+    };
     let dispatched = state.meta_mcp().dispatch_below_gate_native_result(
         RequestId::Number(0),
         &call.tool,
-        call.arguments.clone(),
+        arguments,
         owned.session_id(),
         &caller,
     );
     let dispatched = crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
         Arc::clone(owned.dispatch_log()),
-        dispatched,
+        crate::gateway::meta_mcp::visible::with_judged(judged, dispatched),
     );
     tokio::select! {
         biased;
@@ -333,6 +365,9 @@ pub(crate) enum InputOutcome {
     Closed(RoundClosed),
     NotFound,
     Unavailable,
+    /// MIK-8204: under `FailClosed` the resuming request's grant decisions
+    /// could not be appended, so no resume worker was spawned (-32005).
+    AuditUnavailable,
 }
 
 /// What a store refusal means to the caller of `provide_input`: one mapping,
@@ -395,25 +430,34 @@ impl TaskExecutor {
         // row with no worker: the task finishes the write, and on a resume it
         // becomes the resume worker itself. The request only waits for the
         // outcome, which arrives after the write commits.
-        let (tx, rx) = tokio::sync::oneshot::channel();
         let executor = Arc::clone(self);
         let (digest, id, principal) = (
             owner.as_digest().to_owned(),
             id.to_owned(),
             principal.to_owned(),
         );
-        self.spawn_worker(async move {
+        self.round_outcome(|tx| async move {
+            #[cfg(test)]
+            super::resume_seams::at(super::resume_seams::ResumePoint::Spawned).await;
+            // MIK-8176 D3: the parked round's slot is owned by its row until
+            // the resume redeems it. Adopt the row's holds into this worker's
+            // scope FIRST: the completing commit below drops the row's, and
+            // the slot must never be left with no owner before its redeem.
+            crate::gateway::meta_mcp::sealed_hold::adopt(
+                executor.service.store.round_holds(&digest, &id),
+            );
             let workers = Arc::clone(&executor.workers);
-            let provided = executor
-                .service
-                .store
-                .provide_input(
-                    &digest,
-                    &id,
-                    answers,
-                    move || workers.try_acquire_owned().ok(),
-                    Utc::now(),
-                )
+            // An answer stamped on a clock before 1970 is refused for now, as
+            // the store refuses it, and the round stays open (MIK-8202).
+            let store = &executor.service.store;
+            let Ok(at) = store.now() else {
+                // Released before the answer, as below: a retry finds it free.
+                drop((handoff, cancel_rx));
+                let _ = tx.send(InputOutcome::Unavailable);
+                return;
+            };
+            let provided = store
+                .provide_input(&digest, &id, answers, move || workers.try_acquire_owned().ok(), at)
                 .await;
             let outcome = match provided {
                 Ok(ProvideOutcome::Partial(committed)) => {
@@ -426,13 +470,14 @@ impl TaskExecutor {
                     // round is closed to answers: every later one is refused the
                     // same way, and the sweep retries a close that fails here.
                     let settled = async {
+                        // Closed as of the time the answer was judged at.
                         let current = executor
                             .service
                             .store
                             .get(&digest, &id)
                             .map_err(|_| super::CommitFailure::RevisionConflict)?;
                         executor
-                            .close_round(&digest, &id, current.revision, closed.reason())
+                            .close_round(&digest, &id, current.revision, closed.reason(), at)
                             .await
                     }
                     .await;
@@ -469,8 +514,29 @@ impl TaskExecutor {
             // Not a resume: the handoff and cancel receiver go with this task.
             drop((handoff, cancel_rx));
             let _ = tx.send(outcome);
-        });
-        rx.await.unwrap_or(InputOutcome::Unavailable)
+        })
+        .await
+    }
+
+    /// Spawn an update's worker and wait for its outcome; -32005 and no spawn
+    /// when the update's grant decisions could not be written under
+    /// `FailClosed` (MIK-8204). Not an `async fn`: the worker is boxed before
+    /// the wait, never held inline in the caller's future (stack overflow).
+    fn round_outcome<F>(
+        &self,
+        worker: impl FnOnce(tokio::sync::oneshot::Sender<InputOutcome>) -> F,
+    ) -> impl std::future::Future<Output = InputOutcome> + Send + '_
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let spawned = self.spawn_worker(worker(tx));
+        async move {
+            if spawned.await.is_err() {
+                return InputOutcome::AuditUnavailable;
+            }
+            rx.await.unwrap_or(InputOutcome::Unavailable)
+        }
     }
 }
 
@@ -525,8 +591,11 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
     // An answer taken in time can still reach dispatch late; redeeming then
     // could only fail, so the round is closed as the sweep would close it.
     let deadline = round.continuation_deadline;
-    let reached = deadline.is_some_and(|d| unix_secs(executor.service.store.now()) >= d);
-    executor.proceed_unless_late(ids, deadline, reached).await?;
+    let (at, now) = readable_or_fail(&executor, ids, &mut cancel_rx).await?;
+    let reached = deadline.is_some_and(|d| now >= d);
+    executor
+        .proceed_unless_late(ids, deadline, reached, at)
+        .await?;
     let call = TaskCall {
         tool: round.tool,
         arguments: round.arguments,
@@ -535,16 +604,25 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
         round.request_state,
         Some(Value::Object(round.accepted_inputs)),
     );
-    let response = dispatch(&state, &owned, &call, &retry, &mut cancel_rx).await?;
+    #[cfg(test)]
+    super::resume_seams::at(super::resume_seams::ResumePoint::BeforeRedeem).await;
+    let response = redeeming_dispatch(
+        (&state, &owned, &call, &retry),
+        &executor,
+        ids,
+        &mut cancel_rx,
+    )
+    .await?;
     // Preparation inside the funnel can outlast the margin. A continuation
     // refused once its envelope has expired was refused for expiry: close the
     // round with that reason rather than fail the task.
-    let expired = deadline.is_some_and(|d| {
-        rejected_after_expiry(&response, d, unix_secs(executor.service.store.now()))
-    });
-    executor.proceed_unless_late(ids, deadline, expired).await?;
-    let mut response = inspect_settled(&state, &call, &id, response);
-    state.meta_mcp().release_unsent_hold(&mut response).await; // MIK-8131
+    let (at, now) = readable_or_fail(&executor, ids, &mut cancel_rx).await?;
+    let expired = owned.dispatch_log().worker().take_redemption_expired()
+        || deadline.is_some_and(|d| rejected_after_expiry(&response, d, now));
+    executor
+        .proceed_unless_late(ids, deadline, expired, at)
+        .await?;
+    let response = inspect_settled(&state, &call, &id, response);
     Settling::new(&executor, &state, &owned, &call, &principal, &id, revision)
         .settle_or_ask(response, &mut cancel_rx)
         .await;
@@ -594,13 +672,6 @@ fn rejected_after_expiry(response: &JsonRpcResponse, deadline: u64, now: u64) ->
             .is_some_and(|error| error.code == -32602 && error.message == expired.client_message())
 }
 
-/// `at` in the seconds round deadlines are kept in. Read only to compare
-/// against a deadline: a time before 1970 is a clock that cannot be read, and
-/// reads as past every deadline, never as before them (MIK-8202).
-fn unix_secs(at: chrono::DateTime<Utc>) -> u64 {
-    u64::try_from(at.timestamp()).unwrap_or(u64::MAX)
-}
-
 impl TaskExecutor {
     /// Close the round as the sweep would when `late` and it has a deadline:
     /// the one place both late checks of a resume close it. `Some` means carry
@@ -610,33 +681,43 @@ impl TaskExecutor {
         (principal, id, revision): (&str, &str, u64),
         deadline: Option<u64>,
         late: bool,
+        at: chrono::DateTime<chrono::Utc>,
     ) -> Option<()> {
         let Some(deadline) = deadline.filter(|_| late) else {
             return Some(());
         };
-        self.close_late_round(principal, id, revision, deadline)
+        self.close_late_round(principal, id, revision, deadline, at)
             .await;
         None
     }
 
-    /// Close a resumed round that met its deadline. A write that fails for any
-    /// reason but a moved row is tried once more, reason and all.
+    /// Close a resumed round that met its deadline, stamped at the time the
+    /// deadline was judged at (MIK-8202: a second read could find a clock
+    /// stepped before 1970). A write that fails for any reason but a moved
+    /// row is tried once more, reason and all.
     // ponytail: two attempts, then the row waits for restart recovery (which
     // settles it interrupted), as every other settlement write does.
-    async fn close_late_round(&self, principal: &str, id: &str, revision: u64, deadline: u64) {
+    async fn close_late_round(
+        &self,
+        principal: &str,
+        id: &str,
+        revision: u64,
+        deadline: u64,
+        at: chrono::DateTime<chrono::Utc>,
+    ) {
         let Ok(owner) = self.service.owner(principal) else {
             return;
         };
         let reason = RoundClosed::Continuation(deadline).reason();
         match self
-            .close_round(owner.as_digest(), id, revision, reason)
+            .close_round(owner.as_digest(), id, revision, reason, at)
             .await
         {
             Ok(()) | Err(super::CommitFailure::RevisionConflict) => {}
             Err(_) => {
                 let reason = RoundClosed::Continuation(deadline).reason();
                 if self
-                    .close_round(owner.as_digest(), id, revision, reason)
+                    .close_round(owner.as_digest(), id, revision, reason, at)
                     .await
                     .is_err()
                 {
@@ -653,11 +734,12 @@ impl TaskExecutor {
         id: &str,
         revision: u64,
         reason: String,
+        at: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), super::CommitFailure> {
         match self
             .service
             .store
-            .close_round(owner_digest, id, revision, reason)
+            .close_round(owner_digest, id, revision, reason, at)
             .await
         {
             Ok(committed) => {
@@ -677,70 +759,8 @@ impl TaskExecutor {
 }
 
 #[cfg(test)]
-mod deadline_tests {
-    use super::round_deadline;
-    use crate::protocol::continuation::{ContinuationState, now_unix_secs};
-
-    /// Mutant: a resume refused after expiry settles `failed`, or any refusal
-    /// is read as expiry.
-    #[test]
-    fn only_a_refusal_after_the_envelope_expired_is_read_as_expiry() {
-        use super::{CONTINUATION_DEADLINE_MARGIN_SECS as MARGIN, rejected_after_expiry};
-        use crate::protocol::continuation::ContinuationError;
-        use crate::protocol::{JsonRpcResponse, RequestId};
-        let refused = JsonRpcResponse::error(
-            Some(RequestId::Number(0)),
-            -32602,
-            ContinuationError::Expired.client_message(),
-        );
-        assert!(rejected_after_expiry(&refused, 100, 100 + MARGIN + 1));
-        assert!(!rejected_after_expiry(&refused, 100, 100 + MARGIN));
-        let other = JsonRpcResponse::error(Some(RequestId::Number(0)), -32602, "bad params");
-        assert!(!rejected_after_expiry(&other, 100, 100 + MARGIN + 1));
-    }
-
-    /// Mutant: an envelope that does not open is parked with no deadline.
-    #[test]
-    fn an_unopenable_continuation_has_no_deadline_to_park_with() {
-        let state = ContinuationState::new();
-        let refused = round_deadline(state.keyring(), Some("not-an-envelope"), now_unix_secs());
-        assert!(refused.is_err(), "{refused:?}");
-        assert_eq!(
-            round_deadline(state.keyring(), None, now_unix_secs()).ok(),
-            Some(None)
-        );
-    }
-
-    /// Mutant: a round whose continuation is already inside the margin is
-    /// parked with a deadline in the past, or without one.
-    #[test]
-    fn a_continuation_inside_the_margin_is_refused_and_one_outside_it_parks() {
-        use super::CONTINUATION_DEADLINE_MARGIN_SECS as MARGIN;
-        use crate::protocol::continuation::{ContinuationError, Payload};
-        let state = ContinuationState::new();
-        let now = now_unix_secs();
-        let seal = |expires_at: u64| {
-            let mut payload = Payload::mint(
-                "b".into(),
-                None,
-                "f".into(),
-                "d".into(),
-                "r".into(),
-                "h".into(),
-                now,
-            );
-            payload.expires_at = expires_at;
-            state.keyring().mint(&payload).expect("seals")
-        };
-        for inside in [now + MARGIN, now + MARGIN - 1] {
-            let due = round_deadline(state.keyring(), Some(&seal(inside)), now);
-            assert!(matches!(due, Err(ContinuationError::Expired)), "{due:?}");
-        }
-        // Positive control: one second more room parks at expiry less margin.
-        let room = round_deadline(state.keyring(), Some(&seal(now + MARGIN + 1)), now);
-        assert_eq!(room.ok(), Some(Some(now + 1)));
-    }
-}
+#[path = "input_round_deadline_tests.rs"]
+mod deadline_tests;
 
 #[cfg(test)]
 mod mapping_tests {
@@ -772,3 +792,7 @@ mod mapping_tests {
 #[cfg(test)]
 #[path = "input_round_exit_tests.rs"]
 mod exit_tests;
+
+#[cfg(test)]
+#[path = "input_round_park_tests.rs"]
+mod park_tests;

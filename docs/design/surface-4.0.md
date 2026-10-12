@@ -73,9 +73,14 @@ where the value differs from the default or is a credential.
 6. **The env overlay follows the config key.** `MCP_GATEWAY_<SECTION>__<KEY>` stays as the container form
    of any KEEP key; an overlay naming a non-KEEP key gets the key's treatment.
 7. **The library is not a product surface.** README documents no library use and no crate in the
-   workspace depends on it. Every crate-root item becomes INTERNAL: `#[doc(hidden)] pub` where the binary
-   needs it, a `#[doc(hidden)] pub mod test_support` re-export where only tests need it, and `pub(crate)`
-   where nothing outside uses it.
+   workspace depends on it. Every crate-root item becomes INTERNAL by hiding it in place:
+   `#[doc(hidden)] pub` at its unchanged path, so the binary, the integration tests and the benches build
+   as before, docs.rs lists nothing, and no path carries a stability promise. The crate doc says so.
+   `scripts/release/check_surface_inventory.py` fails on any crate-root item that is neither hidden nor in
+   its empty `LIB_KEEP`, and refuses what it does not model: a `macro_export` token anywhere (`cfg_attr` included),
+   a conditional module path, a root `extern` block, a root inline module or a root `include!`. That check is
+   lexical; `.github/workflows/rustdoc.yml` is the compiler-backed gate (the crate page must list no item)
+   (MIK-8044.SURF.5).
 
 ## Decisions by area
 
@@ -97,13 +102,13 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `cost_governance` | 12 |  |  |  | `currency` |
 | `default_routing_profile` | 1 |  |  |  |  |
 | `env_files` | 1 |  |  |  |  |
-| `error_budget` |  |  | `error_budget`; `capability`; `capability.cooldown`; `capability.min_samples`; `capability.threshold`; `capability.window_duration`; `capability.window_size`; `min_samples`; `threshold`; `window_duration`; `window_size` |  |  |
+| `error_budget` | 11 |  |  |  |  |
 | `events` | 13 |  | `dead_letter_max_bytes`; `dead_letter_max_records`; `default_ttl`; `max_in_flight`; `max_outbox`; `max_outbox_per_subscription`; `max_subscriptions`; `max_subscriptions_per_principal`; `max_ttl`; `max_verified_tail`; `max_verified_tail_per_principal`; `min_ttl`; `queue_depth`; `rate_limit_per_subscription`; `rate_limit_per_subscription.burst`; `rate_limit_per_subscription.per_minute`; `retry_base`; `retry_max_attempts`; `retry_window`; `schedule`; `schedule.max_timers`; `schedule.max_timers_per_principal`; `secret_rotation_grace`; `seen_max_per_route`; `suspend_min_attempts`; `suspend_window`; `verification_per_host_per_minute`; `verified_tail_ttl`; `watch`; `watch.max_pollers`; `watch.max_pollers_per_principal` |  |  |
 | `failsafe` | 9 |  | `circuit_breaker.failure_threshold`; `circuit_breaker.reset_timeout`; `circuit_breaker.success_threshold`; `health_check.interval`; `health_check.timeout`; `rate_limit.burst_size`; `rate_limit.requests_per_second`; `retry.initial_backoff`; `retry.max_attempts`; `retry.max_backoff`; `retry.multiplier` |  |  |
 | `idempotency` | 4 |  |  |  |  |
 | `key_server` | 20 | `oidc[].auto_discover` | `cleanup_interval_secs`; `max_oidc_token_age_secs`; `max_tokens_per_identity`; `token_ttl_secs` |  |  |
 | `marketplace` |  |  |  |  | `marketplace` |
-| `meta_mcp` | 8 | `prompts_resources_fetch_timeout` | `cache_ttl`; `projection_mode` |  | `cache_tools` |
+| `meta_mcp` | 8 |  | `cache_ttl`; `prompts_resources_fetch_timeout`; `projection_mode` |  | `cache_tools` |
 | `mtls` | 20 |  |  |  |  |
 | `playbooks` | 3 |  |  |  |  |
 | `routing_profiles` | 6 |  |  |  |  |
@@ -156,6 +161,11 @@ Generated from the tables at the end; each row there carries the reason and migr
 
 ### routes
 
+INTERNAL routes stay mounted with the answers they give today: admin-only routes refuse a
+non-admin, control-plane reads serve the Auditor, `/ui/api/status` gives a non-admin the redacted
+counts, and `/sse` answers 410 Gone pointing to `POST /mcp` (MIK-8044.SURF.4b).
+`tests/webui_management_tests/internal_routes.rs` pins each one per route, method and caller.
+
 | Area | KEEP | AUTO | INTERNAL, hidden but honoured | INTERNAL | REMOVE |
 |---|---|---|---|---|---|
 | `/.well-known` | 2 |  |  |  |  |
@@ -176,7 +186,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 
 | Area | KEEP | AUTO | INTERNAL, hidden but honoured | INTERNAL | REMOVE |
 |---|---|---|---|---|---|
-| `lib` |  |  |  | 65 |  |
+| `lib` |  |  |  | 64 |  |
 
 
 ## Findings filed on the way (0-bug rule)
@@ -193,6 +203,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | A2A | Operator decision 2026-10-07: the outbound A2A bridge is finished for 4.0 (MIK-8063). `backends.<name>.a2a_url` is KEEP; `a2a_agent_card_path` is a hidden key defaulting to the spec's well-known path; the `a2a` module and default feature stay. Inbound A2A is out of scope. |
 | A2A card path default | Done in MIK-8063 PR1 (#3401): A2A 1.0 is pinned, and the card is read from `/.well-known/agent-card.json` unless `a2a_agent_card_path` is set. |
 | `meta_mcp.cache_tools` | REMOVE (MIK-8064). |
+| `error_budget` and its sub-keys | Amended 2026-10-11 (lead ruling, MIK-8044.SURF.2 P4): INTERNAL to KEEP. GH #475 asked for these tuning options in YAML, and the public close-out of #475 says the `error_budget:` section ships in 4.0.0, documented in docs/DEPLOYMENT.md. Hiding them would withdraw a documented, user-requested feature. If MIK-8385 adds a tier column, they are ADVANCED. |
 | Capability `trawl_extract` and the `cisco_scanner` operation `scan_mcp_server` | Held until 4.1 (MIK-7788): the gateway cannot confine where these tools connect. Capability files are outside the five surfaces, so they have no table row. Class INTERNAL: the definitions stay in the tree, refuse to run and are not offered to clients; they leave the user docs until 4.1. |
 
 ## The minimal setup after 4.0
@@ -281,7 +292,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `accounts.limits.journeys_total` | INTERNAL | `1024` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/personal_accounts/config/limits.rs:33 |
 | `accounts.limits.starts_per_minute_per_user` | INTERNAL | `10` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/personal_accounts/config/limits.rs:38 |
 | `accounts.limits.store_entries` | INTERNAL | `10000` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/personal_accounts/config/limits.rs:28 |
-| `accounts.schema_version` | AUTO | — | `accounts.v1` is the only accepted value; default it | accepted when it equals `accounts.v1`; `upgrade` deletes it | src/personal_accounts/config.rs:193 |
+| `accounts.schema_version` | AUTO | — | `accounts.v1` is the only accepted value; default it | shipped: unset defaults to `accounts.v1`; a set value is still read and refused unless it is `accounts.v1`, so `upgrade` leaves it (src/personal_accounts/config_tests.rs::an_omitted_schema_version_defaults_to_accounts_v1); see upgrading.d/3730.md | src/personal_accounts/config.rs:193 |
 | `accounts.store_dir` | KEEP | — | state location; deployments put it on a chosen volume (the Helm chart puts the audit log on its own persistent volume) | - | src/personal_accounts/config.rs:200 |
 | `agent_auth` | KEEP | `type default` | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/mod.rs:135 |
 | `agent_auth.agents` | KEEP | `type default` | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/auth.rs:331 |
@@ -300,7 +311,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `auth.api_keys[].backends` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:87 |
 | `auth.api_keys[].denied_tools` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:95 |
 | `auth.api_keys[].expires_at` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:77 |
-| `auth.api_keys[].key` | REMOVE | — | legacy plaintext key, parsed only to be refused | already refused naming `key_sha256`; `upgrade` rewrites it via `hash-key` | src/config/features/api_key.rs:70 |
+| `auth.api_keys[].key` | REMOVE | — | legacy plaintext key, parsed only to be refused | refused at load naming `key_sha256`; `upgrade` replaces a literal key with its digest and names an `env:`/`file:`/`${}` value to fix by hand (tests/surf2_upgrade_removed_keys.rs); see upgrading.d/8044-2.md | src/config/features/api_key.rs:70 |
 | `auth.api_keys[].key_sha256` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:74 |
 | `auth.api_keys[].kind` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:101 |
 | `auth.api_keys[].name` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:81 |
@@ -325,7 +336,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `backends.<name>.allow_flagged_tools` | KEEP | `std::collections::BTreeMap::new()` | per-backend security opt-out; stays explicit | - | src/config/backend_config.rs:70 |
 | `backends.<name>.chain_origins` | KEEP | `Vec::new()` | multi-user and provenance deployments (MULTI_USER.md) | - | src/config/backend_config.rs:104 |
 | `backends.<name>.chain_signer` | KEEP | `None` | multi-user and provenance deployments (MULTI_USER.md) | - | src/config/backend_config.rs:106 |
-| `backends.<name>.circuit_breaker` | REMOVE | — | retired in 4.0; never had an effect | already warns once; 4.0.0 makes it a load error and `upgrade` deletes it | src/config/strict_keys.rs:33 |
+| `backends.<name>.circuit_breaker` | REMOVE | — | retired in 4.0; never had an effect | a load error naming the key and `mcp-gateway upgrade`, which deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs); see upgrading.d/8044-2.md | src/config/strict_keys.rs:33 |
 | `backends.<name>.command` | KEEP | `see impl Default` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:220 |
 | `backends.<name>.cwd` | KEEP | `see impl Default` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:220 |
 | `backends.<name>.description` | KEEP | `String::new()` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:16 |
@@ -340,7 +351,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `backends.<name>.identity_propagation.strategy` | KEEP | — | multi-user and provenance deployments (MULTI_USER.md) | - | src/identity_propagation/mod.rs:233 |
 | `backends.<name>.identity_propagation.token_exchange_endpoint` | KEEP | — | multi-user and provenance deployments (MULTI_USER.md) | - | src/identity_propagation/mod.rs:246 |
 | `backends.<name>.identity_propagation.token_exchange_scope` | KEEP | — | multi-user and provenance deployments (MULTI_USER.md) | - | src/identity_propagation/mod.rs:249 |
-| `backends.<name>.idle_timeout` | REMOVE | — | retired in 4.0; never had an effect | already warns once; 4.0.0 makes it a load error and `upgrade` deletes it | src/config/strict_keys.rs:28 |
+| `backends.<name>.idle_timeout` | REMOVE | — | retired in 4.0; never had an effect | a load error naming the key and `mcp-gateway upgrade`, which deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs); see upgrading.d/8044-2.md | src/config/strict_keys.rs:28 |
 | `backends.<name>.input_schema_enforcement` | KEEP | `InputSchemaEnforcement::Closed` | per-backend security opt-out; stays explicit | - | src/config/backend_config.rs:72 |
 | `backends.<name>.max_frame_bytes` | INTERNAL | `None` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/backend_config.rs:40 |
 | `backends.<name>.oauth` | KEEP | `None` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:51 |
@@ -352,9 +363,9 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `backends.<name>.oauth.enabled` | KEEP | `true` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:141 |
 | `backends.<name>.oauth.scopes` | KEEP | — | how a user declares a backend and its credentials | - | src/config/backend_config.rs:144 |
 | `backends.<name>.oauth.shared_account` | KEEP | — | how a user declares a backend and its credentials | - | src/config/backend_config.rs:183 |
-| `backends.<name>.oauth.token_refresh_buffer_secs` | AUTO | `300` | unset: refresh at max(300 s, 10 % of the token lifetime) before expiry, today's 300 s as the floor | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/backend_config.rs:172 |
+| `backends.<name>.oauth.token_refresh_buffer_secs` | AUTO | `300` | unset: refresh at max(300 s, 10 % of the token lifetime) before expiry, today's 300 s as the floor | shipped: unset derives max(300 s, 10 % of the token lifetime); a set value is still read and bounded; hidden from the reference, `init` and examples; `doctor` lists it when set (src/oauth/client/tests.rs `an_unset_buffer_derives_from_the_token_lifetime`); see upgrading.d/8044-4.md | src/config/backend_config.rs:172 |
 | `backends.<name>.passthrough` | KEEP | `false` | per-backend security opt-out; stays explicit | - | src/config/backend_config.rs:65 |
-| `backends.<name>.protocol_version` | AUTO | `None` | negotiated in `initialize` | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/backend_config.rs:220 |
+| `backends.<name>.protocol_version` | AUTO | `None` | negotiated in `initialize` | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set; no UPGRADING item: the version was already negotiated in `initialize` before 4.0, and a set value still applies (tests: unset sends the default, `t12_an_unset_protocol_version_sends_the_default` src/transport/websocket_backend_tests.rs, and negotiates on a refusal, `a_status_refusal_naming_a_shared_version_negotiates_it` src/transport/http/tests/version_refusals.rs; set from gateway.yaml reaches the HTTP transport, `a_protocol_version_set_in_gateway_yaml_reaches_the_http_transport` src/gateway/server/tests/surf2_protocol_version_config.rs) | src/config/backend_config.rs:220 |
 | `backends.<name>.runtime_profile` | KEEP | `None` | multi-user and provenance deployments (MULTI_USER.md) | - | src/config/backend_config.rs:86 |
 | `backends.<name>.secrets` | KEEP | `Vec::new()` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:54 |
 | `backends.<name>.secrets[].credential_type` | KEEP | `CredentialType::ApiKey` | how a user declares a backend and its credentials | - | src/secret_injection.rs:63 |
@@ -365,7 +376,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `backends.<name>.secrets[].value` | KEEP | — | how a user declares a backend and its credentials | - | src/secret_injection.rs:68 |
 | `backends.<name>.signature_chain` | KEEP | `ChainMode::Off` | multi-user and provenance deployments (MULTI_USER.md) | - | src/config/backend_config.rs:102 |
 | `backends.<name>.stop_when_idle_for` | KEEP | `None` | operator trades memory for cold starts per backend | - | src/config/backend_config.rs:35 |
-| `backends.<name>.streamable_http` | AUTO | `None` | already detected at connect (POST first, SSE on 4xx) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/backend_config.rs:231 |
+| `backends.<name>.streamable_http` | AUTO | `None` | already detected at connect (POST first, SSE on 4xx) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set; see UPGRADING 148 (tests: unset reaches both shapes, a streamable server exactly as a streamable pin, `an_unpinned_flavour_connects_exactly_as_a_streamable_pin` src/transport/http/tests/unpinned_flavour.rs, and a legacy SSE server, `add_url_still_reaches_a_legacy_sse_server` tests/add_url_transport_autodetect.rs; a set value is honoured, `explicit_streamable_false_is_honoured` tests/add_url_transport_autodetect.rs) | src/config/backend_config.rs:231 |
 | `backends.<name>.timeout` | KEEP | `Duration::from_secs(30)` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:43 |
 | `backends.<name>.url` | KEEP | — | where to reach the backend; its scheme picks HTTP or WebSocket | - | src/config/config_file.rs:80 |
 | `backends.<name>.ws_url` | INTERNAL | `see impl Default` | older spelling of the backend `url` key (P2c1); still read | hidden alias: still read and validated; `mcp-gateway upgrade` rewrites it as `url`; `doctor` names it | src/config/backend_config.rs:246 |
@@ -412,23 +423,23 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `cost_governance.budgets.daily` | KEEP | `type default` | budgets and per-tool prices are operator inputs | - | src/cost_accounting/config.rs:75 |
 | `cost_governance.budgets.per_key` | KEEP | `type default` | budgets and per-tool prices are operator inputs | - | src/cost_accounting/config.rs:79 |
 | `cost_governance.budgets.per_tool` | KEEP | `type default` | budgets and per-tool prices are operator inputs | - | src/cost_accounting/config.rs:77 |
-| `cost_governance.currency` | REMOVE | `"USD".to_string()` | informational only; every value is stored as USD | rejected naming USD; `upgrade` deletes it | src/cost_accounting/config.rs:23 |
+| `cost_governance.currency` | REMOVE | — | informational only; every value is stored as USD | refused at load (`cost_governance.currency` was removed in 4.0); `upgrade` deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs); see upgrading.d/8044-2.md | src/config/strict_keys.rs:61 |
 | `cost_governance.default_cost` | KEEP | `0.0` | budgets and per-tool prices are operator inputs | - | src/cost_accounting/config.rs:33 |
 | `cost_governance.enabled` | KEEP | `false` | budgets and per-tool prices are operator inputs | - | src/cost_accounting/config.rs:21 |
 | `cost_governance.tool_costs` | KEEP | `HashMap::new()` | budgets and per-tool prices are operator inputs | - | src/cost_accounting/config.rs:30 |
 | `default_routing_profile` | KEEP | `"default".to_string()` | per-session tool scoping | - | src/config/mod.rs:123 |
 | `env_files` | KEEP | `type default` | loads secrets from files the user owns | - | src/config/mod.rs:91 |
-| `error_budget` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/mod.rs:103 |
-| `error_budget.capability` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/error_budget.rs:39 |
-| `error_budget.capability.cooldown` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/error_budget.rs:57 |
-| `error_budget.capability.min_samples` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/error_budget.rs:54 |
-| `error_budget.capability.threshold` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/error_budget.rs:47 |
-| `error_budget.capability.window_duration` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/error_budget.rs:52 |
-| `error_budget.capability.window_size` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/error_budget.rs:49 |
-| `error_budget.min_samples` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/error_budget.rs:37 |
-| `error_budget.threshold` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/error_budget.rs:30 |
-| `error_budget.window_duration` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/error_budget.rs:35 |
-| `error_budget.window_size` | INTERNAL | `type default` | kill-switch thresholds; fixed defaults (GH #475) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/error_budget.rs:32 |
+| `error_budget` | KEEP | `type default` | user-requested tuning, GH #475; documented per public commitment (amended 2026-10-11, was INTERNAL) | - | src/config/mod.rs:103 |
+| `error_budget.capability` | KEEP | `type default` | user-requested tuning, GH #475; documented per public commitment (amended 2026-10-11, was INTERNAL) | - | src/config/features/error_budget.rs:39 |
+| `error_budget.capability.cooldown` | KEEP | `type default` | user-requested tuning, GH #475; documented per public commitment (amended 2026-10-11, was INTERNAL) | - | src/config/features/error_budget.rs:57 |
+| `error_budget.capability.min_samples` | KEEP | `type default` | user-requested tuning, GH #475; documented per public commitment (amended 2026-10-11, was INTERNAL) | - | src/config/features/error_budget.rs:54 |
+| `error_budget.capability.threshold` | KEEP | `type default` | user-requested tuning, GH #475; documented per public commitment (amended 2026-10-11, was INTERNAL) | - | src/config/features/error_budget.rs:47 |
+| `error_budget.capability.window_duration` | KEEP | `type default` | user-requested tuning, GH #475; documented per public commitment (amended 2026-10-11, was INTERNAL) | - | src/config/features/error_budget.rs:52 |
+| `error_budget.capability.window_size` | KEEP | `type default` | user-requested tuning, GH #475; documented per public commitment (amended 2026-10-11, was INTERNAL) | - | src/config/features/error_budget.rs:49 |
+| `error_budget.min_samples` | KEEP | `type default` | user-requested tuning, GH #475; documented per public commitment (amended 2026-10-11, was INTERNAL) | - | src/config/features/error_budget.rs:37 |
+| `error_budget.threshold` | KEEP | `type default` | user-requested tuning, GH #475; documented per public commitment (amended 2026-10-11, was INTERNAL) | - | src/config/features/error_budget.rs:30 |
+| `error_budget.window_duration` | KEEP | `type default` | user-requested tuning, GH #475; documented per public commitment (amended 2026-10-11, was INTERNAL) | - | src/config/features/error_budget.rs:35 |
+| `error_budget.window_size` | KEEP | `type default` | user-requested tuning, GH #475; documented per public commitment (amended 2026-10-11, was INTERNAL) | - | src/config/features/error_budget.rs:32 |
 | `events` | KEEP | `type default` | MCP Events opt-in and which sources publish (EVENTS.md) | - | src/config/mod.rs:150 |
 | `events.allow_no_expiry` | KEEP | `false` | MCP Events opt-in and which sources publish (EVENTS.md) | - | src/config/features/events.rs:121 |
 | `events.callback_allow_private` | KEEP | `Vec::new()` | SSRF exception list: operator intent | - | src/config/features/events.rs:160 |
@@ -507,7 +518,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `key_server.oidc` | KEEP | `Vec::new()` | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:58 |
 | `key_server.oidc[].allowed_domains` | KEEP | — | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:293 |
 | `key_server.oidc[].audiences` | KEEP | — | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:290 |
-| `key_server.oidc[].auto_discover` | AUTO | `true` | try OIDC discovery, then `{issuer}/.well-known/jwks.json`; `jwks_uri` still overrides both | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/key_server.rs:284 |
+| `key_server.oidc[].auto_discover` | AUTO | `true` | try OIDC discovery, then `{issuer}/.well-known/jwks.json`; `jwks_uri` still overrides both | shipped: derived discovery that cannot be reached falls back to `{issuer}/.well-known/jwks.json` for at most 300 s; a refused document or an explicit `discovery_url` never falls back; hidden key, still read (src/key_server/oidc_fallback_tests.rs); see upgrading.d/8044-4.md | src/config/features/key_server.rs:284 |
 | `key_server.oidc[].discovery_url` | KEEP | — | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:278 |
 | `key_server.oidc[].issuer` | KEEP | — | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:270 |
 | `key_server.oidc[].jwks_uri` | KEEP | — | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:274 |
@@ -522,15 +533,15 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `key_server.policies[].scopes.rate_limit` | KEEP | `type default` | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:338 |
 | `key_server.policies[].scopes.tools` | KEEP | `type default` | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:335 |
 | `key_server.token_ttl_secs` | INTERNAL | `DEFAULT_TOKEN_TTL_SECS` | lifetime of issued keys; a security window (rule 1) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/key_server.rs:46 |
-| `marketplace` | REMOVE | — | retired in 4.0; never had an effect | already warns once; 4.0.0 makes it a load error and `upgrade` deletes it | src/config/strict_keys.rs:53 |
+| `marketplace` | REMOVE | — | retired in 4.0; never had an effect | a load error naming the key and `mcp-gateway upgrade`, which deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs); see UPGRADING 145 | src/config/strict_keys.rs:53 |
 | `meta_mcp` | KEEP | `type default` | section | - | src/config/mod.rs:97 |
-| `meta_mcp.cache_tools` | REMOVE | `true` | read by nothing (MIK-8064); setting it has no effect | retired: loads and warns once with the reason (as `server.ws_port`); `init` and the examples drop it; `upgrade` deletes the line in its single rewrite pass, or names the key to delete by hand when that would change anything else | src/config/strict_keys.rs |
+| `meta_mcp.cache_tools` | REMOVE | `true` | read by nothing (MIK-8064); setting it has no effect | retired: loads and warns once with the reason (as `server.ws_port`); `init` and the examples drop it; `upgrade` deletes the line in its single rewrite pass, or names the key to delete by hand when that would change anything else; see UPGRADING 173 (tests: `retired_cache_tools_loads_and_warns_once` src/config/strict_keys.rs; `upgrade_removes_the_retired_cache_tools_key`, `upgrade_names_a_cache_tools_key_it_cannot_remove`, `upgrade_removes_a_meta_mcp_block_that_held_only_cache_tools` src/commands/upgrade_url_keys_tests.rs) | src/config/strict_keys.rs |
 | `meta_mcp.cache_ttl` | INTERNAL | `Duration::from_secs(300)` | catalogue freshness; fixed 300 s (the `init` value) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/meta_mcp_config.rs:43 |
 | `meta_mcp.enabled` | KEEP | `true` | the durable form of `--no-meta-mcp`; `false` runs as a plain proxy | - | src/config/meta_mcp_config.rs:38 |
 | `meta_mcp.expose_stats_tool` | KEEP | `false` | README documents it as the switch for `gateway_get_stats` | - | src/config/meta_mcp_config.rs:98 |
 | `meta_mcp.exposed_meta_tools` | KEEP | `Vec::new()` | operator picks which tools the client sees and which backends start eagerly | - | src/config/meta_mcp_config.rs:90 |
 | `meta_mcp.projection_mode` | INTERNAL | `crate::projection::ProjectionMode::default()` | rollout switch for response projection; off unless a test sets it | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/meta_mcp_config.rs:75 |
-| `meta_mcp.prompts_resources_fetch_timeout` | AUTO | `Duration::from_secs(10)` | unset: min(the backend's `timeout`, 10 s), today's 10 s as the ceiling | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/meta_mcp_config.rs:56 |
+| `meta_mcp.prompts_resources_fetch_timeout` | INTERNAL | `Duration::from_secs(10)` | aggregation wait bound. Per request: the backend's `timeout` (HTTP session recovery may add one re-initialization and resend); whole fetch: 10 s unless set. Not derived from the backend's `timeout`: a paged list can need several requests, each within it (MIK-8285) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/meta_mcp_config.rs:56 |
 | `meta_mcp.surfaced_tools` | KEEP | `Vec::new()` | operator picks which tools the client sees and which backends start eagerly | - | src/config/meta_mcp_config.rs:67 |
 | `meta_mcp.surfaced_tools[].server` | KEEP | — | operator picks which tools the client sees and which backends start eagerly | - | src/config/meta_mcp_config.rs:28 |
 | `meta_mcp.surfaced_tools[].tool` | KEEP | — | operator picks which tools the client sees and which backends start eagerly | - | src/config/meta_mcp_config.rs:30 |
@@ -595,7 +606,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `runtime.profiles.<name>.restart.backoff_secs` | KEEP | `5` | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:276 |
 | `runtime.profiles.<name>.restart.max_restarts` | KEEP | `2` | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:274 |
 | `security` | KEEP | `type default` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/mod.rs:115 |
-| `security.agent_identity` | KEEP | `AgentIdentityConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:629 |
+| `security.agent_identity` | KEEP | `AgentIdentityConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:642 |
 | `security.agent_identity.allow_unverified_agent_identity` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/agent_identity.rs:89 |
 | `security.agent_identity.enabled` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/agent_identity.rs:63 |
 | `security.agent_identity.incomparable_proof_sources` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/agent_identity.rs:132 |
@@ -605,20 +616,20 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `security.agent_identity.principal_labels[].labels` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/agent_identity.rs:249 |
 | `security.agent_identity.principal_labels[].source` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/agent_identity.rs:244 |
 | `security.agent_identity.require_id` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/agent_identity.rs:66 |
-| `security.caller_identity` | KEEP | `crate::security::caller_identity::CallerIdentityConfig::defa` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:644 |
+| `security.caller_identity` | KEEP | `crate::security::caller_identity::CallerIdentityConfig::defa` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:657 |
 | `security.caller_identity.authority` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:47 |
 | `security.caller_identity.cloudflare_access` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:49 |
 | `security.caller_identity.cloudflare_access.audiences` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:32 |
 | `security.caller_identity.cloudflare_access.team_domain` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:30 |
 | `security.caller_identity.mode` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:43 |
 | `security.caller_identity.trusted_proxies` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:45 |
-| `security.claim_capture` | KEEP | `ClaimCaptureConfig::default()` | opt-in capture switch and its file (rule 1) | - | src/config/features/security.rs:659 |
-| `security.claim_capture.enabled` | KEEP | `false` | opt-in capture switch and its file (rule 1) | - | src/config/features/security.rs:571 |
-| `security.claim_capture.path` | KEEP | `"~/.mcp-gateway/claim-capture/claims.jsonl".to_string()` | opt-in capture switch and its file (rule 1) | - | src/config/features/security.rs:573 |
-| `security.context_integrity` | KEEP | `ContextIntegrityConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:647 |
-| `security.context_integrity.non_bypassable` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:535 |
-| `security.context_integrity.preset` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:530 |
-| `security.firewall` | KEEP | `crate::security::firewall::FirewallConfig::default()` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/config/features/security.rs:623 |
+| `security.claim_capture` | KEEP | `ClaimCaptureConfig::default()` | opt-in capture switch and its file (rule 1) | - | src/config/features/security.rs:672 |
+| `security.claim_capture.enabled` | KEEP | `false` | opt-in capture switch and its file (rule 1) | - | src/config/features/security.rs:584 |
+| `security.claim_capture.path` | KEEP | `"~/.mcp-gateway/claim-capture/claims.jsonl".to_string()` | opt-in capture switch and its file (rule 1) | - | src/config/features/security.rs:586 |
+| `security.context_integrity` | KEEP | `ContextIntegrityConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:660 |
+| `security.context_integrity.non_bypassable` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:548 |
+| `security.context_integrity.preset` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:543 |
+| `security.firewall` | KEEP | `crate::security::firewall::FirewallConfig::default()` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/config/features/security.rs:636 |
 | `security.firewall.anomaly_block_threshold` | KEEP | `see impl Default` | a switch under rule 3: setting it turns anomaly blocking on (unset warns only) | - | src/security/firewall/config.rs:78 |
 | `security.firewall.anomaly_detection` | KEEP | `see impl Default` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/security/firewall/config.rs:30 |
 | `security.firewall.anomaly_min_observations` | INTERNAL | `fn default_anomaly_min_observations` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/security/firewall/config.rs:81 |
@@ -658,22 +669,22 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `security.firewall.tenant_guard.enabled` | KEEP | `false` | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/tenant_guard.rs:60 |
 | `security.firewall.tenant_guard.max_tenants_per_window` | KEEP | `3` | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/tenant_guard.rs:62 |
 | `security.firewall.tenant_guard.window_secs` | KEEP | `300` | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/tenant_guard.rs:64 |
-| `security.hardened` | KEEP | `crate::security::posture::HardenedConfig::default()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:598 |
+| `security.hardened` | KEEP | `crate::security::posture::HardenedConfig::default()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:611 |
 | `security.hardened.private_backends` | KEEP | `type default` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/posture.rs:67 |
-| `security.identity_grants` | KEEP | `IdentityGrantsConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:641 |
-| `security.identity_grants.enabled` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:447 |
-| `security.identity_grants.fail_on_error` | KEEP | `true` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:452 |
-| `security.identity_grants.path` | KEEP | `"~/.mcp-gateway/identity-grants.yaml".to_string()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:449 |
-| `security.message_signing` | KEEP | `MessageSigningConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:626 |
-| `security.message_signing.enabled` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:149 |
-| `security.message_signing.key_id` | KEEP | `"default".to_string()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:164 |
-| `security.message_signing.previous_secret` | KEEP | `String::new()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:156 |
-| `security.message_signing.replay_window` | INTERNAL | `300` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/security.rs:162 |
-| `security.message_signing.require_nonce` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:159 |
-| `security.message_signing.shared_secret` | KEEP | `String::new()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:153 |
-| `security.posture` | KEEP | `crate::security::posture::SecurityPosture::default()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:595 |
-| `security.provenance_stamping` | KEEP | `false` | opt-in provenance receipts on results (ASI04) | - | src/config/features/security.rs:655 |
-| `security.remote_server_signing` | KEEP | `RemoteServerSigningConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:650 |
+| `security.identity_grants` | KEEP | `IdentityGrantsConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:654 |
+| `security.identity_grants.enabled` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:460 |
+| `security.identity_grants.fail_on_error` | KEEP | `true` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:465 |
+| `security.identity_grants.path` | KEEP | `"~/.mcp-gateway/identity-grants.yaml".to_string()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:462 |
+| `security.message_signing` | KEEP | `MessageSigningConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:639 |
+| `security.message_signing.enabled` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:162 |
+| `security.message_signing.key_id` | KEEP | `"default".to_string()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:177 |
+| `security.message_signing.previous_secret` | KEEP | `String::new()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:169 |
+| `security.message_signing.replay_window` | INTERNAL | `300` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/security.rs:175 |
+| `security.message_signing.require_nonce` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:172 |
+| `security.message_signing.shared_secret` | KEEP | `String::new()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:166 |
+| `security.posture` | KEEP | `crate::security::posture::SecurityPosture::default()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:608 |
+| `security.provenance_stamping` | KEEP | `false` | opt-in provenance receipts on results (ASI04) | - | src/config/features/security.rs:668 |
+| `security.remote_server_signing` | KEEP | `RemoteServerSigningConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:663 |
 | `security.remote_server_signing.backends` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/remote_provenance.rs:27 |
 | `security.remote_server_signing.backends.<name>.issued_at` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/remote_provenance.rs:55 |
 | `security.remote_server_signing.backends.<name>.issuer` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/remote_provenance.rs:53 |
@@ -684,43 +695,43 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `security.remote_server_signing.trusted_keys` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/remote_provenance.rs:25 |
 | `security.remote_server_signing.trusted_keys.<name>.algorithm` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/remote_provenance.rs:34 |
 | `security.remote_server_signing.trusted_keys.<name>.public_key` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/remote_provenance.rs:36 |
-| `security.response_contract` | KEEP | `ResponseContractConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:638 |
-| `security.response_contract.action_mode` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:422 |
-| `security.response_contract.default_max_bytes` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:424 |
-| `security.response_contract.enabled` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:420 |
-| `security.response_contract.fail_closed` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:427 |
-| `security.response_contract.tools` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:429 |
-| `security.response_contract.tools.<name>.action_mode` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:393 |
-| `security.response_contract.tools.<name>.forbidden_patterns` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:391 |
-| `security.response_contract.tools.<name>.max_bytes` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:389 |
-| `security.response_inspection` | KEEP | `ResponseInspectionConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:635 |
-| `security.response_inspection.action_mode` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:370 |
-| `security.response_inspection.enabled` | KEEP | `true` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:366 |
-| `security.sanitize_input` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:600 |
-| `security.signature_chain` | KEEP | `None` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:661 |
+| `security.response_contract` | KEEP | `ResponseContractConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:651 |
+| `security.response_contract.action_mode` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:435 |
+| `security.response_contract.default_max_bytes` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:437 |
+| `security.response_contract.enabled` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:433 |
+| `security.response_contract.fail_closed` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:440 |
+| `security.response_contract.tools` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:442 |
+| `security.response_contract.tools.<name>.action_mode` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:406 |
+| `security.response_contract.tools.<name>.forbidden_patterns` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:404 |
+| `security.response_contract.tools.<name>.max_bytes` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:402 |
+| `security.response_inspection` | KEEP | `ResponseInspectionConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:648 |
+| `security.response_inspection.action_mode` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:383 |
+| `security.response_inspection.enabled` | KEEP | `true` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:379 |
+| `security.sanitize_input` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:613 |
+| `security.signature_chain` | KEEP | `None` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:674 |
 | `security.signature_chain.emit` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/signature_chain.rs:46 |
 | `security.signature_chain.key_id` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/signature_chain.rs:43 |
 | `security.signature_chain.max_links` | KEEP | `8` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/signature_chain.rs:49 |
 | `security.signature_chain.signing_key` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/signature_chain.rs:41 |
-| `security.ssrf_protection` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:602 |
-| `security.tool_policy` | KEEP | `ToolPolicyConfig::default()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:619 |
+| `security.ssrf_protection` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:615 |
+| `security.tool_policy` | KEEP | `ToolPolicyConfig::default()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:632 |
 | `security.tool_policy.allow` | KEEP | `Vec::new()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/policy.rs:50 |
 | `security.tool_policy.default_action` | KEEP | `PolicyAction::Allow` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/policy.rs:47 |
 | `security.tool_policy.deny` | KEEP | `Vec::new()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/policy.rs:53 |
 | `security.tool_policy.enabled` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/policy.rs:45 |
 | `security.tool_policy.log_denied` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/policy.rs:57 |
 | `security.tool_policy.use_default_deny` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/policy.rs:55 |
-| `security.transparency_log` | KEEP | `TransparencyLogConfig::default()` | audit-log signing key the operator owns | - | src/config/features/security.rs:632 |
-| `security.transparency_log.enabled` | KEEP | `false` | opt-in audit when auth is off; required when auth is on (src/config/features/security.rs:117) | - | src/config/features/security.rs:33 |
-| `security.transparency_log.key_id` | KEEP | `"default".to_string()` | audit-log signing key the operator owns | - | src/config/features/security.rs:37 |
-| `security.transparency_log.path` | KEEP | `"~/.mcp-gateway/transparency/transparency.jsonl".to_string()` | state location; deployments put it on a chosen volume (the Helm chart puts the audit log on its own persistent volume) | - | src/config/features/security.rs:35 |
-| `security.transparency_log.rotation` | KEEP | `crate::security::audit_rotation_config::RotationConfig::defa` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/config/features/security.rs:44 |
+| `security.transparency_log` | KEEP | `TransparencyLogConfig::default()` | audit-log signing key the operator owns | - | src/config/features/security.rs:645 |
+| `security.transparency_log.enabled` | KEEP | unset: on with auth, off without | opt-in audit when auth is off; on by default with auth, and `false` with auth fails the load (MIK-8044 P2c2, src/config/features/security.rs:127) | - | src/config/features/security.rs:37 |
+| `security.transparency_log.key_id` | KEEP | `"default".to_string()` | audit-log signing key the operator owns | - | src/config/features/security.rs:41 |
+| `security.transparency_log.path` | KEEP | `"~/.mcp-gateway/transparency/transparency.jsonl".to_string()` | state location; deployments put it on a chosen volume (the Helm chart puts the audit log on its own persistent volume) | - | src/config/features/security.rs:39 |
+| `security.transparency_log.rotation` | KEEP | `crate::security::audit_rotation_config::RotationConfig::defa` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/config/features/security.rs:48 |
 | `security.transparency_log.rotation.max_segment_age_secs` | KEEP | `0` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/security/audit_rotation_config.rs:37 |
 | `security.transparency_log.rotation.max_segment_bytes` | KEEP | `64 * 1024 * 1024` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/security/audit_rotation_config.rs:35 |
 | `security.transparency_log.rotation.on_disk_full` | KEEP | `OnDiskFull::ExpireOldest` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/security/audit_rotation_config.rs:41 |
 | `security.transparency_log.rotation.retain_segments` | KEEP | `12` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/security/audit_rotation_config.rs:39 |
-| `security.transparency_log.shared_secret` | KEEP | `String::new()` | audit-log signing key the operator owns | - | src/config/features/security.rs:42 |
-| `security.trust_configured_backends` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:617 |
+| `security.transparency_log.shared_secret` | KEEP | `String::new()` | audit-log signing key the operator owns; `${VAR}`, `env:`, `file:` or a literal, 32 bytes or more and not all zero while the log is on (MIK-8365) | - | src/config/features/security.rs:46 |
+| `security.trust_configured_backends` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:630 |
 | `server` | KEEP | `type default` | where the gateway listens and how clients reach it | - | src/config/mod.rs:93 |
 | `server.allow_unauthenticated_network_bind` | KEEP | `false` | security opt-out or credential; must stay an explicit operator decision | - | src/config/server_config.rs:65 |
 | `server.cleartext_http` | KEEP | `CleartextHttp::Refuse` | security opt-out or credential; must stay an explicit operator decision | - | src/config/server_config.rs:87 |
@@ -733,9 +744,9 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `server.port` | KEEP | `39400` | where the gateway listens and how clients reach it | - | src/config/server_config.rs:34 |
 | `server.public_url` | KEEP | `None` | where the gateway listens and how clients reach it | - | src/config/server_config.rs:52 |
 | `server.replicas` | KEEP | `1` | declared, not observable from inside a pod | - | src/config/server_config.rs:83 |
-| `server.request_timeout` | REMOVE | — | retired in 4.0; never had an effect | already warns once; 4.0.0 makes it a load error and `upgrade` deletes it | src/config/strict_keys.rs:48 |
+| `server.request_timeout` | REMOVE | — | retired in 4.0; never had an effect | a load error naming the key and `mcp-gateway upgrade`, which deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs); see UPGRADING 39 | src/config/strict_keys.rs:48 |
 | `server.shutdown_timeout` | INTERNAL | `Duration::from_secs(30)` | safety limit with a fixed default; no user story needs it | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/server_config.rs:39 |
-| `server.ws_port` | REMOVE | — | retired in 4.0; never had an effect | already warns once; 4.0.0 makes it a load error and `upgrade` deletes it | src/config/strict_keys.rs:42 |
+| `server.ws_port` | REMOVE | — | retired in 4.0; never had an effect | a load error naming the key and `mcp-gateway upgrade`, which deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs); see UPGRADING 34 | src/config/strict_keys.rs:42 |
 | `streaming` | KEEP | `type default` | turn server-push streams off behind proxies that break SSE | - | src/config/mod.rs:99 |
 | `streaming.auto_subscribe` | KEEP | `Vec::new()` | operator picks backends to subscribe for notifications | - | src/config/features/streaming.rs:31 |
 | `streaming.buffer_size` | INTERNAL | `DEFAULT_BUFFER_SIZE` | stream plumbing with fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/streaming.rs:25 |
@@ -797,8 +808,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway add --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:401 |
 | `mcp-gateway add -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:401 |
 | `mcp-gateway add --command` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
-| `mcp-gateway add --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes (UPGRADING entry) | src/cli/mod.rs:401 |
-| `mcp-gateway add -c` | REMOVE | short alias of `--config` | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes (UPGRADING entry) | src/cli/mod.rs:401 |
+| `mcp-gateway add --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/mod.rs:401 |
+| `mcp-gateway add -c` | REMOVE | short alias of `--config` | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/mod.rs:401 |
 | `mcp-gateway add --description` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
 | `mcp-gateway add --env` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:401 |
 | `mcp-gateway add -e` | KEEP | short alias of `--env` | - | src/cli/mod.rs:401 |
@@ -934,8 +945,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway get` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:467 |
 | `mcp-gateway get --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:467 |
 | `mcp-gateway get -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:467 |
-| `mcp-gateway get --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes (UPGRADING entry) | src/cli/mod.rs:467 |
-| `mcp-gateway get -c` | REMOVE | short alias of `--config` | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes (UPGRADING entry) | src/cli/mod.rs:467 |
+| `mcp-gateway get --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/mod.rs:467 |
+| `mcp-gateway get -c` | REMOVE | short alias of `--config` | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/mod.rs:467 |
 | `mcp-gateway get <NAME>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:467 |
 | `mcp-gateway hash-key` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:282 |
 | `mcp-gateway hash-key --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:282 |
@@ -1054,8 +1065,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway list --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:453 |
 | `mcp-gateway list -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:453 |
 | `mcp-gateway list --available` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:453 |
-| `mcp-gateway list --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes (UPGRADING entry) | src/cli/mod.rs:453 |
-| `mcp-gateway list -c` | REMOVE | short alias of `--config` | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes (UPGRADING entry) | src/cli/mod.rs:453 |
+| `mcp-gateway list --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/mod.rs:453 |
+| `mcp-gateway list -c` | REMOVE | short alias of `--config` | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/mod.rs:453 |
 | `mcp-gateway list --json` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:453 |
 | `mcp-gateway ranking` | INTERNAL | offline evaluation of the adaptive ranker; developer tooling | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:255 |
 | `mcp-gateway ranking --help` | INTERNAL | clap-generated: prints this command's usage | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:255 |
@@ -1070,8 +1081,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway remove` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:437 |
 | `mcp-gateway remove --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:437 |
 | `mcp-gateway remove -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:437 |
-| `mcp-gateway remove --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes (UPGRADING entry) | src/cli/mod.rs:437 |
-| `mcp-gateway remove -c` | REMOVE | short alias of `--config` | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes (UPGRADING entry) | src/cli/mod.rs:437 |
+| `mcp-gateway remove --config` | REMOVE | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/mod.rs:437 |
+| `mcp-gateway remove -c` | REMOVE | short alias of `--config` | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | src/cli/mod.rs:437 |
 | `mcp-gateway remove --force` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:437 |
 | `mcp-gateway remove <NAME>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:437 |
 | `mcp-gateway runtime` | INTERNAL | sandbox substrate compiler behind the non-default `runtime-substrate` feature (feature runtime-substrate) | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:592 |
@@ -1121,8 +1132,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway skills generate` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/skills.rs:47 |
 | `mcp-gateway skills generate --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/skills.rs:47 |
 | `mcp-gateway skills generate -h` | KEEP | short alias of `--help` | - | src/cli/skills.rs:47 |
-| `mcp-gateway skills generate --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/skills.rs:47 |
-| `mcp-gateway skills generate -C` | AUTO | short alias of `--capabilities` | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/skills.rs:47 |
+| `mcp-gateway skills generate --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`skills_generate_reads_the_configured_directories`; the -C/env override, shared across commands: `flag_and_env_override_the_config`, exercised on `tool list`)); see upgrading.d/3755.md (hidden flag) and upgrading.d/8044-4.md (derived from the config) | src/cli/skills.rs:47 |
+| `mcp-gateway skills generate -C` | AUTO | short alias of `--capabilities` | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`skills_generate_reads_the_configured_directories`; the -C/env override, shared across commands: `flag_and_env_override_the_config`, exercised on `tool list`)); see upgrading.d/3755.md (hidden flag) and upgrading.d/8044-4.md (derived from the config) | src/cli/skills.rs:47 |
 | `mcp-gateway skills generate --category` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/skills.rs:47 |
 | `mcp-gateway skills generate --dry-run` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/skills.rs:47 |
 | `mcp-gateway skills generate --install` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/skills.rs:47 |
@@ -1196,14 +1207,14 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway tool completions` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:717 |
 | `mcp-gateway tool completions --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:717 |
 | `mcp-gateway tool completions -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:717 |
-| `mcp-gateway tool completions --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:717 |
-| `mcp-gateway tool completions -C` | AUTO | short alias of `--capabilities` | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:717 |
+| `mcp-gateway tool completions --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`tool_completions_reads_the_configured_directories`; the -C/env override, shared across commands: `flag_and_env_override_the_config`, exercised on `tool list`)); see upgrading.d/3755.md (hidden flag) and upgrading.d/8044-4.md (derived from the config) | src/cli/mod.rs:717 |
+| `mcp-gateway tool completions -C` | AUTO | short alias of `--capabilities` | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`tool_completions_reads_the_configured_directories`; the -C/env override, shared across commands: `flag_and_env_override_the_config`, exercised on `tool list`)); see upgrading.d/3755.md (hidden flag) and upgrading.d/8044-4.md (derived from the config) | src/cli/mod.rs:717 |
 | `mcp-gateway tool completions <SHELL>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:717 |
 | `mcp-gateway tool inspect` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:686 |
 | `mcp-gateway tool inspect --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:686 |
 | `mcp-gateway tool inspect -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:686 |
-| `mcp-gateway tool inspect --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:686 |
-| `mcp-gateway tool inspect -C` | AUTO | short alias of `--capabilities` | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:686 |
+| `mcp-gateway tool inspect --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`tool_inspect_reads_the_configured_directories`; the -C/env override, shared across commands: `flag_and_env_override_the_config`, exercised on `tool list`)); see upgrading.d/3755.md (hidden flag) and upgrading.d/8044-4.md (derived from the config) | src/cli/mod.rs:686 |
+| `mcp-gateway tool inspect -C` | AUTO | short alias of `--capabilities` | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`tool_inspect_reads_the_configured_directories`; the -C/env override, shared across commands: `flag_and_env_override_the_config`, exercised on `tool list`)); see upgrading.d/3755.md (hidden flag) and upgrading.d/8044-4.md (derived from the config) | src/cli/mod.rs:686 |
 | `mcp-gateway tool inspect --format` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:686 |
 | `mcp-gateway tool inspect -f` | KEEP | short alias of `--format` | - | src/cli/mod.rs:686 |
 | `mcp-gateway tool inspect <TOOL>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:686 |
@@ -1212,8 +1223,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway tool invoke -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:627 |
 | `mcp-gateway tool invoke --args` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:627 |
 | `mcp-gateway tool invoke -a` | KEEP | short alias of `--args` | - | src/cli/mod.rs:627 |
-| `mcp-gateway tool invoke --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:627 |
-| `mcp-gateway tool invoke -C` | AUTO | short alias of `--capabilities` | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:627 |
+| `mcp-gateway tool invoke --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`tool_invoke_reads_the_configured_directories`; the -C/env override, shared across commands: `flag_and_env_override_the_config`, exercised on `tool list`)); see upgrading.d/3755.md (hidden flag) and upgrading.d/8044-4.md (derived from the config) | src/cli/mod.rs:627 |
+| `mcp-gateway tool invoke -C` | AUTO | short alias of `--capabilities` | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`tool_invoke_reads_the_configured_directories`; the -C/env override, shared across commands: `flag_and_env_override_the_config`, exercised on `tool list`)); see upgrading.d/3755.md (hidden flag) and upgrading.d/8044-4.md (derived from the config) | src/cli/mod.rs:627 |
 | `mcp-gateway tool invoke --format` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:627 |
 | `mcp-gateway tool invoke -f` | KEEP | short alias of `--format` | - | src/cli/mod.rs:627 |
 | `mcp-gateway tool invoke <KEY=VALUE>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:627 |
@@ -1221,8 +1232,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway tool list` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:666 |
 | `mcp-gateway tool list --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:666 |
 | `mcp-gateway tool list -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:666 |
-| `mcp-gateway tool list --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:666 |
-| `mcp-gateway tool list -C` | AUTO | short alias of `--capabilities` | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:666 |
+| `mcp-gateway tool list --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`tool_list_reads_the_configured_directories`, `flag_and_env_override_the_config`, `no_config_keeps_the_local_capabilities_directory`)); see upgrading.d/3755.md (hidden flag) and upgrading.d/8044-4.md (derived from the config) | src/cli/mod.rs:666 |
+| `mcp-gateway tool list -C` | AUTO | short alias of `--capabilities` | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`tool_list_reads_the_configured_directories`, `flag_and_env_override_the_config`, `no_config_keeps_the_local_capabilities_directory`)); see upgrading.d/3755.md (hidden flag) and upgrading.d/8044-4.md (derived from the config) | src/cli/mod.rs:666 |
 | `mcp-gateway tool list --format` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:666 |
 | `mcp-gateway tool list -f` | KEEP | short alias of `--format` | - | src/cli/mod.rs:666 |
 | `mcp-gateway trust` | INTERNAL | TrustCard and CBOM metadata for catalogue maintainers | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:266 |
@@ -1292,7 +1303,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway validate --fix` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:330 |
 | `mcp-gateway validate --format` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:330 |
 | `mcp-gateway validate -f` | KEEP | short alias of `--format` | - | src/cli/mod.rs:330 |
-| `mcp-gateway validate --no-color` | AUTO | unset: colour follows the terminal and `NO_COLOR` | hidden flag, still honoured | src/cli/mod.rs:330 |
+| `mcp-gateway validate --no-color` | AUTO | unset: colour follows the terminal and `NO_COLOR` | hidden flag, still honoured; see upgrading.d/3730.md | src/cli/mod.rs:330 |
 | `mcp-gateway validate --severity` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:330 |
 | `mcp-gateway validate -s` | KEEP | short alias of `--severity` | - | src/cli/mod.rs:330 |
 | `mcp-gateway validate <PATHS>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:330 |
@@ -1303,7 +1314,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 |---|---|---|---|---|
 | `MCP_GATEWAY_<SECTION>__<KEY>` | KEEP | env form of any KEEP config key (container deployments); follows the key's class | - | src/config/mod.rs:193 |
 | `MCP_GATEWAY_AUTH__ENABLED` | KEEP | documented overlay spelling of `auth.enabled` (Helm chart) | - | deploy/helm/mcp-gateway/templates/_helpers.tpl:170 |
-| `MCP_GATEWAY_CAPABILITIES` | AUTO | env form of `-C/--capabilities`; derive from the config's `capabilities.directories` | hidden override, still honoured; UPGRADING entry | src/cli/mod.rs:637 |
+| `MCP_GATEWAY_CAPABILITIES` | AUTO | env form of `-C/--capabilities`; derive from the config's `capabilities.directories` | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`flag_and_env_override_the_config`)); see upgrading.d/8044-4.md | src/cli/mod.rs:637 |
 | `MCP_GATEWAY_CA_CERT` | KEEP | credentials for `dashboard-link` and `events dead-letters` against a remote gateway | - | src/cli/dashboard_link.rs:31 |
 | `MCP_GATEWAY_CLIENT_CERT` | KEEP | credentials for `dashboard-link` and `events dead-letters` against a remote gateway | - | src/cli/dashboard_link.rs:23 |
 | `MCP_GATEWAY_CLIENT_KEY` | KEEP | credentials for `dashboard-link` and `events dead-letters` against a remote gateway | - | src/cli/dashboard_link.rs:26 |
@@ -1398,67 +1409,67 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 
 | Item | Class | Used by (files) | Reason | Migration | Defined at |
 |---|---|---|---|---|---|
-| `mcp_gateway::Error` | INTERNAL | bin 3, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from error) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:104 |
-| `mcp_gateway::InitializedStore` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:110 |
-| `mcp_gateway::MCP_PROTOCOL_VERSION` | INTERNAL | bin 2, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (const) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:118 |
-| `mcp_gateway::MigratedCredential` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:110 |
-| `mcp_gateway::OfflineInitError` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:110 |
-| `mcp_gateway::OfflineMigrationError` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:110 |
-| `mcp_gateway::Result` | INTERNAL | bin 1, tests 8, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from error) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:104 |
-| `mcp_gateway::attestation` | INTERNAL | bin 1, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:32 |
-| `mcp_gateway::autotag` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:33 |
-| `mcp_gateway::backend` | INTERNAL | bin 0, tests 52, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:34 |
-| `mcp_gateway::cache` | INTERNAL | bin 0, tests 5, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:35 |
-| `mcp_gateway::capability` | INTERNAL | bin 5, tests 13, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:36 |
-| `mcp_gateway::chains` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:37 |
-| `mcp_gateway::cli` | INTERNAL | bin 22, tests 6, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:38 |
-| `mcp_gateway::config` | INTERNAL | bin 20, tests 90, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:39 |
-| `mcp_gateway::config_persistence` | INTERNAL | bin 6, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:40 |
-| `mcp_gateway::config_reload` | INTERNAL | bin 0, tests 33, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:41 |
-| `mcp_gateway::context_compression` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:42 |
-| `mcp_gateway::context_integrity` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:43 |
-| `mcp_gateway::control_plane` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:44 |
-| `mcp_gateway::cost_accounting` | INTERNAL | bin 0, tests 4, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:45 |
-| `mcp_gateway::discovery` | INTERNAL | bin 4, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:46 |
-| `mcp_gateway::error` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:47 |
-| `mcp_gateway::failsafe` | INTERNAL | bin 0, tests 4, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:49 |
-| `mcp_gateway::gateway` | INTERNAL | bin 5, tests 105, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:51 |
-| `mcp_gateway::honest_task_tokens` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:54 |
-| `mcp_gateway::idempotency` | INTERNAL | bin 0, tests 8, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:55 |
-| `mcp_gateway::identity_grants` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:56 |
-| `mcp_gateway::identity_propagation` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:57 |
-| `mcp_gateway::initialize_store_offline` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:110 |
-| `mcp_gateway::key_server` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:58 |
-| `mcp_gateway::kill_switch` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:59 |
-| `mcp_gateway::kubernetes` | INTERNAL | bin 1, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:60 |
-| `mcp_gateway::metrics` | INTERNAL | bin 0, tests 4, benches/examples 0 | the crate ships a binary; README documents no library use (mod feature metrics) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:62 |
-| `mcp_gateway::migrate_legacy_credential_offline` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:110 |
-| `mcp_gateway::mtls` | INTERNAL | bin 2, tests 28, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:63 |
-| `mcp_gateway::oauth` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:64 |
-| `mcp_gateway::playbook` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:67 |
-| `mcp_gateway::projection` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:68 |
-| `mcp_gateway::protocol` | INTERNAL | bin 0, tests 74, benches/examples 2 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:69 |
-| `mcp_gateway::protocol_imports` | INTERNAL | bin 2, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:70 |
-| `mcp_gateway::protocol_revision_telemetry` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:71 |
-| `mcp_gateway::provider` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:72 |
-| `mcp_gateway::ranking` | INTERNAL | bin 1, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:73 |
-| `mcp_gateway::registry` | INTERNAL | bin 4, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:74 |
-| `mcp_gateway::routing_profile` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:75 |
-| `mcp_gateway::runtime` | INTERNAL | bin 3, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:76 |
-| `mcp_gateway::scheduler` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:77 |
-| `mcp_gateway::secret_injection` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:78 |
-| `mcp_gateway::secrets` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:79 |
-| `mcp_gateway::security` | INTERNAL | bin 8, tests 39, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:80 |
-| `mcp_gateway::semantic_search` | INTERNAL | bin 0, tests 1, benches/examples 1 | the crate ships a binary; README documents no library use (mod feature semantic-search) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:82 |
-| `mcp_gateway::setup_tracing` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (fn) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:149 |
-| `mcp_gateway::simhash` | INTERNAL | bin 0, tests 0, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:83 |
-| `mcp_gateway::skills` | INTERNAL | bin 1, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:84 |
-| `mcp_gateway::stats` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:85 |
-| `mcp_gateway::tool_profiles` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod feature tool-profiles) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:89 |
-| `mcp_gateway::tool_registry` | INTERNAL | bin 0, tests 0, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:90 |
-| `mcp_gateway::tracing_context` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:91 |
-| `mcp_gateway::transform` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:92 |
-| `mcp_gateway::transition` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:93 |
-| `mcp_gateway::transport` | INTERNAL | bin 2, tests 3, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:94 |
-| `mcp_gateway::trust` | INTERNAL | bin 7, tests 4, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:95 |
-| `mcp_gateway::validator` | INTERNAL | bin 1, tests 0, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:96 |
+| `mcp_gateway::Error` | INTERNAL | bin 3, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from error) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:161 |
+| `mcp_gateway::InitializedStore` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:168 |
+| `mcp_gateway::MCP_PROTOCOL_VERSION` | INTERNAL | bin 2, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (const) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:177 |
+| `mcp_gateway::MigratedCredential` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:168 |
+| `mcp_gateway::OfflineInitError` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:168 |
+| `mcp_gateway::OfflineMigrationError` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:168 |
+| `mcp_gateway::Result` | INTERNAL | bin 1, tests 8, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from error) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:161 |
+| `mcp_gateway::attestation` | INTERNAL | bin 1, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:28 |
+| `mcp_gateway::autotag` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:30 |
+| `mcp_gateway::backend` | INTERNAL | bin 0, tests 52, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:32 |
+| `mcp_gateway::cache` | INTERNAL | bin 0, tests 5, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:34 |
+| `mcp_gateway::capability` | INTERNAL | bin 5, tests 13, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:36 |
+| `mcp_gateway::chains` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:38 |
+| `mcp_gateway::cli` | INTERNAL | bin 22, tests 6, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:40 |
+| `mcp_gateway::config` | INTERNAL | bin 20, tests 90, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:43 |
+| `mcp_gateway::config_persistence` | INTERNAL | bin 6, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:45 |
+| `mcp_gateway::config_reload` | INTERNAL | bin 0, tests 33, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:47 |
+| `mcp_gateway::context_compression` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:49 |
+| `mcp_gateway::context_integrity` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:51 |
+| `mcp_gateway::control_plane` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:53 |
+| `mcp_gateway::cost_accounting` | INTERNAL | bin 0, tests 4, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:55 |
+| `mcp_gateway::discovery` | INTERNAL | bin 4, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:58 |
+| `mcp_gateway::error` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:61 |
+| `mcp_gateway::failsafe` | INTERNAL | bin 0, tests 4, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:64 |
+| `mcp_gateway::gateway` | INTERNAL | bin 5, tests 105, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:67 |
+| `mcp_gateway::honest_task_tokens` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:71 |
+| `mcp_gateway::idempotency` | INTERNAL | bin 0, tests 8, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:73 |
+| `mcp_gateway::identity_grants` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:75 |
+| `mcp_gateway::identity_propagation` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:77 |
+| `mcp_gateway::initialize_store_offline` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:168 |
+| `mcp_gateway::key_server` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:79 |
+| `mcp_gateway::kill_switch` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:81 |
+| `mcp_gateway::kubernetes` | INTERNAL | bin 1, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:83 |
+| `mcp_gateway::metrics` | INTERNAL | bin 0, tests 4, benches/examples 0 | the crate ships a binary; README documents no library use (mod feature metrics) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:86 |
+| `mcp_gateway::migrate_legacy_credential_offline` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:168 |
+| `mcp_gateway::mtls` | INTERNAL | bin 2, tests 28, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:88 |
+| `mcp_gateway::oauth` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:90 |
+| `mcp_gateway::playbook` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:94 |
+| `mcp_gateway::projection` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:96 |
+| `mcp_gateway::protocol` | INTERNAL | bin 0, tests 74, benches/examples 2 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:98 |
+| `mcp_gateway::protocol_imports` | INTERNAL | bin 2, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:100 |
+| `mcp_gateway::protocol_revision_telemetry` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:102 |
+| `mcp_gateway::provider` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:104 |
+| `mcp_gateway::ranking` | INTERNAL | bin 1, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:106 |
+| `mcp_gateway::registry` | INTERNAL | bin 4, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:108 |
+| `mcp_gateway::routing_profile` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:110 |
+| `mcp_gateway::runtime` | INTERNAL | bin 3, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:112 |
+| `mcp_gateway::scheduler` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:114 |
+| `mcp_gateway::secret_injection` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:116 |
+| `mcp_gateway::secrets` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:118 |
+| `mcp_gateway::security` | INTERNAL | bin 8, tests 39, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:120 |
+| `mcp_gateway::semantic_search` | INTERNAL | bin 0, tests 1, benches/examples 1 | the crate ships a binary; README documents no library use (mod feature semantic-search) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:123 |
+| `mcp_gateway::setup_tracing` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (fn) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:209 |
+| `mcp_gateway::simhash` | INTERNAL | bin 0, tests 0, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:125 |
+| `mcp_gateway::skills` | INTERNAL | bin 1, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:127 |
+| `mcp_gateway::stats` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:129 |
+| `mcp_gateway::tool_profiles` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod feature tool-profiles) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:138 |
+| `mcp_gateway::tool_registry` | INTERNAL | bin 0, tests 0, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:140 |
+| `mcp_gateway::tracing_context` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:142 |
+| `mcp_gateway::transform` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:144 |
+| `mcp_gateway::transition` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:146 |
+| `mcp_gateway::transport` | INTERNAL | bin 2, tests 3, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:148 |
+| `mcp_gateway::trust` | INTERNAL | bin 7, tests 4, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:150 |
+| `mcp_gateway::validator` | INTERNAL | bin 1, tests 0, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:152 |

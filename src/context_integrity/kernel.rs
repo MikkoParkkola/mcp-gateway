@@ -77,6 +77,9 @@ static EXFILTRATION_PATTERNS: LazyLock<RegexSet> = LazyLock::new(|| {
 pub struct ContextIntegrityKernel {
     policy: ContextIntegrityPolicy,
     response_scanner: ResponseScanner,
+    /// The text-only findings per exact text (MIK-8259). Held by this
+    /// instance, so replacing the kernel drops it.
+    text_findings: crate::security::text_memo::TextMemo<Vec<ContextIntegrityFinding>>,
 }
 
 impl ContextIntegrityKernel {
@@ -86,6 +89,7 @@ impl ContextIntegrityKernel {
         Self {
             policy,
             response_scanner: ResponseScanner::new(),
+            text_findings: crate::security::text_memo::TextMemo::new("context_integrity"),
         }
     }
 
@@ -210,12 +214,12 @@ impl ContextIntegrityKernel {
         evaluation
     }
 
-    fn classify_text(
-        &self,
-        input: &ContextIntegrityInput,
-        text: &str,
-    ) -> ContextIntegrityClassification {
+    /// Every finding that depends on the text alone: the injection scanner,
+    /// the response inspection and the five kernel pattern sets.
+    fn text_only_findings(&self, text: &str) -> Vec<ContextIntegrityFinding> {
         let mut findings = Vec::new();
+        #[cfg(test)]
+        crate::test_classification_count::note("kernel", text);
 
         for item in self.response_scanner.scan_text(text) {
             findings.push(ContextIntegrityFinding {
@@ -300,6 +304,19 @@ impl ContextIntegrityKernel {
             ContextDataClass::Internal,
             "data exfiltration pattern",
         );
+        findings
+    }
+
+    fn classify_text(
+        &self,
+        input: &ContextIntegrityInput,
+        text: &str,
+    ) -> ContextIntegrityClassification {
+        // The findings that depend on the text alone come from the memo; the
+        // ones below read the input and run on every call.
+        let mut findings = self
+            .text_findings
+            .get_or_compute(text, || self.text_only_findings(text));
 
         if input.destructive && input.provenance.trust_boundary.is_untrusted() {
             findings.push(ContextIntegrityFinding {
@@ -697,3 +714,7 @@ fn safe_fragment(fragment: &str) -> String {
 #[cfg(test)]
 #[path = "kernel_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "kernel_memo_tests.rs"]
+mod memo_tests;

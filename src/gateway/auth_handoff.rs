@@ -48,10 +48,8 @@ fn public_origin_of(live: &crate::config_reload::LiveConfig) -> Option<String> {
 #[cfg(feature = "webui")]
 pub(super) fn hand_off(state: &AuthState, candidate: &str) -> Option<Response> {
     let origin = public_origin(state)?;
-    let Redemption { not_after } = state.dashboard_bootstrap.consume_capped(candidate)?;
-    let code = state
-        .dashboard_bootstrap
-        .mint_handoff(Now::read(), not_after);
+    let Redemption { not_after, now } = state.dashboard_bootstrap.consume_capped(candidate)?;
+    let code = state.dashboard_bootstrap.mint_handoff(now, not_after);
     Some(code_page(&origin, &code))
 }
 
@@ -114,7 +112,7 @@ pub(crate) fn redeem_handoff(
     let code = url::form_urlencoded::parse(body)
         .find(|(key, _)| key == "code")
         .map(|(_, value)| value.trim().to_string());
-    let Some(Redemption { not_after }) =
+    let Some(Redemption { not_after, now }) =
         code.and_then(|code| bootstrap.take_handoff(&code, Now::read()))
     else {
         auth_failure(AuthFailureKind::BootstrapRefused);
@@ -126,7 +124,7 @@ pub(crate) fn redeem_handoff(
     // Always `Secure`: a code exists only because this origin is HTTPS, and a
     // reload since it was minted must not downgrade the cookie it sets.
     private(super::bootstrap::signed_in(
-        bootstrap, live, not_after, true,
+        bootstrap, live, not_after, now, true,
     ))
 }
 

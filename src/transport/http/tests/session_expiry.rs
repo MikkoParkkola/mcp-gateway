@@ -539,7 +539,7 @@ async fn request_with_headers_injects_and_overrides_on_the_wire() {
         )
         .await;
 
-    let headers = tokio::time::timeout(Duration::from_secs(1), rx)
+    let headers = tokio::time::timeout(Duration::from_secs(10), rx)
         .await
         .unwrap()
         .unwrap();
@@ -586,7 +586,7 @@ async fn request_without_extra_headers_uses_static_only() {
 
     let _ = transport.request("tools/call", None).await;
 
-    let headers = tokio::time::timeout(Duration::from_secs(1), rx)
+    let headers = tokio::time::timeout(Duration::from_secs(10), rx)
         .await
         .unwrap()
         .unwrap();

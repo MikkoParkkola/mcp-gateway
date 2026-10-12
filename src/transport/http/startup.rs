@@ -22,6 +22,12 @@ use crate::protocol::{
 use crate::security::http_diagnostics::safe_request_error;
 use crate::{Error, Result};
 
+/// The OAuth task's join failure (it panicked or was cancelled) as the error
+/// `connect` returns for it.
+fn join_failure(join_err: &tokio::task::JoinError) -> crate::Error {
+    crate::Error::OAuth(format!("OAuth task failed to join: {join_err}"))
+}
+
 impl HttpTransport {
     /// Initialize the connection
     ///
@@ -70,45 +76,75 @@ impl HttpTransport {
             let base_url_for_task = self.base_url.clone();
             // Read here: the spawned task does not inherit the caller's scope.
             let interactive = crate::oauth::login_gate::interactive();
-            let set_out = crate::oauth::login_gate::set_out_epoch();
+            // Captured here, before the task queues on anything (MIK-8339): a
+            // start's own set-out epoch and cohort, else the gate's now. A
+            // restart or stop after this point refuses this login.
+            let gate = Arc::clone(&self.login_gate);
+            let crate::oauth::login_gate::SetOut {
+                since,
+                cohort,
+                deadline,
+            } = gate.set_out_now();
             let refused_name = sanitize_url_for_diagnostics(&self.base_url);
             let oauth_task = tokio::spawn(async move {
+                let cancelled = || crate::Error::AuthorizationCancelled {
+                    backend: refused_name.clone(),
+                };
+                // A pre-login stage that outlived the start's deadline: the
+                // cohort's recorded failure if there is one.
+                let timed_out = || {
+                    let otherwise = crate::Error::BackendTimeout(refused_name.clone());
+                    gate.classify(&cohort, &refused_name, otherwise)
+                };
                 // A non-interactive caller (the health probe) never waits on
                 // the client mutex a login holds for minutes (MIK-7982 C2).
+                // An interactive one waits under the start's revocation and
+                // the authorization window (MIK-8339).
                 let mut oauth = if interactive {
-                    oauth_arc_for_task.lock().await
+                    tokio::select! {
+                        biased;
+                        () = gate.revoked_since(since) => return Err(cancelled()),
+                        () = tokio::time::sleep_until(crate::oauth::login_gate::stage_end(
+                            crate::oauth::OAUTH_AUTHORIZATION_WINDOW,
+                            deadline,
+                        )) => return Err(timed_out()),
+                        oauth = oauth_arc_for_task.lock() => oauth,
+                    }
                 } else {
                     oauth_arc_for_task.try_lock().map_err(|_| {
                         crate::Error::AuthorizationRequired {
-                            backend: refused_name,
+                            backend: refused_name.clone(),
                         }
                     })?
                 };
-                // A start's epoch was captured when it set out, before this
-                // task existed; any other caller takes it before discovery.
-                // Either way a restart or stop that cancels logins since then
-                // refuses this login.
-                let since = set_out.or_else(|| oauth.login_epoch());
-                oauth.initialize().await?;
+                // Discovery, before any login: a restart or stop ends it, and
+                // so does the start's deadline.
+                tokio::select! {
+                    biased;
+                    () = gate.revoked_since(since) => return Err(cancelled()),
+                    () = crate::oauth::login_gate::past(Some(deadline)) => return Err(timed_out()),
+                    initialized = oauth.initialize() => initialized?,
+                }
 
                 // If we don't have a valid token, trigger authorization flow
                 if !oauth.has_valid_token() {
-                    info!(target: HTTP_TARGET, url = %sanitize_url_for_diagnostics(&base_url_for_task), "OAuth required - initiating authorization flow");
-                    oauth.authorize_shared(interactive, since).await?;
+                    // Computed before the macro, so its head line holds no call (MIK-7725).
+                    let url = sanitize_url_for_diagnostics(&base_url_for_task);
+                    info!(target: HTTP_TARGET, url = %url, "OAuth required - initiating authorization flow");
+                    oauth
+                        .authorize_shared_with(
+                            interactive,
+                            Some(since),
+                            Some(&cohort),
+                            Some(deadline),
+                        )
+                        .await?;
                 }
 
                 Ok::<String, crate::Error>(oauth.backend_name().to_string())
             });
 
-            let backend_name = match oauth_task.await {
-                Ok(Ok(name)) => name,
-                Ok(Err(e)) => return Err(e),
-                Err(join_err) => {
-                    return Err(crate::Error::OAuth(format!(
-                        "OAuth task failed to join: {join_err}"
-                    )));
-                }
-            };
+            let backend_name = oauth_task.await.map_err(|e| join_failure(&e))??;
 
             // Spawn background refresh task now that we have a valid token.
             // Reconnect/session-expiry re-enters initialize() (see request()),
@@ -131,7 +167,8 @@ impl HttpTransport {
             let Some(status) = refused_as_wrong_transport(&sse_error) else {
                 return Err(sse_error);
             };
-            info!(target: HTTP_TARGET, url = %sanitize_url_for_diagnostics(&self.base_url), status, "SSE GET refused; trying Streamable HTTP");
+            let url = sanitize_url_for_diagnostics(&self.base_url);
+            info!(target: HTTP_TARGET, url = %url, status, "SSE GET refused; trying Streamable HTTP");
             *self.streamable_http.write() = Some(true);
             self.switched.store(true, Ordering::Relaxed);
         }
@@ -141,7 +178,11 @@ impl HttpTransport {
         // Starlette compatibility was the original reason, but it handles both.
         let url = self.base_url.clone();
         *self.message_url.write() = Some(url.clone());
-        info!(target: HTTP_TARGET, url = %sanitize_url_for_diagnostics(&url), oauth = self.oauth_client.is_some(), "Streamable HTTP mode - direct POST");
+        let (diagnostic_url, oauth) = (
+            sanitize_url_for_diagnostics(&url),
+            self.oauth_client.is_some(),
+        );
+        info!(target: HTTP_TARGET, url = %diagnostic_url, oauth, "Streamable HTTP mode - direct POST");
         Ok(())
     }
 
@@ -352,7 +393,8 @@ impl HttpTransport {
             )));
         }
 
-        info!(target: HTTP_TARGET, url = %sanitize_url_for_diagnostics(&self.base_url), version = %negotiated_version, "Successfully negotiated protocol version");
+        let url = sanitize_url_for_diagnostics(&self.base_url);
+        info!(target: HTTP_TARGET, url = %url, version = %negotiated_version, "Successfully negotiated protocol version");
         // The retry is the handshake that succeeded, so it carries the
         // selection to adopt. Reading the rejection instead would leave the
         // server's choice on the retry neither validated nor adopted.
@@ -393,11 +435,16 @@ impl HttpTransport {
             .send_notification("notifications/initialized", None, &[], None, None)
             .await
         {
-            debug!(target: HTTP_TARGET, url = %sanitize_url_for_diagnostics(&self.base_url), error = %error, "Initialized notification failed (ignored)");
+            let url = sanitize_url_for_diagnostics(&self.base_url);
+            debug!(target: HTTP_TARGET, url = %url, error = %error, "Initialized notification failed (ignored)");
         }
 
         self.connected.store(true, Ordering::Relaxed);
-        debug!(target: HTTP_TARGET, url = %sanitize_url_for_diagnostics(&self.base_url), streamable = ?*self.streamable_http.read(), "HTTP transport initialized");
+        let (url, streamable) = (
+            sanitize_url_for_diagnostics(&self.base_url),
+            *self.streamable_http.read(),
+        );
+        debug!(target: HTTP_TARGET, url = %url, streamable = ?streamable, "HTTP transport initialized");
 
         Ok(())
     }
@@ -664,5 +711,27 @@ mod wrong_transport_tests {
     fn a_typed_4xx_still_falls_back() {
         let typed = Error::TransportPermanent("HTTP 405 Method Not Allowed".into());
         assert_eq!(refused_as_wrong_transport(&typed), Some(405));
+    }
+}
+
+#[cfg(test)]
+mod join_failure_tests {
+    use super::*;
+
+    /// A panicked OAuth task maps to the OAuth error `connect` has always
+    /// returned for it, naming the join failure.
+    #[tokio::test]
+    async fn a_panicked_oauth_task_is_an_oauth_error() {
+        let panicked: tokio::task::JoinHandle<Result<String>> =
+            tokio::spawn(async { panic!("the OAuth task panicked") });
+        let join_err = panicked.await.expect_err("the task panicked");
+        let Error::OAuth(message) = join_failure(&join_err) else {
+            panic!("not an OAuth error");
+        };
+        assert!(
+            message.starts_with("OAuth task failed to join: "),
+            "{message}"
+        );
+        assert!(message.contains("panicked"), "{message}");
     }
 }

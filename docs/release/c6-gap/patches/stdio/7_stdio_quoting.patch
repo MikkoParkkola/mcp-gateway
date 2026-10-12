@@ -1,11 +1,11 @@
 diff --git a/src/transport/stdio.rs b/src/transport/stdio.rs
-index 064744c1b..e7f3b2dd1 100644
+index 0000000..0000000 100644
 --- a/src/transport/stdio.rs
 +++ b/src/transport/stdio.rs
-@@ -176,12 +176,8 @@ impl StdioTransport {
-     ///
-     /// Returns an error if the command cannot be spawned or MCP initialization fails.
-     pub async fn start(self: &Arc<Self>) -> Result<()> {
+@@ -121,12 +121,8 @@ impl StdioTransport {
+     /// The child's command, with piped stdio, environment and working
+     /// directory.
+     fn spawn_command(&self) -> Result<Command> {
 -        let parts = crate::transport::split_command(&self.command).ok_or_else(|| {
 -            Error::Config(format!(
 -                "Invalid stdio command quoting: {}",
@@ -14,6 +14,6 @@ index 064744c1b..e7f3b2dd1 100644
 -        })?;
 +        let parts = crate::transport::split_command(&self.command)
 +            .unwrap_or_else(|| self.command.split_whitespace().map(String::from).collect());
-         if parts.is_empty() {
+         let Some((program, args)) = parts.split_first() else {
              return Err(Error::Config("Empty command".to_string()));
-         }
+         };

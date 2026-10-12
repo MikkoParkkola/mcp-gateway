@@ -53,16 +53,19 @@ fn chained_meta(dir: &tempfile::TempDir) -> MetaMcp {
         ChainEmit::OnRequest,
     );
     meta.enable_idempotency(Arc::new(IdempotencyCache::new()), Duration::from_secs(300));
-    meta.set_firewall(Some(Arc::new(Firewall::from_config(
-        FirewallConfig {
-            tenant_guard: TenantGuardConfig {
-                arg_keys: vec!["customer_id".to_string()],
-                ..TenantGuardConfig::default()
+    meta.set_firewall(Some(Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                tenant_guard: TenantGuardConfig {
+                    arg_keys: vec!["customer_id".to_string()],
+                    ..TenantGuardConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ))));
+            None,
+        )
+        .with_continuations(meta.continuation()),
+    )));
     meta
 }
 

@@ -44,6 +44,9 @@ pub struct InvokeScope<'a> {
     pub agent_id: Option<crate::security::ProvenAgentId<'a>>,
     /// Verified caller subject for identity-grant evaluation.
     pub grant_subject: Option<&'a GrantSubject>,
+    /// What the caller proved, read only to find its own catalogue slot on a
+    /// per-user backend (MIK-8356). Never an authorization input.
+    pub(crate) caller: crate::identity_propagation::CallerProof<'a>,
 }
 
 impl MetaMcp {
@@ -123,7 +126,19 @@ impl MetaMcp {
         caller: &super::MetaMcpCallerContext<'_>,
         session_id: Option<&str>,
     ) -> Option<Error> {
-        let scope = caller.scope();
+        self.withheld_surfaced_in(server, tool_name, caller.scope(), session_id)
+    }
+
+    /// [`Self::withheld_surfaced`] from the caller's [`InvokeScope`] alone, for
+    /// the route stage, which asks before the caller context exists
+    /// (MIK-8326, route-check-parity P3).
+    pub(super) fn withheld_surfaced_in(
+        &self,
+        server: &str,
+        tool_name: &str,
+        scope: InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) -> Option<Error> {
         // A direct-name call is a dispatch, not a listing: its grant decision
         // is recorded (D3-a); a failed note answers -32005, not -32601.
         let refusal = match self.may_invoke_before_grants(server, tool_name, scope, session_id) {
@@ -147,8 +162,8 @@ impl MetaMcp {
             },
         };
         crate::gateway::authz::audit_refusal(
-            caller.authorizer.transport(),
-            caller.authorizer.caller_name(),
+            scope.authorizer.transport(),
+            scope.authorizer.caller_name(),
             server,
             tool_name,
             &refusal.to_string(),
@@ -157,6 +172,45 @@ impl MetaMcp {
             -32601,
             format!("Unknown tool: {tool_name}"),
         ))
+    }
+
+    /// The one operator record for a direct-name call of a surfaced tool
+    /// withheld from this caller (MIK-8340 A3), written by the meta direct
+    /// route, which every entry reaches. Best-effort: a record that cannot be
+    /// written is logged, never answered, so the answer stays the absent
+    /// name's whatever the audit log does.
+    pub(super) async fn record_withheld(
+        &self,
+        server: &str,
+        tool_name: &str,
+        reason: super::visible::Withholding,
+        caller: &super::MetaMcpCallerContext<'_>,
+        session_id: Option<&str>,
+    ) {
+        match reason {
+            super::visible::Withholding::Refused => {
+                let refused = super::grant_audit::note_withheld_best_effort(server, || {
+                    self.withheld_surfaced(server, tool_name, caller, session_id)
+                })
+                .await;
+                // Outside a grant slot the note is refused and written on its
+                // own task; the call still answers as an absent name.
+                if matches!(refused, Some(Error::AuditUnavailable)) {
+                    tracing::warn!(server, "{}", super::grant_audit::WITHHELD_RECORD_FAILED);
+                }
+            }
+            super::visible::Withholding::Schema
+            | super::visible::Withholding::Descriptor
+            | super::visible::Withholding::Lacked => {
+                tracing::warn!(
+                    server,
+                    tool = tool_name,
+                    ?reason,
+                    "Surfaced tool withheld from a call by its name; answered as a name that \
+                     matches no tool"
+                );
+            }
+        }
     }
 
     /// Whether this caller may be shown the backend name `server`: its
@@ -184,19 +238,32 @@ impl MetaMcp {
             .into_iter()
             .filter(|b| self.admits_backend(&b.name, scope, session_id))
             .collect();
-        let known = backends.iter().filter(|b| b.cached_tools_known()).count();
+        // MIK-8356: a per-user backend is counted from this caller's own slot,
+        // and is not known while that slot is cold.
+        let views: Vec<_> = backends
+            .iter()
+            .map(|b| self.listing_snapshot(b, scope))
+            .collect();
+        let known = backends
+            .iter()
+            .zip(&views)
+            .filter(|(b, view)| view.is_some() && self.listing_known(b, scope))
+            .count();
         // A truncated drain is still "known" (enumerated), but its count is a
         // lower bound, never exact (MIK 7570 PAGING.1 design D). List and flag
         // are read under one guard so a fill landing between cannot tear them.
         let mut truncated = false;
         let admitted: usize = backends
             .iter()
-            .map(|b| {
-                let (tools, cut) = b.cached_tools_snapshot_and_truncated();
+            .zip(views)
+            .map(|(b, view)| {
+                let Some((tools, cut)) = view else {
+                    return 0;
+                };
                 truncated |= cut;
                 tools
                     .iter()
-                    .filter(|t| self.may_invoke(&b.name, &t.name, scope, session_id).is_ok())
+                    .filter(|t| self.shows_tool(&b.name, t, scope, session_id))
                     .count()
             })
             .sum();
@@ -219,7 +286,7 @@ impl MetaMcp {
                 .iter()
                 .filter(|name| {
                     cap.is_listed_in(name, &mut seen)
-                        && self.may_invoke(&cap.name, name, scope, session_id).is_ok()
+                        && self.shows_name(&cap.name, name, scope, session_id)
                 })
                 .count();
             total = total.plus(admitted);
@@ -235,16 +302,17 @@ impl MetaMcp {
         cap: &crate::capability::CapabilityBackend,
         scope: InvokeScope<'_>,
         session_id: Option<&str>,
-    ) -> Vec<crate::capability::CapabilityDefinition> {
+    ) -> Vec<(String, String, Vec<String>)> {
         let mut seen = std::collections::HashMap::new();
         let mut allowed = |name: &str| {
-            cap.is_listed_in(name, &mut seen)
-                && self.may_invoke(&cap.name, name, scope, session_id).is_ok()
+            cap.is_listed_in(name, &mut seen) && self.shows_name(&cap.name, name, scope, session_id)
         };
-        let mut caps = cap.list_capabilities();
-        caps.retain(|c| allowed(&c.name));
-        for c in &mut caps {
-            c.metadata.chains_with.retain(|t| allowed(t));
+        // Name, category and chain hints only (MIK-8014 PERF.8a): the guide
+        // reads nothing else, so no definition is copied.
+        let mut caps = cap.routing_fields();
+        caps.retain(|(name, _, _)| allowed(name));
+        for (_, _, chains_with) in &mut caps {
+            chains_with.retain(|t| allowed(t));
         }
         caps
     }
@@ -259,14 +327,14 @@ impl MetaMcp {
         session_id: Option<&str>,
     ) -> bool {
         let on_backend = self.backends.all().into_iter().any(|b| {
-            b.get_cached_tool(name).is_some()
-                && self.may_invoke(&b.name, name, scope, session_id).is_ok()
+            self.listing_tool(&b, name, scope).is_some()
+                && self.shows_name(&b.name, name, scope, session_id)
         });
         on_backend
             || self.get_capabilities().is_some_and(|cap| {
                 cap.has_capability(name)
                     && cap.is_listed(name)
-                    && self.may_invoke(&cap.name, name, scope, session_id).is_ok()
+                    && self.shows_name(&cap.name, name, scope, session_id)
             })
     }
 
@@ -450,6 +518,7 @@ impl InvokeScope<'static> {
             api_key_name: None,
             agent_id: None,
             grant_subject: None,
+            caller: crate::identity_propagation::CallerProof::Anonymous,
         }
     }
 }
@@ -489,6 +558,7 @@ impl InvokeScope<'static> {
             api_key_name: None,
             agent_id: None,
             grant_subject: None,
+            caller: crate::identity_propagation::CallerProof::Anonymous,
         }
     }
 }
@@ -498,13 +568,20 @@ impl<'a> InvokeScope<'a> {
     /// this process, so it holds the operator's standing; its tools are
     /// judged by the stdio authorizer (the global tool policy), as its calls
     /// are, and identity grants see no subject, which also matches invoke.
-    pub(crate) fn stdio(authorizer: &'a crate::gateway::authz::ToolPolicyAuthorizer<'a>) -> Self {
+    pub(crate) fn stdio(
+        authorizer: &'a crate::gateway::authz::ToolPolicyAuthorizer<'a>,
+        caller: crate::identity_propagation::CallerProof<'a>,
+    ) -> Self {
         Self {
             authorizer,
             is_admin: true,
             api_key_name: None,
             agent_id: None,
             grant_subject: None,
+            // The process's one operator spawned it, so its own catalogue slot on
+            // a per-user backend is the sole operator's (MIK-8356). Proven by
+            // the caller, which holds the stdio nonce.
+            caller,
         }
     }
 }

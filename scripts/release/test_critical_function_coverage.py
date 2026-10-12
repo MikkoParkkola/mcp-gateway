@@ -109,6 +109,78 @@ class CriticalFunctionCoverage(unittest.TestCase):
         row = "src/lib.rs\tcheck\t2\tcritical\td\tcheck\tr"
         self.assertEqual(self.run_rows([row], lcovs=[self.lcov, windows]), 0)
 
+    def test_a_missing_report_is_named_and_is_not_a_graded_fail(self):
+        # MIK-8265: a run whose Windows job uploaded no report. The grade is
+        # refused, naming the input, with its own exit status; it never prints
+        # a row count that would read as a graded FAIL, and never a traceback.
+        missing = self.root / "coverage-windows" / "windows.lcov"
+        inventory = self.root / "inv.tsv"
+        inventory.write_text(HEADER + "src/lib.rs\tcheck\t2\tcritical\td\tcheck\tr\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = cfc.main(["--inventory", str(inventory), "--root", str(self.root),
+                             "--lcov", str(self.lcov), "--lcov", str(missing)])
+        self.assertEqual(code, cfc.INPUT_MISSING)
+        self.assertNotIn(code, (0, 1))
+        self.assertIn(f"input missing: {missing}", out.getvalue())
+        self.assertNotIn("critical rows failing", out.getvalue())
+
+    def test_an_empty_or_unreadable_report_counts_as_missing(self):
+        # An empty windows.lcov would otherwise grade as Linux alone (MIK-8265).
+        empty = self.root / "empty.lcov"
+        empty.write_text("")
+        folder = self.root / "a-directory.lcov"
+        folder.mkdir()
+        for bad in (empty, folder):
+            with self.subTest(bad=bad.name):
+                with self.assertRaises(cfc.MissingInput):
+                    cfc.read_lcov([self.lcov, bad], self.root)
+
+    def test_an_unparseable_report_counts_as_missing(self):
+        # A truncated or corrupt lcov: present, but a DA line is not numbers.
+        corrupt = self.root / "corrupt.lcov"
+        corrupt.write_text("SF:src/lib.rs\nDA:1\nDA:not,a-number\n")
+        with self.assertRaises(cfc.MissingInput):
+            cfc.read_lcov([self.lcov, corrupt], self.root)
+
+    def test_the_wrapper_maps_the_same_status(self):
+        # coverage_grade.sh turns a grader's INPUT_MISSING into NOT GRADED.
+        wrapper = (pathlib.Path(__file__).resolve().parent / "coverage_grade.sh").read_text()
+        self.assertIn(f"INPUT_MISSING={cfc.INPUT_MISSING}\n", wrapper)
+
+    def test_the_report_reader_names_the_missing_report(self):
+        missing = self.root / "absent.lcov"
+        with self.assertRaises(cfc.MissingInput) as raised:
+            cfc.read_lcov([self.lcov, missing], self.root)
+        self.assertEqual(raised.exception.path, str(missing))
+
+    def run_scoped(self, rows, scope):
+        inventory = self.root / "inv.tsv"
+        inventory.write_text(HEADER + "".join(r + "\n" for r in rows))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = cfc.main(["--inventory", str(inventory), "--root", str(self.root),
+                             "--lcov", str(self.lcov), "--scope", scope])
+        return code, out.getvalue()
+
+    def test_a_linux_only_grade_lists_an_unmeasured_variant_without_failing(self):
+        # A pull request's grade has the Linux report alone (MIK-8217): a variant
+        # compiled only elsewhere is listed and counted, and graded on the push.
+        row = "src/lib.rs\tcheck\t2\tcritical\td\tcheck\tr"
+        code, out = self.run_scoped([row], "linux-only")
+        self.assertEqual(code, 0)
+        self.assertIn("UNMEASURED-HERE\t-\t-\tsrc/lib.rs:check#2", out)
+        self.assertIn("critical rows not measured in this scope: 1", out)
+        self.assertIn("critical rows failing: 0", out)
+        self.assertEqual(self.run_scoped([row], "all-platforms")[0], 1)
+
+    def test_a_linux_only_grade_still_fails_a_row_below_or_missing(self):
+        for row in ("src/lib.rs\tcheck\t1\tcritical\td\tcheck\tr",
+                    "src/lib.rs\tgone\t1\tcritical\td\tgone\tr"):
+            code, out = self.run_scoped([row], "linux-only")
+            self.assertEqual(code, 1, row)
+            self.assertIn("critical rows failing: 1", out)
+
     def test_a_checkout_under_a_directory_named_src_still_resolves(self):
         nested = self.root / "nested.lcov"
         nested.write_text(LCOV.replace("SF:/build/repo/src/lib.rs", "SF:/src/mcp-gateway/src/lib.rs"))
@@ -297,6 +369,86 @@ fn logs(x: u8) -> Result<bool, u8> {
         self.assertEqual(result[0], "BELOW")
         self.assertEqual(result[4], [2, 3])
         self.assertEqual(result[8], [])
+
+
+class SelectHeadLines(unittest.TestCase):
+    """MIK-8327: a line that is only an optional `let <pattern> =` and a
+    `[::]tokio::select! {` head holds no call, so its count is graded like any
+    line, while nothing in the crate can rebind the name. Anything more on the
+    line, a bare `select!`, or a crate that could rebind it keeps the MIK-7725
+    rule: unverifiable."""
+
+    ARMS = "        () = ready() => 1,\n    };\n"
+
+    def grade(self, head, count, extra=None, cargo=None):
+        source = "fn waits(x: u8) -> bool {\n" + head + self.ARMS + "    x > 0\n}\n"
+        last = source.count("\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(source)
+            if extra is not None:
+                (root / "src/other.rs").write_text(extra)
+            if cargo is not None:
+                (root / "Cargo.toml").write_text(cargo)
+            counts = {1: 1, 2: count, 3: 1, 4: 1, last - 1: 1, last: 1}
+            records = "".join(f"DA:{n},{c}\n" for n, c in sorted(counts.items()))
+            lcov = root / "cov.lcov"
+            lcov.write_text(f"SF:/repo/src/lib.rs\n{records}end_of_record\n")
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\twaits\t1\tcritical\td\twaits\tr\n")
+            return cfc.grade(root, inventory, [lcov])[0]
+
+    def assert_hit(self, head, **crate):
+        result = self.grade(head, 3, **crate)
+        self.assertEqual(result[4], [], head)
+        self.assertEqual(result[9], [], head)
+
+    def assert_unverifiable(self, head, **crate):
+        result = self.grade(head, 3, **crate)
+        self.assertEqual(result[4], [2], (head, crate))
+        self.assertEqual(result[9], ["src/lib.rs:2 (head count 3)"], (head, crate))
+
+    def test_a_reached_bare_tokio_select_head_is_graded_by_its_count(self):
+        self.assert_hit("    let unanswered = tokio::select! {\n")
+        self.assert_hit("    tokio::select! {\n")
+        self.assert_hit("    let (a, mut b) = ::tokio::select! {\n")
+        self.assert_hit("    let _ = tokio::select! {\n", cargo='[dependencies]\ntokio = { version = "1" }\n')
+
+    def test_a_call_on_the_select_head_is_still_unverifiable(self):
+        self.assert_unverifiable("    let x = tokio::select! { foo() => 1,\n")
+        self.assert_unverifiable("    tokio::select! { biased; () = ready() => 1,\n")
+        self.assert_unverifiable("    let x = pick(tokio::select! {\n")
+
+    def test_anything_else_on_the_select_head_keeps_it_unverifiable(self):
+        self.assert_unverifiable("    tokio::select! { biased;\n")
+        self.assert_unverifiable("    let x: u8 = tokio::select! {\n")
+        self.assert_unverifiable("    tokio::select! { // why\n")
+        self.assert_unverifiable("    other::select! {\n")
+        self.assert_unverifiable("    let x = select! {\n")
+
+    def test_a_crate_that_could_rebind_the_name_is_not_exempt(self):
+        head = "    let x = tokio::select! {\n"
+        for extra in (
+            "mod tokio { pub use crate::logs as select; }\n",
+            "use crate::logs as tokio;\n",
+            "use crate::logs as select;\n",
+            "macro_rules! select { ($($t:tt)*) => {} }\n",
+        ):
+            with self.subTest(extra=extra):
+                self.assert_unverifiable(head, extra=extra)
+        for cargo in (
+            '[dependencies]\ntokio = { package = "other", version = "1" }\n',
+            '[dependencies.tokio]\npackage = "other"\n',
+        ):
+            with self.subTest(cargo=cargo):
+                self.assert_unverifiable(head, cargo=cargo)
+
+    def test_an_unreached_select_head_is_still_missed(self):
+        result = self.grade("    let unanswered = tokio::select! {\n", 0)
+        self.assertEqual(result[0], "BELOW")
+        self.assertIn(2, result[4])
+        self.assertEqual(result[9], [], "a count-0 head is missed, not unverifiable")
 
 
 class HeadLineCalls(unittest.TestCase):

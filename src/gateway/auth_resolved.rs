@@ -53,7 +53,14 @@ impl ResolvedAuthConfig {
         }
 
         config.warn_keys_without_backends();
-        config.warn_expired_keys(chrono::Utc::now());
+        match crate::clock::utc_now() {
+            Ok(now) => config.warn_expired_keys(now),
+            // Advisory only: a clock that cannot date a key lists none.
+            // Admission itself is an access check and already fails closed.
+            Err(error) => {
+                warn!(target: AUTH_TARGET, %error, "host clock reads before 1970: expired API keys are not listed");
+            }
+        }
         let api_keys: Vec<ResolvedApiKey> = config
             .api_keys
             .iter()
@@ -233,6 +240,21 @@ impl ResolvedAuthConfig {
             .iter()
             .find(|k| k.name == name && hex::encode(&k.digest[..6]) == principal)?;
         (!crate::config::api_key_expired_now(key.expires_at)).then(|| Self::client_of(key))
+    }
+
+    /// [`Self::client_for_key`] judged at `now`, the caller's reading of the
+    /// clock; reads no clock (MIK-8202).
+    pub(crate) fn client_for_key_at(
+        &self,
+        name: &str,
+        principal: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Option<AuthenticatedClient> {
+        let key = self
+            .api_keys
+            .iter()
+            .find(|k| k.name == name && hex::encode(&k.digest[..6]) == principal)?;
+        (!crate::config::api_key_expired(key.expires_at, now)).then(|| Self::client_of(key))
     }
 
     /// Check rate limit for a client. Returns true if allowed, false if rate limited.

@@ -21,18 +21,31 @@ use crate::protocol::meta::Declared;
 use crate::protocol::mrtr::RetryFields;
 use crate::security::{ToolPolicy, ToolPolicyConfig};
 
-pub(super) const BACKEND: &str = "fixture";
-const TOOL: &str = "echo";
-const DENIED: &str = "forbidden";
+pub(crate) const BACKEND: &str = "fixture";
+pub(crate) const TOOL: &str = "echo";
+pub(super) const DENIED: &str = "forbidden";
 
 /// A counting backend answering every tool at once.
-async fn backend() -> (String, Arc<AtomicUsize>) {
+pub(crate) async fn backend() -> (String, Arc<AtomicUsize>) {
+    backend_listing(json!([
+        // MIK-8393: `echo` declares itself read-only, so U2's repeat is a
+        // cache hit.
+        {"name": TOOL, "inputSchema": {"type": "object"}, "annotations": {"readOnlyHint": true}},
+        {"name": DENIED, "inputSchema": {"type": "object"}},
+    ]))
+    .await
+}
+
+/// [`backend`] whose `tools/list` answers `tools` (the route x check matrix
+/// lists a destructive tool, MIK-8137 b3).
+pub(crate) async fn backend_listing(tools: Value) -> (String, Arc<AtomicUsize>) {
     let rounds = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&rounds);
     let app = axum::Router::new().route(
         "/",
         axum::routing::post(move |axum::Json(request): axum::Json<Value>| {
             let counted = Arc::clone(&counted);
+            let tools = tools.clone();
             async move {
                 let result = match request.get("method").and_then(Value::as_str) {
                     Some("initialize") => json!({
@@ -40,13 +53,16 @@ async fn backend() -> (String, Arc<AtomicUsize>) {
                         "capabilities": {"tools": {}},
                         "serverInfo": {"name": BACKEND, "version": "0"},
                     }),
-                    Some("tools/list") => json!({"tools": [
-                        {"name": TOOL, "inputSchema": {"type": "object"}},
-                        {"name": DENIED, "inputSchema": {"type": "object"}},
-                    ]}),
+                    Some("tools/list") => json!({"tools": tools}),
                     Some("tools/call") => {
                         counted.fetch_add(1, Ordering::SeqCst);
-                        json!({"content": [{"type": "text", "text": "done"}]})
+                        // Echoes a `cmd` argument as sent, so a row can see
+                        // what reached the backend (route x check matrix).
+                        let text = request["params"]["arguments"]["cmd"]
+                            .as_str()
+                            .unwrap_or("done")
+                            .to_string();
+                        json!({"content": [{"type": "text", "text": text}]})
                     }
                     _ => json!({}),
                 };
@@ -63,25 +79,37 @@ async fn backend() -> (String, Arc<AtomicUsize>) {
 }
 
 /// A stdio task store over a production-built `MetaMcp`, under `policy`.
-pub(super) struct Fixture {
+pub(crate) struct Fixture {
     pub(super) tasks: Arc<StdioTasks>,
-    meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
-    policy: Arc<ToolPolicy>,
+    pub(super) meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
+    pub(super) policy: Arc<ToolPolicy>,
     mtls: Arc<crate::mtls::MtlsPolicy>,
-    rounds: Arc<AtomicUsize>,
+    pub(super) rounds: Arc<AtomicUsize>,
+    /// `security.sanitize_input` as `run_stdio_on` reads it from the config.
+    sanitize: crate::gateway::server::stdio_single::InputSanitizing,
     pub(super) store: tempfile::TempDir,
     pub(super) expiry: Option<crate::gateway::task_service::execution::ExpirySweep>,
     _data: tempfile::TempDir,
 }
 
-async fn fixture(policy: Option<ToolPolicy>) -> Fixture {
+pub(super) async fn fixture(policy: Option<ToolPolicy>) -> Fixture {
     fixture_on(backend().await, policy).await
 }
 
 /// [`fixture`] over the backend at `url`.
 pub(super) async fn fixture_on(
+    backend: (String, Arc<AtomicUsize>),
+    policy: Option<ToolPolicy>,
+) -> Fixture {
+    Box::pin(fixture_on_with(backend, policy, |_| {})).await
+}
+
+/// [`fixture_on`] with `configure` applied to the gateway config before it is
+/// built (the route x check matrix surfaces a tool through it, MIK-8137 b3).
+pub(crate) async fn fixture_on_with(
     (url, rounds): (String, Arc<AtomicUsize>),
     policy: Option<ToolPolicy>,
+    configure: impl FnOnce(&mut Config),
 ) -> Fixture {
     let store = tempfile::tempdir().expect("store root");
     let mut config = Config::default();
@@ -98,6 +126,7 @@ pub(super) async fn fixture_on(
             ..BackendConfig::default()
         },
     );
+    configure(&mut config);
     let data = tempfile::tempdir().expect("data dir");
     let built = Gateway::new(config.clone())
         .await
@@ -121,13 +150,16 @@ pub(super) async fn fixture_on(
         policy: tool_policy,
         mtls: built.mtls_policy,
         rounds,
+        sanitize: crate::gateway::server::stdio_single::InputSanitizing::from_setting(
+            config.security.sanitize_input,
+        ),
         store,
         expiry: Some(expiry),
         _data: data,
     }
 }
 
-fn keyed(key: &str) -> RetryFields {
+pub(super) fn keyed(key: &str) -> RetryFields {
     RetryFields {
         idempotency_key: Some(key.to_owned()),
         ..RetryFields::default()
@@ -135,7 +167,7 @@ fn keyed(key: &str) -> RetryFields {
 }
 
 /// The intent stdio builds for a keyed task-augmented `gateway_invoke`.
-fn intent(tasks: &StdioTasks, tool: &str, retry: &RetryFields) -> TaskIntent {
+pub(super) fn intent(tasks: &StdioTasks, tool: &str, retry: &RetryFields) -> TaskIntent {
     let arguments = json!({"server": BACKEND, "tool": tool, "arguments": {}});
     tasks
         .intent(&IntentRequest {
@@ -147,6 +179,14 @@ fn intent(tasks: &StdioTasks, tool: &str, retry: &RetryFields) -> TaskIntent {
             input_capabilities: Declared::NONE,
             session_id: super::super::STDIO_SESSION_ID,
             protocol_revision: None,
+            scope: crate::gateway::meta_mcp::InvokeScope {
+                authorizer: &crate::gateway::authz::AllowAll,
+                is_admin: false,
+                api_key_name: None,
+                agent_id: None,
+                grant_subject: None,
+                caller: crate::identity_propagation::CallerProof::Anonymous,
+            },
         })
         .expect("a keyed modern call is accepted")
         .expect("a dispatchable tool becomes a task")
@@ -244,8 +284,8 @@ pub(super) fn modern_call(id: u64, tool: &str, key: &str, task: bool) -> Value {
 }
 
 /// One request through the stdio dispatcher, with this fixture's store.
-pub(super) async fn dispatch(fixture: &Fixture, request: Value) -> Value {
-    Gateway::dispatch_single_with_sink(
+pub(crate) async fn dispatch(fixture: &Fixture, request: Value) -> Value {
+    Gateway::dispatch_single_for_client(
         &fixture.meta,
         &fixture.policy,
         &fixture.mtls,
@@ -255,9 +295,10 @@ pub(super) async fn dispatch(fixture: &Fixture, request: Value) -> Value {
             channel: &crate::gateway::input_bridge::NoClientChannel,
             handshake_capabilities: Declared::NONE,
             tasks: Some(&fixture.tasks),
-            modern: false,
+            serving: crate::gateway::server::stdio_single::ModernServing::Enabled,
+            discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
+            sanitize: fixture.sanitize,
         },
-        &super::super::StdioTelemetry::default(),
     )
     .await
     .expect("a request is answered")
@@ -271,6 +312,11 @@ async fn settle(fixture: &Fixture, tool: &str, key: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or_else(|| panic!("a task handle: {created}"))
         .to_owned();
+    wait_terminal(fixture, id).await
+}
+
+/// Wait until task `id` is terminal, and return its id.
+pub(super) async fn wait_terminal(fixture: &Fixture, id: String) -> String {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         let task = fixture
@@ -331,7 +377,11 @@ async fn a_stdio_task_s_inner_call_is_cached_under_the_operator() {
     );
 }
 
-/// U5: a stdio task runs under the current tool policy.
+/// U5: a stdio task runs under the current tool policy. A denied tool is
+/// refused at submit by the route stage (route-check-parity P3, r2.1 H1),
+/// with the policy's own refusal, exactly as its synchronous call is, and no
+/// task (MIK-8315); a neighbour still runs. The worker re-checks at run time
+/// through the dispatch chokepoint.
 #[tokio::test]
 async fn a_stdio_task_runs_under_the_current_tool_policy() {
     let denying = ToolPolicy::from_config(&ToolPolicyConfig {
@@ -339,8 +389,34 @@ async fn a_stdio_task_runs_under_the_current_tool_policy() {
         ..ToolPolicyConfig::default()
     });
     let fixture = Box::pin(fixture(Some(denying))).await;
-    // Settled terminal by its own worker: the authorizer refused it.
-    settle(&fixture, DENIED, "u5-denied").await;
+    let sync = dispatch(&fixture, modern_call(1, DENIED, "u5-denied-sync", false)).await;
+    let refused = dispatch(&fixture, modern_call(2, DENIED, "u5-denied", true)).await;
+    assert_eq!(refused["error"]["code"], -32600, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        format!(
+            "Protocol error: Tool '{DENIED}' on server '{BACKEND}' is blocked by security policy"
+        ),
+        "not refused by the tool policy at submit: {refused}"
+    );
+    assert_eq!(
+        refused["error"]["data"]["gateway_http_status"], 403,
+        "{refused}"
+    );
+    assert!(
+        refused.pointer("/result/taskId").is_none(),
+        "a task was made for a denied tool: {refused}"
+    );
+    assert_eq!(
+        refused.pointer("/error/code"),
+        sync.pointer("/error/code"),
+        "{refused}"
+    );
+    assert_eq!(
+        refused.pointer("/error/message"),
+        sync.pointer("/error/message"),
+        "{refused}"
+    );
     assert_eq!(
         fixture.rounds.load(Ordering::SeqCst),
         0,
@@ -440,7 +516,9 @@ async fn an_unnamed_tasks_method_fails_closed() {
             channel: &crate::gateway::input_bridge::NoClientChannel,
             handshake_capabilities: Declared::NONE,
             tasks: Some(&fixture.tasks),
-            modern: false,
+            serving: crate::gateway::server::stdio_single::ModernServing::Enabled,
+            discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
+            sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
     );
     let answer = fixture
@@ -649,7 +727,7 @@ async fn eof_drains_a_running_task_before_returning() {
     let task = service
         .get(LOCAL_OPERATOR_PRINCIPAL, &id)
         .expect("the local operator's task is in its store");
-    let wire = crate::gateway::task_route::task_envelope(&task.task, "complete");
+    let wire = serde_json::to_value(task.task.wire()).expect("the task serializes");
     assert_eq!(
         task.task.status(),
         crate::protocol::tasks::TaskStatus::Completed,

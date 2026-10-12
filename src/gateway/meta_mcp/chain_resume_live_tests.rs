@@ -485,7 +485,12 @@ async fn handle_expiring_at(meta: &MetaMcp, expires_at: u64, now: u64) -> String
     let state = meta.continuation();
     let hold = state
         .in_flight()
-        .hold("srv", expires_at, now)
+        .hold(
+            "srv",
+            &crate::protocol::continuation::QuotaKey::for_test("caller"),
+            expires_at,
+            now,
+        )
         .await
         .expect("the in-flight table has room for one exchange");
     let fingerprint = crate::protocol::mrtr::principal_fingerprint(Some(&identity()))
@@ -590,3 +595,12 @@ async fn a_chain_resume_after_its_backend_is_replaced_is_refused() {
         replacement.calls()
     );
 }
+
+#[path = "chain_resume_binding_tests.rs"]
+mod binding;
+
+// MIK-8353 slice 3b: a chain resume refused after its handle was spent keeps
+// its nonce. Beside the fixture for its private helpers.
+#[cfg(feature = "cost-governance")]
+#[path = "chain_resume_nonce_tests.rs"]
+mod nonce_tests;

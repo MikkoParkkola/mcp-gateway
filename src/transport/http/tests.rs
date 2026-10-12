@@ -25,6 +25,12 @@ mod session_expiry;
 /// An unpinned flavour connects as a Streamable pin does (MIK-8044).
 mod unpinned_flavour;
 
+/// The legacy handshake's protocol-version refusals (MIK-8195 W1).
+mod version_refusals;
+
+/// A peer's error body is surfaced only for its own request (MIK-8195 W1).
+mod peer_refusal;
+
 /// Per-identity MCP-Session-Id partitioning (MIK-6784, GW.1).
 mod session_partition;
 
@@ -89,7 +95,7 @@ fn oauth_client_for(resource: &str) -> crate::oauth::OAuthClient {
         vec![],
         storage,
         OAuthClientConfig {
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     )
@@ -565,3 +571,39 @@ async fn drop_aborts_refresh_task_without_close() {
 
 #[path = "status_typing_tests.rs"]
 mod status_typing;
+
+/// MIK-8339: an OAuth transport always shares one login gate with its client.
+/// A gated client keeps its own gate; an ungated one is given the transport's.
+#[tokio::test]
+async fn an_oauth_transport_shares_one_gate_with_its_client() {
+    let url = "http://127.0.0.1:1/mcp";
+    let gate = Arc::new(crate::oauth::login_gate::LoginGate::default());
+    let gated = oauth_client_for(url).with_login_gate(Arc::clone(&gate));
+    let t = HttpTransport::new_with_oauth(
+        url,
+        HashMap::new(),
+        Duration::from_secs(5),
+        true,
+        Some(gated),
+        None,
+    )
+    .unwrap();
+    assert!(
+        Arc::ptr_eq(&t.login_gate, &gate),
+        "a gated client's gate is kept"
+    );
+
+    let t = transport_with_oauth(url).unwrap();
+    let client_gate = t
+        .oauth_client
+        .as_ref()
+        .expect("an OAuth transport")
+        .lock()
+        .await
+        .login_gate()
+        .expect("the ungated client was given a gate");
+    assert!(
+        Arc::ptr_eq(&t.login_gate, &client_gate),
+        "an ungated client is given the transport's own gate"
+    );
+}

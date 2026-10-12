@@ -299,7 +299,7 @@ async fn a_cache_read_never_fills_an_identity_bound_backend() {
             callback_host: None,
             callback_port: None,
             callback_path: None,
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
         }),
         ..Default::default()
     };
@@ -385,6 +385,7 @@ async fn a_filtered_tools_list_never_fills_a_backend_the_caller_may_not_see() {
         api_key_name: None,
         agent_id: None,
         grant_subject: None,
+        caller: crate::identity_propagation::CallerProof::Anonymous,
     };
     let _ = meta.handle_tools_list_filtered(
         crate::protocol::RequestId::Number(1),

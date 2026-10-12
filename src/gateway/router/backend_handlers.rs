@@ -24,7 +24,7 @@ use crate::mtls::CertIdentity;
 use crate::protocol::{JsonRpcResponse, RequestId};
 #[cfg(feature = "firewall")]
 use crate::security::firewall::FirewallAction;
-use crate::security::{sanitize_json_value, validate_tool_name};
+use crate::security::validate_tool_name;
 
 type BackendRejection = (StatusCode, Json<Value>);
 type BackendSecurityResult = Result<Option<Value>, BackendRejection>;
@@ -65,7 +65,9 @@ use relay::{
 /// Order of checks matches `meta_mcp_handler`:
 /// 1. `validate_tool_name` — rejects dangerous names before any policy lookup.
 /// 2. `tool_policy.check` — enforces global allow/deny rules.
-/// 3. `sanitize_json_value` — strips/rejects dangerous byte sequences.
+///
+/// Sanitization is not here: the whole request is sanitized at intake
+/// (MIK-8154 SAN.1, `direct_caller::read_envelope`).
 #[allow(clippy::result_large_err)]
 async fn apply_backend_tool_call_security(
     state: &AppState,
@@ -133,26 +135,14 @@ async fn apply_backend_tool_call_security(
                 "Firewall: direct backend request warning"
             );
         }
-        if !verdict.allowed {
-            let desc = verdict
-                .findings
-                .first()
-                .map_or("Security firewall blocked this request", |f| {
-                    f.description.as_str()
-                });
-            // OWASP ASI10: an anomaly block carries -32002 on every route, as
-            // on the meta route, so a caller can tell it from other refusals.
-            if verdict.is_asi10_block() {
-                return Err(backend_security_error_with_status(
-                    id,
-                    -32002,
-                    &format!("Anomaly detection blocked: {desc}"),
-                    StatusCode::FORBIDDEN,
-                ));
-            }
-            return Err(backend_security_error(
+        if let Some((code, message)) = verdict.request_refusal() {
+            // The shared wording's code, ASI10's -32002 included, with this
+            // route's own HTTP status (403).
+            return Err(backend_security_error_with_status(
                 id,
-                &format!("Firewall blocked: {desc}"),
+                code,
+                &message,
+                StatusCode::FORBIDDEN,
             ));
         }
         let target = (backend_name, tool_name);
@@ -172,13 +162,10 @@ async fn apply_backend_tool_call_security(
         return Ok(None);
     }
 
-    match sanitize_json_value(params) {
-        Ok(sanitized) => Ok(Some(sanitized)),
-        Err(e) => {
-            warn!(backend = %backend_name, tool = %tool_name, "Input sanitization failed");
-            Err(backend_security_error(id, &e.to_string()))
-        }
-    }
+    // The request was sanitized as a whole at intake when the setting is on
+    // (MIK-8154 SAN.1, `direct_caller::read_envelope`); these are the params
+    // to forward.
+    Ok(Some(params.clone()))
 }
 
 /// What a direct-route call's token must grant (MIK-7570.ATTEST.1 part 3).
@@ -352,60 +339,6 @@ use crate::identity_propagation::audit_subject;
 // route used to carry a hand copy of it).
 use crate::identity_propagation::audit_identity_propagation;
 
-/// Dispatch a direct-route request to a backend inside a notification scope.
-///
-/// The scope is the only reason this wrapper exists: without one,
-/// `mint_progress_token` returns `None` and `Backend::request*` hands the
-/// backend the caller's own `_meta.progressToken` (MIK-7272.SUB.2b / ADR-014
-/// section 2), which is precisely what the mint exists to prevent. This route
-/// has no client-facing stream, so the drained notifications are discarded --
-/// unscoped they were already dropped inside `publish`, so scoping changes
-/// nothing about delivery and buys the substitution.
-async fn dispatch_in_scope(
-    backend: &crate::backend::Backend,
-    method: &str,
-    id: &RequestId,
-    params: Option<Value>,
-    propagated_headers: &[(String, String)],
-    identity_key: Option<&str>,
-) -> crate::Result<JsonRpcResponse> {
-    // Collected and discarded unread: nothing reaches a client, so no screen.
-    let (response, _discarded) = crate::transport::notification_sink::collect(None, async {
-        if propagated_headers.is_empty() && identity_key.is_none() {
-            backend.request(method, params).await
-        } else {
-            backend
-                .request_with_headers(method, params, propagated_headers, identity_key)
-                .await
-        }
-    })
-    .await;
-    // `method` is client-chosen. The backend refuses whatever the dispatched
-    // slot's era removed, before the wire (MIK-7217 OUTBOUND.1, MIK-8186); the
-    // refusal is answered here with the caller's own id, since an `id: null`
-    // error cannot be correlated.
-    if let Err(error) = &response
-        && let Some(message) = crate::backend::removed_method_refusal_message(error)
-    {
-        return Ok(JsonRpcResponse::error(
-            Some(id.clone()),
-            crate::protocol::era::METHOD_NOT_FOUND_CODE,
-            message.to_string(),
-        ));
-    }
-    // MIK-7116.MIN.2: what the backend sent counts as read here, before a
-    // list drain, filter or normalisation drops fields. `tools/call` notes
-    // its result at its gates instead, once they pass.
-    if method != "tools/call"
-        && let Ok(JsonRpcResponse {
-            result: Some(raw), ..
-        }) = &response
-    {
-        crate::security::tenant_reads::note_read(raw);
-    }
-    response
-}
-
 /// Whether a direct-route request reaches task state.
 ///
 /// Every `tasks/*` method, in any letter case, because a backend that matches
@@ -450,7 +383,14 @@ pub(super) async fn backend_handler(
         ));
     }
 
-    direct_audit::audited_call(Arc::clone(&state), name, request).await
+    // The request's scope for what intake judges (MIK-8154 F2: the exempt
+    // instance the send compares), boxed so the scope wraps a pointer.
+    crate::gateway::meta_mcp::visible::with_visibility_memo(Box::pin(direct_audit::audited_call(
+        Arc::clone(&state),
+        name,
+        request,
+    )))
+    .await
 }
 
 /// The direct backend route, as an ordered sequence of stages. Each stage
@@ -600,10 +540,16 @@ fn settle_direct_idempotency(
 /// lost round stores the uncertainty notice under the first caller's code
 /// (MIK-7979), the same sentence the meta route stores.
 fn settle_direct_failure(
-    mut reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
+    (mut reservation, lease): (
+        Option<&mut crate::idempotency::IdempotencyReservation>,
+        Option<crate::gateway::meta_mcp::admission::SyncLease>,
+    ),
     error: &crate::Error,
     response: &JsonRpcResponse,
 ) {
+    // The lease (7b) follows 7a: a pre-dispatch failure was withdrawn and
+    // releases on drop; a lost round stays uncertain, as 7a's notice does;
+    // otherwise it settles on the answer 7a stores.
     if error.is_pre_dispatch() {
         if let Some(reservation) = reservation {
             reservation.release();
@@ -621,6 +567,9 @@ fn settle_direct_failure(
         }
     }
     settle_direct_idempotency(reservation, response);
+    if let Some(lease) = lease {
+        lease.complete_delivery(response, None);
+    }
 }
 
 /// Rebuild the JSON-RPC error response stored under an idempotency key.
@@ -690,8 +639,15 @@ mod direct_audit;
 mod direct_caller;
 mod direct_dispatch;
 mod direct_failure;
+mod direct_idempotency;
+#[cfg(test)]
+pub(super) use direct_idempotency::seams as direct_lease_seams;
 mod direct_list;
+mod direct_permit;
+#[cfg(test)]
+pub(super) use direct_permit::seams as direct_permit_seams;
 mod direct_preflight;
+mod direct_send;
 mod key_check;
 mod notification_key;
 pub(super) use costs::costs_handler;

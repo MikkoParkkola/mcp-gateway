@@ -10,18 +10,95 @@ use crate::gateway::auth::AuthenticatedClient;
 pub(super) use crate::gateway::authz::{AuthorizationError, CallTarget, ToolTarget};
 use crate::gateway::authz::{Decision, Emit, ToolAuthorizer, Transport};
 use crate::gateway::meta_mcp::MetaMcp;
+use crate::gateway::meta_mcp::invoke::TargetNaming;
 use crate::gateway::oauth::{
     Action, AgentIdentity as OAuthAgentIdentity, check_scopes, record_agent_scope_decision,
 };
 use crate::mtls::{CertIdentity, PolicyDecision};
 use crate::security::validate_tool_name;
 
+/// Whether `request` is exempt from sanitization (MIK-8154 SAN.1, option (a)):
+/// a `tools/call` whose backend targets are known, at least one, and all on
+/// `passthrough` backends. Targets are mapped on `view`; on the caller view a
+/// surfaced name is judged through `tool_visible_to` (the request's memo), so
+/// a name withheld from the caller has no target and the request is sanitized
+/// exactly as an absent name's is. A playbook's steps are read from the live
+/// engine, and the digest of the definition judged is kept in the request's
+/// memo so the run refuses a different one (C2e). Any other shape, and a call
+/// with no target, is not exempt.
+pub(crate) fn sanitize_exempt(
+    meta_mcp: &MetaMcp,
+    request: &Value,
+    view: crate::gateway::meta_mcp::visible::TargetView<'_>,
+) -> bool {
+    if request.get("method").and_then(Value::as_str) != Some("tools/call") {
+        return false;
+    }
+    let params = request.get("params");
+    let Some(name) = params.and_then(|p| p.get("name")).and_then(Value::as_str) else {
+        return false;
+    };
+    let empty = Value::Object(serde_json::Map::new());
+    let arguments = params.and_then(|p| p.get("arguments")).unwrap_or(&empty);
+    let servers: Vec<(String, TargetNaming)> = if name == "gateway_run_playbook" {
+        let playbook = arguments.get("name").and_then(Value::as_str).unwrap_or("");
+        let Some((servers, digest)) = meta_mcp.playbook_step_servers(playbook) else {
+            return false;
+        };
+        crate::gateway::meta_mcp::visible::record_judged_playbook(digest);
+        let explicit = |server| (server, TargetNaming::ExplicitBackend);
+        servers.into_iter().map(explicit).collect()
+    } else {
+        backend_tool_targets_for_call(meta_mcp, name, arguments, view)
+            .into_iter()
+            .map(|t| {
+                let naming = TargetNaming::of(meta_mcp, name, (&t.server, &t.tool));
+                (t.server, naming)
+            })
+            .collect()
+    };
+    // Judged and recorded on the same instances (F2): a reload between two
+    // lookups could otherwise judge one instance and record another. That
+    // includes the per-user exclusion (MIK-8356): one lookup per server.
+    let instances: Option<Vec<_>> = servers
+        .iter()
+        .map(|(server, naming)| {
+            meta_mcp
+                .passthrough_instance(server)
+                .filter(|backend| !per_user_surfaced(backend, *naming))
+        })
+        .collect();
+    match instances {
+        Some(instances) if !instances.is_empty() => {
+            crate::gateway::meta_mcp::visible::record_exempt_instances(&instances);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// A surfaced name on a per-user backend is never exempt (MIK-8356): intake
+/// runs before the caller's own catalogue is read, so exempting it would let
+/// the answer tell a withheld name from a missing one. Judged on the instance
+/// the exemption records.
+fn per_user_surfaced(backend: &crate::backend::Backend, naming: TargetNaming) -> bool {
+    naming == TargetNaming::SurfacedName && backend.keeps_per_user_catalogues()
+}
+
 pub(crate) fn backend_tool_targets_for_call<'a>(
     meta_mcp: &MetaMcp,
     tool_name: &str,
     arguments: &'a Value,
+    view: crate::gateway::meta_mcp::visible::TargetView<'_>,
 ) -> Vec<CallTarget<'a>> {
-    if let Some(server) = meta_mcp.surfaced_tool_server(tool_name) {
+    use crate::gateway::meta_mcp::visible::TargetView;
+    let surfaced = match view {
+        TargetView::Caller(scope, session_id) => meta_mcp
+            .surfaced_for(tool_name, scope, session_id)
+            .visible_server(),
+        TargetView::Dispatched => meta_mcp.surfaced_server_unscoped(tool_name),
+    };
+    if let Some(server) = surfaced {
         return vec![CallTarget {
             server: server.to_string(),
             tool: tool_name.to_string(),
@@ -426,10 +503,7 @@ fn target_from_invoke_arguments(arguments: &Value) -> Option<CallTarget<'_>> {
     Some(CallTarget {
         server: arguments.get("server")?.as_str()?.to_string(),
         tool: arguments.get("tool")?.as_str()?.to_string(),
-        arguments: arguments.get("arguments").map_or_else(
-            || std::borrow::Cow::Owned(serde_json::json!({})),
-            std::borrow::Cow::Borrowed,
-        ),
+        arguments: crate::gateway::authz::judged_arguments(arguments),
     })
 }
 
@@ -443,10 +517,7 @@ fn targets_from_code_mode_arguments(arguments: &Value) -> Vec<CallTarget<'_>> {
                 Some(CallTarget {
                     server: server.to_string(),
                     tool: tool.to_string(),
-                    arguments: step.get("arguments").map_or_else(
-                        || std::borrow::Cow::Owned(serde_json::json!({})),
-                        std::borrow::Cow::Borrowed,
-                    ),
+                    arguments: crate::gateway::authz::judged_arguments(step),
                 })
             })
             .collect();
@@ -462,10 +533,7 @@ fn targets_from_code_mode_arguments(arguments: &Value) -> Vec<CallTarget<'_>> {
     vec![CallTarget {
         server: server.to_string(),
         tool: tool.to_string(),
-        arguments: arguments.get("arguments").map_or_else(
-            || std::borrow::Cow::Owned(serde_json::json!({})),
-            std::borrow::Cow::Borrowed,
-        ),
+        arguments: crate::gateway::authz::judged_arguments(arguments),
     }]
 }
 

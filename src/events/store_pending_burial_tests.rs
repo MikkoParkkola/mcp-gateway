@@ -29,7 +29,9 @@ fn a_burial_keeps_its_receipt_when_the_cleanup_after_it_fails() {
         reason: DeadReason::Gone,
         status: Some("http_4xx"),
     };
-    let settled = store.settle("a", now, dead, now, ROOMY).expect("settled");
+    let settled = store
+        .settle("a", now, dead, Ok(now), ROOMY)
+        .expect("settled");
     assert!(
         settled.buried,
         "the dead letter was written, so it is reported"
@@ -61,7 +63,9 @@ fn a_burial_whose_dead_letter_sync_fails_is_still_reported() {
         reason: DeadReason::Gone,
         status: Some("http_4xx"),
     };
-    let settled = store.settle("a", now, dead, now, ROOMY).expect("settled");
+    let settled = store
+        .settle("a", now, dead, Ok(now), ROOMY)
+        .expect("settled");
     assert!(
         settled.buried,
         "the dead letter is in place, so it is reported"

@@ -10,7 +10,8 @@ and the baselines are the ones in docs/release/v4.0.0-critical-path-coverage.md
 2026-10-01"); a change there is a change here, in the same commit.
 
 Exit status: 0 when every path clears the Standard floor and its recorded
-baseline, 1 otherwise. A path with no measured file fails.
+baseline, 1 otherwise. A path with no measured file fails. 3 when the report is
+absent, empty, unreadable or unparseable: nothing was graded (MIK-8265).
 """
 
 import argparse
@@ -89,12 +90,33 @@ def grade(report):
     return rows
 
 
+# Exit status when the report is absent. Equal to critical_function_coverage's
+# INPUT_MISSING (a test pins it); defined here, not imported, because
+# coverage_grade.sh may run this file from an older revision (MIK-8265).
+INPUT_MISSING = 3
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("report", help="cargo llvm-cov --summary-only --json output")
     args = parser.parse_args(argv)
-    with open(args.report, encoding="utf-8") as handle:
-        rows = grade(json.load(handle))
+    # Absent, empty or unreadable all mean the Linux job uploaded no report.
+    try:
+        with open(args.report, encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError:
+        text = ""
+    try:
+        report = json.loads(text) if text.strip() else None
+    except ValueError:  # truncated or corrupt: as unusable as an absent report
+        report = None
+    if not (isinstance(report, dict) and isinstance(report.get("data"), list)):
+        report = None  # JSON, but not an llvm-cov summary report
+    if report is None:
+        print(f"input missing: {args.report}")
+        print("NOT GRADED: the coverage report is missing, so no path was graded")
+        return INPUT_MISSING
+    rows = grade(report)
     for name, count, covered, total, percent, failures in rows:
         verdict = "; ".join(failures) if failures else "ok"
         print(f"{name:15} files={count:3} {covered}/{total} {percent:6.2f}%  {verdict}")

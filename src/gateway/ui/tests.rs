@@ -42,7 +42,7 @@ fn default_state<'a>(backends: Vec<BackendHealth>) -> DashboardState<'a> {
             total_calls: 42,
             avg_latency_ms: Some(80),
         },
-        recent_calls: vec![],
+        tool_counts: vec![],
         cache_stats: CacheStats {
             hit_rate: 0.75,
             total_hits: 300,
@@ -67,14 +67,6 @@ fn health_status_label() {
     assert_eq!(HealthStatus::Healthy.label(), "Healthy");
     assert_eq!(HealthStatus::Degraded.label(), "Degraded");
     assert_eq!(HealthStatus::Down.label(), "Down");
-}
-
-#[test]
-fn call_status_css_and_label() {
-    assert_eq!(CallStatus::Success.css_class(), "success");
-    assert_eq!(CallStatus::Error.css_class(), "error");
-    assert_eq!(CallStatus::Success.label(), "OK");
-    assert_eq!(CallStatus::Error.label(), "ERR");
 }
 
 // ── compute_error_rate ──────────────────────────────────────────
@@ -185,36 +177,30 @@ fn render_backend_rows_empty_shows_fallback() {
 }
 
 #[test]
-fn render_recent_rows_empty_shows_fallback() {
-    let rows = DashboardRenderer::render_recent_rows(&[]);
+fn render_tool_rows_empty_shows_fallback() {
+    let rows = DashboardRenderer::render_tool_rows(&[]);
     assert!(rows.contains("No tool calls recorded yet"));
 }
 
 #[test]
-fn render_recent_rows_with_calls() {
-    let calls = vec![
-        RecentCall {
-            timestamp: String::new(),
+fn render_tool_rows_with_counts() {
+    let counts = vec![
+        ToolCallCount {
             tool: "search".to_string(),
             server: "brave".to_string(),
-            latency_ms: None,
-            status: CallStatus::Success,
             count: 7,
         },
-        RecentCall {
-            timestamp: String::new(),
+        ToolCallCount {
             tool: "query".to_string(),
             server: "db".to_string(),
-            latency_ms: None,
-            status: CallStatus::Error,
             count: 2,
         },
     ];
-    let rows = DashboardRenderer::render_recent_rows(&calls);
-    assert!(rows.contains("search"));
-    assert!(rows.contains("brave"));
-    assert!(rows.contains("badge success"));
-    assert!(rows.contains("badge error"));
+    let rows = DashboardRenderer::render_tool_rows(&counts);
+    assert!(rows.contains("<td>search</td><td>brave</td><td>7</td>"));
+    assert!(rows.contains("<td>query</td><td>db</td><td>2</td>"));
+    // Counts only: the stats carry no outcome to badge (MIK-8370).
+    assert!(!rows.contains("badge"));
 }
 
 #[test]
@@ -249,15 +235,12 @@ fn render_xss_escaped_in_backend_name() {
 
 #[test]
 fn render_xss_escaped_in_tool_name() {
-    let calls = vec![RecentCall {
-        timestamp: String::new(),
+    let counts = vec![ToolCallCount {
         tool: "<script>alert(1)</script>".to_string(),
         server: "s".to_string(),
-        latency_ms: None,
-        status: CallStatus::Success,
         count: 1,
     }];
-    let rows = DashboardRenderer::render_recent_rows(&calls);
+    let rows = DashboardRenderer::render_tool_rows(&counts);
     assert!(!rows.contains("<script>"));
     assert!(rows.contains("&lt;script&gt;"));
 }

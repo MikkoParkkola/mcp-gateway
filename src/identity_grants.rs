@@ -53,6 +53,30 @@ impl GrantSubject {
             label,
         }
     }
+
+    /// The only way production code builds a CALLER's grant subject
+    /// (MIK-8286): `None` when the authority or the subject is empty, since
+    /// such a subject names nobody and every key built from it would merge
+    /// all such callers. Grant-file rule targets are not caller identities
+    /// and keep [`GrantSubject::new`]; `scripts/release/check_identity_sources.py`
+    /// counts every production `new` call outside this one.
+    pub(crate) fn checked(
+        authority: impl Into<String>,
+        subject: impl Into<String>,
+        label: Option<String>,
+    ) -> Option<Self> {
+        let (authority, subject) = (authority.into(), subject.into());
+        names_someone(&authority, &subject).then(|| Self::new(authority, subject, label))
+    }
+}
+
+/// Whether an (authority, subject) pair names someone: both non-empty,
+/// compared raw (verified bytes are never trimmed). The one predicate every
+/// caller-identity source applies (MIK-8286). It does not judge names: a
+/// subject literally spelled like a placeholder still names someone, so the
+/// certificate refusal is its own check (`CertIdentity::subject_id`).
+pub(crate) fn names_someone(authority: &str, subject: &str) -> bool {
+    !authority.is_empty() && !subject.is_empty()
 }
 
 /// Agent binding for a grant.

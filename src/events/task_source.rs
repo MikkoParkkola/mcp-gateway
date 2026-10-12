@@ -86,7 +86,24 @@ impl EventSource for TaskSource {
         }
     }
 
-    fn matches(&self, principal: &str, arguments: &Value, event: &SourceEvent) -> bool {
+    /// At delivery the occurrence was already matched to its owner (by the
+    /// owner it carries), and a task never changes owner, so the store has
+    /// nothing to add: once the expiry sweep removes the row, asking it would
+    /// refuse the owner's own settlement and end the subscription (MIK-7940).
+    async fn authorize_row(
+        &self,
+        _sub: &crate::events::records::Subscription,
+    ) -> Result<(), RpcError> {
+        Ok(())
+    }
+
+    fn matches(
+        &self,
+        principal: &str,
+        arguments: &Value,
+        event: &SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
         let Some(task_id) = event.data["taskId"].as_str() else {
             return false;
         };

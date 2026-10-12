@@ -57,6 +57,8 @@ mod backend_edit_comments;
 mod backend_mutation;
 #[path = "webui_management_tests/capabilities.rs"]
 mod capabilities;
+#[path = "webui_management_tests/internal_routes.rs"]
+mod internal_routes;
 #[path = "webui_management_tests/openapi_import.rs"]
 mod openapi_import;
 #[path = "webui_management_tests/registry.rs"]

@@ -189,7 +189,7 @@ fn trusted_proxy_identity(
         HEADER_GATEWAY_IDENTITY_SUBJECT,
         HEADER_IDENTITY_MAX_LEN,
     )?
-    .map(|subject| GrantSubject::new(config.authority.clone(), subject, label)))
+    .and_then(|subject| GrantSubject::checked(config.authority.clone(), subject, label)))
 }
 
 /// `cloudflare_access`: the identity is a verified `Cf-Access-Jwt-Assertion`
@@ -278,21 +278,20 @@ pub(crate) fn grant_subject_from_verified_identity(
     let label = trimmed_non_empty(&identity.email)
         .or_else(|| identity.name.as_deref().and_then(trimmed_non_empty));
 
-    Some(GrantSubject::new(
-        identity.issuer.clone(),
-        identity.subject.clone(),
-        label,
-    ))
+    GrantSubject::checked(identity.issuer.clone(), identity.subject.clone(), label)
 }
 
+/// A certificate's grant subject: the subject it names, or none. A
+/// certificate with neither a SAN URI nor a CN names nobody; its display name
+/// is then the placeholder every such certificate shares, so it is never a
+/// subject (MIK-8286: authorization and every key built from it would merge
+/// all such callers). The TLS layer refuses such a certificate before this
+/// runs; this is the layer behind it.
 fn grant_subject_from_cert_identity(identity: &CertIdentity) -> Option<GrantSubject> {
-    // Authorization keeps the display-name fallback; the control key does not
-    // (see `caller_key`).
-    let subject =
-        cert_subject_id(identity).or_else(|| trimmed_non_empty(&identity.display_name))?;
+    let subject = cert_subject_id(identity)?;
     let label = trimmed_non_empty(&identity.display_name);
 
-    Some(GrantSubject::new(MTLS_AUTHORITY, subject, label))
+    GrantSubject::checked(MTLS_AUTHORITY, subject, label)
 }
 
 /// The authority every certificate-derived grant subject carries.
@@ -304,24 +303,18 @@ const MTLS_AUTHORITY: &str = "mtls";
 /// neither — never its display name, which can be a constant every such
 /// certificate shares.
 fn cert_subject_id(identity: &CertIdentity) -> Option<String> {
-    identity
-        .san_uris
-        .iter()
-        .map(String::as_str)
-        .chain(identity.common_name.as_deref())
-        .find(|value| !value.is_empty())
-        .map(String::from)
+    identity.subject_id().map(String::from)
 }
 
 /// The `Subject(authority, id)` half of `caller_key`, in every build: session
-/// ownership keys on it too. `None` when no subject resolved, or when the only
-/// subject is a certificate's display-name fallback.
+/// ownership keys on it too. `None` when no subject resolved, or when a
+/// certificate-derived subject is not the subject the certificate names.
 pub(super) fn subject_key(
     subject: Option<&GrantSubject>,
     cert: Option<&CertIdentity>,
 ) -> Option<String> {
     let subject = subject?;
-    let from_cert = cert.and_then(grant_subject_from_cert_identity).as_ref() == Some(subject);
+    let from_cert = cert.is_some_and(|cert| is_this_certificates(subject, cert));
     let id = if from_cert {
         cert.and_then(cert_subject_id)?
     } else {
@@ -333,6 +326,20 @@ pub(super) fn subject_key(
         subject.authority,
         id.len()
     ))
+}
+
+/// Whether `subject` is the one `cert` stands for: the subject it names, or
+/// (MIK-8286) the display-name placeholder a certificate naming no subject
+/// shows, which the certificate source no longer makes but which must still
+/// never become a key if handed over with that certificate.
+fn is_this_certificates(subject: &GrantSubject, cert: &CertIdentity) -> bool {
+    subject.authority == MTLS_AUTHORITY
+        && match cert.subject_id() {
+            Some(id) => subject.subject == id,
+            None => {
+                trimmed_non_empty(&cert.display_name).as_deref() == Some(subject.subject.as_str())
+            }
+        }
 }
 
 /// The key the per-caller firewall controls (anomaly, tenant, budget) score on:
@@ -347,8 +354,8 @@ pub(super) fn subject_key(
 ///
 /// Length-prefixed, with a tag per variant, so no two distinct callers can
 /// encode to one key. A certificate subject is re-derived from the certificate
-/// itself so the display-name fallback `caller_grant_subject` keeps for
-/// authorization can never become a shared key.
+/// itself, so only the subject the certificate names can become a key
+/// (MIK-8286: a certificate naming nobody has no subject at all).
 pub(super) fn caller_key(
     subject: Option<&GrantSubject>,
     cert: Option<&CertIdentity>,
@@ -404,7 +411,7 @@ fn grant_subject_from_oauth_agent(identity: &OAuthAgentIdentity) -> Option<Grant
     let subject = Some(identity.client_id.clone()).filter(|id| !id.is_empty())?;
     let label = trimmed_non_empty(&identity.agent_name);
 
-    Some(GrantSubject::new("agent_oauth", subject, label))
+    GrantSubject::checked("agent_oauth", subject, label)
 }
 
 fn trimmed_non_empty(value: &str) -> Option<String> {

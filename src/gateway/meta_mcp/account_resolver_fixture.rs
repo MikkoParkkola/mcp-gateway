@@ -676,8 +676,12 @@ impl crate::transport::Transport for CapturingTransport {
 mod gateway;
 pub(super) use gateway::{
     Bind, Descriptors, caller_as, execute, execute_as, execute_bridged, execute_bridged_keyed,
-    external_cfg, gateway, gateway_in, slots,
+    external_cfg, gateway, gateway_in, gateway_in_with, slots,
 };
+
+// MIK-8356 L8: a managed caller's index entry against its current grant.
+#[path = "slot_verdict_g2_managed_tests.rs"]
+mod slot_verdict_g2_managed_tests;
 
 // #2190: the direct-route tests live in `router`; this is their one door in.
 #[path = "account_direct_bridge.rs"]
@@ -694,3 +698,8 @@ mod catalogue_sole_operator_tests;
 // #2326: tool discovery omits a required backend for a caller without identity.
 #[path = "account_tool_discovery_required_tests.rs"]
 mod tool_discovery_required_tests;
+
+// MIK-8353 3a: a refresh before a spend refusal keeps the nonce spent.
+#[cfg(feature = "cost-governance")]
+#[path = "account_signed_budget_tests.rs"]
+mod signed_budget_tests;

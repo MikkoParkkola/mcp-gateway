@@ -513,8 +513,8 @@ fn s02_grant_debug_omits_credentials_and_provider_identity() {
     );
 }
 
-// Linux-only (W-L8): the FIFO regression needs `mkfifo` and a bounded child.
-#[cfg(target_os = "linux")]
+// Unix (W-L8, MIK-8182): the FIFO regression needs `mkfifo` and a bounded child.
+#[cfg(unix)]
 #[path = "fifo_tests.rs"]
 mod fifo;
 

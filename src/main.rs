@@ -16,9 +16,6 @@ mod commands;
 #[path = "debug_trust_roots.rs"]
 mod debug_trust_roots;
 mod home_dir;
-#[cfg(test)]
-#[path = "test_ports.rs"]
-mod test_ports;
 
 use std::{path::Path, process::ExitCode};
 
@@ -26,7 +23,6 @@ use clap::Parser;
 use mcp_gateway::{
     cli::{AuditCommand, Cli, Command, SetupCommand, SkillsCommand},
     config::{Config, EnvOverlay},
-    config_persistence::load_existing_or_default,
     gateway::Gateway,
     setup_tracing,
     validator::ValidateConfig,
@@ -146,11 +142,13 @@ async fn run(cli: Cli) -> ExitCode {
                 format,
                 min_severity: severity,
                 auto_fix: fix,
-                color: !no_color,
+                color: commands::color::for_stdout(no_color),
             };
             mcp_gateway::validator::cli_handler::run_validate_command(&paths, &config).await
         }
-        Some(Command::Tool(tool_cmd)) => commands::run_tool_command(tool_cmd).await,
+        Some(Command::Tool(tool_cmd)) => {
+            commands::run_tool_command(tool_cmd, config_path.as_deref()).await
+        }
         Some(Command::Skills(SkillsCommand::Generate {
             capabilities,
             server,
@@ -159,8 +157,16 @@ async fn run(cli: Cli) -> ExitCode {
             install,
             dry_run,
         })) => {
-            commands::run_skills_generate(capabilities, server, category, out_dir, install, dry_run)
-                .await
+            commands::run_skills_generate(
+                capabilities,
+                config_path.as_deref(),
+                server,
+                category,
+                out_dir,
+                install,
+                dry_run,
+            )
+            .await
         }
         Some(Command::Skills(SkillsCommand::Import { source, registry })) => {
             commands::run_skills_import(source, registry).await
@@ -205,10 +211,10 @@ async fn run(cli: Cli) -> ExitCode {
             url,
             description,
             env_vars,
-            config,
             force,
             trailing_command,
         }) => {
+            let config = cli_config_or_default(config_path.as_deref());
             // Merge --command flag and trailing `-- cmd args...` (claude/codex style)
             let effective_command = if trailing_command.is_empty() {
                 command
@@ -243,11 +249,8 @@ async fn run(cli: Cli) -> ExitCode {
                 ExitCode::FAILURE
             }
         }
-        Some(Command::Remove {
-            name,
-            config,
-            force,
-        }) => {
+        Some(Command::Remove { name, force }) => {
+            let config = cli_config_or_default(config_path.as_deref());
             #[cfg(feature = "webui")]
             {
                 commands::run_remove_command(
@@ -263,11 +266,8 @@ async fn run(cli: Cli) -> ExitCode {
                 ExitCode::FAILURE
             }
         }
-        Some(Command::List {
-            json,
-            available,
-            config,
-        }) => {
+        Some(Command::List { json, available }) => {
+            let config = cli_config_or_default(config_path.as_deref());
             #[cfg(feature = "webui")]
             {
                 if available {
@@ -283,7 +283,8 @@ async fn run(cli: Cli) -> ExitCode {
                 ExitCode::FAILURE
             }
         }
-        Some(Command::Get { name, config }) => {
+        Some(Command::Get { name }) => {
+            let config = cli_config_or_default(config_path.as_deref());
             #[cfg(feature = "webui")]
             {
                 commands::run_get_command(&name, &config)
@@ -375,25 +376,6 @@ fn run_runtime_command(cmd: mcp_gateway::cli::RuntimeCommand) -> ExitCode {
     }
 }
 
-/// Resolve the transparency-log signing config from the gateway config, so
-/// `audit verify` authenticates the per-entry HMAC when a secret is set
-/// (MIK-6700 HMAC.3). A config LOAD FAILURE is propagated as `Err` (fail
-/// closed) — never silently downgraded to an empty secret, which would let
-/// a stale-sig forgery pass with exit 0 when the config is missing or
-/// malformed. A successfully-loaded config with no secret legitimately
-/// verifies hash-only.
-fn resolve_audit_log_config(
-    config_path: Option<&std::path::Path>,
-) -> mcp_gateway::Result<mcp_gateway::security::transparency_log::TransparencyLogConfig> {
-    use mcp_gateway::security::transparency_log::TransparencyLogConfig;
-    let c = Config::load(config_path)?;
-    Ok(TransparencyLogConfig {
-        key_id: c.security.transparency_log.key_id.clone(),
-        shared_secret: c.security.transparency_log.shared_secret.clone(),
-        ..TransparencyLogConfig::default()
-    })
-}
-
 /// Resolve the audit log path: use the provided `--path` flag, or fall back to
 /// the default `~/.mcp-gateway/transparency/transparency.jsonl`.
 fn resolve_audit_log_path(path: Option<std::path::PathBuf>) -> std::path::PathBuf {
@@ -418,7 +400,7 @@ fn run_audit_verify(
     config_path: Option<&std::path::Path>,
 ) -> ExitCode {
     use mcp_gateway::security::transparency_log::{VerifyMode, verify_audit_log};
-    let resolve_log_config = resolve_audit_log_config;
+    let resolve_log_config = Config::audit_verify_config;
     let verify_mode = if archive {
         VerifyMode::Archive
     } else {
@@ -615,6 +597,13 @@ fn apply_cli_overrides_and_validate(
     config.validate_with_env(overlay)
 }
 
+/// The file `add`, `remove`, `list` and `get` use: the global `--config` /
+/// `MCP_GATEWAY_CONFIG`, else `./gateway.yaml`. Unlike the stdio path below, a
+/// named file is used as given, never swapped for a fallback.
+fn cli_config_or_default(global: Option<&Path>) -> std::path::PathBuf {
+    global.map_or_else(|| "gateway.yaml".into(), Path::to_path_buf)
+}
+
 /// Run the gateway in stdio mode (newline-delimited JSON-RPC on stdin/stdout).
 /// Resolve the effective `--config` path for the **stdio** serve command only.
 ///
@@ -777,14 +766,14 @@ pub fn write_discovered_to_config(
         std::path::Path::to_path_buf,
     );
 
-    let mut config = load_existing_or_default(&path)?;
-
-    for server in servers {
-        let backend_config = server.to_backend_config();
-        config.backends.insert(server.name.clone(), backend_config);
-    }
-
-    commands::config_write::write(&path, &config, mode).map_err(mcp_gateway::Error::Config)?;
+    commands::config_write::write(&path, mode, |config| {
+        for server in servers {
+            let backend_config = server.to_backend_config();
+            config.backends.insert(server.name.clone(), backend_config);
+        }
+        Ok(())
+    })
+    .map_err(mcp_gateway::Error::Config)?;
 
     Ok(path)
 }

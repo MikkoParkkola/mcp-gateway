@@ -26,6 +26,11 @@ async fn meta_fixture_with(
     let st = Arc::get_mut(&mut fx.state).expect("state is unique");
     let ttl = Duration::from_secs(600);
     let mut meta = MetaMcp::with_features(Arc::clone(&st.backends), cache, None, None, ttl);
+    // The replacement gateway mints with the keyring the router's firewall
+    // exempts, as startup pairs them (#2210, MIK-8276).
+    if let Some(firewall) = &st.firewall {
+        meta.share_keyring_with_for_test(firewall);
+    }
     meta.set_firewall(st.firewall.clone());
     meta.enable_idempotency(Arc::new(IdempotencyCache::new()), Duration::from_secs(300));
     st.meta_mcp = Arc::new(configure(meta));
@@ -284,7 +289,7 @@ async fn meta_cache_hit_recorded() {
     let cache = Some(Arc::new(crate::cache::ResponseCache::new()));
     let fx = meta_fixture(setup, cache).await;
     meta_read(&fx, Some("a")).await;
-    tokio::time::sleep(Duration::from_millis(1200)).await;
+    fx.lapse_window();
     assert_meta_sent(&fx, &meta_send(&fx, Some("b"), PROSE).await, 1);
     let reads = fx.reads();
     meta_read(&fx, Some("a")).await;
@@ -374,7 +379,7 @@ async fn meta_replay_renews_the_receipt() {
     let read = invoke("read", &json!({}));
     let (_, first) = post(&fx, Some("a"), "gateway_invoke", &read, &keyed("key-r3")).await;
     assert!(first.contains("orchard ledger"), "base: {first}");
-    tokio::time::sleep(Duration::from_millis(1200)).await;
+    fx.lapse_window();
     assert_meta_sent(&fx, &meta_send(&fx, Some("b"), PROSE).await, 1);
     let reads = fx.reads();
     let (_, replay) = post(&fx, Some("a"), "gateway_invoke", &read, &keyed("key-r3")).await;
@@ -537,5 +542,8 @@ async fn meta_grant_decision_failure_leaves_no_receipt() {
     assert_meta_refused(&fx, &meta_send(&fx, Some("b"), PROSE).await, 1);
 }
 
+/// MIK-8340 row 7 over HTTP.
+#[path = "meta/withheld.rs"]
+mod withheld;
 #[path = "meta/writes.rs"]
 mod writes;

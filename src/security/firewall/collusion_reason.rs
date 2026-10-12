@@ -29,4 +29,4 @@ impl RelayReason {
 }
 
 /// Capacity bounds an operator can read, by `bound` (`MIK-8201`).
-pub(super) const CAPACITY_METRIC: &str = "mcp_gateway_collusion_capacity_total";
+pub(in super::super) const CAPACITY_METRIC: &str = "mcp_gateway_collusion_capacity_total";

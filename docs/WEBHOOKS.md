@@ -31,7 +31,6 @@ webhooks:
   enabled: true                # Enable webhook receiver system
   base_path: /webhooks         # Base path for all webhook endpoints
   require_signature: true      # Require HMAC validation (recommended)
-  rate_limit: 100             # Requests per minute per endpoint; 0 = unlimited
 ```
 
 ### Capability Definition
@@ -160,6 +159,7 @@ mcp-gateway
 **Capability**: `capabilities/examples/linear_webhook.yaml`
 
 ```yaml
+# capabilities/examples/linear_webhook.yaml
 webhooks:
   issue_updated:
     path: /linear/issues
@@ -183,6 +183,7 @@ webhooks:
 **Capability**: `capabilities/examples/github_webhook.yaml`
 
 ```yaml
+# capabilities/examples/github_webhook.yaml
 webhooks:
   repository_events:
     path: /github/events
@@ -256,7 +257,7 @@ data: {"source":"linear_integration","event_type":"linear.issue.created",...}
 1. **Always use HMAC validation**: Set `require_signature: true` in production
 2. **Use environment variables for secrets**: Never commit secrets to version control
 3. **Use HTTPS in production**: Webhook payloads should be encrypted in transit
-4. **Rate limiting**: `webhooks.rate_limit` caps each endpoint at that many requests per minute (burst up to the same number) and answers `429` with `Retry-After: 60` beyond it. Requests that fail the signature check are refused first and do not count. The budget lives in one gateway process: behind several replicas each keeps its own, so the effective limit is replicas × `rate_limit`. Set it above your provider's peak rate: most senders, GitHub included, do not retry a `429`, so the event is lost. It takes effect on restart
+4. **Rate limiting**: each endpoint takes at most 100 requests per minute (burst up to the same number) and answers `429` with `Retry-After: 60` beyond it. Requests that fail the signature check are refused first and do not count. The budget lives in one gateway process: behind several replicas each keeps its own, so the effective limit is replicas × 100. Most senders, GitHub included, do not retry a `429`, so an event above that rate is lost
 5. **Validate payload structure**: Use the transform to extract only expected fields
 6. **Monitor webhook logs**: Check gateway logs for failed signature validations
 
@@ -306,8 +307,8 @@ data: {"source":"linear_integration","event_type":"linear.issue.created",...}
    ```
 
 3. Verify `notify: true` in webhook definition (it defaults to `false`)
-4. Verify the session's API key may access the capability backend
-   (`capabilities.name`): a key whose `backends` list omits it receives no
+4. Verify the session's API key may access the capability backend,
+   named `gateway`: a key whose `backends` list omits it receives no
    webhook notifications. The key is re-checked at every delivery, so a
    revoked or expired token stops receiving, and with authentication on a
    session opened without a credential receives nothing
@@ -321,7 +322,7 @@ data: {"source":"linear_integration","event_type":"linear.issue.created",...}
 
 ## Limitations
 
-- Maximum payload size: `server.max_body_size` (default 10 MiB), the cap on every route; a larger body gets HTTP 413
+- Maximum payload size: 10 MiB, the cap on every route; a larger body gets HTTP 413
 - Signature validation uses HMAC-SHA256 only (no other algorithms)
 - Template extraction uses simple dot-notation (not full JSONPath)
 
@@ -330,6 +331,7 @@ data: {"source":"linear_integration","event_type":"linear.issue.created",...}
 ### Multiple Webhooks in One Capability
 
 ```yaml
+# capability file (capabilities/<name>.yaml)
 webhooks:
   issue_events:
     path: /linear/issues

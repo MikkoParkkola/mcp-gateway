@@ -52,7 +52,7 @@ async fn assert_recovered_and_left_alone(
     let recovered = service
         .get(LOCAL_OPERATOR_PRINCIPAL, id)
         .expect("the local operator's task is in its store");
-    let wire = crate::gateway::task_route::task_envelope(&recovered.task, "complete");
+    let wire = serde_json::to_value(recovered.task.wire()).expect("the task serializes");
     assert_eq!(recovered.task.status(), TaskStatus::Completed, "{wire}");
     assert!(
         wire.to_string().contains("gateway_restart_after_dispatch")

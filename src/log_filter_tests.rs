@@ -39,6 +39,8 @@ fn emitted_under(spec: &str) -> String {
                 .with_ansi(false)
                 .with_writer(move || writer.clone()),
         );
+    // A callsite another thread cached as off would miss this capture (MIK-8254).
+    crate::test_log_capture::keep_interest_open();
     tracing::subscriber::with_default(subscriber, || {
         tracing::trace!(target: HANDSHAKE_TARGET, "Request: GET /mcp?token=SECRET");
         tracing::debug!(target: HANDSHAKE_TARGET, "Client handshake done.");

@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8176 stage 2 (family continuation-slot-release): a sealed question
-//! withheld after finalization gives its slot back on the JSON arm of `/mcp`
-//! and on the direct route, and keeps it when delivered. The SSE arm stays
-//! count-only until stage 3, so its rows are listed as known leaks.
+//! MIK-8176 (family continuation-slot-release): a sealed question withheld
+//! after finalization gives its slot back on `/mcp` (JSON, and both arms of an
+//! event stream) and on the direct route, and keeps it when delivered.
 
 use super::*;
 use crate::security::firewall::tenant_guard::CrossTenantReads;
@@ -15,11 +14,19 @@ enum Arm {
     MetaJson,
     /// `POST /mcp`, `gateway_invoke`, offering an event stream.
     MetaSse,
+    /// [`Arm::MetaSse`] whose backend sends a notification first, so the
+    /// answer leaves on the stream's streaming arm (MIK-8176 stage 3).
+    MetaSseStreamed,
     /// `POST /mcp/alpha`, `tools/call t`.
     Direct,
 }
 
-const ARMS: [Arm; 3] = [Arm::MetaJson, Arm::MetaSse, Arm::Direct];
+const ARMS: [Arm; 4] = [
+    Arm::MetaJson,
+    Arm::MetaSse,
+    Arm::MetaSseStreamed,
+    Arm::Direct,
+];
 
 /// A backend question naming `tenant`, so the read judge can attribute it.
 fn question(tenant: &str) -> Value {
@@ -51,7 +58,7 @@ async fn call_with(fx: &Fixture, arm: Arm, id: u64, tenant: &str, extra: &Value)
         "io.modelcontextprotocol/clientInfo": {"name": "SlotRelease", "version": "1.0.0"}
     });
     let (uri, name, params) = match arm {
-        Arm::MetaJson | Arm::MetaSse => (
+        Arm::MetaJson | Arm::MetaSse | Arm::MetaSseStreamed => (
             "/mcp",
             "gateway_invoke",
             json!({"name": "gateway_invoke", "_meta": meta,
@@ -68,7 +75,12 @@ async fn call_with(fx: &Fixture, arm: Arm, id: u64, tenant: &str, extra: &Value)
     if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
         params.extend(extra.clone());
     }
-    let accept = if arm == Arm::MetaSse {
+    if arm == Arm::MetaSseStreamed
+        && let Some(meta) = params.get_mut("_meta")
+    {
+        meta["progressToken"] = json!("p1");
+    }
+    let accept = if matches!(arm, Arm::MetaSse | Arm::MetaSseStreamed) {
         "application/json, text/event-stream"
     } else {
         "application/json"
@@ -139,20 +151,13 @@ const PATHS: [Path; 4] = [
     Path::InvocationRecordRefused,
 ];
 
-/// Rows that still leak after stage 2: the SSE arm is count-only until stage 3
-/// gives it its yield-point handoff (MIK-8176 SLOT.1, SLOT.2 SSE arms).
-const KNOWN_LEAK: [(Arm, Path); 2] = [
-    (Arm::MetaSse, Path::DeliveryRecordRefused),
-    (Arm::MetaSse, Path::ReadJudgeWithheld),
-];
-
-/// Slots a row must leave held: the delivered first read keeps one.
-fn want(arm: Arm, path: Path) -> usize {
-    let kept = match path {
+/// Slots a row must leave held: the delivered first read keeps one. There is
+/// no allow-list of leaking rows (MIK-8176 D7): a reintroduced leak fails.
+const fn want(path: Path) -> usize {
+    match path {
         Path::Delivered | Path::ReadJudgeWithheld => 1,
         Path::DeliveryRecordRefused | Path::InvocationRecordRefused => 0,
-    };
-    kept + usize::from(KNOWN_LEAK.contains(&(arm, path)))
+    }
 }
 
 /// Run one row; `None` when the route cannot take the path.
@@ -206,7 +211,12 @@ async fn row(arm: Arm, path: Path, relay: Relay) -> Option<String> {
     if !took {
         return Some(format!("{label}: did not take its path: {body}"));
     }
-    let (held, want) = (held(&fx).await, want(arm, path));
+    if arm == Arm::MetaSseStreamed && !body.contains("notifications/progress") {
+        return Some(format!(
+            "{label}: the notification did not go first: {body}"
+        ));
+    }
+    let (held, want) = (held(&fx).await, want(path));
     (held != want).then(|| format!("{label}: {held} slots held, want {want}: {body}"))
 }
 
@@ -276,4 +286,92 @@ async fn a_delivered_question_is_redeemed_once() {
         }
     }
     report(&failures);
+}
+
+/// The scripted backend's side of [`Arm::MetaSseStreamed`]: a `tools/call`
+/// carrying a progress token gets a progress notification first; `true` when
+/// one was published, so the backend answers on a later poll and the stream's
+/// biased select takes the notification first (the streaming arm, never the
+/// buffered one). No other row sends a progress token.
+pub(super) fn notify_first(method: &str, params: Option<&Value>) -> bool {
+    if method != "tools/call" {
+        return false;
+    }
+    let Some(token) = params.and_then(|p| p.pointer("/_meta/progressToken")) else {
+        return false;
+    };
+    crate::transport::notification_sink::publish(vec![crate::protocol::JsonRpcNotification {
+        jsonrpc: "2.0".to_string(),
+        method: "notifications/progress".to_string(),
+        params: Some(json!({"progressToken": token, "progress": 1})),
+    }]);
+    true
+}
+
+/// MIK-8276: both of this fixture's firewalls know the keyring its gateway
+/// mints continuations with, as the gateway's own do (#2210, MIK-8092).
+/// Random ciphertext holds a credential shape about once in 20,000
+/// envelopes; without the keyring the redactor rewrites the sealed
+/// `requestState` and the answer is refused (-32600) instead of withheld or
+/// delivered, which is how the streamed `ReadJudgeWithheld` row failed.
+#[tokio::test]
+async fn the_fixtures_firewalls_deliver_a_minted_continuation() {
+    use crate::gateway::meta_mcp::response_security::ResponseDeliveryContext;
+    use crate::security::firewall::response_tests::minted_value::mint_credential_shaped;
+    use crate::security::response_policy::{ResponseCorrelation, ResponsePolicyTarget};
+
+    let fx = fixture(Setup {
+        reply: Some(question("t1")),
+        tenant_limit: Some(0),
+        ..Setup::default()
+    })
+    .await;
+    let token = mint_credential_shaped(fx.state.meta_mcp.continuation().keyring());
+    let targets = [ResponsePolicyTarget {
+        server: "alpha".to_string(),
+        tool: "t".to_string(),
+    }];
+    let context = ResponseDeliveryContext {
+        method: "tools/call",
+        targets: &targets,
+        correlation: ResponseCorrelation {
+            session_id: "",
+            caller: "anonymous",
+            external_server: "alpha",
+            external_tool: "t",
+            subject: None,
+        },
+        signing: None,
+        chain_source: crate::protocol::ChainSource::default(),
+        chain_nonce: None,
+    };
+    // The router's firewall judges a routed `tools/call`; without one, the
+    // Meta-MCP's own does.
+    // Without a router firewall the first pass would judge with the
+    // Meta-MCP's, and the row would test one firewall twice.
+    assert!(fx.state.firewall.is_some(), "the fixture's router firewall");
+    for (name, router) in [("router", fx.state.firewall.as_deref()), ("meta", None)] {
+        let answer = json!({
+            "resultType": "input_required",
+            "inputRequests": {"q1": {"params": {"message": "Choose"}}},
+            "requestState": token,
+        });
+        let response = JsonRpcResponse::success(RequestId::Number(1), answer);
+        let delivered = fx
+            .state
+            .meta_mcp
+            .finalize_routed(response, &context, router);
+        assert!(
+            delivered.error.is_none(),
+            "the {name} firewall refused the minted handle: {delivered:?}"
+        );
+        assert_eq!(
+            delivered
+                .result
+                .as_ref()
+                .and_then(|r| r.get("requestState")),
+            Some(&json!(token)),
+            "the {name} firewall changed the minted handle"
+        );
+    }
 }

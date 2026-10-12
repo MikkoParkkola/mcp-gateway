@@ -55,7 +55,7 @@ impl StdioTransport {
         let began = AtomicBool::new(false);
         // One deadline for the write and the reply: a child that stopped
         // reading stdin cannot hold the call past it.
-        let exchange = tokio::time::timeout(self.request_timeout, async {
+        let exchange = tokio::time::timeout(self.request_timeout(), async {
             self.write_frame(message, &began, claim).await?;
             (&mut rx)
                 .await
@@ -83,11 +83,16 @@ impl StdioTransport {
         };
         match outcome {
             Some(Ok(reply)) => reply,
-            Some(Err(_)) => Err(unsent_or(
-                &began,
-                "Request timed out",
-                Error::BackendTimeout,
-            )),
+            Some(Err(_)) => {
+                #[cfg(test)]
+                self.request_timeouts
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(unsent_or(
+                    &began,
+                    "Request timed out",
+                    Error::BackendTimeout,
+                ))
+            }
             // A reply routed while the write was still yielding is the answer.
             None => rx
                 .try_recv()

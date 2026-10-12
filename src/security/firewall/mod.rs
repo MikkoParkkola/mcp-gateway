@@ -40,8 +40,10 @@ pub mod budget_guard;
 mod collusion;
 mod collusion_digest;
 mod collusion_gate;
+#[cfg(test)]
+pub(crate) use collusion_digest::{note_walk_for_test, walks_built};
 pub use collusion_gate::{AllowedFlow, CollusionAction, CollusionConfig};
-pub(crate) use collusion_gate::{DeliveryDigest, RelayCaller};
+pub(crate) use collusion_gate::{DeliveryDigest, PlanStaging, RelayCaller};
 mod config;
 pub use config::{FirewallAction, FirewallConfig, FirewallRule, ScanType};
 pub mod input_scanner;
@@ -201,6 +203,26 @@ impl Firewall {
         self
     }
 
+    /// Test-only: a firewall built with a fresh keyring, for a fixture that
+    /// builds its firewall before the gateway it guards; the gateway then
+    /// adopts it ([`crate::gateway::meta_mcp::MetaMcp::share_keyring_with_for_test`]),
+    /// so the pair matches the gateway's own (#2210, MIK-8276).
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn keyed_for_test(self) -> Self {
+        self.with_continuations(Arc::new(
+            crate::protocol::continuation::ContinuationState::new(),
+        ))
+    }
+
+    /// Test-only: the keyring this firewall exempts, if any.
+    #[cfg(test)]
+    pub(crate) fn continuations_for_test(
+        &self,
+    ) -> Option<Arc<crate::protocol::continuation::ContinuationState>> {
+        self.continuations.clone()
+    }
+
     /// Relay detection keeps every k-gram instead of a keyed sample, so a
     /// test row always checks the fingerprints its text holds, under any
     /// hash key (MIK-8083). Call it on a firewall just built.
@@ -265,6 +287,68 @@ impl Firewall {
         }
     }
 
+    /// The stateless content scan of a request's arguments, shared by
+    /// admission (`check_request`) and the dispatch chokepoint (`rescan`) so
+    /// the two cannot diverge as scanners change. Records nothing.
+    ///
+    /// `scan_requests` names one control — argument content scanning — and
+    /// switching it off must cost exactly that. The anomaly, tenant and
+    /// budget guards carry their own enable flags, and an operator who
+    /// turned those on did not ask for them to be silently switched off by a
+    /// neighbouring one.
+    fn content_findings(&self, tool: &str, args: &Value) -> Vec<Finding> {
+        let mut findings = Vec::new();
+        if self.config.scan_requests {
+            // Input pattern scan (shell injection, path traversal, SQL).
+            if let Value::Object(map) = args {
+                findings.extend(self.input_scanner.scan_args(map));
+            }
+            // Memory-poisoning scan (OWASP ASI06) — applied only when the
+            // tool name is a recognised memory-write operation.
+            if self.memory_scanner.is_memory_write_tool(tool)
+                && let Value::Object(map) = args
+            {
+                findings.extend(self.memory_scanner.scan_args(map));
+            }
+        }
+        findings
+    }
+
+    /// The dispatch chokepoint's re-check (MIK-8137 P1-route-b1): the content
+    /// scan and rule resolution against the running config, on the bytes a
+    /// send actually carries. It records nothing and re-runs none of the
+    /// stateful guards (anomaly, tenant, budget, learning): those judged the
+    /// logical call once, at its route scan, and a second pass would count it
+    /// twice. Design note `design-b1-rescan.md` r2.
+    pub(crate) fn rescan(&self, tool: &str, args: &Value) -> FirewallVerdict {
+        if !self.config.enabled {
+            return FirewallVerdict::allow();
+        }
+        let findings = self.content_findings(tool, args);
+        let action = self.resolve_action(tool, &findings);
+        FirewallVerdict {
+            allowed: action != FirewallAction::Block,
+            action,
+            findings,
+            anomaly_score: None,
+        }
+    }
+
+    /// One audit row for a chokepoint decision that is not a plain allow
+    /// (a Warn or a Block), naming where the send came from. Arguments are
+    /// hashed, never written.
+    pub(crate) fn audit_dispatch(
+        &self,
+        correlation: &crate::security::response_policy::ResponseCorrelation<'_>,
+        args: &Value,
+        verdict: &FirewallVerdict,
+        source: &'static str,
+    ) {
+        if let Some(ref audit) = self.audit {
+            audit.log_dispatch(correlation, args, verdict, source);
+        }
+    }
+
     /// Pre-invocation check: scan request arguments for threats.
     ///
     /// Returns a verdict. If `allowed` is `false`, the caller **must not**
@@ -282,27 +366,9 @@ impl Firewall {
             return FirewallVerdict::allow();
         }
 
-        let mut findings = Vec::new();
-
-        // `scan_requests` names one control — argument content scanning — and
-        // switching it off must cost exactly that. The anomaly, tenant and
-        // budget guards below carry their own enable flags, and an operator who
-        // turned those on did not ask for them to be silently switched off by a
-        // neighbouring one.
-        if self.config.scan_requests {
-            // 1. Input pattern scan (shell injection, path traversal, SQL).
-            if let Value::Object(map) = args {
-                findings.extend(self.input_scanner.scan_args(map));
-            }
-
-            // 1b. Memory-poisoning scan (OWASP ASI06) — applied only when the
-            //     tool name is a recognised memory-write operation.
-            if self.memory_scanner.is_memory_write_tool(tool)
-                && let Value::Object(map) = args
-            {
-                findings.extend(self.memory_scanner.scan_args(map));
-            }
-        }
+        // 1. Content scan (input patterns, memory poisoning), shared with the
+        //    dispatch chokepoint's `rescan`.
+        let mut findings = self.content_findings(tool, args);
 
         // 2. Anomaly detection (`anomaly_gate.rs`). Empty is not an identity:
         // it must never key the detector, tenant or budget guards.
@@ -562,8 +628,9 @@ impl Firewall {
 
 /// Generic refusal text served in place of a blocked response.
 ///
-/// Deliberately says nothing about what matched: the finding detail belongs in
-/// the audit log, not in a payload handed to the caller that triggered it.
+/// Deliberately says nothing about what matched: the caller that triggered it
+/// learns nothing of the content, and the audit log records only the finding's
+/// kind, severity and location (MIK-8236).
 pub const BLOCKED_RESPONSE_MESSAGE: &str =
     "Security firewall blocked this response: backend content failed a content scan";
 
@@ -593,6 +660,52 @@ impl FirewallVerdict {
     /// `CollusionRelay`. Crate-internal so the public meaning stays put.
     pub(crate) fn is_asi10_block(&self) -> bool {
         self.blocked_only_by(|f| f.scan_type == ScanType::CollusionRelay)
+    }
+
+    /// The code and message a blocked request answers on every route: an
+    /// ASI10 block (OWASP rogue agents) `-32002` "Anomaly detection blocked:
+    /// …", any other block `-32600` "Firewall blocked: …". `None` when the
+    /// verdict allows. One definition, so `/mcp`, `/mcp/{name}`, stdio and the
+    /// dispatch chokepoint cannot word one refusal differently
+    /// (route-check-parity P3). The HTTP status stays with each route.
+    pub(crate) fn request_refusal(&self) -> Option<(i32, String)> {
+        if self.allowed {
+            return None;
+        }
+        let desc = self
+            .findings
+            .first()
+            .map_or("Security firewall blocked this request", |f| {
+                f.description.as_str()
+            });
+        Some(if self.is_asi10_block() {
+            (-32002, format!("Anomaly detection blocked: {desc}"))
+        } else {
+            (-32600, format!("Firewall blocked: {desc}"))
+        })
+    }
+
+    /// Whether the finding a refusal words (the first) came from a content scan
+    /// of the arguments, not from a stateful control. A stateful control's
+    /// text carries counts and scores only; a content scan's names the
+    /// argument and the pattern it matched.
+    pub(crate) fn refusal_words_content(&self) -> bool {
+        self.findings.first().is_some_and(|finding| {
+            // Exhaustive on purpose: a new scan type must choose a side here.
+            match finding.scan_type {
+                ScanType::BudgetExceeded
+                | ScanType::CrossTenantReach
+                | ScanType::SequenceAnomaly
+                | ScanType::CollusionRelay => false,
+                ScanType::Credentials
+                | ScanType::Pii
+                | ScanType::PromptInjection
+                | ScanType::ShellInjection
+                | ScanType::PathTraversal
+                | ScanType::SqlInjection
+                | ScanType::MemoryPoisoning => true,
+            }
+        })
     }
 
     fn blocked_only_by(&self, also: impl Fn(&Finding) -> bool) -> bool {
@@ -692,8 +805,12 @@ mod verification;
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[path = "refusal_words_tests.rs"]
+mod refusal_words_tests;
+#[cfg(test)]
 #[path = "tenant_audit_tests.rs"]
 mod tenant_audit_tests;
+
 #[cfg(test)]
 #[path = "firewall_tests.rs"]
 mod tests;

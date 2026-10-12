@@ -64,11 +64,34 @@ struct FetchPermit<'a, T> {
     mark: FillMark,
     /// The generation current when this fetch was authorized.
     generation: u64,
+    /// Run when the fetch ends without an answer: an error, a cancellation
+    /// or an unwind (MIK-8399). Taken, so it does not run, once the fetch
+    /// answers.
+    on_abandon: Option<AbandonHook>,
 }
+
+/// What a fetch that ends without an answer still does with what it read.
+pub(crate) type AbandonHook = Box<dyn FnOnce() + Send>;
 
 impl<T> Drop for FetchPermit<'_, T> {
     fn drop(&mut self) {
-        self.cache.state.write().in_flight = None;
+        // The hook runs under the cache's write guard, the guard every store
+        // and invalidation also holds, and before `in_flight` clears: no
+        // waiter can lead a newer fill, and no `replace` or invalidation can
+        // land, between the generation check and the hook's narrowing. A
+        // moved generation means newer state was already supplied, so the
+        // hook stands down (MIK-8399 r4-r5). The hook must not touch this
+        // cache's state; it narrows the slot's sets only, the same lock order
+        // `invalidate_then` and `store_if_current` use.
+        {
+            let mut state = self.cache.state.write();
+            if let Some(hook) = self.on_abandon.take()
+                && state.generation == self.generation
+            {
+                hook();
+            }
+            state.in_flight = None;
+        }
         let _ = self.sender.send(());
     }
 }
@@ -96,6 +119,13 @@ impl<T> CachedMetadata<T> {
     pub(crate) fn with_cached<R>(&self, map: impl FnOnce(Option<&Arc<T>>) -> R) -> R {
         let state = self.state.read();
         map(state.value.as_ref())
+    }
+
+    /// Whether a fill is on the wire now. A fill publishes its value and
+    /// derived state (`on_stored`) before it clears this mark, so a reader
+    /// that sees no fill in flight also sees what the last fill stored.
+    pub(super) fn fill_in_flight(&self) -> bool {
+        self.state.read().in_flight.is_some()
     }
 
     pub(crate) fn is_fresh(&self, ttl: Duration) -> bool {
@@ -196,6 +226,21 @@ impl<T> CachedMetadata<T> {
             // welcome to replace it.
             return;
         }
+        Self::clear_locked(&mut state);
+    }
+
+    /// Forget the value whatever it holds, and run `on_cleared` under the
+    /// same write guard: state derived from the dropped value is cleared with
+    /// it, as [`Self::store_if_current`] publishes such state with a stored
+    /// one. A fill stored right after cannot have its own derived state
+    /// erased by a separate, later clear (MIK-7940).
+    pub(super) fn invalidate_then(&self, on_cleared: impl FnOnce()) {
+        let mut state = self.state.write();
+        Self::clear_locked(&mut state);
+        on_cleared();
+    }
+
+    fn clear_locked(state: &mut CachedMetadataState<T>) {
         state.value = None;
         state.cached_at = None;
         state.generation = state.generation.wrapping_add(1);
@@ -228,6 +273,7 @@ impl<T> CachedMetadata<T> {
             sender,
             mark,
             generation: state.generation,
+            on_abandon: None,
         })
     }
 
@@ -247,6 +293,7 @@ impl<T> CachedMetadata<T> {
             |_| async move { fetch().await.map(|v| (v, ())) },
             |()| {},
             |_| {},
+            None,
         )
         .await
     }
@@ -259,12 +306,16 @@ impl<T> CachedMetadata<T> {
     /// `fetch` gets its fill's [`FillMark`]; `waiting` is told, before each
     /// wait, the mark of the fill this caller now waits on, and `None` when
     /// it runs the fill itself, so it never reads a fill it left (MIK-8046).
+    ///
+    /// `on_abandon` runs if the fill this caller leads ends without an
+    /// answer (error, cancellation, unwind), before its waiters are woken.
     pub(crate) async fn get_or_fetch_shared_then<A, F, Fut, S, W>(
         &self,
         ttl: Duration,
         fetch: F,
         on_stored: S,
         waiting: W,
+        mut on_abandon: Option<AbandonHook>,
     ) -> Result<Arc<T>>
     where
         F: Fn(FillMark) -> Fut,
@@ -279,14 +330,18 @@ impl<T> CachedMetadata<T> {
                     waiting(Some(mark));
                     let _ = receiver.changed().await;
                 }
-                CacheFetchState::Fetch(permit) => {
+                CacheFetchState::Fetch(mut permit) => {
                     waiting(None);
+                    permit.on_abandon = on_abandon.take();
                     let result = fetch(Arc::clone(&permit.mark)).await;
                     let result = result.map(|(value, side)| {
                         let value = Arc::new(value);
                         self.store_if_current(Arc::clone(&value), permit.generation, || {
                             on_stored(side);
                         });
+                        // Answered: stored, or refused because an
+                        // invalidation already ran. Nothing to narrow.
+                        permit.on_abandon = None;
                         value
                     });
                     drop(permit);
@@ -306,6 +361,11 @@ impl<T> CachedMetadata<T> {
         None
     }
 }
+
+// MIK-8399 S16: the abandon hook runs inside the flight.
+#[cfg(test)]
+#[path = "cached_metadata_abandon_tests.rs"]
+mod abandon_tests;
 
 #[cfg(test)]
 mod tests {
@@ -402,6 +462,48 @@ mod tests {
             3,
             "each invalidated round must actually ask the backend again"
         );
+    }
+
+    /// MIK-7940 finding 5: the derived-state clear runs while the cache is
+    /// still write-locked, so no fill can store between the two.
+    #[test]
+    fn invalidate_then_clears_derived_state_under_the_guard() {
+        let cache: CachedMetadata<Vec<u8>> = CachedMetadata::new();
+        let mut locked = false;
+        cache.invalidate_then(|| locked = cache.state.try_read().is_none());
+        assert!(
+            locked,
+            "the derived clear ran under the cache's write guard"
+        );
+    }
+
+    /// MIK-7940 SUBS.5: a store racing `invalidate_then` waits for the whole
+    /// clear, derived state included, so the set it derives survives. Were
+    /// the callback run after the guard, a store could land in between and
+    /// the clear would then wipe the set the new value derived. The racing
+    /// thread probes the guard before it stores, so no timing is involved.
+    #[test]
+    fn a_store_racing_a_clear_keeps_the_state_it_derived() {
+        let cache = Arc::new(CachedMetadata::<Vec<u8>>::new());
+        let derived = Arc::new(parking_lot::Mutex::new(vec![1u8]));
+        let (probed, heard) = std::sync::mpsc::channel();
+        let mut store = None;
+        cache.invalidate_then(|| {
+            let (cache, set) = (Arc::clone(&cache), Arc::clone(&derived));
+            store = Some(std::thread::spawn(move || {
+                probed
+                    .send(cache.state.try_write().is_none())
+                    .expect("send");
+                cache.replace(vec![2], || *set.lock() = vec![2]);
+            }));
+            assert!(
+                heard.recv().expect("probe"),
+                "a store must wait for the clear's guard"
+            );
+            derived.lock().clear();
+        });
+        store.expect("spawned").join().expect("store");
+        assert_eq!(*derived.lock(), [2], "the later store keeps its set");
     }
 
     #[tokio::test]
@@ -513,31 +615,53 @@ mod tests {
         let cache: CachedMetadata<Vec<u8>> = CachedMetadata::new();
         let first_mark = parking_lot::Mutex::new(None);
         let heard = parking_lot::Mutex::new(Vec::new());
+        // Ordered by signals, not sleeps: the owner's fetch holds the fill
+        // until the waiter has joined it, so the waiter always waits on it.
+        let (started, release, joined) = (
+            tokio::sync::Notify::new(),
+            tokio::sync::Notify::new(),
+            tokio::sync::Notify::new(),
+        );
         let owner = cache.get_or_fetch_shared_then(
             LONG_TTL,
             |mark| {
                 *first_mark.lock() = Some(Arc::clone(&mark));
+                let (started, release) = (&started, &release);
                 async move {
                     mark.store(true, Ordering::SeqCst);
-                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    started.notify_one();
+                    release.notified().await;
                     Ok((vec![1u8], ()))
                 }
             },
             |()| {},
             |mark| heard.lock().push(("owner", mark)),
+            None,
         );
         let waiter = async {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            started.notified().await;
             cache
                 .get_or_fetch_shared_then(
                     LONG_TTL,
                     |_| async { Ok((vec![2u8], ())) },
                     |()| {},
-                    |mark| heard.lock().push(("waiter", mark)),
+                    |mark| {
+                        heard.lock().push(("waiter", mark));
+                        joined.notify_one();
+                    },
+                    None,
                 )
                 .await
         };
-        let (owner, waiter) = tokio::join!(owner, waiter);
+        let driver = async {
+            joined.notified().await;
+            release.notify_one();
+        };
+        let ((owner, waiter), ()) = tokio::time::timeout(crate::test_wait::HANG_BOUND, async {
+            tokio::join!(async { tokio::join!(owner, waiter) }, driver)
+        })
+        .await
+        .expect("the fill and its waiter settle");
         assert_eq!(*owner.unwrap(), vec![1u8]);
         assert_eq!(*waiter.unwrap(), vec![1u8], "the waiter joined the fill");
         let first_mark = first_mark.lock().clone().expect("the owner's fetch ran");
@@ -568,6 +692,7 @@ mod tests {
                 },
                 |()| {},
                 |_| {},
+                None,
             )
             .await
             .unwrap();

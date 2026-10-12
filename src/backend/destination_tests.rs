@@ -136,7 +136,7 @@ async fn hardened_backend_oauth_discovery_is_pinned() {
                 callback_host: None,
                 callback_port: None,
                 callback_path: None,
-                token_refresh_buffer_secs: 300,
+                token_refresh_buffer_secs: Some(300),
                 shared_account: false,
             }),
             ..BackendConfig::default()
@@ -529,7 +529,9 @@ fn a_start_built_before_the_stamp_is_not_published() {
     let started: Arc<dyn crate::transport::Transport> = Arc::new(Started(Arc::default()));
     assert!(
         backend
-            .publish(&entry, (&started, None), built_under)
+            .publish(&entry, (&started, None), built_under, || {
+                unreachable!("a refused publish installed its era (MIK-8218)")
+            })
             .is_err()
     );
     assert!(
@@ -539,7 +541,7 @@ fn a_start_built_before_the_stamp_is_not_published() {
     );
     assert!(
         backend
-            .publish(&entry, (&started, None), DestinationPolicy::Public)
+            .publish(&entry, (&started, None), DestinationPolicy::Public, || {})
             .is_ok()
     );
 }
@@ -564,7 +566,7 @@ fn refused_before_connecting() -> Arc<Backend> {
         callback_host: None,
         callback_port: None,
         callback_path: None,
-        token_refresh_buffer_secs: 300,
+        token_refresh_buffer_secs: Some(300),
         shared_account: false,
     };
     Arc::new(Backend::new(
@@ -659,7 +661,7 @@ async fn oauth_at_loopback() -> (Arc<Backend>, Arc<AtomicUsize>) {
                 callback_host: None,
                 callback_port: None,
                 callback_path: None,
-                token_refresh_buffer_secs: 300,
+                token_refresh_buffer_secs: Some(300),
                 shared_account: false,
             }),
             ..BackendConfig::default()

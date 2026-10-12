@@ -1,13 +1,14 @@
-diff --git a/src/gateway/server/mod.rs b/src/gateway/server/mod.rs
-index e2bb23408..e7133ffe1 100644
---- a/src/gateway/server/mod.rs
-+++ b/src/gateway/server/mod.rs
-@@ -3082,7 +3082,7 @@ impl Gateway {
+diff --git a/src/gateway/server/stdio_dispatch.rs b/src/gateway/server/stdio_dispatch.rs
+index d70ab33e2..213086c70 100644
+--- a/src/gateway/server/stdio_dispatch.rs
++++ b/src/gateway/server/stdio_dispatch.rs
+@@ -253,8 +253,7 @@ impl Gateway {
+                 meta_mcp.signing_scope(),
+             )
          });
-         let restored = (signing_context.as_mut()).map_or(Ok(()), |c| c.restore(request));
-         let id = restored.is_ok().then_some(raw_id).flatten();
--        match restored.and(crate::protocol::mrtr::take_chain_nonce(request)) {
-+        match restored.and(Ok(crate::protocol::mrtr::take_chain_nonce(request).unwrap_or(None))) {
-             Ok(chain_nonce) => Ok((signing_context, chain_nonce)),
-             Err(error) => Err(crate::protocol::JsonRpcResponse::error(
-                 id,
+-        let chain_nonce = crate::protocol::mrtr::take_chain_nonce(request)
+-            .map_err(|error| refuse(raw_id.clone(), &error))?;
++        let chain_nonce = crate::protocol::mrtr::take_chain_nonce(request).unwrap_or(None);
+         // MIK-8154 SAN.1: mapped on the caller's view (the request's memo),
+         // then sanitized unless every target is `passthrough` (option (a)).
+         if sanitize == InputSanitizing::On

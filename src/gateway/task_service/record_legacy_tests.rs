@@ -29,6 +29,8 @@ fn row(task: &Task, version: u32, upstream: Option<UpstreamRecord>) -> Record {
         targets: Vec::new(),
         output_free: false,
         error_author: None,
+        upstream_cancel_sent: false,
+        upstream_cancel_pending: None,
         admission: AdmissionRecord {
             identity_digest: "identity".to_owned(),
             principal_digest: "principal".to_owned(),

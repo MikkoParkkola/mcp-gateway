@@ -53,6 +53,18 @@ pub struct CertIdentity {
 }
 
 impl CertIdentity {
+    /// The subject this certificate names, verbatim: its first non-empty SAN
+    /// URI, else its non-empty CN. `None` when it has neither: such a
+    /// certificate names nobody, and its display name is a placeholder every
+    /// such certificate shares, so it is never an identity (MIK-8286).
+    pub(crate) fn subject_id(&self) -> Option<&str> {
+        self.san_uris
+            .iter()
+            .map(String::as_str)
+            .chain(self.common_name.as_deref())
+            .find(|value| !value.is_empty())
+    }
+
     /// Parse a DER-encoded certificate and extract its identity fields.
     ///
     /// # Trust boundary

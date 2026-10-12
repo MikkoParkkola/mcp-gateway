@@ -4,6 +4,17 @@
 
 use super::*;
 
+/// How long the hung mock sleeps: past every bound below, so it never answers.
+const HUNG: Duration = Duration::from_secs(600);
+/// The backend's own per-call timeout: past the hang guard, so only the
+/// aggregation timeout can end a list inside it.
+const BACKEND_TIMEOUT: Duration = Duration::from_secs(120);
+/// The tree's hang bound, and under `MetaMcp`'s own 10 s aggregation default:
+/// a list that fell back to that default instead of the configured 100 ms or
+/// 1 s fails here too, not only one that waited for the backend. Still 5x
+/// the longest configured window, so a loaded runner has room (MIK-8222).
+const HANG_GUARD: Duration = Duration::from_secs(5);
+
 // ============================================================================
 // Prompts/resources aggregation: parallel fan-out + per-backend timeout
 // ============================================================================
@@ -19,8 +30,12 @@ struct MockMcpBackend {
     method: &'static str,
     /// JSON array to return for `method`.
     payload: serde_json::Value,
-    /// Sleep before responding.
+    /// Sleep before responding, per page.
     delay: std::time::Duration,
+    /// How many `nextCursor` pages the list spans; each carries `payload`.
+    pages: usize,
+    /// The `cursor` of every `method` request, in order (`None` for page 1).
+    cursors: std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>,
 }
 
 async fn start_mock(backend: MockMcpBackend) -> String {
@@ -56,14 +71,42 @@ async fn start_mock(backend: MockMcpBackend) -> String {
             }),
             m if m == s.backend.method => {
                 s.seen.fetch_add(1, Ordering::SeqCst);
+                let cursor = req["params"]["cursor"].as_str().map(str::to_owned);
+                s.backend.cursors.lock().unwrap().push(cursor.clone());
+                // Page n (1-based) is asked for with cursor "n"; the first page
+                // carries no cursor. A cursor this mock never issued is refused,
+                // so a drain that sent a wrong one cannot pass as page 1.
+                let page = match cursor.as_deref().map(str::parse::<usize>) {
+                    None => 1,
+                    Some(Ok(n)) if (2..=s.backend.pages).contains(&n) => n,
+                    Some(_) => {
+                        return Json(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": req["id"],
+                            "error": { "code": -32602, "message": "cursor not issued" },
+                        }));
+                    }
+                };
                 if !s.backend.delay.is_zero() {
                     tokio::time::sleep(s.backend.delay).await;
                 }
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": req["id"],
-                    "result": { "prompts": s.backend.payload, "resources": s.backend.payload },
-                })
+                // A multi-page list names each page's entries apart, so no
+                // merge or dedup can make two pages read as one.
+                let mut items = s.backend.payload.clone();
+                if s.backend.pages > 1 {
+                    for item in items.as_array_mut().into_iter().flatten() {
+                        for key in ["name", "uri"] {
+                            if let Some(v) = item[key].as_str() {
+                                item[key] = serde_json::json!(format!("{v}-p{page}"));
+                            }
+                        }
+                    }
+                }
+                let mut result = serde_json::json!({ "prompts": items, "resources": items });
+                if page < s.backend.pages {
+                    result["nextCursor"] = serde_json::json!((page + 1).to_string());
+                }
+                serde_json::json!({ "jsonrpc": "2.0", "id": req["id"], "result": result })
             }
             _ => serde_json::json!({
                 "jsonrpc": "2.0",
@@ -94,6 +137,8 @@ async fn prompts_list_includes_backend_prompts() {
         method: "prompts/list",
         payload: serde_json::json!([{ "name": "greet", "description": "say hi" }]),
         delay: Duration::ZERO,
+        pages: 1,
+        cursors: Arc::default(),
     })
     .await;
     let meta = meta_with_backend(&url, Duration::from_secs(5));
@@ -113,30 +158,42 @@ async fn prompts_list_includes_backend_prompts() {
     assert!(names.contains(&"mock/greet"), "backend prompt namespaced");
 }
 
+/// One page's latency in the paged rows: under the backend's timeout alone,
+/// over it for two pages together.
+// timing-oracle: vs 4.5 s backend timeout (MIK-8285)
+const PAGE_DELAY: Duration = Duration::from_secs(3);
+/// The paged backend's own per-call timeout: 1.5 pages, so each page clears it
+/// by 1.5 s and the two-page drain (6 s) exceeds it while staying 4 s under
+/// the 10 s whole-fetch default.
+// timing-oracle: vs 10 s whole-fetch default (MIK-8285)
+const PAGED_BACKEND_TIMEOUT: Duration = Duration::from_millis(4500);
+
 #[tokio::test]
 async fn prompts_list_skips_hung_backend_within_timeout() {
     let url = start_mock(MockMcpBackend {
         method: "prompts/list",
         payload: serde_json::json!([]),
-        delay: Duration::from_secs(60), // far beyond the 100ms test timeout
+        delay: HUNG,
+        pages: 1,
+        cursors: Arc::default(),
     })
     .await;
-    let meta = meta_with_backend(&url, Duration::from_millis(100));
+    // The backend's own timeout outlasts the hang guard, so a list that waited
+    // for it instead of the 100 ms aggregation timeout fails the guard: the
+    // oracle is that the list answers at all (MIK-8222).
+    let meta = meta_with_backend_timeout(&url, Duration::from_millis(100), BACKEND_TIMEOUT);
 
-    let start = std::time::Instant::now();
-    let resp = meta
-        .handle_prompts_list(RequestId::Number(1), None, None, None)
-        .await;
-    let elapsed = start.elapsed();
+    let resp = tokio::time::timeout(
+        HANG_GUARD,
+        meta.handle_prompts_list(RequestId::Number(1), None, None, None),
+    )
+    .await
+    .expect("must skip the hung backend at the aggregation timeout, not at the backend's own");
 
     assert!(
         resp.error.is_none(),
         "list still succeeds: {:?}",
         resp.error
-    );
-    assert!(
-        elapsed < Duration::from_secs(2),
-        "must skip the hung backend at the 100ms aggregation timeout, not at the backend's own 5s timeout, took {elapsed:?}"
     );
     // Only the gateway meta-prompts remain.
     let result = resp.result.unwrap();
@@ -149,25 +206,27 @@ async fn resources_list_skips_hung_backend_within_timeout() {
     let url = start_mock(MockMcpBackend {
         method: "resources/list",
         payload: serde_json::json!([]),
-        delay: Duration::from_secs(60),
+        delay: HUNG,
+        pages: 1,
+        cursors: Arc::default(),
     })
     .await;
-    let meta = meta_with_backend(&url, Duration::from_millis(100));
+    // The backend's own timeout outlasts the hang guard, so a list that waited
+    // for it instead of the 100 ms aggregation timeout fails the guard: the
+    // oracle is that the list answers at all (MIK-8222).
+    let meta = meta_with_backend_timeout(&url, Duration::from_millis(100), BACKEND_TIMEOUT);
 
-    let start = std::time::Instant::now();
-    let resp = meta
-        .handle_resources_list(RequestId::Number(1), None, None, None)
-        .await;
-    let elapsed = start.elapsed();
+    let resp = tokio::time::timeout(
+        HANG_GUARD,
+        meta.handle_resources_list(RequestId::Number(1), None, None, None),
+    )
+    .await
+    .expect("must skip the hung backend at the aggregation timeout, not at the backend's own");
 
     assert!(
         resp.error.is_none(),
         "list still succeeds: {:?}",
         resp.error
-    );
-    assert!(
-        elapsed < Duration::from_secs(2),
-        "must skip the hung backend at the 100ms aggregation timeout, not at the backend's own 5s timeout, took {elapsed:?}"
     );
 }
 
@@ -177,6 +236,8 @@ async fn resources_list_includes_backend_resources() {
         method: "resources/list",
         payload: serde_json::json!([{ "uri": "mock://a", "name": "A" }]),
         delay: Duration::ZERO,
+        pages: 1,
+        cursors: Arc::default(),
     })
     .await;
     let meta = meta_with_backend(&url, Duration::from_secs(5));
@@ -195,82 +256,312 @@ async fn resources_list_includes_backend_resources() {
     assert!(uris.contains(&"mock://a"), "backend resource included");
 }
 
-/// Fast + hung backends: the fast backend's prompts must be returned within a
-/// single aggregation timeout even though the hung backend never answers.
-#[tokio::test]
-async fn prompts_list_fast_backend_not_stalled_by_hung_one() {
-    use crate::backend::Backend;
+// ============================================================================
+// In-process list upstreams on a paused clock (MIK-8360)
+// ============================================================================
+
+/// An in-process upstream for one list method: no socket and no client
+/// timeout, so on a paused clock every wait in a row is virtual and load
+/// cannot move it (MIK-8360).
+struct ListWire {
+    /// The method this upstream answers (`prompts/list` or `resources/list`).
+    method: &'static str,
+    /// What each page carries; a multi-page list names each page's entries
+    /// apart, as [`MockMcpBackend`] does.
+    payload: serde_json::Value,
+    /// How many `nextCursor` pages the list spans.
+    pages: usize,
+    /// A tokio sleep before each page: virtual on a paused clock.
+    delay: Duration,
+    /// Never answers.
+    hung: bool,
+    /// The `cursor` of every request, in order (`None` for page 1).
+    cursors: Arc<std::sync::Mutex<Vec<Option<String>>>>,
+}
+
+impl ListWire {
+    fn answering(method: &'static str, payload: serde_json::Value) -> Self {
+        Self {
+            method,
+            payload,
+            pages: 1,
+            delay: Duration::ZERO,
+            hung: false,
+            cursors: Arc::default(),
+        }
+    }
+
+    fn hung(method: &'static str) -> Self {
+        Self {
+            hung: true,
+            ..Self::answering(method, serde_json::json!([]))
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for ListWire {
+    async fn request(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        self.request_with_headers(
+            method,
+            params,
+            &[],
+            None,
+            crate::transport::ResendPermission::Denied,
+        )
+        .await
+    }
+
+    async fn request_with_headers(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+        _extra_headers: &[(String, String)],
+        _identity_key: Option<&str>,
+        _resend: crate::transport::ResendPermission,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        if method != self.method {
+            return Err(crate::Error::BackendUnavailable(format!(
+                "this upstream answers {} only, not {method}",
+                self.method
+            )));
+        }
+        if self.hung {
+            return std::future::pending().await;
+        }
+        let cursor = params
+            .as_ref()
+            .and_then(|p| p["cursor"].as_str())
+            .map(str::to_owned);
+        self.cursors.lock().unwrap().push(cursor.clone());
+        let page = cursor
+            .as_deref()
+            .map_or(1, |c| c.parse().expect("an issued cursor"));
+        tokio::time::sleep(self.delay).await;
+        let mut items = self.payload.clone();
+        if self.pages > 1 {
+            for item in items.as_array_mut().into_iter().flatten() {
+                for key in ["name", "uri"] {
+                    if let Some(v) = item[key].as_str() {
+                        item[key] = serde_json::json!(format!("{v}-p{page}"));
+                    }
+                }
+            }
+        }
+        let mut result = serde_json::json!({ "prompts": items, "resources": items });
+        if page < self.pages {
+            result["nextCursor"] = serde_json::json!((page + 1).to_string());
+        }
+        Ok(crate::protocol::JsonRpcResponse::success(
+            RequestId::Number(1),
+            result,
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<serde_json::Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// A backend named `name` whose shared slot is `wire`, with `timeout` as its
+/// per-call setting. The URL is never dialled.
+fn wired(name: &str, wire: ListWire, timeout: Duration) -> Arc<crate::backend::Backend> {
     use crate::config::{BackendConfig, TransportConfig};
-
-    let fast = start_mock(MockMcpBackend {
-        method: "prompts/list",
-        payload: serde_json::json!([{ "name": "quick", "description": "fast" }]),
-        delay: Duration::ZERO,
-    })
-    .await;
-    let hung = start_mock(MockMcpBackend {
-        method: "prompts/list",
-        payload: serde_json::json!([]),
-        delay: Duration::from_secs(60),
-    })
-    .await;
-
-    let registry = Arc::new(BackendRegistry::new());
-    for (name, url) in [("fast", fast), ("hung", hung)] {
-        let config = BackendConfig {
-            description: String::new(),
+    let backend = Arc::new(crate::backend::Backend::new(
+        name,
+        BackendConfig {
             enabled: true,
             transport: TransportConfig::Http {
-                http_url: url,
+                http_url: "http://127.0.0.1:9/mcp".to_string(),
                 streamable_http: Some(true),
                 protocol_version: None,
             },
-            stop_when_idle_for: None,
-            max_frame_bytes: None,
-            timeout: Duration::from_secs(5),
+            timeout,
             ..BackendConfig::default()
+        },
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    backend.set_transport_for_test(Arc::new(wire));
+    backend
+}
+
+/// Real-time bound on a whole paused-clock row: only a true hang reaches it.
+const ROW_HANG_BOUND: Duration = Duration::from_secs(300);
+
+/// [`crate::test_wait::watched_row`] under [`ROW_HANG_BOUND`].
+fn paused<F>(row: impl FnOnce() -> F + Send + 'static)
+where
+    F: std::future::Future<Output = ()>,
+{
+    crate::test_wait::watched_row(
+        ROW_HANG_BOUND,
+        "the list never answered: a fetch waited without a bound",
+        row,
+    );
+}
+
+/// Fast + two hung backends (MIK-8360): the fast backend's prompts return
+/// within ONE aggregation window although the hung ones never answer. On a
+/// paused clock with in-process upstreams, the fast fetch completes with no
+/// timer and the hung fetches end at their timeout once every task is idle,
+/// so the window is virtual and load cannot move it. Two hung backends make a
+/// serial fan-out take two windows whatever the registry order.
+#[test]
+fn prompts_list_fast_backend_not_stalled_by_hung_ones() {
+    paused(|| async {
+        tokio::time::pause();
+        let window = Duration::from_secs(1);
+        let registry = Arc::new(BackendRegistry::new());
+        let fast = ListWire::answering(
+            "prompts/list",
+            serde_json::json!([{ "name": "quick", "description": "fast" }]),
+        );
+        for backend in [
+            wired("fast", fast, BACKEND_TIMEOUT),
+            wired("hung1", ListWire::hung("prompts/list"), BACKEND_TIMEOUT),
+            wired("hung2", ListWire::hung("prompts/list"), BACKEND_TIMEOUT),
+        ] {
+            assert!(
+                backend
+                    .pooled_transport_for_test(&crate::backend::PoolKey::Shared)
+                    .is_some_and(|t| t.is_connected()),
+                "the in-process upstream is the slot's connected transport"
+            );
+            assert!(registry.register(backend), "fixture registration");
+        }
+        let meta = MetaMcp::new(registry).with_prompts_resources_fetch_timeout(window);
+
+        let started = tokio::time::Instant::now();
+        let resp = meta
+            .handle_prompts_list(RequestId::Number(1), None, None, None)
+            .await;
+        let took = started.elapsed();
+
+        assert!(
+            took >= window && took < window * 2,
+            "the hung backends end at one shared window, in parallel: took {took:?}"
+        );
+        assert!(
+            resp.error.is_none(),
+            "list still succeeds: {:?}",
+            resp.error
+        );
+        let result = resp.result.unwrap();
+        let names: Vec<&str> = result["prompts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p["name"].as_str())
+            .collect();
+        assert!(
+            names.contains(&"gateway/gateway-discover"),
+            "meta prompts kept"
+        );
+        assert!(
+            names.contains(&"fast/quick"),
+            "fast backend's prompt returned"
+        );
+        assert!(
+            !names.iter().any(|n| n.starts_with("hung")),
+            "the hung backends were skipped: {names:?}"
+        );
+    });
+}
+
+/// MIK-8285 FETCHTO.3, on a paused clock (MIK-8360): the whole-fetch bound
+/// is the unset 10 s default, not the backend's `timeout`. A cold cache
+/// drains two pages that each answer within the backend's timeout but
+/// together take longer, and both pages' entries are listed. Reading A
+/// (min(backend timeout, 10 s) for the whole fetch) would cut this backend at
+/// 4.5 s. The page delays are virtual, so the margins cannot be lost to load.
+fn drains_pages_whose_total_exceeds_the_backend_timeout(
+    method: &'static str,
+    payload: serde_json::Value,
+    key: &'static str,
+    expected: [&'static str; 2],
+) {
+    paused(move || async move {
+        tokio::time::pause();
+        let unset = crate::config::MetaMcpConfig::default().prompts_resources_fetch_timeout;
+        assert_eq!(
+            unset,
+            Duration::from_secs(10),
+            "the row's whole-fetch default"
+        );
+        let wire = ListWire {
+            pages: 2,
+            delay: PAGE_DELAY,
+            ..ListWire::answering(method, payload)
         };
-        let backend = Arc::new(Backend::new(
-            name,
-            config,
-            &crate::config::FailsafeConfig::default(),
-            Duration::from_secs(60),
-        ));
-        let _ = registry.register(backend);
-    }
+        let cursors = Arc::clone(&wire.cursors);
+        let registry = Arc::new(BackendRegistry::new());
+        assert!(
+            registry.register(wired("mock", wire, PAGED_BACKEND_TIMEOUT)),
+            "fixture registration"
+        );
+        let meta = MetaMcp::new(registry).with_prompts_resources_fetch_timeout(unset);
 
-    let meta = MetaMcp::new(registry).with_prompts_resources_fetch_timeout(Duration::from_secs(1));
+        let resp = if method == "prompts/list" {
+            meta.handle_prompts_list(RequestId::Number(1), None, None, None)
+                .await
+        } else {
+            meta.handle_resources_list(RequestId::Number(1), None, None, None)
+                .await
+        };
+        let field = if method == "prompts/list" {
+            "prompts"
+        } else {
+            "resources"
+        };
+        let result = resp.result.unwrap();
+        let mut listed: Vec<&str> = result[field]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p[key].as_str())
+            .filter(|n| n.starts_with("mock"))
+            .collect();
+        listed.sort_unstable();
+        assert_eq!(listed, expected, "both pages, once each");
+        assert_eq!(
+            *cursors.lock().unwrap(),
+            [None, Some("2".to_owned())],
+            "page 1 without a cursor, then page 2 by its cursor"
+        );
+    });
+}
 
-    let start = std::time::Instant::now();
-    let resp = meta
-        .handle_prompts_list(RequestId::Number(1), None, None, None)
-        .await;
-    let elapsed = start.elapsed();
+#[test]
+fn prompts_list_drains_pages_whose_total_exceeds_the_backend_timeout() {
+    drains_pages_whose_total_exceeds_the_backend_timeout(
+        "prompts/list",
+        serde_json::json!([{ "name": "greet", "description": "say hi" }]),
+        "name",
+        ["mock/greet-p1", "mock/greet-p2"],
+    );
+}
 
-    assert!(
-        resp.error.is_none(),
-        "list still succeeds: {:?}",
-        resp.error
-    );
-    assert!(
-        elapsed < Duration::from_secs(3),
-        "fast result must return at the 1s aggregation timeout, not at the hung backend's own 5s timeout, took {elapsed:?}"
-    );
-    // Both the gateway meta-prompts AND the fast backend's prompt are present;
-    // the hung backend was skipped within the bound.
-    let result = resp.result.unwrap();
-    let prompts = result["prompts"].as_array().unwrap();
-    let names: Vec<&str> = prompts
-        .iter()
-        .map(|p| p["name"].as_str().unwrap())
-        .collect();
-    assert!(
-        names.contains(&"gateway/gateway-discover"),
-        "meta prompts kept"
-    );
-    assert!(
-        names.contains(&"fast/quick"),
-        "fast backend's prompt returned"
+/// The resources family, which has its own aggregation site.
+#[test]
+fn resources_list_drains_pages_whose_total_exceeds_the_backend_timeout() {
+    drains_pages_whose_total_exceeds_the_backend_timeout(
+        "resources/list",
+        serde_json::json!([{ "uri": "mock://a", "name": "A" }]),
+        "uri",
+        ["mock://a-p1", "mock://a-p2"],
     );
 }
 
@@ -326,6 +617,7 @@ schema:
       ok:
         type: boolean
 metadata:
+  read_only: true
   exposure: personal
   identity_owner:
     authority: cloudflare_access

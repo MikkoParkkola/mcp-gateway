@@ -12,7 +12,6 @@ use crate::context_integrity::{
 };
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::identity_grants::GrantSubject;
-use crate::protocol::mrtr::InputRequired;
 
 use super::BudgetOutcome;
 
@@ -105,9 +104,9 @@ impl MetaMcp {
             .predict_next(tool_key, 0.30, 3)
             .into_iter()
             .filter(|p| {
-                p.tool.split_once(':').is_some_and(|(server, tool)| {
-                    self.may_invoke(server, tool, scope, session_id).is_ok()
-                })
+                p.tool
+                    .split_once(':')
+                    .is_some_and(|(server, tool)| self.shows_name(server, tool, scope, session_id))
             })
             .map(|p| json!({"tool": p.tool, "confidence": p.confidence}))
             .collect()
@@ -116,9 +115,7 @@ impl MetaMcp {
     pub(in crate::gateway::meta_mcp) fn grant_subject_from_api_key(
         api_key_name: Option<&str>,
     ) -> Option<GrantSubject> {
-        api_key_name
-            .filter(|name| !name.is_empty())
-            .map(|name| GrantSubject::new("api_key", name, Some(name.to_string())))
+        api_key_name.and_then(|name| GrantSubject::checked("api_key", name, Some(name.to_string())))
     }
 
     /// Whether the kernel enforces on `carrier`. Notes no data classes: the
@@ -251,32 +248,11 @@ impl MetaMcp {
         // enforcement never inspected -- `_meta` is free-form and a compromised
         // backend can hang anything off it.
         //
-        // The one thing that must survive is the fact that this is an interim
-        // round, not a finished call. `resultType` is the discriminator and
-        // `requestState` the handle. A handle without its discriminator is a
-        // result that lies -- a live continuation token on a payload claiming
-        // to be finished -- so the handle never crosses alone. The reverse is
-        // not a lie but a narrowing: a round this gateway cannot parse keeps
-        // its discriminator and loses its handle, so the caller learns the
-        // exchange is unfinished without being handed a token nothing here
-        // understood. `InputRequired` owns that parse, so ask it rather than
-        // copying field names: a handle only crosses when the protocol type
-        // says it is one.
+        // An enforced input round is rebuilt here but never delivered: the
+        // response gates refuse it (MIK-8325, decision (i) in
+        // docs/release/v4.0.0-decision-docket.md), so the rebuild carries no
+        // continuation handle and no question (`inputRequests`).
         //
-        // The questions themselves (`inputRequests`) do NOT cross as structure.
-        // Note what that does and does not buy: `Strip` renders the whole
-        // envelope into the delivered text, so the question text reaches the
-        // caller regardless. What is withheld is a machine-actionable copy of
-        // uninspected backend JSON, not the attacker's words.
-        //
-        // That leaves the caller holding a handle and no structured questions,
-        // which is a deliberate narrowing and not a settled policy. The wider
-        // choice -- carry the questions, or refuse the round outright with no
-        // handle at all -- changes what enforcement means for an unfinished
-        // exchange and is the operator's to make. Tracked in the v4.0.0
-        // release notes as an open decision; until it is made, the conservative
-        // reading applies: the exchange is known to continue, and nothing the
-        // kernel judged untrusted crosses as structure.
         // `resultType` and `isError` describe the round. Their VALUES cross
         // untouched -- an unrecognized round type is still a round type, and
         // filtering by value is what turns a future protocol revision into a
@@ -306,14 +282,6 @@ impl MetaMcp {
             if let Some(value) = value {
                 envelope.insert(field.to_string(), value.clone());
             }
-        }
-        // The handle is gated on the protocol type rather than on the field
-        // name: `InputRequired` owns that parse, so a `requestState` crosses
-        // only when the payload really is an input-required round.
-        if let Some(request_state) =
-            InputRequired::from_result(original).and_then(|interim| interim.request_state)
-        {
-            envelope.insert("requestState".to_string(), Value::String(request_state));
         }
         envelope.insert("content".to_string(), content);
         envelope.insert("structuredContent".to_string(), delivered);

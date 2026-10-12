@@ -29,10 +29,13 @@ async fn a_sealed_worker_takes_no_step_when_it_wakes() {
     let wake = Arc::new(tokio::sync::Notify::new());
     let stepped = Arc::new(AtomicBool::new(false));
     let (woken, step) = (Arc::clone(&wake), Arc::clone(&stepped));
-    executor.spawn_worker(async move {
-        woken.notified().await;
-        step.store(true, Ordering::SeqCst);
-    });
+    executor
+        .spawn_worker(async move {
+            woken.notified().await;
+            step.store(true, Ordering::SeqCst);
+        })
+        .await
+        .expect("no slot is open, so nothing to append");
     // Current-thread runtime: one yield lets the worker register on the Notify.
     tokio::task::yield_now().await;
 

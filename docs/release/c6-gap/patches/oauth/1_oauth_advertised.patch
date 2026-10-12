@@ -1,14 +1,15 @@
 diff --git a/src/oauth/client/destination.rs b/src/oauth/client/destination.rs
-index bfeacd891..2a7bef802 100644
+index 0000000..0000000 100644
 --- a/src/oauth/client/destination.rs
 +++ b/src/oauth/client/destination.rs
-@@ -112,11 +112,8 @@ impl OAuthClient {
-         &self,
-         meta: &AuthorizationServerMetadata,
+@@ -248,12 +248,8 @@ impl OAuthClient {
      ) -> Result<()> {
--        self.check_destination(&meta.token_endpoint)?;
+         // The authorization endpoint is where the user signs in: their own
+         // password goes there, through the browser.
+-        self.check_destination(&meta.authorization_endpoint, "authorization_endpoint")?;
+-        self.check_destination(&meta.token_endpoint, "token_endpoint")?;
 -        match &meta.registration_endpoint {
--            Some(registration) => self.check_destination(registration),
+-            Some(registration) => self.check_destination(registration, "registration_endpoint"),
 -            None => Ok(()),
 -        }
 +        let _ = meta;

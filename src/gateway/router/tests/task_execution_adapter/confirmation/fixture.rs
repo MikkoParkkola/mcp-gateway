@@ -44,12 +44,43 @@ pub(super) async fn fixture_with(
     config: crate::config::Config,
     meta: impl FnOnce(&mut MetaMcp),
 ) -> (Arc<AppState>, tempfile::TempDir) {
+    // Boxed: the setup future is large, and inlined it would be carried by
+    // every row that awaits a fixture.
+    Box::pin(fixture_under(mock, &two_principal_auth(), config, meta)).await
+}
+
+/// [`fixture`] with `key-k1` and `key-k2` added: two KEY-ONLY callers, which
+/// `verified_subject` maps to no identity, so the only thing that tells them
+/// apart is the credential itself (`MIK-8137`). Not added to
+/// `two_principal_auth`, whose `three_principal_auth` already extends it.
+pub(super) async fn key_only_fixture(
+    mock: &Arc<MockBackend>,
+) -> (Arc<AppState>, tempfile::TempDir) {
+    let mut auth = two_principal_auth();
+    for (key, name) in [("key-k1", "principal-k1"), ("key-k2", "principal-k2")] {
+        let mut extra = auth.api_keys[0].clone();
+        extra.key_sha256 = Some(crate::config::api_key_digest_spec(key.as_bytes()));
+        extra.name = name.to_string();
+        auth.api_keys.push(extra);
+    }
+    Box::pin(fixture_under(
+        mock,
+        &auth,
+        crate::config::Config::default(),
+        |_| {},
+    ))
+    .await
+}
+
+async fn fixture_under(
+    mock: &Arc<MockBackend>,
+    auth: &crate::config::AuthConfig,
+    config: crate::config::Config,
+    meta: impl FnOnce(&mut MetaMcp),
+) -> (Arc<AppState>, tempfile::TempDir) {
     let (mut state, store) =
-        crate::gateway::router::tests::test_router_app_state_with_auth_and_config(
-            &two_principal_auth(),
-            config,
-        )
-        .await;
+        crate::gateway::router::tests::test_router_app_state_with_auth_and_config(auth, config)
+            .await;
     let inner = Arc::get_mut(&mut state).expect("fixture is not shared yet");
     let mut surfaced = MetaMcp::new(Arc::clone(&inner.backends)).with_surfaced_tools(vec![
         crate::config::SurfacedToolConfig {

@@ -7,7 +7,9 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+#[cfg(test)]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -48,6 +50,11 @@ pub struct TokenInfo {
     /// OAuth `client_secret` stored alongside the token (optional; prefer Keychain).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_secret: Option<String>,
+
+    /// The `expires_in` of the answer that issued this token: its lifetime,
+    /// from which an unset refresh buffer is derived (MIK-8044).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifetime_secs: Option<u64>,
 }
 
 fn default_token_type() -> String {
@@ -124,12 +131,15 @@ impl std::fmt::Debug for TokenInfo {
             .field("token_endpoint", &self.token_endpoint)
             .field("client_id", &self.client_id)
             .field("client_secret", &redact_opt(&self.client_secret))
+            .field("lifetime_secs", &self.lifetime_secs)
             .finish()
     }
 }
 
 impl TokenInfo {
-    /// Create token info from OAuth token response
+    /// [`Self::from_response_at`] on the test thread's clock, for tests that
+    /// build a token without a request.
+    #[cfg(test)]
     pub fn from_response(
         access_token: String,
         token_type: Option<String>,
@@ -137,16 +147,34 @@ impl TokenInfo {
         expires_in: Option<u64>,
         scope: Option<String>,
     ) -> Self {
+        let now = crate::clock::unix_secs().expect("tests build tokens on a readable clock");
+        Self::from_response_at(
+            access_token,
+            token_type,
+            refresh_token,
+            expires_in,
+            scope,
+            now,
+        )
+    }
+
+    /// Create token info from an OAuth token response, its expiry dated from
+    /// `now`: the one clock reading the request was checked against before it
+    /// was sent, so a clock that cannot be read refuses the request rather
+    /// than dating a token from the epoch (MIK-8202).
+    pub fn from_response_at(
+        access_token: String,
+        token_type: Option<String>,
+        refresh_token: Option<String>,
+        expires_in: Option<u64>,
+        scope: Option<String>,
+        now: u64,
+    ) -> Self {
         // MIK-8207: never wraps. An `expires_in` above the bound gives a token
         // that is already expired; the gateway's own callers refuse such an
         // answer before it gets here.
-        let expires_at = expires_in.map(|secs| {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            crate::duration_bound::expiry_from_expires_in(now, secs).unwrap_or(now)
-        });
+        let expires_at = expires_in
+            .map(|secs| crate::duration_bound::expiry_from_expires_in(now, secs).unwrap_or(now));
 
         Self {
             access_token,
@@ -157,6 +185,7 @@ impl TokenInfo {
             token_endpoint: None,
             client_id: None,
             client_secret: None,
+            lifetime_secs: expires_in,
         }
     }
 
@@ -164,13 +193,17 @@ impl TokenInfo {
     #[must_use]
     pub fn is_expired(&self) -> bool {
         if let Some(expires_at) = self.expires_at {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-
-            // Consider expired 60 seconds before actual expiry
-            now + 60 >= expires_at
+            // Expired 60 seconds early, and on a clock that cannot be read
+            // (before 1970) whatever the stamp: an access check fails closed,
+            // so the caller refreshes or refuses (MIK-8202).
+            use crate::clock::{Validity, expired_by};
+            expired_by(|now| {
+                if now.saturating_add(60) >= expires_at {
+                    Validity::Expired
+                } else {
+                    Validity::Live
+                }
+            }) == Validity::Expired
         } else {
             // No expiry = doesn't expire
             false
@@ -181,10 +214,8 @@ impl TokenInfo {
     #[must_use]
     pub fn time_until_expiry(&self) -> Option<Duration> {
         self.expires_at.and_then(|expires_at| {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
+            // None on a clock that cannot be read (MIK-8202).
+            let now = crate::clock::unix_secs().ok()?;
 
             if expires_at > now {
                 Some(Duration::from_secs(expires_at - now))
@@ -468,6 +499,74 @@ impl TokenStorage {
         resource_url: &str,
         client_id: &str,
     ) -> Result<String> {
+        match self.link_client_id(backend_name, resource_url, client_id)? {
+            Linked::Saved(id) => Ok(id),
+            Linked::Corrupt { path, tmp } => {
+                let lock_path = self.client_lock_path(backend_name, resource_url);
+                let lock = crate::fs_lock::ExclusiveFileLock::acquire(&lock_path)
+                    .map_err(|e| repair_lock_error(&e))?;
+                self.repair_corrupt_final(
+                    backend_name,
+                    resource_url,
+                    &path,
+                    &tmp.0,
+                    client_id,
+                    &lock,
+                )
+            }
+        }
+    }
+
+    /// [`save_client_id`](Self::save_client_id) for the async login path
+    /// (MIK-8344). The repair lock is polled, never blocked on, so the login's
+    /// cancel (a restart, a stop) can end the wait, and `bound` ends a wait on
+    /// a holder that never lets go. Either way the final is left as it was and
+    /// the temp file is removed.
+    ///
+    /// # Errors
+    ///
+    /// As [`save_client_id`](Self::save_client_id), and when the repair lock
+    /// is still held after `bound`.
+    pub(crate) async fn save_client_id_polled(
+        &self,
+        backend_name: &str,
+        resource_url: &str,
+        client_id: &str,
+        bound: Duration,
+    ) -> Result<String> {
+        match self.link_client_id(backend_name, resource_url, client_id)? {
+            Linked::Saved(id) => Ok(id),
+            Linked::Corrupt { path, tmp } => {
+                let lock_path = self.client_lock_path(backend_name, resource_url);
+                let lease = crate::fs_lock::ExclusiveFileLock::lease(&lock_path, REPAIR_LOCK_POLL);
+                let lock = tokio::time::timeout(bound, lease)
+                    .await
+                    .map_err(|_| {
+                        Error::OAuth(format!(
+                            "client_id repair lock still held by another process after {bound:?}"
+                        ))
+                    })?
+                    .map_err(|e| repair_lock_error(&e))?;
+                self.repair_corrupt_final(
+                    backend_name,
+                    resource_url,
+                    &path,
+                    &tmp.0,
+                    client_id,
+                    &lock,
+                )
+            }
+        }
+    }
+
+    /// Persist `client_id` first-writer-wins, up to the point that needs the
+    /// repair lock: a corrupt final is handed back with its validated temp.
+    fn link_client_id(
+        &self,
+        backend_name: &str,
+        resource_url: &str,
+        client_id: &str,
+    ) -> Result<Linked> {
         let path = self.client_path(backend_name, resource_url);
         let content = serde_json::to_string(client_id)
             .map_err(|e| Error::OAuth(format!("Failed to serialize client_id: {e}")))?;
@@ -483,37 +582,29 @@ impl TokenStorage {
         // On unix the 0600 mode is applied atomically at creation, closing the
         // world-readable window that a post-write chmod would otherwise leave.
         let tmp = self.create_secret_tmp(file_name)?;
-        let tmp = Self::write_secret_tmp(tmp, &content)?;
+        let tmp = TempFile(Self::write_secret_tmp(tmp, &content)?);
 
         // First-writer-wins: `hard_link` fails with `AlreadyExists` when the
         // final path already exists, so a concurrent instance adopts the
         // existing id instead of clobbering it. A corrupt/unreadable existing
         // file is unusable and gets repaired under a cross-process lock (see
         // `repair_corrupt_final` for why the repair must be serialized).
-        let result = match fs::hard_link(&tmp, &path) {
+        match fs::hard_link(&tmp.0, &path) {
             Ok(()) => {
                 info!(backend = %backend_name, "Saved registered OAuth client_id");
-                Ok(client_id.to_string())
+                Ok(Linked::Saved(client_id.to_string()))
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 match self.load_client_id(backend_name, resource_url) {
                     Some(existing) => {
                         info!(backend = %backend_name, "client_id already persisted by another instance; adopting it");
-                        Ok(existing)
+                        Ok(Linked::Saved(existing))
                     }
-                    None => self.repair_corrupt_final(
-                        backend_name,
-                        resource_url,
-                        &path,
-                        &tmp,
-                        client_id,
-                    ),
+                    None => Ok(Linked::Corrupt { path, tmp }),
                 }
             }
             Err(e) => Err(Error::OAuth(format!("Failed to persist client_id: {e}"))),
-        };
-        let _ = fs::remove_file(&tmp);
-        result
+        }
     }
 
     /// Repair a corrupt/unreadable final `client_id` file under an exclusive
@@ -536,11 +627,8 @@ impl TokenStorage {
         path: &std::path::Path,
         tmp: &std::path::Path,
         client_id: &str,
+        _held: &crate::fs_lock::ExclusiveFileLock,
     ) -> Result<String> {
-        let lock_path = self.client_lock_path(backend_name, resource_url);
-        let _lock = crate::fs_lock::ExclusiveFileLock::acquire(&lock_path)
-            .map_err(|e| Error::OAuth(format!("Failed to acquire client_id repair lock: {e}")))?;
-
         // Re-read under the lock: another process may have healed the file
         // between our caller's unlocked read (which found it corrupt) and
         // this call acquiring the lock. Never remove a final that now parses.
@@ -648,6 +736,36 @@ impl TokenStorage {
         }
         Ok(())
     }
+}
+
+/// What the first-writer-wins link found.
+enum Linked {
+    /// Persisted, or adopted from another writer.
+    Saved(String),
+    /// The final is unreadable: it is repaired under the lock, from `tmp`.
+    Corrupt { path: PathBuf, tmp: TempFile },
+}
+
+/// A temp file removed when dropped, so a save that errors or is cancelled
+/// mid-wait leaves none behind.
+struct TempFile(PathBuf);
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+/// How often a repair lock held by another process is tried again.
+const REPAIR_LOCK_POLL: Duration = Duration::from_millis(50);
+
+/// The most a login waits for another process's `client_id` repair. A repair
+/// is a re-read, a remove and a link: milliseconds. A holder past this is
+/// stuck, and the login proceeds with the id it registered in memory.
+pub(crate) const REPAIR_LOCK_BOUND: Duration = Duration::from_secs(30);
+
+fn repair_lock_error(e: &std::io::Error) -> Error {
+    Error::OAuth(format!("Failed to acquire client_id repair lock: {e}"))
 }
 
 #[cfg(test)]

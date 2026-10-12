@@ -15,7 +15,7 @@ use super::super::MetaMcp;
 use super::{ResponseCorrelation, ResponseDeliveryContext, ResponsePolicyTarget};
 use crate::backend::BackendRegistry;
 use crate::protocol::{JsonRpcResponse, RequestId};
-use crate::security::firewall::response_tests::audit::{assert_v2_event, capture_warnings};
+use crate::security::firewall::response_tests::audit::{assert_response_event, capture_warnings};
 use crate::security::firewall::{Firewall, FirewallAction, FirewallConfig, FirewallRule};
 use crate::security::response_policy::ResponseArtifactKind;
 use crate::security::{TransparencyLogConfig, TransparencyLogger};
@@ -114,7 +114,7 @@ impl Fixture {
     fn assert_audit(&self, targets: &[ResponsePolicyTarget], action: FirewallAction) {
         let events = self.audits();
         assert_eq!(events.len(), 1);
-        assert_v2_event(
+        assert_response_event(
             &events[0],
             &correlation(),
             targets,
@@ -737,3 +737,6 @@ fn firewall_delivery_failed_append_preserves_output_and_consumes_one_shot_fault(
 mod minted;
 #[path = "response_delivery_scope_tests.rs"]
 mod scope_tests;
+
+#[path = "response_delivery_memo_tests.rs"]
+mod memo;

@@ -354,7 +354,7 @@ async fn forwarded_credentials_stay_out_of_the_trace_on_the_wire() {
     }
     let buffer = Buf(Arc::default());
     let writer = buffer.clone();
-    crate::gateway::session_id::log_capture::ensure_global_interest();
+    crate::test_log_capture::keep_interest_open();
     let subscriber = tracing_subscriber::fmt()
         .without_time()
         .with_ansi(false)

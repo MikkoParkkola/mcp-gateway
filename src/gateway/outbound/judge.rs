@@ -65,7 +65,6 @@ fn emitted_document(payload: &Payload) -> Option<Value> {
                 confirmation_refusal: false,
                 delivery_refusal: false,
                 egress_scanned: false,
-                unsent_hold: None,
                 chain_source: crate::protocol::ChainSource::NotEligible,
                 chain_upstream: None,
             };
@@ -237,11 +236,12 @@ pub(crate) fn delivered(
     };
     OutboundFrame {
         payload,
-        assessment: Some(assessment),
+        assessment: Some(Box::new(assessment)),
         ticket,
         record_taken: false,
         key: key.map(Arc::from),
         delivery: None,
+        holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
     }
 }
 
@@ -271,11 +271,12 @@ pub(crate) fn admit(
     }
     Admission::Admitted(OutboundFrame {
         payload,
-        assessment: Some(assessment),
+        assessment: Some(Box::new(assessment)),
         ticket,
         record_taken: false,
         key: key.map(Arc::from),
         delivery: None,
+        holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
     })
 }
 
@@ -321,11 +322,12 @@ pub(crate) fn admit_stream_item(
     }
     Admission::Admitted(OutboundFrame {
         payload: Payload::Withheld,
-        assessment: Some(assessment),
+        assessment: Some(Box::new(assessment)),
         ticket,
         record_taken: false,
         key: key.map(Arc::from),
         delivery: None,
+        holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
     })
 }
 
@@ -366,7 +368,6 @@ mod emitted_document_tests {
             confirmation_refusal: true,
             delivery_refusal: true,
             egress_scanned: true,
-            unsent_hold: None,
             chain_source: crate::protocol::ChainSource::NotEligible,
             chain_upstream: None,
         }

@@ -44,7 +44,11 @@ impl Cancelled {
         let mut marks = self.0.lock();
         let task = tokio::task::try_id();
         if !task.is_some_and(|task| marks.cancelled.contains(&task)) {
-            permit.send(frame);
+            // MIK-8176: every single answer enters the writer queue here, so
+            // its holds are attached here, however it was built. The writer
+            // hands them off as it takes the frame; a cancelled answer is
+            // never attached, and its holds give the slot back with the scope.
+            permit.send(frame.carry_holds());
         }
         if let (Some(_), Some(task)) = (id, task) {
             marks.answered.insert(task);

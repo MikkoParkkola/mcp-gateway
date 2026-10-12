@@ -37,6 +37,9 @@ mod complete;
 mod connections;
 #[path = "accounts/envelope.rs"]
 mod envelope;
+#[cfg(test)]
+#[path = "accounts/evict_slots_cov_tests.rs"]
+mod evict_slots_cov_tests;
 #[path = "accounts/hosted.rs"]
 mod hosted;
 #[path = "accounts/journeys.rs"]

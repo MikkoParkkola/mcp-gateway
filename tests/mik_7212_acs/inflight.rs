@@ -8,7 +8,17 @@ use mcp_gateway::protocol::continuation::{InFlight, Routing};
 #[tokio::test]
 async fn ac_mrtr_6_a_retry_reaching_the_holding_replica_is_served_here() {
     let table = InFlight::new("gw-1", 100);
-    let key = table.hold("weather", 2_000, 0).await.expect("capacity");
+    let key = table
+        .hold(
+            "weather",
+            &mcp_gateway::protocol::continuation::QuotaKey::new(
+                mcp_gateway::protocol::continuation::QuotaSource::KeyName("test"),
+            ),
+            2_000,
+            0,
+        )
+        .await
+        .expect("capacity");
 
     assert!(matches!(table.route(&key, 0).await, Routing::Here));
 }
@@ -32,7 +42,17 @@ async fn ac_mrtr_6_a_retry_landing_on_another_replica_fails_explicitly() {
     // same-replica case one test up.
     let minting = InFlight::new("gw-1", 100);
     let receiving = InFlight::new("gw-2", 100);
-    let key = minting.hold("weather", 2_000, 0).await.expect("capacity");
+    let key = minting
+        .hold(
+            "weather",
+            &mcp_gateway::protocol::continuation::QuotaKey::new(
+                mcp_gateway::protocol::continuation::QuotaSource::KeyName("test"),
+            ),
+            2_000,
+            0,
+        )
+        .await
+        .expect("capacity");
 
     assert!(
         matches!(receiving.route(&key, 0).await, Routing::Gone),
@@ -64,10 +84,32 @@ async fn ac_mrtr_8_the_table_is_bounded() {
     // bounded table and a memory-exhaustion vector.
     let table = InFlight::new("gw-1", 4);
     for _ in 0..4 {
-        assert!(table.hold("weather", 9_999, 0).await.is_some());
+        assert!(
+            table
+                .hold(
+                    "weather",
+                    &mcp_gateway::protocol::continuation::QuotaKey::new(
+                        mcp_gateway::protocol::continuation::QuotaSource::KeyName("test")
+                    ),
+                    9_999,
+                    0
+                )
+                .await
+                .is_some()
+        );
     }
     assert!(
-        table.hold("weather", 9_999, 0).await.is_none(),
+        table
+            .hold(
+                "weather",
+                &mcp_gateway::protocol::continuation::QuotaKey::new(
+                    mcp_gateway::protocol::continuation::QuotaSource::KeyName("test")
+                ),
+                9_999,
+                0
+            )
+            .await
+            .is_none(),
         "at capacity the gateway must refuse to start a new exchange rather \
          than grow, and refusing is what the caller turns into an error the \
          client can see"
@@ -77,9 +119,29 @@ async fn ac_mrtr_8_the_table_is_bounded() {
 #[tokio::test]
 async fn ac_mrtr_8_an_abandoned_exchange_is_reclaimed() {
     let table = InFlight::new("gw-1", 4);
-    let key = table.hold("weather", 1_000, 0).await.expect("capacity");
+    let key = table
+        .hold(
+            "weather",
+            &mcp_gateway::protocol::continuation::QuotaKey::new(
+                mcp_gateway::protocol::continuation::QuotaSource::KeyName("test"),
+            ),
+            1_000,
+            0,
+        )
+        .await
+        .expect("capacity");
     for _ in 1..4 {
-        table.hold("weather", 1_000, 0).await.expect("capacity");
+        table
+            .hold(
+                "weather",
+                &mcp_gateway::protocol::continuation::QuotaKey::new(
+                    mcp_gateway::protocol::continuation::QuotaSource::KeyName("test"),
+                ),
+                1_000,
+                0,
+            )
+            .await
+            .expect("capacity");
     }
 
     // The table is full of exchanges nobody came back for. A caller
@@ -87,7 +149,17 @@ async fn ac_mrtr_8_an_abandoned_exchange_is_reclaimed() {
     // happens on the path that enforces the bound, so there is no reaper
     // to forget to call.
     assert!(
-        table.hold("weather", 9_999, 1_001).await.is_some(),
+        table
+            .hold(
+                "weather",
+                &mcp_gateway::protocol::continuation::QuotaKey::new(
+                    mcp_gateway::protocol::continuation::QuotaSource::KeyName("test")
+                ),
+                9_999,
+                1_001
+            )
+            .await
+            .is_some(),
         "a table full of abandoned exchanges must reclaim rather than refuse"
     );
     assert!(
@@ -95,7 +167,17 @@ async fn ac_mrtr_8_an_abandoned_exchange_is_reclaimed() {
         "an abandoned exchange must not hold its slot forever"
     );
     assert!(
-        table.hold("weather", 9_999, 0).await.is_some(),
+        table
+            .hold(
+                "weather",
+                &mcp_gateway::protocol::continuation::QuotaKey::new(
+                    mcp_gateway::protocol::continuation::QuotaSource::KeyName("test")
+                ),
+                9_999,
+                0
+            )
+            .await
+            .is_some(),
         "and its slot must come back"
     );
 }
@@ -105,7 +187,27 @@ async fn ac_mrtr_6_the_key_is_not_something_the_client_chooses() {
     // Two exchanges for the same backend must not collide, and a client
     // must not be able to name someone else's.
     let table = Arc::new(InFlight::new("gw-1", 100));
-    let a = table.hold("weather", 9_999, 0).await.expect("capacity");
-    let b = table.hold("weather", 9_999, 0).await.expect("capacity");
+    let a = table
+        .hold(
+            "weather",
+            &mcp_gateway::protocol::continuation::QuotaKey::new(
+                mcp_gateway::protocol::continuation::QuotaSource::KeyName("test"),
+            ),
+            9_999,
+            0,
+        )
+        .await
+        .expect("capacity");
+    let b = table
+        .hold(
+            "weather",
+            &mcp_gateway::protocol::continuation::QuotaKey::new(
+                mcp_gateway::protocol::continuation::QuotaSource::KeyName("test"),
+            ),
+            9_999,
+            0,
+        )
+        .await
+        .expect("capacity");
     assert_ne!(a, b, "each exchange gets its own key");
 }

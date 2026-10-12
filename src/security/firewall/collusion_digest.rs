@@ -10,13 +10,46 @@
 //! and the original runs' fingerprints stay where their k-gram is in a
 //! delivered leaf or across adjacent kept leaves.
 
-use std::cell::OnceCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::AtomicBool;
 
-use serde_json::Value;
-
-use super::collusion::{CollusionDetector, K};
+use super::collusion::CollusionDetector;
 use super::collusion_gate::RECORD_CAP;
+
+#[path = "collusion_delivered.rs"]
+mod delivered;
+pub(crate) use delivered::{Delivered, Mode};
+#[path = "collusion_key_path.rs"]
+mod key_path;
+pub(super) use key_path::{key_path_joins, key_path_run_indices, key_path_runs};
+#[path = "collusion_digest_judged.rs"]
+mod judged;
+#[path = "collusion_view.rs"]
+pub(super) mod view;
+#[path = "collusion_walk.rs"]
+mod walk;
+pub(crate) use judged::{Judged, UnreadReceipt};
+
+/// Reference-list walks built on this thread (tests only, `MIK-8066` D2).
+#[cfg(test)]
+pub(crate) fn walks_built() -> u64 {
+    walk::walks_built()
+}
+
+/// Count one reference-list walk made outside the firewall (the relay's
+/// label walk), on this thread's walk count (tests only, `MIK-8066` D6).
+#[cfg(test)]
+pub(crate) fn note_walk_for_test() {
+    walk::note_walk();
+}
+
+#[path = "collusion_runs.rs"]
+mod runs;
+use runs::own_span_delivered_runs;
+#[cfg(test)]
+pub(super) use walk::delivery_leaves;
+pub(super) use walk::delivery_parts;
+use walk::run_forms;
 
 /// The delivered text a plan's receipts are kept against, at most. A larger
 /// answer drops them, as before this check existed (under-receipt, never a
@@ -82,6 +115,62 @@ pub(crate) struct DeliveryDigest {
     /// What the holder received when this receipt was cut: excuse only
     /// (`MIK-8066.EXCUSE.1`).
     pub(super) cut_fps: Option<std::sync::Arc<[u64]>>,
+    /// The key-path joins (`MIK-8209`, design §14.1 K2).
+    joins: Joins,
+    /// The caller's own subset-forward seams (`MIK-8205`): excuse only. Set by
+    /// `delivery_digest` of a committed delivery, or for a plan by the
+    /// answer's single-receipt runs after capping (`add_seam_excuses`); never
+    /// by staging, so a step's text the answer dropped carries none.
+    pub(super) seam_excuses: Option<std::sync::Arc<[u64]>>,
+    /// How the plan's answer judged this receipt (`MIK-8066` D9): the one
+    /// channel a step's evidence reaches the record through.
+    pub(super) judged: Judged,
+    /// Set by the first record (A2): a second record is a counted no-op.
+    pub(super) recorded: AtomicBool,
+    /// `MIK-8066` D4: a plan step's value leaves as sorted keyed hashes, set
+    /// at staging and kept only through a view retention, which keeps no
+    /// whole segments: what subset-forward seam ownership reads instead.
+    pub(super) leaf_hashes: Option<std::sync::Arc<[u64]>>,
+    /// `MIK-8066` A5: a view cut's `VIEW_BYTES` charge, held from retention
+    /// until this digest is recorded and dropped.
+    #[expect(dead_code, reason = "held for its Drop: releases the cut's charge")]
+    cut_charge: Option<super::collusion::budget::ViewCharge>,
+    /// A5: a view cut was refused its charge; its record marks the caller's
+    /// excuse lost.
+    pub(super) cut_lost: bool,
+}
+
+/// A delivery's key-path joins, each fingerprinted alone after the segment
+/// and retained fingerprints, so the per-delivery fingerprint bound keeps
+/// leaf evidence first.
+#[derive(Default, Clone)]
+enum Joins {
+    #[default]
+    None,
+    /// The joins' text, kept to their own [`RECORD_CAP`] budget.
+    Text(Box<[String]>),
+    /// A staged plan step's runs, as segment indices: no text is copied.
+    Runs(Box<[Box<[u32]>]>),
+    /// What retention kept of a step's runs, as fingerprints.
+    Fps(Box<[u64]>),
+}
+
+/// `joins` kept whole, in order, up to a [`RECORD_CAP`] budget of their own;
+/// past the first that does not fit, every later one is left out. Also
+/// whether any was.
+fn budget_joins(joins: Vec<String>) -> (Box<[String]>, bool) {
+    let mut room = RECORD_CAP;
+    let total = joins.len();
+    let kept: Box<[String]> = joins
+        .into_iter()
+        .take_while(|join| {
+            let fits = join.len() <= room;
+            room = room.saturating_sub(join.len());
+            fits
+        })
+        .collect();
+    let cut = kept.len() < total;
+    (kept, cut)
 }
 
 /// Leaf `i` as a whole segment, no seam before it; the first `values` are
@@ -180,8 +269,47 @@ impl DeliveryDigest {
             deferred: false,
             seam_sources: None,
             cut_fps: None,
+            seam_excuses: None,
+            joins: Joins::None,
+            judged: Judged::default(),
+            recorded: AtomicBool::default(),
+            leaf_hashes: None,
+            cut_charge: None,
+            cut_lost: false,
         };
         (digest, cut)
+    }
+
+    /// This digest with `joins`, its key-path joins in run order, kept whole up
+    /// to a [`RECORD_CAP`] budget of their own, so they never take the leaves'
+    /// room (`MIK-8209`). Also whether a join was left out: past the first that
+    /// does not fit, every later one is.
+    pub(super) fn with_joins(mut self, joins: Vec<String>) -> (Self, bool) {
+        let (kept, cut) = budget_joins(joins);
+        self.joins = Joins::Text(kept);
+        (self, cut)
+    }
+
+    /// Add `fps` to this receipt's subset-forward seams (`MIK-8205`, S4:
+    /// a plan answer's single-step runs, attached to their step's receipt).
+    pub(crate) fn add_seam_excuses(&mut self, fps: &[u64]) {
+        if fps.is_empty() {
+            return;
+        }
+        let mut all: Vec<u64> = self.seam_excuses.as_deref().unwrap_or_default().to_vec();
+        all.extend_from_slice(fps);
+        all.sort_unstable();
+        all.dedup();
+        self.seam_excuses = Some(all.into());
+    }
+
+    /// This staged digest with its key-path runs, as indices into its
+    /// segments (`MIK-8209` K2a): no join text is copied while staged.
+    pub(super) fn with_join_runs(mut self, runs: Vec<Box<[u32]>>) -> Self {
+        if self.deferred && !runs.is_empty() {
+            self.joins = Joins::Runs(runs.into());
+        }
+        self
     }
 
     /// [`Self::of_plan_step_parts`] with every leaf a value (tests only).
@@ -215,6 +343,13 @@ impl DeliveryDigest {
             deferred: true,
             seam_sources: None,
             cut_fps: None,
+            seam_excuses: None,
+            joins: Joins::None,
+            judged: Judged::default(),
+            recorded: AtomicBool::default(),
+            leaf_hashes: None,
+            cut_charge: None,
+            cut_lost: false,
         };
         (digest, false)
     }
@@ -229,6 +364,15 @@ impl DeliveryDigest {
         }
         let (segments, cut) = cap(self.segments.len(), &|i| self.segments[i].view());
         let kept = self.retained.len().min(RECORD_CAP);
+        // The join slot is carried over (`MIK-8209`): staged runs become their
+        // text, on the joins' own budget, before the cap renumbers segments.
+        let (joins, joins_cut) = match &self.joins {
+            Joins::Runs(runs) => {
+                let (text, cut) = budget_joins(runs.iter().map(|r| self.run_text(r)).collect());
+                (Joins::Text(text), cut)
+            }
+            other => (other.clone(), false),
+        };
         let digest = Self {
             segments,
             retained: self.retained[..kept].to_vec(),
@@ -236,12 +380,19 @@ impl DeliveryDigest {
             deferred: false,
             seam_sources: None,
             cut_fps: None,
+            seam_excuses: None,
+            joins,
+            judged: Judged::default(),
+            recorded: AtomicBool::default(),
+            leaf_hashes: None,
+            cut_charge: None,
+            cut_lost: false,
         };
-        Some((digest, cut || kept < self.retained.len()))
+        Some((digest, cut || joins_cut || kept < self.retained.len()))
     }
 
-    /// Whether the cap is still to apply (tests only).
-    #[cfg(test)]
+    /// Whether the cap is still to apply: staged whole, not capped at
+    /// staging.
     pub(super) fn is_deferred(&self) -> bool {
         self.deferred
     }
@@ -266,7 +417,15 @@ impl DeliveryDigest {
     pub(crate) fn staged_len(&self) -> usize {
         let per_leaf = std::mem::size_of::<Segment>();
         let text: usize = self.segments.iter().map(|s| s.text.len() + per_leaf).sum();
-        std::mem::size_of::<Self>() + text
+        // Staged index runs are charged too (`MIK-8209` K2a).
+        let runs: usize = match &self.joins {
+            Joins::Runs(runs) => runs
+                .iter()
+                .map(|r| std::mem::size_of_val::<[u32]>(r) + std::mem::size_of::<Box<[u32]>>())
+                .sum(),
+            _ => 0,
+        };
+        std::mem::size_of::<Self>() + text + runs
     }
 
     /// The fingerprints of a seam between plan steps (`MIK-8113`), at most
@@ -314,6 +473,16 @@ impl DeliveryDigest {
     /// walk order, then the retained ones; distinct.
     pub(super) fn fingerprints(&self, detector: &CollusionDetector) -> Vec<u64> {
         let mut seen = HashSet::new();
+        self.leaf_fingerprints(detector)
+            .into_iter()
+            .chain(self.join_fingerprints(detector))
+            .filter(|fp| seen.insert(*fp))
+            .collect()
+    }
+
+    /// The segment runs' forms, then the retained fingerprints; distinct.
+    fn leaf_fingerprints(&self, detector: &CollusionDetector) -> Vec<u64> {
+        let mut seen = HashSet::new();
         self.runs()
             .iter()
             .flat_map(|run| run_forms(run))
@@ -323,51 +492,40 @@ impl DeliveryDigest {
             .collect()
     }
 
+    /// Each key-path join's fingerprints, the join fingerprinted alone so no
+    /// form runs it into a neighbour (`MIK-8209`).
+    fn join_fingerprints(&self, detector: &CollusionDetector) -> Vec<u64> {
+        match &self.joins {
+            Joins::None => Vec::new(),
+            Joins::Text(joins) => joins
+                .iter()
+                .flat_map(|j| detector.fingerprints(j))
+                .collect(),
+            Joins::Runs(runs) => runs
+                .iter()
+                .flat_map(|run| detector.fingerprints(&self.run_text(run)))
+                .collect(),
+            Joins::Fps(fps) => fps.to_vec(),
+        }
+    }
+
+    /// The text of a staged run: its segments run together.
+    fn run_text(&self, run: &[u32]) -> String {
+        run.iter()
+            .filter_map(|&i| self.segments.get(i as usize))
+            .map(|s| s.text.as_str())
+            .collect()
+    }
+
     /// Kept to what `delivered` carries (a plan step's receipt against the
     /// plan's final answer): a whole leaf delivered verbatim stays in its run;
     /// any other segment leaves its run behind a seam and keeps only those of
     /// its fingerprints whose k-gram occurs in a delivered leaf. Every earlier
     /// fingerprint (the original runs' and retained ones) stays when its
     /// k-gram is in a delivered leaf or in a kept run.
+    #[cfg(test)]
     pub(super) fn retaining(self, detector: &CollusionDetector, delivered: &Delivered<'_>) -> Self {
-        if self.deferred {
-            return self.retaining_deferred(detector, delivered);
-        }
-        let verbatim = |s: &Segment| delivered.holds(s);
-        if self.retained.is_empty() && self.segments.iter().all(verbatim) {
-            return self;
-        }
-        let original = self.fingerprints(detector);
-        let found = delivered.kgrams(detector);
-        let mut retained = Vec::new();
-        let mut segments = Vec::with_capacity(self.segments.len());
-        let mut gap = false;
-        for segment in self.segments {
-            if verbatim(&segment) {
-                segments.push(Segment {
-                    gap_before: gap || segment.gap_before,
-                    ..segment
-                });
-                gap = false;
-            } else {
-                retained.extend(
-                    detector
-                        .fingerprints(&segment.text)
-                        .into_iter()
-                        .filter(|fp| found.contains(fp)),
-                );
-                gap = true;
-            }
-        }
-        let kept = Self {
-            segments,
-            retained: Vec::new(),
-            sensitive: self.sensitive,
-            deferred: false,
-            seam_sources: None,
-            cut_fps: None,
-        };
-        kept.with_original(detector, found, original, retained, &HashSet::new())
+        self.retaining_for(detector, delivered, None)
     }
 
     /// [`Self::retaining`] for a digest whose cap is deferred (MIK-7992): its
@@ -380,7 +538,12 @@ impl DeliveryDigest {
     /// is also at most what the step staged: an answer repeating a step leaf
     /// keeps its copies only up to that, the rest behind a seam, so retention
     /// never grows a receipt past what its plan's staging bound counted.
-    fn retaining_deferred(self, detector: &CollusionDetector, delivered: &Delivered<'_>) -> Self {
+    fn retaining_deferred(
+        self,
+        detector: &CollusionDetector,
+        delivered: &Delivered<'_>,
+        step: Option<u32>,
+    ) -> Self {
         // Matched as the same kind (MIK-7773): a step value the answer
         // carries only as a key is not kept as a value.
         let whole: HashSet<(&str, bool)> = self
@@ -389,35 +552,67 @@ impl DeliveryDigest {
             .filter(|s| s.whole)
             .map(|s| (s.text.as_str(), s.key))
             .collect();
+        // At most what the step staged (MIK-7992): its text, never the index
+        // runs `staged_len` also charges.
+        let per_leaf = std::mem::size_of::<Segment>();
+        let mut room: usize = self.segments.iter().map(|s| s.text.len() + per_leaf).sum();
+        // `MIK-8209` K7: room goes to the step's own span of the answer first,
+        // then elsewhere, so an equal leaf another step delivered earlier
+        // cannot spend it; the cap and the equality check are unchanged.
+        let n = delivered.all.len();
+        let own = |i: usize| step.is_some() && delivered.label(i) == step;
+        // `MIK-8251`: each leaf is kept as text at most as often as the step
+        // staged it, so a repeat can never crowd out another staged leaf.
+        let mut left: HashMap<(&str, bool), usize> = HashMap::new();
+        for s in self.segments.iter().filter(|s| s.whole) {
+            *left.entry((s.text.as_str(), s.key)).or_default() += 1;
+        }
+        let mut keep = vec![false; n];
+        for i in (0..n)
+            .filter(|&i| own(i))
+            .chain((0..n).filter(|&i| !own(i)))
+        {
+            let (leaf, key) = (delivered.all[i], i >= delivered.values_len);
+            let cost = leaf.len() + per_leaf;
+            let Some(count) = left.get_mut(&(leaf, key)).filter(|c| **c > 0) else {
+                continue;
+            };
+            if cost <= room {
+                room -= cost;
+                *count -= 1;
+                keep[i] = true;
+            }
+        }
         let mut segments = Vec::new();
         let mut gap = false;
-        let mut room = self.staged_len() - std::mem::size_of::<Self>();
         for (i, leaf) in delivered.all.iter().enumerate() {
-            let key = i >= delivered.values_len;
-            let cost = leaf.len() + std::mem::size_of::<Segment>();
-            if whole.contains(&(*leaf, key)) && cost <= room {
-                room -= cost;
+            if keep[i] {
                 segments.push(Segment {
                     text: (*leaf).to_owned(),
                     whole: true,
                     gap_before: gap,
-                    key,
+                    key: i >= delivered.values_len,
                 });
                 gap = false;
             } else {
                 gap = true;
             }
         }
-        let original = self.fingerprints(detector);
-        let found = delivered.kgrams(detector);
-        let retained = self
+        let original = (
+            self.leaf_fingerprints(detector),
+            self.join_fingerprints(detector),
+        );
+        let found = delivered.found(detector);
+        let mut retained: Vec<u64> = self
             .segments
             .iter()
             .filter(|s| !delivered.holds(s))
             .flat_map(|s| detector.fingerprints(&s.text))
-            .filter(|fp| found.contains(fp))
+            .filter(|&fp| found.contains(fp))
             .collect();
-        let in_step = self.step_runs_kgrams(detector, delivered);
+        retained.extend(own_span_delivered_runs(detector, delivered, step, &whole));
+        let mut in_step = self.step_runs_kgrams(detector, delivered);
+        in_step.extend(self.step_join_kgrams(detector, delivered));
         let kept = Self {
             segments,
             retained: Vec::new(),
@@ -425,8 +620,51 @@ impl DeliveryDigest {
             deferred: true,
             seam_sources: None,
             cut_fps: None,
+            seam_excuses: None,
+            joins: Joins::None,
+            judged: Judged::default(),
+            recorded: AtomicBool::default(),
+            leaf_hashes: None,
+            cut_charge: None,
+            cut_lost: false,
         };
         kept.with_original(detector, found, original, retained, &in_step)
+    }
+
+    /// `MIK-8209` K2a: every k-gram hash of each maximal sub-run of at least
+    /// two consecutive pieces of a staged key-path run that the plan delivered
+    /// whole. Consecutive means next in the run, though the pieces' segment
+    /// indices need not be adjacent (sibling fields sit between them). A piece
+    /// the answer does not hold whole breaks the sub-run. Never filtered by
+    /// what the answer's own k-grams contain: an answer interleaving the
+    /// pieces still delivered each one.
+    fn step_join_kgrams(
+        &self,
+        detector: &CollusionDetector,
+        delivered: &Delivered<'_>,
+    ) -> HashSet<u64> {
+        let Joins::Runs(runs) = &self.joins else {
+            return HashSet::new();
+        };
+        let mut found = HashSet::new();
+        for run in runs {
+            let held: Vec<Option<&str>> = run
+                .iter()
+                .map(|&i| {
+                    self.segments
+                        .get(i as usize)
+                        .filter(|s| delivered.holds(s))
+                        .map(|s| s.text.as_str())
+                })
+                .collect();
+            for sub in held.split(Option::is_none) {
+                if sub.len() >= 2 {
+                    let text: String = sub.iter().flatten().copied().collect();
+                    found.extend(detector.kgram_hashes(&text));
+                }
+            }
+        }
+        found
     }
 
     /// Every k-gram hash of each step-order run of this digest's whole
@@ -471,20 +709,28 @@ impl DeliveryDigest {
     fn with_original(
         mut self,
         detector: &CollusionDetector,
-        found: &HashSet<u64>,
-        original: Vec<u64>,
+        found: view::Found<'_>,
+        (original, joins): (Vec<u64>, Vec<u64>),
         mut retained: Vec<u64>,
         in_step: &HashSet<u64>,
     ) -> Self {
         let across = self.run_kgrams(detector);
-        retained.extend(
-            original
-                .into_iter()
-                .filter(|fp| found.contains(fp) || across.contains(fp) || in_step.contains(fp)),
-        );
+        let kept = |fp: &u64| found.contains(*fp) || across.contains(fp) || in_step.contains(fp);
+        retained.extend(original.into_iter().filter(kept));
         let mut seen = HashSet::new();
         retained.retain(|fp| seen.insert(*fp));
         self.retained = retained;
+        // The joins keep their own slot, as fingerprints: retention never
+        // copies join text or index runs (`MIK-8209` K2a).
+        let joins: Box<[u64]> = joins
+            .into_iter()
+            .filter(|fp| kept(fp) && seen.insert(*fp))
+            .collect();
+        self.joins = if joins.is_empty() {
+            Joins::None
+        } else {
+            Joins::Fps(joins)
+        };
         self
     }
 
@@ -508,125 +754,4 @@ impl DeliveryDigest {
         }
         runs
     }
-}
-
-/// A run's text newline-joined, as a delivery walk joins leaves, and, for a
-/// run of several value segments, those values run together too, as egress
-/// reads forwarded values (keys stay out, as egress keeps them): a copy
-/// delivered split mid-word over short fields then matches its holder's own
-/// forwarding of the pieces (MIK-7773). A run never crosses a seam, so
-/// neither form joins text across a cut.
-fn run_forms(run: &[&Segment]) -> Vec<String> {
-    let joined = run
-        .iter()
-        .map(|s| s.text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let values: Vec<&str> = run
-        .iter()
-        .filter(|s| !s.key)
-        .map(|s| s.text.as_str())
-        .collect();
-    let mut forms = vec![joined];
-    if values.len() > 1 {
-        forms.push(values.concat());
-    }
-    forms
-}
-
-/// The string leaves of a plan's final answer, and every k-gram hash in them,
-/// taken leaf by leaf when first needed. With the kept runs' own k-grams they
-/// decide which fingerprints a receipt keeps.
-pub(crate) struct Delivered<'v> {
-    values: HashSet<&'v str>,
-    keys: HashSet<&'v str>,
-    all: Vec<&'v str>,
-    /// How many of `all`, from the front, are values (the rest are keys).
-    values_len: usize,
-    found: OnceCell<HashSet<u64>>,
-}
-
-impl<'v> Delivered<'v> {
-    /// [`Self::of_parts`] with every leaf a value (tests only).
-    #[cfg(test)]
-    pub(super) fn of_leaves(all: Vec<&'v str>) -> Option<Self> {
-        let values = all.len();
-        Self::of_parts(all, values)
-    }
-
-    /// `all` as [`delivery_parts`] returns it, the first `values` of them
-    /// values and the rest keys. `None` over [`DELIVERED_SET_CAP`] of text
-    /// plus one segment per leaf: a deferred receipt kept to it owns a
-    /// segment per delivered leaf it matches, so many empty leaves must not
-    /// pass as free.
-    pub(super) fn of_parts(all: Vec<&'v str>, values: usize) -> Option<Self> {
-        let per_leaf = std::mem::size_of::<Segment>();
-        let total: usize = all.iter().map(|l| l.len() + per_leaf).sum();
-        (total <= DELIVERED_SET_CAP).then(|| Self {
-            values: all[..values].iter().copied().collect(),
-            keys: all[values..].iter().copied().collect(),
-            all,
-            values_len: values,
-            found: OnceCell::new(),
-        })
-    }
-
-    /// Whether `segment` is a whole leaf delivered verbatim as the same kind:
-    /// a value the answer carries only as a key is not, as egress never runs
-    /// keys together (MIK-7773).
-    fn holds(&self, segment: &Segment) -> bool {
-        let leaves = if segment.key {
-            &self.keys
-        } else {
-            &self.values
-        };
-        segment.whole && leaves.contains(segment.text.as_str())
-    }
-
-    fn kgrams(&self, detector: &CollusionDetector) -> &HashSet<u64> {
-        self.found.get_or_init(|| {
-            self.all
-                .iter()
-                .flat_map(|leaf| detector.kgram_hashes(leaf))
-                .collect()
-        })
-    }
-}
-
-/// The leaves of [`delivery_parts`] (tests only).
-#[cfg(test)]
-pub(super) fn delivery_leaves(value: &Value) -> Vec<&str> {
-    delivery_parts(value).0
-}
-
-/// The string leaves of `value` a delivery walk reads, in walk order: every
-/// string, leaving out a top-level `_context_integrity`, then each object key
-/// of at least `K` chars; and how many of them, from the front, are values
-/// (the rest are keys).
-pub(super) fn delivery_parts(value: &Value) -> (Vec<&str>, usize) {
-    fn visit<'v>(value: &'v Value, leaves: &mut Vec<&'v str>, keys: &mut Vec<&'v str>) {
-        match value {
-            Value::String(s) => leaves.push(s),
-            Value::Array(items) => items.iter().for_each(|v| visit(v, leaves, keys)),
-            Value::Object(map) => map.iter().for_each(|(k, v)| {
-                keys.push(k);
-                visit(v, leaves, keys);
-            }),
-            _ => {}
-        }
-    }
-    let (mut leaves, mut keys) = (Vec::new(), Vec::new());
-    match value {
-        Value::Object(map) => map
-            .iter()
-            .filter(|(k, _)| k.as_str() != "_context_integrity")
-            .for_each(|(k, v)| {
-                keys.push(k.as_str());
-                visit(v, &mut leaves, &mut keys);
-            }),
-        _ => visit(value, &mut leaves, &mut keys),
-    }
-    let values = leaves.len();
-    leaves.extend(keys.into_iter().filter(|k| k.chars().count() >= K));
-    (leaves, values)
 }

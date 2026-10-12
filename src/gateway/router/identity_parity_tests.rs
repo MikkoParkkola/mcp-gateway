@@ -75,14 +75,7 @@ async fn send_and_capture(
     request: axum::http::Request<axum::body::Body>,
 ) -> (StatusCode, serde_json::Value, Vec<serde_json::Value>) {
     use tracing::instrument::WithSubscriber;
-    use tracing_subscriber::prelude::*;
-    static INTEREST: std::sync::Once = std::sync::Once::new();
-    INTEREST.call_once(|| {
-        let _ = tracing::subscriber::set_global_default(
-            tracing_subscriber::Registry::default()
-                .with(tracing::level_filters::LevelFilter::TRACE),
-        );
-    });
+    crate::test_log_capture::keep_interest_open();
     let sink = Sink::default();
     let writer = sink.clone();
     let subscriber = tracing_subscriber::fmt()

@@ -427,3 +427,149 @@ async fn a_zero_expiry_interval_is_refused() {
     service.shutdown().await.expect("custody is released");
     drop(executor);
 }
+
+/// MIK-8202: a clock before 1970 cannot tell what has aged out, so a sweep
+/// deletes and cancels nothing: an expired terminal row and an expired open
+/// round both survive real passes untouched. Once the clock reads, the same
+/// loop deletes the row, so a loop that never ran cannot pass. Mutant: the
+/// pass reads an unreadable clock as the far future.
+#[tokio::test]
+async fn a_clock_before_the_epoch_expires_nothing() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("tasks");
+    let (service, executor) = open_runtime_with_admission(
+        &dir,
+        8,
+        StoreLimits::default(),
+        test_subscriptions(),
+        fresh_admission(),
+    )
+    .await
+    .expect("the runtime opens");
+    let workers = Arc::new(Semaphore::new(8));
+    let done = seed(
+        &service,
+        &workers,
+        "x-done",
+        3_600_000,
+        Some(SHORT_TTL_MS),
+        Settle::Completed,
+    )
+    .await;
+    let asking = seed(
+        &service,
+        &workers,
+        "x-asking",
+        3_600_000,
+        Some(SHORT_TTL_MS),
+        Settle::InputRequired,
+    )
+    .await;
+
+    service.store.set_clock_for_test(Some(
+        chrono::DateTime::<Utc>::from_timestamp(-1, 0).expect("one second before 1970"),
+    ));
+    let guard = executor.start_expiry(TICK).expect("the sweep starts");
+    tokio::time::sleep(TICK * 5).await;
+    assert_retained(
+        &service,
+        &dir,
+        &done,
+        "an expired row on an unreadable clock",
+    );
+    assert_retained(
+        &service,
+        &dir,
+        &asking,
+        "an expired round on an unreadable clock",
+    );
+
+    service.store.set_clock_for_test(None);
+    assert!(
+        swept(&service, &dir, &done.id).await,
+        "the sweep did not resume once the clock read"
+    );
+    let cancelled = timeout(BUDGET, async {
+        loop {
+            let row = service.get(OWNER, &asking.id);
+            // Cancelled, or already deleted after retention by a later pass.
+            if row.map_or_else(
+                |error| matches!(error, ServiceError::NotFound),
+                |row| row.task.status() == TaskStatus::Cancelled,
+            ) {
+                return;
+            }
+            tokio::time::sleep(TICK / 2).await;
+        }
+    })
+    .await;
+    assert!(
+        cancelled.is_ok(),
+        "the expired round was not cancelled once the clock read"
+    );
+    guard.shutdown().await.expect("the sweep stops");
+    service.shutdown().await.expect("custody is released");
+    drop(executor);
+}
+
+/// T14 (guard, MIK-8202 P2 row 15): the sweep closes an expired input round
+/// stamped at the sweep's own checked `now`, which is the store clock. The
+/// store clock is frozen two hours ahead; the announced last-change time is
+/// exactly that. True since P1; pins it against a raw chrono read.
+#[tokio::test]
+async fn t14_the_sweep_stamps_an_expired_round_close_at_the_stores_time() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("tasks");
+    let (service, executor) = open_runtime_with_admission(
+        &dir,
+        8,
+        StoreLimits::default(),
+        test_subscriptions(),
+        fresh_admission(),
+    )
+    .await
+    .expect("the runtime opens");
+    let heard = Arc::new(Mutex::new(
+        Vec::<(String, TaskStatus, chrono::DateTime<Utc>)>::new(),
+    ));
+    let sink = Arc::clone(&heard);
+    executor.on_publication(Arc::new(move |id, status, at, _| {
+        sink.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((id.to_owned(), status, at));
+    }));
+    let workers = Arc::new(Semaphore::new(8));
+    let asking = seed(
+        &service,
+        &workers,
+        "x-t14",
+        3_600_000,
+        Some(SHORT_TTL_MS),
+        Settle::InputRequired,
+    )
+    .await;
+    let frozen =
+        crate::clock::utc_now().expect("host clock") + crate::duration_bound::delta!(hours, 2);
+    service.store.set_clock_for_test(Some(frozen));
+    let guard = executor.start_expiry(TICK).expect("the sweep starts");
+    let closed_at = timeout(BUDGET, async {
+        loop {
+            let found = heard
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .iter()
+                .find(|(id, status, _)| *id == asking.id && *status == TaskStatus::Cancelled)
+                .map(|(_, _, at)| *at);
+            if let Some(at) = found {
+                return at;
+            }
+            tokio::time::sleep(TICK / 2).await;
+        }
+    })
+    .await
+    .expect("the round was closed");
+    guard.shutdown().await.expect("the sweep stops");
+    service.shutdown().await.expect("custody is released");
+    drop(executor);
+    assert_eq!(closed_at, frozen, "stamped at the sweep's checked now");
+}

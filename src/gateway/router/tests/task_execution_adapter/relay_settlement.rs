@@ -24,6 +24,16 @@ async fn relay_state(
     mock: &Arc<MockBackend>,
     window_secs: u64,
 ) -> (Arc<AppState>, tempfile::TempDir) {
+    let (state, store, _) = relay_state_with_firewall(mock, window_secs).await;
+    (state, store)
+}
+
+/// [`relay_state`], and the firewall it installed, for a row that ages its
+/// receipts on that firewall's clock (MIK-8354).
+async fn relay_state_with_firewall(
+    mock: &Arc<MockBackend>,
+    window_secs: u64,
+) -> (Arc<AppState>, tempfile::TempDir, Arc<Firewall>) {
     let config = FirewallConfig {
         rules: serde_yaml::from_str("[{match: echo, action: block}]").unwrap(),
         collusion: CollusionConfig {
@@ -34,18 +44,19 @@ async fn relay_state(
         },
         ..FirewallConfig::default()
     };
-    let firewall = Arc::new(Firewall::from_config(config, None));
+    let firewall = Arc::new(Firewall::from_config(config, None).keyed_for_test());
     let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta(
         &two_principal_auth(),
         None,
         |mut meta| {
-            meta.set_firewall(Some(firewall));
+            meta.share_keyring_with_for_test(&firewall);
+            meta.set_firewall(Some(Arc::clone(&firewall)));
             meta
         },
     )
     .await;
     register(&state, BACKEND, mock);
-    (state, store)
+    (state, store, firewall)
 }
 
 /// `key-a` runs one task to its end; the terminal `tasks/get` body.
@@ -243,10 +254,24 @@ async fn failed_task_records_nothing() {
 #[tokio::test]
 async fn task_get_renews_the_receipt() {
     let mock = MockBackend::answering(Answer::Sequence(vec![text(PROSE), text("ok")]));
-    let (state, _store) = relay_state(&mock, 1).await;
+    let window_secs = 1;
+    let (state, _store, firewall) = relay_state_with_firewall(&mock, window_secs).await;
     let (task, settled) = run_task_id(&state, 1, "relay-r3").await;
     assert_eq!(status_of(&settled), "completed", "base: {settled}");
-    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+    // Terminal visibility precedes worker cleanup: the settlement's receipt
+    // may still be committing. Join the worker first, so the receipt exists
+    // before the clock freezes; a receipt committed after would be fresh.
+    let joined = state
+        .task_executor
+        .drain(std::time::Duration::from_secs(10))
+        .await;
+    assert!(
+        joined.is_clean(),
+        "the settling worker must finish: {joined:?}"
+    );
+    // The settlement's receipt lapses on this firewall's frozen clock, not by
+    // sleeping: wall time under load cannot lapse the renewal (MIK-8354).
+    firewall.advance_collusion_clock_for_test(std::time::Duration::from_secs(window_secs + 1));
     let answer = relay(&state, 2).await;
     assert!(
         answer.get("error").is_none(),

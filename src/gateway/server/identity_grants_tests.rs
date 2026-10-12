@@ -57,7 +57,7 @@ fn config(dir: &Path, auth: bool) -> Config {
     let mut config = Config::default();
     config.auth.enabled = auth;
     config.auth.bearer_token = Some(TOKEN.to_string());
-    config.security.transparency_log.enabled = true;
+    config.security.transparency_log.enabled = Some(true);
     config.security.transparency_log.path = dir.join("audit.jsonl").to_string_lossy().into_owned();
     config.control_plane.store_dir = Some(store_dir(dir).to_string_lossy().into_owned());
     // The task store under the test's own directory, never the default under $HOME.
@@ -649,3 +649,44 @@ async fn a_first_start_with_an_unreadable_journal_keeps_a_baseline() {
         s.records()
     );
 }
+
+/// MIK-8195 W2: an unreadable grants file fails closed with no grants when
+/// `fail_on_error` is off (the warning names the file), and refuses start
+/// when it is on.
+#[tokio::test]
+async fn an_unreadable_grants_file_loads_no_grants_or_refuses_start() {
+    crate::test_log_capture::keep_interest_open();
+    let _log = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_test_writer()
+            .finish(),
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut config = crate::config::IdentityGrantsConfig {
+        enabled: true,
+        path: dir
+            .path()
+            .join("absent.yaml")
+            .to_string_lossy()
+            .into_owned(),
+        fail_on_error: false,
+    };
+    let loaded = super::load_configured_identity_grants(&config)
+        .await
+        .expect("fail_on_error off is not a startup failure");
+    assert!(loaded.is_none(), "an unreadable file yields no grants");
+
+    config.fail_on_error = true;
+    assert!(
+        matches!(
+            super::load_configured_identity_grants(&config).await,
+            Err(crate::Error::Config(_))
+        ),
+        "fail_on_error refuses start on an unreadable grants file"
+    );
+}
+
+#[cfg(test)]
+#[path = "identity_grants_clock_tests.rs"]
+mod clock;

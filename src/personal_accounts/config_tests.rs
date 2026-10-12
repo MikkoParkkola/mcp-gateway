@@ -631,3 +631,23 @@ fn account_key_accepts_file_ref() {
 
 #[path = "config_adapter_tests.rs"]
 mod adapter_tests;
+
+/// MIK-8044 P2c3a: `accounts.schema_version` is AUTO. A block that omits it
+/// loads as `accounts.v1`, the only accepted value; an explicit value is still
+/// read and still refused when it is anything else.
+#[test]
+fn an_omitted_schema_version_defaults_to_accounts_v1() {
+    let dir = root();
+    let mut value = serde_yaml::to_value(valid(dir.path())).expect("serialise");
+    value
+        .as_mapping_mut()
+        .expect("a mapping")
+        .remove("schema_version");
+    let parsed: AccountsConfig = serde_yaml::from_value(value).expect("loads without the key");
+    assert_eq!(parsed.schema_version, SCHEMA_VERSION);
+    // The production gate accepts it too; a written `accounts.v2` is still
+    // refused (the `schema_version` case of the refusal table above).
+    refuse_scaffold(resolve(Some(&parsed), &overlay()), "omitted schema_version")
+        .expect("an omitted schema_version passes the production gate")
+        .expect("accounts present means custody is configured");
+}

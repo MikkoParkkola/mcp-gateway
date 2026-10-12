@@ -28,6 +28,21 @@ pub(super) fn handle_of<T: UpstreamListen + 'static>(
     std::sync::Arc::downgrade(&strong)
 }
 
+/// The flavour `installed` detected, read through `entry`'s listen handle
+/// while the caller holds `entry`'s transport lock, so the two are one pair.
+fn flavour_of(
+    entry: &super::pool::PooledEntry,
+    installed: Option<&Arc<dyn crate::transport::Transport>>,
+) -> Option<bool> {
+    let installed = installed?;
+    let handle = entry.listen.read().as_ref()?.upgrade()?;
+    // A handle left by a stopped or replaced transport names another
+    // allocation: only the installed transport's answer counts.
+    std::ptr::addr_eq(Arc::as_ptr(installed), Arc::as_ptr(&handle))
+        .then(|| handle.detected_streamable())
+        .flatten()
+}
+
 /// While held, the idle reaper leaves the shared slot's transport alone
 /// without the idle clock moving (design §5, D5).
 pub(crate) struct ListenLease(#[allow(dead_code, reason = "held for its Drop")] ActivityGuard);
@@ -97,13 +112,21 @@ impl Backend {
     pub(crate) fn connected_streamable(&self) -> Option<bool> {
         let entry = self.shared_entry();
         let installed = entry.transport.read();
-        let installed = installed.as_ref()?;
-        let handle = entry.listen.read().as_ref()?.upgrade()?;
-        // A handle left by a stopped or replaced transport names another
-        // allocation: only the installed transport's answer counts.
-        std::ptr::addr_eq(Arc::as_ptr(installed), Arc::as_ptr(&handle))
-            .then(|| handle.detected_streamable())
-            .flatten()
+        flavour_of(&entry, installed.as_ref())
+    }
+
+    /// [`Self::connected_streamable`] without waiting: `Err` while a writer
+    /// holds the slot's transport, as a publish does across its swap.
+    #[cfg(test)]
+    pub(crate) fn try_connected_streamable(
+        &self,
+    ) -> std::result::Result<Option<bool>, &'static str> {
+        let entry = self.shared_entry();
+        let installed = entry
+            .transport
+            .try_read()
+            .ok_or("a writer holds the slot")?;
+        Ok(flavour_of(&entry, installed.as_ref()))
     }
 
     /// Install `transport` in the shared slot as a start publishes one.
@@ -111,8 +134,10 @@ impl Backend {
     pub(crate) fn install_http_for_test(&self, transport: &Arc<crate::transport::HttpTransport>) {
         let entry = self.shared_entry();
         let erased: Arc<dyn crate::transport::Transport> = Arc::clone(transport) as _;
-        *entry.transport.write() = Some(erased);
+        // One pair under the slot's write guard, as `publish` writes it.
+        let mut slot = entry.transport.write();
         *entry.listen.write() = Some(handle_of(transport));
+        *slot = Some(erased);
     }
 
     /// Start the shared slot as a client request would, so an events
@@ -192,10 +217,14 @@ impl Backend {
     /// reaches the backend instead of the old list (§14).
     pub(crate) fn invalidate_tools(&self) {
         let entry = self.shared_entry();
-        entry.tools_cache.invalidate_if(|_| true);
         // Derived from the list just dropped; a stale set would keep
-        // permitting a resend for a tool that is no longer read-only.
-        entry.resend_permitted.write().clear();
+        // permitting a resend for a tool that is no longer read-only. Cleared
+        // under the cache's guard, so a fill stored after keeps its own set.
+        entry.tools_cache.invalidate_then(|| {
+            entry.resend_permitted.write().clear();
+            // MIK-8393: the cache's admission set is derived from the same list.
+            entry.read_only_declared.write().clear();
+        });
     }
 
     /// Test-only: fill the shared slot's tool list, as a reader's read does.

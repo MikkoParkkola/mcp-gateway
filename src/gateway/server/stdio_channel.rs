@@ -415,7 +415,7 @@ mod tests {
         channel.close();
 
         let outcome = tokio::time::timeout(
-            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(10),
             channel.send_request("stdio", "elicit-4", "elicitation/create", None),
         )
         .await

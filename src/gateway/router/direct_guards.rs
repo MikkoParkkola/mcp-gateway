@@ -67,19 +67,28 @@ impl DirectRouteGuards {
         }))
     }
 
-    /// Give back the nonce a call admitted when it is refused before its
-    /// backend runs, so a refused call consumes none (MIK-7698).
-    pub(crate) fn release_nonce(state: &AppState, admitted: Option<AdmittedNonce>) {
-        if let Some(admitted) = admitted {
-            let AdmittedNonce {
-                nonce,
-                principal,
-                stamp,
-            } = admitted;
-            state
-                .meta_mcp
-                .release_signing_nonce(&nonce, &principal, stamp);
-        }
+    /// Give an admitted nonce back when the call is refused before its
+    /// backend runs (MIK-7698), the direct route's one release: only with the
+    /// refund witness, which proves nothing before the refusal may have acted
+    /// (MIK-8379, the `/mcp` rule of MIK-8353). With no witness the nonce
+    /// stays spent.
+    pub(crate) fn release_nonce(
+        state: &AppState,
+        admitted: Option<AdmittedNonce>,
+        witness: Option<crate::gateway::meta_mcp::refund_witness::RefundWitness>,
+    ) {
+        let (Some(admitted), Some(witness)) = (admitted, witness) else {
+            return;
+        };
+        witness.spend();
+        let AdmittedNonce {
+            nonce,
+            principal,
+            stamp,
+        } = admitted;
+        state
+            .meta_mcp
+            .release_signing_nonce(&nonce, &principal, stamp);
     }
 
     /// S2 spend, once, immediately before an actual backend dispatch (after
@@ -91,26 +100,40 @@ impl DirectRouteGuards {
         meta.admit_spend_for(call)
     }
 
-    /// S3 accounting on every dispatch; on an answered call, the interim
+    /// S3 accounting on every dispatch but one its own caller cancelled
+    /// (`cancel_entry`, MIK-7642 PR.C); on an answered call, the interim
     /// seal, S4 payload gates, the S2 warnings, the response firewall verdict
     /// and client accounting. A transport failure is returned unchanged for
     /// the caller's failure arm.
     ///
     /// `seal` is the caller's verified identity and the params as sent: what
-    /// an interim answer's continuation is bound to (MIK-8078). `sealed`
-    /// receives the sealed envelope and its hold key; the delivery tail gives
-    /// the slot back unless the answer that leaves still carries it.
+    /// an interim answer's continuation is bound to (MIK-8078). Its slot is
+    /// held in the request's scope and released with it unless the answer
+    /// that carries it is handed off (MIK-8176).
     pub(crate) async fn after_dispatch(
         state: &AppState,
         ((call, challenge), (who, (sent, instance, declared))): (
             (&BackendCall<'_>, Option<&str>),
             Seal<'_>,
         ),
-        (client, sealed): (Option<&AuthenticatedClient>, &mut Option<(String, String)>),
-        admission: &Admission,
+        client: Option<&AuthenticatedClient>,
+        (admission, cancel_entry): (
+            &Admission,
+            Option<&crate::gateway::router::inflight_calls::Registered>,
+        ),
         forward: Result<JsonRpcResponse>,
     ) -> Result<JsonRpcResponse> {
         let meta = &state.meta_mcp;
+        // MIK-7642 PR.C: a call its caller cancelled says nothing about the
+        // backend's health, so it is no error-budget sample: one caller's
+        // cancels must not disable a capability or kill a backend for all.
+        // A failed dispatch spends nothing, so nothing else is skipped.
+        if crate::gateway::router::inflight_calls::cancelled_by_caller(
+            cancel_entry,
+            forward.as_ref().err(),
+        ) {
+            return forward;
+        }
         meta.account_dispatch(call, DirectOutcome::from_response(&forward), admission);
         let warnings = &admission.warnings;
         let mut response = forward?;
@@ -130,7 +153,7 @@ impl DirectRouteGuards {
                 .seal_direct_interim(who, (call.server, Some(instance), sent, declared), result)
                 .await
             {
-                Ok(minted) => *sealed = minted,
+                Ok(_) => {}
                 // The meta route's serializer: a capability refusal keeps the
                 // `data` that names what to declare (MIK-8089). The upstream id
                 // is replaced by the caller's own on delivery, so an id-less

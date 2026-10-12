@@ -127,6 +127,21 @@ pub(crate) enum FillEnd {
     Stored,
 }
 
+impl FillEnd {
+    /// How a drain that returned `drained` ended, before its store.
+    pub(crate) fn of<T>(drained: &crate::Result<T>) -> Self {
+        match drained {
+            Ok(_) => Self::Drained,
+            // A login in progress stamps no cooldown (MIK-7982).
+            Err(e) if e.is_authorization_wait() => Self::Pending,
+            Err(e) => match Replay::of(e) {
+                None if is_transport_failure(e) => Self::Unreplayable,
+                transport => Self::Failed { transport },
+            },
+        }
+    }
+}
+
 /// Armed once a tools fill is admitted, carried in the fill's side value, and
 /// moved to `Stored` only by `on_stored`. `Failed` and `Drained` stamp the
 /// cooldown on drop; `Stored` clears it; `Pending` stamps nothing.
@@ -185,10 +200,11 @@ impl Drop for FillGuard {
 
 /// Steps 1-3 of a fill closure, before its guard is armed: the breaker, the
 /// cooldown (tools only), the limiter token. Every fill but warm-up is
-/// admitted (#1300). A refusal here stamps nothing.
+/// admitted (#1300). A refusal here stamps nothing. An admitted fill is
+/// counted on `fills` before it starts or contacts the backend (MIK-8353 3a).
 pub(super) fn admit_fill(
     entry: &PooledEntry,
-    backend: &str,
+    (backend, fills): (&str, &std::sync::atomic::AtomicU64),
     bound: FillBound,
     tools: bool,
 ) -> Result<()> {
@@ -235,6 +251,7 @@ pub(super) fn admit_fill(
             }
         })?;
     }
+    fills.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     Ok(())
 }
 

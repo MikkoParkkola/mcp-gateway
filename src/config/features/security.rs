@@ -29,19 +29,27 @@ pub use crate::security::remote_provenance::RemoteServerSigningConfig;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TransparencyLogConfig {
-    /// Enable the transparency log. Default: `false` (opt-in).
-    pub enabled: bool,
+    /// Enable the transparency log. Unset means on when auth is on and off
+    /// otherwise (MIK-8044 P2c2); read it through [`Self::is_enabled`]. Kept
+    /// unset rather than resolved at load so a config rewrite does not write
+    /// a line the operator never did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
     /// Path to the NDJSON log file (`~` is expanded at startup).
     pub path: String,
     /// Key identifier written into `key_id` for rotation tracking.
     pub key_id: String,
-    /// HMAC shared secret (resolved from env var at load time).
-    ///
+    /// HMAC secret: `${VAR}`, `env:NAME`, `file:PATH` or a literal, resolved
+    /// once at load; 32+ bytes, not all zero, while the log is on (MIK-8365).
     /// When empty, `sig` / `key_id` are omitted from each entry — the hash
     /// chain alone still provides tamper evidence.
     pub shared_secret: String,
     /// Segment size, retention and disk-full behaviour (D6).
     pub rotation: crate::security::audit_rotation_config::RotationConfig,
+    /// The key did not resolve while the log was off, so it is empty (MIK-8365).
+    /// A flag, not a `String`: `Config` sits in futures held across awaits.
+    #[serde(skip)]
+    unresolved_secret: bool,
 }
 
 // Manual `Debug` that redacts the HMAC shared secret (CWE-532, mirrors PR
@@ -54,6 +62,8 @@ impl std::fmt::Debug for TransparencyLogConfig {
             .field("path", &self.path)
             .field("key_id", &self.key_id)
             .field("rotation", &self.rotation)
+            // A field-named reason, never a value (MIK-8365).
+            .field("unresolved_secret", &self.unresolved_secret)
             .field(
                 "shared_secret",
                 &if self.shared_secret.is_empty() {
@@ -69,30 +79,48 @@ impl std::fmt::Debug for TransparencyLogConfig {
 impl Default for TransparencyLogConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: None,
             path: "~/.mcp-gateway/transparency/transparency.jsonl".to_string(),
             key_id: "default".to_string(),
             shared_secret: String::new(),
             rotation: crate::security::audit_rotation_config::RotationConfig::default(),
+            unresolved_secret: false,
         }
     }
 }
 
-/// The runtime copy the logger opens with; one mapping, so a new key cannot
-/// be dropped at one of several hand-written call sites.
-impl From<&TransparencyLogConfig> for crate::security::transparency_log::TransparencyLogConfig {
-    fn from(c: &TransparencyLogConfig) -> Self {
-        Self {
-            enabled: c.enabled,
-            path: c.path.clone(),
-            key_id: c.key_id.clone(),
-            shared_secret: c.shared_secret.clone(),
-            rotation: c.rotation.clone(),
-        }
+#[path = "transparency_secret.rs"]
+mod transparency_secret;
+
+impl crate::config::Config {
+    /// The runtime config the audit logger opens with, or `None` when the log
+    /// is off. One mapping, so a new key cannot be dropped at one of several
+    /// hand-written call sites, and it reads the auth setting an unset
+    /// `enabled` depends on (MIK-8044 P2c2).
+    pub(crate) fn audit_log(
+        &self,
+    ) -> Option<crate::security::transparency_log::TransparencyLogConfig> {
+        let log = &self.security.transparency_log;
+        log.is_enabled(self.auth.enabled).then(|| {
+            crate::security::transparency_log::TransparencyLogConfig {
+                enabled: true,
+                path: log.path.clone(),
+                key_id: log.key_id.clone(),
+                shared_secret: log.shared_secret.clone(),
+                rotation: log.rotation.clone(),
+            }
+        })
     }
 }
 
 impl TransparencyLogConfig {
+    /// Whether the log is on: as written, or, when unset, on exactly when
+    /// auth is on (MIK-8044 P2c2).
+    #[must_use]
+    pub fn is_enabled(&self, auth_enabled: bool) -> bool {
+        self.enabled.unwrap_or(auth_enabled)
+    }
+
     /// Load-time checks: the log is required with auth on (D1-a), and the
     /// rotation bounds hold (D6).
     ///
@@ -112,7 +140,7 @@ impl TransparencyLogConfig {
     /// [`crate::Error::ConfigValidation`] when auth is on and the log is off or
     /// has a blank path.
     pub(crate) fn validate_required_by_auth(&self, auth_enabled: bool) -> crate::Result<()> {
-        if auth_enabled && (!self.enabled || self.path.trim().is_empty()) {
+        if auth_enabled && (!self.is_enabled(auth_enabled) || self.path.trim().is_empty()) {
             return Err(crate::Error::ConfigValidation(
                 "auth is enabled, so security.transparency_log must be enabled with a writable \
                  path (docs/UPGRADING-4.0.md section 43)"
@@ -325,12 +353,10 @@ impl MessageSigningConfig {
                 reference.resolve(&format!("security.message_signing.{field}"), overlay)?
             }
         };
-        if resolved.len() < 32 || resolved.bytes().all(|byte| byte == 0) {
-            return Err(Self::signing_config_error(
-                field,
-                "must contain at least 32 bytes and must not be all zero",
-            ));
-        }
+        crate::security::message_signing::validate_key(
+            &format!("security.message_signing.{field}"),
+            &resolved,
+        )?;
         Ok(resolved)
     }
 
@@ -596,7 +622,13 @@ pub struct SecurityConfig {
     /// Settings read only under `posture: hardened`. Restart-only.
     #[serde(default)]
     pub hardened: crate::security::posture::HardenedConfig,
-    /// Enable input sanitization (null byte rejection, control char stripping, NFC).
+    /// On by default: sanitize the whole request (method, params, `_meta`) at
+    /// intake, before signing, authorization and the firewall, on `/mcp`,
+    /// `/mcp/{name}`, stdio and task submits. A NUL is refused (-32600); a
+    /// control character is stripped. The `id` and the signing and chain nonces
+    /// are validated, never rewritten. A `passthrough: true` backend is exempt
+    /// from sanitization only, on every route, when it is every call target.
+    /// Off: no route sanitizes.
     pub sanitize_input: bool,
     /// Enable SSRF protection for outbound URLs.
     pub ssrf_protection: bool,
@@ -737,40 +769,5 @@ mod context_integrity_config_tests {
 }
 
 #[cfg(test)]
-mod cwe532_debug_redaction {
-    use super::*;
-
-    const SENTINEL: &str = "SENTINEL_SECRET_a1b2c3";
-
-    // TransparencyLogConfig::Debug must never surface the HMAC shared secret.
-    #[test]
-    fn transparency_log_config_debug_redacts_shared_secret() {
-        let cfg = TransparencyLogConfig {
-            shared_secret: SENTINEL.to_string(),
-            ..TransparencyLogConfig::default()
-        };
-        let dbg = format!("{cfg:?}");
-        assert!(!dbg.contains(SENTINEL), "leaked shared_secret: {dbg}");
-        assert!(
-            dbg.contains("<redacted>"),
-            "missing redaction marker: {dbg}"
-        );
-    }
-
-    // MessageSigningConfig::Debug must redact both the current and previous
-    // rotation secrets.
-    #[test]
-    fn message_signing_config_debug_redacts_both_secrets() {
-        let cfg = MessageSigningConfig {
-            shared_secret: SENTINEL.to_string(),
-            previous_secret: format!("{SENTINEL}-prev"),
-            ..MessageSigningConfig::default()
-        };
-        let dbg = format!("{cfg:?}");
-        assert!(!dbg.contains(SENTINEL), "leaked signing secret: {dbg}");
-        assert!(
-            dbg.contains("<redacted>"),
-            "missing redaction marker: {dbg}"
-        );
-    }
-}
+#[path = "security_debug_redaction_tests.rs"]
+mod cwe532_debug_redaction;

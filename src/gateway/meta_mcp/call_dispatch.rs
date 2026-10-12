@@ -5,7 +5,7 @@
 use std::borrow::Cow;
 
 use super::{
-    Arc, CallerStanding, ChainSource, DispatchTarget, Error, GateOutcome, JsonRpcResponse, MetaMcp,
+    Arc, CallerStanding, ChainSource, DispatchTarget, GateOutcome, JsonRpcResponse, MetaMcp,
     MetaMcpCallerContext, RequestId, ResultShape, Value, admission, destructive_confirmation_gate,
     error_response_preserving_status, invoke, response_security,
 };
@@ -24,36 +24,56 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
     ) -> Option<JsonRpcResponse> {
-        if let Some(server_name) = self.surfaced_tools_map.get(tool_name) {
-            let server_name = server_name.clone();
-            // A tool the catalogue will not disclose must not answer to its
-            // own name either: unlisted-but-invocable is the same defect as
-            // listed-but-refused, read the other way round. Worded like the
-            // unrecognised-tool fallback so the refusal does not confirm the
-            // existence of something the gateway declined to publish.
-            if self.surfaced_schema_withheld(&server_name, tool_name) {
-                return Some(error_response_preserving_status(
-                    id,
-                    &Error::json_rpc(-32601, format!("Unknown tool: {tool_name}")),
-                ));
+        match self.surfaced_for(tool_name, caller.scope(), session_id) {
+            super::visible::Surfaced::Visible(server) => {
+                // MIK-8356: on a per-user backend the caller's own catalogue
+                // decides; a name it withholds or lacks answers exactly as
+                // the absent name below. A resolution refused here is left to
+                // the dispatch, which answers it as before.
+                let verdict = self
+                    .caller_verdict(
+                        (server, tool_name),
+                        caller,
+                        session_id,
+                        super::invoke::TargetNaming::SurfacedName,
+                        // The route stage took the verdict first, holding the
+                        // call's witness; this one is its memo hit.
+                        None,
+                    )
+                    .await;
+                if matches!(verdict, Ok((super::invoke::CallerVerdict::Absent, _))) {
+                    let reason = match super::visible::recorded_visibility(server, tool_name) {
+                        Some(super::visible::Visibility::Withheld(reason)) => reason,
+                        _ => super::visible::Withholding::Lacked,
+                    };
+                    self.record_withheld(server, tool_name, reason, caller, session_id)
+                        .await;
+                    return self
+                        .route_retry_to_origin_backend(id, tool_name, arguments, session_id, caller)
+                        .await;
+                }
+                let server_name = server.to_owned();
+                return Some(
+                    self.invoke_named_backend_tool(
+                        id,
+                        &server_name,
+                        tool_name,
+                        arguments.clone(),
+                        session_id,
+                        caller,
+                    )
+                    .await,
+                );
             }
-            // Nor a surfaced tool this caller could not invoke (A3).
-            if let Some(absent) =
-                self.withheld_surfaced(&server_name, tool_name, caller, session_id)
-            {
-                return Some(error_response_preserving_status(id, &absent));
+            // A surfaced tool withheld from this caller answers exactly as a
+            // name that matches no tool: the absent-name path below produces
+            // the answer (MIK-8340). This is the one place its operator record
+            // is written, best-effort.
+            super::visible::Surfaced::Withheld(server, reason) => {
+                self.record_withheld(server, tool_name, reason, caller, session_id)
+                    .await;
             }
-            return Some(
-                self.invoke_named_backend_tool(
-                    id,
-                    &server_name,
-                    tool_name,
-                    arguments.clone(),
-                    session_id,
-                    caller,
-                )
-                .await,
-            );
+            super::visible::Surfaced::Absent => {}
         }
         self.route_retry_to_origin_backend(id, tool_name, arguments, session_id, caller)
             .await
@@ -114,7 +134,7 @@ impl MetaMcp {
     /// Dispatch a backend tool the client named directly, returning the
     /// backend's own result envelope untouched.
     ///
-    /// `invoke_tool` already returns a complete MCP tools/call result
+    /// `invoke_tool_with_source` already returns a complete MCP tools/call result
     /// (`{content, structuredContent?, isError}`) with output-schema
     /// enforcement applied. A tool called by its own name is a first-class
     /// tool to the client, so that envelope is returned verbatim: re-wrapping
@@ -132,10 +152,25 @@ impl MetaMcp {
     ) -> JsonRpcResponse {
         let invoke_args =
             admission::named_tool_envelope(server_name, tool_name, &arguments, caller);
-        match self.invoke_tool(&invoke_args, session_id, caller).await {
-            Ok(content) => JsonRpcResponse::success_serialized(id, content),
-            Err(e) => error_response_preserving_status(id, &e),
-        }
+        let mut chain = (ChainSource::NotEligible, None);
+        let result = self
+            .invoke_tool_with_source(&invoke_args, session_id, caller)
+            .await
+            .map(|(content, source, upstream)| {
+                chain = (source, upstream);
+                content
+            });
+        // Native: the envelope verbatim. The dispatch's chain source rides on
+        // a success only, as on `gateway_invoke` (A3 R5, MIK-8159).
+        let declared = caller.input_capabilities;
+        response_security::shape_meta_result(
+            id,
+            tool_name,
+            result,
+            ResultShape::Native,
+            declared,
+            chain,
+        )
     }
 
     /// Handle `tools/call` — dispatch to the appropriate handler.
@@ -181,9 +216,13 @@ impl MetaMcp {
         // every step has run or been refused, never at a step's refusal.
         let settle =
             (caller.signing).map(|context| (context, super::signing::nonce_principal(&caller)));
-        let response = Box::pin(
+        // One visibility memo per call (MIK-8356): an entry with no request
+        // scope of its own (a task worker, an in-process caller) still takes
+        // one caller verdict and carries its resolution to dispatch. Inside
+        // a transport's scope this reuses it.
+        let response = super::visible::with_visibility_memo(Box::pin(
             self.handle_tools_call_unsettled(id, tool_name, arguments, session_id, caller),
-        )
+        ))
         .await;
         if let Some((context, principal)) = settle {
             self.settle_nonce_refund(context, principal);
@@ -222,6 +261,9 @@ impl MetaMcp {
         // it asked: every tool refuses them, before any dispatch can repeat a
         // side effect.
         if let Err(error) = caller.retry.solicited_input_responses() {
+            return error_response_preserving_status(id, &error);
+        }
+        if let Err(error) = caller.retry.refuse_on_playbook_run(tool_name) {
             return error_response_preserving_status(id, &error);
         }
 
@@ -265,7 +307,9 @@ impl MetaMcp {
         }
         if let Some(intent) = caller.task.take() {
             // A `require` backend's answer must be a checked chain (inc3 R2).
-            if let Err(error) = self.refuse_chained_task(tool_name, &arguments) {
+            if let Err(error) =
+                self.refuse_chained_task(tool_name, &arguments, (caller.scope(), session_id))
+            {
                 return error_response_preserving_status(id, &error);
             }
             return self
@@ -279,12 +323,17 @@ impl MetaMcp {
                 .await;
         }
 
-        self.dispatch_below_gate(
-            id,
-            tool_name,
-            arguments,
-            session_id,
-            &caller,
+        // Straight to the shaped tail (MIK-8014 design item 2): the
+        // `dispatch_below_gate` layer only builds this target.
+        self.dispatch_below_gate_shaped(
+            DispatchTarget {
+                id,
+                tool_name,
+                arguments,
+                session_id,
+                caller: &caller,
+            },
+            ResultShape::Wrapped,
             confirmed_in_band,
         )
         .await
@@ -300,48 +349,59 @@ impl MetaMcp {
     ) -> JsonRpcResponse {
         use crate::gateway::task_service::execution::BeginOutcome;
 
-        let task = crate::gateway::task_service::Task::create_at(
-            tool_name,
-            chrono::Utc::now(),
-            intent.options,
-        );
+        let task = crate::gateway::task_service::Task::create_undated(tool_name, intent.options);
         let backend = task_backend_name(self, tool_name, &arguments);
         let executor = Arc::clone(&intent.executor);
-        // #2450: a repeat is answered from the stored task, so the policy a
-        // sync replay passes runs first. A fresh task is checked by its worker.
-        let policy_arguments = arguments.clone();
+        // Every task passed the synchronous call's policy at admission
+        // (`admit_meta_sync`, MIK-8315); its worker checks again at dispatch.
+        // Only a `gateway_invoke` envelope's token is kept back from the move.
+        let invoke_attestation = (tool_name == "gateway_invoke")
+            .then(|| {
+                arguments
+                    .get("attestation")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .flatten();
         let call = crate::gateway::task_service::TaskCall {
             tool: tool_name.to_owned(),
             arguments,
         };
         match executor.begin(intent, task, backend, call).await {
-            Ok(BeginOutcome::Existing(stored)) => {
-                // The request's own policy, then the calls that produced the
-                // stored result (R3.2): both must hold before it goes out.
-                if let Err(error) = self.check_task_admission_policy(
-                    caller,
-                    tool_name,
-                    &policy_arguments,
-                    session_id,
-                ) {
-                    return error_response_preserving_status(id, &error);
-                }
+            Ok(BeginOutcome::Existing(held)) => {
+                // MIK-8176 N1: delivered into this request's scope first, so
+                // its holds are adopted before any decision; a refusal below
+                // only drops this request's clones, and the row keeps the slot.
+                let stored = held.deliver(super::sealed_hold::HoldSink::Scope);
+                // The calls that produced the stored result (R3.2) must hold
+                // before it goes out; the request's own policy ran at admission.
                 // The token rides where the current request's own check reads it.
                 let attestation = if tool_name == "gateway_invoke" {
-                    policy_arguments.get("attestation").and_then(Value::as_str)
+                    invoke_attestation.as_deref()
                 } else {
                     caller.retry.attestation.as_deref()
                 };
                 self.refuse_stored_delivery(&id, &stored, attestation, session_id, caller)
-                    .unwrap_or_else(|| BeginOutcome::Existing(stored).into_response(id))
+                    .unwrap_or_else(|| {
+                        // The holds already sit in this request's scope.
+                        let held = super::sealed_hold::Held::new(
+                            stored,
+                            super::sealed_hold::CarriedHolds::none(),
+                        );
+                        BeginOutcome::Existing(held).into_response(id)
+                    })
             }
             Ok(outcome) => outcome.into_response(id),
+            Err(crate::gateway::task_service::ServiceError::AuditUnavailable) => {
+                error_response_preserving_status(id, &crate::Error::AuditUnavailable)
+            }
             Err(_) => JsonRpcResponse::error(Some(id), -32603, "task store unavailable"),
         }
     }
 
-    /// The dispatch tail below the confirmation gate. The request thread and
-    /// the task worker call the same function; there is no parallel handler.
+    /// The dispatch tail below the confirmation gate, as the request thread
+    /// takes it (it builds the target itself). Kept for tests.
+    #[cfg(test)]
     pub(crate) async fn dispatch_below_gate(
         &self,
         id: RequestId,
@@ -449,7 +509,10 @@ impl MetaMcp {
         let result = match tool_name {
             "gateway_search" => self.code_mode_search(&arguments, session_id, caller).await,
             "gateway_execute" => self.code_mode_execute(&arguments, session_id, caller).await,
-            "gateway_list_servers" => self.list_servers(caller, session_id).await,
+            "gateway_list_servers" => {
+                self.revalidate_caller_slots(Self::proof_of(caller)).await;
+                self.list_servers(caller, session_id).await
+            }
             "gateway_list_tools" => self.list_tools(&arguments, session_id, caller).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id, caller).await,
             "gateway_invoke" => {
@@ -468,6 +531,7 @@ impl MetaMcp {
             "gateway_kill_server" => self.kill_server(&arguments),
             "gateway_revive_server" => self.revive_server(&arguments),
             "gateway_list_disabled_capabilities" => {
+                self.revalidate_caller_slots(Self::proof_of(caller)).await;
                 self.list_disabled_capabilities(caller.scope(), session_id)
             }
             "gateway_set_profile" => self.set_profile(&arguments, session_id, caller.is_admin),
@@ -476,7 +540,14 @@ impl MetaMcp {
             "gateway_set_state" => self.set_state(&arguments, session_id, caller.scope()),
             "gateway_reload_config" => self.reload_config().await,
             "gateway_reload_capabilities" => self.reload_capabilities().await,
-            _ => Err(self.no_such_meta_tool(tool_name, caller)),
+            // A name that matches no tool is refused before any backend, so it
+            // gives its signing nonce back (MIK-8340 A4, MIK-8150's rule). A
+            // withheld surfaced name ends here too, so both answer alike.
+            _ => {
+                // `invoke::nonce_settle::ask_refund`, settled when the call returns.
+                caller.signing.inspect(|signing| signing.want_refund());
+                Err(self.no_such_meta_tool(tool_name, caller))
+            }
         };
 
         // A discovery answer the canonical pass refused was scanned too.
@@ -491,8 +562,8 @@ impl MetaMcp {
 }
 
 pub(super) fn task_backend_name(meta: &MetaMcp, tool_name: &str, arguments: &Value) -> String {
-    if let Some(server) = meta.surfaced_tools_map.get(tool_name) {
-        return server.clone();
+    if let Some(server) = meta.surfaced_tools_map.unscoped(tool_name) {
+        return server.to_owned();
     }
     match tool_name {
         "gateway_invoke" => arguments

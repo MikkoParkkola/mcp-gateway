@@ -572,6 +572,7 @@ impl crate::events::EventSource for Flipping {
         _principal: &str,
         _arguments: &serde_json::Value,
         _event: &crate::events::fanout::SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
     ) -> bool {
         true
     }
@@ -688,6 +689,7 @@ impl crate::events::EventSource for Offering {
         _principal: &str,
         _arguments: &serde_json::Value,
         _event: &crate::events::fanout::SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
     ) -> bool {
         true
     }
@@ -786,3 +788,9 @@ mod hold;
 
 #[path = "worker_recheck_tests.rs"]
 mod recheck;
+
+#[path = "worker_owner_tests.rs"]
+mod owner;
+
+#[path = "worker_clock_tests.rs"]
+mod clock;

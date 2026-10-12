@@ -91,17 +91,9 @@ impl Flight {
 /// not blocked on: a cancelled caller leaves no thread waiting behind it.
 pub(super) async fn hold_across_processes(token_path: &Path) -> crate::Result<ExclusiveFileLock> {
     let lock_path = token_path.with_extension("refresh.lock");
-    loop {
-        match ExclusiveFileLock::try_lease(&lock_path) {
-            Ok(Some(lock)) => return Ok(lock),
-            Ok(None) => tokio::time::sleep(LOCK_POLL).await,
-            Err(e) => {
-                return Err(Error::OAuth(format!(
-                    "Could not take the refresh lock: {e}"
-                )));
-            }
-        }
-    }
+    ExclusiveFileLock::lease(&lock_path, LOCK_POLL)
+        .await
+        .map_err(|e| Error::OAuth(format!("Could not take the refresh lock: {e}")))
 }
 
 /// The most one exchange may take, answer body included. Above an owned
@@ -339,6 +331,13 @@ impl Exchange {
     }
 
     async fn send(&mut self) -> Outcome {
+        // One clock reading dates the refreshed token. On a clock that cannot
+        // be read nothing is sent: `NotSent` keeps the stored refresh token and
+        // clears the in-flight marker (MIK-8202).
+        let now = match super::issuance_clock() {
+            Ok(now) => now,
+            Err(error) => return Outcome::NotSent(error),
+        };
         let response = match self
             .http
             .post(&self.endpoint)
@@ -411,13 +410,14 @@ impl Exchange {
             // only reads as not yet seen, which retires rather than resends.
             self.state.keeps = true;
         }
-        let token = (self.finish)(TokenInfo::from_response(
+        let token = (self.finish)(TokenInfo::from_response_at(
             answer.access_token,
             answer.token_type,
             // No new refresh token means keep the one sent (RFC 6749 section 6).
             answer.refresh_token.or_else(|| Some(self.sent.clone())),
             answer.expires_in,
             answer.scope,
+            now,
         ));
         #[cfg(test)]
         {

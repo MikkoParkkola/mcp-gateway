@@ -72,6 +72,29 @@ pub(super) struct TestSeams {
     clock_after_resume: std::sync::Mutex<Option<DateTime<Utc>>>,
     /// Answer writes that have entered the store, before its ordering lock.
     arrived: std::sync::atomic::AtomicUsize,
+    /// Reads of a frozen clock before 1970, each refused.
+    refused_reads: std::sync::atomic::AtomicUsize,
+    /// Reads of a frozen clock that returned a time.
+    readable_reads: std::sync::atomic::AtomicUsize,
+    /// Scripted redemption samples not yet consumed, oldest first.
+    redemption_script: std::sync::Mutex<std::collections::VecDeque<RedemptionRead>>,
+    /// Every scripted sample a redemption consumed, in order.
+    redemption_consumed: std::sync::Mutex<Vec<RedemptionRead>>,
+    /// Readable reads of the frozen clock left before it reads before 1970:
+    /// a clock that breaks between two reads of one worker.
+    unreadable_after: std::sync::Mutex<Option<usize>>,
+}
+
+/// One scripted redemption sample (MIK-8202 AC13).
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RedemptionRead {
+    /// The sample is refused, and the store's own clock reads unreadable from
+    /// here on, so a worker's `readable_now` really waits.
+    Unreadable,
+    /// The sample reads this time, and the store's own clock is frozen at it
+    /// from here on.
+    At(DateTime<Utc>),
 }
 
 #[cfg(test)]
@@ -92,30 +115,147 @@ impl TestSeams {
 }
 
 impl Shared {
-    /// The clock every round-deadline decision reads. Wall time in production;
-    /// a test may freeze it per store.
+    /// The clock every round-deadline decision reads: `crate::clock` in
+    /// production; a test may freeze it per store. `Err` is a clock before
+    /// 1970, which dates nothing (MIK-8202).
     #[cfg_attr(
         not(test),
         expect(clippy::unused_self, reason = "one shape with the cfg(test) clock")
     )]
-    pub(super) fn now(&self) -> DateTime<Utc> {
+    pub(super) fn now(&self) -> Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch> {
         #[cfg(test)]
-        if let Some(frozen) = *self
+        let frozen = *self
             .seams
             .clock
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-        {
-            return frozen;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        #[cfg(test)]
+        if let Some(frozen) = frozen {
+            {
+                let mut left = self
+                    .seams
+                    .unreadable_after
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if *left == Some(0) && frozen.timestamp() >= 0 {
+                    *left = None;
+                    *self
+                        .seams
+                        .clock
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                        DateTime::from_timestamp(-1, 0);
+                    self.seams
+                        .refused_reads
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    return Err(crate::clock::ClockBeforeEpoch);
+                }
+                if let Some(n) = left.as_mut().filter(|_| frozen.timestamp() >= 0) {
+                    *n -= 1;
+                }
+            }
+            return if frozen.timestamp() < 0 {
+                self.seams
+                    .refused_reads
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(crate::clock::ClockBeforeEpoch)
+            } else {
+                self.seams
+                    .readable_reads
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(frozen)
+            };
         }
-        Utc::now()
+        crate::clock::utc_now()
     }
 }
 
 impl TaskStore {
     /// The store's clock (see [`Shared::now`]).
-    pub(crate) fn now(&self) -> DateTime<Utc> {
+    pub(crate) fn now(&self) -> Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch> {
         self.0.now()
+    }
+
+    /// How long a wait on a wall clock that reads before 1970 may hold `id`
+    /// (MIK-8202), measured on monotonic time, since that clock cannot date
+    /// the record's own expiry: its `ttlMs`, or for an unlimited task
+    /// (`tasks.default_ttl_ms = 0`) the release default, so no wait is
+    /// unbounded. `None` once the task is gone.
+    pub(crate) fn clock_wait_bound(&self, id: &str) -> Option<std::time::Duration> {
+        let state = self.0.state();
+        let ttl_ms = state
+            .entries
+            .get(id)?
+            .task
+            .ttl_ms()
+            .unwrap_or(crate::config::DEFAULT_TASK_TTL_MS);
+        Some(std::time::Duration::from_millis(ttl_ms))
+    }
+
+    /// The clock a continuation redemption samples once, immediately before
+    /// it opens the envelope, and reuses for the open, hold and ledger checks
+    /// (MIK-8202 AC13). Exactly [`Self::now`]; under test a script may
+    /// stand in for single samples.
+    pub(crate) fn redemption_now(&self) -> Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch> {
+        #[cfg(test)]
+        if let Some(read) = self.next_scripted_redemption() {
+            return match read {
+                RedemptionRead::At(at) => {
+                    // The instant the redemption saw is the instant the
+                    // worker's next read sees: time does not run backwards.
+                    self.set_clock_for_test(Some(at));
+                    Ok(at)
+                }
+                RedemptionRead::Unreadable => {
+                    self.set_clock_for_test(DateTime::from_timestamp(-1, 0));
+                    Err(crate::clock::ClockBeforeEpoch)
+                }
+            };
+        }
+        self.now()
+    }
+
+    #[cfg(test)]
+    fn next_scripted_redemption(&self) -> Option<RedemptionRead> {
+        let read = self
+            .0
+            .seams
+            .redemption_script
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop_front()?;
+        self.0
+            .seams
+            .redemption_consumed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(read);
+        Some(read)
+    }
+
+    /// Script the next redemption samples, one consumed per sample.
+    #[cfg(test)]
+    pub(crate) fn script_redemption_reads_for_test(
+        &self,
+        reads: impl IntoIterator<Item = RedemptionRead>,
+    ) {
+        *self
+            .0
+            .seams
+            .redemption_script
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = reads.into_iter().collect();
+    }
+
+    /// The scripted samples consumed so far, in order.
+    #[cfg(test)]
+    pub(crate) fn redemptions_consumed_for_test(&self) -> Vec<RedemptionRead> {
+        self.0
+            .seams
+            .redemption_consumed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     #[cfg(test)]
@@ -128,6 +268,19 @@ impl TaskStore {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = at;
     }
 
+    /// After `reads` more readable reads of the frozen clock, it reads before
+    /// 1970 from then on: a clock that breaks between a worker's mint and
+    /// its park.
+    #[cfg(test)]
+    pub(crate) fn set_clock_unreadable_after_for_test(&self, reads: usize) {
+        *self
+            .0
+            .seams
+            .unreadable_after
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(reads);
+    }
+
     /// Freeze the clock at `at` right after the next completing write commits.
     #[cfg(test)]
     pub(crate) fn set_clock_after_next_resume(&self, at: DateTime<Utc>) {
@@ -137,6 +290,24 @@ impl TaskStore {
             .clock_after_resume
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(at);
+    }
+
+    /// How many reads of a frozen clock before 1970 were refused.
+    #[cfg(test)]
+    pub(crate) fn refused_reads_for_test(&self) -> usize {
+        self.0
+            .seams
+            .refused_reads
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// How many reads of a frozen clock returned a time.
+    #[cfg(test)]
+    pub(crate) fn readable_reads_for_test(&self) -> usize {
+        self.0
+            .seams
+            .readable_reads
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// How many answer writes have reached the store's ordering lock.
@@ -174,11 +345,12 @@ impl TaskStore {
         id: &str,
         revision: u64,
         reason: String,
+        at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
         tokio::task::spawn_blocking(move || {
-            shared.close_round_blocking(&owner, &id, revision, reason)
+            shared.close_round_blocking(&owner, &id, revision, reason, at)
         })
         .await
         .map_err(|_| StoreError::Storage)?
@@ -198,10 +370,21 @@ impl TaskStore {
         round: InputRound,
         at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
+        // MIK-8176 D3: the round's sealed continuation is owned by the row it
+        // parks on. Taken here, on the worker's task, where its hold was
+        // registered; the blocking write below runs outside that scope.
+        let holds = round.request_state.as_deref().map_or_else(
+            crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none,
+            |sealed| {
+                crate::gateway::meta_mcp::sealed_hold::carried(&serde_json::json!({
+                    "requestState": sealed
+                }))
+            },
+        );
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
         tokio::task::spawn_blocking(move || {
-            shared.require_input_blocking(&owner, &id, revision, requested, round, at)
+            shared.require_input_blocking(&owner, &id, revision, (requested, round, holds), at)
         })
         .await
         .map_err(|_| StoreError::Storage)?
@@ -286,8 +469,11 @@ impl Shared {
         owner: &str,
         id: &str,
         revision: u64,
-        requested: InputRequired,
-        round: InputRound,
+        (requested, round, holds): (
+            InputRequired,
+            InputRound,
+            crate::gateway::meta_mcp::sealed_hold::CarriedHolds,
+        ),
         at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
         let _order = self.order();
@@ -325,12 +511,12 @@ impl Shared {
         // The round's keys stay on the model, which the bounded failure keeps:
         // a round that leaves it no room is refused while the task can still
         // settle (MIK-7651).
-        if super::targets::fallback_bytes(&task, &record, at)? > self.limits.record_bytes {
+        if super::targets::fallback_bytes(&task, &record)? > self.limits.record_bytes {
             return Err(StoreError::Capacity);
         }
         let bytes = self.fits_cap(&record)?;
         self.commit(&record_name(task.id()), &bytes)?;
-        Ok(self.publish(task, record))
+        Ok(self.publish(task, record, super::HoldUpdate::Replace(holds)))
     }
 
     fn close_round_blocking(
@@ -339,6 +525,7 @@ impl Shared {
         id: &str,
         revision: u64,
         reason: String,
+        at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
         let _order = self.order();
         let (mut task, mut record) = self.read_owned(owner, id)?;
@@ -352,7 +539,9 @@ impl Shared {
         ) {
             return Err(StoreError::InvalidTransition);
         }
-        let at = self.now();
+        // Stamped at the time the caller read when it judged the round closed,
+        // never a second read: the clock may have stepped before 1970 since
+        // (MIK-8202).
         for event in [
             TaskTransition::StatusMessage(Some(reason)),
             TaskTransition::Cancel,
@@ -365,7 +554,7 @@ impl Shared {
         record.set_model(&task);
         let bytes = self.fits_cap(&record)?;
         self.commit(&record_name(task.id()), &bytes)?;
-        Ok(self.publish(task, record))
+        Ok(self.publish(task, record, super::HoldUpdate::Drop))
     }
 
     /// Apply the one-shot clock a test armed for the moment a resume commits.
@@ -401,13 +590,12 @@ impl Shared {
         let (mut task, mut record) = self.read_owned(owner, id)?;
         // Read after the lock, never before: an update queued while the round
         // was open must not be let through once it has closed.
-        let now = self.now();
         // A clock before 1970 dates nothing: the update is refused for now,
         // and the round is not closed, since closing cancels the task for
         // good on a time it cannot read (MIK-8202).
-        if now.timestamp() < 0 {
+        let Ok(now) = self.now() else {
             return Err(StoreError::Unavailable);
-        }
+        };
         if let Some(closed) = closed_at(&task, &record, now) {
             return Ok(ProvideOutcome::Closed(closed));
         }
@@ -434,7 +622,11 @@ impl Shared {
         let bytes = self.fits_cap(&record)?;
         if !completing {
             self.commit(&record_name(task.id()), &bytes)?;
-            return Ok(ProvideOutcome::Partial(self.publish(task, record)));
+            return Ok(ProvideOutcome::Partial(self.publish(
+                task,
+                record,
+                super::HoldUpdate::Carry,
+            )));
         }
         // The permit is taken inside this write and before the CAS to
         // `working`: no free worker means nothing is written.
@@ -450,7 +642,7 @@ impl Shared {
         #[cfg(test)]
         self.after_resume_commit();
         Ok(ProvideOutcome::Resumed {
-            task: self.publish(task, record),
+            task: self.publish(task, record, super::HoldUpdate::Drop),
             round,
             slot,
         })

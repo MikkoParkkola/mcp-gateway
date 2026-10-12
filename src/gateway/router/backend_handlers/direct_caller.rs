@@ -39,6 +39,9 @@ pub(super) struct Caller {
     /// Owned here so a session-less call's `BackendCall` can borrow it for
     /// the whole route.
     pub(super) spend_key: String,
+    /// The agent identity `validate_agent` extracted, kept so the dispatch
+    /// chokepoint judges the proven agent the entry check saw (MIK-8351).
+    pub(super) agent_identity: Option<crate::security::AgentIdentity>,
 }
 
 impl Caller {
@@ -63,7 +66,7 @@ fn validate_agent(
     state: &AppState,
     request: &axum::http::Request<axum::body::Body>,
     caller: &Caller,
-) -> Result<(), Rejection> {
+) -> Result<crate::security::AgentIdentity, Rejection> {
     let agent_identity = crate::security::extract_agent_identity(
         &caller.inbound_headers,
         request.uri().query(),
@@ -76,7 +79,7 @@ fn validate_agent(
     match crate::security::validate_agent_identity(&agent_identity, &state.agent_identity_config) {
         Ok(audit) => {
             crate::security::log_agent_identity(&agent_identity, audit, None);
-            Ok(())
+            Ok(agent_identity)
         }
         Err(reason) => {
             crate::security::log_agent_identity(
@@ -134,8 +137,9 @@ pub(super) async fn resolve_caller(
         inbound_headers: request.headers().clone(),
         grant_subject: None,
         spend_key: String::new(),
+        agent_identity: None,
     };
-    validate_agent(state, &request, &caller)?;
+    caller.agent_identity = Some(validate_agent(state, &request, &caller)?);
 
     // The caller as the meta route resolves it, resolved before the body is
     // read, so a refused identity header reaches no passthrough, propagation
@@ -229,6 +233,10 @@ pub(super) async fn read_envelope(
     // the request: parse, telemetry and every forwarding arm see no token.
     let attestation = super::take_attestation_token(json_request.get_mut("params"));
 
+    if state.sanitize_input {
+        json_request = sanitized(state, name, json_request)?;
+    }
+
     let (id, method, params) = match super::super::helpers::parse_request(&json_request) {
         Ok(parsed) => parsed,
         Err(response) => {
@@ -291,6 +299,21 @@ pub(super) async fn read_envelope(
         era,
         declared,
     })
+}
+
+/// The key a caller's explicit cancel of its own call `id` is registered and
+/// looked up under on this route (MIK-7642 PR.C, design r5 D3, r4 R4.2): the
+/// backend, the caller's key (`identity::caller_key`: its subject, else its
+/// authenticated credential), its validated session, and the client's id.
+/// `None` for a caller with neither: its cancels are always dropped.
+pub(super) fn explicit_cancel_key(
+    backend: &str,
+    caller: &Caller,
+    session: Option<&str>,
+    id: &Value,
+) -> Option<crate::gateway::router::inflight_calls::CallKey> {
+    let owner = Some(caller.spend_key.as_str());
+    crate::gateway::router::inflight_calls::CallKey::new(backend, owner, session, id)
 }
 
 /// What stage 3 resolved: the backend and the session the caller owns.
@@ -376,12 +399,20 @@ pub(super) async fn forward_notification(
     envelope: Envelope,
 ) -> Rejection {
     // MIK-8072: a client's cancel names the client's request id, which the
-    // backend never saw (each transport numbers its own requests), so
-    // forwarding it could cancel another caller's call holding that number.
-    // Accepted and dropped before any per-caller credential is minted or
-    // leased for it; MIK-7642 sends the caller's own backend id.
+    // backend never saw (each transport numbers its own requests), so it is
+    // never forwarded: another caller's call may hold that number. MIK-7642
+    // PR.C: it aborts the call this same caller registered under that id, if
+    // one is in flight, and the transport then cancels that call on the
+    // backend by the backend's own id. Answered before any per-caller
+    // credential is minted or leased.
     if envelope.method == "notifications/cancelled" {
-        tracing::debug!(backend = %name, "Client cancel not forwarded");
+        let aborted = envelope
+            .params
+            .as_ref()
+            .and_then(|params| params.get("requestId"))
+            .and_then(|id| explicit_cancel_key(name, caller, route.session_id, id))
+            .is_some_and(|key| state.meta_mcp.inflight_calls().cancel(&key));
+        tracing::debug!(backend = %name, aborted, "Client cancel never forwarded");
         return (StatusCode::ACCEPTED, Json(serde_json::json!({})));
     }
     let Ok(super::notification_key::Resolved { headers, binding }) =
@@ -448,4 +479,40 @@ pub(super) async fn forward_notification(
             )
         }
     }
+}
+
+/// MIK-8154 SAN.1: the one sanitize step on the direct route, before anything
+/// parses or judges the request: its protocol fields validated (S2'), then
+/// the whole request sanitized unless the backend this route names is
+/// `passthrough` (option (a)), whose instance is then recorded (F2).
+fn sanitized(state: &AppState, name: &str, request: Value) -> Result<Value, Rejection> {
+    use crate::security::sanitize::{ProtocolRoute, sanitize_request, validate_protocol_fields};
+    // A protocol-field refusal answers no id (the id may be what is dirty);
+    // past validation, the request's own id is answered.
+    let refused = |id, e: crate::Error| {
+        super::super::helpers::build_http_error_response(
+            id,
+            e.to_rpc_code(),
+            e.to_string(),
+            StatusCode::BAD_REQUEST,
+        )
+    };
+    validate_protocol_fields(
+        &request,
+        &crate::gateway::PROTOCOL_NONCES,
+        ProtocolRoute::Direct,
+    )
+    .map_err(|e| refused(None, e))?;
+    let exempt = state.meta_mcp.passthrough_instance(name);
+    if let Some(instance) = &exempt {
+        crate::gateway::meta_mcp::visible::record_exempt_instances(std::slice::from_ref(instance));
+    }
+    // Intake has judged; the window a reload must not reach (MIK-8154 F2).
+    #[cfg(test)]
+    crate::gateway::meta_mcp::visible::seams::intake_judged();
+    if exempt.is_some() {
+        return Ok(request);
+    }
+    let id = crate::protocol::mrtr::raw_request_id(&request);
+    sanitize_request(&request, ProtocolRoute::Direct).map_err(|e| refused(id, e))
 }

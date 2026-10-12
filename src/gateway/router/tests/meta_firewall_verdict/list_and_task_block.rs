@@ -147,18 +147,21 @@ async fn a_blocked_direct_tool_list_is_refused() {
 async fn a_blocked_direct_tool_list_writes_one_block_record() {
     let audit_dir = tempfile::tempdir().unwrap();
     let audit_log = audit_dir.path().join("firewall-audit.jsonl");
-    let handler = Arc::new(Firewall::from_config(
-        crate::security::firewall::FirewallConfig {
-            enabled: true,
-            scan_responses: true,
-            scan_requests: false,
-            credential_redaction: true,
-            audit_log: Some(audit_log.clone()),
-            ..crate::security::firewall::FirewallConfig::default()
-        },
-        None,
-    ));
     let meta = super::response_firewall(Vec::new());
+    let handler = Arc::new(
+        Firewall::from_config(
+            crate::security::firewall::FirewallConfig {
+                enabled: true,
+                scan_responses: true,
+                scan_requests: false,
+                credential_redaction: true,
+                audit_log: Some(audit_log.clone()),
+                ..crate::security::firewall::FirewallConfig::default()
+            },
+            None,
+        )
+        .with_continuations(meta.continuations_for_test().expect("keyed")),
+    );
     let (state, _store) = super::state_with_firewalls(handler, meta).await;
     state
         .backends

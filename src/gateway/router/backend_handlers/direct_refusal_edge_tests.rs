@@ -60,7 +60,11 @@ async fn call(params: Value) -> (StatusCode, Value, usize) {
         Duration::from_secs(60),
     ));
     backend.set_transport_for_test(Arc::new(Counting(Arc::clone(&reached))));
-    let (state, _store) = test_router_app_state_with_auth(&scoped_auth_config(false)).await;
+    let (mut state, _store) = test_router_app_state_with_auth(&scoped_auth_config(false)).await;
+    // The production default (MIK-8154 SAN.1: the direct route honours it).
+    Arc::get_mut(&mut state)
+        .expect("state is unique")
+        .sanitize_input = true;
     assert!(state.backends.register(backend));
     let request = Request::builder()
         .method("POST")
@@ -103,7 +107,9 @@ async fn a_malformed_tool_name_is_refused_before_authorization() {
 async fn an_argument_the_sanitizer_rejects_never_reaches_the_backend() {
     let (status, body, reached) =
         call(json!({"name": "allowed_tool", "arguments": {"q": "a\u{0}b"}})).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    // MIK-8154 SAN.1: refused at intake as `/mcp` refuses it, with HTTP 400
+    // (was 403 when the direct route sanitized only after authorization).
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"]["code"], -32600, "{body}");
     assert_eq!(reached, 0, "{body}");
 }

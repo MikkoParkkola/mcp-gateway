@@ -197,9 +197,9 @@ pub struct AuthenticatedClient {
     pub rate_limit: u32,
     /// Allowed backends (`["*"]` = all; empty = none)
     pub backends: Vec<String>,
-    /// Allowed tools (allowlist if Some). Supports glob patterns.
+    /// Allowed tools (allowlist if Some): exact names or a trailing `prefix*`.
     pub allowed_tools: Option<Vec<String>>,
-    /// Denied tools (blocklist if Some). Supports glob patterns.
+    /// Denied tools (blocklist if Some): exact names or a trailing `prefix*`.
     pub denied_tools: Option<Vec<String>>,
     /// Admin-level UI and management tool access.
     pub admin: bool,
@@ -373,125 +373,13 @@ pub(crate) fn dashboard_session_who() -> crate::security::audit::AuditWho {
     crate::security::audit::AuditWho::from_request(Some(&dashboard_client()), None)
 }
 
-/// The answer to a dashboard session that has ended: its own message and a
-/// clearing cookie, rather than a "Missing credential" that sends the operator
-/// looking for a header a browser cannot send.
-fn session_ended_response(secure: bool) -> Response {
-    let mut response = bearer_unauthorized_response(
-        "Dashboard session expired or ended; run `mcp-gateway dashboard-link` for a new link.",
-    );
-    if let Ok(value) = session_cookie("", 0, secure).parse() {
-        response
-            .headers_mut()
-            .append(axum::http::header::SET_COOKIE, value);
-    }
-    response
-}
-
-/// The dashboard's own background refreshes: the `/ui` interval sends the
-/// header, and the `/dashboard` meta refresh targets `?poll=1`. Such a request
-/// is checked but never extends a session. The marker can only fail to extend
-/// one, so a forged or stripped marker cannot lengthen a session.
-fn is_poll(request: &Request<Body>) -> bool {
-    request.headers().contains_key("x-mcp-gateway-poll")
-        || (request.uri().path() == "/dashboard"
-            && request
-                .uri()
-                .query()
-                .is_some_and(|q| q.split('&').any(|p| p == "poll=1")))
-}
-
-/// The identity a validated dashboard session carries.
-fn dashboard_client() -> AuthenticatedClient {
-    AuthenticatedClient {
-        quota_principal: Some(QuotaPrincipal::dashboard_session()),
-        name: "dashboard".to_string(),
-        principal: "dashboard-session".to_string(),
-        rate_limit: 0,
-        backends: vec!["*".to_string()],
-        allowed_tools: None,
-        denied_tools: None,
-        admin: true,
-        authenticated: true,
-        credential_kind: crate::security::audit::CredentialKind::DashboardSession,
-    }
-}
-
-/// The credential a request presents, from the session cookie or a bearer header.
-fn presented_credential(headers: &axum::http::HeaderMap) -> Option<String> {
-    // The session cookie is NOT a credential: it is an opaque handle checked
-    // against this process's store, above.
-    headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| {
-            v.strip_prefix("Bearer ")
-                .or_else(|| v.strip_prefix("bearer "))
-        })
-        .map(ToString::to_string)
-}
-
-/// The SHA-256 of the bearer a request presents, for a binding that must
-/// tell two bearers apart (the 12-hex principal is only a log fingerprint).
-pub(crate) fn presented_bearer_sha256(headers: &axum::http::HeaderMap) -> Option<String> {
-    presented_credential(headers).map(|token| crate::hashing::sha256_hex(token.as_bytes()))
-}
-
-/// Read the session cookie from a request's headers, if present.
-#[must_use]
-pub fn session_cookie_value(headers: &axum::http::HeaderMap) -> Option<String> {
-    headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())?
-        .split(';')
-        .filter_map(|part| part.trim().split_once('='))
-        .find(|(name, _)| *name == SESSION_COOKIE)
-        .map(|(_, value)| value.to_string())
-}
-
-/// The identity every caller holds when authentication is disabled.
-///
-/// Reaches ordinary tools, so a local MCP client works out of the box, and
-/// holds no admin. Admin is an explicit grant that requires a credential
-/// (`auth.enabled = true` with a bearer token): an auth-disabled gateway
-/// cannot tell its operator apart from a web page that rebound a hostname to
-/// loopback, or from any other process running as the same user.
-///
-/// `backends` is `["*"]` because an empty list reaches no backend: with auth
-/// off there is no scope to narrow, so every backend stays reachable.
-#[must_use]
-pub fn anonymous_client() -> AuthenticatedClient {
-    AuthenticatedClient {
-        quota_principal: None,
-        name: "anonymous".to_string(),
-        principal: String::new(),
-        rate_limit: 0,
-        backends: vec!["*".to_string()],
-        allowed_tools: None,
-        denied_tools: None,
-        admin: false,
-        authenticated: false,
-        credential_kind: crate::security::audit::CredentialKind::None,
-    }
-}
-
-/// The identity a public path gives a caller no gateway credential
-/// authenticates. One constructor, because delivery gives a validated agent
-/// token the same one and compares principals against what ingress stored.
-fn public_client() -> AuthenticatedClient {
-    AuthenticatedClient {
-        quota_principal: None,
-        name: "public".to_string(),
-        principal: String::new(),
-        rate_limit: 0,
-        backends: vec!["*".to_string()],
-        allowed_tools: None,
-        denied_tools: None,
-        admin: false,
-        authenticated: false,
-        credential_kind: crate::security::audit::CredentialKind::None,
-    }
-}
+#[path = "auth_clients.rs"]
+mod clients;
+pub(crate) use clients::presented_bearer_sha256;
+pub use clients::{anonymous_client, session_cookie_value};
+use clients::{
+    dashboard_client, is_poll, presented_credential, public_client, session_ended_response,
+};
 
 /// Combined auth state: static config + optional key server.
 #[derive(Clone)]
@@ -652,11 +540,23 @@ async fn authenticate_request(
         // the anonymous identity — and with it the anonymous quota, which any
         // unauthenticated flood can exhaust. Unrecognised input still falls
         // through to the anonymous identity below, exactly as before.
-        if let Some((client, identity, via)) = key_server_credential(&state, &presented).await {
-            debug!(client = %client.name, path = %path, "Public path authenticated via {via}");
-            identity.insert_into(request.extensions_mut());
-            request.extensions_mut().insert(client);
-            return next.run(request).await;
+        match key_server_credential(&state, &presented).await {
+            live::KsCredential::Credential(found) => {
+                let (client, identity, via) = *found;
+                debug!(client = %client.name, path = %path, "Public path authenticated via {via}");
+                identity.insert_into(request.extensions_mut());
+                request.extensions_mut().insert(client);
+                return next.run(request).await;
+            }
+            // A credential this gateway recognises whose identity names no
+            // one is refused here too, never handed the anonymous identity
+            // below (MIK-8286).
+            live::KsCredential::Refused => {
+                auth_failure(AuthFailureKind::InvalidCredential);
+                warn!(path = %path, "Invalid token");
+                return bearer_unauthorized_response("Invalid token");
+            }
+            live::KsCredential::NotOurs => {}
         }
     }
 
@@ -704,7 +604,8 @@ async fn authenticate_request(
     // 2. Try the key server: temporary token, then delegated OIDC bearer. The
     //    verified subject is bound into request extensions so downstream grant
     //    evaluation can scope capabilities to the caller identity.
-    if let Some((client, identity, via)) = key_server_credential(&state, token).await {
+    if let live::KsCredential::Credential(found) = key_server_credential(&state, token).await {
+        let (client, identity, via) = *found;
         if let Some(deny) = client_preflight(auth_config, &client, path) {
             return deny;
         }
@@ -779,6 +680,10 @@ mod api_key_digest_tests;
 #[cfg(test)]
 #[path = "auth_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "auth_clock_tests.rs"]
+mod clock_tests;
 
 /// SIGNING.5 row 44: which nonce-quota authority a dashboard session carries.
 ///

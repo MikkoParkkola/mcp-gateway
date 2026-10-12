@@ -47,6 +47,7 @@ pub(crate) mod security_metrics;
 )]
 pub(crate) mod signature_chain;
 pub mod ssrf;
+pub(crate) mod text_memo;
 pub mod tool_integrity;
 pub mod transparency_log;
 

@@ -20,6 +20,13 @@ tokio::task_local! {
     static PLAN_MEMBERS: RefCell<Vec<(String, u32)>>;
 }
 
+/// Run `f` with `members` as the plan's answer members, synchronously
+/// (tests only: rows that drive `keep_plan_receipts` directly).
+#[cfg(all(test, feature = "firewall"))]
+pub(super) fn with_plan_members<R>(members: Vec<(String, u32)>, f: impl FnOnce() -> R) -> R {
+    PLAN_MEMBERS.sync_scope(RefCell::new(members), f)
+}
+
 /// Run `delivery` with a record of its plan's answer members.
 pub(super) fn scope<F: Future>(delivery: F) -> impl Future<Output = F::Output> {
     PLAN_MEMBERS.scope(RefCell::new(Vec::new()), delivery)
@@ -54,7 +61,7 @@ pub(crate) async fn noting_plan_members<F: Future>(delivery: F) -> (F::Output, V
 }
 
 #[cfg(feature = "firewall")]
-pub(super) use with_firewall::add_seams;
+pub(super) use with_firewall::{add_seams, add_subset_seams, answer_parts};
 
 #[cfg(feature = "firewall")]
 #[path = "relay_seams_record.rs"]
@@ -82,5 +89,23 @@ mod tests {
             plan_step(None, async { plan_step(Some(5), async { label() }).await }).await;
         assert_eq!(unlabelled, None);
         assert_eq!(plan_step(Some(7), async { label() }).await, Some(7));
+    }
+
+    /// T23 (MIK-8202 design v4): the composite scope sits on the step's call,
+    /// so a call nested anywhere inside it, unlabelled or under an inner step,
+    /// is still in a plan step; outside every step it is not. Mutant:
+    /// `in_plan_step` reads false.
+    #[tokio::test]
+    async fn t23_a_call_nested_in_a_plan_step_is_in_it() {
+        use super::super::in_plan_step;
+        assert!(!in_plan_step(), "outside every step");
+        let inside = plan_step(None, async {
+            let nested = plan_step(Some(5), async { in_plan_step() }).await;
+            let awaited = async { in_plan_step() }.await;
+            (in_plan_step(), nested, awaited)
+        })
+        .await;
+        assert_eq!(inside, (true, true, true));
+        assert!(!in_plan_step(), "the scope ends with the step");
     }
 }

@@ -5,7 +5,7 @@
 
 use super::*;
 
-fn test_grant_file() -> IdentityGrantFile {
+pub(super) fn test_grant_file() -> IdentityGrantFile {
     let subject = GrantSubject::new("api_key", "alice", Some("Alice".to_string()));
     IdentityGrantFile::new(vec![IdentityGrant {
         grant_id: "grant-startup-1".to_string(),

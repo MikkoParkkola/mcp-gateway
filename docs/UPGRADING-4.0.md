@@ -58,12 +58,12 @@ backend" and "fails a capability file" first.**
 | 31 | Tool calls with undeclared argument keys are refused | Stop sending the key, or set `input_schema_enforcement: standard` (or `off`) on that backend |
 | 32 | An API key or key-server rule with no `backends` reaches no backend | Add `backends: ["*"]` for the old behaviour, or list the backends it needs; the gateway warns per affected key at startup |
 | 33 | `/metrics` requires its own scrape token | Set `server.metrics_token`; give Prometheus the token through a dedicated scrape job |
-| 34 | The inbound WebSocket listener is gone; `server.ws_port` is ignored with a warning | Delete `server.ws_port`; connect clients over HTTP (`POST /mcp`) or stdio |
+| 34 | The inbound WebSocket listener is gone; `server.ws_port` is refused at load and `mcp-gateway upgrade` deletes it | Delete `server.ws_port`; connect clients over HTTP (`POST /mcp`) or stdio |
 | 35 | A config or env file other users can read fails the load (Unix) | `chmod 600` the file; on Kubernetes keep the chart's `fsGroup` and `defaultMode` |
 | 36 | The Helm chart pins its pod identity to 1001 and caps the `state` volume at `1Gi` | Remove any `runAsUser`, `runAsGroup` or `fsGroup` override other than 1001; raise `stateVolume.sizeLimit` if HOME outgrows `1Gi` |
 | 37 | More than one replica is refused while per-process state is on; the chart defaults to one replica | Keep `replicaCount: 1`, or set `server.modern_protocol: false` with the key server and accounts off |
 | 38 | A credential over plain HTTP on a network bind refuses the start | Enable `mtls`, or set `server.cleartext_http` to say who protects the traffic |
-| 39 | `server.request_timeout` is ignored with a warning; `server.max_body_size` caps every route, oversize gets HTTP 413 / JSON-RPC -32600 | Delete `server.request_timeout` and bound calls with per-backend `timeout`; keep `max_body_size` positive, lower it if you relied on the 2 MiB webhook cap |
+| 39 | `server.request_timeout` is refused at load and `mcp-gateway upgrade` deletes it; `server.max_body_size` caps every route, oversize gets HTTP 413 / JSON-RPC -32600 | Delete `server.request_timeout` and bound calls with per-backend `timeout`; keep `max_body_size` positive, lower it if you relied on the 2 MiB webhook cap |
 | 40 | A secret reference that resolves to nothing fails the load | Set the variable the error names, or write `${VAR:-}` where empty is intended |
 | 41 | API keys are configured as sha256 digests; a plaintext `key` fails the load | Replace each `key` with `key_sha256` from `mcp-gateway hash-key`; clients keep the same key |
 | 42 | `webhooks.rate_limit` is enforced, per endpoint, default 100 per minute | Raise it above your provider's peak rate, or set `0` for no limit; library users: the `mcp_gateway::session_sandbox` and `mcp_gateway::tunnel` modules are removed |
@@ -169,7 +169,7 @@ backend" and "fails a capability file" first.**
 | 142 | `mcp_gateway::gateway::destructive_confirmation::ConfirmationOutcome` gained the variant `Undelivered` and is not `#[non_exhaustive]`, so an exhaustive `match` on it no longer compiles. `require_destructive_confirmation` now returns `Undelivered` when no session could carry the question; a timed-out or cancelled question stays `Unsupported` | Add an `Undelivered` arm handled like `Unsupported`, or end the `match` with a wildcard arm |
 | 143 | The `gateway_search_tools` output schema describes each `matches` row as `anyOf` a tool row (`server`, `tool`, `description`, `score`) or an event row (`kind: event`, `name`, `description`, `inputSchema`); it described tool rows only, so a strict client rejected an answer holding an event. `limit` now caps tool and event rows together: an answer could hold `limit` tools plus `limit` events | A client that reads the row schema at `items.properties` reads `items.anyOf[0].properties` for tool rows and `items.anyOf[1]` for event rows; one that sizes for `2 × limit` rows gets at most `limit` |
 | 144 | `ProvidersConfig::process` and `ProvidersConfig::integrity` are no longer public fields: a program built on the crate reads them through `process()` and `integrity()` and cannot set them, so only the loader marks a definition `Integrity::Verified`; `register_capability` replacing a definition drops its cached answers | An embedder that read the fields calls the getters; one that set `integrity` loads the definition through the capability loader instead |
-| 145 | The `plugin` command is removed (`search`, `install`, `uninstall`, `list`), with `mcp_gateway::registry::marketplace` and `mcp_gateway::config::MarketplaceConfig`; a `marketplace:` block in the config loads and warns once | Delete the `marketplace:` block and `~/.mcp-gateway/plugins`; add tools as `backends:` entries or capability files (`mcp-gateway cap`) |
+| 145 | The `plugin` command is removed (`search`, `install`, `uninstall`, `list`), with `mcp_gateway::registry::marketplace` and `mcp_gateway::config::MarketplaceConfig`; a `marketplace:` block in the config is refused at load and `mcp-gateway upgrade` deletes it | Delete the `marketplace:` block and `~/.mcp-gateway/plugins`; add tools as `backends:` entries or capability files (`mcp-gateway cap`) |
 | 146 | An OAuth backend whose authorization server, authorization endpoint, token endpoint or registration endpoint is `http://` to a host off this machine fails at connect, and so does a redirect from one to such a URL; a capability that sends a credential (`auth.required`, or a header, query or body template that fills in `{env.X}` or `{keychain.X}`) and names an `http://` `base_url` or `endpoint` off this machine fails to load, and a templated one is refused at call time. `http://` to a loopback host is allowed, and is no longer proxied | Serve the authorization server and the capability's API over `https://`, or on a loopback host (`localhost`, `127.0.0.1`, `[::1]`). `allow_cleartext_credentials` does not cover either |
 | 147 | A capability whose declared output root is not object-shaped (an array, a string, a type list) advertises `outputSchema` as an object and publishes `structuredContent` under `items` | Read `structuredContent.items` for the nine shipped capabilities listed below, and for your own; the text content is unchanged |
 | 148 | An `http_url` backend with no `streamable_http` key POSTs `initialize` first and falls back to the legacy SSE `GET` only when that POST is refused with a 4xx that is not about the credential or a retry (any but 401, 403, 407, 408, 429); `add --url` no longer writes `streamable_http: false`. An explicit `true` or `false` is tried first, and when the server refuses it with such a 4xx the other transport is tried once, with a warning naming the backend and the value to set. `TransportConfig::Http::streamable_http` is now `Option<bool>` | None. A config the old `add --url` wrote keeps working; to skip the refused request, set the value the warning names or remove the key. MCP Events follow the transport the backend connected with; a subscribe starts an undetected backend first, a failed start answers `-32000`, and SSE is refused with `-32014` |
@@ -869,20 +869,27 @@ The error is printed on one line. Fix the spelling of each named key, or delete 
 check runs on `gateway_reload_config` and on file-watch reloads: a refused reload keeps the running
 config and reports the error.
 
-- **Retired keys load and warn once; they are not refused (#2360).** `backends.<name>.idle_timeout`
-  was retired in 3.x and never had an effect. `backends.<name>.circuit_breaker` was never read:
-  every backend's breaker uses `failsafe.circuit_breaker`. `server.ws_port` (item 34) and
-  `server.request_timeout` (item 39) also warn and are ignored. Each warning names the key and says
-  why, for example `` `backends.x.idle_timeout` is ignored since 4.0: backend idle hibernation was
-  never implemented, ... ``. Delete the keys when convenient; use `stop_when_idle_for` on a
-  `command` backend for idle shutdown, and tune `failsafe.circuit_breaker` for breakers. A retired
-  key is matched only at its own place: `server.idle_timeout` is refused like a misspelling.
+- **Removed keys are refused at load, and `mcp-gateway upgrade` deletes them (MIK-8044).**
+  `backends.<name>.idle_timeout` was retired in 3.x and never had an effect.
+  `backends.<name>.circuit_breaker` was never read: every backend's breaker uses
+  `failsafe.circuit_breaker`. `server.ws_port` (item 34), `server.request_timeout` (item 39),
+  `marketplace` (item 145) and `cost_governance.currency` never had an effect either. One refusal
+  names every such key and says why, for example `` `backends.x.idle_timeout` was removed in 4.0:
+  backend idle hibernation was never implemented, ... ``, and ends with "Run `mcp-gateway upgrade`,
+  which deletes them, or delete them by hand." Use `stop_when_idle_for` on a `command` backend for
+  idle shutdown, and tune `failsafe.circuit_breaker` for breakers. A removed key is matched only at
+  its own place: `server.idle_timeout` is refused like a misspelling. (From #2360 until this
+  change they loaded and warned.) `meta_mcp.cache_tools` still loads and warns once.
 - **Keys whose own name starts with `_` or `x-` are annotations (#2360).** They load wherever
   this key check applies and are never read. A few sections reject every extra key while they are
   parsed (for example `auth.dashboard_session`), and an annotation there still fails the load. Annotations are never read, so notes such as `_legacy_env: {...}` or a top-level `x-anchors:` block keep
   working. No setting starts with either prefix, so such a key is never a misspelling, and it is
   never bound: `key_server: {_enabled: true}` leaves the key server off. Entries of maps you name
   yourself (`env`, `headers`, backend names) are data, not keys, and are unaffected.
+- **An empty `backends:` section loads as no backends (MIK-8299).** A `backends:` key with
+  nothing under it, which is what the section reads as when every entry is commented out, starts
+  and reloads with no backends instead of failing with `invalid type: found unit, expected a map`.
+  A `backends:` that is a list, a string or a number is still refused.
 - **A backend that names two transports is refused.** `command` and `http_url` together loaded as
   a stdio backend and ignored `http_url`, `streamable_http` and any `a2a_*` key. The error names
   each ignored key and the key that selected the transport. Keep one transport per backend.
@@ -892,7 +899,10 @@ config and reports the error.
 - **Environment variables are not checked.** `MCP_GATEWAY_*` variables are read as config keys,
   and a misspelt one such as `MCP_GATEWAY_SERVER__PROT` is still ignored without a word. Only the
   file is checked, so deployments that set `MCP_GATEWAY_TOKEN`, `MCP_GATEWAY_LOG_LEVEL` or
-  `MCP_GATEWAY_LOG_FORMAT` load as before.
+  `MCP_GATEWAY_LOG_FORMAT` load as before. The variables CLI flags own (`MCP_GATEWAY_CONFIG`,
+  `MCP_GATEWAY_CAPABILITIES`, `MCP_GATEWAY_LOG_LEVEL`, and every other `[env: ...]` name shown
+  by `mcp-gateway --help` or a subcommand's `--help`) are never read as config keys, so `MCP_GATEWAY_CAPABILITIES` sets
+  the tool subcommands' directory without breaking a config load.
 - **YAML merge keys (`<<:`) were never applied**, and are now refused as a key named `<<`. Write
   the merged keys out in full.
 
@@ -993,7 +1003,7 @@ restart, not on a config reload.
 - **enterprise-alpha:** the manifests drop the `prometheus.io/*` annotations and read the token
   from the optional Secret `mcp-gateway-metrics` (key `token`).
 
-## 34. The inbound WebSocket listener is removed, and `server.ws_port` is ignored
+## 34. The inbound WebSocket listener is removed, and `server.ws_port` is refused
 
 **Startup:** prints a notice
 
@@ -1002,10 +1012,10 @@ text frames back: it never served MCP, sat outside the Origin/Host guard and had
 authentication, so no client could reach a tool through it.
 
 - **The listener is gone.** Clients connect via stdio or HTTP (`POST /mcp`).
-- **`server.ws_port` in the config file is a retired key: it loads, opens no listener, and warns
-  once**, on start and on reload, with `server.ws_port` is ignored since 4.0: the inbound
-  WebSocket listener was removed in 4.0 and no WebSocket listener is opened; ... Remove
-  server.ws_port. Delete the key. (Before #2360 it refused the load.) Like every `MCP_GATEWAY_*` variable,
+- **`server.ws_port` in the config file is a removed key: the load is refused**, on start and on
+  reload, naming it: `` `server.ws_port` was removed in 4.0: the inbound WebSocket listener was
+  removed in 4.0 and no WebSocket listener is opened; ... Remove server.ws_port. ``
+  `mcp-gateway upgrade` deletes it. Like every `MCP_GATEWAY_*` variable,
   `MCP_GATEWAY_SERVER__WS_PORT` is not checked; it is now ignored, so remove it too.
 - **Outbound WebSocket is a backend transport** (`ws_url`, see §47). Only the inbound listener is
   removed.
@@ -1031,9 +1041,9 @@ The check follows symlinks, so a Kubernetes `..data` link is judged by the file 
 Group read is allowed only on a file the gateway does not own, and item 96 narrows that to root, because there the group is how it
 reads the file. That is the case for a root-owned Kubernetes projection with `fsGroup`.
 
-- **A refused config file fails every command that loads it**, `doctor` and `config export`
+- **A refused config file fails every command that loads it**, `doctor` and `setup export`
   included. The error names the path, the mode and the fix: `chmod 600 <path>`.
-- **A refused env file fails `serve`, stdio and reload.** `doctor`, `config export` and the other
+- **A refused env file fails `serve`, stdio and reload.** `doctor`, `setup export` and the other
   commands that do not serve print a warning and skip the file.
 - **Helm:** the chart now sets `podSecurityContext.fsGroup: 1001` and
   `configVolume.defaultMode: 288` (octal `0440`), so the projected config is `root:1001 0440`.
@@ -1163,7 +1173,7 @@ The shipped deployments keep starting (item 21):
 - **compose:** sets `MCP_GATEWAY_SERVER__CLEARTEXT_HTTP: host_local_publish` beside its loopback
   publish.
 
-## 39. `server.request_timeout` is ignored, and `server.max_body_size` is enforced
+## 39. `server.request_timeout` is refused, and `server.max_body_size` is enforced
 
 **Startup:** prints a notice; refuses to start, only while `server.max_body_size` is `0`
 
@@ -1171,15 +1181,13 @@ In 3.x neither key did anything. No server-wide timeout existed: each call is bo
 backend's `timeout`. `/mcp` and `/mcp/{name}` capped bodies at a hard-coded 10 MiB, and every
 other route, webhooks included, used the framework's 2 MiB default.
 
-- **`server.request_timeout` is removed and ignored; delete it.** It never did anything. Set
-  per-backend `timeout` to bound calls. The config still loads, on start and on reload, and the
-  gateway warns once:
+- **`server.request_timeout` is removed; `mcp-gateway upgrade` deletes it.** It never did
+  anything. Set per-backend `timeout` to bound calls. A config that still sets it is refused, on
+  start and on reload, with:
 
   ```text
-  `server.request_timeout` is ignored since 4.0: the server-wide request timeout was removed in 4.0; it was never enforced. Calls are bounded by the per-backend `timeout`. Remove server.request_timeout.
+  `server.request_timeout` was removed in 4.0: the server-wide request timeout was removed in 4.0; it was never enforced. Calls are bounded by the per-backend `timeout`. Remove server.request_timeout.
   ```
-
-  (Before #2360 this refused the load.)
 - **`server.max_body_size` is now enforced on every route**, read once at startup
   (default 10 MiB). `0` would refuse every body, so it now fails the load; set a positive byte
   count.
@@ -1817,7 +1825,7 @@ held to item 35.
   UID is in (1001 in the image). The file is then `root:1001 0440` and passes. Without them it is
   `root:root 0644` and is refused.
 - **Docker Compose:** a bind-mounted key keeps its host mode and owner. `chmod 600` and `chown 1001` it (item 96 refuses any other owner).
-- `mcp-gateway config export` now writes the client config it edits as `0600`, and says so on
+- `mcp-gateway setup export` now writes the client config it edits as `0600`, and says so on
   stderr when that changes the file's mode.
 
 ## 55. Answers without the gateway's `requestState` are refused
@@ -3122,8 +3130,12 @@ as above, and a row that holds backend output without recoverable provenance, ev
 playbook or `gateway_execute` row included, is refused -32003 (item 120). Only beta task stores contain such rows.
 
 **Rollback:** a record that carries calls is written as version 5, and a failed upstream task
-whose error is the peer's own as version 6 (MIK-7887); a version 4, 5 or 6 row makes
-a beta (which reads versions 1 to 3) refuse to open the task store, so the gateway does not start.
+whose error is the peer's own as version 6 (MIK-7887), a cancelled task whose upstream
+task was sent a cancel as version 7 (MIK-7642), and a cancelled task whose upstream cancel is
+claimed from 4.0.0 on as version 8 (MIK-8347: an unconfirmed cancel is kept and retried); a
+version 4, 5, 6, 7 or 8 row makes a beta (which reads versions 1 to 3) refuse to open the task
+store, so the gateway does not start. A 4.0.0 pre-release that reads at most version 7 refuses a
+version 8 row the same way.
 4.0.0 does not keep those rows readable by the betas. The task store is the directory
 `tasks.store_dir` (default `~/.mcp-gateway/tasks`). Back it up before upgrading. Clearing it to
 start a beta is destructive: it abandons every task and every task idempotency key, it is not a
@@ -3911,7 +3923,7 @@ pin.
 
 ## 145. The `plugin` command and the `marketplace` config block are removed
 
-**Startup:** no notice, a removed CLI surface (a leftover `marketplace` block logs one warning, not the upgrade notice)
+**Startup:** no notice; refuses to start, only for a config that still has a `marketplace` block
 
 `mcp-gateway plugin search`, `install`, `uninstall` and `list` are gone. `install` downloaded a
 manifest and wrote it under `marketplace.plugin_dir`, but no gateway path ever loaded what it
@@ -3920,8 +3932,9 @@ wrote: an installed plugin added no backend, tool or capability. The default mar
 command (`--marketplace-url`, `--plugin-dir`, `MCP_GATEWAY_MARKETPLACE_URL`,
 `MCP_GATEWAY_PLUGIN_DIR`) are gone with it.
 
-- **`marketplace` in the config file is a retired key: it loads, does nothing, and warns once**,
-  on start and on reload, with `` `marketplace` is ignored since 4.0: the `plugin` command was removed in 4.0, and nothing else read this block: no gateway path loaded the plugins it installed. Remove the marketplace block. ``
+- **`marketplace` in the config file is a removed key: the load is refused**, on start and on
+  reload, with `` `marketplace` was removed in 4.0: the `plugin` command was removed in 4.0, and nothing else read this block: no gateway path loaded the plugins it installed. Remove the marketplace block. ``
+  `mcp-gateway upgrade` deletes the block.
 - **Library break:** the `mcp_gateway::registry::marketplace` module and
   `mcp_gateway::config::MarketplaceConfig` are removed, and `Config` has no `marketplace` field.
 
@@ -4665,3 +4678,78 @@ wrote under the per-issuer key is simply not read by 3.x.
 
 Within 4.0, a rollback to an earlier beta is unsupported once a managed account has had a
 forced refresh (item 61): that beta cannot open the account store and refuses to start.
+
+<!-- surface-appendix:start -->
+## Appendix: hidden, derived and removed surface (generated)
+
+Generated from docs/design/surface-4.0.md by `scripts/release/surface_upgrading.py write`;
+edit the inventory, not this table. Hidden items still work: a config key or variable is
+still read and `mcp-gateway doctor` lists it when set, a command still runs, a route stays
+mounted. Derived items work out their value when unset. Removed items are refused.
+
+### Config keys
+
+| Item | Class | What 4.0 does | Why |
+|---|---|---|---|
+| `auth.api_keys[].key` | removed | refused at load naming `key_sha256`; `upgrade` replaces a literal key with its digest and names an `env:`/`file:`/`${}` value to fix by hand (tests/surf2_upgrade_removed_keys.rs); see upgrading.d/8044-2.md | legacy plaintext key, parsed only to be refused |
+| `backends.<name>.circuit_breaker` | removed | a load error naming the key and `mcp-gateway upgrade`, which deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs); see upgrading.d/8044-2.md | retired in 4.0; never had an effect |
+| `backends.<name>.idle_timeout` | removed | a load error naming the key and `mcp-gateway upgrade`, which deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs); see upgrading.d/8044-2.md | retired in 4.0; never had an effect |
+| `cost_governance.currency` | removed | refused at load (`cost_governance.currency` was removed in 4.0); `upgrade` deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs); see upgrading.d/8044-2.md | informational only; every value is stored as USD |
+| `marketplace` | removed | a load error naming the key and `mcp-gateway upgrade`, which deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs); see UPGRADING 145 | retired in 4.0; never had an effect |
+| `meta_mcp.cache_tools` | removed | retired: loads and warns once with the reason (as `server.ws_port`); `init` and the examples drop it; `upgrade` deletes the line in its single rewrite pass, or names the key to delete by hand when that would change anything else; see UPGRADING 173 (tests: `retired_cache_tools_loads_and_warns_once` src/config/strict_keys.rs; `upgrade_removes_the_retired_cache_tools_key`, `upgrade_names_a_cache_tools_key_it_cannot_remove`, `upgrade_removes_a_meta_mcp_block_that_held_only_cache_tools` src/commands/upgrade_url_keys_tests.rs) | read by nothing (MIK-8064); setting it has no effect |
+| `server.request_timeout` | removed | a load error naming the key and `mcp-gateway upgrade`, which deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs); see UPGRADING 39 | retired in 4.0; never had an effect |
+| `server.ws_port` | removed | a load error naming the key and `mcp-gateway upgrade`, which deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs); see UPGRADING 34 | retired in 4.0; never had an effect |
+| `accounts.schema_version` | derived | shipped: unset defaults to `accounts.v1`; a set value is still read and refused unless it is `accounts.v1`, so `upgrade` leaves it (src/personal_accounts/config_tests.rs::an_omitted_schema_version_defaults_to_accounts_v1); see upgrading.d/3730.md | `accounts.v1` is the only accepted value; default it |
+| `backends.<name>.oauth.token_refresh_buffer_secs` | derived | shipped: unset derives max(300 s, 10 % of the token lifetime); a set value is still read and bounded; hidden from the reference, `init` and examples; `doctor` lists it when set (src/oauth/client/tests.rs `an_unset_buffer_derives_from_the_token_lifetime`); see upgrading.d/8044-4.md | unset: refresh at max(300 s, 10 % of the token lifetime) before expiry, today's 300 s as the floor |
+| `backends.<name>.protocol_version` | derived | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set; no UPGRADING item: the version was already negotiated in `initialize` before 4.0, and a set value still applies (tests: unset sends the default, `t12_an_unset_protocol_version_sends_the_default` src/transport/websocket_backend_tests.rs, and negotiates on a refusal, `a_status_refusal_naming_a_shared_version_negotiates_it` src/transport/http/tests/version_refusals.rs; set from gateway.yaml reaches the HTTP transport, `a_protocol_version_set_in_gateway_yaml_reaches_the_http_transport` src/gateway/server/tests/surf2_protocol_version_config.rs) | negotiated in `initialize` |
+| `backends.<name>.streamable_http` | derived | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set; see UPGRADING 148 (tests: unset reaches both shapes, a streamable server exactly as a streamable pin, `an_unpinned_flavour_connects_exactly_as_a_streamable_pin` src/transport/http/tests/unpinned_flavour.rs, and a legacy SSE server, `add_url_still_reaches_a_legacy_sse_server` tests/add_url_transport_autodetect.rs; a set value is honoured, `explicit_streamable_false_is_honoured` tests/add_url_transport_autodetect.rs) | already detected at connect (POST first, SSE on 4xx) |
+| `key_server.oidc[].auto_discover` | derived | shipped: derived discovery that cannot be reached falls back to `{issuer}/.well-known/jwks.json` for at most 300 s; a refused document or an explicit `discovery_url` never falls back; hidden key, still read (src/key_server/oidc_fallback_tests.rs); see upgrading.d/8044-4.md | try OIDC discovery, then `{issuer}/.well-known/jwks.json`; `jwks_uri` still overrides both |
+| `accounts.adapters[].clock_skew_seconds`, `accounts.adapters[].max_lifetime_seconds`, `accounts.limits`, `accounts.limits.authority_bytes`, `accounts.limits.journeys_created_per_minute`, `accounts.limits.journeys_per_user`, `accounts.limits.journeys_total`, `accounts.limits.starts_per_minute_per_user`, `accounts.limits.store_entries`, `auth.client_circuit_breaker.failure_threshold`, `auth.client_circuit_breaker.reset_timeout`, `auth.client_circuit_breaker.success_threshold`, `auth.dashboard_session`, `auth.dashboard_session.absolute_timeout_secs`, `auth.dashboard_session.idle_timeout_secs`, `backends.<name>.max_frame_bytes`, `capabilities.files.downloads_quota_bytes`, `events.max_outbox_per_subscription`, `events.max_subscriptions_per_principal`, `events.max_verified_tail_per_principal`, `events.rate_limit_per_subscription`, `events.rate_limit_per_subscription.burst`, `events.rate_limit_per_subscription.per_minute`, `events.schedule.max_timers_per_principal`, `events.secret_rotation_grace`, `events.verification_per_host_per_minute`, `events.watch.max_pollers_per_principal`, `failsafe.rate_limit.burst_size`, `failsafe.rate_limit.requests_per_second`, `key_server.max_oidc_token_age_secs`, `key_server.max_tokens_per_identity`, `security.firewall.anomaly_min_observations`, `security.firewall.anomaly_threshold`, `security.firewall.collusion.common_principals`, `security.firewall.collusion.min_matches`, `security.firewall.collusion.window_secs`, `security.firewall.memory_poisoning.max_entry_size_bytes`, `security.message_signing.replay_window`, `server.max_body_size`, `tasks.logical_budget_bytes`, `tasks.max_per_principal`, `tasks.max_record_bytes`, `webhooks.rate_limit` | hidden | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set |  |
+| `backends.<name>.a2a_agent_card_path`, `cache.default_ttl`, `cache.max_entries`, `capabilities.name`, `control_plane.export.max_batch`, `control_plane.export.poll_interval_secs`, `events.dead_letter_max_bytes`, `events.dead_letter_max_records`, `events.default_ttl`, `events.max_in_flight`, `events.max_outbox`, `events.max_subscriptions`, `events.max_ttl`, `events.max_verified_tail`, `events.min_ttl`, `events.queue_depth`, `events.retry_base`, `events.retry_max_attempts`, `events.retry_window`, `events.schedule`, `events.schedule.max_timers`, `events.seen_max_per_route`, `events.suspend_min_attempts`, `events.suspend_window`, `events.verified_tail_ttl`, `events.watch`, `events.watch.max_pollers`, `failsafe.circuit_breaker.failure_threshold`, `failsafe.circuit_breaker.reset_timeout`, `failsafe.circuit_breaker.success_threshold`, `failsafe.health_check.interval`, `failsafe.health_check.timeout`, `failsafe.retry.initial_backoff`, `failsafe.retry.max_attempts`, `failsafe.retry.max_backoff`, `failsafe.retry.multiplier`, `key_server.cleanup_interval_secs`, `key_server.token_ttl_secs`, `meta_mcp.cache_ttl`, `meta_mcp.projection_mode`, `meta_mcp.prompts_resources_fetch_timeout`, `server.shutdown_timeout`, `streaming.buffer_size`, `streaming.keep_alive_interval`, `streaming.session_reaper_interval`, `streaming.session_ttl`, `tasks.default_ttl_ms`, `tasks.expiry_interval`, `tasks.max_records`, `tasks.max_workers`, `tasks.poll_interval_ms` | hidden | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set |  |
+| `backends.<name>.http_url`, `backends.<name>.ws_url` | hidden | hidden alias: still read and validated; `mcp-gateway upgrade` rewrites it as `url`; `doctor` names it |  |
+### Commands and flags
+
+| Item | Class | What 4.0 does | Why |
+|---|---|---|---|
+| `mcp-gateway add --config` | removed | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) |
+| `mcp-gateway add -c` | removed | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | short alias of `--config` |
+| `mcp-gateway get --config` | removed | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) |
+| `mcp-gateway get -c` | removed | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | short alias of `--config` |
+| `mcp-gateway list --config` | removed | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) |
+| `mcp-gateway list -c` | removed | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | short alias of `--config` |
+| `mcp-gateway remove --config` | removed | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | a second `--config` with its own `gateway.yaml` default beside the global one (and its `MCP_GATEWAY_CONFIG` form) |
+| `mcp-gateway remove -c` | removed | deduplicated: the global `--config` is `global = true`, so `<command> --config <path>` keeps parsing; only the subcommand's own `gateway.yaml` default goes; see upgrading.d/3755.md | short alias of `--config` |
+| `mcp-gateway skills generate --capabilities` | derived | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`skills_generate_reads_the_configured_directories`; the -C/env override, shared across commands: `flag_and_env_override_the_config`, exercised on `tool list`)); see upgrading.d/3755.md (hidden flag) and upgrading.d/8044-4.md (derived from the config) | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) |
+| `mcp-gateway skills generate -C` | derived | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`skills_generate_reads_the_configured_directories`; the -C/env override, shared across commands: `flag_and_env_override_the_config`, exercised on `tool list`)); see upgrading.d/3755.md (hidden flag) and upgrading.d/8044-4.md (derived from the config) | short alias of `--capabilities` |
+| `mcp-gateway tool completions --capabilities` | derived | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`tool_completions_reads_the_configured_directories`; the -C/env override, shared across commands: `flag_and_env_override_the_config`, exercised on `tool list`)); see upgrading.d/3755.md (hidden flag) and upgrading.d/8044-4.md (derived from the config) | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) |
+| `mcp-gateway tool completions -C` | derived | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`tool_completions_reads_the_configured_directories`; the -C/env override, shared across commands: `flag_and_env_override_the_config`, exercised on `tool list`)); see upgrading.d/3755.md (hidden flag) and upgrading.d/8044-4.md (derived from the config) | short alias of `--capabilities` |
+| `mcp-gateway tool inspect --capabilities` | derived | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`tool_inspect_reads_the_configured_directories`; the -C/env override, shared across commands: `flag_and_env_override_the_config`, exercised on `tool list`)); see upgrading.d/3755.md (hidden flag) and upgrading.d/8044-4.md (derived from the config) | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) |
+| `mcp-gateway tool inspect -C` | derived | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`tool_inspect_reads_the_configured_directories`; the -C/env override, shared across commands: `flag_and_env_override_the_config`, exercised on `tool list`)); see upgrading.d/3755.md (hidden flag) and upgrading.d/8044-4.md (derived from the config) | short alias of `--capabilities` |
+| `mcp-gateway tool invoke --capabilities` | derived | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`tool_invoke_reads_the_configured_directories`; the -C/env override, shared across commands: `flag_and_env_override_the_config`, exercised on `tool list`)); see upgrading.d/3755.md (hidden flag) and upgrading.d/8044-4.md (derived from the config) | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) |
+| `mcp-gateway tool invoke -C` | derived | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`tool_invoke_reads_the_configured_directories`; the -C/env override, shared across commands: `flag_and_env_override_the_config`, exercised on `tool list`)); see upgrading.d/3755.md (hidden flag) and upgrading.d/8044-4.md (derived from the config) | short alias of `--capabilities` |
+| `mcp-gateway tool list --capabilities` | derived | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`tool_list_reads_the_configured_directories`, `flag_and_env_override_the_config`, `no_config_keeps_the_local_capabilities_directory`)); see upgrading.d/3755.md (hidden flag) and upgrading.d/8044-4.md (derived from the config) | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) |
+| `mcp-gateway tool list -C` | derived | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`tool_list_reads_the_configured_directories`, `flag_and_env_override_the_config`, `no_config_keeps_the_local_capabilities_directory`)); see upgrading.d/3755.md (hidden flag) and upgrading.d/8044-4.md (derived from the config) | short alias of `--capabilities` |
+| `mcp-gateway validate --no-color` | derived | hidden flag, still honoured; see upgrading.d/3730.md | unset: colour follows the terminal and `NO_COLOR` |
+| `mcp-gateway kubernetes`, `mcp-gateway kubernetes --help`, `mcp-gateway kubernetes -h`, `mcp-gateway kubernetes apply-plan`, `mcp-gateway kubernetes apply-plan --approve-apply`, `mcp-gateway kubernetes apply-plan --execute`, `mcp-gateway kubernetes apply-plan --format`, `mcp-gateway kubernetes apply-plan --help`, `mcp-gateway kubernetes apply-plan --namespace`, `mcp-gateway kubernetes apply-plan -f`, `mcp-gateway kubernetes apply-plan -h`, `mcp-gateway kubernetes apply-plan -n`, `mcp-gateway kubernetes apply-plan <RESOURCES>`, `mcp-gateway kubernetes controller`, `mcp-gateway kubernetes controller --cycles`, `mcp-gateway kubernetes controller --format`, `mcp-gateway kubernetes controller --help`, `mcp-gateway kubernetes controller --interval-seconds`, `mcp-gateway kubernetes controller --namespace`, `mcp-gateway kubernetes controller --watch`, `mcp-gateway kubernetes controller -f`, `mcp-gateway kubernetes controller -h`, `mcp-gateway kubernetes controller -n`, `mcp-gateway kubernetes controller <RESOURCES>`, `mcp-gateway kubernetes help`, `mcp-gateway kubernetes plan`, `mcp-gateway kubernetes plan --format`, `mcp-gateway kubernetes plan --help`, `mcp-gateway kubernetes plan --namespace`, `mcp-gateway kubernetes plan -f`, `mcp-gateway kubernetes plan -h`, `mcp-gateway kubernetes plan -n`, `mcp-gateway kubernetes plan <RESOURCES>` | hidden | `#[command(hide = true)]`: still runs; the DEPLOYMENT.md section moves to deploy/kubernetes/enterprise-alpha/README.md (P6) |  |
+| `mcp-gateway ranking`, `mcp-gateway ranking --help`, `mcp-gateway ranking -h`, `mcp-gateway ranking eval`, `mcp-gateway ranking eval --format`, `mcp-gateway ranking eval --help`, `mcp-gateway ranking eval -f`, `mcp-gateway ranking eval -h`, `mcp-gateway ranking eval <FILE>`, `mcp-gateway ranking help`, `mcp-gateway runtime`, `mcp-gateway runtime --help`, `mcp-gateway runtime -h`, `mcp-gateway runtime compile`, `mcp-gateway runtime compile --both`, `mcp-gateway runtime compile --help`, `mcp-gateway runtime compile -h`, `mcp-gateway runtime compile <DESCRIPTOR>`, `mcp-gateway runtime help`, `mcp-gateway trust`, `mcp-gateway trust --help`, `mcp-gateway trust -h`, `mcp-gateway trust generate`, `mcp-gateway trust generate --capabilities`, `mcp-gateway trust generate --format`, `mcp-gateway trust generate --help`, `mcp-gateway trust generate --output`, `mcp-gateway trust generate -C`, `mcp-gateway trust generate -f`, `mcp-gateway trust generate -h`, `mcp-gateway trust generate -o`, `mcp-gateway trust help`, `mcp-gateway trust inspect`, `mcp-gateway trust inspect --capabilities`, `mcp-gateway trust inspect --format`, `mcp-gateway trust inspect --help`, `mcp-gateway trust inspect -C`, `mcp-gateway trust inspect -f`, `mcp-gateway trust inspect -h`, `mcp-gateway trust inspect <NAME>`, `mcp-gateway trust lab`, `mcp-gateway trust lab --help`, `mcp-gateway trust lab -h`, `mcp-gateway trust lab evaluate`, `mcp-gateway trust lab evaluate --active-fixtures`, `mcp-gateway trust lab evaluate --baseline`, `mcp-gateway trust lab evaluate --baseline-id`, `mcp-gateway trust lab evaluate --baseline-registry`, `mcp-gateway trust lab evaluate --capabilities`, `mcp-gateway trust lab evaluate --certification-score`, `mcp-gateway trust lab evaluate --enforce`, `mcp-gateway trust lab evaluate --execute-active-fixtures`, `mcp-gateway trust lab evaluate --format`, `mcp-gateway trust lab evaluate --help`, `mcp-gateway trust lab evaluate --minimum-score`, `mcp-gateway trust lab evaluate --runtime-image`, `mcp-gateway trust lab evaluate --runtime-provider-plan`, `mcp-gateway trust lab evaluate --update-baseline-registry`, `mcp-gateway trust lab evaluate --write-baseline`, `mcp-gateway trust lab evaluate -C`, `mcp-gateway trust lab evaluate -f`, `mcp-gateway trust lab evaluate -h`, `mcp-gateway trust lab evaluate <NAME>`, `mcp-gateway trust lab help`, `mcp-gateway trust validate`, `mcp-gateway trust validate --capabilities`, `mcp-gateway trust validate --file`, `mcp-gateway trust validate --format`, `mcp-gateway trust validate --help`, `mcp-gateway trust validate --strict`, `mcp-gateway trust validate -C`, `mcp-gateway trust validate -f`, `mcp-gateway trust validate -h` | hidden | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it |  |
+### Environment variables
+
+| Item | Class | What 4.0 does | Why |
+|---|---|---|---|
+| `MCP_GATEWAY_CAPABILITIES` | derived | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`flag_and_env_override_the_config`)); see upgrading.d/8044-4.md | env form of `-C/--capabilities`; derive from the config's `capabilities.directories` |
+| `MCP_GATEWAY_KIND_CLUSTER`, `MCP_GATEWAY_KIND_KEEP`, `MCP_GATEWAY_KIND_NAMESPACE`, `MCP_GATEWAY_ROLLOUT_TIMEOUT`, `MCP_GATEWAY_RUNTIME_DOCKER_IMAGE`, `MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE`, `MCP_GATEWAY_RUNTIME_DOCKER_SMOKE` | hidden | test-only; docs say so |  |
+| `MCP_GATEWAY_TEST_CLOCK`, `MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS`, `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN`, `MCP_GATEWAY_TEST_HOME_DIR`, `MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED`, `MCP_GATEWAY_TEST_TRUST_CA` | hidden | test-only |  |
+### HTTP routes
+
+| Item | Class | What 4.0 does | Why |
+|---|---|---|---|
+| `/sse` | hidden | unchanged; listed as a deprecation helper |  |
+| `/ui/api/backends`, `/ui/api/backends/{name}`, `/ui/api/backends/{name}/revive`, `/ui/api/capabilities`, `/ui/api/capabilities/{name}`, `/ui/api/config`, `/ui/api/control-plane`, `/ui/api/control-plane/decisions`, `/ui/api/control-plane/export-status`, `/ui/api/control-plane/grants`, `/ui/api/control-plane/policies`, `/ui/api/costs`, `/ui/api/dashboard-link`, `/ui/api/events/dead-letters`, `/ui/api/events/dead-letters/replay`, `/ui/api/events/dead-letters/{id}/replay`, `/ui/api/import/openapi`, `/ui/api/import/openapi/preview`, `/ui/api/registry`, `/ui/api/registry/search`, `/ui/api/reload`, `/ui/api/status`, `/ui/api/tools` | hidden | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface |  |
+| `/ui/api/events/held` | hidden | admin only, like the dead-letter listing; held webhook subscriptions per type (MIK-8057) |  |
+### Library items
+
+| Item | Class | What 4.0 does | Why |
+|---|---|---|---|
+| `mcp_gateway::Error`, `mcp_gateway::InitializedStore`, `mcp_gateway::MCP_PROTOCOL_VERSION`, `mcp_gateway::MigratedCredential`, `mcp_gateway::OfflineInitError`, `mcp_gateway::OfflineMigrationError`, `mcp_gateway::Result`, `mcp_gateway::attestation`, `mcp_gateway::autotag`, `mcp_gateway::backend`, `mcp_gateway::cache`, `mcp_gateway::capability`, `mcp_gateway::chains`, `mcp_gateway::cli`, `mcp_gateway::config`, `mcp_gateway::config_persistence`, `mcp_gateway::config_reload`, `mcp_gateway::context_compression`, `mcp_gateway::context_integrity`, `mcp_gateway::control_plane`, `mcp_gateway::cost_accounting`, `mcp_gateway::discovery`, `mcp_gateway::error`, `mcp_gateway::failsafe`, `mcp_gateway::gateway`, `mcp_gateway::honest_task_tokens`, `mcp_gateway::idempotency`, `mcp_gateway::identity_grants`, `mcp_gateway::identity_propagation`, `mcp_gateway::initialize_store_offline`, `mcp_gateway::key_server`, `mcp_gateway::kill_switch`, `mcp_gateway::kubernetes`, `mcp_gateway::metrics`, `mcp_gateway::migrate_legacy_credential_offline`, `mcp_gateway::mtls`, `mcp_gateway::oauth`, `mcp_gateway::playbook`, `mcp_gateway::projection`, `mcp_gateway::protocol`, `mcp_gateway::protocol_imports`, `mcp_gateway::protocol_revision_telemetry`, `mcp_gateway::provider`, `mcp_gateway::ranking`, `mcp_gateway::registry`, `mcp_gateway::routing_profile`, `mcp_gateway::runtime`, `mcp_gateway::scheduler`, `mcp_gateway::secret_injection`, `mcp_gateway::secrets`, `mcp_gateway::security`, `mcp_gateway::semantic_search`, `mcp_gateway::setup_tracing`, `mcp_gateway::simhash`, `mcp_gateway::skills`, `mcp_gateway::stats`, `mcp_gateway::tool_profiles`, `mcp_gateway::tool_registry`, `mcp_gateway::tracing_context`, `mcp_gateway::transform`, `mcp_gateway::transition`, `mcp_gateway::transport`, `mcp_gateway::trust`, `mcp_gateway::validator` | hidden | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise |  |
+
+<!-- surface-appendix:end -->

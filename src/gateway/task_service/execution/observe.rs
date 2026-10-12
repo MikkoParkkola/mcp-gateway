@@ -29,6 +29,10 @@ pub(crate) enum CommitStage {
     /// Not a write: a `cancel` lost its revision and is about to retry once at
     /// the one it just re-read. The seam a test uses to move the record again.
     CancelRetry,
+    /// Not a write: a worker holds an upstream handle and is about to make it
+    /// durable. The seam a test uses to cancel the task in that window
+    /// (MIK-7642, r5 T1).
+    BeforeCapture,
 }
 
 /// After a successful durable write at `stage`, before the worker proceeds.
@@ -311,14 +315,29 @@ pub(crate) enum UpstreamAnswer {
     Unavailable,
 }
 
+/// What one upstream `tasks/cancel` attempt established (MIK-8347).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CancelDelivery {
+    /// The peer answered, with a result or a JSON-RPC error: it received the
+    /// cancel, and sending it again changes nothing.
+    Confirmed,
+    /// Sent toward an eligible backend, but it timed out or failed in
+    /// transport. Counts against the row's attempt bound.
+    Failed,
+    /// Not sent: the backend was unclaimed, needed a login, or was still
+    /// starting. Does not count against the attempt bound.
+    NotReady,
+}
+
 /// I5 seam, reduced from r3's `checkpoint`/`query` pair.
 ///
 /// It can name neither a tool nor arguments, so "never resubmit the original
 /// operation" is structural rather than promised: there is no argument through
 /// which an implementation could be handed the original call. Its vocabulary is
-/// one read — `tasks/get` — and `tasks/cancel` and every other mutation are
-/// outside it. `claims` reads configured trust and the peer's own declaration;
-/// an unclaimed backend is never queried at all.
+/// one read — `tasks/get` — plus exactly one write, `tasks/cancel` of a handle
+/// whose task the owner cancelled (MIK-7642, design r5 R4.4). Every other
+/// mutation is outside it. `claims` reads configured trust and the peer's own
+/// declaration; an unclaimed backend is never queried or cancelled at all.
 #[async_trait::async_trait]
 pub(crate) trait UpstreamRecovery: Send + Sync {
     /// Whether this adapter is trusted for `backend` right now. Re-evaluated
@@ -329,6 +348,20 @@ pub(crate) trait UpstreamRecovery: Send + Sync {
     /// One bounded read-only query. No retry loop, no polling across a process
     /// boundary, and no write of any kind upstream.
     async fn query(&self, handle: &UpstreamHandle, deadline: Duration) -> UpstreamAnswer;
+
+    /// The adapter's one write: a single bounded `tasks/cancel` naming
+    /// `handle`. Called only by the holder of the row's cancel claim, which
+    /// retries on what this reports (MIK-8347); the adapter itself never
+    /// retries. Required, with no default: an adapter that silently dropped
+    /// cancels would leave every owner's cancel unsent.
+    async fn cancel(&self, handle: &UpstreamHandle, deadline: Duration) -> CancelDelivery;
+
+    /// Names of backends whose start has just succeeded, published after the
+    /// start lock is released (MIK-8347). `None` when the adapter has no such
+    /// feed; the periodic sweep still retries.
+    fn started(&self) -> Option<tokio::sync::broadcast::Receiver<String>> {
+        None
+    }
 }
 
 #[cfg(test)]

@@ -71,6 +71,10 @@ pub struct Peer {
     submissions: AtomicUsize,
     queries: AtomicUsize,
     handles_asked: Mutex<Vec<String>>,
+    /// The handle named by every upstream `tasks/cancel` (MIK-7642.PR.D).
+    cancels: Mutex<Vec<String>>,
+    /// Notified on every upstream `tasks/cancel`, so a row waits on the event.
+    cancelled: tokio::sync::Notify,
     /// Whether every `tools/call` carried the tasks-extension opt-in.
     optin_seen: AtomicUsize,
     state: Mutex<Upstream>,
@@ -93,6 +97,17 @@ impl Peer {
 
     pub fn handles_asked(&self) -> Vec<String> {
         self.handles_asked.lock().clone()
+    }
+
+    /// Every handle an upstream `tasks/cancel` named, in arrival order.
+    pub fn cancels(&self) -> Vec<String> {
+        self.cancels.lock().clone()
+    }
+
+    /// Wait for an upstream `tasks/cancel` to arrive. A permit stored by one
+    /// that arrived earlier is taken at once.
+    pub async fn cancel_arrived(&self) {
+        self.cancelled.notified().await;
     }
 
     pub fn set(&self, next: Upstream) {
@@ -218,6 +233,20 @@ async fn peer_handler(State(peer): State<Arc<Peer>>, Json(body): Json<Value>) ->
                 }),
             }
         }
+        "tasks/cancel" => {
+            let asked = params
+                .and_then(|params| params.get("taskId"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            peer.cancels.lock().push(asked.clone());
+            peer.cancelled.notify_one();
+            json!({
+                "resultType": "complete", "taskId": asked, "status": "cancelled",
+                "createdAt": "2026-09-08T00:00:00Z", "lastUpdatedAt": "2026-09-08T00:00:00Z",
+                "ttlMs": 900_000,
+            })
+        }
         _ => json!({ "resultType": "complete" }),
     };
     Json(json!({ "jsonrpc": "2.0", "id": id, "result": result })).into_response()
@@ -240,6 +269,8 @@ pub async fn serve_peer(initial: Upstream) -> PeerGuard {
         submissions: AtomicUsize::new(0),
         queries: AtomicUsize::new(0),
         handles_asked: Mutex::new(Vec::new()),
+        cancels: Mutex::new(Vec::new()),
+        cancelled: tokio::sync::Notify::new(),
         optin_seen: AtomicUsize::new(0),
         state: Mutex::new(initial),
         payload: Mutex::new(json!({
@@ -594,6 +625,23 @@ impl Gateway {
         );
     }
 
+    /// [`Self::terminate`], then insist the process has exited: a count read
+    /// after this is final for everything the gateway sent (MIK-7642).
+    pub async fn terminate_confirmed(&mut self) {
+        let pid = self.child.id().expect("the gateway is still running");
+        let signalled = tokio::process::Command::new("kill")
+            .arg("-TERM")
+            .arg(pid.to_string())
+            .status()
+            .await
+            .expect("kill runs");
+        assert!(signalled.success(), "SIGTERM reached the gateway");
+        tokio::time::timeout(EXIT_BOUND, self.child.wait())
+            .await
+            .expect("the gateway exits within the bound")
+            .expect("the gateway's exit is observed");
+    }
+
     pub async fn terminate(&mut self) {
         if let Some(pid) = self.child.id() {
             let _ = tokio::process::Command::new("kill")
@@ -642,6 +690,11 @@ pub fn task_invoke(id: i64, key: &str) -> Value {
 
 pub fn tasks_get(id: i64, task_id: &str) -> Value {
     modern(id, "tasks/get", json!({ "taskId": task_id }))
+}
+
+/// The owner's cancel of the gateway task (MIK-7642.PR.D).
+pub fn tasks_cancel(id: i64, task_id: &str) -> Value {
+    modern(id, "tasks/cancel", json!({ "taskId": task_id }))
 }
 
 /// The same read, carrying a fresh attestation token in the namespaced field

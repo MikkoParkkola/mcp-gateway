@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Grade each Critical function's own line coverage (MIK-7324.COV.3).
 
-Reads the function inventory (docs/release/v4.0.0-critical-functions.tsv) and
+Reads the function inventory (docs/release/v4.0.0-critical-functions.tsv plus its
+docs/release/inventory.d/*.critical.tsv fragments, through inventory_ledger.py) and
 one or more lcov reports from `cargo llvm-cov report --lcov`. A function's
 lines are the `DA:` records from its `fn` line to the brace that closes its
 body; its coverage is the share of those with a non-zero count, over the union
@@ -26,14 +27,18 @@ spuriously but never pass an unrun call. Compute the value into a local before
 the macro and pass the local.
 
 Exit status: 0 when every Critical row clears the floor, 1 otherwise. A row
-whose function is gone, or that no given report measured, fails.
+whose function is gone, or that no given report measured, fails. 3 when a
+given report is absent, empty, unreadable or unparseable: nothing was graded
+(MIK-8265).
 """
 
 import argparse
-import csv
 import re
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import inventory_ledger as ledger  # noqa: E402
 
 FLOOR = 95.0
 
@@ -177,9 +182,46 @@ def macro_names(root):
     return SAFE_MACROS - local
 
 
-def head_has_call(raw, safe=SAFE_MACROS):
+# MIK-8327: a line that is only an optional `let <pattern> =` and a
+# `[::]tokio::select! {` head holds no call: each arm is graded on its own
+# line, and a binding pattern runs no code. Such a line is graded by its
+# count, so a reached head is hit and an unreached one missed. Anything else
+# on the line (`biased;`, an arm, a call, a type annotation, a comment,
+# another path, a bare `select!`) keeps the MIK-7725 rule. The spelling only
+# names tokio's macro if nothing in the crate can rebind it, so the exemption
+# is off for the whole grade when `src/` holds a `mod tokio`, an `as tokio`,
+# an `as select` or a `macro_rules! select`, or Cargo.toml renames the tokio
+# dependency (`package =`): any of those could make the head a wrapper whose
+# expansion runs code on the head line's count.
+_BINDING = r"(?:mut\s+)?[A-Za-z_]\w*"
+_PATTERN = r"(?:" + _BINDING + r"|\(\s*" + _BINDING + r"(?:\s*,\s*" + _BINDING + r")*\s*,?\s*\))"
+SELECT_HEAD = re.compile(
+    r"^\s*(?:let\s+" + _PATTERN + r"\s*=\s*)?(?:::)?tokio::select!\s*\{\s*$"
+)
+_REBINDS_SELECT = re.compile(
+    r"(?<!\w)mod\s+tokio\b|\bas\s+(?:tokio|select)\b|(?<!\w)macro_rules" + _GAP + r"!" + _GAP + r"select\b",
+    re.S,
+)
+# An inline `tokio = { package = .. }`, or any `[...dependencies.tokio]` table
+# (which could carry a `package` key on a later line): either fails closed.
+_TOKIO_RENAMED = re.compile(
+    r"(?m)^\s*tokio\s*=\s*\{[^}\n]*\bpackage\s*=|^\s*\[[^\]\n]*dependencies\.tokio\s*\]"
+)
+
+
+def select_head_trusted(root):
+    """Whether `tokio::select!` can only name tokio's macro in this crate."""
+    if any(_REBINDS_SELECT.search(path.read_text()) for path in (Path(root) / "src").rglob("*.rs")):
+        return False
+    cargo = Path(root) / "Cargo.toml"
+    return not (cargo.exists() and _TOKIO_RENAMED.search(cargo.read_text()))
+
+
+def head_has_call(raw, safe=SAFE_MACROS, select_trusted=False):
     """True when this raw source line invokes a macro outside `safe` (or names
     a tracing level) but is not, as a whole, a plain head line (see above)."""
+    if select_trusted and SELECT_HEAD.match(raw):
+        return False
     unsafe = TRACING_NAME.search(raw) or any(
         not is_safe_macro(prefix, name, safe) and not (prefix == "" and name in _KEYWORDS)
         for prefix, name in _ANY_MACRO.findall(raw)
@@ -274,28 +316,59 @@ def repo_relative(source, root):
     return None
 
 
+# Exit status when an input report is absent: neither a pass (0), a graded
+# FAIL (1) nor a usage error (2), so a caller cannot read it as a grade (MIK-8265).
+INPUT_MISSING = 3
+
+
+class MissingInput(Exception):
+    """An lcov report the grade was given is absent, empty, unreadable or
+    unparseable, as
+    when a platform's coverage job uploaded none. Nothing is graded from a
+    partial set: an empty report would grade as the other platform alone."""
+
+    def __init__(self, path):
+        super().__init__(f"input missing: {path}")
+        self.path = str(path)
+
+
 def read_lcov(paths, root):
+    texts = []
+    for path in paths:
+        try:
+            text = Path(path).read_text() if Path(path).is_file() else ""
+        except OSError:
+            text = ""
+        if not text.strip():
+            raise MissingInput(path)
+        texts.append(text)
     hits, current = {}, None
-    for raw in (line for path in paths for line in Path(path).read_text().splitlines()):
-        if raw.startswith("SF:"):
-            current = repo_relative(raw[3:], root)
-            if current:
-                hits.setdefault(current, {})
-        elif raw.startswith("DA:") and current:
-            number, count = raw[3:].split(",")[:2]
-            line = int(number)
-            hits[current][line] = hits[current].get(line, 0) + int(count)
+    for path, text in zip(paths, texts):
+        for raw in text.splitlines():
+            if raw.startswith("SF:"):
+                current = repo_relative(raw[3:], root)
+                if current:
+                    hits.setdefault(current, {})
+            elif raw.startswith("DA:") and current:
+                try:
+                    number, count = raw[3:].split(",")[:2]
+                    line, count = int(number), int(count)
+                except ValueError:
+                    raise MissingInput(path) from None  # unparseable: a corrupt report
+                hits[current][line] = hits[current].get(line, 0) + count
     return hits
 
 
 def read_inventory(path):
-    rows = [line for line in Path(path).read_text().splitlines() if not line.startswith("#")]
-    return list(csv.DictReader(rows, delimiter="\t"))
+    """The critical ledger: `path` plus the `*.critical.tsv` fragments beside it,
+    through inventory_ledger.py (MIK-8279). Raises LedgerError on any bad row."""
+    return ledger.load_files(ledger.CRITICAL, Path(path))
 
 
 def grade(root, inventory, lcovs):
     hits = read_lcov(lcovs, root)
     names = macro_names(root)
+    select_trusted = select_head_trusted(root)
     results = [
         ("INDIRECT", {"path": what.split(":", 1)[0], "fn": what.split(": ", 1)[1], "occurrence": "-"}, None, None, [])
         for what in tracing_indirections(root)
@@ -317,7 +390,7 @@ def grade(root, inventory, lcovs):
         unverifiable = []
         split = split_call_lines(lines, lo, hi, names)
         for n in range(lo, hi + 1):
-            if n in counts and (n in split or head_has_call(lines[n - 1], names)):
+            if n in counts and (n in split or head_has_call(lines[n - 1], names, select_trusted)):
                 unverifiable.append(f"{row['path']}:{n} (head count {counts[n]})")
                 counts[n] = 0
         excluded = []
@@ -340,10 +413,29 @@ def main(argv=None):
     parser.add_argument("--inventory", default="docs/release/v4.0.0-critical-functions.tsv")
     parser.add_argument("--lcov", action="append", required=True, help="repeat per platform run")
     parser.add_argument("--root", default=".")
+    parser.add_argument(
+        "--scope",
+        choices=("all-platforms", "linux-only"),
+        default="all-platforms",
+        help="linux-only: the reports cover Linux alone (a pull request's CI grade), so a"
+        " row with no measured line, a function compiled only on Windows, does not fail;"
+        " the release-line grade uses all-platforms (MIK-8217)",
+    )
     args = parser.parse_args(argv)
 
-    failed = graded = 0
-    for result in grade(args.root, args.inventory, args.lcov):
+    failed = graded = not_here = 0
+    try:
+        results = grade(args.root, args.inventory, args.lcov)
+    except ledger.LedgerError as error:
+        for problem in error.problems:
+            print(f"inventory: {problem}")
+        print("the inventory could not be read; nothing was graded")
+        return 1
+    except MissingInput as missing:
+        print(missing)
+        print("NOT GRADED: a coverage report is missing, so no Critical row was graded")
+        return INPUT_MISSING
+    for result in results:
         status, row = result[0], result[1]
         # An INDIRECT result is a diagnostic about the tree, not an inventory row.
         graded += status != "INDIRECT"
@@ -356,12 +448,17 @@ def main(argv=None):
             for line in unverifiable:
                 print(f"  unverifiable tracing head line {line}: graded missed")
             failed += status == "BELOW"
+        elif status == "UNMEASURED" and args.scope == "linux-only":
+            print(f"UNMEASURED-HERE\t-\t-\t{where}")
+            not_here += 1
         else:
             print(f"{status}\t-\t-\t{where}")
             failed += 1
     # The Critical count lives here, read from the inventory, and nowhere
     # else (MIK-8195): a count copied into a doc goes stale with every wave.
     print(f"critical rows graded: {graded}")
+    if args.scope == "linux-only":
+        print(f"critical rows not measured in this scope: {not_here}")
     print(f"critical rows failing: {failed}")
     return 1 if failed else 0
 

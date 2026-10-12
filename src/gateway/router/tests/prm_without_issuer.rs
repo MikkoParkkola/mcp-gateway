@@ -90,3 +90,17 @@ async fn a_delegated_issuer_is_still_advertised() {
         StatusCode::OK
     );
 }
+
+/// MIK-8195: an issuer to name but no origin to name it from (a wildcard
+/// bind, no `public_url`) answers 503: the document cannot be built, and an
+/// unbuildable one is never published half-filled.
+#[tokio::test]
+async fn an_issuer_with_no_origin_answers_503() {
+    let mut config = delegated(&["https://idp.example"]);
+    config.server.public_url = None;
+    config.server.host = "0.0.0.0".to_string();
+    assert_eq!(
+        Box::pin(authed(config)).await,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+}

@@ -14,7 +14,9 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use crate::gateway::task_service::{UpstreamAnswer, UpstreamHandle, UpstreamRecovery};
+use crate::gateway::task_service::{
+    CancelDelivery, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
+};
 use crate::security::TransparencyLogger;
 use crate::security::audit::AuditFailurePolicy;
 use crate::security::firewall::tenant_guard::TenantGuardConfig;
@@ -166,6 +168,11 @@ impl Recovery {
 
 #[async_trait::async_trait]
 impl UpstreamRecovery for Recovery {
+    /// This suite asserts nothing about upstream cancels (MIK-7642 PR.D rows do).
+    async fn cancel(&self, _handle: &UpstreamHandle, _deadline: Duration) -> CancelDelivery {
+        CancelDelivery::Confirmed
+    }
+
     async fn claims(&self, backend: &str) -> bool {
         backend == BACKEND
     }
@@ -285,16 +292,19 @@ async fn fixture(setup: Setup, path: Path) -> Fixture {
     let mut meta =
         Arc::try_unwrap(app.meta_mcp).unwrap_or_else(|_| panic!("fixture meta is exclusive"));
     meta.enable_transparency_log(Arc::clone(&log));
-    meta.set_firewall(Some(Arc::new(Firewall::from_config(
-        FirewallConfig {
-            tenant_guard: TenantGuardConfig {
-                arg_keys: vec!["customer_id".to_string()],
-                ..TenantGuardConfig::default()
+    meta.set_firewall(Some(Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                tenant_guard: TenantGuardConfig {
+                    arg_keys: vec!["customer_id".to_string()],
+                    ..TenantGuardConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ))));
+            None,
+        )
+        .with_continuations(meta.continuation()),
+    )));
     if setup.refusing {
         meta.enable_response_inspection_action_mode();
     }

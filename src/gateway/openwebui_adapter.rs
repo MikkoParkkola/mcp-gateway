@@ -380,10 +380,6 @@ fn verify(
         return Err(Refusal::Invalid("signature or claim validation failed"));
     }
 
-    if claims.sub.is_empty() {
-        return Err(Refusal::Invalid("empty subject"));
-    }
-
     // Lifetime is bounded from the token's OWN claims, so an upstream cannot
     // mint a year-long assertion that stays valid if it leaks. `exp <= iat` is
     // rejected as incoherent rather than treated as an already-expired token.
@@ -410,16 +406,17 @@ fn verify(
         return Err(Refusal::Invalid("issued in the future"));
     }
 
-    Ok(VerifiedIdentity {
-        subject: claims.sub,
-        // Not carried: an adapter asserts a subject, and an email or group list
-        // taken from it would flow into role mapping as if an IdP had verified
-        // it.
-        email: String::new(),
-        name: None,
-        groups: Vec::new(),
-        issuer: namespaced_issuer(&runtime.installation_id),
-    })
+    // An email or group list is not carried: an adapter asserts a subject,
+    // and either taken from it would flow into role mapping as if an IdP had
+    // verified it. An empty subject names nobody (MIK-8286).
+    VerifiedIdentity::checked(
+        namespaced_issuer(&runtime.installation_id),
+        claims.sub,
+        String::new(),
+        None,
+        Vec::new(),
+    )
+    .ok_or(Refusal::Invalid("empty subject"))
 }
 
 /// The issuer this identity is recorded under.
@@ -500,6 +497,20 @@ mod tests {
             &EncodingKey::from_secret(secret),
         )
         .unwrap()
+    }
+
+    /// MIK-8286 R6 (pin): an assertion whose subject is empty names no one
+    /// and is refused (the adapter answers 403 through `refuse`), now through
+    /// `VerifiedIdentity::checked` rather than a check of its own. Mutant:
+    /// the emptiness test in `names_someone` removed.
+    #[test]
+    fn an_assertion_naming_no_one_is_refused() {
+        let key = DecodingKey::from_secret(SECRET);
+        let nameless = token(&claims(""), Algorithm::HS256, SECRET);
+        assert!(matches!(
+            verify(&runtime("desk"), &key, &nameless),
+            Err(Refusal::Invalid("empty subject"))
+        ));
     }
 
     #[test]

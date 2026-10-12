@@ -78,12 +78,7 @@ fn records_for_session(session_id: &str, requests: &[serde_json::Value]) -> Vec<
     // cached interest at `sometimes`, so the thread-local subscriber
     // below decides each event. Interest, not delivery: this one
     // discards, `with_default` still owns what the test sees.
-    static INTEREST: std::sync::Once = std::sync::Once::new();
-    INTEREST.call_once(|| {
-        let _ = tracing::subscriber::set_global_default(
-            Registry::default().with(tracing::level_filters::LevelFilter::DEBUG),
-        );
-    });
+    crate::test_log_capture::keep_interest_open();
 
     let captured = Arc::new(Mutex::new(Vec::new()));
     let subscriber = Registry::default()

@@ -158,15 +158,47 @@ async fn a_completed_exchange_releases_its_capacity() {
     // started until its deadline passes, so a healthy gateway refuses new
     // elicitations because of ones that finished long ago.
     let table = InFlight::new("gw-1", 1);
-    let key = table.hold("weather", 9_999, 0).await.expect("capacity");
-    assert!(table.hold("weather", 9_999, 0).await.is_none());
+    let key = table
+        .hold(
+            "weather",
+            &mcp_gateway::protocol::continuation::QuotaKey::new(
+                mcp_gateway::protocol::continuation::QuotaSource::KeyName("test"),
+            ),
+            9_999,
+            0,
+        )
+        .await
+        .expect("capacity");
+    assert!(
+        table
+            .hold(
+                "weather",
+                &mcp_gateway::protocol::continuation::QuotaKey::new(
+                    mcp_gateway::protocol::continuation::QuotaSource::KeyName("test")
+                ),
+                9_999,
+                0
+            )
+            .await
+            .is_none()
+    );
 
     assert!(
         table.complete(&key, 0).await,
         "completing must report the release"
     );
     assert!(
-        table.hold("weather", 9_999, 0).await.is_some(),
+        table
+            .hold(
+                "weather",
+                &mcp_gateway::protocol::continuation::QuotaKey::new(
+                    mcp_gateway::protocol::continuation::QuotaSource::KeyName("test")
+                ),
+                9_999,
+                0
+            )
+            .await
+            .is_some(),
         "a finished exchange must return its slot"
     );
     assert!(
@@ -178,7 +210,17 @@ async fn a_completed_exchange_releases_its_capacity() {
 #[tokio::test]
 async fn a_completed_exchange_is_gone_for_routing() {
     let table = InFlight::new("gw-1", 4);
-    let key = table.hold("weather", 9_999, 0).await.expect("capacity");
+    let key = table
+        .hold(
+            "weather",
+            &mcp_gateway::protocol::continuation::QuotaKey::new(
+                mcp_gateway::protocol::continuation::QuotaSource::KeyName("test"),
+            ),
+            9_999,
+            0,
+        )
+        .await
+        .expect("capacity");
     assert!(table.complete(&key, 0).await);
 
     assert!(
@@ -199,7 +241,17 @@ async fn routing_waits_for_the_lock_rather_than_reporting_the_exchange_gone() {
     use std::sync::Arc;
 
     let table = Arc::new(InFlight::new("gw-1", 4));
-    let key = table.hold("weather", 9_999, 0).await.expect("capacity");
+    let key = table
+        .hold(
+            "weather",
+            &mcp_gateway::protocol::continuation::QuotaKey::new(
+                mcp_gateway::protocol::continuation::QuotaSource::KeyName("test"),
+            ),
+            9_999,
+            0,
+        )
+        .await
+        .expect("capacity");
 
     // Hammer routing while reclamation runs concurrently: `hold` takes the same
     // lock, so a `try_lock` implementation reports `Gone` for an exchange
@@ -208,7 +260,16 @@ async fn routing_waits_for_the_lock_rather_than_reporting_the_exchange_gone() {
         let table = Arc::clone(&table);
         tokio::spawn(async move {
             for _ in 0..500 {
-                table.hold("weather", 9_999, 0).await;
+                table
+                    .hold(
+                        "weather",
+                        &mcp_gateway::protocol::continuation::QuotaKey::new(
+                            mcp_gateway::protocol::continuation::QuotaSource::KeyName("test"),
+                        ),
+                        9_999,
+                        0,
+                    )
+                    .await;
                 tokio::task::yield_now().await;
             }
         })

@@ -24,6 +24,7 @@ which PR merged first.
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import re
 import subprocess
@@ -40,8 +41,9 @@ KEYS = ("change", "action", "notice")
 
 
 REQUIRED = ("change", "action")
-MARKER = "**Startup:** "
-NOTICE_MARKER = MARKER + "prints a notice"
+# The startup marker's clauses and test vectors, shared with tests/upgrading_summary_rows.rs.
+GRAMMAR = json.loads(pathlib.Path(__file__).with_name("upgrading-startup-grammar.json").read_text(encoding="utf-8"))
+MARKER = GRAMMAR["marker"]
 ROW = re.compile(r"^\|\s*(\d+)\s*\|")
 SECTION = re.compile(r"^## (\d+)\. (.*)$")
 
@@ -82,6 +84,32 @@ def name_errors(names: list[str]) -> list[str]:
         for n in names
         if n not in NOT_FRAGMENTS and not NAME.match(n)
     ]
+
+
+def parse_marker(text: str) -> list[dict]:
+    """Parse a marker's text (after `MARKER`) into its clauses: the rules of
+    `parse_marker` in tests/upgrading_summary_rows.rs. A ValueError message
+    starts with the reason token the grammar file names."""
+    clauses, last = [], None
+    for part in text.split("; "):
+        clause = next((c for c in GRAMMAR["clauses"] if part.startswith(c["words"])), None)
+        if clause is None:
+            raise ValueError(f"unknown_clause: unrecognised clause {part!r}")
+        rest = part[len(clause["words"]) :]
+        if rest.startswith(", "):
+            # Rust's `trim` strips Unicode White_Space; Python's `isspace` also
+            # counts U+001C..U+001F, which Rust keeps as text.
+            if all(c.isspace() and c not in "\x1c\x1d\x1e\x1f" for c in rest[2:]):
+                raise ValueError(f"empty_detail: empty text after the comma in {part!r}")
+        elif rest:
+            raise ValueError(f"detail_needs_comma: text must follow a comma in {part!r}")
+        if ";" in part:
+            raise ValueError(f"semicolon_in_text: free text may not contain ';': {part!r}")
+        if last is not None and clause["place"] <= last:
+            raise ValueError(f"order: clause out of order or repeated: {part!r}")
+        last = clause["place"]
+        clauses.append(clause)
+    return clauses
 
 
 def parse(name: str, text: str) -> tuple[Fragment | None, list[str]]:
@@ -125,10 +153,16 @@ def parse(name: str, text: str) -> tuple[Fragment | None, list[str]]:
         body.pop()
     if not body or not body[0].startswith(MARKER):
         errors.append(f"{where}: `{MARKER.strip()}` must be the first line after the title")
-    elif body[0].startswith(NOTICE_MARKER) != ("notice" in fields):
-        errors.append(
-            f"{where}: a `prints a notice` marker needs a `notice:` phrase in the front matter, and only it"
-        )
+    else:
+        try:
+            clauses = parse_marker(body[0][len(MARKER) :])
+        except ValueError as e:
+            errors.append(f"{where}: bad `{MARKER.strip()}` marker, {e} (rules: upgrading-startup-grammar.json)")
+        else:
+            if any(c.get("needs_notice_field") for c in clauses) != ("notice" in fields):
+                errors.append(
+                    f"{where}: a `prints a notice` marker needs a `notice:` phrase in the front matter, and only it"
+                )
     if errors:
         return None, errors
     return Fragment(name, fields["change"], fields["action"], title, body, fields.get("notice")), []
@@ -165,6 +199,11 @@ def _parse_all(fragments: dict[str, str]) -> list[Fragment]:
     if errors:
         raise ValueError("\n".join(errors))
     return parsed
+
+
+def fragment_numbers(frozen_max: int, names) -> dict[str, int]:
+    """The item number `assemble` gives each fragment: file-name order from frozen_max + 1."""
+    return {n: frozen_max + 1 + i for i, n in enumerate(sorted(names, key=sort_key))}
 
 
 def assemble(doc: str, frozen_max: int, fragments: dict[str, str]) -> tuple[str, int]:
@@ -363,11 +402,25 @@ def main(argv: list[str]) -> int:
         return 1 if errors else 0
 
     result, top = assemble(doc, frozen_max, texts)
+    # MIK-8044.SURF.6: surface rows that cite a fragment now cite its number,
+    # and the generated appendix is rebuilt from the rewritten inventory.
+    import surface_upgrading
+
+    inventory_path = ROOT / "docs/design/surface-4.0.md"
+    inventory = None
+    if inventory_path.is_file():
+        inventory = surface_upgrading.rewrite_citations(
+            inventory_path.read_text(encoding="utf-8"), fragment_numbers(frozen_max, texts)
+        )
+    if inventory is not None and surface_upgrading.START in result:
+        result = surface_upgrading.write(result, surface_upgrading.render(surface_upgrading.rows_of(inventory)))
     if args.dry_run:
         sys.stdout.write(result)
         return 0
     if texts:
         (ROOT / DOC).write_text(result, encoding="utf-8")
+        if inventory is not None:
+            inventory_path.write_text(inventory, encoding="utf-8")
         (frag_dir / FROZEN_MAX).write_text(f"{top}\n", encoding="utf-8")
         for n in texts:
             (frag_dir / n).unlink()

@@ -14,7 +14,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
@@ -136,18 +135,22 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
     // calls without a restart (MIK-8052), and a repaired row is served again
     // (MIK-8121). It never fails the sweep.
     executor.reread_sealed().await;
+    // A clock before 1970 cannot tell what has aged out: the pass deletes and
+    // cancels nothing, and the next one runs once the clock reads (MIK-8202).
+    let Ok(now) = service.store.now() else {
+        tracing::warn!("clock before 1970: task expiry pass skipped");
+        return Ok(());
+    };
     // The deletion snapshot is taken FIRST, so a round cancelled below is
     // deleted by a later pass, never in the same one.
-    let candidates = service.store.expired_candidates(Utc::now());
+    let candidates = service.store.expired_candidates(now);
     // An open input round past its TTL is cancelled here, continuation and
     // all; a later pass deletes it like any terminal row after retention.
     let mut round_failure = None;
-    for (id, revision, owner_digest, closed) in
-        service.store.expired_input_rounds(service.store.now())
-    {
+    for (id, revision, owner_digest, closed) in service.store.expired_input_rounds(now) {
         // #2429: one write that names why the round closed and drops it.
         let cancelled = executor
-            .close_round(&owner_digest, &id, revision, closed.reason())
+            .close_round(&owner_digest, &id, revision, closed.reason(), now)
             .await;
         let Err(failure) = cancelled else {
             continue;
@@ -169,13 +172,38 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
         }
     }
     let mut outcome = round_failure.map_or(Ok(()), Err);
+    // Rows whose upstream cancel is still unconfirmed: deleting one ends its
+    // retries, which an operator must hear (MIK-8347).
+    let pending: std::collections::HashMap<String, (String, String)> = service
+        .store
+        .pending_cancels(None, i64::MAX)
+        .into_iter()
+        .filter_map(|(owner, id)| {
+            let send = service.store.pending_cancel(&owner, &id)?;
+            let backend = send.backend.unwrap_or_default();
+            Some((id, (backend, send.handle)))
+        })
+        .collect();
     for (id, revision) in candidates {
         match service
             .store
             .expire(&id, revision, service.admission_arc())
             .await
         {
-            Ok(()) => tracing::debug!(task_id = %id, "expired task record deleted"),
+            Ok(()) => {
+                service.cancel_sends.release_row(&id);
+                if let Some((backend, handle)) = pending.get(&id) {
+                    let (backend, handle) = (backend.as_str(), handle.as_str());
+                    tracing::error!(
+                        task_id = %id,
+                        backend,
+                        handle,
+                        reason = "expired",
+                        "upstream tasks/cancel given up; the upstream job may still be running"
+                    );
+                }
+                tracing::debug!(task_id = %id, "expired task record deleted");
+            }
             // Terminal is absorbing, so a candidate cannot legitimately be
             // running by the time it is deleted; if one is, it is not expiry's
             // to end and the row simply stays.
@@ -188,5 +216,8 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
             }
         }
     }
+    // Due upstream cancels are retried detached (MIK-8347): the sweep never
+    // awaits a peer, so a stop is never held by one.
+    drop(executor.flush_pending_cancels(None));
     outcome
 }

@@ -1,0 +1,172 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! MIK-8137 b1: the chokepoint's own rows, at the meta layer (gpt i1 on #3688).
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use crate::gateway::auth::QuotaPrincipal;
+use crate::gateway::authz::{
+    AllowAll, AuthorizationError, Decision, ToolAuthorizer, ToolTarget, Transport,
+};
+use crate::gateway::meta_mcp::MetaMcp;
+use crate::gateway::meta_mcp::authz_tests::{counted_backend, ctx, invoke_args};
+
+/// Allows the first `allowed` decisions, then refuses: a grant revoked after
+/// the call was authorized and before it is sent.
+struct RevokedAfter {
+    allowed: usize,
+    decided: AtomicUsize,
+}
+
+impl ToolAuthorizer for RevokedAfter {
+    fn quota_principal(&self) -> Option<&QuotaPrincipal> {
+        None
+    }
+    fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
+        if self.decided.fetch_add(1, Ordering::SeqCst) < self.allowed {
+            return AllowAll.decide(target);
+        }
+        Decision::of(Err(AuthorizationError::forbidden(
+            -32003,
+            "grant revoked".to_owned(),
+        )))
+    }
+    fn admits_backend(&self, _server: &str) -> bool {
+        true
+    }
+    fn transport(&self) -> Transport {
+        AllowAll.transport()
+    }
+    fn caller_name(&self) -> Option<&str> {
+        None
+    }
+}
+
+/// F5: a grant revoked between the call's authorization and its send is
+/// refused at the chokepoint: the decision taken at admission is not reused,
+/// and the backend is never reached. Control: the same call with the grant
+/// kept is sent. Mutant: the chokepoint skipping `recheck_target`.
+#[tokio::test]
+async fn f5_a_grant_revoked_before_the_send_is_refused_at_dispatch() {
+    let (registry, calls) = counted_backend("alpha");
+    let meta = MetaMcp::new(registry);
+    let kept = RevokedAfter {
+        allowed: usize::MAX,
+        decided: AtomicUsize::new(0),
+    };
+    let sent = meta
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&kept))
+        .await;
+    assert!(sent.is_ok(), "control: a kept grant is sent: {sent:?}");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "control: the backend was reached"
+    );
+
+    let revoked = RevokedAfter {
+        allowed: 1,
+        decided: AtomicUsize::new(0),
+    };
+    let refused = meta
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&revoked))
+        .await;
+    assert!(
+        matches!(refused, Err(crate::Error::Forbidden { .. })),
+        "refused at the chokepoint: {refused:?}"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the revoked call reached its backend"
+    );
+    assert_eq!(
+        revoked.decided.load(Ordering::SeqCst),
+        2,
+        "decided at admission and again at dispatch"
+    );
+}
+
+/// R-choke-fresh (MIK-8353 3a, gpt code r1): a signed call whose grant is
+/// revoked before the send is refused at the chokepoint with nothing acted
+/// (the schema warm, no mint, no continuation), so it keeps its witness and
+/// gives the nonce back: a later call admits the same nonce. The control for
+/// K-choke-consume. Mutants: mKeep, mCarryDrop.
+#[tokio::test]
+async fn a_chokepoint_refusal_with_nothing_acted_gives_the_nonce_back() {
+    use crate::gateway::meta_mcp::refund_witness::RefundWitness;
+    use crate::gateway::meta_mcp::signing::{NONCE_META, SigningInvocationContext, SigningScope};
+    const NONCE: &str = "choke-fresh-nonce";
+    let signed = |name: &str, arguments: &serde_json::Value| {
+        let mut request = serde_json::json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": {"name": name, "arguments": arguments, "_meta": {(NONCE_META): NONCE}}});
+        let context =
+            SigningInvocationContext::capture_scoped(&mut request, SigningScope::EveryToolCall);
+        (context, request["params"]["arguments"].clone())
+    };
+    let (registry, calls) = counted_backend("alpha");
+    let mut meta = MetaMcp::new(registry);
+    meta.enable_message_signing(
+        crate::security::message_signing::MessageSigner::new(
+            b"choke-fresh-key-0123456789abcdef".to_vec(),
+            None,
+            "k1".into(),
+        ),
+        std::time::Duration::from_secs(300),
+        true,
+    );
+    let warm = meta
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll))
+        .await;
+    assert!(warm.is_ok(), "premise: the warm-up was sent: {warm:?}");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    let revoked = RevokedAfter {
+        allowed: 1,
+        decided: AtomicUsize::new(0),
+    };
+    let mut caller = ctx(&revoked);
+    let (mut signing, arguments) = signed("gateway_invoke", &invoke_args("alpha", "read"));
+    meta.prepare_signing_for_call(&mut signing, "gateway_invoke", &arguments, None, &caller)
+        .expect("the refusal is the chokepoint's");
+    assert!(
+        !signing.awaits_admission(),
+        "premise: the nonce was admitted"
+    );
+    // What admission leaves on the context on both adapters.
+    signing.keep_witness(RefundWitness::at_capture());
+    caller.signing = Some(&signing);
+    let response = Box::pin(meta.handle_tools_call(
+        crate::protocol::RequestId::Number(7),
+        "gateway_invoke",
+        arguments,
+        None,
+        caller,
+    ))
+    .await;
+    let wire = serde_json::to_value(&response).expect("a response serializes");
+    assert!(
+        wire.to_string().contains("grant revoked"),
+        "refused at the chokepoint: {wire}"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the backend was not reached"
+    );
+
+    let (mut later, arguments) = signed("gateway_list_servers", &serde_json::json!({}));
+    let permitted = ctx(&AllowAll);
+    meta.prepare_signing_for_call(
+        &mut later,
+        "gateway_list_servers",
+        &arguments,
+        None,
+        &permitted,
+    )
+    .expect("the nonce was given back");
+    assert!(
+        !later.awaits_admission(),
+        "the nonce was kept though nothing acted: {wire}"
+    );
+}

@@ -198,7 +198,12 @@ fn surfaced_tool_calls_resolve_to_backend_authorization_target() {
     ]);
 
     let arguments = json!({"x": 1});
-    let targets = backend_tool_targets_for_call(&meta, "pinned_tool", &arguments);
+    let targets = backend_tool_targets_for_call(
+        &meta,
+        "pinned_tool",
+        &arguments,
+        crate::gateway::meta_mcp::visible::TargetView::Dispatched,
+    );
 
     assert_eq!(targets.len(), 1);
     assert_eq!(targets[0].server, "demo");

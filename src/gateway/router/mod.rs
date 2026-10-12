@@ -36,12 +36,14 @@ mod authorization;
 pub use authorization::CallerStanding;
 pub(crate) use authorization::{
     ADMIN_META_TOOLS, OwnedRouterAuthorizer, RouterAuthorizer, backend_tool_targets_for_call,
+    sanitize_exempt,
 };
 mod backend_handlers;
 mod handlers;
 mod hardened_elicitation;
 mod hardened_identity;
 mod identity;
+pub(crate) mod inflight_calls;
 mod meta_refusal_audit;
 // Re-exported rather than widening `mod handlers` itself, so exactly one item
 // becomes crate-visible. The `MIK-7334.CATALOGUE.1` C10a/C10b cells drive the
@@ -71,18 +73,32 @@ mod audit_degraded_tests;
 mod body_limit_tests;
 #[cfg(test)]
 mod callback_admin_denial_tests;
+#[cfg(test)]
+mod chokepoint_direct_tests;
+#[cfg(test)]
+mod chokepoint_tests;
+/// MIK-8202 P2: task creation on a clock before 1970.
+#[cfg(test)]
+mod clock_p2_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod collusion_direct_tests;
 #[cfg(test)]
 mod continuation_instance_tests;
+/// MIK-8202 P2: the control-plane grant display on a clock before 1970.
+#[cfg(all(test, feature = "webui"))]
+mod control_plane_grant_clock_tests;
 #[cfg(test)]
 mod direct_audit_tests;
+#[cfg(test)]
+mod direct_cache_guard_tests;
 #[cfg(test)]
 mod direct_capability_tests;
 #[cfg(test)]
 mod direct_continuation_gate_tests;
 #[cfg(test)]
 mod direct_continuation_tests;
+#[cfg(test)]
+mod direct_explicit_cancel_tests;
 #[cfg(test)]
 mod direct_guards_fixture;
 #[cfg(all(test, feature = "a2a", feature = "firewall"))]
@@ -93,6 +109,8 @@ mod direct_guards_tests;
 mod direct_list_scope_tests;
 #[cfg(test)]
 mod direct_modern_shape_tests;
+#[cfg(test)]
+mod direct_nonce_witness_tests;
 #[cfg(test)]
 mod direct_notification_credential_tests;
 #[cfg(test)]
@@ -114,6 +132,8 @@ mod dispatch_parity_tests;
 mod e5_dashboard_session_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod egress_matrix_tests;
+#[cfg(test)]
+mod era_refusal_http_tests;
 #[cfg(all(test, feature = "a2a", feature = "firewall"))]
 mod errscan_a2a_tests;
 #[cfg(test)]
@@ -130,18 +150,50 @@ mod hardened_identity_tests;
 mod identity_parity_tests;
 mod judged_answer;
 #[cfg(test)]
+mod mcp_nonce_admission_tests;
+#[cfg(test)]
 mod mcp_nonce_tests;
 #[cfg(test)]
+mod mcp_nonce_witness_tests;
+#[cfg(test)]
 mod meta_fingerprint_tests;
+/// MIK-8154.LEASE.1 rows: the direct route takes the shared execution lease.
+#[cfg(test)]
+mod mik8154_lease_rows_tests;
+/// MIK-8154 PR 2 rows: sanitize parity and passthrough on every route.
+#[cfg(all(test, feature = "firewall"))]
+mod mik8154_rows_tests;
 #[cfg(test)]
 mod mrtr9_lease_tests;
+#[cfg(test)]
+mod nonce_failure_class_tests;
+#[cfg(test)]
+mod playbook_envelope_tests;
+#[cfg(test)]
+mod playbook_key_tests;
 /// MIK-8058: a failed reload's status says whose fault it is.
 #[cfg(all(test, feature = "webui"))]
 mod reload_status_tests;
+#[cfg(all(test, feature = "firewall"))]
+pub(super) mod route_matrix_driver_tests;
+#[cfg(all(test, feature = "firewall"))]
+pub(super) mod route_matrix_x14_nonce_tests;
+#[cfg(test)]
+mod slot_quota_direct_tests;
 #[cfg(test)]
 mod webhook_mount_tests;
+/// MIK-8340: a withheld surfaced name answers as an absent one.
+#[cfg(all(test, feature = "firewall"))]
+mod withheld_listing_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod withheld_parity_tests;
+#[cfg(all(test, feature = "firewall"))]
+pub(super) mod withheld_twin_tests;
 /// The meta route's post-judge delivery record, shared with stdio (MIK-7920).
 pub(in crate::gateway) use judged_answer::record_delivery as record_judged_delivery;
+/// MIK-8286 / MIK-8287: an identity that names nobody is refused.
+#[cfg(test)]
+mod identity_collapse_tests;
 #[cfg(test)]
 mod log_level_admin_tests;
 #[cfg(test)]
@@ -163,6 +215,19 @@ mod session_fp_once_tests;
 /// MIK-7736: under standard, a gateway_invoke nonce is judged after policy.
 #[cfg(all(test, feature = "metrics"))]
 mod signing_nonce_order_tests;
+/// MIK-8356 C9: a managed caller's cold-slot 401 on `/mcp`.
+#[cfg(test)]
+mod slot_verdict_g2_managed_http_tests;
+/// MIK-8356: router entry rows for per-user calls judged by the caller's slot.
+#[cfg(test)]
+mod slot_verdict_g3_http_tests;
+#[cfg(test)]
+mod slot_verdict_http_tests;
+#[cfg(test)]
+mod slot_verdict_http_variant_tests;
+/// MIK-8356 x MIK-8353: the caller verdict's effects reach the refund witness.
+#[cfg(test)]
+mod slot_verdict_witness_tests;
 /// E1: SSO admins through the role mapping (MIK-7570.ADMINSSO.1).
 #[cfg(test)]
 mod sso_admin_tests;

@@ -16,7 +16,7 @@ build_image="${MCP_GATEWAY_DOCKER_BUILD:-1}"
 bin="${MCP_GATEWAY_BIN:-$repo_root/target/debug/mcp-gateway}"
 # 1: write the profile with the image itself, so no host build is needed (CI).
 init_in_image="${MCP_GATEWAY_INIT_IN_IMAGE:-0}"
-fixture_image="${MCP_GATEWAY_FIXTURE_IMAGE:-python:3.13-alpine@sha256:79e7a9b9ff1cbceff819f856fb374477792a5967759d94df266de7b7b4120e6f}"
+fixture_image="${MCP_GATEWAY_FIXTURE_IMAGE:-mirror.gcr.io/library/python:3.13-alpine@sha256:79e7a9b9ff1cbceff819f856fb374477792a5967759d94df266de7b7b4120e6f}"
 
 if [[ "$build_image" != "0" ]]; then
   docker build --target runtime -t "$image" "$repo_root"

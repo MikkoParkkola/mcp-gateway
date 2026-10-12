@@ -90,9 +90,14 @@ impl OAuthClient {
         tokio::spawn(Self::refresh_loop(
             client,
             backend_name,
-            Duration::from_secs(60),
+            Self::RENEWAL_CHECK_PERIOD,
         ))
     }
+
+    /// How often the background renewal task checks its token. The first
+    /// check comes one full period after the task is spawned (MIK-8258 RACE.1
+    /// relies on that to tell its refreshes from a caller's).
+    pub(crate) const RENEWAL_CHECK_PERIOD: Duration = Duration::from_secs(60);
 
     /// The refresh task's body, checking every `period`.
     pub(super) async fn refresh_loop(

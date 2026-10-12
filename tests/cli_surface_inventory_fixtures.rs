@@ -247,3 +247,69 @@ fn doc_rows_reads_only_the_cli_table() {
     let rows = walker::doc_rows(&md);
     assert_eq!(rows.keys().collect::<Vec<_>>(), vec!["x"]);
 }
+
+/// clap does not mark a hidden command's descendants hidden; the walker does
+/// (MIK-8044 SURF.3), so an INTERNAL subtree needs `hide` only on its root.
+#[test]
+fn a_hidden_command_hides_everything_under_it() {
+    let cmd = Command::new("x")
+        .subcommand(
+            Command::new("internal")
+                .hide(true)
+                .subcommand(Command::new("child").arg(flag("deep"))),
+        )
+        .subcommand(Command::new("public").arg(flag("shown")));
+    let w = walker::walk(&cmd);
+    for id in [
+        "x internal",
+        "x internal child",
+        "x internal child --deep",
+        "x internal --help",
+    ] {
+        assert!(
+            w.hidden.contains(id),
+            "{id} should be hidden: {:?}",
+            w.hidden
+        );
+    }
+    for id in ["x public", "x public --shown"] {
+        assert!(
+            !w.hidden.contains(id),
+            "{id} should be listed: {:?}",
+            w.hidden
+        );
+    }
+}
+
+/// KEEP must be listed, AUTO and INTERNAL hidden, REMOVE absent (MIK-8044 SURF.3).
+#[test]
+fn a_row_whose_visibility_contradicts_its_class_is_reported() {
+    let cmd = Command::new("x")
+        .arg(flag("kept").hide(true))
+        .arg(flag("auto"))
+        .arg(flag("gone"));
+    let w = walker::walk(&cmd);
+    let rows: std::collections::BTreeMap<String, String> = [
+        ("x", "KEEP"),
+        ("x --kept", "KEEP"),
+        ("x --auto", "AUTO"),
+        ("x --gone", "REMOVE"),
+        ("x --help", "KEEP"),
+        ("x -h", "KEEP"),
+    ]
+    .into_iter()
+    .map(|(a, b)| (a.to_owned(), b.to_owned()))
+    .collect();
+    let problems = walker::compare(&w, &rows);
+    for want in [
+        "KEEP row `x --kept` is hidden from --help",
+        "AUTO row `x --auto` is listed by --help",
+        "REMOVE row `x --gone` is still in the CLI",
+    ] {
+        assert!(
+            problems.iter().any(|p| p == want),
+            "{want} missing from {problems:?}"
+        );
+    }
+    assert_eq!(problems.len(), 3, "{problems:?}");
+}

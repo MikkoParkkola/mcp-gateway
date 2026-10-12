@@ -1,0 +1,1 @@
+src/oauth/client/mod.rs	issuance_clock	1	critical	d	issuance_clock	Refuses a token request, refresh or code exchange on a clock that reads before 1970, before anything is sent, so no endpoint is called and no token is dated from the epoch (MIK-8202)

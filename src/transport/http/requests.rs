@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Outbound requests and notifications, and the headers they carry.
 
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
+
+use tokio::sync::Mutex as TokioMutex;
 
 use reqwest::header;
 use serde_json::Value;
@@ -18,6 +21,8 @@ use super::{
     peer_refusal, require_secure_oauth_target,
 };
 use crate::gateway::trace;
+use crate::oauth::OAuthClient;
+use crate::oauth::login_gate::{self, Provenance};
 use crate::protocol::era::Era;
 use crate::protocol::meta::MODERN_VERSIONS;
 use crate::protocol::{
@@ -162,20 +167,46 @@ impl HttpTransport {
             require_secure_oauth_target(&parsed)?;
 
             // A non-interactive caller (the health probe) never waits on the
-            // client mutex a login holds for minutes (MIK-7982 C2).
-            let oauth = if crate::oauth::login_gate::interactive() {
-                oauth_mutex.lock().await
-            } else {
-                oauth_mutex
+            // client mutex a login holds for minutes, and never detaches
+            // (MIK-7982 C2, MIK-8339).
+            if !login_gate::interactive() {
+                let oauth = oauth_mutex
                     .try_lock()
                     .map_err(|_| Error::AuthorizationRequired {
                         backend: sanitize_url_for_diagnostics(&self.base_url),
-                    })?
-            };
-            let token = oauth.get_token().await?;
+                    })?;
+                let token = oauth.get_token().await?;
+                Provenance::mark_dispatched();
+                return Ok(Some(token));
+            }
+            // Fast path: a live token, read without waiting on the mutex. The
+            // guard is dropped before anything detaches.
+            if let Ok(oauth) = oauth_mutex.try_lock()
+                && let Some(token) = oauth.live_token()
+            {
+                drop(oauth);
+                Provenance::mark_dispatched();
+                return Ok(Some(token));
+            }
+            let gate = &self.login_gate;
+            // Captured here, synchronously, before anything queues: a start's
+            // own set-out epoch wins, else the gate's now.
+            let set_out = gate.set_out_now();
+            // Mark a login wait only when a login is actually open: this
+            // caller will queue behind it (MIK-7982 C3).
+            if gate.in_flight() {
+                Provenance::mark_waited();
+            }
+            let token = detach_token_step(
+                Arc::clone(oauth_mutex),
+                Arc::clone(gate),
+                set_out,
+                sanitize_url_for_diagnostics(&self.base_url),
+            )
+            .await?;
             // Past the request-time token step: a deadline from here is the
             // backend's, not a login's (MIK-7982 C3).
-            crate::oauth::login_gate::Provenance::mark_dispatched();
+            Provenance::mark_dispatched();
             Ok(Some(token))
         } else {
             Ok(None)
@@ -235,6 +266,29 @@ impl HttpTransport {
         result
     }
 
+    /// Keep the failed send's whole error chain and kind flags (MIK-8359): the
+    /// sanitized `Error` says only "request failed", which hides whether a
+    /// connection was reset, closed early or refused.
+    #[cfg(test)]
+    fn record_send_error(&self, error: &reqwest::Error) {
+        use std::fmt::Write as _;
+        let mut chain = String::new();
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+        while let Some(layer) = source {
+            let _ = write!(chain, "[{layer:?}] <- ");
+            source = layer.source();
+        }
+        *self.last_send_error.lock() = Some(format!(
+            "connect={} timeout={} redirect={} request={} body={} decode={} :: {chain}",
+            error.is_connect(),
+            error.is_timeout(),
+            error.is_redirect(),
+            error.is_request(),
+            error.is_body(),
+            error.is_decode(),
+        ));
+    }
+
     /// POST `request` with `headers` and read its reply.
     async fn post_and_read(
         &self,
@@ -256,6 +310,8 @@ impl HttpTransport {
             .send()
             .await
             .map_err(|e| {
+                #[cfg(test)]
+                self.record_send_error(&e);
                 let evidence = if self.redirects_followed.load(Ordering::SeqCst) == redirects_before
                 {
                     RedirectEvidence::NoRedirectFollowed
@@ -264,6 +320,9 @@ impl HttpTransport {
                 };
                 safe_request_error_for("Request failed", &e, evidence)
             })?;
+        // The response head is in: a task worker's rescue poll can now only
+        // receive (MIK-7642 R10.1). A no-op unless a submission is armed.
+        crate::transport::submit_mark::response_head_received();
 
         // Extract session ID from response headers if this caller's bucket is
         // empty (MIK-6784: store under the caller's identity key, never a shared
@@ -462,4 +521,45 @@ impl HttpTransport {
 
         Ok(())
     }
+}
+
+/// Run an interactive caller's token step in a task of its own (MIK-8339):
+/// the login it may lead belongs to the task, so a caller whose deadline
+/// fires drops only its wait, and a person who approves later still stores a
+/// token. The caller's scopes are carried in, so the task's marks land on the
+/// caller's own Provenance. Before it holds the client, the task observes a
+/// restart or stop and ends at the authorization window; no timeout ever
+/// wraps a live Lead (the Lead stage bounds itself, in `authorize_until`).
+async fn detach_token_step(
+    oauth: Arc<TokioMutex<OAuthClient>>,
+    gate: Arc<crate::oauth::login_gate::LoginGate>,
+    set_out: crate::oauth::login_gate::SetOut,
+    backend: String,
+) -> Result<String> {
+    let crate::oauth::login_gate::SetOut {
+        since,
+        cohort,
+        deadline,
+    } = set_out;
+    #[cfg(test)]
+    gate.note_detached();
+    let carried = crate::oauth::login_gate::carry_scopes();
+    let task = tokio::spawn(carried.run(async move {
+        let client = tokio::select! {
+            biased;
+            () = gate.revoked_since(since) => {
+                return Err(Error::AuthorizationCancelled { backend });
+            }
+            () = tokio::time::sleep_until(crate::oauth::login_gate::stage_end(
+                crate::oauth::OAUTH_AUTHORIZATION_WINDOW,
+                deadline,
+            )) => {
+                return Err(gate.classify(&cohort, &backend, Error::BackendTimeout(backend.clone())));
+            }
+            client = oauth.lock_owned() => client,
+        };
+        client.get_token_detached(true, since, &cohort, deadline).await
+    }));
+    task.await
+        .map_err(|e| Error::OAuth(format!("the detached token step failed: {e}")))?
 }

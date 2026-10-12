@@ -14,8 +14,16 @@ use crate::security::firewall::{
     Severity,
 };
 
+#[path = "collusion_gate_big_tests.rs"]
+mod big;
 #[path = "collusion_gate_excuse_tests.rs"]
 mod excuse;
+#[path = "collusion_gate_middle_tests.rs"]
+mod middle;
+#[path = "collusion_gate_p3_tests.rs"]
+mod p3;
+#[path = "collusion_gate_p3_unit_tests.rs"]
+mod p3_units;
 #[path = "collusion_gate_plan_tests.rs"]
 mod plan;
 
@@ -168,7 +176,11 @@ fn the_text_walker_reads_values_then_keys_and_skips_nothing() {
 /// fingerprint joins them).
 #[test]
 fn an_over_cap_text_keeps_exact_head_and_tail_on_char_boundaries() {
-    assert_eq!(RECORD_CAP, 6 * 1024, "the documented evasion bound");
+    assert_eq!(
+        RECORD_CAP,
+        6 * 1024,
+        "the record cap: head and tail kept whole"
+    );
     for len in [RECORD_CAP - 1, RECORD_CAP] {
         let text = "x".repeat(len);
         let (digest, cut) = DeliveryDigest::of_leaves(&[&text], false);
@@ -648,21 +660,25 @@ fn an_unkeyed_block_increments_the_relay_metric() {
     );
 }
 
-/// MIK-7934.PLANRCPT.2: a plan whose answer is over the bound its receipts
-/// are kept against is counted where an operator can read it.
+/// MIK-7934.PLANRCPT.2, migrated by `MIK-8066` 2b: an over-bound answer is
+/// now read as a view, so the operator-visible count is of plans whose answer
+/// could NOT be read (D6, `bound="plan_answer_unread"`).
 #[cfg(feature = "metrics")]
 #[test]
-fn a_dropped_plan_receipt_increments_the_metric() {
-    let series = "mcp_gateway_collusion_plan_receipts_dropped_total";
+fn an_unread_plan_increments_the_metric() {
+    let series = "mcp_gateway_collusion_capacity_total{bound=\"plan_answer_unread\"}";
     let (fw, _dir) = observing(|_| {});
+    fw.collusion_detector()
+        .expect("relay detection on")
+        .set_answer_text_cap(512 * 1024);
     let before = rendered_count(series);
     let text = "x".repeat(super::super::collusion_digest::DELIVERED_SET_CAP + 1);
     let answer = json!({"content": [{"type": "text", "text": text}]});
+    let _ = fw.delivered_for_plan(&answer, None);
     assert!(
-        fw.delivered_for_plan(&answer, None).is_none(),
-        "premise: over the bound"
+        rendered_count(series) > before,
+        "an unread plan was not counted"
     );
-    assert!(rendered_count(series) > before, "dropped plan: not counted");
 }
 
 /// The observed-relay warnings `check` logs, as parsed records.
@@ -726,6 +742,8 @@ fn a_clean_call_and_a_blocked_relay_log_no_observed_warning() {
     assert!(warnings.is_empty(), "{warnings:?}");
 }
 
+#[path = "collusion_gate_key_path_tests.rs"]
+mod key_path;
 #[path = "collusion_gate_reason_tests.rs"]
 mod reason;
 #[path = "collusion_gate_relay_excuse_tests.rs"]

@@ -32,7 +32,12 @@ fn received(events: &mut tokio::sync::mpsc::Receiver<SourceEvent>) -> Vec<Source
 
 /// Start the timer `arguments` names, as the core does for a first subscriber.
 async fn start(source: &ScheduleSource, arguments: &Value) -> String {
-    let key = source.lifecycle_key("p", NAME, arguments);
+    let key = source.lifecycle_key(
+        "p",
+        NAME,
+        arguments,
+        crate::clock::utc_now().expect("clock"),
+    );
     source
         .on_first_subscriber(&key, "p", NAME, arguments)
         .await
@@ -248,14 +253,25 @@ async fn a_tick_matches_only_its_own_timer() {
     start(&source, &mine).await;
     source.tick_at(at(9, 0, 0));
     let tick = received(&mut events).pop().expect("tick");
-    assert!(source.matches("p", &mine, &tick));
+    assert!(source.matches("p", &mine, &tick, crate::clock::utc_now().expect("clock")));
     assert!(source.matches(
         "q",
         &json!({"cron": "0  9 * * *", "timezone": "UTC", "label": "a"}),
-        &tick
+        &tick,
+        crate::clock::utc_now().expect("clock")
     ));
-    assert!(!source.matches("p", &json!({"cron": "0 9 * * *", "label": "b"}), &tick));
-    assert!(!source.matches("p", &json!({"cron": "0 10 * * *", "label": "a"}), &tick));
+    assert!(!source.matches(
+        "p",
+        &json!({"cron": "0 9 * * *", "label": "b"}),
+        &tick,
+        crate::clock::utc_now().expect("clock")
+    ));
+    assert!(!source.matches(
+        "p",
+        &json!({"cron": "0 10 * * *", "label": "a"}),
+        &tick,
+        crate::clock::utc_now().expect("clock")
+    ));
 }
 
 /// The global timer cap refuses a new timer; a held one is still admitted.
@@ -270,7 +286,7 @@ async fn the_timer_caps_hold() {
     let a = start(&source, &json!({"cron": "0 1 * * *"})).await;
     start(&source, &json!({"cron": "0 2 * * *"})).await;
     let third = json!({"cron": "0 3 * * *"});
-    let key = source.lifecycle_key("p", NAME, &third);
+    let key = source.lifecycle_key("p", NAME, &third, crate::clock::utc_now().expect("clock"));
     let error = source
         .on_first_subscriber(&key, "p", NAME, &third)
         .await
@@ -360,7 +376,7 @@ async fn a_restart_over_the_cap_keeps_the_earliest_timers() {
     for arguments in &rows[..2] {
         start(&source, arguments).await;
     }
-    let key = source.lifecycle_key("p", NAME, &rows[2]);
+    let key = source.lifecycle_key("p", NAME, &rows[2], crate::clock::utc_now().expect("clock"));
     let error = source
         .on_first_subscriber(&key, "p", NAME, &rows[2])
         .await
@@ -386,7 +402,7 @@ async fn a_replay_starts_a_timer_any_holder_may_keep() {
         admit(&hub, &format!("sub_p{n}"), "p", arguments);
     }
     admit(&hub, "sub_q", "q", &rows[2]);
-    let key = source.lifecycle_key("p", NAME, &rows[2]);
+    let key = source.lifecycle_key("p", NAME, &rows[2], crate::clock::utc_now().expect("clock"));
     source
         .on_first_subscriber(&key, "p", NAME, &rows[2])
         .await
@@ -566,4 +582,32 @@ async fn timers_past_the_cap_are_refused_at_fan_out() {
         .await
         .expect_err("past the cap");
     assert_eq!(refused.code, -32012);
+}
+
+/// MIK-8202: the timer cap judges every lease on one reading, never a fresh
+/// read per row. With the thread's clock reading before 1970, every row live
+/// at the supplied reading still counts, so no key is ranked past the cap by
+/// a row the scan lost. An authorization the clock cannot judge answers the
+/// explicit clock error, never -32012 (which revokes).
+#[tokio::test]
+async fn the_timer_cap_judges_every_lease_on_one_reading() {
+    let dir = tempfile::tempdir().expect("dir");
+    let mut config = crate::config::EventsConfig::default();
+    config.schedule.max_timers_per_principal = 2;
+    let hub = hub(dir.path(), &config);
+    let source = ScheduleSource::new(&hub, dir.path().join("schedule"));
+    let timers = [json!({"cron": "0 1 * * *"}), json!({"cron": "0 2 * * *"})];
+    for (n, arguments) in timers.iter().enumerate() {
+        admit(&hub, &format!("sub_{n}"), "p", arguments);
+    }
+    let key = super::parts(&timers[0]).expect("parts").key;
+    let now = crate::clock::utc_now().expect("a readable clock");
+    let _clock = crate::clock::test_clock::before_epoch();
+    assert_eq!(source.held_by("p", now).len(), 2, "a live row lost");
+    assert_eq!(source.holders(&key, now).len(), 1, "a live holder lost");
+    let refused = source
+        .authorize("p", NAME, &timers[0])
+        .await
+        .expect_err("no verdict on an unreadable clock");
+    assert!(refused.is_clock_unreadable(), "{refused:?}");
 }

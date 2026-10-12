@@ -42,6 +42,25 @@ pub(crate) struct CallTarget<'a> {
     pub arguments: std::borrow::Cow<'a, Value>,
 }
 
+/// The `arguments` a call dispatches, as every gate judges them: the
+/// JSON-string form parsed to the object it is sent as (MIK-8137 b1: a string
+/// once skipped the request scan, which reads objects), otherwise the value as
+/// given (`{}` when absent). A string that does not parse to an object is kept
+/// as given; [`crate::gateway::meta_mcp_helpers::parse_tool_arguments`] refuses that call before any dispatch.
+pub(crate) fn judged_arguments(holder: &Value) -> std::borrow::Cow<'_, Value> {
+    use std::borrow::Cow;
+    match holder.get("arguments") {
+        // Owned only here, where a string had to be parsed (MIK-8014 keeps
+        // the object form borrowed).
+        Some(raw @ Value::String(_)) => {
+            crate::gateway::meta_mcp_helpers::parse_tool_arguments_cow(holder)
+                .unwrap_or(Cow::Borrowed(raw))
+        }
+        Some(value) => Cow::Borrowed(value),
+        None => Cow::Owned(serde_json::json!({})),
+    }
+}
+
 /// A backend tool invocation, borrowed.
 ///
 /// Carries `arguments` even though no policy reads them today: the router's

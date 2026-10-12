@@ -56,8 +56,9 @@ pub struct StdioTransport {
     env: HashMap<String, String>,
     /// Working directory
     cwd: Option<String>,
-    /// Request timeout for initialize and JSON-RPC calls
-    request_timeout: std::time::Duration,
+    /// Request timeout for initialize and JSON-RPC calls, in nanoseconds.
+    /// Atomic only so a test can shorten it after the handshake.
+    request_timeout: AtomicU64,
     /// Writer handle
     writer: Arc<Mutex<Option<tokio::process::ChildStdin>>>,
     /// Cancelled by `close()`, renewed by `start()`: ends a write stuck on a reader.
@@ -88,6 +89,21 @@ pub struct StdioTransport {
     /// `Some` is the gateway's to clear; `None` says the value that reaches
     /// the child, if any, came from the operator's own configuration.
     assigned_cache: Option<std::path::PathBuf>,
+    /// Test-only: one bound, at hang scale, that replaces the start's drain
+    /// window, `end_tree`'s wait and each spawned tree's reap deadline, so a
+    /// row that asserts the reported status and class waits for the events
+    /// rather than racing 1 s and 5 s windows on a loaded host (MIK-8360).
+    #[cfg(test)]
+    pub(super) slow_host_bound: parking_lot::Mutex<Option<std::time::Duration>>,
+    /// Test-only: replaces the drain window for the stderr reader alone
+    /// (MIK-8360); `None` keeps the real window.
+    #[cfg(test)]
+    pub(super) stderr_bound: parking_lot::Mutex<Option<std::time::Duration>>,
+    /// Test-only: requests that waited out their timeout. An early exit must
+    /// be noticed before the start's request times out; a row reads this
+    /// instead of a stopwatch (MIK-8360).
+    #[cfg(test)]
+    pub(super) request_timeouts: std::sync::atomic::AtomicUsize,
 }
 
 impl StdioTransport {
@@ -197,7 +213,7 @@ impl StdioTransport {
         // Renewed under the stdin lock, so a write never pairs new stdin with
         // the token a previous `close()` cancelled.
         *self.shutdown.lock() = tokio_util::sync::CancellationToken::new();
-        if let Err(refused) = self.install_tree(ChildTree::new(child)) {
+        if let Err(refused) = self.install_tree(self.new_tree(child)) {
             *writer = None;
             return Err(refused);
         }
@@ -324,9 +340,12 @@ impl StdioTransport {
             .read()
             .clone()
             .unwrap_or_else(|| PROTOCOL_VERSION.to_string());
+        // Computed once, outside the log macros, so each macro head carries
+        // only plain locals.
+        let command = self.diagnostic_command();
 
         debug!(
-            command = %self.diagnostic_command(),
+            command = %command,
             version = %version,
             "Sending MCP initialize"
         );
@@ -339,8 +358,7 @@ impl StdioTransport {
             // text and may quote back a credential the gateway passed it.
             if !is_version_mismatch_error(&error.message) {
                 return Err(Error::Protocol(format!(
-                    "Initialize failed for '{}': backend error code {}",
-                    self.diagnostic_command(),
+                    "Initialize failed for '{command}': backend error code {}",
                     error.code
                 )));
             }
@@ -349,14 +367,13 @@ impl StdioTransport {
                 .and_then(negotiate_best_version)
             else {
                 return Err(Error::Protocol(format!(
-                    "Protocol version negotiation failed for '{}': server rejected {version}, \
+                    "Protocol version negotiation failed for '{command}': server rejected {version}, \
                      no compatible version found (backend error code {})",
-                    self.diagnostic_command(),
                     error.code
                 )));
             };
             warn!(
-                command = %self.diagnostic_command(),
+                command = %command,
                 rejected = %version,
                 negotiated = %negotiated,
                 "Retrying initialize with negotiated protocol version"
@@ -364,9 +381,8 @@ impl StdioTransport {
             response = self.init_request(initialize_params(negotiated)).await?;
             if let Some(ref error) = response.error {
                 return Err(Error::Protocol(format!(
-                    "Initialize failed for '{}' even with negotiated version {negotiated}: \
+                    "Initialize failed for '{command}' even with negotiated version {negotiated}: \
                      backend error code {}",
-                    self.diagnostic_command(),
                     error.code
                 )));
             }
@@ -380,7 +396,7 @@ impl StdioTransport {
         let selected = checked_selection(response.result.as_ref(), Selectable::LegacyOrModern)?
             .unwrap_or(proposed);
         info!(
-            command = %self.diagnostic_command(),
+            command = %command,
             requested = %proposed,
             negotiated = %selected,
             "Protocol version agreed"
@@ -538,7 +554,7 @@ impl StdioTransport {
     fn handle_response(&self, line: &str) -> Result<()> {
         let line_len = line.len();
         debug!(line_len, "Parsing response");
-        let response = match serde_json::from_str::<JsonRpcMessage>(line)? {
+        let response = match JsonRpcMessage::from_line(line)? {
             JsonRpcMessage::Response(response) => response,
             JsonRpcMessage::Notification(notification) => {
                 self.capture_notification(notification);
@@ -724,6 +740,8 @@ mod child_tree;
 mod reaper;
 #[path = "stdio_tree.rs"]
 mod tree;
+// Only the unix frame tests build a tree by hand (MIK-8360).
+#[cfg(all(test, unix))]
 use child_tree::ChildTree;
 pub use tree::{CEILING_MAX_FRAME_BYTES, DEFAULT_MAX_FRAME_BYTES, MIN_MAX_FRAME_BYTES};
 use tree::{read_frame, spawn_in_own_tree};

@@ -33,8 +33,12 @@ pub(super) fn open_blocking(
     let dir_id = dir_identity(dir);
     let lease = acquire_lease(&dir.join(LEASE))?.pinning(pin);
     let loaded = load(dir, limits)?;
+    #[cfg(test)]
+    after_load::run(dir);
     if dir_id.is_none() || dir_identity(dir) != dir_id {
-        tracing::warn!(path = %dir.display(), "task store directory changed while it was opened");
+        // Bound first so the macro head line holds no call (MIK-7725).
+        let shown_path = dir.display();
+        tracing::warn!(path = %shown_path, "task store directory changed while it was opened");
         return Err(StoreError::Storage);
     }
     Ok((lease, loaded, dir_id))
@@ -366,7 +370,7 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<Loaded, StoreError> {
             // A live row written before this check, or under a larger cap,
             // may have no room for the bounded failure it could settle as;
             // refused like a row over the cap (MIK-7651).
-            let needed = super::targets::fallback_bytes(&task, &record, chrono::Utc::now())?;
+            let needed = super::targets::fallback_bytes(&task, &record)?;
             if needed > limits.record_bytes {
                 tracing::warn!(
                     path = %shown_path,
@@ -375,7 +379,15 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<Loaded, StoreError> {
                 );
                 return Err(StoreError::Capacity);
             }
-            loaded.entries.insert(task_id, Entry { task, record });
+            loaded.entries.insert(
+                task_id,
+                Entry {
+                    task,
+                    record,
+                    // Loaded from disk: no holds, as the slot table starts empty.
+                    holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
+                },
+            );
         } else {
             tracing::warn!(
                 path = %shown_path,
@@ -460,7 +472,7 @@ pub(super) fn reread_record(
         (Some((record, task)), _) => {
             // As at load: a row with no room for the bounded failure it may
             // settle as would make the next startup refuse the store (MIK-7651).
-            let needed = super::targets::fallback_bytes(&task, &record, chrono::Utc::now());
+            let needed = super::targets::fallback_bytes(&task, &record);
             if !needed.is_ok_and(|needed| needed <= limits.record_bytes) {
                 tracing::error!(path = %shown_path, "repaired task record leaves no room for its bounded failure; raise max_record_bytes or remove the row; it stays sealed");
                 return Reread::Sealed;
@@ -598,4 +610,52 @@ fn stage_temp(mut file: fs::File, bytes: &[u8], hook: Option<&CommitHook>) -> io
 
 pub(super) fn fire(hook: Option<&CommitHook>, stage: CommitStage) -> io::Result<()> {
     hook.map_or(Ok(()), |hook| hook(stage))
+}
+
+/// Test-only seam inside `open_blocking`: a callback run after the rows are
+/// loaded and before the directory identity is confirmed, so a test can change
+/// the directory at exactly that point. Keyed by store path, like the lock
+/// attempt counter in `fs_lock`, so parallel tests never see each other's.
+#[cfg(test)]
+pub(in crate::gateway::task_service) mod after_load {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+
+    type Seam = Arc<dyn Fn() + Send + Sync>;
+
+    static SEAMS: LazyLock<Mutex<HashMap<PathBuf, Seam>>> = LazyLock::new(Default::default);
+
+    /// Run `seam` once per open of `dir` until it is cleared with `None`.
+    /// Unix-only, like its one caller (`store_tests::repaired_rows`).
+    #[cfg(unix)]
+    pub(in crate::gateway::task_service) fn set(dir: &Path, seam: Option<Seam>) {
+        let mut seams = SEAMS.lock().unwrap_or_else(PoisonError::into_inner);
+        match seam {
+            Some(seam) => seams.insert(dir.to_path_buf(), seam),
+            None => seams.remove(dir),
+        };
+    }
+
+    /// `open_blocking` on this thread, so a test can capture the log it writes
+    /// (the async open runs it on a blocking-pool thread); the lease is dropped.
+    /// Unix-only, like its one caller.
+    #[cfg(unix)]
+    pub(in crate::gateway::task_service) fn open(
+        dir: &Path,
+        limits: super::StoreLimits,
+    ) -> Result<(), super::StoreError> {
+        super::open_blocking(dir, limits).map(drop)
+    }
+
+    pub(super) fn run(dir: &Path) {
+        let seam = SEAMS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(dir)
+            .cloned();
+        if let Some(seam) = seam {
+            seam();
+        }
+    }
 }

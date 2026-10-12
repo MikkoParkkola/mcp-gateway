@@ -20,8 +20,9 @@
 //! # Privacy
 //!
 //! A finding's `matched` excerpt is the redacted text, truncated to 40
-//! characters, so credential values are not propagated into audit logs or
-//! structured spans.
+//! characters, so credential values are not propagated into structured
+//! spans. The excerpt never reaches the audit log at all: audit rows hold a
+//! finding's kind, severity and location only (MIK-8236).
 
 use std::collections::{HashMap, HashSet};
 
@@ -201,7 +202,7 @@ impl Redactor {
         }
         redacted.push_str(&text[cursor..]);
         // A finding shows the redacted text: a bare 40-char token would
-        // otherwise survive the truncation whole into the audit log.
+        // otherwise survive the truncation whole in the in-process excerpt.
         let suffix = match site {
             Site::Value => "",
             Site::Key => " (object key)",

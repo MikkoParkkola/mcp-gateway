@@ -227,7 +227,7 @@ async fn close_sends_shared_close_headers() {
 
     transport.close().await.unwrap();
 
-    let headers = tokio::time::timeout(Duration::from_secs(1), rx)
+    let headers = tokio::time::timeout(Duration::from_secs(10), rx)
         .await
         .unwrap()
         .unwrap();

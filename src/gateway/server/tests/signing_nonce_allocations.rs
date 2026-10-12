@@ -4,9 +4,11 @@
 //! stdio dispatcher must not pay for the payload it refuses.
 //!
 //! What is measured: every real allocation made on this thread while
-//! `Gateway::dispatch_single_with_sink` — the exact function `run_stdio` calls,
-//! not a duplicate validator — runs to completion on a prepared 1 MiB or 3 MiB
-//! request. Runtime, gateway, backend, payload and expectations are built
+//! `Gateway::dispatch_single_staged` — the function the serve loop calls,
+//! boxed as the loop boxes it, not a duplicate validator — runs to completion
+//! on a prepared 1 MiB or 3 MiB request, its answer then settled as
+//! `dispatch_single_for_client` settles it (MIK-8400). Runtime, gateway,
+//! backend, payload and expectations are built
 //! before the scope opens; every assertion and every formatted message happens
 //! after it closes.
 //!
@@ -28,21 +30,46 @@
 //! and maximum-body rejection; retry siblings; multiple batch items; the
 //! metadata-ownership table. Row 40 is not done when this file is green.
 //!
-//! Two controls sit under the SAME meter, because a byte counter that is blind
+//! Controls sit under the SAME meter, because a byte counter that is blind
 //! proves nothing by reporting a small number:
 //! * positive — a forced deep clone of the prepared tree must cost at least
 //!   the payload's own size;
-//! * negative — one known-size allocation must be reported at its known size.
+//! * negative — one known-size allocation must be reported at its known size;
+//! * boundary — the large-allocation counters split exactly at
+//!   `alloc_meter::LARGE_BYTES`, reset per scope, and count a reallocation
+//!   grown past it (MIK-8400).
 
 use serde_json::{Value, json};
 
-use super::alloc_meter::{Measured, measure, measure_async};
+use super::alloc_meter::{LARGE_BYTES, Measured, measure, measure_async};
 use super::signing_nonce_allocations_support::{
     Fixture, ONE_MIB, SESSION, THREE_MIB, error_of, invoke, isolate, nested_arguments, runtime,
 };
 
-/// The refusal budget this checkpoint asserts, per refused dispatch.
-const REFUSAL_BUDGET: u64 = 16 * 1024;
+/// What a refused dispatch may allocate, measured on `dispatch_single_staged`
+/// inside the serve loop's box of it (see [`dispatch_as_served`])
+/// (MIK-8400). Two populations, each with its own cap, split at
+/// `alloc_meter::LARGE_BYTES` (2 KiB):
+///
+/// - Small allocations are what the refusal itself does (records, strings,
+///   tables): at most [`SMALL_BUDGET`] bytes. New per-refusal churn breaks it;
+///   a payload copy breaks one cap or the other, as small pieces or as one
+///   large block.
+/// - Large allocations store dispatch futures: the stdio dispatch boxed inside
+///   its visibility memo (`Box::pin(Self::dispatch_relay_scoped(..))` in
+///   `stdio_single.rs`) and the `tools/call` dispatch's own box
+///   (`Box::pin(Self::dispatch_tools_call(..))` in `stdio_dispatch.rs`, inside
+///   `slot_rpc`), inside which a missing, malformed or replayed nonce is
+///   refused at signing admission (`prepare_signing_for_call`), after the
+///   invocation policy and before the route stage. The serve loop's own box of the whole dispatch holds only a
+///   pointer to the first, so it is small. At most [`LARGE_ALLOCATIONS`] large
+///   allocations and [`LARGE_BUDGET`] bytes in all: another boxed dispatch or
+///   a growing dispatch state breaks it. No lint bounds them:
+///   `clippy::large_futures` does not see a future behind `Box::pin`, and
+///   `dispatch_single_staged` allows it.
+const SMALL_BUDGET: u64 = 8 * 1024;
+const LARGE_ALLOCATIONS: u64 = 2;
+const LARGE_BUDGET: u64 = 12 * 1024;
 
 /// The three refusal errors are settled production controls, pinned exactly.
 /// `wire_error_message` preserves each text.
@@ -68,25 +95,57 @@ fn test_path(name: &str) -> String {
     format!("{module}::{name}")
 }
 
-/// The production stdio dispatcher, called exactly as `run_stdio` calls it:
-/// owned `Value` moved in, no sink, the stdio session id.
+/// The stdio client every call in this file is, the session `SESSION`.
+fn client() -> super::super::StdioClient<'static> {
+    super::super::StdioClient {
+        session_id: SESSION,
+        channel: &crate::gateway::input_bridge::NoClientChannel,
+        handshake_capabilities: crate::protocol::meta::Declared::NONE,
+        tasks: None,
+        serving: crate::gateway::server::stdio_single::ModernServing::Enabled,
+        discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
+        sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
+    }
+}
+
+/// The test entry to the stdio dispatcher (owned `Value` moved in, no sink,
+/// the stdio session id), for the unmetered calls only; the measured ones go
+/// through [`dispatch_as_served`], which runs it as the serve loop does.
 async fn dispatch(fixture: &Fixture, request: Value) -> Value {
-    super::super::Gateway::dispatch_single_with_sink(
+    super::super::Gateway::dispatch_single_for_client(
         &fixture.meta,
         &fixture.tool_policy,
         &fixture.mtls_policy,
         request,
-        super::super::StdioClient {
-            session_id: SESSION,
-            channel: &crate::gateway::input_bridge::NoClientChannel,
-            handshake_capabilities: crate::protocol::meta::Declared::NONE,
-            tasks: None,
-            modern: false,
-        },
-        &super::super::StdioTelemetry::default(),
+        client(),
     )
     .await
     .expect("a request carrying an id must produce a response")
+}
+
+/// The dispatch inside the serve loop's own box of it (`stdio_loop.rs`):
+/// `dispatch_single_staged` boxed whole, then its answer settled as
+/// `dispatch_single_for_client` settles it (no frame judge in this fixture).
+/// The loop wraps that box in two more layers this does not run: the
+/// notification-streaming future and the sealed-hold scope's own box. Both
+/// are inert on a refusal (no notification, no hold), but a large allocation
+/// of theirs is outside these readings.
+async fn dispatch_as_served(fixture: &Fixture, request: Value) -> Value {
+    let (answer, staged) = Box::pin(super::super::Gateway::dispatch_single_staged(
+        &fixture.meta,
+        &fixture.tool_policy,
+        &fixture.mtls_policy,
+        request,
+        client(),
+    ))
+    .await;
+    let answer = answer.expect("a request carrying an id must produce a response");
+    let frame = answer.delivered_unjudged(&fixture.meta, SESSION).await;
+    staged.commit(frame.delivers_result());
+    frame
+        .stdio_value()
+        .map(std::borrow::Cow::into_owned)
+        .expect("a refusal is delivered as a frame")
 }
 
 fn assert_refusal(phase: &str, response: &Value, expected: (i64, &str)) {
@@ -99,10 +158,18 @@ fn assert_refusal(phase: &str, response: &Value, expected: (i64, &str)) {
 }
 
 fn assert_within_budget(phase: &str, payload_bytes: usize, measured: Measured) {
+    let small_bytes = measured.bytes - measured.large_bytes;
     assert!(
-        measured.bytes < REFUSAL_BUDGET,
-        "{phase} refusal of a {payload_bytes}-byte payload allocated {measured}, \
-         above the {REFUSAL_BUDGET}-byte budget"
+        small_bytes <= SMALL_BUDGET,
+        "{phase} refusal of a {payload_bytes}-byte payload allocated {measured}: \
+         {small_bytes} bytes under {LARGE_BYTES} each, above the {SMALL_BUDGET}-byte cap"
+    );
+    assert!(
+        measured.large <= LARGE_ALLOCATIONS && measured.large_bytes <= LARGE_BUDGET,
+        "{phase} refusal of a {payload_bytes}-byte payload allocated {measured}: \
+         {} bytes in large allocations, above {LARGE_ALLOCATIONS} or {LARGE_BUDGET} bytes \
+         (another boxed dispatch, or a dispatch state that grew?)",
+        measured.large_bytes
     );
 }
 
@@ -133,7 +200,8 @@ fn refusal_cold_and_warm(payload_bytes: usize, nonce: Option<Value>, expected: (
             "the fixture must serve the cold reading first"
         );
 
-        let (cold_response, cold) = measure_async(|| dispatch(&fixture, cold_request)).await;
+        let (cold_response, cold) =
+            measure_async(|| dispatch_as_served(&fixture, cold_request)).await;
         assert_refusal("cold", &cold_response, expected);
         assert_eq!(
             fixture.backend.tools_call_count(),
@@ -158,7 +226,8 @@ fn refusal_cold_and_warm(payload_bytes: usize, nonce: Option<Value>, expected: (
             "the admitted call must have reached the real backend"
         );
 
-        let (warm_response, warm) = measure_async(|| dispatch(&fixture, warm_request)).await;
+        let (warm_response, warm) =
+            measure_async(|| dispatch_as_served(&fixture, warm_request)).await;
         assert_refusal("warm", &warm_response, expected);
         assert_eq!(
             fixture.backend.tools_call_count(),
@@ -195,7 +264,8 @@ fn replay_under_budget(payload_bytes: usize) {
             "the admitted call must have reached the real backend"
         );
 
-        let (response, measured) = measure_async(|| dispatch(&fixture, replay_request)).await;
+        let (response, measured) =
+            measure_async(|| dispatch_as_served(&fixture, replay_request)).await;
 
         assert_refusal("replay", &response, REPLAYED_NONCE);
         assert_eq!(
@@ -323,5 +393,61 @@ fn known_size_allocation_is_reported_at_its_known_size() {
     assert!(
         measured.bytes >= SIZE as u64 && measured.bytes < (SIZE * 2) as u64,
         "a {SIZE}-byte reservation was reported as {measured}"
+    );
+}
+
+/// MIK-8400 control: the large-allocation count and the largest single
+/// allocation sit on the exact `LARGE_BYTES` boundary. A counter that never
+/// counted would let every refusal row pass its bound.
+#[test]
+fn the_large_allocation_count_starts_at_its_boundary() {
+    if isolate(&test_path(
+        "the_large_allocation_count_starts_at_its_boundary",
+    )) {
+        return;
+    }
+    let ((below, at), measured) = measure(|| {
+        (
+            std::hint::black_box(Vec::<u8>::with_capacity(LARGE_BYTES - 1)),
+            std::hint::black_box(Vec::<u8>::with_capacity(LARGE_BYTES)),
+        )
+    });
+    assert_eq!(
+        (below.capacity(), at.capacity()),
+        (LARGE_BYTES - 1, LARGE_BYTES)
+    );
+    assert_eq!(
+        measured.large, 1,
+        "only the {LARGE_BYTES}-byte one is large: {measured}"
+    );
+    assert_eq!(measured.largest, LARGE_BYTES as u64, "{measured}");
+    assert_eq!(measured.large_bytes, LARGE_BYTES as u64, "{measured}");
+}
+
+/// MIK-8400 control: each scope starts its large-allocation counters at zero,
+/// and a reallocation that grows a block past `LARGE_BYTES` counts as large,
+/// since the allocator was asked for a block that size.
+#[test]
+fn the_large_allocation_counters_reset_and_see_a_reallocation() {
+    if isolate(&test_path(
+        "the_large_allocation_counters_reset_and_see_a_reallocation",
+    )) {
+        return;
+    }
+    let (first, large) = measure(|| std::hint::black_box(Vec::<u8>::with_capacity(LARGE_BYTES)));
+    let (second, small) = measure(|| std::hint::black_box(Vec::<u8>::with_capacity(16)));
+    assert_eq!((first.capacity(), second.capacity()), (LARGE_BYTES, 16));
+    assert_eq!(large.large, 1, "{large}");
+    assert_eq!(
+        (small.large, small.large_bytes),
+        (0, 0),
+        "a scope kept the last one's: {small}"
+    );
+    let mut grown = Vec::<u8>::with_capacity(16);
+    let ((), regrown) = measure(|| grown.reserve_exact(LARGE_BYTES));
+    assert!(grown.capacity() >= LARGE_BYTES);
+    assert_eq!(
+        regrown.large, 1,
+        "a reallocation past the boundary was not counted: {regrown}"
     );
 }

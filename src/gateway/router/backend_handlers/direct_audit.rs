@@ -172,17 +172,9 @@ pub(super) async fn audited_call(
     #[cfg(feature = "firewall")]
     if state.firewall.as_ref().is_some_and(|fw| fw.relay_active()) {
         let collected = crate::gateway::meta_mcp::invoke::relay::collecting(Box::pin(judged));
-        return crate::gateway::meta_mcp::sealed_hold::scoped(
-            crate::gateway::meta_mcp::sealed_hold::HoldPolicy::Release,
-            collected,
-        )
-        .await;
+        return crate::gateway::meta_mcp::sealed_hold::scoped(collected).await;
     }
-    crate::gateway::meta_mcp::sealed_hold::scoped(
-        crate::gateway::meta_mcp::sealed_hold::HoldPolicy::Release,
-        Box::pin(judged),
-    )
-    .await
+    crate::gateway::meta_mcp::sealed_hold::scoped(Box::pin(judged)).await
 }
 
 async fn audited_call_judged(

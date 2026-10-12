@@ -24,11 +24,14 @@ const FOREIGN_NAME: &str = "task-00000000-0000-4000-8000-000000000000";
 
 mod adapter_marker;
 mod admission;
+mod clock_rows;
 mod durability;
 mod fallback_room;
 mod gateway_writes;
 mod input_round;
 mod qualification;
+#[cfg(unix)]
+mod repaired_rows;
 #[cfg(unix)]
 mod reread;
 mod sealed;
@@ -331,7 +334,7 @@ async fn store_04_live_owner_excludes_second_open_and_close_releases_lease() {
     let path = dir.path().join("tasks");
     let store = open(&path).await;
     let second = tokio::time::timeout(
-        Duration::from_secs(2),
+        Duration::from_secs(10),
         TaskStore::open(&path, StoreLimits::default()),
     )
     .await

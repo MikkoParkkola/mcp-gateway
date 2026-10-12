@@ -137,6 +137,10 @@ async fn end_ineligible(shared: &Shared, hub: &Weak<EventsHub>) -> bool {
 
 /// The task: reconnect until stopped.
 pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub: Weak<EventsHub>) {
+    #[cfg(test)]
+    {
+        *shared.ran_interactive.lock() = Some(crate::oauth::login_gate::interactive());
+    }
     let _gate = tokio::select! {
         () = shared.stop.cancelled() => return,
         gate = Arc::clone(&shared.gate).lock_owned() => gate,
@@ -162,8 +166,14 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
             shared.before_park.pause().await;
             tokio::select! {
                 () = shared.stop.cancelled() => return,
-                _ = wake.changed() => {}
-                () = tokio::time::sleep(Duration::from_secs(30)) => {}
+                _ = wake.changed() => {
+                    #[cfg(test)]
+                    shared.waits.ended(WaitEnd::Revival);
+                }
+                () = tokio::time::sleep(Duration::from_secs(30)) => {
+                    #[cfg(test)]
+                    shared.waits.ended(WaitEnd::Timer);
+                }
             }
             continue;
         };
@@ -189,17 +199,60 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
         // A revival cuts the wait; a filter change does not, so churn on the
         // subscriptions cannot reconnect a failing backend early (T35).
         let deadline = tokio::time::Instant::now() + delay;
+        #[cfg(test)]
+        shared.waits.begin();
         loop {
             tokio::select! {
                 () = shared.stop.cancelled() => return,
-                () = tokio::time::sleep_until(deadline) => break,
+                () = tokio::time::sleep_until(deadline) => {
+                    #[cfg(test)]
+                    shared.waits.ended(WaitEnd::Timer);
+                    break;
+                }
                 _ = wake.changed() => {
                     if registered_anew(&registry, &shared.name, &backend) {
+                        #[cfg(test)]
+                        shared.waits.ended(WaitEnd::Revival);
                         break;
                     }
                 }
             }
         }
+    }
+}
+
+/// What ended a wait: a revival signal, or the wait's own timer (T35).
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum WaitEnd {
+    Revival,
+    Timer,
+}
+
+/// The task's waits, seen from a test: what ended each one, in order, so a
+/// row asserts the cause of a reconnect instead of timing it, and a signal
+/// that the task has begun a backoff wait, so a row sends its revival
+/// during the wait instead of after a sleep.
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(super) struct WaitProbe {
+    ends: parking_lot::Mutex<Vec<WaitEnd>>,
+    pub(super) began: tokio::sync::Notify,
+}
+
+#[cfg(test)]
+impl WaitProbe {
+    fn begin(&self) {
+        self.began.notify_one();
+    }
+
+    fn ended(&self, cause: WaitEnd) {
+        self.ends.lock().push(cause);
+    }
+
+    /// The causes recorded so far.
+    pub(super) fn ends(&self) -> Vec<WaitEnd> {
+        self.ends.lock().clone()
     }
 }
 

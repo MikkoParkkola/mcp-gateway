@@ -83,6 +83,10 @@ A failed call comes back as a normal tool result whose payload has `"isError": t
 | Called a backend whose server will not start | `isError: true`, a transport error such as "stdio backend ... exited before initialize (exit status: 3): missing_module, stderr matched \"Cannot find module\"", `recovery.error_code: BACKEND_ERROR`, `recovery.retry: true` |
 | Called a tool `security.tool_policy` denies | HTTP 403 with JSON-RPC error `-32600`: "Tool '...' on server '...' is blocked by security policy" |
 
+On a backend where each user has their own tool catalogue (identity propagation), a tool your
+catalogue does not offer is answered as JSON-RPC error `-32601`, exactly as a name the gateway does
+not know, rather than with the "does not list" text above.
+
 A backend that fails does not take the gateway down: other backends keep answering.
 
 ## Tested

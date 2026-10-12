@@ -51,7 +51,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crate::gateway::task_service::{
-    CommitObserver, CommitStage, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
+    CancelDelivery, CommitObserver, CommitStage, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
 };
 
 /// The opaque handle the peer answers a task-augmented call with.
@@ -244,6 +244,11 @@ impl FakeRecovery {
 
 #[async_trait::async_trait]
 impl UpstreamRecovery for FakeRecovery {
+    /// This suite asserts nothing about upstream cancels (MIK-7642 PR.D rows do).
+    async fn cancel(&self, _handle: &UpstreamHandle, _deadline: Duration) -> CancelDelivery {
+        CancelDelivery::Confirmed
+    }
+
     async fn claims(&self, backend: &str) -> bool {
         backend == BACKEND
     }

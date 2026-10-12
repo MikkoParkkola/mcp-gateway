@@ -303,6 +303,10 @@ pub struct HttpTransport {
     /// fail-safe direction -- the counter can only ever cost a retry, never
     /// license one.
     redirects_followed: Arc<AtomicU64>,
+    /// The last failed send's error chain and kind flags, kept so a test that
+    /// fails on the sanitized message can print the real cause (MIK-8359).
+    #[cfg(test)]
+    last_send_error: parking_lot::Mutex<Option<String>>,
     /// Connected flag
     connected: AtomicBool,
     /// Request timeout (used in client builder)
@@ -316,6 +320,11 @@ pub struct HttpTransport {
     switched: AtomicBool,
     /// OAuth client for authenticated backends (Arc allows background refresh task to share it)
     oauth_client: Option<Arc<TokioMutex<OAuthClient>>>,
+    /// The OAuth client's login gate, cloned at construction so a request's
+    /// token step reads its epoch and cohort without the client mutex
+    /// (MIK-8339). Every OAuth transport has one: a client that arrives
+    /// without a gate is given this one, so there is no ungated login path.
+    login_gate: Arc<crate::oauth::login_gate::LoginGate>,
     /// Background token-refresh task handle, set during `initialize()`.
     /// Stored in a lock so `initialize(&self)` can assign it after construction.
     refresh_task: RwLock<Option<JoinHandle<()>>>,
@@ -351,6 +360,13 @@ fn bearer_header_value(token: &str) -> Result<header::HeaderValue> {
 }
 
 impl HttpTransport {
+    /// Test-only: this transport's OAuth client, for a row that ages its
+    /// token (MIK-8269).
+    #[cfg(test)]
+    pub(crate) fn oauth_client_for_test(&self) -> Option<Arc<TokioMutex<OAuthClient>>> {
+        self.oauth_client.clone()
+    }
+
     /// Create a new HTTP transport
     ///
     /// If `streamable_http` is true, uses direct POST without SSE handshake.
@@ -419,6 +435,14 @@ impl HttpTransport {
             require_secure_oauth_target(&base_origin)?;
         }
         let redirects_followed = Arc::new(AtomicU64::new(0));
+        let login_gate = oauth_client
+            .as_ref()
+            .and_then(OAuthClient::login_gate)
+            .unwrap_or_default();
+        let oauth_client = oauth_client.map(|client| match client.login_gate() {
+            Some(_) => client,
+            None => client.with_login_gate(Arc::clone(&login_gate)),
+        });
         let client = client::build(
             base_origin,
             timeout,
@@ -439,11 +463,14 @@ impl HttpTransport {
             reinit_needed: AtomicBool::new(false),
             reinit_lock: TokioMutex::new(()),
             redirects_followed,
+            #[cfg(test)]
+            last_send_error: parking_lot::Mutex::new(None),
             connected: AtomicBool::new(false),
             timeout,
             streamable_http: RwLock::new(streamable_http),
             switched: AtomicBool::new(false),
             oauth_client: oauth_client.map(|c| Arc::new(TokioMutex::new(c))),
+            login_gate,
             refresh_task: RwLock::new(None),
             protocol_version: RwLock::new(protocol_version),
         }))

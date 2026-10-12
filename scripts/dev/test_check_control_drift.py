@@ -144,7 +144,7 @@ def _repo_with_tag():
 
     def git(*args):
         subprocess.run(
-            ["git", "-C", str(root), *args],
+            ["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-C", str(root), *args],
             check=True,
             capture_output=True,
             env={**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"},
@@ -157,14 +157,14 @@ def _repo_with_tag():
     git("add", "a")
     git("commit", "-qm", "released")
     released = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True
+        ["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True
     ).stdout.strip()
     git("tag", "v3.4.0")
     (root / "b").write_text("b")
     git("add", "b")
     git("commit", "-qm", "after the release")
     later = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True
+        ["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True
     ).stdout.strip()
     return root, released, later
 

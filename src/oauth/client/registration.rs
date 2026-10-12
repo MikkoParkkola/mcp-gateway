@@ -36,11 +36,18 @@ impl OAuthClient {
                     // browser authorize step below never completes. Without this
                     // every connection re-registers and opens a new OAuth tab.
                     let credential_key = self.credential_key()?;
-                    match self.storage.save_client_id(
-                        &credential_key,
-                        &self.resource_url,
-                        &client_id,
-                    ) {
+                    // Polled, so this login's cancel can end a wait on another
+                    // process's repair lock (MIK-8344).
+                    match self
+                        .storage
+                        .save_client_id_polled(
+                            &credential_key,
+                            &self.resource_url,
+                            &client_id,
+                            crate::oauth::storage::REPAIR_LOCK_BOUND,
+                        )
+                        .await
+                    {
                         Ok(persisted) => {
                             // First-writer-wins: a co-located instance may have
                             // registered concurrently; adopt the authoritative

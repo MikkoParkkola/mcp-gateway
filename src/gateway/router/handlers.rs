@@ -46,11 +46,13 @@ pub(super) use health::health_handler;
 pub(super) use metrics_scrape::metrics_handler;
 pub(crate) use modern_response::shape_modern_response;
 pub(super) use owner::owner_of;
+// The direct route admits its execution lease under the same owner (MIK-8154).
 #[cfg(test)]
 use owner::session_owner;
 pub(super) use session_end::{mcp_delete_handler, sse_deprecated_handler};
 pub(super) use sse::mcp_sse_handler;
 use sse::unsupported_version_error;
+pub(super) use tasks::route_owners;
 
 /// The caller's `Mcp-Session-Id`, one rule for every session route: missing,
 /// non-UTF-8, empty and whitespace-only values are all "no session" (F9).
@@ -126,16 +128,9 @@ pub(super) async fn meta_mcp_handler(
     // MIK-8176: the slots this request's mints take are owned here, outside
     // the grant-audit replacer, and by the dispatch future itself, so a
     // stream that polls it after this handler returns still has its scope.
-    // MIK-8176 stage 2: a JSON answer is handed off by its reply, so its
-    // unsent slots are given back; a stream's handoff lands in stage 3, so a
-    // request offering one only counts until then.
-    let policy = if offers_event_stream {
-        crate::gateway::meta_mcp::sealed_hold::HoldPolicy::CountOnly
-    } else {
-        crate::gateway::meta_mcp::sealed_hold::HoldPolicy::Release
-    };
+    // MIK-8176: every answer is handed off where its bytes leave (the JSON
+    // reply, or the stream's answer event), so unsent slots are given back.
     let dispatch = crate::gateway::meta_mcp::sealed_hold::scoped(
-        policy,
         crate::gateway::meta_mcp::grant_audit::slot_http(
             logger.clone(),
             // COLLUDE.1: one relay-receipt collector spans dispatch and finalize.
@@ -144,7 +139,16 @@ pub(super) async fn meta_mcp_handler(
                     guard_for_scope,
                     Box::pin(crate::gateway::meta_mcp::invoke::relay::collecting_http(
                         Arc::clone(&state.meta_mcp),
-                        meta_mcp_dispatch(state, http_request),
+                        // One visibility judgement per request (MIK-8340),
+                        // from intake's sanitize exemption (MIK-8154 D1) to
+                        // the dispatch: the scope rides this future, so a
+                        // notification-first stream polling it after the
+                        // handler returns still reads the same answers.
+                        // Boxed first: the memo then wraps a pointer, so no
+                        // frame polled through the dispatch holds a copy of it.
+                        crate::gateway::meta_mcp::visible::with_visibility_memo(Box::pin(
+                            meta_mcp_dispatch(state, http_request),
+                        )),
                     )),
                 )
                 .await
@@ -203,7 +207,8 @@ async fn meta_mcp_dispatch(
         &intake.grant_subject,
     );
     let (session_id, chain_nonce) = (&intake.session_id, &intake.chain_nonce);
-    let (request, method, external_tool) = (&intake.request, &intake.method, &intake.external_tool);
+    let (request, method, external_tool) =
+        (&intake.request, &intake.method, intake.external_tool());
     let (owner, events_owner, header_profile) =
         (&intake.owner, &intake.events_owner, &intake.header_profile);
     let (code_mode_url_active, surface_request) =
@@ -245,6 +250,12 @@ async fn meta_mcp_dispatch(
         api_key_name: client.as_ref().map(|c| c.name.as_str()),
         agent_id: agent_identity.proven_agent_id(),
         grant_subject: grant_subject.as_ref(),
+        caller: crate::identity_propagation::CallerProof::new(
+            verified_identity.as_ref(),
+            crate::identity_propagation::CallerProvenance::classify(
+                client.as_ref().map(|client| client.principal.as_str()),
+            ),
+        ),
     };
     // Every shared backend's one level, set over the gateway's own credential:
     // an operator action. Checked before dispatch so a case variant of the
@@ -390,14 +401,23 @@ async fn meta_mcp_dispatch(
                 .meta_mcp
                 .discover_document(state.live_config.running().server.modern_protocol),
         ),
-        "initialize" => state.meta_mcp.handle_initialize(
-            id,
-            params,
-            Some(session_id.as_str()),
-            header_profile.as_deref(),
-            era,
-            invoke_scope,
-        ),
+        "initialize" => {
+            // Its greeting counts tools per backend: the same managed-grant
+            // recheck as every listing, so a rotated grant's stale slot never
+            // contributes (MIK-8356 R4.2).
+            state
+                .meta_mcp
+                .revalidate_caller_slots(invoke_scope.caller)
+                .await;
+            state.meta_mcp.handle_initialize(
+                id,
+                params,
+                Some(session_id.as_str()),
+                header_profile.as_deref(),
+                era,
+                invoke_scope,
+            )
+        }
         "tools/list" => {
             // NFR.OBS.2. The inputs that decide this surface, and the
             // cacheScope the response will carry — recorded before the list is
@@ -426,6 +446,12 @@ async fn meta_mcp_dispatch(
                 cache_scope_advertised = is_modern,
                 "tools/list surface inputs and cache scope"
             );
+            // MIK-8356: a rotated or revoked managed grant's slot is never this
+            // caller's listing view; one recheck for every listing path.
+            state
+                .meta_mcp
+                .revalidate_caller_slots(invoke_scope.caller)
+                .await;
             state.meta_mcp.handle_tools_list_with_url_override(
                 id,
                 params,
@@ -439,8 +465,25 @@ async fn meta_mcp_dispatch(
         // by the same code every other response takes. `Err` is a refusal that
         // already carries the status it must be sent with, returned as it is.
         "tools/call" => {
+            // MIK-7642 PR.C: registered so this caller's own explicit cancel
+            // aborts the call (the transport then cancels it on the backend
+            // by the backend's id); held until the call ends.
+            let (_cancel_entry, cancel_on) = serde_json::to_value(&id)
+                .ok()
+                .and_then(|key_id| {
+                    let caller = (
+                        grant_subject.as_ref(),
+                        cert_identity.as_ref(),
+                        client.as_ref(),
+                    );
+                    dispatch_intake::mcp_cancel_key(caller, session_id, &key_id)
+                })
+                .and_then(|key| state.meta_mcp.inflight_calls().register(key))
+                .unzip();
+            let answer_id = id.clone();
             // Boxed: an inline future would enlarge this dispatcher's own state.
-            match Box::pin(dispatch_tools_call::tools_call(
+            // The request's visibility memo is already open (see the handler).
+            let call = Box::pin(dispatch_tools_call::tools_call(
                 &state,
                 &intake,
                 id,
@@ -449,11 +492,26 @@ async fn meta_mcp_dispatch(
                 &mut signing_context,
                 &mut response_targets,
                 &mut execution,
-            ))
-            .await
-            {
-                Ok(response) => response,
-                Err(response) => return response,
+            ));
+            let called = match cancel_on {
+                Some(cancel_on) => cancel_on.run(call).await,
+                None => Some(call.await),
+            };
+            match called {
+                Some(Ok(response)) => response,
+                Some(Err(response)) => return response,
+                None => {
+                    // Not counted against the client: the cancel was its
+                    // own choice. The admission lease settles on drop as
+                    // dispatched, so a retry never re-runs the call.
+                    return build_error_response(
+                        Some(answer_id),
+                        crate::gateway::router::inflight_calls::CLIENT_CANCELLED_CODE,
+                        crate::gateway::router::inflight_calls::CLIENT_CANCELLED_MESSAGE,
+                        session_id,
+                        StatusCode::OK,
+                    );
+                }
             }
         }
         // Resources
@@ -625,8 +683,7 @@ async fn meta_mcp_dispatch(
     let router = state.firewall.as_deref();
     #[cfg(not(feature = "firewall"))]
     let router = None;
-    let mut response = (state.meta_mcp).finalize_routed(response, &delivery, router);
-    state.meta_mcp.release_unsent_hold(&mut response).await; // MIK-8131
+    let response = (state.meta_mcp).finalize_routed(response, &delivery, router);
     // Kept for the stored delivery (cloned only when an execution stores it).
     let finalized = execution.as_ref().map(|_| response.clone());
     // MIN.2: judged on the finalized answer; the verdict rides its delivery

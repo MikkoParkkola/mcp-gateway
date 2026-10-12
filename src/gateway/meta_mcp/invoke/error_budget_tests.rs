@@ -227,12 +227,7 @@ fn rate_limited_exclusion_emits_a_debug_event() {
     // event instead. Same fix shape as
     // `gateway::server::mod::tests::stdio_observation::records_for_session`,
     // for the analogous problem at a different callsite.
-    static INTEREST: std::sync::Once = std::sync::Once::new();
-    INTEREST.call_once(|| {
-        let _ = tracing::subscriber::set_global_default(
-            Registry::default().with(tracing::level_filters::LevelFilter::DEBUG),
-        );
-    });
+    crate::test_log_capture::keep_interest_open();
 
     let events: Arc<Mutex<Vec<Fields>>> = Arc::new(Mutex::new(Vec::new()));
 

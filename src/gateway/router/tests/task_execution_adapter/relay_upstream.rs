@@ -15,7 +15,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use crate::gateway::task_service::{UpstreamAnswer, UpstreamHandle, UpstreamRecovery};
+use crate::gateway::task_service::{
+    CancelDelivery, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
+};
 use crate::security::firewall::{CollusionAction, CollusionConfig, Firewall, FirewallConfig};
 
 /// What the upstream task finally answers, long enough for several fingerprints.
@@ -87,6 +89,11 @@ struct Recovery(Arc<AtomicUsize>, Answering);
 
 #[async_trait::async_trait]
 impl UpstreamRecovery for Recovery {
+    /// This suite asserts nothing about upstream cancels (MIK-7642 PR.D rows do).
+    async fn cancel(&self, _handle: &UpstreamHandle, _deadline: Duration) -> CancelDelivery {
+        CancelDelivery::Confirmed
+    }
+
     async fn claims(&self, backend: &str) -> bool {
         backend == BACKEND
     }
@@ -107,21 +114,25 @@ async fn followed(answer: Value) -> (Arc<AppState>, tempfile::TempDir) {
 
 /// [`followed`], with the query answering whatever `answering` returns.
 async fn followed_with(answering: Answering) -> (Arc<AppState>, tempfile::TempDir, String) {
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            collusion: CollusionConfig {
-                action: CollusionAction::Block,
-                sources: vec![format!("{BACKEND}:{TOOL}")],
-                ..CollusionConfig::default()
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    sources: vec![format!("{BACKEND}:{TOOL}")],
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+            None,
+        )
+        .keyed_for_test(),
+    );
     let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta(
         &two_principal_auth(),
         None,
         |mut meta| {
+            meta.share_keyring_with_for_test(&firewall);
             meta.set_firewall(Some(firewall));
             meta
         },

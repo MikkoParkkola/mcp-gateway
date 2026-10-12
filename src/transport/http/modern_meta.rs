@@ -152,11 +152,12 @@ pub(crate) fn with_modern_meta(method: &str, params: Option<Value>) -> Result<Op
 ///
 /// The opt-in selects task-augmented execution upstream, so the vocabulary it
 /// unlocks is exactly the one the adapter implements: the initial submission
-/// (`tools/call`) and the poll (`tasks/get`). `tasks/update` and `tasks/cancel`
-/// exist upstream and are outside this adapter by construction — an allow-list
-/// keeps a future caller from reaching them through this door by passing a
-/// method name.
-pub(super) const TASK_CAPABILITY_METHODS: [&str; 2] = ["tools/call", "tasks/get"];
+/// (`tools/call`), the poll (`tasks/get`), and the one cancel of a handle whose
+/// task the owner cancelled (`tasks/cancel`, MIK-7642 design r5 R5.2).
+/// `tasks/update` exists upstream and is outside this adapter by construction
+/// — an allow-list keeps a future caller from reaching it through this door by
+/// passing a method name.
+pub(super) const TASK_CAPABILITY_METHODS: [&str; 3] = ["tools/call", "tasks/get", "tasks/cancel"];
 
 /// Build the modern `_meta` envelope, then declare the one tasks extension in it.
 ///
@@ -217,5 +218,41 @@ pub(super) fn value_kind(value: &Value) -> &'static str {
         Value::String(_) => "a string",
         Value::Array(_) => "an array",
         Value::Object(_) => "an object",
+    }
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::*;
+
+    /// MIK-8195 W1 (`with_modern_meta`, critical d): params that cannot carry
+    /// `_meta` are refused before dispatch, naming the method.
+    #[test]
+    fn non_object_params_are_refused() {
+        let err = with_modern_meta("tools/call", Some(serde_json::json!(["a"])))
+            .expect_err("an array cannot carry _meta");
+        let Error::Protocol(message) = err else {
+            panic!("not a protocol refusal");
+        };
+        assert!(message.contains("`params` must be an object"), "{message}");
+        assert!(message.contains("tools/call"), "{message}");
+    }
+
+    /// MIK-8195 W1 (`with_modern_meta`, critical d): a caller's non-object
+    /// `_meta` is refused rather than overwritten or dropped.
+    #[test]
+    fn a_non_object_meta_is_refused() {
+        let err = with_modern_meta(
+            "tools/call",
+            Some(serde_json::json!({"name": "x", "_meta": "forged"})),
+        )
+        .expect_err("a string _meta is refused");
+        let Error::Protocol(message) = err else {
+            panic!("not a protocol refusal");
+        };
+        assert!(
+            message.contains("`params._meta` must be an object"),
+            "{message}"
+        );
     }
 }

@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! How the runtime ends once `run` returned (MIK-7683, MIK-8084).
 
-use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use mcp_gateway::cli::Command;
@@ -33,33 +32,9 @@ fn stuck_task(runtime: &tokio::runtime::Runtime) -> mpsc::Sender<()> {
     release
 }
 
-/// Everything logged at ERROR while `body` runs on this thread.
-fn errors_logged(body: impl FnOnce()) -> String {
-    #[derive(Clone, Default)]
-    struct Captured(Arc<Mutex<Vec<u8>>>);
-    impl Write for Captured {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0
-                .lock()
-                .expect("the log buffer")
-                .extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let captured = Captured::default();
-    let writer = captured.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::ERROR)
-        .with_ansi(false)
-        .with_writer(move || writer.clone())
-        .finish();
-    tracing::subscriber::with_default(subscriber, body);
-    let bytes = captured.0.lock().expect("the log buffer").clone();
-    String::from_utf8(bytes).expect("utf-8 log lines")
-}
+#[path = "test_support/error_capture.rs"]
+mod error_capture;
+use error_capture::errors_logged;
 
 /// MIK-7683 and `MIK-8084.SHUTDOWN.1`: every serve mode bounds the runtime's
 /// shutdown, stdio and HTTP (with or without the subcommand) alike. Other

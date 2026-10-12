@@ -59,7 +59,7 @@ async fn a_scored_call_tracks_its_identity_with_an_idle_ttl_deadline() {
     })
     .await;
 
-    let before = now_unix();
+    let before = now_unix().expect("clock after 1970");
     let (status, body) = post(&app, scanned_call(), &[("authorization", "Bearer k")]).await;
     assert_ne!(status, StatusCode::UNAUTHORIZED, "body: {body}");
     assert_eq!(lifecycle.tracked_count(), 1, "the route tracked nothing");
@@ -74,7 +74,7 @@ async fn a_scored_call_tracks_its_identity_with_an_idle_ttl_deadline() {
         "reclaimed before its deadline: the write site used a shorter TTL"
     );
     assert_eq!(
-        lifecycle.reap(now_unix() + IDLE_TTL.as_secs() + 1),
+        lifecycle.reap(now_unix().expect("clock after 1970") + IDLE_TTL.as_secs() + 1),
         1,
         "not reclaimed past its deadline: the write site used a longer TTL"
     );

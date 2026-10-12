@@ -14,12 +14,33 @@ pub(super) struct TestSeams {
     pub(super) data_dir: Option<PathBuf>,
     bound_port: Option<oneshot::Sender<u16>>,
     /// Starts the graceful shutdown as Ctrl+C or SIGTERM would (MIK-8156).
+    /// A mutex because `run_stdio_on` takes it through `&self` (MIK-8364).
     #[cfg(test)]
-    shutdown: Option<oneshot::Receiver<()>>,
+    shutdown: std::sync::Mutex<Option<oneshot::Receiver<()>>>,
     /// Receives `run`'s in-flight request gate, so a test can hold a request
     /// open across the drain (MIK-8156).
     #[cfg(test)]
     inflight: Option<oneshot::Sender<std::sync::Arc<tokio::sync::Semaphore>>>,
+    /// Receives the stdio session's Meta-MCP, so a test can read the
+    /// continuation table that session holds (MIK-8176). A mutex because
+    /// `run_stdio_on` reports it through `&self`.
+    #[cfg(test)]
+    stdio_meta_mcp: std::sync::Mutex<
+        Option<oneshot::Sender<std::sync::Arc<crate::gateway::meta_mcp::MetaMcp>>>,
+    >,
+    /// The stdio telemetry saver's interval (MIK-8364); `None` is the
+    /// production one. A row sets it long, so no tick lands mid-row.
+    #[cfg(test)]
+    telemetry_save_every: Option<std::time::Duration>,
+    /// A pause at the start of this gateway's stdio dispatches, before the
+    /// request is observed (MIK-8364 drain-window row). Per gateway, so no
+    /// other session in the test binary stops on it.
+    #[cfg(test)]
+    pub(super) stdio_dispatch_hold: std::sync::Arc<crate::test_pause::Slot>,
+    /// Notified when this gateway's stdio read loop has stopped and the
+    /// drain begins (MIK-8364 drain-window row).
+    #[cfg(test)]
+    pub(super) stdio_drain_started: std::sync::Arc<tokio::sync::Notify>,
 }
 
 impl TestSeams {
@@ -37,10 +58,35 @@ impl TestSeams {
         }
     }
 
+    /// The stdio telemetry saver's interval a test set, if any (MIK-8364).
+    #[cfg(test)]
+    pub(super) fn telemetry_save_every(&self) -> Option<std::time::Duration> {
+        self.telemetry_save_every
+    }
+
     /// The test's shutdown trigger, taken once by `run`.
     #[cfg(test)]
-    pub(super) fn take_shutdown_trigger(&mut self) -> Option<oneshot::Receiver<()>> {
-        self.shutdown.take()
+    pub(super) fn take_shutdown_trigger(&self) -> Option<oneshot::Receiver<()>> {
+        self.shutdown
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+
+    /// Hand the stdio session's Meta-MCP to the test that asked for it.
+    #[cfg(test)]
+    pub(super) fn report_stdio_meta_mcp(
+        &self,
+        meta_mcp: &std::sync::Arc<crate::gateway::meta_mcp::MetaMcp>,
+    ) {
+        let sender = self
+            .stdio_meta_mcp
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(sender) = sender {
+            sender.send(std::sync::Arc::clone(meta_mcp)).ok();
+        }
     }
 
     /// Hand `run`'s in-flight request gate to the test that asked for it.
@@ -77,6 +123,29 @@ pub(super) async fn shutdown_signal_or_trigger(
 }
 
 impl super::Gateway {
+    /// The pause at the start of this gateway's stdio dispatches, and the
+    /// notice that its drain has begun (MIK-8364).
+    #[cfg(test)]
+    pub(super) fn stdio_drain_seams_for_test(
+        &self,
+    ) -> (
+        std::sync::Arc<crate::test_pause::Slot>,
+        std::sync::Arc<tokio::sync::Notify>,
+    ) {
+        (
+            std::sync::Arc::clone(&self.test_seams.stdio_dispatch_hold),
+            std::sync::Arc::clone(&self.test_seams.stdio_drain_started),
+        )
+    }
+
+    /// Run the stdio telemetry saver every `every` instead of the production
+    /// interval (MIK-8364).
+    #[cfg(test)]
+    pub(super) fn with_telemetry_save_interval(mut self, every: std::time::Duration) -> Self {
+        self.test_seams.telemetry_save_every = Some(every);
+        self
+    }
+
     /// The port `run` binds, for a test that configured `server.port: 0`, so
     /// no port is picked and dropped before the gateway binds it (MIK-7984).
     pub(super) fn bound_port_for_test(&mut self) -> oneshot::Receiver<u16> {
@@ -95,12 +164,30 @@ impl super::Gateway {
         receiver
     }
 
+    /// The stdio session's Meta-MCP, sent once `run_stdio_on` builds it.
+    #[cfg(test)]
+    pub(super) fn stdio_meta_mcp_for_test(
+        &mut self,
+    ) -> oneshot::Receiver<std::sync::Arc<crate::gateway::meta_mcp::MetaMcp>> {
+        let (sender, receiver) = oneshot::channel();
+        *self
+            .test_seams
+            .stdio_meta_mcp
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(sender);
+        receiver
+    }
+
     /// A trigger that starts `run`'s graceful shutdown, as a signal would.
     /// Sending, or dropping the sender, starts it.
     #[cfg(test)]
     pub(super) fn shutdown_trigger_for_test(&mut self) -> oneshot::Sender<()> {
         let (sender, receiver) = oneshot::channel();
-        self.test_seams.shutdown = Some(receiver);
+        *self
+            .test_seams
+            .shutdown
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(receiver);
         sender
     }
 }

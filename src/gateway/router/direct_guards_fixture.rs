@@ -9,17 +9,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use axum::body::to_bytes;
-use axum::http::StatusCode;
 use serde_json::{Value, json};
-use tower::ServiceExt;
 
 use super::create_router;
 use super::tests::{test_router_app_state_with_auth, test_router_app_state_with_auth_and_config};
 use crate::backend::Backend;
-use crate::config::{ApiKeyConfig, AuthConfig, BackendConfig, FailsafeConfig};
+use crate::config::{ApiKeyConfig, AuthConfig, BackendConfig};
 use crate::gateway::meta_mcp::MetaMcp;
-use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::transport::Transport;
 
@@ -29,7 +25,8 @@ use crate::transport::Transport;
 pub(crate) enum Answer {
     /// Ordinary success, `isError: false`.
     Ok,
-    /// Like `Ok`, its `tools/list` also naming a second tool, `note`.
+    /// Like `Ok`, its `tools/list` also naming a second tool, `note`, and an
+    /// open-schema backend tool named `gateway_invoke` (MIK-8154 S9f).
     WithNote,
     /// Success envelope, `isError: true` (a tool refusing a request).
     IsError,
@@ -50,6 +47,10 @@ pub(crate) enum Answer {
     AskOnce,
     /// Like `AskOnce`, the question carrying no `requestState` (MIK-8078).
     AskNoState,
+    /// Asks on every call that carries no `requestState`, and answers every
+    /// retry that does: each fresh call takes one continuation slot, and a
+    /// redeem gives it back without taking another (MIK-8293).
+    AskAlways,
     /// A completed answer that still carries a `requestState` (MIK-8078).
     DoneWithState,
     /// Like `AskOnce`, a question `InputRequired::from_result` declines (an
@@ -68,6 +69,9 @@ pub(crate) enum Answer {
     AskSecond,
     /// The backend cannot be reached: nothing was sent (`TransportConnect`).
     Unreachable,
+    /// Every `tools/call` fails with the error the function builds, as the
+    /// dispatch would raise it (MIK-8379 D4: one row per failure class).
+    FailsWith(fn() -> crate::Error),
     /// Like `AskOnce`, the question then edited by the function (MIK-8089).
     AskEdited(fn(&mut Value)),
     /// Like `Ok`, from a 2026-07-28 backend: its `tools/list` carries
@@ -94,6 +98,20 @@ pub(crate) enum Answer {
     /// A failed dispatch dressed as an `accounts.v1` account refusal, with
     /// the given message (MIK-8139: a backend can forge the marker).
     ForgedAccount(&'static str),
+    /// State-only interim rounds (`requestState`, no questions; MIK-8177):
+    /// calls before the given index answer a harmless round, the call at it a
+    /// round whose `content` carries the given text, every later call
+    /// succeeds. Index 0 refuses the initial round, 1 a resumed one.
+    StateOnlyRounds(usize, &'static str),
+    /// The first `tools/call` asks (as [`Answer::AskOnce`]); every later one
+    /// completes with its own arguments echoed as text (MIK-8176: a playbook
+    /// step can carry an earlier step's envelope into a completed answer).
+    AskThenEcho,
+    /// The first `tools/call` asks; later ones are a tiny store: `cmd`
+    /// `"store <text>"` keeps `<text>`, and `"get"` returns what was kept
+    /// (MIK-8323: a backend handed an envelope can return it to a later,
+    /// fresh call).
+    AskThenStore,
 }
 
 /// One `Transport` shared by `alpha` and `alpha-pt`, scripted with `Answer`
@@ -105,6 +123,8 @@ struct CountingBackend {
     /// The params of every `tools/call`, in order (MIK-8078).
     seen: Arc<std::sync::Mutex<Vec<Value>>>,
     answer: Answer,
+    /// What `Answer::AskThenStore` keeps between calls.
+    kept: Arc<std::sync::Mutex<String>>,
 }
 
 #[async_trait::async_trait]
@@ -122,6 +142,25 @@ impl Transport for CountingBackend {
             .unwrap()
             .push(params.clone().unwrap_or(Value::Null));
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(body) = answers::recording_answer(self.answer, n, params.as_ref(), &self.kept) {
+            return Ok(JsonRpcResponse::success(id, body));
+        }
+        if let Answer::StateOnlyRounds(at, text) = self.answer {
+            let round = |text: &str| {
+                json!({"resultType": "input_required", "requestState": format!("state-{n}"),
+                       "content": [{"type": "text", "text": text}]})
+            };
+            return Ok(JsonRpcResponse::success(
+                id,
+                match n.cmp(&at) {
+                    std::cmp::Ordering::Less => round("nothing to see"),
+                    std::cmp::Ordering::Equal => round(text),
+                    std::cmp::Ordering::Greater => {
+                        json!({"content": [{"type": "text", "text": "ok"}], "isError": false})
+                    }
+                },
+            ));
+        }
         if matches!(
             self.answer,
             Answer::AskOnce
@@ -133,8 +172,16 @@ impl Transport for CountingBackend {
                 | Answer::AskAndError
                 | Answer::AskSecond
                 | Answer::AskEdited(_)
+                | Answer::AskAlways
         ) {
-            let asks_now = n == usize::from(matches!(self.answer, Answer::AskSecond));
+            let asks_now = if matches!(self.answer, Answer::AskAlways) {
+                params
+                    .as_ref()
+                    .and_then(|p| p.get("requestState"))
+                    .is_none()
+            } else {
+                n == usize::from(matches!(self.answer, Answer::AskSecond))
+            };
             return Ok(if asks_now {
                 let mut asked = JsonRpcResponse::success(id, question(self.answer));
                 if matches!(self.answer, Answer::AskAndError) {
@@ -211,13 +258,14 @@ pub(crate) fn replace_backend(fx: &Fx, name: &str) -> Arc<AtomicUsize> {
             passthrough: name.ends_with("-pt"),
             ..BackendConfig::default()
         },
-        &FailsafeConfig::default(),
+        &fixture_failsafe(),
         Duration::from_secs(60),
     ));
     backend.set_transport_for_test(Arc::new(CountingBackend {
         calls: Arc::clone(&calls),
         seen: Arc::default(),
         answer: Answer::Ok,
+        kept: Arc::default(),
     }));
     assert!(
         fx.state.backends.register(backend),
@@ -236,6 +284,23 @@ pub(crate) async fn fixture(answer: Answer, arm: impl FnOnce(&mut MetaMcp)) -> F
     .await
 }
 
+/// [`fixture`] with `security.sanitize_input` set to `on` (MIK-8137 b3).
+pub(crate) async fn fixture_sanitizing(answer: Answer, on: bool) -> Fx {
+    SANITIZE.with(|s| s.set(on));
+    let fx = fixture_inner(answer, false, |meta| meta).await;
+    SANITIZE.with(|s| s.set(false));
+    fx
+}
+
+/// Any fixture builder, run with `security.sanitize_input` = `on` (MIK-8154
+/// rows: the firewalled and code-mode fixtures under sanitization).
+pub(crate) async fn sanitizing<T, F: std::future::Future<Output = T>>(on: bool, build: F) -> T {
+    SANITIZE.with(|s| s.set(on));
+    let fx = build.await;
+    SANITIZE.with(|s| s.set(false));
+    fx
+}
+
 /// [`fixture`], for arming that needs the owned builder methods
 /// (`with_profile_registry`, `with_cost_governance`).
 pub(crate) async fn fixture_built(answer: Answer, build: impl FnOnce(MetaMcp) -> MetaMcp) -> Fx {
@@ -248,6 +313,51 @@ pub(crate) async fn fixture_built(answer: Answer, build: impl FnOnce(MetaMcp) ->
 #[cfg(feature = "firewall")]
 pub(crate) async fn fixture_firewalled(answer: Answer) -> Fx {
     fixture_inner(answer, true, |meta| meta).await
+}
+
+/// [`fixture_firewalled`] with both firewalls writing their audit rows to
+/// `audit` (MIK-8137 b1: the chokepoint's `dispatch` rows).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_firewalled_audited(answer: Answer, audit: std::path::PathBuf) -> Fx {
+    AUDIT_LOG.with(|a| *a.borrow_mut() = Some(audit));
+    let fx = fixture_inner(answer, true, |meta| meta).await;
+    AUDIT_LOG.with(|a| *a.borrow_mut() = None);
+    fx
+}
+
+/// [`fixture_built`] with `transport` answering for both backends in place of
+/// the scripted one (the route x check matrix's annotated tool, MIK-8137 b3).
+pub(crate) async fn fixture_built_on(
+    transport: Arc<dyn Transport>,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    with_transport(transport, Box::pin(fixture_inner(Answer::Ok, false, build))).await
+}
+
+/// Builds `fixture` (any of this module's fixtures) over `transport`. Boxed,
+/// so the caller's future holds a pointer, not the fixture's whole state.
+pub(crate) async fn with_transport(
+    transport: Arc<dyn Transport>,
+    fixture: std::pin::Pin<Box<impl std::future::Future<Output = Fx>>>,
+) -> Fx {
+    TRANSPORT.with(|t| *t.borrow_mut() = Some(transport));
+    let fx = fixture.await;
+    TRANSPORT.with(|t| *t.borrow_mut() = None);
+    fx
+}
+
+/// [`fixture_firewalled_audited`], arming the replaced `MetaMcp` with `build`
+/// (the route x check matrix's surfaced-name route, MIK-8137 b3).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_firewalled_audited_built(
+    answer: Answer,
+    audit: std::path::PathBuf,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    AUDIT_LOG.with(|a| *a.borrow_mut() = Some(audit));
+    let fx = fixture_inner(answer, true, build).await;
+    AUDIT_LOG.with(|a| *a.borrow_mut() = None);
+    fx
 }
 
 /// [`fixture_firewalled`] with a firewall rule for `read` and a client
@@ -271,11 +381,30 @@ pub(crate) async fn fixture_firewalled_with(
 mod answers;
 #[path = "direct_guards_fixture_egress.rs"]
 mod egress;
+pub(crate) use answers::envelope_in;
+#[path = "direct_guards_fixture_quota.rs"]
+mod quota;
+#[path = "direct_guards_fixture_requests.rs"]
+mod requests;
 use answers::{call_answer, listing, question};
 use egress::backend_transport;
 #[cfg(feature = "firewall")]
+pub(crate) use egress::fixture_hardened_signed_built_on;
+#[cfg(feature = "firewall")]
 pub(crate) use egress::{
-    fixture_audited_on, fixture_firewalled_on, fixture_inspecting_on, meta_firewall,
+    fixture_audited_built_on, fixture_audited_on, fixture_firewalled_built, fixture_firewalled_on,
+    fixture_hardened_signed_firewalled, fixture_inspecting_on, meta_firewall,
+};
+#[cfg(feature = "firewall")]
+pub(crate) use quota::Minting;
+#[cfg(feature = "cost-governance")]
+pub(crate) use quota::{MINT_MODES, fixture_optional_failing_mint};
+use quota::{fixture_backend_config, fixture_failsafe, leaked_transparency_log};
+#[cfg(feature = "firewall")]
+pub(crate) use quota::{fixture_firewalled_budget_built, fixture_propagating_budgeted};
+pub(crate) use quota::{fixture_propagating, fixture_propagating_signed};
+pub(crate) use requests::{
+    initialize, post_direct, post_meta_invoke, post_meta_invoke_nonce, send, send_with_headers,
 };
 
 pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";
@@ -349,6 +478,18 @@ pub(crate) async fn fixture_modern_off(answer: Answer) -> Fx {
     fx
 }
 
+/// [`fixture`] with a key server attached, so its temporary tokens are
+/// credentials the auth middleware resolves (MIK-8286 R5).
+pub(crate) async fn fixture_with_key_server(
+    answer: Answer,
+    key_server: Arc<crate::key_server::KeyServer>,
+) -> Fx {
+    KEY_SERVER.with(|k| *k.borrow_mut() = Some(key_server));
+    let fx = fixture_inner(answer, false, |meta| meta).await;
+    KEY_SERVER.with(|k| *k.borrow_mut() = None);
+    fx
+}
+
 /// [`fixture_firewalled`] with sequence-anomaly blocking armed: `read` was only
 /// ever followed by `other`, so a second `read` in one session scores as a
 /// never-seen transition and is blocked.
@@ -365,9 +506,33 @@ pub(crate) async fn fixture_firewalled_anomaly(answer: Answer) -> Fx {
 thread_local! {
     static HARDENED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static MODERN_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static KEY_SERVER: std::cell::RefCell<Option<Arc<crate::key_server::KeyServer>>> =
+        const { std::cell::RefCell::new(None) };
+    /// `security.sanitize_input` for the state (the route x check matrix).
+    static SANITIZE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Both backends require identity propagation, each to its own audience
+    /// (`aud-<name>`), so one caller reaches them under two bindings
+    /// (MIK-8293 S3c).
+    static PROPAGATING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// With `PROPAGATING`, propagation is optional (`required: false`).
+    static OPTIONAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// A transport that replaces the scripted backend (the egress matrix).
     static TRANSPORT: std::cell::RefCell<Option<Arc<dyn Transport>>> =
         const { std::cell::RefCell::new(None) };
+    /// Both backends run `input_schema_enforcement = "off"` (MIK-8353 3a).
+    static SCHEMA_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// [`fixture_hardened_signed_built`] with the input-schema check off on both
+/// backends, so a call never fills a tool list before dispatch.
+pub(crate) async fn fixture_hardened_signed_schema_off(
+    answer: Answer,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    SCHEMA_OFF.with(|s| s.set(true));
+    let fx = fixture_hardened_signed_built(answer, true, build).await;
+    SCHEMA_OFF.with(|s| s.set(false));
+    fx
 }
 
 #[cfg(feature = "firewall")]
@@ -376,6 +541,8 @@ thread_local! {
         const { std::cell::Cell::new(None) };
     static CLIENT_BREAKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static ANOMALY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Calls per window the call budget allows; 0 leaves the budget off (MIK-8362).
+    static BUDGET: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static RELAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static META_FIREWALL: std::cell::RefCell<Option<Arc<crate::security::firewall::Firewall>>> =
         const { std::cell::RefCell::new(None) };
@@ -390,13 +557,16 @@ fn fixture_auth() -> AuthConfig {
         enabled: true,
         api_keys: vec![
             key("k-std"),
+            key("k-other"),
             key("k-budget"),
             ApiKeyConfig {
                 rate_limit: 1,
                 ..key("k-rl")
             },
             ApiKeyConfig {
-                denied_tools: Some(vec!["read".to_string()]),
+                // `gateway_invok` is MIK-8340's near-meta-tool name: one edit
+                // from `gateway_invoke`, withheld from this key by policy.
+                denied_tools: Some(vec!["read".to_string(), "gateway_invok".to_string()]),
                 ..key("k-deny")
             },
         ],
@@ -413,17 +583,12 @@ fn fixture_auth() -> AuthConfig {
     auth
 }
 
-/// The rebuilt Meta-MCP keeps the state's admission store: sync calls and
-/// tasks share one, as `server/task_runtime.rs` wires it.
-async fn fixture_inner(
-    answer: Answer,
-    #[cfg_attr(not(feature = "firewall"), allow(unused_variables))] firewalled: bool,
-    build: impl FnOnce(MetaMcp) -> MetaMcp,
-) -> Fx {
+/// The router state the per-thread knobs ask for.
+async fn fixture_state() -> (Arc<super::AppState>, tempfile::TempDir) {
     let auth = fixture_auth();
     let hardened = HARDENED.with(std::cell::Cell::get);
     let modern_off = MODERN_OFF.with(std::cell::Cell::get);
-    let (mut state, store) = if hardened || modern_off {
+    if hardened || modern_off {
         let mut config = crate::config::Config::default();
         if hardened {
             config.security.posture = crate::security::SecurityPosture::Hardened;
@@ -432,19 +597,34 @@ async fn fixture_inner(
             config.server.modern_protocol = false;
         }
         test_router_app_state_with_auth_and_config(&auth, config).await
+    } else if let Some(key_server) = KEY_SERVER.with(|k| k.borrow().clone()) {
+        super::tests::test_router_app_state_with_auth_and_key_server(&auth, Some(key_server)).await
     } else {
         test_router_app_state_with_auth(&auth).await
-    };
+    }
+}
+
+/// The rebuilt Meta-MCP keeps the state's admission store: sync calls and
+/// tasks share one, as `server/task_runtime.rs` wires it.
+async fn fixture_inner(
+    answer: Answer,
+    #[cfg_attr(not(feature = "firewall"), allow(unused_variables))] firewalled: bool,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    let (mut state, store) = fixture_state().await;
     let (calls, seen) = (Arc::new(AtomicUsize::new(0)), Arc::default());
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
+    state_mut.sanitize_input = SANITIZE.with(std::cell::Cell::get);
+    // A required propagation refuses to mint without a durable audit sink
+    // (MIK-6740), so a propagating fixture gets a transparency log.
+    if PROPAGATING.with(std::cell::Cell::get) {
+        state_mut.transparency_log = Some(leaked_transparency_log());
+    }
     for (name, passthrough) in [("alpha", false), ("alpha-pt", true)] {
         let backend = Arc::new(Backend::new(
             name,
-            BackendConfig {
-                passthrough,
-                ..BackendConfig::default()
-            },
-            &FailsafeConfig::default(),
+            fixture_backend_config(name, passthrough),
+            &fixture_failsafe(),
             Duration::from_secs(60),
         ));
         backend.set_transport_for_test(backend_transport((&calls, &seen), answer));
@@ -487,6 +667,11 @@ async fn fixture_inner(
             credential_redaction: true,
             rules,
             audit_log: AUDIT_LOG.with(|a| a.borrow().clone()),
+            budget: crate::security::firewall::budget_guard::BudgetGuardConfig {
+                enabled: BUDGET.with(std::cell::Cell::get) > 0,
+                max_calls_per_window: BUDGET.with(std::cell::Cell::get),
+                window_secs: 3_600,
+            },
             anomaly_detection: anomaly,
             anomaly_threshold: 0.7,
             anomaly_block_threshold: anomaly.then_some(0.9),
@@ -502,11 +687,13 @@ async fn fixture_inner(
             },
             ..FirewallConfig::default()
         };
-        state_mut.firewall = Some(Arc::new(Firewall::from_config(
-            config.clone(),
-            tracker.clone(),
-        )));
-        let meta_firewall = Arc::new(Firewall::from_config(config, tracker));
+        state_mut.firewall = Some(Arc::new(
+            Firewall::from_config(config.clone(), tracker.clone())
+                .with_continuations(meta.continuation()),
+        ));
+        let meta_firewall = Arc::new(
+            Firewall::from_config(config, tracker).with_continuations(meta.continuation()),
+        );
         META_FIREWALL.with(|f| *f.borrow_mut() = Some(Arc::clone(&meta_firewall)));
         meta.set_firewall(Some(meta_firewall));
     }
@@ -521,141 +708,29 @@ async fn fixture_inner(
     }
 }
 
-/// Build `params._meta` carrying an idempotency key, when one is given.
-fn set_idem(params: &mut Value, idem: Option<&str>) {
-    if let Some(value) = idem {
-        params["_meta"] = json!({ IDEMPOTENCY_KEY_META: value });
+/// MIK-8154 F2 rows: a reload of `name` as config reload does it, the old
+/// instance removed and a new one registered with `passthrough`, sending
+/// through the fixture's counting transport. Returned as a hook to run at a
+/// seam.
+pub(crate) fn reload_for_test(
+    fx: &Fx,
+    name: &'static str,
+    passthrough: bool,
+) -> impl FnOnce() + use<> {
+    let (state, calls, seen) = (
+        Arc::clone(&fx.state),
+        Arc::clone(&fx.calls),
+        Arc::clone(&fx.seen),
+    );
+    move || {
+        let backend = Arc::new(Backend::new(
+            name,
+            fixture_backend_config(name, passthrough),
+            &fixture_failsafe(),
+            Duration::from_secs(60),
+        ));
+        backend.set_transport_for_test(backend_transport((&calls, &seen), Answer::Ok));
+        state.backends.remove(name);
+        assert!(state.backends.register(backend), "reload registration");
     }
-}
-
-/// `POST /mcp/{backend}` `tools/call`, as the direct route takes it.
-pub(crate) async fn post_direct(
-    fx: &Fx,
-    backend: &str,
-    key: &str,
-    tool: &str,
-    args: Value,
-    idem: Option<&str>,
-    session: Option<&str>,
-) -> (StatusCode, Value) {
-    let mut params = json!({ "name": tool, "arguments": args });
-    set_idem(&mut params, idem);
-    send(
-        fx,
-        &format!("/mcp/{backend}"),
-        key,
-        "tools/call",
-        params,
-        session,
-    )
-    .await
-}
-
-/// `POST /mcp` `tools/call gateway_invoke`, the meta-route twin a parity
-/// table compares against `post_direct`.
-pub(crate) async fn post_meta_invoke(
-    fx: &Fx,
-    key: &str,
-    server: &str,
-    tool: &str,
-    args: Value,
-    idem: Option<&str>,
-    session: Option<&str>,
-) -> (StatusCode, Value) {
-    let mut params = json!({
-        "name": "gateway_invoke",
-        "arguments": { "server": server, "tool": tool, "arguments": args },
-    });
-    set_idem(&mut params, idem);
-    send(fx, "/mcp", key, "tools/call", params, session).await
-}
-
-/// `initialize` on `/mcp` for `key`; returns the session id the gateway
-/// minted (it never adopts a client-chosen one).
-pub(crate) async fn initialize(fx: &Fx, key: &str) -> String {
-    let request = axum::http::Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("authorization", format!("Bearer {key}"))
-        .header("content-type", "application/json")
-        .body(axum::body::Body::from(
-            json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2025-06-18",
-                    "capabilities": {},
-                    "clientInfo": {"name": "t8", "version": "1"}
-                }
-            })
-            .to_string(),
-        ))
-        .unwrap();
-    let response = fx.router.clone().oneshot(request).await.unwrap();
-    response
-        .headers()
-        .get("mcp-session-id")
-        .and_then(|v| v.to_str().ok())
-        .expect("initialize mints a session id")
-        .to_string()
-}
-
-/// [`post_meta_invoke`] carrying a signing `nonce` in the `gateway_invoke`
-/// arguments.
-pub(crate) async fn post_meta_invoke_nonce(
-    fx: &Fx,
-    key: &str,
-    server: &str,
-    tool: &str,
-    nonce: &str,
-) -> (StatusCode, Value) {
-    let params = json!({
-        "name": "gateway_invoke",
-        "arguments": { "server": server, "tool": tool, "arguments": {}, "nonce": nonce },
-    });
-    send(fx, "/mcp", key, "tools/call", params, None).await
-}
-
-pub(crate) async fn send(
-    fx: &Fx,
-    uri: &str,
-    key: &str,
-    method: &str,
-    params: Value,
-    session: Option<&str>,
-) -> (StatusCode, Value) {
-    send_with_headers(fx, uri, key, method, params, session, &[]).await
-}
-
-/// [`send`] plus extra request headers, such as the modern era's mirrors.
-pub(crate) async fn send_with_headers(
-    fx: &Fx,
-    uri: &str,
-    key: &str,
-    method: &str,
-    params: Value,
-    session: Option<&str>,
-    headers: &[(&str, &str)],
-) -> (StatusCode, Value) {
-    let mut builder = axum::http::Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header("authorization", format!("Bearer {key}"))
-        .header("content-type", "application/json");
-    for (name, value) in headers {
-        builder = builder.header(*name, *value);
-    }
-    if let Some(session_id) = session {
-        builder = builder.header("mcp-session-id", session_id);
-    }
-    let request = builder
-        .body(axum::body::Body::from(
-            json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string(),
-        ))
-        .unwrap();
-    let response = fx.router.clone().oneshot(request).await.unwrap();
-    let status = response.status();
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    (status, serde_json::from_slice(&body).unwrap())
 }

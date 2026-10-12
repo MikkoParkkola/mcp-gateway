@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! F13 text A keeps the MIK-7518 guarantee: the "did you mean?" hint that R2's
 //! cold-slot refusal appends on the Meta-MCP route is drawn only from names the
-//! caller's routing profile lets it invoke (`miss_hint_pool`'s `may_invoke`
-//! filter). F13 moved the pool into that helper, so this pins the filter on
+//! caller may be shown (`miss_hint_pool`, judging each name by the caller's
+//! own catalogue entry). F13 moved the pool into that helper, so this pins the filter on
 //! the text A site. Both directions are asserted: absence alone is satisfied
 //! by a gateway that suggests nothing.
 

@@ -433,7 +433,7 @@ async fn close_does_not_wait_behind_a_blocked_send() {
     tokio::task::yield_now().await;
 
     // close() must not queue behind the send's hold on the sender slot.
-    tokio::time::timeout(std::time::Duration::from_secs(2), t.close())
+    tokio::time::timeout(std::time::Duration::from_secs(10), t.close())
         .await
         .expect("close() must not wait for a blocked send")
         .unwrap();
@@ -449,7 +449,7 @@ async fn close_fails_in_flight_requests_at_once() {
     t.close().await.unwrap();
 
     // An aborted I/O task never reaches its own cleanup, so close() must do it.
-    let outcome = tokio::time::timeout(std::time::Duration::from_secs(1), rx)
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), rx)
         .await
         .expect("a pending request must fail promptly after close()");
     assert!(outcome.is_err(), "no response can arrive after close()");

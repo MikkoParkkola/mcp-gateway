@@ -38,7 +38,8 @@ pub(crate) enum CreateOutcome {
         task: CommittedTask,
         slot: OwnedSemaphorePermit,
     },
-    Existing(CommittedTask),
+    /// The task the key already owns, carrying its holds (MIK-8176 N1).
+    Existing(crate::gateway::meta_mcp::sealed_hold::Held<CommittedTask>),
     Mismatch,
     InFlight,
     Capacity,
@@ -63,6 +64,10 @@ pub enum ServiceError {
     /// an absent task are answered identically.
     #[error("task not found")]
     NotFound,
+    /// MIK-8204: under `FailClosed` the grant decisions that cause the work
+    /// could not be appended, so nothing was started (-32005).
+    #[error("audit log unavailable")]
+    AuditUnavailable,
 }
 
 /// Durable task ownership and transitions backed by an exclusively leased
@@ -76,6 +81,8 @@ pub struct TaskService {
     /// `None` once released: a re-read that finishes after shutdown cannot
     /// put a share back (seat-2 review).
     sealed: Arc<parking_lot::Mutex<Option<usize>>>,
+    /// The per-row send locks of upstream cancels (MIK-8347).
+    pub(crate) cancel_sends: super::execution::pending_cancel::CancelSends,
 }
 
 impl TaskService {
@@ -111,6 +118,7 @@ impl TaskService {
             store,
             admission,
             sealed: Arc::new(parking_lot::Mutex::new(Some(sealed))),
+            cancel_sends: super::execution::pending_cancel::CancelSends::default(),
         })
     }
 
@@ -218,8 +226,9 @@ impl TaskService {
         backend: &str,
         reserve: impl FnOnce() -> Option<OwnedSemaphorePermit> + Send,
     ) -> Result<CreateOutcome, ServiceError> {
-        self.create_targeted(request, task, (backend, Vec::new()), reserve)
-            .await
+        Ok(self
+            .create_targeted(request, task, (backend, Vec::new()), reserve)
+            .await)
     }
 
     /// [`Self::create`] recording the backend calls the task will make (#2450).
@@ -229,11 +238,25 @@ impl TaskService {
         task: &Task,
         (backend, targets): (&str, Vec<Target>),
         reserve: impl FnOnce() -> Option<OwnedSemaphorePermit> + Send,
-    ) -> Result<CreateOutcome, ServiceError> {
+    ) -> CreateOutcome {
         match self.admission.admit_task(request) {
             Ok(TaskAdmission::Owned(lease)) => {
                 let Some(slot) = reserve() else {
-                    return Ok(CreateOutcome::Capacity);
+                    return CreateOutcome::Capacity;
+                };
+                // A NEW row is dated here, and only here: a replay (below)
+                // answers from the stored row and needs no clock. A clock
+                // before 1970 refuses the create before anything is written;
+                // the dropped lease releases the key (MIK-8202).
+                let dated;
+                let task = if task.is_undated() {
+                    let Ok(now) = self.store.now() else {
+                        return CreateOutcome::Unavailable;
+                    };
+                    dated = task.clone().dated_at(now);
+                    &dated
+                } else {
+                    task
                 };
                 let binding = lease.binding().clone();
                 let prepared = PreparedTask::admitted_with_targets(
@@ -247,11 +270,11 @@ impl TaskService {
                 // the reservation back rather than stranding the key. The permit
                 // is dropped with this arm so a store refusal cannot keep a worker.
                 match self.store.create(prepared).await {
-                    Ok(committed) => Ok(CreateOutcome::Created {
+                    Ok(committed) => CreateOutcome::Created {
                         task: committed,
                         slot,
-                    }),
-                    Err(_) => Ok(CreateOutcome::Unavailable),
+                    },
+                    Err(_) => CreateOutcome::Unavailable,
                 }
             }
             // The key already owns a committed task: the caller gets THAT task,
@@ -259,21 +282,33 @@ impl TaskService {
             // task value is not committed and never becomes visible. No worker
             // is reserved — a repeat must not compete with the running task.
             Ok(TaskAdmission::Existing { task_id, binding }) => {
-                match self.store.get(binding.principal_digest(), &task_id) {
-                    Ok(committed) => Ok(CreateOutcome::Existing(committed)),
-                    Err(_) => Ok(CreateOutcome::Unavailable),
+                match self.store.get_held(binding.principal_digest(), &task_id) {
+                    Ok(held) => CreateOutcome::Existing(held),
+                    Err(_) => CreateOutcome::Unavailable,
                 }
             }
-            Ok(TaskAdmission::InFlight) => Ok(CreateOutcome::InFlight),
-            Ok(TaskAdmission::Sealed) => Ok(CreateOutcome::Sealed),
-            Err(Refusal::Mismatch) => Ok(CreateOutcome::Mismatch),
-            Ok(TaskAdmission::Unavailable) | Err(_) => Ok(CreateOutcome::Unavailable),
+            Ok(TaskAdmission::InFlight) => CreateOutcome::InFlight,
+            Ok(TaskAdmission::Sealed) => CreateOutcome::Sealed,
+            Err(Refusal::Mismatch) => CreateOutcome::Mismatch,
+            Ok(TaskAdmission::Unavailable) | Err(_) => CreateOutcome::Unavailable,
         }
     }
 
     pub(crate) fn get(&self, principal: &str, id: &str) -> Result<CommittedTask, ServiceError> {
         self.store
             .get(self.owner(principal)?.as_digest(), id)
+            .map_err(refused)
+    }
+
+    /// [`Self::get`] for a reader that may put the row's payload on the
+    /// wire: it comes as `Held`, so delivering it adopts its holds.
+    pub(crate) fn get_held(
+        &self,
+        principal: &str,
+        id: &str,
+    ) -> Result<crate::gateway::meta_mcp::sealed_hold::Held<CommittedTask>, ServiceError> {
+        self.store
+            .get_held(self.owner(principal)?.as_digest(), id)
             .map_err(refused)
     }
 

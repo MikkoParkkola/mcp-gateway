@@ -40,6 +40,13 @@ pub(crate) struct UpstreamCapture {
     pub handle: String,
 }
 
+/// Whether [`TaskExecutor::cancel_upstream_once`] awaits its send or detaches it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CancelSend {
+    Inline,
+    Detach,
+}
+
 /// Why a read issued zero upstream queries.
 ///
 /// Every variant is a refusal reached BEFORE the wire, which is the property
@@ -155,6 +162,47 @@ impl TaskExecutor {
                 false
             }
         }
+    }
+
+    /// Claim this cancelled row's one upstream `tasks/cancel`, and send it when
+    /// this caller won (MIK-7642, design r7 R7.3).
+    ///
+    /// Every sender comes through here: the cancel transition with no offer
+    /// (the row's own descriptor, if any), and the worker with the handle it
+    /// holds. The claim is one durable compare, so exactly one of them claims;
+    /// an unconfirmed send stays pending and is retried (MIK-8347, see
+    /// `pending_cancel`). `Detach` never waits on the row's send lock or the
+    /// peer, so an owner's `tasks/cancel` answer does not; `Inline` awaits
+    /// both on a worker that owns its own task. Returns whether this caller
+    /// claimed.
+    pub(crate) async fn cancel_upstream_once(
+        &self,
+        owner_digest: &str,
+        id: &str,
+        offered: Option<UpstreamRecord>,
+        send: CancelSend,
+    ) -> bool {
+        self.claim_and_send((owner_digest, id), offered, send == CancelSend::Detach)
+            .await
+    }
+
+    /// A worker's offer of the handle it holds for `job`, bound to the row's
+    /// own admitted operation; `None` when the row cannot be read.
+    pub(super) fn offered_descriptor(
+        &self,
+        owner_digest: &str,
+        id: &str,
+        job: &crate::gateway::meta_mcp::upstream::DirectJob,
+        handle: String,
+    ) -> Option<UpstreamRecord> {
+        let operation_digest = self.service.store.operation_digest_of(owner_digest, id)?;
+        Some(UpstreamRecord {
+            handle,
+            backend: job.server.clone(),
+            tool: job.tool.clone(),
+            arguments: job.arguments.clone(),
+            operation_digest,
+        })
     }
 
     /// The owner-scoped recovery descriptor a reader must authorize against.
@@ -401,5 +449,17 @@ impl TaskExecutor {
         if Arc::strong_count(&slot) <= 2 {
             gate.remove(id);
         }
+    }
+
+    /// How many clones of `id`'s query slot exist beside the directory's own,
+    /// or `None` when the directory holds no entry for `id`. A recovery read
+    /// holds one, held or queued. A worker's [`QueryLease`] holds two, held or
+    /// queued: the lease's own and its owned guard's. The signal a row waits on
+    /// to know who holds the slot and that a contender is parked behind it,
+    /// rather than guessing from scheduler turns.
+    #[cfg(test)]
+    pub(crate) async fn query_slot_clones_for_test(&self, id: &str) -> Option<usize> {
+        let gate = self.query_gate.lock().await;
+        gate.get(id).map(|slot| Arc::strong_count(slot) - 1)
     }
 }

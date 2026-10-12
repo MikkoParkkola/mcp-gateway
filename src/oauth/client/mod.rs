@@ -181,8 +181,8 @@ pub struct OAuthClient {
 
     /// Seconds before expiry at which the background task proactively refreshes.
     ///
-    /// The task triggers when `time_until_expiry < max(lifetime * 10%, buffer)`.
-    token_refresh_buffer_secs: u64,
+    /// `None` derives it from the token (see [`refresh_buffer`]).
+    token_refresh_buffer_secs: Option<u64>,
 
     /// Where advertised URLs may point (the backend's destination policy).
     destination: crate::security::ssrf::DestinationPolicy,
@@ -251,8 +251,9 @@ pub struct OAuthClientConfig {
     pub callback_port: Option<u16>,
     /// Callback URL path (default: `"/oauth/callback"`).
     pub callback_path: Option<String>,
-    /// Seconds before expiry to proactively refresh (default: 300).
-    pub token_refresh_buffer_secs: u64,
+    /// Seconds before expiry to refresh; `None` derives it from the token's
+    /// lifetime ([`refresh_buffer`]).
+    pub token_refresh_buffer_secs: Option<u64>,
 }
 
 // Manual `Debug` that redacts the fixed OAuth client secret (CWE-532, mirrors
@@ -337,34 +338,33 @@ impl OAuthClient {
         // string is left and the two are indistinguishable.
         let mut issuer_source = IssuerSource::Origin;
 
-        // Try to discover protected resource metadata first
-        match ProtectedResourceMetadata::discover(self.client_for(&base_url)?, &base_url).await {
-            Ok(meta) => {
-                debug!(resource = %meta.resource, "Found protected resource metadata");
+        // Which protected-resource document describes this backend, held to
+        // the configured resource (MIK-8320, MIK-8324). A mismatch or a policy
+        // refusal is an answer, not a missing document: it ends discovery
+        // rather than falling back (MIK-7701).
+        if let Some(meta) = self.discover_resource_metadata().await? {
+            // Read before the macro so its count is graded (MIK-7725).
+            let resource = &meta.resource;
+            debug!(resource = %resource, "Found protected resource metadata");
 
-                // Get authorization server from metadata
-                if let Some(auth_server) = meta.authorization_server() {
-                    self.oauth_base_url = Some(auth_server.to_string());
-                    issuer_source = IssuerSource::Advertised;
-                } else {
-                    // Fallback to same base URL
-                    self.oauth_base_url = Some(base_url.clone());
-                }
-
-                // Use scopes from metadata if not specified
-                if self.scopes.is_empty() && !meta.scopes_supported.is_empty() {
-                    self.scopes.clone_from(&meta.scopes_supported);
-                }
-
-                self.resource_metadata = Some(meta);
-            }
-            // A policy refusal is an answer, not a missing document: falling
-            // back would walk past it (MIK-7701).
-            Err(e) if is_ssrf_refusal(&e) => return Err(e),
-            Err(e) => {
-                debug!(error = %e, "No protected resource metadata, using base URL");
+            // Get authorization server from metadata
+            if let Some(auth_server) = meta.authorization_server() {
+                self.oauth_base_url = Some(auth_server.to_string());
+                issuer_source = IssuerSource::Advertised;
+            } else {
+                // Fallback to same base URL
                 self.oauth_base_url = Some(base_url.clone());
             }
+
+            // Use scopes from metadata if not specified
+            if self.scopes.is_empty() && !meta.scopes_supported.is_empty() {
+                self.scopes.clone_from(&meta.scopes_supported);
+            }
+
+            self.resource_metadata = Some(meta);
+        } else {
+            debug!("No protected resource metadata, using base URL");
+            self.oauth_base_url = Some(base_url.clone());
         }
 
         // Discover authorization server metadata
@@ -396,7 +396,9 @@ impl OAuthClient {
         // process restarts or a connection is re-established.
         self.restore_persisted_client_id();
 
-        info!(backend = %self.backend_name, "OAuth client initialized");
+        // Read before the macro so its count is graded (MIK-7725).
+        let backend = &self.backend_name;
+        info!(backend = %backend, "OAuth client initialized");
         Ok(())
     }
 
@@ -506,6 +508,80 @@ impl OAuthClient {
         Ok(token)
     }
 
+    /// The cached access token, if it is unexpired: one read of the cell, so
+    /// no expiry can land between the check and the copy (MIK-8339).
+    pub(crate) fn live_token(&self) -> Option<String> {
+        self.current_token
+            .read()
+            .as_ref()
+            .filter(|token| !token.is_expired())
+            .map(|token| token.access_token.clone())
+    }
+
+    /// The token step a detached request-time task runs (MIK-8339), for a
+    /// caller that captured `since` (its cancel epoch) and `cohort` before
+    /// it queued. Before a login is led or joined, the refresh observes a
+    /// restart or stop (`AuthorizationCancelled`) and ends at
+    /// [`grants::OAUTH_AUTHORIZATION_WINDOW`] through
+    /// [`LoginGate::classify`](super::login_gate::LoginGate::classify),
+    /// never falling into a login after its bound. A refresh that succeeds
+    /// after a revocation is not handed back.
+    pub(crate) async fn get_token_detached(
+        &self,
+        interactive: bool,
+        since: u64,
+        cohort: &std::sync::Arc<super::login_gate::Cohort>,
+        deadline: tokio::time::Instant,
+    ) -> Result<String> {
+        if let Some(access) = self.live_token() {
+            return Ok(access);
+        }
+        let cancelled = || Error::AuthorizationCancelled {
+            backend: self.backend_name.clone(),
+        };
+        let has_refresh_token = self
+            .current_token
+            .read()
+            .as_ref()
+            .is_some_and(|t| t.refresh_token.is_some());
+        if has_refresh_token {
+            let refreshed = match &self.login_gate {
+                Some(gate) => tokio::select! {
+                    biased;
+                    () = gate.revoked_since(since) => return Err(cancelled()),
+                    () = tokio::time::sleep_until(super::login_gate::stage_end(
+                        grants::OAUTH_AUTHORIZATION_WINDOW,
+                        deadline,
+                    )) => {
+                        return Err(gate.classify(
+                            cohort,
+                            &self.backend_name,
+                            Error::BackendTimeout(self.backend_name.clone()),
+                        ));
+                    }
+                    refreshed = self.refresh_token() => refreshed,
+                },
+                None => self.refresh_token().await,
+            };
+            match refreshed {
+                Ok(token) => {
+                    if self
+                        .login_gate
+                        .as_ref()
+                        .is_some_and(|gate| gate.is_revoked(since))
+                    {
+                        return Err(cancelled());
+                    }
+                    return Ok(token);
+                }
+                Err(e) if is_ssrf_refusal(&e) => return Err(e),
+                Err(_) => {}
+            }
+        }
+        self.authorize_shared_with(interactive, Some(since), Some(cohort), Some(deadline))
+            .await
+    }
+
     /// Return the backend name (used by the background refresh task for logging).
     #[must_use]
     pub fn backend_name(&self) -> &str {
@@ -520,7 +596,8 @@ impl OAuthClient {
 
     /// Return true if the token should be proactively refreshed.
     ///
-    /// Triggers when remaining lifetime is below `max(lifetime * 10%, buffer)`.
+    /// Triggers when the remaining lifetime is below [`refresh_buffer`]: a set
+    /// buffer, else max(300 s, 10 % of the token lifetime).
     #[must_use]
     pub fn needs_proactive_refresh(&self) -> bool {
         let token = self.current_token.read();
@@ -531,20 +608,42 @@ impl OAuthClient {
             return false;
         };
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        // A scheduler: on a clock that cannot be read the proactive pass is
+        // skipped; `is_expired` still guards every use (MIK-8202).
+        let Ok(now) = crate::clock::unix_secs() else {
+            return false;
+        };
 
         let remaining = expires_at.saturating_sub(now);
 
-        // Compute 10% of total lifetime using the stored expires_at as a proxy.
-        // We don't store issued_at, so approximate lifetime as (expires_at - now + remaining)
-        // which simplifies to: use a fixed fraction of the buffer itself.
-        // Practical rule: trigger refresh at max(buffer, 10% of remaining_at_last_check).
-        // Since we check every 60s, use the simpler form: remaining < buffer.
-        remaining < self.token_refresh_buffer_secs
+        remaining < refresh_buffer(self.token_refresh_buffer_secs, t.lifetime_secs)
     }
+}
+
+/// The floor of a derived refresh buffer, and the whole buffer for a token
+/// that carries no lifetime.
+const REFRESH_BUFFER_FLOOR_SECS: u64 = 300;
+
+/// Seconds before expiry to refresh: the set value, else the larger of 300 s
+/// and 10 % of the token's lifetime, else 300 s (MIK-8044). A token shorter
+/// than 300 s therefore refreshes at every check, as it did with the fixed
+/// 300 s buffer.
+pub(crate) fn refresh_buffer(set: Option<u64>, lifetime_secs: Option<u64>) -> u64 {
+    set.unwrap_or_else(|| {
+        lifetime_secs.map_or(REFRESH_BUFFER_FLOOR_SECS, |life| {
+            (life / 10).max(REFRESH_BUFFER_FLOOR_SECS)
+        })
+    })
+}
+
+/// The one clock reading a token request is checked against before it is
+/// sent, and that dates the token it returns. A clock that cannot be read
+/// (before 1970) refuses the request: nothing is sent, so no token is dated
+/// from the epoch and no endpoint is called on a broken clock (MIK-8202).
+pub(super) fn issuance_clock() -> Result<u64> {
+    crate::clock::unix_secs().map_err(|_| {
+        Error::OAuth("the host clock reads before 1970; the token request was not sent".to_string())
+    })
 }
 
 /// MIK-8207: a token answer whose `expires_in` is above 100 years is
@@ -594,7 +693,10 @@ fn generate_client_id() -> String {
 #[cfg(test)]
 mod authorize_tests;
 mod browser;
+#[cfg(test)]
+mod deadline_tests;
 pub(crate) mod destination;
+mod discovery;
 #[cfg(test)]
 mod refresh_flight_tests;
 #[cfg(test)]
@@ -616,12 +718,17 @@ impl OAuthClient {
 use url::Url;
 
 mod grants;
+pub(crate) use grants::OAUTH_AUTHORIZATION_WINDOW;
 #[cfg(test)]
 mod grants_tests;
 mod refresh_flight;
 pub(crate) use refresh_flight::{
     RefreshCaller, RefreshRequest, Refreshed, StoredCredential, refresh_stored,
 };
+#[cfg(test)]
+mod issuer_provenance_tests;
+#[cfg(test)]
+mod prm_discovery_tests;
 mod registration;
 mod renewal;
 #[cfg(test)]

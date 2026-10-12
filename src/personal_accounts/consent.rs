@@ -3,9 +3,6 @@
 //! Guarded consent commit: compare the captured expectation and replace the
 //! grant under ONE authority-lock acquisition.
 //!
-//! `RuntimeNotImplemented` is never a domain answer. It survives for the one
-//! target where the durable writers do not exist at all.
-//!
 //! WHY THIS EXISTS AS A PRIMITIVE. `commit_grant` is unconditional and `lookup`
 //! releases the authority lock before it returns, so a consent journey built
 //! from the pair compares a state it has already stopped holding. A grant or a
@@ -35,19 +32,9 @@ pub(crate) enum GuardedCommit {
     Fenced,
 }
 
-/// Guarded-commit refusals. The scaffold is deliberately its own variant so a
-/// store failure can never be read as "not implemented", or the reverse.
+/// Guarded-commit refusals.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum GuardedCommitError {
-    #[error("guarded consent commit is not implemented")]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-        )
-    )]
-    RuntimeNotImplemented,
     #[error(transparent)]
     Store(#[from] AccountError),
 }

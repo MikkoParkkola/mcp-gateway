@@ -11,7 +11,8 @@ use chrono::{DateTime, Timelike as _, Utc};
 use super::{Shared, StoreError, TaskStore, owned, record_name, serialize};
 use crate::gateway::gateway_writes::WriteRecord;
 use crate::gateway::task_service::record::{
-    CommittedTask, ERROR_AUTHOR_VERSION, ErrorAuthor, Record, TARGET_VERSION, Target,
+    CommittedTask, ERROR_AUTHOR_VERSION, ErrorAuthor, MAX_UPSTREAM_HANDLE_BYTES, Record,
+    TARGET_VERSION, Target, UpstreamRecord,
 };
 use crate::protocol::JsonRpcError;
 use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
@@ -90,6 +91,15 @@ impl TaskStore {
         author: ErrorAuthor,
         at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
+        // MIK-8176 D4: a completed result's sealed questions are owned by the
+        // row it is stored on. Taken here, on the worker's task, where their
+        // holds were registered; outside a scope (startup recovery) none.
+        let offered = match &event {
+            TaskTransition::Complete(result) => {
+                crate::gateway::meta_mcp::sealed_hold::carried(result)
+            }
+            _ => crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
+        };
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
         tokio::task::spawn_blocking(move || {
@@ -98,7 +108,7 @@ impl TaskStore {
                 &id,
                 revision,
                 (event, targets, author, writes),
-                at,
+                (at, offered),
             )
         })
         .await
@@ -180,7 +190,7 @@ impl Shared {
             return Err(StoreError::Capacity);
         }
         self.commit(&record_name(task.id()), &bytes)?;
-        self.publish(task, record);
+        self.publish(task, record, super::HoldUpdate::Carry);
         Ok(())
     }
 
@@ -195,7 +205,10 @@ impl Shared {
             ErrorAuthor,
             WriteRecord,
         ),
-        at: DateTime<Utc>,
+        (at, offered): (
+            DateTime<Utc>,
+            crate::gateway::meta_mcp::sealed_hold::CarriedHolds,
+        ),
     ) -> Result<CommittedTask, StoreError> {
         let _order = self.order();
         let (task, record) = {
@@ -211,7 +224,17 @@ impl Shared {
         };
         Ok(
             match self.settle_durable(&task, &record, (event, targets, author, writes), at)? {
-                Some((task, record)) => self.publish(task, record),
+                Some((task, record)) => {
+                    // M1: kept only as far as what was committed carries them;
+                    // a bounded failure (no result) keeps none.
+                    let holds = task.result().map_or_else(
+                        crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none,
+                        |result| {
+                            crate::gateway::meta_mcp::sealed_hold::carried_from(&offered, result)
+                        },
+                    );
+                    self.publish(task, record, super::HoldUpdate::Replace(holds))
+                }
                 None => CommittedTask::of(task, &record),
             },
         )
@@ -383,6 +406,45 @@ fn settled(
     Ok(Some((task, record)))
 }
 
+/// The encoded size of `record` cancelled, at its widest: the largest
+/// revision and a nine-digit settle instant (MIK-7642). The dispatch preflight
+/// admits an upstream descriptor only if the row still fits once cancelled:
+/// a cancel that overflowed would settle as the bounded failure instead,
+/// discarding the descriptor its one upstream `tasks/cancel` is sent from.
+/// 0 for a settled row.
+pub(super) fn cancelled_bytes(
+    task: &Task,
+    record: &Record,
+    now: DateTime<Utc>,
+) -> Result<usize, StoreError> {
+    let at = now.max(task.last_updated_at());
+    let at = at.with_nanosecond(999_999_999).unwrap_or(at);
+    let Some((_, mut cancelled)) = settled(
+        task,
+        record,
+        (
+            TaskTransition::Cancel,
+            None,
+            false,
+            ErrorAuthor::Gateway,
+            WriteRecord::default(),
+        ),
+        at,
+    )?
+    else {
+        return Ok(0);
+    };
+    cancelled.revision = u64::MAX;
+    let bytes = serialize(&cancelled)?.len();
+    // And once its cancel is claimed pending (MIK-8347), at its widest. The
+    // preflight always measures a row carrying the descriptor.
+    let claimed = cancelled.upstream.clone().map_or(Ok(bytes), |descriptor| {
+        super::pending_cancel::widest_pending_claim(task, &mut cancelled, &descriptor);
+        serialize(&cancelled).map(|encoded| encoded.len())
+    })?;
+    Ok(bytes.max(claimed))
+}
+
 /// The encoded size of the bounded failure `record` would settle as, at its
 /// widest: the largest revision, and a settle instant printed with all nine
 /// fractional digits (the serde form trims to 0, 3, 6 or 9). 0 for a settled
@@ -394,13 +456,13 @@ fn settled(
 /// and the input round: a write that grows a KEPT field must check this
 /// against the record budget. Today those are creation and a new input round;
 /// the loader checks every live row it reads.
-pub(super) fn fallback_bytes(
-    task: &Task,
-    record: &Record,
-    now: DateTime<Utc>,
-) -> Result<usize, StoreError> {
-    let at = now.max(task.last_updated_at());
-    let at = at.with_nanosecond(999_999_999).unwrap_or(at);
+///
+/// Measured at the widest timestamp chrono encodes (expanded year, nine
+/// fractional digits), the same at creation, at a new round and at load, so a
+/// row admitted near the cap always loads again. It is about width, not time,
+/// so it reads no clock (MIK-8202).
+pub(super) fn fallback_bytes(task: &Task, record: &Record) -> Result<usize, StoreError> {
+    let at = DateTime::<Utc>::MAX_UTC;
     let Some((_, mut fallback)) = settled(
         task,
         record,
@@ -425,7 +487,7 @@ pub(super) fn fallback_bytes(
 /// current version no longer consults, so raising it bare would read as
 /// "dispatched nothing" and skip the delivery check. `false` when a legacy row
 /// has no call to keep: its authorship is then not recorded (fail closed).
-fn keep_provenance(task: &crate::protocol::tasks::Task, record: &mut Record) -> bool {
+pub(super) fn keep_provenance(task: &crate::protocol::tasks::Task, record: &mut Record) -> bool {
     if record.version >= TARGET_VERSION {
         return true;
     }
@@ -435,4 +497,168 @@ fn keep_provenance(task: &crate::protocol::tasks::Task, record: &mut Record) -> 
     }
     record.targets = legacy;
     true
+}
+
+// The one durable claim on a cancelled row's upstream `tasks/cancel`
+// (MIK-7642 PR.D, design r7 R7.3 / r8 R8.4).
+//
+// Every sender — the cancel transition, the worker's dispatch-phase cancel
+// arm, and the worker's offer after a refused capture — asks here, and sends only on
+// [`CancelClaim::Claimed`]. The claim is one compare on
+// the row's cancel state (sent, or pending since MIK-8347) under the store's
+// ordering lock, so exactly
+// one sender wins per row whatever order they arrive in.
+
+/// What one claim on a row's upstream cancel decided.
+#[derive(Debug, PartialEq)]
+pub(crate) enum CancelClaim {
+    /// This caller won: send one `tasks/cancel` naming this descriptor's handle.
+    Claimed(UpstreamRecord),
+    /// Another sender already claimed it. Send nothing.
+    AlreadyClaimed,
+    /// Not a cancelled row, or no handle is known for it yet. Nothing is
+    /// claimed, so a sender that learns the handle later can still win.
+    NotOurs,
+}
+
+#[cfg(test)]
+pub(crate) use super::pending_cancel::UpstreamCancelState;
+
+impl TaskStore {
+    /// Claim the single upstream `tasks/cancel` of a cancelled row.
+    ///
+    /// `offered` is the descriptor a sender holds but the row may not: the
+    /// worker that has a handle the capture never made durable. A descriptor
+    /// already on the row wins over it (first handle wins), and an offered one
+    /// must name the row's own admitted operation. The winning descriptor is
+    /// returned to the sender and taken off the row. The revision is not
+    /// bumped: like `mark_upstream`, no reader's compare-and-set depends on
+    /// this field.
+    ///
+    /// # Errors
+    /// `NotFound` for a foreign or absent row; `Capacity` when the descriptor
+    /// would exceed the record budget; a storage failure as itself.
+    pub(crate) async fn claim_upstream_cancel(
+        &self,
+        owner: &str,
+        id: &str,
+        offered: Option<UpstreamRecord>,
+    ) -> Result<CancelClaim, StoreError> {
+        let shared = Arc::clone(&self.0);
+        let (owner, id) = (owner.to_owned(), id.to_owned());
+        tokio::task::spawn_blocking(move || {
+            shared.claim_upstream_cancel_blocking(&owner, &id, offered)
+        })
+        .await
+        .map_err(|_| StoreError::Storage)?
+    }
+}
+
+impl Shared {
+    fn claim_upstream_cancel_blocking(
+        &self,
+        owner: &str,
+        id: &str,
+        offered: Option<UpstreamRecord>,
+    ) -> Result<CancelClaim, StoreError> {
+        let _order = self.order();
+        let (task, mut record) = {
+            let state = self.state();
+            if !state.ready {
+                return Err(StoreError::Unavailable);
+            }
+            let entry = owned(&state, owner, id)?;
+            if entry.task.status() != TaskStatus::Cancelled {
+                return Ok(CancelClaim::NotOurs);
+            }
+            if entry.record.upstream_cancel_sent || entry.record.upstream_cancel_pending.is_some() {
+                return Ok(CancelClaim::AlreadyClaimed);
+            }
+            (entry.task.clone(), entry.record.clone())
+        };
+        let durable = record
+            .upstream
+            .clone()
+            .filter(|upstream| upstream.consistent_with(&record.admission));
+        let offered = offered.filter(|upstream| {
+            upstream.handle.len() <= MAX_UPSTREAM_HANDLE_BYTES
+                && upstream.consistent_with(&record.admission)
+        });
+        let Some(descriptor) = durable.or(offered) else {
+            return Ok(CancelClaim::NotOurs);
+        };
+        // The descriptor leaves the row with the claim. A terminal row is never
+        // queried again, and taking it off is what guarantees the marker fits:
+        // the cancelled row already met its budget with the descriptor on it.
+        // A legacy row named its call only through the descriptor: keep that
+        // provenance as targets before the descriptor leaves (the row is raised
+        // past the version that reads targets). The winning descriptor, offered
+        // or durable, is the one read.
+        let now = self.now().map_err(|_| StoreError::Unavailable)?.timestamp();
+        super::pending_cancel::record_pending_claim(&task, &mut record, &descriptor, now);
+        let bytes = serialize(&record)?;
+        if bytes.len() > self.limits.record_bytes {
+            return Err(StoreError::Capacity);
+        }
+        self.commit(&record_name(task.id()), &bytes)?;
+        self.publish(task, record, super::HoldUpdate::Drop);
+        Ok(CancelClaim::Claimed(descriptor))
+    }
+}
+
+#[cfg(test)]
+mod fallback_tests {
+    use super::fallback_bytes;
+    use crate::gateway::task_service::record::PreparedTask;
+    use crate::protocol::tasks::{Task, TaskOptions, TaskTransition};
+
+    const OWNER: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+
+    /// A settled row never settles again, so it needs no room for a bounded
+    /// failure: its fallback size is 0 (MIK-8202, read at load). Mutant: the
+    /// settled row measured as if it could still fail.
+    #[test]
+    fn a_settled_row_needs_no_fallback_room() {
+        let at = chrono::DateTime::from_timestamp(1_790_000_000, 0).expect("a time");
+        let mut task = Task::create_at(
+            "tool",
+            at,
+            TaskOptions {
+                ttl_ms: Some(60_000),
+                poll_interval_ms: Some(1_000),
+            },
+        );
+        task.transition(
+            TaskTransition::Complete(serde_json::json!({ "content": [] })),
+            at,
+        )
+        .expect("a working task completes");
+        let record = PreparedTask::for_test(&task, OWNER, 1).record;
+        assert_eq!(fallback_bytes(&task, &record).expect("measured"), 0);
+    }
+
+    /// A live row already at the last revision cannot settle at all, so it
+    /// has no fallback to measure: the bounded failure's revision bump
+    /// overflows and the measure is the store's capacity refusal, never a
+    /// size. The only error the bounded failure's `settled` can return: a Fail
+    /// transition on a live task never refuses. Mutant: the overflow saturates
+    /// (a size is reported for a write that cannot happen).
+    #[test]
+    fn a_row_at_the_last_revision_has_no_fallback_to_measure() {
+        let at = chrono::DateTime::from_timestamp(1_790_000_000, 0).expect("a time");
+        let task = Task::create_at(
+            "tool",
+            at,
+            TaskOptions {
+                ttl_ms: Some(60_000),
+                poll_interval_ms: Some(1_000),
+            },
+        );
+        let mut record = PreparedTask::for_test(&task, OWNER, 1).record;
+        record.revision = u64::MAX;
+        assert!(matches!(
+            fallback_bytes(&task, &record),
+            Err(super::StoreError::Capacity)
+        ));
+    }
 }

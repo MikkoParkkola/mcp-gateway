@@ -25,6 +25,9 @@ use crate::fs_lock::ExclusiveFileLock;
 use chrono::{DateTime, Utc};
 #[cfg(test)]
 use disk::acquire_lease;
+// Unix-only: its one caller, `store_tests::repaired_rows`, is `cfg(unix)`.
+#[cfg(all(test, unix))]
+pub(super) use disk::after_load;
 #[cfg(test)]
 pub(super) use disk::read_bounded;
 use disk::{Fault, fire, open_blocking, write_record};
@@ -32,11 +35,15 @@ use disk::{Fault, fire, open_blocking, write_record};
 mod disk;
 #[path = "store_expiry.rs"]
 mod expiry;
+#[path = "store_holds.rs"]
+mod holds;
 #[path = "store_input.rs"]
 pub(crate) mod input;
 #[cfg(test)]
 #[path = "store_lease_tests.rs"]
 mod lease_tests;
+#[path = "store_pending_cancel.rs"]
+pub(crate) mod pending_cancel;
 #[cfg(unix)]
 #[path = "store_unix.rs"]
 mod platform;
@@ -132,6 +139,24 @@ pub(super) type CommitHook = Arc<dyn Fn(CommitStage) -> std::io::Result<()> + Se
 struct Entry {
     task: Task,
     record: Record,
+    /// The holds of the sealed questions this row's payload carries (its
+    /// parked round or its completed result), MIK-8176. In memory only: a row
+    /// loaded from disk has none, as the slot table it would point into
+    /// starts empty too. Dropping the entry drops them, which gives back the
+    /// slots of a payload never handed off.
+    holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds,
+}
+
+/// What a commit does with the row's holds (MIK-8176 D2). Every `publish`
+/// names one, so a new commit path cannot silently keep or lose them.
+pub(super) enum HoldUpdate {
+    /// The commit stores a payload carrying these holds (a parked round, a
+    /// completed result); the previous holds go.
+    Replace(crate::gateway::meta_mcp::sealed_hold::CarriedHolds),
+    /// The commit changes neither the round nor the result: keep them.
+    Carry,
+    /// The commit leaves no sealed question on the row: give them up.
+    Drop,
 }
 
 struct State {
@@ -337,12 +362,13 @@ impl TaskStore {
         tool: &str,
         arguments: &serde_json::Value,
     ) -> Result<bool, StoreError> {
-        let mut candidate = {
+        let (task, mut candidate) = {
             let state = self.0.state();
             if !state.ready {
                 return Err(StoreError::Unavailable);
             }
-            owned(&state, owner, id)?.record.clone()
+            let entry = owned(&state, owner, id)?;
+            (entry.task.clone(), entry.record.clone())
         };
         // The record's OWN admitted digest, exactly as `capture_upstream` binds
         // it: measuring against a digest derived a second time would measure a
@@ -356,7 +382,16 @@ impl TaskStore {
             operation_digest,
         });
         candidate.version = candidate.version.max(UPSTREAM_VERSION);
-        Ok(serialize(&candidate)?.len() <= self.0.limits.record_bytes)
+        let budget = self.0.limits.record_bytes;
+        // And once cancelled (MIK-7642): see `targets::cancelled_bytes`. Measured
+        // at the widest instant chrono can encode, so no real cancel's
+        // timestamp is wider, and no clock is read.
+        Ok(serialize(&candidate)?.len() <= budget
+            && targets::cancelled_bytes(
+                &task,
+                &candidate,
+                chrono::DateTime::<chrono::Utc>::MAX_UTC,
+            )? <= budget)
     }
 
     /// Test-only: the durable recovery descriptor of `id`, whatever owner holds
@@ -374,6 +409,23 @@ impl TaskStore {
             .entries
             .get(id)
             .and_then(|entry| entry.record.upstream.clone())
+    }
+
+    /// MIK-8204 S5: the committed rows, the ones `get` can return (not
+    /// capacity occupancy, which also counts reserved and sealed files).
+    #[cfg(test)]
+    pub(crate) fn committed_count_for_test(&self) -> usize {
+        self.0.state().entries.len()
+    }
+
+    /// Test-only: the owner digest of `id`, whatever owner holds it.
+    #[cfg(test)]
+    pub(crate) fn owner_digest_for_test(&self, id: &str) -> Option<String> {
+        self.0
+            .state()
+            .entries
+            .get(id)
+            .map(|entry| entry.record.admission.principal_digest.clone())
     }
 
     /// The admitted operation digest of one owner-scoped row.
@@ -449,13 +501,13 @@ impl Shared {
         }
         // Room for the bounded failure this task may have to settle as, or a
         // too-large outcome would leave it working (MIK-7651).
-        if targets::fallback_bytes(&task, &record, self.now())? > self.limits.record_bytes {
+        if targets::fallback_bytes(&task, &record)? > self.limits.record_bytes {
             return Err(StoreError::Capacity);
         }
         self.commit(&record_name(task.id()), &bytes)?;
         // Readable FIRST, discoverable second. Reversed, a retry could be told
         // the task exists and then fail to read it.
-        let committed = self.publish(task, record);
+        let committed = self.publish(task, record, HoldUpdate::Drop);
         let hook = self.hook();
         let hook_result = fire(hook.as_ref(), CommitStage::Published);
         if let Some(publication) = publication {
@@ -503,7 +555,7 @@ impl Shared {
             return Err(StoreError::Capacity);
         }
         self.commit(&record_name(task.id()), &bytes)?;
-        Ok(self.publish(task, record))
+        Ok(self.publish(task, record, HoldUpdate::Carry))
     }
 
     fn mark_dispatched_blocking(
@@ -536,7 +588,7 @@ impl Shared {
             return Err(StoreError::Capacity);
         }
         self.commit(&record_name(task.id()), &bytes)?;
-        self.publish(task, record);
+        self.publish(task, record, HoldUpdate::Carry);
         Ok(())
     }
 
@@ -585,7 +637,7 @@ impl Shared {
             return Err(StoreError::Capacity);
         }
         self.commit(&record_name(task.id()), &bytes)?;
-        self.publish(task, record);
+        self.publish(task, record, HoldUpdate::Carry);
         Ok(())
     }
 
@@ -607,11 +659,26 @@ impl Shared {
 
     /// Make a committed record visible to readers. Called only after the write
     /// is durable, which is what keeps an acknowledgement behind its record.
-    fn publish(&self, task: Task, record: Record) -> CommittedTask {
+    fn publish(&self, task: Task, record: Record, holds: HoldUpdate) -> CommittedTask {
         let committed = CommittedTask::of(task.clone(), &record);
-        self.state()
-            .entries
-            .insert(task.id().to_owned(), Entry { task, record });
+        let mut state = self.state();
+        let holds = match holds {
+            HoldUpdate::Replace(holds) => holds,
+            HoldUpdate::Carry => state
+                .entries
+                .get(task.id())
+                .map(|entry| entry.holds.clone())
+                .unwrap_or_default(),
+            HoldUpdate::Drop => crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
+        };
+        state.entries.insert(
+            task.id().to_owned(),
+            Entry {
+                task,
+                record,
+                holds,
+            },
+        );
         committed
     }
 

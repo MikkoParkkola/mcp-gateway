@@ -1,15 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Standalone helpers and the `ToolInvoker` bridge for `MetaMcp`.
+//! Standalone helpers for `MetaMcp`.
 //!
 //! Contains idempotency key resolution, tag collection, Code Mode result
-//! conversion, the `MetaMcpInvoker` bridge, and response augmentation.
+//! conversion, and response augmentation. The playbook step invoker lives in
+//! `playbook_invoker.rs`.
 
 use serde_json::{Value, json};
 
-use crate::Result;
 use crate::idempotency::IdempotencyCache;
-use crate::playbook::ToolInvoker;
 
 use super::MetaMcp;
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
@@ -54,6 +53,20 @@ pub(super) enum CachePrincipal {
     Caller(String),
     Anonymous,
     Unresolved,
+}
+
+/// `projection_key_suffix`, scoped to the playbook step this dispatch runs
+/// in, if any (MIK-8341): `|step:N` lands after the length-prefixed client
+/// key, so each step of a keyed run gets its own entry (no 409 between steps)
+/// while a retry of the same step inside the run still meets its stored answer
+/// (ADR-012). A client key that spells `|step:N` cannot collide: the length
+/// prefix covers only the client's text. Reads the playbook engine's own step
+/// label, never Code Mode's, whose steps carry no key.
+pub(super) fn step_scoped(projection_key_suffix: &str) -> String {
+    match crate::playbook::current_step() {
+        Some(label) => format!("|step:{label}{projection_key_suffix}"),
+        None => projection_key_suffix.to_owned(),
+    }
 }
 
 /// Build the idempotency key for a `gateway_invoke` call.
@@ -245,19 +258,34 @@ pub(super) fn credential_owner(caller: &super::MetaMcpCallerContext<'_>) -> Opti
     })
 }
 
+/// The principal a caller owns its keyed calls by when it has no routed task
+/// owner: its credential (never text carrying the reserved local-operator
+/// prefix), else its proven subject. One function for the meta route and the
+/// direct route (MIK-8154), so the two cannot spell one caller apart.
+pub(super) fn credential_or_subject_owner<'a>(
+    credential_principal: Option<&'a str>,
+    grant_subject: Option<&crate::identity_grants::GrantSubject>,
+    caller_key: Option<&'a str>,
+) -> Option<&'a str> {
+    credential_principal
+        .filter(|text| !text.is_empty() && !text.starts_with(super::LOCAL_OPERATOR_PREFIX))
+        .or_else(|| proven_subject_owner(grant_subject, caller_key))
+}
+
 /// The proven subject a caller with no credential owns its keyed calls by
 /// (MIK-7688): an OAuth agent (its client id) or a client certificate (its
 /// SAN URI, else its CN), as the router's `caller_key` encodes them. Never a
 /// header identity, and never a certificate naming no subject: its
 /// `caller_key` is then no subject key.
-pub(super) fn proven_subject_owner<'a>(
-    caller: &super::MetaMcpCallerContext<'a>,
+fn proven_subject_owner<'a>(
+    grant_subject: Option<&crate::identity_grants::GrantSubject>,
+    caller_key: Option<&'a str>,
 ) -> Option<&'a str> {
-    let authority = caller.grant_subject.as_ref()?.authority.as_str();
+    let authority = grant_subject?.authority.as_str();
     if !matches!(authority, "agent_oauth" | "mtls") {
         return None;
     }
-    caller.caller_key.filter(|key| key.starts_with("subject:"))
+    caller_key.filter(|key| key.starts_with("subject:"))
 }
 
 /// Build the response-cache key for a `gateway_invoke` call.
@@ -437,171 +465,6 @@ pub fn prune_constant_signals(ranking: &Value) -> Value {
 }
 
 // ============================================================================
-// ToolInvoker bridge
-// ============================================================================
-
-/// Bridges `MetaMcp::invoke_tool` to the `ToolInvoker` trait for playbook execution.
-pub(super) struct MetaMcpInvoker<'a, 'c> {
-    pub(super) meta: &'a MetaMcp,
-    /// The caller that invoked the playbook, carried whole.
-    ///
-    /// Whole, and not field by field, because it holds the authorizer: each
-    /// step faces exactly the checks the caller would face invoking that tool
-    /// directly. An earlier version carried the caller's identity without the
-    /// authorizer, which nothing on this path consulted — an identity no check
-    /// reads is not a check.
-    pub(super) caller: &'c MetaMcpCallerContext<'c>,
-    /// Each successful step call's gateway notes, taken out of the delivery's
-    /// record, with the value they describe (MIK-7993 r5): put back onto the
-    /// playbook's answer once its output is built.
-    pub(super) steps: parking_lot::Mutex<Vec<(crate::gateway::gateway_writes::WriteRecord, Value)>>,
-}
-
-impl MetaMcpInvoker<'_, '_> {
-    /// Put each completed step's gateway notes back, rebased onto the
-    /// playbook's stored answer (the `output` of its serialized result): by
-    /// step name with no output mapping, through each mapping otherwise.
-    /// Successful calls pair with `completed` in order; if the counts differ,
-    /// nothing is carried, and those members stay receipted.
-    pub(super) fn carry_writes(
-        &self,
-        output: Option<&crate::playbook::PlaybookOutput>,
-        completed: &[String],
-    ) {
-        let steps = std::mem::take(&mut *self.steps.lock());
-        if steps.len() != completed.len() {
-            return;
-        }
-        let named: Vec<(&String, crate::gateway::gateway_writes::WriteRecord, Value)> = completed
-            .iter()
-            .zip(steps)
-            .map(|(name, (record, value))| (name, record, value))
-            .collect();
-        let Some(output) = output else {
-            // The engine keeps the LAST result under a repeated name, so only
-            // that call's notes describe what is stored there (delta D2).
-            let mut last: Vec<(&String, crate::gateway::gateway_writes::WriteRecord)> = Vec::new();
-            for (name, record, _) in named {
-                if let Some(slot) = last.iter_mut().find(|(kept, _)| *kept == name) {
-                    slot.1 = record;
-                } else {
-                    last.push((name, record));
-                }
-            }
-            for (name, record) in last {
-                crate::gateway::gateway_writes::restore(
-                    &record.rebased(&["output".to_owned(), name.clone()]),
-                );
-            }
-            return;
-        };
-        for (prop, mapping) in &output.properties {
-            let path = mapping.path.trim_start_matches('$');
-            let (step, rest) = path.split_once('.').unwrap_or((path, ""));
-            // `inputs` is the caller's namespace even beside a step of that
-            // name, as `PlaybookContext::resolve_var` reads it (impl F5).
-            if step == "inputs" {
-                continue;
-            }
-            // The engine keeps the LAST result under a repeated name (impl F4).
-            let Some((_, record, value)) =
-                named.iter().rev().find(|(name, ..)| name.as_str() == step)
-            else {
-                continue;
-            };
-            // One match is stored as itself, several as an array of them in
-            // the order the resolver visits them (impl F3).
-            let found = crate::gateway::gateway_writes::mapping_paths(value, rest);
-            let to = ["output".to_owned(), prop.clone()];
-            match found.as_slice() {
-                [one] => {
-                    crate::gateway::gateway_writes::restore(&record.projected(value, one, &to));
-                }
-                many => {
-                    for (index, from) in many.iter().enumerate() {
-                        let at = [to[0].clone(), to[1].clone(), index.to_string()];
-                        crate::gateway::gateway_writes::restore(
-                            &record.projected(value, from, &at),
-                        );
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl ToolInvoker for MetaMcpInvoker<'_, '_> {
-    async fn invoke(&self, server: &str, tool: &str, arguments: Value) -> Result<Value> {
-        let args = internal_invoke_args(server, tool, arguments);
-        let writes_mark = crate::gateway::gateway_writes::mark();
-        // Steps inherit the invoking caller's standing, admin included.
-        // Hard-coding non-admin meant an operator's own playbook failed on a
-        // step they could run directly, which is a regression rather than a
-        // control: a playbook is not a way AROUND a check, so it faces the same
-        // one — now including the scope checks, at the chokepoint.
-        let outcome = crate::gateway::meta_mcp::invoke::relay::plan_step(
-            crate::playbook::current_step(),
-            self.meta.invoke_tool(&args, None, self.caller),
-        )
-        .await;
-        // A refused step's reason names an operator-defined target the caller
-        // may not reach, so it is replaced with a neutral one (A3). Decided
-        // from the refusal plus the silent non-authorizer pieces, so the
-        // authorizer is consulted once per step, as before.
-        let answered = match outcome {
-            Err(e)
-                if matches!(e, crate::Error::Forbidden { .. })
-                    || self
-                        .meta
-                        .refused_beyond_authorizer(server, tool, self.caller.scope()) =>
-            {
-                Err(crate::Error::Forbidden {
-                    code: -32003,
-                    status: 403,
-                    message: "step not permitted for this caller".to_string(),
-                })
-            }
-            other => other,
-        };
-        // A failed attempt's notes describe nothing the playbook keeps.
-        let taken = crate::gateway::gateway_writes::take_since(writes_mark);
-        if let Ok(value) = &answered {
-            self.steps.lock().push((taken, value.clone()));
-        }
-        answered
-    }
-}
-
-/// Build the `invoke_tool` argument envelope for an internal (chain / playbook)
-/// invocation.
-///
-/// Internal orchestration consumes the raw backend payload: steps reference
-/// prior outputs by their original field paths (`$step.issue.id`). Canonical
-/// projection (MIK-3534) is a client-presentation layer that would move those
-/// fields under `_raw` and silently break interpolation, so internal calls opt
-/// out via `_full`.
-///
-/// The directive is read (and stripped) from INSIDE the `arguments` map by
-/// `invoke_tool_traced`, so it MUST be injected there — placing it as an outer
-/// sibling of `arguments` leaves it invisible to `want_full`. Non-object
-/// arguments are passed through unchanged (no data loss).
-fn internal_invoke_args(server: &str, tool: &str, arguments: Value) -> Value {
-    let arguments = match arguments {
-        Value::Object(mut map) => {
-            map.insert("_full".to_string(), Value::Bool(true));
-            Value::Object(map)
-        }
-        other => other,
-    };
-    json!({
-        "server": server,
-        "tool": tool,
-        "arguments": arguments
-    })
-}
-
-// ============================================================================
 // Response augmentation
 // ============================================================================
 
@@ -664,6 +527,10 @@ fn auth_context_ref_hash(name: &str) -> String {
 /// the caller (`maybe_stamp_provenance`, MIK-6908 rung 3.1) can hand it to the
 /// shadow claim-capture sink without re-deriving or re-parsing it out of the
 /// JSON it was just serialized into.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one receipt's facts, each passed as observed"
+)]
 pub(super) fn augment_with_provenance(
     mut result: Value,
     signer: &crate::attestation::signer::BnautAttestationSigner,
@@ -672,10 +539,10 @@ pub(super) fn augment_with_provenance(
     api_key_name: Option<&str>,
     cache: crate::trust::CacheOutcome,
     backend_ok: bool,
+    observed_at: String,
 ) -> (Value, crate::trust::SignedResultProvenance) {
     use crate::trust::RuntimeProvenanceReceipt;
 
-    let observed_at = chrono::Utc::now().to_rfc3339();
     let mut receipt =
         RuntimeProvenanceReceipt::observed(backend_id, tool, observed_at, cache, backend_ok);
     if let Some(name) = api_key_name {
@@ -736,6 +603,15 @@ pub(super) fn strip_backend_provenance(mut result: Value) -> Value {
     }
     result
 }
+
+#[path = "playbook_invoker.rs"]
+mod playbook_invoker;
+pub(super) use playbook_invoker::MetaMcpInvoker;
+#[cfg(test)]
+use playbook_invoker::internal_invoke_args;
+pub(crate) use playbook_invoker::{
+    STEP_NOT_PERMITTED, STEP_NOT_PERMITTED_CODE, STEP_NOT_PERMITTED_STATUS, step_not_permitted,
+};
 
 #[cfg(test)]
 #[path = "support_tests.rs"]

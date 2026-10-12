@@ -98,13 +98,63 @@ fn merge_key_refused_under_a_backend() {
     );
 }
 
-/// #2360: a retired key never had an effect, so it loads (with a warning)
-/// instead of taking every backend down.
+/// MIK-8044.SURF.2 (T5): a key removed in 4.0 is a load error that names the
+/// key and the command that deletes it. It never had an effect, so the fix is
+/// always the deletion `mcp-gateway upgrade` makes.
+fn removed_key_refused(yaml: &str, path: &str) {
+    let message = refusal(yaml, &[path]);
+    assert!(
+        message.contains("mcp-gateway upgrade"),
+        "the refusal of `{path}` must name `mcp-gateway upgrade`; got: {message}"
+    );
+}
+
 #[test]
-fn retired_backend_circuit_breaker_loads() {
-    let (_dir, _path, result) =
-        load("backends:\n  x:\n    command: y\n    circuit_breaker:\n      enabled: false\n");
-    result.expect("a retired backend circuit_breaker must load");
+fn removed_backend_circuit_breaker_refused() {
+    removed_key_refused(
+        "backends:\n  x:\n    command: y\n    circuit_breaker:\n      enabled: false\n",
+        "backends.x.circuit_breaker",
+    );
+}
+
+#[test]
+fn removed_marketplace_block_refused() {
+    removed_key_refused(
+        "marketplace:\n  marketplace_url: https://plugins.invalid\n  plugin_dir: /tmp/p\n",
+        "marketplace",
+    );
+}
+
+#[test]
+fn removed_server_request_timeout_refused() {
+    removed_key_refused(
+        "server:\n  request_timeout: 30s\n",
+        "server.request_timeout",
+    );
+}
+
+/// T5c: a build without `cost-governance` refuses the whole block naming the
+/// feature, `currency` included; the feature is the first fix. Compiled only
+/// in such a build (feature-combos lints it; it runs once by hand, MIK-8044).
+#[cfg(not(feature = "cost-governance"))]
+#[test]
+fn cost_governance_block_names_the_missing_feature() {
+    let message = refusal("cost_governance:\n  currency: USD\n", &["cost_governance"]);
+    assert!(message.contains("cost-governance"), "{message}");
+}
+
+/// `currency` only labelled values that are always USD. Its sibling keys stay
+/// valid, so the refusal names the one key.
+#[cfg(feature = "cost-governance")]
+#[test]
+fn removed_cost_governance_currency_refused() {
+    let message = refusal(
+        "cost_governance:\n  enabled: true\n  currency: USD\n",
+        &["cost_governance.currency"],
+    );
+    assert!(message.contains("mcp-gateway upgrade"), "{message}");
+    let (_dir, _path, result) = load("cost_governance:\n  enabled: true\n");
+    result.expect("cost_governance without currency loads");
 }
 
 /// A non-string key under a backend cannot be matched against the key list;
@@ -143,20 +193,49 @@ fn all_unrecognised_keys_reported_together() {
 }
 
 #[test]
-fn retired_idle_timeout_loads() {
-    let (_dir, _path, result) = load("backends:\n  x:\n    command: y\n    idle_timeout: 10m\n");
-    let config = result.expect("a retired idle_timeout must load");
-    assert!(config.backends.contains_key("x"));
+fn removed_idle_timeout_refused() {
+    removed_key_refused(
+        "backends:\n  x:\n    command: y\n    idle_timeout: 10m\n",
+        "backends.x.idle_timeout",
+    );
 }
 
-/// F15, #2360: the WebSocket listener stays removed; a config still naming its
-/// port loads and opens no listener, as `ws_port: null` (the old default) does.
+/// F15: the WebSocket listener stays removed; a config still naming its port,
+/// even as `null` (the old default), is refused naming the key.
 #[test]
-fn retired_server_ws_port_loads() {
+fn removed_server_ws_port_refused() {
     for yaml in ["server:\n  ws_port: 9000\n", "server:\n  ws_port: null\n"] {
-        let (_dir, _path, result) = load(yaml);
-        result.unwrap_or_else(|e| panic!("{yaml:?} must load: {e}"));
+        removed_key_refused(yaml, "server.ws_port");
     }
+}
+
+/// T12 (B1): a key the loader accepts twice must not switch off the backend
+/// key check. (a) also kills a strict-parse regression in that check; at base
+/// `idle_timeout` loads because it only warned.
+#[test]
+fn removed_backend_key_after_a_repeated_key_refused() {
+    removed_key_refused(
+        &format!("{REPEATED_KEY}backends:\n  x:\n    command: y\n    idle_timeout: 10m\n"),
+        "backends.x.idle_timeout",
+    );
+}
+
+#[test]
+fn misspelt_backend_key_after_a_repeated_key_refused() {
+    refusal(
+        &format!("{REPEATED_KEY}backends:\n  x:\n    command: y\n    timout: 5s\n"),
+        &["backends.x.timout"],
+    );
+}
+
+/// T13: the example at the repository root loads, so no removed key is left
+/// in the file a new operator copies first.
+#[test]
+fn root_gateway_example_loads() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("gateway.example.yaml");
+    let body = std::fs::read_to_string(path).expect("read gateway.example.yaml");
+    let (_dir, _path, result) = load(&body);
+    result.unwrap_or_else(|e| panic!("gateway.example.yaml must load: {e}"));
 }
 
 /// F15: the retirement names `server.ws_port` only; the same leaf under a
@@ -288,7 +367,8 @@ fn env_root_keys_and_shipped_examples_load() {
     let mut failures = Vec::new();
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
     let names = shipped_examples(&examples);
-    assert!(names.len() >= 8, "examples/ sweep found only {names:?}");
+    // 7 since 4.0 deleted circuit-breaker.yaml, which showed only hidden keys.
+    assert!(names.len() >= 7, "examples/ sweep found only {names:?}");
     for name in &names {
         // Through a 0600 copy: a git checkout is 0644, which CONFIG.2 refuses.
         let body = std::fs::read_to_string(examples.join(name)).expect("read example");
@@ -421,13 +501,6 @@ async fn refused_reload_keeps_the_running_config() {
     assert_eq!(live.get().backends["keep"].description, "after");
 }
 
-/// C8, #2360: `server.request_timeout` was never enforced; it loads and warns.
-#[test]
-fn removed_request_timeout_loads() {
-    let (_dir, _path, result) = load("server:\n  request_timeout: 30s\n");
-    result.expect("a retired request_timeout must load");
-}
-
 /// #2360: `_` and `x-` keys are the operator's notes, at any depth, and load.
 #[test]
 fn annotation_keys_load() {
@@ -447,14 +520,29 @@ fn annotation_key_configures_nothing() {
     assert!(!config.key_server.enabled);
 }
 
-/// #2360: the operator's shape, many retired keys and a note block, loads.
+/// The operator's #2360 shape, many removed keys beside a note block, names
+/// every removed key in one refusal and none of the notes (MIK-8044).
+#[test]
+fn removed_keys_beside_annotations_all_named() {
+    let message = refusal(
+        "server:\n  request_timeout: 30s\nbackends:\n  a:\n    command: y\n    idle_timeout: 5m\n  \
+         b:\n    http_url: \"http://127.0.0.1:1/mcp\"\n    _legacy: {k: v}\n  c:\n    command: z\n    idle_timeout: 10m\n",
+        &[
+            "server.request_timeout",
+            "backends.a.idle_timeout",
+            "backends.c.idle_timeout",
+        ],
+    );
+    assert!(!message.contains("_legacy"), "got: {message}");
+}
+
+/// #2360: a retired key that still loads, beside a note block, loads.
 #[test]
 fn retired_and_annotation_keys_together_load() {
     let (_dir, _path, result) = load(
-        "server:\n  request_timeout: 30s\nbackends:\n  a:\n    command: y\n    idle_timeout: 5m\n  \
-         b:\n    http_url: \"http://127.0.0.1:1/mcp\"\n    _legacy: {k: v}\n  c:\n    command: z\n    idle_timeout: 10m\n",
+        "meta_mcp:\n  cache_tools: false\nbackends:\n  b:\n    http_url: \"http://127.0.0.1:1/mcp\"\n    _legacy: {k: v}\n",
     );
-    result.expect("retired plus annotation keys must load");
+    result.expect("a retired key plus annotation keys must load");
 }
 
 /// #2360: typo protection stays for every other key, and a mixed file names
@@ -462,11 +550,11 @@ fn retired_and_annotation_keys_together_load() {
 #[test]
 fn misspelt_key_beside_ignored_keys_still_refused() {
     let message = refusal(
-        "server:\n  request_timeout: 30s\nbackends:\n  x:\n    command: y\n    idle_timeout: 5m\n    \
+        "meta_mcp:\n  cache_tools: false\nbackends:\n  x:\n    command: y\n    \
          idel_timeout: 5m\n    _note: n\n",
         &["backends.x.idel_timeout"],
     );
-    for ignored in ["backends.x.idle_timeout", "server.request_timeout", "_note"] {
+    for ignored in ["cache_tools", "_note"] {
         assert!(
             !message.contains(ignored),
             "{ignored} must not be refused; got: {message}"
@@ -491,22 +579,28 @@ fn a_dotted_key_is_not_an_annotation() {
     refusal("server:\n  \"a._b\": 1\n", &["server.a._b"]);
 }
 
-/// #2360: a transport conflict is not retired and not a note; still refused.
+/// #2360: a transport conflict is not a removed key and not a note; one
+/// refusal names it as a conflict and the removed key as removed.
 #[test]
-fn unselected_transport_key_beside_retired_key_refused() {
+fn unselected_transport_key_beside_removed_key_refused() {
     let message = refusal(
         "backends:\n  x:\n    command: y\n    http_url: \"http://127.0.0.1:1/mcp\"\n    idle_timeout: 5m\n",
-        &["backends.x.http_url"],
+        &[
+            "backends.x.http_url",
+            "`backends.x.idle_timeout` was removed in 4.0",
+        ],
     );
-    assert!(!message.contains("idle_timeout"), "got: {message}");
+    assert!(message.contains("mcp-gateway upgrade"), "got: {message}");
 }
 
-/// Flow style is valid YAML and loads like the block form: the retired key
-/// loads there too (#2360), and a misspelling is still refused.
+/// Flow style is valid YAML and loads like the block form: a removed key is
+/// refused there too, and so is a misspelling.
 #[test]
-fn retired_key_loads_in_flow_style_mappings() {
-    let (_dir, _path, result) = load("backends: {demo: {command: \"echo hi\", idle_timeout: 10m}}");
-    result.expect("flow-style retired key must load");
+fn removed_key_refused_in_flow_style_mappings() {
+    removed_key_refused(
+        "backends: {demo: {command: \"echo hi\", idle_timeout: 10m}}",
+        "backends.demo.idle_timeout",
+    );
     refusal(
         "backends: {demo: {command: \"echo hi\", idel_timeout: 10m}}",
         &["backends.demo.idel_timeout"],

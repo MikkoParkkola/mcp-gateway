@@ -214,15 +214,18 @@ backends:
       TAVILY_API_KEY: "${TAVILY_API_KEY}"
 
   sentry:
-    http_url: "https://mcp.sentry.dev/mcp"
+    url: "https://mcp.sentry.dev/mcp"
     description: "Sentry issues"
 
   realtime:
     # WebSocket backend: headers ride the upgrade request once (UPGRADING-4.0 §47).
-    ws_url: "wss://rt.example.com/mcp"
+    url: "wss://rt.example.com/mcp"
     headers:
       Authorization: "Bearer ${RT_TOKEN}"
 ```
+
+The gateway refuses a config file other users can read, because it can hold
+credentials, so make a hand-written one yours alone: `chmod 600 gateway.yaml`.
 
 ### Run and verify
 
@@ -403,7 +406,7 @@ flowchart TB
     FS --> B4["REST capabilities<br/>(130+)"]
 ```
 
-Single-binary gateway. An AI client talks to the compact meta-surface, and the gateway dynamically discovers and routes to backend tools. Key modules: `gateway/` (core router, OAuth, streaming, UI), `provider/` (MCP/composite/capability), `capability/` (discovery, validation), `transport/` (HTTP, stdio), `security/` (firewall, mTLS, message signing, agent identity, memory scanner), `identity_propagation/`, `key_server/`, `cost_accounting/`, `scheduler/`, `skills/`, `tool_profiles/`, `config_reload/`, and `a2a/` (outbound A2A bridge).
+Single-binary gateway. An AI client talks to the compact meta-surface, and the gateway dynamically discovers and routes to backend tools. Key modules: `gateway/` (core router, OAuth, streaming, UI), `provider/` (MCP/composite/capability), `capability/` (discovery, validation), `transport/` (HTTP, stdio), `security/` (firewall, mTLS, message signing, agent identity, memory scanner), `identity_propagation/`, `key_server/`, `cost_accounting/`, `scheduler/`, `skills/`, `config_reload/`, and `a2a/` (outbound A2A bridge).
 
 ## Features
 
@@ -436,14 +439,12 @@ The gateway ships with **130+ built-in capabilities**: weather, Wikipedia, GitHu
 | **Webhooks** | GitHub/Linear/Stripe push events as MCP notifications. [Docs](docs/WEBHOOKS.md). |
 | **Auto-discovery** | Discover MCP servers from existing client configs and running processes. |
 | **Surfaced tools** | Pin high-value tools directly in `tools/list` for one-hop invocation. |
-| **Semantic search** | TF-IDF ranked search across all tool names and descriptions. |
-| **Tool profiles** | Usage analytics per tool: latency, errors, trends. Persisted to disk. |
-| **Config export** | Export sanitized config as YAML or JSON via `mcp-gateway config export`. |
+| **Client config export** | `mcp-gateway setup export` writes the gateway's entry into each AI client's own MCP config file (Claude Code, Claude Desktop, Cursor, VS Code Copilot, Windsurf, Cline, Zed), in proxy or stdio mode, with `--dry-run` and `--watch`. |
 
 ### Protocol and transport
 
 - **MCP versions**: 2025-11-25 and earlier through the `initialize` handshake, and 2026-07-28 without one (see [What's new in 4.0](#whats-new-in-40)). The handshake negotiates up to 2025-11-25 only, because 2026-07-28 removed it. The 2026-07-28 revision is served on the stateless `POST /mcp` path, where a client names it per request with the `MCP-Protocol-Version` header; it is on by default and switched off with `server.modern_protocol: false`. On stdio, `server/discover` also lists 2026-07-28 while `server.modern_protocol` is on, and a stdio request that declares its capabilities in its own 2026-style `_meta` gets a 2026 continuation when its backend asks for input mid-call. How mixed client and backend revisions interoperate: [MCP compatibility](#mcp-compatibility)
-- **Backend transports**: stdio, HTTP (Streamable HTTP or SSE), WebSocket (`ws_url`, legacy `initialize` handshake, one shared socket per backend), and A2A (`a2a_url`; A2A 1.0 JSON-RPC agents only, so an agent offering only 0.3 is refused at start; one `send_message` tool per agent; an agent's question reaches the client as an MCP input round, a long task is followed to its answer, and a question left unanswered has its agent task canceled within 330 s; `a2a` feature, on by default)
+- **Backend transports**: stdio, HTTP (Streamable HTTP or SSE), WebSocket (`url` with a `ws://` or `wss://` scheme, legacy `initialize` handshake, one shared socket per backend), and A2A (`a2a_url`; A2A 1.0 JSON-RPC agents only, so an agent offering only 0.3 is refused at start; one `send_message` tool per agent; an agent's question reaches the client as an MCP input round, a long task is followed to its answer, and a question left unanswered has its agent task canceled within 330 s; `a2a` feature, on by default)
 - **Client transports**: clients connect via stdio or HTTP (`POST /mcp`); there is no inbound WebSocket listener
 - **Hot reload**: capability YAMLs and backends are watched and reloaded live. `server.public_url` and `control_plane.role_mapping` are re-read per request; everything else needs a restart
 - **Reload outcomes**: `gateway_reload_config` and `/ui/api/reload` report `restart_required`, and keep reporting it until a restart, for every field a reload cannot apply — which is every field outside that short live list, `auth` included. A reload that would leave the tool endpoint reachable without a credential is refused rather than applied
@@ -485,7 +486,7 @@ Remote MCP servers plug in by URL, with no extra code. See [examples/gateway-ful
 |--------|-------|-------|
 | **Startup time** | ~8ms | Mean run time of `mcp-gateway --help` (`hyperfine`, 20 runs); not the time until the gateway serves requests ([benchmarks](docs/BENCHMARKS.md)) |
 | **Binary size** | ~12-13 MB | Release build with LTO, stripped |
-| **Hot-path microbenchmarks** | Included | Criterion suite covers registry, parsing, cache-key, firewall, and semantic-search hot paths |
+| **Hot-path microbenchmarks** | Included | Criterion suite covers registry, parsing, cache-key, and firewall hot paths |
 | **End-to-end latency** | Backend-dependent | Measure with your real MCP servers and REST APIs rather than relying on a synthetic single number |
 
 ## SKILL.md / agentskills.io compatibility
@@ -618,11 +619,14 @@ This project follows [Semantic Versioning](https://semver.org/) over its
 either are versioned accordingly — a config key that stops being accepted, or a
 command that changes behaviour, is a breaking change.
 
-**The Rust library API is not part of that surface.** Types are `pub` for
-modularity and testing, not as a supported embedding API, and they may change
-in any release. The crate ships a binary; at the time of writing crates.io
-reports zero reverse dependencies. If you embed the library, pin an exact
-version (`=4.0.0`) rather than a caret range.
+**The Rust library API is not part of that surface.** As of 4.0 every
+crate-root item is `#[doc(hidden)]`: the library exists so the binary, its
+tests and its benches share one build, and docs.rs lists nothing. The supported
+surface is the binary, its configuration and its HTTP and MCP interfaces. Library
+paths may change in any release. The crate ships a binary; at the time of
+writing crates.io reports zero reverse dependencies. If you embed the library,
+open an issue describing what you use, and pin an exact version (`=4.0.0`)
+rather than a caret range.
 
 This is stated explicitly because "removing a `pub` field" and "breaking a
 supported API" are only the same thing when the API is supported. Here it is

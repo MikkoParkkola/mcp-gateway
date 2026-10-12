@@ -15,7 +15,9 @@ use super::{Outbound, WebSocketTransport};
 use crate::protocol::JsonRpcResponse;
 use crate::transport::Transport as _;
 
-const ARRIVAL: Duration = Duration::from_secs(2);
+/// A hang bound on frames that do arrive, never a window an outcome is timed
+/// against: a loaded runner may take seconds (MIK-8222).
+const ARRIVAL: Duration = Duration::from_secs(10);
 
 /// A transport whose writer is the returned queue, and a request on it.
 async fn queued_request(

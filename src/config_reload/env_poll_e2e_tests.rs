@@ -48,6 +48,7 @@ fn start(root: &Path, env_paths: Vec<PathBuf>) -> Started {
         &Config::default(),
         Arc::clone(&env),
         None,
+        None,
         shutdown_rx,
     )
     .expect("the watcher starts");
@@ -63,9 +64,12 @@ fn value(env: &LiveEnv, key: &str) -> Option<String> {
     env.get().resolve(key)
 }
 
-/// Wait up to `secs` for `key` to read `want` in the live overlay.
-async fn reaches(env: &LiveEnv, key: &str, want: &str, secs: u64) {
-    let got = tokio::time::timeout(Duration::from_secs(secs), async {
+/// Real-time bound on an event wait: only a hang reaches it (MIK-8360).
+const HANG_BOUND: Duration = Duration::from_secs(60);
+
+/// Wait, under [`HANG_BOUND`], for `key` to read `want` in the live overlay.
+async fn reaches(env: &LiveEnv, key: &str, want: &str) {
+    let got = tokio::time::timeout(HANG_BOUND, async {
         while value(env, key).as_deref() != Some(want) {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
@@ -73,7 +77,7 @@ async fn reaches(env: &LiveEnv, key: &str, want: &str, secs: u64) {
     .await;
     assert!(
         got.is_ok(),
-        "{key} never read {want:?} within {secs} s; it reads {:?}",
+        "{key} never read {want:?} within {HANG_BOUND:?}; it reads {:?}",
         value(env, key)
     );
 }
@@ -92,9 +96,9 @@ async fn p1_a_directory_link_retarget_then_a_write_reaches_the_overlay() {
     assert_eq!(value(&g.env, "MCP_GW_T1286_P1").as_deref(), Some("rel1"));
 
     retarget(&r.join("current"), Path::new("rel2"));
-    reaches(&g.env, "MCP_GW_T1286_P1", "rel2", 3).await;
+    reaches(&g.env, "MCP_GW_T1286_P1", "rel2").await;
     write_owner_only(r.join("rel2").join(".env"), "MCP_GW_T1286_P1=rel2b\n").unwrap();
-    reaches(&g.env, "MCP_GW_T1286_P1", "rel2b", 3).await;
+    reaches(&g.env, "MCP_GW_T1286_P1", "rel2b").await;
 }
 
 /// P2: a file-symlink retarget, then a write to the new target.
@@ -111,9 +115,9 @@ async fn p2_a_file_link_retarget_then_a_write_reaches_the_overlay() {
     assert_eq!(value(&g.env, "MCP_GW_T1286_P2").as_deref(), Some("one"));
 
     retarget(&r.join("link.env"), &r.join("b").join(".env"));
-    reaches(&g.env, "MCP_GW_T1286_P2", "two", 3).await;
+    reaches(&g.env, "MCP_GW_T1286_P2", "two").await;
     write_owner_only(r.join("b").join(".env"), "MCP_GW_T1286_P2=three\n").unwrap();
-    reaches(&g.env, "MCP_GW_T1286_P2", "three", 3).await;
+    reaches(&g.env, "MCP_GW_T1286_P2", "three").await;
 }
 
 /// P3: a malformed file left unchanged is retried, warned about once, and
@@ -139,12 +143,20 @@ fn p3_a_failing_env_file_is_retried_warned_once_and_recovers() {
     let first = records(|| {
         runtime.block_on(async {
             let counts = g.watcher.env_reloads();
+            let from = counts.failures.load(Ordering::SeqCst);
             write_owner_only(&path, "MCP_GW_T1286_P3=\"unterminated\n").unwrap();
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            let attempts = counts.attempts.load(Ordering::SeqCst);
+            // Completed failures, each reported, not attempts started: the
+            // first one and two retries of the unchanged file (MIK-8360).
+            let retried = tokio::time::timeout(HANG_BOUND, async {
+                while counts.failures.load(Ordering::SeqCst) < from + 3 {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            })
+            .await;
             assert!(
-                attempts >= 3,
-                "an unchanged failing file must be retried; {attempts} reloads ran"
+                retried.is_ok(),
+                "an unchanged failing file must be retried; {} failures were reported",
+                counts.failures.load(Ordering::SeqCst) - from
             );
             assert_eq!(
                 value(&g.env, "MCP_GW_T1286_P3").as_deref(),
@@ -168,10 +180,20 @@ fn p3_a_failing_env_file_is_retried_warned_once_and_recovers() {
     // the minute. The success reset the limiter, so it warns again, once.
     let second = records(|| {
         runtime.block_on(async {
+            let counts = g.watcher.env_reloads();
             write_owner_only(&path, "MCP_GW_T1286_P3=fixed\n").unwrap();
-            reaches(&g.env, "MCP_GW_T1286_P3", "fixed", 3).await;
+            reaches(&g.env, "MCP_GW_T1286_P3", "fixed").await;
+            let from = counts.failures.load(Ordering::SeqCst);
             write_owner_only(&path, "MCP_GW_T1286_P3=\"unterminated\n").unwrap();
-            tokio::time::sleep(Duration::from_secs(3)).await;
+            // The failure and one retry of it, both reported, so "once" is
+            // judged over a retry that could have warned again (MIK-8360).
+            let retried = tokio::time::timeout(HANG_BOUND, async {
+                while counts.failures.load(Ordering::SeqCst) < from + 2 {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            })
+            .await;
+            assert!(retried.is_ok(), "the second failure was never retried");
         });
     });
     assert_eq!(
@@ -263,7 +285,7 @@ async fn envfile_19_the_poll_reads_the_recorded_paths_and_no_other() {
         .zip(["MCP_GW_T1286_E19_ONE", "MCP_GW_T1286_E19_TWO"])
     {
         write_owner_only(path, format!("{key}=changed\n")).unwrap();
-        reaches(&g.env, key, "changed", 3).await;
+        reaches(&g.env, key, "changed").await;
     }
 
     // Let the last reload settle, then write the unrecorded sibling.
