@@ -610,13 +610,22 @@ mod tests {
         let cache: CachedMetadata<Vec<u8>> = CachedMetadata::new();
         let first_mark = parking_lot::Mutex::new(None);
         let heard = parking_lot::Mutex::new(Vec::new());
+        // Ordered by signals, not sleeps: the owner's fetch holds the fill
+        // until the waiter has joined it, so the waiter always waits on it.
+        let (started, release, joined) = (
+            tokio::sync::Notify::new(),
+            tokio::sync::Notify::new(),
+            tokio::sync::Notify::new(),
+        );
         let owner = cache.get_or_fetch_shared_then(
             LONG_TTL,
             |mark| {
                 *first_mark.lock() = Some(Arc::clone(&mark));
+                let (started, release) = (&started, &release);
                 async move {
                     mark.store(true, Ordering::SeqCst);
-                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    started.notify_one();
+                    release.notified().await;
                     Ok((vec![1u8], ()))
                 }
             },
@@ -625,18 +634,29 @@ mod tests {
             None,
         );
         let waiter = async {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            started.notified().await;
             cache
                 .get_or_fetch_shared_then(
                     LONG_TTL,
                     |_| async { Ok((vec![2u8], ())) },
                     |()| {},
-                    |mark| heard.lock().push(("waiter", mark)),
+                    |mark| {
+                        heard.lock().push(("waiter", mark));
+                        joined.notify_one();
+                    },
                     None,
                 )
                 .await
         };
-        let (owner, waiter) = tokio::join!(owner, waiter);
+        let driver = async {
+            joined.notified().await;
+            release.notify_one();
+        };
+        let ((owner, waiter), ()) = tokio::time::timeout(crate::test_wait::HANG_BOUND, async {
+            tokio::join!(async { tokio::join!(owner, waiter) }, driver)
+        })
+        .await
+        .expect("the fill and its waiter settle");
         assert_eq!(*owner.unwrap(), vec![1u8]);
         assert_eq!(*waiter.unwrap(), vec![1u8], "the waiter joined the fill");
         let first_mark = first_mark.lock().clone().expect("the owner's fetch ran");
