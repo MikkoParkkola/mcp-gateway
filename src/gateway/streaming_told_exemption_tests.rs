@@ -163,3 +163,37 @@ async fn an_anonymous_dead_bearer_hint_is_skipped_never_closed() {
     };
     assert_eq!(view.decide(&auth(), None, "", "a").await, Decision::Skip);
 }
+
+/// An anonymous session that opened a stream is not reached by a judged hint:
+/// the fan-out finds no moved view for it (silence), so it counts no copy.
+#[tokio::test]
+async fn an_anonymous_session_is_not_reached_by_a_judged_hint() {
+    let multiplexer = NotificationMultiplexer::new(
+        Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::StreamingConfig::default(),
+    );
+    multiplexer.set_authorizer(auth());
+    let owner = crate::gateway::session_id::SessionOwner::Anonymous;
+    let (session, _rx) = multiplexer.get_or_create_session_scoped(Some("s"), &owner, None);
+    let judge = Fake::answering("s0", "x");
+    judge.die();
+    let attached = multiplexer
+        .attach_view(&session, ViewSubject::default(), judge.clone())
+        .await;
+    assert!(
+        matches!(attached, Ok(Some(_))),
+        "premise: its stream opened"
+    );
+    let hint = TaggedNotification {
+        source: "alpha".to_owned(),
+        event_type: "message".to_owned(),
+        data: serde_json::json!({
+            "jsonrpc": "2.0", "method": "notifications/tools/list_changed"
+        }),
+        event_id: None,
+    };
+    let reached = multiplexer
+        .broadcast_to_backend_judged(&hint, "alpha", &*judge)
+        .await;
+    assert_eq!(reached, 0, "an anonymous session is told nothing");
+}
