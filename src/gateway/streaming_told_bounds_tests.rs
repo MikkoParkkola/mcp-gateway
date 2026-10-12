@@ -4,6 +4,7 @@
 //! and a view's key is its identity, not a display label.
 
 use super::*;
+use crate::gateway::session_id::SessionOwner;
 
 fn subject_labelled(subject: &str, label: Option<&str>) -> ViewSubject {
     ViewSubject {
