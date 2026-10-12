@@ -75,18 +75,23 @@ pub(crate) type AbandonHook = Box<dyn FnOnce() + Send>;
 
 impl<T> Drop for FetchPermit<'_, T> {
     fn drop(&mut self) {
-        // The hook runs FIRST, while this fill still holds the slot's single
-        // flight: no waiter can lead a newer fill until `in_flight` clears
-        // below, so the hook cannot narrow a newer fill's sets. A moved
-        // generation means a store or an invalidation already supplied newer
-        // state, so the hook stands down (MIK-8399 r4-r5).
-        let current = self.cache.state.read().generation == self.generation;
-        if let Some(hook) = self.on_abandon.take()
-            && current
+        // The hook runs under the cache's write guard, the guard every store
+        // and invalidation also holds, and before `in_flight` clears: no
+        // waiter can lead a newer fill, and no `replace` or invalidation can
+        // land, between the generation check and the hook's narrowing. A
+        // moved generation means newer state was already supplied, so the
+        // hook stands down (MIK-8399 r4-r5). The hook must not touch this
+        // cache's state; it narrows the slot's sets only, the same lock order
+        // `invalidate_then` and `store_if_current` use.
         {
-            hook();
+            let mut state = self.cache.state.write();
+            if let Some(hook) = self.on_abandon.take()
+                && state.generation == self.generation
+            {
+                hook();
+            }
+            state.in_flight = None;
         }
-        self.cache.state.write().in_flight = None;
         let _ = self.sender.send(());
     }
 }

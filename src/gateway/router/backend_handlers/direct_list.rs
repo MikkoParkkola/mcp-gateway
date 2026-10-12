@@ -111,10 +111,16 @@ pub(super) async fn drain(
                 } else {
                     crate::backend::Listing::Complete
                 };
-                let mut tools = std::mem::take(&mut read.tools);
+                let withheld = backend.remember_listed_tools_as(
+                    identity_key,
+                    credential,
+                    &read.tools,
+                    listing,
+                );
+                // Remembered: disarmed only now, so a panic inside `remember`
+                // still revokes from what was read (MIK-8399 r4).
                 read.armed = false;
-                let withheld =
-                    backend.remember_listed_tools_as(identity_key, credential, &tools, listing);
+                let mut tools = std::mem::take(&mut read.tools);
                 // Dropped here, from the raw list this drain judged, not by a
                 // later read of the backend's blocked set, which a concurrent
                 // listing may change before the response is sent (#1441).

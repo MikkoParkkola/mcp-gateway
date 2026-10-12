@@ -68,6 +68,18 @@ pub(super) async fn drain_list_pages(
                     None => r.is_object() && cursor.is_some(),
                 }
         };
+        // MIK-8399: what the page declares is recorded before its shape is
+        // judged, so a page refused for a malformed cursor still narrows by
+        // the tools it listed if the fill is then abandoned.
+        if let Some(seen) = seen
+            && let Some(items) = response
+                .result
+                .as_ref()
+                .and_then(|r| r.get(family.list_key))
+                .and_then(Value::as_array)
+        {
+            seen.lock().extend(items.iter().cloned());
+        }
         let Some(mut result) = response.result.filter(readable) else {
             // A missing or malformed page is a transient page failure (F13:
             // as zero items it would make a present tool absent); keep the
@@ -81,13 +93,6 @@ pub(super) async fn drain_list_pages(
             .as_object_mut()
             .and_then(|m| m.remove("nextCursor"))
             .and_then(|v| v.as_str().map(str::to_owned));
-        // MIK-8399: kept as it arrives, so a fill that later fails or is
-        // cancelled can still narrow by what it read.
-        if let Some(seen) = seen
-            && let Some(items) = result.get(family.list_key).and_then(Value::as_array)
-        {
-            seen.lock().extend(items.iter().cloned());
-        }
         if let Some(acc) = merged.as_mut() {
             let items = if let Some(items) = result
                 .get_mut(family.list_key)

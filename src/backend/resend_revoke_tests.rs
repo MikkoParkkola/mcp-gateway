@@ -116,6 +116,18 @@ fn header_invalid_write(name: &str) -> Value {
 /// S6a: a write dropped by the header check still revokes its resend.
 #[tokio::test]
 async fn s6a_a_header_invalid_write_still_revokes_its_resend() {
+    let (mut parsed, _) =
+        crate::backend::descriptor_gate::parse_listed(&[header_invalid_write("t")]);
+    let _ = crate::backend::prepare_tool_metadata(
+        "ledger",
+        &std::collections::BTreeMap::new(),
+        crate::backend::Judging::AlreadyJudged,
+        &mut parsed,
+    );
+    assert!(
+        parsed.is_empty(),
+        "premise: the header gate drops this tool"
+    );
     let backend = backend();
     seed_resend_only(&backend, &["t"]);
     let _ = backend.remember_listed_tools_as(
@@ -353,12 +365,16 @@ fn refreshing_backend(wire: &Arc<Wire>) -> Arc<Backend> {
 /// A first, complete fill that declares `t` idempotent, so it is resend-permitted
 /// and a catalogue is stored. Then the wire serves `next`.
 async fn primed(next: Vec<Page>) -> (Arc<Backend>, Arc<Wire>) {
-    let wire = Wire::new(vec![Page::Tools(vec![idempotent("t")], false)]);
+    let wire = Wire::new(vec![Page::Tools(vec![read_only("t")], false)]);
     let backend = refreshing_backend(&wire);
     backend.get_tools_shared().await.expect("the first fill");
     assert!(
         permitted(&backend).contains("t"),
         "premise: the fill permits `t`"
+    );
+    assert!(
+        backend.is_read_only_for(None, "t"),
+        "premise: and admits it"
     );
     *wire.pages.lock() = next;
     (backend, wire)
@@ -379,6 +395,7 @@ async fn s13_an_abandoned_refresh_narrows_from_what_it_read() {
         !permitted(&backend).contains("t"),
         "a refresh read `t` declared a write, failed, and kept it resend-permitted"
     );
+    assert!(!backend.is_read_only_for(None, "t"));
     assert_eq!(
         catalogue_len(&backend),
         1,
@@ -407,6 +424,7 @@ async fn s15_a_cancelled_refresh_narrows_from_what_it_read() {
         !permitted(&backend).contains("t"),
         "a cancelled refresh read `t` declared a write and kept it resend-permitted"
     );
+    assert!(!backend.is_read_only_for(None, "t"));
     assert_eq!(catalogue_len(&backend), 1);
 }
 
@@ -581,5 +599,38 @@ async fn s13b_an_abandoned_refresh_narrows_cache_admission_too() {
     );
     *wire.pages.lock() = vec![Page::Tools(vec![write("t")], true), Page::ErrorFrame];
     let _ = backend.get_tools_shared().await;
+    assert!(!backend.is_read_only_for(None, "t"));
+}
+
+/// S12 through a discovery fill: a complete listing that names `t` safe and
+/// unsafe grants neither set, and a listing naming it safe twice grants both.
+#[tokio::test]
+async fn s12_a_fill_with_a_conflicting_duplicate_grants_nothing() {
+    let wire = Wire::new(vec![Page::Tools(vec![read_only("t"), write("t")], false)]);
+    let backend = refreshing_backend(&wire);
+    backend.get_tools_shared().await.expect("the fill");
+    assert!(!permitted(&backend).contains("t"));
+    assert!(!backend.is_read_only_for(None, "t"));
+    *wire.pages.lock() = vec![Page::Tools(vec![read_only("t"), read_only("t")], false)];
+    backend.get_tools_shared().await.expect("the control fill");
+    assert!(permitted(&backend).contains("t"), "the safe-only control");
+    assert!(backend.is_read_only_for(None, "t"));
+}
+
+/// S15 through the real deadline: `tools_for_check` bounds the refresh by
+/// the backend's own timeout. Page 2 never answers, the paused clock runs
+/// the deadline out, and the abandoned refresh still narrows by page 1.
+#[tokio::test(start_paused = true)]
+async fn s15_a_refresh_cut_off_by_its_deadline_narrows_from_what_it_read() {
+    let (backend, _wire) = primed(vec![
+        Page::Tools(vec![write("t")], true),
+        Page::Held(Vec::new()),
+    ])
+    .await;
+    let _ = backend.tools_for_check(None, &[], true).await;
+    assert!(
+        !permitted(&backend).contains("t"),
+        "a refresh cut off by its deadline kept a write it read resend-permitted"
+    );
     assert!(!backend.is_read_only_for(None, "t"));
 }

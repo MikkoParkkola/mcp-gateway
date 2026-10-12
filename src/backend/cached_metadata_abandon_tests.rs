@@ -1,12 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8399 S16: the single-flight permit runs its abandon hook FIRST, while
-//! the fill still holds the flight, and only when the fill gave no answer.
-//!
-//! The order is the proof that the hook cannot narrow a newer fill's sets:
-//! a waiter can lead a new fill only once `in_flight` clears. Each row has
-//! the hook record `fill_in_flight()` as it runs; the reversed order (clear,
-//! then hook) records `false`.
+//! MIK-8399 S16: the single-flight permit runs its abandon hook once when
+//! the fill gives no answer, never when it answers, and not when the
+//! generation moved. The hook runs under the cache's write guard together
+//! with the `in_flight` clear, so no newer fill or store can interleave; it
+//! therefore must not read this cache's state, and these hooks only count.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,12 +13,11 @@ use super::{AbandonHook, CachedMetadata};
 
 type Cache = CachedMetadata<Vec<u8>>;
 
-/// A hook that records, each time it runs, whether the fill still held the
-/// flight.
-fn recording(cache: &Arc<Cache>) -> (AbandonHook, Arc<parking_lot::Mutex<Vec<bool>>>) {
+/// A hook that records each run.
+fn recording(_cache: &Arc<Cache>) -> (AbandonHook, Arc<parking_lot::Mutex<Vec<bool>>>) {
     let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
-    let (cache, log) = (Arc::clone(cache), Arc::clone(&seen));
-    let hook: AbandonHook = Box::new(move || log.lock().push(cache.fill_in_flight()));
+    let log = Arc::clone(&seen);
+    let hook: AbandonHook = Box::new(move || log.lock().push(true));
     (hook, seen)
 }
 
@@ -29,7 +26,7 @@ const TTL: Duration = Duration::from_secs(600);
 /// S16: a fill that errors runs the hook exactly once, before the flight
 /// clears.
 #[tokio::test]
-async fn s16_an_errored_fill_runs_its_hook_while_it_holds_the_flight() {
+async fn s16_an_errored_fill_runs_its_hook_once() {
     let cache = Arc::new(Cache::new());
     let (hook, seen) = recording(&cache);
     let result = cache
@@ -42,11 +39,7 @@ async fn s16_an_errored_fill_runs_its_hook_while_it_holds_the_flight() {
         )
         .await;
     assert!(result.is_err());
-    assert_eq!(
-        *seen.lock(),
-        vec![true],
-        "the hook ran once, inside the flight"
-    );
+    assert_eq!(*seen.lock(), vec![true], "the hook ran once");
     assert!(!cache.fill_in_flight(), "and the flight cleared after it");
 }
 
@@ -71,7 +64,7 @@ async fn s16_an_answered_fill_never_runs_its_hook() {
 /// S16, cancellation: a fill whose future is dropped runs the hook once,
 /// inside the flight.
 #[tokio::test]
-async fn s16_a_dropped_fill_runs_its_hook_while_it_holds_the_flight() {
+async fn s16_a_dropped_fill_runs_its_hook_once() {
     let cache = Arc::new(Cache::new());
     let (hook, seen) = recording(&cache);
     let started = Arc::new(tokio::sync::Notify::new());
@@ -127,4 +120,29 @@ async fn s16_a_fill_whose_generation_moved_does_not_run_its_hook() {
         .await;
     assert!(result.is_err());
     assert!(seen.lock().is_empty(), "a moved generation ran the hook");
+}
+
+/// S16, success with a moved generation: an answered fill never runs its
+/// hook, even when an invalidation ran while it fetched.
+#[tokio::test]
+async fn s16_an_answered_fill_whose_generation_moved_never_runs_its_hook() {
+    let cache = Arc::new(Cache::new());
+    let (hook, seen) = recording(&cache);
+    cache
+        .get_or_fetch_shared_then(
+            TTL,
+            |_| {
+                let cache = Arc::clone(&cache);
+                async move {
+                    cache.invalidate_then(|| {});
+                    Ok((vec![1u8], ()))
+                }
+            },
+            |()| {},
+            |_| {},
+            Some(hook),
+        )
+        .await
+        .expect("the fill answers");
+    assert!(seen.lock().is_empty());
 }
