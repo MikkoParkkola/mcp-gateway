@@ -151,6 +151,8 @@ async fn authz_cache_4b_read_and_write_keys_share_the_pre_dispatch_epoch() {
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
+    // MIK-8393: only a declared read is cached.
+    backend.set_read_only_declared_for_test(&["read"]);
     let _ = registry.register(Arc::clone(&backend));
     let meta = MetaMcp::with_features(
         registry,

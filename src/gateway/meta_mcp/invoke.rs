@@ -59,6 +59,7 @@ pub(super) fn spend_witness(caller: &super::MetaMcpCallerContext<'_>) {
     nonce_settle::Witnessed::take(caller).spend();
 }
 mod r2_check;
+mod step_fingerprint;
 // #1962: settlement of a bridged round's key, kept out of this file's size baseline.
 mod bridge_settle;
 pub(crate) mod cache_reads;
@@ -212,54 +213,18 @@ impl MetaMcp {
         // MIK-8353 3a: the refund witness, carried through every may-effect
         // step below; any exit hands back what survived.
         let mut witness = nonce_settle::Witnessed::take(caller);
-        // A caller verdict taken earlier in this request carries its backend
-        // instance and resolution here (MIK-8356 R5.2): one resolution per
-        // call, consumed by this invocation only.
-        let (backend, resolved) = match super::visible::take_carried(server, tool) {
-            // The verdict's fill failed: answered as a failed dispatch is,
-            // with nothing filled or sent again (F13, A11-c). The verdict
-            // resolved and tried a fill: it acted.
-            Some(super::visible::Carried {
-                fill_error: Some(error),
-                ..
-            }) => {
-                witness.spend();
-                let checked = (std::time::Instant::now(), surface);
-                let value = self.account_refused_fill(server, tool, &error, checked);
-                if crate::personal_accounts::refusal::marked(&error).is_some() {
-                    return self.with_connect_offer(Err(error), verified_identity).await;
-                }
-                return Ok(GuardedValue::sealed_by_guard(value));
-            }
-            // The verdict resolved and filled the caller's catalogue: it acted.
-            Some(carried) => {
-                witness.spend();
-                (Some(carried.backend), carried.resolved)
-            }
-            None => {
-                let backend = self.backends.get(server);
-                // No principal on a required per-user backend: an absent name,
-                // answered before any resolution (lead ruling 2026-10-11).
-                if backend
-                    .as_deref()
-                    .is_some_and(|b| self.lacks_principal_on_required(b, caller_proof))
-                {
-                    return Err(super::visible::absent_name(tool));
-                }
-                let resolved = self
-                    .resolve_dispatch(
-                        (server, tool),
-                        backend.as_deref(),
-                        caller_proof,
-                        verified_identity,
-                    )
-                    .await;
-                if resolved.is_err() {
-                    // A failed resolution may have minted or refreshed before it failed.
-                    witness.spend();
-                }
-                (backend, resolved?)
-            }
+        // MIK-8356 R5.2: the resolution a caller verdict carried, or a fresh one.
+        let (backend, resolved) = match self
+            .dispatch_resolution(
+                (server, tool),
+                (caller_proof, verified_identity),
+                surface,
+                &mut witness,
+            )
+            .await?
+        {
+            std::ops::ControlFlow::Continue(resolution) => resolution,
+            std::ops::ControlFlow::Break(answer) => return Ok(answer),
         };
         let target = (server, backend.as_ref().map(|backend| backend.instance()));
         let propagation::ResolvedDispatch {
@@ -376,21 +341,33 @@ impl MetaMcp {
         }
         // A chained backend's answer is bound to one challenge: no cache (D7).
         let chained = self.is_chained(backend.as_deref());
-        if let Some(cached) = self.serve_cached_response(
-            caller,
-            session_id,
+        // MIK-8393 (#3773): a stored result may stand in for a call only when
+        // this caller's slot declared the tool read-only, so the call it
+        // replaces had no effect to lose. Absent means deny: an unannotated
+        // tool, an undiscovered slot and a write all go to the backend, and
+        // their answers are never stored.
+        let read_only = self.cache_admits(
             (server, tool),
-            trace_id,
-            (want_full, chained),
-            protocol_revision,
-            &arguments,
-            (&projection_key_suffix, &caller_principal),
-            (&profile.name, policy_epoch),
-            (arm_key, &tool_key),
-            api_key_name,
-            client_claim.as_ref(),
-            &mut idem_reservation,
-        ) {
+            backend.as_deref(),
+            dispatch_binding.as_deref(),
+        );
+        if read_only
+            && let Some(cached) = self.serve_cached_response(
+                caller,
+                session_id,
+                (server, tool),
+                trace_id,
+                (want_full, chained),
+                protocol_revision,
+                &arguments,
+                (&projection_key_suffix, &caller_principal),
+                (&profile.name, policy_epoch),
+                (arm_key, &tool_key),
+                api_key_name,
+                client_claim.as_ref(),
+                &mut idem_reservation,
+            )
+        {
             return Ok(cached);
         }
 
@@ -737,18 +714,20 @@ impl MetaMcp {
         self.inject_cost_advice(&mut result, &cost_warnings, tool, caller, session_id);
         let written = gateway_writes::snapshot_since(writes_mark);
 
-        self.store_response(
-            caller,
-            args,
-            (server, tool),
-            trace_id,
-            (want_full, stopped_to_ask, chained),
-            protocol_revision,
-            &arguments,
-            (&projection_key_suffix, &caller_principal),
-            (&profile.name, policy_epoch),
-            (&result, &written),
-        );
+        if read_only {
+            self.store_response(
+                caller,
+                args,
+                (server, tool),
+                trace_id,
+                (want_full, stopped_to_ask, chained),
+                protocol_revision,
+                &arguments,
+                (&projection_key_suffix, &caller_principal),
+                (&profile.name, policy_epoch),
+                (&result, &written),
+            );
+        }
 
         if let Some(reservation) = idem_reservation.as_mut()
             && reservation.complete_read(&result, (self.dispatch_reading(args), written))

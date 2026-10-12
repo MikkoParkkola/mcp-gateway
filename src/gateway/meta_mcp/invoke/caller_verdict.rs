@@ -239,6 +239,75 @@ impl MetaMcp {
         witness
     }
 
+    /// The resolution an invocation dispatches under (MIK-8356 R5.2): the one
+    /// a caller verdict taken earlier in this request carried (its backend
+    /// instance and resolution, consumed by this invocation only), or a fresh
+    /// one. `Break` is the call's answer. A carried resolution, failed fill or
+    /// not, means the verdict acted, and a fresh resolution may mint or refresh
+    /// before it fails: each spends `witness` (MIK-8353 3a). The no-principal
+    /// arm resolves nothing and keeps it.
+    pub(super) async fn dispatch_resolution(
+        &self,
+        (server, tool): (&str, &str),
+        (caller_proof, verified_identity): (
+            CallerProof<'_>,
+            Option<&crate::key_server::oidc::VerifiedIdentity>,
+        ),
+        surface: crate::gateway::recovery::MetaSurface,
+        witness: &mut super::nonce_settle::Witnessed<'_, '_>,
+    ) -> crate::Result<
+        std::ops::ControlFlow<
+            super::GuardedValue,
+            (Option<std::sync::Arc<Backend>>, super::ResolvedDispatch),
+        >,
+    > {
+        use std::ops::ControlFlow::{Break, Continue};
+        match visible::take_carried(server, tool) {
+            // The verdict's fill failed: answered as a failed dispatch is,
+            // with nothing filled or sent again (F13, A11-c).
+            Some(visible::Carried {
+                fill_error: Some(error),
+                ..
+            }) => {
+                witness.spend();
+                let checked = (std::time::Instant::now(), surface);
+                let value = self.account_refused_fill(server, tool, &error, checked);
+                if crate::personal_accounts::refusal::marked(&error).is_some() {
+                    return self.with_connect_offer(Err(error), verified_identity).await;
+                }
+                Ok(Break(super::GuardedValue::sealed_by_guard(value)))
+            }
+            Some(carried) => {
+                witness.spend();
+                Ok(Continue((Some(carried.backend), carried.resolved)))
+            }
+            None => {
+                let backend = self.backends.get(server);
+                // No principal on a required per-user backend: an absent name,
+                // answered before any resolution (lead ruling 2026-10-11).
+                if backend
+                    .as_deref()
+                    .is_some_and(|b| self.lacks_principal_on_required(b, caller_proof))
+                {
+                    return Err(visible::absent_name(tool));
+                }
+                let resolved = self
+                    .resolve_dispatch(
+                        (server, tool),
+                        backend.as_deref(),
+                        caller_proof,
+                        verified_identity,
+                    )
+                    .await;
+                if resolved.is_err() {
+                    // A failed resolution may have minted or refreshed before it failed.
+                    witness.spend();
+                }
+                Ok(Continue((backend, resolved?)))
+            }
+        }
+    }
+
     /// The half of [`Self::caller_verdict`] that may act: resolve the
     /// caller's credential, judge the caller's slot (a fill), and carry the
     /// resolution to the dispatch.
@@ -289,58 +358,6 @@ impl MetaMcp {
             },
         );
         Ok(verdict)
-    }
-
-    /// Who a continuation minted by a call to `server:tool` is bound to, for
-    /// `caller`: `principal_source` over the call's dispatch binding, exactly
-    /// as the call's own mint derives it (MIK-8137). A chain resume reads this
-    /// for the step its handle is pending at, so the resume opens the handle
-    /// under the binding the step minted with rather than a second spelling.
-    ///
-    /// Resolving the binding mints the caller's propagated or account
-    /// credential, as the step's own dispatch does; a refusal returns here.
-    pub(in crate::gateway::meta_mcp) async fn step_fingerprint(
-        &self,
-        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
-        (server, tool): (&str, &str),
-    ) -> crate::Result<Option<String>> {
-        // A resolution the caller verdict carried for this step is the one
-        // its dispatch will use: derive from it, with no second mint (fold F6).
-        if let Some(binding) =
-            visible::with_carried(server, tool, |carried| carried.resolved.binding.clone())
-        {
-            return Ok(crate::protocol::mrtr::source_fingerprint(
-                caller.principal_source(binding.as_deref()),
-            ));
-        }
-        let backend = self.backends.get(server);
-        let proof = CallerProof::new(caller.verified_identity, caller.provenance());
-        let resolved = self
-            .resolve_dispatch(
-                (server, tool),
-                backend.as_deref(),
-                proof,
-                caller.verified_identity,
-            )
-            .await?;
-        let fingerprint = crate::protocol::mrtr::source_fingerprint(
-            caller.principal_source(resolved.binding.as_deref()),
-        );
-        // A resume runs no caller verdict (its step is known only at run
-        // time): this resolution is the step's, carried to its invocation so
-        // the resume resolves once (MIK-8356 C13).
-        if let Some(backend) = backend {
-            visible::carry_dispatch(
-                server,
-                tool,
-                visible::Carried {
-                    backend,
-                    resolved,
-                    fill_error: None,
-                },
-            );
-        }
-        Ok(fingerprint)
     }
 
     /// Judge `tool` on the slot `binding` selects, record the answer in the

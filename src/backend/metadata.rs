@@ -26,6 +26,10 @@ use crate::protocol::{
     ResourcesTemplatesListResult, Tool, ToolsListResult,
 };
 
+// MIK-8393: the response cache's admission, read from the slot this file resolves.
+#[path = "metadata_read_only.rs"]
+mod read_only;
+
 impl Backend {
     /// The tool cache belonging to `binding`'s pool slot.
     ///
@@ -418,17 +422,7 @@ impl Backend {
                     // Only this accepted store's own set and verdicts (F13,
                     // #1441).
                     if let Some(prepared) = prepared {
-                        *entry.resend_permitted.write() = prepared.resend_permitted;
-                        let listing = if truncated {
-                            super::descriptor_gate::Listing::Truncated
-                        } else {
-                            super::descriptor_gate::Listing::Complete
-                        };
-                        self.commit_verdicts(
-                            identity_key.unwrap_or(""),
-                            listing,
-                            prepared.verdicts,
-                        );
+                        self.store_prepared(&entry, identity_key, truncated, prepared);
                     }
                     // The only place a guard reaches `Stored`: a voided store
                     // drops it unrun, still `Drained`, and so stamps (F13).

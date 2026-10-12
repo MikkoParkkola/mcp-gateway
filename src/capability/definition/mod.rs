@@ -654,9 +654,19 @@ impl CapabilityDefinition {
         self.providers.get("primary")
     }
 
-    /// Check if caching is enabled
+    /// Whether the executor may store and serve this capability's results.
+    ///
+    /// Only for a capability declared `read_only: true` (MIK-8393): a cache hit
+    /// runs nothing, so on a write it reports an effect that never happened.
     #[must_use]
     pub fn is_cacheable(&self) -> bool {
+        self.metadata.read_only && self.cache_configured()
+    }
+
+    /// Whether the definition enables a `cache:` block, whether or not
+    /// [`Self::is_cacheable`] lets it be used.
+    #[must_use]
+    pub(crate) fn cache_configured(&self) -> bool {
         self.cache.ttl > 0 && !self.cache.strategy.is_empty() && self.cache.strategy != "none"
     }
 }

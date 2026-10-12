@@ -80,6 +80,20 @@ async fn a_tools_notice_clears_the_resend_permitted_set() {
     );
 }
 
+/// MIK-8393 R6: the cache's read-only set is derived from the same list, so
+/// the same notice drops it; a stale set would keep serving a cached answer
+/// for a tool the backend now lists as a write.
+#[tokio::test]
+async fn a_tools_notice_clears_the_cache_read_only_set() {
+    let backend = backend();
+    backend.set_read_only_declared_for_test(&["was_read_only"]);
+    backend.invalidate_tools();
+    assert!(
+        !backend.is_read_only_for(None, "was_read_only"),
+        "a stale read-only set outlived the tool list"
+    );
+}
+
 /// A server that accepts connections and never answers.
 async fn silent_url() -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
