@@ -114,10 +114,11 @@ pub(crate) const fn expect(route: ReadRoute, stage: ReadStage) -> ReadExpect {
     use ReadRoute::{Cancel, HttpFrame, HttpGet, RepeatedCall, StdioFrame, StdioGet, Update};
     use ReadStage::{AccountView, CallerView};
     match (route, stage) {
-        (HttpGet | StdioGet | HttpFrame, AccountView | CallerView) => Stated(Expect::Applies),
         // The repeat is a live tools/call: the live admission judges the
         // caller's view first. Its account step is STORED.2's site 5.
-        (RepeatedCall, CallerView) => Stated(Expect::Applies),
+        (HttpGet | StdioGet | HttpFrame, AccountView | CallerView) | (RepeatedCall, CallerView) => {
+            Stated(Expect::Applies)
+        }
         (RepeatedCall, AccountView) => Stated(Expect::ExpectedGap(Ticket::Mik8392)),
         (StdioFrame, AccountView | CallerView) => NotApplicable(ReadNa::NoStdioSubscribers),
         (Update | Cancel, AccountView | CallerView) => NotApplicable(ReadNa::GatewayAuthoredAck),

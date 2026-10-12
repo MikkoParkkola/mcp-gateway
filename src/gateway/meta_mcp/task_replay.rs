@@ -176,13 +176,15 @@ impl MetaMcp {
     /// A stored read found no account outcome for `server`'s target: every
     /// read entry runs the pre-pass first, so this is a broken invariant
     /// (MIK-8392 N0). It still fails closed; tests observe it by count.
-    fn unfilled_outcome_read(&self, server: &str) {
+    fn unfilled_outcome_read(backends: &crate::backend::BackendRegistry, server: &str) {
         #[cfg(test)]
-        if let Some(backend) = self.backends.get(server) {
+        if let Some(backend) = backends.get(server) {
             backend
                 .unfilled_outcome_reads
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
+        #[cfg(not(test))]
+        let _ = backends;
         #[cfg(all(not(test), debug_assertions))]
         panic!("stored read of {server} without the account pre-pass");
         #[cfg(not(any(test, debug_assertions)))]
@@ -251,7 +253,7 @@ impl MetaMcp {
             {
                 let outcome = visible::account_outcome(server, &account);
                 if outcome.is_none() {
-                    self.unfilled_outcome_read(server);
+                    Self::unfilled_outcome_read(&self.backends, server);
                 }
                 match outcome {
                     // Unfilled: the pre-pass never ran for it. Fail closed,

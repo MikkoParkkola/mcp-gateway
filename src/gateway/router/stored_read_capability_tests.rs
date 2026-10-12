@@ -113,7 +113,7 @@ async fn t11_a_capability_account_revoked_after_the_task_answers_absent() {
 
 /// U2 (M29): an external account has no mint-free view, so its outcome is
 /// Unjudged and the read is judged on the catalogue alone: served (the
-/// stated residual), never refused as NoView.
+/// stated residual), never refused as `NoView`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn u2_an_external_account_is_unjudged_and_served() {
     let account = CapabilityAccount::start(true).await;

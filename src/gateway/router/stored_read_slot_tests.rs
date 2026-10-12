@@ -19,6 +19,9 @@ use crate::key_server::oidc::VerifiedIdentity;
 
 const OUTPUT: &str = "\"text\":\"ok\"";
 
+/// A name no backend serves, swapped for [`TOOL`] in its answer.
+const MISSING: &str = "no_such_tool_8392";
+
 fn modern_meta() -> Value {
     json!({
         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
@@ -131,7 +134,6 @@ async fn t8_alpha_s_own_slot_lacking_the_tool_answers_absent() {
     // The gateway's own answer to a name that matches no tool, as alpha, with
     // that name swapped for TOOL (`read` is surfaced here, so it cannot be
     // the missing name itself).
-    const MISSING: &str = "no_such_tool_8392";
     let twin = send(
         &gw,
         10,

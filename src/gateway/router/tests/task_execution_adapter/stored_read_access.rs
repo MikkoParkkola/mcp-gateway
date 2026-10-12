@@ -389,7 +389,7 @@ async fn two_backend_state() -> (Arc<AppState>, tempfile::TempDir) {
 }
 
 /// Install playbook `pb` with `steps`.
-fn install(state: &Arc<AppState>, steps: Value) {
+fn install(state: &Arc<AppState>, steps: &Value) {
     let definition: crate::playbook::PlaybookDefinition = serde_json::from_value(json!({
         "playbook": "1.0", "name": "pb", "description": "stored-read rows", "steps": steps
     }))
@@ -432,9 +432,9 @@ async fn finished_playbook(state: &Arc<AppState>, key: &str) -> String {
 #[tokio::test]
 async fn t22_a_recorded_step_removed_from_the_playbook_still_blocks_the_read() {
     let (state, _store) = two_backend_state().await;
-    install(&state, json!([step("s1", BACKEND), step("s2", SECOND)]));
+    install(&state, &json!([step("s1", BACKEND), step("s2", SECOND)]));
     let id = finished_playbook(&state, "s1-t22").await;
-    install(&state, json!([step("s1", BACKEND)]));
+    install(&state, &json!([step("s1", BACKEND)]));
     withhold_on(&state, SECOND);
     assert_absent(&state, &get_task(&state, "key-a", &id).await, "T22").await;
 }
@@ -447,7 +447,7 @@ async fn t23_an_unrun_conditional_step_does_not_block_the_read() {
     let (state, _store) = two_backend_state().await;
     let mut skipped = step("s2", SECOND);
     skipped["condition"] = json!("false");
-    install(&state, json!([step("s1", BACKEND), skipped]));
+    install(&state, &json!([step("s1", BACKEND), skipped]));
     let id = finished_playbook(&state, "s1-t23").await;
     let recorded = state.task_executor.service.store.targets_for_test(&id);
     assert!(
