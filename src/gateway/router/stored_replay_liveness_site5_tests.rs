@@ -527,6 +527,31 @@ mod unguarded {
             .1
     }
 
+    /// Poll task `id` until it is terminal, within the tree's 10 s bound.
+    async fn settled(fx: &Fx, id: &str) {
+        let headers = [
+            ("mcp-protocol-version", "2026-07-28"),
+            ("mcp-method", "tasks/get"),
+            ("mcp-name", id),
+        ];
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let params = json!({"taskId": id, "_meta": meta(None, true)});
+            let got = send_with_headers(fx, "/mcp", "k-std", "tasks/get", params, None, &headers)
+                .await
+                .1;
+            let status = got.pointer("/result/status").and_then(Value::as_str);
+            if matches!(status, Some("completed" | "failed" | "cancelled")) {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "premise: the task settled: {got}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
     fn invoke(key: &str, tasks: bool) -> Value {
         let mut params = json!({"name": "gateway_invoke",
             "arguments": {"server": "alpha", "tool": "read", "arguments": {}},
@@ -575,7 +600,7 @@ mod unguarded {
         while fx.calls.load(Ordering::SeqCst) == 0 && tokio::time::Instant::now() < deadline {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        settled(&fx, &id).await;
         let sent = fx.calls.load(Ordering::SeqCst);
         assert_eq!(sent, 1, "premise: the task dispatched once");
         let again = call(&fx, invoke("u2", true)).await;

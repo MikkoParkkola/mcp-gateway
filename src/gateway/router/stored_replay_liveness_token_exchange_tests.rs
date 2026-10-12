@@ -245,14 +245,24 @@ mod r6m_token_exchange {
         alice: &crate::key_server::oidc::VerifiedIdentity,
         params: Value,
     ) -> Value {
-        let body = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params});
+        send_method_as(router, alice, ("tools/call", "gateway_invoke"), params).await
+    }
+
+    /// [`send_as`] for any `(method, name)`.
+    pub(super) async fn send_method_as(
+        router: &axum::Router,
+        alice: &crate::key_server::oidc::VerifiedIdentity,
+        (method, name): (&str, &str),
+        params: Value,
+    ) -> Value {
+        let body = json!({"jsonrpc": "2.0", "id": 7, "method": method, "params": params});
         let mut request = axum::http::Request::builder()
             .method("POST")
             .uri("/mcp")
             .header("content-type", "application/json")
             .header("mcp-protocol-version", "2026-07-28")
-            .header("mcp-method", "tools/call")
-            .header("mcp-name", "gateway_invoke")
+            .header("mcp-method", method)
+            .header("mcp-name", name)
             .body(axum::body::Body::from(body.to_string()))
             .expect("a request");
         request.extensions_mut().insert(alice.clone());
@@ -409,7 +419,20 @@ async fn t12_token_exchange_task_repeat_after_idp_kill_answers_as_live() {
         );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    loop {
+        let params = json!({"taskId": id, "_meta": meta(None, true)});
+        let got =
+            r6m_token_exchange::send_method_as(&router, &alice, ("tasks/get", &id), params).await;
+        let status = got.pointer("/result/status").and_then(Value::as_str);
+        if matches!(status, Some("completed" | "failed" | "cancelled")) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < bound,
+            "premise: the task settled: {got}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
     let sent = sends.load(Ordering::SeqCst);
     idp.kill();
     let now = crate::clock::unix_secs().expect("a test host clock reads after 1970");
