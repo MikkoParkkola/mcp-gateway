@@ -13,11 +13,13 @@ use super::{AbandonHook, CachedMetadata};
 
 type Cache = CachedMetadata<Vec<u8>>;
 
-/// A hook that records each run.
-fn recording(_cache: &Arc<Cache>) -> (AbandonHook, Arc<parking_lot::Mutex<Vec<bool>>>) {
+/// A hook that records, each time it runs, whether the cache's state guard
+/// was held. A non-blocking try is the witness: `try_write` fails only while
+/// someone holds the guard, so a hook run outside it records `false`.
+fn recording(cache: &Arc<Cache>) -> (AbandonHook, Arc<parking_lot::Mutex<Vec<bool>>>) {
     let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
-    let log = Arc::clone(&seen);
-    let hook: AbandonHook = Box::new(move || log.lock().push(true));
+    let (cache, log) = (Arc::clone(cache), Arc::clone(&seen));
+    let hook: AbandonHook = Box::new(move || log.lock().push(cache.state.try_write().is_none()));
     (hook, seen)
 }
 
@@ -39,7 +41,11 @@ async fn s16_an_errored_fill_runs_its_hook_once() {
         )
         .await;
     assert!(result.is_err());
-    assert_eq!(*seen.lock(), vec![true], "the hook ran once");
+    assert_eq!(
+        *seen.lock(),
+        vec![true],
+        "the hook ran once, under the cache guard"
+    );
     assert!(!cache.fill_in_flight(), "and the flight cleared after it");
 }
 
