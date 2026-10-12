@@ -343,11 +343,13 @@ async fn w1_a_grant_revoked_before_the_worker_step_is_refused_there() {
     }
 }
 
-/// WM1 (M22): a two-step plan on the same tool; the listing withholds it
-/// (invalid schema) after step 1. The worker memo keeps no visibility, so
-/// step 2 is judged anew and refused: the backend answered one call.
+/// WM1 (M22): a plan [account read, plain echo (held), account read]. While
+/// step 2 is held, the operator's own slot relists `read` with an invalid
+/// schema. The worker memo keeps no visibility, so step 3's caller verdict
+/// judges the slot anew and refuses it: the account backend answered one
+/// call. A memo that kept step 1's "visible" would send step 3.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn wm1_a_withhold_mid_run_is_seen_at_step_two() {
+async fn wm1_a_withhold_mid_run_is_seen_at_a_later_step() {
     let fx = fixture().await;
     let hold = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -358,40 +360,39 @@ async fn wm1_a_withhold_mid_run_is_seen_at_step_two() {
             calls: std::sync::Arc::clone(&calls),
         },
     );
+    fx.gateway.answer_next(json!({
+        "content": [{"type": "text", "text": MARKER}], "isError": false
+    }));
     let id = plan_task(
         &fx,
         "s1-wm1",
-        &[(super::PLAIN, "echo"), (super::PLAIN, "echo")],
+        &[(BACKEND, TOOL), (super::PLAIN, "echo"), (BACKEND, TOOL)],
     )
     .await;
-    // Step 1 arrives and is held: the block lands before step 2 is judged.
     let bound = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while calls.load(std::sync::atomic::Ordering::SeqCst) < 1 {
         assert!(
             std::time::Instant::now() < bound,
-            "premise: step 1 arrived and is held"
+            "premise: step 2 arrived and is held"
         );
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    // The listing now carries `echo` with an invalid schema: only the
-    // visibility judgement withholds it (no dispatch-time descriptor guard),
-    // so a memo that kept step 1's "visible" would send step 2.
+    assert_eq!(fx.gateway.tool_calls().len(), 1, "premise: step 1 was sent");
     let invalid: crate::protocol::Tool = serde_json::from_value(json!({
-        "name": "echo", "inputSchema": {"type": "object", "properties": 7}
+        "name": TOOL, "inputSchema": {"type": "object", "properties": 7}
     }))
     .expect("a tool");
     fx.gateway
         .backends()
-        .get(super::PLAIN)
-        .expect("the plain backend")
-        .store_shared_tools_for_test(vec![invalid]);
-    // Two permits, so a step 2 wrongly sent past the withhold is counted, not hung.
-    hold.add_permits(2);
+        .get(BACKEND)
+        .expect("the backend")
+        .store_per_user_tools_for_test(&DirectAccountGateway::operator_binding(), vec![invalid]);
+    hold.add_permits(1);
     let _ = settled_record(&fx, &id).await;
     assert_eq!(
-        calls.load(std::sync::atomic::Ordering::SeqCst),
+        fx.gateway.tool_calls().len(),
         1,
-        "WM1: step 2 was dispatched past the withhold"
+        "WM1: step 3 was sent past the withhold"
     );
 }
 
