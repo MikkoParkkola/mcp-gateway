@@ -181,6 +181,8 @@ struct Setup {
     sanitize: bool,
     /// MIK-8382: `beta` is a `passthrough: true` backend.
     beta_passthrough: bool,
+    /// MIK-8382: `security.posture: hardened` (auth stays off).
+    hardened: bool,
     /// The backends' chain policy; under `Require` the gateway also has a
     /// chain identity, so their unchained answers are refused unread (MIK-7636).
     chain: crate::config::ChainMode,
@@ -260,6 +262,13 @@ async fn fixture(setup: Setup) -> Fixture {
     let lists = Arc::new(AtomicUsize::new(0));
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.sanitize_input = setup.sanitize;
+    if setup.hardened {
+        // The route reads the posture the process started with, so the
+        // running config is replaced, not edited.
+        let mut config = (*state_mut.live_config.get()).clone();
+        config.security.posture = crate::security::SecurityPosture::Hardened;
+        state_mut.live_config = Arc::new(crate::config_reload::LiveConfig::new(config));
+    }
     for name in ["alpha", "beta"] {
         let backend = Arc::new(Backend::new(
             name,

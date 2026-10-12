@@ -538,3 +538,120 @@ async fn c4_mcp_intake_answers_before_later_refusals() {
     );
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "c4: dispatched");
 }
+
+/// One anonymous direct request to `alpha` with exactly `headers` added.
+async fn post_with_headers(
+    fx: &Fixture,
+    body: &Value,
+    headers: &[(&str, &str)],
+) -> (StatusCode, Value) {
+    let mut builder = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp/alpha")
+        .header("content-type", "application/json");
+    for (name, value) in headers {
+        builder = builder.header(*name, *value);
+    }
+    let request = builder
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = fx.router.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// A keyed `tools/call` of `t`, declaring the modern era at `version` in
+/// `_meta` when given.
+fn keyed_body(version: Option<&str>) -> Value {
+    let mut meta = json!({(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): KEY});
+    if let Some(version) = version {
+        meta["io.modelcontextprotocol/protocolVersion"] = json!(version);
+        meta["io.modelcontextprotocol/clientCapabilities"] = json!({});
+    }
+    json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+        "params": {"name": "t", "arguments": {"customer_id": "c"}, "_meta": meta}})
+}
+
+/// B8d: `direct_refusal` (the protocol checks `/mcp` shares) and
+/// `DirectRouteGuards::run` (the kill switch) answer after the intake check
+/// for a keyed no-principal call. Before: each answers its own code (the red
+/// run records them); after: -32003, HTTP 400, id 5.
+#[tokio::test]
+async fn b8d_direct_refusals_answer_after_intake() {
+    let modern = crate::protocol::meta::MODERN_VERSIONS[0];
+    let mirrors = |name: &'static str| {
+        vec![
+            ("mcp-protocol-version", modern),
+            ("mcp-method", "tools/call"),
+            ("mcp-name", name),
+        ]
+    };
+    let twice = |header: &'static str, value: &'static str| {
+        let mut headers = mirrors("t");
+        headers.push((header, value));
+        headers
+    };
+    let cases: Vec<(&str, Value, Vec<(&str, &str)>)> = vec![
+        // A modern header set over a legacy body: Malformed (-32602).
+        ("d malformed shape", keyed_body(None), mirrors("t")),
+        // A legacy body naming a revision served in neither era (-32022).
+        (
+            "d unserved header",
+            keyed_body(None),
+            vec![("mcp-protocol-version", "1999-01-01")],
+        ),
+        // A modern body at a revision this build cannot serve (-32022).
+        (
+            "d unsupported modern",
+            keyed_body(Some("2099-01-01")),
+            vec![],
+        ),
+        // A mirrored header twice (-32020).
+        (
+            "d duplicated name",
+            keyed_body(Some(modern)),
+            twice("mcp-name", "t"),
+        ),
+        // A mirrored header contradicting the body.
+        (
+            "d mirrored name",
+            keyed_body(Some(modern)),
+            mirrors("other"),
+        ),
+    ];
+    let fx = fixture(idempotent()).await;
+    let mut wrong = Vec::new();
+    for (case, body, headers) in cases {
+        let (status, answer) = post_with_headers(&fx, &body, &headers).await;
+        if message(&answer) != NO_PRINCIPAL || status != StatusCode::BAD_REQUEST {
+            wrong.push(format!("{case}: {status} {answer}"));
+        }
+    }
+    // The kill switch (`DirectRouteGuards::run`): a disabled backend.
+    fx.state.meta_mcp.kill_switch().kill("alpha");
+    let (status, answer) = post_with_headers(&fx, &keyed_body(None), &[]).await;
+    if message(&answer) != NO_PRINCIPAL || status != StatusCode::BAD_REQUEST {
+        wrong.push(format!("d kill switch: {status} {answer}"));
+    }
+    // Hardened: a legacy call that declares no elicitation (403, id None).
+    let hardened = fixture(Setup {
+        hardened: true,
+        ..idempotent()
+    })
+    .await;
+    let (status, answer) = post_with_headers(&hardened, &keyed_body(None), &[]).await;
+    if message(&answer) != NO_PRINCIPAL || status != StatusCode::BAD_REQUEST {
+        wrong.push(format!("d hardened: {status} {answer}"));
+    }
+    assert!(
+        wrong.is_empty(),
+        "b8d answered before intake:\n{}",
+        wrong.join("\n")
+    );
+    let calls = fx.calls.load(Ordering::SeqCst) + hardened.calls.load(Ordering::SeqCst);
+    assert_eq!(calls, 0, "b8d: dispatched");
+}
