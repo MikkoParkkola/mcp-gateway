@@ -168,12 +168,7 @@ pub(super) fn deliver_replay(
         Some(GuardOutcome::CachedError(error)) => {
             crate::gateway::meta_mcp::invoke::audit::note_cached_failure(&error);
             let mut response = super::cached_error_response(Some(id.clone()), &error);
-            super::direct_dispatch::replay_scan(
-                state,
-                (&admitted.call, envelope),
-                client,
-                &mut response,
-            );
+            replay_scan(state, (&admitted.call, envelope), client, &mut response);
             return Err(build_http_response(&Egressed::of(response), StatusCode::OK));
         }
         Some(GuardOutcome::Proceed(reservation)) => {
@@ -188,12 +183,7 @@ pub(super) fn deliver_replay(
         crate::gateway::meta_mcp::invoke::audit::note_cached();
         // A replay is a delivery too: it renews this caller's own copy,
         // shaped for this request's era (MIK-8022).
-        super::direct_dispatch::replay_scan(
-            state,
-            (&admitted.call, envelope),
-            client,
-            &mut response,
-        );
+        replay_scan(state, (&admitted.call, envelope), client, &mut response);
         let auth = (admitted.auth, admitted.call.tool);
         let response =
             super::direct_dispatch::finish_tail(scope, envelope, preflight, auth, response);
@@ -211,6 +201,31 @@ pub(super) fn mark(lease: Option<&SyncLease>) {
 /// raised before dispatch): the lease releases on drop.
 pub(super) fn withdraw(lease: Option<&SyncLease>) {
     lease.inspect(|lease| lease.withdraw_dispatch());
+}
+
+/// A replay is scanned like a fresh answer: the idempotency cache is shared
+/// across routes, and the meta route settles before its delivery scan, so an
+/// entry's provenance proves nothing (design round 2).
+fn replay_scan(
+    state: &super::super::AppState,
+    (call, envelope): (
+        &crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall<'_>,
+        &Envelope,
+    ),
+    client: Option<&crate::gateway::auth::AuthenticatedClient>,
+    response: &mut JsonRpcResponse,
+) {
+    let method = envelope.method.as_str();
+    let target = super::direct_dispatch::screen_target(call, method);
+    super::super::direct_guards::scan_direct_egress(
+        state,
+        (
+            &target,
+            crate::gateway::meta_mcp::invoke::egress::ContentChecks::for_method(method),
+        ),
+        client,
+        response,
+    );
 }
 
 /// Test seams: hold one call after admission, just before its lease is marked

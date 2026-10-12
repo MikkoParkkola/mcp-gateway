@@ -92,25 +92,9 @@ impl Gateway {
         // firewall and before X14, task intent and admission: as on `/mcp`.
         // A refusal or a failed fill is answered by the dispatch. A verdict
         // that acted spends the witness, so the nonce stays spent (MIK-8353).
-        let mut witness = witness;
-        for target in &targets {
-            let checked = target.as_target();
-            witness = meta_mcp
-                .caller_verdict(
-                    (checked.server, checked.tool),
-                    caller,
-                    Some(session_id),
-                    crate::gateway::meta_mcp::invoke::TargetNaming::of(
-                        meta_mcp,
-                        tool_name,
-                        (checked.server, checked.tool),
-                    ),
-                    witness,
-                )
-                .await
-                .ok()
-                .and_then(|(_, witness)| witness);
-        }
+        let witness = meta_mcp
+            .caller_verdicts(&targets, tool_name, (caller, Some(session_id)), witness)
+            .await;
         // MIK-8361, as on `/mcp`: recorded, so the gate answers it absent.
         let invisible = meta_mcp
             .invisible_call(

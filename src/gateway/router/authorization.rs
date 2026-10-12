@@ -10,6 +10,7 @@ use crate::gateway::auth::AuthenticatedClient;
 pub(super) use crate::gateway::authz::{AuthorizationError, CallTarget, ToolTarget};
 use crate::gateway::authz::{Decision, Emit, ToolAuthorizer, Transport};
 use crate::gateway::meta_mcp::MetaMcp;
+use crate::gateway::meta_mcp::invoke::TargetNaming;
 use crate::gateway::oauth::{
     Action, AgentIdentity as OAuthAgentIdentity, check_scopes, record_agent_scope_decision,
 };
@@ -39,28 +40,33 @@ pub(crate) fn sanitize_exempt(
     };
     let empty = Value::Object(serde_json::Map::new());
     let arguments = params.and_then(|p| p.get("arguments")).unwrap_or(&empty);
-    let servers: Vec<String> = if name == "gateway_run_playbook" {
+    let servers: Vec<(String, TargetNaming)> = if name == "gateway_run_playbook" {
         let playbook = arguments.get("name").and_then(Value::as_str).unwrap_or("");
         let Some((servers, digest)) = meta_mcp.playbook_step_servers(playbook) else {
             return false;
         };
         crate::gateway::meta_mcp::visible::record_judged_playbook(digest);
-        servers
+        let explicit = |server| (server, TargetNaming::ExplicitBackend);
+        servers.into_iter().map(explicit).collect()
     } else {
-        let targets = backend_tool_targets_for_call(meta_mcp, name, arguments, view);
-        // A surfaced name on a per-user backend is never exempt (MIK-8356):
-        // intake runs before the caller's own catalogue is read, so exempting
-        // it would let the answer tell a withheld name from a missing one.
-        if targets.iter().any(|t| per_user_surfaced(meta_mcp, name, t)) {
-            return false;
-        }
-        targets.into_iter().map(|t| t.server).collect()
+        backend_tool_targets_for_call(meta_mcp, name, arguments, view)
+            .into_iter()
+            .map(|t| {
+                let naming = TargetNaming::of(meta_mcp, name, (&t.server, &t.tool));
+                (t.server, naming)
+            })
+            .collect()
     };
     // Judged and recorded on the same instances (F2): a reload between two
-    // lookups could otherwise judge one instance and record another.
+    // lookups could otherwise judge one instance and record another. That
+    // includes the per-user exclusion (MIK-8356): one lookup per server.
     let instances: Option<Vec<_>> = servers
         .iter()
-        .map(|server| meta_mcp.passthrough_instance(server))
+        .map(|(server, naming)| {
+            meta_mcp
+                .passthrough_instance(server)
+                .filter(|backend| !per_user_surfaced(backend, *naming))
+        })
         .collect();
     match instances {
         Some(instances) if !instances.is_empty() => {
@@ -71,15 +77,12 @@ pub(crate) fn sanitize_exempt(
     }
 }
 
-/// Whether `target` is the surfaced tool `name` itself, on a backend that keeps
-/// a catalogue per caller.
-fn per_user_surfaced(meta_mcp: &MetaMcp, name: &str, target: &CallTarget<'_>) -> bool {
-    use crate::gateway::meta_mcp::invoke::TargetNaming;
-    TargetNaming::of(meta_mcp, name, (&target.server, &target.tool)) == TargetNaming::SurfacedName
-        && meta_mcp
-            .backends
-            .get(&target.server)
-            .is_some_and(|backend| backend.keeps_per_user_catalogues())
+/// A surfaced name on a per-user backend is never exempt (MIK-8356): intake
+/// runs before the caller's own catalogue is read, so exempting it would let
+/// the answer tell a withheld name from a missing one. Judged on the instance
+/// the exemption records.
+fn per_user_surfaced(backend: &crate::backend::Backend, naming: TargetNaming) -> bool {
+    naming == TargetNaming::SurfacedName && backend.keeps_per_user_catalogues()
 }
 
 pub(crate) fn backend_tool_targets_for_call<'a>(

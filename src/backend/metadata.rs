@@ -134,17 +134,11 @@ impl Backend {
         self.tools_slot(None).tools_cache.ever_populated()
     }
 
-    /// The shared slot's tools and truncated flag under one read guard. The
-    /// fill writes the flag under the store's write guard, so this pair is
-    /// never a truncated list beside a clear flag.
+    /// The tools and truncated flag of the slot `binding` selects (`None`: the
+    /// shared one; MIK-8356) under one read guard. The fill writes the flag under
+    /// the store's write guard, so the pair is never a truncated list beside a clear flag.
     #[must_use]
-    pub(crate) fn cached_tools_snapshot_and_truncated(&self) -> (Arc<Vec<Tool>>, bool) {
-        self.cached_tools_snapshot_and_truncated_for(None)
-    }
-
-    /// [`Self::cached_tools_snapshot_and_truncated`] for the slot `binding`
-    /// selects (MIK-8356: a listing reads the caller's own slot).
-    pub(crate) fn cached_tools_snapshot_and_truncated_for(
+    pub(crate) fn cached_tools_snapshot_and_truncated(
         &self,
         binding: Option<&str>,
     ) -> (Arc<Vec<Tool>>, bool) {
