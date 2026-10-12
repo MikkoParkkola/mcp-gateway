@@ -117,6 +117,16 @@ pub(crate) enum ViewVerdict {
     },
 }
 
+/// What a listen stream does with a published item (MIK-8350).
+pub(crate) enum Admit {
+    /// Not for this listener.
+    Skip,
+    /// Its credential no longer authenticates: the stream ends.
+    Close,
+    /// Write it; the record to make once it is written, for a view hint.
+    Send(Option<(String, String)>),
+}
+
 impl std::fmt::Debug for Listener {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Listener").finish_non_exhaustive()
@@ -189,32 +199,38 @@ impl Listener {
             .then_some(hint)
     }
 
-    /// The record to make once `published` is written: `None` when the
-    /// listener is not owed it (its view did not move), `Some(None)` when it
-    /// is not a view hint at all.
-    pub(crate) async fn owed(&mut self, published: &Published) -> Option<Option<(String, String)>> {
-        match self.view_verdict(published).await {
-            ViewVerdict::Quiet => None,
-            ViewVerdict::Owed {
-                backend,
-                fingerprint,
-            } => Some(Some((backend, fingerprint))),
-            ViewVerdict::NotAView => Some(None),
-        }
-    }
-
     /// Whether `published` is a `tools/list_changed` this listener judges by
     /// its own view.
-    pub(crate) fn judges_views(&self, published: &Published) -> bool {
+    fn judges_views(&self, published: &Published) -> bool {
         self.views.is_some()
             && matches!(published.audience, OwnedAudience::Backend(_))
             && published.notification.get("method").and_then(Value::as_str)
                 == Some("notifications/tools/list_changed")
     }
 
+    /// What the stream does with `published`: the scope check at delivery and,
+    /// for a `tools/list_changed`, the verdict on this listener's own view
+    /// (MIK-8350). A hint for a backend this caller just lost is still owed
+    /// once, so scope alone does not withhold it.
+    pub(crate) async fn admit(&mut self, published: &Published) -> Admit {
+        match self.delivery(published).await {
+            Delivery::Dead => return Admit::Close,
+            Delivery::OutOfScope if !self.judges_views(published) => return Admit::Skip,
+            Delivery::Deliver | Delivery::OutOfScope => {}
+        }
+        match self.view_verdict(published).await {
+            ViewVerdict::Quiet => Admit::Skip,
+            ViewVerdict::Owed {
+                backend,
+                fingerprint,
+            } => Admit::Send(Some((backend, fingerprint))),
+            ViewVerdict::NotAView => Admit::Send(None),
+        }
+    }
+
     /// Whether `published` is a `tools/list_changed` this listener is owed:
     /// its own view of the backend moved since it was last told.
-    pub(crate) async fn view_verdict(&mut self, published: &Published) -> ViewVerdict {
+    async fn view_verdict(&mut self, published: &Published) -> ViewVerdict {
         let OwnedAudience::Backend(backend) = &published.audience else {
             return ViewVerdict::NotAView;
         };
@@ -242,9 +258,11 @@ impl Listener {
         }
     }
 
-    /// Record that the listener was told `backend` as `fingerprint`.
-    pub(crate) fn commit_told(&mut self, backend: String, fingerprint: String) {
-        self.told.insert(backend, fingerprint);
+    /// Make the record `admit` owed, once the frame is written.
+    pub(crate) fn commit_owed(&mut self, owed: Option<(String, String)>) {
+        if let Some((backend, fingerprint)) = owed {
+            self.told.insert(backend, fingerprint);
+        }
     }
 
     /// What delivering `published` to this listener's caller should do now.

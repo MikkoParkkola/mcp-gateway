@@ -225,6 +225,24 @@ fn is_task_notification(notification: &Value) -> bool {
     notification.get("method").and_then(Value::as_str) == Some("notifications/tasks")
 }
 
+/// The written form of the attach hint, when the listener is owed it and the
+/// reader's judge lets it out.
+async fn attach_hint(
+    listener: &crate::gateway::subscription_registry::Listener,
+    filter: &crate::protocol::subscriptions::ListenRequest,
+    subscription: &crate::protocol::subscriptions::SubscriptionId,
+    judge: &StreamJudge,
+) -> Option<String> {
+    let hint = listener.attach_hint(filter).await?;
+    let recorded = judge
+        .record(judge.judge_document(subscription.tag(hint))?)
+        .await;
+    if recorded.is_withheld() {
+        return None;
+    }
+    sse_data(&recorded)
+}
+
 /// The response body of a `subscriptions/listen` request.
 ///
 /// An SSE stream that stays open, per the transport specification: the
@@ -247,7 +265,7 @@ pub(crate) fn subscription_stream(
     request_params: Option<Value>,
     task_frames: Option<std::sync::Arc<dyn TaskFrames>>,
 ) -> axum::response::Response {
-    use crate::gateway::subscription_registry::delivers;
+    use crate::gateway::subscription_registry::{Admit, delivers};
 
     let stream = stream! {
         // MIK-8350: what this listener is shown now, taken before anything is
@@ -270,15 +288,8 @@ pub(crate) fn subscription_stream(
 
         // MIK-8350 B10: one constant hint after the acknowledgement, so a
         // client that attaches re-lists once whatever changed while it was away.
-        if let Some(hint) = listener.attach_hint(&filter).await
-            && let Some(frame) = judge.judge_document(subscription.tag(hint))
-        {
-            let recorded = judge.record(frame).await;
-            if !recorded.is_withheld()
-                && let Some(data) = sse_data(&recorded)
-            {
-                yield Ok(Event::default().event("message").data(data));
-            }
+        if let Some(data) = attach_hint(&listener, &filter, &subscription, &judge).await {
+            yield Ok(Event::default().event("message").data(data));
         }
 
         let mut graceful = true;
@@ -291,16 +302,12 @@ pub(crate) fn subscription_stream(
                         continue;
                     }
                     // Re-validated at delivery, only for wanted items: a token
-                    // revoked or expired after the stream opened is not told.
-                    // MIK-8350: a hint for a backend this caller just lost is
-                    // still owed once (its list shrank), so scope alone does not
-                    // withhold it; the view verdict below decides.
-                    let delivery = listener.delivery(&published).await;
-                    match delivery {
-                        Delivery::Deliver => {}
-                        Delivery::OutOfScope if listener.judges_views(&published) => {}
-                        Delivery::OutOfScope => continue,
-                        Delivery::Dead => {
+                    // revoked or expired after the stream opened is not told,
+                    // and a `tools/list_changed` is owed only to a listener
+                    // whose own view of that backend moved (MIK-8350).
+                    let owed = match listener.admit(&published).await {
+                        Admit::Skip => continue,
+                        Admit::Close => {
                             // Skipping would hold one of the listener slots for
                             // a stream that can never receive again. Not
                             // graceful: a dead credential receives no further
@@ -310,11 +317,7 @@ pub(crate) fn subscription_stream(
                             graceful = false;
                             break;
                         }
-                    }
-                    // MIK-8350: a `tools/list_changed` is owed only to a listener
-                    // whose own view of that backend moved since it was told.
-                    let Some(owed) = listener.owed(&published).await else {
-                        continue;
+                        Admit::Send(owed) => owed,
                     };
                     // A task notification is built for THIS reader at delivery
                     // (full state, re-authorized); every other kind is the
@@ -384,9 +387,7 @@ pub(crate) fn subscription_stream(
                         crate::gateway::meta_mcp::sealed_hold::hand_off(holds);
                     }
                     yield Ok(Event::default().event("message").data(data));
-                    if let Some((backend, fingerprint)) = owed {
-                        listener.commit_told(backend, fingerprint);
-                    }
+                    listener.commit_owed(owed);
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
                 Err(broadcast::error::RecvError::Lagged(missed)) => {
