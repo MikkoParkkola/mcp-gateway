@@ -8,6 +8,8 @@
 //! budget's day rolls at 00:00 UTC (MIK-8395). The scenario runs between two
 //! readings of the day and once more when they differ; the caller asserts.
 
+use std::future::Future;
+
 /// Today's UTC day number, from the clock that dates a cost save.
 fn utc_day() -> u64 {
     mcp_gateway::cost_accounting::persistence::now_secs() / 86_400
@@ -36,9 +38,35 @@ fn same_utc_day_with<T>(mut day: impl FnMut() -> u64, mut scenario: impl FnMut()
     seen
 }
 
+/// [`same_utc_day`] for an async scenario.
+pub async fn same_utc_day_async<T, F: Future<Output = T>>(scenario: impl FnMut() -> F) -> T {
+    same_utc_day_async_with(utc_day, scenario).await
+}
+
+/// [`same_utc_day_async`] with the day read by `day`.
+async fn same_utc_day_async_with<T, F: Future<Output = T>>(
+    mut day: impl FnMut() -> u64,
+    mut scenario: impl FnMut() -> F,
+) -> T {
+    let before = day();
+    let seen = scenario().await;
+    if day() == before {
+        return seen;
+    }
+    eprintln!("same_utc_day: the UTC day changed during the scenario; running it once more");
+    let before = day();
+    let seen = scenario().await;
+    assert_eq!(
+        day(),
+        before,
+        "the UTC day changed during both runs of the scenario, so neither run's values belong to one day"
+    );
+    seen
+}
+
 #[cfg(test)]
 mod tests {
-    use super::same_utc_day_with;
+    use super::{same_utc_day_async_with, same_utc_day_with};
 
     /// Days read in turn from `days`.
     fn scripted(days: &'static [u64]) -> impl FnMut() -> u64 {
@@ -74,5 +102,18 @@ mod tests {
     #[should_panic(expected = "the UTC day changed during both runs")]
     fn a_day_change_during_both_runs_panics() {
         let _ = same_utc_day_with(scripted(&[7, 8, 8, 9]), || ());
+    }
+
+    /// The async form follows the same rule.
+    #[tokio::test]
+    async fn the_async_form_reruns_once_when_the_day_changes() {
+        let mut runs = 0;
+        let seen = same_utc_day_async_with(scripted(&[7, 8, 8, 8]), || {
+            runs += 1;
+            let run = runs;
+            async move { run }
+        })
+        .await;
+        assert_eq!((runs, seen), (2, 2));
     }
 }

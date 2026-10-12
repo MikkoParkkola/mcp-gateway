@@ -69,19 +69,23 @@ fn enforcer_per_tool_block_when_exceeded() {
 
 #[test]
 fn enforcer_global_block_when_exceeded() {
-    let e = enforcer_with(true, Some(0.01), &[], &[], &[("tool", 0.006)]);
-    // Spend $0.006, then try another $0.006 → $0.012 > $0.01
-    e.record_spend("tool", None, 0.006);
-    let result = e.check("tool", None);
+    let result = crate::test_day::same_utc_day(|| {
+        let e = enforcer_with(true, Some(0.01), &[], &[], &[("tool", 0.006)]);
+        // Spend $0.006, then try another $0.006 → $0.012 > $0.01
+        e.record_spend("tool", None, 0.006);
+        e.check("tool", None)
+    });
     assert!(!result.allowed);
     assert!(result.block_reason.as_deref().unwrap().contains("Global"));
 }
 
 #[test]
 fn enforcer_per_key_block_when_exceeded() {
-    let e = enforcer_with(true, None, &[], &[("dev_key", 0.01)], &[("tool", 0.008)]);
-    e.record_spend("tool", Some("dev_key"), 0.008);
-    let result = e.check("tool", Some("dev_key"));
+    let result = crate::test_day::same_utc_day(|| {
+        let e = enforcer_with(true, None, &[], &[("dev_key", 0.01)], &[("tool", 0.008)]);
+        e.record_spend("tool", Some("dev_key"), 0.008);
+        e.check("tool", Some("dev_key"))
+    });
     assert!(!result.allowed);
     assert!(result.block_reason.as_deref().unwrap().contains("dev_key"));
 }
@@ -110,10 +114,12 @@ fn enforcer_log_at_50_percent_no_response_warning() {
 
 #[test]
 fn enforcer_record_spend_accumulates() {
-    let e = enforcer_with(true, Some(1.0), &[], &[], &[("tool", 0.01)]);
-    e.record_spend("tool", Some("k1"), 0.30);
-    e.record_spend("tool", Some("k1"), 0.20);
-    let snap = e.snapshot();
+    let snap = crate::test_day::same_utc_day(|| {
+        let e = enforcer_with(true, Some(1.0), &[], &[], &[("tool", 0.01)]);
+        e.record_spend("tool", Some("k1"), 0.30);
+        e.record_spend("tool", Some("k1"), 0.20);
+        e.snapshot()
+    });
     assert!((snap.global_daily_usd - 0.50).abs() < 1e-6);
     assert!((snap.tool_daily["tool"] - 0.50).abs() < 1e-6);
     assert!((snap.key_daily["k1"] - 0.50).abs() < 1e-6);
@@ -136,10 +142,13 @@ fn enforcer_check_performance_under_100us() {
 
 #[test]
 fn daily_accumulator_add_increases_current() {
-    let acc = DailyAccumulator::new();
-    acc.add(500_000); // $0.50
-    acc.add(300_000); // $0.30
-    assert_eq!(acc.current(), 800_000);
+    let current = crate::test_day::same_utc_day(|| {
+        let acc = DailyAccumulator::new();
+        acc.add(500_000); // $0.50
+        acc.add(300_000); // $0.30
+        acc.current()
+    });
+    assert_eq!(current, 800_000);
 }
 
 #[test]
@@ -201,14 +210,16 @@ fn a_spend_sweeps_unbudgeted_entries_from_an_earlier_day() {
 #[test]
 fn spend_past_the_cap_counts_in_other_and_a_budgeted_tool_still_blocks() {
     // GIVEN: a budgeted tool, and the unbudgeted cap already filled
-    let e = enforcer_with(true, None, &[("paid", 0.005)], &[], &[("paid", 0.01)]);
-    for i in 0..300 {
-        e.record_spend(&format!("invented-{i}"), None, 0.01);
-    }
-    e.record_spend("paid", None, 0.004);
+    let (snap, allowed) = crate::test_day::same_utc_day(|| {
+        let e = enforcer_with(true, None, &[("paid", 0.005)], &[], &[("paid", 0.01)]);
+        for i in 0..300 {
+            e.record_spend(&format!("invented-{i}"), None, 0.01);
+        }
+        e.record_spend("paid", None, 0.004);
+        (e.snapshot(), e.check("paid", None).allowed)
+    });
     // THEN: the overflow is all in its own total, and the budgeted tool kept its own
     // entry, so its check still blocks
-    let snap = e.snapshot();
     // Exactly the cap of unbudgeted names got their own entries.
     let own = MAX_UNBUDGETED_ROWS;
     #[allow(clippy::cast_precision_loss)]
@@ -219,20 +230,26 @@ fn spend_past_the_cap_counts_in_other_and_a_budgeted_tool_still_blocks() {
         "the overflow holds {other}"
     );
     assert!((snap.tool_daily["paid"] - 0.004).abs() < 1e-9);
-    assert!(!e.check("paid", None).allowed);
+    assert!(!allowed);
 }
 
 #[test]
 fn the_sweep_keeps_entries_from_today() {
     // GIVEN: spend today on an unbudgeted tool and key
-    let e = enforcer_with(true, None, &[], &[], &[]);
-    e.record_spend("today-tool", Some("today-key"), 0.01);
-    // WHEN: a later spend runs a due sweep
-    e.next_sweep.store(0, std::sync::atomic::Ordering::Relaxed);
-    e.record_spend("t", None, 0.01);
+    let (tool_kept, key_kept) = crate::test_day::same_utc_day(|| {
+        let e = enforcer_with(true, None, &[], &[], &[]);
+        e.record_spend("today-tool", Some("today-key"), 0.01);
+        // WHEN: a later spend runs a due sweep
+        e.next_sweep.store(0, std::sync::atomic::Ordering::Relaxed);
+        e.record_spend("t", None, 0.01);
+        (
+            e.tool_daily.contains_key("today-tool"),
+            e.key_daily.contains_key("today-key"),
+        )
+    });
     // THEN: today's entries are still there
-    assert!(e.tool_daily.contains_key("today-tool"));
-    assert!(e.key_daily.contains_key("today-key"));
+    assert!(tool_kept);
+    assert!(key_kept);
 }
 
 #[test]
@@ -282,43 +299,52 @@ fn a_restore_applies_the_cap_and_keeps_the_saved_overflow() {
 fn budgeted_names_arriving_after_the_cap_do_not_widen_it() {
     // GIVEN: three budgeted keys that spend only after the cap is full
     let budgets = [("b1", 9.0), ("b2", 9.0), ("b3", 9.0)];
-    let e = enforcer_with(true, None, &[], &budgets, &[]);
-    for i in 0..300 {
-        e.record_spend("t", Some(&format!("invented-{i}")), 0.01);
-    }
-    for (name, _) in budgets {
-        e.record_spend("t", Some(name), 0.01);
-    }
+    let (rows, key_overflow) = crate::test_day::same_utc_day(|| {
+        let e = enforcer_with(true, None, &[], &budgets, &[]);
+        for i in 0..300 {
+            e.record_spend("t", Some(&format!("invented-{i}")), 0.01);
+        }
+        for (name, _) in budgets {
+            e.record_spend("t", Some(name), 0.01);
+        }
+        (e.key_daily.len(), e.snapshot().key_overflow_usd)
+    });
     // THEN: the key map holds the cap plus the budgeted names, and the
     // overflow holds the rest of the invented keys
-    assert_eq!(e.key_daily.len(), MAX_UNBUDGETED_ROWS + budgets.len());
+    assert_eq!(rows, MAX_UNBUDGETED_ROWS + budgets.len());
     #[allow(clippy::cast_precision_loss)]
     let overflow = (300 - MAX_UNBUDGETED_ROWS) as f64 * 0.01;
-    assert!((e.snapshot().key_overflow_usd - overflow).abs() < 1e-9);
+    assert!((key_overflow - overflow).abs() < 1e-9);
 }
 
 #[test]
 fn an_over_long_unbudgeted_name_counts_as_overflow() {
-    let e = enforcer_with(true, None, &[], &[], &[]);
-    let long = "x".repeat(super::super::tally::MAX_ROW_NAME_BYTES + 1);
-    e.record_spend(&long, None, 0.01);
-    assert!(e.tool_daily.is_empty());
-    assert!((e.snapshot().tool_overflow_usd - 0.01).abs() < 1e-9);
+    let (no_rows, tool_overflow) = crate::test_day::same_utc_day(|| {
+        let e = enforcer_with(true, None, &[], &[], &[]);
+        let long = "x".repeat(super::super::tally::MAX_ROW_NAME_BYTES + 1);
+        e.record_spend(&long, None, 0.01);
+        (e.tool_daily.is_empty(), e.snapshot().tool_overflow_usd)
+    });
+    assert!(no_rows);
+    assert!((tool_overflow - 0.01).abs() < 1e-9);
 }
 
 #[test]
 fn budgeted_names_present_first_leave_the_full_unbudgeted_allowance() {
     // GIVEN: three budgeted keys that spend before any other key
     let budgets = [("b1", 9.0), ("b2", 9.0), ("b3", 9.0)];
-    let e = enforcer_with(true, None, &[], &budgets, &[]);
-    for (name, _) in budgets {
-        e.record_spend("t", Some(name), 0.01);
-    }
-    for i in 0..300 {
-        e.record_spend("t", Some(&format!("invented-{i}")), 0.01);
-    }
+    let rows = crate::test_day::same_utc_day(|| {
+        let e = enforcer_with(true, None, &[], &budgets, &[]);
+        for (name, _) in budgets {
+            e.record_spend("t", Some(name), 0.01);
+        }
+        for i in 0..300 {
+            e.record_spend("t", Some(&format!("invented-{i}")), 0.01);
+        }
+        e.key_daily.len()
+    });
     // THEN: the invented keys still get the whole cap of their own entries
-    assert_eq!(e.key_daily.len(), budgets.len() + MAX_UNBUDGETED_ROWS);
+    assert_eq!(rows, budgets.len() + MAX_UNBUDGETED_ROWS);
 }
 
 #[test]
@@ -421,15 +447,14 @@ fn swept_today_with_old_rows(
 #[test]
 fn a_new_tool_after_a_straddled_sweep_gets_its_own_row() {
     // GIVEN: the tool map at the cap with yesterday's rows, today marked swept
-    let e = swept_today_with_old_rows(|e| &e.tool_daily);
-    // WHEN: a new tool spends
-    e.record_spend("new-today", None, 0.01);
+    let (own_row, snap) = crate::test_day::same_utc_day(|| {
+        let e = swept_today_with_old_rows(|e| &e.tool_daily);
+        // WHEN: a new tool spends
+        e.record_spend("new-today", None, 0.01);
+        (e.tool_daily.contains_key("new-today"), e.snapshot())
+    });
     // THEN: it has its own row and nothing overflowed
-    assert!(
-        e.tool_daily.contains_key("new-today"),
-        "the new tool's spend went to the overflow row"
-    );
-    let snap = e.snapshot();
+    assert!(own_row, "the new tool's spend went to the overflow row");
     assert!((snap.tool_daily["new-today"] - 0.01).abs() < 1e-9);
     assert!(snap.tool_overflow_usd.abs() < 1e-12);
 }
@@ -438,15 +463,14 @@ fn a_new_tool_after_a_straddled_sweep_gets_its_own_row() {
 #[test]
 fn a_new_key_after_a_straddled_sweep_gets_its_own_row() {
     // GIVEN: the key map at the cap with yesterday's rows, today marked swept
-    let e = swept_today_with_old_rows(|e| &e.key_daily);
-    // WHEN: a new key spends
-    e.record_spend("t", Some("new-key"), 0.01);
+    let (own_row, snap) = crate::test_day::same_utc_day(|| {
+        let e = swept_today_with_old_rows(|e| &e.key_daily);
+        // WHEN: a new key spends
+        e.record_spend("t", Some("new-key"), 0.01);
+        (e.key_daily.contains_key("new-key"), e.snapshot())
+    });
     // THEN: it has its own row and nothing overflowed
-    assert!(
-        e.key_daily.contains_key("new-key"),
-        "the new key's spend went to the overflow row"
-    );
-    let snap = e.snapshot();
+    assert!(own_row, "the new key's spend went to the overflow row");
     assert!((snap.key_daily["new-key"] - 0.01).abs() < 1e-9);
     assert!(snap.key_overflow_usd.abs() < 1e-12);
 }
@@ -456,21 +480,24 @@ fn a_new_key_after_a_straddled_sweep_gets_its_own_row() {
 #[test]
 fn overflowing_spends_sweep_at_most_once_a_day() {
     // GIVEN: the tool map at the cap with today's rows, and one spend past it
-    let e = enforcer_with(true, None, &[], &[], &[]);
-    for i in 0..MAX_UNBUDGETED_ROWS {
-        e.record_spend(&format!("now-{i}"), None, 0.01);
-    }
-    e.record_spend("first-over", None, 0.01);
-    // AND: a row gone stale since, with the minute throttle armed
-    let yesterday = DailyAccumulator::stale(current_day().expect("clock after 1970") - 1, 5);
-    e.tool_daily.insert("now-0".to_string(), yesterday);
-    e.next_sweep
-        .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
-    // WHEN: another new tool spends past the cap
-    e.record_spend("second-over", None, 0.01);
+    let kept = crate::test_day::same_utc_day(|| {
+        let e = enforcer_with(true, None, &[], &[], &[]);
+        for i in 0..MAX_UNBUDGETED_ROWS {
+            e.record_spend(&format!("now-{i}"), None, 0.01);
+        }
+        e.record_spend("first-over", None, 0.01);
+        // AND: a row gone stale since, with the minute throttle armed
+        let yesterday = DailyAccumulator::stale(current_day().expect("clock after 1970") - 1, 5);
+        e.tool_daily.insert("now-0".to_string(), yesterday);
+        e.next_sweep
+            .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
+        // WHEN: another new tool spends past the cap
+        e.record_spend("second-over", None, 0.01);
+        e.tool_daily.contains_key("now-0")
+    });
     // THEN: no second sweep ran that day
     assert!(
-        e.tool_daily.contains_key("now-0"),
+        kept,
         "an overflowing spend swept the map again the same day"
     );
 }
@@ -484,20 +511,27 @@ fn a_sub_micro_tool_exhausts_a_budget_of_n_micros() {
     // GIVEN: a tool priced at a tenth of a micro-USD, under a per-tool budget
     // that fits N micro-USD and refuses the next
     let limit = (f64::from(N) + 0.5) * 1e-6;
-    let e = enforcer_with(true, None, &[("cheap", limit)], &[], &[("cheap", 1e-7)]);
-    // WHEN: N calls are admitted and recorded at the configured price
-    for call in 0..N {
-        let verdict = e.check("cheap", None);
-        assert!(verdict.allowed, "call {call} of {N} is admitted");
-        e.settle(verdict.hold.as_deref(), "cheap", None, 1e-7);
+    let (admitted, snap, next_allowed) = crate::test_day::same_utc_day(|| {
+        let e = enforcer_with(true, None, &[("cheap", limit)], &[], &[("cheap", 1e-7)]);
+        // WHEN: N calls are admitted and recorded at the configured price
+        let mut admitted = Vec::new();
+        for _ in 0..N {
+            let verdict = e.check("cheap", None);
+            admitted.push(verdict.allowed);
+            e.settle(verdict.hold.as_deref(), "cheap", None, 1e-7);
+        }
+        (admitted, e.snapshot(), e.check("cheap", None).allowed)
+    });
+    for (call, allowed) in admitted.into_iter().enumerate() {
+        assert!(allowed, "call {call} of {N} is admitted");
     }
     assert!(
-        (e.snapshot().tool_daily["cheap"] - f64::from(N) * 1e-6).abs() < 1e-12,
+        (snap.tool_daily["cheap"] - f64::from(N) * 1e-6).abs() < 1e-12,
         "each recorded call counts one whole micro-USD"
     );
     // THEN: the budget is spent, and the next call is refused
     assert!(
-        !e.check("cheap", None).allowed,
+        !next_allowed,
         "a sub-micro tool was never counted against its budget"
     );
 }
