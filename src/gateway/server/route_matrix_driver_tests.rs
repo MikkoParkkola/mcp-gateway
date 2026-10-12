@@ -686,3 +686,34 @@ pub(crate) fn stdio_refund_through_delivery() -> [Delivered; 3] {
         [refused, resent, third]
     })
 }
+
+/// MIK-8382, the premise of R5's `KeyedPrincipal` N/A: stdio `gateway_invoke
+/// alpha read` with idempotency on, keyed `k-a`, `k-a` again, then `k-b`.
+/// Returns the three answers and the backend's sends.
+pub(crate) async fn stdio_keyed_calls() -> ([Value; 3], usize) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let gateway_meta = stdio_meta(
+        |meta| {
+            meta.enable_idempotency(
+                Arc::new(crate::idempotency::IdempotencyCache::new()),
+                crate::idempotency::CLEANUP_INTERVAL,
+            );
+        },
+        Arc::new(Counting {
+            calls: Arc::clone(&calls),
+            answer: text_result("ok"),
+        }),
+    )
+    .await;
+    let keyed = |key: &str| {
+        let mut params = invoke_read(&json!({}));
+        params["_meta"] = json!({ (crate::protocol::mrtr::IDEMPOTENCY_KEY_META): key });
+        params
+    };
+    let answers = [
+        stdio_send(&gateway_meta, keyed("k-a")).await,
+        stdio_send(&gateway_meta, keyed("k-a")).await,
+        stdio_send(&gateway_meta, keyed("k-b")).await,
+    ];
+    (answers, calls.load(Ordering::SeqCst))
+}

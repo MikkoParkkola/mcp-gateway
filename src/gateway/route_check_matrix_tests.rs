@@ -79,6 +79,12 @@ pub(crate) enum Na {
     /// Grants and the admin rule fire only for the capability provider,
     /// which is never a direct-route backend.
     NotCapabilityProvider,
+    /// The route's caller is always the local operator, an execution
+    /// principal: stdio admits every call under
+    /// `AdmissionOwner::local_operator()` (`stdio_dispatch.rs`), so it has no
+    /// keyed-principal check (MIK-8382 design r2, R2-8 "stdio: no site").
+    /// Premise pinned by `keyed::stdio_owner_is_the_local_operator_for_any_key`.
+    AlwaysLocalOperator,
 }
 
 /// The ticket that closes an expected gap.
@@ -158,6 +164,10 @@ pub(crate) use table::expect;
 #[cfg(feature = "firewall")]
 #[path = "route_check_matrix_rows_tests.rs"]
 mod rows;
+
+#[cfg(feature = "firewall")]
+#[path = "route_check_matrix_keyed_tests.rs"]
+mod keyed;
 
 #[cfg(feature = "firewall")]
 #[path = "route_check_matrix_p3_tests.rs"]
