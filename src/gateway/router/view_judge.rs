@@ -387,3 +387,7 @@ impl AppState {
         (response, PendingRefresh::default())
     }
 }
+
+#[cfg(test)]
+#[path = "view_judge_tests.rs"]
+mod tests;
