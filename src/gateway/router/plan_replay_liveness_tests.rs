@@ -14,7 +14,7 @@ use tower::ServiceExt;
 
 use crate::config::{ApiKeyConfig, AuthConfig, api_key_digest_spec};
 use crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::{
-    BACKEND, Binding, DirectAccountGateway,
+    BACKEND, Binding, DirectAccountGateway, PERSONAL_BACKEND, Second,
 };
 
 const KEY: &str = "sole-operator-key";
@@ -48,38 +48,81 @@ fn sole_operator() -> AuthConfig {
     }
 }
 
-/// A playbook of two reads on the managed-account backend.
-fn two_reads() -> crate::playbook::PlaybookDefinition {
-    serde_json::from_value(json!({
-        "playbook": "1.0", "name": PLAYBOOK, "description": "two reads",
-        "steps": [
-            {"name": "a", "server": BACKEND, "tool": TOOL, "arguments": {"folder": "inbox"}},
-            {"name": "b", "server": BACKEND, "tool": TOOL, "arguments": {"folder": "sent"}}
-        ]
-    }))
+/// A playbook named `name` of reads, one per `(server, condition)`.
+fn reads(name: &str, steps: &[(&str, Option<&str>)]) -> crate::playbook::PlaybookDefinition {
+    let steps: Vec<Value> = steps
+        .iter()
+        .enumerate()
+        .map(|(n, (server, condition))| {
+            let mut step = json!({"name": format!("s{n}"), "server": server, "tool": TOOL,
+                                  "arguments": {"folder": "inbox"}});
+            if let Some(condition) = condition {
+                step["condition"] = json!(condition);
+            }
+            step
+        })
+        .collect();
+    serde_json::from_value(json!({"playbook": "1.0", "name": name,
+        "description": "reads", "steps": steps}))
     .expect("the playbook deserialises")
 }
 
+/// Every playbook the rows run: two reads on the managed account; a live
+/// account then a revocable one; the two accounts the other way round; and a
+/// managed read with a conditional read on the second account.
+fn playbooks() -> Vec<crate::playbook::PlaybookDefinition> {
+    vec![
+        reads(PLAYBOOK, &[(BACKEND, None), (BACKEND, None)]),
+        reads(
+            "personal_then_work",
+            &[(PERSONAL_BACKEND, None), (BACKEND, None)],
+        ),
+        reads(
+            "work_then_personal",
+            &[(BACKEND, None), (PERSONAL_BACKEND, None)],
+        ),
+        reads(
+            "conditional",
+            &[
+                (BACKEND, None),
+                (PERSONAL_BACKEND, Some("$inputs.deep == 'true'")),
+            ],
+        ),
+    ]
+}
+
 async fn fixture() -> Fx {
+    fixture_with(None).await
+}
+
+/// The fixture, with `second` registered beside the managed backend.
+async fn fixture_with(second: Option<Second>) -> Fx {
     let auth = sole_operator();
-    let mut gateway = DirectAccountGateway::new(auth.clone(), &Binding::Connected);
+    let mut gateway = match second {
+        None => DirectAccountGateway::new(auth.clone(), &Binding::Connected),
+        Some(second) => {
+            DirectAccountGateway::with_second(auth.clone(), &Binding::Connected, second)
+        }
+    };
     let (mut state, store) = super::tests::test_router_app_state_with_auth(&auth).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.backends = gateway.backends();
     let mut meta = gateway.take_meta();
     let mut engine = crate::playbook::PlaybookEngine::new();
-    engine.register(two_reads());
+    for definition in playbooks() {
+        engine.register(definition);
+    }
     meta.set_playbook_engine(engine);
     state_mut.meta_mcp = Arc::new(meta);
     let tool: crate::protocol::Tool = serde_json::from_value(json!({
         "name": TOOL, "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}}
     }))
     .expect("a tool");
-    gateway
-        .backends()
-        .get(BACKEND)
-        .expect("the backend")
-        .store_shared_tools_for_test(vec![tool]);
+    for name in [BACKEND, PERSONAL_BACKEND] {
+        if let Some(backend) = gateway.backends().get(name) {
+            backend.store_shared_tools_for_test(vec![tool.clone()]);
+        }
+    }
     Fx {
         router: super::create_router(state),
         gateway,
@@ -225,4 +268,105 @@ async fn p5_control_live_plan_replay_is_served_stored() {
         sent,
         "P5: the replay was sent: {again}"
     );
+}
+
+/// A keyed `gateway_run_playbook` of `playbook` with `inputs`.
+fn playbook_params(playbook: &str, key: &str, inputs: Value) -> Value {
+    json!({"name": "gateway_run_playbook",
+           "arguments": {"name": playbook, "arguments": inputs}, "_meta": meta(key)})
+}
+
+/// Run `playbook` once on the two-account fixture, every dispatched step
+/// answering [`MARKER`]; `steps` is how many dispatch.
+async fn run_two_account(fx: &Fx, playbook: &str, key: &str, steps: usize) {
+    for _ in 0..steps {
+        fx.gateway
+            .answer_next(json!({"content": [{"type": "text", "text": MARKER}], "isError": false}));
+    }
+    let first = send(
+        fx,
+        "gateway_run_playbook",
+        playbook_params(playbook, key, json!({})),
+    )
+    .await;
+    assert!(
+        first.to_string().contains(MARKER),
+        "premise: the plan ran: {first}"
+    );
+}
+
+fn assert_refused_unsent(fx: &Fx, row: &str, answer: &Value, sent: usize) {
+    assert!(
+        !answer.to_string().contains(MARKER),
+        "{row}: the stored plan output was served after revocation: {answer}"
+    );
+    assert!(
+        answer.get("error").is_some(),
+        "{row}: not a refusal: {answer}"
+    );
+    let now = fx.gateway.tool_calls_to(BACKEND) + fx.gateway.tool_calls_to(PERSONAL_BACKEND);
+    assert_eq!(now, sent, "{row}: the replay reached a backend: {answer}");
+}
+
+/// P1b (kills M2, a gate judging only the first target): the first step's
+/// account stays live, the second's is revoked; the replay is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn p1b_second_target_revoked_refuses_the_replay() {
+    let fx = fixture_with(Some(Second::PersonalAccount)).await;
+    run_two_account(&fx, "personal_then_work", "P1b", 2).await;
+    let sent = fx.gateway.tool_calls_to(BACKEND) + fx.gateway.tool_calls_to(PERSONAL_BACKEND);
+    fx.gateway.revoke_operator_grant_on(BACKEND).await;
+    let again = send(
+        &fx,
+        "gateway_run_playbook",
+        playbook_params("personal_then_work", "P1b", json!({})),
+    )
+    .await;
+    assert_refused_unsent(&fx, "P1b", &again, sent);
+}
+
+/// P7: both accounts revoked; the answer is the first declared step's
+/// (BACKEND's), not the second's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn p7_first_declared_revoked_target_answers() {
+    let fx = fixture_with(Some(Second::PersonalAccount)).await;
+    run_two_account(&fx, "work_then_personal", "P7", 2).await;
+    let sent = fx.gateway.tool_calls_to(BACKEND) + fx.gateway.tool_calls_to(PERSONAL_BACKEND);
+    fx.gateway.revoke_operator_grant_on(BACKEND).await;
+    fx.gateway.revoke_operator_grant_on(PERSONAL_BACKEND).await;
+    let again = send(
+        &fx,
+        "gateway_run_playbook",
+        playbook_params("work_then_personal", "P7", json!({})),
+    )
+    .await;
+    assert_refused_unsent(&fx, "P7", &again, sent);
+    let text = again.to_string();
+    assert!(
+        text.contains(BACKEND) && !text.contains(PERSONAL_BACKEND),
+        "P7: not the first declared target's refusal: {again}"
+    );
+}
+
+/// P8: the conditional step never ran (its condition was false), and its
+/// account is revoked afterwards. Declared targets include it, so the replay
+/// is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn p8_unrun_conditional_step_revoked_refuses_the_replay() {
+    let fx = fixture_with(Some(Second::PersonalAccount)).await;
+    run_two_account(&fx, "conditional", "P8", 1).await;
+    assert_eq!(
+        fx.gateway.tool_calls_to(PERSONAL_BACKEND),
+        0,
+        "premise: the branch was not taken"
+    );
+    let sent = fx.gateway.tool_calls_to(BACKEND);
+    fx.gateway.revoke_operator_grant_on(PERSONAL_BACKEND).await;
+    let again = send(
+        &fx,
+        "gateway_run_playbook",
+        playbook_params("conditional", "P8", json!({})),
+    )
+    .await;
+    assert_refused_unsent(&fx, "P8", &again, sent);
 }
