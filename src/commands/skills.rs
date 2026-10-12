@@ -17,31 +17,41 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use mcp_gateway::{
-    capability::CapabilityLoader,
-    skills::{
-        ImportedSkill, SkillRegistry, default_agent_paths, install_bundles, parse_skill_dir,
-        parse_skill_file, renderer::render_bundles,
-    },
+use mcp_gateway::skills::{
+    ImportedSkill, SkillRegistry, default_agent_paths, install_bundles, parse_skill_dir,
+    parse_skill_file, renderer::render_bundles,
 };
 
 /// Run `mcp-gateway skills generate`.
 pub async fn run_skills_generate(
-    capabilities: PathBuf,
+    capabilities: Option<PathBuf>,
+    config: Option<&std::path::Path>,
     server: Option<String>,
     category: Option<String>,
     out_dir: PathBuf,
     install: bool,
     dry_run: bool,
 ) -> ExitCode {
-    let dir = capabilities.to_string_lossy();
-    let mut caps = match CapabilityLoader::load_directory(&dir).await {
-        Ok(c) => c,
+    // The gateway's own directories unless -C or the env var names one
+    // (MIK-8044, `super::capability_dirs`).
+    let dirs = match super::capability_dirs::resolve(capabilities, config) {
+        Ok(dirs) => dirs,
         Err(e) => {
-            eprintln!("Error: Failed to load capabilities from '{dir}': {e}");
+            eprintln!("Error: {e}");
             return ExitCode::FAILURE;
         }
     };
+    let mut caps = match super::capability_dirs::load(&dirs).await {
+        Ok(c) => c.all().to_vec(),
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if caps.is_empty() && matches!(dirs, super::capability_dirs::CapabilityDirs::Configured(_)) {
+        eprintln!("{}.", super::capability_dirs::NONE_FOUND);
+        return ExitCode::FAILURE;
+    }
 
     // Apply optional filters
     if let Some(ref prefix) = server {

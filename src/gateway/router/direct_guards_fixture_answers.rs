@@ -117,7 +117,8 @@ pub(super) fn listing(answer: Answer, params: Option<&Value>) -> Value {
         Answer::WithNote => {
             result["tools"] = json!([
                 {"name": "read", "inputSchema": {"type": "object"}},
-                {"name": "note", "inputSchema": {"type": "object"}}
+                {"name": "note", "inputSchema": {"type": "object"}},
+                {"name": "gateway_invoke", "inputSchema": {"type": "object"}}
             ]);
         }
         Answer::ModernList => {

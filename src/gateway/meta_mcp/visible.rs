@@ -241,11 +241,25 @@ impl MetaMcp {
 
 /// One visibility judgement per request (MIK-8340, perflane MIK-8356 R3.1):
 /// the first answer [`MetaMcp::tool_visible_to`] gives for a `(server, tool)`
-/// within a request, kept for the rest of that request.
+/// within a request, kept for the rest of that request. It also keeps what
+/// intake judged the sanitize exemption on ([`Judged`], MIK-8154).
 #[derive(Default)]
 pub(crate) struct VisibilityMemo(
     parking_lot::Mutex<std::collections::HashMap<(String, String), Visibility>>,
+    parking_lot::Mutex<Judged>,
 );
+
+/// What intake judged a request's sanitize exemption on (MIK-8154): the digest
+/// of the playbook definition (C2e), and, for an exempt call, the backend
+/// instance each target was judged passthrough on (F2). A run or a send that
+/// meets a different definition or instance (a reload since) is refused.
+/// `Weak` keeps each judged allocation, so a new instance never shares its
+/// address.
+#[derive(Clone, Default)]
+pub(crate) struct Judged {
+    playbook: Option<String>,
+    instances: Vec<(String, std::sync::Weak<crate::backend::Backend>)>,
+}
 
 impl VisibilityMemo {
     fn recorded(&self, server: &str, tool: &str) -> Option<Visibility> {
@@ -266,9 +280,74 @@ impl VisibilityMemo {
     }
 }
 
+/// Record the digest of the playbook definition intake judged, in the open
+/// request's memo. Outside a memo there is no request to bind it to.
+pub(crate) fn record_judged_playbook(digest: String) {
+    let _ = VISIBILITY_MEMO.try_with(|memo| memo.1.lock().playbook = Some(digest));
+}
+
+/// Record the backend instances an exempt call's targets were judged on.
+pub(crate) fn record_exempt_instances(instances: &[std::sync::Arc<crate::backend::Backend>]) {
+    let judged: Vec<_> = instances
+        .iter()
+        .map(|backend| (backend.name.clone(), std::sync::Arc::downgrade(backend)))
+        .collect();
+    let _ = VISIBILITY_MEMO.try_with(|memo| memo.1.lock().instances = judged);
+}
+
+/// What this request's intake judged, or what a task worker carries from its
+/// submit ([`with_judged`]); empty outside both.
+pub(crate) fn judged() -> Judged {
+    // An empty memo (one a worker's dispatch opened) defers to the worker's.
+    let memo = VISIBILITY_MEMO
+        .try_with(|memo| memo.1.lock().clone())
+        .unwrap_or_default();
+    if memo.playbook.is_some() || !memo.instances.is_empty() {
+        return memo;
+    }
+    WORKER_JUDGED.try_with(Clone::clone).unwrap_or_default()
+}
+
+/// The playbook digest [`judged`] holds, if any.
+pub(crate) fn judged_playbook() -> Option<String> {
+    judged().playbook
+}
+
+/// The refusal of a `tools/call` sent by a backend instance other than the
+/// one intake judged the call exempt on (MIK-8154 F2); `None` when the call
+/// was not judged exempt on this backend's name, or on this very instance.
+pub(crate) fn changed_instance(backend: &crate::backend::Backend) -> Option<String> {
+    // Looked up in place: this runs on every send.
+    let differs = |judged: &Judged| {
+        judged
+            .instances
+            .iter()
+            .find(|(name, _)| *name == backend.name)
+            .map(|(_, instance)| !std::ptr::eq(instance.as_ptr(), backend))
+    };
+    let request = VISIBILITY_MEMO.try_with(|memo| differs(&memo.1.lock()));
+    let differs = request
+        .ok()
+        .flatten()
+        .or_else(|| WORKER_JUDGED.try_with(differs).ok().flatten())?;
+    differs.then(|| "The backend changed after this call was admitted; retry the call".to_owned())
+}
+
+/// Run a task's dispatch with what its submit judged (MIK-8154 C2e, F2), so
+/// the run refuses a playbook or backend reloaded between submit and run. Not
+/// a memo: a task's visibility is judged live, however long it runs.
+pub(crate) fn with_judged<F: std::future::Future>(
+    judged: Judged,
+    dispatch: F,
+) -> impl std::future::Future<Output = F::Output> {
+    WORKER_JUDGED.scope(judged, dispatch)
+}
+
 tokio::task_local! {
     /// The open request's memo; see [`with_visibility_memo`].
     static VISIBILITY_MEMO: VisibilityMemo;
+    /// A task worker's judgement; see [`with_judged`].
+    static WORKER_JUDGED: Judged;
 }
 
 /// Run `request` with one visibility memo for its whole lifetime (the HTTP
@@ -292,6 +371,37 @@ pub(crate) mod seams {
 
     thread_local! {
         static AFTER_ROUTE_STAGE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+        static BEFORE_TASK_DISPATCH: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+        static AFTER_INTAKE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    /// Run `hook` once, the next time `/mcp` or `/mcp/{name}` intake on this
+    /// thread has made its sanitize decision (MIK-8154 NP3, F2).
+    #[cfg(feature = "firewall")]
+    pub(crate) fn after_intake(hook: impl FnOnce() + 'static) {
+        AFTER_INTAKE.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    /// Called where `/mcp` or `/mcp/{name}` intake has made its sanitize
+    /// decision.
+    pub(crate) fn intake_judged() {
+        if let Some(hook) = AFTER_INTAKE.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
+    }
+
+    /// Run `hook` once, the next time a task worker on this thread starts its
+    /// dispatch: between the submit's intake and the run (MIK-8154 C2e2).
+    #[cfg(feature = "firewall")]
+    pub(crate) fn before_task_dispatch(hook: impl FnOnce() + 'static) {
+        BEFORE_TASK_DISPATCH.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    /// Called where a task worker starts its dispatch.
+    pub(crate) fn task_dispatch_starts() {
+        if let Some(hook) = BEFORE_TASK_DISPATCH.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
     }
 
     /// Run `hook` once, the next time a route stage on this thread finishes.

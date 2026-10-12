@@ -20,7 +20,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use chrono::Utc;
 use serde_json::{Map, Value, json};
 
 use super::fanout::SourceEvent;
@@ -119,8 +118,13 @@ pub(crate) trait WatchHost: Send + Sync {
     /// denial is trusted only when it has not moved since the read the
     /// decision started from (MIK-8037).
     fn catalogue_generation(&self) -> u64;
-    /// Whether `holder` may invoke `target` now (the `tools/list` predicate).
-    fn may_invoke(&self, holder: &Holder, target: &Target) -> bool;
+    /// Whether `holder` may invoke `target` at the caller's reading `now` (MIK-8202).
+    fn may_invoke(
+        &self,
+        holder: &Holder,
+        target: &Target,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> bool;
     /// Call `target` as `holder` with every control a `tools/call` gets, and
     /// return the firewall-approved application value, before per-call
     /// metadata is attached.
@@ -289,20 +293,6 @@ impl WatchSource {
             .into_iter()
             .find(|t| t.read_only && event_name(&t.capability) == name)
     }
-
-    /// The holder a stored row polls as, when its credential still passes:
-    /// an API key that is live and may invoke `target`.
-    fn holder(&self, row: &Subscription, target: &Target) -> Option<Holder> {
-        let api_key = row
-            .api_key
-            .clone()
-            .filter(|_| row.legacy_api_key_name.is_none())?;
-        let holder = Holder {
-            principal: row.principal.clone(),
-            api_key,
-        };
-        self.host.may_invoke(&holder, target).then_some(holder)
-    }
 }
 
 #[async_trait::async_trait]
@@ -395,8 +385,15 @@ impl EventSource for WatchSource {
         };
         // ponytail: scans the store per check; an index by principal is the
         // upgrade if many watch rows make fan-out measurable.
-        let rows = Self::rows(&hub, principal, name, arguments);
-        if rows.iter().any(|row| self.holder(row, &target).is_none()) {
+        // Undated, never an empty row set the holder check passes (MIK-8202).
+        let Ok(now) = crate::clock::utc_now() else {
+            return Err(RpcError::clock_unreadable());
+        };
+        let rows = Self::rows(&hub, principal, name, arguments, now);
+        if rows
+            .iter()
+            .any(|row| self.holder(row, &target, now).is_none())
+        {
             // The key is judged against the capability's current definition,
             // which a mid-write read can change: skip, keep (MIK-8122). A
             // revoked credential is revoked at fan-out before this check.
@@ -405,18 +402,30 @@ impl EventSource for WatchSource {
         Ok(())
     }
 
-    fn matches(&self, principal: &str, arguments: &Value, event: &SourceEvent) -> bool {
+    fn matches(
+        &self,
+        principal: &str,
+        arguments: &Value,
+        event: &SourceEvent,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
         event
             .lifecycle_key
             .as_deref()
-            .is_some_and(|key| self.lifecycle_key(principal, &event.name, arguments) == key)
+            .is_some_and(|key| self.lifecycle_key(principal, &event.name, arguments, now) == key)
     }
 
     /// Shared across principals for a credential-free capability; per
     /// principal otherwise, so one principal's credential never answers for
     /// another's subscription.
-    fn lifecycle_key(&self, principal: &str, name: &str, arguments: &Value) -> String {
-        let class = self.class_for(principal, name, arguments);
+    fn lifecycle_key(
+        &self,
+        principal: &str,
+        name: &str,
+        arguments: &Value,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> String {
+        let class = self.class_for(principal, name, arguments, now);
         poll_key(
             (class == WatchClass::Keyed).then_some(principal),
             name,
@@ -588,9 +597,9 @@ impl Run {
     /// under, so the next subscribe starts a fresh poller instead of finding
     /// the key started with nothing polling. A holder that committed while
     /// this poll read the store joined the key: the poller goes on.
-    async fn retire(&self, hub: &EventsHub) -> Step {
+    async fn retire(&self, hub: &EventsHub, now: chrono::DateTime<chrono::Utc>) -> Step {
         let mut started = hub.lifecycle.lock().await;
-        if !self.holders(hub).is_empty() {
+        if !self.holders(hub, now).is_empty() {
             return Step::Polled;
         }
         started.remove(&(SourceKind::RestWatch, self.key.clone()));
@@ -652,7 +661,7 @@ impl Run {
         let Ok(now) = crate::clock::utc_now() else {
             return Step::Polled;
         };
-        let rows = self.holders(hub);
+        let rows = self.holders(hub, now);
         let Some(services) = hub.runtime.services.get().cloned() else {
             return Step::Failed;
         };
@@ -660,9 +669,19 @@ impl Run {
         let mut denied = Vec::new();
         let mut skipped = false;
         for row in rows {
-            let passes = services
-                .admits_subscription(&row, Some(target.backend.as_str()))
-                .await;
+            let passes = match services
+                .admission(&row, Some(target.backend.as_str()))
+                .await
+            {
+                super::services::AccessVerdict::Admits => true,
+                super::services::AccessVerdict::Refuses => false,
+                // The refusal may be the clock's: kept, not called for, and
+                // judged again next poll; the poller is not retired (MIK-8202).
+                super::services::AccessVerdict::Undated => {
+                    skipped = true;
+                    continue;
+                }
+            };
             let api_key = row
                 .api_key
                 .clone()
@@ -678,7 +697,7 @@ impl Run {
                 denied.push(row);
                 continue;
             };
-            if !self.host.may_invoke(&holder, &target) {
+            if !self.host.may_invoke(&holder, &target, now) {
                 skipped = true;
             } else if chosen.is_none() {
                 chosen = Some(holder);
@@ -701,7 +720,7 @@ impl Run {
             return if skipped {
                 Step::Polled
             } else {
-                self.retire(hub).await
+                self.retire(hub, now).await
             };
         };
         let Ok(value) = self
@@ -748,7 +767,7 @@ impl Run {
         };
         let mut fields = Map::new();
         fields.insert("action".into(), "events.watch_backoff".into());
-        fields.insert("timestamp".into(), Utc::now().to_rfc3339().into());
+        crate::clock::stamp_audit_row(&mut fields);
         fields.insert("event_name".into(), self.name.clone().into());
         fields.insert("failures".into(), failures.into());
         let envelope = crate::security::audit::AuditEnvelope::gateway();

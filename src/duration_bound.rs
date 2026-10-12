@@ -35,11 +35,24 @@ pub(crate) fn expiry_from_expires_in(now_secs: u64, expires_in: u64) -> Option<u
 pub(crate) fn secs<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
     let secs = u64::deserialize(deserializer)?;
     if secs > MAX_DURATION.as_secs() {
-        return Err(serde::de::Error::custom(too_long(&format!(
-            "{secs} seconds"
-        ))));
+        return Err(serde::de::Error::custom(too_long("this duration")));
     }
     Ok(secs)
+}
+
+/// As [`secs`], for an optional field: absent or `null` is `None`, a set
+/// value is bounded the same way (MIK-8044).
+pub(crate) fn opt_secs<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<u64>, D::Error> {
+    match Option::<u64>::deserialize(deserializer)? {
+        // Never the value: MIK-8375's rule for config errors, which changes
+        // `secs` and `millis` the same way.
+        Some(secs) if secs > MAX_DURATION.as_secs() => {
+            Err(serde::de::Error::custom(too_long("this duration")))
+        }
+        other => Ok(other),
+    }
 }
 
 /// As [`secs`], for a field that also may not be zero.
@@ -55,7 +68,7 @@ pub(crate) fn nonzero_secs<'de, D: Deserializer<'de>>(deserializer: D) -> Result
 pub(crate) fn millis<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
     let millis = u64::deserialize(deserializer)?;
     if Duration::from_millis(millis) > MAX_DURATION {
-        return Err(serde::de::Error::custom(too_long(&format!("{millis} ms"))));
+        return Err(serde::de::Error::custom(too_long("this duration")));
     }
     Ok(millis)
 }

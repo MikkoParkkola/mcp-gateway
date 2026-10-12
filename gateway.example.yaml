@@ -2,8 +2,6 @@ env_files: []
 server:
   host: 127.0.0.1
   port: 39401
-  shutdown_timeout: 30s
-  max_body_size: 10485760
 auth:
   enabled: false
   bearer_token: null
@@ -12,7 +10,6 @@ auth:
   - /health
 meta_mcp:
   enabled: true
-  cache_ttl: 300s
   warm_start: []
   surfaced_tools: []
   # Which of the gateway's own meta-tools this gateway lists and accepts.
@@ -35,31 +32,16 @@ meta_mcp:
   exposed_meta_tools: []
 streaming:
   enabled: true
-  buffer_size: 100
-  keep_alive_interval: 15s
   auto_subscribe: []
-  session_ttl: 1800s
-  session_reaper_interval: 60s
 failsafe:
   circuit_breaker:
     enabled: true
-    failure_threshold: 5
-    success_threshold: 3
-    reset_timeout: 30s
   retry:
     enabled: true
-    max_attempts: 3               # Total attempts (1 original + 2 retries)
-    initial_backoff: 0s
-    max_backoff: 10s
-    multiplier: 2.0
   rate_limit:
     enabled: true
-    requests_per_second: 100
-    burst_size: 50
   health_check:
     enabled: true
-    interval: 30s
-    timeout: 5s
 backends:
   # `command` uses host-platform parsing (POSIX shlex on unix; CommandLineToArgvW
   # on Windows). Quote paths that contain spaces.
@@ -68,7 +50,6 @@ backends:
     enabled: true
     command: gitnexus mcp
     cwd: null
-    protocol_version: null
     timeout: 30s
     env: {}
     headers: {}
@@ -80,7 +61,6 @@ backends:
     enabled: true
     command: /path/to/trvl/bin/trvl mcp
     cwd: null
-    protocol_version: null
     timeout: 30s
     env: {}
     headers: {}
@@ -92,7 +72,6 @@ backends:
     enabled: true
     command: npx -y @superhuman/mcp-mail
     cwd: null
-    protocol_version: null
     timeout: 60s
     env: {}
     headers: {}
@@ -101,7 +80,6 @@ backends:
     passthrough: false
 capabilities:
   enabled: true
-  name: gateway
   directories:
   - ./capabilities
   # Capability calls ignore HTTP(S)_PROXY. To send them through a proxy, name
@@ -109,8 +87,6 @@ capabilities:
   # egress_proxy: http://proxy.internal:3128
 cache:
   enabled: true
-  default_ttl: 60s
-  max_entries: 10000
 playbooks:
   enabled: false
   directories:
@@ -134,12 +110,10 @@ security:
     anomaly_detection: false
     audit_log: null
     rules: []
-    anomaly_threshold: 0.7
 webhooks:
   enabled: true
   base_path: /webhooks
   require_signature: true
-  rate_limit: 100
 routing_profiles: {}
 default_routing_profile: default
 code_mode:
@@ -154,10 +128,6 @@ mtls:
   policies: []
 key_server:
   enabled: false
-  token_ttl_secs: 3600
-  max_tokens_per_identity: 5
-  max_oidc_token_age_secs: 300
-  cleanup_interval_secs: 60
   oidc: []
   policies: []
   admin_token: null

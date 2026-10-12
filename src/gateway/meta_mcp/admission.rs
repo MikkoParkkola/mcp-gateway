@@ -151,6 +151,11 @@ pub(crate) enum SyncAdmission {
     Replay(JsonRpcResponse, Option<ReplayAudit>),
 }
 
+/// The gateway's own directives inside a tool's arguments: read and removed
+/// here, so the sanitize step refuses a dirty key that cleans to one
+/// (MIK-8378 ENV.2) from this one list.
+pub(crate) const EXECUTION_DIRECTIVES: [&str; 2] = ["_full", "_claim"];
+
 /// Gateway controls have the same meaning at both external execution routes.
 pub(crate) fn execution_arguments(arguments: &mut Value) -> bool {
     let full = arguments
@@ -158,8 +163,9 @@ pub(crate) fn execution_arguments(arguments: &mut Value) -> bool {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     if let Some(object) = arguments.as_object_mut() {
-        object.remove("_full");
-        object.remove("_claim");
+        for directive in EXECUTION_DIRECTIVES {
+            object.remove(directive);
+        }
     }
     full
 }
@@ -167,7 +173,10 @@ pub(crate) fn execution_arguments(arguments: &mut Value) -> bool {
 /// [`execution_arguments`] on a possibly borrowed value: it is copied only
 /// when there is a control key to strip (MIK-8014).
 pub(super) fn execution_arguments_cow(arguments: &mut std::borrow::Cow<'_, Value>) -> bool {
-    if arguments.get("_full").is_some() || arguments.get("_claim").is_some() {
+    if EXECUTION_DIRECTIVES
+        .iter()
+        .any(|directive| arguments.get(directive).is_some())
+    {
         return execution_arguments(arguments.to_mut());
     }
     false

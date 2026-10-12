@@ -38,6 +38,18 @@ pub(super) struct ChildTree {
     /// rather than by elapsed time (MIK-8222).
     #[cfg(all(test, unix))]
     pub(super) grace_for_test: Option<std::time::Duration>,
+    /// Test-only: replaces [`REAP_DEADLINE`] for this tree, so a row that
+    /// asserts the reaped status does not race the deadline on a loaded host
+    /// (MIK-8360). The deadline's own behaviour is pinned with synthetic
+    /// `Instant`s, not through this.
+    #[cfg(test)]
+    pub(super) reap_deadline_for_test: Option<std::time::Duration>,
+    /// Test-only: while set, every step of this tree is `Pending` before it
+    /// starts, so a row can hold one tree in the real reaper loop and watch
+    /// the others finish around it, by event rather than by stopwatch
+    /// (MIK-8360).
+    #[cfg(test)]
+    pub(super) hold_for_test: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 /// What the kernel says about the leader, without reaping it.
@@ -126,6 +138,10 @@ impl ChildTree {
             signals_refused: 0,
             #[cfg(all(test, unix))]
             grace_for_test: None,
+            #[cfg(test)]
+            reap_deadline_for_test: None,
+            #[cfg(test)]
+            hold_for_test: None,
         }
     }
 
@@ -209,6 +225,14 @@ impl ChildTree {
         if let Some(status) = self.status {
             return Reap::Done(Some(status));
         }
+        #[cfg(test)]
+        if self
+            .hold_for_test
+            .as_ref()
+            .is_some_and(|held| held.load(std::sync::atomic::Ordering::SeqCst))
+        {
+            return Reap::Pending;
+        }
         let (started, phase) = if let Some(state) = self.reaping {
             state
         } else {
@@ -218,7 +242,11 @@ impl ChildTree {
             state
         };
         let elapsed = now.saturating_duration_since(started);
-        if elapsed >= REAP_DEADLINE {
+        #[cfg(test)]
+        let deadline = self.reap_deadline_for_test.unwrap_or(REAP_DEADLINE);
+        #[cfg(not(test))]
+        let deadline = REAP_DEADLINE;
+        if elapsed >= deadline {
             self.signals_closed = true;
             tracing::warn!(
                 pid = self.wrapper.id(),

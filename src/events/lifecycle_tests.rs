@@ -41,7 +41,13 @@ impl EventSource for Probe {
             kind: self.kind(),
         }]
     }
-    fn matches(&self, _principal: &str, _arguments: &Value, _event: &SourceEvent) -> bool {
+    fn matches(
+        &self,
+        _principal: &str,
+        _arguments: &Value,
+        _event: &SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
         true
     }
     async fn authorize(&self, _p: &str, _n: &str, _a: &Value) -> Result<(), RpcError> {
@@ -566,7 +572,15 @@ async fn a_clock_before_the_epoch_keeps_an_undone_start() {
     let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
     let probe = Arc::new(Probe::default());
     hub.register_source(probe.clone());
-    let key = (probe.kind(), probe.lifecycle_key("p1", NAME, &json!({})));
+    let key = (
+        probe.kind(),
+        probe.lifecycle_key(
+            "p1",
+            NAME,
+            &json!({}),
+            crate::clock::utc_now().expect("clock"),
+        ),
+    );
 
     let mut started = std::collections::HashSet::from([key.clone()]);
     hub.undo_start(&mut started, key.clone()).await;

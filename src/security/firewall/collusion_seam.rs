@@ -26,6 +26,63 @@ use super::{CollusionDetector, K, key, sample};
 /// stream is cut even inside a composing run.
 const MAX_PIECE: usize = 256;
 
+/// Test-only: the work one form cost, counted where it is done, so a row
+/// asserts linear work instead of timing it (MIK-8360).
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(super) struct FormWork {
+    /// Chars in the form.
+    pub(super) chars: usize,
+    /// Chars handed to the normalizer, over every call.
+    pub(super) normalized: usize,
+    /// k-gram hash invocations.
+    pub(super) hashed: usize,
+    /// k-gram hashes kept for the slides.
+    pub(super) stored: usize,
+    /// k-grams the second slide visited.
+    pub(super) visited: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only: one entry per form this thread read.
+    pub(super) static FORM_WORK: std::cell::RefCell<Vec<FormWork>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// Test-only: running counts for the form being read.
+    static NORMALIZED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static HASHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Normalize `text`: the one call site of the normalizer, counted in tests.
+fn normalized<'a>(
+    nfc: &ComposingNormalizerBorrowed<'_>,
+    text: &'a str,
+) -> std::borrow::Cow<'a, str> {
+    #[cfg(test)]
+    NORMALIZED.set(NORMALIZED.get() + text.chars().count());
+    nfc.normalize(text)
+}
+
+/// Hash one k-gram: the one call site of the hasher, counted in tests.
+fn gram_hash(gram: &str) -> u64 {
+    #[cfg(test)]
+    HASHED.set(HASHED.get() + 1);
+    key().hash_one(gram)
+}
+
+/// Test-only: close the form being read into [`FORM_WORK`].
+#[cfg(test)]
+fn record(chars: usize, stored: usize, visited: usize) {
+    let work = FormWork {
+        chars,
+        normalized: NORMALIZED.get(),
+        hashed: HASHED.get(),
+        stored,
+        visited,
+    };
+    FORM_WORK.with_borrow_mut(|forms| forms.push(work));
+}
+
 /// A seam fingerprint and the steps whose text it touches anywhere in the
 /// answer, ascending.
 pub(crate) type SeamFingerprint = (u64, Vec<u32>);
@@ -89,6 +146,11 @@ impl CollusionDetector {
         parts: &[(&str, Option<u32>)],
         separator: &str,
     ) -> Vec<(u64, BTreeSet<u32>)> {
+        #[cfg(test)]
+        {
+            NORMALIZED.set(0);
+            HASHED.set(0);
+        }
         let (norm, tags) = self.tagged_form(parts, separator);
         let chars = tags.len();
         if chars < K {
@@ -102,7 +164,7 @@ impl CollusionDetector {
         let mut hashes = Vec::with_capacity(chars - K + 1);
         let mut seam: HashSet<u64> = HashSet::new();
         slide(&tags, |i, window| {
-            let hash = key().hash_one(&norm[bounds[i]..bounds[i + K]]);
+            let hash = gram_hash(&norm[bounds[i]..bounds[i + K]]);
             hashes.push(hash);
             if window.len() >= 2 {
                 seam.insert(hash);
@@ -113,10 +175,18 @@ impl CollusionDetector {
             .filter(|fp| seam.contains(fp))
             .collect();
         if selected.is_empty() {
+            #[cfg(test)]
+            record(chars, hashes.len(), 0);
             return Vec::new();
         }
+        #[cfg(test)]
+        let mut visited = 0;
         let mut union: HashMap<u64, BTreeSet<u32>> = HashMap::new();
         slide(&tags, |i, window| {
+            #[cfg(test)]
+            {
+                visited += 1;
+            }
             if selected.contains(&hashes[i]) {
                 union
                     .entry(hashes[i])
@@ -124,6 +194,8 @@ impl CollusionDetector {
                     .extend(window.keys().copied());
             }
         });
+        #[cfg(test)]
+        record(chars, hashes.len(), visited);
         union.into_iter().collect()
     }
 
@@ -259,7 +331,7 @@ impl Piece {
         if self.text.is_ascii() {
             self.text.chars().next_back()
         } else {
-            nfc.normalize(&self.text).chars().next_back()
+            normalized(nfc, &self.text).chars().next_back()
         }
     }
 
@@ -273,10 +345,10 @@ impl Piece {
     ) {
         let first = self.steps.first().and_then(|(_, step)| *step);
         if self.text.is_ascii() || self.steps.iter().all(|(_, s)| *s == first) {
-            stream.extend(nfc.normalize(&self.text).chars().map(|n| (n, first)));
+            stream.extend(normalized(nfc, &self.text).chars().map(|n| (n, first)));
         } else {
             let mut left = std::mem::take(&mut self.steps);
-            for n in nfc.normalize(&self.text).chars() {
+            for n in normalized(nfc, &self.text).chars() {
                 let step = left
                     .iter()
                     .position(|(c, _)| *c == n)

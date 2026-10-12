@@ -58,13 +58,10 @@ pub(in crate::gateway::router) fn request_check_refusal(
         // A version we cannot serve statelessly. The client is told which ones
         // we can, so it can retry on a shared revision rather than guess.
         let modern_enabled = state.live_config.running().server.modern_protocol;
-        if !modern_enabled
-            || !crate::protocol::meta::MODERN_VERSIONS.contains(&fields.protocol_version.as_str())
+        if let Some(rpc) =
+            crate::protocol::modern_refusal::unsupported_modern_version(id, fields, modern_enabled)
         {
-            return Some((
-                unsupported_version_error(id.cloned(), &fields.protocol_version, modern_enabled),
-                StatusCode::BAD_REQUEST,
-            ));
+            return Some((rpc, StatusCode::BAD_REQUEST));
         }
 
         // Header against body, before anything acts on either. The
@@ -133,35 +130,21 @@ pub(in crate::gateway::router) fn request_check_refusal(
             ));
         }
 
-        // A capability the client never declared. Checked before dispatch:
-        // a handler that discovers this halfway through has already acted.
-        if let Some(capability) = crate::protocol::meta::required_capability(method)
-            && !fields.declares_capability(capability)
+        // A capability the client never declared, then a method this revision
+        // removed. Checked before dispatch: a handler that discovers this
+        // halfway through has already acted. Refusing removed methods is the
+        // difference between claiming the revision and speaking it. The same
+        // function answers stdio (MIK-8368).
+        if let Some((rpc, kind)) =
+            crate::protocol::modern_refusal::modern_method_refusal(id, fields, method)
         {
-            let mut rpc = JsonRpcResponse::error(
-                id.cloned(),
-                -32021,
-                format!("client did not declare the '{capability}' capability"),
-            );
-            if let Some(ref mut error) = rpc.error {
-                error.data = Some(serde_json::json!({
-                    "requiredCapabilities": [capability],
-                }));
-            }
-            return Some((rpc, StatusCode::BAD_REQUEST));
-        }
-
-        // Methods this revision removed. Refusing them is the difference
-        // between claiming the revision and speaking it.
-        if crate::protocol::meta::REMOVED_IN_2026_07_28.contains(&method) {
-            return Some((
-                JsonRpcResponse::error(
-                    id.cloned(),
-                    -32601,
-                    format!("method '{method}' was removed in MCP 2026-07-28"),
-                ),
-                StatusCode::NOT_FOUND,
-            ));
+            let status = match kind {
+                crate::protocol::modern_refusal::ModernRefusal::MissingCapability => {
+                    StatusCode::BAD_REQUEST
+                }
+                crate::protocol::modern_refusal::ModernRefusal::Removed => StatusCode::NOT_FOUND,
+            };
+            return Some((rpc, status));
         }
     }
     None

@@ -72,6 +72,10 @@ pub(super) struct Twin {
     pub(super) key: &'static str,
     pub(super) spec: Spec,
     pub(super) calls: Arc<AtomicUsize>,
+    /// Every `tools/call` params the backend received (MIK-8154 NP rows).
+    pub(super) seen: Arc<std::sync::Mutex<Vec<Value>>>,
+    /// The backend the tool is surfaced on: `alpha`, or `alpha-pt` (passthrough).
+    pub(super) server: &'static str,
     pub(super) audit: PathBuf,
     _dir: tempfile::TempDir,
 }
@@ -85,6 +89,7 @@ pub(crate) const ASKING: &str = "ask";
 struct Catalogue {
     tools: Value,
     calls: Arc<AtomicUsize>,
+    seen: Arc<std::sync::Mutex<Vec<Value>>>,
 }
 
 #[async_trait::async_trait]
@@ -104,6 +109,9 @@ impl crate::transport::Transport for Catalogue {
             }),
             _ => {
                 self.calls.fetch_add(1, Ordering::SeqCst);
+                if let Some(params) = &params {
+                    self.seen.lock().expect("seen lock").push(params.clone());
+                }
                 json!({"content": [{"type": "text", "text": "ok"}], "isError": false})
             }
         };
@@ -223,14 +231,27 @@ pub(super) async fn twin_built(spec: Spec, arm: impl FnOnce(MetaMcp) -> MetaMcp)
 
 /// [`twin_built`] on the fixture `kind`.
 pub(super) async fn twin_of(kind: Kind, spec: Spec, arm: impl FnOnce(MetaMcp) -> MetaMcp) -> Twin {
+    twin_on("alpha", kind, spec, arm).await
+}
+
+/// [`twin_of`] with the tool surfaced on `server` (`alpha-pt` is the
+/// passthrough backend, MIK-8154 NP rows).
+pub(super) async fn twin_on(
+    server: &'static str,
+    kind: Kind,
+    spec: Spec,
+    arm: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Twin {
     let dir = tempfile::tempdir().expect("tempdir");
     let audit = dir.path().join("audit.jsonl");
     let calls = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let transport = Arc::new(Catalogue {
         tools: catalogue(spec),
         calls: Arc::clone(&calls),
+        seen: Arc::clone(&seen),
     });
-    let surfaced = spec.surfaced_on("alpha");
+    let surfaced = spec.surfaced_on(server);
     let build = move |meta: MetaMcp| arm(meta.with_surfaced_tools(surfaced));
     let fx = match kind {
         Kind::Audited => fixture_audited_built_on(transport, audit.clone(), build).await,
@@ -251,6 +272,8 @@ pub(super) async fn twin_of(kind: Kind, spec: Spec, arm: impl FnOnce(MetaMcp) ->
         key: spec.key(),
         spec,
         calls,
+        seen,
+        server,
         audit,
         _dir: dir,
     };
@@ -262,7 +285,12 @@ impl Twin {
     /// Oracle rule 2, fixture half: the withholding is really in place on the
     /// withheld fixture, and really gone on the control.
     fn assert_fixture_premise(&self) {
-        let backend = self.fx.state.backends.get("alpha").expect("alpha");
+        let backend = self
+            .fx
+            .state
+            .backends
+            .get(self.server)
+            .expect("the surfaced backend");
         let (reason, side, tool) = (self.spec.reason, self.spec.side, self.spec.tool);
         let blocked = backend.is_blocked_tool(tool);
         match (reason, side) {
@@ -355,6 +383,15 @@ impl Twin {
         )
         .await;
         self.answered(status, body)
+    }
+
+    /// Whether the backend's last `tools/call` carried a NUL anywhere.
+    pub(super) fn forwarded_nul(&self) -> bool {
+        self.seen
+            .lock()
+            .expect("seen lock")
+            .last()
+            .is_some_and(|params| params.to_string().contains("\\u0000"))
     }
 
     fn answered(&self, status: StatusCode, body: Value) -> Answered {

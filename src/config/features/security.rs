@@ -622,7 +622,13 @@ pub struct SecurityConfig {
     /// Settings read only under `posture: hardened`. Restart-only.
     #[serde(default)]
     pub hardened: crate::security::posture::HardenedConfig,
-    /// Enable input sanitization (null byte rejection, control char stripping, NFC).
+    /// On by default: sanitize the whole request (method, params, `_meta`) at
+    /// intake, before signing, authorization and the firewall, on `/mcp`,
+    /// `/mcp/{name}`, stdio and task submits. A NUL is refused (-32600); a
+    /// control character is stripped. The `id` and the signing and chain nonces
+    /// are validated, never rewritten. A `passthrough: true` backend is exempt
+    /// from sanitization only, on every route, when it is every call target.
+    /// Off: no route sanitizes.
     pub sanitize_input: bool,
     /// Enable SSRF protection for outbound URLs.
     pub ssrf_protection: bool,
@@ -763,40 +769,5 @@ mod context_integrity_config_tests {
 }
 
 #[cfg(test)]
-mod cwe532_debug_redaction {
-    use super::*;
-
-    const SENTINEL: &str = "SENTINEL_SECRET_a1b2c3";
-
-    // TransparencyLogConfig::Debug must never surface the HMAC shared secret.
-    #[test]
-    fn transparency_log_config_debug_redacts_shared_secret() {
-        let cfg = TransparencyLogConfig {
-            shared_secret: SENTINEL.to_string(),
-            ..TransparencyLogConfig::default()
-        };
-        let dbg = format!("{cfg:?}");
-        assert!(!dbg.contains(SENTINEL), "leaked shared_secret: {dbg}");
-        assert!(
-            dbg.contains("<redacted>"),
-            "missing redaction marker: {dbg}"
-        );
-    }
-
-    // MessageSigningConfig::Debug must redact both the current and previous
-    // rotation secrets.
-    #[test]
-    fn message_signing_config_debug_redacts_both_secrets() {
-        let cfg = MessageSigningConfig {
-            shared_secret: SENTINEL.to_string(),
-            previous_secret: format!("{SENTINEL}-prev"),
-            ..MessageSigningConfig::default()
-        };
-        let dbg = format!("{cfg:?}");
-        assert!(!dbg.contains(SENTINEL), "leaked signing secret: {dbg}");
-        assert!(
-            dbg.contains("<redacted>"),
-            "missing redaction marker: {dbg}"
-        );
-    }
-}
+#[path = "security_debug_redaction_tests.rs"]
+mod cwe532_debug_redaction;

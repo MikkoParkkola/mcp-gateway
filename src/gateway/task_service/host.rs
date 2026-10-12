@@ -16,7 +16,9 @@ use crate::gateway::authz::{
     Decision, ToolAuthorizer, ToolPolicyAuthorizer, ToolTarget, Transport,
 };
 use crate::gateway::meta_mcp::MetaMcp;
+use crate::gateway::meta_mcp::visible::Judged;
 use crate::gateway::router::{AppState, OwnedRouterAuthorizer, RouterAuthorizer};
+use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::ToolPolicy;
 
 /// What a stdio gateway lends its tasks. `run_stdio_on` holds the only strong
@@ -28,6 +30,8 @@ pub(crate) struct StdioTaskHost {
     /// The transport mark. Only `gateway::server` can mint one, so only a
     /// stdio-built host carries it.
     pub(crate) nonce: &'static StdioNonce,
+    /// `security.sanitize_input` at stdio start: a resume re-admits under it.
+    pub(crate) sanitize: crate::security::sanitize::InputSanitizing,
 }
 
 pub(crate) enum TaskHost {
@@ -56,6 +60,59 @@ impl LiveHost {
             Self::Http(state) => &state.meta_mcp,
             Self::Stdio(host) => &host.meta_mcp,
         }
+    }
+
+    /// Re-admit a resumed task's stored call (MIK-8154 B): a resume is an
+    /// admission point, so it gets intake's rule against the current config.
+    /// The exemption is judged again on the caller's view; still exempt, the
+    /// call is sent as stored under the instances judged now; otherwise its
+    /// arguments are sanitized first (a NUL refuses the resume). Returns the
+    /// arguments to send and the judgement to send them under.
+    pub(crate) async fn readmit(
+        &self,
+        call: &super::execution::TaskCall,
+        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+        session_id: Option<&str>,
+    ) -> Result<(serde_json::Value, Judged), Box<JsonRpcResponse>> {
+        let sanitize = match self {
+            Self::Http(state) => state.sanitize_input,
+            Self::Stdio(host) => host.sanitize == crate::security::sanitize::InputSanitizing::On,
+        };
+        if !sanitize {
+            return Ok((call.arguments.clone(), Judged::default()));
+        }
+        let request = serde_json::json!({"jsonrpc": "2.0", "method": "tools/call",
+            "params": {"name": call.tool, "arguments": call.arguments}});
+        let refused = |e: crate::Error| {
+            Box::new(JsonRpcResponse::error(
+                Some(RequestId::Number(0)),
+                e.to_rpc_code(),
+                e.to_string(),
+            ))
+        };
+        // Intake's full rule, in intake's order (MIK-8378): the keys the
+        // gateway reads are validated whenever sanitizing is on, an exempt
+        // call included, so a dirty one stored by a process with sanitizing
+        // off is refused here, never stripped or sent as stored. The
+        // exemption below spares only the values.
+        let route = crate::security::sanitize::ProtocolRoute::Meta;
+        crate::security::sanitize::validate_protocol_fields(&request, &[], route)
+            .map_err(refused)?;
+        let view =
+            crate::gateway::meta_mcp::visible::TargetView::Caller(caller.scope(), session_id);
+        // A memo for the judgement alone: the round's dispatch judges live.
+        crate::gateway::meta_mcp::visible::with_visibility_memo(async {
+            if crate::gateway::router::sanitize_exempt(self.meta_mcp(), &request, view) {
+                return Ok((
+                    call.arguments.clone(),
+                    crate::gateway::meta_mcp::visible::judged(),
+                ));
+            }
+            crate::security::sanitize::sanitize_request(&request, route)
+                .map(|clean| (clean["params"]["arguments"].clone(), Judged::default()))
+                .map_err(refused)
+        })
+        .await
     }
 
     /// The mark a rebuilt context carries: `Some` only for a stdio host.

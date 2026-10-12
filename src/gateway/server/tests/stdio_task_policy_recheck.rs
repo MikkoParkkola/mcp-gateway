@@ -42,7 +42,8 @@ async fn a_stdio_task_worker_refuses_a_tool_the_current_policy_denies() {
             channel: &crate::gateway::input_bridge::NoClientChannel,
             handshake_capabilities: Declared::NONE,
             tasks: Some(&fixture.tasks),
-            modern: false,
+            serving: crate::gateway::server::stdio_single::ModernServing::Disabled,
+            discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
             sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
     );

@@ -202,6 +202,63 @@ class Timeouts(unittest.TestCase):
         text = f"#[tokio::test(start_paused = true)]\nasync fn paused() {{}}\n#[tokio::test]\nasync fn real() {{\n{body}\n}}\n"
         self.assertEqual([f.fn for f in guard.scan_timeouts("src/x_tests.rs", text, {}, {})], ["real"])
 
+    def test_a_paused_clock_exempts_an_assert_on_tokio_time_only(self):
+        # MIK-8360: the exemption the docstring promises for asserts, not only
+        # for timeouts. A tokio `Instant` is virtual on a paused clock; a
+        # std one is not, and a real clock is judged whatever the instant.
+        bound = "assert!(start.elapsed() < Duration::from_secs(1));"
+        tokio_start = "let start = tokio::time::Instant::now();"
+        cases = {
+            "paused by attribute, tokio instant": (
+                f"#[tokio::test(start_paused = true)]\nasync fn t() {{\n{tokio_start}\n{bound}\n}}\n",
+                [],
+            ),
+            "paused by call, tokio instant": (
+                f"#[tokio::test]\nasync fn t() {{\ntokio::time::pause();\n{tokio_start}\n{bound}\n}}\n",
+                [],
+            ),
+            "paused, bare instant imported from tokio": (
+                "use tokio::time::{sleep, Instant};\n"
+                f"#[tokio::test]\nasync fn t() {{\ntokio::time::pause();\nlet start = Instant::now();\n{bound}\n}}\n",
+                [],
+            ),
+            "paused, through an alias": (
+                f"#[tokio::test]\nasync fn t() {{\ntokio::time::pause();\n{tokio_start}\nlet took = start.elapsed();\n"
+                "assert!(took < Duration::from_secs(1));\n}\n",
+                [],
+            ),
+            "real clock, tokio instant": (
+                f"#[tokio::test]\nasync fn t() {{\n{tokio_start}\n{bound}\n}}\n",
+                ["under 5 s"],
+            ),
+            "paused, std instant": (
+                f"#[tokio::test]\nasync fn t() {{\ntokio::time::pause();\nlet start = std::time::Instant::now();\n{bound}\n}}\n",
+                ["under 5 s"],
+            ),
+            "paused, bare instant from std": (
+                "use std::time::Instant;\n"
+                f"#[tokio::test]\nasync fn t() {{\ntokio::time::pause();\nlet start = Instant::now();\n{bound}\n}}\n",
+                ["under 5 s"],
+            ),
+            # A stated miss, on the safe side: an aliased tokio import is not
+            # followed, so the assert is judged (refused), never exempted.
+            "paused, aliased tokio import": (
+                "use tokio::time::Instant as T;\n"
+                f"#[tokio::test]\nasync fn t() {{\ntokio::time::pause();\nlet start = T::now();\n{bound}\n}}\n",
+                ["under 5 s"],
+            ),
+            # A file naming both clocks leaves a bare `Instant` ambiguous.
+            "paused, bare instant, std imported in the fn": (
+                "use tokio::time::Instant;\n"
+                f"#[tokio::test]\nasync fn t() {{\nuse std::time::Instant;\ntokio::time::pause();\nlet start = Instant::now();\n{bound}\n}}\n",
+                ["under 5 s"],
+            ),
+        }
+        for name, (text, rules) in cases.items():
+            with self.subTest(name):
+                found = guard.scan_text("src/x_tests.rs", text, {})
+                self.assertEqual([f.rule for f in found], rules, found)
+
     def test_the_handshake_shape_of_mik_8253_is_refused(self):
         self.assertRefused('timeout(Duration::from_millis(500), t.start()).await.expect("handshake").unwrap();')
 
@@ -522,6 +579,118 @@ class Lexer(unittest.TestCase):
         code = 'let s = "one\ntwo";\n/* a\nb */\nassert!(start.elapsed() < Duration::from_millis(1));'
         found = guard.scan_text(PATH, "fn case() {\n    let start = Instant::now();\n" + code + "\n}\n", {})
         self.assertEqual([f.line for f in found], [7])
+
+
+
+class Members(unittest.TestCase):
+    """MIK-8360.TABLE.1: each flaky-under-load member's ORIGINAL code, quoted
+    verbatim from the release line before its fix (c5e432970 unless noted),
+    and the rule that refuses it, or the stated miss it falls under."""
+
+    # The new-code helpers, borrowed so NewCode's own rows do not run twice.
+    scan = NewCode.scan
+    assertRefused = NewCode.assertRefused
+    assertPasses = NewCode.assertPasses
+
+    def test_collusion_elapsed_bound(self):
+        # src/security/firewall/collusion_seam_tests.rs:201-208
+        body = (
+            "let start = std::time::Instant::now();\n"
+            "let seams = det.seam_fingerprints(&parts);\n"
+            "assert!(!seams.is_empty());\n"
+            'assert!(\n    start.elapsed() < std::time::Duration::from_secs(5),\n    "{:?}",\n    start.elapsed()\n);'
+        )
+        self.assertRefused(body, guard.FLOOR)
+
+    def test_prompts_builder_window(self):
+        # src/gateway/meta_mcp/tests/backend_lists.rs:399
+        body = "let meta = MetaMcp::new(registry).with_prompts_resources_fetch_timeout(Duration::from_secs(1));"
+        self.assertRefused(body, guard.SETTER)
+
+    def test_sub4_timeout_field(self):
+        # tests/mik_7272_sub4_adr012_acs.rs:239-252, in the assert-free helper `backend_for`
+        body = (
+            "let config = BackendConfig {\n    enabled: true,\n    stop_when_idle_for: None,\n"
+            "    timeout: Duration::from_millis(300),\n    env: HashMap::default(),\n    ..BackendConfig::default()\n};"
+        )
+        self.assertRefused(body, guard.FIELD, attrs="")
+
+    def test_early_exit_fail_fast_timeout(self):
+        # src/transport/stdio_early_exit_tests.rs:14-15, :32-35
+        prelude = "const ROW_LIMIT: Duration = Duration::from_secs(5);"
+        body = (
+            "tokio::time::timeout(ROW_LIMIT, t.start())\n    .await\n"
+            '    .expect("start must fail fast, not wait out the request timeout")\n'
+            '    .expect_err("a child that died before initialize cannot start")\n    .to_string();'
+        )
+        self.assertRefused(body, guard.FLOOR, prelude=prelude)
+
+    def test_child_tree_deadline_bound(self):
+        # src/transport/stdio_child_tree_tests.rs:555-558
+        prelude = "const REAP_DEADLINE: Duration = Duration::from_secs(5);"
+        body = (
+            "assert!(\n    at.elapsed() < REAP_DEADLINE + Duration::from_millis(500),\n"
+            '    "a tree waited behind the others"\n);'
+        )
+        self.assertRefused(body, guard.FLOOR, prelude=prelude)
+
+    def test_env_poll_sleep_window(self):
+        # src/config_reload/env_poll_e2e_tests.rs:144-149
+        body = (
+            "tokio::time::sleep(Duration::from_secs(5)).await;\n"
+            "let attempts = counts.attempts.load(Ordering::SeqCst);\n"
+            'assert!(\n    attempts >= 3,\n    "an unchanged failing file must be retried; {attempts} reloads ran"\n);'
+        )
+        self.assertRefused(body, guard.SLEEP)
+
+    def test_fanout_sleep_window(self):
+        # src/events/fanout_tests.rs:309-319 (from evcore's report)
+        body = (
+            "tokio::time::sleep(std::time::Duration::from_millis(200)).await;\n"
+            'std::fs::set_permissions(&unlock, std::fs::Permissions::from_mode(0o700)).expect("unlock");\n'
+            'assert!(\n    crate::test_log_capture::count(&records, "WARN", "startup reconcile could not remove") >= 1,\n'
+            '    "a failed attempt is logged: {records:?}"\n);'
+        )
+        self.assertRefused(body, guard.SLEEP)
+
+    def test_t35_is_ok_wait(self):
+        # src/events/upstream_session_wake_tests.rs:71-82 (MIK-8359, e2etests fixes it)
+        body = (
+            "let contacted = tokio::time::timeout(Duration::from_secs(5), async {\n"
+            "    while hits.load(Ordering::SeqCst) == 0 {\n"
+            "        tokio::time::sleep(Duration::from_millis(20)).await;\n    }\n})\n.await;\n"
+            "shared.stop.cancel();\n"
+            'assert!(\n    contacted.is_ok(),\n    "the revived backend is contacted at once, not at the 30 s timer"\n);'
+        )
+        self.assertRefused(body, guard.IS_OK)
+
+
+class NamedShapeSpans(unittest.TestCase):
+    """MIK-8360 review: R3a, R3b and R1b judge the whole statement and the
+    window's binding, not only the call's opening line, and a typed literal
+    is read as a number."""
+
+    scan = NewCode.scan
+    assertRefused = NewCode.assertRefused
+    assertPasses = NewCode.assertPasses
+
+    def test_a_changed_argument_line_of_a_multiline_setter_is_judged(self):
+        body = "let c = Config::default()\n    .with_request_timeout(\n        Duration::from_millis(300),\n    );"
+        self.assertRefused(body, guard.SETTER, added={6})
+        self.assertPasses(body, added=())
+
+    def test_a_changed_binding_of_the_window_is_judged(self):
+        body = "let w = Duration::from_millis(300);\nlet c = Config::default().with_request_timeout(w);"
+        self.assertRefused(body, guard.SETTER, added={4})
+
+    def test_a_newly_added_is_ok_assert_is_judged(self):
+        body = "let r = timeout(Duration::from_millis(300), f()).await;\nassert!(r.is_ok());"
+        self.assertRefused(body, guard.IS_OK, added={5})
+        self.assertPasses(body, added=())
+
+    def test_a_typed_literal_field_is_a_number(self):
+        self.assertRefused("let c = C { timeout_ms: 300_u64 };", guard.FIELD, attrs="")
+        self.assertPasses("let c = C { timeout_ms: 30_000_u64 };", attrs="")
 
 
 if __name__ == "__main__":

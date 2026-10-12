@@ -326,16 +326,20 @@ async fn dispatch(
     let authorizer = state.authorizer(owned.authorizer());
     let _key_hold = owned.hold_caller_key(state);
     let caller = owned.dispatch_context_retrying(state, &authorizer, retry);
+    let (arguments, judged) = match state.readmit(call, &caller, owned.session_id()).await {
+        Ok(readmitted) => readmitted,
+        Err(refused) => return Some(*refused),
+    };
     let dispatched = state.meta_mcp().dispatch_below_gate_native_result(
         RequestId::Number(0),
         &call.tool,
-        call.arguments.clone(),
+        arguments,
         owned.session_id(),
         &caller,
     );
     let dispatched = crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
         Arc::clone(owned.dispatch_log()),
-        dispatched,
+        crate::gateway::meta_mcp::visible::with_judged(judged, dispatched),
     );
     tokio::select! {
         biased;

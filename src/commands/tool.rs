@@ -1,112 +1,138 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `mcp-gateway tool` subcommands (CLI bridge for direct tool invocation).
+//!
+//! The catalogue is the gateway's own: the loaded config's
+//! `capabilities.directories`, unless `-C` or `MCP_GATEWAY_CAPABILITIES`
+//! names a directory (MIK-8044, `super::capability_dirs`).
 
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use mcp_gateway::cli::{
     ToolCommand,
     completion::{ShellTarget, generate_completion},
-    invoke::{ToolCatalogue, build_completion_tool_names, execute_tool, resolve_args},
+    invoke::{ToolCatalogue, execute_tool, resolve_args},
     output::{OutputFormat, print_tool_inspect, print_tool_list, print_tool_result},
 };
 
-/// Run `mcp-gateway tool` subcommands (CLI bridge for direct tool invocation).
-pub async fn run_tool_command(cmd: ToolCommand) -> ExitCode {
+use super::capability_dirs::{self, CapabilityDirs, NONE_FOUND};
+
+pub async fn run_tool_command(cmd: ToolCommand, config: Option<&Path>) -> ExitCode {
     match cmd {
         ToolCommand::List {
             capabilities,
             format,
-        } => tool_list(capabilities, format).await,
+        } => tool_list(capabilities, config, format).await,
         ToolCommand::Inspect {
             tool,
             capabilities,
             format,
-        } => tool_inspect(tool, capabilities, format).await,
+        } => tool_inspect(tool, capabilities, config, format).await,
         ToolCommand::Invoke {
             tool,
             capabilities,
             args,
             kv_args,
             format,
-        } => tool_invoke(tool, capabilities, args, kv_args, format).await,
+        } => tool_invoke(tool, capabilities, config, args, kv_args, format).await,
         ToolCommand::Completions {
             shell,
             capabilities,
-        } => tool_completions(shell, capabilities).await,
+        } => tool_completions(shell, capabilities, config).await,
     }
 }
 
-async fn tool_list(capabilities: std::path::PathBuf, format: OutputFormat) -> ExitCode {
-    let dir = capabilities.to_string_lossy();
-    // `tool list` scans a *local* capability-YAML directory. It is independent
-    // of the running gateway's `-c gateway.yaml` config (including
-    // `capabilities.enabled`), which controls the server, not this CLI scan.
-    // When the directory is absent, report an empty catalogue with a one-line
-    // explanation rather than hard-failing (see issue #225); the `discover`
-    // path already degrades this way for the same condition.
-    if !capabilities.exists() {
+/// The catalogue the command reads, or the error already printed.
+async fn catalogue(
+    capabilities: Option<PathBuf>,
+    config: Option<&Path>,
+) -> Result<(ToolCatalogue, CapabilityDirs), ExitCode> {
+    let dirs = capability_dirs::resolve(capabilities, config).map_err(|e| {
+        eprintln!("Error: {e}");
+        ExitCode::FAILURE
+    })?;
+    let cat = capability_dirs::load(&dirs).await.map_err(|e| {
+        eprintln!("Error: {e}");
+        ExitCode::FAILURE
+    })?;
+    Ok((cat, dirs))
+}
+
+/// Whether a catalogue read from the configured directories came back empty;
+/// says so on stderr.
+fn none_found(cat: &ToolCatalogue, dirs: &CapabilityDirs) -> bool {
+    let empty = cat.all().is_empty() && matches!(dirs, CapabilityDirs::Configured(_));
+    if empty {
+        eprintln!("{NONE_FOUND}.");
+    }
+    empty
+}
+
+async fn tool_list(
+    capabilities: Option<PathBuf>,
+    config: Option<&Path>,
+    format: OutputFormat,
+) -> ExitCode {
+    // A named directory that is absent reports an empty catalogue with one
+    // line of explanation rather than failing (#225).
+    if let Some(dir) = capabilities.as_ref().filter(|d| !d.exists()) {
         eprintln!(
-            "No capability catalogue at '{dir}'. `tool list` scans a local directory of \
-             capability YAML files (set -C/--capabilities or MCP_GATEWAY_CAPABILITIES) and is \
-             independent of your server config. A configured gateway exposes its tools over MCP \
-             at runtime, not via this command."
+            "No capability catalogue at '{}'. `tool list` scans the directory named by \
+             -C/--capabilities or MCP_GATEWAY_CAPABILITIES; without either it reads the \
+             gateway config's `capabilities.directories`.",
+            dir.display()
         );
         print_tool_list(&[], format);
         return ExitCode::SUCCESS;
     }
-    match ToolCatalogue::load(&dir).await {
-        Ok(cat) => {
+    match catalogue(capabilities, config).await {
+        Ok((cat, dirs)) => {
+            none_found(&cat, &dirs);
             print_tool_list(&cat.list_entries(), format);
             ExitCode::SUCCESS
         }
-        Err(e) => {
-            eprintln!("Error: Failed to load capabilities from '{dir}': {e}");
-            ExitCode::FAILURE
-        }
+        Err(code) => code,
     }
 }
 
 async fn tool_inspect(
     tool: String,
-    capabilities: std::path::PathBuf,
+    capabilities: Option<PathBuf>,
+    config: Option<&Path>,
     format: OutputFormat,
 ) -> ExitCode {
-    let dir = capabilities.to_string_lossy();
-    match ToolCatalogue::load(&dir).await {
-        Ok(cat) => {
-            if let Some(cap) = cat.find(&tool) {
-                print_tool_inspect(&cap.name, &cap.description, &cap.schema.input, format);
-                ExitCode::SUCCESS
-            } else {
-                eprintln!(
-                    "Error: Tool '{tool}' not found. Run 'tool list' to see available tools."
-                );
-                ExitCode::FAILURE
-            }
-        }
-        Err(e) => {
-            eprintln!("Error: Failed to load capabilities from '{dir}': {e}");
-            ExitCode::FAILURE
-        }
+    let (cat, dirs) = match catalogue(capabilities, config).await {
+        Ok(found) => found,
+        Err(code) => return code,
+    };
+    if none_found(&cat, &dirs) {
+        return ExitCode::FAILURE;
+    }
+    if let Some(cap) = cat.find(&tool) {
+        print_tool_inspect(&cap.name, &cap.description, &cap.schema.input, format);
+        ExitCode::SUCCESS
+    } else {
+        eprintln!("Error: Tool '{tool}' not found. Run 'tool list' to see available tools.");
+        ExitCode::FAILURE
     }
 }
 
 async fn tool_invoke(
     tool: String,
-    capabilities: std::path::PathBuf,
+    capabilities: Option<PathBuf>,
+    config: Option<&Path>,
     args: Option<String>,
     kv_args: Vec<String>,
     format: OutputFormat,
 ) -> ExitCode {
-    let dir = capabilities.to_string_lossy();
-    let catalogue = match ToolCatalogue::load(&dir).await {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Error: Failed to load capabilities from '{dir}': {e}");
-            return ExitCode::FAILURE;
-        }
+    let (catalogue, dirs) = match catalogue(capabilities, config).await {
+        Ok(found) => found,
+        Err(code) => return code,
     };
+    if none_found(&catalogue, &dirs) {
+        return ExitCode::FAILURE;
+    }
     // `key=value` text is typed by the tool's own input schema (MIK-7943).
     let kv_schema = catalogue.find(&tool).map(|cap| &cap.schema.input);
     let resolved = match resolve_args(args.as_deref(), &kv_args, true, kv_schema) {
@@ -130,10 +156,23 @@ async fn tool_invoke(
 
 async fn tool_completions(
     shell: clap_complete::Shell,
-    capabilities: std::path::PathBuf,
+    capabilities: Option<PathBuf>,
+    config: Option<&Path>,
 ) -> ExitCode {
-    let dir = capabilities.to_string_lossy();
-    let tool_names = build_completion_tool_names(&dir).await;
+    // A config that will not load stops completions as it stops the other
+    // commands. A `-C` directory that cannot be read still yields a script,
+    // as before, just without tool names.
+    let dirs = match capability_dirs::resolve(capabilities, config) {
+        Ok(dirs) => dirs,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let tool_names: Vec<String> = match capability_dirs::load(&dirs).await {
+        Ok(cat) => cat.all().iter().map(|c| c.name.clone()).collect(),
+        Err(_) => Vec::new(),
+    };
     let target = ShellTarget::from_shell(shell).unwrap_or(ShellTarget::Bash);
     let script = generate_completion(target, &tool_names);
     print!("{script}");

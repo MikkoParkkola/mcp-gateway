@@ -8,11 +8,9 @@
 server:
   host: "127.0.0.1"
   port: 39401
-  shutdown_timeout: 5s
 
 capabilities:
   enabled: true
-  name: my-gateway  # Your gateway name (appears in gateway_list_servers)
 
   # Load capabilities from directories:
   directories:

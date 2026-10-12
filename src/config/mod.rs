@@ -16,6 +16,7 @@ mod backend_transport;
 mod config_file;
 mod env_overlay;
 mod features;
+pub(crate) mod load_error;
 pub(crate) use features::DEFAULT_TASK_TTL_MS;
 mod flagged_tools;
 mod input_schema;
@@ -77,7 +78,7 @@ pub use features::{
 pub use features::{
     EventsConfig, EventsRateLimit, EventsScheduleConfig, EventsSourcesConfig, EventsWatchConfig,
 };
-pub(crate) use features::{api_key_expired_now, parse_api_key_digest, parse_cidr};
+pub(crate) use features::{api_key_expired, api_key_expired_now, parse_api_key_digest, parse_cidr};
 
 // Personal-account custody DTO only — not the rest of `personal_accounts`.
 pub use crate::personal_accounts::config::{AccountsConfig, AccountsLimits};
@@ -537,7 +538,7 @@ impl Config {
     ) -> Result<Evaluated> {
         let spec: EnvFileConfig = Self::figment(path, &EnvOverlay::none())
             .extract()
-            .map_err(|e| Error::Config(e.to_string()))?;
+            .map_err(load_error::from_figment)?;
 
         let mut overlay = EnvOverlay::none();
         let mut paths = Vec::with_capacity(spec.env_files.len());
@@ -605,9 +606,7 @@ impl Config {
             // `env:`.
             Expansion::Literal => Self::yaml(path),
         };
-        let mut config: Self = figment
-            .extract()
-            .map_err(|e| Error::Config(e.to_string()))?;
+        let mut config: Self = figment.extract().map_err(load_error::from_figment)?;
         // Before any validation, so a misspelt key is reported rather than the
         // validation error its absence causes.
         strict_keys::refuse_unrecognised_keys(path, &figment)?;
@@ -794,8 +793,8 @@ fn remote_transport_identity(transport: &TransportConfig) -> Option<(&'static st
     }
 }
 
+use backend_config::default_true;
 pub use backend_config::{BackendConfig, OAuthConfig, TransportConfig};
-use backend_config::{default_token_refresh_buffer, default_true};
 pub use meta_mcp_config::{MetaMcpConfig, SurfacedToolConfig};
 pub use server_config::{CleartextHttp, IdempotencyKeyMode, ServerConfig};
 

@@ -15,8 +15,6 @@ env_files:
 server:
   host: "127.0.0.1"              # Bind address
   port: 39400                     # Listen port
-  shutdown_timeout: 30s           # Graceful shutdown timeout
-  max_body_size: 10485760         # Max request body size in bytes on every route (10 MiB; 413 above)
   replicas: 1                     # Declared process count, not observed. Above 1, startup refuses with
                                   # key_server, accounts or modern_protocol on (UPGRADING-4.0 item 37)
   # With auth on and a non-loopback bind or public_url, plain HTTP is refused
@@ -55,12 +53,9 @@ auth:
   public_paths:
     - /health
 
-  # Dashboard browser sessions (the link `serve` prints, or `mcp-gateway dashboard-link`).
-  # A session ends after idle_timeout_secs without activity or absolute_timeout_secs after
-  # sign-in. The dashboard's own refresh is not activity. Both > 0; idle <= absolute.
-  # dashboard_session:
-  #   idle_timeout_secs: 1800        # 30 minutes
-  #   absolute_timeout_secs: 28800   # 8 hours
+  # Dashboard browser sessions (the link `serve` prints, or `mcp-gateway dashboard-link`)
+  # end after 30 minutes without activity or 8 hours after sign-in, whichever comes first.
+  # The dashboard's own refresh is not activity.
 
 # --- Audit log ---
 # Tamper-evident, hash-chained record of every tool call: who (credential kind,
@@ -87,7 +82,6 @@ auth:
 
 meta_mcp:
   enabled: true                   # Enable Meta-MCP mode (9 tools minimum / 11 in the README benchmark scenario)
-  cache_ttl: 5m                   # Tool cache TTL
   # Backends to pre-connect and cache on startup.
   warm_start: []
   # warm_start:
@@ -108,8 +102,6 @@ meta_mcp:
 
 streaming:
   enabled: true                   # Enable SSE streaming for notifications
-  buffer_size: 100                # Notification buffer size per client
-  keep_alive_interval: 15s        # SSE keep-alive interval
   # Backends to auto-subscribe for notifications.
   auto_subscribe: []
 
@@ -118,28 +110,17 @@ streaming:
 failsafe:
   circuit_breaker:
     enabled: true
-    failure_threshold: 5          # Failures before circuit opens
-    success_threshold: 3          # Successes in half-open to close
-    reset_timeout: 30s            # Time before half-open retry
 
   retry:
     enabled: true
-    max_attempts: 3               # Total attempts (1 original + 2 retries)
-    initial_backoff: 100ms        # First retry delay
-    max_backoff: 10s              # Maximum retry delay
-    multiplier: 2.0               # Backoff multiplier
 
   rate_limit:
     enabled: true
-    requests_per_second: 100      # Per-backend RPS
-    burst_size: 50                # Token bucket burst
                                   # A refusal reads "Rate limit exceeded for backend
                                   # '<name>'" and is never counted by error_budget.
 
   health_check:
     enabled: true
-    interval: 30s                 # Health check interval
-    timeout: 5s                   # Health check timeout
 
 # --- Error Budget / Kill Switch ---
 
@@ -163,16 +144,13 @@ error_budget:
 
 cache:
   enabled: true                   # Enable response caching
-  default_ttl: 60s                # Default cache TTL
                                   # Errors (isError: true) are never cached, so a
                                   # transient refusal is not replayed for the TTL.
-  max_entries: 10000              # Max cached responses before eviction
 
 # --- Capabilities (REST API integration) ---
 
 capabilities:
   enabled: true                   # Enable capability system
-  name: fulcrum                   # Backend name shown in gateway_list_servers
   directories:                    # Directories to load capability YAMLs from
     - ./capabilities
 
@@ -210,7 +188,6 @@ capabilities:
 #     credential_redaction: true   # Auto-redact AWS keys, GitHub tokens, JWTs, etc.
 #     prompt_injection_detection: true
 #     anomaly_detection: false     # Opt-in: flag unusual tool transition patterns
-#     anomaly_threshold: 0.7      # 0.0-1.0, higher = more permissive
 #     audit_log: /var/log/mcp-gateway/audit.ndjson  # NDJSON audit trail
 #     rules:                       # Per-tool glob-matched rules
 #       - match: "exec_*"
@@ -255,7 +232,7 @@ backends:
   #                               # a backend the gateway starts itself (one with
   #                               # a `command`) - the gateway cannot stop a
   #                               # server it did not start, so this is rejected
-  #                               # at config load for `http_url` backends,
+  #                               # at config load for `url` backends,
   #                               # including local ones. Omit it to never stop.
   #   input_schema_enforcement: closed  # Undeclared tool-call argument keys:
   #                               # `closed` (default) refuses them, and a level
@@ -272,10 +249,8 @@ backends:
 
   # Example: HTTP backend (connects to running server)
   # context7:
-  #   http_url: "http://localhost:8080/mcp"
+  #   url: "http://localhost:8080/mcp"
   #   description: "Documentation lookup"
-  #   streamable_http: true       # Use Streamable HTTP (no SSE handshake)
-  #   protocol_version: "2025-03-26"  # Override protocol version
   #   headers:
   #     Authorization: "Bearer ${API_TOKEN}"
   #   allow_cleartext_credentials: false  # Credential-bearing configuration —
@@ -288,7 +263,7 @@ backends:
 
   # Example: SSE backend
   # pieces:
-  #   http_url: "http://localhost:39300/sse"
+  #   url: "http://localhost:39300/sse"
   #   description: "Pieces LTM"
 
   # Example: GitMCP — free remote MCP server that auto-generates docs + code
@@ -298,23 +273,23 @@ backends:
   # (`fetch_generic_url_content`, `search_generic_code`, `search_generic_documentation`)
   # accept a repo URL as an argument, so a single backend covers every GitHub repo.
   #
-  # For a repo-pinned backend, point `http_url` at the repo-specific route:
+  # For a repo-pinned backend, point `url` at the repo-specific route:
   # gitmcp_mcp_gateway:
-  #   http_url: "https://gitmcp.io/MikkoParkkola/mcp-gateway/sse"
+  #   url: "https://gitmcp.io/MikkoParkkola/mcp-gateway/sse"
   #   description: "GitMCP — docs + search for MikkoParkkola/mcp-gateway"
   # Repo-pinned routes expose tools named after the repo
   # (e.g. `fetch_mcp_gateway_documentation`, `search_mcp_gateway_code`).
   #
-  # Transport: SSE (http_url ends in /sse, streamable_http unset: detected at connect).
+  # Transport: SSE, detected at connect (the gateway POSTs first, then falls back to SSE).
   # Auth: none required for public repos.
   # gitmcp_docs:
-  #   http_url: "https://gitmcp.io/docs/sse"
+  #   url: "https://gitmcp.io/docs/sse"
   #   description: "GitMCP — on-demand docs + code search for any GitHub repo"
   #   timeout: 30s
 
   # Example: backend with OAuth
   # google:
-  #   http_url: "https://mcp.googleapis.com/mcp"
+  #   url: "https://mcp.googleapis.com/mcp"
   #   description: "Google services"
   #   oauth:
   #     enabled: true

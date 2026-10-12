@@ -166,9 +166,9 @@ security:
     path: "/var/lib/mcp-gateway/audit/transparency.jsonl"
 backends:
   github:
-    http_url: "https://github-mcp.example.com/mcp"
+    url: "https://github-mcp.example.com/mcp"
   jira:
-    http_url: "https://jira-mcp.example.com/mcp"
+    url: "https://jira-mcp.example.com/mcp"
 ```
 
 `/livez` and `/readyz` stay open alongside `/health` whenever `/health` is

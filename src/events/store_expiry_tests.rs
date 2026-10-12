@@ -85,7 +85,7 @@ fn an_expiry_found_at_open_is_buried_by_the_first_due() {
     store.enqueue(tried, OUTBOX).expect("io");
     drop(store);
     let later = past_expiry(now);
-    let reopened = Store::open(dir.path(), later, TAIL).expect("reopen");
+    let reopened = Store::open(dir.path(), Ok(later), TAIL).expect("reopen");
     assert_eq!(dead_reason(&reopened, "e1"), None, "nothing buried at open");
     assert!(reopened.has_due("s1", later), "still pending after open");
     reopened.due(later, &HashSet::new(), ROOMY).expect("io");
@@ -165,7 +165,10 @@ fn an_unsubscribe_still_drops_a_replayed_record() {
     store
         .revive("e1", now, record("e1", "s1", now), OUTBOX, || Ok(now))
         .expect("io");
-    assert!(store.remove("s1", now, TAIL).expect("io"), "unsubscribed");
+    assert!(
+        store.remove("s1", Ok(now), TAIL).expect("io"),
+        "unsubscribed"
+    );
     assert_eq!(dead_reason(&store, "e1"), None, "dropped, as before");
 }
 
@@ -284,7 +287,7 @@ fn a_record_of_a_gone_subscription_is_dropped_not_buried() {
     for entry in std::fs::read_dir(dir.path().join("subs")).expect("subs") {
         std::fs::remove_file(entry.expect("entry").path()).expect("row gone");
     }
-    let reopened = Store::open(dir.path(), now, TAIL).expect("reopen");
+    let reopened = Store::open(dir.path(), Ok(now), TAIL).expect("reopen");
     reopened.due(now, &HashSet::new(), ROOMY).expect("io");
     assert!(!reopened.has_due("s1", now), "dropped");
     assert_eq!(dead_reason(&reopened, "e1"), None, "never buried");
@@ -305,7 +308,10 @@ fn unsubscribing_a_kept_expired_row_does_not_restart_its_tail() {
     store.enqueue(tried, OUTBOX).expect("io");
     let expiry = now + crate::duration_bound::delta!(hours, 1);
     let late = expiry + crate::duration_bound::delta!(minutes, 30);
-    assert!(store.remove("s1", late, TAIL).expect("io"), "unsubscribed");
+    assert!(
+        store.remove("s1", Ok(late), TAIL).expect("io"),
+        "unsubscribed"
+    );
     let after = expiry + crate::duration_bound::delta!(minutes, 61);
     assert!(
         !store.is_verified("p", "https://h/s1", after, TAIL),
@@ -416,7 +422,7 @@ fn an_unsynced_expiry_burial_is_receipted_once() {
         );
         let store = if restart {
             drop(store);
-            Store::open(dir.path(), later, TAIL).expect("reopen")
+            Store::open(dir.path(), Ok(later), TAIL).expect("reopen")
         } else {
             store
         };
@@ -462,7 +468,7 @@ fn a_lapsed_hold_buries_its_records_and_starts_the_tail_at_its_bound() {
     use crate::events::store::{Held, Judged};
     let dir = tempfile::tempdir().expect("dir");
     let now = Utc::now();
-    let store = Store::open(dir.path(), now, TAIL).expect("open");
+    let store = Store::open(dir.path(), Ok(now), TAIL).expect("open");
     let unleased = Subscription {
         expires_at: None,
         ..sub("s1", now)
@@ -487,7 +493,7 @@ fn a_lapsed_hold_buries_its_records_and_starts_the_tail_at_its_bound() {
     };
     let bound = now + crate::duration_bound::delta!(hours, 1);
     store
-        .apply_holds(&held, now, crate::duration_bound::delta!(hours, 1))
+        .apply_holds(&held, Ok(now), crate::duration_bound::delta!(hours, 1))
         .expect("io");
     let past = bound + crate::duration_bound::delta!(minutes, 10);
     store.due(past, &HashSet::new(), ROOMY).expect("io");

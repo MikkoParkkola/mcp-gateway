@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use super::EventsHub;
 use super::outbox::{DeadReason, Enqueued, OutboxRecord, OutboxState};
 use super::records::Subscription;
-use super::services::{Scan, Services, Subject};
+use super::services::{AccessVerdict, Scan, Services, Subject};
 use super::types::{SourceKind, Visibility};
 
 /// The draft's SHOULD ceiling on a delivery body (design §6.5).
@@ -89,6 +89,13 @@ impl EventsHub {
         let Some(source) = self.source(event.kind) else {
             return;
         };
+        // One reading judges every lease. A clock before 1970 reads none live:
+        // nothing is delivered on a lease it cannot date, and the occurrence
+        // is counted as a clock drop (MIK-8202).
+        let Ok(now) = crate::clock::utc_now() else {
+            self.count_clock_drop();
+            return;
+        };
         // Matched under the catalogue gate a route refresh holds while it
         // swaps the routes and judges the held set: no match against new
         // routes reaches a subscription they hold (MIK-8076). No I/O and no
@@ -98,9 +105,7 @@ impl EventsHub {
             self.store
                 .subscriptions()
                 .into_iter()
-                // A clock before 1970 reads no lease live: nothing is
-                // delivered on a lease it cannot date (MIK-8202).
-                .filter(|s| s.name == event.name && s.live_now())
+                .filter(|s| s.name == event.name && s.live(now))
                 .filter(|s| self.store.held(&s.id).is_none())
                 // A keyed occurrence belongs to its key's holders alone (MIK-7811).
                 .filter(|s| {
@@ -108,25 +113,31 @@ impl EventsHub {
                     // key whatever the catalogue says now (MIK-8122).
                     event.lifecycle_key.as_deref().is_none_or(|key| {
                         source.row_key(s).unwrap_or_else(|| {
-                            source.lifecycle_key(&s.principal, &s.name, &s.arguments)
+                            source.lifecycle_key(&s.principal, &s.name, &s.arguments, now)
                         }) == key
                     })
                 })
-                .filter(|s| source.matches(&s.principal, &s.arguments, event))
+                .filter(|s| source.matches(&s.principal, &s.arguments, event, now))
                 .collect()
         };
         for sub in matching {
-            if !services
-                .admits_subscription(&sub, event.scope.grant_backend())
-                .await
-            {
-                self.revoke(&sub).await;
-                continue;
+            match services.admission(&sub, event.scope.grant_backend()).await {
+                AccessVerdict::Admits => {}
+                // The refusal may be the clock's: the row is kept and this
+                // occurrence, which cannot be dated, is dropped (MIK-8202).
+                AccessVerdict::Undated => {
+                    self.count_clock_drop();
+                    continue;
+                }
+                AccessVerdict::Refuses => {
+                    self.revoke(&sub).await;
+                    continue;
+                }
             }
             // An occurrence that carries its owner was authorized where it was
             // made: the record it describes may be gone (an expired task).
             if event.owner.is_some() {
-                self.offer(services, event, &sub).await;
+                self.offer(services, event, &sub, now).await;
                 continue;
             }
             match source.authorize_row(&sub).await {
@@ -137,16 +148,30 @@ impl EventsHub {
                     self.revoke(&sub).await;
                     continue;
                 }
+                // The source could not judge on this clock: the row is kept
+                // and this occurrence dropped and counted (MIK-8202).
+                Err(refusal) if refusal.is_clock_unreadable() => {
+                    self.count_clock_drop();
+                    continue;
+                }
                 // Anything else (a store hiccup) skips this occurrence only.
                 Err(_) => continue,
             }
-            self.offer(services, event, &sub).await;
+            self.offer(services, event, &sub, now).await;
         }
         self.runtime.wake.notify_one();
     }
 
     /// Build, scan and write one subscription's record.
-    async fn offer(self: &Arc<Self>, services: &Services, event: &SourceEvent, sub: &Subscription) {
+    /// `now` is the fan-out's one reading: it dates the provenance receipt,
+    /// the record and any burial (MIK-8202).
+    async fn offer(
+        self: &Arc<Self>,
+        services: &Services,
+        event: &SourceEvent,
+        sub: &Subscription,
+        now: DateTime<Utc>,
+    ) {
         let id = event_id(event.kind, &event.upstream_id, &sub.id);
         let mut data = event.data.clone();
         // Attribution before redaction (MIN.2 row E1): what the source named.
@@ -169,9 +194,8 @@ impl EventsHub {
             &id,
             event,
             &data,
-            &services.provenance(&event.backend, &event.name),
+            &services.provenance(&event.backend, &event.name, now),
         );
-        let now = Utc::now();
         let record = OutboxRecord {
             v: 1,
             event_id: id,
@@ -253,7 +277,8 @@ impl EventsHub {
     /// cause that made it (design r3 G3). `false` when a subscription could not be removed.
     pub(crate) fn withdraw_rows(&self, judged: &[Subscription]) -> bool {
         let tail = super::tail_policy(&self.config);
-        let now = Utc::now();
+        // A commanded removal: it happens on any clock (MIK-8202).
+        let now = crate::clock::utc_now();
         #[cfg(test)]
         self.before_withdraw.pause_blocking();
         let mut all_removed = true;
@@ -427,9 +452,9 @@ impl EventsHub {
     /// that could not be written is logged and written by the next refresh.
     fn hold_unserved(&self, shapes: &std::collections::BTreeMap<String, super::reload::Shape>) {
         let judge = |sub: &Subscription| super::reload::judge(sub, shapes);
-        if let Err(error) = self
-            .store
-            .apply_holds(&judge, Utc::now(), self.hold_bound())
+        if let Err(error) =
+            self.store
+                .apply_holds(&judge, crate::clock::utc_now(), self.hold_bound())
         {
             tracing::warn!(%error, "events: a held subscription's stamp was not written; retried at the next refresh");
         }
@@ -452,12 +477,26 @@ impl EventsHub {
     /// Delete subscription `refused`, the snapshot the access check refused,
     /// with its pending records (F9), unless a refresh has since re-bound it
     /// to another credential.
+    ///
+    /// Not on a clock that cannot be read (before 1970, MIK-8202): an access
+    /// check then reads every expiring credential as expired, so the refusal
+    /// may be the clock's, and a revocation deletes the row for good. Nothing
+    /// is sent on such a clock; the next check on a readable one revokes a
+    /// refusal that still stands.
     pub(super) async fn revoke(self: &Arc<Self>, refused: &Subscription) {
+        let Ok(now) = crate::clock::utc_now() else {
+            tracing::warn!(
+                clock_unreadable = true,
+                subscription = %refused.id,
+                "events: refused subscription kept; the host clock reads before 1970"
+            );
+            return;
+        };
         let tail = super::tail_policy(&self.config);
         let snapshot = refused.clone();
         let removed = self
             .blocking(move |store| {
-                store.remove_where(&snapshot.id, Utc::now(), tail, |row| {
+                store.remove_where(&snapshot.id, Ok(now), tail, |row| {
                     // A re-grant under the same id is not the row judged.
                     row.incarnation == snapshot.incarnation
                         && row.credential_principal == snapshot.credential_principal
