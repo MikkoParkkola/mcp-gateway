@@ -84,7 +84,7 @@ async fn rig_with(
                     action: CollusionAction::Block,
                     min_matches: 1,
                     sources: match sensitivity {
-                        Sensitivity::Rule => vec![format!("{ALPHA}:*")],
+                        Sensitivity::Rule => vec![format!("{ALPHA}:*"), format!("{BETA}:*")],
                         Sensitivity::Verdict => Vec::new(),
                     },
                     window_secs: WINDOW_SECS,
@@ -97,6 +97,9 @@ async fn rig_with(
         .keyed_for_test()
         .keeping_every_kgram(),
     );
+    // Frozen from the start: a slow runner must not age a receipt in real
+    // time before a premise reads it; only the explicit lapse moves it.
+    relay.advance_collusion_clock_for_test(std::time::Duration::ZERO);
     let mut auth = three_principal_auth();
     for key in &mut auth.api_keys {
         key.backends.extend([ALPHA.to_string(), BETA.to_string()]);
@@ -163,6 +166,12 @@ impl Rig {
         if reply["error"]["code"] == -32002 {
             return true;
         }
+        // Not refused: it must be the probe's own clean answer, so an
+        // unrelated error never reads as a send that went through.
+        assert!(
+            reply.get("error").is_none() && reply.to_string().contains("ok"),
+            "a relay probe that is not refused must succeed with the probe's answer: {reply}"
+        );
         assert!(
             !reply.to_string().contains(relayed),
             "the probe must not deliver the tested text: {reply}"
@@ -261,19 +270,52 @@ impl Rig {
         assert_eq!(
             self.calls(),
             (1, 1),
-            "premise: both steps dispatched, one call each (two distinct targets)"
+            "premise: both steps dispatched, one call each"
+        );
+        let targets: Vec<(String, String)> = self
+            .state
+            .task_executor
+            .service
+            .store
+            .targets_for_test(&task)
+            .into_iter()
+            .map(|t| (t.server, t.tool))
+            .collect();
+        assert_eq!(
+            targets,
+            vec![
+                (ALPHA.to_string(), TOOL.to_string()),
+                (BETA.to_string(), TOOL.to_string())
+            ],
+            "premise: the row records two distinct targets, so the base takes the multi-target path"
         );
         task
     }
 
-    /// The shared tail of every route row: the receipt lapsed (P1), `reread`
-    /// ran nothing (P2), and bob relaying A's text is then refused.
-    async fn renews_after(&self, relayed: &str, reread: impl std::future::Future<Output = Value>) {
+    /// The shared tail of every route row. P0: bob relaying each of `texts`
+    /// is refused while the live receipts hold (they exist). P1: after the
+    /// lapse, none is refused. P2: `reread` ran nothing, and when `expected`
+    /// is given it delivered exactly that retained result. Then each is
+    /// refused again: the re-read renewed it.
+    async fn renews_after(
+        &self,
+        texts: &[&str],
+        expected: Option<&Value>,
+        reread: impl std::future::Future<Output = Value>,
+    ) {
+        for (i, text) in (0_i64..).zip(texts) {
+            assert!(
+                self.refused("key-b", 100 + i, text).await,
+                "premise P0: the live receipt holds for {text:.40}"
+            );
+        }
         self.lapse().await;
-        assert!(
-            !self.refused("key-b", 100, relayed).await,
-            "premise P1: the live receipt lapsed"
-        );
+        for (i, text) in (0_i64..).zip(texts) {
+            assert!(
+                !self.refused("key-b", 110 + i, text).await,
+                "premise P1: the live receipt lapsed for {text:.40}"
+            );
+        }
         let before = self.calls();
         let read = reread.await;
         assert!(
@@ -285,21 +327,33 @@ impl Rig {
             before,
             "premise P2: the re-read was served from the stored answer, not run again"
         );
-        assert!(
-            self.refused("key-b", 101, relayed).await,
-            "the re-read renewed no receipt for the step's text"
-        );
+        if let Some(expected) = expected {
+            assert_eq!(
+                read["result"], expected["result"],
+                "premise P2: the replay delivered the retained result unchanged"
+            );
+        }
+        for (i, text) in (0_i64..).zip(texts) {
+            assert!(
+                self.refused("key-b", 120 + i, text).await,
+                "the re-read renewed no receipt for {text:.40}"
+            );
+        }
     }
 }
 
-/// R1 (REPLAY.5): alice's `tasks/get` of a completed chain task renews step
-/// A's receipt.
+/// R1 (REPLAY.5): alice's `tasks/get` of a completed chain task renews both
+/// steps' receipts.
 #[tokio::test]
 async fn a_plan_task_read_renews_each_step_receipt() {
     let rig = rig(PROSE, OTHER_PROSE, None).await;
     let task = rig.settle_task("r1", "gateway_execute", chain()).await;
-    rig.renews_after(PROSE, get_task(&rig.state, "key-a", &task))
-        .await;
+    rig.renews_after(
+        &[PROSE, OTHER_PROSE],
+        None,
+        get_task(&rig.state, "key-a", &task),
+    )
+    .await;
 }
 
 /// R2 (REPLAY.5): the same for a two-step playbook task.
@@ -309,12 +363,16 @@ async fn a_playbook_task_read_renews_each_step_receipt() {
     let task = rig
         .settle_task("r2", "gateway_run_playbook", playbook_args())
         .await;
-    rig.renews_after(PROSE, get_task(&rig.state, "key-a", &task))
-        .await;
+    rig.renews_after(
+        &[PROSE, OTHER_PROSE],
+        None,
+        get_task(&rig.state, "key-a", &task),
+    )
+    .await;
 }
 
 /// R3 (REPLAY.6): a keyed synchronous `gateway_execute` repeated is served
-/// from the retained answer, and that delivery renews step A's receipt.
+/// from the retained answer, and that delivery renews both steps' receipts.
 #[tokio::test]
 async fn a_keyed_chain_replay_renews_each_step_receipt() {
     let rig = rig(PROSE, OTHER_PROSE, None).await;
@@ -327,7 +385,8 @@ async fn a_keyed_chain_replay_renews_each_step_receipt() {
     assert!(first.get("error").is_none(), "base: delivered: {first}");
     assert_eq!(rig.calls(), (1, 1), "premise: both steps dispatched");
     rig.renews_after(
-        PROSE,
+        &[PROSE, OTHER_PROSE],
+        Some(&first),
         post(
             &rig.state,
             "key-a",
@@ -350,7 +409,8 @@ async fn a_keyed_playbook_replay_renews_each_step_receipt() {
     assert!(first.get("error").is_none(), "base: delivered: {first}");
     assert_eq!(rig.calls(), (1, 1), "premise: both steps dispatched");
     rig.renews_after(
-        PROSE,
+        &[PROSE, OTHER_PROSE],
+        Some(&first),
         post(
             &rig.state,
             "key-a",
@@ -360,14 +420,16 @@ async fn a_keyed_playbook_replay_renews_each_step_receipt() {
     .await;
 }
 
-/// G29 (REPLAY.5, red): alice repeats the task-augmented call itself; the
-/// existing task is served (the Existing arm), and that delivery renews.
+/// G29 (REPLAY.5, red): alice repeats the task-augmented call itself (same
+/// key, same body); the existing task is served (the Existing arm), and that
+/// delivery renews.
 #[tokio::test]
 async fn a_task_augmented_repeat_renews() {
     let rig = rig(PROSE, OTHER_PROSE, None).await;
     rig.settle_task("g29", "gateway_execute", chain()).await;
     rig.renews_after(
-        PROSE,
+        &[PROSE, OTHER_PROSE],
+        None,
         post(
             &rig.state,
             "key-a",
@@ -398,8 +460,8 @@ async fn a_plan_task_read_keeps_the_readers_excuse() {
     )
     .await;
     assert!(
-        carol.to_string().contains("north slope"),
-        "premise: carol was delivered A's text: {carol}"
+        carol.get("error").is_none() && carol.to_string().contains(PROSE),
+        "premise: carol was delivered A's whole text: {carol}"
     );
     assert!(
         rig.refused("key-a", 51, PROSE).await,
@@ -427,24 +489,24 @@ async fn a_plan_task_read_renews_the_cross_step_seam() {
     let task = rig
         .settle_task("r6", "gateway_run_playbook", playbook_args())
         .await;
+    let shown = get_task(&rig.state, "key-a", &task).await.to_string();
+    assert!(
+        shown.contains(FIELD_A) && shown.contains(FIELD_B),
+        "premise: the playbook output holds both fields: {shown}"
+    );
     let pair = format!("{FIELD_A}{FIELD_B}");
     assert!(
         !rig.refused("key-b", 60, FIELD_A).await && !rig.refused("key-b", 61, FIELD_B).await,
         "premise: neither field alone is matched"
     );
-    assert!(
-        rig.refused("key-b", 62, &pair).await,
-        "premise: the live seam is receipted"
-    );
-    rig.renews_after(&pair, get_task(&rig.state, "key-a", &task))
+    rig.renews_after(&[&pair], None, get_task(&rig.state, "key-a", &task))
         .await;
 }
 
-/// R7 (REPLAY.6): no `sources` rule; step A is sensitive only by its
+/// R7 (REPLAY.5): no `sources` rule; step A is sensitive only by its
 /// context-integrity verdict (personal data), which sits on the step's result
-/// and which the playbook's output mapping drops. A keyed replay of the
-/// playbook still renews A's receipt as sensitive. (Synchronous: on the task
-/// path the live settlement itself loses the verdict, reported separately.)
+/// and which the playbook's output mapping drops. A task re-read still renews
+/// A's receipt as sensitive.
 #[tokio::test]
 async fn a_verdict_sensitive_playbook_step_renews() {
     let classified = format!("{PROSE} Contact: keeper@orchardcoop.fi");
@@ -455,30 +517,16 @@ async fn a_verdict_sensitive_playbook_step_renews() {
         Sensitivity::Verdict,
     )
     .await;
-    let first = post(
-        &rig.state,
-        "key-a",
-        keyed_call(1, "r7", "gateway_run_playbook", playbook_args()),
-    )
-    .await;
-    assert!(first.get("error").is_none(), "base: delivered: {first}");
+    let task = rig
+        .settle_task("r7", "gateway_run_playbook", playbook_args())
+        .await;
+    let shown = get_task(&rig.state, "key-a", &task).await.to_string();
     assert!(
-        !first.to_string().contains("personal_data"),
-        "premise: the output mapping dropped the step's verdict: {first}"
+        shown.contains("orchardcoop") && !shown.contains("personal_data"),
+        "premise: the stored output carries A's text but not the step's verdict: {shown}"
     );
-    assert!(
-        rig.refused("key-b", 70, &classified).await,
-        "premise: the live receipt is sensitive by the step's verdict alone"
-    );
-    rig.renews_after(
-        &classified,
-        post(
-            &rig.state,
-            "key-a",
-            keyed_call(2, "r7", "gateway_run_playbook", playbook_args()),
-        ),
-    )
-    .await;
+    rig.renews_after(&[&classified], None, get_task(&rig.state, "key-a", &task))
+        .await;
 }
 
 /// The gateway's recovery advice for a tool error it reads as a parameter
@@ -539,6 +587,7 @@ async fn a_detection_off_answer_replayed_on_never_receipts_gateway_text() {
         .keyed_for_test()
         .keeping_every_kgram(),
     );
+    relay.advance_collusion_clock_for_test(std::time::Duration::ZERO);
     let admission = Arc::clone(off.meta_mcp.execution_admission());
     let handle = Arc::clone(&relay);
     let (on, _on_store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
@@ -558,8 +607,22 @@ async fn a_detection_off_answer_replayed_on_never_receipts_gateway_text() {
     let probe = |state: &Arc<AppState>, who: &'static str, id: i64, relayed: String| {
         let state = Arc::clone(state);
         async move {
-            let reply = post(&state, who, sync_invoke(id, json!({"text": relayed}))).await;
-            reply["error"]["code"] == -32002
+            let reply = post(
+                &state,
+                who,
+                sync_invoke(id, json!({"text": relayed.clone()})),
+            )
+            .await;
+            if reply["error"]["code"] == -32002 {
+                return true;
+            }
+            assert!(
+                reply.get("error").is_none()
+                    && reply.to_string().contains("ok")
+                    && !reply.to_string().contains(&relayed),
+                "a relay probe that is not refused must succeed with the probe's answer: {reply}"
+            );
+            false
         }
     };
     assert!(
