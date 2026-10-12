@@ -17,7 +17,7 @@ const SUBJECT: &str = "alice";
 /// Seed `SUBJECT`'s per-user slot on each backend with the scripted
 /// transport, so a propagated call dispatches to it (as
 /// `slot_quota_direct_tests.rs` does).
-fn seed_caller_slots(fx: &Fx) {
+pub(super) fn seed_caller_slots(fx: &Fx) {
     for backend in ["alpha", "alpha-pt"] {
         let registered = fx.state.backends.get(backend).expect("fixture backend");
         let shared = registered

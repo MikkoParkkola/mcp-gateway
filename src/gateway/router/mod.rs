@@ -110,6 +110,8 @@ mod direct_list_scope_tests;
 #[cfg(test)]
 mod direct_modern_shape_tests;
 #[cfg(test)]
+mod direct_nonce_witness_tests;
+#[cfg(test)]
 mod direct_notification_credential_tests;
 #[cfg(test)]
 mod direct_notification_refusal_tests;
