@@ -68,6 +68,31 @@ pub(super) fn run(text: &str, at: usize) -> &str {
     &text[at..at + 2_000]
 }
 
+/// A 2,000-char run of `text` in `from..to`, picked under this run's key so
+/// at least 4 of its sampled fingerprints survive thinning at m = 128: above
+/// any record's rate here, so the run is evidence whatever the thinning.
+pub(super) fn pick_run<'t>(
+    detector: &crate::security::firewall::collusion::CollusionDetector,
+    text: &'t str,
+    from: usize,
+    to: usize,
+) -> &'t str {
+    (from..to)
+        .step_by(997)
+        .map(|at| &text[at..at + 2_000])
+        .find(|run| {
+            detector
+                .fingerprints(run)
+                .iter()
+                .filter(|&&fp| {
+                    crate::security::firewall::collusion::CollusionDetector::thinning_keeps(fp, 128)
+                })
+                .count()
+                >= 4
+        })
+        .expect("premise: a run whose fingerprints survive m = 128")
+}
+
 /// Alice's plan step `step`, staged with `staged` already held by her plan,
 /// kept to `answer` and recorded, as a plan's delivery does. `false` when
 /// the answer was over the bound and the receipt was dropped.
@@ -162,8 +187,10 @@ fn a_step_over_the_plan_bound_is_excused_and_evidence_for_what_it_delivered() {
 #[test]
 fn a_step_inside_an_answer_over_the_bound_is_excused_and_evidence() {
     let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
     let text = filler(51, 900 * 1024);
-    let relayed = run(&text, 300_000);
+    // A fixed slice this deep can lose every fingerprint to keyed thinning.
+    let relayed = pick_run(detector, &text, 300_000, 600_000);
     let step = json!({"content": [{"type": "text", "text": text}]});
     let answer = json!({"whole": text, "pad": filler(52, 700 * 1024)});
     assert!(

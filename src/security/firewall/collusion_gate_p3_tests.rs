@@ -8,8 +8,7 @@
 use serde_json::{Value, json};
 
 use super::RelayCaller;
-use super::big::{SOURCE, deliver, filler, firewall, refusal, relays, step_of};
-use crate::security::firewall::collusion::CollusionDetector;
+use super::big::{SOURCE, deliver, filler, firewall, pick_run, refusal, relays, step_of};
 use crate::security::firewall::collusion::big::VIEW_BYTES;
 use crate::security::firewall::{Firewall, PlanStaging};
 
@@ -43,24 +42,6 @@ fn to_the_bound(seed: u64) -> Vec<Value> {
     (0..11)
         .map(|i| step_of(seed * 100 + i, 100 * 1024).1)
         .collect()
-}
-
-/// A 2,000-char run of `text` in `from..to`, picked under this run's key so
-/// at least 4 of its sampled fingerprints survive thinning at m = 128: above
-/// any record's rate here, so the run is evidence whatever the thinning.
-fn pick_run<'t>(detector: &CollusionDetector, text: &'t str, from: usize, to: usize) -> &'t str {
-    (from..to)
-        .step_by(997)
-        .map(|at| &text[at..at + 2_000])
-        .find(|run| {
-            detector
-                .fingerprints(run)
-                .iter()
-                .filter(|&&fp| CollusionDetector::thinning_keeps(fp, 128))
-                .count()
-                >= 4
-        })
-        .expect("premise: a run whose fingerprints survive m = 128")
 }
 
 /// `MIK-8066` T6b (P3 + P1): a P1 step (staged past the plan bound, a
