@@ -8,8 +8,9 @@ use serde_json::json;
 
 #[test]
 fn a_retry_that_finds_a_completed_task_delivers_its_result_private() {
-    let mut task = Task::create("probe");
-    task.complete(json!({"content": [], "cacheScope": "public"}));
+    let mut task = Task::create("probe").expect("the test clock reads after 1970");
+    task.complete(&json!({"content": [], "cacheScope": "public"}))
+        .expect("a live task takes its outcome");
     let stored = CommittedTask {
         task,
         revision: 3,

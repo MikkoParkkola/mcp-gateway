@@ -99,7 +99,12 @@ async fn a_resume_without_its_host_settles_the_task_interrupted() {
     let fx = fixture("exit-host").await;
     std::assert_eq!(status(&fx), TaskStatus::Working, "control: it is working");
 
-    let flow = settle_interrupted(&fx.executor, (OWNER, &fx.id, fx.revision)).await;
+    let flow = settle_interrupted(
+        &fx.executor,
+        (OWNER, &fx.id, fx.revision),
+        &mut tokio::sync::watch::channel(false).1,
+    )
+    .await;
 
     assert!(flow.is_none(), "nothing is left to run after the settle");
     std::assert_ne!(status(&fx), TaskStatus::Working, "the task was settled");

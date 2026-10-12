@@ -215,9 +215,14 @@ pub(super) async fn evaluate_lab_cards_with_mode(
             } else {
                 runtime
             };
-            lab.evaluate_card_with_runtime_at(card, baseline, chrono::Utc::now(), runtime)
+            lab.evaluate_card_with_runtime_at(
+                card,
+                baseline,
+                crate::commands::clock_now()?,
+                runtime,
+            )
         } else {
-            lab.evaluate_card_with_baseline_at(card, baseline, chrono::Utc::now())
+            lab.evaluate_card_with_baseline_at(card, baseline, crate::commands::clock_now()?)
         };
         evaluations.push(evaluation);
     }

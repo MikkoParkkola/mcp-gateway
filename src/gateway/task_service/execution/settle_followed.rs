@@ -62,10 +62,11 @@ pub(super) async fn settle_followed(
         crate::gateway::gateway_writes::WriteRecord,
     ),
     notes: &crate::gateway::meta_mcp::invoke::audit::DispatchNotes,
+    cancel_rx: &mut tokio::sync::watch::Receiver<bool>,
 ) {
     let (job, id) = (followed.job, followed.id);
-    // Recorded before the commit, still under the lease, as a live call is
-    // recorded before its result is stored.
+    // Recorded before the commit, as a live call is recorded before its
+    // result is stored.
     let task = crate::gateway::meta_mcp::invoke::audit::SettledTask {
         server: &job.server,
         tool: &job.tool,
@@ -81,12 +82,11 @@ pub(super) async fn settle_followed(
     }
     let stored = executor
         .settle_cas_by(
-            followed.principal,
-            id,
-            followed.revision,
+            (followed.principal, id, followed.revision),
             (event, None),
             author,
             writes,
+            cancel_rx,
         )
         .await;
     state.meta_mcp().commit_staged_relay(stored);
