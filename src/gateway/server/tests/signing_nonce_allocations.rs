@@ -41,23 +41,27 @@ use super::signing_nonce_allocations_support::{
     Fixture, ONE_MIB, SESSION, THREE_MIB, error_of, invoke, isolate, nested_arguments, runtime,
 };
 
-/// The refusal budget this checkpoint asserts, per refused dispatch: the bytes
-/// of its allocations under `alloc_meter::LARGE_BYTES` (MIK-8400.METER.1).
-/// Every larger allocation on a refusal's path stores a dispatch future (the
-/// serve loop's box of the whole dispatch, the `tools/call` dispatch's box),
-/// whose size has its own guard, `clippy::large_futures` (16 KiB); their
-/// number is bounded by [`LARGE_ALLOCATIONS`], which also catches a payload
-/// copy, as that is one more large allocation.
-const REFUSAL_BUDGET: u64 = 16 * 1024;
-
-/// How many large allocations (`alloc_meter::LARGE_BYTES` or more) a refused
-/// dispatch may make as the serve loop runs it (MIK-8400.METER.2): two. One
-/// is the loop's box of the whole dispatch (`stdio_loop.rs`); the other is
-/// the `tools/call` dispatch's own box (`Box::pin(Self::dispatch_tools_call(..))`
-/// in `stdio_dispatch.rs`, inside `slot_rpc`), where a missing or replayed
-/// nonce is refused after the policy. #3841 boxed the whole stdio dispatch a
-/// third time inside the visibility memo; it is pinned in place since.
+/// What a refused dispatch may allocate, run as the serve loop runs it
+/// (MIK-8400). Two populations, each with its own cap, split at
+/// `alloc_meter::LARGE_BYTES` (2 KiB):
+///
+/// - Small allocations are what the refusal itself does (records, strings,
+///   tables): at most [`SMALL_BUDGET`] bytes. A payload-sized copy or new
+///   per-refusal churn breaks it.
+/// - Large allocations store dispatch futures: the serve loop's box of the
+///   whole dispatch (`stdio_loop.rs`) and the `tools/call` dispatch's own box
+///   (`Box::pin(Self::dispatch_tools_call(..))` in `stdio_dispatch.rs`, inside
+///   `slot_rpc`), where a missing or replayed nonce is refused after the
+///   policy. At most [`LARGE_ALLOCATIONS`] of them and [`LARGE_BUDGET`] bytes
+///   in all: an extra boxed dispatch or a growing dispatch state breaks it.
+///   No lint bounds them: `clippy::large_futures` does not see a future behind
+///   `Box::pin`, and `dispatch_single_staged` allows it.
+///
+/// #3841 boxed the whole stdio dispatch a third time, inside the visibility
+/// memo; it is pinned in place since.
+const SMALL_BUDGET: u64 = 8 * 1024;
 const LARGE_ALLOCATIONS: u64 = 2;
+const LARGE_BUDGET: u64 = 12 * 1024;
 
 /// The three refusal errors are settled production controls, pinned exactly.
 /// `wire_error_message` preserves each text.
@@ -83,35 +87,55 @@ fn test_path(name: &str) -> String {
     format!("{module}::{name}")
 }
 
+/// The stdio client every call in this file is, the session `SESSION`.
+fn client() -> super::super::StdioClient<'static> {
+    super::super::StdioClient {
+        session_id: SESSION,
+        channel: &crate::gateway::input_bridge::NoClientChannel,
+        handshake_capabilities: crate::protocol::meta::Declared::NONE,
+        tasks: None,
+        serving: crate::gateway::server::stdio_single::ModernServing::Enabled,
+        discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
+        sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
+    }
+}
+
 /// The production stdio dispatcher, called as `run_stdio` calls it (owned
-/// `Value` moved in, no sink, the stdio session id) but awaited unboxed: the
-/// serve loop wraps it in `Box::pin` (`stdio_loop.rs`), which
-/// [`dispatch_as_served`] adds for the measured readings.
+/// `Value` moved in, no sink, the stdio session id), unmetered calls only;
+/// the measured ones go through [`dispatch_as_served`].
 async fn dispatch(fixture: &Fixture, request: Value) -> Value {
     super::super::Gateway::dispatch_single_with_sink(
         &fixture.meta,
         &fixture.tool_policy,
         &fixture.mtls_policy,
         request,
-        super::super::StdioClient {
-            session_id: SESSION,
-            channel: &crate::gateway::input_bridge::NoClientChannel,
-            handshake_capabilities: crate::protocol::meta::Declared::NONE,
-            tasks: None,
-            serving: crate::gateway::server::stdio_single::ModernServing::Enabled,
-            discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
-            sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
-        },
+        client(),
         &super::super::StdioTelemetry::default(),
     )
     .await
     .expect("a request carrying an id must produce a response")
 }
 
-/// [`dispatch`] as the serve loop runs it (`stdio_loop.rs`): the whole
-/// dispatch boxed, then awaited.
+/// The dispatch as the serve loop runs it (`stdio_loop.rs`):
+/// `dispatch_single_staged` boxed whole, then its answer settled as
+/// `dispatch_single_with_sink` settles it (no frame judge in this fixture).
 async fn dispatch_as_served(fixture: &Fixture, request: Value) -> Value {
-    Box::pin(dispatch(fixture, request)).await
+    let (answer, staged) = Box::pin(super::super::Gateway::dispatch_single_staged(
+        &fixture.meta,
+        &fixture.tool_policy,
+        &fixture.mtls_policy,
+        request,
+        client(),
+        &super::super::StdioTelemetry::default(),
+    ))
+    .await;
+    let answer = answer.expect("a request carrying an id must produce a response");
+    let frame = answer.delivered_unjudged(&fixture.meta, SESSION).await;
+    staged.commit(frame.delivers_result());
+    frame
+        .stdio_value()
+        .map(std::borrow::Cow::into_owned)
+        .expect("a refusal is delivered as a frame")
 }
 
 fn assert_refusal(phase: &str, response: &Value, expected: (i64, &str)) {
@@ -126,15 +150,16 @@ fn assert_refusal(phase: &str, response: &Value, expected: (i64, &str)) {
 fn assert_within_budget(phase: &str, payload_bytes: usize, measured: Measured) {
     let small_bytes = measured.bytes - measured.large_bytes;
     assert!(
-        small_bytes < REFUSAL_BUDGET,
-        "{phase} refusal of a {payload_bytes}-byte payload allocated {measured} \
-         ({small_bytes} in allocations under {LARGE_BYTES} bytes), above the \
-         {REFUSAL_BUDGET}-byte budget"
+        small_bytes <= SMALL_BUDGET,
+        "{phase} refusal of a {payload_bytes}-byte payload allocated {measured}: \
+         {small_bytes} bytes under {LARGE_BYTES} each, above the {SMALL_BUDGET}-byte cap"
     );
     assert!(
-        measured.large <= LARGE_ALLOCATIONS,
+        measured.large <= LARGE_ALLOCATIONS && measured.large_bytes <= LARGE_BUDGET,
         "{phase} refusal of a {payload_bytes}-byte payload allocated {measured}: \
-         more than {LARGE_ALLOCATIONS} large allocation (a second boxed dispatch?)"
+         {} bytes in large allocations, above {LARGE_ALLOCATIONS} or {LARGE_BUDGET} bytes \
+         (another boxed dispatch, or a dispatch state that grew?)",
+        measured.large_bytes
     );
 }
 
