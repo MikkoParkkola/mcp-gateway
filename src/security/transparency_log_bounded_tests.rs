@@ -22,7 +22,10 @@ async fn write_cleared(l: &Arc<TransparencyLogger>) -> bool {
         .expect("the wait does not panic")
 }
 
-fn logger(dir: &tempfile::TempDir, policy: AuditFailurePolicy) -> Arc<TransparencyLogger> {
+pub(super) fn logger(
+    dir: &tempfile::TempDir,
+    policy: AuditFailurePolicy,
+) -> Arc<TransparencyLogger> {
     let l = TransparencyLogger::open(cfg(&log_path(dir), 12, false))
         .unwrap()
         .with_failure_policy(policy);

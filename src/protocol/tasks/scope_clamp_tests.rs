@@ -37,8 +37,9 @@ fn a_record_written_before_the_change_is_served_private() {
 
 #[test]
 fn a_completed_task_is_stored_and_served_private() {
-    let mut task = Task::create("probe");
-    task.complete(json!({"content": [], "cacheScope": "public"}));
+    let mut task = Task::create("probe").expect("the test clock reads after 1970");
+    task.complete(&json!({"content": [], "cacheScope": "public"}))
+        .expect("a live task takes its outcome");
     let wire = serde_json::to_value(task.wire()).expect("wire serializes");
     assert_eq!(wire["result"]["cacheScope"], "private", "{wire}");
     let stored = serde_json::to_value(task.snapshot()).expect("snapshot serializes");

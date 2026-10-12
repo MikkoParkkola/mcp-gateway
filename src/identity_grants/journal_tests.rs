@@ -609,3 +609,32 @@ async fn a_journal_beside_the_link_is_adopted() {
         .collect();
     assert_eq!(ids, vec!["g1"]);
 }
+
+/// MIK-8202.AC.16 (R7, mutant M7): a grant change on a clock that reads
+/// before 1970 is `Refused` before anything is written: the clock is read
+/// before the grant write (journal.rs), so the grant file's bytes and the
+/// journal are unchanged, never a written grant followed by `Unjournalled`.
+/// Mutant M7: the grant file is written before the clock read.
+#[tokio::test(flavor = "current_thread")]
+async fn a_change_on_a_clock_before_1970_is_refused_with_nothing_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("grants.yaml");
+    change(&path, upsert(row("g1", "r"), false)).await.unwrap();
+    let grants_before = std::fs::read(&path).unwrap();
+    let journal_before = journal_bytes(&path);
+
+    let dark = crate::clock::test_clock::before_epoch();
+    let r = change(&path, upsert(row("g2", "r"), false)).await;
+    drop(dark);
+
+    match &r {
+        Err(ChangeError::Refused(reason)) => assert!(reason.contains("1970"), "{reason}"),
+        other => panic!("a dark clock must refuse the change: {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        grants_before,
+        "the grant file is untouched"
+    );
+    assert_eq!(journal_bytes(&path), journal_before, "no line appended");
+}

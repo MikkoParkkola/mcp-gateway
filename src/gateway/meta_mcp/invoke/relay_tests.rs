@@ -466,7 +466,8 @@ async fn an_unchanged_result_keeps_its_receipts() {
 fn stored_task(
     end: impl FnOnce(&mut crate::gateway::task_service::Task),
 ) -> crate::gateway::task_service::CommittedTask {
-    let mut task = crate::gateway::task_service::Task::create("gateway_invoke");
+    let mut task = crate::gateway::task_service::Task::create("gateway_invoke")
+        .expect("the test clock reads after 1970");
     end(&mut task);
     crate::gateway::task_service::CommittedTask {
         task,
@@ -492,11 +493,12 @@ async fn a_failed_task_error_is_receipted_by_its_classification() {
     // control is a non-relay.
     let (meta, firewall) = classified_only_meta();
     let mut stored = stored_task(|task| {
-        task.fail(crate::protocol::JsonRpcError {
+        task.fail(&crate::protocol::JsonRpcError {
             code: -32042,
             message: PROSE.to_owned(),
             data: None,
-        });
+        })
+        .expect("a live task takes its outcome");
     });
     stored.error_author = Some(crate::gateway::task_service::ErrorAuthor::Peer);
     let ((), staged) = meta
@@ -518,7 +520,10 @@ async fn a_failed_task_error_is_receipted_by_its_classification() {
 async fn reading_a_multi_target_task_stages_no_receipt() {
     for targets in [1usize, 2] {
         let (meta, firewall) = relay_meta();
-        let mut stored = stored_task(|task| task.complete(text_result(PROSE)));
+        let mut stored = stored_task(|task| {
+            task.complete(&text_result(PROSE))
+                .expect("a live task takes its outcome");
+        });
         if targets == 2 {
             stored.targets.push(crate::gateway::task_service::Target {
                 server: "alpha".to_owned(),
@@ -550,11 +555,12 @@ async fn reading_a_failed_task_receipts_only_the_peer_error() {
     ] {
         let (meta, firewall) = relay_meta();
         let mut stored = stored_task(|task| {
-            task.fail(JsonRpcError {
+            task.fail(&JsonRpcError {
                 code: -32042,
                 message: PROSE.to_owned(),
                 data: None,
-            });
+            })
+            .expect("a live task takes its outcome");
         });
         stored.output_free = output_free;
         stored.error_author = author;

@@ -142,7 +142,7 @@ impl TransparencyLogger {
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         let mut fields = serde_json::Map::new();
         fields.insert("type".into(), AUDIT_PROBE_TYPE.into());
-        fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
+        crate::clock::stamp_audit_row(&mut fields);
         self.append_core(fields, &AuditEnvelope::gateway(), false)
             .map(|_| ())
     }
@@ -163,7 +163,7 @@ impl TransparencyLogger {
     ) -> crate::Result<()> {
         fields.insert("event".into(), "admin_action".into());
         fields.insert("surface".into(), surface.into());
-        fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
+        crate::clock::stamp_audit_row(&mut fields);
         match self.append_event(fields, envelope) {
             Ok(_) => Ok(()),
             Err(error) if self.failure_policy == AuditFailurePolicy::FailClosed => {

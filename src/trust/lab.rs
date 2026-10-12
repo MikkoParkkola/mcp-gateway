@@ -66,9 +66,19 @@ impl CatalogTrustLab {
     }
 
     /// Evaluate a `TrustCard` with the current clock and no baseline.
-    #[must_use]
-    pub fn evaluate_card(&self, card: &TrustCard) -> TrustLabEvaluation {
-        self.evaluate_card_with_baseline_at(card, None, Utc::now())
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::Internal`] when the host clock reads before 1970: the
+    /// evaluation needs a time, and none is invented (MIK-8202 P4a). A caller
+    /// that holds a time uses [`Self::evaluate_card_with_baseline_at`].
+    pub fn evaluate_card(&self, card: &TrustCard) -> crate::Result<TrustLabEvaluation> {
+        let now = crate::clock::utc_now().map_err(|_| {
+            crate::Error::Internal(
+                "TrustLab evaluation needs a time: the host clock reads before 1970".to_string(),
+            )
+        })?;
+        Ok(self.evaluate_card_with_baseline_at(card, None, now))
     }
 
     /// Evaluate a `TrustCard` at a specific time and optional baseline.
@@ -441,3 +451,6 @@ impl Default for CatalogTrustLab {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod lab_clock_compile_red_tests;

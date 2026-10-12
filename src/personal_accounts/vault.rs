@@ -244,12 +244,27 @@ impl VaultStrategy {
     /// [`PropagationError::Misconfigured`] when the backend audience and the
     /// descriptor resource have drifted; [`PropagationError::Refuse`] for an
     /// unusable account key, an unusable account (revoked, reconnect-required,
-    /// superseded) or a refused release. Nothing here falls back.
+    /// superseded), a refused release or a clock that reads before 1970.
+    /// Nothing here falls back.
     pub(crate) async fn prepare(
         &self,
         principal: Principal<'_>,
         backend: &BackendDescriptor,
     ) -> Result<(PropagatedCredential, CredentialLease), PropagationError> {
+        // Read the clock first, before custody resolves, refreshes or releases
+        // anything (MIK-8202 P4a): chrono's own clock read panics before 1970,
+        // and a dispatch on such a clock is refused with nothing moved. The
+        // same reading dates the credential. The `i64` conversion cannot fail
+        // before the year 292 billion; it refuses rather than wraps.
+        let now = crate::clock::unix_secs()
+            .ok()
+            .and_then(|secs| i64::try_from(secs).ok())
+            .ok_or_else(|| {
+                PropagationError::Refuse(
+                    "managed account credential not issued: the gateway clock reads before 1970"
+                        .to_string(),
+                )
+            })?;
         // The installed descriptor and the backend's compiled propagation
         // config are produced together by `config::account_bindings`. A
         // mismatch means an install and a configuration have drifted, and
@@ -306,7 +321,7 @@ impl VaultStrategy {
             // carried past this dispatch would be one nothing rechecked. The
             // durable grant's own expiry stays inside custody, where the
             // refresh decision is made.
-            expires_at: now_secs(),
+            expires_at: now,
             subject_key: binding.clone(),
             audience: backend.audience.clone(),
             // Scope authority lives on the lease, which is built from the
@@ -525,10 +540,6 @@ fn authorization_value(credentials: &ReleasedCredentials) -> String {
     let scheme = credentials.token_type.trim();
     let scheme = if scheme.is_empty() { "Bearer" } else { scheme };
     format!("{scheme} {}", credentials.access_token)
-}
-
-fn now_secs() -> i64 {
-    chrono::Utc::now().timestamp()
 }
 
 #[cfg(test)]

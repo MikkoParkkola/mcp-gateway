@@ -72,7 +72,12 @@ pub(super) async fn run_watch_loop(
             && t.elapsed() >= debounce
         {
             last_event = None;
-            let now = chrono::Local::now().format("%H:%M:%S");
+            // UTC through crate::clock: chrono panics reading local time on a
+            // clock before 1970 (MIK-8202 P4a).
+            let now = crate::clock::utc_now().map_or_else(
+                |_| "--:--:--".to_string(),
+                |now| now.format("%H:%M:%S UTC").to_string(),
+            );
             println!(
                 "[{now}] {} changed — regenerating...",
                 config_path.display()
