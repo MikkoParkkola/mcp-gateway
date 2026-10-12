@@ -388,7 +388,7 @@ impl Gateway {
         // `run` and `run_stdio` reach it, so the cache is `Some` on every boot.
         // All three of the criterion's routes reach a guard from here: generic
         // `tools/call` through `meta_mcp/invoke.rs`, stdio through the real
-        // `RetryFields` `dispatch_single_with_sink` builds (`:1886`), and the
+        // `RetryFields` `dispatch_single_for_client` builds (`:1886`), and the
         // direct `POST /mcp/{name}` bypass through its own local re-enforcement
         // (`meta_mcp/direct_route.rs`, called at `backend_handlers.rs:781`).
         // Reaching a guard is not the whole criterion: the direct route still

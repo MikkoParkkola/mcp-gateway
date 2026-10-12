@@ -20,7 +20,7 @@ use crate::config::IdempotencyKeyMode::{Optional, Required};
 const COUNTER: &str = "mcp_unkeyed_calls_total";
 
 async fn dispatch(fixture: &Fixture, request: Value) -> Value {
-    super::super::Gateway::dispatch_single_with_sink(
+    super::super::Gateway::dispatch_single_for_client(
         &fixture.meta,
         &fixture.tool_policy,
         &fixture.mtls_policy,
@@ -34,7 +34,6 @@ async fn dispatch(fixture: &Fixture, request: Value) -> Value {
             discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
             sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
-        &super::super::StdioTelemetry::default(),
     )
     .await
     .expect("a request carrying an id must produce a response")

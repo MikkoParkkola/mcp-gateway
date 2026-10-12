@@ -252,7 +252,7 @@ async fn staged_request(
     Option<Value>,
     crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
 ) {
-    use crate::gateway::server::{Gateway, StdioClient, StdioTelemetry};
+    use crate::gateway::server::{Gateway, StdioClient};
     let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
@@ -274,7 +274,6 @@ async fn staged_request(
             &mtls,
             request.clone(),
             client,
-            &StdioTelemetry::default(),
         )),
     )
     .await;
@@ -341,7 +340,7 @@ async fn batch_read_delivers(
     cell: &parking_lot::Mutex<String>,
     text: &str,
 ) -> bool {
-    use crate::gateway::server::{Gateway, StdioTelemetry};
+    use crate::gateway::server::Gateway;
     *cell.lock() = text.to_string();
     let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
@@ -363,7 +362,6 @@ async fn batch_read_delivers(
             crate::gateway::server::stdio_single::InputSanitizing::Off,
             crate::gateway::server::stdio_single::ModernServing::Disabled,
         ),
-        &StdioTelemetry::default(),
         reads,
     )
     .await;
@@ -397,7 +395,7 @@ async fn stdio_judged_out_batch_item_records_no_receipt() {
 /// excuses it; deferring the receipt past the later item would refuse it.
 #[tokio::test]
 async fn a_batch_item_sees_the_receipt_of_an_earlier_item() {
-    use crate::gateway::server::{Gateway, StdioTelemetry};
+    use crate::gateway::server::Gateway;
     let (meta, firewall, cell) = judged_stdio(None);
     let reads = meta.stdio_reads();
     *cell.lock() = PROSE.to_string();
@@ -430,7 +428,6 @@ async fn a_batch_item_sees_the_receipt_of_an_earlier_item() {
             crate::gateway::server::stdio_single::InputSanitizing::Off,
             crate::gateway::server::stdio_single::ModernServing::Disabled,
         ),
-        &StdioTelemetry::default(),
         &reads,
     )
     .await;
@@ -626,7 +623,7 @@ async fn stdio_catalogue_is_inside_relay_detection() {
 #[tokio::test]
 async fn stdio_gateway_built_refusal_is_sent_as_written() {
     use crate::gateway::server::stdio_delivery::StdioAnswer;
-    use crate::gateway::server::{Gateway, StdioClient, StdioTelemetry};
+    use crate::gateway::server::{Gateway, StdioClient};
     let (meta, _firewall, _cell) = judged_stdio(None);
     let reads = meta.stdio_reads();
     let policy = Arc::new(crate::security::ToolPolicy::default());
@@ -650,7 +647,6 @@ async fn stdio_gateway_built_refusal_is_sent_as_written() {
             &mtls,
             json!({"jsonrpc": "2.0", "id": 7}),
             client,
-            &StdioTelemetry::default(),
         )),
     )
     .await;

@@ -18,7 +18,7 @@ async fn dispatch(request: Value) -> Option<Value> {
     let mtls_policy = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
-    super::super::Gateway::dispatch_single_with_sink(
+    super::super::Gateway::dispatch_single_for_client(
         &meta,
         &tool_policy,
         &mtls_policy,
@@ -32,7 +32,6 @@ async fn dispatch(request: Value) -> Option<Value> {
             discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
             sanitize: InputSanitizing::On,
         },
-        &super::super::StdioTelemetry::default(),
     )
     .await
 }

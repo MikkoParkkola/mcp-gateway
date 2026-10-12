@@ -18,7 +18,7 @@ const REMOVED: [&str; 4] = [
 /// One stdio request through the real dispatch, as a client with
 /// `server.modern_protocol` = `modern`.
 pub(super) async fn send(modern: bool, request: Value) -> Option<Value> {
-    Gateway::dispatch_single_with_sink(
+    Gateway::dispatch_single_for_client(
         &test_meta_mcp(),
         &test_tool_policy(),
         &test_mtls_policy(),
@@ -32,7 +32,6 @@ pub(super) async fn send(modern: bool, request: Value) -> Option<Value> {
             discover: super::super::stdio_single::DiscoverListing::Configured,
             sanitize: super::super::stdio_single::InputSanitizing::Off,
         },
-        &super::super::StdioTelemetry::default(),
     )
     .await
 }
