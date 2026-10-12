@@ -98,3 +98,88 @@ async fn c6_a_cold_read_under_failing_custody_answers_retryable() {
         "C6: served after recovery: {read}"
     );
 }
+
+/// Record the operator's NoView index entry the way production does: a
+/// listing after the grant is gone.
+async fn list_tools(fx: &Fx) {
+    let _ = send(
+        fx,
+        "tools/list",
+        "tools/list",
+        json!({"_meta": modern_meta()}),
+    )
+    .await;
+}
+
+fn assert_absent(read: &Value, row: &str) {
+    assert_eq!(
+        read.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "{row}: {read}"
+    );
+    assert!(!read.to_string().contains(MARKER), "{row}: output: {read}");
+}
+
+/// L4: a NoView entry while the account is NoView: -32601, and no cold
+/// attempt (one custody read, the pre-pass's own; M20 claims anyway).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn l4_a_no_view_entry_with_a_revoked_account_stays_absent() {
+    let fx = fixture().await;
+    let id = finished(&fx, "s1-l4").await;
+    fx.gateway.revoke_operator_grant().await;
+    list_tools(&fx).await;
+    let reads = fx.gateway.resolves();
+    assert_absent(&task_get(&fx, &id).await, "L4");
+    assert_eq!(
+        fx.gateway.resolves() - reads,
+        1,
+        "L4: the pre-pass read only"
+    );
+}
+
+/// L4b: no index entry and a NoView account: -32601 and no claim (M42).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn l4b_no_entry_with_a_revoked_account_claims_nothing() {
+    let fx = fixture().await;
+    let id = finished(&fx, "s1-l4b").await;
+    fx.gateway.revoke_operator_grant().await;
+    fx.gateway
+        .backends()
+        .get(BACKEND)
+        .expect("the backend")
+        .forget_caller_slots_for_test();
+    let reads = fx.gateway.resolves();
+    assert_absent(&task_get(&fx, &id).await, "L4b");
+    assert_eq!(
+        fx.gateway.resolves() - reads,
+        1,
+        "L4b: the pre-pass read only"
+    );
+}
+
+/// L5: a NoView entry, then the grant is reconnected (account Live): the
+/// read claims, resolves once and serves (M43: NoView never claimable).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn l5_a_reconnected_grant_reclaims_a_no_view_entry() {
+    let fx = fixture().await;
+    let id = finished(&fx, "s1-l5").await;
+    fx.gateway.revoke_operator_grant().await;
+    list_tools(&fx).await;
+    fx.gateway.reconnect_operator_grant_for_test().await;
+    // The reconnected grant selects a new slot: the binding the vault now
+    // gives, read without a mint.
+    let binding = fx
+        .state
+        .meta_mcp
+        .account_strategies()
+        .managed_vault(Some("work-gmail"))
+        .expect("the managed vault")
+        .view_binding(crate::personal_accounts::identity::Principal::SoleOperator)
+        .await
+        .expect("premise: the reconnected grant has a view");
+    fx.gateway.rearm_operator_slot_at_for_test(&binding);
+    let releases = fx.gateway.releases();
+    let read = task_get(&fx, &id).await;
+    assert!(read.to_string().contains(MARKER), "L5: served: {read}");
+    assert_eq!(fx.gateway.releases() - releases, 1, "L5: one resolution");
+}

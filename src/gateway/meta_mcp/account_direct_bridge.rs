@@ -176,16 +176,41 @@ impl DirectAccountGateway {
         self.custody.resolves()
     }
 
+    /// Reconnect the operator's grant after [`Self::revoke_operator_grant`],
+    /// as a completed connect journey publishes it (MIK-8392 L5).
+    pub(crate) async fn reconnect_operator_grant_for_test(&self) {
+        let current = grant(ALICE_WORK_TOKEN, u64::MAX);
+        let expectation = ConsentExpectation::Revoked(GrantVersion {
+            generation: current.generation.clone(),
+            token_revision: current.token_revision,
+            authorization_epoch: current.authorization_epoch,
+            descriptor_revision: current.descriptor_revision.clone(),
+        });
+        let mut next = grant(ALICE_WORK_TOKEN, u64::MAX);
+        next.generation = RECONNECT_GENERATION.to_string();
+        self.custody
+            .handle
+            .commit_grant_if(&operator_key(), &expectation, &next)
+            .await
+            .expect("the reconnected grant must be published through live custody");
+    }
+
     /// Re-attach the operator's per-user upstream after a real eviction
     /// dropped its slot, as a gateway reconnects it (MIK-8392 C6; reconnect
     /// from config itself is MIK-8417).
     pub(crate) fn rearm_operator_slot_for_test(&self) {
+        self.rearm_operator_slot_at_for_test(&Self::operator_binding());
+    }
+
+    /// [`Self::rearm_operator_slot_for_test`] for the slot `binding` selects
+    /// (a reconnected grant selects a new one).
+    pub(crate) fn rearm_operator_slot_at_for_test(&self, binding: &str) {
         self.backends
             .get(BACKEND)
             .expect("the backend")
             .set_pooled_transport_for_test(
                 &PoolKey::PerUser {
-                    binding: Self::operator_binding(),
+                    binding: binding.to_string(),
                 },
                 Arc::new(CapturingTransport {
                     dispatches: Arc::clone(&self.dispatches),
