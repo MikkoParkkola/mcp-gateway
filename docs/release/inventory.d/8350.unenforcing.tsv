@@ -1,5 +1,5 @@
 src/gateway/router/view_judge.rs	new	1	Borrows the app state for one fan-out; decides nothing (MIK-8350)
-src/gateway/router/view_judge.rs	new	2	Holds the app state and the attach-time adapter identity for one listen stream; decides nothing (MIK-8350)
+src/gateway/router/view_judge.rs	shared	1	Holds the app state and the attach-time adapter identity for one listen stream; decides nothing (MIK-8350)
 src/gateway/router/view_judge.rs	fingerprint	1	Forwards to fingerprint_async for the listen stream; the hint it gates carries no tool data and access is still checked at delivery (MIK-8350)
 src/gateway/router/view_judge.rs	baseline	1	Forwards to baseline_async for the listen stream; decides nothing (MIK-8350)
 src/gateway/router/view_judge.rs	fingerprint_for	1	Digests what one caller is shown of one backend under the scope a POST of that caller would use; a digest for comparison, never an access decision (MIK-8350)
@@ -11,3 +11,4 @@ src/gateway/router/view_judge.rs	refresh_told	1	Records a session's current view
 src/gateway/router/view_judge.rs	judged_listener	1	Installs the per-listener view judge on a new listen stream; decides nothing (MIK-8350)
 src/gateway/router/view_judge.rs	refresh_after_call	1	Refreshes last-told after a successful gateway_set_profile; only ever lowers the notices the session receives (MIK-8350)
 src/gateway/server/tools_changed/stdio.rs	stdio_view	1	Digests what the stdio client is shown of a backend under the operator scope and tool policy, to suppress a notice for a change it cannot see; never grants access (MIK-8350)
+src/gateway/router/view_judge.rs	take_baseline	1	Records what a session's caller is shown as its stream opens; decides nothing (MIK-8350)
