@@ -59,9 +59,47 @@ SKIP_DIRS = {".git", "target", "node_modules"}
 # braces that tell which inline modules enclose a declaration.
 TOKEN = re.compile(
     r"""(?P<path>\#\s*\[\s*path\s*=\s*)(?:r\#*)?(?P<quote>")"""
+    r"""|(?P<cfg>\#(?P<inner>!)?\s*\[\s*cfg\s*\()"""
+    r"""|(?P<attr>\#!?\s*\[)"""
     r"""|\bmod\s+(?:r\#)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?P<end>[;{])"""
-    r"""|(?P<open>\{)|(?P<close>\})"""
+    r"""|(?P<open>\{)|(?P<close>\})|(?P<semi>;)"""
 )
+
+
+def cfg_is_test(expr: str) -> bool:
+    """Whether a `#[cfg(<expr>)]` compiles only under test: `test`, or an
+    `all(..)` with `test` as a DIRECT operand. A nested `any(test, ..)` or a
+    `not(..)` still builds outside tests, and `test_mode` is not `test`
+    (MIK-8405.SPLIT.5; the one cfg judgement, shared with
+    scripts/release/check_inventory_rows.py)."""
+    expr = expr.strip()
+    if expr == "test":
+        return True
+    opener = re.match(r"all\s*\(", expr)
+    if not (opener and expr.endswith(")")):
+        return False
+    operands, depth, start = [], 0, opener.end()
+    for i in range(opener.end(), len(expr) - 1):
+        ch = expr[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            operands.append(expr[start:i])
+            start = i + 1
+    operands.append(expr[start : len(expr) - 1])
+    return "test" in (o.strip() for o in operands)
+
+
+def cfg_expression(code: str, start: int) -> str:
+    """The expression of a `#[cfg(` whose `(` ends just before `start`, up to
+    its balancing `)`. Literal contents are already blanked."""
+    depth, i = 1, start
+    while i < len(code) and depth:
+        depth += {"(": 1, ")": -1}.get(code[i], 0)
+        i += 1
+    return code[start : i - 1]
 RAW_STRING = re.compile(r'b?r(#*)"')
 
 
@@ -121,10 +159,14 @@ def blank(text: str) -> tuple[str, dict[int, str]]:
         elif text[i] == "'":
             # A char literal ('x', '\n', '"') or a lifetime ('a): only the
             # literal forms are skipped, so a lifetime never swallows code.
+            # Their contents are blanked: a '{' or '[' is not a brace.
             if text.startswith("\\", i + 1):
                 j = text.find("'", i + 3)
-                i = n if j < 0 else j + 1
+                j = n if j < 0 else j
+                wipe(i + 1, j)
+                i = j + 1
             elif i + 2 < n and text[i + 2] == "'":
+                wipe(i + 1, i + 2)
                 i += 3
             else:
                 i += 1
@@ -166,6 +208,11 @@ def module_dir(source: Path, owns_dir: bool) -> Path:
 
 
 def declarations(source: Path, owns_dir: bool) -> set[tuple[Path, bool]]:
+    """[`declarations_with_cfg`] without the test flag."""
+    return {(path, via_path) for path, via_path, _ in declarations_with_cfg(source, owns_dir)}
+
+
+def declarations_with_cfg(source: Path, owns_dir: bool) -> set[tuple[Path, bool, bool]]:
     """Resolve every file-backed declaration in `source` to the path it names.
 
     Per the Rust reference: a plain `mod name;` resolves under the module
@@ -174,36 +221,83 @@ def declarations(source: Path, owns_dir: bool) -> set[tuple[Path, bool]]:
     directory plus enclosing inline modules inside one. A `#[path]`
     declaration names only its path, never also the default file. Each result
     carries whether it was reached through `#[path]`, which decides where ITS
-    child modules resolve.
+    child modules resolve, and whether the declaration compiles only under
+    test: a test `#[cfg]` on it or on an enclosing inline module
+    (MIK-8405.SPLIT.5). A `#[cfg]` is dropped at the end of the item it
+    belongs to (`;`, `{` or `}`), so one on a `use` or `fn` never reaches a
+    later `mod`. An inner `#![cfg(test)]` makes the file (or the inline
+    module it opens) test-only, so everything it declares is too. The body
+    of any other attribute is skipped whole, so a brace inside one (say
+    `#[doc = concat!{..}]`) never drops a pending `#[cfg]`.
     """
+    return _scan(source, owns_dir)[0]
+
+
+def file_is_test(source: Path) -> bool:
+    """Whether `source` opens with an inner `#![cfg(test)]`: the whole file
+    then compiles only under test."""
+    return _scan(source, True)[1]
+
+
+def _scan(source: Path, owns_dir: bool) -> tuple[set[tuple[Path, bool, bool]], bool]:
     code, literals = blank(source.read_text(encoding="utf-8", errors="replace"))
     base = module_dir(source, owns_dir)
-    declared: set[tuple[Path, bool]] = set()
-    inline: list[str | None] = []
+    declared: set[tuple[Path, bool, bool]] = set()
+    # Each open brace: the inline module name it opens (None for any other
+    # block) and whether that block compiles only under test.
+    inline: list[tuple[str | None, bool]] = []
     pending_path: str | None = None
-    for m in TOKEN.finditer(code):
+    pending_test = False
+    file_test = False
+    pos = 0
+    while m := TOKEN.search(code, pos):
+        pos = m.end()
+        enclosing_test = file_test or any(test for _, test in inline)
         if m.group("quote"):
             pending_path = literals.get(m.start("quote"))
+        elif m.group("cfg"):
+            test = cfg_is_test(cfg_expression(code, m.end()))
+            if not m.group("inner"):
+                pending_test = pending_test or test
+            elif inline:
+                inline[-1] = (inline[-1][0], inline[-1][1] or test)
+            else:
+                file_test = file_test or test
+        elif m.group("attr"):
+            pos = attribute_end(code, m.end())
         elif m.group("name"):
-            nested = [name for name in inline if name]
+            nested = [name for name, _ in inline if name]
+            test = pending_test or enclosing_test
             if m.group("end") == "{":
-                inline.append(m.group("name"))
+                inline.append((m.group("name"), test))
             elif pending_path is not None:
                 start = base.joinpath(*nested) if nested else source.parent
-                declared.add(((start / pending_path).resolve(), True))
+                declared.add(((start / pending_path).resolve(), True, test))
             else:
                 directory = base.joinpath(*nested)
-                declared.add(((directory / f"{m.group('name')}.rs").resolve(), False))
-                declared.add(((directory / m.group("name") / "mod.rs").resolve(), False))
-            pending_path = None
+                declared.add(((directory / f"{m.group('name')}.rs").resolve(), False, test))
+                declared.add(((directory / m.group("name") / "mod.rs").resolve(), False, test))
+            pending_path, pending_test = None, False
         elif m.group("open"):
-            inline.append(None)
-            pending_path = None
+            inline.append((None, pending_test or enclosing_test))
+            pending_path, pending_test = None, False
         elif m.group("close"):
             if inline:
                 inline.pop()
-            pending_path = None
-    return declared
+            pending_path, pending_test = None, False
+        elif m.group("semi"):
+            pending_path, pending_test = None, False
+    return declared, file_test
+
+
+def attribute_end(code: str, start: int) -> int:
+    """The offset just past the `]` closing an attribute whose `[` ends just
+    before `start`. Literal contents are already blanked."""
+    depth, i = 1, start
+    while i < len(code) and depth:
+        depth += {"[": 1, "]": -1}.get(code[i], 0)
+        i += 1
+    return i
 
 
 def reachable() -> set[Path]:
@@ -222,6 +316,42 @@ def reachable() -> set[Path]:
         seen.add((path, owns_dir))
         stack.extend(declarations(path, owns_dir))
     return {path for path, _ in seen}
+
+
+def library_roots() -> list[Path]:
+    """The crate roots that build outside tests: the library and the
+    binaries. `tests/`, `benches/` and `examples/` targets build only for
+    their own commands, so what they alone reach is test-only."""
+    src = ROOT / "src"
+    roots = [src / "lib.rs", src / "main.rs", *src.joinpath("bin").glob("*.rs")]
+    roots += src.joinpath("bin").glob("*/main.rs")
+    return [root for root in roots if root.is_file()]
+
+
+def compiled_outside_tests() -> set[Path]:
+    """Files reached from a library or binary root through declarations none
+    of which is test-only."""
+    seen: set[tuple[Path, bool]] = set()
+    stack = [(root.resolve(), True) for root in library_roots()]
+    while stack:
+        path, owns_dir = stack.pop()
+        if (path, owns_dir) in seen or not path.is_file():
+            continue
+        declared, file_test = _scan(path, owns_dir)
+        if file_test:
+            continue
+        seen.add((path, owns_dir))
+        stack.extend((child, via_path) for child, via_path, test in declared if not test)
+    return {path for path, _ in seen}
+
+
+def test_only_files(live: set[Path] | None = None) -> set[Path]:
+    """Files compiled only under test: reachable from a crate root, but not
+    through any chain of non-test declarations from the library or a binary
+    (MIK-8405.SPLIT.5). check_inventory_rows.py keeps their functions out of
+    the critical-function inventory. `live` is `reachable()`, when the
+    caller has it already."""
+    return (reachable() if live is None else live) - compiled_outside_tests()
 
 
 def orphans() -> list[Path]:
