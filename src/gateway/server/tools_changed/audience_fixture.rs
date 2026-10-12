@@ -745,19 +745,16 @@ impl World {
     }
 
     async fn sse_open(&self, bearer: &str, assertion: Option<&str>, resume: Option<&str>) -> Ear {
-        self.sse_request(bearer, assertion, ("/mcp", resume)).await
+        self.sse_request(bearer, assertion, ("/mcp", resume), |_| {})
+            .await
     }
 
-    /// A GET stream at `uri`, resuming `resume` when given.
-    pub(super) async fn sse_at(&self, bearer: &str, uri: &str, resume: Option<&str>) -> Ear {
-        self.sse_request(bearer, None, (uri, resume)).await
-    }
-
-    async fn sse_request(
+    pub(super) async fn sse_request(
         &self,
         bearer: &str,
         assertion: Option<&str>,
         (uri, resume): (&str, Option<&str>),
+        extend: impl FnOnce(&mut axum::http::Request<Body>),
     ) -> Ear {
         let mut builder = axum::http::Request::builder()
             .method("GET")
@@ -769,6 +766,7 @@ impl World {
         }
         let mut request = builder.body(Body::empty()).expect("a request");
         asserted(&mut request, assertion);
+        extend(&mut request);
         let response = self.router.clone().oneshot(request).await.expect("served");
         assert!(
             response.status().is_success(),
