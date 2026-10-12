@@ -74,7 +74,7 @@ async fn resolve(fx: &Fx, captured: &Arc<Backend>) -> Result<(), u16> {
         "alpha",
         &anonymous(),
         &route,
-        (&guarded(), route.backend.list_fills()),
+        &guarded(),
         &RequestId::Number(1),
     )
     .await
@@ -244,7 +244,7 @@ async fn an_a2a_question_on_this_route_is_bound_to_the_key_holder() {
             "alpha",
             &key_of(principal),
             &route,
-            (&guarded(), route.backend.list_fills()),
+            &guarded(),
             &RequestId::Number(1),
         )
         .await

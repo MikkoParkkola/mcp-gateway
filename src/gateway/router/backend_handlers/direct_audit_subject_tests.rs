@@ -194,7 +194,7 @@ async fn the_mint_audit_subject_is_the_captured_backends_principal() {
         "alpha",
         &caller,
         &route,
-        (&guarded(), route.backend.list_fills()),
+        &guarded(),
         &RequestId::Number(1),
     )
     .await;

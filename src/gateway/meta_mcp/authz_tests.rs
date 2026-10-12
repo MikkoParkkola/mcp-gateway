@@ -37,7 +37,9 @@ use crate::transport::Transport;
 
 #[path = "authz_fixture.rs"]
 mod fixture;
-pub(in crate::gateway::meta_mcp) use fixture::{counted_backend, ctx, invoke_args};
+pub(in crate::gateway::meta_mcp) use fixture::{
+    counted_backend, counted_listing_backend, ctx, invoke_args,
+};
 
 /// MIK-8361: a denied target answers exactly as a name the backend does not
 /// list: a tool result with `isError` and text A naming `tool`, never the

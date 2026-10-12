@@ -419,14 +419,14 @@ pub(super) async fn propagate_identity(
     name: &str,
     caller: &Caller,
     route: &Route<'_>,
-    (preflight, fills_before): (&Preflight, u64),
+    preflight: &Preflight,
     id: &RequestId,
 ) -> Result<Propagation, Rejection> {
     let mut propagation = Propagation {
         identity_key: None,
         managed: None,
         headers: Vec::new(),
-        fills_before,
+        fills_before: route.backend.list_fills(),
         attempted: false,
     };
     if !preflight.isolation_guarded {
