@@ -189,8 +189,10 @@ async fn a_spend_refusal_after_a_refresh_keeps_the_nonce() {
 }
 
 /// Cold (MIK-8356): the caller's own catalogue is filled before the refusal,
-/// a second effect beside the refresh; the nonce stays spent. Pins the
-/// catalogue fill's carry (`schema_effect`).
+/// a second effect beside the refresh; the nonce stays spent. Pins the two
+/// together: a broken fill carry alone stays green behind the refresh. The
+/// fill's carry (`schema_effect`) is isolated by the non-minting cold-schema
+/// row in `router/mcp_nonce_witness_tests.rs`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_spend_refusal_after_a_refresh_and_a_cold_fill_keeps_the_nonce() {
     let refused = a_spend_refusal_after_a_refresh(Slot::Cold).await;
