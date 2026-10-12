@@ -18,6 +18,9 @@ use super::fill_check::{
 };
 use super::list_drain::drain_list_pages;
 use super::pool::PoolKey;
+
+#[path = "metadata_stored_view.rs"]
+mod stored_view;
 use crate::Error;
 use crate::Result;
 use crate::oauth::login_gate::{Provenance, fill_scope};
@@ -154,25 +157,6 @@ impl Backend {
             )
         });
         (self.without_blocked(tools), truncated)
-    }
-
-    /// The slot's tools, truncated flag and whether it was ever populated,
-    /// all under one read guard (MIK-8392, R2-5): a stored read judges "the
-    /// complete catalogue lacks the tool" from one snapshot, never from
-    /// membership and completeness read apart.
-    #[must_use]
-    pub(crate) fn cached_tools_view(&self, binding: Option<&str>) -> (Arc<Vec<Tool>>, bool, bool) {
-        let slot = self.tools_slot(binding);
-        let (tools, truncated, populated) =
-            slot.tools_cache
-                .with_cached_and_populated(|tools, populated| {
-                    (
-                        tools.map_or_else(|| Arc::new(Vec::new()), Arc::clone),
-                        slot.tools_truncated.load(Ordering::SeqCst),
-                        populated,
-                    )
-                });
-        (self.without_blocked(tools), truncated, populated)
     }
 
     /// Both under one guard; use wherever the two travel together.
