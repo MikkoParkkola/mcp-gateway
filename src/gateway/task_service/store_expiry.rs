@@ -211,7 +211,7 @@ impl TaskStore {
             return Vec::new();
         }
         let mut out = Vec::new();
-        let mut held = std::collections::HashSet::new();
+        let mut kept = std::collections::HashSet::new();
         for (id, entry) in &state.entries {
             let terminal = matches!(
                 entry.task.status(),
@@ -221,14 +221,14 @@ impl TaskStore {
                 continue;
             }
             if held_for_cancel(entry, hold) {
-                held.insert(id.clone());
+                kept.insert(id.clone());
                 continue;
             }
             out.push((id.clone(), entry.record.revision));
         }
         drop(state);
         let mut state = self.0.state();
-        for id in &held {
+        for id in &kept {
             if state.cancel_hold_warned.insert(id.clone()) {
                 tracing::warn!(
                     task_id = %id,
@@ -239,7 +239,7 @@ impl TaskStore {
         }
         // Rows no longer held (sent, given up, deleted) leave the set, so it
         // never outlives the rows it names.
-        state.cancel_hold_warned.retain(|id| held.contains(id));
+        state.cancel_hold_warned.retain(|id| kept.contains(id));
         out
     }
 

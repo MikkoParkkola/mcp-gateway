@@ -246,7 +246,10 @@ async fn expiry_never_reaches_a_skipped_row() {
     let later = chrono::Utc::now() + crate::duration_bound::delta!(days, 3650);
     assert!(
         store
-            .expired_candidates(later)
+            .expired_candidates(
+                later,
+                crate::gateway::task_service::store::CancelHold::Undated
+            )
             .iter()
             .all(|(id, _)| *id != skipped_id),
         "a skipped row must never be offered to expiry"
