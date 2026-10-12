@@ -133,6 +133,10 @@ const STARTED_FEED: usize = 64;
 pub struct BackendRegistry {
     /// Backends by name
     backends: DashMap<String, Arc<Backend>>,
+    /// Membership epoch of `backends`: bumped on every successful `register`
+    /// (including replace-by-name) and every `remove` that removed something,
+    /// so two equal reads prove no add, replace or remove happened between.
+    membership: std::sync::atomic::AtomicU64,
     /// Where a changed backend name goes so listeners hear `tools/list_changed`
     /// (F24). Set by the HTTP server, and by a stdio session (MIK-8278); unset
     /// in a registry no server runs.
@@ -206,6 +210,7 @@ impl BackendRegistry {
     pub fn new() -> Self {
         Self {
             backends: DashMap::new(),
+            membership: std::sync::atomic::AtomicU64::new(0),
             change_feed: std::sync::OnceLock::new(),
             stopping: parking_lot::Mutex::new(false),
             reload: tokio::sync::Mutex::new(()),
@@ -304,6 +309,9 @@ impl BackendRegistry {
             breaker.observe(observer);
         }
         let inserted = Arc::clone(&backend);
+        // Bump before the insert: a reader that sees the new instance must also see the moved epoch.
+        self.membership
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.backends.insert(name.clone(), backend);
         drop(stopping);
         // Before the insert, so no transition escapes; again after it, so an
@@ -461,6 +469,13 @@ impl BackendRegistry {
         }
     }
 
+    /// The membership epoch: equal reads prove no add, replace or remove
+    /// happened between (MIK-8361's fill marks).
+    pub(crate) fn membership(&self) -> u64 {
+        // SeqCst, as for `list_fills`: the gate orders this against those counts.
+        self.membership.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Get a backend by name
     #[must_use]
     pub fn get(&self, name: &str) -> Option<Arc<Backend>> {
@@ -489,6 +504,8 @@ impl BackendRegistry {
     pub fn remove(&self, name: &str) -> bool {
         let removed = self.backends.remove(name);
         if let Some((_, gone)) = &removed {
+            self.membership
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             // The drain finds the name unregistered: the backend shows nothing.
             gone.nudge_tools(super::tools_nudge::NudgeKind::Changed);
         }

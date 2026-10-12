@@ -9,7 +9,7 @@ use std::iter::once;
 use std::sync::Arc;
 
 use crate::gateway::meta_mcp::MetaMcp;
-use crate::gateway::meta_mcp::authz_tests::counted_backend;
+use crate::gateway::meta_mcp::authz_tests::{counted_backend, counted_listing_backend};
 
 #[test]
 fn a_replaced_or_removed_backend_counts_as_a_fill() {
@@ -34,5 +34,41 @@ fn a_replaced_or_removed_backend_counts_as_a_fill() {
     assert!(
         meta.filled_since(&marks, once("alpha")),
         "a removed backend cannot prove it filled nothing"
+    );
+}
+
+#[test]
+fn a_backend_added_and_removed_mid_judgement_counts_as_a_fill() {
+    let (registry, _) = counted_backend("alpha");
+    let meta = MetaMcp::new(Arc::clone(&registry));
+    // Marked absent: no instance to hold, so only the epoch can see the churn.
+    let marks = meta.fill_marks(once("beta"));
+    assert!(
+        !meta.filled_since(&marks, once("beta")),
+        "control: still absent"
+    );
+
+    let (other, _) = counted_backend("beta");
+    let beta = other.get("beta").expect("fixture backend");
+    assert!(registry.register(beta), "the mid-judgement add");
+    assert!(registry.remove("beta"), "the mid-judgement remove");
+    assert!(
+        meta.filled_since(&marks, once("beta")),
+        "an add and a remove that net to nothing still moved the membership"
+    );
+}
+
+#[tokio::test]
+async fn a_fill_with_no_registration_change_counts_as_a_fill() {
+    let (registry, _) = counted_listing_backend("alpha");
+    let meta = MetaMcp::new(Arc::clone(&registry));
+    let marks = meta.fill_marks(once("alpha"));
+    // No test hook bumps the counter; a real cold fill does, without touching
+    // the registry.
+    let backend = registry.get("alpha").expect("fixture backend");
+    backend.get_tools_shared().await.expect("the fill");
+    assert!(
+        meta.filled_since(&marks, once("alpha")),
+        "a fill with no registration change still counts"
     );
 }

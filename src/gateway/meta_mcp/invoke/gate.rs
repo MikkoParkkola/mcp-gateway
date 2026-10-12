@@ -141,39 +141,39 @@ impl MetaMcp {
         (invisible, RefundWitness::carry(witness, filled))
     }
 
-    /// Each named backend's instance and fill count, for [`Self::filled_since`].
-    /// The instance is held, so a replacement cannot reuse its address.
+    /// Each named backend's fill count plus the registry's membership epoch,
+    /// for [`Self::filled_since`]. No instance is held: the epoch moves on
+    /// every add, replace or remove, so an unmoved epoch means every target
+    /// is the same instance as at the mark and its count compares soundly.
     fn fill_marks<'s>(
         &self,
         servers: impl Iterator<Item = &'s str>,
-    ) -> Vec<Option<(std::sync::Arc<Backend>, u64)>> {
-        servers
-            .map(|server| {
-                let backend = self.backends.get(server)?;
-                let fills = backend.list_fills();
-                Some((backend, fills))
-            })
-            .collect()
+    ) -> (u64, Vec<Option<u64>>) {
+        let membership = self.backends.membership();
+        let fills = servers
+            .map(|server| self.backends.get(server).map(|backend| backend.list_fills()))
+            .collect();
+        (membership, fills)
     }
 
-    /// Whether a named backend was filled since `marks`, or replaced: a reload
-    /// that swaps the instance hides the old one's fills from its counter, so
-    /// a replacement counts as a fill (the nonce stays spent).
+    /// Whether a named backend filled since `marks`, or the membership moved:
+    /// any add, replace or remove during the judgement counts as a fill, so
+    /// the nonce stays spent. Only reloads pay this; an unmoved epoch with
+    /// unchanged counts proves nothing acted. The epoch is read after the
+    /// counts, and `register` bumps before it inserts, so a swap that the
+    /// counts could miss always moves the epoch the check reads.
     fn filled_since<'s>(
         &self,
-        marks: &[Option<(std::sync::Arc<Backend>, u64)>],
+        (membership, marks): &(u64, Vec<Option<u64>>),
         servers: impl Iterator<Item = &'s str>,
     ) -> bool {
-        marks
-            .iter()
-            .zip(servers)
-            .any(|(mark, server)| match (mark, self.backends.get(server)) {
-                (None, None) => false,
-                (Some((before, fills)), Some(now)) => {
-                    !std::sync::Arc::ptr_eq(before, &now) || now.list_fills() != *fills
-                }
-                _ => true,
-            })
+        let counts_changed = marks.iter().zip(servers).any(|(mark, server)| {
+            self.backends
+                .get(server)
+                .map(|backend| backend.list_fills())
+                != *mark
+        });
+        counts_changed || self.backends.membership() != *membership
     }
 
     /// The route stage's judgement of one requested backend target: whether
