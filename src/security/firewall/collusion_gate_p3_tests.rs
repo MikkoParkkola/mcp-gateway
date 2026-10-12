@@ -247,10 +247,11 @@ fn an_answer_with_no_view_room_fails_closed() {
 
 /// `MIK-8066` T23c (guard): unread plans' holders never count toward
 /// `Common`. Nine unread plans of distinct callers (one shared unread
-/// holder, A4) carry one text that one real recipient (carol) also holds;
-/// with the Common threshold at its minimum, 2, it stays evidence against
-/// bob. A build counting the unread holder as a caller makes it common (carol
-/// plus the holder), and bob passes.
+/// holder, A4) carry one text that one real caller (carol) also holds, from
+/// a source that is not sensitive: she counts toward `Common` but is no
+/// evidence. With the Common threshold at its minimum, 2, the unread
+/// evidence still refuses bob. A build counting the unread holder as a
+/// caller makes the text common (carol plus the holder), and bob passes.
 #[test]
 fn unread_holders_never_make_text_common() {
     let fw = Firewall::from_config(
@@ -278,7 +279,12 @@ fn unread_holders_never_make_text_common() {
         );
     }
     let run = pick_run(detector, &text, 60_000, 200_000);
-    deliver(&fw, "carol", run);
+    fw.record_delivery(
+        RelayCaller::Keyed("carol"),
+        "beta",
+        "read",
+        &json!({"content": [{"type": "text", "text": run}]}),
+    );
     assert!(
         relays(&fw, "bob", run),
         "unread holders made the text common: bob passed"

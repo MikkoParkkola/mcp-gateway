@@ -258,7 +258,10 @@ fn a_forward_spanning_two_steps_gets_no_seam_on_an_over_bound_answer() {
 #[test]
 fn a_key_delivered_as_a_value_gets_no_seam_on_an_over_bound_answer() {
     let fw = observing();
-    let parts: Vec<String> = (0..3).map(piece).collect();
+    let mut parts: Vec<String> = (0..3).map(piece).collect();
+    // Part 0 is longer than a k-gram: a delivery walk reads an object key
+    // only from K chars, so a shorter key would never be hashed at all.
+    parts[0] = format!("{}{}", piece(10), piece(11));
     // The step carries part 0 as a key, the answer carries it as a value.
     let staged_items = vec![
         json!({ parts[0].clone(): "v", "kind": "chunk" }),

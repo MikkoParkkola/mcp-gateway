@@ -311,7 +311,10 @@ fn retention_through_the_view_keeps_what_the_full_set_keeps() {
     }
     // A step leaf the answer delivers split across two adjacent values: its
     // k-grams across the split are found only in the values run together.
-    let (head, tail) = (filler(1190, 6 * 1024), filler(1191, 6 * 1024));
+    // Trimmed at the split, so the newline-joined form (whitespace collapses
+    // to a space) differs from the run-together one there.
+    let head = filler(1190, 6 * 1024).trim_end().to_owned();
+    let tail = filler(1191, 6 * 1024).trim_start().to_owned();
     let step = json!({ "content": [format!("{head}{tail}")] });
     compare(&step, &[head, tail], "a leaf split across two values");
 }
