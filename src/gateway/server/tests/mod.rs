@@ -49,6 +49,8 @@ mod stdio_response_firewall;
 mod stdio_initialize_order;
 #[cfg(feature = "firewall")]
 mod stdio_tenant_reads;
+/// MIK-8392.STORED.1 T2: stdio tasks/get judges the caller's current view.
+mod stored_read_stdio;
 
 mod stdio_hardened_signing;
 

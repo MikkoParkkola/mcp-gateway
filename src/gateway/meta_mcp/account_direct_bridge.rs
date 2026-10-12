@@ -97,6 +97,16 @@ impl DirectAccountGateway {
         self.dispatches.count()
     }
 
+    /// Revoke the sole operator's grant through live custody, with no
+    /// reconnect (MIK-8392 rows).
+    pub(crate) async fn revoke_operator_grant_for_test(&self) {
+        self._custody
+            .handle
+            .invalidate(&operator_key())
+            .await
+            .expect("the seeded grant must revoke through real custody");
+    }
+
     /// The `tools/call` requests that reached the backend, each as its
     /// `Authorization` header and the identity key that selected its slot.
     pub(crate) fn tool_calls(&self) -> Vec<(Option<String>, Option<String>)> {

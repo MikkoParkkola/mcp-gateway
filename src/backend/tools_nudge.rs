@@ -210,6 +210,15 @@ impl super::Backend {
         self.shared_entry().tools_cache.replace(tools, || ());
     }
 
+    /// Mark the shared slot's held list as a truncated drain, as a paging fill
+    /// past its budget leaves it (MIK-8392 T9 control).
+    #[cfg(test)]
+    pub(crate) fn mark_shared_truncated_for_test(&self) {
+        self.shared_entry()
+            .tools_truncated
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// Prefill the shared slot as an accepted fill of `tools` would: the same
     /// `prepare_tool_metadata`, then its resend set, verdicts and tools. So a
     /// row reads the resend permission a real `tools/list` would produce
