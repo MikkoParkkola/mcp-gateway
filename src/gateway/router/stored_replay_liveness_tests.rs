@@ -780,6 +780,31 @@ async fn l3_a_deferred_replay_is_taken_only_by_its_own_key_once() {
     .await;
 }
 
+/// T4 (guard; mutant M20': an extra live resolution at site 5): a LIVE vault account's repeated task call is
+/// answered with the stored task, nothing sent, and no more custody
+/// resolutions than the base path (`T4_BASE_RESOLVES`, measured on the
+/// release base without STORED.2).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t4_live_task_repeat_is_served_at_the_base_custody_cost() {
+    let fx = fixture(false).await;
+    let id = completed_task(&fx, "t4").await;
+    let (sent, resolved) = (fx.gateway.tool_calls().len(), fx.gateway.resolves());
+    let again = send(&fx, "tools/call", "gateway_invoke", invoke_params(Some("t4"), true)).await;
+    let cost = fx.gateway.resolves() - resolved;
+    eprintln!("T4 custody resolutions for the live task repeat: {cost}");
+    assert_eq!(
+        again.pointer("/result/taskId").and_then(Value::as_str),
+        Some(id.as_str()),
+        "T4: the live task repeat was not answered with the stored task: {again}"
+    );
+    assert_eq!(fx.gateway.tool_calls().len(), sent, "T4: the repeat was re-sent: {again}");
+    assert!(cost <= T4_BASE_RESOLVES, "T4: the live task repeat resolved custody {cost} times (base: {T4_BASE_RESOLVES})");
+}
+
+/// Custody resolutions a live task repeat costs on the release base.
+/// Measured on 573338311 (release base), and the same with STORED.2 (E10b).
+const T4_BASE_RESOLVES: usize = 2;
+
 /// G1 (guard; mutant M31): on the direct route a revoked grant's keyed replay
 /// is refused at stage 5 (the identity mint), before 7a/7b can serve a stored
 /// answer; nothing is sent.

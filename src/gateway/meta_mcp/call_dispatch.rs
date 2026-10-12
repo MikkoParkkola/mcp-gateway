@@ -454,7 +454,7 @@ impl MetaMcp {
         held: super::sealed_hold::Held<crate::gateway::task_service::CommittedTask>,
         caller: &MetaMcpCallerContext<'_>,
     ) -> JsonRpcResponse {
-        use super::visible::{self, AccountOutcome};
+        use super::visible;
         use crate::gateway::task_service::execution::BeginOutcome;
 
         // (server, account) resolved already in this walk: an account
@@ -492,16 +492,12 @@ impl MetaMcp {
                 }
                 continue;
             }
-            let proven = match self.target_account(server, tool) {
-                Some(account) => {
-                    visible::account_outcome(server, &account) == Some(AccountOutcome::Live)
-                }
-                // E7: no `account:`, but a per-caller mint is per-user in
-                // substance, so it proves only by a live resolution below.
-                // Anything else mints nothing per caller and is exempt (U2).
-                None => !self.mints_per_caller(server, tool),
-            };
-            if proven {
+            // A target that mints nothing per caller is exempt (U2); every
+            // other one (a managed account, or a per-caller mint, E7) proves
+            // only by a live resolution below. There is no shortcut for an
+            // outcome already read Live: a carried credential is taken above
+            // first, so it saved nothing measurable (E10b, T4).
+            if !self.mints_per_caller(server, tool) {
                 continue;
             }
             if !resolved.insert((server.to_owned(), self.target_account(server, tool))) {
