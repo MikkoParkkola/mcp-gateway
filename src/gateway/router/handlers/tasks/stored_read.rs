@@ -31,10 +31,9 @@ pub(super) async fn prepare_stored_read(
 }
 
 /// The stored-read pre-pass under THIS request's live policy caller
-/// (MIK-8392 F4): the same context [`with_policy_caller`] builds, held
-/// across the pre-pass's await so a cold claim already refused without
-/// the caller's catalogue is skipped before it resolves. Kept identical
-/// to that context field for field; change both together.
+/// (MIK-8392 F4): the context [`super::policy_context`] builds, held across
+/// the pre-pass's await so a cold claim already refused without the
+/// caller's catalogue is skipped before it resolves.
 pub(super) async fn prepare_stored_read_with_policy(
     state: &Arc<AppState>,
     stored: &crate::gateway::task_service::CommittedTask,
@@ -52,32 +51,7 @@ pub(super) async fn prepare_stored_read_with_policy(
         caller.cert_identity,
         caller.client,
     );
-    let policy_caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
-        is_modern: true,
-        // This context checks authorization only; it never accesses a cache.
-        protocol_revision: None,
-        credential_principal: caller.client.map(|client| client.principal.as_str()),
-        authentication: crate::gateway::meta_mcp::Authentication::of(caller.client),
-        credential_kind: crate::security::audit::CredentialKind::of(caller.client),
-        execution: None,
-        signing: None,
-        authorizer,
-        api_key_name: caller.api_key_name,
-        agent_id: caller.agent_id,
-        agent_declared: None,
-        grant_subject: caller.grant_subject.clone(),
-        stdio_nonce: None,
-        caller_key: Some(caller_key.as_str()).filter(|key| !key.is_empty()),
-        verified_identity: caller.verified_identity,
-        is_admin: caller.is_admin,
-        surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
-        input_capabilities: caller.input_capabilities,
-        confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
-        retry: &crate::protocol::mrtr::NO_RETRY,
-        task: None,
-        era: crate::protocol::meta::Era::Modern,
-        channel: &crate::gateway::input_bridge::NoClientChannel,
-    };
+    let policy_caller = super::policy_context(caller, authorizer, &caller_key);
     state
         .meta_mcp
         .prepare_stored_read(stored, policy_caller.scope(), caller.session_id)

@@ -424,3 +424,49 @@ async fn f4_a_cold_descriptor_blocked_read_resolves_nothing() {
 
 #[path = "stored_read_lease_tests.rs"]
 mod lease;
+
+/// F4 admit_target (MIK-8392): a cold view whose target is under the kill
+/// switch claims nothing — 0 resolutions, no backend traffic — and the read
+/// answers the policy refusal without the output. Red with
+/// `refused_without_catalogue` ending in `false`: the read resolves a view
+/// it then refuses anyway.
+#[tokio::test]
+async fn f4_a_cold_kill_switched_read_resolves_nothing() {
+    let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await;
+    let id = finished(&gw, "s1-f4k").await;
+    backend(&gw).forget_caller_slots_for_test();
+    let cfg = crate::kill_switch::budget::CapabilityErrorBudgetConfig::default();
+    for _ in 0..cfg.min_samples.max(cfg.window_size) {
+        gw.meta
+            .kill_switch()
+            .record_capability_failure(BACKEND, TOOL, &cfg);
+    }
+    let before_mints = gw.mints.load(Ordering::SeqCst);
+    let before_lists = gw.caller.lists();
+    let read = task_get(&gw, &id).await;
+    assert!(read.get("error").is_some(), "F4: refused: {read}");
+    assert!(!read.to_string().contains(OUTPUT), "F4: no output: {read}");
+    assert_eq!(
+        gw.mints.load(Ordering::SeqCst),
+        before_mints,
+        "F4: 0 resolutions"
+    );
+    assert_eq!(gw.caller.lists(), before_lists, "F4: no backend traffic");
+}
+
+/// Passthrough past the TTL (MIK-8392 lead/gpt delta): a Passthrough
+/// backend judges the shared catalogue, so a shared list past its TTL is
+/// refreshed before the read judges it, and the read serves. Red with
+/// Passthrough skipping the shared refresh: the stale list answers
+/// retryable forever.
+#[tokio::test]
+async fn p1c_passthrough_stored_read_refreshes_a_stale_shared_catalogue() {
+    let gw = passthrough_gateway().await;
+    let id = finished(&gw, "s1-p1c").await;
+    backend(&gw).age_tools_cache_for_test(None, 400);
+    let lists = gw.shared.lists();
+    let read = task_get(&gw, &id).await;
+    assert!(read.to_string().contains(OUTPUT), "P1c: served: {read}");
+    assert!(read.get("error").is_none(), "P1c: no error: {read}");
+    assert!(gw.shared.lists() > lists, "P1c: the shared list refreshed");
+}

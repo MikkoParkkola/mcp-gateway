@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8392 STORED.1 review findings F1, F2 (shared) and F5 on the shared
 //! catalogue: a removed backend, a stale shared catalogue past its TTL, and
-//! a cleared cache.
+//! a cleared cache; and the delta rows B (repeat pre-pass), D (guarded
+//! refresh) and F2 (failed refresh). A (freshness) has no row: freshness is
+//! read under the same guard as the catalogue it judges
+//! (`with_cached_populated_fresh`), so no interleaving can pair them.
 
 use super::*;
 
@@ -92,6 +95,8 @@ async fn f5_a_cleared_catalogue_answers_retryable_until_refilled() {
 struct Listing {
     tools: std::sync::Mutex<Value>,
     lists: std::sync::atomic::AtomicUsize,
+    /// Every `tools/list` fails (a refresh that cannot complete).
+    refuse: std::sync::atomic::AtomicBool,
 }
 
 impl Listing {
@@ -99,6 +104,7 @@ impl Listing {
         std::sync::Arc::new(Self {
             tools: std::sync::Mutex::new(tools),
             lists: std::sync::atomic::AtomicUsize::new(0),
+            refuse: std::sync::atomic::AtomicBool::new(false),
         })
     }
 }
@@ -121,6 +127,9 @@ impl crate::transport::Transport for Listing {
             )),
             "tools/list" => {
                 self.lists.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if self.refuse.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err(crate::Error::Transport("listing refused".into()));
+                }
                 let tools = self
                     .tools
                     .lock()
@@ -191,5 +200,102 @@ async fn f2_a_stale_shared_catalogue_refreshes_past_its_ttl() {
     assert!(
         upstream.lists.load(std::sync::atomic::Ordering::SeqCst) >= 1,
         "F2: the refresh listed the upstream"
+    );
+}
+
+fn read_tool() -> crate::protocol::Tool {
+    serde_json::from_value(json!({
+        "name": TOOL, "description": "Reads.", "inputSchema": {"type": "object"}
+    }))
+    .expect("a tool")
+}
+
+/// Swap the shared upstream for `upstream` and age the shared catalogue
+/// past its TTL.
+fn stale_behind(state: &Arc<AppState>, upstream: &std::sync::Arc<Listing>) {
+    backend(state).set_transport_for_test(
+        std::sync::Arc::clone(upstream) as std::sync::Arc<dyn crate::transport::Transport>
+    );
+    backend(state).age_tools_cache_for_test(None, 400);
+}
+
+/// B (MIK-8392 lead/gpt delta): a repeated keyed task call whose shared
+/// catalogue is past its TTL runs the stored-read pre-pass, refreshes, and
+/// answers the stored task. Red with the pre-pass dropped from the repeat
+/// arm: the stale list answers retryable -32603 until other traffic
+/// refreshes it.
+#[tokio::test]
+async fn b_a_repeat_over_a_stale_catalogue_refreshes_and_answers_the_task() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+    let id = finished(&state, "s1-b").await;
+    let upstream = Listing::with(json!([read_tool()]));
+    stale_behind(&state, &upstream);
+    let again = post(&state, "key-a", task_invoke(2, "s1-b", json!({ "q": 1 }))).await;
+    std::assert_eq!(
+        again.pointer("/result/taskId").and_then(Value::as_str),
+        Some(id.as_str()),
+        "B: the repeat answers the stored task: {again}"
+    );
+    assert!(again.get("error").is_none(), "B: no error: {again}");
+    assert!(
+        upstream.lists.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+        "B: the repeat refreshed the stale catalogue"
+    );
+}
+
+/// D (MIK-8392 lead/gpt delta): a stored read already refused without the
+/// catalogue (descriptor-blocked) causes no gateway-credentialed listing,
+/// even with the shared catalogue past its TTL. Red with the F4 guard
+/// dropped from `settle_shared_view`: the doomed read lists the upstream.
+#[tokio::test]
+async fn d_a_refused_read_over_a_stale_catalogue_lists_nothing() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+    let id = finished(&state, "s1-d").await;
+    let upstream = Listing::with(json!([read_tool()]));
+    stale_behind(&state, &upstream);
+    backend(&state).block_tool_for_test(TOOL);
+    assert_absent(&state, &get_task(&state, "key-a", &id).await, "D").await;
+    std::assert_eq!(
+        upstream.lists.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "D: a refused read lists nothing"
+    );
+}
+
+/// F2 failed refresh (MIK-8392): a shared catalogue past its TTL whose
+/// refresh fails stays stale; the read answers retryable -32603 with
+/// `data.retryable`, never the output and never -32601. Red with the
+/// freshness check removed from `stored_target_view`: the stale list
+/// serves.
+#[tokio::test]
+async fn f2_a_failed_refresh_of_a_stale_catalogue_stays_retryable() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+    let id = finished(&state, "s1-f2r").await;
+    let upstream = Listing::with(json!([read_tool()]));
+    upstream
+        .refuse
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    stale_behind(&state, &upstream);
+    let read = get_task(&state, "key-a", &id).await;
+    std::assert_eq!(
+        read.pointer("/error/code"),
+        Some(&json!(-32603)),
+        "F2: retryable, not -32601: {read}"
+    );
+    std::assert_eq!(
+        read.pointer("/error/data/retryable"),
+        Some(&json!(true)),
+        "F2: {read}"
+    );
+    assert!(
+        !read.to_string().contains("mock-backend-answered"),
+        "F2: no output: {read}"
+    );
+    assert!(
+        upstream.lists.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+        "premise: the refresh was attempted"
     );
 }

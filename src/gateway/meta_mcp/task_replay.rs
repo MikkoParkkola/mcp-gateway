@@ -624,12 +624,12 @@ enum StoredRead {
     RepeatedCall,
 }
 
-/// Why a stored delivery does not go out.
 /// A stored read's visibility verdict that is answered later: the first cold
 /// view's remaining lease (retry), and the first refusal by the caller's own
 /// per-user catalogue (answered after the account judgement).
 type StoredVisibility = (Option<Option<std::time::Duration>>, Option<Error>);
 
+/// Why a stored delivery does not go out.
 enum StoredWithheld {
     /// Its target is withheld from this caller: the absent answer.
     Refused(Error),
@@ -653,3 +653,7 @@ fn retry_later(id: &RequestId, after: Option<std::time::Duration>) -> JsonRpcRes
         data,
     )
 }
+
+#[cfg(test)]
+#[path = "stored_read_prepass_tests.rs"]
+mod prepass_tests;
