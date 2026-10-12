@@ -343,11 +343,11 @@ async fn w1_a_grant_revoked_before_the_worker_step_is_refused_there() {
     }
 }
 
-/// WM1 (M22): a two-step plan on the same tool; a descriptor block lands
-/// after step 1. The worker memo keeps no visibility, so step 2 is judged
-/// anew and refused: the backend answered one call.
+/// WM1 (M22): a two-step plan on the same tool; the listing withholds it
+/// (invalid schema) after step 1. The worker memo keeps no visibility, so
+/// step 2 is judged anew and refused: the backend answered one call.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn wm1_a_block_mid_run_is_seen_at_step_two() {
+async fn wm1_a_withhold_mid_run_is_seen_at_step_two() {
     let fx = fixture().await;
     let hold = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -373,18 +373,25 @@ async fn wm1_a_block_mid_run_is_seen_at_step_two() {
         );
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
+    // The listing now carries `echo` with an invalid schema: only the
+    // visibility judgement withholds it (no dispatch-time descriptor guard),
+    // so a memo that kept step 1's "visible" would send step 2.
+    let invalid: crate::protocol::Tool = serde_json::from_value(json!({
+        "name": "echo", "inputSchema": {"type": "object", "properties": 7}
+    }))
+    .expect("a tool");
     fx.gateway
         .backends()
         .get(super::PLAIN)
         .expect("the plain backend")
-        .block_tool_for_test("echo");
-    // Two permits, so a step 2 wrongly sent past the block is counted, not hung.
+        .store_shared_tools_for_test(vec![invalid]);
+    // Two permits, so a step 2 wrongly sent past the withhold is counted, not hung.
     hold.add_permits(2);
     let _ = settled_record(&fx, &id).await;
     assert_eq!(
         calls.load(std::sync::atomic::Ordering::SeqCst),
         1,
-        "WM1: step 2 was dispatched past the block"
+        "WM1: step 2 was dispatched past the withhold"
     );
 }
 
