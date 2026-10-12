@@ -316,42 +316,9 @@ impl StdioTasks {
             owner: &owner,
         };
         match method {
-            "tasks/get" => {
-                crate::gateway::meta_mcp::visible::with_visibility_memo(async {
-                    // MIK-8392: fill the account outcomes of the named task's
-                    // recorded targets before the delivery check reads them.
-                    if let (Some(owner_text), Some(task_id)) = (
-                        owner.text(),
-                        crate::gateway::task_route::task_id_param(params),
-                    ) && let Ok(stored) = self.service.get(owner_text, task_id)
-                    {
-                        self.host
-                            .meta_mcp
-                            .prepare_stored_read(&stored, caller.scope().caller)
-                            .await;
-                    }
-                    route
-                        .get(
-                            id.clone(),
-                            params,
-                            |_| std::future::ready(()),
-                            |current| {
-                                self.host.meta_mcp.refuse_stored_delivery(
-                                    &id,
-                                    current,
-                                    crate::gateway::meta_mcp::upstream::recovery_attestation(
-                                        params,
-                                    ),
-                                    Some(session_id),
-                                    caller,
-                                )
-                            },
-                            |current, frame| self.host.meta_mcp.scan_task_read(current, frame),
-                        )
-                        .await
-                })
-                .await
-            }
+            // Boxed, as the `tools/call` dispatch is: only a `tasks/get`
+            // request pays for this arm's future state (MIK-8392).
+            "tasks/get" => Box::pin(self.dispatch_get(id, params, caller, session_id)).await,
             "tasks/update" => {
                 // THIS update request's caller resumes the round; a resumed
                 // result is never response-cached, so no revision is carried.
@@ -371,6 +338,57 @@ impl StdioTasks {
                 format!("Method not found: {other}"),
             ),
         }
+    }
+
+    /// `tasks/get` for the local operator. Its own future, boxed at the call
+    /// site, so the shared [`Self::dispatch`] state stays small; the
+    /// visibility memo still covers both the pre-pass and the delivery check.
+    async fn dispatch_get(
+        &self,
+        id: crate::protocol::RequestId,
+        params: Option<&Value>,
+        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+        session_id: &str,
+    ) -> crate::protocol::JsonRpcResponse {
+        use crate::gateway::task_route::{TaskOwnerText, TaskRoute};
+        let owner = TaskOwnerText::LocalOperator;
+        let route = TaskRoute {
+            service: &self.service,
+            executor: &self.executor,
+            owner: &owner,
+        };
+        crate::gateway::meta_mcp::visible::with_visibility_memo(async {
+            // MIK-8392: fill the account outcomes of the named task's
+            // recorded targets before the delivery check reads them.
+            if let (Some(owner_text), Some(task_id)) = (
+                owner.text(),
+                crate::gateway::task_route::task_id_param(params),
+            ) && let Ok(stored) = self.service.get(owner_text, task_id)
+            {
+                self.host
+                    .meta_mcp
+                    .prepare_stored_read(&stored, caller.scope().caller)
+                    .await;
+            }
+            route
+                .get(
+                    id.clone(),
+                    params,
+                    |_| std::future::ready(()),
+                    |current| {
+                        self.host.meta_mcp.refuse_stored_delivery(
+                            &id,
+                            current,
+                            crate::gateway::meta_mcp::upstream::recovery_attestation(params),
+                            Some(session_id),
+                            caller,
+                        )
+                    },
+                    |current, frame| self.host.meta_mcp.scan_task_read(current, frame),
+                )
+                .await
+        })
+        .await
     }
 }
 
