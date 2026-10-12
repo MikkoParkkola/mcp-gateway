@@ -23,6 +23,7 @@ The wizard scans Claude Desktop, Claude Code, Cursor, Windsurf, Zed, Continue.de
 ### Prerequisites
 
 - **Rust toolchain** (1.95+): [rustup.rs](https://rustup.rs), or use Homebrew
+- **Node.js with `npx`**, for the manual config's example backend. Its first start downloads the package, so it needs network access once.
 
 ### 1. Install
 
@@ -60,19 +61,29 @@ DASHBOARD (opens once, then remembered in this browser):
 
 Or create the config manually:
 
+<!-- quickstart-minimal-config -->
 ```yaml
 server:
   port: 39400
 
-meta_mcp:
-  enabled: true
+backends:
+  everything:
+    command: "npx -y @modelcontextprotocol/server-everything"
 
 capabilities:
-  enabled: true
   directories:
     - ./capabilities
+```
+<!-- /quickstart-minimal-config -->
 
-backends: {}
+`everything` is the MCP reference server; replace it with any server you already
+run. The capability directory may stay empty until step 3.
+
+The gateway refuses a config file other users can read, because it can hold
+credentials, so make it yours alone:
+
+```bash
+chmod 600 gateway.yaml
 ```
 
 ### 3. Add Capabilities
@@ -120,6 +131,7 @@ auth:
 
 metadata:
   category: weather
+  read_only: true  # only a read-only capability is cached
   tags: [weather, forecast, free]
 ```
 
@@ -158,6 +170,7 @@ auth:
 
 metadata:
   category: knowledge
+  read_only: true  # only a read-only capability is cached
   tags: [wikipedia, encyclopedia, free]
 ```
 
@@ -302,7 +315,7 @@ For a team-shared gateway, keep auth enabled, bind behind TLS or mTLS, and distr
 - **Add remote backends**: For a zero-auth remote backend you can try in seconds, see [Adding remote MCP backends](REMOTE_BACKENDS.md).
 - **Find unmanaged MCP servers**: `mcp-gateway cap discover --shadow --format json` emits a passive ShadowRadar report with stable finding IDs, ownership, transport exposure, trust status, data risk, recommended action, confidence, verification, and rollback. It does not invoke discovered tools. Add `--write-config` only after reviewing adoptable local findings.
 - **Inspect the local control plane**: Open `http://127.0.0.1:39400/ui#control-plane` for read-only inventory, runtime health, decision queue, RBAC, and license-boundary status.
-- **Enable caching**: Add `cache: { enabled: true, default_ttl: 60s }` to your config.
+- **Enable caching**: Add `cache: { enabled: true }` to your config.
 - **Enable auth**: on a config `init` wrote, it is already on with a generated credential. On a hand-written one, use `auth: { enabled: true, bearer_token: "env:MCP_GATEWAY_TOKEN", public_paths: ["/health", "/mcp"] }` and set that variable to a secret you keep.
 
   Two halves, both load-bearing. `public_paths` is not optional: turning authentication on gates **every** path, so enabling it alone makes the MCP client you already configured start failing. And do not use `bearer_token: "auto"` if anything needs to authenticate — it mints a fresh random token on every start and logs only a fingerprint, never the value, so no client can present it. See [DEPLOYMENT.md](DEPLOYMENT.md#admin-requires-a-credential).

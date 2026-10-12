@@ -38,6 +38,7 @@ use super::super::meta_mcp_helpers::{extract_required_str, parse_tool_arguments}
 #[cfg(test)]
 use super::super::recovery::ErrorCategory;
 use super::MetaMcp;
+use super::refund_witness as rw;
 mod side_effect_markers;
 mod undeclared_gate;
 // D1: the invocation record, written around `invoke_tool_traced`.
@@ -50,7 +51,15 @@ pub(in crate::gateway) use chokepoint::{DirectPermit, Outbound};
 pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2.1)
 pub(crate) mod egress;
 mod nonce_settle; // MIK-8150: refund requests and dispatch marks of a signed execution
+
+/// The only entry outside `invoke` that spends a refund witness (MIK-8353
+/// 3b): something outside the invoke path consumed or acted for this call (a
+/// chain resume's handle), so no later refusal of it may give the nonce back.
+pub(super) fn spend_witness(caller: &super::MetaMcpCallerContext<'_>) {
+    nonce_settle::Witnessed::take(caller).spend();
+}
 mod r2_check;
+mod step_fingerprint;
 // #1962: settlement of a bridged round's key, kept out of this file's size baseline.
 mod bridge_settle;
 pub(crate) mod cache_reads;
@@ -201,44 +210,21 @@ impl MetaMcp {
         // cache is consulted: a cache key built before the caller's credential
         // is known cannot name the caller. Reused verbatim at dispatch so there
         // is no re-mint or drift.
-        // A caller verdict taken earlier in this request carries its backend
-        // instance and resolution here (MIK-8356 R5.2): one resolution per
-        // call, consumed by this invocation only.
-        let (backend, resolved) = match super::visible::take_carried(server, tool) {
-            // The verdict's fill failed: answered as a failed dispatch is,
-            // with nothing filled or sent again (F13, A11-c).
-            Some(super::visible::Carried {
-                fill_error: Some(error),
-                ..
-            }) => {
-                let checked = (std::time::Instant::now(), surface);
-                let value = self.account_refused_fill(server, tool, &error, checked);
-                if crate::personal_accounts::refusal::marked(&error).is_some() {
-                    return self.with_connect_offer(Err(error), verified_identity).await;
-                }
-                return Ok(GuardedValue::sealed_by_guard(value));
-            }
-            Some(carried) => (Some(carried.backend), carried.resolved),
-            None => {
-                let backend = self.backends.get(server);
-                // No principal on a required per-user backend: an absent name,
-                // answered before any resolution (lead ruling 2026-10-11).
-                if backend
-                    .as_deref()
-                    .is_some_and(|b| self.lacks_principal_on_required(b, caller_proof))
-                {
-                    return Err(super::visible::absent_name(tool));
-                }
-                let resolved = self
-                    .resolve_dispatch(
-                        (server, tool),
-                        backend.as_deref(),
-                        caller_proof,
-                        verified_identity,
-                    )
-                    .await?;
-                (backend, resolved)
-            }
+        // MIK-8353 3a: the refund witness, carried through every may-effect
+        // step below; any exit hands back what survived.
+        let mut witness = nonce_settle::Witnessed::take(caller);
+        // MIK-8356 R5.2: the resolution a caller verdict carried, or a fresh one.
+        let (backend, resolved) = match self
+            .dispatch_resolution(
+                (server, tool),
+                (caller_proof, verified_identity),
+                surface,
+                &mut witness,
+            )
+            .await?
+        {
+            std::ops::ControlFlow::Continue(resolution) => resolution,
+            std::ops::ControlFlow::Break(answer) => return Ok(answer),
         };
         let target = (server, backend.as_ref().map(|backend| backend.instance()));
         let propagation::ResolvedDispatch {
@@ -246,6 +232,9 @@ impl MetaMcp {
             account_credential,
             binding: dispatch_binding,
         } = resolved;
+        // A failed optional mint counts too: it may have reached the issuer.
+        let minted = caller_credential.cache_binding.is_some() || caller_credential.attempted;
+        witness.carry(rw::dispatch_effect(minted, account_credential.is_some()));
         // Who the response cache keys on, in one place and one namespace per
         // source (`support::caller_cache_principal`). The binding when identity
         // propagation is minting per-user credentials, then the verified OIDC
@@ -321,7 +310,11 @@ impl MetaMcp {
             .protocol_revision
             .and_then(crate::protocol::meta::served_revision);
 
-        if let Some(refusal) = self
+        // Whether the check below fills a list from the backend: counted at
+        // the fill, so a slot that expires mid-check still counts.
+        let fills = || backend.as_ref().map_or(0, |b| b.list_fills());
+        let fills_before = fills();
+        let checked = self
             .answer_undeclared_key(
                 caller,
                 session_id,
@@ -333,8 +326,11 @@ impl MetaMcp {
                 verified_identity,
                 &mut idem_reservation,
             )
-            .await?
-        {
+            .await;
+        // Carried before either exit below, so neither hands back a witness
+        // the check's fill spent.
+        witness.carry(rw::schema_effect(fills() != fills_before));
+        if let Some(refusal) = checked? {
             return Ok(refusal);
         }
 
@@ -345,21 +341,33 @@ impl MetaMcp {
         }
         // A chained backend's answer is bound to one challenge: no cache (D7).
         let chained = self.is_chained(backend.as_deref());
-        if let Some(cached) = self.serve_cached_response(
-            caller,
-            session_id,
+        // MIK-8393 (#3773): a stored result may stand in for a call only when
+        // this caller's slot declared the tool read-only, so the call it
+        // replaces had no effect to lose. Absent means deny: an unannotated
+        // tool, an undiscovered slot and a write all go to the backend, and
+        // their answers are never stored.
+        let read_only = self.cache_admits(
             (server, tool),
-            trace_id,
-            (want_full, chained),
-            protocol_revision,
-            &arguments,
-            (&projection_key_suffix, &caller_principal),
-            (&profile.name, policy_epoch),
-            (arm_key, &tool_key),
-            api_key_name,
-            client_claim.as_ref(),
-            &mut idem_reservation,
-        ) {
+            backend.as_deref(),
+            dispatch_binding.as_deref(),
+        );
+        if read_only
+            && let Some(cached) = self.serve_cached_response(
+                caller,
+                session_id,
+                (server, tool),
+                trace_id,
+                (want_full, chained),
+                protocol_revision,
+                &arguments,
+                (&projection_key_suffix, &caller_principal),
+                (&profile.name, policy_epoch),
+                (arm_key, &tool_key),
+                api_key_name,
+                client_claim.as_ref(),
+                &mut idem_reservation,
+            )
+        {
             return Ok(cached);
         }
 
@@ -377,16 +385,22 @@ impl MetaMcp {
         // Returns the warnings to inject post-dispatch and blocks when the
         // budget is exceeded (returns JSON-RPC -32003 error).
         #[cfg(feature = "cost-governance")]
-        let mut admission = self
-            .admit_spend_for(&dispatch_guards::BackendCall {
-                server,
-                tool,
-                session_id,
-                api_key_name,
-                trace_id,
-                caller_key: None,
-            })
-            .inspect_err(|_| nonce_settle::ask_refund(caller))?;
+        let mut admission = match self.admit_spend_for(&dispatch_guards::BackendCall {
+            server,
+            tool,
+            session_id,
+            api_key_name,
+            trace_id,
+            caller_key: None,
+        }) {
+            Ok(admission) => admission,
+            Err(error) => {
+                // The refusal records nothing outside the gateway; whatever
+                // witness survived the steps above decides the refund.
+                nonce_settle::ask_refund(caller);
+                return Err(error);
+            }
+        };
         #[cfg(feature = "cost-governance")]
         let cost_warnings = std::mem::take(&mut admission.warnings);
         #[cfg(not(feature = "cost-governance"))]
@@ -414,11 +428,15 @@ impl MetaMcp {
                     // Refused before the backend was reached, so it has not
                     // acted: the key is released rather than settled (settling
                     // would answer an honest retry with a side effect nothing
-                    // performed), and the signing nonce is asked back.
+                    // performed), and the signing nonce is asked back. A
+                    // refused redeem consumed nothing, so the witness stands.
                     nonce_settle::give_back_unsent(caller, &mut idem_reservation);
                     return Err(error);
                 }
             };
+        // Redeemed: a continuation the caller presented was consumed, whatever
+        // state the backend issued with it.
+        witness.carry(rw::retry_effect(caller.retry.request_state.is_some()));
 
         let egress = relay::Egress {
             arguments: &arguments,
@@ -427,7 +445,14 @@ impl MetaMcp {
             retry: &outbound_retry,
         };
         let reservation = idem_reservation.as_mut();
-        self.refuse_relay(caller, session_id, (server, tool), &egress, reservation)?;
+        if let Err(error) =
+            self.refuse_relay(caller, session_id, (server, tool), &egress, reservation)
+        {
+            // Refused before anything is sent: the witness that survived the
+            // steps above decides the refund (MIK-8353 3b, NONCEFX.3).
+            nonce_settle::ask_refund(caller);
+            return Err(error);
+        }
         // MIK-8137 b1: the chokepoint, before anything marks this send.
         let answers = outbound_retry.input_responses.as_ref();
         let outbound = chokepoint::Outbound {
@@ -435,14 +460,21 @@ impl MetaMcp {
             answers,
         };
         let source = chokepoint::Source::of_call(answers);
-        let permit = (self.chokepoint(
+        let permit = match self.chokepoint(
             caller.scope(),
             session_id,
             (server, tool),
             &outbound,
             source,
-        ))
-        .inspect_err(|_| nonce_settle::give_back_unsent(caller, &mut idem_reservation))?;
+        ) {
+            Ok(permit) => permit,
+            Err(error) => {
+                nonce_settle::give_back_unsent(caller, &mut idem_reservation);
+                return Err(error);
+            }
+        };
+        // Dispatch: the witness goes with the send (the nonce stays spent).
+        witness.spend();
         nonce_settle::mark_dispatched(caller);
         // Boxed: the dispatch future is the largest thing this frame ever
         // holds, and inlining it puts `invoke_tool_traced` over
@@ -682,18 +714,20 @@ impl MetaMcp {
         self.inject_cost_advice(&mut result, &cost_warnings, tool, caller, session_id);
         let written = gateway_writes::snapshot_since(writes_mark);
 
-        self.store_response(
-            caller,
-            args,
-            (server, tool),
-            trace_id,
-            (want_full, stopped_to_ask, chained),
-            protocol_revision,
-            &arguments,
-            (&projection_key_suffix, &caller_principal),
-            (&profile.name, policy_epoch),
-            (&result, &written),
-        );
+        if read_only {
+            self.store_response(
+                caller,
+                args,
+                (server, tool),
+                trace_id,
+                (want_full, stopped_to_ask, chained),
+                protocol_revision,
+                &arguments,
+                (&projection_key_suffix, &caller_principal),
+                (&profile.name, policy_epoch),
+                (&result, &written),
+            );
+        }
 
         if let Some(reservation) = idem_reservation.as_mut()
             && reservation.complete_read(&result, (self.dispatch_reading(args), written))
@@ -750,58 +784,6 @@ impl MetaMcp {
         } else {
             sealed
         })
-    }
-
-    /// Who a continuation minted by a call to `server:tool` is bound to, for
-    /// `caller`: `principal_source` over the call's dispatch binding, exactly
-    /// as the call's own mint derives it (MIK-8137). A chain resume reads this
-    /// for the step its handle is pending at, so the resume opens the handle
-    /// under the binding the step minted with rather than a second spelling.
-    ///
-    /// Resolving the binding mints the caller's propagated or account
-    /// credential, as the step's own dispatch does; a refusal returns here.
-    pub(in crate::gateway::meta_mcp) async fn step_fingerprint(
-        &self,
-        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
-        (server, tool): (&str, &str),
-    ) -> Result<Option<String>> {
-        // A resolution the caller verdict carried for this step is the one
-        // its dispatch will use: derive from it, with no second mint (fold F6).
-        if let Some(binding) =
-            super::visible::with_carried(server, tool, |carried| carried.resolved.binding.clone())
-        {
-            return Ok(crate::protocol::mrtr::source_fingerprint(
-                caller.principal_source(binding.as_deref()),
-            ));
-        }
-        let backend = self.backends.get(server);
-        let proof = CallerProof::new(caller.verified_identity, caller.provenance());
-        let resolved = self
-            .resolve_dispatch(
-                (server, tool),
-                backend.as_deref(),
-                proof,
-                caller.verified_identity,
-            )
-            .await?;
-        let fingerprint = crate::protocol::mrtr::source_fingerprint(
-            caller.principal_source(resolved.binding.as_deref()),
-        );
-        // A resume runs no caller verdict (its step is known only at run
-        // time): this resolution is the step's, carried to its invocation so
-        // the resume resolves once (MIK-8356 C13).
-        if let Some(backend) = backend {
-            super::visible::carry_dispatch(
-                server,
-                tool,
-                super::visible::Carried {
-                    backend,
-                    resolved,
-                    fill_error: None,
-                },
-            );
-        }
-        Ok(fingerprint)
     }
 }
 

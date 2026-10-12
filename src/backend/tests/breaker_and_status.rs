@@ -92,7 +92,7 @@ fn oauth_requires_per_user_isolation_reflects_config() {
         callback_host: None,
         callback_port: None,
         callback_path: None,
-        token_refresh_buffer_secs: 300,
+        token_refresh_buffer_secs: Some(300),
         shared_account: shared,
     };
     // Enabled, gateway-held, not blessed shared → guard MUST fire.
@@ -128,7 +128,7 @@ fn create_oauth_client_refuses_identity_propagation_backends() {
         callback_host: None,
         callback_port: None,
         callback_path: None,
-        token_refresh_buffer_secs: 300,
+        token_refresh_buffer_secs: Some(300),
         shared_account: false,
     };
     let idp = |strategy: crate::identity_propagation::PropagationStrategyKind| {

@@ -22,6 +22,58 @@ use super::MetaMcp;
 // Builder — with_surfaced_tools
 // ============================================================================
 
+/// How a `tools/call`'s own `arguments` are read (MIK-8154): the one place
+/// the decode decision lives. The sanitize step matches on it exhaustively.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ArgsPolicy {
+    /// A backend tool's: a JSON string is decoded as a whole.
+    BackendWhole,
+    /// A meta tool whose handler reads its own `arguments` as they are, but
+    /// decodes an inner `arguments` itself.
+    MetaParsedInner,
+    /// [`Self::MetaParsedInner`] whose handler also reads a `chain`, decoding
+    /// each step's `arguments` (`gateway_execute`). Only this one has a
+    /// `chain` the sanitize step decodes (MIK-8378).
+    MetaParsedChain,
+    /// A meta tool whose handler reads its own `arguments` as they are.
+    MetaOpaque,
+}
+
+/// Every meta tool and how its `arguments` are read: the names
+/// `call_dispatch`'s meta match routes on, kept equal to its arms by
+/// `meta_tool_names_are_the_dispatch_arms`. Surfacing refuses a backend tool
+/// under any of them, so a meta name always resolves to the gateway's own
+/// handler. A new meta tool takes its row here, with its policy.
+pub(crate) const META_TOOLS: &[(&str, ArgsPolicy)] = &[
+    ("gateway_search", ArgsPolicy::MetaOpaque),
+    ("gateway_execute", ArgsPolicy::MetaParsedChain),
+    ("gateway_list_servers", ArgsPolicy::MetaOpaque),
+    ("gateway_list_tools", ArgsPolicy::MetaOpaque),
+    ("gateway_search_tools", ArgsPolicy::MetaOpaque),
+    ("gateway_invoke", ArgsPolicy::MetaParsedInner),
+    ("gateway_get_stats", ArgsPolicy::MetaOpaque),
+    ("gateway_cost_report", ArgsPolicy::MetaOpaque),
+    ("gateway_webhook_status", ArgsPolicy::MetaOpaque),
+    ("gateway_run_playbook", ArgsPolicy::MetaParsedInner),
+    ("gateway_kill_server", ArgsPolicy::MetaOpaque),
+    ("gateway_revive_server", ArgsPolicy::MetaOpaque),
+    ("gateway_list_disabled_capabilities", ArgsPolicy::MetaOpaque),
+    ("gateway_set_profile", ArgsPolicy::MetaOpaque),
+    ("gateway_get_profile", ArgsPolicy::MetaOpaque),
+    ("gateway_list_profiles", ArgsPolicy::MetaOpaque),
+    ("gateway_set_state", ArgsPolicy::MetaOpaque),
+    ("gateway_reload_config", ArgsPolicy::MetaOpaque),
+    ("gateway_reload_capabilities", ArgsPolicy::MetaOpaque),
+];
+
+/// `name`'s argument policy: a meta tool's row, else a backend tool's.
+pub(crate) fn args_policy(name: &str) -> ArgsPolicy {
+    META_TOOLS
+        .iter()
+        .find(|(meta, _)| *meta == name)
+        .map_or(ArgsPolicy::BackendWhole, |(_, policy)| *policy)
+}
+
 impl MetaMcp {
     /// Attach statically surfaced tools (consuming builder).
     ///
@@ -33,33 +85,11 @@ impl MetaMcp {
     /// gateway always starts — misconfigured surfaced tools are simply dropped.
     #[must_use]
     pub fn with_surfaced_tools(mut self, tools: Vec<SurfacedToolConfig>) -> Self {
-        const META_TOOL_NAMES: &[&str] = &[
-            "gateway_search",
-            "gateway_execute",
-            "gateway_list_servers",
-            "gateway_list_tools",
-            "gateway_search_tools",
-            "gateway_invoke",
-            "gateway_get_stats",
-            "gateway_cost_report",
-            "gateway_webhook_status",
-            "gateway_run_playbook",
-            "gateway_kill_server",
-            "gateway_revive_server",
-            "gateway_list_disabled_capabilities",
-            "gateway_set_profile",
-            "gateway_get_profile",
-            "gateway_list_profiles",
-            "gateway_set_state",
-            "gateway_reload_config",
-            "gateway_reload_capabilities",
-        ];
-
         let mut map: HashMap<String, String> = HashMap::new();
         let mut validated: Vec<SurfacedToolConfig> = Vec::with_capacity(tools.len());
 
         for cfg in tools {
-            if META_TOOL_NAMES.contains(&cfg.tool.as_str()) {
+            if args_policy(&cfg.tool) != ArgsPolicy::BackendWhole {
                 warn!(
                     tool = %cfg.tool,
                     "Surfaced tool name collides with a meta-tool — skipping"

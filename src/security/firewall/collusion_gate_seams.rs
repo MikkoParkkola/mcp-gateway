@@ -9,6 +9,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+use super::super::collusion::Recorded;
+use super::super::collusion::big::{KeptStep, StepEvidence, UnreadStep};
+use super::super::collusion_digest::{Judged, UnreadReceipt};
 use super::{
     CAPACITY_METRIC, CollusionDetector, DeliveryDigest, Firewall, RelayCaller, key_path_runs,
 };
@@ -25,19 +28,60 @@ impl Firewall {
         flows: u64,
         digest: &DeliveryDigest,
     ) {
+        let now = self.relay.now();
+        // `MIK-8066` D9: a step's evidence reaches the record only through
+        // its judgement, matched exhaustively with every field named.
+        let sample = match &digest.judged {
+            Judged::Unread {
+                receipt: UnreadReceipt { fps, cut },
+                step,
+            } => {
+                let sample = step.as_ref().map(|UnreadStep { evidence }| evidence.fps());
+                let recorded = (fps.clone(), cut.clone(), sample);
+                Self::record_unread(
+                    detector,
+                    (source, caller),
+                    (digest.sensitive, flows),
+                    recorded,
+                    now,
+                );
+                return;
+            }
+            Judged::Staged(big) => {
+                // Never retained (unreachable in today's wiring): fail
+                // closed, as an unread answer.
+                let capped = self.capped(digest);
+                let receipt = capped.as_ref().unwrap_or(digest);
+                let recorded = (
+                    receipt.fingerprints(detector),
+                    receipt.cut_fps.clone(),
+                    Some(big.staged_evidence()),
+                );
+                Self::record_unread(
+                    detector,
+                    (source, caller),
+                    (digest.sensitive, flows),
+                    recorded,
+                    now,
+                );
+                return;
+            }
+            Judged::Kept(Some(KeptStep { evidence, excuse })) => {
+                if let Some(excuse) = excuse {
+                    excuse.publish(now);
+                }
+                evidence.as_ref().map(StepEvidence::fps)
+            }
+            Judged::Kept(None) | Judged::Pending => None,
+        };
         // `MIK-8205`: read before capping, which keeps no seams.
         let seams = digest.seam_excuses.clone();
+        // A5: a view cut refused its charge keeps only thinned evidence.
+        let cut_lost = digest.cut_lost;
         // MIK-7992: the one sink every record passes, so a plan step's
         // receipt never kept to its plan's answer is recorded capped too.
         let capped = self.capped(digest);
         let digest = capped.as_ref().unwrap_or(digest);
-        let now = self.relay.now();
-        // `MIK-8066.BIG.3`: a step past the plan bound publishes its excuse
-        // sketch and offers its exact evidence to the record's sample.
-        let sample = digest.big.as_ref().and_then(|big| {
-            big.publish(now);
-            big.evidence()
-        });
         detector.record_sampled_at(
             (source, caller.key()),
             (digest.sensitive, flows),
@@ -51,6 +95,23 @@ impl Firewall {
         if let Some(seams) = seams {
             detector.record_seam_excuses_at(source, caller.key(), &seams, now);
         }
+        if cut_lost {
+            detector.mark_step_lost(source, caller.key());
+        }
+    }
+
+    /// `MIK-8066` D6: an unread receipt's evidence under the caller's unread
+    /// holder, and the caller's excuse from `source` marked lost, so it is
+    /// refused for lost room, never excused. No seams: nothing was read.
+    fn record_unread(
+        detector: &CollusionDetector,
+        (source, caller): (&str, RelayCaller<'_>),
+        held: (bool, u64),
+        recorded: Recorded<'_>,
+        now: std::time::Instant,
+    ) {
+        detector.record_unread_at(source, held, recorded, now);
+        detector.mark_step_lost(source, caller.key());
     }
 
     /// `MIK-8205` (S4): the subset-forward seams of a plan `answer`'s runs,

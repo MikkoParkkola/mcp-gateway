@@ -504,7 +504,20 @@ async fn webhook_handler(
     };
 
     // An `event:` route emits an MCP event whether or not it notifies.
-    events::emit(&state, &headers, &body, &payload, &notification.event_type).await;
+    // On a clock that cannot date the event (before 1970) the POST is
+    // refused before any session is told, so the sender's retry runs it once
+    // (MIK-8202).
+    if events::emit(&state, &headers, &body, &payload, &notification.event_type)
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(axum::http::header::RETRY_AFTER, "60")],
+            "the gateway's clock reads before 1970; retry later",
+        )
+            .into_response();
+    }
 
     // Deliver to in-scope SSE sessions if enabled: a webhook carries one
     // integration's data, so a caller without access to the capability

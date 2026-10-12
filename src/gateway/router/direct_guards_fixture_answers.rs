@@ -85,6 +85,7 @@ pub(super) fn call_answer(answer: Answer, id: RequestId) -> crate::Result<JsonRp
         | Answer::FailedWith(_)
         | Answer::ForgedAccount(_) => error_answer(answer, id),
         Answer::Unreachable => Err(crate::Error::TransportConnect("no route".to_string())),
+        Answer::FailsWith(make) => Err(make()),
         Answer::AskOnce
         | Answer::AskNoState
         | Answer::AskMalformed
@@ -117,7 +118,8 @@ pub(super) fn listing(answer: Answer, params: Option<&Value>) -> Value {
         Answer::WithNote => {
             result["tools"] = json!([
                 {"name": "read", "inputSchema": {"type": "object"}},
-                {"name": "note", "inputSchema": {"type": "object"}}
+                {"name": "note", "inputSchema": {"type": "object"}},
+                {"name": "gateway_invoke", "inputSchema": {"type": "object"}}
             ]);
         }
         Answer::ModernList => {

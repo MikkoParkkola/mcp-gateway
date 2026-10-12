@@ -103,22 +103,11 @@ impl Gateway {
         }
         // The caller verdict (MIK-8356 R5.1), after authorize and the
         // firewall and before X14, task intent and admission: as on `/mcp`.
-        // A refusal or a failed fill is answered by the dispatch.
-        for target in &targets {
-            let checked = target.as_target();
-            let _ = meta_mcp
-                .caller_verdict(
-                    (checked.server, checked.tool),
-                    caller,
-                    Some(session_id),
-                    crate::gateway::meta_mcp::invoke::TargetNaming::of(
-                        meta_mcp,
-                        tool_name,
-                        (checked.server, checked.tool),
-                    ),
-                )
-                .await;
-        }
+        // A refusal or a failed fill is answered by the dispatch. A verdict
+        // that acted spends the witness, so the nonce stays spent (MIK-8353).
+        let witness = meta_mcp
+            .caller_verdicts(&targets, tool_name, (caller, Some(session_id)), witness)
+            .await;
         // X14 decides a task-augmented call, so it needs the session's task
         // store; without one the call is synchronous and X14 has nothing to say.
         let Some(tasks) = client.tasks else {

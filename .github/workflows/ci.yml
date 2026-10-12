@@ -1059,8 +1059,12 @@ jobs:
         run: python3 scripts/release/test_c6_mutation_sample.py
       - name: Every user-facing surface item is classified (MIK-8044)
         run: python3 scripts/release/test_check_surface_inventory.py
+      - name: User docs and examples list only KEEP keys (MIK-8044.SURF.2)
+        run: python3 scripts/release/test_surface_docs.py
       - name: Test the UPGRADING fragment assembler (MIK-8185)
         run: python3 scripts/release/test_upgrading_fragments.py
+      - name: UPGRADING covers every non-KEEP surface row (MIK-8044.SURF.6)
+        run: python3 scripts/release/test_surface_upgrading.py
       - name: Every pending UPGRADING fragment is well formed, and no new item is numbered (MIK-8185)
         run: python3 scripts/release/upgrading_fragments.py check
       # Proves the workflow-wiring assertions still discriminate: each case

@@ -25,7 +25,7 @@ use super::signing_nonce_allocations_support::{Fixture, SESSION, error_of, invok
 
 /// The production stdio entry point, called exactly as `run_stdio` calls it.
 async fn dispatch(fixture: &Fixture, request: Value) -> Value {
-    super::super::Gateway::dispatch_single_with_sink(
+    super::super::Gateway::dispatch_single_for_client(
         &fixture.meta,
         &fixture.tool_policy,
         &fixture.mtls_policy,
@@ -35,10 +35,10 @@ async fn dispatch(fixture: &Fixture, request: Value) -> Value {
             channel: &crate::gateway::input_bridge::NoClientChannel,
             handshake_capabilities: crate::protocol::meta::Declared::NONE,
             tasks: None,
-            modern: false,
+            serving: crate::gateway::server::stdio_single::ModernServing::Enabled,
+            discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
             sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
-        &super::super::StdioTelemetry::default(),
     )
     .await
     .expect("a request carrying an id must produce a response")
@@ -72,7 +72,7 @@ fn assert_ok(phase: &str, response: &Value) {
 ///
 /// Without this row the `Unprotected` arm has no dispatcher coverage at all —
 /// the other three rows all carry a key. The arm's other obligation, that it
-/// holds no lease, is NOT asserted here: `dispatch_single_with_sink` does not
+/// holds no lease, is NOT asserted here: `dispatch_single_for_client` does not
 /// return the `Option<SyncLease>` that `dispatch_tools_call` produces, so the
 /// lease is unobservable from the production entry point. See D24/D26 in
 /// `docs/release/v4.0.0-dispatcher-regression-design.md`.

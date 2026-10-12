@@ -248,6 +248,29 @@ async fn resend_permission_follows_the_stateless_slot_that_derived_it() {
     );
 }
 
+/// MIK-8393 R7: the cache's read-only set lives where the list that derived it
+/// lives. Every answer here declares `readOnlyHint: true`, so a gate reading
+/// one shared set would admit beta's call to alpha's tool, and the shared slot
+/// would admit both.
+#[tokio::test]
+async fn cache_admission_follows_the_stateless_slot_that_derived_it() {
+    let wire = PerIdentityTools::new();
+    let backend = wired(&wire);
+    backend
+        .get_tools_for_binding(Some("alpha@ledger"), &minted("alpha"))
+        .await
+        .expect("alpha fills");
+    assert!(backend.is_read_only_for(Some("alpha@ledger"), ALPHA_TOOL));
+    assert!(
+        !backend.is_read_only_for(Some("beta@ledger"), ALPHA_TOOL),
+        "beta's cold slot admitted a tool only alpha's listing declared"
+    );
+    assert!(
+        !backend.is_read_only_for(None, ALPHA_TOOL),
+        "an identified caller's declaration reached the shared slot"
+    );
+}
+
 /// GIVEN a `stateless` backend with two identified callers' slots filled
 /// WHEN a grant revocation evicts on the PRODUCTION binding prefix
 /// THEN alpha's slot is removed and refills on the next read, while beta's slot

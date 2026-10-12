@@ -103,6 +103,17 @@ pub(crate) struct EventsHub {
     /// Test-only: one attempt pauses just before its send admission.
     #[cfg(test)]
     before_send: crate::test_pause::Slot,
+    /// Test-only: one attempt pauses right after its claim (MIK-8202 E3).
+    #[cfg(test)]
+    after_claim: crate::test_pause::Slot,
+    /// Test-only: one attempt pauses just before its last retry-window read
+    /// (MIK-8202 E3b).
+    #[cfg(test)]
+    before_window: crate::test_pause::Slot,
+    /// Test-only: one attempt pauses just before its access is checked again
+    /// after the attempt is on record (MIK-8202).
+    #[cfg(test)]
+    before_recheck: crate::test_pause::Slot,
     /// Test-only: one withdraw pauses between judging its rows and deleting
     /// them (reconcile table T07).
     #[cfg(test)]
@@ -151,10 +162,17 @@ pub(crate) trait EventSource: Send + Sync {
         principal: &str,
         arguments: &serde_json::Value,
         event: &fanout::SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
     ) -> bool;
     /// What the core refcounts upstream work on: by default the event name
     /// and canonical arguments, shared across principals.
-    fn lifecycle_key(&self, _principal: &str, name: &str, arguments: &serde_json::Value) -> String {
+    fn lifecycle_key(
+        &self,
+        _principal: &str,
+        name: &str,
+        arguments: &serde_json::Value,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> String {
         String::from_utf8(rpc::canonical(&serde_json::json!([name, arguments]))).unwrap_or_default()
     }
     /// The lifecycle key of a stored row this source owns even while it does
@@ -221,6 +239,13 @@ impl std::fmt::Debug for EventsHub {
 }
 
 impl EventsHub {
+    /// Test-only: the queue of emitted occurrences, taken so a test outside
+    /// this module can read what was emitted (MIK-8202 E2-http).
+    #[cfg(test)]
+    pub(crate) fn take_intake(&self) -> tokio::sync::mpsc::Receiver<fanout::SourceEvent> {
+        self.runtime.intake.lock().take().expect("intake")
+    }
+
     /// Open the hub on `store_dir` (already `~`-expanded).
     ///
     /// # Errors
@@ -249,12 +274,12 @@ impl EventsHub {
     ) -> crate::Result<Arc<Self>> {
         // The startup sweep removes expired rows and opt-in tails: retention,
         // which skips its pass on a clock before 1970 rather than delete what
-        // it cannot date. The epoch dates nothing as ended, so nothing goes;
-        // every lease check refuses on its own read of the clock (MIK-8202).
-        let now = crate::clock::utc_now().unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
-        let store = store::Store::open(store_dir, now, tail_policy(config)).map_err(|e| {
-            crate::Error::Config(format!("events store {}: {e}", store_dir.display()))
-        })?;
+        // it cannot date; every lease check refuses on its own read of the
+        // clock (MIK-8202).
+        let store = store::Store::open(store_dir, crate::clock::utc_now(), tail_policy(config))
+            .map_err(|e| {
+                crate::Error::Config(format!("events store {}: {e}", store_dir.display()))
+            })?;
         Ok(Arc::new_cyclic(|me| Self {
             me: me.clone(),
             config: config.clone(),
@@ -279,6 +304,12 @@ impl EventsHub {
             before_receipts: crate::test_pause::Slot::default(),
             #[cfg(test)]
             before_send: crate::test_pause::Slot::default(),
+            #[cfg(test)]
+            after_claim: crate::test_pause::Slot::default(),
+            #[cfg(test)]
+            before_window: crate::test_pause::Slot::default(),
+            #[cfg(test)]
+            before_recheck: crate::test_pause::Slot::default(),
             #[cfg(test)]
             before_withdraw: crate::test_pause::Slot::default(),
         }))
@@ -361,6 +392,9 @@ fn tail_policy(config: &EventsConfig) -> store::TailPolicy {
 #[path = "lifecycle_tests.rs"]
 mod lifecycle_tests;
 
+#[cfg(test)]
+#[path = "clock_entry_tests.rs"]
+mod clock_entry_tests;
 #[cfg(test)]
 #[path = "sources_tests.rs"]
 mod sources_tests;

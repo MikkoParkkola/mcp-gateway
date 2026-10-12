@@ -309,7 +309,7 @@ async fn a_shared_personal_login_refuses_on_a_multi_user_gateway() {
         callback_host: None,
         callback_port: None,
         callback_path: None,
-        token_refresh_buffer_secs: 300,
+        token_refresh_buffer_secs: Some(300),
         shared_account: false,
     };
     let gw = gateway(
@@ -473,7 +473,7 @@ fn shared_login() -> BackendConfig {
         callback_host: None,
         callback_port: None,
         callback_path: None,
-        token_refresh_buffer_secs: 300,
+        token_refresh_buffer_secs: Some(300),
         shared_account: false,
     };
     BackendConfig {

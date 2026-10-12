@@ -11,18 +11,37 @@
 //! delivered leaf or across adjacent kept leaves.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::AtomicBool;
 
 use super::collusion::CollusionDetector;
 use super::collusion_gate::RECORD_CAP;
 
 #[path = "collusion_delivered.rs"]
 mod delivered;
-pub(crate) use delivered::Delivered;
+pub(crate) use delivered::{Delivered, Mode};
 #[path = "collusion_key_path.rs"]
 mod key_path;
 pub(super) use key_path::{key_path_joins, key_path_run_indices, key_path_runs};
+#[path = "collusion_digest_judged.rs"]
+mod judged;
+#[path = "collusion_view.rs"]
+pub(super) mod view;
 #[path = "collusion_walk.rs"]
 mod walk;
+pub(crate) use judged::{Judged, UnreadReceipt};
+
+/// Reference-list walks built on this thread (tests only, `MIK-8066` D2).
+#[cfg(test)]
+pub(crate) fn walks_built() -> u64 {
+    walk::walks_built()
+}
+
+/// Count one reference-list walk made outside the firewall (the relay's
+/// label walk), on this thread's walk count (tests only, `MIK-8066` D6).
+#[cfg(test)]
+pub(crate) fn note_walk_for_test() {
+    walk::note_walk();
+}
 
 #[path = "collusion_runs.rs"]
 mod runs;
@@ -103,10 +122,22 @@ pub(crate) struct DeliveryDigest {
     /// answer's single-receipt runs after capping (`add_seam_excuses`); never
     /// by staging, so a step's text the answer dropped carries none.
     pub(super) seam_excuses: Option<std::sync::Arc<[u64]>>,
-    /// A plan step past the plan bound: its fingerprint attachments, sketch
-    /// reservation and, once kept to the answer, its evidence and excuse
-    /// (`MIK-8066.BIG.3`, design r5.1).
-    pub(super) big: Option<Box<super::collusion::big::BigStep>>,
+    /// How the plan's answer judged this receipt (`MIK-8066` D9): the one
+    /// channel a step's evidence reaches the record through.
+    pub(super) judged: Judged,
+    /// Set by the first record (A2): a second record is a counted no-op.
+    pub(super) recorded: AtomicBool,
+    /// `MIK-8066` D4: a plan step's value leaves as sorted keyed hashes, set
+    /// at staging and kept only through a view retention, which keeps no
+    /// whole segments: what subset-forward seam ownership reads instead.
+    pub(super) leaf_hashes: Option<std::sync::Arc<[u64]>>,
+    /// `MIK-8066` A5: a view cut's `VIEW_BYTES` charge, held from retention
+    /// until this digest is recorded and dropped.
+    #[expect(dead_code, reason = "held for its Drop: releases the cut's charge")]
+    cut_charge: Option<super::collusion::budget::ViewCharge>,
+    /// A5: a view cut was refused its charge; its record marks the caller's
+    /// excuse lost.
+    pub(super) cut_lost: bool,
 }
 
 /// A delivery's key-path joins, each fingerprinted alone after the segment
@@ -240,7 +271,11 @@ impl DeliveryDigest {
             cut_fps: None,
             seam_excuses: None,
             joins: Joins::None,
-            big: None,
+            judged: Judged::default(),
+            recorded: AtomicBool::default(),
+            leaf_hashes: None,
+            cut_charge: None,
+            cut_lost: false,
         };
         (digest, cut)
     }
@@ -310,7 +345,11 @@ impl DeliveryDigest {
             cut_fps: None,
             seam_excuses: None,
             joins: Joins::None,
-            big: None,
+            judged: Judged::default(),
+            recorded: AtomicBool::default(),
+            leaf_hashes: None,
+            cut_charge: None,
+            cut_lost: false,
         };
         (digest, false)
     }
@@ -343,7 +382,11 @@ impl DeliveryDigest {
             cut_fps: None,
             seam_excuses: None,
             joins,
-            big: None,
+            judged: Judged::default(),
+            recorded: AtomicBool::default(),
+            leaf_hashes: None,
+            cut_charge: None,
+            cut_lost: false,
         };
         Some((digest, cut || joins_cut || kept < self.retained.len()))
     }
@@ -485,66 +528,6 @@ impl DeliveryDigest {
         self.retaining_for(detector, delivered, None)
     }
 
-    /// Kept to `delivered` as `retaining` describes, for the receipt of plan
-    /// step `step`, whose own span of the answer is matched first (`MIK-8209`
-    /// K7).
-    pub(super) fn retaining_for(
-        self,
-        detector: &CollusionDetector,
-        delivered: &Delivered<'_>,
-        step: Option<u32>,
-    ) -> Self {
-        if self.deferred {
-            return self.retaining_deferred(detector, delivered, step);
-        }
-        let verbatim = |s: &Segment| delivered.holds(s);
-        // Unchanged only without joins: a join is kept only where the answer
-        // still delivers it, even when every capped leaf survives (`MIK-8209`).
-        if self.retained.is_empty()
-            && matches!(self.joins, Joins::None)
-            && self.segments.iter().all(verbatim)
-        {
-            return self;
-        }
-        let original = (
-            self.leaf_fingerprints(detector),
-            self.join_fingerprints(detector),
-        );
-        let found = delivered.kgrams(detector);
-        let mut retained = Vec::new();
-        let mut segments = Vec::with_capacity(self.segments.len());
-        let mut gap = false;
-        for segment in self.segments {
-            if verbatim(&segment) {
-                segments.push(Segment {
-                    gap_before: gap || segment.gap_before,
-                    ..segment
-                });
-                gap = false;
-            } else {
-                retained.extend(
-                    detector
-                        .fingerprints(&segment.text)
-                        .into_iter()
-                        .filter(|fp| found.contains(fp)),
-                );
-                gap = true;
-            }
-        }
-        let kept = Self {
-            segments,
-            retained: Vec::new(),
-            sensitive: self.sensitive,
-            deferred: false,
-            seam_sources: None,
-            cut_fps: None,
-            seam_excuses: None,
-            joins: Joins::None,
-            big: self.big,
-        };
-        kept.with_original(detector, found, original, retained, &HashSet::new())
-    }
-
     /// [`Self::retaining`] for a digest whose cap is deferred (MIK-7992): its
     /// kept segments are the delivered leaves, in delivered order, that equal
     /// a whole leaf of the step, so every kept run is text the caller received
@@ -619,13 +602,13 @@ impl DeliveryDigest {
             self.leaf_fingerprints(detector),
             self.join_fingerprints(detector),
         );
-        let found = delivered.kgrams(detector);
+        let found = delivered.found(detector);
         let mut retained: Vec<u64> = self
             .segments
             .iter()
             .filter(|s| !delivered.holds(s))
             .flat_map(|s| detector.fingerprints(&s.text))
-            .filter(|fp| found.contains(fp))
+            .filter(|&fp| found.contains(fp))
             .collect();
         retained.extend(own_span_delivered_runs(detector, delivered, step, &whole));
         let mut in_step = self.step_runs_kgrams(detector, delivered);
@@ -639,7 +622,11 @@ impl DeliveryDigest {
             cut_fps: None,
             seam_excuses: None,
             joins: Joins::None,
-            big: None,
+            judged: Judged::default(),
+            recorded: AtomicBool::default(),
+            leaf_hashes: None,
+            cut_charge: None,
+            cut_lost: false,
         };
         kept.with_original(detector, found, original, retained, &in_step)
     }
@@ -722,13 +709,13 @@ impl DeliveryDigest {
     fn with_original(
         mut self,
         detector: &CollusionDetector,
-        found: &HashSet<u64>,
+        found: view::Found<'_>,
         (original, joins): (Vec<u64>, Vec<u64>),
         mut retained: Vec<u64>,
         in_step: &HashSet<u64>,
     ) -> Self {
         let across = self.run_kgrams(detector);
-        let kept = |fp: &u64| found.contains(fp) || across.contains(fp) || in_step.contains(fp);
+        let kept = |fp: &u64| found.contains(*fp) || across.contains(fp) || in_step.contains(fp);
         retained.extend(original.into_iter().filter(kept));
         let mut seen = HashSet::new();
         retained.retain(|fp| seen.insert(*fp));

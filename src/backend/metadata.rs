@@ -26,6 +26,10 @@ use crate::protocol::{
     ResourcesTemplatesListResult, Tool, ToolsListResult,
 };
 
+// MIK-8393: the response cache's admission, read from the slot this file resolves.
+#[path = "metadata_read_only.rs"]
+mod read_only;
+
 impl Backend {
     /// The tool cache belonging to `binding`'s pool slot.
     ///
@@ -67,6 +71,14 @@ impl Backend {
         self.tools_slot(binding)
             .tools_cache
             .is_fresh(self.cache_ttl)
+    }
+
+    /// How many list fills on this backend have passed admission (any slot,
+    /// any caller). A change across a check means a fill may have started or
+    /// contacted the backend meanwhile, possibly another caller's: read as an
+    /// effect, that errs toward keeping a nonce spent.
+    pub(crate) fn list_fills(&self) -> u64 {
+        self.list_fills.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// The shared slot's freshness. Used by readers that hold no caller.
@@ -126,17 +138,11 @@ impl Backend {
         self.tools_slot(None).tools_cache.ever_populated()
     }
 
-    /// The shared slot's tools and truncated flag under one read guard. The
-    /// fill writes the flag under the store's write guard, so this pair is
-    /// never a truncated list beside a clear flag.
+    /// The tools and truncated flag of the slot `binding` selects (`None`: the
+    /// shared one; MIK-8356) under one read guard. The fill writes the flag under
+    /// the store's write guard, so the pair is never a truncated list beside a clear flag.
     #[must_use]
-    pub(crate) fn cached_tools_snapshot_and_truncated(&self) -> (Arc<Vec<Tool>>, bool) {
-        self.cached_tools_snapshot_and_truncated_for(None)
-    }
-
-    /// [`Self::cached_tools_snapshot_and_truncated`] for the slot `binding`
-    /// selects (MIK-8356: a listing reads the caller's own slot).
-    pub(crate) fn cached_tools_snapshot_and_truncated_for(
+    pub(crate) fn cached_tools_snapshot_and_truncated(
         &self,
         binding: Option<&str>,
     ) -> (Arc<Vec<Tool>>, bool) {
@@ -315,109 +321,97 @@ impl Backend {
         // Resolve the slot ONCE and keep it for both the cache and the fetch.
         let lease = self.begin_internal_activity_for(&key)?;
         let entry = Arc::clone(lease.entry());
-        select(&entry)
-            .get_or_fetch_shared_then(
-                self.cache_ttl,
-                |mark| {
-                    fill_scope(mark, async {
-                        // F13: breaker, cooldown, token, in that order, before the
-                        // guard is armed, so a refusal here never stamps.
-                        let refresh_failed = || entry.tools_refresh_failed_at.lock();
-                        if family.stale_hit
-                            && refresh_failed().is_some_and(|at| at.elapsed() < LIST_FILL_COOLDOWN)
-                        {
-                            return Err(Error::BackendUnavailable(format!(
-                                "{}: a stale tools refresh failed within the last {}s",
-                                self.name,
-                                LIST_FILL_COOLDOWN.as_secs()
-                            )));
-                        }
-                        admit_fill(&entry, &self.name, bound, family.cooldown)?;
-                        let mut guard = family.cooldown.then(|| FillGuard::arm(Arc::clone(&entry)));
-                        let drained = run_bounded(&entry, &self.name, bound, async {
-                            // A cold fill on the dispatch path has sent no tools/call
-                            // yet, so a failed start is a pre-send refusal (MIK-7979).
-                            let transport = self.ensure_entry_started(&key).await.map_err(|e| {
-                                super::lifecycle::pre_send_start_error(&self.name, e)
-                            })?;
-                            Provenance::mark_started();
-                            let (merged, truncated) = drain_list_pages(
-                                transport.as_ref(),
-                                &self.name,
-                                &family,
-                                fetch_headers,
-                                identity_key,
-                            )
-                            .await?;
-                            let (items, prepared) = match merged {
-                                Some(result) => parse(result)?,
-                                None => (Vec::new(), None),
-                            };
-                            Ok((items, truncated, prepared))
-                        })
-                        .await;
-                        let end = match &drained {
-                            Ok(_) => FillEnd::Drained,
-                            // A login in progress stamps no cooldown (MIK-7982).
-                            Err(e) if e.is_authorization_wait() => FillEnd::Pending,
-                            Err(e) => match super::fill_check::Replay::of(e) {
-                                None if super::fill_check::is_transport_failure(e) => {
-                                    FillEnd::Unreplayable
-                                }
-                                transport => FillEnd::Failed { transport },
-                            },
+        // MIK-8399: what a tools fill read, for the permit's abandon hook.
+        let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let tools = family.truncated_flag.is_some();
+        let on_abandon =
+            tools.then(|| self.abandoned_fill_hook(Arc::clone(&entry), Arc::clone(&seen)));
+        // Boxed: the fill's state is large, and every caller of this (and of
+        // its callers) would otherwise carry it inline (clippy large_futures).
+        Box::pin(select(&entry).get_or_fetch_shared_then(
+            self.cache_ttl,
+            |mark| {
+                fill_scope(mark, async {
+                    // F13: breaker, cooldown, token, in that order, before the
+                    // guard is armed, so a refusal here never stamps.
+                    let refresh_failed = || entry.tools_refresh_failed_at.lock();
+                    if family.stale_hit
+                        && refresh_failed().is_some_and(|at| at.elapsed() < LIST_FILL_COOLDOWN)
+                    {
+                        return Err(Error::BackendUnavailable(format!(
+                            "{}: a stale tools refresh failed within the last {}s",
+                            self.name,
+                            LIST_FILL_COOLDOWN.as_secs()
+                        )));
+                    }
+                    let counted = (self.name.as_str(), &self.list_fills);
+                    admit_fill(&entry, counted, bound, family.cooldown)?;
+                    let mut guard = family.cooldown.then(|| FillGuard::arm(Arc::clone(&entry)));
+                    let drained = run_bounded(&entry, &self.name, bound, async {
+                        // A cold fill on the dispatch path has sent no tools/call
+                        // yet, so a failed start is a pre-send refusal (MIK-7979).
+                        let transport = self
+                            .ensure_entry_started(&key)
+                            .await
+                            .map_err(|e| super::lifecycle::pre_send_start_error(&self.name, e))?;
+                        Provenance::mark_started();
+                        let (merged, truncated) = drain_list_pages(
+                            transport.as_ref(),
+                            &self.name,
+                            &family,
+                            (fetch_headers, identity_key),
+                            tools.then_some(&*seen),
+                        )
+                        .await?;
+                        let (items, prepared) = match merged {
+                            Some(result) => parse(result)?,
+                            None => (Vec::new(), None),
                         };
-                        if family.stale_hit && drained.is_err() && !matches!(end, FillEnd::Pending)
-                        {
-                            *refresh_failed() = Some(tokio::time::Instant::now());
-                        }
-                        if let Some(guard) = guard.as_mut() {
-                            guard.end(end);
-                        }
-                        let (items, truncated, prepared) = drained?;
-
-                        debug!(
-                            backend = %self.name,
-                            kind = family.kind,
-                            count = items.len(),
-                            per_user = identity_key.is_some(),
-                            "Backend metadata cached"
-                        );
-
-                        Ok((items, (truncated, guard, prepared)))
+                        Ok((items, truncated, prepared))
                     })
-                },
-                |(truncated, guard, prepared)| {
-                    // Written only once the store is accepted, and on every
-                    // accepted store, so a complete fill clears it (design D).
-                    if let Some(flag) = family.truncated_flag {
-                        flag(&entry).store(truncated, Ordering::SeqCst);
+                    .await;
+                    let end = FillEnd::of(&drained);
+                    if family.stale_hit && drained.is_err() && !matches!(end, FillEnd::Pending) {
+                        *refresh_failed() = Some(tokio::time::Instant::now());
                     }
-                    // Only this accepted store's own set and verdicts (F13,
-                    // #1441).
-                    if let Some(prepared) = prepared {
-                        *entry.resend_permitted.write() = prepared.resend_permitted;
-                        let listing = if truncated {
-                            super::descriptor_gate::Listing::Truncated
-                        } else {
-                            super::descriptor_gate::Listing::Complete
-                        };
-                        self.commit_verdicts(
-                            identity_key.unwrap_or(""),
-                            listing,
-                            prepared.verdicts,
-                        );
+                    if let Some(guard) = guard.as_mut() {
+                        guard.end(end);
                     }
-                    // The only place a guard reaches `Stored`: a voided store
-                    // drops it unrun, still `Drained`, and so stamps (F13).
-                    if let Some(mut guard) = guard {
-                        guard.end(FillEnd::Stored);
-                    }
-                },
-                // A joiner classifies its deadline by this fill (MIK-8046).
-                Provenance::joined,
-            )
-            .await
+                    let (items, truncated, prepared) = drained?;
+
+                    debug!(
+                        backend = %self.name,
+                        kind = family.kind,
+                        count = items.len(),
+                        per_user = identity_key.is_some(),
+                        "Backend metadata cached"
+                    );
+
+                    Ok((items, (truncated, guard, prepared)))
+                })
+            },
+            |(truncated, guard, prepared)| {
+                // Written only once the store is accepted, and on every
+                // accepted store, so a complete fill clears it (design D).
+                if let Some(flag) = family.truncated_flag {
+                    flag(&entry).store(truncated, Ordering::SeqCst);
+                }
+                // Only this accepted store's own set and verdicts (F13,
+                // #1441).
+                if let Some(prepared) = prepared {
+                    self.store_prepared(&entry, identity_key, truncated, prepared);
+                }
+                // The only place a guard reaches `Stored`: a voided store
+                // drops it unrun, still `Drained`, and so stamps (F13).
+                if let Some(mut guard) = guard {
+                    guard.end(FillEnd::Stored);
+                }
+            },
+            // A joiner classifies its deadline by this fill (MIK-8046).
+            Provenance::joined,
+            on_abandon,
+        ))
+        .await
     }
 
     /// # Errors

@@ -20,7 +20,7 @@ impl Default for OAuthConfig {
             callback_host: None,
             callback_port: None,
             callback_path: None,
-            token_refresh_buffer_secs: super::default_token_refresh_buffer(),
+            token_refresh_buffer_secs: None,
             shared_account: false,
         }
     }

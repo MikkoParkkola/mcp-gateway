@@ -266,6 +266,29 @@ impl HttpTransport {
         result
     }
 
+    /// Keep the failed send's whole error chain and kind flags (MIK-8359): the
+    /// sanitized `Error` says only "request failed", which hides whether a
+    /// connection was reset, closed early or refused.
+    #[cfg(test)]
+    fn record_send_error(&self, error: &reqwest::Error) {
+        use std::fmt::Write as _;
+        let mut chain = String::new();
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+        while let Some(layer) = source {
+            let _ = write!(chain, "[{layer:?}] <- ");
+            source = layer.source();
+        }
+        *self.last_send_error.lock() = Some(format!(
+            "connect={} timeout={} redirect={} request={} body={} decode={} :: {chain}",
+            error.is_connect(),
+            error.is_timeout(),
+            error.is_redirect(),
+            error.is_request(),
+            error.is_body(),
+            error.is_decode(),
+        ));
+    }
+
     /// POST `request` with `headers` and read its reply.
     async fn post_and_read(
         &self,
@@ -287,6 +310,8 @@ impl HttpTransport {
             .send()
             .await
             .map_err(|e| {
+                #[cfg(test)]
+                self.record_send_error(&e);
                 let evidence = if self.redirects_followed.load(Ordering::SeqCst) == redirects_before
                 {
                     RedirectEvidence::NoRedirectFollowed

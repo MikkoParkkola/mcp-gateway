@@ -612,3 +612,133 @@ async fn s1_http_invoke_withheld_lacked_and_unknown_answer_alike() {
         );
     }
 }
+
+/// A `tools/call` of `name` on `/mcp` whose argument carries a NUL, as alpha
+/// (`alpha`) or with no identity at all.
+async fn nul_call(gw: &Gateway, name: &str, alpha: bool) -> (StatusCode, Value) {
+    let body = json!({"jsonrpc": "2.0", "id": 31, "method": "tools/call",
+        "params": {"name": name, "arguments": {"q": "a\u{0}b"}}});
+    if alpha {
+        return post_as_alpha(&gw.router, "/mcp", &body).await;
+    }
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = tower::ServiceExt::oneshot(gw.router.clone(), request)
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// The per-user backend as a `passthrough` backend, with input sanitizing on.
+async fn sanitizing_gateway(slot: CallerSlot) -> Gateway {
+    gateway_tuned(
+        (
+            slot,
+            &crate::gateway::meta_mcp::slot_verdict_fixture::valid(),
+            Warmth::Warm,
+        ),
+        CLOSED,
+        Surfaced::Yes,
+        (
+            |c: &mut crate::config::BackendConfig| c.passthrough = true,
+            |_: &mut _| {},
+        ),
+        |state: &mut super::AppState| state.sanitize_input = true,
+    )
+    .await
+}
+
+const NUL_REFUSAL: &str = "null bytes";
+
+/// X1 (MIK-8356 ruling (a); the exemption oracle at the per-user verdict and
+/// the MIK-8154 sanitize exemption): on a per-user `passthrough` backend with
+/// sanitizing on, a call by a surfaced name is never exempt. Intake runs
+/// before the caller's own catalogue is read, so an exemption there would
+/// let the answer tell a name alpha's catalogue withholds or lacks (exempt,
+/// then -32601) from one the backend has nowhere (sanitized). Every surfaced
+/// case answers the same null-byte refusal and dispatches nothing: offered,
+/// withheld and lacked as alpha, offered with no identity, and an unknown
+/// name. Control: `gateway_invoke` naming the backend keeps the passthrough
+/// exemption. RED before the fix: the withheld and lacked names, and the
+/// offered one, pass intake as exempt.
+#[tokio::test]
+async fn x1_per_user_surfaced_names_are_always_sanitized() {
+    let unknown_gw = sanitizing_gateway(CallerSlot::Valid).await;
+    let unknown = nul_call(&unknown_gw, "no_such_tool", true).await;
+    assert!(
+        unknown.1.to_string().contains(NUL_REFUSAL),
+        "premise: an unknown name is sanitized: {unknown:?}"
+    );
+    let unknown_text = unknown.1.to_string();
+    let cases = [
+        ("offered", CallerSlot::Valid, true),
+        ("withheld", CallerSlot::Invalid, true),
+        ("lacked", CallerSlot::Lacks, true),
+        ("no identity", CallerSlot::Valid, false),
+    ];
+    for (case, slot, alpha) in cases {
+        let gw = sanitizing_gateway(slot).await;
+        let answer = nul_call(&gw, TOOL, alpha).await;
+        assert_eq!(gw.dispatched(), 0, "X1 {case}: dispatched: {answer:?}");
+        assert_eq!(
+            (answer.0, answer.1.to_string()),
+            (unknown.0, unknown_text.clone()),
+            "X1 {case}: answered unlike an unknown name"
+        );
+    }
+    let gw = sanitizing_gateway(CallerSlot::Valid).await;
+    let body = json!({"jsonrpc": "2.0", "id": 32, "method": "tools/call",
+        "params": {"name": "gateway_invoke", "arguments":
+            {"server": BACKEND, "tool": TOOL, "arguments": {"q": "a\u{0}b"}}}});
+    let invoked = post_as_alpha(&gw.router, "/mcp", &body).await;
+    assert!(
+        !invoked.1.to_string().contains(NUL_REFUSAL),
+        "X1 control: gateway_invoke lost the passthrough exemption: {invoked:?}"
+    );
+    assert_eq!(
+        gw.dispatched(),
+        1,
+        "X1 control: not dispatched: {invoked:?}"
+    );
+    // Control 2: the same surfaced name on a passthrough backend that keeps
+    // one shared catalogue stays exempt; only per-user backends lose it.
+    let shared = gateway_tuned(
+        (
+            CallerSlot::Valid,
+            &crate::gateway::meta_mcp::slot_verdict_fixture::valid(),
+            Warmth::Warm,
+        ),
+        CLOSED,
+        Surfaced::Yes,
+        (
+            |c: &mut crate::config::BackendConfig| {
+                c.passthrough = true;
+                c.identity_propagation = None;
+            },
+            |_: &mut _| {},
+        ),
+        |state: &mut super::AppState| state.sanitize_input = true,
+    )
+    .await;
+    let exempt = nul_call(&shared, TOOL, true).await;
+    assert!(
+        !exempt.1.to_string().contains(NUL_REFUSAL),
+        "X1 control 2: a shared passthrough surfaced name lost its exemption: {exempt:?}"
+    );
+    assert_eq!(
+        shared.dispatched(),
+        1,
+        "X1 control 2: not dispatched: {exempt:?}"
+    );
+}

@@ -120,6 +120,13 @@ async fn g3_i6_index_bounded_by_admission() {
     );
 
     let refused = list_as(&fx.meta, "p64").await;
+    // A search indexes after every fill attempt, a refused one included
+    // (MIK-8356), so it reaches the index with no admitted slot behind it.
+    let who = identity("p64");
+    let searched = fx
+        .meta
+        .search_tools(&json!({"query": "read"}), None, &identified_caller(&who))
+        .await;
     assert!(
         !backend.pool_has_slot_for_test(&slot_of("p64")),
         "I6: the 65th principal was admitted a slot (listing answered: {refused})"
@@ -127,7 +134,7 @@ async fn g3_i6_index_bounded_by_admission() {
     assert_eq!(
         indexed_binding_for(&fx.meta, "p64"),
         None,
-        "I6: the 65th principal got an index entry"
+        "I6: the 65th principal got an index entry (search answered: {searched:?})"
     );
     assert!(
         backend.indexed_bindings_for_test().len() <= 64,

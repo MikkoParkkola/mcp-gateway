@@ -9,19 +9,19 @@ use tracing::debug;
 use super::Gateway;
 use super::StdioNonce;
 use super::stdio_route_stage::RouteStage;
-use super::stdio_single::InputSanitizing;
 use super::{
-    STDIO_CREDENTIAL_PRINCIPAL, StdioClient, StdioTelemetry, stdio_catalogue, stdio_delivery,
+    STDIO_CREDENTIAL_PRINCIPAL, StdioClient, stdio_catalogue, stdio_delivery,
     stdio_routing_keys_only, stdio_take_merged_client_meta, stdio_tasks,
 };
 use crate::gateway::authz::ToolPolicyAuthorizer;
 use crate::gateway::meta_mcp::refund_witness::RefundWitness;
 use crate::gateway::meta_mcp::{InvokeScope, MetaMcp, MetaMcpCallerContext};
+use crate::security::sanitize::InputSanitizing;
 
 impl Gateway {
     #[expect(
         clippy::too_many_lines,
-        reason = "one dispatch path; the telemetry-guard scope is part of it"
+        reason = "one dispatch path: signing, parse, routing and tools/call staging in order"
     )]
     pub(super) async fn dispatch_relay_scoped(
         meta_mcp: &Arc<MetaMcp>,
@@ -29,7 +29,6 @@ impl Gateway {
         _mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
         mut request: serde_json::Value,
         client: StdioClient<'_>,
-        protocol_telemetry_sink: &StdioTelemetry,
     ) -> Option<stdio_delivery::StdioAnswer> {
         // Borrowed views throughout: a refused request is never copied.
         // Ownership is taken once, after admission, where it executes.
@@ -37,25 +36,6 @@ impl Gateway {
         use crate::protocol::JsonRpcResponse;
 
         let session_id = client.session_id;
-        let prepared = Self::prepare_signing(meta_mcp, &mut request, client.sanitize);
-        let (mut signing_context, chain_nonce) = match prepared {
-            Ok(prepared) => prepared,
-            Err(response) => return Some(stdio_delivery::StdioAnswer::Built(response)),
-        };
-
-        // Scoped so the guard is gone before the first await below: see
-        // [`StdioTelemetry`].
-        let parsed = {
-            let mut sink = protocol_telemetry_sink
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            Self::parse_and_observe(&request, session_id, sink.as_mut())
-        };
-        let (id, method, params, request_shape) = match parsed {
-            Ok(parsed) => parsed,
-            Err(early) => return early.map(stdio_delivery::StdioAnswer::Built),
-        };
-
         let policy = ToolPolicyAuthorizer { tool_policy };
         let scope = InvokeScope::stdio(
             &policy,
@@ -66,6 +46,19 @@ impl Gateway {
                 ),
             ),
         );
+        let view = super::super::meta_mcp::visible::TargetView::Caller(scope, Some(session_id));
+        let prepared = Self::prepare_signing(meta_mcp, &mut request, (client.sanitize, view));
+        let (mut signing_context, chain_nonce) = match prepared {
+            Ok(prepared) => prepared,
+            Err(response) => return Some(stdio_delivery::StdioAnswer::Built(response)),
+        };
+
+        let parsed = Self::parse_and_observe(&request, (session_id, client.serving));
+        let (id, method, params, request_shape) = match parsed {
+            Ok(parsed) => parsed,
+            Err(early) => return early.map(stdio_delivery::StdioAnswer::Built),
+        };
+
         let (external_tool, response_targets) = {
             // Response targets are derived here, before dispatch, so live backend
             // state cannot move an accepted call's provenance. The mapping is fed
@@ -128,7 +121,7 @@ impl Gateway {
                         client.tasks,
                         JsonRpcResponse::success_serialized(
                             id,
-                            meta_mcp.discover_document(client.modern),
+                            meta_mcp.discover_document(client.discover_lists_modern()),
                         ),
                     ),
                     "initialize" => {
@@ -235,7 +228,10 @@ impl Gateway {
     fn prepare_signing(
         meta_mcp: &Arc<MetaMcp>,
         request: &mut serde_json::Value,
-        sanitize: InputSanitizing,
+        (sanitize, view): (
+            InputSanitizing,
+            super::super::meta_mcp::visible::TargetView<'_>,
+        ),
     ) -> std::result::Result<
         (
             Option<super::super::meta_mcp::signing::SigningInvocationContext>,
@@ -251,6 +247,18 @@ impl Gateway {
             JsonRpcResponse::error(id, error.to_rpc_code(), wire_error_message(error))
                 .to_value_lossy()
         };
+        // MIK-8154 S2': the protocol fields, before anything takes them off.
+        if sanitize == InputSanitizing::On {
+            crate::security::sanitize::validate_protocol_fields(
+                request,
+                &crate::gateway::PROTOCOL_NONCES,
+                crate::security::sanitize::ProtocolRoute::Meta,
+            )
+            .map_err(|error| {
+                JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string())
+                    .to_value_lossy()
+            })?;
+        }
         let mut signing_context = meta_mcp.signing_enabled().then(|| {
             super::super::meta_mcp::signing::SigningInvocationContext::capture_scoped(
                 request,
@@ -259,11 +267,16 @@ impl Gateway {
         });
         let chain_nonce = crate::protocol::mrtr::take_chain_nonce(request)
             .map_err(|error| refuse(raw_id.clone(), &error))?;
-        if sanitize == InputSanitizing::On {
-            *request =
-                crate::security::sanitize::sanitize_json_value(request).map_err(|error| {
-                    JsonRpcResponse::error(None, -32600, error.to_string()).to_value_lossy()
-                })?;
+        // MIK-8154 SAN.1: mapped on the caller's view (the request's memo),
+        // then sanitized unless every target is `passthrough` (option (a)).
+        if sanitize == InputSanitizing::On
+            && !super::super::router::sanitize_exempt(meta_mcp, request, view)
+        {
+            *request = crate::security::sanitize::sanitize_request(
+                request,
+                crate::security::sanitize::ProtocolRoute::Meta,
+            )
+            .map_err(|error| refuse(raw_id.clone(), &error))?;
         }
         if let Some(context) = signing_context.as_mut() {
             context
@@ -278,16 +291,15 @@ impl Gateway {
         Ok((signing_context, chain_nonce))
     }
 
-    /// Parse, classify and durably observe one inbound stdio request.
+    /// Parse, classify and observe one inbound stdio request. The observation
+    /// is in memory only; the session's saver persists it off the request
+    /// path (MIK-8364).
     ///
     /// `Err(None)` means no response is due (a notification); `Err(Some(_))`
     /// carries an already-serialized error response.
     fn parse_and_observe<'r>(
         request: &'r serde_json::Value,
-        session_id: &str,
-        protocol_telemetry_sink: Option<
-            &mut crate::protocol_revision_telemetry::DurableTelemetrySink,
-        >,
+        (session_id, serving): (&str, super::stdio_single::ModernServing),
     ) -> std::result::Result<
         (
             crate::protocol::RequestId,
@@ -297,8 +309,7 @@ impl Gateway {
         ),
         Option<serde_json::Value>,
     > {
-        use super::super::router::helpers::parse_request_ref;
-        use crate::protocol::JsonRpcResponse;
+        use super::super::router::helpers::{is_notification_method, parse_request_ref};
 
         let (id, method, params) = match parse_request_ref(request) {
             Ok((id, method, params)) => (id, method.to_string(), params),
@@ -321,13 +332,7 @@ impl Gateway {
             // keeps the pre-handshake record at `absent`/`none`.
             crate::protocol_revision_telemetry::session_negotiated_revision(Some(session_id)),
         );
-        Self::observe_stdio_inbound(
-            request,
-            params,
-            &method,
-            session_id,
-            protocol_telemetry_sink,
-        );
+        Self::observe_stdio_inbound(request, params, &method, session_id);
 
         // ADR-014 §4, the stdio half. Stdio classifies the same body HTTP does,
         // so it declares a level the same way and gets the same filter -- one
@@ -337,17 +342,56 @@ impl Gateway {
             request_shape.declared_log_level(),
         );
 
-        // Notifications have no id — send no response
-        if method.starts_with("notifications/") {
-            debug!(notification = %method, "stdio: notification (no response)");
-            return Err(None);
-        }
+        // The refusals `/mcp` runs from the body alone, in its order: a revision
+        // this build does not serve, then a method whose client capability was
+        // not declared, then a method the revision removed (MIK-8368, MIK-8380).
+        // The header checks are HTTP-only: stdio carries no headers.
+        let modern_serving = serving == super::stdio_single::ModernServing::Enabled;
 
-        // Requests must have an id
-        let Some(id) = id else {
-            let resp = JsonRpcResponse::error(None, -32600, "Missing id");
-            return Err(Some(resp.to_value_lossy()));
+        // Notifications have no id — send no response. One exception: a MODERN
+        // request that names a method the revision removed and carries an id is
+        // a request, and HTTP refuses it, so it is refused here too (version
+        // first). Every other notification stays silent, whatever its id, era
+        // or revision. HTTP differs: it runs every check before its 202.
+        // `parse_request_ref` already refused a request without an id (-32600
+        // "Missing id"), and both use `is_notification_method`, so only a
+        // notification takes the second arm (MIK-8364).
+        let id = match id {
+            Some(id) if !is_notification_method(&method) => id,
+            id => {
+                if let (Some(id), crate::protocol::meta::RequestShape::Modern(fields)) =
+                    (id.as_ref(), &request_shape)
+                    && let Some(removed) =
+                        crate::protocol::modern_refusal::removed_method_refusal(Some(id), &method)
+                {
+                    let refusal = crate::protocol::modern_refusal::unsupported_modern_version(
+                        Some(id),
+                        fields,
+                        modern_serving,
+                    )
+                    .unwrap_or(removed);
+                    return Err(Some(refusal.to_value_lossy()));
+                }
+                debug!(notification = %method, "stdio: notification (no response)");
+                return Err(None);
+            }
         };
+
+        // One function answers both transports. Legacy and malformed shapes are
+        // not judged here, as before.
+        if let crate::protocol::meta::RequestShape::Modern(fields) = &request_shape
+            && let Some(rpc) = crate::protocol::modern_refusal::unsupported_modern_version(
+                Some(&id),
+                fields,
+                modern_serving,
+            )
+            .or_else(|| {
+                crate::protocol::modern_refusal::modern_method_refusal(Some(&id), fields, &method)
+                    .map(|(rpc, _)| rpc)
+            })
+        {
+            return Err(Some(rpc.to_value_lossy()));
+        }
 
         Ok((id, method, params, request_shape))
     }

@@ -1,5 +1,10 @@
 # Circuit Breaker Implementation Summary
 
+> Historical (3.x, issue #47). In 4.0 the per-backend `circuit_breaker` block is
+> removed (a load error that `mcp-gateway upgrade` deletes), and the `failsafe.*`
+> tuning keys are hidden: still honoured, but their defaults apply unless set.
+> The YAML below records what 3.x accepted; do not copy it into a 4.0 config.
+
 ## Overview
 Enhanced circuit breaker implementation for mcp-gateway with comprehensive tracing, per-backend configuration, and detailed error messages.
 
@@ -133,7 +138,7 @@ backends:
 5. **tests/backend_tests.rs**
    - Updated test fixtures with new `circuit_breaker` field
 
-6. **examples/circuit-breaker.yaml**
+6. **examples/circuit-breaker.yaml** (removed in 4.0: it showed only hidden keys)
    - Comprehensive configuration example with comments
    - Shows global, per-backend, and disabled configurations
 
@@ -242,4 +247,4 @@ backends:
 - Branch: `feature/circuit-breakers`
 - Files changed: 6 files, +358 insertions, -30 deletions
 - Tests: 8 new tests, all existing tests pass
-- Example config: `examples/circuit-breaker.yaml`
+- Example config: `examples/circuit-breaker.yaml` (removed in 4.0)

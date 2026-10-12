@@ -20,7 +20,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use super::super::stdio_tasks::{self, StdioTasks};
-use super::super::{STDIO_SESSION_ID, StdioClient, StdioTelemetry};
+use super::super::{STDIO_SESSION_ID, StdioClient};
 use crate::config::{AuthConfig, InputSchemaEnforcement, SurfacedToolConfig};
 use crate::gateway::Gateway;
 use crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::{
@@ -112,7 +112,7 @@ impl Stdio {
         let before = self.gateway.tool_calls().len();
         let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": {"name": TOOL, "arguments": {"folder": "inbox"}}});
-        let answer = Gateway::dispatch_single_with_sink(
+        let answer = Gateway::dispatch_single_for_client(
             &self.meta,
             &Arc::new(crate::security::ToolPolicy::default()),
             &Arc::new(crate::mtls::MtlsPolicy::from_config(
@@ -124,10 +124,10 @@ impl Stdio {
                 channel: &crate::gateway::input_bridge::NoClientChannel,
                 handshake_capabilities: Declared::NONE,
                 tasks: self.tasks.as_ref().map(|store| &*store.tasks),
-                modern: false,
+                serving: crate::gateway::server::stdio_single::ModernServing::Enabled,
+                discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
                 sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
             },
-            &StdioTelemetry::default(),
         )
         .await
         .expect("a request is answered");
@@ -189,7 +189,7 @@ async fn c10_stdio_per_user_lacked_with_enforcement_off() {
 impl Stdio {
     async fn rpc(&self, id: u64, method: &str, params: Value) -> Value {
         let request = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
-        Gateway::dispatch_single_with_sink(
+        Gateway::dispatch_single_for_client(
             &self.meta,
             &Arc::new(crate::security::ToolPolicy::default()),
             &Arc::new(crate::mtls::MtlsPolicy::from_config(
@@ -201,10 +201,10 @@ impl Stdio {
                 channel: &crate::gateway::input_bridge::NoClientChannel,
                 handshake_capabilities: Declared::NONE,
                 tasks: self.tasks.as_ref().map(|store| &*store.tasks),
-                modern: false,
+                serving: crate::gateway::server::stdio_single::ModernServing::Enabled,
+                discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
                 sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
             },
-            &StdioTelemetry::default(),
         )
         .await
         .expect("a request is answered")
@@ -606,5 +606,190 @@ async fn r1_stdio_signed_keyed_replay_of_a_withheld_name_answers_absent() {
         stdio.gateway.tool_calls().len(),
         sent,
         "R1-stdio-signed: the retry reached the backend: {replay}"
+    );
+}
+
+/// N1 (the no-view marker from the call path; muse delta LOW): the sole
+/// operator's slot is warm and indexed by a real listing, then its managed
+/// grant is revoked. Readers that recheck the grant (initialize, `tools/list`,
+/// `list_servers`, the disabled list) write the no-view marker themselves;
+/// next-tool predictions read the index and do not. A surfaced call by the
+/// revoked operator is answered as absent and writes the marker, so every
+/// later reader withholds the backend at once. RED without the verdict's
+/// `record_no_view`: the index still holds the revoked grant's slot.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn n1_a_revoked_operators_surfaced_call_marks_no_view() {
+    let stdio = operator_stdio();
+    let filled = stdio
+        .rpc(
+            1,
+            "tools/call",
+            json!({"name": "gateway_list_tools", "arguments": {"server": BACKEND}}),
+        )
+        .await;
+    let backend = stdio.gateway.backends().get(BACKEND).expect("the backend");
+    assert!(
+        backend
+            .populated_per_user_bindings_for_test()
+            .contains(&DirectAccountGateway::operator_binding()),
+        "premise: a real fill warmed the operator's slot: {filled}"
+    );
+    stdio.gateway.revoke_operator_grant().await;
+    let operator = DirectAccountGateway::operator_subject();
+    assert!(
+        !backend.caller_has_no_view(&operator),
+        "premise: the revocation alone writes no marker"
+    );
+    let answer = stdio
+        .rpc(
+            2,
+            "tools/call",
+            json!({"name": TOOL, "arguments": {"folder": "inbox"}}),
+        )
+        .await;
+    assert_eq!(
+        answer.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "premise: the revoked operator's surfaced call answers as absent: {answer}"
+    );
+    assert!(
+        backend.caller_has_no_view(&operator),
+        "N1: the call left no no-view marker, so predictions still read the revoked slot"
+    );
+}
+
+/// X1, stdio twin (MIK-8356 ruling (a)): on stdio, with input sanitizing on,
+/// a call by the surfaced name of a tool on a per-user `passthrough` backend
+/// is sanitized: its NUL argument is refused and nothing is dispatched. The
+/// sole operator's own catalogue is what judges the name later, so intake
+/// must not exempt it. RED before the fix: intake exempts it and the NUL is
+/// dispatched.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn x1_stdio_per_user_surfaced_name_is_sanitized() {
+    let mut gateway = DirectAccountGateway::new_configured(
+        ServeMode::Stdio,
+        AuthConfig::default(),
+        &Binding::Connected,
+        |config| config.passthrough = true,
+    );
+    let meta = Arc::new(
+        gateway
+            .take_meta()
+            .with_surfaced_tools(vec![SurfacedToolConfig {
+                server: BACKEND.to_string(),
+                tool: TOOL.to_string(),
+            }]),
+    );
+    gateway
+        .backends()
+        .get(BACKEND)
+        .expect("the backend")
+        .store_shared_tools_for_test(vec![tool(TOOL, &valid())]);
+    let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": TOOL, "arguments": {"folder": "a\u{0}b"}}});
+    let answer = Gateway::dispatch_single_for_client(
+        &meta,
+        &Arc::new(crate::security::ToolPolicy::default()),
+        &Arc::new(crate::mtls::MtlsPolicy::from_config(
+            &crate::mtls::MtlsConfig::default(),
+        )),
+        request,
+        StdioClient {
+            session_id: STDIO_SESSION_ID,
+            channel: &crate::gateway::input_bridge::NoClientChannel,
+            handshake_capabilities: Declared::NONE,
+            tasks: None,
+            serving: crate::gateway::server::stdio_single::ModernServing::Enabled,
+            discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
+            sanitize: crate::gateway::server::stdio_single::InputSanitizing::On,
+        },
+    )
+    .await
+    .expect("a request is answered");
+    assert!(
+        answer.to_string().contains("null bytes"),
+        "X1 stdio: a per-user surfaced name was exempt from sanitizing: {answer}"
+    );
+    assert_eq!(
+        gateway.tool_calls().len(),
+        0,
+        "X1 stdio: the NUL argument was dispatched: {answer}"
+    );
+}
+
+/// A signed, keyed modern `gateway_invoke` of [`TOOL`] under `key` and `nonce`.
+fn signed_invoke_as(key: &str, nonce: &str, folder: &str) -> Value {
+    json!({
+        "name": "gateway_invoke",
+        "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"folder": folder}, "nonce": nonce},
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+            crate::protocol::mrtr::IDEMPOTENCY_KEY_META: key,
+        }
+    })
+}
+
+/// W2 (MIK-8356 x MIK-8353), the stdio twin of the HTTP witness row: the
+/// route stage's caller verdict releases the sole operator's managed
+/// credential, then execution admission refuses the call (its key reused for
+/// other arguments, 409). Something acted, so the nonce stays spent: the
+/// honest call re-sent under it is a replay. RED while the stdio witness,
+/// minted before the route stage, ignores what the verdict did.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn w2_stdio_a_verdict_release_then_an_admission_refusal_keeps_the_nonce() {
+    let stdio = operator_stdio_armed(|meta| {
+        meta.enable_message_signing(
+            crate::security::message_signing::MessageSigner::new(
+                b"w2-stdio-signing-secret-at-least-32-bytes!!".to_vec(),
+                None,
+                "w2-stdio".to_owned(),
+            ),
+            std::time::Duration::from_secs(300),
+            true,
+        );
+    });
+    let backend = stdio.gateway.backends().get(BACKEND).expect("the backend");
+    backend.store_per_user_tools_for_test(
+        &DirectAccountGateway::operator_binding(),
+        vec![tool(TOOL, &valid()), tool(SIBLING, &valid())],
+    );
+    stdio.gateway.answer_next(json!({
+        "content": [{"type": "text", "text": "w2-first"}], "isError": false
+    }));
+    let first = stdio
+        .rpc(1, "tools/call", signed_invoke_as("w2-k1", "w2-n1", "inbox"))
+        .await;
+    assert!(
+        first.to_string().contains("w2-first"),
+        "premise: the first signed call ran: {first}"
+    );
+    let sent = stdio.gateway.tool_calls().len();
+    let released = stdio.gateway.releases();
+
+    let refused = stdio
+        .rpc(2, "tools/call", signed_invoke_as("w2-k1", "w2-n2", "other"))
+        .await;
+    assert_eq!(
+        refused.pointer("/error/code"),
+        Some(&json!(409)),
+        "premise: execution admission's own refusal: {refused}"
+    );
+    assert!(
+        stdio.gateway.releases() > released,
+        "premise: the refused call's verdict released a managed credential"
+    );
+    assert_eq!(
+        stdio.gateway.tool_calls().len(),
+        sent,
+        "premise: the refusal reached no upstream"
+    );
+
+    let resent = stdio
+        .rpc(3, "tools/call", signed_invoke_as("w2-k2", "w2-n2", "other"))
+        .await;
+    assert!(
+        resent.to_string().contains("Nonce replay detected"),
+        "the nonce was given back after the verdict released a credential: {resent}"
     );
 }

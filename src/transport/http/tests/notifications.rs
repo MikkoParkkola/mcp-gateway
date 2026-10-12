@@ -170,25 +170,36 @@ async fn a_connect_failure_after_a_followed_redirect_is_not_pre_dispatch() {
     *transport.message_url.write() = Some(base);
 
     let err = transport.request("tools/call", None).await.unwrap_err();
+    // What the sanitized error hides: the send's real error chain, so a rare
+    // sighting under load names its mechanism (MIK-8359).
+    let why = format!(
+        "{err}; hops followed: {}; send error: {}",
+        transport.redirects_followed.load(Ordering::SeqCst),
+        transport
+            .last_send_error
+            .lock()
+            .clone()
+            .unwrap_or_else(|| "none recorded".to_owned())
+    );
     assert_eq!(
         transport.redirects_followed.load(Ordering::SeqCst),
         1,
         "precondition: the policy must have followed exactly one hop, or this \
-         row proves nothing about the redirect case: {err}"
+         row proves nothing about the redirect case: {why}"
     );
     assert!(
         err.to_string().contains("connection failed"),
         "precondition: the hop must have been REFUSED. A timeout or a rejected \
          redirect would satisfy every other assertion here while testing \
-         nothing about the redirect case: {err}"
+         nothing about the redirect case: {why}"
     );
     assert!(
         !err.is_pre_dispatch(),
         "the 307 re-submitted the body, so the redirecting origin may already \
          have executed the call; releasing the idempotency key here would \
-         admit a second execution: {err}"
+         admit a second execution: {why}"
     );
-    assert!(matches!(err, Error::Transport(_)), "{err}");
+    assert!(matches!(err, Error::Transport(_)), "{why}");
 
     server.abort();
 }

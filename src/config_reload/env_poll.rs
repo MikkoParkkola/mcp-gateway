@@ -295,6 +295,10 @@ pub(super) struct EnvReloadCounts {
     pub(super) warns: std::sync::atomic::AtomicUsize,
     /// Whether the last reload, whatever triggered it, failed.
     failed: std::sync::atomic::AtomicBool,
+    /// Test-only: failed poll-started reloads whose report is logged, so a
+    /// row waits for completed failures instead of sleeping (MIK-8360).
+    #[cfg(test)]
+    pub(super) failures: std::sync::atomic::AtomicUsize,
 }
 
 impl EnvReloadCounts {
@@ -353,6 +357,8 @@ impl EnvReloadCounts {
                 error = %error,
                 "Config reload: still failing"
             );
+            #[cfg(test)]
+            self.failures.fetch_add(1, Ordering::SeqCst);
             return;
         }
         self.warns.fetch_add(1, Ordering::SeqCst);
@@ -365,6 +371,8 @@ impl EnvReloadCounts {
                 "Config reload: failed; keeping the current config and retrying every poll"
             );
         }
+        #[cfg(test)]
+        self.failures.fetch_add(1, Ordering::SeqCst);
     }
 }
 

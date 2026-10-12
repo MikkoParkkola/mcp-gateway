@@ -79,8 +79,11 @@ impl Gateway {
         tool_policy: &std::sync::Arc<crate::security::ToolPolicy>,
         mtls_policy: &std::sync::Arc<crate::mtls::MtlsPolicy>,
         batch: serde_json::Value,
-        (session_id, sanitize): (&str, super::stdio_single::InputSanitizing),
-        protocol_telemetry_sink: &super::StdioTelemetry,
+        (session_id, sanitize, serving): (
+            &str,
+            super::stdio_single::InputSanitizing,
+            super::stdio_single::ModernServing,
+        ),
         reads: &StdioReads,
     ) -> Vec<OutboundFrame> {
         let invalid = || {
@@ -115,11 +118,13 @@ impl Gateway {
                         handshake_capabilities: crate::protocol::meta::Declared::NONE,
                         // A batch is a legacy shape; it serves no `tasks/*`.
                         tasks: None,
-                        modern: false,
+                        // Judged by the process setting like any request; only
+                        // the discover listing is the legacy set (MIK-8380).
+                        serving,
+                        discover: super::stdio_single::DiscoverListing::LegacyOnly,
                         // Each item is sanitized as a single request is.
                         sanitize,
                     },
-                    protocol_telemetry_sink,
                 )),
             )
             .await;
@@ -142,13 +147,12 @@ impl Gateway {
 
     /// [`Self::dispatch_batch_read`] without the readings.
     #[cfg(test)]
-    pub(super) async fn dispatch_batch_with_sink(
+    pub(super) async fn dispatch_batch_for_client(
         meta_mcp: &std::sync::Arc<crate::gateway::meta_mcp::MetaMcp>,
         tool_policy: &std::sync::Arc<crate::security::ToolPolicy>,
         mtls_policy: &std::sync::Arc<crate::mtls::MtlsPolicy>,
         batch: serde_json::Value,
         session_id: &str,
-        protocol_telemetry_sink: &super::StdioTelemetry,
     ) -> Vec<serde_json::Value> {
         let reads = meta_mcp.stdio_reads();
         Self::dispatch_batch_read(
@@ -156,8 +160,11 @@ impl Gateway {
             tool_policy,
             mtls_policy,
             batch,
-            (session_id, super::stdio_single::InputSanitizing::Off),
-            protocol_telemetry_sink,
+            (
+                session_id,
+                super::stdio_single::InputSanitizing::Off,
+                super::stdio_single::ModernServing::Enabled,
+            ),
             &reads,
         )
         .await

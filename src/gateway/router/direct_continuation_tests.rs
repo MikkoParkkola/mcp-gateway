@@ -362,19 +362,21 @@ pub(super) fn budget(meta: crate::gateway::meta_mcp::MetaMcp) -> crate::gateway:
 #[tokio::test]
 async fn r12_a_budget_refusal_does_not_spend_the_continuation() {
     for backend in BACKENDS {
-        let fx = super::direct_guards_fixture::fixture_built(Answer::AskOnce, budget).await;
-        let (_, asked) = call_as(&fx, "k-budget", backend, Some("alice"), json!({})).await;
-        let retry = json!({"requestState": state_of(&asked), "inputResponses": answers()});
-        let (_, refused) = call_as(&fx, "k-budget", backend, Some("alice"), retry.clone()).await;
+        let (refused, first, done, second) = crate::test_day::same_utc_day_async(|| async move {
+            let fx = super::direct_guards_fixture::fixture_built(Answer::AskOnce, budget).await;
+            let (_, asked) = call_as(&fx, "k-budget", backend, Some("alice"), json!({})).await;
+            let retry = json!({"requestState": state_of(&asked), "inputResponses": answers()});
+            let (_, refused) =
+                call_as(&fx, "k-budget", backend, Some("alice"), retry.clone()).await;
+            let first = dispatched(&fx);
+            let (_, done) = call_as(&fx, "k-std", backend, Some("alice"), retry).await;
+            (refused, first, done, dispatched(&fx))
+        })
+        .await;
         assert!(refused.get("error").is_some(), "{backend}: {refused}");
-        assert_eq!(
-            dispatched(&fx),
-            1,
-            "{backend}: the refused retry dispatched"
-        );
-        let (_, done) = call_as(&fx, "k-std", backend, Some("alice"), retry).await;
+        assert_eq!(first, 1, "{backend}: the refused retry dispatched");
         assert!(done.get("error").is_none(), "{backend}: {done}");
-        assert_eq!(dispatched(&fx), 2, "{backend}");
+        assert_eq!(second, 2, "{backend}");
     }
 }
 
@@ -383,7 +385,13 @@ async fn r12_a_budget_refusal_does_not_spend_the_continuation() {
 /// written back over the sanitized ones.
 #[tokio::test]
 async fn r13_the_backend_gets_the_sanitized_answers() {
-    let fx = fixture(Answer::AskOnce, |_| {}).await;
+    // MIK-8154 SAN.1: the direct route honours `security.sanitize_input`, so
+    // the row turns it on (it sanitized even when off before).
+    let fx = Box::pin(super::direct_guards_fixture::sanitizing(
+        true,
+        fixture(Answer::AskOnce, |_| {}),
+    ))
+    .await;
     let (_, asked) = call(&fx, "alpha", Some("alice"), json!({})).await;
     let raw = json!({"k1": {"action": "accept", "content": {"account": "wo\u{7}rk"}}});
     let retry = json!({"requestState": state_of(&asked), "inputResponses": raw});
@@ -745,18 +753,23 @@ async fn r19_the_propagated_binding_binds_ahead_of_the_identity() {
 async fn r20_a_spend_refusal_consumes_no_nonce() {
     use super::direct_guards_fixture::fixture_hardened_signed_built;
     for backend in BACKENDS {
-        let fx = fixture_hardened_signed_built(Answer::Ok, true, budget).await;
-        let who = ("k-budget", backend);
-        let _ = signed_call(&fx, who, &format!("{backend}-n1"), json!({})).await;
-        let n2 = format!("{backend}-n2");
-        let (status, refused) = signed_call(&fx, who, &n2, json!({})).await;
+        let (status, refused, again_status, again, sent) =
+            crate::test_day::same_utc_day_async(|| async move {
+                let fx = fixture_hardened_signed_built(Answer::Ok, true, budget).await;
+                let who = ("k-budget", backend);
+                let _ = signed_call(&fx, who, &format!("{backend}-n1"), json!({})).await;
+                let n2 = format!("{backend}-n2");
+                let (status, refused) = signed_call(&fx, who, &n2, json!({})).await;
+                let (again_status, again) = signed_call(&fx, who, &n2, json!({})).await;
+                (status, refused, again_status, again, dispatched(&fx))
+            })
+            .await;
         assert!(refused.get("error").is_some(), "{backend}: {refused}");
-        let (again_status, again) = signed_call(&fx, who, &n2, json!({})).await;
         assert_eq!(
             (again_status, code(&again)),
             (status, code(&refused)),
             "{backend}: nonce burned: {again}"
         );
-        assert_eq!(dispatched(&fx), 1, "{backend}");
+        assert_eq!(sent, 1, "{backend}");
     }
 }

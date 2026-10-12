@@ -78,7 +78,7 @@ pub use features::{
 pub use features::{
     EventsConfig, EventsRateLimit, EventsScheduleConfig, EventsSourcesConfig, EventsWatchConfig,
 };
-pub(crate) use features::{api_key_expired_now, parse_api_key_digest, parse_cidr};
+pub(crate) use features::{api_key_expired, api_key_expired_now, parse_api_key_digest, parse_cidr};
 
 // Personal-account custody DTO only — not the rest of `personal_accounts`.
 pub use crate::personal_accounts::config::{AccountsConfig, AccountsLimits};
@@ -793,8 +793,8 @@ fn remote_transport_identity(transport: &TransportConfig) -> Option<(&'static st
     }
 }
 
+use backend_config::default_true;
 pub use backend_config::{BackendConfig, OAuthConfig, TransportConfig};
-use backend_config::{default_token_refresh_buffer, default_true};
 pub use meta_mcp_config::{MetaMcpConfig, SurfacedToolConfig};
 pub use server_config::{CleartextHttp, IdempotencyKeyMode, ServerConfig};
 

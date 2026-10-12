@@ -16,6 +16,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use super::*;
 use crate::gateway::trace;
 
+#[path = "cache_read_only_tests.rs"]
+mod cache_read_only;
+
 #[path = "order2_fsm_tests.rs"]
 mod order2_fsm;
 

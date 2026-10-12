@@ -78,7 +78,10 @@ fn answer(request: &Value, calls: &AtomicUsize) -> Value {
             "serverInfo": { "name": "fixture", "version": "0" }
         }),
         Some("tools/list") => json!({
-            "tools": [ { "name": TOOL, "description": "d", "inputSchema": { "type": "object" } } ]
+            // MIK-8393: the tool declares itself read-only, so a repeat may
+            // be a cache hit.
+            "tools": [ { "name": TOOL, "description": "d", "inputSchema": { "type": "object" },
+                         "annotations": { "readOnlyHint": true } } ]
         }),
         Some("tools/call") => {
             let n = calls.fetch_add(1, Ordering::SeqCst) + 1;
@@ -754,14 +757,22 @@ async fn direct_route_refuses_untrusted_peer_identity_header() {
     assert_eq!(delivery(&trusted.1).as_deref(), Some("call-1"));
 }
 
-/// T6 control — trust OFF: the headers are ignored, both requests are the
-/// anonymous principal, and they pool. Headers are not trusted by default.
+/// T6 control — trust OFF: the headers are ignored, both requests are the one
+/// principal their shared certificate proves, and they pool. Headers are not
+/// trusted by default.
 #[tokio::test]
 async fn direct_route_ignores_identity_headers_when_trust_is_off() {
+    // One verified certificate on both calls: a keyed direct call needs an
+    // execution principal (MIK-8154 ANON.1). The headers still differ, and
+    // with trust off they must not split the one caller into two.
+    let as_cert = |caller: Caller| Caller {
+        cert: mtls("spiffe://test/one").cert,
+        ..caller
+    };
     let (calls, second) = direct_pair(
         Setup::auth_off(),
-        trusted_header("alice"),
-        trusted_header("bob"),
+        as_cert(trusted_header("alice")),
+        as_cert(trusted_header("bob")),
     )
     .await;
     assert_eq!(calls, 1, "untrusted headers separated callers: {second}");

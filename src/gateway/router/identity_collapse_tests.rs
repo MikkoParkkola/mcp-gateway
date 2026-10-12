@@ -471,7 +471,7 @@ async fn nameless_certificates_never_share_a_per_caller_child() {
 fn personal_probe(name: &str, owner: &str, port: u16) -> String {
     format!(
         "name: {name}\ndescription: Personal cacheable probe\ncache:\n  ttl: 60\n  \
-         strategy: memory\nmetadata:\n  exposure: personal\n  identity_owner:\n    \
+         strategy: memory\nmetadata:\n  read_only: true\n  exposure: personal\n  identity_owner:\n    \
          authority: mtls\n    subject: '{owner}'\nproviders:\n  primary:\n    service: rest\n    \
          config:\n      base_url: http://localhost:{port}\n      path: /probe\n      method: GET\n"
     )

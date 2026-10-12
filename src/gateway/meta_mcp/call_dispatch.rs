@@ -36,9 +36,12 @@ impl MetaMcp {
                         caller,
                         session_id,
                         super::invoke::TargetNaming::SurfacedName,
+                        // The route stage took the verdict first, holding the
+                        // call's witness; this one is its memo hit.
+                        None,
                     )
                     .await;
-                if matches!(verdict, Ok(super::invoke::CallerVerdict::Absent)) {
+                if matches!(verdict, Ok((super::invoke::CallerVerdict::Absent, _))) {
                     let reason = match super::visible::recorded_visibility(server, tool_name) {
                         Some(super::visible::Visibility::Withheld(reason)) => reason,
                         _ => super::visible::Withholding::Lacked,

@@ -590,7 +590,7 @@ gateway does not verify inbound signatures at all. To rotate:
 3. Once no client needs the old key, remove it from the clients.
 
 Every `security.message_signing` field (`enabled`, `shared_secret`,
-`previous_secret`, `key_id`, `require_nonce`, `replay_window`) needs a restart. A
+`previous_secret`, `key_id`, `require_nonce`, and the replay window) needs a restart. A
 config reload that changes any of them is refused with
 `config reload refused: security.message_signing.<field> requires restart` and
 leaves the running config untouched.
@@ -685,7 +685,8 @@ WantedBy=multi-user.target
 sudo useradd -r -s /usr/sbin/nologin mcp-gateway
 sudo cp target/release/mcp-gateway /usr/local/bin/
 sudo mkdir -p /etc/mcp-gateway
-sudo cp gateway.yaml /etc/mcp-gateway/
+# Owner-only: the gateway refuses a config other users can read.
+sudo install -m 600 gateway.yaml /etc/mcp-gateway/gateway.yaml
 sudo chown -R mcp-gateway:mcp-gateway /etc/mcp-gateway
 sudo systemctl daemon-reload
 sudo systemctl enable --now mcp-gateway
@@ -1080,7 +1081,7 @@ sha256, so a short or guessable key can be recovered from a leaked config by off
 guessing; a 32-byte random key cannot.
 
 `hash-key` reads the key from stdin (at most 64 KiB), strips one trailing newline, and reads no config. A
-plaintext `key` field, or an `env:` variable that holds a key rather than a digest, fails the
+plaintext API key in `auth.api_keys`, or an `env:` variable that holds a key rather than a digest, fails the
 load with an error that names the entry or variable but never the value. See
 [UPGRADING-4.0.md](UPGRADING-4.0.md) item 41.
 
@@ -1387,10 +1388,9 @@ origin. Keep request bodies for that path out of the proxy's logs.
 A session ends after 30 minutes without activity or 8 hours after sign-in,
 whichever comes first; the cookie's `Max-Age` matches the 8 hours. The
 dashboard's own 5-second refresh is checked but is not activity, so an unattended
-tab signs out at the idle limit. Change the limits under `auth.dashboard_session`
-(`idle_timeout_secs`, `absolute_timeout_secs`); a reload applies them to open
-sessions. A browser keeps the `Max-Age` its cookie was issued with, so a longer
-absolute limit reaches sessions opened after the reload.
+tab signs out at the idle limit. These limits are fixed defaults in 4.0; a
+hidden setting a 3.x config still carries keeps applying, and
+`mcp-gateway doctor` lists it.
 
 **Log out** on `/dashboard` sends `POST /dashboard/logout`, which ends the session
 on the server as well as in the browser and redirects to `/ui`. It answers `303`
@@ -1538,16 +1538,6 @@ For horizontal scaling (organizational isolation, not throughput): run separate 
 ### Resource Tuning
 
 ```yaml
-failsafe:
-  rate_limit:
-    requests_per_second: 100   # Per-backend; adjust for backend capacity
-    burst_size: 50
-  circuit_breaker:
-    failure_threshold: 5       # Lower = faster isolation
-    reset_timeout: 30s
-cache:
-  default_ttl: 60s             # Higher = fewer calls, staler data
-  max_entries: 10000           # In-memory; scale with available RAM
 error_budget:
   threshold: 0.8               # Failure rate that disables a backend
   window_size: 100             # Calls in the sliding window

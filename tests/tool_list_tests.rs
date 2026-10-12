@@ -36,10 +36,14 @@ fn test_tool_list_missing_dir_degrades_gracefully() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // The explanation must clarify this is a local scan independent of config.
+    // The explanation names the missing directory and says where the scanned
+    // directories come from. Since MIK-8044 an unset -C reads the config's
+    // `capabilities.directories`, so the 3.x "independent of your server
+    // config" wording would now be false.
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("independent of your server config"),
+        stderr.contains("No capability catalogue at")
+            && stderr.contains("without either it reads the gateway config's"),
         "expected an orienting message on stderr, got: {stderr:?}"
     );
 }

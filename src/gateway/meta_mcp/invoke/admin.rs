@@ -14,6 +14,11 @@ use crate::gateway::meta_mcp_helpers::{
 use crate::playbook::PlaybookEngine;
 use crate::{Error, Result};
 
+/// The refusal of a playbook run whose definition changed after intake judged
+/// it (MIK-8154 C2e). Retrying the call judges the new definition.
+pub(crate) const PLAYBOOK_CHANGED: &str =
+    "The playbook changed after this call was admitted; retry the call";
+
 impl MetaMcp {
     /// `gateway_cost_report` — per-session and per-API-key spend report.
     #[allow(
@@ -133,7 +138,7 @@ impl MetaMcp {
         let mut tools_known = true;
         let mut total_tools: usize = 0;
         for b in &all_backends {
-            let (tools, truncated) = b.cached_tools_snapshot_and_truncated();
+            let (tools, truncated) = b.cached_tools_snapshot_and_truncated(None);
             tools_known &= b.cached_tools_known() && !truncated;
             total_tools += tools.len();
         }
@@ -346,7 +351,9 @@ impl MetaMcp {
         *self.playbook_engine.write() = engine;
     }
 
-    /// `gateway_run_playbook` — run a named playbook.
+    /// `gateway_run_playbook` — run a named playbook. Refused with
+    /// [`PLAYBOOK_CHANGED`] when the definition differs from the one intake
+    /// judged the request's sanitize exemption on (MIK-8154 C2e).
     pub(in crate::gateway::meta_mcp) async fn run_playbook(
         &self,
         args: &Value,
@@ -370,6 +377,13 @@ impl MetaMcp {
                 .cloned()
                 .ok_or_else(|| Error::json_rpc(-32602, format!("Playbook not found: {name}")))?
         };
+        // MIK-8154 C2e: intake judged the sanitize exemption on one definition;
+        // a different one (reloaded since) is refused, never run under it.
+        if crate::gateway::meta_mcp::visible::judged_playbook().is_some_and(|judged| {
+            judged != crate::gateway::meta_mcp::passthrough::playbook_digest(&definition)
+        }) {
+            return Err(Error::json_rpc(-32000, PLAYBOOK_CHANGED));
+        }
 
         let invoker = MetaMcpInvoker {
             meta: self,

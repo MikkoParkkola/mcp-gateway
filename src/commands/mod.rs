@@ -11,6 +11,7 @@ mod add_remove;
 mod api_key_rewrite;
 mod backend_url_keys;
 mod cap;
+mod capability_dirs;
 pub(crate) mod color;
 #[cfg(feature = "config-export")]
 mod config_export;

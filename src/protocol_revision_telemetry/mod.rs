@@ -8,6 +8,8 @@
 //! legacy stdio follow-ups reuse the bounded attribution learned at initialize.
 
 mod durable;
+#[cfg(test)]
+pub(crate) use durable::write_seam;
 mod observe;
 
 use std::collections::{BTreeMap, VecDeque};

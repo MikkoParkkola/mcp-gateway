@@ -266,11 +266,11 @@ impl Backend {
     ) -> Result<JsonRpcResponse> {
         let start_time = std::time::Instant::now();
 
-        // Every `tools/call` funnels through here, public library callers
-        // included, so a withheld tool is refused at this one chokepoint as
-        // well as by the routes' own earlier checks (#1441).
+        // Every send funnels through here, so a withheld tool (#1441) and any
+        // send by an instance other than the one an exempt call was judged on
+        // (MIK-8154 F2: a reload; nothing sent, so "unavailable") stop here.
         if let Some(refusal) = self.blocked_call_refusal(method, params.as_ref(), identity_key) {
-            return Err(crate::Error::Protocol(refusal));
+            return Err(refusal);
         }
 
         // MIK-7272.SUB.2b / ADR-014 §2: never hand a backend the client's own
@@ -550,7 +550,7 @@ impl Backend {
         // A tool call sent as a notification is refused as a request is: the
         // backend never receives a withheld tool (#1441).
         if let Some(refusal) = self.blocked_call_refusal(method, params.as_ref(), identity_key) {
-            return Err(crate::Error::Protocol(refusal));
+            return Err(refusal);
         }
 
         // Derive the same slot `request_with_headers` would use for this
@@ -609,21 +609,20 @@ impl Backend {
         method: &str,
         params: Option<&Value>,
         identity_key: Option<&str>,
-    ) -> Option<String> {
+    ) -> Option<crate::Error> {
+        if let Some(reloaded) = crate::gateway::changed_instance(self) {
+            return Some(crate::Error::BackendUnavailable(reloaded));
+        }
         if method != "tools/call" {
             return None;
         }
-        params
-            .and_then(|p| p.get("name"))
-            .and_then(Value::as_str)
-            .and_then(|tool| self.blocked_tool_refusal(identity_key, tool))
+        let tool = params.and_then(|p| p.get("name")).and_then(Value::as_str)?;
+        self.blocked_tool_refusal(identity_key, tool)
+            .map(crate::Error::Protocol)
     }
 
-    /// Return `true` if this backend is configured for pass-through mode.
-    ///
-    /// When `true`, the direct `/mcp/{name}` endpoint skips tool policy
-    /// enforcement and input sanitization for `tools/call` requests.
-    /// This must only be enabled for fully-trusted internal backends.
+    /// Pass-through mode: exempt from input sanitization on every route, and
+    /// from tool policy on `/mcp/{name}`. Only for fully-trusted backends.
     #[must_use]
     pub fn passthrough(&self) -> bool {
         self.config.passthrough

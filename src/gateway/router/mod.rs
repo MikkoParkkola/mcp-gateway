@@ -36,6 +36,7 @@ mod authorization;
 pub use authorization::CallerStanding;
 pub(crate) use authorization::{
     ADMIN_META_TOOLS, OwnedRouterAuthorizer, RouterAuthorizer, backend_tool_targets_for_call,
+    sanitize_exempt,
 };
 mod backend_handlers;
 mod handlers;
@@ -110,6 +111,8 @@ mod direct_list_scope_tests;
 #[cfg(test)]
 mod direct_modern_shape_tests;
 #[cfg(test)]
+mod direct_nonce_witness_tests;
+#[cfg(test)]
 mod direct_notification_credential_tests;
 #[cfg(test)]
 mod direct_notification_refusal_tests;
@@ -130,6 +133,8 @@ mod dispatch_parity_tests;
 mod e5_dashboard_session_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod egress_matrix_tests;
+#[cfg(test)]
+mod era_refusal_http_tests;
 #[cfg(all(test, feature = "a2a", feature = "firewall"))]
 mod errscan_a2a_tests;
 #[cfg(test)]
@@ -150,12 +155,19 @@ mod mcp_nonce_admission_tests;
 #[cfg(test)]
 mod mcp_nonce_tests;
 #[cfg(test)]
+mod mcp_nonce_witness_tests;
+#[cfg(test)]
 mod meta_fingerprint_tests;
 /// MIK-8154.LEASE.1 rows: the direct route takes the shared execution lease.
 #[cfg(test)]
 mod mik8154_lease_rows_tests;
+/// MIK-8154 PR 2 rows: sanitize parity and passthrough on every route.
+#[cfg(all(test, feature = "firewall"))]
+mod mik8154_rows_tests;
 #[cfg(test)]
 mod mrtr9_lease_tests;
+#[cfg(test)]
+mod nonce_failure_class_tests;
 #[cfg(test)]
 mod playbook_envelope_tests;
 #[cfg(test)]
@@ -214,6 +226,9 @@ mod slot_verdict_g3_http_tests;
 mod slot_verdict_http_tests;
 #[cfg(test)]
 mod slot_verdict_http_variant_tests;
+/// MIK-8356 x MIK-8353: the caller verdict's effects reach the refund witness.
+#[cfg(test)]
+mod slot_verdict_witness_tests;
 /// E1: SSO admins through the role mapping (MIK-7570.ADMINSSO.1).
 #[cfg(test)]
 mod sso_admin_tests;

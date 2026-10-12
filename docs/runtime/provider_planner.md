@@ -74,9 +74,7 @@ runtime:
 backends:
   docs:
     enabled: true
-    transport:
-      type: stdio
-      command: node server.js
+    command: node server.js
     runtime_profile: local_safe
 ```
 

@@ -28,7 +28,9 @@ pub(super) const DENIED: &str = "forbidden";
 /// A counting backend answering every tool at once.
 pub(crate) async fn backend() -> (String, Arc<AtomicUsize>) {
     backend_listing(json!([
-        {"name": TOOL, "inputSchema": {"type": "object"}},
+        // MIK-8393: `echo` declares itself read-only, so U2's repeat is a
+        // cache hit.
+        {"name": TOOL, "inputSchema": {"type": "object"}, "annotations": {"readOnlyHint": true}},
         {"name": DENIED, "inputSchema": {"type": "object"}},
     ]))
     .await
@@ -283,7 +285,7 @@ pub(super) fn modern_call(id: u64, tool: &str, key: &str, task: bool) -> Value {
 
 /// One request through the stdio dispatcher, with this fixture's store.
 pub(crate) async fn dispatch(fixture: &Fixture, request: Value) -> Value {
-    Gateway::dispatch_single_with_sink(
+    Gateway::dispatch_single_for_client(
         &fixture.meta,
         &fixture.policy,
         &fixture.mtls,
@@ -293,10 +295,10 @@ pub(crate) async fn dispatch(fixture: &Fixture, request: Value) -> Value {
             channel: &crate::gateway::input_bridge::NoClientChannel,
             handshake_capabilities: Declared::NONE,
             tasks: Some(&fixture.tasks),
-            modern: false,
+            serving: crate::gateway::server::stdio_single::ModernServing::Enabled,
+            discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
             sanitize: fixture.sanitize,
         },
-        &super::super::StdioTelemetry::default(),
     )
     .await
     .expect("a request is answered")
@@ -514,7 +516,8 @@ async fn an_unnamed_tasks_method_fails_closed() {
             channel: &crate::gateway::input_bridge::NoClientChannel,
             handshake_capabilities: Declared::NONE,
             tasks: Some(&fixture.tasks),
-            modern: false,
+            serving: crate::gateway::server::stdio_single::ModernServing::Enabled,
+            discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
             sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
     );

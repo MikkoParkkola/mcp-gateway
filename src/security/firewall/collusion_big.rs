@@ -13,7 +13,7 @@
 //!
 //! A Bloom hit is never evidence: only `step_ev`'s exact entries are.
 
-use std::collections::HashSet;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -30,6 +30,12 @@ pub(super) const PLAN_ANSWER_FPS: usize = 1 << 20;
 /// Fingerprints kept per over-bound step at staging (`step_ev`), before
 /// the per-delivery bound thins them again at record time.
 pub(super) const STEP_EV_BUDGET: usize = 32_768;
+
+/// `MIK-8066` D8: the transient budget every answer view (P3 and <= 1 MiB)
+/// reserves from while its answer is judged; separate from the sketch
+/// store's `SKETCH_BYTES`, so window-long sketches never decide whether a
+/// millisecond judgement runs. Combined worst case 64 MiB. A constant.
+pub(crate) const VIEW_BYTES: usize = 32 * 1024 * 1024;
 
 /// The extra sketch room a step reserves at logical position `position`
 /// for false positives its Bloom filter selects from the answer view.
@@ -95,25 +101,109 @@ impl Drop for StepReservation {
     }
 }
 
-/// A plan step past the plan bound: its attachments, then, once kept to the
-/// answer, the fingerprints the answer delivered from it.
+/// A plan step past the plan bound, staged: its attachments, until the
+/// plan's answer judges it. Its only exits consume it (D9):
+/// [`BigStep::keep_to`] and [`BigStep::into_unread`]. Dropped un-judged (its
+/// plan dropped before any answer), its reservation is abandoned and
+/// nothing is recorded: nothing was delivered.
 pub(crate) struct BigStep {
     reservation: StepReservation,
     /// Exact-size, so the bytes charged are the bytes held (a thinned
     /// `Vec` keeps its pre-thinning capacity).
     step_ev: Box<[u64]>,
     /// Dropped at retention, before the final sketch is built: between
-    /// staging and record only the reserved bytes are held. Retention itself
-    /// briefly holds one step's selection while it builds the sketch: 8 bytes
-    /// per selected fingerprint, up to about twice that as the `Vec` grows
-    /// (sizing it exactly would need a second probe pass over the answer).
-    /// Uncharged, and freed before retention returns.
-    step_all: Option<Sketch>,
-    /// Exact evidence candidates: `step_ev` entries the answer delivered.
-    evidence: Option<Arc<[u64]>>,
-    /// The excuse sketch, built at retention in the reserved shape from the
-    /// answer fingerprints `step_all` holds; published at record.
-    excuse: Option<Arc<Sketch>>,
+    /// staging and record only the reserved bytes are held.
+    step_all: Sketch,
+}
+
+/// Bytes of step evidence split off a sketch reservation (D9): charged to
+/// the sketch store's total while it lives, released when it drops.
+pub(crate) struct EvidenceCharge {
+    detector: Arc<CollusionDetector>,
+    bytes: usize,
+}
+
+impl Drop for EvidenceCharge {
+    fn drop(&mut self) {
+        self.detector
+            .state
+            .lock()
+            .sketches
+            .release_extra(self.bytes);
+        self.detector
+            .views
+            .evidence_bytes
+            .fetch_sub(self.bytes, Ordering::Relaxed);
+    }
+}
+
+/// A judged step's exact evidence candidates, with their charge (D9).
+#[must_use]
+pub(crate) struct StepEvidence {
+    /// Kept as filtered, never shrunk: a shrink may reallocate outside the
+    /// charge.
+    fps: Vec<u64>,
+    /// Held for its `Drop`: evidence never outlives its charge.
+    _charge: EvidenceCharge,
+}
+
+impl StepEvidence {
+    /// The candidates, offered to the record's sample.
+    pub(crate) fn fps(&self) -> &[u64] {
+        &self.fps
+    }
+}
+
+/// A built excuse sketch in its reserved position, published at record.
+pub(crate) struct Excuse {
+    sketch: Arc<Sketch>,
+    reservation: StepReservation,
+}
+
+/// A step kept to what its answer delivered (D9): the exact `step_ev`
+/// entries the view holds, and the excuse sketch (`None` when abandoned,
+/// overfull, empty or refused for selection room, already marked).
+#[must_use]
+pub(crate) struct KeptStep {
+    pub(crate) evidence: Option<StepEvidence>,
+    pub(crate) excuse: Option<Excuse>,
+}
+
+/// A step whose answer could not be read (D6/D9): all of `step_ev` is
+/// evidence; its sketch was abandoned, so it can never publish.
+#[must_use]
+pub(crate) struct UnreadStep {
+    pub(crate) evidence: StepEvidence,
+}
+
+impl StepReservation {
+    /// Move the evidence bytes off the reservation into their own charge.
+    fn split_evidence(&self) -> EvidenceCharge {
+        let detector = Arc::clone(&self.detector);
+        let bytes = self.reservation.lock().ok().map_or(0, |mut held| {
+            held.as_mut()
+                .map_or(0, |r| detector.state.lock().sketches.split_extra(r))
+        });
+        detector
+            .views
+            .evidence_bytes
+            .fetch_add(bytes, Ordering::Relaxed);
+        EvidenceCharge { detector, bytes }
+    }
+
+    /// Abandon the sketch position, mark the pair's excuse lost.
+    fn abandon_marked(&self) {
+        let detector = &self.detector;
+        let mut state = detector.state.lock();
+        if let Some(held) = self.take() {
+            state.sketches.mark_lost(held.pair());
+            state.sketches.abandon(&held);
+        }
+        let until = Instant::now() + detector.params.window;
+        for lost in state.sketches.take_lost() {
+            state.markers.mark(lost, until);
+        }
+    }
 }
 
 impl BigStep {
@@ -144,105 +234,152 @@ impl BigStep {
             return None;
         }
         Some(Self {
-            step_all: Some(Sketch::build(&fps, shape)),
+            step_all: Sketch::build(&fps, shape),
             step_ev: step_ev.into_boxed_slice(),
-            evidence: None,
-            excuse: None,
             reservation,
         })
     }
 
+    /// The attachment bytes a step of sampled fingerprints `fps` charges at
+    /// sketch position `position`, by the sizing rules alone (its sketch
+    /// shape plus its thinned evidence), with no store or plan involved:
+    /// what a row derives its expected admissions from (tests only).
+    #[cfg(test)]
+    pub(crate) fn sized_attachment(fps: &[u64], position: usize) -> usize {
+        let mut fps = fps.to_vec();
+        fps.sort_unstable();
+        fps.dedup();
+        let (_, step_ev) = stage_thinned(&fps, STEP_EV_BUDGET);
+        reservation_shape(fps.len(), position).bytes() + step_ev.len() * 8
+    }
+
+    /// A copy of the staged evidence candidates, for the one record arm
+    /// that meets a step never judged (D9: recorded as unread, fail closed).
+    pub(crate) fn staged_evidence(&self) -> &[u64] {
+        &self.step_ev
+    }
+
     /// Bytes the attachments hold, charged to the plan's total.
     pub(crate) fn bytes(&self) -> usize {
-        self.step_ev.len() * 8 + self.step_all.as_ref().map_or(0, Sketch::bytes)
+        self.step_ev.len() * 8 + self.step_all.bytes()
     }
 }
 
 impl BigStep {
-    /// Keep the step to what the answer delivered: `found` is every k-gram
-    /// hash of the answer. Its evidence is the exact `step_ev` entries found;
-    /// its excuse is the sampled answer hashes `step_all` holds. A selection
-    /// past the reserved room (n + headroom) abandons the sketch, counted
-    /// and marked: never overfilled. An empty one leaves nothing to publish.
-    /// The selection itself is transient: what stays until record is the
-    /// sketch, whose bytes the reservation charged.
-    pub(crate) fn keep_to(&mut self, found: &HashSet<u64>) {
-        // Retention runs once: a second call finds no filter and keeps the
-        // first call's evidence and excuse.
-        let Some(step_all) = self.step_all.take() else {
-            return;
+    /// Keep the step to what the answer delivered (D3, D9). Its evidence is
+    /// the exact `step_ev` entries `found` holds; its excuse is the answer's
+    /// sampled hashes `step_all` holds. The selection is reserved from
+    /// `VIEW_BYTES` first (n + headroom + 1 entries: one past the room proves
+    /// overflow); without room the sketch is abandoned, counted and marked,
+    /// and the evidence kept. A selection past the room abandons the sketch,
+    /// counted and marked: never overfilled.
+    pub(crate) fn keep_to(
+        self,
+        found: super::super::collusion_digest::view::Found<'_>,
+    ) -> KeptStep {
+        let Self {
+            reservation,
+            step_ev,
+            step_all,
+        } = self;
+        let detector = Arc::clone(&reservation.detector);
+        let charge = reservation.split_evidence();
+        // Filtered in place: the evidence never needs a second buffer.
+        let mut kept = step_ev.into_vec();
+        kept.retain(|&fp| found.contains(fp));
+        let evidence = (!kept.is_empty()).then(|| StepEvidence {
+            fps: kept,
+            _charge: charge,
+        });
+        let room = reservation.n + reservation.headroom;
+        let Some(selection_charge) = detector.views.budget.reserve((room + 1) * 8) else {
+            detector
+                .views
+                .selection_refusals
+                .fetch_add(1, Ordering::Relaxed);
+            telemetry_metrics::counter!(super::CAPACITY_METRIC, "bound" => "plan_selection_budget")
+                .increment(1);
+            reservation.abandon_marked();
+            return KeptStep {
+                evidence,
+                excuse: None,
+            };
         };
-        let detector = Arc::clone(&self.reservation.detector);
-        let evidence: Vec<u64> = self
-            .step_ev
-            .iter()
-            .copied()
-            .filter(|fp| found.contains(fp))
-            .collect();
-        self.evidence = (!evidence.is_empty()).then(|| evidence.into());
-        let selection: Vec<u64> = found
-            .iter()
-            .copied()
-            .filter(|&h| detector.keeps(h) && step_all.holds(h))
-            .collect();
+        // A view's entries are already sampled: no `keeps` recheck (D8).
+        let presampled = found.presampled();
+        let mut selection: Vec<u64> = Vec::with_capacity(room + 1);
+        found.for_each(|h| {
+            if selection.len() <= room && (presampled || detector.keeps(h)) && step_all.holds(h) {
+                selection.push(h);
+            }
+        });
         drop(step_all);
-        self.step_ev = Box::default();
-        let room = self.reservation.n + self.reservation.headroom;
-        let mut state = detector.state.lock();
-        if let Some(reservation) = self
-            .reservation
+        #[cfg(test)]
+        if let Some(pair) = reservation
             .reservation
             .lock()
             .ok()
             .and_then(|r| r.as_ref().map(Reservation::pair))
         {
-            #[cfg(test)]
-            {
-                state.sketches.last_selection =
-                    Some((reservation, selection.len(), self.reservation.n));
-            }
-            if selection.len() > room {
-                state.sketches.overfull += 1;
-                telemetry_metrics::counter!(super::CAPACITY_METRIC, "bound" => "sketch_overfull")
-                    .increment(1);
-                state.sketches.mark_lost(reservation);
-                if let Some(held) = self.reservation.take() {
-                    state.sketches.abandon(&held);
-                }
-                let until = Instant::now() + detector.params.window;
-                for lost in state.sketches.take_lost() {
-                    state.markers.mark(lost, until);
-                }
-                return;
-            }
+            detector.state.lock().sketches.last_selection =
+                Some((pair, selection.len(), reservation.n));
         }
-        drop(state);
-        if selection.is_empty() {
-            return;
+        if selection.len() > room {
+            detector.state.lock().sketches.overfull += 1;
+            telemetry_metrics::counter!(super::CAPACITY_METRIC, "bound" => "sketch_overfull")
+                .increment(1);
+            reservation.abandon_marked();
+            return KeptStep {
+                evidence,
+                excuse: None,
+            };
         }
-        if let Some(shape) = self.reservation.shape() {
-            self.excuse = Some(Arc::new(Sketch::build(&selection, shape)));
-        }
-    }
-
-    /// The exact evidence candidates kept by [`Self::keep_to`].
-    pub(crate) fn evidence(&self) -> Option<Arc<[u64]>> {
-        self.evidence.clone()
-    }
-
-    /// Publish the excuse sketch into the reserved position (at record).
-    /// Without one the reservation is dropped, which abandons it.
-    pub(crate) fn publish(&self, now: Instant) {
-        let Some(sketch) = &self.excuse else {
-            return;
+        let excuse = match reservation.shape() {
+            Some(shape) if !selection.is_empty() => Some(Excuse {
+                sketch: Arc::new(Sketch::build(&selection, shape)),
+                reservation,
+            }),
+            // Nothing selected: dropping the reservation abandons it.
+            _ => None,
         };
+        drop(selection);
+        drop(selection_charge);
+        KeptStep { evidence, excuse }
+    }
+
+    /// The step's answer could not be read (D6): all of `step_ev` is
+    /// evidence, keeping its charge; the sketch reservation is abandoned
+    /// (dropped), so an unread step never publishes.
+    pub(crate) fn into_unread(self) -> UnreadStep {
+        let Self {
+            reservation,
+            step_ev,
+            step_all,
+        } = self;
+        drop(step_all);
+        let charge = reservation.split_evidence();
+        drop(reservation);
+        UnreadStep {
+            evidence: StepEvidence {
+                fps: step_ev.into_vec(),
+                _charge: charge,
+            },
+        }
+    }
+}
+
+impl Excuse {
+    /// Publish the sketch into its reserved position (at record). A second
+    /// call finds the reservation taken and does nothing.
+    pub(crate) fn publish(&self, now: Instant) {
         let Some(reservation) = self.reservation.take() else {
             return;
         };
-        let sketch = Arc::clone(sketch);
         let detector = &self.reservation.detector;
         let mut state = detector.state.lock();
-        state.sketches.publish(&reservation, sketch, now);
+        state
+            .sketches
+            .publish(&reservation, Arc::clone(&self.sketch), now);
         let until = now + detector.params.window;
         for lost in state.sketches.take_lost() {
             state.markers.mark(lost, until);
@@ -257,7 +394,7 @@ impl CollusionDetector {
         &self,
         (source, principal): (&str, &str),
         (sensitive, flows): (bool, u64),
-        (fps, cut, sample): super::Recorded,
+        (fps, cut, sample): super::Recorded<'_>,
         now: Instant,
     ) {
         self.record_held_at(
@@ -322,7 +459,7 @@ impl CollusionDetector {
 
     /// Mark `caller`'s excuse from `source` lost for room: a step whose
     /// attachments did not fit the plan (F5).
-    fn mark_step_lost(&self, source: &str, caller: &str) {
+    pub(in super::super) fn mark_step_lost(&self, source: &str, caller: &str) {
         let pair = (self.digest(source), self.digest(caller));
         let until = Instant::now() + self.params.window;
         let mut state = self.state.lock();
@@ -390,6 +527,124 @@ impl CollusionDetector {
             Some((p, selected, own)) if p == pair => Some((selected, own)),
             _ => None,
         }
+    }
+
+    /// The answer text cap P3 reads under (`PLAN_ANSWER_TEXT`; tests lower it).
+    pub(crate) fn set_answer_text_cap(&self, bytes: usize) {
+        self.views
+            .answer_text_cap
+            .store(bytes, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The view's entry cap A.
+    pub(crate) fn set_view_entry_cap(&self, entries: usize) {
+        self.views
+            .entry_cap
+            .store(entries, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// `VIEW_BYTES` held by live views.
+    pub(crate) fn view_bytes(&self) -> usize {
+        self.views.budget.used()
+    }
+
+    /// View cuts refused for lack of `VIEW_BYTES` (A5).
+    pub(crate) fn view_cut_refusals(&self) -> u64 {
+        self.views.cut_refusals.load(Ordering::Relaxed)
+    }
+
+    /// Second records of one digest, each a no-op (A2).
+    pub(crate) fn double_records(&self) -> u64 {
+        self.views.double_records.load(Ordering::Relaxed)
+    }
+
+    /// Plans whose answer took the unread path (D6).
+    pub(crate) fn unread_plans(&self) -> u64 {
+        self.views
+            .unread_plans
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// `answer`'s view built exactly as the gate builds it: the walks'
+    /// reservation, then the view within it (tests only).
+    fn view_by_production_path(
+        &self,
+        answer: &serde_json::Value,
+        probe: Option<&mut Vec<(usize, usize)>>,
+    ) -> Result<
+        super::super::collusion_digest::view::AnswerView,
+        super::super::collusion_digest::view::Unreadable,
+    > {
+        let view = super::super::collusion_digest::view::reserve_walk(self, answer)?;
+        super::super::collusion_digest::view::build_with(self, answer, view, probe)
+    }
+
+    /// The `VIEW_BYTES` charge `answer`'s view would take,
+    /// computed from the view's length, not from the budget counter.
+    pub(crate) fn view_charge_of(&self, answer: &serde_json::Value) -> usize {
+        self.view_by_production_path(answer, None)
+            .map_or(0, |v| v.charge_bytes())
+    }
+
+    /// The streaming sampled k-gram hashes of `text` (D2), collected.
+    pub(crate) fn sampled_kgrams(&self, text: &str) -> Vec<u64> {
+        self.sampled_kgram_stream(text.chars()).collect()
+    }
+
+    /// The sorted sampled view of `answer`, built without the
+    /// over-bound gate (unit rows only).
+    pub(crate) fn view_of(&self, answer: &serde_json::Value) -> Option<Vec<u64>> {
+        self.view_by_production_path(answer, None)
+            .ok()
+            .map(|v| v.entries().to_vec())
+    }
+
+    /// The most `VIEW_BYTES` a build of `answer` reserves at once.
+    pub(crate) fn view_build_peak(&self, answer: &serde_json::Value) -> usize {
+        self.view_build_probe(answer)
+            .iter()
+            .map(|&(reserved, _)| reserved)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// (reserved bytes, live buffer bytes) at the first reservation, every
+    /// growth and compaction while `answer`'s view is built.
+    pub(crate) fn view_build_probe(&self, answer: &serde_json::Value) -> Vec<(usize, usize)> {
+        let mut probe = Vec::new();
+        let _ = self.view_by_production_path(answer, Some(&mut probe));
+        probe
+    }
+
+    /// Bytes charged for step evidence awaiting record (D9).
+    pub(crate) fn evidence_charge_bytes(&self) -> usize {
+        self.views.evidence_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Selections refused for lack of `VIEW_BYTES`.
+    pub(crate) fn selection_budget_refusals(&self) -> u64 {
+        self.views.selection_refusals.load(Ordering::Relaxed)
+    }
+
+    /// Reference lists the answer walks built on this thread (D2).
+    #[expect(
+        clippy::unused_self,
+        reason = "a detector accessor, as the rows read it"
+    )]
+    pub(crate) fn walk_refs_built(&self) -> u64 {
+        super::super::collusion_digest::walks_built()
+    }
+
+    /// `VIEW_BYTES` lowered for this detector.
+    pub(crate) fn set_view_budget(&self, bytes: usize) {
+        self.views.set_budget_cap(bytes);
+    }
+
+    /// Views refused for lack of `VIEW_BYTES` (D6).
+    pub(crate) fn view_budget_refusals(&self) -> u64 {
+        self.views
+            .budget_refusals
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Reserve no headroom on this detector (the abandon path, made

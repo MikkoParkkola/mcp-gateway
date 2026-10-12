@@ -66,6 +66,9 @@ pub(in crate::gateway::meta_mcp) fn counted_backend(
         calls: Arc::clone(&calls),
         result: json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
     }));
+    // MIK-8393: only a declared read is cached; this fixture's subject is
+    // the cache's keying, so `read` is declared read-only here.
+    backend.set_read_only_declared_for_test(&["read"]);
     let _ = registry.register(backend);
     (registry, calls)
 }

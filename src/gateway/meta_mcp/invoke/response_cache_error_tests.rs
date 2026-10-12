@@ -73,6 +73,9 @@ fn cached_meta(failsafe: &FailsafeConfig, script: Vec<Value>) -> (MetaMcp, Arc<A
         calls: Arc::clone(&calls),
         script,
     }));
+    // MIK-8393: only a declared read is cached; this fixture's subject is
+    // the cache, so `read` is declared read-only here.
+    backend.set_read_only_declared_for_test(&["read"]);
     let registry = Arc::new(BackendRegistry::new());
     let _ = registry.register(backend);
     let meta = MetaMcp::with_features(

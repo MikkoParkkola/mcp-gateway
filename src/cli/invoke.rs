@@ -21,7 +21,7 @@ use serde_json::Value;
 use crate::capability::{
     CapabilityDefinition, CapabilityExecutionContext, CapabilityExecutor, CapabilityLoader,
 };
-use crate::registry::{Registry, RegistryEntry};
+use crate::registry::RegistryEntry;
 use crate::{Error, Result};
 
 // ── public entry-point types ──────────────────────────────────────────────────
@@ -32,17 +32,28 @@ pub struct ToolCatalogue {
 }
 
 impl ToolCatalogue {
-    /// Load capabilities from `capabilities_dir`.
-    ///
-    /// Silently skips non-YAML files; returns an error only when the directory
-    /// itself is inaccessible.
+    /// Load the capabilities of `capability_dirs`, in order, as the gateway
+    /// does: a directory that cannot be read is warned about and skipped,
+    /// and a later definition of a name replaces an earlier one (MIK-8044).
+    /// Non-YAML files are skipped. A caller that needs a missing directory to
+    /// be an error checks it first.
     ///
     /// # Errors
     ///
-    /// Propagates I/O or parse errors from [`CapabilityLoader`].
-    pub async fn load(capabilities_dir: &str) -> Result<Self> {
-        let caps = CapabilityLoader::load_directory(capabilities_dir).await?;
-        Ok(Self { capabilities: caps })
+    /// None today; the `Result` stays for the loader's own signature.
+    pub async fn load(capability_dirs: &[&str]) -> Result<Self> {
+        let loaded = CapabilityLoader::load_directories(capability_dirs).await?;
+        let mut at: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut capabilities: Vec<CapabilityDefinition> = Vec::new();
+        for cap in loaded {
+            if let Some(&i) = at.get(&cap.name) {
+                capabilities[i] = cap;
+            } else {
+                at.insert(cap.name.clone(), capabilities.len());
+                capabilities.push(cap);
+            }
+        }
+        Ok(Self { capabilities })
     }
 
     /// Return all capability definitions.
@@ -200,18 +211,6 @@ pub fn catalogue_to_registry_entries(catalogue: &ToolCatalogue) -> Vec<RegistryE
             requires_key: c.auth.required,
         })
         .collect()
-}
-
-/// Build a [`Registry`]-backed index from a path (for shell completions).
-///
-/// Returns an empty index when the directory does not exist rather than
-/// propagating an error — completions should degrade gracefully.
-pub async fn build_completion_tool_names(capabilities_dir: &str) -> Vec<String> {
-    let registry = Registry::new(capabilities_dir);
-    match registry.build_index().await {
-        Ok(index) => index.capabilities.into_iter().map(|e| e.name).collect(),
-        Err(_) => vec![],
-    }
 }
 
 // ── JSON helpers ──────────────────────────────────────────────────────────────

@@ -201,6 +201,11 @@ def _parse_all(fragments: dict[str, str]) -> list[Fragment]:
     return parsed
 
 
+def fragment_numbers(frozen_max: int, names) -> dict[str, int]:
+    """The item number `assemble` gives each fragment: file-name order from frozen_max + 1."""
+    return {n: frozen_max + 1 + i for i, n in enumerate(sorted(names, key=sort_key))}
+
+
 def assemble(doc: str, frozen_max: int, fragments: dict[str, str]) -> tuple[str, int]:
     """Number the fragments from frozen_max + 1 in file-name order, add each
     row after the last summary row and each section before the walkthrough.
@@ -397,11 +402,25 @@ def main(argv: list[str]) -> int:
         return 1 if errors else 0
 
     result, top = assemble(doc, frozen_max, texts)
+    # MIK-8044.SURF.6: surface rows that cite a fragment now cite its number,
+    # and the generated appendix is rebuilt from the rewritten inventory.
+    import surface_upgrading
+
+    inventory_path = ROOT / "docs/design/surface-4.0.md"
+    inventory = None
+    if inventory_path.is_file():
+        inventory = surface_upgrading.rewrite_citations(
+            inventory_path.read_text(encoding="utf-8"), fragment_numbers(frozen_max, texts)
+        )
+    if inventory is not None and surface_upgrading.START in result:
+        result = surface_upgrading.write(result, surface_upgrading.render(surface_upgrading.rows_of(inventory)))
     if args.dry_run:
         sys.stdout.write(result)
         return 0
     if texts:
         (ROOT / DOC).write_text(result, encoding="utf-8")
+        if inventory is not None:
+            inventory_path.write_text(inventory, encoding="utf-8")
         (frag_dir / FROZEN_MAX).write_text(f"{top}\n", encoding="utf-8")
         for n in texts:
             (frag_dir / n).unlink()

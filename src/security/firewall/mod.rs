@@ -40,6 +40,8 @@ pub mod budget_guard;
 mod collusion;
 mod collusion_digest;
 mod collusion_gate;
+#[cfg(test)]
+pub(crate) use collusion_digest::{note_walk_for_test, walks_built};
 pub use collusion_gate::{AllowedFlow, CollusionAction, CollusionConfig};
 pub(crate) use collusion_gate::{DeliveryDigest, PlanStaging, RelayCaller};
 mod config;

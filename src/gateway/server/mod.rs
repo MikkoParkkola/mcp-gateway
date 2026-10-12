@@ -130,12 +130,13 @@ const MAX_INFLIGHT_STDIO_REQUESTS: usize = STDOUT_QUEUE_DEPTH;
 /// which is exactly the pre-concurrency behaviour and no worse (design §6).
 const STDIO_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// The stdio protocol-revision sink, shared by every spawned dispatch.
+/// The stdio protocol-revision sink, written only by saves (MIK-8364): the
+/// saver's tick threads and the bounded final save at teardown. Requests never
+/// take it; they record in the in-memory registry only.
 ///
-/// A `std::sync::Mutex` and never a `tokio` one: every writer is synchronous,
-/// so the guard is taken and dropped without an await in between. Holding one
-/// across an await would make the dispatch future `!Send` and serialise the
-/// concurrent bridged calls this whole change exists to allow (design §5).
+/// A `std::sync::Mutex`: every save is synchronous and runs off the runtime
+/// (a detached tick thread, or the final save's blocking thread), and holding
+/// it across the whole save is what keeps two saves from overlapping.
 pub(crate) type StdioTelemetry =
     std::sync::Mutex<Option<crate::protocol_revision_telemetry::DurableTelemetrySink>>;
 
@@ -316,6 +317,8 @@ mod tests {
 
     mod boot;
     mod build_meta_wiring;
+    mod era_parity;
+    mod era_split;
     mod startup_strategy;
     mod stdio_dispatch;
 

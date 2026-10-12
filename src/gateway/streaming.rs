@@ -580,14 +580,6 @@ impl NotificationMultiplexer {
         session
     }
 
-    /// Test seam: an anonymous session under a chosen id, which production
-    /// never creates (every production id is minted, F9).
-    #[cfg(test)]
-    pub(crate) fn seed_session(&self, id: &str) -> broadcast::Receiver<SessionFrame> {
-        self.insert_session(&mut self.sessions.write(), id, SessionOwner::Anonymous)
-            .subscribe()
-    }
-
     /// Remove a session
     pub fn remove_session(&self, session_id: &str) {
         let mut sessions = self.sessions.write();
@@ -766,6 +758,8 @@ impl NotificationMultiplexer {
 /// already names.
 const STREAMING_TARGET: &str = module_path!();
 
+#[path = "streaming_fanout.rs"]
+mod fanout;
 #[path = "streaming_sse.rs"]
 mod sse;
 pub(crate) use sse::create_sse_response_with_view;

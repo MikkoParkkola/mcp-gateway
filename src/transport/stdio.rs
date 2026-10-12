@@ -89,6 +89,21 @@ pub struct StdioTransport {
     /// `Some` is the gateway's to clear; `None` says the value that reaches
     /// the child, if any, came from the operator's own configuration.
     assigned_cache: Option<std::path::PathBuf>,
+    /// Test-only: one bound, at hang scale, that replaces the start's drain
+    /// window, `end_tree`'s wait and each spawned tree's reap deadline, so a
+    /// row that asserts the reported status and class waits for the events
+    /// rather than racing 1 s and 5 s windows on a loaded host (MIK-8360).
+    #[cfg(test)]
+    pub(super) slow_host_bound: parking_lot::Mutex<Option<std::time::Duration>>,
+    /// Test-only: replaces the drain window for the stderr reader alone
+    /// (MIK-8360); `None` keeps the real window.
+    #[cfg(test)]
+    pub(super) stderr_bound: parking_lot::Mutex<Option<std::time::Duration>>,
+    /// Test-only: requests that waited out their timeout. An early exit must
+    /// be noticed before the start's request times out; a row reads this
+    /// instead of a stopwatch (MIK-8360).
+    #[cfg(test)]
+    pub(super) request_timeouts: std::sync::atomic::AtomicUsize,
 }
 
 impl StdioTransport {
@@ -198,7 +213,7 @@ impl StdioTransport {
         // Renewed under the stdin lock, so a write never pairs new stdin with
         // the token a previous `close()` cancelled.
         *self.shutdown.lock() = tokio_util::sync::CancellationToken::new();
-        if let Err(refused) = self.install_tree(ChildTree::new(child)) {
+        if let Err(refused) = self.install_tree(self.new_tree(child)) {
             *writer = None;
             return Err(refused);
         }
@@ -725,6 +740,8 @@ mod child_tree;
 mod reaper;
 #[path = "stdio_tree.rs"]
 mod tree;
+// Only the unix frame tests build a tree by hand (MIK-8360).
+#[cfg(all(test, unix))]
 use child_tree::ChildTree;
 pub use tree::{CEILING_MAX_FRAME_BYTES, DEFAULT_MAX_FRAME_BYTES, MIN_MAX_FRAME_BYTES};
 use tree::{read_frame, spawn_in_own_tree};

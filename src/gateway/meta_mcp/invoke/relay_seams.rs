@@ -20,6 +20,13 @@ tokio::task_local! {
     static PLAN_MEMBERS: RefCell<Vec<(String, u32)>>;
 }
 
+/// Run `f` with `members` as the plan's answer members, synchronously
+/// (tests only: rows that drive `keep_plan_receipts` directly).
+#[cfg(all(test, feature = "firewall"))]
+pub(super) fn with_plan_members<R>(members: Vec<(String, u32)>, f: impl FnOnce() -> R) -> R {
+    PLAN_MEMBERS.sync_scope(RefCell::new(members), f)
+}
+
 /// Run `delivery` with a record of its plan's answer members.
 pub(super) fn scope<F: Future>(delivery: F) -> impl Future<Output = F::Output> {
     PLAN_MEMBERS.scope(RefCell::new(Vec::new()), delivery)

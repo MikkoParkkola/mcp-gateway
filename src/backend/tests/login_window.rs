@@ -149,7 +149,7 @@ pub(super) fn login_backend_with(
                 callback_host: Some("127.0.0.1".to_string()),
                 callback_port,
                 callback_path: None,
-                token_refresh_buffer_secs: 300,
+                token_refresh_buffer_secs: Some(300),
                 shared_account: matches!(account, Account::Shared),
             }),
             ..BackendConfig::default()
