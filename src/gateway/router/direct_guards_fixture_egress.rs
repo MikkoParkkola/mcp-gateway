@@ -2,17 +2,18 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The egress matrix's hooks into the shared fixture (design
 //! `2026-10-08-one-egress-scan.md`): a planted transport in place of the
-//! scripted backend, a Warn rule, an audit log, an inspection-only gateway,
-//! and the backend-error answers the error-scan rows use (MIK-8139).
+//! scripted counting transport, a Warn rule, an audit log, an
+//! inspection-only gateway, and the backend-error answers (MIK-8139).
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::{Value, json};
 
+use super::answers::{call_answer, listing, question, recording_answer};
 #[cfg(feature = "firewall")]
 use super::{AUDIT_LOG, FIREWALL_RULE, META_FIREWALL};
-use super::{Answer, CountingBackend, TRANSPORT};
+use super::{Answer, TRANSPORT};
 #[cfg(feature = "firewall")]
 use super::{Fx, fixture_inner};
 use crate::protocol::{JsonRpcResponse, RequestId};
@@ -123,6 +124,104 @@ pub(super) fn error_answer(answer: Answer, id: RequestId) -> crate::Result<JsonR
     }
 }
 
+/// One `Transport` shared by `alpha` and `alpha-pt`, scripted with `Answer`
+/// and counting every `tools/call`. `tools/list` names the one tool the rows
+/// call, `read`, so the direct route's listing check (F13) admits it; a
+/// listing never counts as a call.
+pub(super) struct CountingBackend {
+    pub(super) calls: Arc<AtomicUsize>,
+    /// The params of every `tools/call`, in order (MIK-8078).
+    pub(super) seen: Arc<std::sync::Mutex<Vec<Value>>>,
+    pub(super) answer: Answer,
+    /// What `Answer::AskThenStore` keeps between calls.
+    pub(super) kept: Arc<std::sync::Mutex<String>>,
+}
+
+#[async_trait::async_trait]
+impl Transport for CountingBackend {
+    async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
+        let id = RequestId::Number(1);
+        if method == "tools/list" {
+            return Ok(JsonRpcResponse::success(
+                id,
+                listing(self.answer, params.as_ref()),
+            ));
+        }
+        self.seen
+            .lock()
+            .unwrap()
+            .push(params.clone().unwrap_or(Value::Null));
+        let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(body) = recording_answer(self.answer, n, params.as_ref(), &self.kept) {
+            return Ok(JsonRpcResponse::success(id, body));
+        }
+        if let Answer::StateOnlyRounds(at, text) = self.answer {
+            let round = |text: &str| {
+                json!({"resultType": "input_required", "requestState": format!("state-{n}"),
+                       "content": [{"type": "text", "text": text}]})
+            };
+            return Ok(JsonRpcResponse::success(
+                id,
+                match n.cmp(&at) {
+                    std::cmp::Ordering::Less => round("nothing to see"),
+                    std::cmp::Ordering::Equal => round(text),
+                    std::cmp::Ordering::Greater => {
+                        json!({"content": [{"type": "text", "text": "ok"}], "isError": false})
+                    }
+                },
+            ));
+        }
+        if matches!(
+            self.answer,
+            Answer::AskOnce
+                | Answer::AskNoState
+                | Answer::AskMalformed
+                | Answer::AskBig
+                | Answer::AskWith(_)
+                | Answer::AskBadMeta
+                | Answer::AskAndError
+                | Answer::AskSecond
+                | Answer::AskEdited(_)
+                | Answer::AskAlways
+        ) {
+            let asks_now = if matches!(self.answer, Answer::AskAlways) {
+                params
+                    .as_ref()
+                    .and_then(|p| p.get("requestState"))
+                    .is_none()
+            } else {
+                n == usize::from(matches!(self.answer, Answer::AskSecond))
+            };
+            return Ok(if asks_now {
+                let mut asked = JsonRpcResponse::success(id, question(self.answer));
+                if matches!(self.answer, Answer::AskAndError) {
+                    asked.error = Some(crate::protocol::JsonRpcError {
+                        code: -32000,
+                        message: "backend failed".to_string(),
+                        data: None,
+                    });
+                }
+                asked
+            } else {
+                JsonRpcResponse::success(
+                    id,
+                    json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+                )
+            });
+        }
+        call_answer(self.answer, id)
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
 /// The transport both fixture backends answer with: a planted one when a
 /// cell set it, the scripted one otherwise.
 pub(super) fn backend_transport(
@@ -137,16 +236,6 @@ pub(super) fn backend_transport(
             kept: Arc::default(),
         })
     })
-}
-
-/// [`super::fixture_firewalled`] with `build` arming the `MetaMcp` (MIK-8351:
-/// a key budget on the firewalled fixture, for the give-back rows).
-#[cfg(feature = "firewall")]
-pub(crate) async fn fixture_firewalled_built(
-    answer: Answer,
-    build: impl FnOnce(crate::gateway::meta_mcp::MetaMcp) -> crate::gateway::meta_mcp::MetaMcp,
-) -> Fx {
-    fixture_inner(answer, true, build).await
 }
 
 /// [`super::fixture_hardened_signed`] with the production firewall too
