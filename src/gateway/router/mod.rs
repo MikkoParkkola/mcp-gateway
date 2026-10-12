@@ -101,6 +101,9 @@ mod direct_continuation_tests;
 mod direct_explicit_cancel_tests;
 #[cfg(test)]
 mod direct_guards_fixture;
+/// MIK-8392 STORED.2: stored single-call results need a live account.
+#[cfg(test)]
+mod stored_replay_liveness_tests;
 #[cfg(all(test, feature = "a2a", feature = "firewall"))]
 mod direct_guards_fixture_a2a;
 #[cfg(test)]

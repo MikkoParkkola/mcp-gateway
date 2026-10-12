@@ -117,6 +117,17 @@ impl DirectAccountGateway {
             .collect()
     }
 
+    /// Revoke the sole operator's seeded grant through live custody, with no
+    /// reconnect: the operator keeps its principal but has no current grant,
+    /// so it has no view of the backend (MIK-8356 R3.7, MIK-8392).
+    pub(crate) async fn revoke_operator_grant(&self) {
+        self._custody
+            .handle
+            .invalidate(&operator_key())
+            .await
+            .expect("the seeded grant must revoke through real custody");
+    }
+
     /// Answer the next non-`tools/list` request with `result`.
     pub(crate) fn answer_next(&self, result: serde_json::Value) {
         self.dispatches.script(&[Answer::Result(result)]);
