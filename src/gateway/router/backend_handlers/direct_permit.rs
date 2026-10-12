@@ -64,7 +64,7 @@ pub(super) fn mint_permit(
 /// drop), and the spend admission and continuation slot, which the caller
 /// drops with the refusal.
 fn give_back_refused(state: &AppState, admitted: &mut Admitted<'_>) {
-    DirectRouteGuards::release_nonce(state, admitted.nonce.take());
+    DirectRouteGuards::release_nonce(state, admitted.nonce.take(), admitted.witness.take());
     if let Some(mut reservation) = admitted.idem_reservation.take() {
         // Today the reservation is unarmed here (it is armed only in
         // `dispatch_armed`, after the permit), so its drop would release the
