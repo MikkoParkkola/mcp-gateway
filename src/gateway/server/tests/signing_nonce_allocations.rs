@@ -45,10 +45,13 @@ use super::signing_nonce_allocations_support::{
 const REFUSAL_BUDGET: u64 = 16 * 1024;
 
 /// How many large allocations (`alloc_meter::LARGE_BYTES` or more) a refused
-/// dispatch may make (MIK-8400.STDIO.5): one, the `tools/call` dispatch's
-/// box, inside which a missing or replayed nonce is refused after the policy.
-/// #3841 boxed the whole stdio dispatch a second time inside the visibility
-/// memo, a second 5 KB copy on every refusal.
+/// dispatch may make on this path (MIK-8400.STDIO.7): one, the `tools/call`
+/// dispatch's own box (`Box::pin(Self::dispatch_tools_call(..))` in
+/// `stdio_dispatch.rs`, inside `slot_rpc`), where a missing or replayed nonce
+/// is refused after the policy. #3841 boxed the whole stdio dispatch a second
+/// time inside the visibility memo, a second 5 KB copy on every refusal. The
+/// serve loop's own box of the whole dispatch is outside this path (see
+/// [`dispatch`]), so production makes one more than this count.
 const LARGE_ALLOCATIONS: u64 = 1;
 
 /// The three refusal errors are settled production controls, pinned exactly.
@@ -75,8 +78,10 @@ fn test_path(name: &str) -> String {
     format!("{module}::{name}")
 }
 
-/// The production stdio dispatcher, called exactly as `run_stdio` calls it:
-/// owned `Value` moved in, no sink, the stdio session id.
+/// The production stdio dispatcher, called as `run_stdio` calls it (owned
+/// `Value` moved in, no sink, the stdio session id) but awaited unboxed: the
+/// serve loop wraps it in `Box::pin` (`stdio_loop.rs`), and that box is not in
+/// these readings, which measure the dispatch itself.
 async fn dispatch(fixture: &Fixture, request: Value) -> Value {
     super::super::Gateway::dispatch_single_with_sink(
         &fixture.meta,
