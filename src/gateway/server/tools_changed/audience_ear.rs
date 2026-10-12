@@ -253,7 +253,7 @@ impl World {
         // first bytes within the deadline are read.
         let body = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            axum::body::to_bytes(response.into_body(), 64 * 1024),
+            axum::body::to_bytes(response.into_body(), usize::MAX),
         )
         .await
         .map_or_else(|_| axum::body::Bytes::new(), Result::unwrap_or_default);
