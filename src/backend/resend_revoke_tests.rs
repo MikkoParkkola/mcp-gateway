@@ -103,6 +103,31 @@ async fn s3_an_idempotent_relist_keeps_resend_and_loses_cache_admission() {
     );
 }
 
+/// S3b: an unstored page relisting an idempotent write exactly as the slot
+/// already holds it changes nothing, so the stored catalogue survives and
+/// no refill is needed. Pins that the resend leg tests the resend-safe set.
+#[tokio::test]
+async fn s3b_an_unchanged_idempotent_relist_keeps_the_catalogue() {
+    let backend = backend();
+    let _ = backend.remember_listed_tools(None, false, &[idempotent("t")]);
+    seed_resend_only(&backend, &["t"]);
+    assert_eq!(
+        backend.cached_tools_snapshot_and_truncated().0.len(),
+        1,
+        "premise: a complete listing stored a catalogue"
+    );
+    let _ = backend.remember_listed_tools_as(None, false, &[idempotent("t")], Listing::Truncated);
+    assert!(
+        permitted(&backend).contains("t"),
+        "premise: still resend-safe"
+    );
+    assert_eq!(
+        backend.cached_tools_snapshot_and_truncated().0.len(),
+        1,
+        "an unchanged relist invalidated the slot, forcing a refill"
+    );
+}
+
 /// `write(name)` whose schema breaks an `x-mcp-header` constraint, so
 /// `prepare_tool_metadata` drops it before the safety sets are read.
 fn header_invalid_write(name: &str) -> Value {
