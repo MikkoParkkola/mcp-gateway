@@ -419,3 +419,64 @@ async fn c1b_mcp_invoke_of_a_withheld_target_matches_an_existing_one() {
         String::from_utf8_lossy(&existing.1)
     );
 }
+
+/// C5 CONTROL (D1, routed admission owner): with auth off and a trusted proxy
+/// naming a subject, a keyed direct call has a principal (the routed owner)
+/// and runs; the intake check must not refuse it. As `delivery_who` sets it.
+#[tokio::test]
+async fn c5_trusted_proxy_subject_is_a_principal() {
+    let fx = fixture(Setup {
+        caller_identity: Some(crate::security::caller_identity::CallerIdentityConfig {
+            mode: crate::security::caller_identity::CallerIdentityMode::TrustedProxy,
+            trusted_proxies: vec!["10.0.0.5".parse().unwrap()],
+            authority: "corp-sso".to_string(),
+            ..crate::security::caller_identity::CallerIdentityConfig::default()
+        }),
+        ..idempotent()
+    })
+    .await;
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp/alpha")
+        .header("content-type", "application/json")
+        .header("x-gateway-identity-subject", "alice")
+        .body(axum::body::Body::from(keyed("t")))
+        .unwrap();
+    request.extensions_mut().insert(axum::extract::ConnectInfo(
+        "10.0.0.5:4000".parse::<std::net::SocketAddr>().unwrap(),
+    ));
+    let response = fx.router.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "c5: {}",
+        String::from_utf8_lossy(&body)
+    );
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        1,
+        "c5: the call did not run"
+    );
+}
+
+/// D6 (D8(c)): a keyed no-principal modern `gateway_set_profile` is refused
+/// at intake (-32003). RED: today its own Protocol refusal answers first
+/// (admission's set_profile check precedes the principal check).
+#[tokio::test]
+async fn d6_set_profile_answers_intake_first() {
+    let fx = fixture(idempotent()).await;
+    let body = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {
+    "name": "gateway_set_profile",
+    "arguments": {"profile": "default"},
+    "_meta": {
+        (crate::protocol::mrtr::IDEMPOTENCY_KEY_META): KEY,
+        "io.modelcontextprotocol/protocolVersion": crate::protocol::meta::MODERN_VERSIONS[0],
+        "io.modelcontextprotocol/clientCapabilities": {},
+    }}})
+    .to_string();
+    let (status, answer) = post_to(&fx, "/mcp", &body, &Caller::Modern).await;
+    assert_eq!(message(&answer), NO_PRINCIPAL, "d6: {answer}");
+    assert_eq!(status, StatusCode::BAD_REQUEST, "d6: {answer}");
+}
