@@ -8,7 +8,6 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -180,15 +179,6 @@ pub fn load(path: &Path) -> crate::Result<PersistedCosts> {
         "Loaded cost data"
     );
     Ok(costs)
-}
-
-/// Return the current Unix timestamp in seconds (for `saved_at`).
-#[cfg(feature = "cost-governance")]
-pub fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

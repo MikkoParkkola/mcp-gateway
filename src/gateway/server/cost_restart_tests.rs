@@ -75,7 +75,7 @@ fn spend_saved_on_an_earlier_day_does_not_count_today() {
     let (snap, allowed) = same_utc_day(|| {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut persisted = PersistedCosts {
-            saved_at: cost_persistence::now_secs() - 2 * 86_400,
+            saved_at: crate::clock::unix_secs().expect("a readable clock") - 2 * 86_400,
             ..PersistedCosts::default()
         };
         persisted.tool_totals.insert(
