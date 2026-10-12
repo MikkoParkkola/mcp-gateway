@@ -1,0 +1,31 @@
+diff --git a/src/backend/input_keys.rs b/src/backend/input_keys.rs
+index da1a8a591..4c6fe5205 100644
+--- a/src/backend/input_keys.rs
++++ b/src/backend/input_keys.rs
+@@ -31,7 +31,7 @@ fn miss(
+     labels: [&'static str; 2],
+     text: impl FnOnce() -> String,
+ ) -> Option<String> {
+-    if mode == InputSchemaEnforcement::Closed || lens == Lens::Withheld {
++    if mode == InputSchemaEnforcement::Closed || (false && lens == Lens::Withheld) {
+         count(labels[0]);
+         Some(text())
+     } else {
+@@ -222,7 +222,7 @@ impl Backend {
+         let mode = self.config.input_schema_enforcement;
+         if mode == InputSchemaEnforcement::Off {
+             // Off checks no membership; a withheld name is still not sent.
+-            return Some(Ok((lens == Lens::Withheld).then(|| text_absent(tool))));
++            return Some(Ok((false && lens == Lens::Withheld).then(|| text_absent(tool))));
+         }
+         if !(self.has_cached_tools_for(identity_key) || self.stale_refresh_cooling(identity_key)) {
+             return None;
+@@ -256,7 +256,7 @@ impl Backend {
+         }
+         let mode = self.config.input_schema_enforcement;
+         if mode == InputSchemaEnforcement::Off {
+-            return Ok((lens == Lens::Withheld).then(|| text_absent(tool)));
++            return Ok((false && lens == Lens::Withheld).then(|| text_absent(tool)));
+         }
+         // A4: a hit is judged from the cache while the slot is fresh; a stale
+         // hit refreshes once, and falls back to the held schema (design E)

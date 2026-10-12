@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/gate.rs b/src/gateway/meta_mcp/invoke/gate.rs
+index e67322869..0074eb504 100644
+--- a/src/gateway/meta_mcp/invoke/gate.rs
++++ b/src/gateway/meta_mcp/invoke/gate.rs
+@@ -265,7 +265,7 @@ impl MetaMcp {
+                     self.record_withheld(server, tool, reason, caller, session_id)
+                         .await;
+                 }
+-                Lens::Withheld
++                Lens::Catalogue
+             }
+             // A miss, or a fill that failed: the check below meets the same
+             // state and answers it as F13 does.

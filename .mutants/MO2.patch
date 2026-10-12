@@ -1,0 +1,14 @@
+diff --git a/src/gateway/server/stdio_route_stage.rs b/src/gateway/server/stdio_route_stage.rs
+index 86ae3ad9b..8a823b325 100644
+--- a/src/gateway/server/stdio_route_stage.rs
++++ b/src/gateway/server/stdio_route_stage.rs
+@@ -107,7 +107,8 @@ impl Gateway {
+                 .await;
+         }
+         // MIK-8361, as on `/mcp`: recorded, so the gate answers it absent.
+-        let invisible = meta_mcp
++        let invisible = false
++            && meta_mcp
+             .invisible_call(
+                 tool_name,
+                 (&targets, request_targets),

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/grant_audit.rs b/src/gateway/meta_mcp/grant_audit.rs
+index 42d6e03fe..d9d238f3c 100644
+--- a/src/gateway/meta_mcp/grant_audit.rs
++++ b/src/gateway/meta_mcp/grant_audit.rs
+@@ -442,7 +442,7 @@ pub(super) async fn note_withheld_best_effort<T>(server: &str, noting: impl FnOn
+         GRANT_SLOT
+             .try_with(|slot| {
+                 let mut held = slot.notes.lock().expect("grant slot lock");
+-                let at = before.min(held.len());
++                let at = 0;
+                 (Arc::clone(&slot.logger), held.split_off(at))
+             })
+             .ok()

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/signing.rs b/src/gateway/meta_mcp/signing.rs
+index bf61e5dbb..10ee69522 100644
+--- a/src/gateway/meta_mcp/signing.rs
++++ b/src/gateway/meta_mcp/signing.rs
+@@ -628,7 +628,7 @@ impl super::MetaMcp {
+         // nonce refusal tells the two apart. The route stage answers it
+         // absent; admission re-runs the policy before any replay.
+         if context.origin == Origin::GatewayInvoke
+-            && !self.withheld_invoke_target(arguments, session, caller)
++            && !(false && self.withheld_invoke_target(arguments, session, caller))
+         {
+             self.check_invocation_policy(arguments, session, caller)?;
+         }

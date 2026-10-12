@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/gate.rs b/src/gateway/meta_mcp/invoke/gate.rs
+index e67322869..1d2896e0b 100644
+--- a/src/gateway/meta_mcp/invoke/gate.rs
++++ b/src/gateway/meta_mcp/invoke/gate.rs
+@@ -188,7 +188,7 @@ impl MetaMcp {
+         session_id: Option<&str>,
+         refusal: Error,
+     ) -> Result<GuardedValue> {
+-        if crate::playbook::current_step().is_some() {
++        if true || crate::playbook::current_step().is_some() {
+             return Err(refusal);
+         }
+         match self.gate_answer((server, tool), caller, session_id).await {

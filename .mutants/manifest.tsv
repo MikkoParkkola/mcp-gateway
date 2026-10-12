@@ -1,0 +1,21 @@
+head_sha	c2ef1f26ddd9fe760b74ddf203d9d528d62ba37b
+# MIK-8361 batch 2 (final head, after the clippy reshaping of guard_tool_call and stdio_route_stage): each mutant reverts one piece of the gate, A1 signing or the one-record audit; each must fail its named row
+MG1	linux	MG1.patch	--lib -- gateway::router::oracle_parity_tests::oracle2_schema_descriptor_profile_answer_as_the_missing_name --exact
+MO1	linux	MO1.patch	--lib -- gateway::router::oracle_order_tests::o2_a_withheld_task_call_creates_no_task --exact
+MO2	linux	MO2.patch	--lib -- gateway::server::signing_allocation_tests::owner2_stdio_tasks::a_stdio_task_runs_under_the_current_tool_policy --exact
+MG2	linux	MG2.patch	--lib -- gateway::router::oracle_per_user_tests::c2_a_firewall_refused_direct_call_resolves_no_credential --exact
+MG3	linux	MG3.patch	--lib -- gateway::router::oracle_parity_tests::oracle2_schema_descriptor_profile_answer_as_the_missing_name --exact
+MS1	linux	MS1.patch	--lib -- gateway::router::oracle_parity_tests::oracle2_policy_surfaced_name_answers_as_an_unmapped_name --exact
+MR6	linux	MR6.patch	--lib -- gateway::router::direct_guards_tests::oracle::t4_the_session_profile_applies_on_the_direct_route --exact
+MP1	linux	MP1.patch	--lib -- gateway::router::oracle_per_user_tests::p5_the_caller_slot_not_the_shared_one_decides --exact
+MA1	linux	MA1.patch	--lib -- gateway::meta_mcp::oracle_audit_tests::a3a_a_withheld_steps_failed_record_is_isolated --exact
+MA2	linux	MA2.patch	--lib -- gateway::meta_mcp::oracle_audit_tests::a3b_another_steps_failed_record_still_fails_closed --exact
+MC4	linux	MC4.patch	--lib -- gateway::router::oracle_per_user_tests::p1_a_policy_withheld_name_answers_absent_with_no_fill_or_mint --exact
+MW	linux	MW.patch	--lib -- gateway::router::oracle_parity_tests::s5_s6_catalogue_reasons_withhold_and_forward_the_missing_name --exact
+M5	linux	M5.patch	--lib -- gateway::router::oracle_parity_tests::oracle2_schema_descriptor_profile_answer_as_the_missing_name --exact
+MD1	linux	MD1.patch	--lib -- gateway::router::oracle_order_tests::d1_a_refill_after_the_route_stage_keeps_a_missing_name_absent --exact
+MB1	linux	MB1.patch	--lib -- gateway::router::oracle_order_tests::b1_the_dispatch_backstop_answers_a_withheld_target_absent --exact
+MSG1	linux	MSG1.patch	--lib -- gateway::server::signing_allocation_tests::owner4_stdio_policy::stdio_answers_policy_before_a_malformed_invoke_nonce --exact
+MAU1	linux	MAU1.patch	--lib -- gateway::meta_mcp::audit_record_tests::denied_call_writes_denied_record --exact
+MAU2	linux	MAU2.patch	--lib -- gateway::router::direct_audit_tests::direct_authorizer_refusal_is_denied_record --exact
+MU1	linux	MU1.patch	--lib -- gateway::router::meta_refusal_audit::tests::a_failed_refusal_write_answers_503_when_the_log_fails_closed --exact

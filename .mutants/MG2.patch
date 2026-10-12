@@ -1,0 +1,24 @@
+diff --git a/src/gateway/router/backend_handlers.rs b/src/gateway/router/backend_handlers.rs
+index 46bebb987..0dc042c04 100644
+--- a/src/gateway/router/backend_handlers.rs
++++ b/src/gateway/router/backend_handlers.rs
+@@ -501,9 +501,6 @@ async fn backend_handler_inner(
+     };
+     // Authorize, the firewall and the withheld gate need no credential:
+     // a call they refuse or answer resolves none (MIK-8361 ORACLE.4).
+-    if let Err(response) = direct_gate::guard_before_credential(scope, &envelope).await {
+-        return response;
+-    }
+     let propagation =
+         match direct_preflight::propagate_identity(state, &name, &caller, &route, &preflight, &id)
+             .await
+@@ -511,6 +508,9 @@ async fn backend_handler_inner(
+             Ok(propagation) => propagation,
+             Err(response) => return response,
+         };
++    if let Err(response) = direct_gate::guard_before_credential(scope, &envelope).await {
++        return response;
++    }
+     let admitted = match direct_dispatch::admit(scope, &envelope, &preflight, &propagation).await {
+         Ok(admitted) => admitted,
+         Err(response) => return response,
