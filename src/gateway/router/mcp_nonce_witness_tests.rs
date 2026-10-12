@@ -299,12 +299,8 @@ async fn a_chokepoint_refusal_after_a_consume_keeps_the_nonce() {
 #[tokio::test]
 async fn a_spend_refusal_after_a_failed_optional_mint_keeps_the_nonce() {
     use super::direct_continuation_tests::budget;
-    use super::direct_guards_fixture::{FailingMint, fixture_optional_failing_mint};
-    let modes: [(&str, fn() -> FailingMint); 2] = [
-        ("failed mint", FailingMint::default),
-        ("invalid header", FailingMint::with_bad_header),
-    ];
-    for (mode, mint) in modes {
+    use super::direct_guards_fixture::{MINT_MODES, fixture_optional_failing_mint};
+    for (mode, mint) in MINT_MODES {
         let (fx, failing) = fixture_optional_failing_mint(Answer::Ok, mint(), budget).await;
         let who = ("k-budget", "alpha");
         let (_, first) = signed_call(&fx, who, "n1", json!({})).await;

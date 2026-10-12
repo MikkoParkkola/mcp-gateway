@@ -229,6 +229,16 @@ impl crate::identity_propagation::IdentityPropagation for FailingMint {
     }
 }
 
+/// A named way for a [`FailingMint`] to fail.
+pub(crate) type MintMode = (&'static str, fn() -> FailingMint);
+
+/// Both failure modes the H1 rows run: a failed mint, and a mint whose header
+/// does not parse.
+pub(crate) const MINT_MODES: [MintMode; 2] = [
+    ("failed mint", FailingMint::default),
+    ("invalid header", FailingMint::with_bad_header),
+];
+
 /// The hardened, signed fixture whose backends declare OPTIONAL identity
 /// propagation through a [`FailingMint`]: every propagated call attempts a
 /// mint, fails, and falls back to the static credential (IDP.5). `build` arms
