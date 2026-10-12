@@ -98,6 +98,19 @@ fn attached(client_id: &str) -> crate::gateway::oauth::AgentIdentity {
     }
 }
 
+/// `live()`'s context holding `agent`, with default caller identity and no
+/// Cloudflare verifier.
+fn ctx<'a>(
+    agent: Option<&'a crate::gateway::oauth::ValidatedToken>,
+    identity: &'a crate::security::caller_identity::CallerIdentityConfig,
+) -> crate::gateway::streaming::LiveCtx<'a> {
+    crate::gateway::streaming::LiveCtx {
+        agent,
+        caller_identity: identity,
+        cf_verifier: None,
+    }
+}
+
 /// `token` validated now against `registry`, as the judge's `current_caller`
 /// does.
 fn validated(registry: &AgentRegistry, token: &str) -> crate::gateway::oauth::ValidatedToken {
@@ -111,15 +124,18 @@ fn validated(registry: &AgentRegistry, token: &str) -> crate::gateway::oauth::Va
 /// reach this state; the predicate is what keeps it closed if it ever does.
 #[test]
 fn agent_4_an_agentless_stream_never_adopts_a_live_agent() {
+    let identity = crate::security::caller_identity::CallerIdentityConfig::default();
     let registry = AgentRegistry::new();
     let token = agent(&registry, "a1", &["tools:alpha:*"]);
     let subject = crate::gateway::streaming::ViewSubject::default();
     assert!(
-        subject.live(Some(&validated(&registry, &token))).is_err(),
+        subject
+            .live(&ctx(Some(&validated(&registry, &token)), &identity))
+            .is_err(),
         "an agent-less snapshot with a live agent is dead"
     );
     assert!(
-        subject.live(None).is_ok(),
+        subject.live(&ctx(None, &identity)).is_ok(),
         "control: no agent then, none now, is live"
     );
 }
@@ -128,6 +144,7 @@ fn agent_4_an_agentless_stream_never_adopts_a_live_agent() {
 /// dead, never judged as a2.
 #[test]
 fn agent_5_a_stream_whose_live_agent_is_another_client_is_dead() {
+    let identity = crate::security::caller_identity::CallerIdentityConfig::default();
     let registry = AgentRegistry::new();
     agent(&registry, "a1", &["tools:alpha:*"]);
     let a2 = agent(&registry, "a2", &["tools:alpha:*"]);
@@ -136,12 +153,16 @@ fn agent_5_a_stream_whose_live_agent_is_another_client_is_dead() {
         ..crate::gateway::streaming::ViewSubject::default()
     };
     assert!(
-        subject.live(Some(&validated(&registry, &a2))).is_err(),
+        subject
+            .live(&ctx(Some(&validated(&registry, &a2)), &identity))
+            .is_err(),
         "a live agent other than the attached one is dead"
     );
     let a1 = agent(&registry, "a1", &["tools:alpha:*"]);
     assert!(
-        subject.live(Some(&validated(&registry, &a1))).is_ok(),
+        subject
+            .live(&ctx(Some(&validated(&registry, &a1)), &identity))
+            .is_ok(),
         "control: the attached agent, still valid, is live"
     );
 }

@@ -195,3 +195,35 @@ fn metric_a_certificate_death_is_counted_once_as_cert() {
         "counted once: {text}"
     );
 }
+
+/// PROXY.2-peer: a stream whose grant subject came from a trusted proxy is
+/// dead once that proxy's address is no longer in `trusted_proxies`, never
+/// re-judged as the API-key subject. A unit row on `live()`: the setting is
+/// restart-only, so no running gateway can drop a peer while a stream lives;
+/// the check is defence in depth (design d2.1 L-4).
+#[test]
+fn proxy_2_peer_a_stream_from_an_untrusted_proxy_is_dead() {
+    let peer: std::net::SocketAddr = "10.0.0.9:443".parse().expect("an address");
+    let subject = crate::gateway::streaming::ViewSubject {
+        proxy_peer: Some(peer),
+        ..crate::gateway::streaming::ViewSubject::default()
+    };
+    let ctx = |identity| crate::gateway::streaming::LiveCtx {
+        agent: None,
+        caller_identity: identity,
+        cf_verifier: None,
+    };
+    let untrusted = crate::security::caller_identity::CallerIdentityConfig::default();
+    assert!(
+        subject.live(&ctx(&untrusted)).is_err(),
+        "a proxy no longer trusted makes the stream dead"
+    );
+    let trusted = crate::security::caller_identity::CallerIdentityConfig {
+        trusted_proxies: vec![peer.ip()],
+        ..crate::security::caller_identity::CallerIdentityConfig::default()
+    };
+    assert!(
+        subject.live(&ctx(&trusted)).is_ok(),
+        "control: a still-trusted proxy is live"
+    );
+}
