@@ -247,11 +247,11 @@ impl AttestedSandboxLauncher {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::disallowed_methods,
-    reason = "test code reads the host clock (MIK-8202 AC.14)"
-)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )]
     use super::*;
     use crate::attestation::signer::{BnautAttestationSigner, TokenRequest};
     use uuid::Uuid;

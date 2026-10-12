@@ -110,7 +110,7 @@ fn no_read_path_reports_the_undated_trip_placeholder_as_a_date() {
         assert_eq!(stats.last_trip_ms, None, "a dark trip is reported undated");
         let message = build_circuit_breaker_error("clock", &stats);
         assert!(
-            message.contains("unknown") && !message.contains("~0ms"),
+            message.contains("Opened an unknown time ago") && !message.contains("Opened ~"),
             "error text: {message}"
         );
     }
