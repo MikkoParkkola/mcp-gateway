@@ -348,11 +348,11 @@ async fn p7_first_declared_revoked_target_answers() {
     );
 }
 
-/// P8: the conditional step never ran (its condition was false), and its
-/// account is revoked afterwards. Declared targets include it, so the replay
-/// is refused.
+/// P8 CONTROL (d1 reopen 2026-10-12): the conditional step never ran, and its
+/// account is revoked afterwards. Only executed steps are judged, as on the
+/// task paths (STORED.1 T23, P9c), so the replay is served stored.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn p8_unrun_conditional_step_revoked_refuses_the_replay() {
+async fn p8_control_unrun_conditional_step_revoked_does_not_block() {
     let fx = fixture_with(Some(Second::PersonalAccount)).await;
     run_two_account(&fx, "conditional", "P8", 1).await;
     assert_eq!(
@@ -368,5 +368,13 @@ async fn p8_unrun_conditional_step_revoked_refuses_the_replay() {
         playbook_params("conditional", "P8", json!({})),
     )
     .await;
-    assert_refused_unsent(&fx, "P8", &again, sent);
+    assert!(
+        again.to_string().contains(MARKER),
+        "P8: not served stored: {again}"
+    );
+    assert_eq!(
+        fx.gateway.tool_calls_to(BACKEND),
+        sent,
+        "P8: the replay was sent: {again}"
+    );
 }
