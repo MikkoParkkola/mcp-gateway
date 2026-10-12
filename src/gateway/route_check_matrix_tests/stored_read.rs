@@ -7,7 +7,7 @@
 //! without a row does not compile. The `ExpectedGap` row names the ticket
 //! that closes it, and the gap pin turns red when it closes.
 
-use super::{Expect, Ticket};
+use super::Expect;
 
 /// The routes that read a stored task.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,29 +115,28 @@ pub(crate) const fn expect(route: ReadRoute, stage: ReadStage) -> ReadExpect {
     use ReadStage::{AccountView, CallerView};
     match (route, stage) {
         // The repeat is a live tools/call: the live admission judges the
-        // caller's view first. Its account step is STORED.2's site 5.
-        (HttpGet | StdioGet | HttpFrame, AccountView | CallerView) | (RepeatedCall, CallerView) => {
+        // caller's view first. Its account step is STORED.2's site 5
+        // (`defer_or_serve_existing`, MIK-8392), which closed the gap.
+        (HttpGet | StdioGet | HttpFrame | RepeatedCall, AccountView | CallerView) => {
             Stated(Expect::Applies)
         }
-        (RepeatedCall, AccountView) => Stated(Expect::ExpectedGap(Ticket::Mik8392)),
         (StdioFrame, AccountView | CallerView) => NotApplicable(ReadNa::NoStdioSubscribers),
         (Update | Cancel, AccountView | CallerView) => NotApplicable(ReadNa::GatewayAuthoredAck),
     }
 }
 
-/// Today's one gap: the repeated call's account step, closed by MIK-8392
-/// STORED.2 (site 5, `defer_or_serve_existing`), which flips the row.
+/// No gap remains: the repeated call's account step was closed by MIK-8392
+/// STORED.2 (site 5, `defer_or_serve_existing`). A new gap must be named here.
 #[test]
-fn the_read_table_has_one_named_gap() {
+fn the_read_table_has_no_named_gap() {
     let gaps: Vec<_> = ReadRoute::ALL
         .into_iter()
         .flat_map(|r| ReadStage::ALL.into_iter().map(move |s| (r, s)))
         .filter(|&(r, s)| matches!(expect(r, s), ReadExpect::Stated(Expect::ExpectedGap(_))))
         .collect();
-    assert_eq!(
-        gaps,
-        [(ReadRoute::RepeatedCall, ReadStage::AccountView)],
-        "the gap set moved: update the table and this pin"
+    assert!(
+        gaps.is_empty(),
+        "the gap set moved: update the table and this pin: {gaps:?}"
     );
 }
 
@@ -185,7 +184,7 @@ const DRIVEN: &[(ReadRoute, ReadStage, &str)] = &[
     (
         ReadRoute::RepeatedCall,
         ReadStage::AccountView,
-        "gap MIK-8392 STORED.2: driven red-first by its site-5 rows",
+        "router::stored_replay_liveness_tests R5, T4, T8, T9, T12 (site 5 and E9)",
     ),
 ];
 
