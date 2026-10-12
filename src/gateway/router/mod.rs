@@ -185,6 +185,9 @@ mod slot_quota_direct_tests;
 mod stored_read_account_tests;
 #[cfg(test)]
 mod stored_read_capability_tests;
+/// MIK-8392.STORED.1 order twins: stored reads refuse in live-call order.
+#[cfg(test)]
+mod stored_read_order_tests;
 #[cfg(test)]
 mod webhook_mount_tests;
 /// MIK-8340: a withheld surfaced name answers as an absent one.

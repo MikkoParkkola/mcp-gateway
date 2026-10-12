@@ -132,6 +132,17 @@ impl MetaMcp {
         if !backend.keeps_per_user_catalogues() {
             return;
         }
+        // A Passthrough view can never warm (`remember_caller_slot` skips it)
+        // and the stored read judges the shared catalogue for it: nothing to
+        // claim or publish here.
+        if backend.identity_propagation_config().is_some_and(|idp| {
+            matches!(
+                idp.strategy,
+                crate::identity_propagation::PropagationStrategyKind::Passthrough
+            )
+        }) {
+            return;
+        }
         let Some(principal) = self.principal_for(&backend, caller) else {
             return;
         };
@@ -185,10 +196,7 @@ impl MetaMcp {
         }
         #[cfg(not(test))]
         let _ = backends;
-        #[cfg(all(not(test), debug_assertions))]
-        panic!("stored read of {server} without the account pre-pass");
-        #[cfg(not(any(test, debug_assertions)))]
-        let _ = server;
+        tracing::error!(server, "stored read without the account pre-pass");
     }
 
     /// What is left of `caller`'s running cold lease on `server`, if one runs.
@@ -219,61 +227,56 @@ impl MetaMcp {
         }
         // Visibility first, as on the live path: a Descriptor, Schema or Lacked
         // target answers as absent even where policy would also refuse
-        // (MIK-8392 T12). A Refused target falls through to the policy check.
-        let refused = match self.judge_stored_targets(stored, session, caller, read) {
-            Err(StoredWithheld::Retry(after)) => return Some(retry_later(id, after)),
-            Err(StoredWithheld::Refused(error)) => Some(error),
-            Ok(()) => self
-                .authorize_stored(stored, attestation, session, caller)
-                .err(),
+        // (MIK-8392 T12). A Refused target falls through to the policy check;
+        // a cold one defers its retry until after policy and accounts, as the
+        // live path fills a cold slot only after route policy.
+        let cold = match self.judge_stored_visibility(stored, session, caller) {
+            Err(error) => return Some(error_response_preserving_status(id.clone(), &error)),
+            Ok(cold) => cold,
         };
+        // Policy before accounts, as on the live path: route authorize before
+        // caller verdicts, and the dispatch policy before its resolution.
+        if let Err(error) = self.authorize_stored(stored, attestation, session, caller) {
+            return Some(error_response_preserving_status(id.clone(), &error));
+        }
+        if let Err(withheld) = self.judge_stored_accounts(stored, read) {
+            return Some(match withheld {
+                StoredWithheld::Retry(after) => retry_later(id, after),
+                StoredWithheld::Refused(error) => {
+                    error_response_preserving_status(id.clone(), &error)
+                }
+            });
+        }
+        if let Some(after) = cold {
+            return Some(retry_later(id, after));
+        }
         // COLLUDE.1 §13.3: a stored result or pending prompt delivered again
         // renews the reader's receipt; the delivery owner commits it.
-        if refused.is_none() {
-            self.stage_stored_receipt(caller.relay_caller(session), caller.api_key_name, stored);
-        }
-        refused.map(|error| error_response_preserving_status(id.clone(), &error))
+        self.stage_stored_receipt(caller.relay_caller(session), caller.api_key_name, stored);
+        None
     }
 
-    /// Each recorded target against this caller's current view (MIK-8392):
-    /// its account (task reads only) as the pre-pass recorded it, then its
-    /// catalogue through the one judgement [`MetaMcp::stored_target_view`],
-    /// refused through the one guard [`visible::absent_if_withheld`], except
-    /// a Refused view, which falls through to [`Self::authorize_stored`].
-    fn judge_stored_targets(
+    /// Each recorded target against this caller's current catalogue (MIK-8392):
+    /// through the one judgement [`MetaMcp::stored_target_view`], refused
+    /// through the one guard [`visible::absent_if_withheld`], except a Refused
+    /// view, which falls through to [`Self::authorize_stored`]. A cold view
+    /// defers its retry until after policy and accounts; the first cold lease,
+    /// if any, is returned for the caller to answer then.
+    fn judge_stored_visibility(
         &self,
         stored: &CommittedTask,
         session: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
-        read: StoredRead,
-    ) -> std::result::Result<(), StoredWithheld> {
+    ) -> std::result::Result<Option<Option<std::time::Duration>>, Error> {
         let scope = caller.scope();
+        let mut cold: Option<Option<std::time::Duration>> = None;
         for target in &stored.targets {
             let (server, tool) = (target.server.as_str(), target.tool.as_str());
-            if read == StoredRead::Read
-                && let Some(account) = self.target_account(server, tool)
-            {
-                let outcome = visible::account_outcome(server, &account);
-                if outcome.is_none() {
-                    Self::unfilled_outcome_read(&self.backends, server);
-                }
-                match outcome {
-                    // Unfilled: the pre-pass never ran for it. Fail closed,
-                    // and retryable: nothing about the grant was learned.
-                    None | Some(AccountOutcome::Unavailable) => {
-                        return Err(visible::take_account_refusal(server, &account)
-                            .map_or(StoredWithheld::Retry(None), StoredWithheld::Refused));
-                    }
-                    Some(AccountOutcome::NoView) => {
-                        return Err(StoredWithheld::Refused(visible::absent_name(tool)));
-                    }
-                    Some(AccountOutcome::Live | AccountOutcome::Unjudged) => {}
-                }
-            }
             let Some(judged) = self.stored_target_view(server, tool, scope, session) else {
-                return Err(StoredWithheld::Retry(
-                    self.cold_lease_remaining(server, caller),
-                ));
+                if cold.is_none() {
+                    cold = Some(self.cold_lease_remaining(server, caller));
+                }
+                continue;
             };
             // A Refused view is policy, not visibility: it falls through to
             // `authorize_stored`, so the read refuses as the live call does
@@ -281,7 +284,45 @@ impl MetaMcp {
             if judged == visible::Visibility::Withheld(visible::Withholding::Refused) {
                 continue;
             }
-            visible::absent_if_withheld(Some(judged), tool).map_err(StoredWithheld::Refused)?;
+            visible::absent_if_withheld(Some(judged), tool)?;
+        }
+        Ok(cold)
+    }
+
+    /// Each recorded target's account (task reads only) as the pre-pass
+    /// recorded it (MIK-8392). Runs after [`Self::authorize_stored`], as the
+    /// live path refuses on policy before the account/caller verdict: route
+    /// authorize before caller verdicts, and the dispatch policy before its
+    /// resolution.
+    fn judge_stored_accounts(
+        &self,
+        stored: &CommittedTask,
+        read: StoredRead,
+    ) -> std::result::Result<(), StoredWithheld> {
+        if read != StoredRead::Read {
+            return Ok(());
+        }
+        for target in &stored.targets {
+            let (server, tool) = (target.server.as_str(), target.tool.as_str());
+            let Some(account) = self.target_account(server, tool) else {
+                continue;
+            };
+            let outcome = visible::account_outcome(server, &account);
+            if outcome.is_none() {
+                Self::unfilled_outcome_read(&self.backends, server);
+            }
+            match outcome {
+                // Unfilled: the pre-pass never ran for it. Fail closed,
+                // and retryable: nothing about the grant was learned.
+                None | Some(AccountOutcome::Unavailable) => {
+                    return Err(visible::take_account_refusal(server, &account)
+                        .map_or(StoredWithheld::Retry(None), StoredWithheld::Refused));
+                }
+                Some(AccountOutcome::NoView) => {
+                    return Err(StoredWithheld::Refused(visible::absent_name(tool)));
+                }
+                Some(AccountOutcome::Live | AccountOutcome::Unjudged) => {}
+            }
         }
         Ok(())
     }

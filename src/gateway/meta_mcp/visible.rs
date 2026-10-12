@@ -161,13 +161,29 @@ impl MetaMcp {
         let Some(backend) = self.backends.get(server) else {
             return Some(self.judge_name(server, tool, scope, session_id));
         };
-        let binding = match self.listing_view(&backend, scope) {
-            super::listing_view::ListingView::NoView => {
-                return Some(Visibility::Withheld(Withholding::Lacked));
+        // A Passthrough backend is never indexed (`remember_caller_slot` skips
+        // it), so its listing view is permanently Cold and no read could ever
+        // warm it. The live path carries no per-caller binding for such a call,
+        // so its verdict reads the shared slot; the stored read judges the
+        // shared catalogue too, served when it offers the tool and -32601 when
+        // it lacks it, never "retry" forever (MIK-8392).
+        let passthrough = backend.identity_propagation_config().is_some_and(|idp| {
+            matches!(
+                idp.strategy,
+                crate::identity_propagation::PropagationStrategyKind::Passthrough
+            )
+        });
+        let binding = if passthrough {
+            None
+        } else {
+            match self.listing_view(&backend, scope) {
+                super::listing_view::ListingView::NoView => {
+                    return Some(Visibility::Withheld(Withholding::Lacked));
+                }
+                super::listing_view::ListingView::Cold => return None,
+                super::listing_view::ListingView::Shared => None,
+                super::listing_view::ListingView::Caller(binding) => Some(binding),
             }
-            super::listing_view::ListingView::Cold => return None,
-            super::listing_view::ListingView::Shared => None,
-            super::listing_view::ListingView::Caller(binding) => Some(binding),
         };
         let (tools, truncated, populated) = backend.cached_tools_view(binding.as_deref());
         Some(match tools.iter().find(|entry| entry.name == tool) {

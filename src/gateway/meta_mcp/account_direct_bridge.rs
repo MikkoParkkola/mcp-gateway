@@ -281,6 +281,7 @@ pub(crate) struct CapabilityAccount {
     port: u16,
     log: Arc<crate::security::TransparencyLogger>,
     external: bool,
+    personal: bool,
     _log_dir: tempfile::TempDir,
 }
 
@@ -307,13 +308,38 @@ impl CapabilityAccount {
             port,
             log,
             external,
+            personal: false,
             _log_dir: dir,
         }
+    }
+
+    /// As [`Self::start`] (managed), but the capability is Personal owned by
+    /// alice, so identity grants decide it (the order twin that withdraws the
+    /// grant as well as revoking the account).
+    pub(crate) async fn start_personal() -> Self {
+        let mut account = Self::start(false).await;
+        account.personal = true;
+        account
     }
 
     /// The caller the grant belongs to.
     pub(crate) fn alice() -> VerifiedIdentity {
         identity("alice")
+    }
+
+    /// The identity grant that lets alice reach the personal capability.
+    pub(crate) fn alice_grant() -> crate::identity_grants::IdentityGrant {
+        serde_json::from_value(serde_json::json!({
+            "grant_id": "g-alice",
+            "subject": { "authority": INBOUND_ISSUER, "subject": "alice" },
+            "agent": "any",
+            "capability": super::super::account_rest_fixture::TOOL,
+            "scope": "read",
+            "owner": { "authority": INBOUND_ISSUER, "subject": "alice" },
+            "provenance": "local-operator",
+            "reason": "order-twin fixture grant"
+        }))
+        .expect("the fixture grant deserialises")
     }
 
     /// Install the account and the capability on `meta`.
@@ -347,12 +373,21 @@ impl CapabilityAccount {
             CAPABILITY_SERVER,
             executor,
         ));
-        backend
-            .register_capability(capability(
+        let definition = if self.personal {
+            personal_capability(
+                &format!("http://127.0.0.1:{}", self.port),
+                "oauth:google",
+                WORK,
+            )
+        } else {
+            capability(
                 &format!("http://127.0.0.1:{}", self.port),
                 "oauth:google",
                 Some(WORK),
-            ))
+            )
+        };
+        backend
+            .register_capability(definition)
             .expect("the capability registers");
         meta.set_capabilities(backend);
         meta
@@ -366,4 +401,39 @@ impl CapabilityAccount {
             .await
             .expect("the seeded grant revokes");
     }
+}
+
+/// The same account-bound REST capability as
+/// [`account_rest_fixture::capability`](super::super::account_rest_fixture::capability),
+/// but Personal owned by alice, so identity grants decide it.
+fn personal_capability(
+    base_url: &str,
+    key: &str,
+    account: &str,
+) -> crate::capability::CapabilityDefinition {
+    crate::capability::parse_capability(&format!(
+        "name: {}\n\
+         description: Read one folder through a personal account\n\
+         metadata:\n\
+         \x20 exposure: personal\n\
+         \x20 read_only: true\n\
+         \x20 identity_owner:\n\
+         \x20   authority: {}\n\
+         \x20   subject: alice\n\
+         auth:\n\
+         \x20 required: true\n\
+         \x20 type: bearer\n\
+         \x20 key: {key}\n\
+         \x20 account: {account}\n\
+         providers:\n\
+         \x20 primary:\n\
+         \x20   service: rest\n\
+         \x20   config:\n\
+         \x20     base_url: {base_url}\n\
+         \x20     path: /read\n\
+         \x20     method: GET\n",
+        super::super::account_rest_fixture::TOOL,
+        INBOUND_ISSUER,
+    ))
+    .expect("fixture personal capability must parse")
 }

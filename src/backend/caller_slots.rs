@@ -31,7 +31,10 @@ pub(crate) enum CallerSlot {
     /// A stored read claimed the attempt to re-establish this caller's cold
     /// view (MIK-8392 B'): a lease, so one reader resolves per window. A
     /// failed or abandoned attempt only delays the next one until `until`;
-    /// a success, or any fill of the caller's own slot, replaces it.
+    /// a success, or any fill of the caller's own slot, replaces it. An
+    /// expired lease nobody reads again stays until the caller's slot is
+    /// next claimed, filled or recorded, which replaces it: at most one
+    /// entry per caller principal per backend.
     ColdTried {
         until: tokio::time::Instant,
         /// Which claim this is: only its own winner may publish over it.

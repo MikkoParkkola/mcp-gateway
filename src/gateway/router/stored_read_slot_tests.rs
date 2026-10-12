@@ -11,9 +11,9 @@ use axum::body::to_bytes;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use super::slot_verdict_http_tests::{CLOSED, Gateway, gateway};
+use super::slot_verdict_http_tests::{CLOSED, Gateway, gateway, gateway_tuned};
 use crate::gateway::meta_mcp::slot_verdict_fixture::{
-    BACKEND, BINDING, CallerSlot, Surfaced, TOOL,
+    BACKEND, BINDING, CallerSlot, Surfaced, TOOL, Warmth, valid,
 };
 use crate::key_server::oidc::VerifiedIdentity;
 
@@ -262,6 +262,60 @@ async fn c1r_a_read_after_a_real_eviction_resolves_once_and_serves() {
         1,
         "C1r: warm polls after the refill resolve nothing"
     );
+}
+
+/// A per-user backend with identity-propagation strategy Passthrough (as L7
+/// configures it), warm and surfaced, offering TOOL on the shared slot.
+async fn passthrough_gateway() -> Gateway {
+    gateway_tuned(
+        (CallerSlot::Valid, &valid(), Warmth::Warm),
+        CLOSED,
+        Surfaced::Yes,
+        (
+            |config: &mut crate::config::BackendConfig| {
+                if let Some(idp) = config.identity_propagation.as_mut() {
+                    idp.strategy =
+                        crate::identity_propagation::PropagationStrategyKind::Passthrough;
+                }
+            },
+            |_: &mut _| {},
+        ),
+        |_| {},
+    )
+    .await
+}
+
+/// P1 (MIK-8392 review): a Passthrough per-user backend is never indexed
+/// (`remember_caller_slot` skips it, `listing_view` stays Cold), so before the
+/// fix every stored read answered retryable and the output was never served.
+/// The live path carries no per-caller binding for such a call, so its verdict
+/// reads the shared slot; the stored read judges the shared catalogue too and
+/// serves when it offers the tool.
+#[tokio::test]
+async fn p1_passthrough_stored_read_serves_from_the_shared_catalogue() {
+    let gw = passthrough_gateway().await;
+    let id = finished(&gw, "s1-p1").await;
+    let read = task_get(&gw, &id).await;
+    assert!(read.to_string().contains(OUTPUT), "P1: served: {read}");
+    assert!(read.get("error").is_none(), "P1: no error: {read}");
+}
+
+/// P1b: the same, but the shared catalogue is complete without the tool:
+/// -32601, never retryable.
+#[tokio::test]
+async fn p1b_passthrough_stored_read_answers_absent_when_the_shared_catalogue_lacks_it() {
+    let gw = passthrough_gateway().await;
+    let id = finished(&gw, "s1-p1b").await;
+    let other =
+        json!({"name": "other", "description": "Reads.", "inputSchema": {"type": "object"}});
+    let _ = backend(&gw).remember_listed_tools(None, false, &[other]);
+    let read = task_get(&gw, &id).await;
+    assert_eq!(
+        read.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "P1b: {read}"
+    );
+    assert!(!read.to_string().contains(OUTPUT), "P1b: no output: {read}");
 }
 
 #[path = "stored_read_lease_tests.rs"]
