@@ -34,3 +34,8 @@
 #
 # Keep this list EMPTY unless a vuln genuinely has no fix. The right fix for a
 # fixable vuln is to bump the dependency, not to ignore it.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0449"
+ignoreUntil = 2027-01-10
+reason = "unsafe-libyaml is unmaintained (informational, no CVE). It arrives via serde_yaml 0.9, which figment 0.10.19 (latest, required for YAML config in src/config/mod.rs) depends on; no release removes it. Reviewed 2026-10-12."
