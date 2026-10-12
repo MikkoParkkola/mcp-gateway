@@ -91,10 +91,7 @@ pub(super) fn apply(st: &mut AppState, access: &McpAccess) {
                     name: "shared".to_string(),
                     hs256_secret: Some(agent_secret(id)),
                     rs256_public_key: None,
-                    scopes: vec![
-                        "tools:alpha:*:*".to_string(),
-                        "tools:caps:*:*".to_string(),
-                    ],
+                    scopes: vec!["tools:alpha:*:*".to_string(), "tools:caps:*:*".to_string()],
                     issuer: None,
                     audience: Some(AUDIENCE.to_string()),
                 });

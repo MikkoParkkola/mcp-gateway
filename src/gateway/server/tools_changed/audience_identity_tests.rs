@@ -79,27 +79,32 @@ async fn r7_listen_with_an_agent_token_is_told_a_visible_change() {
     );
 }
 
-/// A personal capability owned by the shared principal the two agents act as.
+fn adapter_authority() -> String {
+    crate::gateway::openwebui_adapter::adapter_issuer(super::audience_fixture::ADAPTER_INSTALLATION)
+}
+
+/// A personal capability `agent_cal` owned by the adapter's end user `alice`.
 fn agent_cal(description: &str) -> String {
     format!(
         "fulcrum: \"1.0\"\nname: agent_cal\ndescription: {description}\n\
 schema:\n  input:\n    type: object\n    properties: {{}}\n\
-metadata:\n  exposure: personal\n  identity_owner:\n    authority: \"api_key\"\n    subject: shared\n\
+metadata:\n  exposure: personal\n  identity_owner:\n    authority: \"{}\"\n    subject: alice\n\
 providers:\n  primary:\n    service: rest\n    config:\n      base_url: https://example.invalid\n      path: /cal\n      method: GET\n\
-auth:\n  required: false\n  type: none\n"
+auth:\n  required: false\n  type: none\n",
+        adapter_authority()
     )
 }
 
-/// A grant on `agent_cal` for the shared principal, held by `agent_a` alone.
+/// alice's grant on `agent_cal`, held by `agent_a` alone.
 fn agent_a_grant() -> crate::identity_grants::LocalIdentityGrantStore {
     use crate::identity_grants::{
         GrantAgent, GrantAgentKey, GrantScope, GrantSubject, IdentityGrant,
     };
     use crate::security::ProofSource;
-    let shared = GrantSubject::new("api_key", "shared", None);
+    let alice = GrantSubject::new(adapter_authority(), "alice", None);
     crate::identity_grants::LocalIdentityGrantStore::from_grants([IdentityGrant {
         grant_id: "g-agent-a".to_string(),
-        subject: shared.clone(),
+        subject: alice.clone(),
         agent: GrantAgent::Exact(GrantAgentKey {
             source: ProofSource::VerifiedJwtSubject,
             id: AGENT_A.to_string(),
@@ -107,7 +112,7 @@ fn agent_a_grant() -> crate::identity_grants::LocalIdentityGrantStore {
         capability: "agent_cal".to_string(),
         tool: None,
         scope: GrantScope::Any,
-        owner: Some(shared),
+        owner: Some(alice),
         expires_at: None,
         revoked_at: None,
         provenance: "mik-8350".to_string(),
@@ -115,19 +120,26 @@ fn agent_a_grant() -> crate::identity_grants::LocalIdentityGrantStore {
     }])
 }
 
-/// R9: two agents act as one principal; a grant names agent A alone, so a
-/// change to the capability it grants is told to A's stream and not to B's.
-/// The proven agent id is part of the view (kills M33d).
+/// R9: two agents act for one end user (one grant subject, the adapter's);
+/// the grant names agent A alone, so a change to the capability it grants is
+/// told to A's stream and not to B's. The proven agent id is part of the view
+/// (kills M33d).
 #[tokio::test]
 async fn r9_a_grant_for_one_agent_is_told_to_its_stream_alone() {
-    use super::audience_access::{AGENT_B, agent_token};
-    let w = World::start_agent(|meta| meta.with_identity_grants(agent_a_grant())).await;
+    use super::audience_access::{AGENT_B, McpAccess, agent_token};
+    use super::audience_fixture::adapter_assertion;
+    let w = World::start_adapter_as(
+        |meta| meta.with_identity_grants(agent_a_grant()),
+        McpAccess::AgentToken,
+    )
+    .await;
     w.set_capability_yaml(&agent_cal("one"));
     w.settle().await;
+    let alice = adapter_assertion("alice");
     let (a, b) = (agent_token(AGENT_A), agent_token(AGENT_B));
     let seen = (
-        w.discovered(&a, "caps").await,
-        w.discovered(&b, "caps").await,
+        w.discovered_as(&a, Some(&alice), "caps").await,
+        w.discovered_as(&b, Some(&alice), "caps").await,
     );
     assert!(
         seen.0.contains(&"agent_cal".to_string()),
@@ -135,9 +147,12 @@ async fn r9_a_grant_for_one_agent_is_told_to_its_stream_alone() {
     );
     assert!(
         !seen.1.contains(&"agent_cal".to_string()),
-        "premise: agent B does not: {seen:?}"
+        "premise: agent B, acting for the same user, does not: {seen:?}"
     );
-    let mut ears = [w.listen(&a).await, w.listen(&b).await];
+    let mut ears = [
+        w.listen_as(&a, Some(&alice)).await,
+        w.listen_as(&b, Some(&alice)).await,
+    ];
     w.settle().await;
     for ear in &mut ears {
         let _ = ear.told(&w).await;

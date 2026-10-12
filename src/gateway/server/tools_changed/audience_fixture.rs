@@ -301,6 +301,15 @@ impl World {
     /// As [`Self::start_with`], with an Open `WebUI` adapter that k-std may
     /// present ([`adapter_assertion`] mints its assertions).
     pub(super) async fn start_adapter(configure: impl FnOnce(MetaMcp) -> MetaMcp) -> Self {
+        Self::start_adapter_as(configure, super::audience_access::McpAccess::Authenticated).await
+    }
+
+    /// As [`Self::start_adapter`], under `access` (the fixture agents' keys are
+    /// allowed to present assertions too).
+    pub(super) async fn start_adapter_as(
+        configure: impl FnOnce(MetaMcp) -> MetaMcp,
+        access: super::audience_access::McpAccess,
+    ) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let env = dir.path().join("adapter.env");
         crate::gateway::test_helpers::write_owner_only(
@@ -319,18 +328,12 @@ impl World {
              adapters:\n    - kind: openwebui_signed_header\n      \
              installation_id: {ADAPTER_INSTALLATION}\n      header: {ADAPTER_HEADER}\n      \
              issuer: open-webui\n      hmac_secret_ref: env:AUDIENCE_OWUI_HMAC\n      \
-             allowed_api_key_names: [k-std]\n",
+             allowed_api_key_names: [k-std, shared]\n",
             env.display().to_string().replace('\'', "''")
         ))
         .expect("adapter config parses");
         let key_server = Arc::new(KeyServer::new(crate::config::KeyServerConfig::default()));
-        Self::start_on(
-            key_server,
-            Some((config, dir)),
-            configure,
-            super::audience_access::McpAccess::Authenticated,
-        )
-        .await
+        Self::start_on(key_server, Some((config, dir)), configure, access).await
     }
 
     /// As [`Self::start`], with a real OIDC key server: one provider
