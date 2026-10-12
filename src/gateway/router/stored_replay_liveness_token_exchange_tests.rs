@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8392 STORED.2 liveness rows, part 3: a token-exchange backend (a
-//! per-caller mint with no `account:`), its live IdP fixture, and the lift
+//! per-caller mint with no `account:`), its live `IdP` fixture, and the lift
 //! rows built on it (R6m, T12, S2b, L0, L4', L5).
 
 use super::*;
