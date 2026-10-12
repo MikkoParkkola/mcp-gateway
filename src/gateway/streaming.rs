@@ -37,8 +37,8 @@ mod copy;
 use copy::{CopyAudience, Unsent};
 #[path = "streaming_told.rs"]
 mod told;
-use told::{Told, ToldCommit};
 pub(crate) use told::ViewJudge;
+use told::{Told, ToldCommit};
 
 /// A tagged notification event from a backend
 #[derive(Debug, Clone, Serialize)]

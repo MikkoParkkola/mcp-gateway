@@ -477,7 +477,8 @@ impl ProxyManager {
     /// Sent as a `message` event, so the GET stream carries the bare JSON-RPC
     /// notification an MCP client reads, not the gateway's envelope (F24).
     pub async fn broadcast_tools_list_changed(&self, backend: &str) {
-        self.broadcast_tools_list_changed_judged(backend, None).await;
+        self.broadcast_tools_list_changed_judged(backend, None)
+            .await;
     }
 
     /// [`Self::broadcast_tools_list_changed`], told only to the sessions whose

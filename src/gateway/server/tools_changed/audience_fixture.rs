@@ -646,7 +646,10 @@ impl World {
         let Ear::Listen(events) = &mut ear else {
             unreachable!("a listen stream")
         };
-        events.next().await.expect("the attach hint follows the acknowledgement");
+        events
+            .next()
+            .await
+            .expect("the attach hint follows the acknowledgement");
         ear
     }
 

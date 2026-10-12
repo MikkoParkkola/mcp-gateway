@@ -10,8 +10,8 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 
 use super::{AppState, OwnedRouterAuthorizer};
-use crate::gateway::auth::{AuthState, AuthenticatedClient};
 use crate::gateway::auth::live::{HeldCredential, current_caller};
+use crate::gateway::auth::{AuthState, AuthenticatedClient};
 use crate::gateway::meta_mcp::InvokeScope;
 use crate::gateway::streaming::ViewJudge;
 use crate::identity_grants::GrantSubject;
@@ -55,7 +55,14 @@ impl ViewJudge for OwnedViewJudge {
         session_id: &'a str,
         backend: &'a str,
     ) -> BoxFuture<'a, Option<String>> {
-        Box::pin(fingerprint_async(&self.state, self.subject.as_ref(), auth, credential, session_id, backend))
+        Box::pin(fingerprint_async(
+            &self.state,
+            self.subject.as_ref(),
+            auth,
+            credential,
+            session_id,
+            backend,
+        ))
     }
 
     fn baseline<'a>(
@@ -64,7 +71,13 @@ impl ViewJudge for OwnedViewJudge {
         credential: Option<&'a HeldCredential>,
         session_id: &'a str,
     ) -> BoxFuture<'a, HashMap<String, String>> {
-        Box::pin(baseline_async(&self.state, self.subject.as_ref(), auth, credential, session_id))
+        Box::pin(baseline_async(
+            &self.state,
+            self.subject.as_ref(),
+            auth,
+            credential,
+            session_id,
+        ))
     }
 }
 
@@ -111,7 +124,9 @@ async fn fingerprint_async(
     backend: &str,
 ) -> Option<String> {
     let caller = current_caller(auth, credential).await?;
-    Some(fingerprint_for(state, subject, &caller, session_id, backend))
+    Some(fingerprint_for(
+        state, subject, &caller, session_id, backend,
+    ))
 }
 
 /// Every backend's fingerprint for `credential`, empty when it does not resolve.
@@ -162,7 +177,9 @@ impl ViewJudge for RouterViewJudge<'_> {
         credential: Option<&'a HeldCredential>,
         session_id: &'a str,
     ) -> BoxFuture<'a, HashMap<String, String>> {
-        Box::pin(baseline_async(self.state, None, auth, credential, session_id))
+        Box::pin(baseline_async(
+            self.state, None, auth, credential, session_id,
+        ))
     }
 }
 

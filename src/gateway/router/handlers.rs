@@ -495,7 +495,9 @@ async fn meta_mcp_dispatch(
             };
             match called {
                 Some(Ok(response)) => {
-                    state.refresh_after_call(session_id.as_str(), params, &response).await;
+                    state
+                        .refresh_after_call(session_id.as_str(), params, &response)
+                        .await;
                     response
                 }
                 Some(Err(response)) => return response,

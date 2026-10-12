@@ -219,13 +219,15 @@ fn next_event(w: &World) -> u64 {
 async fn d_order_a_bearer_without_access_decides_over_a_live_cookie() {
     let w = World::start().await;
     let cookie = w.dashboard_cookie();
-    let mut ear = w.legacy_with(
-        "narrow",
-        &[
-            ("authorization", "Bearer k-narrow".to_string()),
-            ("cookie", cookie),
-        ],
-    ).await;
+    let mut ear = w
+        .legacy_with(
+            "narrow",
+            &[
+                ("authorization", "Bearer k-narrow".to_string()),
+                ("cookie", cookie),
+            ],
+        )
+        .await;
     w.store_shared("alpha", alpha_with("r2", "f"));
     assert_eq!(
         ear.told(&w).await,
@@ -240,13 +242,15 @@ async fn d_order_a_bearer_without_access_decides_over_a_live_cookie() {
 async fn d_order_2_a_non_bearer_authorization_beside_a_live_cookie_is_dead() {
     let w = World::start().await;
     let cookie = w.dashboard_cookie();
-    let mut ear = w.legacy_with(
-        "basic",
-        &[
-            ("authorization", "Basic dXNlcjpwYXNz".to_string()),
-            ("cookie", cookie),
-        ],
-    ).await;
+    let mut ear = w
+        .legacy_with(
+            "basic",
+            &[
+                ("authorization", "Basic dXNlcjpwYXNz".to_string()),
+                ("cookie", cookie),
+            ],
+        )
+        .await;
     w.store_shared("alpha", alpha_with("r2", "f"));
     assert_eq!(
         ear.told(&w).await,
@@ -295,7 +299,9 @@ async fn m_b9_a_caller_who_listed_during_the_pending_nudge_is_not_told() {
     hold.reached().await;
     // The listing is the listener's own: a refresh follows the session that
     // listed, not every session that shares its credential (design B9).
-    let listed = w.post_in(STD, "std", "tools/list", serde_json::json!({})).await;
+    let listed = w
+        .post_in(STD, "std", "tools/list", serde_json::json!({}))
+        .await;
     assert!(
         listed["result"]["tools"]
             .as_array()

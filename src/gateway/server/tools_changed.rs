@@ -367,9 +367,9 @@ mod views;
 pub(super) mod stdio;
 
 #[cfg(test)]
-pub(in crate::gateway::server) mod audience_fixture;
-#[cfg(test)]
 mod audience_ear;
+#[cfg(test)]
+pub(in crate::gateway::server) mod audience_fixture;
 #[cfg(test)]
 mod audience_l2_tests;
 #[cfg(test)]

@@ -111,7 +111,10 @@ pub(crate) enum ViewVerdict {
     /// A hint for a backend whose view did not move for this listener.
     Quiet,
     /// A hint this listener is owed; the record is made once it is written.
-    Owed { backend: String, fingerprint: String },
+    Owed {
+        backend: String,
+        fingerprint: String,
+    },
 }
 
 impl std::fmt::Debug for Listener {

@@ -24,11 +24,11 @@ use tokio::sync::{Notify, broadcast, mpsc, watch};
 
 use super::{Announced, decide_on};
 use crate::backend::BackendRegistry;
-use crate::security::ToolPolicy;
 use crate::backend::tools_nudge::ToolsNudge;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::outbound::OutboundFrame;
 use crate::gateway::server::background::AbortOnDrop;
+use crate::security::ToolPolicy;
 
 /// The drain, the sender and their stop, for one stdio session.
 pub(in crate::gateway::server) struct StdioAnnouncer {
@@ -82,7 +82,10 @@ impl StdioAnnouncer {
                         #[cfg(test)]
                         crate::gateway::server::stdio_seams::decided();
                         let view = stdio_view(&meta_mcp, &tool_policy, &name);
-                        if told.insert(name, view.clone()).is_some_and(|before| before == view) {
+                        if told
+                            .insert(name, view.clone())
+                            .is_some_and(|before| before == view)
+                        {
                             return std::future::ready(());
                         }
                         if *ready.borrow() {
@@ -162,7 +165,11 @@ fn stdio_view(meta_mcp: &MetaMcp, tool_policy: &ToolPolicy, backend: &str) -> St
             ),
         ),
     );
-    meta_mcp.visible_fingerprint(backend, scope, Some(crate::gateway::server::STDIO_SESSION_ID))
+    meta_mcp.visible_fingerprint(
+        backend,
+        scope,
+        Some(crate::gateway::server::STDIO_SESSION_ID),
+    )
 }
 
 /// Turn the latch into frames, one per wake. The latch is only ever set for
