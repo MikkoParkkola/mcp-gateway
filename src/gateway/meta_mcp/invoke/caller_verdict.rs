@@ -144,13 +144,32 @@ impl MetaMcp {
         if let Some(witness) = witness {
             witness.spend();
         }
+        // Boxed: the acting half's state (resolution, fill, refresh) would
+        // otherwise sit inline in every dispatch future that awaits a verdict,
+        // refusals included (MIK-8400's allocation caps). It is allocated only
+        // when a per-user call gets this far.
+        Box::pin(self.caller_verdict_acting(
+            (server, tool),
+            backend,
+            proof,
+            caller.verified_identity,
+        ))
+        .await
+        .map(|verdict| (verdict, None))
+    }
+
+    /// The half of [`Self::caller_verdict`] that may act: resolve the
+    /// caller's credential, judge the caller's slot (a fill), and carry the
+    /// resolution to the dispatch.
+    async fn caller_verdict_acting(
+        &self,
+        (server, tool): (&str, &str),
+        backend: std::sync::Arc<Backend>,
+        proof: CallerProof<'_>,
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    ) -> crate::Result<CallerVerdict> {
         let resolved = self
-            .resolve_dispatch(
-                (server, tool),
-                Some(&backend),
-                proof,
-                caller.verified_identity,
-            )
+            .resolve_dispatch((server, tool), Some(&backend), proof, verified_identity)
             .await?;
         let judged = self
             .judge_caller_slot(
@@ -162,7 +181,7 @@ impl MetaMcp {
             )
             .await;
         let (verdict, fill_error) = match judged {
-            Ok(SlotJudgement::Absent) => return Ok((CallerVerdict::Absent, None)),
+            Ok(SlotJudgement::Absent) => return Ok(CallerVerdict::Absent),
             Ok(_) => (CallerVerdict::Proceed, None),
             // A 401 on a managed credential forces its one refresh here, as
             // the dispatch's fill would (A11-c). The failure is carried: the
@@ -188,7 +207,7 @@ impl MetaMcp {
                 fill_error,
             },
         );
-        Ok((verdict, None))
+        Ok(verdict)
     }
 
     /// Judge `tool` on the slot `binding` selects, record the answer in the
