@@ -95,7 +95,7 @@ fn oauth_client_for(resource: &str) -> crate::oauth::OAuthClient {
         vec![],
         storage,
         OAuthClientConfig {
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     )

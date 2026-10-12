@@ -9,8 +9,6 @@ use serde_json::{Map, Value, json};
 
 use std::sync::Arc;
 
-use chrono::Utc;
-
 use super::fanout::SourceEvent;
 use super::types::{EventDescriptor, SourceKind, Visibility};
 use super::{EventSource, EventsHub};
@@ -38,7 +36,13 @@ impl EventSource for WebhookSource {
 
     /// `event_type` matches by glob, every other argument by equality on
     /// the projected field of that name.
-    fn matches(&self, _principal: &str, arguments: &Value, event: &SourceEvent) -> bool {
+    fn matches(
+        &self,
+        _principal: &str,
+        arguments: &Value,
+        event: &SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
         let Some(arguments) = arguments.as_object() else {
             return false;
         };
@@ -73,7 +77,15 @@ pub(crate) struct Inbound<'a> {
 impl EventsHub {
     /// Turn one accepted inbound POST into a queued occurrence. Never
     /// blocks the inbound answer on delivery: a full queue drops and counts.
-    pub(crate) async fn webhook_received(self: &Arc<Self>, inbound: Inbound<'_>) {
+    ///
+    /// `Err` when the host clock reads before 1970: one reading dates both
+    /// the dedupe check and the occurrence, so nothing is recorded in the
+    /// seen-set and nothing is queued, and the route answers 503 for the
+    /// sender to retry once the clock is set (MIK-8202).
+    pub(crate) async fn webhook_received(
+        self: &Arc<Self>,
+        inbound: Inbound<'_>,
+    ) -> Result<(), crate::clock::ClockBeforeEpoch> {
         if inbound.fields.is_empty() {
             self.runtime.count_projection_failed();
             tracing::warn!(
@@ -81,20 +93,21 @@ impl EventsHub {
                 route = %inbound.route,
                 "events: projection_failed, no mapped field resolved; no event emitted"
             );
-            return;
+            return Ok(());
         }
+        let now = crate::clock::utc_now().inspect_err(|_| self.runtime.count_clock_drop())?;
         let route = format!("{}.{}", inbound.capability, inbound.route);
         let key = dedupe_key(&inbound);
         if let Some(key) = &key {
             let (hub, at, seen_key) = (Arc::clone(self), route.clone(), key.clone());
             let first = tokio::task::spawn_blocking(move || {
-                hub.runtime.seen.first_sighting(&at, &seen_key, Utc::now())
+                hub.runtime.seen.first_sighting(&at, &seen_key, now)
             })
             .await
             .unwrap_or(true);
             if !first {
                 tracing::debug!(%route, "events: inbound repeat dropped");
-                return;
+                return Ok(());
             }
         }
         let upstream = key.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -103,12 +116,13 @@ impl EventsHub {
             name: format!("webhook.{route}.received"),
             backend: inbound.backend.to_owned(),
             upstream_id: format!("{route}:{upstream}"),
-            occurred_at: Utc::now(),
+            occurred_at: now,
             data: json!({ "event_type": inbound.event_type, "fields": inbound.fields }),
             scope: Visibility::Backend(inbound.backend.to_owned()),
             owner: None,
             lifecycle_key: None,
         });
+        Ok(())
     }
 }
 

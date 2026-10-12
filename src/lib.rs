@@ -127,6 +127,9 @@ pub mod simhash;
 pub mod skills;
 #[doc(hidden)]
 pub mod stats;
+// Every caller judges a daily budget, which only a cost-governance build has.
+#[cfg(all(test, feature = "cost-governance"))]
+pub(crate) mod test_day;
 #[cfg(test)]
 mod test_pause;
 #[cfg(test)]

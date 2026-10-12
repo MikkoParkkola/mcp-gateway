@@ -6,6 +6,7 @@
 //! and gives the nonce back only if a step asked and none dispatched.
 
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
+use crate::gateway::meta_mcp::refund_witness::{Effect, RefundWitness};
 
 /// Ask for the nonce back: this step was refused before its backend (its
 /// continuation or its spend). Settled when the call returns.
@@ -36,4 +37,48 @@ pub(crate) fn give_back_unsent(
         reservation.release();
     }
     ask_refund(caller);
+}
+
+/// The refund witness one invoke carries through its may-effect steps
+/// (MIK-8353 slice 3a). Taken from the signing context on entry; a step that
+/// may have acted drops it through [`Self::carry`]; the send spends it. Every
+/// other exit, a refusal, an early answer or an error, hands back what
+/// survived when this is dropped, so the settle may refund and a later step of
+/// the same call starts from it. A step must carry its effect before any exit
+/// that follows it.
+pub(crate) struct Witnessed<'c, 'a> {
+    caller: &'c MetaMcpCallerContext<'a>,
+    witness: Option<RefundWitness>,
+}
+
+impl<'c, 'a> Witnessed<'c, 'a> {
+    pub(crate) fn take(caller: &'c MetaMcpCallerContext<'a>) -> Self {
+        let witness = caller
+            .signing
+            .and_then(crate::gateway::meta_mcp::signing::SigningInvocationContext::take_witness);
+        Self { caller, witness }
+    }
+
+    /// Record what a step did: an effect drops the witness.
+    pub(crate) fn carry(&mut self, effect: Effect) {
+        self.witness = RefundWitness::carry(self.witness.take(), effect);
+    }
+
+    /// Something is about to act, or may have acted unreported: the nonce
+    /// stays spent.
+    pub(crate) fn spend(&mut self) {
+        if let Some(witness) = self.witness.take() {
+            witness.spend();
+        }
+    }
+}
+
+impl Drop for Witnessed<'_, '_> {
+    fn drop(&mut self) {
+        match (self.caller.signing, self.witness.take()) {
+            (Some(signing), Some(witness)) => signing.keep_witness(witness),
+            (None, Some(witness)) => witness.spend(),
+            (_, None) => {}
+        }
+    }
 }

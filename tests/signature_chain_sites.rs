@@ -191,18 +191,35 @@ async fn cs_http_meta_only_tool_is_not_chained() {
     assert!(unchained(&response), "{response}");
 }
 
-/// A3 R6'': the chain nonce is taken off the request before sanitization, so
-/// control characters survive byte-exact into the link.
+/// A3 R6'', as MIK-8154 S2' amends it: the chain nonce is never rewritten.
+/// A nonce carrying a NUL or a control character is refused before any link
+/// is minted (it was carried byte-exact before the protocol fields were
+/// validated); any other nonce, however unusual, is carried byte-exact.
 #[tokio::test]
-async fn cs_http_control_character_nonce_is_carried_byte_exact() {
+async fn cs_http_control_character_nonce_is_refused_never_rewritten() {
     let backend = BackendFixture::start(backend_result()).await;
     let gateway = HttpGateway::start(chain_config(&backend.url)).await;
     let session = gateway.initialize().await;
-    let nonce = "a\u{0}b\u{1}c";
+    // A NUL alone and a control character alone are each refused, and no
+    // signature chain is minted for either.
+    for (id, dirty) in [("cs-3n", "a\u{0}b"), ("cs-3c", "a\u{1}b")] {
+        let refused = gateway
+            .call(
+                &session,
+                &chained(signed_invoke(id, &format!("hmac-{id}")), dirty),
+            )
+            .await;
+        assert!(
+            refused.get("error").is_some(),
+            "{dirty:?} was not refused: {refused}"
+        );
+        assert!(unchained(&refused), "{dirty:?} minted a chain: {refused}");
+    }
+    let nonce = "a b\u{e9}c";
     let response = gateway
         .call(
             &session,
-            &chained(signed_invoke("cs-3", "hmac-cs-3"), nonce),
+            &chained(signed_invoke("cs-3b", "hmac-cs-3b"), nonce),
         )
         .await;
     assert_eq!(origin(&response)["nonce"], nonce, "{response}");

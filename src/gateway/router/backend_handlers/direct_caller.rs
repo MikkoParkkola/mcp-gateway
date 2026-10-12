@@ -233,6 +233,10 @@ pub(super) async fn read_envelope(
     // the request: parse, telemetry and every forwarding arm see no token.
     let attestation = super::take_attestation_token(json_request.get_mut("params"));
 
+    if state.sanitize_input {
+        json_request = sanitized(state, name, json_request)?;
+    }
+
     let (id, method, params) = match super::super::helpers::parse_request(&json_request) {
         Ok(parsed) => parsed,
         Err(response) => {
@@ -475,4 +479,40 @@ pub(super) async fn forward_notification(
             )
         }
     }
+}
+
+/// MIK-8154 SAN.1: the one sanitize step on the direct route, before anything
+/// parses or judges the request: its protocol fields validated (S2'), then
+/// the whole request sanitized unless the backend this route names is
+/// `passthrough` (option (a)), whose instance is then recorded (F2).
+fn sanitized(state: &AppState, name: &str, request: Value) -> Result<Value, Rejection> {
+    use crate::security::sanitize::{ProtocolRoute, sanitize_request, validate_protocol_fields};
+    // A protocol-field refusal answers no id (the id may be what is dirty);
+    // past validation, the request's own id is answered.
+    let refused = |id, e: crate::Error| {
+        super::super::helpers::build_http_error_response(
+            id,
+            e.to_rpc_code(),
+            e.to_string(),
+            StatusCode::BAD_REQUEST,
+        )
+    };
+    validate_protocol_fields(
+        &request,
+        &crate::gateway::PROTOCOL_NONCES,
+        ProtocolRoute::Direct,
+    )
+    .map_err(|e| refused(None, e))?;
+    let exempt = state.meta_mcp.passthrough_instance(name);
+    if let Some(instance) = &exempt {
+        crate::gateway::meta_mcp::visible::record_exempt_instances(std::slice::from_ref(instance));
+    }
+    // Intake has judged; the window a reload must not reach (MIK-8154 F2).
+    #[cfg(test)]
+    crate::gateway::meta_mcp::visible::seams::intake_judged();
+    if exempt.is_some() {
+        return Ok(request);
+    }
+    let id = crate::protocol::mrtr::raw_request_id(&request);
+    sanitize_request(&request, ProtocolRoute::Direct).map_err(|e| refused(id, e))
 }

@@ -16,10 +16,12 @@ use crate::config::{BackendConfig, FailsafeConfig};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
+#[cfg(feature = "firewall")]
+pub(crate) use super::signing_allocation_tests::route_matrix_stdio_tasks::stdio_task_traced;
 pub(crate) use super::signing_allocation_tests::route_matrix_stdio_tasks::{
-    served_sanitizing, stdio_blocked_task, stdio_sanitizing, stdio_task_read,
-    stdio_task_refused_without_a_grant, stdio_task_surfaced, stdio_x14_consumed_then_refused,
-    stdio_x14_signed_round,
+    served_sanitizing, served_sanitizing_call, served_sanitizing_with, stdio_blocked_task,
+    stdio_sanitizing, stdio_task_read, stdio_task_refused_without_a_grant, stdio_task_surfaced,
+    stdio_x14_consumed_then_refused, stdio_x14_signed_round,
 };
 
 /// A backend serving two tools, `read` and `write`, counting the `tools/call`
@@ -576,7 +578,7 @@ pub(crate) fn stdio_admission_then_resend() -> (Value, Value, Value, usize) {
                             IDEMPOTENCY_KEY_META: key,
                         }}
                 });
-                super::Gateway::dispatch_single_with_sink(
+                super::Gateway::dispatch_single_for_client(
                     &fixture.meta,
                     &fixture.tool_policy,
                     &fixture.mtls_policy,
@@ -590,7 +592,6 @@ pub(crate) fn stdio_admission_then_resend() -> (Value, Value, Value, usize) {
                         discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
                         sanitize: super::stdio_single::InputSanitizing::Off,
                     },
-                    &super::StdioTelemetry::default(),
                 )
                 .await
                 .expect("a request carrying an id must produce a response")
@@ -630,6 +631,14 @@ pub(crate) fn stdio_refund_through_delivery() -> [Delivered; 3] {
     const NONCE: &str = "stdio-settle-nonce-0001";
     runtime().block_on(async {
         let fixture = Fixture::start_hardened().await;
+        // The refusal must be effect-free to earn a refund (NONCEFX.9): a
+        // cold schema slot would fetch `tools/list` first and keep the nonce.
+        let backend = fixture.meta.backends.get(BACKEND).expect("backend");
+        backend
+            .get_tools_shared()
+            .await
+            .expect("warm the schema slot");
+        assert!(backend.has_cached_tools(), "premise: the schema is warm");
         let send = |extra: Value| {
             let fixture = &fixture;
             async move {
@@ -660,7 +669,6 @@ pub(crate) fn stdio_refund_through_delivery() -> [Delivered; 3] {
                                 crate::gateway::server::stdio_single::DiscoverListing::Configured,
                             sanitize: super::stdio_single::InputSanitizing::Off,
                         },
-                        &super::StdioTelemetry::default(),
                     )),
                 )
                 .await;

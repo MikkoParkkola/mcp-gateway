@@ -48,7 +48,7 @@ fn oauth_config_debug_redacts_client_secret() {
         callback_host: None,
         callback_port: None,
         callback_path: None,
-        token_refresh_buffer_secs: 300,
+        token_refresh_buffer_secs: Some(300),
         shared_account: false,
     };
     let dbg = format!("{cfg:?}");

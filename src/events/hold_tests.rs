@@ -357,7 +357,7 @@ async fn a_held_refresh_whose_row_goes_at_the_commit_is_checked_afresh() {
         .await
         .expect("the refresh reached its commit");
     let tail = crate::events::tail_policy(&hub.config);
-    let removed = hub.store.remove(&id, chrono::Utc::now(), tail);
+    let removed = hub.store.remove(&id, Ok(chrono::Utc::now()), tail);
     release.notify_one();
     let answer = tokio::time::timeout(bound, refreshing)
         .await

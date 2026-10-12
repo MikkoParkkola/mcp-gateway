@@ -146,6 +146,10 @@ pub struct Backend {
     semaphore: Semaphore,
     /// Request counter
     request_count: AtomicU64,
+    /// List fills that passed admission and so may start or contact the
+    /// backend: a caller reads it around a check to learn whether that check
+    /// reached outside the gateway (MIK-8353 3a).
+    list_fills: AtomicU64,
     /// Cleanup tasks for transports that `force_restart` replaced while
     /// requests were still using them, plus the shutdown latch that stops new
     /// ones being created.
@@ -532,6 +536,10 @@ pub(crate) mod tests;
 #[cfg(test)]
 #[path = "resend_isolation_tests.rs"]
 mod resend_isolation_tests;
+
+#[cfg(test)]
+#[path = "silence_resend_tests.rs"]
+mod silence_resend_tests;
 
 #[cfg(test)]
 #[path = "slot_eviction_tests.rs"]

@@ -6,13 +6,17 @@
 //! and the file must then carry a newer save with the same spend. A shutdown
 //! path that skipped the save would leave the seed untouched.
 //!
-//! "Today" is computed when the case runs; one that straddles UTC midnight
-//! sees the loader drop the seeded day.
+//! The case runs within one UTC day (`same_utc_day`, MIK-8395), and its seed
+//! is never dated before today's midnight: the loader correctly drops spend
+//! saved on an earlier day.
 // Unix-only: stops the gateway with `kill -TERM`; Windows has no SIGTERM.
 #![cfg(all(unix, feature = "cost-governance"))]
 
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
+#[path = "common/same_utc_day.rs"]
+#[allow(dead_code, reason = "shared helper; each binary uses a subset")]
+mod same_utc_day;
 
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -47,61 +51,97 @@ fn spawn(dir: &Path) -> (Child, std::path::PathBuf) {
     (child, log)
 }
 
+/// The seed's `saved_at`: a few seconds back, so a save at shutdown is newer,
+/// but never before today's UTC midnight, so the loader keeps it (MIK-8395).
+fn seed_saved_at(now: u64) -> u64 {
+    now.saturating_sub(5).max(now - now % 86_400)
+}
+
+#[test]
+fn a_seed_written_just_after_midnight_is_dated_today() {
+    const D: u64 = 20_000;
+    let now = D * 86_400 + 2;
+    assert_eq!(
+        seed_saved_at(now) / 86_400,
+        D,
+        "a seed written 2 s after midnight is dated the day before"
+    );
+    // Control: away from midnight the seed is five seconds back.
+    let now = D * 86_400 + 3600;
+    assert_eq!(seed_saved_at(now), now - 5);
+}
+
 #[test]
 fn http_shutdown_saves_costs() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let state = dir.path().join("state");
-    std::fs::create_dir_all(&state).expect("state dir");
-    let file = state.join("costs.json");
-    let mut seeded = PersistedCosts {
-        saved_at: costs::now_secs() - 5,
-        ..PersistedCosts::default()
-    };
-    seeded.tool_totals.insert(
-        "seeded_tool".to_string(),
-        ToolTotal {
-            call_count: 0,
-            total_cost_usd: 0.4,
-            avg_cost_usd: 0.0,
-        },
-    );
-    seeded.key_totals.insert("seeded_key".to_string(), 0.4);
-    costs::save(&file, &seeded).expect("seed costs.json");
+    let (seeded_at, saved, logs) = same_utc_day::same_utc_day(|| {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = dir.path().join("state");
+        std::fs::create_dir_all(&state).expect("state dir");
+        let file = state.join("costs.json");
+        let mut seeded = PersistedCosts {
+            saved_at: seed_saved_at(costs::now_secs()),
+            ..PersistedCosts::default()
+        };
+        seeded.tool_totals.insert(
+            "seeded_tool".to_string(),
+            ToolTotal {
+                call_count: 0,
+                total_cost_usd: 0.4,
+                avg_cost_usd: 0.0,
+            },
+        );
+        seeded.key_totals.insert("seeded_key".to_string(), 0.4);
+        costs::save(&file, &seeded).expect("seed costs.json");
 
-    let (mut child, log) = spawn(dir.path());
-    let logs = || std::fs::read_to_string(&log).unwrap_or_default();
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while !gateway_bin::logged_port(&log).is_some_and(gateway_bin::answers_livez) {
-        if let Some(status) = child.try_wait().expect("wait on the gateway") {
-            panic!("the gateway exited {status} before serving:\n{}", logs());
+        let (mut child, log) = spawn(dir.path());
+        let logs = || std::fs::read_to_string(&log).unwrap_or_default();
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !gateway_bin::logged_port(&log).is_some_and(gateway_bin::answers_livez) {
+            if let Some(status) = child.try_wait().expect("wait on the gateway") {
+                panic!("the gateway exited {status} before serving:\n{}", logs());
+            }
+            if Instant::now() > deadline {
+                let _ = child.kill();
+                panic!("the gateway never answered /livez:\n{}", logs());
+            }
+            std::thread::sleep(Duration::from_millis(200));
         }
-        if Instant::now() > deadline {
-            let _ = child.kill();
-            panic!("the gateway never answered /livez:\n{}", logs());
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
 
-    let signalled = Command::new("kill")
-        .arg("-TERM")
-        .arg(child.id().to_string())
-        .status()
-        .expect("run kill");
-    assert!(signalled.success(), "SIGTERM was not delivered");
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while child.try_wait().expect("wait on the gateway").is_none() {
-        if Instant::now() > deadline {
-            let _ = child.kill();
-            panic!("the gateway did not exit after SIGTERM:\n{}", logs());
+        // The shutdown save must be stamped after the seed. In the first
+        // seconds of a day the seed is midnight itself, so wait for the clock
+        // to pass it (MIK-8395).
+        let deadline = Instant::now() + mcp_gateway::gateway::test_helpers::HANG_BOUND;
+        while costs::now_secs() <= seeded.saved_at {
+            if Instant::now() > deadline {
+                let _ = child.kill();
+                panic!(
+                    "the clock never passed the seed's stamp {}: is the host clock stalled?",
+                    seeded.saved_at
+                );
+            }
+            std::thread::sleep(Duration::from_millis(50));
         }
-        std::thread::sleep(Duration::from_millis(100));
-    }
+        let signalled = Command::new("kill")
+            .arg("-TERM")
+            .arg(child.id().to_string())
+            .status()
+            .expect("run kill");
+        assert!(signalled.success(), "SIGTERM was not delivered");
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while child.try_wait().expect("wait on the gateway").is_none() {
+            if Instant::now() > deadline {
+                let _ = child.kill();
+                panic!("the gateway did not exit after SIGTERM:\n{}", logs());
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
 
-    let saved = costs::load(&file).expect("costs.json parses after shutdown");
+        let saved = costs::load(&file).expect("costs.json parses after shutdown");
+        (seeded.saved_at, saved, logs())
+    });
     assert!(
-        saved.saved_at > seeded.saved_at,
-        "the HTTP shutdown did not save costs.json (saved_at unchanged):\n{}",
-        logs()
+        saved.saved_at > seeded_at,
+        "the HTTP shutdown did not save costs.json (saved_at unchanged):\n{logs}"
     );
     let tool = saved
         .tool_totals

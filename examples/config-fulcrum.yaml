@@ -8,12 +8,10 @@
 server:
   host: "127.0.0.1"
   port: 39401
-  shutdown_timeout: 5s
 
 # Capability backend (direct REST API integration)
 capabilities:
   enabled: true
-  name: fulcrum
   directories:
     # Primary: Your fulcrum capabilities repository
     # Clone from: https://github.com/anthropics/fulcrum
@@ -25,6 +23,5 @@ backends:
   beeper:
     description: "Beeper unified messaging (WhatsApp, Signal, etc.)"
     enabled: true
-    http_url: "http://localhost:23373/mcp"
-    streamable_http: true
+    url: "http://localhost:23373/mcp"
     timeout: 30s

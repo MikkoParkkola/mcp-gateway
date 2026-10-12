@@ -103,12 +103,16 @@ fn kernel_view(pid: Pid) -> Option<bool> {
     }
 }
 
+/// Real-time bound on an event wait no row is about: only a hang reaches it
+/// (MIK-8360).
+const HANG_BOUND: Duration = Duration::from_secs(60);
+
 async fn poll_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = tokio::time::Instant::now() + ROW_LIMIT;
+    let hung_at = tokio::time::Instant::now() + HANG_BOUND;
     while !done() {
         assert!(
-            tokio::time::Instant::now() < deadline,
-            "{what} within {ROW_LIMIT:?}"
+            tokio::time::Instant::now() < hung_at,
+            "{what} within {HANG_BOUND:?}"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -528,39 +532,69 @@ async fn a_reap_step_past_its_deadline_gives_up() {
     gone(child).await;
 }
 
-/// MIK-7923 T1-burst: twenty trees handed to the reaper at once are each
-/// finished within `REAP_DEADLINE` of their own handover: one tree's grace
-/// delays no other.
+/// MIK-7923 T1-burst, by event (MIK-8360): one tree held in the real reaper
+/// loop delays no other. Nineteen trees handed over after it are each reaped
+/// while it is still held; released, it is reaped too. The product deadline
+/// is lifted to the hang bound and each wait is a hang guard only, so a
+/// loaded host can slow the row but not fail it.
 #[tokio::test]
-async fn twenty_handed_over_trees_each_finish_within_their_deadline() {
-    super::super::reaper::ensure_started().expect("reaper");
-    let mut handed = Vec::new();
-    for _ in 0..20 {
-        let mut cmd = tokio::process::Command::new("sh");
-        cmd.args(["-c", "exec sleep 60"]);
-        let tree = ChildTree::new(super::super::spawn_in_own_tree(cmd).expect("spawn"));
-        handed.push((
-            std::time::Instant::now(),
-            super::super::reaper::hand_over(tree),
-        ));
+async fn a_held_tree_delays_no_other_in_the_reaper_loop() {
+    use super::super::reaper::{Reaped, ensure_started, hand_over};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Releases the hold however the row ends, so a failure cannot leave a
+    /// held tree in the shared reaper.
+    struct Release(Arc<AtomicBool>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
     }
-    for (at, mut done) in handed {
+
+    let tree = |script: &str| {
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.args(["-c", script]);
+        let mut tree = ChildTree::new(super::super::spawn_in_own_tree(cmd).expect("spawn"));
+        tree.reap_deadline_for_test = Some(HANG_BOUND);
+        tree
+    };
+    ensure_started().expect("reaper");
+    let latch = Arc::new(AtomicBool::new(true));
+    let release = Release(Arc::clone(&latch));
+    // Exits at once: without the hold it would finish alongside the others.
+    let mut held = tree("exit 0");
+    held.hold_for_test = Some(Arc::clone(&latch));
+    let mut held = hand_over(held);
+    let others: Vec<_> = (0..19).map(|_| hand_over(tree("exec sleep 60"))).collect();
+    for mut done in others {
         tokio::time::timeout(
-            super::REAP_DEADLINE + Duration::from_millis(500),
-            done.wait_for(|state| matches!(state, super::super::reaper::Reaped::Done(_))),
+            HANG_BOUND,
+            done.wait_for(|state| matches!(state, Reaped::Done(_))),
         )
         .await
-        .expect("finished in time")
+        .expect("a tree waited behind the held one")
         .expect("reaper alive");
         assert!(
-            at.elapsed() < super::REAP_DEADLINE + Duration::from_millis(500),
-            "a tree waited behind the others"
-        );
-        assert!(
-            matches!(*done.borrow(), super::super::reaper::Reaped::Done(Some(_))),
+            matches!(*done.borrow(), Reaped::Done(Some(_))),
             "reaped, not abandoned"
         );
     }
+    assert!(
+        matches!(*held.borrow(), Reaped::Pending),
+        "the held tree finished while held: the hold is not what kept it"
+    );
+    drop(release);
+    tokio::time::timeout(
+        HANG_BOUND,
+        held.wait_for(|state| matches!(state, Reaped::Done(_))),
+    )
+    .await
+    .expect("the released tree is reaped")
+    .expect("reaper alive");
+    assert!(
+        matches!(*held.borrow(), Reaped::Done(Some(_))),
+        "the released tree is reaped, not abandoned"
+    );
 }
 
 /// MIK-7923 P5: a tree spawned by a start the retire overtook after its
@@ -602,12 +636,18 @@ async fn a_dropped_transport_hands_its_tree_to_the_reaper() {
 /// because the pre-reap signal repeats until the group settles. The test
 /// drives `reap_step` by hand and puts the late member into the group
 /// between two steps with `process_group`, so no race decides the row.
+///
+/// The reap deadline is not this row's subject, and it runs on the real
+/// clock from the first step, across the wait for the leader to exit: a
+/// loaded host that took longer than it gave the second step up as
+/// abandoned. It is lifted to the hang bound here (MIK-8360).
 #[tokio::test]
 async fn a_member_joining_after_the_first_pre_reap_signal_is_still_ended() {
     use std::os::unix::process::CommandExt as _;
     let (_w, t) = started("while IFS= read -r l; do :; done", None).await;
     let pgid = leader(&t).await;
     let mut tree = t.child.lock().tree.take().expect("a started tree");
+    tree.reap_deadline_for_test = Some(HANG_BOUND);
     let t0 = std::time::Instant::now();
     assert!(
         matches!(tree.reap_step(t0), Reap::Pending),
@@ -649,14 +689,14 @@ async fn a_member_joining_after_the_first_pre_reap_signal_is_still_ended() {
 /// The late member is our own child here, so the test reaps it itself:
 /// gone means it was killed (a zombie the test then collects).
 async fn gone_or_zombie(mut child: std::process::Child) {
-    let deadline = std::time::Instant::now() + ROW_LIMIT;
+    let hung_at = std::time::Instant::now() + HANG_BOUND;
     loop {
         if let Some(status) = child.try_wait().expect("try_wait") {
             assert!(!status.success(), "the late member was killed, not done");
             return;
         }
         assert!(
-            std::time::Instant::now() < deadline,
+            std::time::Instant::now() < hung_at,
             "the late member outlived the settle"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;

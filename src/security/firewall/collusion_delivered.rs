@@ -25,6 +25,19 @@ pub(crate) struct Delivered<'v> {
     answer: Option<&'v Value>,
     /// Each value leaf's plan step, in `all` order (`MIK-8209` K7).
     labels: Vec<Option<u32>>,
+    /// How the answer was read (`MIK-8066` 2b D1/D6).
+    mode: Mode,
+}
+
+/// How a plan's answer was read.
+pub(crate) enum Mode {
+    /// Leaf by leaf, under the 1 MiB bound, with the answer's sampled view
+    /// for retention's lookups (D8; `None` only for rows built from leaves).
+    Leaves(Option<super::view::AnswerView>),
+    /// Over the bound: a bounded sampled view (D1).
+    View(super::view::AnswerView),
+    /// Not readable (D6): past a cap, or no `VIEW_BYTES` room.
+    Unread(super::view::Unreadable),
 }
 
 impl<'v> Delivered<'v> {
@@ -51,6 +64,7 @@ impl<'v> Delivered<'v> {
             found: OnceCell::new(),
             answer: None,
             labels: Vec::new(),
+            mode: Mode::Leaves(None),
         })
     }
 
@@ -79,6 +93,56 @@ impl<'v> Delivered<'v> {
         self.labels.get(i).copied().flatten()
     }
 
+    /// An over-bound answer read as `view` (D1) or not readable (D6): no
+    /// leaves, so `holds` is false and every label is `None`.
+    pub(in super::super) fn of_mode(mode: Mode) -> Self {
+        Self {
+            values: HashSet::new(),
+            keys: HashSet::new(),
+            all: Vec::new(),
+            values_len: 0,
+            found: OnceCell::new(),
+            answer: None,
+            labels: Vec::new(),
+            mode,
+        }
+    }
+
+    /// This leaf reading with the answer's sampled view for retention (D8).
+    pub(in super::super) fn with_found_view(mut self, view: super::view::AnswerView) -> Self {
+        self.mode = Mode::Leaves(Some(view));
+        self
+    }
+
+    /// The view an over-bound answer was read as, if any.
+    pub(crate) fn view(&self) -> Option<&super::view::AnswerView> {
+        match &self.mode {
+            Mode::View(view) => Some(view),
+            _ => None,
+        }
+    }
+
+    /// Whether the answer could not be read (D6).
+    pub(crate) fn unread(&self) -> bool {
+        matches!(self.mode, Mode::Unread(_))
+    }
+
+    /// Why the answer could not be read, if it could not (D6).
+    pub(crate) fn unread_reason(&self) -> Option<super::view::Unreadable> {
+        match self.mode {
+            Mode::Unread(why) => Some(why),
+            _ => None,
+        }
+    }
+
+    /// What retention reads the answer through (D8).
+    pub(crate) fn found(&self, detector: &CollusionDetector) -> super::view::Found<'_> {
+        match &self.mode {
+            Mode::View(view) | Mode::Leaves(Some(view)) => super::view::Found::View(view),
+            Mode::Leaves(None) | Mode::Unread(_) => super::view::Found::Set(self.kgrams(detector)),
+        }
+    }
+
     /// This answer, read also for its key-path joins (`MIK-8209` K3).
     pub(in super::super) fn with_answer(mut self, answer: &'v Value) -> Self {
         self.answer = Some(answer);
@@ -105,5 +169,18 @@ impl<'v> Delivered<'v> {
                 .flat_map(|text| detector.kgram_hashes(text))
                 .collect()
         })
+    }
+}
+
+#[cfg(test)]
+impl Delivered<'_> {
+    /// Whether this answer was read as a bounded view (D1).
+    pub(crate) fn is_view(&self) -> bool {
+        self.view().is_some()
+    }
+
+    /// Whether this answer took the unread path (D6).
+    pub(crate) fn is_unread(&self) -> bool {
+        self.unread()
     }
 }

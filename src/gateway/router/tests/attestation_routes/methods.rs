@@ -264,10 +264,20 @@ async fn direct_route_replay_needs_a_token() {
     let token = token_for(TOOL);
     let first = json!({"name": TOOL, "arguments": {},
         "_meta": { key_meta: "replay-1", (ATTESTATION_META): token }});
-    let (_, json) = rpc(&router, "/mcp/demo", "tools/call", first, None).await;
+    // A keyed direct call needs an execution principal (MIK-8154 ANON.1).
+    let who = || {
+        Some(crate::key_server::oidc::VerifiedIdentity {
+            subject: "replayer".to_string(),
+            email: "replayer@example.invalid".to_string(),
+            name: None,
+            groups: vec![],
+            issuer: "https://issuer.example.invalid".to_string(),
+        })
+    };
+    let (_, json) = rpc_as(&router, "/mcp/demo", "tools/call", first, who()).await;
     assert_admitted("first call", &json);
     let replay = json!({"name": TOOL, "arguments": {}, "_meta": { key_meta: "replay-1" }});
-    let (_, json) = rpc(&router, "/mcp/demo", "tools/call", replay, None).await;
+    let (_, json) = rpc_as(&router, "/mcp/demo", "tools/call", replay, who()).await;
     assert_attestation_refused("replay without a token", &json);
     assert_eq!(transport.seen.lock().unwrap().len(), 1, "one dispatch");
 }

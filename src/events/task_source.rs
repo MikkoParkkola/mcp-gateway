@@ -97,7 +97,13 @@ impl EventSource for TaskSource {
         Ok(())
     }
 
-    fn matches(&self, principal: &str, arguments: &Value, event: &SourceEvent) -> bool {
+    fn matches(
+        &self,
+        principal: &str,
+        arguments: &Value,
+        event: &SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
         let Some(task_id) = event.data["taskId"].as_str() else {
             return false;
         };

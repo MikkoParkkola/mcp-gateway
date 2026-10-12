@@ -32,13 +32,11 @@ pub(crate) const fn expect(method: MethodKind, route: Route, stage: Stage) -> Ex
                 Invoke | Surfaced | TaskWorker | Stdio | Direct => Applies,
                 TaskSubmit => NotApplicable(Na::NoBackendSend),
             },
-            // /mcp honours the flag (dispatch_intake.rs:355), and stdio at its
-            // intake in the same order (stdio_dispatch.rs `prepare_signing`,
-            // P3); the direct route sanitizes whatever it says
-            // (backend_handlers.rs:171-175).
+            // One sanitize step honouring the flag on every route (MIK-8154
+            // SAN.1): /mcp intake (dispatch_intake.rs), stdio
+            // `prepare_signing` and the direct route's `read_envelope`.
             Stage::Sanitize => match route {
-                Invoke | Surfaced | TaskSubmit | Stdio => Applies,
-                Direct => ExpectedGap(Ticket::Mik8154),
+                Invoke | Surfaced | TaskSubmit | Stdio | Direct => Applies,
                 TaskWorker => NotApplicable(Na::DecidedAtSubmit),
             },
             // Grants and the admin rule fire only for the capability provider
@@ -79,11 +77,11 @@ pub(crate) const fn expect(method: MethodKind, route: Route, stage: Stage) -> Ex
             // An admission refusal of a call without task intent gives the
             // nonce back on /mcp and stdio (MIK-8150, `signing::admit_meta_sync`),
             // as the direct route does (direct_dispatch.rs:313-316). A relay
-            // refusal and any task call's refusal still keep it until every
-            // effect marks the execution (MIK-8353).
+            // refusal gives it back too when nothing before it acted
+            // (MIK-8353 3b); a task submit refusal still keeps it (MIK-8353).
             Stage::NonceGiveBack => match route {
-                Invoke | TaskSubmit => ExpectedGap(Ticket::Mik8353),
-                Surfaced | Stdio | Direct => Applies,
+                TaskSubmit => ExpectedGap(Ticket::Mik8353),
+                Invoke | Surfaced | Stdio | Direct => Applies,
                 TaskWorker => NotApplicable(Na::TransportHasNoNonce),
             },
             // A surfaced-name call keeps its chain source (MIK-8159).
