@@ -180,7 +180,11 @@ impl NotificationMultiplexer {
     /// Whether a stream would write `frame` to `session_id`'s caller, as the
     /// real write loop's credential check decides it: for rows that read a bare
     /// receiver of the queue.
-    pub(crate) async fn passes_write_gate(&self, session_id: &str, frame: &SessionFrame) -> bool {
+    pub(crate) async fn passes_write_gate(
+        &self,
+        session_id: &str,
+        frame: &super::SessionFrame,
+    ) -> bool {
         let Some(session) = self.sessions.read().get(session_id).map(Arc::clone) else {
             return false;
         };
