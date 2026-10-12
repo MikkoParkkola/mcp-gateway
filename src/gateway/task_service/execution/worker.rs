@@ -242,11 +242,6 @@ async fn run_dispatched(
     // MIK-8154 C2e, F2: the run and its sends compare against what the
     // submit's intake judged, as a synchronous call does.
     let dispatch = crate::gateway::meta_mcp::visible::with_judged(intent.owned.judged(), dispatch);
-    // MIK-8392 (muse F13/F14): an outcome-only memo, so the executor-entry
-    // pre-pass has somewhere to record account outcomes and the carried
-    // credential reaches the dispatch; it keeps no visibility, so every step
-    // still judges live.
-    let dispatch = crate::gateway::meta_mcp::visible::with_outcome_memo(dispatch);
     let mut dispatch = Box::pin(crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
         Arc::clone(intent.owned.dispatch_log()),
         dispatch,

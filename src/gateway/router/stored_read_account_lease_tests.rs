@@ -345,9 +345,9 @@ async fn w1_a_grant_revoked_before_the_worker_step_is_refused_there() {
 
 /// WM1 (M22): a plan [account read, plain echo (held), account read]. While
 /// step 2 is held, the operator's own slot relists `read` with an invalid
-/// schema. The worker memo keeps no visibility, so step 3's caller verdict
-/// judges the slot anew and refuses it: the account backend answered one
-/// call. A memo that kept step 1's "visible" would send step 3.
+/// schema. A task run keeps no visibility judgement across its steps, so step
+/// 3's caller verdict judges the slot anew and refuses it: the account backend
+/// answered one call. Anything that kept step 1's "visible" would send step 3.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn wm1_a_withhold_mid_run_is_seen_at_a_later_step() {
     let fx = fixture().await;
@@ -396,9 +396,8 @@ async fn wm1_a_withhold_mid_run_is_seen_at_a_later_step() {
     );
 }
 
-/// WR1 (M14b): a resume after an input round, grant live: the resumed
-/// dispatch has its account outcome (not fail-closed), serves, and the
-/// verdict's resolution reaches it (one resolution, not two).
+/// WR1: a resume after an input round, grant live: the resumed dispatch
+/// serves on one credential resolution.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn wr1_a_resume_with_a_live_grant_serves_on_one_resolution() {
     let fx = fixture().await;

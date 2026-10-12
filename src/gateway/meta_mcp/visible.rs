@@ -337,10 +337,6 @@ pub(crate) struct VisibilityMemo {
     /// the live call answers instead of "retry" forever.
     account_refusal:
         parking_lot::Mutex<std::collections::HashMap<(String, AccountKey), crate::Error>>,
-    /// A task worker's memo (MIK-8392, muse F13): it carries account outcomes
-    /// and credentials but never keeps a visibility judgement, so a task's
-    /// visibility is still judged live at every step, however long it runs.
-    outcome_only: bool,
 }
 
 /// The account a target's dispatch would use (MIK-8392): a managed
@@ -464,9 +460,6 @@ pub(crate) struct Judged {
 
 impl VisibilityMemo {
     fn recorded(&self, server: &str, tool: &str) -> Option<Visibility> {
-        if self.outcome_only {
-            return None;
-        }
         self.visibility
             .lock()
             .get(&(server.to_owned(), tool.to_owned()))
@@ -476,9 +469,6 @@ impl VisibilityMemo {
     /// Record `judged` unless an answer is already recorded; returns the
     /// recorded answer, so the first judgement wins.
     fn record(&self, server: &str, tool: &str, judged: Visibility) -> Visibility {
-        if self.outcome_only {
-            return judged;
-        }
         *self
             .visibility
             .lock()
@@ -616,23 +606,6 @@ pub(crate) async fn with_visibility_memo<F: std::future::Future>(request: F) -> 
     }
     VISIBILITY_MEMO
         .scope(VisibilityMemo::default(), request)
-        .await
-}
-
-/// Run a task worker's dispatch with an outcome-only memo (MIK-8392, muse
-/// F13/F14): the executor-entry pre-pass records each target account's
-/// outcome there, and the carried credential reaches its dispatch, but no
-/// visibility is kept, so every step judges live. Wrap only the dispatch
-/// future: a readmit before it keeps its own memo (muse F15).
-pub(crate) async fn with_outcome_memo<F: std::future::Future>(dispatch: F) -> F::Output {
-    VISIBILITY_MEMO
-        .scope(
-            VisibilityMemo {
-                outcome_only: true,
-                ..VisibilityMemo::default()
-            },
-            dispatch,
-        )
         .await
 }
 

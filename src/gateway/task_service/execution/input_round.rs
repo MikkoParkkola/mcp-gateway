@@ -339,12 +339,7 @@ async fn dispatch(
     );
     let dispatched = crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
         Arc::clone(owned.dispatch_log()),
-        // MIK-8392 (muse F14/F15): the resume gets the same outcome-only memo
-        // as a first run; readmit above keeps its own memo.
-        crate::gateway::meta_mcp::visible::with_judged(
-            judged,
-            crate::gateway::meta_mcp::visible::with_outcome_memo(dispatched),
-        ),
+        crate::gateway::meta_mcp::visible::with_judged(judged, dispatched),
     );
     tokio::select! {
         biased;
