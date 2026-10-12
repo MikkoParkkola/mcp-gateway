@@ -1032,8 +1032,10 @@ async fn r6m_token_exchange_replay_after_idp_kill_and_ttl_is_refused() {
         malformed: Vec::new(),
         attestation: None,
     };
-    let caller = |retry: &crate::protocol::mrtr::RetryFields,
-                  alice: &VerifiedIdentity| {
+    fn caller<'a>(
+        retry: &'a crate::protocol::mrtr::RetryFields,
+        alice: &'a VerifiedIdentity,
+    ) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'a> {
         crate::gateway::meta_mcp::MetaMcpCallerContext {
             task: None,
             signing: None,
@@ -1060,7 +1062,7 @@ async fn r6m_token_exchange_replay_after_idp_kill_and_ttl_is_refused() {
             era: crate::protocol::meta::Era::Legacy,
             channel: &crate::gateway::input_bridge::NoClientChannel,
         }
-    };
+    }
 
     // First: the keyed call succeeds via token exchange. The pre-pass is a
     // no-op here (no account to fill); admission and dispatch are the real
