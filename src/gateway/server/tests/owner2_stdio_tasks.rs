@@ -28,7 +28,9 @@ pub(super) const DENIED: &str = "forbidden";
 /// A counting backend answering every tool at once.
 pub(crate) async fn backend() -> (String, Arc<AtomicUsize>) {
     backend_listing(json!([
-        {"name": TOOL, "inputSchema": {"type": "object"}},
+        // MIK-8393: `echo` declares itself read-only, so U2's repeat is a
+        // cache hit.
+        {"name": TOOL, "inputSchema": {"type": "object"}, "annotations": {"readOnlyHint": true}},
         {"name": DENIED, "inputSchema": {"type": "object"}},
     ]))
     .await

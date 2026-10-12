@@ -24,6 +24,27 @@ use crate::transport::notification_sink::emit_log;
 use crate::{Error, Result};
 
 impl MetaMcp {
+    /// Whether the response cache may store or serve this call (MIK-8393).
+    ///
+    /// Asks the same question dispatch does, in the same order
+    /// (`dispatch.rs`): a capability of that name is judged by its own
+    /// `read_only`, and only otherwise the registry backend by what its slot
+    /// declared. With neither there is nothing that declared a read: deny.
+    pub(super) fn cache_admits(
+        &self,
+        (server, tool): (&str, &str),
+        backend: Option<&crate::backend::Backend>,
+        binding: Option<&str>,
+    ) -> bool {
+        if let Some(capabilities) = self.get_capabilities()
+            && server == capabilities.name
+            && let Some(definition) = capabilities.get(tool)
+        {
+            return definition.metadata.read_only;
+        }
+        backend.is_some_and(|backend| backend.is_read_only_for(binding, tool))
+    }
+
     pub(super) fn refuse_shared_oauth_login(
         &self,
         server: &str,

@@ -26,6 +26,10 @@ use crate::protocol::{
     ResourcesTemplatesListResult, Tool, ToolsListResult,
 };
 
+// MIK-8393: the response cache's admission, read from the slot this file resolves.
+#[path = "metadata_read_only.rs"]
+mod read_only;
+
 impl Backend {
     /// The tool cache belonging to `binding`'s pool slot.
     ///
@@ -388,6 +392,7 @@ impl Backend {
                     // #1441).
                     if let Some(prepared) = prepared {
                         *entry.resend_permitted.write() = prepared.resend_permitted;
+                        *entry.read_only_declared.write() = prepared.read_only_declared;
                         let listing = if truncated {
                             super::descriptor_gate::Listing::Truncated
                         } else {

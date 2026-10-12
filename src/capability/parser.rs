@@ -78,6 +78,15 @@ pub async fn parse_capability_file(path: &std::path::Path) -> Result<CapabilityD
         capability.name = stem.to_string_lossy().to_string();
     }
 
+    // MIK-8393: the cache stands in for a call only on a declared read.
+    if capability.cache_configured() && !capability.metadata.read_only {
+        tracing::warn!(
+            path = %path.display(),
+            capability = %capability.name,
+            "capability sets `cache:` but is not declared `read_only: true`; its results are not cached",
+        );
+    }
+
     // Last, over the definition as returned, so admission and the cache can
     // tell it from any later edit or substitute (MIK-7814).
     if capability.providers.integrity == crate::capability::Integrity::Verified {
