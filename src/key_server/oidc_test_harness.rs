@@ -79,7 +79,8 @@ impl Harness {
     /// Sign `extra` claims (merged over iss/sub/aud/iat/exp) as an ES256 JWT.
     pub(crate) fn mint(&self, iss: &str, sub: &str, extra: &Value) -> String {
         let info = self.key.key_info();
-        let now = chrono::Utc::now().timestamp();
+        let now = i64::try_from(crate::clock::unix_secs().expect("a clock after the epoch"))
+            .expect("seconds fit i64");
         let mut claims = json!({"iss": iss, "sub": sub, "aud": AUD, "iat": now, "exp": now + 300});
         for (k, v) in extra.as_object().expect("object") {
             claims[k] = v.clone();
