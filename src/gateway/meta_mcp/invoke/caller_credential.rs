@@ -50,6 +50,7 @@ impl std::fmt::Debug for CallerCredential {
             .field("headers", &format_args!("{header_names:?} = <redacted>"))
             .field("cache_binding", &self.cache_binding)
             .field("managed", &self.managed.is_some())
+            .field("attempted", &self.attempted)
             .finish()
     }
 }
