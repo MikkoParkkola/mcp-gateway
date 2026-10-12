@@ -274,6 +274,14 @@ pub(super) struct World {
     _adapter: Option<tempfile::TempDir>,
 }
 
+/// Whether the fixture's `/mcp` route needs a credential.
+pub(super) enum McpAccess {
+    Authenticated,
+    /// `/mcp` is a public path: a caller that presents nothing is admitted
+    /// anonymously.
+    PublicPath,
+}
+
 impl World {
     pub(super) async fn start() -> Self {
         Self::start_with(|meta| meta).await
@@ -282,7 +290,7 @@ impl World {
     /// As [`Self::start`], with `configure` applied to the Meta-MCP last.
     pub(super) async fn start_with(configure: impl FnOnce(MetaMcp) -> MetaMcp) -> Self {
         let key_server = Arc::new(KeyServer::new(crate::config::KeyServerConfig::default()));
-        Self::start_on(key_server, None, configure).await
+        Self::start_on(key_server, None, configure, McpAccess::Authenticated).await
     }
 
     /// As [`Self::start_with`], with an Open `WebUI` adapter that k-std may
@@ -311,7 +319,13 @@ impl World {
         ))
         .expect("adapter config parses");
         let key_server = Arc::new(KeyServer::new(crate::config::KeyServerConfig::default()));
-        Self::start_on(key_server, Some((config, dir)), configure).await
+        Self::start_on(
+            key_server,
+            Some((config, dir)),
+            configure,
+            McpAccess::Authenticated,
+        )
+        .await
     }
 
     /// As [`Self::start`], with a real OIDC key server: one provider
@@ -329,18 +343,29 @@ impl World {
         let extra = format!("delegated_bearer: true\npolicies:\n{policies}");
         let oidc = Harness::start(&config_yaml("[]", &extra)).await;
         (
-            Self::start_on(Arc::clone(&oidc.ks), None, |meta| meta).await,
+            Self::start_on(
+                Arc::clone(&oidc.ks),
+                None,
+                |meta| meta,
+                McpAccess::Authenticated,
+            )
+            .await,
             oidc,
         )
     }
 
-    async fn start_on(
+    pub(super) async fn start_on(
         key_server: Arc<KeyServer>,
         live: Option<(crate::config::Config, tempfile::TempDir)>,
         configure: impl FnOnce(MetaMcp) -> MetaMcp,
+        access: McpAccess,
     ) -> Self {
         let auth = AuthConfig {
             enabled: true,
+            public_paths: match access {
+                McpAccess::Authenticated => AuthConfig::default().public_paths,
+                McpAccess::PublicPath => vec!["/mcp".to_string()],
+            },
             api_keys: vec![
                 api_key("k-std", &[]),
                 api_key("k-deny", &["read", "fetch", "hidden_cap"]),

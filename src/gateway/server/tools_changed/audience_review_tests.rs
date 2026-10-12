@@ -225,3 +225,36 @@ async fn r16_get_judging_at_write_mints_nothing_and_fetches_nothing() {
 async fn r16_listen_judging_at_admit_mints_nothing_and_fetches_nothing() {
     judging_stays_on_caches(true).await;
 }
+
+/// An anonymous caller on a public path keeps its stream at attach, and is
+/// told nothing of a change: it has no view to judge, and the write-time
+/// decision does not find it live.
+#[tokio::test]
+async fn an_anonymous_public_path_stream_is_told_nothing_of_a_change() {
+    let w = World::start_public().await;
+    let (status, ear) = w.anonymous_sse().await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "premise: it is admitted"
+    );
+    let mut ear = ear.expect("an open stream");
+    w.settle().await;
+    let _ = ear.told(&w).await;
+    w.store_shared("alpha", alpha_with("r2"));
+    assert_eq!(
+        ear.told(&w).await,
+        0,
+        "no hint reaches a caller with no view"
+    );
+}
+
+/// The exemption stops at public paths: with `/mcp` authenticated, the same
+/// anonymous GET is refused by the auth layer before any attach.
+#[tokio::test]
+async fn an_anonymous_get_on_an_authenticated_path_is_refused() {
+    let w = World::start().await;
+    let (status, ear) = w.anonymous_sse().await;
+    assert_eq!(status, axum::http::StatusCode::UNAUTHORIZED);
+    assert!(ear.is_none());
+}

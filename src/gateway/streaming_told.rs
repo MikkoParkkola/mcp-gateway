@@ -262,6 +262,24 @@ pub(crate) struct LiveCtx<'a> {
     pub(crate) cf_verifier: Option<&'a crate::key_server::OidcVerifier>,
 }
 
+/// What a caller found dead when its stream opens gets.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum AtAttach {
+    /// No stream: the caller is answered as an invalid credential is.
+    Refuse,
+    /// A caller that presented nothing: a public path admits it anonymously, so
+    /// its bearer "death" is only the absence of a credential. Its stream opens
+    /// with no view, and no hint is ever judged live for it.
+    OpenAnonymous,
+}
+
+pub(crate) fn dead_at_attach(credential: Option<&HeldCredential>, reason: DeadReason) -> AtAttach {
+    match (credential, reason) {
+        (None, DeadReason::Bearer) => AtAttach::OpenAnonymous,
+        (Some(_), _) | (None, DeadReason::Adapter | DeadReason::Cf) => AtAttach::Refuse,
+    }
+}
+
 /// What the judge made of a caller: a view, or a caller that no longer
 /// resolves (MIK-8350 D17i). Every consumer closes its stream on `Dead`.
 #[derive(Debug, PartialEq, Eq)]
@@ -568,11 +586,13 @@ impl NotificationMultiplexer {
             // A caller that does not resolve at attach gets no stream, unless
             // it presented nothing at all: a public path admits it
             // anonymously, and nothing is ever delivered to it.
-            Judged::Dead(reason) if credential.is_some() || reason != DeadReason::Bearer => {
-                reason.count();
-                return Err(reason);
-            }
-            Judged::Dead(_) => {}
+            Judged::Dead(reason) => match dead_at_attach(credential.as_ref(), reason) {
+                AtAttach::Refuse => {
+                    reason.count();
+                    return Err(reason);
+                }
+                AtAttach::OpenAnonymous => {}
+            },
         }
         Ok(Some(StreamView {
             subject,

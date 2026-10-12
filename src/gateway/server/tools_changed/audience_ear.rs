@@ -186,6 +186,55 @@ impl Ear {
 }
 
 impl World {
+    /// A gateway whose `/mcp` is a public path.
+    pub(super) async fn start_public() -> Self {
+        let key_server = std::sync::Arc::new(crate::key_server::KeyServer::new(
+            crate::config::KeyServerConfig::default(),
+        ));
+        Self::start_on(
+            key_server,
+            None,
+            |meta| meta,
+            super::audience_fixture::McpAccess::PublicPath,
+        )
+        .await
+    }
+
+    /// A GET stream that presents no credential: the route's status, and the
+    /// stream when it opened.
+    pub(super) async fn anonymous_sse(&self) -> (axum::http::StatusCode, Option<Ear>) {
+        let request = axum::http::Request::builder()
+            .method("GET")
+            .uri("/mcp")
+            .header("accept", "text/event-stream")
+            .body(Body::empty())
+            .expect("a request");
+        let response = self.router.clone().oneshot(request).await.expect("served");
+        let status = response.status();
+        if !status.is_success() {
+            return (status, None);
+        }
+        let session = response
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|v| v.to_str().ok())
+            .expect("the stream names its session")
+            .to_string();
+        let mut body = Events {
+            stream: Box::pin(response.into_body().into_data_stream()),
+            buffer: String::new(),
+        };
+        let (tx, events) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(event) = body.next_unbounded().await {
+                if tx.send(event).is_err() {
+                    break;
+                }
+            }
+        });
+        (status, Some(Ear::Sse { events, session }))
+    }
+
     /// As [`Self::legacy`], owned as the router owns it, so a POST under
     /// `bearer` may carry its session id ([`Self::post_in`]).
     pub(super) async fn legacy_owned(&self, id: &str, bearer: &str) -> Ear {
