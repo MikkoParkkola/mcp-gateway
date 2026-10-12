@@ -46,7 +46,15 @@ pub(super) async fn drain(
     identity_key: Option<&str>,
     backend_name: &str,
 ) -> crate::Result<JsonRpcResponse> {
-    let mut tools = Vec::new();
+    // Every page read so far. Armed until the listing is remembered, so an
+    // early return, `?`, the page cap, a cancellation or an unwind still
+    // revokes from what was read (MIK-8399).
+    let mut read = Abandoned {
+        backend,
+        identity_key,
+        tools: Vec::new(),
+        armed: true,
+    };
     // An unreadable list (see `readable_page`), or a page without a tools
     // array, says nothing about which tools exist: it is answered, judged as a
     // truncated listing (it clears no block on a name it did not show, #1441)
@@ -92,7 +100,7 @@ pub(super) async fn drain(
         if let Some(hint) = result.get("ttlMs").and_then(Value::as_u64) {
             ttl = Some(ttl.map_or(hint, |shortest| shortest.min(hint)));
         }
-        tools.extend(items.into_iter().flatten().cloned());
+        read.tools.extend(items.into_iter().flatten().cloned());
         match result.get("nextCursor") {
             Some(next) if !next.is_null() => cursor = Some(next.clone()),
             _ => {
@@ -103,6 +111,8 @@ pub(super) async fn drain(
                 } else {
                     crate::backend::Listing::Complete
                 };
+                let mut tools = std::mem::take(&mut read.tools);
+                read.armed = false;
                 let withheld =
                     backend.remember_listed_tools_as(identity_key, credential, &tools, listing);
                 // Dropped here, from the raw list this drain judged, not by a
@@ -124,8 +134,8 @@ pub(super) async fn drain(
             }
         }
     }
-    // An abandoned drain is never shown and never remembered, so it neither
-    // judges a descriptor nor revokes cache admission (MIK-8393).
+    // An abandoned drain is never shown and never remembered: it judges no
+    // descriptor, and `read` revokes from what it read as it drops (MIK-8399).
     telemetry_metrics::counter!(
         "mcp_direct_tools_list_page_cap_exceeded_total",
         "backend" => backend_name.to_owned()
@@ -137,6 +147,27 @@ pub(super) async fn drain(
         "tool catalogue exceeds the direct-route page cap",
         json!({ "reason": "direct_list_page_cap", "max_pages": DIRECT_LIST_MAX_PAGES }),
     ))
+}
+
+/// The pages a direct drain has read, revoking from them on drop unless the
+/// listing was remembered (MIK-8399 r4). A plain local guard: it covers every
+/// way the drain can end early, including the future being dropped by
+/// `explicitly_cancellable`. Drop never panics: the revocation skips what it
+/// cannot parse and takes `parking_lot` locks, which do not poison.
+struct Abandoned<'a> {
+    backend: &'a crate::backend::Backend,
+    identity_key: Option<&'a str>,
+    tools: Vec<Value>,
+    armed: bool,
+}
+
+impl Drop for Abandoned<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.backend
+                .revoke_from_abandoned_listing(self.identity_key, &self.tools);
+        }
+    }
 }
 
 /// A page the metadata fill could read: a string `nextCursor` or none, and

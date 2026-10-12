@@ -64,10 +64,28 @@ struct FetchPermit<'a, T> {
     mark: FillMark,
     /// The generation current when this fetch was authorized.
     generation: u64,
+    /// Run when the fetch ends without an answer: an error, a cancellation
+    /// or an unwind (MIK-8399). Taken, so it does not run, once the fetch
+    /// answers.
+    on_abandon: Option<AbandonHook>,
 }
+
+/// What a fetch that ends without an answer still does with what it read.
+pub(crate) type AbandonHook = Box<dyn FnOnce() + Send>;
 
 impl<T> Drop for FetchPermit<'_, T> {
     fn drop(&mut self) {
+        // The hook runs FIRST, while this fill still holds the slot's single
+        // flight: no waiter can lead a newer fill until `in_flight` clears
+        // below, so the hook cannot narrow a newer fill's sets. A moved
+        // generation means a store or an invalidation already supplied newer
+        // state, so the hook stands down (MIK-8399 r4-r5).
+        let current = self.cache.state.read().generation == self.generation;
+        if let Some(hook) = self.on_abandon.take()
+            && current
+        {
+            hook();
+        }
         self.cache.state.write().in_flight = None;
         let _ = self.sender.send(());
     }
@@ -250,6 +268,7 @@ impl<T> CachedMetadata<T> {
             sender,
             mark,
             generation: state.generation,
+            on_abandon: None,
         })
     }
 
@@ -269,6 +288,7 @@ impl<T> CachedMetadata<T> {
             |_| async move { fetch().await.map(|v| (v, ())) },
             |()| {},
             |_| {},
+            None,
         )
         .await
     }
@@ -281,12 +301,16 @@ impl<T> CachedMetadata<T> {
     /// `fetch` gets its fill's [`FillMark`]; `waiting` is told, before each
     /// wait, the mark of the fill this caller now waits on, and `None` when
     /// it runs the fill itself, so it never reads a fill it left (MIK-8046).
+    ///
+    /// `on_abandon` runs if the fill this caller leads ends without an
+    /// answer (error, cancellation, unwind), before its waiters are woken.
     pub(crate) async fn get_or_fetch_shared_then<A, F, Fut, S, W>(
         &self,
         ttl: Duration,
         fetch: F,
         on_stored: S,
         waiting: W,
+        mut on_abandon: Option<AbandonHook>,
     ) -> Result<Arc<T>>
     where
         F: Fn(FillMark) -> Fut,
@@ -301,14 +325,18 @@ impl<T> CachedMetadata<T> {
                     waiting(Some(mark));
                     let _ = receiver.changed().await;
                 }
-                CacheFetchState::Fetch(permit) => {
+                CacheFetchState::Fetch(mut permit) => {
                     waiting(None);
+                    permit.on_abandon = on_abandon.take();
                     let result = fetch(Arc::clone(&permit.mark)).await;
                     let result = result.map(|(value, side)| {
                         let value = Arc::new(value);
                         self.store_if_current(Arc::clone(&value), permit.generation, || {
                             on_stored(side);
                         });
+                        // Answered: stored, or refused because an
+                        // invalidation already ran. Nothing to narrow.
+                        permit.on_abandon = None;
                         value
                     });
                     drop(permit);
@@ -328,6 +356,11 @@ impl<T> CachedMetadata<T> {
         None
     }
 }
+
+// MIK-8399 S16: the abandon hook runs inside the flight.
+#[cfg(test)]
+#[path = "cached_metadata_abandon_tests.rs"]
+mod abandon_tests;
 
 #[cfg(test)]
 mod tests {
@@ -589,6 +622,7 @@ mod tests {
             },
             |()| {},
             |mark| heard.lock().push(("owner", mark)),
+            None,
         );
         let waiter = async {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -598,6 +632,7 @@ mod tests {
                     |_| async { Ok((vec![2u8], ())) },
                     |()| {},
                     |mark| heard.lock().push(("waiter", mark)),
+                    None,
                 )
                 .await
         };
@@ -632,6 +667,7 @@ mod tests {
                 },
                 |()| {},
                 |_| {},
+                None,
             )
             .await
             .unwrap();

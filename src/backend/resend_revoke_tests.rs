@@ -202,6 +202,8 @@ enum Page {
     Lost,
     /// Wait until released, then answer these tools as the last page.
     Held(Vec<Value>),
+    /// The transport panics.
+    Panic,
 }
 
 /// Answers `tools/list` page by page (page `n` is asked with cursor `cN`),
@@ -262,6 +264,7 @@ impl crate::transport::Transport for Wire {
                 self.release.notified().await;
                 (tools, false)
             }
+            Page::Panic => panic!("the transport fell over mid-drain"),
         };
         let mut result = json!({ "tools": tools });
         if more {
@@ -448,4 +451,66 @@ async fn s9_a_fill_after_a_revocation_grants_what_it_declares() {
     let _ = backend.remember_listed_tools_as(None, false, &[write("t")], Listing::Truncated);
     backend.get_tools_shared().await.expect("a later fill");
     assert!(permitted(&backend).contains("t"));
+}
+
+/// S17, the fill half: an abandoned refresh read only a prefix, so a name it
+/// never reached (`u`) keeps its permission; the write it read (`t`) loses it.
+#[tokio::test]
+async fn s17_an_abandoned_refresh_keeps_names_it_never_read() {
+    let wire = Wire::new(vec![Page::Tools(
+        vec![idempotent("t"), idempotent("u")],
+        false,
+    )]);
+    let backend = refreshing_backend(&wire);
+    backend.get_tools_shared().await.expect("the first fill");
+    *wire.pages.lock() = vec![Page::Tools(vec![write("t")], true), Page::ErrorFrame];
+    let _ = backend.get_tools_shared().await;
+    let set = permitted(&backend);
+    assert!(!set.contains("t"));
+    assert!(
+        set.contains("u"),
+        "a name the refresh never reached lost its permission"
+    );
+}
+
+/// S18: a complete direct listing replaces the slot while a refresh is on the
+/// wire; the refresh is then cancelled. The replacement is newer, so the
+/// abandoned refresh must not narrow it.
+#[tokio::test]
+async fn s18_an_abandoned_refresh_leaves_a_newer_replacement_alone() {
+    let (backend, wire) = primed(vec![
+        Page::Tools(vec![write("t")], true),
+        Page::Held(Vec::new()),
+    ])
+    .await;
+    let fill = tokio::spawn({
+        let backend = Arc::clone(&backend);
+        async move { backend.get_tools_shared().await }
+    });
+    tokio::time::timeout(WAIT, wire.entered.notified())
+        .await
+        .expect("page 2 reached the wire");
+    let _ = backend.remember_listed_tools_as(None, false, &[idempotent("t")], Listing::Complete);
+    fill.abort();
+    let _ = fill.await;
+    assert!(
+        permitted(&backend).contains("t"),
+        "an abandoned refresh narrowed the newer complete listing"
+    );
+}
+
+/// Unwind: a transport that panics on page 2. The hook narrows during the
+/// unwind, and the panic stays inside the fill's task.
+#[tokio::test]
+async fn an_unwinding_refresh_still_narrows_from_what_it_read() {
+    let (backend, _wire) = primed(vec![Page::Tools(vec![write("t")], true), Page::Panic]).await;
+    let fill = tokio::spawn({
+        let backend = Arc::clone(&backend);
+        async move { backend.get_tools_shared().await }
+    });
+    assert!(
+        fill.await.is_err_and(|e| e.is_panic()),
+        "premise: the fill panicked"
+    );
+    assert!(!permitted(&backend).contains("t"));
 }

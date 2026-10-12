@@ -24,8 +24,8 @@ pub(super) async fn drain_list_pages(
     transport: &dyn crate::transport::Transport,
     backend: &str,
     family: &ListFamily,
-    headers: &[(String, String)],
-    identity_key: Option<&str>,
+    (headers, identity_key): (&[(String, String)], Option<&str>),
+    seen: Option<&parking_lot::Mutex<Vec<Value>>>,
 ) -> Result<(Option<Value>, bool)> {
     let started = tokio::time::Instant::now();
     let mut merged: Option<Value> = None;
@@ -81,6 +81,13 @@ pub(super) async fn drain_list_pages(
             .as_object_mut()
             .and_then(|m| m.remove("nextCursor"))
             .and_then(|v| v.as_str().map(str::to_owned));
+        // MIK-8399: kept as it arrives, so a fill that later fails or is
+        // cancelled can still narrow by what it read.
+        if let Some(seen) = seen
+            && let Some(items) = result.get(family.list_key).and_then(Value::as_array)
+        {
+            seen.lock().extend(items.iter().cloned());
+        }
         if let Some(acc) = merged.as_mut() {
             let items = if let Some(items) = result
                 .get_mut(family.list_key)

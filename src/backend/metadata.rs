@@ -310,6 +310,11 @@ impl Backend {
         // Resolve the slot ONCE and keep it for both the cache and the fetch.
         let lease = self.begin_internal_activity_for(&key)?;
         let entry = Arc::clone(lease.entry());
+        // MIK-8399: what a tools fill read, for the permit's abandon hook.
+        let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let tools = family.truncated_flag.is_some();
+        let on_abandon =
+            tools.then(|| self.abandoned_fill_hook(Arc::clone(&entry), Arc::clone(&seen)));
         select(&entry)
             .get_or_fetch_shared_then(
                 self.cache_ttl,
@@ -340,8 +345,8 @@ impl Backend {
                                 transport.as_ref(),
                                 &self.name,
                                 &family,
-                                fetch_headers,
-                                identity_key,
+                                (fetch_headers, identity_key),
+                                tools.then_some(&*seen),
                             )
                             .await?;
                             let (items, prepared) = match merged {
@@ -412,6 +417,7 @@ impl Backend {
                 },
                 // A joiner classifies its deadline by this fill (MIK-8046).
                 Provenance::joined,
+                on_abandon,
             )
             .await
     }
