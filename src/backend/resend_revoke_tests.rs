@@ -514,3 +514,59 @@ async fn an_unwinding_refresh_still_narrows_from_what_it_read() {
     );
     assert!(!permitted(&backend).contains("t"));
 }
+
+/// S11: a caller's partial page revokes in that caller's slot only. Another
+/// identity's slot keeps the permission its own listing gave it (mutant m7,
+/// a revocation that always reads the shared slot).
+#[tokio::test]
+async fn s11_a_callers_page_revokes_in_that_callers_slot_only() {
+    use crate::backend::PoolKey;
+    use crate::identity_propagation::{
+        IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
+    };
+    let backend = Arc::new(Backend::new(
+        "ledger",
+        BackendConfig {
+            identity_propagation: Some(IdentityPropagationConfig {
+                strategy: PropagationStrategyKind::SignedAssertion,
+                audience: "ledger".to_string(),
+                required: true,
+                session_mode: SessionMode::PerUser,
+                token_exchange_endpoint: None,
+                token_exchange_scope: None,
+            }),
+            ..Default::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let slot = |who: &str| PoolKey::PerUser {
+        binding: who.to_string(),
+    };
+    for who in ["alpha", "beta"] {
+        backend.set_pooled_transport_for_test(
+            &slot(who),
+            Wire::new(Vec::new()) as Arc<dyn crate::transport::Transport>,
+        );
+        *backend
+            .pooled_entry(&slot(who))
+            .expect("the slot exists")
+            .resend_permitted
+            .write() = std::iter::once("t".to_owned()).collect();
+    }
+    let _ =
+        backend.remember_listed_tools_as(Some("alpha"), false, &[write("t")], Listing::Truncated);
+    let holds = |who: &str| {
+        backend
+            .pooled_entry(&slot(who))
+            .expect("the slot exists")
+            .resend_permitted
+            .read()
+            .contains("t")
+    };
+    assert!(
+        !holds("alpha"),
+        "alpha's own page did not revoke in alpha's slot"
+    );
+    assert!(holds("beta"), "alpha's page revoked beta's permission");
+}

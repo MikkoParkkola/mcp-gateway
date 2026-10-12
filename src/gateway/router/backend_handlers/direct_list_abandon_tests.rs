@@ -171,3 +171,44 @@ async fn s19_a_drain_abandoned_on_page_one_changes_nothing() {
     assert!(backend.resend_permitted_snapshot().contains("t"));
     assert!(backend.is_read_only_for(None, "t"));
 }
+
+fn idempotent(name: &str) -> Value {
+    json!({"name": name, "inputSchema": {"type": "object"},
+        "annotations": {"readOnlyHint": false, "idempotentHint": true}})
+}
+
+/// S17, the direct half: a page that was read in full but whose drain was
+/// abandoned revokes like a stored partial page. Each set keeps only what
+/// the page itself declares safe: `v` (declared idempotent) keeps its
+/// retries, `u` (not on the page) loses them, unlike an abandoned fill's
+/// prefix, which keeps a name it never reached.
+#[tokio::test]
+async fn s17_an_abandoned_direct_page_keeps_only_what_it_declares_safe() {
+    let (backend, _wire) = backend(vec![
+        Page::More(vec![write("t"), idempotent("v")]),
+        Page::ErrorFrame,
+    ]);
+    *backend.shared_entry_for_test().resend_permitted.write() =
+        ["t", "u", "v"].iter().map(|n| (*n).to_owned()).collect();
+    let _ = drain(&backend).await;
+    let set = backend.resend_permitted_snapshot();
+    assert!(!set.contains("t"));
+    assert!(
+        set.contains("v"),
+        "a name the page declared safe lost its retries"
+    );
+    assert!(
+        !set.contains("u"),
+        "the page leg keeps only what the page declares"
+    );
+}
+
+/// S10, abandoned (mutant m12): a malformed entry on a page the drain then
+/// abandons reaches the guard's Drop, which must skip it rather than panic.
+#[tokio::test]
+async fn s10_an_abandoned_page_with_a_malformed_entry_revokes_the_rest() {
+    let malformed = json!({"name": "m", "annotations": "not an object"});
+    let (backend, _wire) = backend(vec![Page::More(vec![malformed, write("t")]), Page::Lost]);
+    let _ = drain(&backend).await;
+    assert!(!backend.resend_permitted_snapshot().contains("t"));
+}
