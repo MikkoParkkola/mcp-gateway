@@ -107,7 +107,7 @@ async fn fixture_with(second: Option<Second>) -> Fx {
     let (mut state, store) = super::tests::test_router_app_state_with_auth(&auth).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.backends = gateway.backends();
-    let mut meta = gateway.take_meta();
+    let meta = gateway.take_meta();
     let mut engine = crate::playbook::PlaybookEngine::new();
     for definition in playbooks() {
         engine.register(definition);
