@@ -147,7 +147,7 @@ pub(crate) struct ViewSubject {
     pub(crate) cert: Option<crate::mtls::CertIdentity>,
     /// The URL asked for Code Mode (`?codemode=search_and_execute`).
     pub(crate) code_mode_url: bool,
-    /// The Open WebUI assertion this stream was admitted under, when it was.
+    /// The Open `WebUI` assertion this stream was admitted under, when it was.
     pub(crate) adapter: Option<crate::gateway::openwebui_adapter::AdapterAssertion>,
 }
 
@@ -197,7 +197,7 @@ pub(crate) enum Judged<T> {
 pub(crate) enum DeadReason {
     /// The held credential no longer authenticates.
     Bearer,
-    /// The Open WebUI assertion the stream was admitted under has expired. An
+    /// The Open `WebUI` assertion the stream was admitted under has expired. An
     /// unreadable clock is folded in here: `jwt_window` answers Expired for
     /// it, and a broken host clock alerts elsewhere.
     Adapter,
@@ -235,6 +235,10 @@ pub(crate) trait ViewJudge: Send + Sync {
         session_id: &'a str,
     ) -> futures::future::BoxFuture<'a, Judged<HashMap<String, ViewDigest>>>;
 }
+
+/// One view held on a session: the key of its subject, the subject and its
+/// record.
+pub(super) type ViewEntry = (String, Arc<ViewSubject>, Arc<ViewRecord>);
 
 /// One view's record: what its caller was last told, the stamps writes are
 /// ordered by, and the gate that makes stamp order equal data order.
@@ -457,6 +461,7 @@ impl NotificationMultiplexer {
 
     /// Take `session_id`'s baseline for the default subject: for a session no
     /// stream has opened a view on (a bare receiver).
+    #[cfg(test)]
     pub(crate) async fn take_baseline(&self, session_id: &str, judge: &Arc<dyn ViewJudge>) {
         self.attach_view(session_id, ViewSubject::default(), Arc::clone(judge))
             .await;

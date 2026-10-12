@@ -208,7 +208,7 @@ struct ClientSession {
     credential: RwLock<Option<HeldCredential>>,
     /// One record per distinct view held on this session (MIK-8350): what
     /// each was last told, keyed by the subject its stream opened under.
-    records: RwLock<Vec<(String, Arc<ViewSubject>, Arc<ViewRecord>)>>,
+    records: RwLock<Vec<told::ViewEntry>>,
 }
 
 impl ClientSession {

@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8350 A-EXPIRE: an Open WebUI assertion a stream was admitted under
+//! MIK-8350 A-EXPIRE: an Open `WebUI` assertion a stream was admitted under
 //! has a window; a stream held past it is dead, judged by the same function
 //! and inclusive boundary admission used (D11, D16). The adapter's skew is
 //! its default, 30 seconds; the assertion lives 120.

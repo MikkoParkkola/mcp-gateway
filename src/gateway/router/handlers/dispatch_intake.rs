@@ -50,7 +50,7 @@ pub(super) struct Intake<'r> {
     pub(super) client: Option<AuthenticatedClient>,
     pub(super) cert_identity: Option<CertIdentity>,
     pub(super) oauth_agent_identity: Option<OAuthAgentIdentity>,
-    /// What the Open WebUI adapter judged about the assertion that admitted
+    /// What the Open `WebUI` adapter judged about the assertion that admitted
     /// this request, when one did.
     adapter_assertion: Option<crate::gateway::openwebui_adapter::AdapterAssertion>,
     pub(super) verified_identity: Option<VerifiedIdentity>,
