@@ -8,7 +8,7 @@ use super::*;
 
 /// F1 (MIK-8392): the backend is removed after the task ran. The live call
 /// answers a tool result with isError ("Backend not found: ..."); a task read
-/// cannot carry a tool result, so it answers BackendNotFound (-32001) with the
+/// cannot carry a tool result, so it answers `BackendNotFound` (-32001) with the
 /// live call's own text, and never the stored output (lead ruling 2026-10-12).
 /// Red without the fix: the read judged only policy and served the output.
 #[tokio::test]
