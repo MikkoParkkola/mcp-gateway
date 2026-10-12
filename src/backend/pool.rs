@@ -670,7 +670,7 @@ impl Backend {
 
         tracing::info!(
             backend = %self.name,
-            idle_for_secs = cutoff,
+            idle_for_secs = cutoff.as_secs(),
             "Stopped idle backend; next request will restart it"
         );
         true
