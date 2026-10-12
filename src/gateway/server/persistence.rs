@@ -602,7 +602,7 @@ mod tests {
                 }
             }
             let listening = tx.send(()).is_ok();
-            let stopped = tokio::time::timeout(std::time::Duration::from_secs(5), task).await;
+            let stopped = tokio::time::timeout(crate::test_wait::HANG_BOUND, task).await;
             (phases, listening, stopped)
         })
         .await;

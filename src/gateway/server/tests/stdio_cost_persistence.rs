@@ -228,6 +228,7 @@ async fn stdio_exit_saves_todays_spend() {
         // save made before the drain misses it.
         served
             .close_then(async {
+                // timing: lower-bound
                 tokio::time::sleep(EOF_HOLD).await;
                 release.notify_one();
             })

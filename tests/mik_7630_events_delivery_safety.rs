@@ -422,6 +422,7 @@ async fn a_delivery_is_charged_against_the_key_budget() {
                 .any(|d| d["reason"] == "budget")
         })
         .await;
+        // timing: absence
         tokio::time::sleep(SETTLE).await;
         let posted = rx.events().len();
         gw.stop().await;
