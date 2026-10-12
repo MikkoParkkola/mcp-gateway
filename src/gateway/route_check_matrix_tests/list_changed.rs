@@ -34,8 +34,8 @@ pub(crate) enum ViewCheck {
 pub(crate) enum NotifyExpect {
     /// The check applies; the named test pins it.
     Applies(&'static str),
-    /// It cannot apply, and why.
-    NotApplicable(&'static str),
+    /// It cannot apply, and the shared reason why.
+    NotApplicable(super::Na),
 }
 
 impl NotifyRoute {
@@ -64,9 +64,9 @@ pub(crate) const fn expect_notify(route: NotifyRoute, check: ViewCheck) -> Notif
         (NotifyRoute::Listen, ViewCheck::SubjectAtAttach) => {
             NotifyExpect::Applies("audience_l2_tests::l2_grant_subject_one_key_two_adapter_users")
         }
-        (NotifyRoute::Stdio, ViewCheck::SubjectAtAttach) => NotifyExpect::NotApplicable(
-            "the stdio client has one operator scope, no per-request identity",
-        ),
+        (NotifyRoute::Stdio, ViewCheck::SubjectAtAttach) => {
+            NotifyExpect::NotApplicable(super::Na::AlwaysLocalOperator)
+        }
     }
 }
 
@@ -78,9 +78,7 @@ fn every_notification_route_states_every_check() {
                 NotifyExpect::Applies(row) => {
                     assert!(!row.is_empty(), "{route:?} x {check:?} names no row");
                 }
-                NotifyExpect::NotApplicable(why) => {
-                    assert!(!why.is_empty(), "{route:?} x {check:?} gives no reason");
-                }
+                NotifyExpect::NotApplicable(_) => {}
             }
         }
     }
