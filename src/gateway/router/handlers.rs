@@ -295,13 +295,7 @@ async fn meta_mcp_dispatch(
                 .subscribe_as(crate::gateway::auth::live::held_credential(headers))
                 .await
             {
-                Ok(mut listener) => {
-                    listener.set_views(crate::gateway::router::view_judge::OwnedViewJudge::new(
-                        &state,
-                        grant_subject.clone(),
-                    ));
-                    listener
-                }
+                Ok(listener) => state.judged_listener(listener, grant_subject.clone()),
                 Err(ListenRefusal::Unauthenticated) => {
                     return build_error_response(
                         Some(id),
@@ -450,13 +444,7 @@ async fn meta_mcp_dispatch(
                 .revalidate_caller_slots(invoke_scope.caller)
                 .await;
             // MIK-8350 B9: what this list shows is what the caller is told.
-            state
-                .multiplexer
-                .refresh_told(
-                    session_id.as_str(),
-                    &crate::gateway::router::view_judge::RouterViewJudge::new(&state),
-                )
-                .await;
+            state.refresh_told(session_id.as_str()).await;
             state.meta_mcp.handle_tools_list_with_url_override(
                 id,
                 params,
@@ -507,21 +495,7 @@ async fn meta_mcp_dispatch(
             };
             match called {
                 Some(Ok(response)) => {
-                    // MIK-8350: a switched profile changes what this caller is
-                    // shown, and the switch's own answer is the notice.
-                    let switched = params
-                        .and_then(|p| p.get("name"))
-                        .and_then(serde_json::Value::as_str)
-                        == Some("gateway_set_profile");
-                    if switched && response.error.is_none() {
-                        state
-                            .multiplexer
-                            .refresh_told(
-                                session_id.as_str(),
-                                &crate::gateway::router::view_judge::RouterViewJudge::new(&state),
-                            )
-                            .await;
-                    }
+                    state.refresh_after_call(session_id.as_str(), params, &response).await;
                     response
                 }
                 Some(Err(response)) => return response,

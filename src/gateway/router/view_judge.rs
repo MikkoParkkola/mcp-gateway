@@ -165,3 +165,43 @@ impl ViewJudge for RouterViewJudge<'_> {
         Box::pin(baseline_async(self.state, None, auth, credential, session_id))
     }
 }
+
+impl AppState {
+    /// The caller of `session_id` has just been shown its current view (a
+    /// `tools/list` answer, a profile switch): record it as told.
+    pub(super) async fn refresh_told(&self, session_id: &str) {
+        self.multiplexer
+            .refresh_told(session_id, &RouterViewJudge::new(self))
+            .await;
+    }
+}
+
+impl AppState {
+    /// `listener` judged by the view of the caller that opened it, under the
+    /// adapter identity captured now (MIK-8350 D11).
+    pub(super) fn judged_listener(
+        self: &Arc<Self>,
+        mut listener: crate::gateway::subscription_registry::Listener,
+        subject: Option<GrantSubject>,
+    ) -> crate::gateway::subscription_registry::Listener {
+        listener.set_views(OwnedViewJudge::new(self, subject));
+        listener
+    }
+
+    /// A switched profile changes what its caller is shown, and the switch's
+    /// own answer is the notice: record the new view as told.
+    pub(super) async fn refresh_after_call(
+        &self,
+        session_id: &str,
+        params: Option<&serde_json::Value>,
+        response: &crate::protocol::JsonRpcResponse,
+    ) {
+        let switched = params
+            .and_then(|p| p.get("name"))
+            .and_then(serde_json::Value::as_str)
+            == Some("gateway_set_profile");
+        if switched && response.error.is_none() {
+            self.refresh_told(session_id).await;
+        }
+    }
+}
