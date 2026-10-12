@@ -275,6 +275,21 @@ fn is_tools_list_changed(notification: &TaggedNotification) -> bool {
         == Some("notifications/tools/list_changed")
 }
 
+/// A refresh read before an answer was built, held until the answer is known
+/// to have been delivered.
+#[derive(Default)]
+pub(crate) struct PendingRefresh(Option<(Arc<ViewRecord>, u64, HashMap<String, ViewDigest>)>);
+
+impl PendingRefresh {
+    /// Record the view as told when the answer was `delivered`; a withheld
+    /// answer leaves the record alone, so the change is still owed.
+    pub(crate) fn settle(self, delivered: bool) {
+        if let (true, Some((record, stamp, view))) = (delivered, self.0) {
+            record.state().refresh(stamp, view);
+        }
+    }
+}
+
 impl ClientSession {
     /// The record of the view `subject` opens, made on first use.
     fn record_for(&self, subject: &ViewSubject) -> Arc<ViewRecord> {
@@ -413,31 +428,33 @@ impl NotificationMultiplexer {
             .await;
     }
 
-    /// The caller of `session_id`, under `subject`, has just been shown its
-    /// current view (a `tools/list` answer, a profile switch): record that as
-    /// told for every backend. Nothing happens when no stream holds a view
-    /// for that subject.
-    pub(crate) async fn refresh_told(
+    /// Read what `session_id`'s caller, under `subject`, is shown now, ahead
+    /// of an answer that will show it (a `tools/list`, a profile switch). The
+    /// result is applied by [`PendingRefresh::settle`] only once that answer
+    /// has cleared every delivery gate (MIK-8350 B9, D17h). Empty when no
+    /// stream holds a view for that subject.
+    pub(crate) async fn read_refresh(
         &self,
         session_id: &str,
         subject: &ViewSubject,
         judge: &dyn ViewJudge,
-    ) {
+    ) -> PendingRefresh {
         let Some(authorizer) = self.authorizer.read().clone() else {
-            return;
+            return PendingRefresh::default();
         };
         let Some(session) = self.sessions.read().get(session_id).map(Arc::clone) else {
-            return;
+            return PendingRefresh::default();
         };
         let Some((held, record)) = session.existing_record(subject) else {
-            return;
+            return PendingRefresh::default();
         };
         let credential = session.credential.read().clone();
         let (stamp, judged) = record
             .read(judge.baseline(&authorizer, (credential.as_ref(), &held), session_id))
             .await;
-        if let Judged::Live(view) = judged {
-            record.state().refresh(stamp, view);
+        match judged {
+            Judged::Live(view) => PendingRefresh(Some((record, stamp, view))),
+            Judged::Dead => PendingRefresh::default(),
         }
     }
 
@@ -572,92 +589,9 @@ impl NotificationMultiplexer {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+#[path = "streaming_told_state_tests.rs"]
+mod state_tests;
 
-    fn digest(served: &str, shown: &str) -> ViewDigest {
-        ViewDigest {
-            served: served.to_owned(),
-            shown: shown.to_owned(),
-        }
-    }
-
-    fn baselined(views: &[(&str, ViewDigest)]) -> ToldState {
-        let mut told = ToldState::default();
-        let view = views
-            .iter()
-            .map(|(backend, view)| ((*backend).to_owned(), view.clone()))
-            .collect();
-        assert!(told.baseline(1, view));
-        told
-    }
-
-    #[test]
-    fn a_state_with_no_baseline_records_the_first_view_and_is_owed_nothing() {
-        let mut told = ToldState::default();
-        assert_eq!(told.peek(1, "a", &digest("s0", "x")), Peek::Quiet);
-        assert_eq!(told.peek(2, "a", &digest("s0", "x")), Peek::Quiet);
-        assert_eq!(told.peek(3, "a", &digest("s0", "y")), Peek::Owed);
-    }
-
-    #[test]
-    fn a_backend_added_after_the_baseline_is_owed_when_it_shows_anything() {
-        let mut told = baselined(&[("a", digest("s0", "x"))]);
-        assert_eq!(told.peek(2, "new", &digest("s0", "t")), Peek::Owed);
-        assert_eq!(told.peek(2, "hidden", &digest("s0", "")), Peek::Quiet);
-    }
-
-    #[test]
-    fn one_served_digest_serves_every_backend() {
-        let mut told = baselined(&[("a", digest("s0", "x")), ("b", digest("s0", "y"))]);
-        let moved = digest("s1", "x2");
-        assert_eq!(told.peek(2, "a", &moved), Peek::Owed);
-        assert!(told.commit(2, "a", &moved));
-        // b's own listing did not move, and the served list is now told.
-        assert_eq!(told.peek(3, "b", &digest("s1", "y")), Peek::Quiet);
-    }
-
-    #[test]
-    fn a_write_older_than_the_record_is_refused_whatever_its_kind() {
-        let view = digest("s1", "x2");
-        let mut told = baselined(&[("a", digest("s0", "x"))]);
-        assert!(told.commit(5, "a", &view));
-        assert!(!told.commit(3, "a", &digest("s2", "x3")), "older commit");
-        assert!(!told.refresh(4, HashMap::from([("a".to_owned(), digest("s0", "x"))])));
-        assert!(!told.baseline(2, HashMap::from([("z".to_owned(), digest("s0", "z"))])));
-        // The refused writes left the record where the newest one put it.
-        assert_eq!(told.peek(6, "a", &view), Peek::Quiet);
-    }
-
-    #[test]
-    fn a_repeat_of_a_told_digest_is_refused() {
-        let view = digest("s1", "x2");
-        let mut told = baselined(&[("a", digest("s0", "x"))]);
-        assert!(told.commit(2, "a", &view));
-        assert!(!told.commit(3, "a", &view), "already told");
-    }
-
-    #[test]
-    fn a_clear_raises_the_floor_for_every_earlier_read() {
-        let mut told = baselined(&[("a", digest("s0", "x"))]);
-        told.clear(10);
-        assert!(
-            !told.commit(9, "a", &digest("s1", "x2")),
-            "read for the old caller"
-        );
-        assert!(
-            !told.baseline(9, HashMap::new()),
-            "baseline read for the old caller"
-        );
-        assert!(told.baseline(11, HashMap::from([("a".to_owned(), digest("s5", "n"))])));
-        assert_eq!(told.peek(12, "a", &digest("s5", "n")), Peek::Quiet);
-    }
-
-    #[test]
-    fn a_refresh_holds_the_view() {
-        let mut told = baselined(&[("a", digest("s0", "x"))]);
-        assert!(told.refresh(2, HashMap::from([("a".to_owned(), digest("s1", "x2"))])));
-        assert_eq!(told.peek(3, "a", &digest("s1", "x2")), Peek::Quiet);
-        assert_eq!(told.peek(3, "a", &digest("s1", "x3")), Peek::Owed);
-    }
-}
+#[cfg(test)]
+#[path = "streaming_told_decision_tests.rs"]
+mod decision_tests;

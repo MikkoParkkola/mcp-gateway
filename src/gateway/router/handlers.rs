@@ -259,6 +259,7 @@ async fn meta_mcp_dispatch(
     ) {
         return build_error_response(Some(id), e.code, e.message, session_id, e.status);
     }
+    let mut pending_view = crate::gateway::streaming::PendingRefresh::default();
     let mut response = match method.as_str() {
         "subscriptions/listen" => {
             use crate::gateway::subscription_registry::ListenRefusal;
@@ -439,11 +440,9 @@ async fn meta_mcp_dispatch(
             );
             // MIK-8356: a rotated or revoked managed grant's slot is never this
             // caller's listing view; one recheck for every listing path.
-            state
-                .meta_mcp
-                .revalidate_caller_slots(invoke_scope.caller)
+            pending_view = state
+                .begin_listing(session_id, &intake.view_subject(), invoke_scope.caller)
                 .await;
-            state.refresh_told(session_id, &intake.view_subject()).await;
             state.meta_mcp.handle_tools_list_with_url_override(
                 id,
                 params,
@@ -494,9 +493,12 @@ async fn meta_mcp_dispatch(
             };
             match called {
                 Some(Ok(response)) => {
-                    state
-                        .after_call(session_id, &intake.view_subject(), params, response)
-                        .await
+                    let subject = intake.view_subject();
+                    let (response, pending) = state
+                        .after_call((session_id, &subject), params, response)
+                        .await;
+                    pending_view = pending;
+                    response
                 }
                 Some(Err(response)) => return response,
                 None => {
@@ -708,6 +710,7 @@ async fn meta_mcp_dispatch(
     let response = frame
         .response()
         .expect("an answer frame stays an answer through its replacements");
+    pending_view.settle(response.error.is_none());
     // MIK-7887.RECEIPT.4: the receipt describes this, the delivered answer.
     {
         use crate::gateway::meta_mcp::invoke::relay::AnswerShape;

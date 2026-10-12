@@ -13,7 +13,7 @@ use super::{AppState, OwnedRouterAuthorizer};
 use crate::gateway::auth::live::{HeldCredential, current_caller};
 use crate::gateway::auth::{AuthState, AuthenticatedClient};
 use crate::gateway::meta_mcp::InvokeScope;
-use crate::gateway::streaming::{Judged, ViewDigest, ViewJudge, ViewSubject};
+use crate::gateway::streaming::{Judged, PendingRefresh, ViewDigest, ViewJudge, ViewSubject};
 
 /// Judges from the state the caller holds. Borrowed for the span of one
 /// fan-out, so nothing stores a pointer back into the state that owns the
@@ -195,13 +195,28 @@ pub(super) fn code_mode_requested(query: Option<&str>) -> bool {
 }
 
 impl AppState {
-    /// The caller of `session_id`, under `subject`, has just been shown its
-    /// current view (a `tools/list` answer, a profile switch): record it as
-    /// told.
-    pub(super) async fn refresh_told(&self, session_id: &str, subject: &ViewSubject) {
+    /// What the caller of `session_id`, under `subject`, is shown now, to be
+    /// recorded as told once the answer that shows it is delivered.
+    pub(super) async fn begin_refresh(
+        &self,
+        session_id: &str,
+        subject: &ViewSubject,
+    ) -> PendingRefresh {
         self.multiplexer
-            .refresh_told(session_id, subject, &RouterViewJudge::new(self))
-            .await;
+            .read_refresh(session_id, subject, &RouterViewJudge::new(self))
+            .await
+    }
+
+    /// A `tools/list`: recheck the caller's managed-grant slots (MIK-8356),
+    /// then read the view the listing will show, as [`Self::begin_refresh`].
+    pub(super) async fn begin_listing(
+        &self,
+        session_id: &str,
+        subject: &ViewSubject,
+        caller: crate::identity_propagation::CallerProof<'_>,
+    ) -> PendingRefresh {
+        self.meta_mcp.revalidate_caller_slots(caller).await;
+        self.begin_refresh(session_id, subject).await
     }
 
     /// A GET stream opened for `session_id` under `subject`: the view it
@@ -254,22 +269,22 @@ impl AppState {
     }
 
     /// A switched profile changes what its caller is shown, and the switch's
-    /// own answer is the notice: record the new view as told. Hands `response`
-    /// back.
+    /// own answer is the notice: read the new view, to be recorded once the
+    /// answer is delivered. Hands `response` back with it.
     pub(super) async fn after_call(
         &self,
-        session_id: &str,
-        subject: &ViewSubject,
+        (session_id, subject): (&str, &ViewSubject),
         params: Option<&serde_json::Value>,
         response: crate::protocol::JsonRpcResponse,
-    ) -> crate::protocol::JsonRpcResponse {
+    ) -> (crate::protocol::JsonRpcResponse, PendingRefresh) {
         let switched = params
             .and_then(|p| p.get("name"))
             .and_then(serde_json::Value::as_str)
             == Some("gateway_set_profile");
         if switched && response.error.is_none() {
-            self.refresh_told(session_id, subject).await;
+            let pending = self.begin_refresh(session_id, subject).await;
+            return (response, pending);
         }
-        response
+        (response, PendingRefresh::default())
     }
 }
