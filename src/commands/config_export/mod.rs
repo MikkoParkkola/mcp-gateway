@@ -310,8 +310,10 @@ fn create_backup(path: &Path) -> Result<Option<PathBuf>, String> {
         .file_name()
         .ok_or_else(|| format!("Cannot determine file name for {}", path.display()))?
         .to_string_lossy();
-    let timestamp = crate::clock::unix_nanos()
-        .map_err(|e| format!("System clock error while creating backup: {e}"))?;
+    let timestamp = crate::clock::utc_now()
+        .map_err(|e| format!("System clock error while creating backup: {e}"))?
+        .timestamp_nanos_opt()
+        .ok_or_else(|| "System clock is past 2262: cannot stamp the backup".to_owned())?;
     let backup_path = parent.join(format!("{file_name}{BACKUP_MARKER}{timestamp}"));
 
     std::fs::copy(path, &backup_path).map_err(|e| {

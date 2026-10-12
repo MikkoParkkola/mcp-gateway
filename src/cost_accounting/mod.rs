@@ -505,10 +505,10 @@ impl CostTracker {
                 .record(&rec, rec.timestamp);
             // The entry guard is dropped above: `retain` takes every shard lock.
             // Housekeeping skips its pass when the record is undated (MIK-8202).
-            if let Some(now) = rec.timestamp {
-                if tally::sweep_due(&self.next_key_sweep, now) {
-                    self.per_key.retain(|_, key| !key.idle(now));
-                }
+            if let Some(now) = rec.timestamp
+                && tally::sweep_due(&self.next_key_sweep, now)
+            {
+                self.per_key.retain(|_, key| !key.idle(now));
             }
         }
     }

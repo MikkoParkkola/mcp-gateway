@@ -170,7 +170,7 @@ fn clock_rs_holds_no_shared_mutable_state() {
     }
 }
 
-/// Test-only by the repo's naming (as error_pre_send_scan_tests.rs reads it):
+/// Test-only by the repo's naming (as `error_pre_send_scan_tests.rs` reads it):
 /// `*tests.rs`, `*_test.rs`, or under a `tests`/`*_tests` directory.
 fn a_test_file(rel: &std::path::Path) -> bool {
     let name = rel.file_name().and_then(|n| n.to_str()).unwrap_or_default();
@@ -290,11 +290,11 @@ fn clock_lint_holes(rel: &str, src: &str) -> Vec<String> {
 /// goes, clippy's `disallowed_methods` is the lint; this test is the guard the
 /// baseline gave for two spots clippy cannot see: a product function that
 /// already carries `allow(clippy::disallowed_methods)` for another entry (the
-/// `dirs::*` lookups in src/home_dir.rs) would let a clock read inside it pass,
+/// `dirs::*` lookups in `src/home_dir.rs`) would let a clock read inside it pass,
 /// and an alias imported at module level could reach such a body.
 /// Green on base (a guard). Mutant Fm, and the four r2 plants (an aliasing
 /// `use`, a `type` alias, the const epoch alias, a clock read inside
-/// home_dir's allowed body), each make the final `assert!` below fail, naming
+/// `home_dir`'s allowed body), each make the final `assert!` below fail, naming
 /// the file; a `#[cfg(test)]` item holding an alias, and a
 /// `cfg_attr(test, allow(..))` scope, are controls that stay green.
 #[test]

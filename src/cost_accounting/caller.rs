@@ -82,10 +82,10 @@ impl CallerCosts {
         }
         // The shard guard is dropped above: `retain` takes every shard lock,
         // and a held guard would deadlock it.
-        if let Some(now) = now {
-            if tally::sweep_due(&self.next_sweep, now) {
-                self.by_caller.retain(|_, cost| !cost.expired(Some(now)));
-            }
+        if let Some(now) = now
+            && tally::sweep_due(&self.next_sweep, now)
+        {
+            self.by_caller.retain(|_, cost| !cost.expired(Some(now)));
         }
     }
 

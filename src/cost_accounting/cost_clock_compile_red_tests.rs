@@ -76,7 +76,7 @@ fn a_cost_recorded_on_a_dark_clock_is_undated_and_counted_only_in_lifetime_total
 /// Mutant "undated stored as 0 and read as a time" (caller): killed at
 /// `assert!(caller.is_some())`. Same mutant on the key's `last_spend`:
 /// killed at `assert!(tracker.key_snapshot("dark-key").is_some())`.
-/// Mutant "caller first_spend dated 0": killed at the `started_at` assertion.
+/// Mutant "caller `first_spend` dated 0": killed at the `started_at` assertion.
 #[test]
 fn an_undated_entry_is_neither_expired_nor_idle_when_the_clock_reads() {
     let tracker = CostTracker::new();
@@ -107,7 +107,7 @@ fn an_undated_entry_is_neither_expired_nor_idle_when_the_clock_reads() {
 
 /// MIK-8202 B1s (r3/r4): a session started on a dark clock has
 /// `started_at: None`.
-/// Mutant "started_at dated 0" (`Some(0)`): killed at the `assert_eq!`.
+/// Mutant "`started_at` dated 0" (`Some(0)`): killed at the `assert_eq!`.
 #[test]
 fn a_session_started_on_a_dark_clock_has_no_start_time() {
     let tracker = CostTracker::new();
@@ -131,7 +131,7 @@ fn a_session_started_on_a_dark_clock_has_no_start_time() {
 
 /// MIK-8202 B2t (r3/r4): the UI `snapshot()` on a dark clock is undated
 /// (`taken_at: None`); the save path keeps its own concrete reading.
-/// Mutant "taken_at dated 0" (`Some(0)`): killed at the `assert_eq!(.., None)`.
+/// Mutant "`taken_at` dated 0" (`Some(0)`): killed at the `assert_eq!(.., None)`.
 #[cfg(feature = "cost-governance")]
 #[test]
 fn the_ui_cost_snapshot_on_a_dark_clock_is_undated() {

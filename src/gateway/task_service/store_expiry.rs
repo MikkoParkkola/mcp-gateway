@@ -186,7 +186,7 @@ impl TaskStore {
         }
         let mut out = Vec::new();
         let mut held = Vec::new();
-        for (id, entry) in state.entries.iter() {
+        for (id, entry) in &state.entries {
             let terminal = matches!(
                 entry.task.status(),
                 TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled

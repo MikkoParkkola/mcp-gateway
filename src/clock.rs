@@ -88,12 +88,6 @@ pub(crate) fn unix_millis() -> Result<u64, ClockBeforeEpoch> {
     since_epoch().map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
-/// Nanoseconds since the Unix epoch (MIK-8202 P4b: the config-export backup
-/// stamp needs sub-second uniqueness).
-pub(crate) fn unix_nanos() -> Result<u128, ClockBeforeEpoch> {
-    since_epoch().map(|d| d.as_nanos())
-}
-
 /// Whether a wall-clock reading is at or after the epoch, hence usable
 /// (MIK-8202 P4b: the auth dashboard's injected `Now` judges this through
 /// the clock module rather than comparing against `UNIX_EPOCH` itself).

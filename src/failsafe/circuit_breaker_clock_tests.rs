@@ -28,7 +28,7 @@ fn one_failure_trips(reset_timeout: Duration) -> CircuitBreaker {
 /// so after the paused advance the breaker is still open and the post-advance
 /// assertion fails.
 ///
-/// Mutant B4m (the open-state age read from crate::clock's wall clock): on the
+/// Mutant B4m (the open-state age read from `crate::clock`'s wall clock): on the
 /// dark clock an error taken as "not elapsed" never half-opens (killed by the
 /// post-advance assertion); one taken as an ancient stamp half-opens at once
 /// (killed by the pre-advance negative).
@@ -40,7 +40,7 @@ async fn an_open_breaker_half_opens_after_its_timeout_while_the_clock_is_dark() 
     cb.record_failure("down", Duration::ZERO);
     assert_eq!(cb.state(), CircuitState::Open);
 
-    tokio::time::advance(reset_timeout - Duration::from_secs(1)).await;
+    tokio::time::advance(reset_timeout.saturating_sub(Duration::from_secs(1))).await;
     assert!(
         !cb.can_proceed(),
         "B4 pre-advance: an open breaker stays open before its reset timeout"

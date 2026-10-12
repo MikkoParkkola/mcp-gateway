@@ -15,7 +15,7 @@ use crate::clock::test_clock;
 /// time reaches; real time barely moves during the test, so after the paused
 /// advance the slot still reads as fresh and the post-advance assertion fails.
 ///
-/// Mutant B3m (the eviction reads crate::clock's wall clock again): on the dark
+/// Mutant B3m (the eviction reads `crate::clock`'s wall clock again): on the dark
 /// clock either the read is an error taken as "not idle", killed by the
 /// post-advance assertion, or it is taken as an ancient stamp, killed by the
 /// pre-advance negative.
@@ -27,7 +27,7 @@ async fn an_idle_slot_is_stopped_after_its_limit_while_the_clock_is_dark() {
     let transport = Arc::new(SessionMock::new("shared"));
     backend.set_transport_for_test(transport.clone());
 
-    tokio::time::advance(idle_for - Duration::from_secs(1)).await;
+    tokio::time::advance(idle_for.saturating_sub(Duration::from_secs(1))).await;
     assert!(
         !backend.stop_if_idle().await,
         "B3 pre-advance: a slot younger than its idle limit is not stopped"
