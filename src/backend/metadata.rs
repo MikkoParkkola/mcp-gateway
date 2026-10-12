@@ -323,91 +323,92 @@ impl Backend {
         let tools = family.truncated_flag.is_some();
         let on_abandon =
             tools.then(|| self.abandoned_fill_hook(Arc::clone(&entry), Arc::clone(&seen)));
-        select(&entry)
-            .get_or_fetch_shared_then(
-                self.cache_ttl,
-                |mark| {
-                    fill_scope(mark, async {
-                        // F13: breaker, cooldown, token, in that order, before the
-                        // guard is armed, so a refusal here never stamps.
-                        let refresh_failed = || entry.tools_refresh_failed_at.lock();
-                        if family.stale_hit
-                            && refresh_failed().is_some_and(|at| at.elapsed() < LIST_FILL_COOLDOWN)
-                        {
-                            return Err(Error::BackendUnavailable(format!(
-                                "{}: a stale tools refresh failed within the last {}s",
-                                self.name,
-                                LIST_FILL_COOLDOWN.as_secs()
-                            )));
-                        }
-                        let counted = (self.name.as_str(), &self.list_fills);
-                        admit_fill(&entry, counted, bound, family.cooldown)?;
-                        let mut guard = family.cooldown.then(|| FillGuard::arm(Arc::clone(&entry)));
-                        let drained = run_bounded(&entry, &self.name, bound, async {
-                            // A cold fill on the dispatch path has sent no tools/call
-                            // yet, so a failed start is a pre-send refusal (MIK-7979).
-                            let transport = self.ensure_entry_started(&key).await.map_err(|e| {
-                                super::lifecycle::pre_send_start_error(&self.name, e)
-                            })?;
-                            Provenance::mark_started();
-                            let (merged, truncated) = Box::pin(drain_list_pages(
-                                transport.as_ref(),
-                                &self.name,
-                                &family,
-                                (fetch_headers, identity_key),
-                                tools.then_some(&*seen),
-                            ))
-                            .await?;
-                            let (items, prepared) = match merged {
-                                Some(result) => parse(result)?,
-                                None => (Vec::new(), None),
-                            };
-                            Ok((items, truncated, prepared))
-                        })
-                        .await;
-                        let end = FillEnd::of(&drained);
-                        if family.stale_hit && drained.is_err() && !matches!(end, FillEnd::Pending)
-                        {
-                            *refresh_failed() = Some(tokio::time::Instant::now());
-                        }
-                        if let Some(guard) = guard.as_mut() {
-                            guard.end(end);
-                        }
-                        let (items, truncated, prepared) = drained?;
-
-                        debug!(
-                            backend = %self.name,
-                            kind = family.kind,
-                            count = items.len(),
-                            per_user = identity_key.is_some(),
-                            "Backend metadata cached"
-                        );
-
-                        Ok((items, (truncated, guard, prepared)))
+        // Boxed: the fill's state is large, and every caller of this (and of
+        // its callers) would otherwise carry it inline (clippy large_futures).
+        Box::pin(select(&entry).get_or_fetch_shared_then(
+            self.cache_ttl,
+            |mark| {
+                fill_scope(mark, async {
+                    // F13: breaker, cooldown, token, in that order, before the
+                    // guard is armed, so a refusal here never stamps.
+                    let refresh_failed = || entry.tools_refresh_failed_at.lock();
+                    if family.stale_hit
+                        && refresh_failed().is_some_and(|at| at.elapsed() < LIST_FILL_COOLDOWN)
+                    {
+                        return Err(Error::BackendUnavailable(format!(
+                            "{}: a stale tools refresh failed within the last {}s",
+                            self.name,
+                            LIST_FILL_COOLDOWN.as_secs()
+                        )));
+                    }
+                    let counted = (self.name.as_str(), &self.list_fills);
+                    admit_fill(&entry, counted, bound, family.cooldown)?;
+                    let mut guard = family.cooldown.then(|| FillGuard::arm(Arc::clone(&entry)));
+                    let drained = run_bounded(&entry, &self.name, bound, async {
+                        // A cold fill on the dispatch path has sent no tools/call
+                        // yet, so a failed start is a pre-send refusal (MIK-7979).
+                        let transport = self
+                            .ensure_entry_started(&key)
+                            .await
+                            .map_err(|e| super::lifecycle::pre_send_start_error(&self.name, e))?;
+                        Provenance::mark_started();
+                        let (merged, truncated) = drain_list_pages(
+                            transport.as_ref(),
+                            &self.name,
+                            &family,
+                            (fetch_headers, identity_key),
+                            tools.then_some(&*seen),
+                        )
+                        .await?;
+                        let (items, prepared) = match merged {
+                            Some(result) => parse(result)?,
+                            None => (Vec::new(), None),
+                        };
+                        Ok((items, truncated, prepared))
                     })
-                },
-                |(truncated, guard, prepared)| {
-                    // Written only once the store is accepted, and on every
-                    // accepted store, so a complete fill clears it (design D).
-                    if let Some(flag) = family.truncated_flag {
-                        flag(&entry).store(truncated, Ordering::SeqCst);
+                    .await;
+                    let end = FillEnd::of(&drained);
+                    if family.stale_hit && drained.is_err() && !matches!(end, FillEnd::Pending) {
+                        *refresh_failed() = Some(tokio::time::Instant::now());
                     }
-                    // Only this accepted store's own set and verdicts (F13,
-                    // #1441).
-                    if let Some(prepared) = prepared {
-                        self.store_prepared(&entry, identity_key, truncated, prepared);
+                    if let Some(guard) = guard.as_mut() {
+                        guard.end(end);
                     }
-                    // The only place a guard reaches `Stored`: a voided store
-                    // drops it unrun, still `Drained`, and so stamps (F13).
-                    if let Some(mut guard) = guard {
-                        guard.end(FillEnd::Stored);
-                    }
-                },
-                // A joiner classifies its deadline by this fill (MIK-8046).
-                Provenance::joined,
-                on_abandon,
-            )
-            .await
+                    let (items, truncated, prepared) = drained?;
+
+                    debug!(
+                        backend = %self.name,
+                        kind = family.kind,
+                        count = items.len(),
+                        per_user = identity_key.is_some(),
+                        "Backend metadata cached"
+                    );
+
+                    Ok((items, (truncated, guard, prepared)))
+                })
+            },
+            |(truncated, guard, prepared)| {
+                // Written only once the store is accepted, and on every
+                // accepted store, so a complete fill clears it (design D).
+                if let Some(flag) = family.truncated_flag {
+                    flag(&entry).store(truncated, Ordering::SeqCst);
+                }
+                // Only this accepted store's own set and verdicts (F13,
+                // #1441).
+                if let Some(prepared) = prepared {
+                    self.store_prepared(&entry, identity_key, truncated, prepared);
+                }
+                // The only place a guard reaches `Stored`: a voided store
+                // drops it unrun, still `Drained`, and so stamps (F13).
+                if let Some(mut guard) = guard {
+                    guard.end(FillEnd::Stored);
+                }
+            },
+            // A joiner classifies its deadline by this fill (MIK-8046).
+            Provenance::joined,
+            on_abandon,
+        ))
+        .await
     }
 
     /// # Errors
