@@ -29,7 +29,7 @@ Usage:
 from __future__ import annotations
 
 import functools
-import posixpath
+import importlib.util
 import re
 import subprocess
 import sys
@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import inventory_ledger as ledger  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
+ROOT_OF_SCRIPTS = Path(__file__).resolve().parents[1]
 INVENTORY = "docs/release/v4.0.0-critical-functions.tsv"
 UNENFORCING = "docs/release/v4.0.0-unenforcing-functions.tsv"
 ALL = "--all"
@@ -86,26 +87,10 @@ def code(line: str) -> str:
 
 
 def test_only(text: str) -> bool:
-    """`#[cfg(test)]`, or a `cfg(all(...))` with `test` as a direct operand.
-    A nested `any(test, ...)` or `not(...)` still builds outside tests."""
-    if text.startswith("#[cfg(test)]"):
-        return True
-    if not text.startswith("#[cfg(all("):
-        return False
-    operands, depth, start = [], 0, len("#[cfg(all(")
-    for i in range(start, len(text)):
-        ch = text[i]
-        if ch == "(":
-            depth += 1
-        elif ch == ")" and depth == 0:
-            operands.append(text[start:i])
-            break
-        elif ch == ")":
-            depth -= 1
-        elif ch == "," and depth == 0:
-            operands.append(text[start:i])
-            start = i + 1
-    return "test" in (o.strip() for o in operands)
+    """Whether an attribute line `#[cfg(<expr>)]` compiles only under test,
+    by the orphan gate's one cfg judgement (`cfg_is_test`)."""
+    match = re.match(r"#\[cfg\((.*)\)\]", text.strip())
+    return bool(match) and orphan_gate().cfg_is_test(match.group(1))
 
 
 def bodyless(lines: list[str], line: int) -> bool:
@@ -180,162 +165,62 @@ def occurrence(lines: list[str], name: str, line: int) -> int:
     return sum(1 for text in lines[:line] if pattern.search(text))
 
 
-def under_cfg_test(lines: list[str], n: int) -> bool:
-    """Whether the attribute block directly above 1-based line `n` holds
-    `#[cfg(test)]`. Only that block: an attribute further up belongs to
-    another item."""
-    i = n - 2
-    if lines and i < len(lines) and lines[n - 1].lstrip().startswith("#[cfg(test)]"):
-        return True
-    while i >= 0:
-        text = lines[i].strip()
-        if text.startswith(("#[cfg(test)]", "#[cfg(all(test")):
-            return True
-        if not (text.startswith("#[") or text.startswith("//")):
-            return False
-        i -= 1
-    return False
-
-
-@functools.lru_cache(maxsize=None)
-def mount_lines(head: str, path: str) -> tuple[tuple[str, int], ...]:
-    """Every line at `head` that declares `path` as a module, by
-    `#[path = "<file>"]` or `mod <stem>;`, as (declaring file, line). Found with
-    `git grep`, so a sibling's `#[path]` counts."""
-    name = Path(path).name
-    stem = Path(path).stem
-    pattern = rf'#\[path = "([^"]*/)?{re.escape(name)}"\]|^[[:space:]]*(pub(\([^)]*\))? )?mod {re.escape(stem)};'
-    done = subprocess.run(
-        ["git", "grep", "-n", "-E", pattern, head, "--", "src"],
-        cwd=ROOT, capture_output=True, text=True,
+@functools.lru_cache(maxsize=1)
+def _load_orphan_gate():
+    spec = importlib.util.spec_from_file_location(
+        "orphan_gate", ROOT_OF_SCRIPTS / "dev" / "check-orphan-test-modules.py"
     )
-    hits = [line.split(":", 3) for line in done.stdout.splitlines()]
-    found = []
-    for _rev, source, number, text in hits:
-        lines = (show(head, source) or "").splitlines()
-        item = declared_item(lines, int(number))
-        if item is not None and mounts(source, lines, item, path):
-            found.append((source, item))
-    return tuple(found)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-ATTRIBUTE_OR_COMMENT = re.compile(r"^\s*(#\[|//)")
-PATH_ATTRIBUTE = re.compile(r'#\[path = "([^"]*)"\]')
-MOD_DECLARATION = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_]\w*)\s*;")
-
-
-def declared_item(lines: list[str], n: int) -> int | None:
-    """The 1-based line of the `mod x;` that line `n` belongs to: `n` itself,
-    or the first line after an attribute block that `n` sits in. `None` when
-    no `mod x;` follows (the match was not a declaration)."""
-    i = n - 1
-    while i < len(lines) and ATTRIBUTE_OR_COMMENT.match(lines[i]) and not MOD_DECLARATION.match(lines[i]):
-        i += 1
-    if i < len(lines) and MOD_DECLARATION.match(lines[i]):
-        return i + 1
-    return None
-
-
-INLINE_MODULE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_]\w*)\s*\{")
-
-
-def inline_modules(lines: list[str], item: int) -> list[str]:
-    """The inline `mod name { .. }` blocks enclosing 1-based line `item`,
-    outermost first. Braces are counted per line with `//` comments dropped;
-    string literals in this codebase balance their braces, which is the
-    ceiling of a line counter."""
-    stack: list[tuple[str, int]] = []
-    depth = 0
-    for line in lines[: item - 1]:
-        code = line.split("//", 1)[0]
-        opened = INLINE_MODULE.match(code)
-        if opened:
-            stack.append((opened.group(1), depth))
-        depth += code.count("{") - code.count("}")
-        while stack and depth <= stack[-1][1]:
-            stack.pop()
-    return [name for name, _ in stack]
-
-
-def mounts(source: str, lines: list[str], item: int, path: str) -> bool:
-    """Whether the `mod x;` at 1-based line `item` of `source` mounts `path`,
-    by Rust's rules: a `#[path]` in its attribute block is relative to the
-    declaring file's directory; otherwise `x.rs` or `x/mod.rs` beside a
-    `mod.rs`/`lib.rs`/`main.rs`, or under a directory named for any other
-    declaring file, each inside the inline modules that enclose it. Without this, `mod admission;` anywhere in `src` would
-    count as a mount of every `admission.rs` (MIK-8405.SPLIT.5)."""
-    directory = posixpath.dirname(source)
-    stem, _ = posixpath.splitext(posixpath.basename(source))
-    own = directory if stem in ("mod", "lib", "main") else posixpath.join(directory, stem)
-    inline = inline_modules(lines, item)
-    i = item - 2
-    while i >= 0 and ATTRIBUTE_OR_COMMENT.match(lines[i]):
-        attribute = PATH_ATTRIBUTE.search(lines[i])
-        if attribute:
-            # Outside an inline block a `#[path]` is relative to the file's
-            # directory; inside one, to the file's own module directory plus
-            # the inline names (the Rust reference, "the path attribute").
-            relative_to = posixpath.join(own, *inline) if inline else directory
-            return posixpath.normpath(posixpath.join(relative_to, attribute.group(1))) == path
-        i -= 1
-    name = MOD_DECLARATION.match(lines[item - 1]).group(1)
-    base = posixpath.join(own, *inline)
-    return path in (posixpath.join(base, f"{name}.rs"), posixpath.join(base, name, "mod.rs"))
+def orphan_gate():
+    """scripts/dev/check-orphan-test-modules.py: the one module resolver
+    (MIK-8405.SPLIT.5). It walks declarations from the crate roots by Rust's
+    rules, so this check and the orphan gate cannot disagree about where a
+    file is mounted or whether it compiles outside tests. Pointed at this
+    module's ROOT on every use."""
+    module = _load_orphan_gate()
+    module.ROOT = ROOT
+    return module
 
 
 @functools.lru_cache(maxsize=None)
-def declared_for_tests(head: str, path: str, depth: int = 0) -> bool:
-    """Whether every declaration of `path` at `head` compiles only under test.
-
-    A module file is test-only when the line that declares it sits under
-    `#[cfg(test)]` or inside a test item, or in a file that is itself
-    test-only by the same rule. A declaring file's name proves nothing
-    (MIK-8405.SPLIT.5): a `*_tests.rs` mounted outside tests compiles into
-    production, and so does everything it declares.
-    """
-    hits = mount_lines(head, path)
-    if not hits:
-        return False
-    for source, n in hits:
-        if depth < 4 and declared_for_tests(head, source, depth + 1):
-            continue  # declared from a file that only tests compile
-        lines = (show(head, source) or "").splitlines()
-        if not (under_cfg_test(lines, n) or n in test_lines(lines)):
-            return False
-    return True
+def mount_status(root: Path) -> tuple[frozenset[str], frozenset[str]]:
+    """(reachable, test-only) source paths under `root`, repo-relative. Read
+    from the working tree: every caller checks the tree it has checked out
+    (pre-push and CI pass HEAD)."""
+    gate = orphan_gate()
+    rel = lambda paths: frozenset(p.relative_to(root.resolve()).as_posix() for p in paths)
+    return rel(gate.reachable()), rel(gate.test_only_files())
 
 
-def outside_inventory(head: str, path: str) -> bool:
+def outside_inventory(path: str) -> bool:
     """Whether `path`'s functions are out of the inventory's scope: it
-    compiles only under test, or it is named like a test and mounted nowhere
-    (not compiled at all; `test_file_problems` reports that). A test-like name
-    mounted outside tests is in scope (MIK-8405.SPLIT.5)."""
-    if declared_for_tests(head, path):
-        return True
-    return bool(TEST_FILE.search(path)) and not mount_lines(head, path)
+    compiles only under test, or it is reached by no crate root (not compiled
+    at all; the orphan gate reports that). A file named like a test but
+    compiled outside tests is IN scope (MIK-8405.SPLIT.5)."""
+    reachable, test_only = mount_status(ROOT)
+    return path in test_only or path not in reachable
 
 
 def test_file_problems(base: str, head: str) -> list[str]:
-    """Test-named `.rs` files `head` adds or changes on the COV.3 paths (every
-    one with `--all`) that are mounted nowhere, so their tests never compile,
-    or mounted outside `#[cfg(test)]`, so their code compiles into production
-    under a test's name (MIK-8405.SPLIT.5)."""
-    # Resolved first: the mount lookups are cached by revision, and a symbolic
-    # name such as HEAD would let one repository's answer stand for another's.
+    """Test-named `.rs` files `head` adds or changes on the COV.3 paths
+    (every one with `--all`) that compile outside tests: their code would
+    ship under a test's name (MIK-8405.SPLIT.5). An unreached file is the
+    orphan gate's to report."""
     head = git("rev-parse", head).strip()
     merge_base = EMPTY_TREE if base == ALL else git("merge-base", base, head).strip()
     changed = git(
         "diff", "--name-only", "--no-renames", "--diff-filter=AM", merge_base, head, "--", *PREFIXES
     ).split()
-    problems = []
-    for path in changed:
-        if not path.endswith(".rs") or not TEST_FILE.search(path):
-            continue
-        if not mount_lines(head, path):
-            problems.append(f"{path}: named like a test file but mounted nowhere, so its tests never compile")
-        elif not declared_for_tests(head, path):
-            problems.append(f"{path}: named like a test file but compiled outside tests")
-    return problems
+    reachable, test_only = mount_status(ROOT)
+    return [
+        f"{path}: named like a test file but compiled outside tests"
+        for path in changed
+        if path.endswith(".rs") and TEST_FILE.search(path) and path in reachable and path not in test_only
+    ]
 
 
 def added_functions(base: str, head: str) -> list[tuple[str, str, int, int]]:
@@ -349,7 +234,7 @@ def added_functions(base: str, head: str) -> list[tuple[str, str, int, int]]:
     for line in diff.splitlines():
         if line.startswith("+++ "):
             path = line[6:] if line.startswith("+++ b/") else None
-            if path and (not path.endswith(".rs") or outside_inventory(head, path)):
+            if path and (not path.endswith(".rs") or outside_inventory(path)):
                 path = None
             if path:
                 lines = (show(head, path) or "").splitlines()

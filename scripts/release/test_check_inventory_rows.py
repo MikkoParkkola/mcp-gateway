@@ -32,6 +32,10 @@ class Repo:
         self.git("config", "user.name", "t")
         self.write(rows.INVENTORY, HEADER)
         self.write("src/oauth/mod.rs", "pub fn existing() {}\n")
+        # A crate root: mounts are judged by a walk from the roots (the
+        # orphan gate's resolver), so the tree needs one.
+        self.write("src/lib.rs", "pub mod oauth;\npub mod cli;\n")
+        self.write("src/cli/mod.rs", "")
         self.commit("base")
         self.git("checkout", "-q", "-b", "change")
 
@@ -51,6 +55,7 @@ class Repo:
 
     def missing(self) -> list[str]:
         rows.ROOT = self.root
+        rows.mount_status.cache_clear()
         return sorted(name for _, name, _, _ in rows.missing_rows("base", "HEAD"))
 
     def problems(self) -> list[str]:
@@ -58,7 +63,7 @@ class Repo:
         outside tests (MIK-8405.SPLIT.5). Empty on a script without the check,
         so a red row fails at its own assertion."""
         rows.ROOT = self.root
-        rows.declared_for_tests.cache_clear()
+        rows.mount_status.cache_clear()
         check = getattr(rows, "test_file_problems", lambda _base, _head: [])
         return check("base", "HEAD")
 
@@ -227,14 +232,13 @@ class TestNamedFiles(unittest.TestCase):
             ["src/oauth/store_tests.rs: named like a test file but compiled outside tests"],
         )
 
-    def test_a_test_named_file_mounted_nowhere_is_reported(self) -> None:
+    def test_a_test_named_file_mounted_nowhere_is_left_to_the_orphan_gate(self) -> None:
+        # Not compiled at all, so it has no functions to inventory; the orphan
+        # gate (scripts/dev/check-orphan-test-modules.py, CI) reports it.
         self.repo.write("src/oauth/orphan_tests.rs", "fn case() {}\n")
         self.repo.commit("add")
         self.assertEqual(self.repo.missing(), [])
-        self.assertEqual(
-            self.repo.problems(),
-            ["src/oauth/orphan_tests.rs: named like a test file but mounted nowhere, so its tests never compile"],
-        )
+        self.assertEqual(self.repo.problems(), [])
 
     def test_a_production_file_declared_from_a_test_named_one_is_inventoried(self) -> None:
         # The declarer's name used to make its children test-only too.
