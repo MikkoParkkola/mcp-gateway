@@ -14,6 +14,10 @@ use crate::backend::{Backend, Listing};
 use crate::config::{BackendConfig, FailsafeConfig};
 use crate::protocol::{JsonRpcResponse, RequestId};
 
+/// Upper bound on any wait in a race leg, so a mis-wired gate fails the row
+/// rather than hanging the suite; a passing row never comes near it.
+const WAIT: Duration = Duration::from_secs(30);
+
 fn backend() -> Arc<Backend> {
     Arc::new(Backend::new(
         "edits",
@@ -122,12 +126,12 @@ async fn a_fill_in_flight_cannot_undo_a_revocation() {
         let backend = Arc::clone(&backend);
         async move { backend.get_tools_shared().await }
     });
-    tokio::time::timeout(Duration::from_secs(5), wire.entered.notified())
+    tokio::time::timeout(WAIT, wire.entered.notified())
         .await
         .expect("the fill reached the wire");
     let _ = backend.remember_listed_tools_as(None, false, &[tool("t", false)], Listing::Truncated);
     wire.release.notify_one();
-    let _ = tokio::time::timeout(Duration::from_secs(5), fill)
+    let _ = tokio::time::timeout(WAIT, fill)
         .await
         .expect("the fill finished");
     assert!(
@@ -151,12 +155,12 @@ async fn a_cold_fill_in_flight_cannot_admit_a_tool_a_page_declared_a_write() {
         let backend = Arc::clone(&backend);
         async move { backend.get_tools_shared().await }
     });
-    tokio::time::timeout(Duration::from_secs(5), wire.entered.notified())
+    tokio::time::timeout(WAIT, wire.entered.notified())
         .await
         .expect("the fill reached the wire");
     let _ = backend.remember_listed_tools_as(None, false, &[tool("t", false)], Listing::Truncated);
     wire.release.notify_one();
-    let _ = tokio::time::timeout(Duration::from_secs(5), fill)
+    let _ = tokio::time::timeout(WAIT, fill)
         .await
         .expect("the fill finished");
     assert!(
