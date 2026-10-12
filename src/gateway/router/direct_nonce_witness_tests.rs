@@ -3,7 +3,8 @@
 //! MIK-8379.DIRECTREFUND.4: the direct route (`/mcp/{name}`) gives a signing
 //! nonce back by the same rule as `/mcp` (MIK-8353 slice 3a): only when no
 //! step before the refusal may have acted. Each row is the direct twin of a
-//! `/mcp` row in `mcp_nonce_witness_tests.rs` and runs on both backends.
+//! `/mcp` row in `mcp_nonce_witness_tests.rs`; each runs on both backends
+//! except the cold-schema row, which needs a backend left cold (`alpha-pt`).
 
 use axum::http::StatusCode;
 use serde_json::{Value, json};

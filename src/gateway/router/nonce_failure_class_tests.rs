@@ -11,6 +11,9 @@
 //!
 //! The error is raised by the scripted transport, the point where a real
 //! start or send failure surfaces; every class reaches the same answer arm.
+//! `ToolNotFound` never arises at the send on either route: only capability
+//! grant evaluation raises it, before the send, where `/mcp` refunds it at the
+//! chokepoint with the witness. Its row pins the mechanism, not a real path.
 
 use serde_json::json;
 
