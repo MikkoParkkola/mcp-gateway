@@ -655,3 +655,49 @@ async fn b8d_direct_refusals_answer_after_intake() {
     let calls = fx.calls.load(Ordering::SeqCst) + hardened.calls.load(Ordering::SeqCst);
     assert_eq!(calls, 0, "b8d: dispatched");
 }
+
+/// B8e: the direct preflight's refusals answer after the intake check for a
+/// keyed no-principal call. Covered here: malformed `inputResponses` and
+/// `requestState` (`RetryFields`), an arguments string that does not parse,
+/// and a missing attestation token under enforce. Not flips, so not rows: the
+/// chain nonce (its parse error is dropped, never answered) and the chain
+/// challenge (it fails only on non-object params or `_meta`, which a keyed
+/// call cannot have). The signing nonce is hardened-only, where the hardened
+/// refusal (B8d) answers first.
+#[tokio::test]
+async fn b8e_preflight_refusals_answer_after_intake() {
+    let with = |field: &str, value: Value| {
+        let mut body = keyed_body(None);
+        body["params"][field] = value;
+        body
+    };
+    let cases = [
+        ("e inputResponses", with("inputResponses", json!([1]))),
+        ("e requestState", with("requestState", json!(7))),
+        ("e arguments parse", with("arguments", json!("{not json"))),
+    ];
+    let fx = fixture(idempotent()).await;
+    let mut wrong = Vec::new();
+    for (case, body) in cases {
+        let (status, answer) = post_with_headers(&fx, &body, &[]).await;
+        if message(&answer) != NO_PRINCIPAL || status != StatusCode::BAD_REQUEST {
+            wrong.push(format!("{case}: {status} {answer}"));
+        }
+    }
+    let attested = fixture(Setup {
+        attestation: true,
+        ..idempotent()
+    })
+    .await;
+    let (status, answer) = post_with_headers(&attested, &keyed_body(None), &[]).await;
+    if message(&answer) != NO_PRINCIPAL || status != StatusCode::BAD_REQUEST {
+        wrong.push(format!("e attestation: {status} {answer}"));
+    }
+    assert!(
+        wrong.is_empty(),
+        "b8e answered before intake:\n{}",
+        wrong.join("\n")
+    );
+    let calls = fx.calls.load(Ordering::SeqCst) + attested.calls.load(Ordering::SeqCst);
+    assert_eq!(calls, 0, "b8e: dispatched");
+}

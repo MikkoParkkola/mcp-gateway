@@ -183,6 +183,8 @@ struct Setup {
     beta_passthrough: bool,
     /// MIK-8382: `security.posture: hardened` (auth stays off).
     hardened: bool,
+    /// MIK-8382: attestation enforced on both routes.
+    attestation: bool,
     /// The backends' chain policy; under `Require` the gateway also has a
     /// chain identity, so their unchained answers are refused unread (MIK-7636).
     chain: crate::config::ChainMode,
@@ -310,6 +312,13 @@ async fn fixture(setup: Setup) -> Fixture {
         ));
     }
     meta.enable_transparency_log(Arc::clone(&log));
+    if setup.attestation {
+        let validator = Arc::new(crate::attestation::AttestationValidator::new(
+            crate::attestation::BnautAttestationSigner::new(b"k".to_vec(), "route")
+                .with_audience("test-gateway"),
+        ));
+        meta = meta.with_attestation(validator, crate::attestation::AttestationMode::Enforce);
+    }
     if setup.chain == crate::config::ChainMode::Require {
         meta.set_chain_signer(
             crate::security::signature_chain::ChainSigner::from_seed(&[7; 32], "gw-test")
