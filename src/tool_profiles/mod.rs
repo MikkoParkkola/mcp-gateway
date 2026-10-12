@@ -300,3 +300,7 @@ pub mod persistence;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "clock_tests.rs"]
+mod clock_tests;

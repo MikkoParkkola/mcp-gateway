@@ -348,3 +348,7 @@ mod tests {
         assert!(metrics.latency_p50_ms.is_some());
     }
 }
+
+#[cfg(test)]
+#[path = "health_clock_tests.rs"]
+mod clock_tests;

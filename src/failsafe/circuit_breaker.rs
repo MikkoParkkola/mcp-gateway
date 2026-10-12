@@ -523,3 +523,8 @@ pub(crate) fn epoch_millis_now() -> u64 {
 #[cfg(test)]
 #[path = "circuit_breaker_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "circuit_breaker_clock_tests.rs"]
+mod clock_tests;
+

@@ -418,3 +418,8 @@ mod tests;
 #[cfg(test)]
 #[path = "pending_cancel_edge_tests.rs"]
 mod edge_tests;
+
+#[cfg(test)]
+#[path = "pending_cancel_clock_tests.rs"]
+mod clock_tests;
+
