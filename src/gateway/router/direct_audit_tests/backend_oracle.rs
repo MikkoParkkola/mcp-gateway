@@ -42,6 +42,13 @@ enum Route {
     Execute,
     /// `/mcp/{server}`, `tools/call`.
     Direct,
+    /// `/mcp/{server}`, another method (MIK-8387 r2 F4): the envelope's scope
+    /// check runs for every method.
+    DirectMethod(&'static str),
+    /// `/mcp`, `prompts/get` of `server/p`.
+    MetaPrompt,
+    /// `/mcp`, `gateway_list_tools` of `server`.
+    MetaList,
 }
 
 /// Call `server`'s tool `t` on `route` as the scoped key: the HTTP status and
@@ -66,9 +73,58 @@ async fn answer(fx: &Fixture, route: Route, server: &str) -> (StatusCode, String
             json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
                    "params": {"name": "t", "arguments": {}}}),
         ),
+        Route::DirectMethod(method) => (
+            format!("/mcp/{server}"),
+            json!({"jsonrpc": "2.0", "id": 7, "method": method,
+                   "params": direct_params(method)}),
+        ),
+        Route::MetaList => (
+            "/mcp".to_string(),
+            json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+                   "params": {"name": "gateway_list_tools", "arguments": {"server": server}}}),
+        ),
+        Route::MetaPrompt => (
+            "/mcp".to_string(),
+            json!({"jsonrpc": "2.0", "id": 7, "method": "prompts/get",
+                   "params": {"name": format!("{server}/p")}}),
+        ),
     };
     let (status, value) = post_to(fx, &uri, &body.to_string(), &Caller::Key).await;
-    (status, value.to_string().replace(server, NAME))
+    (status, mask_trace_ids(&value.to_string().replace(server, NAME)))
+}
+
+/// The params a direct `method` row sends.
+fn direct_params(method: &str) -> Value {
+    match method {
+        "prompts/get" => json!({"name": "p"}),
+        "resources/read" => json!({"uri": "file:///r"}),
+        _ => json!({}),
+    }
+}
+
+/// Replace every per-call trace id (`gw-` and a 36-character UUID) with one
+/// placeholder: two calls never share one, so it is no part of the answer a
+/// row compares.
+fn mask_trace_ids(text: &str) -> String {
+    const UUID_LEN: usize = 36;
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("gw-") {
+        let after = &rest[at + 3..];
+        let is_uuid = after.len() >= UUID_LEN
+            && after[..UUID_LEN]
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() || c == '-');
+        out.push_str(&rest[..at + 3]);
+        if is_uuid {
+            out.push_str("<trace>");
+            rest = &after[UUID_LEN..];
+        } else {
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The three answers on `route` must be one answer. The control first: the
@@ -153,4 +209,55 @@ async fn a1_the_record_keeps_the_scope_refusal_for_every_out_of_scope_name() {
             assert_eq!(entry["server"], name, "{route:?} {name}: {entry}");
         }
     }
+}
+
+/// MIK-8387.ORACLE.1 (r2 F4): every method on `/mcp/{name}` passes the same
+/// envelope scope check, so each has the same split.
+#[tokio::test]
+async fn o3m_every_direct_method_answers_an_unreachable_backend_as_an_absent_one() {
+    for method in ["tools/list", "prompts/get", "resources/read"] {
+        assert_one_answer(|| MetaMode::Plain, Route::DirectMethod(method)).await;
+    }
+}
+
+/// MIK-8387 D7: `/mcp` `prompts/get` of `server/p` checks scope first, then
+/// looks the backend up, so it has the same split.
+#[tokio::test]
+async fn p1_meta_prompt_answers_an_unreachable_backend_as_an_absent_one() {
+    assert_one_answer(|| MetaMode::Plain, Route::MetaPrompt).await;
+}
+
+/// MIK-8387 D2: a key with `backends: []` reaches nothing, so every name gets
+/// the one grant message, which names no backend and keeps its upgrade
+/// pointer. Guards that the change leaves it alone.
+#[tokio::test]
+async fn e1_an_empty_grant_answers_every_name_alike_with_its_grant_message() {
+    for route in [Route::Invoke, Route::Direct] {
+        let mut answers = Vec::new();
+        for name in ["alpha", WITHHELD, NOSUCH] {
+            let mut auth = key_for_alpha(None);
+            auth.api_keys[0].backends = Vec::new();
+            let fx = fixture(Setup {
+                auth: Some(auth),
+                ..Setup::default()
+            })
+            .await;
+            answers.push(answer(&fx, route, name).await);
+        }
+        assert!(
+            answers[0].1.contains("has no backends granted"),
+            "{route:?}: the empty-grant message is gone: {answers:?}"
+        );
+        assert!(
+            answers.iter().all(|a| a == &answers[0]),
+            "{route:?}: an empty grant answers names differently: {answers:?}"
+        );
+    }
+}
+
+/// MIK-8387 D7 regression guard: `gateway_list_tools` already answers a
+/// backend outside the scope as an absent one (A3, search.rs:475-480).
+#[tokio::test]
+async fn l1_listing_already_answers_an_unreachable_backend_as_an_absent_one() {
+    assert_one_answer(|| MetaMode::Plain, Route::MetaList).await;
 }
