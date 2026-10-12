@@ -391,6 +391,8 @@ pub(super) fn cacheable_capability(
     parse_capability(&format!(
         "name: {TOOL}\n\
          description: Read one folder through a personal account\n\
+         metadata:\n\
+         \x20 read_only: true\n\
          cache:\n\
          \x20 ttl: 60\n\
          \x20 strategy: memory\n\

@@ -256,3 +256,137 @@ async fn a_write_answer_is_never_stored() {
         "a write's answer was stored and later served"
     );
 }
+
+// --- The capability route (r3/r5: the capability's own `read_only`) ---------
+
+/// A capability `name` on the capability backend `capabilities`, reached at a
+/// counting `localhost` endpoint. No `cache:` block, so the executor's own
+/// cache is off and any hit is the outer response cache's (r4, muse H2).
+async fn counting_capability(meta: &MetaMcp, name: &str, metadata: &str) -> Arc<AtomicUsize> {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&hits);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    tokio::spawn(async move {
+        let app = axum::Router::new().route(
+            "/probe",
+            axum::routing::get(move || {
+                let counter = Arc::clone(&counter);
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    axum::Json(json!({"ok": true}))
+                }
+            }),
+        );
+        axum::serve(listener, app).await.expect("serve");
+    });
+    let definition = crate::capability::parse_capability(&format!(
+        "name: {name}\ndescription: the capability under test\nmetadata:\n{metadata}\
+         providers:\n  primary:\n    service: rest\n    config:\n      \
+         base_url: http://localhost:{port}\n      path: /probe\n      method: GET\n"
+    ))
+    .expect("fixture capability");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("client");
+    let executor =
+        Arc::new(crate::capability::CapabilityExecutor::new().with_test_http_client(client));
+    let capabilities = Arc::new(crate::capability::CapabilityBackend::new(
+        "capabilities",
+        executor,
+    ));
+    capabilities
+        .register_capability(definition)
+        .expect("register");
+    meta.set_capabilities(capabilities);
+    hits
+}
+
+/// R11, the capability control: a capability declared `read_only: true` keeps
+/// its outer cache hit.
+#[tokio::test]
+async fn a_read_only_capability_is_served_from_the_outer_cache() {
+    let fx = backend("unrelated", "search", ann(READ_ONLY), false).await;
+    let meta = fx.meta();
+    let hits = counting_capability(&meta, "lookup", "  read_only: true\n").await;
+    invoke(&meta, "capabilities", "lookup").await;
+    invoke(&meta, "capabilities", "lookup").await;
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        1,
+        "a read-only capability may be cached"
+    );
+}
+
+/// R12: a capability not declared read-only is never served from the outer
+/// cache, even when it says it is idempotent (mutant c11 reads that field).
+#[tokio::test]
+async fn a_capability_not_declared_read_only_is_never_served_from_cache() {
+    let fx = backend("unrelated", "search", ann(READ_ONLY), false).await;
+    let meta = fx.meta();
+    let hits = counting_capability(
+        &meta,
+        "mark_read",
+        "  read_only: false\n  idempotent: true\n",
+    )
+    .await;
+    invoke(&meta, "capabilities", "mark_read").await;
+    invoke(&meta, "capabilities", "mark_read").await;
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        2,
+        "a capability write must reach its endpoint on every call"
+    );
+}
+
+/// R15: dispatch picks the capability before a registry backend of the same
+/// name (dispatch.rs:248), so the gate must too. The backend declares `toggle`
+/// read-only; the capability `toggle` does not.
+#[tokio::test]
+async fn a_capability_shadowing_a_backend_is_judged_by_its_own_declaration() {
+    let fx = backend("capabilities", "toggle", ann(READ_ONLY), true).await;
+    let meta = fx.meta();
+    let hits = counting_capability(&meta, "toggle", "  read_only: false\n").await;
+    invoke(&meta, "capabilities", "toggle").await;
+    invoke(&meta, "capabilities", "toggle").await;
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        2,
+        "the backend's declaration admitted the capability"
+    );
+    assert_eq!(
+        fx.calls(),
+        0,
+        "the capability, not the backend, serves the call"
+    );
+}
+
+/// R16: with no capability and no backend there is nothing to declare, so
+/// nothing is served. The entry is real: the backend stored it while it was
+/// registered and read-only, then it was removed. Only a gate whose last arm
+/// admits (mutant c12) would answer the call from it.
+#[tokio::test]
+async fn a_call_to_a_removed_backend_is_never_answered_from_cache() {
+    let fx = backend("gone", "search", ann(READ_ONLY), true).await;
+    let meta = fx.meta();
+    invoke(&meta, "gone", "search").await;
+    assert_eq!(fx.calls(), 1, "premise: the first call stored an entry");
+    assert!(
+        fx.registry.remove("gone"),
+        "premise: the backend was registered"
+    );
+    let second = meta
+        .invoke_tool(
+            &json!({"server": "gone", "tool": "search", "arguments": {}}),
+            Some("session-1"),
+            &allow_all_ctx_named(Some("alice"), None),
+        )
+        .await;
+    assert!(
+        second.is_err(),
+        "a call with nothing behind it was answered from cache: {second:?}"
+    );
+}
