@@ -185,6 +185,9 @@ struct Setup {
     hardened: bool,
     /// MIK-8382: attestation enforced on both routes.
     attestation: bool,
+    /// MIK-8382: `alpha` requires passthrough identity propagation (shared
+    /// slot), so a caller with no credential to pass is refused.
+    alpha_requires_identity: bool,
     /// The backends' chain policy; under `Require` the gateway also has a
     /// chain identity, so their unchained answers are refused unread (MIK-7636).
     chain: crate::config::ChainMode,
@@ -277,6 +280,16 @@ async fn fixture(setup: Setup) -> Fixture {
             BackendConfig {
                 signature_chain: setup.chain,
                 passthrough: setup.beta_passthrough && name == "beta",
+                identity_propagation: (setup.alpha_requires_identity && name == "alpha").then(
+                    || crate::identity_propagation::IdentityPropagationConfig {
+                        strategy: crate::identity_propagation::PropagationStrategyKind::Passthrough,
+                        audience: "https://alpha".to_string(),
+                        required: true,
+                        session_mode: crate::identity_propagation::SessionMode::Stateless,
+                        token_exchange_endpoint: None,
+                        token_exchange_scope: None,
+                    },
+                ),
                 ..BackendConfig::default()
             },
             &FailsafeConfig::default(),

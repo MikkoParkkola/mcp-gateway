@@ -701,3 +701,21 @@ async fn b8e_preflight_refusals_answer_after_intake() {
     let calls = fx.calls.load(Ordering::SeqCst) + attested.calls.load(Ordering::SeqCst);
     assert_eq!(calls, 0, "b8e: dispatched");
 }
+
+/// B8f: identity propagation's refusal (a required passthrough backend, a
+/// caller with no credential to pass, a shared slot) answers after the intake
+/// check for a keyed no-principal call. Before: its own refusal (the red run
+/// records it); after: -32003, HTTP 400, id 5.
+#[tokio::test]
+async fn b8f_propagation_refusal_answers_after_intake() {
+    let fx = fixture(Setup {
+        alpha_requires_identity: true,
+        ..idempotent()
+    })
+    .await;
+    let (status, answer) = post_with_headers(&fx, &keyed_body(None), &[]).await;
+    assert_eq!(message(&answer), NO_PRINCIPAL, "b8f: {status} {answer}");
+    assert_eq!(status, StatusCode::BAD_REQUEST, "b8f: {answer}");
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "b8f: dispatched");
+    assert_eq!(mint_rows(&fx), 0, "b8f: identity minted");
+}
