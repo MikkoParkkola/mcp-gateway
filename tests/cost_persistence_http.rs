@@ -107,6 +107,12 @@ fn http_shutdown_saves_costs() {
             std::thread::sleep(Duration::from_millis(200));
         }
 
+        // The shutdown save must be stamped after the seed. In the first
+        // seconds of a day the seed is midnight itself, so wait for the clock
+        // to pass it (MIK-8395).
+        while costs::now_secs() <= seeded.saved_at {
+            std::thread::sleep(Duration::from_millis(50));
+        }
         let signalled = Command::new("kill")
             .arg("-TERM")
             .arg(child.id().to_string())

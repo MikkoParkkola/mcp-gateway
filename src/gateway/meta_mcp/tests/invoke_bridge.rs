@@ -481,7 +481,11 @@ fn question() -> serde_json::Value {
 #[tokio::test]
 async fn a_budget_refused_bridged_round_releases_the_idempotency_key() {
     let (refused, calls, cache_empty) = crate::test_day::same_utc_day_async(|| async {
-        let (mut meta, _, script) = budgeted(vec![question()], 0.015);
+        // A second answer, so a midnight between the two rounds (which admits
+        // the bridged round) ends in a result the helper reruns, not in the
+        // script running out (MIK-8395).
+        let booked = json!({"content": [{"type": "text", "text": "booked"}]});
+        let (mut meta, _, script) = budgeted(vec![question(), booked], 0.015);
         let cache = Arc::new(crate::idempotency::IdempotencyCache::new());
         meta.enable_idempotency(Arc::clone(&cache), Duration::from_secs(300));
 
