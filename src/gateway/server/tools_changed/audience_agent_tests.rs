@@ -86,3 +86,62 @@ async fn agent_3_a_narrowed_agent_is_judged_by_its_live_scopes() {
         "the narrowed agent's stream stays open"
     );
 }
+
+/// The attach-time snapshot of `client_id`, as the agent middleware builds it.
+fn attached(client_id: &str) -> crate::gateway::oauth::AgentIdentity {
+    crate::gateway::oauth::AgentIdentity {
+        client_id: client_id.to_string(),
+        agent_name: client_id.to_string(),
+        scopes: Vec::new(),
+        raw_scopes: Vec::new(),
+        quota_principal: None,
+    }
+}
+
+/// `token` validated now against `registry`, as the judge's `current_caller`
+/// does.
+fn validated(registry: &AgentRegistry, token: &str) -> crate::gateway::oauth::ValidatedToken {
+    crate::gateway::oauth::validate_agent_token(token, registry).expect("a valid agent token")
+}
+
+/// AGENT.4: a stream that attached with no agent is never judged as the agent
+/// its held bearer later validates as. That would widen its view past its
+/// attach identity, so it is dead. A unit row: with agent auth on, the
+/// middleware always attaches the agent, so the whole-gateway path cannot
+/// reach this state; the predicate is what keeps it closed if it ever does.
+#[test]
+fn agent_4_an_agentless_stream_never_adopts_a_live_agent() {
+    let registry = AgentRegistry::new();
+    let token = agent(&registry, "a1", &["tools:alpha:*"]);
+    let subject = crate::gateway::streaming::ViewSubject::default();
+    assert!(
+        subject.live(Some(&validated(&registry, &token))).is_err(),
+        "an agent-less snapshot with a live agent is dead"
+    );
+    assert!(
+        subject.live(None).is_ok(),
+        "control: no agent then, none now, is live"
+    );
+}
+
+/// AGENT.5: a stream attached as a1 whose held bearer now validates as a2 is
+/// dead, never judged as a2.
+#[test]
+fn agent_5_a_stream_whose_live_agent_is_another_client_is_dead() {
+    let registry = AgentRegistry::new();
+    agent(&registry, "a1", &["tools:alpha:*"]);
+    let a2 = agent(&registry, "a2", &["tools:alpha:*"]);
+    let subject = crate::gateway::streaming::ViewSubject {
+        oauth_agent: Some(attached("a1")),
+        ..crate::gateway::streaming::ViewSubject::default()
+    };
+    assert!(
+        subject.live(Some(&validated(&registry, &a2))).is_err(),
+        "a live agent other than the attached one is dead"
+    );
+    let a1 = agent(&registry, "a1", &["tools:alpha:*"]);
+    assert!(
+        subject.live(Some(&validated(&registry, &a1))).is_ok(),
+        "control: the attached agent, still valid, is live"
+    );
+}
