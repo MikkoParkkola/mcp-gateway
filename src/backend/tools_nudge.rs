@@ -195,6 +195,30 @@ impl super::Backend {
             .replace(tools, || ());
     }
 
+    /// Set per-user slot `binding`'s last use `secs` into the past, as that
+    /// much idle time would (MIK-8392 K1: eviction reads the wall clock).
+    #[cfg(test)]
+    pub(crate) fn age_per_user_slot_for_test(&self, binding: &str, secs: u64) {
+        let key = super::PoolKey::PerUser {
+            binding: binding.to_string(),
+        };
+        self.pooled_entry(&key)
+            .expect("a per-user slot is admitted")
+            .last_used
+            .store(
+                super::pool::now_unix_secs().saturating_sub(secs),
+                std::sync::atomic::Ordering::SeqCst,
+            );
+    }
+
+    /// Whether per-user slot `binding` is in the pool (MIK-8392 K1).
+    #[cfg(test)]
+    pub(crate) fn holds_per_user_slot_for_test(&self, binding: &str) -> bool {
+        self.pool.contains_key(&super::PoolKey::PerUser {
+            binding: binding.to_string(),
+        })
+    }
+
     /// Withhold tool `name` from every slot's served view, as a descriptor
     /// verdict does.
     #[cfg(test)]
