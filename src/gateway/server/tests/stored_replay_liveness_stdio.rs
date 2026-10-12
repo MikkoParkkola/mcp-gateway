@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8392 STORED.2 R2: stdio's admission (stdio_dispatch.rs) serves no
+//! MIK-8392 STORED.2 R2: stdio's admission (`stdio_dispatch.rs`) serves no
 //! retained result to an operator whose grant was revoked.
 
 use std::sync::Arc;

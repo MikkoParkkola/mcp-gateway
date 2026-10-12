@@ -25,6 +25,7 @@ pub(crate) const PERSONAL_BACKEND: &str = "personal-mail";
 pub(crate) const EXTERNAL_BACKEND: &str = "partner";
 
 /// The backend [`DirectAccountGateway::with_second`] adds beside `BACKEND`.
+#[derive(Clone, Copy)]
 pub(crate) enum Second {
     /// [`PERSONAL_BACKEND`], a managed account.
     PersonalAccount,
@@ -49,7 +50,7 @@ pub(crate) struct DirectAccountGateway {
     backends: Arc<BackendRegistry>,
     dispatches: Arc<Dispatches>,
     /// Kept alive: its store directory lives as long as the gateway.
-    _custody: Custody,
+    custody: Custody,
 }
 
 impl DirectAccountGateway {
@@ -69,7 +70,7 @@ impl DirectAccountGateway {
             Binding::Unconnected | Binding::Connected => Bind::Account(WORK),
             Binding::Propagation => Bind::Propagation(external_cfg()),
         };
-        Self::build(mode, auth, binding, vec![(BACKEND, bind)])
+        Self::build(mode, auth, binding, &[(BACKEND, bind)])
     }
 
     /// `BACKEND` (`account: work-gmail`) plus one `second` backend, over HTTP.
@@ -88,21 +89,21 @@ impl DirectAccountGateway {
             Second::PersonalAccount => (PERSONAL_BACKEND, Bind::Account(PERSONAL)),
             Second::External => (EXTERNAL_BACKEND, Bind::Propagation(external_cfg())),
         };
-        Self::build(ServeMode::Http, auth, binding, vec![(BACKEND, first), other])
+        Self::build(ServeMode::Http, auth, binding, &[(BACKEND, first), other])
     }
 
     fn build(
         mode: ServeMode,
         auth: crate::config::AuthConfig,
         binding: &Binding,
-        binds: Vec<(&str, Bind<'_>)>,
+        binds: &[(&str, Bind<'_>)],
     ) -> Self {
         let operator_grant = matches!(binding, Binding::Connected);
         let accounts: Vec<&str> = binds
             .iter()
             .filter_map(|(_, bind)| match bind {
                 Bind::Account(id) => Some(*id),
-                _ => None,
+                Bind::Propagation(_) => None,
             })
             .collect();
         let (seed, slots) = if operator_grant {
@@ -120,7 +121,7 @@ impl DirectAccountGateway {
         let custody = custody_with(&seed);
         let descriptors: Vec<&str> = if accounts.is_empty() { vec![WORK] } else { accounts };
         let (meta, dispatches) = gateway_in(
-            &binds,
+            binds,
             &Descriptors::same(&descriptors),
             &custody.installed(),
             &slots,
@@ -131,7 +132,7 @@ impl DirectAccountGateway {
             backends: Arc::clone(&meta.backends),
             meta: Some(meta),
             dispatches,
-            _custody: custody,
+            custody,
         }
     }
 
@@ -175,7 +176,7 @@ impl DirectAccountGateway {
     /// reconnect: the operator keeps its principal but has no current grant,
     /// so it has no view of the backend (MIK-8356 R3.7, MIK-8392).
     pub(crate) async fn revoke_operator_grant(&self) {
-        self._custody
+        self.custody
             .handle
             .invalidate(&operator_key())
             .await
@@ -190,7 +191,7 @@ impl DirectAccountGateway {
             PERSONAL_BACKEND => PERSONAL,
             other => panic!("{other} is not a managed backend of this fixture"),
         };
-        self._custody
+        self.custody
             .handle
             .invalidate(&operator_key_for(id))
             .await
