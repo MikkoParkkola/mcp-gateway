@@ -32,6 +32,12 @@ fn alpha(read: &str) -> Vec<crate::protocol::Tool> {
 /// harness's JWKS, and the harness that mints and rotates its keys.
 async fn cf_world() -> (World, Harness) {
     let harness = Harness::start(&config_yaml("[]", "")).await;
+    let world = cf_world_on(&harness).await;
+    (world, harness)
+}
+
+/// The same gateway over an existing `harness`.
+pub(super) async fn cf_world_on(harness: &Harness) -> World {
     let verifier = crate::key_server::OidcVerifier::with_http_client(
         harness.ks.config.oidc.clone(),
         reqwest::Client::new(),
@@ -44,12 +50,11 @@ async fn cf_world() -> (World, Harness) {
         },
         ..CallerIdentityConfig::default()
     };
-    let world = World::start_with(move |meta| {
+    World::start_with(move |meta| {
         meta.with_caller_identity(identity)
             .with_access_verifier_for_test(verifier)
     })
-    .await;
-    (world, harness)
+    .await
 }
 
 /// The listen stream k-std opens under `assertion`.

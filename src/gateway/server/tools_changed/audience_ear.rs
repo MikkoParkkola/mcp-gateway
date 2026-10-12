@@ -15,6 +15,13 @@ use super::audience_fixture::{ARRIVAL, LIST_CHANGED, SENTINEL, World, asserted};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::streaming::SessionFrame;
 
+/// Which attach route a refusal is read from.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Attach {
+    Get,
+    Listen,
+}
+
 /// A listen response body read as SSE `data:` events.
 pub(super) struct Events {
     pub(super) stream: std::pin::Pin<Box<axum::body::BodyDataStream>>,
@@ -199,6 +206,58 @@ impl World {
             super::audience_access::McpAccess::PublicPath,
         )
         .await
+    }
+
+    /// What a stream attach is answered with, status and body, whether or not a
+    /// stream opens: the client-visible contract of a refusal. `extend` is
+    /// applied to the request first.
+    pub(super) async fn attach_raw(
+        &self,
+        route: Attach,
+        bearer: &str,
+        extend: impl FnOnce(&mut axum::http::Request<Body>),
+    ) -> (axum::http::StatusCode, axum::body::Bytes) {
+        let builder = axum::http::Request::builder()
+            .uri("/mcp")
+            .header("authorization", format!("Bearer {bearer}"));
+        let mut request = match route {
+            Attach::Get => builder
+                .method("GET")
+                .header("accept", "text/event-stream")
+                .body(Body::empty()),
+            Attach::Listen => builder
+                .method("POST")
+                .header("content-type", "application/json")
+                .header("mcp-protocol-version", "2026-07-28")
+                .header("mcp-method", "subscriptions/listen")
+                .header("accept", "application/json, text/event-stream")
+                .body(Body::from(
+                    json!({
+                        "jsonrpc": "2.0", "id": "listen", "method": "subscriptions/listen",
+                        "params": {
+                            "notifications": { "toolsListChanged": true },
+                            "_meta": {
+                                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                                "io.modelcontextprotocol/clientCapabilities": {}
+                            }
+                        }
+                    })
+                    .to_string(),
+                )),
+        }
+        .expect("a request");
+        extend(&mut request);
+        let response = self.router.clone().oneshot(request).await.expect("served");
+        let status = response.status();
+        // A refusal has a body that ends; an open stream does not, so only the
+        // first bytes within the deadline are read.
+        let body = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            axum::body::to_bytes(response.into_body(), 64 * 1024),
+        )
+        .await
+        .map_or_else(|_| axum::body::Bytes::new(), Result::unwrap_or_default);
+        (status, body)
     }
 
     /// A gateway whose mTLS policy admits a presented certificate to `alpha`.

@@ -369,6 +369,8 @@ pub(super) mod stdio;
 #[cfg(test)]
 mod audience_access;
 #[cfg(test)]
+mod audience_attach_tests;
+#[cfg(test)]
 mod audience_cf_tests;
 #[cfg(test)]
 mod audience_ear;
