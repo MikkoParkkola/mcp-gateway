@@ -324,7 +324,7 @@ impl Backend {
         let on_abandon =
             tools.then(|| self.abandoned_fill_hook(Arc::clone(&entry), Arc::clone(&seen)));
         select(&entry)
-            .get_or_fetch_shared_abandoning(
+            .get_or_fetch_shared_then(
                 self.cache_ttl,
                 |mark| {
                     fill_scope(mark, async {
