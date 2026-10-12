@@ -266,6 +266,23 @@ pub fn sanitize_optional_json(value: Option<Value>) -> Result<Option<Value>> {
 
 #[cfg(test)]
 mod tests {
+    /// MIK-8378 F: `sanitize_object` matches keys as sent because a key that
+    /// passes `validate_protocol_text` sanitizes to itself. That holds only
+    /// while `unicode_nfc_normalize` is the identity: a real NFC step would
+    /// rewrite the decomposed `e\u{301}` below and fail this, which reopens
+    /// the matching rule.
+    #[test]
+    fn a_valid_key_sanitizes_to_itself() {
+        for key in ["arguments", "chain", "caf\u{e9}", "cafe\u{301}", "\u{212a}"] {
+            super::validate_protocol_text(key).expect("a valid key");
+            assert_eq!(
+                super::sanitize_string(key).expect("sanitizes"),
+                key,
+                "{key:?}"
+            );
+        }
+    }
+
     use super::*;
     use serde_json::json;
 
