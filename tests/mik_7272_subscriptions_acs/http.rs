@@ -26,7 +26,7 @@ use tower::ServiceExt;
 /// The store holds that directory for as long as the service lives, and the
 /// cases here keep listen streams open across several steps, so the caller
 /// binds the `TempDir` for the whole test rather than dropping it here.
-async fn state(modern: bool) -> (Arc<AppState>, tempfile::TempDir) {
+pub(super) async fn state(modern: bool) -> (Arc<AppState>, tempfile::TempDir) {
     let mut config = Config::default();
     config.server.modern_protocol = modern;
     let backends = Arc::new(BackendRegistry::new());
@@ -149,7 +149,7 @@ async fn post_modern(method: &str, params: Value) -> (StatusCode, Value) {
 /// Reads the body FRAME BY FRAME. `to_bytes` waits for the end of the
 /// body, and the whole point of this response is that there is no end —
 /// a test written that way hangs rather than fails.
-async fn open_listen(
+pub(super) async fn open_listen(
     state: &Arc<AppState>,
     params: Value,
 ) -> (StatusCode, Option<String>, axum::body::BodyDataStream) {
@@ -189,7 +189,7 @@ async fn open_listen(
 ///
 /// Bounded on purpose: a stream that stays open cannot be drained, so
 /// "nothing arrived" has to be an answer the test can assert on.
-async fn next_data(stream: &mut axum::body::BodyDataStream) -> Option<Value> {
+pub(super) async fn next_data(stream: &mut axum::body::BodyDataStream) -> Option<Value> {
     use futures::StreamExt;
 
     let deadline = std::time::Duration::from_secs(2);
@@ -246,53 +246,6 @@ async fn ac_sub_1_the_gateway_serves_subscriptions_listen() {
         ack["params"]["notifications"],
         json!({ "toolsListChanged": true }),
         "the acknowledgement names the filter the server honours: {ack}"
-    );
-}
-
-/// MIK-7766: a listener that fell behind lost updates, so its stream closes
-/// without the success response that would call the subscription complete.
-#[tokio::test]
-async fn ac_sub_1_a_lagged_listener_is_closed_without_a_graceful_end() {
-    let (state, _store_dir) = state(true).await;
-    let (status, _, mut stream) = open_listen(
-        &state,
-        json!({ "notifications": { "toolsListChanged": true } }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    next_data(&mut stream)
-        .await
-        .expect("the ack opens the stream");
-    // More than the registry's channel holds, published while unread.
-    for _ in 0..300 {
-        state.announce_tools_changed("any").await;
-    }
-    // The constant attach hint (MIK-8350 B10) may precede the close, byte for
-    // byte as the registry sends it; nothing else is delivered, and never a
-    // response.
-    let attach_hint = json!({
-        "jsonrpc": "2.0",
-        "method": "notifications/tools/list_changed",
-        "params": { "_meta": { "io.modelcontextprotocol/subscriptionId": 1 } }
-    });
-    let mut frames = Vec::new();
-    while let Some(frame) = next_data(&mut stream).await {
-        frames.push(frame);
-    }
-    assert!(
-        frames.is_empty() || frames == [attach_hint],
-        "a lagged stream closes with no response: {frames:?}"
-    );
-    assert!(
-        matches!(
-            tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                futures::StreamExt::next(&mut stream)
-            )
-            .await,
-            Ok(None)
-        ),
-        "the body ended, not merely went quiet"
     );
 }
 
