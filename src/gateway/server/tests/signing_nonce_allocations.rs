@@ -50,17 +50,17 @@ use super::signing_nonce_allocations_support::{
 /// - Small allocations are what the refusal itself does (records, strings,
 ///   tables): at most [`SMALL_BUDGET`] bytes. A payload-sized copy or new
 ///   per-refusal churn breaks it.
-/// - Large allocations store dispatch futures: the serve loop's box of the
-///   whole dispatch (`stdio_loop.rs`) and the `tools/call` dispatch's own box
+/// - Large allocations store dispatch futures: the stdio dispatch boxed inside
+///   its visibility memo (`Box::pin(Self::dispatch_relay_scoped(..))` in
+///   `stdio_single.rs`) and the `tools/call` dispatch's own box
 ///   (`Box::pin(Self::dispatch_tools_call(..))` in `stdio_dispatch.rs`, inside
 ///   `slot_rpc`), where a missing or replayed nonce is refused after the
-///   policy. At most [`LARGE_ALLOCATIONS`] of them and [`LARGE_BUDGET`] bytes
-///   in all: an extra boxed dispatch or a growing dispatch state breaks it.
-///   No lint bounds them: `clippy::large_futures` does not see a future behind
-///   `Box::pin`, and `dispatch_single_staged` allows it.
-///
-/// #3841 boxed the whole stdio dispatch a third time, inside the visibility
-/// memo; it is pinned in place since.
+///   policy. The serve loop's own box of the whole dispatch holds only a
+///   pointer to the first, so it is small. At most [`LARGE_ALLOCATIONS`] large
+///   allocations and [`LARGE_BUDGET`] bytes in all: another boxed dispatch or
+///   a growing dispatch state breaks it. No lint bounds them:
+///   `clippy::large_futures` does not see a future behind `Box::pin`, and
+///   `dispatch_single_staged` allows it.
 const SMALL_BUDGET: u64 = 8 * 1024;
 const LARGE_ALLOCATIONS: u64 = 2;
 const LARGE_BUDGET: u64 = 12 * 1024;
