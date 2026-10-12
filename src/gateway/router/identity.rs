@@ -473,6 +473,10 @@ mod control_tests;
 #[path = "identity_cf_edge_tests.rs"]
 mod cf_edge_tests;
 
+#[cfg(test)]
+#[path = "identity_source_facts_tests.rs"]
+mod source_facts_tests;
+
 #[cfg(all(test, feature = "firewall"))]
 #[path = "caller_key_tests.rs"]
 mod caller_key_tests;
