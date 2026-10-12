@@ -268,7 +268,26 @@ impl World {
     /// As [`Self::listen_as`], stopping at the acknowledgement: the attach
     /// hint is still unread.
     pub(super) async fn listen_undrained(&self, bearer: &str, assertion: Option<&str>) -> Ear {
-        self.listen_request(bearer, assertion, ("/mcp", None)).await
+        self.listen_request(bearer, assertion, ("/mcp", None), |_| {})
+            .await
+    }
+
+    /// As [`Self::listen`], with `extend` applied to the request first: the
+    /// request extensions the TLS layer would insert (a client certificate,
+    /// its `notAfter`), for MIK-8377's identity-liveness rows.
+    pub(super) async fn listen_with(
+        &self,
+        bearer: &str,
+        extend: impl FnOnce(&mut axum::http::Request<Body>),
+    ) -> Ear {
+        let mut ear = self
+            .listen_request(bearer, None, ("/mcp", None), extend)
+            .await;
+        let Ear::Listen(events) = &mut ear else {
+            unreachable!("a listen stream")
+        };
+        events.next().await.expect("the attach hint");
+        ear
     }
 
     /// A listen at `uri`, inside legacy session `session` (its minted id)
@@ -276,7 +295,7 @@ impl World {
     pub(super) async fn listen_at(&self, bearer: &str, uri: &str, session: Option<&str>) -> Ear {
         let minted = session.map(|id| self.minted.borrow().get(id).cloned().expect("a session"));
         let mut ear = self
-            .listen_request(bearer, None, (uri, minted.as_deref()))
+            .listen_request(bearer, None, (uri, minted.as_deref()), |_| {})
             .await;
         let Ear::Listen(events) = &mut ear else {
             unreachable!("a listen stream")
@@ -290,6 +309,7 @@ impl World {
         bearer: &str,
         assertion: Option<&str>,
         (uri, session): (&str, Option<&str>),
+        extend: impl FnOnce(&mut axum::http::Request<Body>),
     ) -> Ear {
         let body = json!({
             "jsonrpc": "2.0", "id": "listen", "method": "subscriptions/listen",
@@ -317,6 +337,7 @@ impl World {
             .expect("a request");
         let mut request = request;
         asserted(&mut request, assertion);
+        extend(&mut request);
         let response = self.router.clone().oneshot(request).await.expect("served");
         assert!(
             response.status().is_success(),
