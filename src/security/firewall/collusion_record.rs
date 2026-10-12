@@ -5,7 +5,11 @@
 //! unread holder (`MIK-8066` D6, A4), with evidence thinned to what a record
 //! keeps.
 
-use super::*;
+use super::{
+    BuildHasher, CAPACITY_METRIC, CollusionDetector, Copies, Entry, Flows, Holder, HolderId,
+    Holders, Instant, MAX_SOURCE_FINGERPRINTS, Ordering, Pending, Recorded, RelayAction, count,
+    holders, sketch, thin, unread_key,
+};
 
 impl CollusionDetector {
     /// The one holder every unread plan records its evidence under (D6, A4):

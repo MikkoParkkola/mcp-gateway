@@ -5,7 +5,10 @@
 //! (MIK-7887.RECEIPT.2; `MIK-8066` 2b: the view, the unread path and the
 //! judgement, D6/D8/D9).
 
-use super::*;
+use super::{
+    CAPACITY_METRIC, CollusionDetector, Delivered, DeliveryDigest, Firewall, Mode, Ordering,
+    PLAN_DROP_METRIC, PlanStaging, UnreadReceipt, Value, delivery_parts, view,
+};
 
 impl Firewall {
     /// The leaves of a plan's final answer that its step receipts are kept
