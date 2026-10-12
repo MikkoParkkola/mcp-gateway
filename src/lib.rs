@@ -128,6 +128,8 @@ pub mod skills;
 #[doc(hidden)]
 pub mod stats;
 #[cfg(test)]
+pub(crate) mod test_day;
+#[cfg(test)]
 mod test_pause;
 #[cfg(test)]
 mod test_ports;
