@@ -131,9 +131,11 @@ async fn a_fill_in_flight_cannot_undo_a_revocation() {
         .expect("the fill reached the wire");
     let _ = backend.remember_listed_tools_as(None, false, &[tool("t", false)], Listing::Truncated);
     wire.release.notify_one();
-    let _ = tokio::time::timeout(WAIT, fill)
+    tokio::time::timeout(WAIT, fill)
         .await
-        .expect("the fill finished");
+        .expect("the fill finished")
+        .expect("the fill task")
+        .expect("the fill succeeds for its own caller");
     assert!(
         !backend.is_read_only_for(None, "t"),
         "a fill that started before the revocation re-admitted the tool"
@@ -160,9 +162,11 @@ async fn a_cold_fill_in_flight_cannot_admit_a_tool_a_page_declared_a_write() {
         .expect("the fill reached the wire");
     let _ = backend.remember_listed_tools_as(None, false, &[tool("t", false)], Listing::Truncated);
     wire.release.notify_one();
-    let _ = tokio::time::timeout(WAIT, fill)
+    tokio::time::timeout(WAIT, fill)
         .await
-        .expect("the fill finished");
+        .expect("the fill finished")
+        .expect("the fill task")
+        .expect("the fill succeeds for its own caller");
     assert!(
         !backend.is_read_only_for(None, "t"),
         "a cold fill that started before the page admitted a tool the page declared a write"

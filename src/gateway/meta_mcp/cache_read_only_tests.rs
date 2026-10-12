@@ -231,7 +231,16 @@ async fn a_tool_relisted_as_a_write_is_not_served_its_cached_answer() {
     let fx = backend("docs", "toggle", ann(READ_ONLY), true).await;
     let meta = fx.meta();
     invoke(&meta, "docs", "toggle").await;
+    assert_eq!(
+        fx.calls(),
+        1,
+        "premise: call 1 reached the backend and stored"
+    );
     fx.relist("toggle", ann(IDEMPOTENT_WRITE)).await;
+    assert!(
+        !fx.backend.is_read_only_for(None, "toggle"),
+        "premise: the relist revoked"
+    );
     invoke(&meta, "docs", "toggle").await;
     assert_eq!(
         fx.calls(),
@@ -248,7 +257,12 @@ async fn a_write_answer_is_never_stored() {
     let fx = backend("docs", "toggle", ann(IDEMPOTENT_WRITE), true).await;
     let meta = fx.meta();
     invoke(&meta, "docs", "toggle").await;
+    assert_eq!(fx.calls(), 1, "premise: call 1 reached the backend");
     fx.relist("toggle", ann(READ_ONLY)).await;
+    assert!(
+        fx.backend.is_read_only_for(None, "toggle"),
+        "premise: the relist re-admitted, so only a stored entry could make call 2 a hit"
+    );
     invoke(&meta, "docs", "toggle").await;
     assert_eq!(
         fx.calls(),
@@ -373,7 +387,8 @@ async fn a_call_to_a_removed_backend_is_never_answered_from_cache() {
     let fx = backend("gone", "search", ann(READ_ONLY), true).await;
     let meta = fx.meta();
     invoke(&meta, "gone", "search").await;
-    assert_eq!(fx.calls(), 1, "premise: the first call stored an entry");
+    invoke(&meta, "gone", "search").await;
+    assert_eq!(fx.calls(), 1, "premise: the entry exists and serves a hit");
     assert!(
         fx.registry.remove("gone"),
         "premise: the backend was registered"
@@ -395,3 +410,6 @@ async fn a_call_to_a_removed_backend_is_never_answered_from_cache() {
     );
     assert!(answer.to_string().contains("Backend not found"), "{answer}");
 }
+
+#[path = "cache_read_only_slot_tests.rs"]
+mod slot;
