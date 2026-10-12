@@ -50,17 +50,26 @@ fn capability(dir: &Path, name: &str, description: &str, ext: &str) {
     std::fs::write(dir.join(format!("{name}.{ext}")), yaml).expect("capability");
 }
 
+/// `dirs` as a list both the config file and the environment overlay read.
+///
+/// Serialised, never hand-quoted: a Windows path inside YAML double quotes
+/// reads `C:\Users` as a `\U` escape and the config fails to load. A JSON
+/// array is also a YAML flow sequence, so one encoder serves both readers.
+fn dir_list<P: AsRef<Path>>(dirs: &[P]) -> String {
+    let dirs: Vec<&str> = dirs
+        .iter()
+        .map(|d| d.as_ref().to_str().expect("utf-8"))
+        .collect();
+    serde_json::to_string(&dirs).expect("dir list")
+}
+
 /// A gateway config at `path` naming `dirs` as capability directories.
 fn config(path: &Path, dirs: &[&str], extra: &str) {
     std::fs::create_dir_all(path.parent().expect("parent")).expect("config dir");
-    let list = dirs
-        .iter()
-        .map(|d| format!("\"{d}\""))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let list = dir_list(dirs);
     mcp_gateway::gateway::test_helpers::write_owner_only(
         path,
-        format!("capabilities:\n  directories: [{list}]\n{extra}"),
+        format!("capabilities:\n  directories: {list}\n{extra}"),
     )
     .expect("config");
 }
@@ -338,7 +347,7 @@ fn an_env_overlay_names_capability_dirs() {
     let root = tempfile::tempdir().expect("root");
     let dir = root.path().join("env_dir");
     capability(&dir, "env_cap", "From env", "yaml");
-    let value = format!("[\"{}\"]", dir.display());
+    let value = dir_list(&[&dir]);
     let env = [("MCP_GATEWAY_CAPABILITIES__DIRECTORIES", value.as_str())];
     let out = run(root.path(), &env, &["tool", "list"]);
     assert!(both(&out).contains("env_cap"), "{}", both(&out));
@@ -381,8 +390,8 @@ fn disabled_capabilities_still_name_capability_dirs() {
     mcp_gateway::gateway::test_helpers::write_owner_only(
         &cfg,
         format!(
-            "capabilities:\n  enabled: false\n  directories: [\"{}\"]\n",
-            dir.display()
+            "capabilities:\n  enabled: false\n  directories: {}\n",
+            dir_list(&[&dir])
         ),
     )
     .expect("config");
@@ -471,7 +480,7 @@ fn an_env_overlay_beats_the_config_file() {
     capability(&from_env, "env_cap", "From the env", "yaml");
     let cfg = root.path().join("gateway.yaml");
     config(&cfg, &[from_file.to_str().expect("utf-8")], "");
-    let value = format!("[\"{}\"]", from_env.display());
+    let value = dir_list(&[&from_env]);
     let env = [("MCP_GATEWAY_CAPABILITIES__DIRECTORIES", value.as_str())];
     let out = run(root.path(), &env, &with_config(&cfg, &["tool", "list"]));
     let shown = both(&out);
