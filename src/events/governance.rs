@@ -59,7 +59,7 @@ impl Services {
         };
         let mut fields = Map::new();
         fields.insert("action".into(), act.action.into());
-        fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
+        crate::clock::stamp_audit_row(&mut fields);
         fields.insert("subscription_id".into(), act.subscription_id.into());
         fields.insert("event_name".into(), act.event_name.into());
         fields.insert("callback_host".into(), act.callback_host.into());

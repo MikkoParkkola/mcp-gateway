@@ -23,6 +23,7 @@ use crate::security::audit::AuditFailurePolicy;
 use crate::security::transparency_log::TransparencyLogConfig;
 use crate::transport::Transport;
 
+mod anon_key;
 mod delivery;
 mod delivery_who;
 mod lost_round;
@@ -114,16 +115,21 @@ fn direct_call(tenant: &str, idempotency_key: Option<&str>) -> String {
     json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": params}).to_string()
 }
 
-/// POST as a modern, anonymous client: the era that carries an idempotency key.
-/// The body declares the revision the header does, as `/mcp` requires of it
-/// and the direct route now does too (MIK-8040).
-async fn post_modern(fx: &Fixture, uri: &str, body: &str) -> (StatusCode, Value) {
+/// POST as a modern `caller`: the era that carries an idempotency key. The
+/// body declares the revision the header does, as `/mcp` requires of it and
+/// the direct route now does too (MIK-8040).
+async fn post_modern_as(
+    fx: &Fixture,
+    uri: &str,
+    body: &str,
+    caller: &Caller,
+) -> (StatusCode, Value) {
     let mut call: Value = serde_json::from_str(body).unwrap();
     let meta = &mut call["params"]["_meta"];
     meta["io.modelcontextprotocol/protocolVersion"] =
         json!(crate::protocol::meta::MODERN_VERSIONS[0]);
     meta["io.modelcontextprotocol/clientCapabilities"] = json!({});
-    post_to(fx, uri, &call.to_string(), &Caller::Modern).await
+    post_to(fx, uri, &call.to_string(), caller).await
 }
 
 /// Knobs a cell varies; everything else is the plain auth-off gateway.
@@ -342,6 +348,9 @@ enum Caller {
     Cert,
     /// Anonymous, with a verified OAuth agent token (MIK-7938).
     Agent,
+    /// [`Caller::Modern`] with a verified OIDC identity: an execution
+    /// principal, so a keyed direct call is admitted (MIK-8154 ANON.1).
+    ModernOidc,
 }
 
 /// Put the verified identity a `Caller` stands for on `request`.
@@ -386,7 +395,7 @@ async fn post_to(fx: &Fixture, uri: &str, body: &str, caller: &Caller) -> (Statu
     if matches!(caller, Caller::Session) {
         builder = builder.header("mcp-session-id", "sess-d2");
     }
-    if matches!(caller, Caller::Modern) {
+    if matches!(caller, Caller::Modern | Caller::ModernOidc) {
         // The modern era also requires the method and name headers to echo
         // the body, or the call is refused (-32020) before any audit path.
         let parsed: Value = serde_json::from_str(body).unwrap();
@@ -401,7 +410,7 @@ async fn post_to(fx: &Fixture, uri: &str, body: &str, caller: &Caller) -> (Statu
     let mut request = builder
         .body(axum::body::Body::from(body.to_string()))
         .unwrap();
-    if matches!(caller, Caller::Oidc) {
+    if matches!(caller, Caller::Oidc | Caller::ModernOidc) {
         // Auth is off in the OIDC cells, so the middleware leaves it in place.
         request.extensions_mut().insert(VerifiedIdentity {
             subject: "1".to_string(),

@@ -1,0 +1,49 @@
+{
+  "auth": {
+    "mode": "oidc",
+    "existingSecret": "gw-ks",
+    "oidc": {
+      "providers": [
+        {
+          "issuer": "https://idp.corp.lan",
+          "audiences": [
+            "mcp-gateway"
+          ],
+          "allowedDomains": [
+            "corp.lan"
+          ],
+          "jwksUri": "https://idp.corp.lan/keys",
+          "discoveryUrl": "https://idp.corp.lan/.well-known/openid-configuration"
+        }
+      ],
+      "policies": [
+        {
+          "match": {
+            "issuer": "https://idp.corp.lan",
+            "domain": "corp.lan",
+            "email": "ops@corp.lan",
+            "group": "ops"
+          },
+          "scopes": {
+            "backends": [
+              "*"
+            ],
+            "tools": [
+              "gateway_search_tools"
+            ],
+            "rateLimit": 60
+          }
+        }
+      ],
+      "adminTokenSecretKey": "admin"
+    }
+  },
+  "persistence": {
+    "enabled": true,
+    "size": "2Gi",
+    "storageClass": "standard",
+    "accessModes": [
+      "ReadWriteOnce"
+    ]
+  }
+}

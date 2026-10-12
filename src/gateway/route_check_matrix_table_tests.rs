@@ -32,13 +32,11 @@ pub(crate) const fn expect(method: MethodKind, route: Route, stage: Stage) -> Ex
                 Invoke | Surfaced | TaskWorker | Stdio | Direct => Applies,
                 TaskSubmit => NotApplicable(Na::NoBackendSend),
             },
-            // /mcp honours the flag (dispatch_intake.rs:355), and stdio at its
-            // intake in the same order (stdio_dispatch.rs `prepare_signing`,
-            // P3); the direct route sanitizes whatever it says
-            // (backend_handlers.rs:171-175).
+            // One sanitize step honouring the flag on every route (MIK-8154
+            // SAN.1): /mcp intake (dispatch_intake.rs), stdio
+            // `prepare_signing` and the direct route's `read_envelope`.
             Stage::Sanitize => match route {
-                Invoke | Surfaced | TaskSubmit | Stdio => Applies,
-                Direct => ExpectedGap(Ticket::Mik8154),
+                Invoke | Surfaced | TaskSubmit | Stdio | Direct => Applies,
                 TaskWorker => NotApplicable(Na::DecidedAtSubmit),
             },
             // Grants and the admin rule fire only for the capability provider

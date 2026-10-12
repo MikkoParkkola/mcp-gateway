@@ -189,7 +189,19 @@ async fn rpc(
     if let Some(token) = token {
         params["_meta"] = json!({ (ATTESTATION_META): token });
     }
-    let request = axum::http::Request::builder()
+    rpc_as(router, uri, method, params, None).await
+}
+
+/// [`rpc`] with `params` as given, as `identity` when one is given (a verified
+/// execution principal, which a keyed direct call needs: MIK-8154 ANON.1).
+async fn rpc_as(
+    router: &axum::Router,
+    uri: &str,
+    method: &str,
+    params: Value,
+    identity: Option<crate::key_server::oidc::VerifiedIdentity>,
+) -> (StatusCode, Value) {
+    let mut request = axum::http::Request::builder()
         .method("POST")
         .uri(uri)
         .header("content-type", "application/json")
@@ -197,6 +209,9 @@ async fn rpc(
             json!({"jsonrpc": "2.0", "id": 7, "method": method, "params": params}).to_string(),
         ))
         .unwrap();
+    if let Some(identity) = identity {
+        request.extensions_mut().insert(identity);
+    }
     let response = router.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();

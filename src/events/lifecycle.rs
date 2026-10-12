@@ -54,6 +54,7 @@ impl EventsHub {
         principal: &str,
         name: &str,
         arguments: &serde_json::Value,
+        now: chrono::DateTime<chrono::Utc>,
     ) -> Result<Option<(SourceKind, String)>, RpcError> {
         let Some(source) = self.source_offering(name) else {
             // An upstream-notification name no source offers any more (its
@@ -68,7 +69,7 @@ impl EventsHub {
         };
         let key = (
             source.kind(),
-            source.lifecycle_key(principal, name, arguments),
+            source.lifecycle_key(principal, name, arguments, now),
         );
         if started.contains(&key) {
             return Ok(None);
@@ -133,7 +134,7 @@ impl EventsHub {
                 self.source_offering(&sub.name).map(|source| {
                     (
                         source.kind(),
-                        source.lifecycle_key(&sub.principal, &sub.name, &sub.arguments),
+                        source.lifecycle_key(&sub.principal, &sub.name, &sub.arguments, now),
                     )
                 })
             });

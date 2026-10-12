@@ -70,7 +70,12 @@ async fn t12_a_retired_poller_leaves_no_map_entry() {
     let hub = hub(dir.path());
     let host = fake(vec![target("weather", true, CredentialUse::Free)]);
     let source = WatchSource::new(&hub, host);
-    let key = source.lifecycle_key("p", NAME, &json!({}));
+    let key = source.lifecycle_key(
+        "p",
+        NAME,
+        &json!({}),
+        crate::clock::utc_now().expect("clock"),
+    );
     hub.lifecycle
         .lock()
         .await
@@ -120,7 +125,12 @@ async fn d1b_a_side_effecting_capability_holds_and_is_not_called() {
     // The row was admitted while the capability was read-only.
     admit(&hub, "p", NAME, &json!({}));
     let source = WatchSource::new(&hub, Arc::clone(&host) as Arc<dyn WatchHost>);
-    let key = source.lifecycle_key("p", NAME, &json!({}));
+    let key = source.lifecycle_key(
+        "p",
+        NAME,
+        &json!({}),
+        crate::clock::utc_now().expect("clock"),
+    );
     source
         .on_first_subscriber(&key, "p", NAME, &json!({}))
         .await

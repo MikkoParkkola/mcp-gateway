@@ -606,10 +606,11 @@ impl OAuthClient {
             return false;
         };
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        // A scheduler: on a clock that cannot be read the proactive pass is
+        // skipped; `is_expired` still guards every use (MIK-8202).
+        let Ok(now) = crate::clock::unix_secs() else {
+            return false;
+        };
 
         let remaining = expires_at.saturating_sub(now);
 
@@ -620,6 +621,16 @@ impl OAuthClient {
         // Since we check every 60s, use the simpler form: remaining < buffer.
         remaining < self.token_refresh_buffer_secs
     }
+}
+
+/// The one clock reading a token request is checked against before it is
+/// sent, and that dates the token it returns. A clock that cannot be read
+/// (before 1970) refuses the request: nothing is sent, so no token is dated
+/// from the epoch and no endpoint is called on a broken clock (MIK-8202).
+pub(super) fn issuance_clock() -> Result<u64> {
+    crate::clock::unix_secs().map_err(|_| {
+        Error::OAuth("the host clock reads before 1970; the token request was not sent".to_string())
+    })
 }
 
 /// MIK-8207: a token answer whose `expires_in` is above 100 years is

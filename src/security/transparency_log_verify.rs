@@ -91,6 +91,15 @@ fn log_files(path: &Path) -> io::Result<Vec<(Option<u64>, PathBuf)>> {
     Ok(files)
 }
 
+/// Whether `entry` is signed: it carries a `sig` field, whatever its value.
+/// Presence, not a valid-looking value, so a null, empty or garbled `sig`
+/// still counts and cannot downgrade a signed log to hash-only. The one rule
+/// `audit verify` and SIEM export share for refusing a signed log they hold
+/// no key for (MIK-8374).
+pub(crate) fn is_signed_entry(entry: &Value) -> bool {
+    entry.get("sig").is_some()
+}
+
 /// Whether any segment of the log holds a signed entry, so `audit verify`
 /// refuses a silent hash-only pass over a signed log (MIK-6700 review).
 ///
@@ -101,7 +110,7 @@ pub fn log_contains_signed_entry(path: &Path) -> io::Result<bool> {
     for (_, file) in log_files(path)? {
         let content = bounded_read_to_string(&file, MAX_AUDIT_READ_BYTES)?;
         let signed = content.lines().any(|raw| {
-            serde_json::from_str::<Value>(raw.trim()).is_ok_and(|e| e.get("sig").is_some())
+            serde_json::from_str::<Value>(raw.trim()).is_ok_and(|e| is_signed_entry(&e))
         });
         if signed {
             return Ok(true);

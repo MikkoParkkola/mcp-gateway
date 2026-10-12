@@ -31,6 +31,37 @@ pub(crate) async fn stdio_task_read(
     policy: Option<crate::security::ToolPolicy>,
     surfacing: Surfacing,
 ) -> (Value, usize) {
+    let trace = Box::pin(stdio_task_run(policy, surfacing, None)).await;
+    (trace.body, trace.backend_calls)
+}
+
+/// What a stdio task submit left behind (MIK-8326): the answer, the backend's
+/// call count, the firewall audit log's event names, the tasks committed, the
+/// legacy idempotency responses stored and the execution admission entries.
+pub(crate) struct StdioTrace {
+    pub(crate) body: Value,
+    pub(crate) backend_calls: usize,
+    pub(crate) events: Vec<String>,
+    pub(crate) committed: usize,
+    pub(crate) stored_keys: usize,
+    pub(crate) admitted: usize,
+}
+
+/// [`stdio_task_read`] with the production firewall on, writing to `audit`.
+#[cfg(feature = "firewall")]
+pub(crate) async fn stdio_task_traced(
+    policy: Option<crate::security::ToolPolicy>,
+    surfacing: Surfacing,
+    audit: &std::path::Path,
+) -> StdioTrace {
+    Box::pin(stdio_task_run(policy, surfacing, Some(audit))).await
+}
+
+async fn stdio_task_run(
+    policy: Option<crate::security::ToolPolicy>,
+    surfacing: Surfacing,
+    audit: Option<&std::path::Path>,
+) -> StdioTrace {
     let served = backend_listing(json!([{
         "name": TOOL,
         "inputSchema": {"type": "object"},
@@ -39,6 +70,12 @@ pub(crate) async fn stdio_task_read(
     .await;
     let calls = std::sync::Arc::clone(&served.1);
     let fixture = Box::pin(fixture_on_with(served, policy, |config| {
+        if let Some(audit) = audit {
+            let firewall = &mut config.security.firewall;
+            firewall.enabled = true;
+            firewall.scan_requests = true;
+            firewall.audit_log = Some(audit.to_path_buf());
+        }
         if matches!(surfacing, Surfacing::On) {
             config.meta_mcp.surfaced_tools = vec![SurfacedToolConfig {
                 server: BACKEND.to_string(),
@@ -65,7 +102,17 @@ pub(crate) async fn stdio_task_read(
         },
     });
     let body = dispatch(&fixture, request).await;
-    (body, calls.load(Ordering::SeqCst))
+    StdioTrace {
+        body,
+        backend_calls: calls.load(Ordering::SeqCst),
+        events: audit.map_or_else(
+            Vec::new,
+            crate::gateway::router::route_matrix_driver_tests::audit_events,
+        ),
+        committed: fixture.tasks.service.store.committed_count_for_test(),
+        stored_keys: fixture.meta.idempotency_completed_for_test().len(),
+        admitted: fixture.meta.execution_admission().snapshot().entries,
+    }
 }
 
 /// R5: `tools/call gateway_invoke` of the fixture's `echo` over stdio with a
@@ -96,6 +143,21 @@ pub(crate) async fn stdio_sanitizing(on: bool) -> (Value, usize) {
 /// carrying a NUL. Returns the answer and the backend's `tools/call` count:
 /// the setting reaches stdio from the config, not from a test-built client.
 pub(crate) async fn served_sanitizing() -> (Value, usize) {
+    served_sanitizing_with(false).await
+}
+
+/// [`served_sanitizing`] with the backend's `passthrough` set to
+/// `passthrough` (MIK-8154 P2: exempt from sanitization on stdio too).
+pub(crate) async fn served_sanitizing_with(passthrough: bool) -> (Value, usize) {
+    let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+        "name": "gateway_invoke",
+        "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"cmd": "a\u{0}b"}}}});
+    Box::pin(served_sanitizing_call(passthrough, call)).await
+}
+
+/// One `call` frame served on stdio with sanitizing on, after the handshake:
+/// its answer and the backend's call count.
+pub(crate) async fn served_sanitizing_call(passthrough: bool, call: Value) -> (Value, usize) {
     use std::time::Duration;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let (url, calls) = backend().await;
@@ -112,6 +174,7 @@ pub(crate) async fn served_sanitizing() -> (Value, usize) {
                 streamable_http: Some(true),
                 protocol_version: None,
             },
+            passthrough,
             ..crate::config::BackendConfig::default()
         },
     );
@@ -127,9 +190,6 @@ pub(crate) async fn served_sanitizing() -> (Value, usize) {
     let handshake = json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
         "protocolVersion": "2025-06-18", "capabilities": {},
         "clientInfo": {"name": "matrix", "version": "1"}}});
-    let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
-        "name": "gateway_invoke",
-        "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"cmd": "a\u{0}b"}}}});
     let mut answer = Value::Null;
     for frame in [handshake, call] {
         stdin

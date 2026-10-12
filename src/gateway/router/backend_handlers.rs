@@ -24,7 +24,7 @@ use crate::mtls::CertIdentity;
 use crate::protocol::{JsonRpcResponse, RequestId};
 #[cfg(feature = "firewall")]
 use crate::security::firewall::FirewallAction;
-use crate::security::{sanitize_json_value, validate_tool_name};
+use crate::security::validate_tool_name;
 
 type BackendRejection = (StatusCode, Json<Value>);
 type BackendSecurityResult = Result<Option<Value>, BackendRejection>;
@@ -53,13 +53,16 @@ use relay::{
     stage_direct_delivery,
 };
 
-/// The checks a direct `tools/call` meets once its credential is resolved:
-/// the argument-key check (R2, F13) and input sanitization. Authorize and the
-/// firewall ran before the credential, in [`guard_tool_call`] (MIK-8361).
+/// The check a direct `tools/call` meets once its credential is resolved:
+/// the argument-key check (R2, F13). Authorize and the firewall ran before
+/// the credential, in [`guard_tool_call`] (MIK-8361).
 ///
-/// Returns `Ok(Some(sanitized))` when all checks pass, `Ok(None)` for a
+/// Returns `Ok(Some(params))` when the check passes, `Ok(None)` for a
 /// passthrough backend, or `Err(response)` when a check fails and the caller
 /// should return an HTTP error immediately.
+///
+/// Sanitization is not here: the whole request is sanitized at intake
+/// (MIK-8154 SAN.1, `direct_caller::read_envelope`).
 #[allow(clippy::result_large_err)]
 async fn apply_backend_tool_call_security(
     state: &AppState,
@@ -85,14 +88,11 @@ async fn apply_backend_tool_call_security(
         return Ok(None);
     }
 
-    let _ = state;
-    match sanitize_json_value(params) {
-        Ok(sanitized) => Ok(Some(sanitized)),
-        Err(e) => {
-            warn!(backend = %backend_name, "Input sanitization failed");
-            Err(backend_security_error(id, &e.to_string()))
-        }
-    }
+    let _ = (state, backend_name);
+    // The request was sanitized as a whole at intake when the setting is on
+    // (MIK-8154 SAN.1, `direct_caller::read_envelope`); these are the params
+    // to forward.
+    Ok(Some(params.clone()))
 }
 
 /// The refusal of a `tools/call` with no params or no tool name (400,
@@ -450,7 +450,14 @@ pub(super) async fn backend_handler(
         ));
     }
 
-    direct_audit::audited_call(Arc::clone(&state), name, request).await
+    // The request's scope for what intake judges (MIK-8154 F2: the exempt
+    // instance the send compares), boxed so the scope wraps a pointer.
+    crate::gateway::meta_mcp::visible::with_visibility_memo(Box::pin(direct_audit::audited_call(
+        Arc::clone(&state),
+        name,
+        request,
+    )))
+    .await
 }
 
 /// The direct backend route, as an ordered sequence of stages. Each stage

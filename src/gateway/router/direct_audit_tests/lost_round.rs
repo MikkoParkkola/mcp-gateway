@@ -24,11 +24,23 @@ fn keyed(fail: fn() -> crate::Error) -> Setup {
 #[tokio::test]
 async fn a_direct_lost_round_serves_the_uncertain_notice() {
     let fx = fixture(keyed(|| crate::Error::Transport("connection reset".into()))).await;
-    let (_, first) = post_modern(&fx, "/mcp/alpha", &direct_call("cust-1", Some(KEY))).await;
+    let (_, first) = post_modern_as(
+        &fx,
+        "/mcp/alpha",
+        &direct_call("cust-1", Some(KEY)),
+        &Caller::ModernOidc,
+    )
+    .await;
     let reached = fx.calls.load(Ordering::SeqCst);
     assert!(reached >= 1, "{first}");
 
-    let (_, retry) = post_modern(&fx, "/mcp/alpha", &direct_call("cust-1", Some(KEY))).await;
+    let (_, retry) = post_modern_as(
+        &fx,
+        "/mcp/alpha",
+        &direct_call("cust-1", Some(KEY)),
+        &Caller::ModernOidc,
+    )
+    .await;
     assert_eq!(
         fx.calls.load(Ordering::SeqCst),
         reached,
@@ -44,9 +56,21 @@ async fn a_direct_lost_round_serves_the_uncertain_notice() {
 #[tokio::test]
 async fn a_direct_backend_unavailable_frees_the_key() {
     let fx = fixture(keyed(|| crate::Error::BackendUnavailable("alpha".into()))).await;
-    let _ = post_modern(&fx, "/mcp/alpha", &direct_call("cust-1", Some(KEY))).await;
+    let _ = post_modern_as(
+        &fx,
+        "/mcp/alpha",
+        &direct_call("cust-1", Some(KEY)),
+        &Caller::ModernOidc,
+    )
+    .await;
     let reached = fx.calls.load(Ordering::SeqCst);
-    let (_, retry) = post_modern(&fx, "/mcp/alpha", &direct_call("cust-1", Some(KEY))).await;
+    let (_, retry) = post_modern_as(
+        &fx,
+        "/mcp/alpha",
+        &direct_call("cust-1", Some(KEY)),
+        &Caller::ModernOidc,
+    )
+    .await;
     assert!(
         fx.calls.load(Ordering::SeqCst) > reached,
         "a freed key lets the retry run: {retry}"

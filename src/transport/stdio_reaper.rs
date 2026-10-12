@@ -209,6 +209,33 @@ pub(super) async fn wait_reaped(
 }
 
 impl super::StdioTransport {
+    /// The tree for a freshly spawned `child`, carrying this transport's
+    /// test-only reap deadline (MIK-8360).
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
+    pub(super) fn new_tree(&self, child: Box<dyn process_wrap::tokio::ChildWrapper>) -> ChildTree {
+        #[cfg_attr(not(test), allow(unused_mut))]
+        let mut tree = ChildTree::new(child);
+        #[cfg(test)]
+        {
+            tree.reap_deadline_for_test = *self.slow_host_bound.lock();
+        }
+        tree
+    }
+
+    /// How long a handed-over tree may take: [`REAP_DEADLINE`], or the
+    /// test-only slow-host bound (MIK-8360), the value each tree this
+    /// transport spawned also carries.
+    ///
+    /// [`REAP_DEADLINE`]: super::child_tree::REAP_DEADLINE
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
+    fn reap_deadline(&self) -> Duration {
+        #[cfg(test)]
+        if let Some(bound) = *self.slow_host_bound.lock() {
+            return bound;
+        }
+        super::child_tree::REAP_DEADLINE
+    }
+
     /// Hand the tree over, if any, and wait (bounded, needing no particular
     /// runtime for the work itself) for every reap this slot started. Returns
     /// the handed tree's status, else the newest one an earlier reap recorded.
@@ -218,8 +245,7 @@ impl super::StdioTransport {
             let mine = slot.take_for_reaper();
             (mine, slot.outstanding())
         };
-        let deadline =
-            tokio::time::Instant::now() + super::child_tree::REAP_DEADLINE + Duration::from_secs(1);
+        let deadline = tokio::time::Instant::now() + self.reap_deadline() + Duration::from_secs(1);
         let status = wait_reaped(all, mine, deadline).await;
         let mut slot = self.child.lock();
         let _ = slot.outstanding();

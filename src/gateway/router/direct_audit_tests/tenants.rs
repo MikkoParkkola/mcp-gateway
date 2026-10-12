@@ -143,8 +143,13 @@ async fn direct_idempotent_replay_record_carries_delivered_tenants() {
     })
     .await;
     for _ in 0..2 {
-        let (status, answer) =
-            post_modern(&fx, "/mcp/alpha", &direct_call("cust-1", Some("k-min1"))).await;
+        let (status, answer) = post_modern_as(
+            &fx,
+            "/mcp/alpha",
+            &direct_call("cust-1", Some("k-min1")),
+            &Caller::ModernOidc,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "{answer}");
     }
     assert_eq!(
@@ -223,7 +228,13 @@ async fn direct_cached_error_replay_is_marked_cached() {
     })
     .await;
     for _ in 0..2 {
-        let _ = post_modern(&fx, "/mcp/alpha", &direct_call("cust-1", Some("k-err"))).await;
+        let _ = post_modern_as(
+            &fx,
+            "/mcp/alpha",
+            &direct_call("cust-1", Some("k-err")),
+            &Caller::ModernOidc,
+        )
+        .await;
     }
     assert_eq!(
         fx.calls.load(Ordering::SeqCst),
@@ -261,7 +272,11 @@ async fn direct_replayed_chain_refusal_keeps_its_uninspected_attribution() {
         .await;
         let mut answers = Vec::new();
         for _ in 0..2 {
-            answers.push(post_modern(&fx, "/mcp/alpha", &call).await.1);
+            answers.push(
+                post_modern_as(&fx, "/mcp/alpha", &call, &Caller::ModernOidc)
+                    .await
+                    .1,
+            );
         }
         // The replay answers the stored error; the stored marker stays internal.
         let error = &answers[1]["error"];
@@ -335,7 +350,11 @@ async fn direct_replayed_firewall_refusal_of_an_unread_answer_stays_uninspected(
     let call = direct_call("cust-1", Some("k-firewall"));
     let mut answers = Vec::new();
     for _ in 0..2 {
-        answers.push(post_modern(&fx, "/mcp/alpha", &call).await.1);
+        answers.push(
+            post_modern_as(&fx, "/mcp/alpha", &call, &Caller::ModernOidc)
+                .await
+                .1,
+        );
     }
     assert!(
         answers[0]["error"]["code"].is_i64() && answers[1]["error"] == answers[0]["error"],
