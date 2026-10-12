@@ -390,7 +390,7 @@ impl Backend {
 
     /// Withhold `tool` as a listing with a failed description would (test
     /// support for rows whose fixture serves no description).
-    #[cfg(test)]
+    #[cfg(all(test, feature = "firewall"))]
     pub(crate) fn block_descriptor_for_test(&self, tool: &str) {
         self.descriptor_gate
             .blocked

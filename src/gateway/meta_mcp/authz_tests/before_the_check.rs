@@ -245,3 +245,43 @@ async fn a1_signing_judges_a_denied_targets_attestation_as_any_names() {
     );
     assert_eq!(denied, allowed, "the denied target skipped its attestation");
 }
+
+/// MIK-8361 A1 (defence in depth): a target whose policy signing skipped is
+/// left unprepared, so the dispatch check runs its whole policy rather than
+/// stamping it. With no route verdict recorded to catch it, a prepared mark
+/// would let the denied target through on the stamp alone.
+#[tokio::test]
+async fn a1_a_skipped_target_is_not_prepared_so_dispatch_runs_its_policy() {
+    let (registry, _calls) = counted_backend("alpha");
+    let mut meta = MetaMcp::new(registry);
+    meta.enable_message_signing(
+        crate::security::message_signing::MessageSigner::new(
+            b"a-test-secret-of-sufficient-length".to_vec(),
+            None,
+            "test-key".to_string(),
+        ),
+        Duration::from_secs(300),
+        false,
+    );
+    let dispatch_check =
+        |nonce: &str, authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync)| {
+            let (mut signing, args) = captured_external_gateway_invoke(nonce);
+            meta.prepare_signing_invocation(&mut signing, &args, None, &ctx(authorizer))
+                .expect("signing admits the call");
+            let caller = MetaMcpCallerContext {
+                signing: Some(&signing),
+                ..ctx(authorizer)
+            };
+            meta.check_or_stamp(&args, None, &caller, ("alpha", "read"))
+                .map_err(|error| error.to_string())
+        };
+    assert_eq!(
+        dispatch_check("a1-prep-allowed", &AllowAll),
+        Ok(()),
+        "premise: a prepared allowed target is stamped"
+    );
+    assert!(
+        dispatch_check("a1-prep-denied", &DenyAll).is_err(),
+        "a skipped target was marked prepared: dispatch stamped it past its policy"
+    );
+}

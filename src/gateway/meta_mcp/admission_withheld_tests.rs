@@ -25,8 +25,9 @@ fn owned<'a>(
     }
 }
 
-/// Two keyed `gateway_execute` calls of `[beta:read, beta:other]`, the first
-/// holding the key while the second asks: the second call's answer.
+/// Two keyed `gateway_execute` calls of `[beta:other, beta:read]`: the first,
+/// judged while `read` is allowed, holds the key; the second, judged by
+/// `authorizer`, asks while it is in flight. The second call's answer.
 fn second_while_in_flight(authorizer: &(dyn ToolAuthorizer + Sync)) -> String {
     let (registry, _calls) = counted_backend("beta");
     let meta = MetaMcp::new(registry).with_code_mode(true);
@@ -34,33 +35,34 @@ fn second_while_in_flight(authorizer: &(dyn ToolAuthorizer + Sync)) -> String {
         idempotency_key: Some("in-flight".into()),
         ..RetryFields::default()
     };
-    let caller = owned(&retry, authorizer);
     let args = json!({"chain": [
         {"tool": "beta:other", "arguments": {}},
         {"tool": "beta:read", "arguments": {}}
     ]});
-    let admit = |id| {
+    let admit = |caller: &MetaMcpCallerContext<'_>, id| {
         meta.admit_meta_sync_for_test(
             AdmissionOwner::for_test(caller.owner_principal()),
-            &caller,
+            caller,
             "gateway_execute",
             &args,
             Some("legacy:session"),
             &RequestId::Number(id),
         )
     };
-    let held = admit(1);
+    let held = admit(&owned(&retry, &AllowAll), 1);
     assert!(
         matches!(held, Ok(super::SyncAdmission::Owned(_))),
-        "premise: the first call owns the key"
+        "premise: the first, allowed call owns the key"
     );
-    let second = admit(2).err().map(|error| error.to_string());
+    let second = admit(&owned(&retry, authorizer), 2)
+        .err()
+        .map(|error| error.to_string());
     drop(held);
     second.expect("premise: a key in flight refuses the second call")
 }
 
-/// Ruling A, addition 2: with the key in flight, a plan whose last step the
-/// policy withholds gets exactly the answer the plan whose last step it
+/// Ruling A, addition 2: with the key in flight, a call whose last step the
+/// policy now withholds gets exactly the answer a call whose last step it
 /// allows gets (a missing step passes admission the same way): the key's own
 /// answer, never the withheld step's reason.
 #[test]

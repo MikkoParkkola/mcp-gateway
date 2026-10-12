@@ -203,3 +203,7 @@ fn authorize_targets(
             .map(|error| error_response_preserving_status(id.clone(), &error))
     })
 }
+
+#[cfg(test)]
+#[path = "stdio_route_stage_tests.rs"]
+mod tests;

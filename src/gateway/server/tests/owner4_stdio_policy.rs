@@ -95,10 +95,15 @@ struct Stdio {
     denying: Arc<ToolPolicy>,
     mtls: Arc<crate::mtls::MtlsPolicy>,
     calls: Calls,
-    _data_dir: tempfile::TempDir,
+    data_dir: tempfile::TempDir,
 }
 
 async fn stdio(signing: Signing) -> Stdio {
+    stdio_tuned(signing, |_, _| {}).await
+}
+
+/// [`stdio`] with `tune` adjusting the configuration, handed the data dir.
+async fn stdio_tuned(signing: Signing, tune: impl FnOnce(&mut Config, &std::path::Path)) -> Stdio {
     let (url, calls) = counting_backend().await;
     let mut config = Config::default();
     config.cache.enabled = false;
@@ -122,6 +127,7 @@ async fn stdio(signing: Signing) -> Stdio {
         },
     );
     let data_dir = tempfile::tempdir().expect("tempdir");
+    tune(&mut config, data_dir.path());
     let built = Gateway::new(config)
         .await
         .expect("the production constructor accepts this configuration")
@@ -139,7 +145,7 @@ async fn stdio(signing: Signing) -> Stdio {
         denying,
         mtls: built.mtls_policy,
         calls,
-        _data_dir: data_dir,
+        data_dir,
     }
 }
 
@@ -401,4 +407,33 @@ async fn a_withheld_target_spends_its_nonce_as_a_missing_name_does() {
         "the withheld call's nonce was not settled as a missing name's: {hidden_replay}"
     );
     assert_eq!(count(&stdio.calls, DENIED), 0);
+}
+
+/// MIK-8361 review F4 (stdio): a target the policy withholds writes its one
+/// invocation record as `denied` with the route's refusal code, as on `/mcp`,
+/// although the caller is answered as for a missing name. Before, the stdio
+/// route noted no code and the record was classed by the text-A result.
+#[tokio::test]
+async fn a_withheld_targets_record_keeps_the_routes_refusal_code() {
+    let stdio = stdio_tuned(Signing::Off, |config, dir| {
+        config.security.transparency_log.enabled = Some(true);
+        config.security.transparency_log.path = dir.join("audit.jsonl").display().to_string();
+    })
+    .await;
+    let refused = dispatch(&stdio, &stdio.denying, keyed("f4", DENIED, "owner-4-f4")).await;
+    assert!(
+        refused
+            .to_string()
+            .contains(&crate::backend::text_absent(DENIED)),
+        "premise: answered as a missing name: {refused}"
+    );
+    let records: Vec<Value> = std::fs::read_to_string(stdio.data_dir.path().join("audit.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|record| record.get("tool").is_some() && record.get("event").is_none())
+        .collect();
+    assert_eq!(records.len(), 1, "one invocation record: {records:?}");
+    assert_eq!(records[0]["outcome"], json!("denied"), "{records:?}");
+    assert!(records[0]["error_code"].is_i64(), "{records:?}");
 }
