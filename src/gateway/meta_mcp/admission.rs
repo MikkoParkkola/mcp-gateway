@@ -499,6 +499,25 @@ impl MetaMcp {
         // These compiled discovery/reporting tools do not execute external work.
         // Backend annotations and operator target strings cannot add built-ins.
         let read_only = meta_tool_effect(tool_name) == Effect::ReadOnly;
+        // MIK-8392 STORED.2 E8: a non-meta name with no target for this
+        // caller (withheld or missing) answers exactly as a missing name
+        // does, before any idempotency lookup, so no key state is consulted
+        // or revealed (else a revoked caller's keyed repeat leaks its key
+        // and tool through a 409 fingerprint mismatch). A continuation
+        // retry with an origin keeps its path: a readable one proves via
+        // the origin target, and an unreadable one is E1's continuation
+        // error, never -32601. Unkeyed calls never consult key state, a
+        // malformed retry is refused as malformed, and a call with no
+        // principal keeps admission's own -32003: none of those take this.
+        if retry.idempotency_key.is_some()
+            && !retry.is_malformed()
+            && !crate::gateway::meta_mcp_tool_defs::is_governed_meta_tool(tool_name)
+            && super::invoke::retry_origin_backend(&self.continuation, retry).is_none()
+            && (verified_identity.is_some()
+                || owner_principal.is_some_and(|principal| !principal.is_empty()))
+        {
+            return Err(self.no_such_meta_tool(tool_name, caller));
+        }
         // A retained result is still protected by today's authorization. Plan
         // loading and every target check precede lookup, including mismatches.
         let playbook = self.authorize_execution_plan(caller, tool_name, arguments, session)?;
@@ -721,8 +740,20 @@ impl MetaMcp {
         response: JsonRpcResponse,
         audit: Option<ReplayAudit>,
     ) -> Option<(JsonRpcResponse, Option<ReplayAudit>)> {
-        let target = target?;
-        let key = super::visible::deferred_replay_key(&target.server, &target.tool, caller.retry)?;
+        // A replay with no target (a plan) is served as today (D1): there
+        // is no account to prove live, and the lift could never meet it.
+        // `?` would answer `None` here, which the caller reads as
+        // "deferred", re-running the plan live instead of serving it (S6).
+        let Some(target) = target else {
+            return Some((response, audit));
+        };
+        // Unkeyed likewise: admission never replays one, so the lift could
+        // never meet it either.
+        let Some(key) =
+            super::visible::deferred_replay_key(&target.server, &target.tool, caller.retry)
+        else {
+            return Some((response, audit));
+        };
         if !self.stored_replay_defers(&target.server, &target.tool) {
             return Some((response, audit));
         }

@@ -322,24 +322,44 @@ async fn r5_repeated_task_call_after_revocation_is_not_served_the_stored_task() 
     assert_eq!(fx.gateway.tool_calls().len(), sent, "R5: the call reached the backend: {again}");
 }
 
-/// R4: a keyed call by the SURFACED name dispatches while connected; after
-/// revocation the repeat must be refused with nothing sent. RED on the release
-/// line (ef0e22e72): the retained result is served. With MIK-8356's withheld
-/// name it is refused at the route stage, so this row then guards that answer.
+/// R4 (E8 twin): a keyed call by the SURFACED name dispatches while
+/// connected; after revocation the repeat answers exactly as the same keyed
+/// call to a name that does not exist: byte-identical after normalising only
+/// `id`, with nothing sent and no stored output. The withheld name is never
+/// served stored and never leaks its key through a 409.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn r4_revoked_surfaced_name_is_not_served_the_retained_result() {
+    // The withheld half: surfaced, dispatched, revoked, repeated.
     let fx = fixture(true).await;
     answer_marker(&fx);
-    let call = || {
-        json!({"name": TOOL, "arguments": {"folder": "inbox"}, "_meta": meta(Some("r4"), false)})
+    let call = |key: &str| {
+        json!({"name": TOOL, "arguments": {"folder": "inbox"}, "_meta": meta(Some(key), false)})
     };
-    let first = send(&fx, "tools/call", TOOL, call()).await;
+    let first = send(&fx, "tools/call", TOOL, call("r4")).await;
     assert!(first.to_string().contains(MARKER), "premise: dispatched: {first}");
     let sent = fx.gateway.tool_calls().len();
     fx.gateway.revoke_operator_grant().await;
-    let again = send(&fx, "tools/call", TOOL, call()).await;
+    let again = send(&fx, "tools/call", TOOL, call("r4")).await;
     eprintln!("R4 answer: {again}");
+    // The absent half: never surfaced, so the same name matches no tool.
+    // Fresh key, same shape.
+    let fx_absent = fixture(false).await;
+    let missing = send(&fx_absent, "tools/call", TOOL, call("r4-absent")).await;
+    eprintln!("R4 absent: {missing}");
+    // Twin: byte-identical after normalising only `id`.
+    let mut again_norm = again.clone();
+    let mut missing_norm = missing.clone();
+    again_norm["id"] = Value::Null;
+    missing_norm["id"] = Value::Null;
+    assert_eq!(
+        again_norm, missing_norm,
+        "R4: the withheld answer differs from the missing-name answer: {again} vs {missing}"
+    );
     assert_refused_unsent(&fx, "R4", &again, sent);
+    assert!(
+        fx_absent.gateway.tool_calls().is_empty(),
+        "R4: the missing-name call reached the backend: {missing}"
+    );
 }
 
 /// The two-account fixture MIK-8406 builds on: both managed accounts start
@@ -559,4 +579,428 @@ async fn fixture_fail_next_fails_one_call_with_the_account_live() {
     answer_marker(&fx);
     let ok = send(&fx, "tools/call", "gateway_invoke", invoke_params(None, false)).await;
     assert!(ok.to_string().contains(MARKER), "the next call succeeds: {ok}");
+}
+
+/// R6u (E7 unit): a per-caller propagation backend without `account:`
+/// classifies as needing proof at site 1, so its Replay defers. M34 (that
+/// backend exempted like an unguarded one) makes the deferral false.
+#[test]
+fn r6u_per_caller_propagation_without_account_defers() {
+    let mut gateway =
+        DirectAccountGateway::new(sole_operator(), &Binding::Propagation);
+    let meta = gateway.take_meta();
+    // No `account:`, so no per-user account to judge ...
+    assert!(
+        meta.target_account(BACKEND, TOOL).is_none(),
+        "R6u: a propagation backend without `account:` names an account"
+    );
+    // ... but it mints per caller, so site 1 defers to a live mint (E7).
+    assert!(
+        meta.mints_per_caller(BACKEND, TOOL),
+        "R6u: a per-caller propagation backend mints nothing per caller"
+    );
+    assert!(
+        meta.stored_replay_defers(BACKEND, TOOL),
+        "R6u: a per-caller propagation backend's Replay does not defer"
+    );
+    // Contrast: a backend that mints nothing per caller is exempt.
+    let empty = crate::gateway::meta_mcp::MetaMcp::new(Arc::new(
+        crate::backend::BackendRegistry::new(),
+    ));
+    assert!(
+        !empty.stored_replay_defers("no-backend", "no-tool"),
+        "R6u: a backend that mints nothing per caller defers"
+    );
+}
+
+/// R6m support: a token-exchange backend whose IdP is the key-server IdP
+/// pattern from `token_exchange_live_tests`, with `kill()`.
+mod r6m_token_exchange {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use axum::{Router, routing::get};
+    use serde_json::{Value, json};
+    use tokio::net::TcpListener;
+
+    use crate::config::{
+        KeyServerConfig, KeyServerPolicyConfig, KeyServerProviderConfig, PolicyMatchConfig,
+        PolicyScopesConfig,
+    };
+    use crate::gateway::oauth::{GatewayKeyPair, jwks_handler};
+    use crate::key_server::policy::PolicyEngine;
+    use crate::key_server::{InMemoryTokenStore, KeyServer, OidcVerifier, handler::key_server_routes};
+
+    /// The permissive authorizer the R6m caller carries.
+    pub(super) static ALLOW: crate::gateway::authz::AllowAll =
+        crate::gateway::authz::AllowAll;
+
+    const GATEWAY_ASSERTION_ISSUER: &str = "mcp-gateway";
+
+    /// The in-process key-server IdP: `/auth/token` plus `/.well-known/jwks.json`.
+    pub(super) struct LiveIdp {
+        addr: std::net::SocketAddr,
+        server: tokio::task::JoinHandle<()>,
+    }
+
+    impl LiveIdp {
+        pub(super) async fn start(key: &Arc<GatewayKeyPair>) -> Self {
+            let config = KeyServerConfig {
+                enabled: true,
+                oidc: vec![KeyServerProviderConfig {
+                    issuer: GATEWAY_ASSERTION_ISSUER.to_string(),
+                    jwks_uri: Some(String::new()),
+                    discovery_url: None,
+                    auto_discover: false,
+                    audiences: Vec::new(),
+                    allowed_domains: Vec::new(),
+                }],
+                policies: vec![KeyServerPolicyConfig {
+                    match_criteria: PolicyMatchConfig {
+                        domain: None,
+                        issuer: GATEWAY_ASSERTION_ISSUER.to_string(),
+                        email: None,
+                        group: None,
+                    },
+                    scopes: PolicyScopesConfig {
+                        backends: vec!["*".to_string()],
+                        tools: vec!["*".to_string()],
+                        rate_limit: 42,
+                    },
+                }],
+                ..KeyServerConfig::default()
+            };
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind an ephemeral port");
+            let addr = listener.local_addr().expect("a local address");
+            let mut config = config;
+            config.oidc[0].jwks_uri = Some(format!("http://{addr}/.well-known/jwks.json"));
+            let key_server = Arc::new(KeyServer {
+                store: Arc::new(InMemoryTokenStore::new()),
+                oidc: Arc::new(OidcVerifier::with_http_client(
+                    config.oidc.clone(),
+                    reqwest::Client::new(),
+                )),
+                policy: Arc::new(PolicyEngine::new(config.policies.clone())),
+                config,
+            });
+            let jwks_router = Router::new()
+                .route("/.well-known/jwks.json", get(jwks_handler))
+                .with_state(Arc::clone(key));
+            let app = key_server_routes(key_server).merge(jwks_router);
+            let server = tokio::spawn(async move {
+                axum::serve(listener, app)
+                    .await
+                    .expect("the in-process IdP serves");
+            });
+            Self { addr, server }
+        }
+
+        pub(super) fn endpoint(&self) -> String {
+            format!("http://{}/auth/token", self.addr)
+        }
+
+        /// Kill the IdP outright: any later mint must fail without it.
+        pub(super) fn kill(self) {
+            self.server.abort();
+        }
+    }
+
+    /// A counting backend transport: `tools/call` answers the marker;
+    /// listings answer the one tool without counting.
+    pub(super) struct Counting {
+        pub(super) sends: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::transport::Transport for Counting {
+        async fn request(
+            &self,
+            method: &str,
+            _params: Option<Value>,
+        ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+            use crate::protocol::{JsonRpcResponse, RequestId};
+            if method == "tools/call" {
+                self.sends.fetch_add(1, Ordering::SeqCst);
+                return Ok(JsonRpcResponse::success(
+                    RequestId::Number(1),
+                    json!({"content": [{"type": "text", "text": super::MARKER}]}),
+                ));
+            }
+            if method == "tools/list" {
+                return Ok(JsonRpcResponse::success(
+                    RequestId::Number(1),
+                    json!({"tools": [{"name": super::TOOL, "inputSchema": {"type": "object"}}]}),
+                ));
+            }
+            Ok(JsonRpcResponse::success(
+                RequestId::Number(1),
+                json!({}),
+            ))
+        }
+
+        async fn request_with_headers(
+            &self,
+            method: &str,
+            params: Option<Value>,
+            _extra_headers: &[(String, String)],
+            _identity_key: Option<&str>,
+            _resend: crate::transport::ResendPermission,
+        ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+            self.request(method, params).await
+        }
+
+        async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+            Ok(())
+        }
+
+        fn is_connected(&self) -> bool {
+            true
+        }
+
+        async fn close(&self) -> crate::Result<()> {
+            Ok(())
+        }
+    }
+}
+
+/// R6m (E7 meta level, through the REAL replay entry): a keyed call succeeds
+/// via token exchange; the IdP is killed and the clock moved past the cached
+/// token's TTL; the same keyed repeat is refused, with nothing sent and no
+/// stored output. Current-thread: the forced clock is this thread's.
+#[tokio::test]
+async fn r6m_token_exchange_replay_after_idp_kill_and_ttl_is_refused() {
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    use serde_json::json;
+
+    use r6m_token_exchange::{ALLOW, Counting, LiveIdp};
+
+    use crate::backend::{Backend, BackendRegistry};
+    use crate::config::{BackendConfig, TransportConfig};
+    use crate::gateway::meta_mcp::MetaMcp;
+    use crate::gateway::meta_mcp::admission::SyncAdmission;
+    use crate::gateway::oauth::GatewayKeyPair;
+    use crate::identity_propagation::{
+        IdentityPropagationConfig, PropagationStrategyKind, SessionMode, TokenExchangeStrategy,
+    };
+    use crate::key_server::oidc::VerifiedIdentity;
+
+    const BACKEND: &str = "tx";
+
+    // The IdP, and the gateway key it trusts.
+    let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
+    let idp = LiveIdp::start(&key).await;
+    let endpoint = idp.endpoint();
+
+    // The token-exchange backend: per-caller propagation, no `account:`.
+    let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let registry = Arc::new(BackendRegistry::new());
+    let backend_config = BackendConfig {
+        transport: TransportConfig::Http {
+            http_url: "https://tx.internal/mcp".to_string(),
+            streamable_http: Some(true),
+            protocol_version: None,
+        },
+        identity_propagation: Some(IdentityPropagationConfig {
+            strategy: PropagationStrategyKind::TokenExchange,
+            audience: "https://tx.internal".to_string(),
+            required: true,
+            session_mode: SessionMode::Stateless,
+            token_exchange_endpoint: Some(endpoint),
+            token_exchange_scope: Some("backends:tx tools:read".to_string()),
+        }),
+        ..BackendConfig::r2_off()
+    };
+    let backend = Arc::new(Backend::new(
+        BACKEND,
+        backend_config,
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    backend.set_transport_for_test(Arc::new(Counting {
+        sends: Arc::clone(&sends),
+    }));
+    let tool: crate::protocol::Tool = serde_json::from_value(json!({
+        "name": TOOL, "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}}
+    }))
+    .expect("a tool");
+    backend.store_shared_tools_for_test(vec![tool]);
+    assert!(registry.register(backend), "the fixture backend registers");
+
+    let mut meta = MetaMcp::new(registry);
+    meta.set_identity_propagation(Arc::new(TokenExchangeStrategy::with_http_client(
+        Arc::clone(&key),
+        300,
+        reqwest::Client::new(),
+    )));
+    let log_dir = tempfile::tempdir().expect("a log directory");
+    let log = Arc::new(
+        crate::security::TransparencyLogger::open(Arc::new(
+            crate::security::transparency_log::TransparencyLogConfig {
+                enabled: true,
+                path: log_dir.path().join("audit.jsonl").to_string_lossy().into_owned(),
+                key_id: "r6m".to_string(),
+                ..crate::security::transparency_log::TransparencyLogConfig::default()
+            },
+        ))
+        .expect("the transparency log opens"),
+    );
+    meta.enable_transparency_log(log);
+
+    // E7 classification at the backend: no account, but a per-caller mint.
+    assert!(
+        meta.target_account(BACKEND, TOOL).is_none(),
+        "R6m premise: a token-exchange backend without `account:` names an account"
+    );
+    assert!(
+        meta.mints_per_caller(BACKEND, TOOL),
+        "R6m premise: a token-exchange backend mints nothing per caller"
+    );
+    assert!(
+        meta.stored_replay_defers(BACKEND, TOOL),
+        "R6m premise: a token-exchange backend's Replay does not defer"
+    );
+
+    let alice = VerifiedIdentity {
+        subject: "alice-subject".to_string(),
+        email: "alice@corp.example".to_string(),
+        name: None,
+        groups: vec!["eng".to_string()],
+        issuer: "https://corp-idp.example".to_string(),
+    };
+    let invoke_args = || {
+        json!({"server": BACKEND, "tool": TOOL, "arguments": {"folder": "inbox"}})
+    };
+    let retry = |key: &str| crate::protocol::mrtr::RetryFields {
+        input_responses: None,
+        request_state: None,
+        idempotency_key: Some(key.to_string()),
+        malformed: Vec::new(),
+        attestation: None,
+    };
+    let caller = |retry: &crate::protocol::mrtr::RetryFields,
+                  alice: &VerifiedIdentity|
+     -> crate::gateway::meta_mcp::MetaMcpCallerContext<'_> {
+        crate::gateway::meta_mcp::MetaMcpCallerContext {
+            task: None,
+            signing: None,
+            execution: None,
+            credential_principal: None,
+            authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
+            credential_kind: crate::security::audit::CredentialKind::None,
+            is_modern: false,
+            protocol_revision: None,
+            authorizer: &ALLOW,
+            stdio_nonce: None,
+            caller_key: None,
+            verified_identity: Some(alice),
+            api_key_name: None,
+            agent_id: None,
+            agent_declared: None,
+            grant_subject: None,
+            is_admin: false,
+            surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
+            input_capabilities: crate::protocol::meta::Declared::NONE,
+            retry,
+            confirmation:
+                crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+            era: crate::protocol::meta::Era::Legacy,
+            channel: &crate::gateway::input_bridge::NoClientChannel,
+        }
+    };
+
+    // First: the keyed call succeeds via token exchange. The pre-pass is a
+    // no-op here (no account to fill); admission and dispatch are the real
+    // route-stage path, and the lease settle retains the result.
+    let retry1 = retry("r6m");
+    let mut caller1 = caller(&retry1, &alice);
+    let args1 = invoke_args();
+    let id1 = crate::protocol::RequestId::Number(7);
+    let (first, lease) = crate::gateway::meta_mcp::visible::with_visibility_memo(async {
+        let admission = meta
+            .admit_meta_sync_for_test(
+                crate::gateway::meta_mcp::AdmissionOwner::local_operator(),
+                &caller1,
+                "gateway_invoke",
+                &args1,
+                Some("s1"),
+                &id1,
+            )
+            .expect("premise: admission runs");
+        let lease = match admission {
+            SyncAdmission::Owned(lease) => lease,
+            _ => panic!("premise: the first keyed call is not admitted owned"),
+        };
+        caller1.execution = Some(&lease);
+        let response = meta
+            .handle_tools_call(id1, "gateway_invoke", args1, Some("s1"), caller1)
+            .await;
+        (response, lease)
+    })
+    .await;
+    assert!(
+        first.to_value_lossy().to_string().contains(MARKER),
+        "premise: the token-exchange call did not dispatch: {first:?}"
+    );
+    assert_eq!(sends.load(Ordering::SeqCst), 1, "premise: {first:?}");
+    lease.complete_secured(&first);
+
+    // The IdP dies and the cached token's TTL (one hour) passes; the retained
+    // result (one day) is still present.
+    idp.kill();
+    let now = crate::clock::unix_secs().expect("a test host clock reads after 1970");
+    let _clock = crate::clock::test_clock::at_secs(now + 7200);
+
+    // Repeat: the same keyed call. Admission replays it with its target; the
+    // replay defers (E7); the live proof fails without the IdP; nothing is
+    // sent and no stored output goes out.
+    let retry2 = retry("r6m");
+    let caller2 = caller(&retry2, &alice);
+    let args2 = invoke_args();
+    let id2 = crate::protocol::RequestId::Number(7);
+    let again = crate::gateway::meta_mcp::visible::with_visibility_memo(async {
+        let admission = meta
+            .admit_meta_sync_for_test(
+                crate::gateway::meta_mcp::AdmissionOwner::local_operator(),
+                &caller2,
+                "gateway_invoke",
+                &args2,
+                Some("s1"),
+                &id2,
+            )
+            .expect("R6m: admission runs");
+        let (response, audit, target) = match admission {
+            SyncAdmission::Replay(response, audit, target) => (response, audit, target),
+            _ => panic!("R6m: the repeat was not admitted as a replay"),
+        };
+        assert!(
+            target
+                .as_ref()
+                .is_some_and(|target| target.server == BACKEND && target.tool == TOOL),
+            "R6m: the replay carries no single-call target"
+        );
+        match meta.defer_or_serve_replay("gateway_invoke", &args2, &caller2, target, response, audit)
+        {
+            Some(_) => panic!("R6m: the replay was served without a live proof"),
+            None => {
+                meta.handle_tools_call(id2, "gateway_invoke", args2, Some("s1"), caller2)
+                    .await
+            }
+        }
+    })
+    .await;
+    eprintln!("R6m answer: {again:?}");
+    assert!(
+        !again.to_value_lossy().to_string().contains(MARKER),
+        "R6m: the stored output was served: {again:?}"
+    );
+    assert!(again.error.is_some(), "R6m: not a refusal: {again:?}");
+    assert_eq!(
+        sends.load(Ordering::SeqCst),
+        1,
+        "R6m: the call reached the backend: {again:?}"
+    );
 }
