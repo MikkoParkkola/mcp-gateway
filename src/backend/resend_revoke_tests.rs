@@ -570,3 +570,19 @@ async fn s11_a_callers_page_revokes_in_that_callers_slot_only() {
     );
     assert!(holds("beta"), "alpha's page revoked beta's permission");
 }
+
+/// S13b: the abandoned refresh narrows cache admission too (mutant m15,
+/// narrowing resend only).
+#[tokio::test]
+async fn s13b_an_abandoned_refresh_narrows_cache_admission_too() {
+    let wire = Wire::new(vec![Page::Tools(vec![read_only("t")], false)]);
+    let backend = refreshing_backend(&wire);
+    backend.get_tools_shared().await.expect("the first fill");
+    assert!(
+        backend.is_read_only_for(None, "t"),
+        "premise: `t` is admitted"
+    );
+    *wire.pages.lock() = vec![Page::Tools(vec![write("t")], true), Page::ErrorFrame];
+    let _ = backend.get_tools_shared().await;
+    assert!(!backend.is_read_only_for(None, "t"));
+}
