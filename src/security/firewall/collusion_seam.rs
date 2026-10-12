@@ -37,6 +37,8 @@ pub(super) struct FormWork {
     pub(super) normalized: usize,
     /// k-gram hash invocations.
     pub(super) hashed: usize,
+    /// k-gram hashes kept for the slides.
+    pub(super) stored: usize,
     /// k-grams the second slide visited.
     pub(super) visited: usize,
 }
@@ -70,11 +72,12 @@ fn gram_hash(gram: &str) -> u64 {
 
 /// Test-only: close the form being read into [`FORM_WORK`].
 #[cfg(test)]
-fn record(chars: usize, visited: usize) {
+fn record(chars: usize, stored: usize, visited: usize) {
     let work = FormWork {
         chars,
         normalized: NORMALIZED.get(),
         hashed: HASHED.get(),
+        stored,
         visited,
     };
     FORM_WORK.with_borrow_mut(|forms| forms.push(work));
@@ -173,7 +176,7 @@ impl CollusionDetector {
             .collect();
         if selected.is_empty() {
             #[cfg(test)]
-            record(chars, 0);
+            record(chars, hashes.len(), 0);
             return Vec::new();
         }
         #[cfg(test)]
@@ -192,7 +195,7 @@ impl CollusionDetector {
             }
         });
         #[cfg(test)]
-        record(chars, visited);
+        record(chars, hashes.len(), visited);
         union.into_iter().collect()
     }
 

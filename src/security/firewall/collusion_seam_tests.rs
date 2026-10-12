@@ -216,6 +216,7 @@ fn many_tiny_leaves_are_read_in_one_pass() {
         // any of the text shows as more chars normalized than the form has.
         assert_eq!(form.normalized, form.chars, "each char normalized once");
         assert_eq!(form.hashed, grams, "each k-gram hashed once");
+        assert_eq!(form.stored, grams, "each k-gram's hash kept once");
         assert!(
             form.visited <= grams,
             "each k-gram visited at most once more"
