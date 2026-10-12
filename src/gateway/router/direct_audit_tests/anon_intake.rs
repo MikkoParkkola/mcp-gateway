@@ -255,11 +255,20 @@ async fn b8_intake_answers_before_later_refusals() {
             .to_string(),
         ),
     ];
+    // Every case runs; the failures are listed together, so the red run
+    // records each case's "before".
+    let mut wrong = Vec::new();
     for (case, body) in cases {
         let (status, answer) = post(&fx, "alpha", &body, &Caller::Anonymous).await;
-        assert_eq!(message(&answer), NO_PRINCIPAL, "b8 {case}: {answer}");
-        assert_eq!(status, StatusCode::BAD_REQUEST, "b8 {case}: {answer}");
+        if message(&answer) != NO_PRINCIPAL || status != StatusCode::BAD_REQUEST {
+            wrong.push(format!("{case}: {status} {answer}"));
+        }
     }
+    assert!(
+        wrong.is_empty(),
+        "b8 answered before intake:\n{}",
+        wrong.join("\n")
+    );
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "b8: dispatched");
 }
 
@@ -295,4 +304,80 @@ async fn b9_protocol_field_refusals_stay_first() {
             "b9 {case}: intake answered first"
         );
     }
+}
+
+/// `gateway_invoke` of `server`/`tool` on `/mcp`, keyed.
+fn keyed_invoke(server: &str, tool: &str) -> String {
+    json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {
+        "name": "gateway_invoke",
+        "arguments": {"server": server, "tool": tool, "arguments": {"customer_id": "c"}},
+        "_meta": {(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): KEY}}})
+    .to_string()
+}
+
+/// C1 (UNIFY.1a′, /mcp): a keyed no-principal `gateway_invoke` gets the same
+/// bytes whatever its target: an existing tool, a missing tool, a missing
+/// server. RED where a target judgement answers first.
+#[tokio::test]
+async fn c1_mcp_invoke_is_name_independent() {
+    let fx = fixture(idempotent()).await;
+    let mut answers = Vec::new();
+    for (case, server, tool) in [
+        ("existing", "alpha", "t"),
+        ("missing tool", "alpha", "nope"),
+        ("missing server", "nope", "t"),
+    ] {
+        answers.push((
+            case,
+            post_to_raw(&fx, "/mcp", &keyed_invoke(server, tool), &Caller::Session).await,
+        ));
+    }
+    let (_, (_, first)) = &answers[0];
+    let wrong: Vec<String> = answers
+        .iter()
+        .filter(|(_, (status, bytes))| *status != StatusCode::BAD_REQUEST || bytes != first)
+        .map(|(case, (status, bytes))| {
+            format!("{case}: {status} {}", String::from_utf8_lossy(bytes))
+        })
+        .collect();
+    assert!(
+        wrong.is_empty(),
+        "c1 differs from the existing target:\n{}",
+        wrong.join("\n")
+    );
+    let body: Value = serde_json::from_slice(first).expect("JSON");
+    assert_eq!(message(&body), NO_PRINCIPAL, "c1: {body}");
+    assert_eq!(
+        fx.lists.load(Ordering::SeqCst),
+        0,
+        "c1: a backend was listed"
+    );
+}
+
+/// D2 (D8(a)): on this auth-off gateway, an anonymous keyed task submit
+/// (a `task` member, the tasks extension declared) is refused -32003 and no
+/// task is created. RED: today a task submit skips sync admission, so a
+/// pooled-owner task is created.
+#[tokio::test]
+async fn d2_auth_off_anonymous_keyed_task_is_refused() {
+    let fx = fixture(idempotent()).await;
+    let body = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {
+    "name": "gateway_invoke",
+    "arguments": {"server": "alpha", "tool": "t", "arguments": {"customer_id": "c"}},
+    "task": {},
+    "_meta": {
+        (crate::protocol::mrtr::IDEMPOTENCY_KEY_META): KEY,
+        "io.modelcontextprotocol/protocolVersion": crate::protocol::meta::MODERN_VERSIONS[0],
+        "io.modelcontextprotocol/clientCapabilities": {
+            "extensions": {"io.modelcontextprotocol/tasks": {}}
+        },
+    }}})
+    .to_string();
+    let (status, answer) = post_to(&fx, "/mcp", &body, &Caller::Modern).await;
+    assert!(
+        answer.pointer("/result/taskId").is_none(),
+        "d2: a task was created: {answer}"
+    );
+    assert_eq!(message(&answer), NO_PRINCIPAL, "d2: {answer}");
+    assert_eq!(status, StatusCode::BAD_REQUEST, "d2: {answer}");
 }
