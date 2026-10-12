@@ -89,6 +89,26 @@ impl RpcError {
     pub(crate) fn internal() -> Self {
         Self::new(-32603, "Internal error", None)
     }
+
+    /// `-32603` for a verdict the host clock could not judge (before 1970,
+    /// MIK-8202). An internal error on the wire; told apart in process, so
+    /// no caller reads it as an admission or as a refusal.
+    pub(crate) fn clock_unreadable() -> Self {
+        Self::new(
+            -32603,
+            "Internal error",
+            Some(json!({ "reason": "clock_unreadable" })),
+        )
+    }
+
+    /// Whether this is [`Self::clock_unreadable`].
+    pub(crate) fn is_clock_unreadable(&self) -> bool {
+        self.code == -32603
+            && self
+                .data
+                .as_ref()
+                .is_some_and(|data| data["reason"] == "clock_unreadable")
+    }
 }
 
 /// Why a callback endpoint failed. Only this category ever reaches a caller:
@@ -107,6 +127,9 @@ pub(crate) enum CallbackFailure {
     Http5xx,
     /// A 2xx or 3xx answer that did not echo the challenge.
     ChallengeFailed,
+    /// Not sent: the host clock reads before 1970, so the request could not
+    /// be signed with a timestamp (MIK-8202). Settled unsent, never counted.
+    ClockUnreadable,
 }
 
 impl CallbackFailure {
@@ -118,6 +141,7 @@ impl CallbackFailure {
             Self::Http4xx => "http_4xx",
             Self::Http5xx => "http_5xx",
             Self::ChallengeFailed => "challenge_failed",
+            Self::ClockUnreadable => "clock_unreadable",
         }
     }
 }

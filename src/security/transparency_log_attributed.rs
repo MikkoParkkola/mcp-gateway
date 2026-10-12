@@ -7,7 +7,6 @@
 
 use std::io;
 
-use chrono::Utc;
 use serde_json::{Map, Value};
 
 use super::{CorrelationKey, CorrelationSource, TransparencyLogger};
@@ -164,7 +163,8 @@ impl TransparencyLogger {
         fields.insert("route".into(), record.route.into());
         fields.insert("server".into(), record.server.into());
         fields.insert("session_id".into(), record.session_id.into());
-        fields.insert("timestamp".into(), Utc::now().to_rfc3339().into());
+        // Undated on a clock before 1970, never a 1969 stamp (MIK-8202).
+        crate::clock::stamp_audit_row(&mut fields);
         if let Some(tool) = record.tool {
             fields.insert("tool".into(), tool.into());
         }

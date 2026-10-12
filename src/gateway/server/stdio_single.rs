@@ -30,12 +30,54 @@ pub(super) struct StdioClient<'a> {
     pub(super) handshake_capabilities: crate::protocol::meta::Declared,
     /// The session's task store; `None` serves no `tasks/*` (MIK-7272.OWNER.2).
     pub(super) tasks: Option<&'a stdio_tasks::StdioTasks>,
-    /// `server.modern_protocol` at stdio start: whether `server/discover`
-    /// lists 2026-07-28 (MIK-7217.STDIO.1, design D7).
-    pub(super) modern: bool,
+    /// `server.modern_protocol` at stdio start: whether this process serves
+    /// MCP 2026-07-28 at all. Gates the unserved-revision refusal and, with
+    /// `discover`, what `server/discover` lists (MIK-7217.STDIO.1, MIK-8380).
+    pub(super) serving: ModernServing,
+    /// Which revisions `server/discover` lists for this request, apart from
+    /// whether modern is served: a batch is a legacy shape and always lists the
+    /// legacy set (MIK-8380).
+    pub(super) discover: DiscoverListing,
     /// `security.sanitize_input` at stdio start, applied at intake exactly as
     /// `/mcp` applies it (MIK-8149.REQFW.2).
     pub(super) sanitize: InputSanitizing,
+}
+
+/// Whether this process serves MCP 2026-07-28 (`server.modern_protocol`, read
+/// once at stdio start). An enum, not a `bool`, because it selects behaviour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ModernServing {
+    /// Modern requests are served and `server/discover` may list the revision.
+    Enabled,
+    /// Modern serving is switched off: a modern revision is refused.
+    Disabled,
+}
+
+impl ModernServing {
+    /// The setting, as `server.modern_protocol` spells it.
+    pub(super) const fn from_setting(setting: bool) -> Self {
+        if setting {
+            Self::Enabled
+        } else {
+            Self::Disabled
+        }
+    }
+}
+
+/// Which revisions `server/discover` lists for one request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DiscoverListing {
+    /// The set the process serves: the modern revision too, when it is served.
+    Configured,
+    /// The legacy set only, whatever the process serves (a batch item).
+    LegacyOnly,
+}
+
+impl StdioClient<'_> {
+    /// Whether `server/discover` lists 2026-07-28 for this request.
+    pub(super) fn discover_lists_modern(&self) -> bool {
+        self.serving == ModernServing::Enabled && self.discover == DiscoverListing::Configured
+    }
 }
 
 /// Whether stdio intake sanitizes each request (`security.sanitize_input`).
@@ -233,7 +275,8 @@ impl Gateway {
                 channel: &crate::gateway::input_bridge::NoClientChannel,
                 handshake_capabilities: crate::protocol::meta::Declared::NONE,
                 tasks: None,
-                modern: false,
+                serving: ModernServing::Enabled,
+                discover: DiscoverListing::Configured,
                 sanitize: InputSanitizing::Off,
             },
             &StdioTelemetry::default(),

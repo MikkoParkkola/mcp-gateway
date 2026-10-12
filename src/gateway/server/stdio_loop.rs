@@ -89,7 +89,8 @@ impl Gateway {
         // the async teardown; this guard still stops its task workers.
         let _stop_tasks = task_store.as_ref().map(|(tasks, _)| tasks.stop_on_drop());
         // MIK-7217.STDIO.1: read once, as the store is; discover lists 2026-07-28 by it.
-        let modern = self.config.server.modern_protocol;
+        let serving =
+            super::stdio_single::ModernServing::from_setting(self.config.server.modern_protocol);
         let sanitize =
             super::stdio_single::InputSanitizing::from_setting(self.config.security.sanitize_input);
 
@@ -438,7 +439,7 @@ impl Gateway {
                                 &tool_policy,
                                 &mtls_policy,
                                 request,
-                                (session_id, sanitize),
+                                (session_id, sanitize, serving),
                                 &telemetry,
                                 &reads,
                             )),
@@ -535,7 +536,8 @@ impl Gateway {
                                 channel: &*channel,
                                 handshake_capabilities,
                                 tasks: tasks.as_deref(),
-                                modern,
+                                serving,
+                                discover: super::stdio_single::DiscoverListing::Configured,
                                 sanitize,
                             },
                             &telemetry,

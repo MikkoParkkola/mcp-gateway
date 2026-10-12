@@ -63,6 +63,9 @@ pub(super) struct Shared {
     /// Test pause as a task starts its reconnect backoff (T35).
     #[cfg(test)]
     pub before_backoff: Arc<crate::test_pause::Slot>,
+    /// What ended each of the task's waits, and when it began one (T35).
+    #[cfg(test)]
+    pub waits: super::upstream_session::WaitProbe,
     /// Whether the task ran where a login may begin, read as it starts
     /// (MIK-8269): background upkeep must not.
     #[cfg(test)]
@@ -176,7 +179,16 @@ impl EventsHub {
         granted_by: u64,
     ) {
         let name = format!("backend.{backend}.resource_updated");
-        let now = chrono::Utc::now();
+        // A 1969 `now` reads expired rows live and would revoke them, dropping
+        // their records with no expiry burial. Skipped: the next complete read
+        // revokes again, and delivery is idle on such a clock (MIK-8202).
+        let Ok(now) = crate::clock::utc_now() else {
+            tracing::warn!(
+                clock_unreadable = true,
+                "events: absent resources not revoked; the host clock reads before 1970"
+            );
+            return;
+        };
         let gone: Vec<_> = self
             .store
             .subscriptions()
@@ -602,6 +614,8 @@ impl UpstreamListeners {
             before_park: Arc::clone(&self.before_park),
             #[cfg(test)]
             before_backoff: Arc::default(),
+            #[cfg(test)]
+            waits: super::upstream_session::WaitProbe::default(),
             #[cfg(test)]
             ran_interactive: Mutex::default(),
         })

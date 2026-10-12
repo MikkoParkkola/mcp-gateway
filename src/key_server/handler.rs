@@ -31,11 +31,7 @@
 //! If no admin token is configured, the endpoints return `503 Service Unavailable`.
 
 use crate::gateway::routes;
-use std::{
-    net::IpAddr,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{net::IpAddr, sync::Arc};
 
 use axum::{
     Form, Json, Router,
@@ -53,7 +49,7 @@ use super::{
     audit::{self, AuditEvent},
     oidc::VerifiedIdentity,
     policy::{RequestedScopes, ScopeRefusal},
-    store::{InMemoryTokenStore, TemporaryToken},
+    store::{InMemoryTokenStore, TemporaryToken, TokenScopes},
 };
 use crate::config::KeyServerOidcConfig;
 
@@ -253,18 +249,35 @@ async fn exchange_token(
         return refusal;
     }
 
-    // Issue token
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_secs();
+    issue(&ks, identity, scopes, client_ip).await
+}
+
+/// Issue a temporary token for a verified identity and its resolved scopes,
+/// dated by one read of the clock, and store it.
+pub(super) async fn issue(
+    ks: &KeyServer,
+    identity: VerifiedIdentity,
+    scopes: TokenScopes,
+    client_ip: Option<IpAddr>,
+) -> axum::response::Response {
+    // An issuer refuses on a clock that cannot be read (before 1970): a token
+    // dated from the epoch would be refused on any readable clock, and
+    // nothing is stored (MIK-8202).
+    let Ok(now) = crate::clock::unix_secs() else {
+        warn!("key server: the host clock reads before 1970; no token issued");
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "temporarily_unavailable",
+            "the host clock reads before 1970; retry once it is set",
+        );
+    };
 
     let ttl = ks.config.token_ttl_secs;
     let token = TemporaryToken {
         jti: InMemoryTokenStore::generate_jti(),
         token: InMemoryTokenStore::generate_bearer(),
-        identity: identity.clone(),
-        scopes: scopes.clone(),
+        identity,
+        scopes,
         iat: now,
         // `token_ttl_secs` is bounded at load; never wraps regardless.
         exp: now.saturating_add(ttl),
@@ -493,6 +506,7 @@ fn error_response(status: StatusCode, error: &str, message: &str) -> axum::respo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn empty_admin_token_never_authenticates() {

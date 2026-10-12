@@ -12,7 +12,6 @@
 //! Events are emitted via `tracing::info!` using structured fields, keeping
 //! them queryable in any log aggregator (Loki, `CloudWatch`, Datadog, etc.).
 
-use chrono::Utc;
 use serde::Serialize;
 
 /// Decision for a tool invocation.
@@ -37,8 +36,12 @@ impl std::fmt::Display for Decision {
 /// A structured audit log entry for a single tool invocation.
 #[derive(Debug, Serialize)]
 pub struct ToolInvocationAudit {
-    /// ISO 8601 timestamp.
-    pub timestamp: String,
+    /// ISO 8601 timestamp; `None` (serialized as `null`) when the host clock
+    /// reads before 1970, with `clock_invalid` set (MIK-8202).
+    pub timestamp: Option<String>,
+    /// True when the host clock could not date this entry.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub clock_invalid: bool,
     /// Agent `client_id`.
     pub agent_id: String,
     /// Agent display name.
@@ -56,6 +59,12 @@ pub struct ToolInvocationAudit {
     pub reason: Option<String>,
 }
 
+/// The entry's timestamp, or `None` on a clock that cannot be read: a
+/// recorder writes the entry undated rather than stamping the epoch.
+fn stamp() -> Option<String> {
+    crate::clock::utc_now().ok().map(|now| now.to_rfc3339())
+}
+
 impl ToolInvocationAudit {
     /// Build an `allow` entry.
     pub fn allow(
@@ -65,8 +74,10 @@ impl ToolInvocationAudit {
         tool: impl Into<String>,
         scopes: Vec<String>,
     ) -> Self {
+        let stamped = stamp();
         Self {
-            timestamp: Utc::now().to_rfc3339(),
+            clock_invalid: stamped.is_none(),
+            timestamp: stamped,
             agent_id: agent_id.into(),
             agent_name: agent_name.into(),
             backend: backend.into(),
@@ -86,8 +97,10 @@ impl ToolInvocationAudit {
         scopes: Vec<String>,
         reason: impl Into<String>,
     ) -> Self {
+        let stamped = stamp();
         Self {
-            timestamp: Utc::now().to_rfc3339(),
+            clock_invalid: stamped.is_none(),
+            timestamp: stamped,
             agent_id: agent_id.into(),
             agent_name: agent_name.into(),
             backend: backend.into(),
@@ -130,7 +143,7 @@ mod tests {
 
         assert_eq!(entry.decision, Decision::Allow);
         assert!(entry.reason.is_none());
-        assert!(!entry.timestamp.is_empty());
+        assert!(entry.timestamp.as_deref().is_some_and(|t| !t.is_empty()));
         assert_eq!(entry.agent_id, "agent-1");
         assert_eq!(entry.backend, "surreal");
         assert_eq!(entry.tool, "query");
@@ -171,5 +184,23 @@ mod tests {
     fn decision_display() {
         assert_eq!(Decision::Allow.to_string(), "allow");
         assert_eq!(Decision::Deny.to_string(), "deny");
+    }
+
+    /// MIK-8202 P3 (recorder): on a clock before 1970 the entry is still
+    /// emitted, undated: `timestamp` is `null` and `clock_invalid` is true.
+    /// On a readable clock the JSON carries no `clock_invalid` key, as
+    /// before. Red on the seam: a 1970 timestamp. Mutant: stamp the epoch.
+    #[test]
+    fn an_unreadable_clock_writes_the_entry_undated() {
+        let entry = || ToolInvocationAudit::allow("a", "A", "b", "t", vec![]);
+        let readable = serde_json::to_value(entry()).unwrap();
+        assert!(readable["timestamp"].is_string(), "{readable}");
+        assert!(readable.get("clock_invalid").is_none(), "{readable}");
+        let undated = {
+            let _clock = crate::clock::test_clock::before_epoch();
+            serde_json::to_value(entry()).unwrap()
+        };
+        assert!(undated["timestamp"].is_null(), "{undated}");
+        assert_eq!(undated["clock_invalid"], true, "{undated}");
     }
 }
