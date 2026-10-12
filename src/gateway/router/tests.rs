@@ -463,6 +463,32 @@ pub(super) async fn test_router_app_state_with_auth_and_key_server(
     meta_fixture::test_router_app_state_with_meta(auth, key_server, |meta| meta).await
 }
 
+/// MIK-8350: the authenticated fixture with a key server and a configured
+/// Meta-MCP, for the `list_changed` audience rows under `gateway::server`.
+pub(crate) async fn audience_state(
+    auth: &AuthConfig,
+    key_server: Option<Arc<crate::key_server::KeyServer>>,
+    configure: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> (Arc<AppState>, tempfile::TempDir) {
+    meta_fixture::test_router_app_state_with_meta(auth, key_server, configure).await
+}
+
+/// The streaming-session owner the router derives for `held` (as
+/// `handlers::owner::session_owner` does), for the audience rows that open a
+/// legacy session and then POST into it.
+pub(crate) async fn audience_owner(
+    state: &Arc<AppState>,
+    held: Option<&crate::gateway::auth::live::HeldCredential>,
+) -> crate::gateway::session_id::SessionOwner {
+    let auth = super::build_auth_state(state);
+    match crate::gateway::auth::live::current_client(&auth, held).await {
+        Some(c) if c.authenticated && !c.principal.is_empty() => {
+            crate::gateway::session_id::SessionOwner::Credential(c.principal)
+        }
+        _ => crate::gateway::session_id::SessionOwner::Anonymous,
+    }
+}
+
 /// Authenticated fixture whose executor capacity comes from the supplied config.
 pub(super) async fn test_router_app_state_with_auth_and_config(
     auth: &AuthConfig,
