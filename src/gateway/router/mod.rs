@@ -79,6 +79,8 @@ mod chokepoint_tests;
 /// MIK-8202 P2: task creation on a clock before 1970.
 #[cfg(test)]
 mod clock_p2_tests;
+#[cfg(test)]
+mod stored_result_access_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod collusion_direct_tests;
 #[cfg(test)]
