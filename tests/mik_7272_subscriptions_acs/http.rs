@@ -267,17 +267,20 @@ async fn ac_sub_1_a_lagged_listener_is_closed_without_a_graceful_end() {
     for _ in 0..300 {
         state.announce_tools_changed("any").await;
     }
-    // The constant attach hint (MIK-8350 B10) may precede the close; nothing
-    // else is delivered, and never a response.
+    // The constant attach hint (MIK-8350 B10) may precede the close, byte for
+    // byte as the registry sends it; nothing else is delivered, and never a
+    // response.
+    let attach_hint = json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/tools/list_changed",
+        "params": { "_meta": { "io.modelcontextprotocol/subscriptionId": 1 } }
+    });
     let mut frames = Vec::new();
     while let Some(frame) = next_data(&mut stream).await {
         frames.push(frame);
     }
     assert!(
-        frames.len() <= 1
-            && frames.iter().all(|f| {
-                f["method"] == "notifications/tools/list_changed" && f.get("id").is_none()
-            }),
+        frames.is_empty() || frames == [attach_hint],
         "a lagged stream closes with no response: {frames:?}"
     );
     assert!(
