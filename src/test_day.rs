@@ -104,7 +104,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "the UTC day changed during both runs")]
     fn a_day_change_during_both_runs_panics() {
-        let _ = same_utc_day_with(scripted(&[7, 8, 8, 9]), || ());
+        same_utc_day_with(scripted(&[7, 8, 8, 9]), || ());
     }
 
     /// The async form follows the same rule.

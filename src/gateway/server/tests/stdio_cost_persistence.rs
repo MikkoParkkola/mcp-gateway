@@ -196,7 +196,7 @@ fn restored_daily(served_config: &Config, data_dir: &Path) -> (f64, Option<f64>,
 /// recorded only when the held answer arrives, after stdin has closed.
 #[tokio::test]
 async fn stdio_exit_saves_todays_spend() {
-    let (wrote, (global, tool, _)) = same_utc_day_async(|| async {
+    let (wrote, (global, tool, _)) = Box::pin(same_utc_day_async(|| async {
         let dir = tempfile::tempdir().expect("tempdir");
         let called = Arc::new(AtomicBool::new(false));
         let release = Arc::new(tokio::sync::Notify::new());
@@ -237,7 +237,7 @@ async fn stdio_exit_saves_todays_spend() {
             dir.path().join("costs.json").exists(),
             restored_daily(&config, dir.path()),
         )
-    })
+    }))
     .await;
 
     assert!(wrote, "the stdio exit wrote no costs.json");
@@ -256,7 +256,7 @@ async fn stdio_exit_saves_todays_spend() {
 /// caught up by a later one (MIK-8157, MIK-8216).
 #[tokio::test]
 async fn stdio_saves_spend_periodically_before_exit() {
-    let (rounds, (global, tool, key)) = same_utc_day_async(|| async {
+    let (rounds, (global, tool, key)) = Box::pin(same_utc_day_async(|| async {
         let dir = tempfile::tempdir().expect("tempdir");
         let costs = dir.path().join("costs.json");
         let mut seeded = PersistedCosts {
@@ -296,7 +296,7 @@ async fn stdio_saves_spend_periodically_before_exit() {
         let restored = restored_daily(&served.config, dir.path());
         served.close().await;
         (rounds, restored)
-    })
+    }))
     .await;
     for (round, landed) in rounds {
         assert!(

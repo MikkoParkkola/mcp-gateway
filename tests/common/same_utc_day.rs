@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A copy of the crate's `same_utc_day` (src/test_day.rs) for integration
+//! A copy of the crate's `same_utc_day` (`src/test_day.rs`) for integration
 //! tests, which cannot reach crate-private helpers. The day is read through
 //! the crate's public `now_secs`, so this file adds no raw clock read (the
 //! MIK-8202 clock baseline counts tests/ too). A test that
@@ -103,7 +103,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "the UTC day changed during both runs")]
     fn a_day_change_during_both_runs_panics() {
-        let _ = same_utc_day_with(scripted(&[7, 8, 8, 9]), || ());
+        same_utc_day_with(scripted(&[7, 8, 8, 9]), || ());
     }
 
     /// The async form follows the same rule.

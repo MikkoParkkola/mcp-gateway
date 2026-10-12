@@ -53,7 +53,7 @@ fn seed(costs: &Path) {
 
 #[tokio::test]
 async fn http_saves_spend_periodically_while_serving() {
-    let (listening, saved, still_serving, global) = same_utc_day_async(|| async {
+    let (listening, saved, still_serving, global) = Box::pin(same_utc_day_async(|| async {
         let dir = tempfile::tempdir().expect("tempdir");
         let costs = dir.path().join("costs.json");
         seed(&costs);
@@ -112,7 +112,7 @@ async fn http_saves_spend_periodically_while_serving() {
             .snapshot()
             .global_daily_usd;
         (true, saved, still_serving, global)
-    })
+    }))
     .await;
     assert!(listening, "the HTTP gateway never answered /livez");
     assert!(
