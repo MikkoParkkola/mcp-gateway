@@ -453,8 +453,8 @@ pub(crate) use service::CredentialLease;
 pub(crate) use service::RejectionOutcome;
 #[cfg(test)]
 pub(crate) use service::{
-    ConsentExpectation, CredentialReleaseObserver, ProviderRefreshError, RefreshProvider,
-    ReleasedCredentials, TokenRefresh,
+    AccountServiceError, ConsentExpectation, CredentialReleaseObserver, ProviderRefreshError,
+    RefreshProvider, ReleasedCredentials, TokenRefresh,
 };
 #[cfg(test)]
 pub(crate) use storage::journey::JourneyReason;

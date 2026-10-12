@@ -77,28 +77,40 @@ impl MetaMcp {
         else {
             return AccountOutcome::Unjudged;
         };
-        match view {
-            Ok(binding) => {
-                // A binding the isolation guard or the per-user slot rule
-                // would refuse is no view either (as `has_no_view_for`). Only
-                // an identity-propagation backend has those rules; a
-                // capability account has none.
-                let refused = self.backends.get(server).is_some_and(|backend| {
-                    backend.identity_propagation_config().is_some()
-                        && (self.meta_route_isolation_refused_for_caller(&backend, Some(&binding))
-                            || !backend.fetch_carries_caller_identity(Some(&binding)))
-                });
-                if refused {
-                    AccountOutcome::NoView
-                } else {
-                    AccountOutcome::Live
-                }
-            }
-            Err(
-                PropagationError::AccountNotConnected(_)
-                | PropagationError::AccountReconnectRequired(_),
-            ) => AccountOutcome::NoView,
-            Err(_) => AccountOutcome::Unavailable,
-        }
+        view_outcome(view, |binding| {
+            // A binding the isolation guard or the per-user slot rule would
+            // refuse is no view either (as `has_no_view_for`). Only an
+            // identity-propagation backend has those rules; a capability
+            // account has none.
+            self.backends.get(server).is_some_and(|backend| {
+                backend.identity_propagation_config().is_some()
+                    && (self.meta_route_isolation_refused_for_caller(&backend, Some(binding))
+                        || !backend.fetch_carries_caller_identity(Some(binding)))
+            })
+        })
     }
 }
+
+/// A mint-free view read's outcome. A refusal a connect journey fixes
+/// (absent, revoked, reconnect required, a changed descriptor) is no view;
+/// any other failure (busy, shutting down, a store error) proves nothing
+/// either way, so it is unavailable. `slot_refuses` judges a binding the
+/// vault did hand back.
+fn view_outcome(
+    view: Result<String, PropagationError>,
+    slot_refuses: impl FnOnce(&String) -> bool,
+) -> AccountOutcome {
+    match view {
+        Ok(binding) if slot_refuses(&binding) => AccountOutcome::NoView,
+        Ok(_) => AccountOutcome::Live,
+        Err(
+            PropagationError::AccountNotConnected(_)
+            | PropagationError::AccountReconnectRequired(_),
+        ) => AccountOutcome::NoView,
+        Err(_) => AccountOutcome::Unavailable,
+    }
+}
+
+#[cfg(test)]
+#[path = "account_outcome_tests.rs"]
+mod tests;

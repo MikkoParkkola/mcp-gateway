@@ -70,7 +70,7 @@ use crate::personal_accounts::identity::AccountDescriptor as AccountKeyDescripto
 use crate::personal_accounts::{
     AccountCustody, AccountKey, GrantRecord, PersonalAccountStore, StoreConfig,
 };
-use crate::personal_accounts::{ConsentExpectation, CustodyHandle, GrantVersion};
+use crate::personal_accounts::{ConsentExpectation, CustodyError, CustodyHandle, GrantVersion};
 use crate::personal_accounts::{
     CredentialLease, CredentialReleaseObserver, ProviderRefreshError, RefreshProvider,
     ReleasedCredentials, TokenRefresh,
@@ -407,6 +407,8 @@ pub(super) struct Custody {
     pub(super) handle: Arc<CustodyHandle<ScriptedProvider, Arc<RecordingObserver>>>,
     refresh_calls: Arc<AtomicUsize>,
     observer: Arc<RecordingObserver>,
+    /// Custody reads (`resolve`) through [`Self::installed`] (MIK-8392 O3).
+    resolves: Arc<AtomicUsize>,
     /// Kept alive: dropping it removes the store directory under the locks.
     _root: tempfile::TempDir,
 }
@@ -424,8 +426,49 @@ impl Custody {
     /// The production custody, type-erased exactly as the real gateway caller
     /// erases its own `GatewayCustody` before installing. The SAME handle — no
     /// second store, service or authorization path.
+    /// Every call is delegated unchanged; `resolve` is counted on the way.
     pub(super) fn installed(&self) -> Arc<dyn AccountCustody> {
-        Arc::clone(&self.handle) as Arc<dyn AccountCustody>
+        Arc::new(CountedResolves {
+            inner: Arc::clone(&self.handle) as Arc<dyn AccountCustody>,
+            resolves: Arc::clone(&self.resolves),
+        })
+    }
+
+    /// Custody reads made through [`Self::installed`].
+    pub(super) fn resolves(&self) -> usize {
+        self.resolves.load(Ordering::SeqCst)
+    }
+}
+
+/// The installed custody, counting reads and adding nothing else.
+struct CountedResolves {
+    inner: Arc<dyn AccountCustody>,
+    resolves: Arc<AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl AccountCustody for CountedResolves {
+    async fn resolve(&self, account: &AccountKey) -> Result<CredentialLease, CustodyError> {
+        self.resolves.fetch_add(1, Ordering::SeqCst);
+        self.inner.resolve(account).await
+    }
+
+    async fn refresh_if_expired(
+        &self,
+        account: &AccountKey,
+    ) -> Result<CredentialLease, CustodyError> {
+        self.inner.refresh_if_expired(account).await
+    }
+
+    async fn release(&self, lease: &CredentialLease) -> Result<ReleasedCredentials, CustodyError> {
+        self.inner.release(lease).await
+    }
+
+    async fn refresh_after_rejection(
+        &self,
+        lease: &CredentialLease,
+    ) -> Result<crate::personal_accounts::RejectionOutcome, CustodyError> {
+        self.inner.refresh_after_rejection(lease).await
     }
 }
 
@@ -474,6 +517,7 @@ pub(super) fn custody_with_steps(
         handle: Arc::new(handle),
         refresh_calls,
         observer,
+        resolves: Arc::new(AtomicUsize::new(0)),
         _root: root,
     }
 }

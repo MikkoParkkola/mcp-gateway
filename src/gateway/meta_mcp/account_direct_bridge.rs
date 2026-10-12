@@ -170,6 +170,12 @@ impl DirectAccountGateway {
         self.custody.refreshes()
     }
 
+    /// Custody reads (`resolve`): one per mint-free view read or resolution
+    /// (MIK-8392 O3, E5).
+    pub(crate) fn resolves(&self) -> usize {
+        self.custody.resolves()
+    }
+
     /// Credential releases custody made: one per `prepare` (MIK-8356 F5: a
     /// refused call resolves nothing).
     pub(crate) fn releases(&self) -> usize {

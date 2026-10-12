@@ -85,6 +85,7 @@ pub(crate) enum Na {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Ticket {
     Mik8353,
+    Mik8392,
 }
 
 /// What a (method, route, stage) row asserts.
@@ -157,6 +158,9 @@ pub(crate) use table::expect;
 #[cfg(feature = "firewall")]
 #[path = "route_check_matrix_rows_tests.rs"]
 mod rows;
+
+/// The stored task-read matrix (MIK-8392).
+mod stored_read;
 
 #[cfg(feature = "firewall")]
 #[path = "route_check_matrix_p3_tests.rs"]

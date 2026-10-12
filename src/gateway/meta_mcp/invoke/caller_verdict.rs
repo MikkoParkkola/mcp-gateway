@@ -357,3 +357,7 @@ impl MetaMcp {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "caller_verdict_outcome_tests.rs"]
+mod outcome_tests;
