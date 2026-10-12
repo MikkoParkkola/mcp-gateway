@@ -112,7 +112,7 @@ async fn s3b_an_unchanged_idempotent_relist_keeps_the_catalogue() {
     let _ = backend.remember_listed_tools(None, false, &[idempotent("t")]);
     seed_resend_only(&backend, &["t"]);
     assert_eq!(
-        backend.cached_tools_snapshot_and_truncated().0.len(),
+        backend.cached_tools_snapshot_and_truncated(None).0.len(),
         1,
         "premise: a complete listing stored a catalogue"
     );
@@ -122,7 +122,7 @@ async fn s3b_an_unchanged_idempotent_relist_keeps_the_catalogue() {
         "premise: still resend-safe"
     );
     assert_eq!(
-        backend.cached_tools_snapshot_and_truncated().0.len(),
+        backend.cached_tools_snapshot_and_truncated(None).0.len(),
         1,
         "an unchanged relist invalidated the slot, forcing a refill"
     );
@@ -406,7 +406,7 @@ async fn primed(next: Vec<Page>) -> (Arc<Backend>, Arc<Wire>) {
 }
 
 fn catalogue_len(backend: &Backend) -> usize {
-    backend.cached_tools_snapshot_and_truncated().0.len()
+    backend.cached_tools_snapshot_and_truncated(None).0.len()
 }
 
 /// S13: a refresh whose page 1 declares `t` a write and whose page 2 fails
