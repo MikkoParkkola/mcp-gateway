@@ -247,6 +247,36 @@ class TestNamedFiles(unittest.TestCase):
         self.repo.commit("add")
         self.assertEqual(self.repo.missing(), ["deep"])
 
+    def test_a_same_named_module_elsewhere_is_not_a_mount(self) -> None:
+        # `store_tests/admission.rs` is mounted by `store_tests.rs` under a
+        # cfg(test) parent; an unrelated production `mod admission;` in
+        # another directory must not count as its mount.
+        self.repo.write(
+            "src/oauth/mod.rs",
+            "pub fn existing() {}\nmod admission;\n#[cfg(test)]\nmod store_tests;\n",
+        )
+        self.repo.write("src/oauth/admission.rs", "fn a() {}\n")
+        self.repo.write("src/oauth/store_tests.rs", "mod admission;\n")
+        self.repo.write("src/oauth/store_tests/admission.rs", "fn case() {}\n")
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/admission.rs\ta\t1\tformats\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), [])
+        self.assertEqual(self.repo.problems(), [])
+
+    def test_a_file_mounted_inside_an_inline_test_module_passes(self) -> None:
+        # server/mod.rs mounts server/tests/*.rs as `mod x;` inside an inline
+        # `#[cfg(test)] mod tests { .. }`: the inline name is a directory.
+        self.repo.write(
+            "src/oauth/mod.rs",
+            "pub fn existing() {}\n#[cfg(test)]\nmod tests {\n    mod boot;\n"
+            '    #[path = "nested/deep_tests.rs"]\n    mod deep;\n}\n',
+        )
+        self.repo.write("src/oauth/tests/boot.rs", "fn case() {}\n")
+        self.repo.write("src/oauth/tests/nested/deep_tests.rs", "fn other() {}\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), [])
+        self.assertEqual(self.repo.problems(), [])
+
     def test_a_test_named_file_mounted_under_cfg_test_passes(self) -> None:
         self.repo.write(
             "src/oauth/mod.rs",
