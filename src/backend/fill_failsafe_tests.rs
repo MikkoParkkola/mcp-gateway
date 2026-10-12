@@ -99,7 +99,7 @@ async fn one_token_admits_one_cold_discovery_fill() {
     let error = backend.get_tools_shared().await.expect_err("no token");
     assert!(matches!(error, crate::Error::RateLimited(_)), "got {error}");
     assert_eq!(lister.lists(), 0, "a refused fill sent a list");
-    // The limiter reads the wall clock: this sleep is real.
+    // The limiter refills on governor's monotonic clock; this test is not paused, so this sleep runs in real time.
     tokio::time::sleep(Duration::from_millis(1100)).await;
     backend.get_tools_shared().await.expect("a token is back");
     assert_eq!(lister.lists(), 1, "the refusal stamped a cooldown");
@@ -211,7 +211,7 @@ async fn half_open_throttled() -> Arc<crate::backend::Backend> {
     ));
     backend.set_transport_for_test(Arc::new(Throttler) as Arc<dyn crate::transport::Transport>);
     backend.trip_circuit_breaker_for_test();
-    // The breaker reads the wall clock, so this sleep is real.
+    // The breaker ages on tokio's clock (MIK-8202 P4b); this test is not paused, so this sleep runs in real time.
     tokio::time::sleep(Duration::from_millis(300)).await;
     backend
 }
