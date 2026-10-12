@@ -672,7 +672,11 @@ pub mod suggestions;
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 #[path = "clock_windows_tests.rs"]
 mod clock_windows_tests;
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+#[path = "cost_clock_compile_red_tests.rs"]
+mod cost_clock_compile_red_tests;

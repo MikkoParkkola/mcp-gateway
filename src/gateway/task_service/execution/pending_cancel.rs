@@ -423,3 +423,6 @@ mod edge_tests;
 #[path = "pending_cancel_clock_tests.rs"]
 mod clock_tests;
 
+#[cfg(test)]
+#[path = "pending_cancel_clock_compile_red_tests.rs"]
+mod clock_compile_red_tests;
