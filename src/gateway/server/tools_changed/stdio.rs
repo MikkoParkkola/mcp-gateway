@@ -24,6 +24,7 @@ use tokio::sync::{Notify, broadcast, mpsc, watch};
 
 use super::{Announced, decide_on};
 use crate::backend::BackendRegistry;
+use crate::security::ToolPolicy;
 use crate::backend::tools_nudge::ToolsNudge;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::outbound::OutboundFrame;
@@ -50,6 +51,7 @@ impl StdioAnnouncer {
     /// Start deciding `rx`'s nudges for the client behind `writer`.
     pub(in crate::gateway::server) fn start(
         (backends, meta_mcp): (Arc<BackendRegistry>, Arc<MetaMcp>),
+        tool_policy: Arc<ToolPolicy>,
         rx: mpsc::UnboundedReceiver<ToolsNudge>,
         writer: mpsc::Sender<OutboundFrame>,
     ) -> Self {
@@ -65,6 +67,10 @@ impl StdioAnnouncer {
         let drain = {
             let (pending, held) = (Arc::clone(&pending), Arc::clone(&held));
             let announced = parking_lot::Mutex::new(Announced::default());
+            // What the stdio client was last told of each backend: it is owed
+            // a notice only when its own view of that backend moved (MIK-8350).
+            let mut told: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
             let shutdown = stop.subscribe();
             let ready = ready.clone();
             tokio::spawn(async move {
@@ -72,9 +78,13 @@ impl StdioAnnouncer {
                     // Every nudge is decided, so the record of what was last
                     // announced stays current. One client, one view: a shared
                     // or a per-user change is the same notification to it.
-                    if decide_on((&backends, &meta_mcp), &announced, nudge).is_some() {
+                    if let Some((name, _)) = decide_on((&backends, &meta_mcp), &announced, nudge) {
                         #[cfg(test)]
                         crate::gateway::server::stdio_seams::decided();
+                        let view = stdio_view(&meta_mcp, &tool_policy, &name);
+                        if told.insert(name, view.clone()).is_some_and(|before| before == view) {
+                            return std::future::ready(());
+                        }
                         if *ready.borrow() {
                             pending.notify_one();
                         } else {
@@ -137,6 +147,22 @@ impl Drop for StdioAnnouncer {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+/// What the stdio client is shown of `backend` now: the operator's scope,
+/// judged by the global tool policy, exactly as its `tools/list` is.
+fn stdio_view(meta_mcp: &MetaMcp, tool_policy: &ToolPolicy, backend: &str) -> String {
+    let policy = crate::gateway::authz::ToolPolicyAuthorizer { tool_policy };
+    let scope = crate::gateway::meta_mcp::InvokeScope::stdio(
+        &policy,
+        crate::identity_propagation::CallerProof::new(
+            None,
+            crate::identity_propagation::CallerProvenance::local_transport(
+                crate::gateway::server::StdioNonce::process(),
+            ),
+        ),
+    );
+    meta_mcp.visible_fingerprint(backend, scope, Some(crate::gateway::server::STDIO_SESSION_ID))
 }
 
 /// Turn the latch into frames, one per wake. The latch is only ever set for

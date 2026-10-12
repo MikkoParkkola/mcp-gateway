@@ -102,9 +102,24 @@ fn temporary_token(backends: &[&str]) -> crate::key_server::TemporaryToken {
 #[tokio::test]
 async fn tools_list_changed_reaches_only_listeners_in_scope_for_the_backend() {
     let (state, _store) = fixture_state(&split_scope_auth()).await;
+    // MIK-8350: a hint is owed only when the listener's own view moved, so
+    // `alpha` has to change what key-a is shown, not merely be announced.
+    let mock = MockBackend::answering(Answer::ok());
+    register(&state, "alpha", &mock);
     let mut in_scope = open_listen(&state, "key-a", 1, listen_tools()).await;
     let mut out_of_scope = open_listen(&state, "key-b", 2, listen_tools()).await;
-
+    // The constant attach hint follows the acknowledgement; it is not a change.
+    for ear in [&mut in_scope, &mut out_of_scope] {
+        let _ = expect_message(ear, "the attach hint").await;
+    }
+    state
+        .backends
+        .get("alpha")
+        .expect("alpha")
+        .store_shared_tools_for_test(vec![
+            serde_json::from_value(json!({"name": "added", "inputSchema": {"type": "object"}}))
+                .expect("a tool"),
+        ]);
     state.announce_tools_changed("alpha").await;
 
     // Positive control: the same generation reaches the caller who may see it,

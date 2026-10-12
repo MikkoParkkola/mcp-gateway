@@ -271,7 +271,9 @@ pub(crate) fn subscription_stream(
         // MIK-8350 B10: one constant hint after the acknowledgement, so a
         // client that attaches re-lists once whatever changed while it was
         // away; it carries nothing about any backend's data.
-        if listener.judges_views_at_attach() {
+        // Only to a credential that still authenticates: a dead one receives no
+        // frame after its acknowledgement (MIK-7798 G5).
+        if listener.judges_views_at_attach() && listener.current_client().await.is_some() {
             let hint = crate::gateway::subscription_registry::tools_list_changed();
             if delivers(&filter, &hint)
                 && let Some(frame) = judge.judge_document(subscription.tag(hint))

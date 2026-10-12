@@ -233,6 +233,7 @@ impl Gateway {
         // watchers stop with the announcer, so they end on every exit path.
         let announcer = super::tools_changed::stdio::StdioAnnouncer::start(
             (Arc::clone(&self.backends), Arc::clone(&meta_mcp)),
+            Arc::clone(&tool_policy),
             nudge_rx,
             writer.clone(),
         );
