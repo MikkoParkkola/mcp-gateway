@@ -155,6 +155,22 @@ async fn attributed_meta_record_verifies() {
     assert!(verified.ok, "{verified:?}");
 }
 
+/// MIK-8393: only a declared read is cached. The F13 fill a cold call would
+/// run is run here first, so the declaration seeded after it stands. Not in
+/// the fixture's listing: a read-only `read` may also be resent, which the
+/// lost-round case below must not do.
+async fn declare_read_only(meta: &MetaMcp) {
+    let alpha = meta
+        .backends
+        .get("alpha")
+        .expect("the fixture registers alpha");
+    alpha
+        .get_tools_shared()
+        .await
+        .expect("the fixture lists its tool");
+    alpha.set_read_only_declared_for_test(&["read"]);
+}
+
 /// T25. A response-cache hit records the delivered value's tenants, marked
 /// as a cached delivery, without data classes: a post-gate value cannot be
 /// re-classified as the raw response was.
@@ -164,6 +180,7 @@ async fn cache_hit_record_carries_delivered_tenants() {
     let mut cached = meta(Ok(reply_naming("cust-9", "")), &dir);
     cached.cache = Some(Arc::new(crate::cache::ResponseCache::new()));
     cached.default_cache_ttl = Duration::from_secs(300);
+    declare_read_only(&cached).await;
     let meta = attributing(cached);
     let who = api_key_caller();
     for _ in 0..2 {
@@ -232,6 +249,7 @@ async fn oversize_cache_hit_record_says_both() {
     let mut cached = meta(Ok(oversize_reply_naming("cust-9")), &dir);
     cached.cache = Some(Arc::new(crate::cache::ResponseCache::new()));
     cached.default_cache_ttl = Duration::from_secs(300);
+    declare_read_only(&cached).await;
     let meta = attributing(cached);
     let who = api_key_caller();
     for _ in 0..2 {
