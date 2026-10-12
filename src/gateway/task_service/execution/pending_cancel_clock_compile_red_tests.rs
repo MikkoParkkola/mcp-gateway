@@ -64,8 +64,9 @@ impl Recorder for HeldCounter {
 /// (never once per pass); the readable sweep then sends once, and the next
 /// pass removes the row by the normal rule.
 /// The owner's cancel meets the dark clock; the ttl elapses while dark; the
-/// reopened store reads past it. Two expiry passes run ALONE: the reopened
-/// executor has no adapter yet, so a pass's own flush sends nothing.
+/// reopened store reads past it. Two expiry passes run with the adapter
+/// installed (the hold needs one, lead ruling B) and its first send held
+/// open, so the record stays unsent across both passes.
 /// A plain `#[test]` on its own current-thread runtime: the metric recorder
 /// and the log capture are this thread's, so the WARN and the increment must
 /// be made on the pass's own thread (the sweep or `expired_candidates`), not
@@ -89,6 +90,11 @@ fn a_dark_cancel_past_its_ttl_is_held_counted_once_then_sent_once() {
             let (_capture, warns) = crate::test_log_capture::live_count(HELD_WARN);
             let r = dark_claim_then_restart(Claimant::Owner, Some(DAY_MS), DAY + HOUR).await;
             assert_eq!(r.claimed_dark, Some(Pending { attempts: 0 }), "premise");
+            // Lead ruling B: the hold applies only while an adapter can send
+            // the cancel. The adapter is installed, and its first send is held
+            // open, so both passes run while the record is still unsent.
+            let peer = r.peer();
+            let release = peer.hold_next();
             for _ in 0..2 {
                 r.executor
                     .expiry_pass_for_test()
@@ -101,7 +107,8 @@ fn a_dark_cancel_past_its_ttl_is_held_counted_once_then_sent_once() {
             }
             assert_eq!(counted.load(Ordering::SeqCst), 1, "held-past-ttl count");
             assert_eq!(*warns.borrow(), 1, "held-past-ttl WARNs");
-            let peer = r.peer();
+            drop(release);
+            r.executor.cancel_send_idle(&r.id).await;
             r.sweep_flush().await;
             assert_eq!(peer.count(), 1, "the held cancel is sent once");
             assert_eq!(r.state(), Some(Done));

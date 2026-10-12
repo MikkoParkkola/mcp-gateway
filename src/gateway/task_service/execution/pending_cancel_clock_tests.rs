@@ -23,8 +23,8 @@ use super::tests::{
 };
 use crate::gateway::task_service::TaskService;
 use crate::gateway::task_service::record::ErrorAuthor;
-use crate::gateway::task_service::store::StoreError;
 use crate::gateway::task_service::store::targets::UpstreamCancelState::{self, Done, Pending};
+use crate::gateway::task_service::store::{CancelHold, StoreError};
 use crate::protocol::tasks::TaskTransition;
 use crate::test_wait::{HANG_BOUND, wait_until};
 
@@ -286,49 +286,29 @@ async fn retention_removes_a_sent_cancel_and_a_completed_row_past_their_ttl() {
     }
 }
 
-/// G (MIK-8202 P4b, lead): the retention hold does not switch off the
-/// MIK-8347 age give-up. A dated pending cancel to a backend that is never
-/// ready is held past the row's ttl; at `MAX_CANCEL_PENDING_AGE` the sweep
-/// gives it up without another send (`pending_cancels` picks the aged row,
-/// `send` takes its aged arm, `record_cancel_attempt` records `GiveUp::Age`),
-/// and the next expiry pass removes the row by the normal rule.
-/// Mutant: `PendingSend::aged` always false (the give-up switched off):
-/// killed at "an aged-out cancel was sent instead of given up" (one more
-/// send), and the row would stay held for good.
+/// G (MIK-8202 P4b, lead ruling A = narrow): retention holds only an UNDATED
+/// pending cancel. A cancel claimed on a readable clock is dated, so its row
+/// expires at its TTL as before P4b, and the MIK-8347 "expired" give-up stays
+/// live. Here the backend is never ready, the claim is dated, and one expiry
+/// pass past the TTL deletes the row.
+/// Mutant A, the hold also catching dated records (`claimed_at.is_none()`
+/// dropped from `held_for_cancel`): killed at "a dated pending cancel was
+/// held past its ttl".
 #[tokio::test(flavor = "current_thread")]
-async fn a_held_pending_cancel_is_still_given_up_by_age() {
+async fn a_dated_pending_cancel_expires_at_its_ttl() {
     let f = fixture(Some(60 * 60 * 1_000)).await;
     let peer = ScriptedPeer::new(std::iter::repeat_n(CancelDelivery::NotReady, 50));
     assert!(f.executor.install_recovery(peer.clone()));
     f.owner_cancels().await;
     f.state_becomes(Pending { attempts: 0 }).await;
+    let pending = f
+        .service
+        .store
+        .pending_cancel(&f.owner_digest, &f.id)
+        .expect("premise: a pending cancel");
+    assert!(pending.claimed_at.is_some(), "premise: the claim is dated");
 
     f.advance_store_clock(2 * HOUR);
-    f.executor
-        .expiry_pass_for_test()
-        .await
-        .expect("an expiry pass");
-    assert!(
-        f.service.store.get(&f.owner_digest, &f.id).is_ok(),
-        "the unsent cancel's row was not held past its ttl"
-    );
-    assert_eq!(
-        f.state(),
-        Some(Pending { attempts: 0 }),
-        "premise: still pending"
-    );
-
-    let sends = peer.count();
-    f.advance_store_clock(DAY);
-    settle(f.executor.flush_pending_cancels(None)).await;
-    f.executor.cancel_send_idle(&f.id).await;
-    assert_eq!(
-        peer.count(),
-        sends,
-        "an aged-out cancel was sent instead of given up"
-    );
-    f.state_becomes(Done).await;
-
     f.executor
         .expiry_pass_for_test()
         .await
@@ -338,6 +318,101 @@ async fn a_held_pending_cancel_is_still_given_up_by_age() {
             f.service.store.get(&f.owner_digest, &f.id),
             Err(StoreError::NotFound)
         ),
-        "a given-up row past its ttl is removed by the normal rule"
+        "a dated pending cancel was held past its ttl"
+    );
+}
+
+/// B (MIK-8202 P4b, lead ruling B): with no upstream adapter installed,
+/// nothing can ever send a held cancel, so retention holds nothing: an
+/// undated pending cancel's row expires at its TTL as before P4b.
+/// Mutant B, the hold applied without an adapter: killed at "a row was held
+/// with no adapter to send its cancel".
+#[tokio::test(flavor = "current_thread")]
+async fn without_an_adapter_an_undated_cancel_is_not_held() {
+    let r = dark_claim_then_restart(Claimant::Owner, Some(DAY_MS), DAY + HOUR).await;
+    assert_eq!(r.claimed_dark, Some(Pending { attempts: 0 }), "premise");
+    assert!(r.executor.recovery().is_none(), "premise: no adapter");
+    r.executor
+        .expiry_pass_for_test()
+        .await
+        .expect("an expiry pass");
+    assert!(
+        matches!(
+            r.service.store.get(&r.owner_digest, &r.id),
+            Err(StoreError::NotFound)
+        ),
+        "a row was held with no adapter to send its cancel"
+    );
+}
+
+/// The race (MIK-8202 P4b, gpt seat HIGH): a cancel claimed AFTER the expiry
+/// pass took its candidate snapshot keeps the row's revision, so only the
+/// recheck under the ordering lock in `expire_blocking` can see it. Driven
+/// deterministically through the store's own steps: snapshot, then a
+/// worker's claim on a dark clock (undated), then the deletion at the
+/// snapshot's revision.
+/// Mutant: the recheck under the lock dropped: killed at "a cancel claimed
+/// after enumeration was deleted with its row".
+#[tokio::test(flavor = "current_thread")]
+async fn a_cancel_claimed_after_enumeration_keeps_its_row() {
+    let f = super::tests::fixture_with(Some(60 * 60 * 1_000), Handle::Held).await;
+    let first = ScriptedPeer::new([]);
+    assert!(f.executor.install_recovery(first.clone()));
+    f.owner_cancels().await;
+    f.executor.cancel_send_idle(&f.id).await;
+    assert_eq!(
+        f.state(),
+        None,
+        "premise: the owner's cancel claimed nothing"
+    );
+
+    let past = f.service.store.now().expect("a readable clock")
+        + chrono::Duration::from_std(DAY).expect("a representable step");
+    let candidates = f
+        .service
+        .store
+        .expired_candidates(past, CancelHold::Undated);
+    let revision = candidates
+        .iter()
+        .find(|(id, _)| *id == f.id)
+        .map(|(_, revision)| *revision)
+        .expect("premise: the row is an expiry candidate");
+
+    let dark = chrono::DateTime::from_timestamp(-1, 0).expect("one second before 1970");
+    f.service.store.set_clock_for_test(Some(dark));
+    let job = crate::gateway::meta_mcp::upstream::DirectJob {
+        server: BACKEND.to_owned(),
+        tool: TOOL.to_owned(),
+        arguments: json!({}),
+    };
+    let offer = f
+        .executor
+        .offered_descriptor(&f.owner_digest, &f.id, &job, HANDLE.to_owned())
+        .expect("the row is readable");
+    let _ = f
+        .executor
+        .cancel_upstream_once(&f.owner_digest, &f.id, Some(offer), CancelSend::Inline)
+        .await;
+    f.executor.cancel_send_idle(&f.id).await;
+    assert_eq!(
+        f.state(),
+        Some(Pending { attempts: 0 }),
+        "premise: the worker's claim wrote an undated pending cancel"
+    );
+
+    let deleted = f
+        .service
+        .store
+        .expire(
+            &f.id,
+            revision,
+            f.service.admission_arc(),
+            CancelHold::Undated,
+        )
+        .await;
+    assert!(
+        matches!(deleted, Err(StoreError::RevisionConflict))
+            && f.service.store.get(&f.owner_digest, &f.id).is_ok(),
+        "a cancel claimed after enumeration was deleted with its row: {deleted:?}"
     );
 }

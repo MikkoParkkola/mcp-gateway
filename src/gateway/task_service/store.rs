@@ -32,6 +32,7 @@ pub(super) use disk::after_load;
 pub(super) use disk::read_bounded;
 use disk::{Fault, fire, open_blocking, write_record};
 pub(crate) use error::StoreError;
+pub(super) use expiry::CancelHold;
 #[path = "store_disk.rs"]
 mod disk;
 #[path = "store_error.rs"]
