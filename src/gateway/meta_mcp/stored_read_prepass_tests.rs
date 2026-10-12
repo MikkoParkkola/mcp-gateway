@@ -39,7 +39,7 @@ fn cold() -> PerUser {
     )
 }
 
-/// F4 may_invoke (MIK-8392): the caller's policy refuses the target, so the
+/// F4 `may_invoke` (MIK-8392): the caller's policy refuses the target, so the
 /// cold claim is skipped: 0 resolutions, no backend traffic. The control
 /// (an open policy) claims and resolves once on the same fixture. Red with
 /// the `may_invoke` clause dropped from `refused_without_catalogue`.
