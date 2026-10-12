@@ -289,7 +289,7 @@ async fn m_b1a_a_hidden_change_then_a_visible_change_is_one_notice() {
 #[tokio::test]
 async fn m_b9_a_caller_who_listed_during_the_pending_nudge_is_not_told() {
     let w = World::start().await;
-    let mut ear = w.legacy("std", STD).await;
+    let mut ear = w.legacy_owned("std", STD).await;
     let hold = super::drain_seam::Hold::arm();
     w.store_shared("alpha", vec![tool("write", "w2")]);
     hold.reached().await;
@@ -307,6 +307,25 @@ async fn m_b9_a_caller_who_listed_during_the_pending_nudge_is_not_told() {
         ear.told(&w).await,
         0,
         "the listing refreshed it: RED on base"
+    );
+}
+
+/// M-B9b (MIK-8350), PIN: a `tools/list` that names no session cannot say
+/// which listener it belongs to, so it refreshes none; the listener whose
+/// view moved is still told once.
+#[tokio::test]
+async fn m_b9b_a_sessionless_listing_refreshes_no_listener() {
+    let w = World::start().await;
+    let mut ear = w.legacy_owned("std", STD).await;
+    let hold = super::drain_seam::Hold::arm();
+    w.store_shared("alpha", vec![tool("write", "w2")]);
+    hold.reached().await;
+    assert!(w.served_names(STD).await.contains(&"write".to_string()));
+    hold.release();
+    assert_eq!(
+        ear.told(&w).await,
+        1,
+        "no session was named, so none was refreshed"
     );
 }
 
