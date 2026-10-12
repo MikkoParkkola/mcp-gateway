@@ -544,7 +544,8 @@ pub(super) struct Dispatch {
     pub(super) identity_key: Option<String>,
     /// The JSON-RPC method. F13 lists a cold slot before a `tools/call`, so
     /// positive assertions read the `tools/call` records only.
-    pub(super) method: String,    /// The backend the call was sent to (MIK-8392: two-backend rows).
+    pub(super) method: String,
+    /// The backend the call was sent to (MIK-8392: two-backend rows).
     pub(super) server: String,
 }
 
