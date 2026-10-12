@@ -126,6 +126,13 @@ impl crate::transport::Transport for Wire {
     }
 }
 
+pub(super) fn api_key_for(name: &str, secret: &[u8]) -> ApiKeyConfig {
+    ApiKeyConfig {
+        key_sha256: Some(crate::config::api_key_digest_spec(secret)),
+        ..api_key(name, &[])
+    }
+}
+
 fn api_key(name: &str, denied: &[&str]) -> ApiKeyConfig {
     ApiKeyConfig {
         key: None,
@@ -358,7 +365,7 @@ impl World {
         configure: impl FnOnce(MetaMcp) -> MetaMcp,
         access: super::audience_access::McpAccess,
     ) -> Self {
-        let auth = AuthConfig {
+        let mut auth = AuthConfig {
             enabled: true,
             public_paths: super::audience_access::public_paths(&access),
             api_keys: vec![
@@ -371,6 +378,8 @@ impl World {
             ],
             ..AuthConfig::default()
         };
+        auth.api_keys
+            .extend(super::audience_access::agent_api_keys(&access));
         let audit = tempfile::NamedTempFile::new().expect("tempfile");
         let logger = crate::security::TransparencyLogger::open(Arc::new(
             crate::security::TransparencyLogConfig {

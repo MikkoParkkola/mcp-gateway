@@ -84,7 +84,7 @@ fn agent_cal(description: &str) -> String {
     format!(
         "fulcrum: \"1.0\"\nname: agent_cal\ndescription: {description}\n\
 schema:\n  input:\n    type: object\n    properties: {{}}\n\
-metadata:\n  exposure: personal\n  identity_owner:\n    authority: \"api_key\"\n    subject: public\n\
+metadata:\n  exposure: personal\n  identity_owner:\n    authority: \"api_key\"\n    subject: shared\n\
 providers:\n  primary:\n    service: rest\n    config:\n      base_url: https://example.invalid\n      path: /cal\n      method: GET\n\
 auth:\n  required: false\n  type: none\n"
     )
@@ -96,7 +96,7 @@ fn agent_a_grant() -> crate::identity_grants::LocalIdentityGrantStore {
         GrantAgent, GrantAgentKey, GrantScope, GrantSubject, IdentityGrant,
     };
     use crate::security::ProofSource;
-    let shared = GrantSubject::new("api_key", "public", None);
+    let shared = GrantSubject::new("api_key", "shared", None);
     crate::identity_grants::LocalIdentityGrantStore::from_grants([IdentityGrant {
         grant_id: "g-agent-a".to_string(),
         subject: shared.clone(),

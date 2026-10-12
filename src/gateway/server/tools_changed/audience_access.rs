@@ -26,20 +26,32 @@ pub(super) enum McpAccess {
 /// share one display name, so they are one principal and two proven agent ids.
 pub(super) const AGENT_A: &str = "agent-a";
 pub(super) const AGENT_B: &str = "agent-b";
+const AUDIENCE: &str = "audience-fixture";
 
 fn agent_secret(id: &str) -> String {
     format!("{id}-secret-0123456789-0123456789")
 }
 
-/// A bearer the fixture's agent registry validates for `id`.
+/// A bearer the fixture's agent registry validates for `id`. Deterministic, so
+/// the same string is also an API key ([`agent_api_keys`]): the gateway runs
+/// its API-key layer before the agent layer.
 pub(super) fn agent_token(id: &str) -> String {
-    let now = chrono::Utc::now().timestamp();
     jsonwebtoken::encode(
         &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
-        &serde_json::json!({ "sub": id, "exp": now + 3600, "iat": now }),
+        &serde_json::json!({ "sub": id, "exp": 4_102_444_800_u64, "iat": 1_700_000_000_u64, "aud": AUDIENCE }),
         &jsonwebtoken::EncodingKey::from_secret(agent_secret(id).as_bytes()),
     )
     .expect("sign agent token")
+}
+
+/// The agents' tokens as API keys, both under the one display name `shared`.
+pub(super) fn agent_api_keys(access: &McpAccess) -> Vec<crate::config::ApiKeyConfig> {
+    match access {
+        McpAccess::AgentToken => [AGENT_A, AGENT_B]
+            .map(|id| super::audience_fixture::api_key_for("shared", agent_token(id).as_bytes()))
+            .to_vec(),
+        _ => Vec::new(),
+    }
 }
 
 pub(super) fn public_paths(access: &McpAccess) -> Vec<String> {
@@ -65,7 +77,7 @@ pub(super) fn apply(st: &mut AppState, access: &McpAccess) {
                             backends: vec!["alpha".to_string()],
                             tools: vec!["*".to_string()],
                         },
-                        deny: Default::default(),
+                        deny: crate::mtls::config::ToolScopeConfig::default(),
                     }],
                     ..Default::default()
                 },
@@ -84,7 +96,7 @@ pub(super) fn apply(st: &mut AppState, access: &McpAccess) {
                         "tools:caps:*:execute".to_string(),
                     ],
                     issuer: None,
-                    audience: None,
+                    audience: Some(AUDIENCE.to_string()),
                 });
             }
             st.agent_auth = crate::gateway::oauth::AgentAuthState::new(true, registry);
