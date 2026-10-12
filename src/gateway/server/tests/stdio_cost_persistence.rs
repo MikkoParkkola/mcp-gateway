@@ -7,8 +7,8 @@
 //! through `boot_cost_governance`, the loader the next process runs, so a
 //! save that wrote an empty or unreadable snapshot fails here too.
 //!
-//! Each case computes "today" when it runs; one that straddles UTC midnight
-//! can see the earlier day's spend dropped by the loader.
+//! Each case runs within one UTC day (`same_utc_day_async`, MIK-8395): the
+//! loader correctly drops spend saved on an earlier day.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -23,6 +23,7 @@ use crate::config::Config;
 use crate::cost_accounting::persistence::{self as cost_persistence, PersistedCosts, ToolTotal};
 use crate::gateway::Gateway;
 use crate::gateway::server::persistence::boot_cost_governance;
+use crate::test_day::same_utc_day_async;
 
 const BACKEND: &str = "fixture";
 const TOOL: &str = "echo";
@@ -195,47 +196,51 @@ fn restored_daily(served_config: &Config, data_dir: &Path) -> (f64, Option<f64>,
 /// recorded only when the held answer arrives, after stdin has closed.
 #[tokio::test]
 async fn stdio_exit_saves_todays_spend() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let called = Arc::new(AtomicBool::new(false));
-    let release = Arc::new(tokio::sync::Notify::new());
-    let backend = spawn_backend(Arc::clone(&called), Arc::clone(&release)).await;
-    let yaml = format!(
-        "backends:\n  {BACKEND}:\n    http_url: \"{backend}\"\n    streamable_http: true\n{GOVERNANCE}"
-    );
-    let mut served = serve(dir.path(), &yaml).await;
-    served.initialize().await;
-    served
-        .send(&json!({
-            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
-            "params": {"name": "gateway_invoke", "arguments": {
-                "server": BACKEND, "tool": TOOL, "arguments": {},
-            }},
-        }))
-        .await;
-    timeout(ARRIVAL, async {
-        while !called.load(Ordering::SeqCst) {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("control: the call never reached the backend");
-    let config = served.config.clone();
-    // EOF first, with the backend still holding its answer. The answer is
-    // released a hold after EOF (nothing outside the loop can observe the
-    // loop reading EOF), so the spend is recorded during the drain and a
-    // save made before the drain misses it.
-    served
-        .close_then(async {
-            tokio::time::sleep(EOF_HOLD).await;
-            release.notify_one();
+    let (wrote, (global, tool, _)) = Box::pin(same_utc_day_async(|| async {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let called = Arc::new(AtomicBool::new(false));
+        let release = Arc::new(tokio::sync::Notify::new());
+        let backend = spawn_backend(Arc::clone(&called), Arc::clone(&release)).await;
+        let yaml = format!(
+            "backends:\n  {BACKEND}:\n    http_url: \"{backend}\"\n    streamable_http: true\n{GOVERNANCE}"
+        );
+        let mut served = serve(dir.path(), &yaml).await;
+        served.initialize().await;
+        served
+            .send(&json!({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": "gateway_invoke", "arguments": {
+                    "server": BACKEND, "tool": TOOL, "arguments": {},
+                }},
+            }))
+            .await;
+        timeout(ARRIVAL, async {
+            while !called.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
         })
-        .await;
+        .await
+        .expect("control: the call never reached the backend");
+        let config = served.config.clone();
+        // EOF first, with the backend still holding its answer. The answer is
+        // released a hold after EOF (nothing outside the loop can observe the
+        // loop reading EOF), so the spend is recorded during the drain and a
+        // save made before the drain misses it.
+        served
+            .close_then(async {
+                // timing: lower-bound
+                tokio::time::sleep(EOF_HOLD).await;
+                release.notify_one();
+            })
+            .await;
+        (
+            dir.path().join("costs.json").exists(),
+            restored_daily(&config, dir.path()),
+        )
+    }))
+    .await;
 
-    assert!(
-        dir.path().join("costs.json").exists(),
-        "the stdio exit wrote no costs.json"
-    );
-    let (global, tool, _) = restored_daily(&config, dir.path());
+    assert!(wrote, "the stdio exit wrote no costs.json");
     assert!(
         (global - 0.6).abs() < 1e-9,
         "the stdio exit did not save the drained call's spend: the next boot reads {global}"
@@ -251,41 +256,55 @@ async fn stdio_exit_saves_todays_spend() {
 /// caught up by a later one (MIK-8157, MIK-8216).
 #[tokio::test]
 async fn stdio_saves_spend_periodically_before_exit() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let costs = dir.path().join("costs.json");
-    let mut seeded = PersistedCosts {
-        saved_at: cost_persistence::now_secs(),
-        ..PersistedCosts::default()
-    };
-    seeded.tool_totals.insert(
-        TOOL.to_string(),
-        ToolTotal {
-            call_count: 0,
-            total_cost_usd: 0.3,
-            avg_cost_usd: 0.0,
-        },
-    );
-    seeded.key_totals.insert(KEY.to_string(), 0.3);
-    cost_persistence::save(&costs, &seeded).expect("seed costs.json");
+    let (rounds, (global, tool, key)) = Box::pin(same_utc_day_async(|| async {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let costs = dir.path().join("costs.json");
+        let mut seeded = PersistedCosts {
+            saved_at: cost_persistence::now_secs(),
+            ..PersistedCosts::default()
+        };
+        seeded.tool_totals.insert(
+            TOOL.to_string(),
+            ToolTotal {
+                call_count: 0,
+                total_cost_usd: 0.3,
+                avg_cost_usd: 0.0,
+            },
+        );
+        seeded.key_totals.insert(KEY.to_string(), 0.3);
+        cost_persistence::save(&costs, &seeded).expect("seed costs.json");
 
-    let mut served = serve(dir.path(), GOVERNANCE).await;
-    // Boot is over once initialize is answered: the seeded spend is loaded.
-    served.initialize().await;
+        let mut served = serve(dir.path(), GOVERNANCE).await;
+        // Boot is over once initialize is answered: the seeded spend is loaded.
+        served.initialize().await;
 
-    // Paused only now, so no timer inside the boot was advanced.
-    tokio::time::pause();
-    // Several ticks per round: see `advance_until_saved` (MIK-8216).
-    for round in 1..=2 {
-        std::fs::remove_file(&costs).expect("remove costs.json; only a save can bring it back");
-        let landed = crate::gateway::server::persistence::advance_until_saved(&costs).await;
+        // Paused only now, so no timer inside the boot was advanced.
+        tokio::time::pause();
+        // Several ticks per round: see `advance_until_saved` (MIK-8216).
+        let mut rounds = Vec::new();
+        for round in 1..=2 {
+            std::fs::remove_file(&costs).expect("remove costs.json; only a save can bring it back");
+            let landed = crate::gateway::server::persistence::advance_until_saved(&costs).await;
+            let failed = landed.is_err();
+            rounds.push((round, landed));
+            if failed {
+                break;
+            }
+        }
+        // Resumed on every path: a rerun pauses again.
+        tokio::time::resume();
+        let restored = restored_daily(&served.config, dir.path());
+        served.close().await;
+        (rounds, restored)
+    }))
+    .await;
+    for (round, landed) in rounds {
         assert!(
             landed.is_ok(),
             "no periodic save in round {round} while stdin stayed open: the save {}",
             landed.err().unwrap_or_default()
         );
     }
-    tokio::time::resume();
-    let (global, tool, key) = restored_daily(&served.config, dir.path());
     assert!(
         (global - 0.3).abs() < 1e-9 && tool.is_some_and(|t| (t - 0.3).abs() < 1e-9),
         "the periodic save lost the loaded spend: global {global}, tool {tool:?}"
@@ -294,5 +313,4 @@ async fn stdio_saves_spend_periodically_before_exit() {
         key.is_some_and(|k| (k - 0.3).abs() < 1e-9),
         "the periodic save lost the per-key spend: {key:?}"
     );
-    served.close().await;
 }

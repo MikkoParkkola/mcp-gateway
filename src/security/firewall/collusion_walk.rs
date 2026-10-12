@@ -38,6 +38,26 @@ pub(in super::super) fn delivery_leaves(value: &Value) -> Vec<&str> {
     delivery_parts(value).0
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Reference lists the answer walks built on this thread (`MIK-8066`
+    /// D2: an answer past a preflight cap builds none). Per thread, so
+    /// parallel tests never see each other's walks.
+    static WALKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Count one reference-list walk (tests only).
+#[cfg(test)]
+pub(super) fn note_walk() {
+    WALKS.with(|w| w.set(w.get() + 1));
+}
+
+/// Reference-list walks built on this thread (tests only).
+#[cfg(test)]
+pub(super) fn walks_built() -> u64 {
+    WALKS.with(std::cell::Cell::get)
+}
+
 /// The string leaves of `value` a delivery walk reads, in walk order: every
 /// string, leaving out a top-level `_context_integrity`, then each object key
 /// of at least `K` chars; and how many of them, from the front, are values
@@ -54,6 +74,8 @@ pub(in super::super) fn delivery_parts(value: &Value) -> (Vec<&str>, usize) {
             _ => {}
         }
     }
+    #[cfg(test)]
+    note_walk();
     let (mut leaves, mut keys) = (Vec::new(), Vec::new());
     match value {
         Value::Object(map) => map

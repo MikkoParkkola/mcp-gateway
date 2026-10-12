@@ -893,6 +893,27 @@ Before this, every middle relay was missed. A thicker sample for large deliverie
 `the_middle_sample_misses_within_its_budget` checks the formula with a seeded trial (fixed seed, exact
 binomial band); `the_selector_matches_the_published_rows` pins m = 1 / 8 / 128.
 
+**B1″ view cut (D1, MIK-8066 2b). Detection of a relay from a large plan step is probabilistic: a
+200-char relay out of a 900 KiB step is missed 88% of the time, a 2,000-char one 0.4%.** A plan step kept through a view of an answer over 1 MiB is recorded
+as its cut: every sampled fingerprint of the step's forms (each leaf, the values newline-joined and run
+together, each key-path join) that the view holds. The receipt keeps no text, so the cut is thinned into
+the whole 4,096 room with the B1′ selector. A relayed run of L chars from such a step (n = L - 47) is
+missed with P_miss(n) = (1 - q)^n + n·q·(1 - q)^(n - 1), q = 1/(4m), where m is the smallest power of
+two with |cut|/m <= 4,096 and |cut| is about S/4 for a step of S chars. The same assumptions as B1′ apply.
+
+| step | m | miss, 200-char relay | 500-char | 1,000-char | 2,000-char |
+|---|---|---|---|---|---|
+| 100 KiB | 8 | 4.6e-02 | 8.9e-06 | 2.3e-12 | 7.5e-26 |
+| 256 KiB | 16 | 0.31 | 6.5e-03 | 4.9e-06 | 1.4e-12 |
+| 900 KiB | 64 | 0.88 | 0.47 | 0.11 | 4.1e-03 |
+
+The run-together and joined forms (2b C1) add about 23.5 sampled fingerprints per boundary between
+leaves. A step of a few large leaves is unchanged. A step of many leaves can reach the next power of two
+of m one boundary sooner, which halves q. A step whose leaves are all shorter than a k-gram was never
+detected before C1, and now is at this rate. A row asserting such a relay is caught picks its run under
+the process key (`pick_run`), or asserts this rate. The 900 KiB row T6 missed at 4.1e-03 with a fixed
+slice.
+
 **Determinism.** The sampling key is drawn once per process (`collusion.rs:303-305`), so which
 k-grams are kept cannot be predicted from outside. Inside one process a text always gets the same
 verdict, so a retry cannot draw a new sample (row `a_retried_relay_gets_the_same_verdict`). A row

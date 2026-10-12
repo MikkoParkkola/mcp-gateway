@@ -434,48 +434,54 @@ async fn f2d_giveback_a_refused_direct_send_keeps_no_spend() {
     use super::direct_guards_fixture::fixture_firewalled_built;
     use crate::cost_accounting::config::CostGovernanceConfig;
     for backend in BACKENDS {
-        let mut cfg = CostGovernanceConfig {
-            enabled: true,
-            ..Default::default()
-        };
-        cfg.tool_costs.insert("read".to_string(), 1.0);
-        cfg.budgets.per_key.insert("k-budget".to_string(), 2.5);
-        let registry =
-            std::sync::Arc::new(crate::cost_accounting::registry::CostRegistry::new(&cfg));
-        let enforcer = std::sync::Arc::new(crate::cost_accounting::enforcer::BudgetEnforcer::new(
-            cfg,
-            std::sync::Arc::clone(&registry),
-        ));
-        let fx = fixture_firewalled_built(Answer::AskOnce, move |meta| {
-            meta.with_cost_governance(enforcer, registry)
+        let (refused, spends, fresh, sent) = crate::test_day::same_utc_day_async(|| async move {
+            let mut cfg = CostGovernanceConfig {
+                enabled: true,
+                ..Default::default()
+            };
+            cfg.tool_costs.insert("read".to_string(), 1.0);
+            cfg.budgets.per_key.insert("k-budget".to_string(), 2.5);
+            let registry =
+                std::sync::Arc::new(crate::cost_accounting::registry::CostRegistry::new(&cfg));
+            let enforcer =
+                std::sync::Arc::new(crate::cost_accounting::enforcer::BudgetEnforcer::new(
+                    cfg,
+                    std::sync::Arc::clone(&registry),
+                ));
+            let fx = fixture_firewalled_built(Answer::AskOnce, move |meta| {
+                meta.with_cost_governance(enforcer, registry)
+            })
+            .await;
+            let spend = || {
+                let enforcer = fx.state.meta_mcp.budget_enforcer.as_ref().expect("armed");
+                enforcer
+                    .snapshot()
+                    .key_daily
+                    .get("k-budget")
+                    .copied()
+                    .unwrap_or(0.0)
+            };
+            let who = ("k-budget", backend);
+            let (_, asked) = direct(&fx, who, json!({}), json!({})).await;
+            let after_question = spend();
+            let hostile =
+                json!({"requestState": state_of(&asked), "inputResponses": answering(BLOCKED)});
+            let (_, refused) = direct(&fx, who, json!({}), hostile).await;
+            let spends = (after_question, spend());
+            let (_, fresh) = direct(&fx, who, json!({}), json!({})).await;
+            (refused, spends, fresh, dispatched(&fx))
         })
         .await;
-        let spend = || {
-            let enforcer = fx.state.meta_mcp.budget_enforcer.as_ref().expect("armed");
-            enforcer
-                .snapshot()
-                .key_daily
-                .get("k-budget")
-                .copied()
-                .unwrap_or(0.0)
-        };
-        let who = ("k-budget", backend);
-        let (_, asked) = direct(&fx, who, json!({}), json!({})).await;
-        let after_question = spend();
-        let hostile =
-            json!({"requestState": state_of(&asked), "inputResponses": answering(BLOCKED)});
-        let (_, refused) = direct(&fx, who, json!({}), hostile).await;
         assert_eq!(code(&refused), Some(-32600), "{backend}: {refused}");
         assert!(
-            (spend() - after_question).abs() < f64::EPSILON,
+            (spends.1 - spends.0).abs() < f64::EPSILON,
             "{backend}: the refused send was charged"
         );
-        let (_, fresh) = direct(&fx, who, json!({}), json!({})).await;
         assert!(
             fresh.get("error").is_none(),
             "{backend}: the fresh call did not fit; a reservation leaked: {fresh}"
         );
-        assert_eq!(dispatched(&fx), 2, "{backend}: the fresh call was not sent");
+        assert_eq!(sent, 2, "{backend}: the fresh call was not sent");
     }
 }
 

@@ -69,20 +69,25 @@ async fn n1b_a_spend_refusal_consumes_no_nonce_on_mcp() {
     use super::direct_continuation_tests::budget;
     use super::direct_guards_fixture::fixture_hardened_signed_built;
     for backend in BACKENDS {
-        let fx = fixture_hardened_signed_built(Answer::Ok, true, budget).await;
-        let who = ("k-budget", backend);
-        let (_, first) = signed_invoke(&fx, who, &format!("{backend}-n1"), json!({})).await;
+        let (first, status, refused, again_status, again, sent) =
+            crate::test_day::same_utc_day_async(|| async move {
+                let fx = fixture_hardened_signed_built(Answer::Ok, true, budget).await;
+                let who = ("k-budget", backend);
+                let (_, first) = signed_invoke(&fx, who, &format!("{backend}-n1"), json!({})).await;
+                let n2 = format!("{backend}-n2");
+                let (status, refused) = signed_invoke(&fx, who, &n2, json!({})).await;
+                let (again_status, again) = signed_invoke(&fx, who, &n2, json!({})).await;
+                (first, status, refused, again_status, again, dispatched(&fx))
+            })
+            .await;
         assert!(first.get("error").is_none(), "{backend}: {first}");
-        let n2 = format!("{backend}-n2");
-        let (status, refused) = signed_invoke(&fx, who, &n2, json!({})).await;
         assert_eq!(code(&refused), Some(-32003), "{backend}: {refused}");
-        let (again_status, again) = signed_invoke(&fx, who, &n2, json!({})).await;
         assert_eq!(
             (again_status, code(&again)),
             (status, code(&refused)),
             "{backend}: nonce burned: {again}"
         );
-        assert_eq!(dispatched(&fx), 1, "{backend}");
+        assert_eq!(sent, 1, "{backend}");
     }
 }
 
@@ -96,41 +101,46 @@ async fn n1b_a_spend_refusal_consumes_no_nonce_on_mcp() {
 async fn n1c_a_signed_chain_that_ran_a_step_keeps_its_nonce() {
     use super::direct_continuation_tests::budget;
     use super::direct_guards_fixture::fixture_hardened_signed_built;
-    let fx = fixture_hardened_signed_built(Answer::Ok, true, budget).await;
-    let chain = json!({"chain": [
-        {"tool": "alpha:read", "arguments": {}},
-        {"tool": "alpha:read", "arguments": {"cmd": "two"}}
-    ]});
-    let params = json!({"name": "gateway_execute", "arguments": chain, "_meta": {
-        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-        "io.modelcontextprotocol/clientCapabilities": {},
-        crate::gateway::meta_mcp::signing::NONCE_META: "chain-n1"
-    }});
-    let headers = [
-        ("mcp-protocol-version", "2026-07-28"),
-        ("mcp-method", "tools/call"),
-        ("mcp-name", "gateway_execute"),
-    ];
-    let send = || {
-        send_with_headers(
-            &fx,
-            "/mcp",
-            "k-budget",
-            "tools/call",
-            params.clone(),
-            None,
-            &headers,
-        )
-    };
-    let (_, first) = send().await;
+    let (first, after_first, again, after_again) = crate::test_day::same_utc_day_async(|| async {
+        let fx = fixture_hardened_signed_built(Answer::Ok, true, budget).await;
+        let chain = json!({"chain": [
+            {"tool": "alpha:read", "arguments": {}},
+            {"tool": "alpha:read", "arguments": {"cmd": "two"}}
+        ]});
+        let params = json!({"name": "gateway_execute", "arguments": chain, "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+            crate::gateway::meta_mcp::signing::NONCE_META: "chain-n1"
+        }});
+        let headers = [
+            ("mcp-protocol-version", "2026-07-28"),
+            ("mcp-method", "tools/call"),
+            ("mcp-name", "gateway_execute"),
+        ];
+        let send = || {
+            send_with_headers(
+                &fx,
+                "/mcp",
+                "k-budget",
+                "tools/call",
+                params.clone(),
+                None,
+                &headers,
+            )
+        };
+        let (_, first) = send().await;
+        let after_first = dispatched(&fx);
+        let (_, again) = send().await;
+        (first, after_first, again, dispatched(&fx))
+    })
+    .await;
     assert!(
         first.get("error").is_some(),
         "step 2 is refused by the budget: {first}"
     );
-    assert_eq!(dispatched(&fx), 1, "step 1 ran once: {first}");
-    let (_, again) = send().await;
+    assert_eq!(after_first, 1, "step 1 ran once: {first}");
     assert_eq!(code(&again), Some(-32001), "replay refused: {again}");
-    assert_eq!(dispatched(&fx), 1, "step 1 ran twice");
+    assert_eq!(after_again, 1, "step 1 ran twice");
 }
 
 /// N1d (gpt d1 CRIT): a signed playbook that continues past a refused step
@@ -157,41 +167,49 @@ steps:
     server: alpha
     tool: note
 ";
-    let fx = fixture_hardened_signed_built(Answer::WithNote, true, |meta| {
-        let meta = budget(meta);
-        let mut engine = crate::playbook::PlaybookEngine::new();
-        engine.register(serde_yaml::from_str(PLAYBOOK).expect("the playbook parses"));
-        meta.set_playbook_engine(engine);
-        meta
-    })
-    .await;
-    let (_, spent) = signed_invoke(&fx, ("k-budget", "alpha"), "pb-n0", json!({})).await;
+    let (spent, first, after_first, again, after_again) =
+        crate::test_day::same_utc_day_async(|| async {
+            let fx = fixture_hardened_signed_built(Answer::WithNote, true, |meta| {
+                let meta = budget(meta);
+                let mut engine = crate::playbook::PlaybookEngine::new();
+                engine.register(serde_yaml::from_str(PLAYBOOK).expect("the playbook parses"));
+                meta.set_playbook_engine(engine);
+                meta
+            })
+            .await;
+            let (_, spent) =
+                signed_invoke(&fx, ("k-budget", "alpha"), "pb-n0", json!({})).await;
+            let params = json!({"name": "gateway_run_playbook", "arguments": {"name": "onward"}, "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+                crate::gateway::meta_mcp::signing::NONCE_META: "pb-n1"
+            }});
+            let headers = [
+                ("mcp-protocol-version", "2026-07-28"),
+                ("mcp-method", "tools/call"),
+                ("mcp-name", "gateway_run_playbook"),
+            ];
+            let send = || {
+                send_with_headers(
+                    &fx,
+                    "/mcp",
+                    "k-budget",
+                    "tools/call",
+                    params.clone(),
+                    None,
+                    &headers,
+                )
+            };
+            let (_, first) = send().await;
+            let after_first = dispatched(&fx);
+            let (_, again) = send().await;
+            (spent, first, after_first, again, dispatched(&fx))
+        })
+        .await;
     assert!(
         spent.get("error").is_none(),
         "premise: the read is paid: {spent}"
     );
-    let params = json!({"name": "gateway_run_playbook", "arguments": {"name": "onward"}, "_meta": {
-        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-        "io.modelcontextprotocol/clientCapabilities": {},
-        crate::gateway::meta_mcp::signing::NONCE_META: "pb-n1"
-    }});
-    let headers = [
-        ("mcp-protocol-version", "2026-07-28"),
-        ("mcp-method", "tools/call"),
-        ("mcp-name", "gateway_run_playbook"),
-    ];
-    let send = || {
-        send_with_headers(
-            &fx,
-            "/mcp",
-            "k-budget",
-            "tools/call",
-            params.clone(),
-            None,
-            &headers,
-        )
-    };
-    let (_, first) = send().await;
     let report: Value = first["result"]["content"][0]["text"]
         .as_str()
         .and_then(|text| serde_json::from_str(text).ok())
@@ -204,12 +222,7 @@ steps:
         "premise: the budget refused the read: {report}"
     );
     assert_eq!(report["steps_completed"], json!(["note"]), "{report}");
-    assert_eq!(
-        dispatched(&fx),
-        2,
-        "premise: read refused, note ran: {first}"
-    );
-    let (_, again) = send().await;
+    assert_eq!(after_first, 2, "premise: read refused, note ran: {first}");
     assert_eq!(code(&again), Some(-32001), "replay refused: {again}");
-    assert_eq!(dispatched(&fx), 2, "note ran twice: {again}");
+    assert_eq!(after_again, 2, "note ran twice: {again}");
 }

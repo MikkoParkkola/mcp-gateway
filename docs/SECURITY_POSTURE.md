@@ -60,8 +60,12 @@ To turn CLI capabilities off entirely, set `capabilities.process_execution: disa
 - **A stdio caller is always admin**, because it started the gateway process itself.
 - **CLI capabilities are confined, not sandboxed.** They run as the gateway's own user. Give
   that user least privilege.
-- **Relay detection matches verbatim text only.** It compares the first and last 3 KiB of each
-  result, so paraphrased or re-encoded content goes unseen.
+- **Relay detection matches verbatim text only, and is probabilistic on large results.** It
+  compares the first and last 3 KiB of each result whole and only a thinned sample of the rest
+  (at most 4,096 fingerprints per delivery), so a relay from deep inside a large result can be
+  missed: a 500-char relay from the middle of a 1 MiB result is missed 78% of the time, and a
+  200-char relay out of a 900 KiB plan step 88% (relay design §14.3, B1′ and B1″). Paraphrased
+  or re-encoded content goes unseen.
 - **Downstream tools keep their own risks.** The gateway screens calls and results. It cannot
   make an unsafe backend safe.
 

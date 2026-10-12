@@ -504,7 +504,8 @@ async fn nonce_give_back_direct_row() {
         expect(MethodKind::ToolsCall, Route::Direct, Stage::NonceGiveBack),
         Expect::Applies
     );
-    let (refused, again, replay, calls) = router::direct_spend_then_resend().await;
+    let (refused, again, replay, calls) =
+        crate::test_day::same_utc_day_async(router::direct_spend_then_resend).await;
     assert!(
         message(&refused).contains("daily budget exceeded"),
         "premise: the budget refused: {refused}"
