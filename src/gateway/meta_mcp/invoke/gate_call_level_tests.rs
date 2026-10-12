@@ -75,3 +75,29 @@ async fn a_hidden_malformed_name_is_refused_and_audited_as_the_authorizer_refuse
         .unwrap_or_else(|| panic!("no authorization-refusal warning logged:\n{logged}"));
     assert!(line.contains("bad/tool"), "{line}");
 }
+
+/// The authorizers pass an empty tool name, so the skipped policy answers it
+/// with its own name check: signing answers an empty hidden name the same way.
+#[test]
+fn an_empty_hidden_name_is_refused_as_the_policy_refuses_it() {
+    let (registry, _) = counted_backend("alpha");
+    let meta = MetaMcp::new(registry);
+    let policy = crate::security::ToolPolicy::default();
+    let authorizer = ToolPolicyAuthorizer {
+        tool_policy: &policy,
+    };
+    let caller = ctx(&authorizer);
+    let arguments = json!({"server": "alpha", "tool": "", "arguments": {}});
+
+    let by_policy = meta
+        .check_invocation_policy(&arguments, None, &caller)
+        .expect_err("the policy refuses an empty name");
+    let by_signing = meta
+        .check_call_level_policy(&arguments, &caller)
+        .expect_err("signing refuses an empty hidden name");
+    assert_eq!(
+        format!("{by_signing:?}"),
+        format!("{by_policy:?}"),
+        "the same refusal as the policy this call skipped"
+    );
+}

@@ -366,6 +366,11 @@ async fn assert_error_answers(mcp: &mut Session) {
     assert_eq!(down["recovery"]["retry"], true, "{down}");
 }
 
+/// A JSON-RPC error or a tool result flagged as an error.
+fn is_refusal(answer: &Value) -> bool {
+    answer.get("error").is_some_and(Value::is_object) || answer["result"]["isError"] == true
+}
+
 async fn assert_invoke_matches_execute(mcp: &mut Session) {
     // Existing clients that call gateway_invoke by name keep working, and pass
     // the same grant check as gateway_execute: a policy-denied tool is
@@ -395,6 +400,10 @@ async fn assert_invoke_matches_execute(mcp: &mut Session) {
     ] {
         let refused = mcp.call(meta, args(DENIED_TOOL)).await;
         let absent = mcp.call(meta, args(ABSENT_TOOL)).await;
+        // Equal answers prove nothing if both succeeded: each is a refusal.
+        for answer in [&refused, &absent] {
+            assert!(is_refusal(answer), "{meta}: not a refusal: {answer}");
+        }
         assert_eq!(
             normalised(&refused),
             normalised(&absent),

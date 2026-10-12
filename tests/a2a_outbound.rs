@@ -402,6 +402,14 @@ async fn a2a_7_a_delegation_passes_the_gateway_funnel() {
     // exist, byte for byte, from the same caller (only the echoed name and the
     // request id differ).
     let (absent_status, absent) = common::post(&state, invoke_tool(ABSENT), &denied_key).await;
+    // Equal answers prove nothing if both succeeded: each is a refusal.
+    for answer in [&refused, &absent] {
+        assert!(
+            answer.get("error").is_some_and(Value::is_object)
+                || answer["result"]["isError"] == true,
+            "not a refusal: {answer}"
+        );
+    }
     assert_eq!(refused_status, absent_status, "{refused} / {absent}");
     let normalised = |answer: &Value| {
         let mut answer = answer.clone();

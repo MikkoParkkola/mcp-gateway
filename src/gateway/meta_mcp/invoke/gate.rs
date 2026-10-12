@@ -70,6 +70,15 @@ impl MetaMcp {
     ) -> Result<()> {
         let tool = crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "tool")?;
         if let Err(reason) = crate::security::validate_tool_name(tool) {
+            let server =
+                crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "server")?;
+            // Every authorizer passes an empty server or tool, so the policy's
+            // own name check answers it, as it did before A1.
+            if server.is_empty() || tool.is_empty() {
+                return Err(Error::Protocol(format!(
+                    "Invalid tool name '{tool}': {reason}"
+                )));
+            }
             // As every authorizer refuses a malformed name, and as
             // `authorize_invocation` answers and audits it: the policy this
             // call skipped would have, and so does a missing name.
@@ -78,8 +87,6 @@ impl MetaMcp {
                 status: axum::http::StatusCode::FORBIDDEN.as_u16(),
                 message: reason,
             };
-            let server =
-                crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "server")?;
             let authorizer = caller.authorizer;
             crate::gateway::authz::audit_refusal(
                 authorizer.transport(),
