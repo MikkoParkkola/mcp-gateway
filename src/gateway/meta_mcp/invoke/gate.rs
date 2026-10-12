@@ -145,13 +145,14 @@ impl MetaMcp {
     /// for [`Self::filled_since`]. No instance is held: the epoch moves on
     /// every add, replace or remove, so an unmoved epoch means every target
     /// is the same instance as at the mark and its count compares soundly.
-    fn fill_marks<'s>(
-        &self,
-        servers: impl Iterator<Item = &'s str>,
-    ) -> (u64, Vec<Option<u64>>) {
+    fn fill_marks<'s>(&self, servers: impl Iterator<Item = &'s str>) -> (u64, Vec<Option<u64>>) {
         let membership = self.backends.membership();
         let fills = servers
-            .map(|server| self.backends.get(server).map(|backend| backend.list_fills()))
+            .map(|server| {
+                self.backends
+                    .get(server)
+                    .map(|backend| backend.list_fills())
+            })
             .collect();
         (membership, fills)
     }
