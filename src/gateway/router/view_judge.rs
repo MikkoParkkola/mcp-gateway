@@ -13,7 +13,7 @@ use super::{AppState, OwnedRouterAuthorizer};
 use crate::gateway::auth::live::{HeldCredential, current_caller};
 use crate::gateway::auth::{AuthState, AuthenticatedClient};
 use crate::gateway::meta_mcp::InvokeScope;
-use crate::gateway::streaming::{ViewDigest, ViewJudge, ViewSubject};
+use crate::gateway::streaming::{Judged, ViewDigest, ViewJudge, ViewSubject};
 
 /// Judges from the state the caller holds. Borrowed for the span of one
 /// fan-out, so nothing stores a pointer back into the state that owns the
@@ -42,7 +42,7 @@ impl OwnedViewJudge {
     }
 }
 
-type Caller<'a> = (Option<&'a HeldCredential>, Option<&'a ViewSubject>);
+type Caller<'a> = (Option<&'a HeldCredential>, &'a ViewSubject);
 
 impl ViewJudge for OwnedViewJudge {
     fn digest<'a>(
@@ -51,7 +51,7 @@ impl ViewJudge for OwnedViewJudge {
         caller: Caller<'a>,
         session_id: &'a str,
         backend: &'a str,
-    ) -> BoxFuture<'a, Option<ViewDigest>> {
+    ) -> BoxFuture<'a, Judged<ViewDigest>> {
         Box::pin(digest_async(&self.state, auth, caller, session_id, backend))
     }
 
@@ -60,7 +60,7 @@ impl ViewJudge for OwnedViewJudge {
         auth: &'a AuthState,
         caller: Caller<'a>,
         session_id: &'a str,
-    ) -> BoxFuture<'a, HashMap<String, ViewDigest>> {
+    ) -> BoxFuture<'a, Judged<HashMap<String, ViewDigest>>> {
         Box::pin(baseline_async(&self.state, auth, caller, session_id))
     }
 }
@@ -72,7 +72,7 @@ impl ViewJudge for RouterViewJudge<'_> {
         caller: Caller<'a>,
         session_id: &'a str,
         backend: &'a str,
-    ) -> BoxFuture<'a, Option<ViewDigest>> {
+    ) -> BoxFuture<'a, Judged<ViewDigest>> {
         Box::pin(digest_async(self.state, auth, caller, session_id, backend))
     }
 
@@ -81,7 +81,7 @@ impl ViewJudge for RouterViewJudge<'_> {
         auth: &'a AuthState,
         caller: Caller<'a>,
         session_id: &'a str,
-    ) -> BoxFuture<'a, HashMap<String, ViewDigest>> {
+    ) -> BoxFuture<'a, Judged<HashMap<String, ViewDigest>>> {
         Box::pin(baseline_async(self.state, auth, caller, session_id))
     }
 }
@@ -91,7 +91,7 @@ impl ViewJudge for RouterViewJudge<'_> {
 /// stream was opened with stand in for the ones a request carries.
 fn digest_for(
     state: &AppState,
-    subject: Option<&ViewSubject>,
+    subject: &ViewSubject,
     (client, identity): &(
         AuthenticatedClient,
         Option<crate::key_server::oidc::VerifiedIdentity>,
@@ -99,8 +99,8 @@ fn digest_for(
     session_id: &str,
     backend: &str,
 ) -> ViewDigest {
-    let oauth = subject.and_then(|s| s.oauth_agent.as_ref());
-    let cert = subject.and_then(|s| s.cert.as_ref());
+    let oauth = subject.oauth_agent.as_ref();
+    let cert = subject.cert.as_ref();
     let owned = OwnedRouterAuthorizer::capture(Some(client), oauth, cert);
     let authorizer = owned.borrow(state);
     // Only the proven half of an agent identity matters, and it comes from the
@@ -116,7 +116,7 @@ fn digest_for(
         is_admin: client.admin,
         api_key_name: Some(&client.name),
         agent_id: agent.proven_agent_id(),
-        grant_subject: subject.and_then(|s| s.grant_subject.as_ref()),
+        grant_subject: subject.grant_subject.as_ref(),
         caller: crate::identity_propagation::CallerProof::new(
             identity.as_ref(),
             crate::identity_propagation::CallerProvenance::classify(Some(
@@ -124,33 +124,46 @@ fn digest_for(
             )),
         ),
     };
-    state
-        .meta_mcp
-        .visible_digest(backend, scope, Some(session_id).filter(|s| !s.is_empty()))
+    state.meta_mcp.visible_digest(
+        backend,
+        scope,
+        (
+            Some(session_id).filter(|s| !s.is_empty()),
+            subject.code_mode_url,
+        ),
+    )
 }
 
-/// What the held credential is shown of `backend` now, or `None` when it no
-/// longer resolves to a caller.
+/// What the held credential is shown of `backend` now, or `Dead` when the
+/// stream's identity or its credential no longer resolves to a caller.
 async fn digest_async(
     state: &AppState,
     auth: &AuthState,
     (credential, subject): Caller<'_>,
     session_id: &str,
     backend: &str,
-) -> Option<ViewDigest> {
-    let caller = current_caller(auth, credential).await?;
-    Some(digest_for(state, subject, &caller, session_id, backend))
+) -> Judged<ViewDigest> {
+    if !subject.live() {
+        return Judged::Dead;
+    }
+    let Some(caller) = current_caller(auth, credential).await else {
+        return Judged::Dead;
+    };
+    Judged::Live(digest_for(state, subject, &caller, session_id, backend))
 }
 
-/// Every backend's view for the held credential, empty when it does not resolve.
+/// Every backend's view for the held credential, `Dead` when it does not resolve.
 async fn baseline_async(
     state: &AppState,
     auth: &AuthState,
     (credential, subject): Caller<'_>,
     session_id: &str,
-) -> HashMap<String, ViewDigest> {
+) -> Judged<HashMap<String, ViewDigest>> {
+    if !subject.live() {
+        return Judged::Dead;
+    }
     let Some(caller) = current_caller(auth, credential).await else {
-        return HashMap::new();
+        return Judged::Dead;
     };
     let mut names: Vec<String> = state
         .backends
@@ -161,67 +174,82 @@ async fn baseline_async(
     if let Some(capabilities) = state.meta_mcp.get_capabilities() {
         names.push(capabilities.name.clone());
     }
-    names
-        .into_iter()
-        .map(|name| {
-            let digest = digest_for(state, subject, &caller, session_id, &name);
-            (name, digest)
-        })
-        .collect()
+    Judged::Live(
+        names
+            .into_iter()
+            .map(|name| {
+                let digest = digest_for(state, subject, &caller, session_id, &name);
+                (name, digest)
+            })
+            .collect(),
+    )
+}
+
+/// Whether the URL asked for Code Mode by `?codemode=search_and_execute`: the
+/// one test the intake and a stream's attach both use.
+pub(super) fn code_mode_requested(query: Option<&str>) -> bool {
+    query.is_some_and(|q| {
+        q.split('&')
+            .any(|pair| pair == "codemode=search_and_execute")
+    })
 }
 
 impl AppState {
-    /// The caller of `session_id` has just been shown its current view (a
-    /// `tools/list` answer, a profile switch): record it as told.
-    pub(super) async fn refresh_told(&self, session_id: &str) {
+    /// The caller of `session_id`, under `subject`, has just been shown its
+    /// current view (a `tools/list` answer, a profile switch): record it as
+    /// told.
+    pub(super) async fn refresh_told(&self, session_id: &str, subject: &ViewSubject) {
         self.multiplexer
-            .refresh_told(session_id, &RouterViewJudge::new(self))
+            .refresh_told(session_id, subject, &RouterViewJudge::new(self))
             .await;
     }
 
-    /// A GET stream opened for `session_id`: bind the identities it was opened
-    /// under and record what its caller is shown now, so the first change after
-    /// attach is judged against it.
+    /// A GET stream opened for `session_id` under `subject`: the view it
+    /// judges with, baselined so the first change after attach is judged
+    /// against what it saw.
     pub(super) async fn attach_view(
-        &self,
+        self: &Arc<Self>,
         session_id: &str,
-        grant_subject: Option<crate::identity_grants::GrantSubject>,
-        extensions: &axum::http::Extensions,
-    ) {
-        self.multiplexer.bind_view_subject(
-            session_id,
-            ViewSubject {
-                grant_subject,
-                oauth_agent: extensions
-                    .get::<crate::gateway::oauth::AgentIdentity>()
-                    .cloned(),
-                cert: extensions.get::<crate::mtls::CertIdentity>().cloned(),
-            },
-        );
+        subject: ViewSubject,
+    ) -> Option<crate::gateway::streaming::StreamView> {
         self.multiplexer
-            .take_baseline(session_id, &RouterViewJudge::new(self))
-            .await;
+            .attach_view(session_id, subject, OwnedViewJudge::shared(self))
+            .await
+    }
+
+    /// [`Self::attach_view`] for a GET: the subject is read from the request
+    /// the way the intake reads it for a POST.
+    pub(super) async fn attach_get_view(
+        self: &Arc<Self>,
+        session_id: &str,
+        (grant_subject, extensions, query): (
+            Option<crate::identity_grants::GrantSubject>,
+            &axum::http::Extensions,
+            Option<&str>,
+        ),
+    ) -> Option<crate::gateway::streaming::StreamView> {
+        let subject = ViewSubject {
+            grant_subject,
+            oauth_agent: extensions
+                .get::<crate::gateway::oauth::AgentIdentity>()
+                .cloned(),
+            cert: extensions.get::<crate::mtls::CertIdentity>().cloned(),
+            code_mode_url: code_mode_requested(query),
+            adapter: extensions
+                .get::<crate::gateway::openwebui_adapter::AdapterAssertion>()
+                .copied(),
+        };
+        self.attach_view(session_id, subject).await
     }
 
     /// `listener` judged by the view of the caller that opened it, under the
-    /// identities captured now (MIK-8350 D11).
+    /// subject captured now (MIK-8350 D11).
     pub(super) fn judged_listener(
         self: &Arc<Self>,
         mut listener: crate::gateway::subscription_registry::Listener,
-        grant_subject: Option<crate::identity_grants::GrantSubject>,
-        (oauth_agent, cert): (
-            Option<crate::gateway::oauth::AgentIdentity>,
-            Option<crate::mtls::CertIdentity>,
-        ),
+        subject: ViewSubject,
     ) -> crate::gateway::subscription_registry::Listener {
-        listener.set_views(
-            OwnedViewJudge::shared(self),
-            ViewSubject {
-                grant_subject,
-                oauth_agent,
-                cert,
-            },
-        );
+        listener.set_views(OwnedViewJudge::shared(self), subject);
         listener
     }
 
@@ -231,6 +259,7 @@ impl AppState {
     pub(super) async fn after_call(
         &self,
         session_id: &str,
+        subject: &ViewSubject,
         params: Option<&serde_json::Value>,
         response: crate::protocol::JsonRpcResponse,
     ) -> crate::protocol::JsonRpcResponse {
@@ -239,7 +268,7 @@ impl AppState {
             .and_then(serde_json::Value::as_str)
             == Some("gateway_set_profile");
         if switched && response.error.is_none() {
-            self.refresh_told(session_id).await;
+            self.refresh_told(session_id, subject).await;
         }
         response
     }

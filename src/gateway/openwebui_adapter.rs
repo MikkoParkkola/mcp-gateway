@@ -171,7 +171,9 @@ impl OpenWebUiAdapterState {
     ) -> Option<VerifiedIdentity> {
         let name = header_name(header)?;
         let candidates = self.inner.trusted.get(&name)?;
-        resolve_identity(candidates, api_key_name, token).ok()
+        resolve_identity(candidates, api_key_name, token)
+            .ok()
+            .map(|(identity, _)| identity)
     }
 }
 
@@ -294,7 +296,9 @@ pub(crate) async fn openwebui_adapter_middleware(
     // The header is consumed. A handler must not be able to re-read the raw
     // assertion and reach its own, weaker conclusion about it.
     request.headers_mut().remove(&header);
+    let (identity, assertion) = identity;
     request.extensions_mut().insert(identity);
+    request.extensions_mut().insert(assertion);
     next.run(request).await
 }
 
@@ -317,8 +321,8 @@ fn resolve_identity(
     candidates: &[Trusted],
     api_key_name: &str,
     token: &str,
-) -> Result<VerifiedIdentity, Refusal> {
-    let mut accepted: Option<VerifiedIdentity> = None;
+) -> Result<(VerifiedIdentity, AdapterAssertion), Refusal> {
+    let mut accepted: Option<(VerifiedIdentity, AdapterAssertion)> = None;
     let mut first_refusal: Option<Refusal> = None;
     for candidate in candidates {
         // Per-installation: the allow-list belongs to the installation being
@@ -332,7 +336,7 @@ fn resolve_identity(
             first_refusal.get_or_insert(Refusal::KeyNotAllowed);
             continue;
         }
-        match verify(&candidate.runtime, &candidate.decoding_key, token) {
+        match verify_assertion(&candidate.runtime, &candidate.decoding_key, token) {
             Ok(identity) => {
                 if accepted.is_some() {
                     return Err(Refusal::AmbiguousIdentity);
@@ -347,12 +351,45 @@ fn resolve_identity(
     accepted.ok_or(first_refusal.unwrap_or(Refusal::NoTrustedMaterial))
 }
 
-/// Verify one assertion against one adapter's material and rules.
+/// What `verify_assertion` judged about an accepted assertion, kept on the
+/// request so a stream held open past it can ask the same question again
+/// (MIK-8350): the expiry and the skew that admitted it. The future-`iat`
+/// test is an admission-only refusal and needs no second look.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AdapterAssertion {
+    expires_at: u64,
+    skew: u64,
+}
+
+impl AdapterAssertion {
+    /// Whether the assertion is still inside its window, judged by the same
+    /// function and inclusive boundary admission used. A clock that cannot be
+    /// read answers no (MIK-8202).
+    pub(crate) fn live(&self) -> bool {
+        clock::jwt_window(
+            JwtClaimTime::At(self.expires_at),
+            JwtClaimTime::Absent,
+            self.skew,
+        ) == Validity::Live
+    }
+}
+
+/// [`verify_assertion`] for the callers that need only the identity.
+#[cfg(test)]
 fn verify(
     runtime: &AdapterRuntime,
     key: &DecodingKey,
     token: &str,
 ) -> Result<VerifiedIdentity, Refusal> {
+    verify_assertion(runtime, key, token).map(|(identity, _)| identity)
+}
+
+/// Verify one assertion against one adapter's material and rules.
+fn verify_assertion(
+    runtime: &AdapterRuntime,
+    key: &DecodingKey,
+    token: &str,
+) -> Result<(VerifiedIdentity, AdapterAssertion), Refusal> {
     // HS256 only, fixed by the algorithm this `Validation` is constructed with:
     // the token's own `alg` header cannot select a different verification, so
     // `none` and an RS/HS confusion are both rejected before any signature
@@ -409,14 +446,24 @@ fn verify(
     // An email or group list is not carried: an adapter asserts a subject,
     // and either taken from it would flow into role mapping as if an IdP had
     // verified it. An empty subject names nobody (MIK-8286).
-    VerifiedIdentity::checked(
+    let identity = VerifiedIdentity::checked(
         namespaced_issuer(&runtime.installation_id),
         claims.sub,
         String::new(),
         None,
         Vec::new(),
     )
-    .ok_or(Refusal::Invalid("empty subject"))
+    .ok_or(Refusal::Invalid("empty subject"))?;
+    // `exp` was judged above, so a non-negative value is the only one that
+    // gets here.
+    let expires_at = u64::try_from(claims.exp).unwrap_or(0);
+    Ok((
+        identity,
+        AdapterAssertion {
+            expires_at,
+            skew: runtime.clock_skew_seconds,
+        },
+    ))
 }
 
 /// The issuer this identity is recorded under.
@@ -549,9 +596,9 @@ mod tests {
         let desk = token(&claims("alice"), Algorithm::HS256, SECRET);
         let laptop = token(&claims("alice"), Algorithm::HS256, OTHER);
 
-        let first = resolve_identity(&candidates, "owui", &desk)
+        let (first, _) = resolve_identity(&candidates, "owui", &desk)
             .unwrap_or_else(|_| panic!("desk assertion"));
-        let second = resolve_identity(&candidates, "owui", &laptop)
+        let (second, _) = resolve_identity(&candidates, "owui", &laptop)
             .unwrap_or_else(|_| panic!("laptop assertion"));
         // Order-independent: the second installation is reachable even though
         // it is not the first candidate tried.

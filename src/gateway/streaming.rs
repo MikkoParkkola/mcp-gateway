@@ -37,8 +37,10 @@ mod copy;
 use copy::{CopyAudience, Unsent};
 #[path = "streaming_told.rs"]
 mod told;
-use told::ToldCommit;
-pub(crate) use told::{Peek, ToldState, ViewDigest, ViewJudge, ViewSubject};
+pub(crate) use told::{
+    Decision, Judged, Owed, Peek, StreamView, ToldState, ViewDigest, ViewJudge, ViewRecord,
+    ViewSubject,
+};
 
 /// A tagged notification event from a backend
 #[derive(Debug, Clone, Serialize)]
@@ -69,9 +71,9 @@ pub struct SessionFrame {
     watch: Option<Arc<DeliveryWatch>>,
     /// Who the copy is for, judged again when the stream writes it (G6).
     audience: CopyAudience,
-    /// A `tools/list_changed` hint's record of what its listener was told,
-    /// applied only once the stream writes the frame (MIK-8350 B2').
-    commit: Option<Arc<ToldCommit>>,
+    /// A `tools/list_changed` hint each stream judges again for its own view
+    /// when it writes it (MIK-8350 D17d).
+    judged: Option<Arc<str>>,
 }
 
 /// How a server-to-client request's queued copies fared on their streams
@@ -204,21 +206,17 @@ struct ClientSession {
     /// revoked or expired token.
     // ci-allow-secret-debug: HeldCredential's own Debug prints only <redacted>
     credential: RwLock<Option<HeldCredential>>,
-    /// What this session was last told of each backend (MIK-8350).
-    told: RwLock<ToldState>,
-    /// Bumped when the credential changes, so a record read for the old
-    /// caller is never written for the new one.
-    epoch: std::sync::atomic::AtomicU64,
-    /// The identities the stream was opened under, which its view is judged
-    /// with besides the credential.
-    subject: RwLock<Option<Arc<ViewSubject>>>,
+    /// One record per distinct view held on this session (MIK-8350): what
+    /// each was last told, keyed by the subject its stream opened under.
+    records: RwLock<Vec<(String, Arc<ViewSubject>, Arc<ViewRecord>)>>,
 }
 
 impl ClientSession {
     /// Hold `credential`. A different credential is a different caller, so
-    /// what the session was last told no longer describes it: the record is
-    /// cleared and the next attach takes a fresh baseline (MIK-8350). The same
-    /// credential keeps its record, so a frame withheld at write stays owed.
+    /// what the session was last told no longer describes it: every record is
+    /// cleared under a new floor and the next attach takes a fresh baseline
+    /// (MIK-8350). The same credential keeps its records, so a frame withheld
+    /// at write stays owed.
     fn replace_credential(&self, credential: Option<HeldCredential>) {
         let mut held = self.credential.write();
         let changed = held.as_ref().map(HeldCredential::digest)
@@ -226,9 +224,9 @@ impl ClientSession {
         *held = credential;
         drop(held);
         if changed {
-            let mut told = self.told.write();
-            self.epoch.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-            told.clear();
+            for (_, _, record) in self.records.read().iter() {
+                record.clear();
+            }
         }
     }
 
@@ -349,7 +347,7 @@ impl NotificationMultiplexer {
         hidden: Option<&crate::security::tenant_reads::ReadAttribution>,
         watch: Option<Arc<DeliveryWatch>>,
         audience: CopyAudience,
-        commit: Option<Arc<ToldCommit>>,
+        judged: Option<Arc<str>>,
     ) -> std::result::Result<usize, Unsent> {
         // No open stream: nothing to deliver, so nothing to judge, and nothing
         // is sent either, so a stream that subscribes meanwhile cannot get an
@@ -371,7 +369,7 @@ impl NotificationMultiplexer {
             mark,
             watch: watch.clone(),
             audience,
-            commit,
+            judged,
         })?;
         if let Some(watch) = watch {
             watch.sent(copies);
@@ -536,9 +534,7 @@ impl NotificationMultiplexer {
             last_active: RwLock::new(Instant::now()),
             owner,
             credential: RwLock::new(None),
-            told: RwLock::new(ToldState::default()),
-            epoch: std::sync::atomic::AtomicU64::new(0),
-            subject: RwLock::new(None),
+            records: RwLock::new(Vec::new()),
         });
         sessions.insert(id, Arc::clone(&session));
         session
@@ -771,6 +767,7 @@ const STREAMING_TARGET: &str = module_path!();
 
 #[path = "streaming_sse.rs"]
 mod sse;
+pub(crate) use sse::create_sse_response_with_view;
 pub use sse::{TaskFrame, TaskFrameDelivery, TaskFrames, create_sse_response};
 pub(crate) use sse::{first_event_wins_stream, subscription_stream};
 // Kept at the crate-visible path it had before the move; only the tests

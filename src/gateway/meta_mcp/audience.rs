@@ -25,32 +25,41 @@ impl MetaMcp {
         &self,
         backend: &str,
         scope: InvokeScope<'_>,
-        session_id: Option<&str>,
+        (session_id, code_mode_url): (Option<&str>, bool),
     ) -> ViewDigest {
-        let served = self.served_tools_list(RequestId::Number(0), session_id, scope);
+        // A URL-activated Code Mode serves the two fixed tools whatever any
+        // backend holds (the early return in `handle_tools_list_with_url_override`).
+        let url_code_mode = code_mode_url && !self.code_mode_enabled;
+        let served = if url_code_mode {
+            self.code_mode_url_list(RequestId::Number(0), scope)
+        } else {
+            self.served_tools_list(RequestId::Number(0), session_id, scope)
+        };
         let served = serde_json::to_string(&served.result).unwrap_or_default();
         // Code Mode serves two fixed meta-tools and no discovery listing, so
         // a backend's own tools are not part of what the caller can see.
-        let shown: Vec<Tool> =
-            if self.code_mode_enabled || !self.admits_backend(backend, scope, session_id) {
-                Vec::new()
-            } else if let Some(b) = self.backends.get(backend) {
-                self.listing_snapshot(&b, scope)
-                    .map(|(tools, _)| {
-                        tools
-                            .iter()
-                            .filter(|t| self.shows_tool(backend, t, scope, session_id))
-                            .cloned()
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            } else {
-                self.capability_tools(backend)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|t| self.shows_tool(backend, t, scope, session_id))
-                    .collect()
-            };
+        let shown: Vec<Tool> = if self.code_mode_enabled
+            || url_code_mode
+            || !self.admits_backend(backend, scope, session_id)
+        {
+            Vec::new()
+        } else if let Some(b) = self.backends.get(backend) {
+            self.listing_snapshot(&b, scope)
+                .map(|(tools, _)| {
+                    tools
+                        .iter()
+                        .filter(|t| self.shows_tool(backend, t, scope, session_id))
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            self.capability_tools(backend)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|t| self.shows_tool(backend, t, scope, session_id))
+                .collect()
+        };
         ViewDigest {
             served: crate::hashing::sha256_hex(served.as_bytes()),
             shown: if shown.is_empty() {

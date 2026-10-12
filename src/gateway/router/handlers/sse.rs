@@ -21,7 +21,7 @@ use crate::gateway::router::AppState;
 use crate::gateway::router::helpers::{
     attach_session_header, build_http_error_response, build_http_response,
 };
-use crate::gateway::streaming::create_sse_response;
+use crate::gateway::streaming::create_sse_response_with_view;
 use crate::mtls::CertIdentity;
 use crate::protocol::JsonRpcResponse;
 
@@ -117,6 +117,7 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
     State(state): State<Arc<AppState>>,
     client: Option<axum::Extension<AuthenticatedClient>>,
     headers: HeaderMap,
+    uri: axum::http::Uri,
     extensions: axum::http::Extensions,
 ) -> OutboundReply {
     let client = client.map(|axum::Extension(c)| c);
@@ -204,8 +205,8 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
     }
     // MIK-8350: what this stream's caller is shown, so the first change after
     // attach is judged against it.
-    state
-        .attach_view(&session_id, subject.clone(), &extensions)
+    let view = state
+        .attach_get_view(&session_id, (subject.clone(), &extensions, uri.query()))
         .await;
     // Read before the macro so its count is graded (MIK-7725).
     let session = opened.fp();
@@ -223,11 +224,11 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
     let keep_alive = state.streaming_config.keep_alive_interval;
 
     // Create SSE response with owned data
-    match create_sse_response(
+    match create_sse_response_with_view(
         multiplexer_for_stream,
         session_id.clone(),
-        last_event_id,
-        keep_alive,
+        (last_event_id, keep_alive),
+        view,
     ) {
         Some(sse) => {
             // Add session ID header to response

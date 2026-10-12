@@ -295,11 +295,7 @@ async fn meta_mcp_dispatch(
                 .subscribe_as(crate::gateway::auth::live::held_credential(headers))
                 .await
             {
-                Ok(listener) => state.judged_listener(
-                    listener,
-                    grant_subject.clone(),
-                    (oauth_agent_identity.clone(), cert_identity.clone()),
-                ),
+                Ok(listener) => state.judged_listener(listener, intake.view_subject()),
                 Err(ListenRefusal::Unauthenticated) => {
                     return build_error_response(
                         Some(id),
@@ -447,7 +443,7 @@ async fn meta_mcp_dispatch(
                 .meta_mcp
                 .revalidate_caller_slots(invoke_scope.caller)
                 .await;
-            state.refresh_told(session_id.as_str()).await;
+            state.refresh_told(session_id, &intake.view_subject()).await;
             state.meta_mcp.handle_tools_list_with_url_override(
                 id,
                 params,
@@ -499,7 +495,7 @@ async fn meta_mcp_dispatch(
             match called {
                 Some(Ok(response)) => {
                     state
-                        .after_call(session_id.as_str(), params, response)
+                        .after_call(session_id, &intake.view_subject(), params, response)
                         .await
                 }
                 Some(Err(response)) => return response,

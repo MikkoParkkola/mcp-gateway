@@ -175,7 +175,7 @@ impl World {
             .multiplexer
             .take_baseline(
                 &minted,
-                &*crate::gateway::router::tests::view_judge_for(&self.state),
+                &crate::gateway::router::tests::view_judge_for(&self.state),
             )
             .await;
         self.minted.borrow_mut().insert(id.to_string(), minted);
@@ -202,7 +202,7 @@ impl World {
             .multiplexer
             .take_baseline(
                 &minted,
-                &*crate::gateway::router::tests::view_judge_for(&self.state),
+                &crate::gateway::router::tests::view_judge_for(&self.state),
             )
             .await;
         self.minted.borrow_mut().insert(id.to_string(), minted);

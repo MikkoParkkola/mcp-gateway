@@ -50,6 +50,9 @@ pub(super) struct Intake<'r> {
     pub(super) client: Option<AuthenticatedClient>,
     pub(super) cert_identity: Option<CertIdentity>,
     pub(super) oauth_agent_identity: Option<OAuthAgentIdentity>,
+    /// What the Open WebUI adapter judged about the assertion that admitted
+    /// this request, when one did.
+    adapter_assertion: Option<crate::gateway::openwebui_adapter::AdapterAssertion>,
     pub(super) verified_identity: Option<VerifiedIdentity>,
     pub(super) presented: events::Presented,
     pub(super) agent_identity: AgentIdentity,
@@ -142,6 +145,10 @@ pub(super) async fn intake(
         .extensions()
         .get::<OAuthAgentIdentity>()
         .cloned();
+    let adapter_assertion = http_request
+        .extensions()
+        .get::<crate::gateway::openwebui_adapter::AdapterAssertion>()
+        .copied();
     let verified_identity = http_request.extensions().get::<VerifiedIdentity>().cloned();
     // MCP Events caps a subscription at the credential's own expiry.
     let presented = events::Presented::capture(&http_request);
@@ -171,10 +178,7 @@ pub(super) async fn intake(
     // Per-connection Code Mode override (issue #146).
     // Accepted value: ?codemode=search_and_execute
     // When the static config already enables Code Mode, this is a no-op.
-    let code_mode_url_active = query_str.is_some_and(|q| {
-        q.split('&')
-            .any(|pair| pair == "codemode=search_and_execute")
-    });
+    let code_mode_url_active = crate::gateway::router::view_judge::code_mode_requested(query_str);
     let surface_request = SurfaceRequest::from_url(code_mode_url_active);
     // The refusal arm emits its own audit record. Before this change it
     // returned silently, so a proved-A-claimed-B refusal left no trace on the
@@ -699,6 +703,7 @@ pub(super) async fn intake(
             client,
             cert_identity,
             oauth_agent_identity,
+            adapter_assertion,
             verified_identity,
             presented,
             agent_identity,
@@ -732,3 +737,17 @@ mod cancel_key_tests;
 #[cfg(test)]
 #[path = "dispatch_intake_presented_tests.rs"]
 mod presented_tests;
+
+impl Intake<'_> {
+    /// The view this request's caller is shown, as a stream opened by the same
+    /// request would hold it (MIK-8350 D16).
+    pub(super) fn view_subject(&self) -> crate::gateway::streaming::ViewSubject {
+        crate::gateway::streaming::ViewSubject {
+            grant_subject: self.grant_subject.clone(),
+            oauth_agent: self.oauth_agent_identity.clone(),
+            cert: self.cert_identity.clone(),
+            code_mode_url: self.code_mode_url_active,
+            adapter: self.adapter_assertion,
+        }
+    }
+}

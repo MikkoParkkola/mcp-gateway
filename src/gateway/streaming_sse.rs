@@ -18,16 +18,33 @@ use tracing::warn;
 use super::{NotificationMultiplexer, STREAMING_TARGET};
 use crate::gateway::auth::live::{Delivery, delivery};
 use crate::gateway::outbound::{OutboundFrame, StreamJudge, sse_data, sse_message};
+use crate::gateway::streaming::Decision;
 
 /// Create SSE response for GET /mcp
 ///
 /// Takes owned data to satisfy Rust 2024 lifetime capture rules for `impl Stream`.
-#[allow(clippy::needless_pass_by_value)] // owned values required for stream lifetime
 pub fn create_sse_response(
     multiplexer: Arc<NotificationMultiplexer>,
     session_id: String,
     last_event_id: Option<String>,
     keep_alive_interval: Duration,
+) -> Option<Sse<impl Stream<Item = std::result::Result<Event, Infallible>>>> {
+    create_sse_response_with_view(
+        multiplexer,
+        session_id,
+        (last_event_id, keep_alive_interval),
+        None,
+    )
+}
+
+/// [`create_sse_response`] for a stream that judges each view hint for its own
+/// view when it writes it (MIK-8350 D17d).
+#[allow(clippy::needless_pass_by_value)] // owned values required for stream lifetime
+pub(crate) fn create_sse_response_with_view(
+    multiplexer: Arc<NotificationMultiplexer>,
+    session_id: String,
+    (last_event_id, keep_alive_interval): (Option<String>, Duration),
+    view: Option<crate::gateway::streaming::StreamView>,
 ) -> Option<Sse<impl Stream<Item = std::result::Result<Event, Infallible>>>> {
     // Access session data
     let sessions = multiplexer.sessions.read();
@@ -84,10 +101,30 @@ pub fn create_sse_response(
                     }
                     // MIK-8350 B2': what the listener was last told advances only
                     // here, once the frame has passed every write gate.
-                    if let Some(commit) = &item.commit
-                        && !commit.apply()
-                    {
-                        continue;
+                    if let (Some(backend), Some(view)) = (&item.judged, &view) {
+                        let credential = session.credential.read().clone();
+                        let authorizer = multiplexer.authorizer.read().clone();
+                        let decision = match authorizer {
+                            Some(auth) => {
+                                view.decide(
+                                    &auth,
+                                    credential.as_ref(),
+                                    session.id.expose_secret(),
+                                    backend,
+                                )
+                                .await
+                            }
+                            None => Decision::Skip,
+                        };
+                        match decision {
+                            Decision::Write => {}
+                            Decision::Skip => continue,
+                            Decision::Close => {
+                                withhold(&item);
+                                close_dead(&mut rx);
+                                break;
+                            }
+                        }
                     }
                     if let Some(watch) = &item.watch {
                         watch.report(true);

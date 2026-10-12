@@ -27,22 +27,18 @@ pub(crate) struct ViewDigest {
     pub(crate) shown: String,
 }
 
-/// What a caller was last told of one backend, and a generation a refresh
-/// bumps so a stale commit is dropped (MIK-8350 B11).
-#[derive(Debug, Clone)]
-struct Told {
-    shown: String,
-    generation: u64,
-}
-
 /// What a caller was last told: its one served-list digest and, per backend,
-/// what it was shown of it. Shared by the legacy GET session and the listen
-/// stream, so both judge a view the same way.
+/// what it was shown of it. Every write carries the stamp it was read under
+/// and is applied only if that stamp is newer than the one the record holds,
+/// so a slow reader, a refresh and a rekey cannot move the record backward
+/// (MIK-8350 D17b). Shared by the legacy GET stream and the listen stream.
 #[derive(Debug, Default)]
 pub(crate) struct ToldState {
     baselined: bool,
+    stamp: u64,
     served: Option<String>,
-    backends: HashMap<String, Told>,
+    /// Per backend, the `shown` digest the caller was last told.
+    backends: HashMap<String, String>,
 }
 
 /// The verdict on a view against a [`ToldState`].
@@ -50,112 +46,109 @@ pub(crate) struct ToldState {
 pub(crate) enum Peek {
     /// Nothing the caller does not already hold.
     Quiet,
-    /// The caller is owed a hint; the generation to commit under.
-    Owed(u64),
+    /// The caller is owed a hint.
+    Owed,
 }
 
 impl ToldState {
-    /// Forget everything: the next attach takes a fresh baseline.
-    pub(crate) fn clear(&mut self) {
-        *self = Self::default();
+    /// Forget everything and refuse every write read before `floor`: the next
+    /// attach takes a fresh baseline for the new caller.
+    pub(crate) fn clear(&mut self, floor: u64) {
+        *self = Self {
+            stamp: floor,
+            ..Self::default()
+        };
     }
 
-    /// Record `view` for the backends this state has no record of; what it
-    /// already holds is kept, so a change withheld at write stays owed after a
-    /// resumed or re-keyed stream reopens (MIK-8350 B1, B2').
-    pub(crate) fn baseline(&mut self, view: HashMap<String, ViewDigest>) {
+    /// Record `view` for the backends this state has no record of, read under
+    /// `stamp`; what it already holds is kept, so a change withheld at write
+    /// stays owed after a resumed stream reopens (MIK-8350 B1, B2'). Refused
+    /// when `stamp` is older than the record.
+    pub(crate) fn baseline(&mut self, stamp: u64, view: HashMap<String, ViewDigest>) -> bool {
+        if stamp < self.stamp {
+            return false;
+        }
+        self.stamp = stamp;
         self.baselined = true;
         for (backend, digest) in view {
             self.served.get_or_insert(digest.served);
-            self.backends.entry(backend).or_insert(Told {
-                shown: digest.shown,
-                generation: 0,
-            });
+            self.backends.entry(backend).or_insert(digest.shown);
         }
+        true
     }
 
-    /// The caller was just shown `view`: record it for every backend and bump
-    /// each generation, so a hint queued before is not written for a view the
-    /// caller now holds (MIK-8350 B9).
-    pub(crate) fn refresh(&mut self, view: HashMap<String, ViewDigest>) {
+    /// The caller was just shown `view`, read under `stamp`: record it for
+    /// every backend (MIK-8350 B9). Refused when `stamp` is older than the
+    /// record.
+    pub(crate) fn refresh(&mut self, stamp: u64, view: HashMap<String, ViewDigest>) -> bool {
+        if stamp <= self.stamp {
+            return false;
+        }
+        self.stamp = stamp;
         self.baselined = true;
         for (backend, digest) in view {
-            let generation = self.backends.get(&backend).map_or(0, |t| t.generation + 1);
             self.served = Some(digest.served);
-            self.backends.insert(
-                backend,
-                Told {
-                    shown: digest.shown,
-                    generation,
-                },
-            );
+            self.backends.insert(backend, digest.shown);
         }
+        true
     }
 
     /// Whether `digest` is a view of `backend` the caller was not told. A
     /// state that never took a baseline records this one and is owed nothing
     /// (a stream is never told of a change it never saw); once one is taken, a
     /// backend it has no record of is new, and owed when it shows anything.
-    pub(crate) fn peek(&mut self, backend: &str, digest: &ViewDigest) -> Peek {
+    pub(crate) fn peek(&mut self, stamp: u64, backend: &str, digest: &ViewDigest) -> Peek {
         if !self.baselined {
-            self.baseline(HashMap::from([(backend.to_owned(), digest.clone())]));
+            self.baseline(stamp, HashMap::from([(backend.to_owned(), digest.clone())]));
             return Peek::Quiet;
         }
         let served_moved = self.served.as_deref() != Some(digest.served.as_str());
         match self.backends.get(backend) {
-            Some(told) if !served_moved && told.shown == digest.shown => Peek::Quiet,
-            Some(told) => Peek::Owed(told.generation),
-            None if served_moved || !digest.shown.is_empty() => Peek::Owed(0),
+            Some(shown) if !served_moved && *shown == digest.shown => Peek::Quiet,
+            Some(_) => Peek::Owed,
+            None if served_moved || !digest.shown.is_empty() => Peek::Owed,
             None => {
-                self.backends.insert(
-                    backend.to_owned(),
-                    Told {
-                        shown: String::new(),
-                        generation: 0,
-                    },
-                );
+                self.backends.insert(backend.to_owned(), String::new());
                 Peek::Quiet
             }
         }
     }
 
-    /// Record that `digest` of `backend` was told, once its frame is written.
-    /// `false` when there is nothing to record and so nothing to write: the
-    /// state was cleared, a refresh moved the generation, or the caller
-    /// already holds this view.
-    pub(crate) fn commit(&mut self, backend: &str, digest: &ViewDigest, generation: u64) -> bool {
-        if !self.baselined {
+    /// Record that `digest` of `backend`, read under `stamp`, was told, once
+    /// its frame is written. `false` when there is nothing to record and so
+    /// nothing to write: the state was cleared, a newer write got there
+    /// first, or the caller already holds this view.
+    pub(crate) fn commit(&mut self, stamp: u64, backend: &str, digest: &ViewDigest) -> bool {
+        if !self.baselined || stamp <= self.stamp {
             return false;
         }
         let served_moved = self.served.as_deref() != Some(digest.served.as_str());
-        let owed = match self.backends.get(backend) {
-            Some(told) => {
-                told.generation == generation && (served_moved || told.shown != digest.shown)
-            }
-            None => generation == 0,
-        };
+        let owed = self
+            .backends
+            .get(backend)
+            .is_none_or(|shown| served_moved || *shown != digest.shown);
         if owed {
+            self.stamp = stamp;
             self.served = Some(digest.served.clone());
-            self.backends.insert(
-                backend.to_owned(),
-                Told {
-                    shown: digest.shown.clone(),
-                    generation,
-                },
-            );
+            self.backends
+                .insert(backend.to_owned(), digest.shown.clone());
         }
         owed
     }
 }
 
-/// The identities a stream was opened under, besides its credential: part of
-/// what its caller is shown, so the judge builds the scope a POST of that
-/// caller would (MIK-8350 D11).
+/// The identities and request surface a stream was opened under, besides its
+/// credential: part of what its caller is shown, so the judge builds the scope
+/// a POST of that caller would (MIK-8350 D11, D16). Owned by the stream.
 #[derive(Clone, Default)]
 pub(crate) struct ViewSubject {
     pub(crate) grant_subject: Option<crate::identity_grants::GrantSubject>,
     pub(crate) oauth_agent: Option<crate::gateway::oauth::AgentIdentity>,
     pub(crate) cert: Option<crate::mtls::CertIdentity>,
+    /// The URL asked for Code Mode (`?codemode=search_and_execute`).
+    pub(crate) code_mode_url: bool,
+    /// The Open WebUI assertion this stream was admitted under, when it was.
+    pub(crate) adapter: Option<crate::gateway::openwebui_adapter::AdapterAssertion>,
 }
 
 impl std::fmt::Debug for ViewSubject {
@@ -164,50 +157,116 @@ impl std::fmt::Debug for ViewSubject {
     }
 }
 
-/// The write-time record of a delivered `tools/list_changed`: a
-/// compare-and-set against the generation, and the session's credential
-/// epoch, its digest was read under.
-#[derive(Debug)]
-pub(crate) struct ToldCommit {
-    session: Arc<ClientSession>,
-    backend: String,
-    digest: ViewDigest,
-    generation: u64,
-    epoch: u64,
-}
+impl ViewSubject {
+    /// What two requests must share to be one view: the identities and the
+    /// surface, not the secrets or the clock-bound parts. Only used as a map
+    /// key in process.
+    pub(crate) fn key(&self) -> String {
+        crate::hashing::sha256_hex(
+            format!(
+                "{:?}|{:?}|{:?}|{}",
+                self.grant_subject, self.oauth_agent, self.cert, self.code_mode_url
+            )
+            .as_bytes(),
+        )
+    }
 
-impl ToldCommit {
-    /// Record the digest as told. `false` when the frame should not be
-    /// written: a refresh or a rekey got there first, or it is already told.
-    pub(crate) fn apply(&self) -> bool {
-        let mut told = self.session.told.write();
-        self.session.epoch.load(Ordering::Acquire) == self.epoch
-            && told.commit(&self.backend, &self.digest, self.generation)
+    /// Whether the identity the stream was admitted under is still good. The
+    /// adapter assertion's window is judged here; MIK-8377 adds its clauses.
+    pub(crate) fn live(&self) -> bool {
+        self.adapter
+            .as_ref()
+            .is_none_or(crate::gateway::openwebui_adapter::AdapterAssertion::live)
     }
 }
 
-/// Decides what a listener is shown, for the per-listener `list_changed`
-/// filter (MIK-8350). Installed by the router, which owns the visibility
-/// state the multiplexer does not.
+/// What the judge made of a caller: a view, or a caller that no longer
+/// resolves (MIK-8350 D17i). Every consumer closes its stream on `Dead`.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Judged<T> {
+    Live(T),
+    Dead,
+}
+
+/// Decides what a stream's caller is shown, for the per-stream
+/// `list_changed` filter (MIK-8350). Installed by the router, which owns the
+/// visibility state the multiplexer does not. It reads caches only: it never
+/// mints a credential and never fills a slot.
 pub(crate) trait ViewJudge: Send + Sync {
-    /// What `credential` is shown of `backend` now, or `None` when the
-    /// credential no longer resolves to a caller.
+    /// What the held credential is shown of `backend` now.
     fn digest<'a>(
         &'a self,
         auth: &'a AuthState,
-        caller: (Option<&'a HeldCredential>, Option<&'a ViewSubject>),
+        caller: (Option<&'a HeldCredential>, &'a ViewSubject),
         session_id: &'a str,
         backend: &'a str,
-    ) -> futures::future::BoxFuture<'a, Option<ViewDigest>>;
+    ) -> futures::future::BoxFuture<'a, Judged<ViewDigest>>;
 
-    /// Every backend's view for `credential`, taken when a stream opens so the
-    /// first change after attach is judged against what it saw.
+    /// Every backend's view for the held credential, taken when a stream opens
+    /// so the first change after attach is judged against what it saw.
     fn baseline<'a>(
         &'a self,
         auth: &'a AuthState,
-        caller: (Option<&'a HeldCredential>, Option<&'a ViewSubject>),
+        caller: (Option<&'a HeldCredential>, &'a ViewSubject),
         session_id: &'a str,
-    ) -> futures::future::BoxFuture<'a, HashMap<String, ViewDigest>>;
+    ) -> futures::future::BoxFuture<'a, Judged<HashMap<String, ViewDigest>>>;
+}
+
+/// One view's record: what its caller was last told, the stamps writes are
+/// ordered by, and the gate that makes stamp order equal data order.
+#[derive(Debug, Default)]
+pub(crate) struct ViewRecord {
+    state: parking_lot::Mutex<ToldState>,
+    stamps: std::sync::atomic::AtomicU64,
+    gate: tokio::sync::Mutex<()>,
+}
+
+impl ViewRecord {
+    /// Run `read` and give it a stamp. The stamp is taken and the read made
+    /// under one gate, so a read that took a later stamp never captured older
+    /// data (MIK-8350 D17b). The gate covers cache reads only.
+    pub(crate) async fn read<T>(&self, read: impl std::future::Future<Output = T>) -> (u64, T) {
+        let _gate = self.gate.lock().await;
+        let stamp = self.stamps.fetch_add(1, Ordering::AcqRel) + 1;
+        (stamp, read.await)
+    }
+
+    pub(crate) fn state(&self) -> parking_lot::MutexGuard<'_, ToldState> {
+        self.state.lock()
+    }
+
+    /// The caller changed: forget what it was told and refuse every write read
+    /// before now.
+    pub(crate) fn clear(&self) {
+        let floor = self.stamps.fetch_add(1, Ordering::AcqRel) + 1;
+        self.state.lock().clear(floor);
+    }
+}
+
+/// What one open stream judges with: its own subject, the record of its view,
+/// and the judge.
+#[derive(Clone)]
+pub(crate) struct StreamView {
+    pub(crate) subject: Arc<ViewSubject>,
+    pub(crate) record: Arc<ViewRecord>,
+    pub(crate) judge: Arc<dyn ViewJudge>,
+}
+
+impl std::fmt::Debug for StreamView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamView").finish_non_exhaustive()
+    }
+}
+
+/// What a stream does with a view hint at write.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Decision {
+    /// Its view did not move, or a newer write already told it.
+    Skip,
+    /// Its caller no longer resolves: close.
+    Close,
+    /// Write it; the record is made.
+    Write,
 }
 
 /// Whether `notification` is the `tools/list_changed` hint.
@@ -216,60 +275,169 @@ fn is_tools_list_changed(notification: &TaggedNotification) -> bool {
         == Some("notifications/tools/list_changed")
 }
 
-impl NotificationMultiplexer {
-    /// Bind the identities `session_id`'s stream was opened under, which its
-    /// view is judged with (MIK-8350 D11).
-    pub(crate) fn bind_view_subject(&self, session_id: &str, subject: ViewSubject) {
-        if let Some(session) = self.sessions.read().get(session_id) {
-            *session.subject.write() = Some(Arc::new(subject));
+impl ClientSession {
+    /// The record of the view `subject` opens, made on first use.
+    fn record_for(&self, subject: &ViewSubject) -> Arc<ViewRecord> {
+        let key = subject.key();
+        if let Some((_, _, record)) = self.records.read().iter().find(|(k, ..)| *k == key) {
+            return Arc::clone(record);
         }
+        let mut records = self.records.write();
+        if let Some((_, _, record)) = records.iter().find(|(k, ..)| *k == key) {
+            return Arc::clone(record);
+        }
+        let record = Arc::new(ViewRecord::default());
+        records.push((key, Arc::new(subject.clone()), Arc::clone(&record)));
+        record
     }
 
-    /// What `session_id`'s caller is shown of every backend now, with the
-    /// credential epoch it was read under; `None` when there is nothing to
-    /// judge (no authorizer, no such session).
-    async fn view_of(
+    /// The record of the view `subject` opens, if a stream opened it.
+    fn existing_record(
         &self,
+        subject: &ViewSubject,
+    ) -> Option<(Arc<ViewSubject>, Arc<ViewRecord>)> {
+        let key = subject.key();
+        self.records
+            .read()
+            .iter()
+            .find(|(k, ..)| *k == key)
+            .map(|(_, held, record)| (Arc::clone(held), Arc::clone(record)))
+    }
+
+    /// Every view held on this session.
+    fn views(&self) -> Vec<(Arc<ViewSubject>, Arc<ViewRecord>)> {
+        self.records
+            .read()
+            .iter()
+            .map(|(_, subject, record)| (Arc::clone(subject), Arc::clone(record)))
+            .collect()
+    }
+}
+
+/// The record a written view hint makes.
+pub(crate) struct Owed {
+    backend: String,
+    digest: ViewDigest,
+    stamp: u64,
+}
+
+impl StreamView {
+    /// What `backend` shows this stream's caller now, against what it was
+    /// told: the record to make if the hint is written, or `None` when its
+    /// view did not move. Nothing is recorded yet (MIK-8350 B2').
+    pub(crate) async fn owed(
+        &self,
+        auth: &AuthState,
+        credential: Option<&HeldCredential>,
         session_id: &str,
-        judge: &dyn ViewJudge,
-    ) -> Option<(Arc<ClientSession>, u64, HashMap<String, ViewDigest>)> {
-        let authorizer = self.authorizer.read().clone()?;
-        let session = self.sessions.read().get(session_id).map(Arc::clone)?;
-        let epoch = session.epoch.load(Ordering::Acquire);
-        let credential = session.credential.read().clone();
-        let subject = session.subject.read().clone();
-        let view = judge
-            .baseline(
-                &authorizer,
-                (credential.as_ref(), subject.as_deref()),
-                session_id,
+        backend: &str,
+    ) -> Judged<Option<Owed>> {
+        let (stamp, judged) = self
+            .record
+            .read(
+                self.judge
+                    .digest(auth, (credential, &self.subject), session_id, backend),
             )
             .await;
-        Some((session, epoch, view))
+        let Judged::Live(digest) = judged else {
+            return Judged::Dead;
+        };
+        let moved = self.record.state().peek(stamp, backend, &digest) == Peek::Owed;
+        Judged::Live(moved.then(|| Owed {
+            backend: backend.to_owned(),
+            digest,
+            stamp,
+        }))
     }
 
-    /// Take `session_id`'s baseline: what each backend shows its credential
-    /// now, recorded as what it was last told. Called when a stream opens, so
-    /// the first change after attach is judged against what it saw.
-    pub(crate) async fn take_baseline(&self, session_id: &str, judge: &dyn ViewJudge) {
-        if let Some((session, epoch, view)) = self.view_of(session_id, judge).await {
-            let mut told = session.told.write();
-            if session.epoch.load(Ordering::Acquire) == epoch {
-                told.baseline(view);
-            }
+    /// Make the record for a hint that has been written. `false` when a newer
+    /// write already told the caller (the frame is then not written).
+    pub(crate) fn commit(&self, owed: &Owed) -> bool {
+        self.record
+            .state()
+            .commit(owed.stamp, &owed.backend, &owed.digest)
+    }
+
+    /// Judge the hint a stream is about to write, under its own subject and
+    /// record. The frame has passed every write gate, so the record is made
+    /// here.
+    pub(crate) async fn decide(
+        &self,
+        auth: &AuthState,
+        credential: Option<&HeldCredential>,
+        session_id: &str,
+        backend: &str,
+    ) -> Decision {
+        match self.owed(auth, credential, session_id, backend).await {
+            Judged::Dead => Decision::Close,
+            Judged::Live(Some(owed)) if self.commit(&owed) => Decision::Write,
+            Judged::Live(_) => Decision::Skip,
         }
     }
+}
 
-    /// The caller of `session_id` has just been shown its current view (a
-    /// `tools/list` answer, a profile switch): record that as told for every
-    /// backend. The view is read before the answer is built, so a change that
-    /// lands in between leaves the caller owed one hint rather than none.
-    pub(crate) async fn refresh_told(&self, session_id: &str, judge: &dyn ViewJudge) {
-        if let Some((session, epoch, view)) = self.view_of(session_id, judge).await {
-            let mut told = session.told.write();
-            if session.epoch.load(Ordering::Acquire) == epoch {
-                told.refresh(view);
-            }
+impl NotificationMultiplexer {
+    /// The view `session_id`'s stream opens with: its own subject's record on
+    /// the session, with a baseline of what each backend shows its caller now,
+    /// so the first change after attach is judged against what it saw
+    /// (MIK-8350). Streams of one session with different subjects get
+    /// different records and never judge one another (D17e).
+    pub(crate) async fn attach_view(
+        &self,
+        session_id: &str,
+        subject: ViewSubject,
+        judge: Arc<dyn ViewJudge>,
+    ) -> Option<StreamView> {
+        let authorizer = self.authorizer.read().clone()?;
+        let session = self.sessions.read().get(session_id).map(Arc::clone)?;
+        let subject = Arc::new(subject);
+        let record = session.record_for(&subject);
+        let credential = session.credential.read().clone();
+        let (stamp, judged) = record
+            .read(judge.baseline(&authorizer, (credential.as_ref(), &subject), session_id))
+            .await;
+        if let Judged::Live(view) = judged {
+            record.state().baseline(stamp, view);
+        }
+        Some(StreamView {
+            subject,
+            record,
+            judge,
+        })
+    }
+
+    /// Take `session_id`'s baseline for the default subject: for a session no
+    /// stream has opened a view on (a bare receiver).
+    pub(crate) async fn take_baseline(&self, session_id: &str, judge: &Arc<dyn ViewJudge>) {
+        self.attach_view(session_id, ViewSubject::default(), Arc::clone(judge))
+            .await;
+    }
+
+    /// The caller of `session_id`, under `subject`, has just been shown its
+    /// current view (a `tools/list` answer, a profile switch): record that as
+    /// told for every backend. Nothing happens when no stream holds a view
+    /// for that subject.
+    pub(crate) async fn refresh_told(
+        &self,
+        session_id: &str,
+        subject: &ViewSubject,
+        judge: &dyn ViewJudge,
+    ) {
+        let Some(authorizer) = self.authorizer.read().clone() else {
+            return;
+        };
+        let Some(session) = self.sessions.read().get(session_id).map(Arc::clone) else {
+            return;
+        };
+        let Some((held, record)) = session.existing_record(subject) else {
+            return;
+        };
+        let credential = session.credential.read().clone();
+        let (stamp, judged) = record
+            .read(judge.baseline(&authorizer, (credential.as_ref(), &held), session_id))
+            .await;
+        if let Judged::Live(view) = judged {
+            record.state().refresh(stamp, view);
         }
     }
 
@@ -324,7 +492,8 @@ impl NotificationMultiplexer {
         // MIK-8350: a `tools/list_changed` judged by view is a constant hint
         // that carries nothing of the backend, so it is owed to a caller whose
         // view moved even when that move is losing the backend; only a dead
-        // credential is refused, here and again at write.
+        // credential is refused, here and again at write. Each stream then
+        // judges it again for itself when it writes (D17d).
         let judge = judge.filter(|_| is_tools_list_changed(notification));
         let audience = match judge {
             Some(_) => CopyAudience::Any,
@@ -337,15 +506,14 @@ impl NotificationMultiplexer {
             if verdict == Delivery::Dead || (verdict != Delivery::Deliver && judge.is_none()) {
                 continue;
             }
-            let mut commit = None;
-            if let Some(judge) = judge {
-                commit = self
-                    .owed_commit(&session, &authorizer, credential.as_ref(), backend, judge)
-                    .await;
-                if commit.is_none() {
-                    continue;
-                }
+            if let Some(judge) = judge
+                && !self
+                    .view_moved(&session, &authorizer, credential.as_ref(), backend, judge)
+                    .await
+            {
+                continue;
             }
+            let judged = judge.map(|_| Arc::from(backend));
             if self
                 .enqueue(
                     &session,
@@ -353,7 +521,7 @@ impl NotificationMultiplexer {
                     hidden.as_ref(),
                     None,
                     audience.clone(),
-                    commit,
+                    judged,
                 )
                 .is_ok()
             {
@@ -363,41 +531,43 @@ impl NotificationMultiplexer {
         reached
     }
 
-    /// The record to make when `session` is written a `tools/list_changed` for
-    /// `backend`, or `None` when its view of `backend` did not move. The record
-    /// is made when the stream writes the frame, not here.
-    async fn owed_commit(
+    /// Whether any view held on `session` is owed a hint for `backend`. A
+    /// session no stream opened a view on has none, so it is judged as the
+    /// default subject would be.
+    async fn view_moved(
         &self,
         session: &Arc<ClientSession>,
         authorizer: &AuthState,
         credential: Option<&HeldCredential>,
         backend: &str,
         judge: &dyn ViewJudge,
-    ) -> Option<Arc<ToldCommit>> {
-        let epoch = session.epoch.load(Ordering::Acquire);
-        let subject = session.subject.read().clone();
-        let digest = judge
-            .digest(
-                authorizer,
-                (credential, subject.as_deref()),
-                session.id.expose_secret(),
-                backend,
-            )
-            .await?;
-        let mut told = session.told.write();
-        if session.epoch.load(Ordering::Acquire) != epoch {
-            return None;
+    ) -> bool {
+        let mut views = session.views();
+        if views.is_empty() {
+            views.push((
+                Arc::new(ViewSubject::default()),
+                session.record_for(&ViewSubject::default()),
+            ));
         }
-        let Peek::Owed(generation) = told.peek(backend, &digest) else {
-            return None;
-        };
-        Some(Arc::new(ToldCommit {
-            session: Arc::clone(session),
-            backend: backend.to_owned(),
-            digest,
-            generation,
-            epoch,
-        }))
+        for (subject, record) in views {
+            let (stamp, judged) = record
+                .read(judge.digest(
+                    authorizer,
+                    (credential, &subject),
+                    session.id.expose_secret(),
+                    backend,
+                ))
+                .await;
+            // A dead caller is closed by the write-time check; the copy still
+            // goes so it can be.
+            let Judged::Live(digest) = judged else {
+                return true;
+            };
+            if record.state().peek(stamp, backend, &digest) == Peek::Owed {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -414,64 +584,80 @@ mod tests {
 
     fn baselined(views: &[(&str, ViewDigest)]) -> ToldState {
         let mut told = ToldState::default();
-        told.baseline(
-            views
-                .iter()
-                .map(|(backend, view)| ((*backend).to_owned(), view.clone()))
-                .collect(),
-        );
+        let view = views
+            .iter()
+            .map(|(backend, view)| ((*backend).to_owned(), view.clone()))
+            .collect();
+        assert!(told.baseline(1, view));
         told
     }
 
     #[test]
     fn a_state_with_no_baseline_records_the_first_view_and_is_owed_nothing() {
         let mut told = ToldState::default();
-        assert_eq!(told.peek("a", &digest("s0", "x")), Peek::Quiet);
-        assert_eq!(told.peek("a", &digest("s0", "x")), Peek::Quiet);
-        assert_eq!(told.peek("a", &digest("s0", "y")), Peek::Owed(0));
+        assert_eq!(told.peek(1, "a", &digest("s0", "x")), Peek::Quiet);
+        assert_eq!(told.peek(2, "a", &digest("s0", "x")), Peek::Quiet);
+        assert_eq!(told.peek(3, "a", &digest("s0", "y")), Peek::Owed);
     }
 
     #[test]
     fn a_backend_added_after_the_baseline_is_owed_when_it_shows_anything() {
         let mut told = baselined(&[("a", digest("s0", "x"))]);
-        assert_eq!(told.peek("new", &digest("s0", "t")), Peek::Owed(0));
-        assert_eq!(told.peek("hidden", &digest("s0", "")), Peek::Quiet);
+        assert_eq!(told.peek(2, "new", &digest("s0", "t")), Peek::Owed);
+        assert_eq!(told.peek(2, "hidden", &digest("s0", "")), Peek::Quiet);
     }
 
     #[test]
     fn one_served_digest_serves_every_backend() {
         let mut told = baselined(&[("a", digest("s0", "x")), ("b", digest("s0", "y"))]);
         let moved = digest("s1", "x2");
-        assert_eq!(told.peek("a", &moved), Peek::Owed(0));
-        assert!(told.commit("a", &moved, 0));
+        assert_eq!(told.peek(2, "a", &moved), Peek::Owed);
+        assert!(told.commit(2, "a", &moved));
         // b's own listing did not move, and the served list is now told.
-        assert_eq!(told.peek("b", &digest("s1", "y")), Peek::Quiet);
+        assert_eq!(told.peek(3, "b", &digest("s1", "y")), Peek::Quiet);
     }
 
     #[test]
-    fn a_commit_is_refused_after_a_clear_a_refresh_or_a_repeat() {
+    fn a_write_older_than_the_record_is_refused_whatever_its_kind() {
         let view = digest("s1", "x2");
-        let mut cleared = baselined(&[("a", digest("s0", "x"))]);
-        cleared.clear();
-        assert!(!cleared.commit("a", &view, 0), "cleared: nothing to record");
-
-        let mut refreshed = baselined(&[("a", digest("s0", "x"))]);
-        refreshed.refresh(HashMap::from([("a".to_owned(), digest("s1", "x2"))]));
-        assert!(
-            !refreshed.commit("a", &view, 0),
-            "a refresh moved the generation"
-        );
-
         let mut told = baselined(&[("a", digest("s0", "x"))]);
-        assert!(told.commit("a", &view, 0));
-        assert!(!told.commit("a", &view, 0), "already told");
+        assert!(told.commit(5, "a", &view));
+        assert!(!told.commit(3, "a", &digest("s2", "x3")), "older commit");
+        assert!(!told.refresh(4, HashMap::from([("a".to_owned(), digest("s0", "x"))])));
+        assert!(!told.baseline(2, HashMap::from([("z".to_owned(), digest("s0", "z"))])));
+        // The refused writes left the record where the newest one put it.
+        assert_eq!(told.peek(6, "a", &view), Peek::Quiet);
     }
 
     #[test]
-    fn a_refresh_bumps_the_generation_and_holds_the_view() {
+    fn a_repeat_of_a_told_digest_is_refused() {
+        let view = digest("s1", "x2");
         let mut told = baselined(&[("a", digest("s0", "x"))]);
-        told.refresh(HashMap::from([("a".to_owned(), digest("s1", "x2"))]));
-        assert_eq!(told.peek("a", &digest("s1", "x2")), Peek::Quiet);
-        assert_eq!(told.peek("a", &digest("s1", "x3")), Peek::Owed(1));
+        assert!(told.commit(2, "a", &view));
+        assert!(!told.commit(3, "a", &view), "already told");
+    }
+
+    #[test]
+    fn a_clear_raises_the_floor_for_every_earlier_read() {
+        let mut told = baselined(&[("a", digest("s0", "x"))]);
+        told.clear(10);
+        assert!(
+            !told.commit(9, "a", &digest("s1", "x2")),
+            "read for the old caller"
+        );
+        assert!(
+            !told.baseline(9, HashMap::new()),
+            "baseline read for the old caller"
+        );
+        assert!(told.baseline(11, HashMap::from([("a".to_owned(), digest("s5", "n"))])));
+        assert_eq!(told.peek(12, "a", &digest("s5", "n")), Peek::Quiet);
+    }
+
+    #[test]
+    fn a_refresh_holds_the_view() {
+        let mut told = baselined(&[("a", digest("s0", "x"))]);
+        assert!(told.refresh(2, HashMap::from([("a".to_owned(), digest("s1", "x2"))])));
+        assert_eq!(told.peek(3, "a", &digest("s1", "x2")), Peek::Quiet);
+        assert_eq!(told.peek(3, "a", &digest("s1", "x3")), Peek::Owed);
     }
 }

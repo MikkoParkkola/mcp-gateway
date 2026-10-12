@@ -71,7 +71,8 @@ impl StdioAnnouncer {
             // a notice only when its own view of that backend moved (MIK-8350).
             let mut told = crate::gateway::streaming::ToldState::default();
             // Baselined with nothing, so the first sight of a backend is told.
-            told.baseline(std::collections::HashMap::new());
+            let mut stamp = 1_u64;
+            told.baseline(stamp, std::collections::HashMap::new());
             let shutdown = stop.subscribe();
             let ready = ready.clone();
             tokio::spawn(async move {
@@ -83,12 +84,12 @@ impl StdioAnnouncer {
                         #[cfg(test)]
                         crate::gateway::server::stdio_seams::decided();
                         let view = stdio_view(&meta_mcp, &tool_policy, &name);
-                        let crate::gateway::streaming::Peek::Owed(generation) =
-                            told.peek(&name, &view)
-                        else {
+                        stamp += 1;
+                        if told.peek(stamp, &name, &view) != crate::gateway::streaming::Peek::Owed
+                            || !told.commit(stamp, &name, &view)
+                        {
                             return std::future::ready(());
-                        };
-                        let _ = told.commit(&name, &view, generation);
+                        }
                         if *ready.borrow() {
                             pending.notify_one();
                         } else {
@@ -173,7 +174,7 @@ fn stdio_view(
     meta_mcp.visible_digest(
         backend,
         scope,
-        Some(crate::gateway::server::STDIO_SESSION_ID),
+        (Some(crate::gateway::server::STDIO_SESSION_ID), false),
     )
 }
 
