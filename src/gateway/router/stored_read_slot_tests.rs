@@ -12,7 +12,9 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use super::slot_verdict_http_tests::{CLOSED, Gateway, gateway};
-use crate::gateway::meta_mcp::slot_verdict_fixture::{BACKEND, BINDING, CallerSlot, Surfaced, TOOL};
+use crate::gateway::meta_mcp::slot_verdict_fixture::{
+    BACKEND, BINDING, CallerSlot, Surfaced, TOOL,
+};
 use crate::key_server::oidc::VerifiedIdentity;
 
 const OUTPUT: &str = "\"text\":\"ok\"";
@@ -53,7 +55,14 @@ async fn send(gw: &Gateway, id: i64, method: &str, name: &str, params: Value) ->
 }
 
 async fn task_get(gw: &Gateway, id: &str) -> Value {
-    send(gw, 9, "tasks/get", id, json!({"taskId": id, "_meta": modern_meta()})).await
+    send(
+        gw,
+        9,
+        "tasks/get",
+        id,
+        json!({"taskId": id, "_meta": modern_meta()}),
+    )
+    .await
 }
 
 /// A finished task of alpha's own `read`, its output delivered once.
@@ -120,7 +129,10 @@ async fn t8_alpha_s_own_slot_lacking_the_tool_answers_absent() {
         Some(&json!(-32601)),
         "T8: alpha's catalogue lacks the tool: {read}"
     );
-    assert!(!read.to_string().contains(OUTPUT), "T8: output delivered: {read}");
+    assert!(
+        !read.to_string().contains(OUTPUT),
+        "T8: output delivered: {read}"
+    );
 }
 
 /// T8t: the same, but alpha's slot is a TRUNCATED drain: it proves nothing
@@ -151,7 +163,10 @@ async fn c1_a_cold_read_resolves_once_then_warm_polls_resolve_nothing() {
     );
     let before = gw.mints.load(Ordering::SeqCst);
     let first = task_get(&gw, &id).await;
-    assert!(first.to_string().contains(OUTPUT), "C1: the cold read serves: {first}");
+    assert!(
+        first.to_string().contains(OUTPUT),
+        "C1: the cold read serves: {first}"
+    );
     assert_eq!(
         gw.mints.load(Ordering::SeqCst) - before,
         1,

@@ -80,9 +80,6 @@ mod chokepoint_tests;
 /// MIK-8202 P2: task creation on a clock before 1970.
 #[cfg(test)]
 mod clock_p2_tests;
-/// MIK-8392.STORED.1 T10: a revoked account's stored task read.
-#[cfg(test)]
-mod stored_read_account_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod collusion_direct_tests;
 #[cfg(test)]
@@ -183,6 +180,9 @@ pub(super) mod route_matrix_driver_tests;
 pub(super) mod route_matrix_x14_nonce_tests;
 #[cfg(test)]
 mod slot_quota_direct_tests;
+/// MIK-8392.STORED.1 T10: a revoked account's stored task read.
+#[cfg(test)]
+mod stored_read_account_tests;
 #[cfg(test)]
 mod webhook_mount_tests;
 /// MIK-8340: a withheld surfaced name answers as an absent one.
@@ -226,9 +226,6 @@ mod slot_verdict_g2_managed_http_tests;
 mod slot_verdict_g3_http_tests;
 #[cfg(test)]
 mod slot_verdict_http_tests;
-/// MIK-8392.STORED.1 batch B: per-user stored reads, cold slots, touch-on-read.
-#[cfg(test)]
-mod stored_read_slot_tests;
 #[cfg(test)]
 mod slot_verdict_http_variant_tests;
 /// MIK-8356 x MIK-8353: the caller verdict's effects reach the refund witness.
@@ -237,6 +234,9 @@ mod slot_verdict_witness_tests;
 /// E1: SSO admins through the role mapping (MIK-7570.ADMINSSO.1).
 #[cfg(test)]
 mod sso_admin_tests;
+/// MIK-8392.STORED.1 batch B: per-user stored reads, cold slots, touch-on-read.
+#[cfg(test)]
+mod stored_read_slot_tests;
 #[cfg(test)]
 mod stream_kill_tests;
 /// `pub(crate)` for the A11 direct-route cells in `meta_mcp`, which need this

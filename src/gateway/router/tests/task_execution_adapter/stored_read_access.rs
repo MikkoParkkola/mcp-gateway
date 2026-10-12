@@ -60,7 +60,8 @@ fn withhold_by_schema(state: &Arc<AppState>) {
 
 /// A complete listing that no longer names the tool.
 fn delist(state: &Arc<AppState>) {
-    let other = json!({"name": "other", "description": "Reads.", "inputSchema": {"type": "object"}});
+    let other =
+        json!({"name": "other", "description": "Reads.", "inputSchema": {"type": "object"}});
     let _ = backend(state).remember_listed_tools(None, false, &[other]);
 }
 
@@ -211,9 +212,19 @@ async fn t6_tasks_update_carries_no_stored_output_for_a_withheld_target() {
     let mock = MockBackend::answering(Answer::ok());
     let (state, _store) = state_with(&mock).await;
     let id = finished(&state, "s1-t6").await;
-    let control = post(&state, "key-a", task_method(4, "tasks/update", json!({ "taskId": id }))).await;
+    let control = post(
+        &state,
+        "key-a",
+        task_method(4, "tasks/update", json!({ "taskId": id })),
+    )
+    .await;
     withhold_by_schema(&state);
-    let update = post(&state, "key-a", task_method(5, "tasks/update", json!({ "taskId": id }))).await;
+    let update = post(
+        &state,
+        "key-a",
+        task_method(5, "tasks/update", json!({ "taskId": id })),
+    )
+    .await;
     std::assert_eq!(update.get("result"), control.get("result"), "T6: {update}");
     let mut ack = update.pointer("/result").cloned().unwrap_or_default();
     if let Some(ack) = ack.as_object_mut() {
@@ -235,7 +246,12 @@ async fn t7_tasks_cancel_carries_no_stored_output_for_a_withheld_target() {
     let (state, _store) = state_with(&mock).await;
     let id = finished(&state, "s1-t7").await;
     withhold_by_schema(&state);
-    let cancel = post(&state, "key-a", task_method(6, "tasks/cancel", json!({ "taskId": id }))).await;
+    let cancel = post(
+        &state,
+        "key-a",
+        task_method(6, "tasks/cancel", json!({ "taskId": id })),
+    )
+    .await;
     assert!(
         !cancel.to_string().contains("mock-backend-answered"),
         "T7: the cancel answer carries stored output: {cancel}"

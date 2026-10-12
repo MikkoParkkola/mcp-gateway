@@ -286,6 +286,65 @@ pub(crate) struct VisibilityMemo {
     visibility: parking_lot::Mutex<std::collections::HashMap<(String, String), Visibility>>,
     carried_credential: parking_lot::Mutex<std::collections::HashMap<(String, String), Carried>>,
     judged: parking_lot::Mutex<Judged>,
+    /// MIK-8392: each target account's liveness, filled once per request by
+    /// the async pre-pass and only read after it. Never a [`Visibility`]: an
+    /// account outcome and a caller-view judgement are kept apart.
+    offer_pending:
+        parking_lot::Mutex<std::collections::HashMap<(String, AccountKey), AccountOutcome>>,
+    /// A task worker's memo (MIK-8392, muse F13): it carries account outcomes
+    /// and credentials but never keeps a visibility judgement, so a task's
+    /// visibility is still judged live at every step, however long it runs.
+    outcome_only: bool,
+}
+
+/// The account a target's dispatch would use (MIK-8392): a managed
+/// descriptor's id, from an identity-propagation backend's `account` or a
+/// capability's `auth.account`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct AccountKey(pub(crate) String);
+
+/// Whether a target's account is live for this caller, judged without a
+/// mint (MIK-8392).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AccountOutcome {
+    /// The caller's grant yields a binding now.
+    Live,
+    /// No grant: absent, revoked, reconnect-required, or no principal.
+    NoView,
+    /// The account kind has no mint-free view (an external or token-exchange
+    /// descriptor): visibility is judged on the catalogue only (stated
+    /// residual).
+    Unjudged,
+    /// Custody could not be read (busy, shutting down, store failure): not a
+    /// finding about the grant, so a reader answers retryable.
+    Unavailable,
+}
+
+/// Record `outcome` for `(server, account)` in the open request's memo unless
+/// one is recorded; outside a memo nothing is kept.
+pub(crate) fn record_account_outcome(server: &str, account: &AccountKey, outcome: AccountOutcome) {
+    let _ = VISIBILITY_MEMO.try_with(|memo| {
+        memo.offer_pending
+            .lock()
+            .entry((server.to_owned(), account.clone()))
+            .or_insert(outcome);
+    });
+}
+
+/// The outcome recorded for `(server, account)` in the open request. Reads
+/// the memo only: outside an open memo, or before the pre-pass ran, it is
+/// `None`, and the caller fails closed. It never judges afresh (unlike the
+/// visibility fallback in [`MetaMcp::tool_visible_to`]).
+pub(crate) fn account_outcome(server: &str, account: &AccountKey) -> Option<AccountOutcome> {
+    VISIBILITY_MEMO
+        .try_with(|memo| {
+            memo.offer_pending
+                .lock()
+                .get(&(server.to_owned(), account.clone()))
+                .copied()
+        })
+        .ok()
+        .flatten()
 }
 
 /// A caller verdict's resolution, waiting for the first invocation on its
@@ -315,6 +374,9 @@ pub(crate) struct Judged {
 
 impl VisibilityMemo {
     fn recorded(&self, server: &str, tool: &str) -> Option<Visibility> {
+        if self.outcome_only {
+            return None;
+        }
         self.visibility
             .lock()
             .get(&(server.to_owned(), tool.to_owned()))
@@ -324,6 +386,9 @@ impl VisibilityMemo {
     /// Record `judged` unless an answer is already recorded; returns the
     /// recorded answer, so the first judgement wins.
     fn record(&self, server: &str, tool: &str, judged: Visibility) -> Visibility {
+        if self.outcome_only {
+            return judged;
+        }
         *self
             .visibility
             .lock()
@@ -464,6 +529,23 @@ pub(crate) async fn with_visibility_memo<F: std::future::Future>(request: F) -> 
         .await
 }
 
+/// Run a task worker's dispatch with an outcome-only memo (MIK-8392, muse
+/// F13/F14): the executor-entry pre-pass records each target account's
+/// outcome there, and the carried credential reaches its dispatch, but no
+/// visibility is kept, so every step judges live. Wrap only the dispatch
+/// future: a readmit before it keeps its own memo (muse F15).
+pub(crate) async fn with_outcome_memo<F: std::future::Future>(dispatch: F) -> F::Output {
+    VISIBILITY_MEMO
+        .scope(
+            VisibilityMemo {
+                outcome_only: true,
+                ..VisibilityMemo::default()
+            },
+            dispatch,
+        )
+        .await
+}
+
 /// The answer to a name that matches no tool (-32601). A tool withheld from
 /// this caller answers with exactly this, so the two cannot be told apart.
 pub(crate) fn absent_name(tool_name: &str) -> crate::Error {
@@ -480,7 +562,18 @@ pub(crate) fn absent_name(tool_name: &str) -> crate::Error {
 ///
 /// [`absent_name`] when the memo records `server`'s `tool` as withheld.
 pub(crate) fn refuse_withheld(server: &str, tool: &str) -> crate::Result<()> {
-    match recorded_visibility(server, tool) {
+    absent_if_withheld(recorded_visibility(server, tool), tool)
+}
+
+/// The absent answer for an already-judged [`Visibility`] (MIK-8392.STORED.3):
+/// the one withheld-name guard, over the memo or over a judgement made where
+/// no request memo is open. No second predicate.
+///
+/// # Errors
+///
+/// [`absent_name`] when `judged` is withheld.
+pub(crate) fn absent_if_withheld(judged: Option<Visibility>, tool: &str) -> crate::Result<()> {
+    match judged {
         Some(Visibility::Withheld(_)) => Err(absent_name(tool)),
         _ => Ok(()),
     }

@@ -324,10 +324,29 @@ impl VaultStrategy {
     /// fenced by a changed descriptor. A credential that fails header
     /// validation at mint is not predicted here.
     pub(crate) async fn view_binding(&self, principal: Principal<'_>) -> Option<String> {
-        let account = account_key(Some(principal), &self.descriptor).ok()?;
-        let current = self.custody.resolve(&account).await.ok()?;
-        self.fence_changed_descriptor(&current).ok()?;
-        cache_binding(&account, &current).ok()
+        self.view_binding_checked(principal).await.ok()
+    }
+
+    /// [`Self::view_binding`] with the reason it failed (MIK-8392): the
+    /// custody error goes through [`refusal`]'s partition, so absence,
+    /// revocation and reconnect-required (what a connect journey fixes) stay
+    /// apart from a busy custody, a shutdown or a store failure. A caller
+    /// that judges liveness must not read the second kind as "no view".
+    /// Mint-free, like `view_binding`: no refresh, no provider call.
+    pub(crate) async fn view_binding_checked(
+        &self,
+        principal: Principal<'_>,
+    ) -> Result<String, PropagationError> {
+        let account = account_key(Some(principal), &self.descriptor).map_err(|error| {
+            PropagationError::Refuse(format!("account identity binding refused: {error}"))
+        })?;
+        let current = self
+            .custody
+            .resolve(&account)
+            .await
+            .map_err(|error| refusal("managed account view", &error))?;
+        self.fence_changed_descriptor(&current)?;
+        cache_binding(&account, &current)
     }
 
     /// Refuse a grant stored under a descriptor revision other than the live

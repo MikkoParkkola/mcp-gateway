@@ -33,7 +33,9 @@ async fn spawn_backend() -> String {
                 "tools/list" => json!({"tools": [{
                     "name": TOOL, "description": "reads rows", "inputSchema": {"type": "object"},
                 }]}),
-                "tools/call" => json!({"content": [{"type": "text", "text": OUTPUT}], "isError": false}),
+                "tools/call" => {
+                    json!({"content": [{"type": "text", "text": OUTPUT}], "isError": false})
+                }
                 _ => json!({}),
             };
             axum::Json(json!({"jsonrpc": "2.0", "id": request.get("id"), "result": result}))
@@ -177,5 +179,8 @@ async fn t2_stdio_tasks_get_answers_absent_once_the_listing_withholds_the_tool()
         Some(&json!(-32601)),
         "T2: a blocked stored read answers as an absent name: {read}"
     );
-    assert!(!read.to_string().contains(OUTPUT), "T2: output delivered: {read}");
+    assert!(
+        !read.to_string().contains(OUTPUT),
+        "T2: output delivered: {read}"
+    );
 }

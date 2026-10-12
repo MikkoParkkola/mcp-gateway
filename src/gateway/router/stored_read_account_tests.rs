@@ -54,12 +54,15 @@ async fn fixture() -> Fx {
     let (mut state, store) = super::tests::test_router_app_state_with_auth(&auth).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.backends = gateway.backends();
-    state_mut.meta_mcp = Arc::new(gateway.take_meta().with_surfaced_tools(vec![
-        SurfacedToolConfig {
-            server: BACKEND.to_string(),
-            tool: TOOL.to_string(),
-        },
-    ]));
+    state_mut.meta_mcp =
+        Arc::new(
+            gateway
+                .take_meta()
+                .with_surfaced_tools(vec![SurfacedToolConfig {
+                    server: BACKEND.to_string(),
+                    tool: TOOL.to_string(),
+                }]),
+        );
     let tool: crate::protocol::Tool = serde_json::from_value(json!({
         "name": TOOL, "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}}
     }))
@@ -157,7 +160,10 @@ async fn t10_a_stored_read_after_the_grant_is_revoked_answers_absent() {
         Some(&json!(-32601)),
         "T10: a revoked account's stored read answers as an absent name: {read}"
     );
-    assert!(!read.to_string().contains(MARKER), "T10: output delivered: {read}");
+    assert!(
+        !read.to_string().contains(MARKER),
+        "T10: output delivered: {read}"
+    );
 }
 
 /// A plain backend (no managed account) whose one tool answers `plain-ok`.
@@ -274,7 +280,10 @@ async fn t10p_a_plan_task_whose_second_targets_account_is_revoked_answers_absent
         Some(&json!(-32601)),
         "T10p: a revoked second target's stored plan read answers absent: {read}"
     );
-    assert!(!read.to_string().contains(MARKER), "T10p: output delivered: {read}");
+    assert!(
+        !read.to_string().contains(MARKER),
+        "T10p: output delivered: {read}"
+    );
 }
 
 /// The JSON payloads of an open SSE body, read block by block.
@@ -291,7 +300,10 @@ impl Frames {
             if let Some(end) = self.buffer.windows(2).position(|pair| pair == b"\n\n") {
                 let block: Vec<u8> = self.buffer.drain(..end + 2).collect();
                 let text = String::from_utf8(block).expect("a frame is UTF-8");
-                let data: Vec<&str> = text.lines().filter_map(|l| l.strip_prefix("data: ")).collect();
+                let data: Vec<&str> = text
+                    .lines()
+                    .filter_map(|l| l.strip_prefix("data: "))
+                    .collect();
                 if !data.is_empty() {
                     return serde_json::from_str(&data.join("\n")).expect("a frame is JSON");
                 }
@@ -317,7 +329,12 @@ async fn t10pf_a_plan_tasks_frame_after_its_accounts_revoke_carries_status_only(
     for revoke in [false, true] {
         let fx = fixture().await;
         let hold = Arc::new(tokio::sync::Semaphore::new(0));
-        register_plain_with(&fx, PlainBackend { hold: Some(Arc::clone(&hold)) });
+        register_plain_with(
+            &fx,
+            PlainBackend {
+                hold: Some(Arc::clone(&hold)),
+            },
+        );
         fx.gateway.answer_next(json!({
             "content": [{"type": "text", "text": MARKER}], "isError": false
         }));
@@ -352,7 +369,11 @@ async fn t10pf_a_plan_tasks_frame_after_its_accounts_revoke_carries_status_only(
             .body(axum::body::Body::from(listen.to_string()))
             .expect("a request");
         let response = fx.router.clone().oneshot(request).await.expect("an answer");
-        assert_eq!(response.status(), axum::http::StatusCode::OK, "premise: listen admitted");
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::OK,
+            "premise: listen admitted"
+        );
         let mut frames = Frames {
             body: response.into_body().into_data_stream(),
             buffer: Vec::new(),
@@ -362,7 +383,10 @@ async fn t10pf_a_plan_tasks_frame_after_its_accounts_revoke_carries_status_only(
         while fx.gateway.tool_calls().is_empty() && std::time::Instant::now() < bound {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        assert!(!fx.gateway.tool_calls().is_empty(), "premise: the account step ran");
+        assert!(
+            !fx.gateway.tool_calls().is_empty(),
+            "premise: the account step ran"
+        );
         if revoke {
             fx.gateway.revoke_operator_grant_for_test().await;
         }
@@ -375,9 +399,15 @@ async fn t10pf_a_plan_tasks_frame_after_its_accounts_revoke_carries_status_only(
         };
         let carries = completed.to_string().contains(MARKER);
         if revoke {
-            assert!(!carries, "T10pf: the frame carries a revoked plan's output: {completed}");
+            assert!(
+                !carries,
+                "T10pf: the frame carries a revoked plan's output: {completed}"
+            );
         } else {
-            assert!(carries, "control: the frame carries the plan's output: {completed}");
+            assert!(
+                carries,
+                "control: the frame carries the plan's output: {completed}"
+            );
         }
     }
 }

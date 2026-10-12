@@ -732,6 +732,27 @@ impl AccountStrategyRegistry {
         }
     }
 
+    /// The caller's current view of descriptor `descriptor_id`, read without
+    /// refreshing or minting (MIK-8392): `None` when the descriptor has no
+    /// managed custody to read (an external or token-exchange account, or
+    /// none installed), so no mint-free judgement exists; otherwise the
+    /// binding, or why there is none. A caller with no principal for it has
+    /// no view, reported as not connected.
+    pub(crate) async fn view_binding_checked(
+        &self,
+        descriptor_id: &str,
+        caller: CallerProof<'_>,
+    ) -> Option<std::result::Result<String, PropagationError>> {
+        let installed = self.installed(descriptor_id)?;
+        let vault = installed.minter.managed()?;
+        let Some(principal) = Self::principal(installed.as_ref(), caller) else {
+            return Some(Err(PropagationError::AccountNotConnected(
+                "the request carries no principal for this account".to_owned(),
+            )));
+        };
+        Some(vault.view_binding_checked(principal).await)
+    }
+
     /// Record a refusal. The request is already being refused, so an audit-write
     /// failure does not change the outcome — but it must not be dropped
     /// silently.
