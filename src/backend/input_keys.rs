@@ -351,6 +351,11 @@ impl Backend {
     }
 }
 
+// MIK-8399: partial and abandoned listings revoke resend permission.
+#[cfg(test)]
+#[path = "resend_revoke_tests.rs"]
+mod resend_revoke_tests;
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::Ordering;
