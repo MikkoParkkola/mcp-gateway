@@ -4,9 +4,10 @@
 //! stdio dispatcher must not pay for the payload it refuses.
 //!
 //! What is measured: every real allocation made on this thread while
-//! `Gateway::dispatch_single_with_sink` — the exact function `run_stdio` calls,
-//! not a duplicate validator — runs to completion on a prepared 1 MiB or 3 MiB
-//! request. Runtime, gateway, backend, payload and expectations are built
+//! `Gateway::dispatch_single_staged` — the function the serve loop calls,
+//! boxed as the loop boxes it, not a duplicate validator — runs to completion
+//! on a prepared 1 MiB or 3 MiB request, its answer then settled as
+//! `dispatch_single_with_sink` settles it (MIK-8400). Runtime, gateway, backend, payload and expectations are built
 //! before the scope opens; every assertion and every formatted message happens
 //! after it closes.
 //!
@@ -100,9 +101,9 @@ fn client() -> super::super::StdioClient<'static> {
     }
 }
 
-/// The production stdio dispatcher, called as `run_stdio` calls it (owned
-/// `Value` moved in, no sink, the stdio session id), unmetered calls only;
-/// the measured ones go through [`dispatch_as_served`].
+/// The test entry to the stdio dispatcher (owned `Value` moved in, no sink,
+/// the stdio session id), for the unmetered calls only; the measured ones go
+/// through [`dispatch_as_served`], which runs it as the serve loop does.
 async fn dispatch(fixture: &Fixture, request: Value) -> Value {
     super::super::Gateway::dispatch_single_with_sink(
         &fixture.meta,
