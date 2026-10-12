@@ -227,6 +227,7 @@ pub(in super::super) fn gateway_in(
         ));
         let transport = Arc::new(CapturingTransport {
             dispatches: Arc::clone(&dispatches),
+            server: (*name).to_string(),
         });
         backend
             .set_transport_for_test(Arc::clone(&transport) as Arc<dyn crate::transport::Transport>);
@@ -478,6 +479,7 @@ async fn account_shared_descriptor_dispatches_legacy_without_identity_or_custody
     ));
     backend.set_transport_for_test(Arc::new(CapturingTransport {
         dispatches: Arc::clone(&dispatches),
+        server: name.to_string(),
     }) as Arc<dyn crate::transport::Transport>);
     assert!(registry.register(backend), "fixture registry must accept");
 

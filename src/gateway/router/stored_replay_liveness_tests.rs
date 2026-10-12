@@ -313,3 +313,58 @@ async fn r4_revoked_surfaced_name_is_not_served_the_retained_result() {
     eprintln!("R4 answer: {again}");
     assert_refused_unsent(&fx, "R4", &again, sent);
 }
+
+/// The two-account fixture MIK-8406 builds on: both managed accounts start
+/// live; revoking one leaves the other dispatching, and calls are counted per
+/// backend.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_account_fixture_revokes_one_account_only() {
+    use crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::{
+        PERSONAL_BACKEND, Second,
+    };
+    let auth = sole_operator();
+    let mut gateway =
+        DirectAccountGateway::with_second(auth.clone(), &Binding::Connected, Second::PersonalAccount);
+    let (mut state, _store) = super::tests::test_router_app_state_with_auth(&auth).await;
+    let state_mut = Arc::get_mut(&mut state).expect("state is unique");
+    state_mut.backends = gateway.backends();
+    state_mut.meta_mcp = Arc::new(gateway.take_meta());
+    for backend in [BACKEND, PERSONAL_BACKEND] {
+        let tool: crate::protocol::Tool =
+            serde_json::from_value(json!({"name": TOOL, "inputSchema": {"type": "object"}}))
+                .expect("a tool");
+        gateway.backends().get(backend).expect("registered").store_shared_tools_for_test(vec![tool]);
+    }
+    let fx = Fx { router: super::create_router(state), gateway, _store: tempfile::tempdir().unwrap() };
+    let call = |backend: &str| {
+        json!({"name": "gateway_invoke",
+            "arguments": {"server": backend, "tool": TOOL, "arguments": {}},
+            "_meta": meta(None, false)})
+    };
+    for backend in [BACKEND, PERSONAL_BACKEND] {
+        let answer = send(&fx, "tools/call", "gateway_invoke", call(backend)).await;
+        assert!(answer.get("error").is_none(), "{backend} live: {answer}");
+        assert_eq!(fx.gateway.tool_calls_to(backend), 1, "{backend}: {answer}");
+    }
+    fx.gateway.revoke_operator_grant_on(BACKEND).await;
+    let refused = send(&fx, "tools/call", "gateway_invoke", call(BACKEND)).await;
+    assert!(refused.get("error").is_some(), "the revoked account still dispatched: {refused}");
+    assert_eq!(fx.gateway.tool_calls_to(BACKEND), 1, "the revoked account reached its backend");
+    let live = send(&fx, "tools/call", "gateway_invoke", call(PERSONAL_BACKEND)).await;
+    assert!(live.get("error").is_none(), "the other account was revoked too: {live}");
+    assert_eq!(fx.gateway.tool_calls_to(PERSONAL_BACKEND), 2, "{live}");
+}
+
+/// The external second backend MIK-8406's P6 uses: registered beside BACKEND,
+/// with no managed account of its own, so revoking BACKEND's account is the
+/// only grant the fixture holds.
+#[test]
+fn two_backend_fixture_registers_the_external_backend() {
+    use crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::{
+        EXTERNAL_BACKEND, Second,
+    };
+    let gateway = DirectAccountGateway::with_second(sole_operator(), &Binding::Connected, Second::External);
+    assert!(gateway.backends().get(BACKEND).is_some(), "BACKEND is registered");
+    assert!(gateway.backends().get(EXTERNAL_BACKEND).is_some(), "the external backend is registered");
+    assert_eq!(gateway.tool_calls_to(EXTERNAL_BACKEND), 0);
+}
