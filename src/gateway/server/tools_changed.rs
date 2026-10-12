@@ -367,7 +367,11 @@ mod views;
 pub(super) mod stdio;
 
 #[cfg(test)]
+mod audience_access;
+#[cfg(test)]
 mod audience_agent_tests;
+#[cfg(test)]
+mod audience_attach_tests;
 #[cfg(test)]
 mod audience_cf_tests;
 #[cfg(test)]
@@ -376,6 +380,8 @@ mod audience_ear;
 mod audience_expire_tests;
 #[cfg(test)]
 pub(in crate::gateway::server) mod audience_fixture;
+#[cfg(test)]
+mod audience_identity_tests;
 #[cfg(test)]
 mod audience_l2_tests;
 #[cfg(test)]

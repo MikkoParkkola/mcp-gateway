@@ -20,11 +20,17 @@ fn auth() -> AuthState {
 }
 
 /// A judge that answers with whatever it was last told to.
-struct Fake(parking_lot::Mutex<Option<ViewDigest>>);
+struct Fake(
+    parking_lot::Mutex<Option<ViewDigest>>,
+    parking_lot::Mutex<DeadReason>,
+);
 
 impl Fake {
     fn answering(served: &str, shown: &str) -> Arc<Self> {
-        let judge = Arc::new(Self(parking_lot::Mutex::new(None)));
+        let judge = Arc::new(Self(
+            parking_lot::Mutex::new(None),
+            parking_lot::Mutex::new(DeadReason::Bearer),
+        ));
         judge.say(served, shown);
         judge
     }
@@ -37,7 +43,12 @@ impl Fake {
     }
 
     fn die(&self) {
+        self.die_as(DeadReason::Bearer);
+    }
+
+    fn die_as(&self, reason: DeadReason) {
         *self.0.lock() = None;
+        *self.1.lock() = reason;
     }
 }
 
@@ -49,7 +60,7 @@ impl ViewJudge for Fake {
     ) -> futures::future::BoxFuture<'a, Judged<ResolvedCaller>> {
         Box::pin(async move {
             if self.0.lock().is_none() {
-                return Judged::Dead(DeadReason::Bearer);
+                return Judged::Dead(*self.1.lock());
             }
             Judged::Live(ResolvedCaller {
                 client: crate::gateway::auth::anonymous_client(),
@@ -253,4 +264,31 @@ async fn a_caller_that_presented_nothing_keeps_its_stream_at_attach() {
         .attach_view(&session, ViewSubject::default(), judge)
         .await;
     assert!(matches!(attached, Ok(Some(_))));
+}
+
+/// Every reason a held credential can die for refuses the attach and says so
+/// (the handler answers each with the one invalid-credential refusal).
+#[tokio::test]
+async fn a_credentialed_caller_dead_for_any_reason_is_refused_at_attach() {
+    for reason in [DeadReason::Bearer, DeadReason::Adapter, DeadReason::Cf] {
+        let multiplexer = NotificationMultiplexer::new(
+            Arc::new(crate::backend::BackendRegistry::new()),
+            crate::config::StreamingConfig::default(),
+        );
+        multiplexer.set_authorizer(auth());
+        let owner = crate::gateway::session_id::SessionOwner::Credential("k".to_owned());
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            axum::http::HeaderValue::from_static("Bearer dead"),
+        );
+        let held = crate::gateway::auth::live::held_credential(&headers);
+        let (session, _rx) = multiplexer.get_or_create_session_scoped(Some("s"), &owner, held);
+        let judge = Fake::answering("s0", "x");
+        judge.die_as(reason);
+        let attached = multiplexer
+            .attach_view(&session, ViewSubject::default(), judge)
+            .await;
+        assert_eq!(attached.err(), Some(reason));
+    }
 }

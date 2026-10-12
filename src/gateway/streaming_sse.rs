@@ -494,6 +494,11 @@ pub(crate) fn subscription_stream(
 /// The result frame is the bytes the JSON path already produced, so an SSE
 /// client and a JSON client see byte-identical results -- there is no second
 /// producer of the decorated result to drift from the first. `MIK-7272.SUB.2b`.
+/// Marks a gateway-authored refusal that must reach the client exactly as the
+/// auth layer's would, whatever `Accept` offered: it is not framed as an event.
+#[derive(Clone, Copy)]
+pub(crate) struct Unframed;
+
 pub(crate) async fn request_scoped_event_stream(
     response: axum::response::Response,
     notifications: Vec<OutboundFrame>,
@@ -504,6 +509,9 @@ pub(crate) async fn request_scoped_event_stream(
 
     // `subscriptions/listen` already answered with a stream of its own, and a
     // refusal that never reached the dispatch has no result to frame.
+    if response.extensions().get::<Unframed>().is_some() {
+        return response;
+    }
     let is_json = response
         .headers()
         .get(CONTENT_TYPE)

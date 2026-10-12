@@ -776,7 +776,7 @@ pub(crate) use sse::{first_event_wins_stream, subscription_stream};
 // Kept at the crate-visible path it had before the move; only the tests
 // and the `sse` module call it today.
 #[allow(unused_imports)]
-pub(crate) use sse::request_scoped_event_stream;
+pub(crate) use sse::{Unframed, request_scoped_event_stream};
 // Names the test modules reach through `use super::*`, which the code moved
 // into `sse` no longer needs here.
 #[cfg(test)]

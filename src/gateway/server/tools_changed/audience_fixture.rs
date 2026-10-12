@@ -126,6 +126,13 @@ impl crate::transport::Transport for Wire {
     }
 }
 
+pub(super) fn api_key_for(name: &str, secret: &[u8]) -> ApiKeyConfig {
+    ApiKeyConfig {
+        key_sha256: Some(crate::config::api_key_digest_spec(secret)),
+        ..api_key(name, &[])
+    }
+}
+
 fn api_key(name: &str, denied: &[&str]) -> ApiKeyConfig {
     ApiKeyConfig {
         key: None,
@@ -274,14 +281,6 @@ pub(super) struct World {
     _adapter: Option<tempfile::TempDir>,
 }
 
-/// Whether the fixture's `/mcp` route needs a credential.
-pub(super) enum McpAccess {
-    Authenticated,
-    /// `/mcp` is a public path: a caller that presents nothing is admitted
-    /// anonymously.
-    PublicPath,
-}
-
 impl World {
     pub(super) async fn start() -> Self {
         Self::start_with(|meta| meta).await
@@ -290,12 +289,28 @@ impl World {
     /// As [`Self::start`], with `configure` applied to the Meta-MCP last.
     pub(super) async fn start_with(configure: impl FnOnce(MetaMcp) -> MetaMcp) -> Self {
         let key_server = Arc::new(KeyServer::new(crate::config::KeyServerConfig::default()));
-        Self::start_on(key_server, None, None, configure, McpAccess::Authenticated).await
+        Self::start_on(
+            key_server,
+            None,
+            None,
+            configure,
+            super::audience_access::McpAccess::Authenticated,
+        )
+        .await
     }
 
     /// As [`Self::start_with`], with an Open `WebUI` adapter that k-std may
     /// present ([`adapter_assertion`] mints its assertions).
     pub(super) async fn start_adapter(configure: impl FnOnce(MetaMcp) -> MetaMcp) -> Self {
+        Self::start_adapter_as(configure, super::audience_access::McpAccess::Authenticated).await
+    }
+
+    /// As [`Self::start_adapter`], under `access` (the fixture agents' keys are
+    /// allowed to present assertions too).
+    pub(super) async fn start_adapter_as(
+        configure: impl FnOnce(MetaMcp) -> MetaMcp,
+        access: super::audience_access::McpAccess,
+    ) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let env = dir.path().join("adapter.env");
         crate::gateway::test_helpers::write_owner_only(
@@ -314,19 +329,12 @@ impl World {
              adapters:\n    - kind: openwebui_signed_header\n      \
              installation_id: {ADAPTER_INSTALLATION}\n      header: {ADAPTER_HEADER}\n      \
              issuer: open-webui\n      hmac_secret_ref: env:AUDIENCE_OWUI_HMAC\n      \
-             allowed_api_key_names: [k-std]\n",
+             allowed_api_key_names: [k-std, shared]\n",
             env.display().to_string().replace('\'', "''")
         ))
         .expect("adapter config parses");
         let key_server = Arc::new(KeyServer::new(crate::config::KeyServerConfig::default()));
-        Self::start_on(
-            key_server,
-            Some((config, dir)),
-            None,
-            configure,
-            McpAccess::Authenticated,
-        )
-        .await
+        Self::start_on(key_server, Some((config, dir)), None, configure, access).await
     }
 
     /// As [`Self::start`], with a real OIDC key server: one provider
@@ -349,7 +357,7 @@ impl World {
                 None,
                 None,
                 |meta| meta,
-                McpAccess::Authenticated,
+                super::audience_access::McpAccess::Authenticated,
             )
             .await,
             oidc,
@@ -361,14 +369,14 @@ impl World {
         live: Option<(crate::config::Config, tempfile::TempDir)>,
         agents: Option<Arc<crate::gateway::oauth::AgentRegistry>>,
         configure: impl FnOnce(MetaMcp) -> MetaMcp,
-        access: McpAccess,
+        access: super::audience_access::McpAccess,
     ) -> Self {
-        let auth = AuthConfig {
-            enabled: agents.is_none(),
-            public_paths: match access {
-                McpAccess::Authenticated => AuthConfig::default().public_paths,
-                McpAccess::PublicPath => vec!["/mcp".to_string()],
-            },
+        // `start_agents` bearers are agent-only; `AgentToken`'s are API keys too.
+        let gateway_auth = agents.is_none();
+        let agents = agents.or_else(|| super::audience_access::agent_registry(&access));
+        let mut auth = AuthConfig {
+            enabled: gateway_auth,
+            public_paths: super::audience_access::public_paths(&access),
             api_keys: vec![
                 api_key("k-std", &[]),
                 api_key("k-deny", &["read", "fetch", "hidden_cap"]),
@@ -379,6 +387,8 @@ impl World {
             ],
             ..AuthConfig::default()
         };
+        auth.api_keys
+            .extend(super::audience_access::agent_api_keys(&access));
         let audit = tempfile::NamedTempFile::new().expect("tempfile");
         let logger = crate::security::TransparencyLogger::open(Arc::new(
             crate::security::TransparencyLogConfig {
@@ -424,6 +434,7 @@ impl World {
             st.live_config = Arc::new(crate::config_reload::LiveConfig::new(config));
             dir
         });
+        super::audience_access::apply(st, &access);
         st.backends.set_change_feed(feed.clone());
         for backend in [
             shared_backend("alpha", &probe),
@@ -734,21 +745,19 @@ impl World {
     }
 
     async fn sse_open(&self, bearer: &str, assertion: Option<&str>, resume: Option<&str>) -> Ear {
-        self.sse_request(bearer, assertion, ("/mcp", resume), |_| {})
-            .await
+        self.sse_request(bearer, assertion, ("/mcp", resume)).await
     }
 
     /// A GET stream at `uri`, resuming `resume` when given.
     pub(super) async fn sse_at(&self, bearer: &str, uri: &str, resume: Option<&str>) -> Ear {
-        self.sse_request(bearer, None, (uri, resume), |_| {}).await
+        self.sse_request(bearer, None, (uri, resume)).await
     }
 
-    pub(super) async fn sse_request(
+    async fn sse_request(
         &self,
         bearer: &str,
         assertion: Option<&str>,
         (uri, resume): (&str, Option<&str>),
-        extend: impl FnOnce(&mut axum::http::Request<Body>),
     ) -> Ear {
         let mut builder = axum::http::Request::builder()
             .method("GET")
@@ -760,7 +769,6 @@ impl World {
         }
         let mut request = builder.body(Body::empty()).expect("a request");
         asserted(&mut request, assertion);
-        extend(&mut request);
         let response = self.router.clone().oneshot(request).await.expect("served");
         assert!(
             response.status().is_success(),
