@@ -47,7 +47,7 @@ impl ViewFacts {
 impl Intake<'_> {
     /// The view this request's caller is shown, as a stream opened by the same
     /// request would hold it (MIK-8350 D16).
-    pub(super) fn view_subject(&self) -> ViewSubject {
+    pub(in crate::gateway::router::handlers) fn view_subject(&self) -> ViewSubject {
         let facts = &self.view_facts;
         ViewSubject {
             grant_subject: self.grant_subject.clone(),

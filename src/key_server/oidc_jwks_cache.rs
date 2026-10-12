@@ -156,6 +156,13 @@ impl JwksCache {
         }
     }
 
+    /// Clear the cached JWKS and discovery entries.
+    #[cfg(test)]
+    pub(super) fn clear_for_test(&self) {
+        self.inner.clear();
+        self.discovery.clear();
+    }
+
     /// Resolve the `jwks_uri` for `issuer` from its OIDC discovery document
     /// (`discovery_url`, conventionally `{issuer}/.well-known/openid-configuration`).
     ///

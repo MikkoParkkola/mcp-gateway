@@ -246,8 +246,7 @@ impl OidcVerifier {
     /// fetches the provider's current keys (a key rotation seen at once).
     #[cfg(test)]
     pub(crate) fn expire_jwks_for_test(&self) {
-        self.jwks_cache.inner.clear();
-        self.jwks_cache.discovery.clear();
+        self.jwks_cache.clear_for_test();
     }
 
     /// As [`Self::with_http_client`], with the cache and fallback lifetimes
