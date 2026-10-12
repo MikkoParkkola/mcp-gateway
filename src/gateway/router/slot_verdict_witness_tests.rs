@@ -120,3 +120,121 @@ async fn w1_http_a_verdict_mint_then_an_admission_refusal_keeps_the_nonce() {
         "the nonce was given back after the verdict minted: {resent}"
     );
 }
+
+/// The per-user gateway under `security.posture: hardened` (test-only: every
+/// `tools/call` is signed, its nonce in `_meta`), message signing armed,
+/// alpha's own slot cold and lacking [`TOOL`], and [`TOOL`] surfaced per
+/// `surfaced`.
+async fn hardened_signed_gateway(surfaced: Surfaced) -> Gateway {
+    super::slot_verdict_http_tests::gateway_tuned(
+        (CallerSlot::Lacks, &valid(), Warmth::Cold),
+        CLOSED,
+        surfaced,
+        (
+            |_: &mut crate::config::BackendConfig| {},
+            |meta: &mut crate::gateway::meta_mcp::MetaMcp| {
+                meta.enable_message_signing(
+                    crate::security::message_signing::MessageSigner::new(
+                        b"witness-rows-signing-secret-at-least-32-bytes".to_vec(),
+                        None,
+                        "witness-rows".into(),
+                    ),
+                    std::time::Duration::from_secs(300),
+                    true,
+                );
+            },
+        ),
+        |state: &mut super::AppState| {
+            let mut config = (*state.live_config.running()).clone();
+            config.security.posture = crate::security::SecurityPosture::Hardened;
+            state.live_config = std::sync::Arc::new(crate::config_reload::LiveConfig::new(config));
+        },
+    )
+    .await
+}
+
+/// A signed `tools/call` of [`TOOL`] by its own (surfaced) name, nonce in `_meta`.
+async fn surfaced_call(gw: &Gateway, nonce: &str) -> Value {
+    let body = json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {
+        "name": TOOL,
+        "arguments": {"q": "x"},
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+            crate::gateway::meta_mcp::signing::NONCE_META: nonce,
+        },
+    }});
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", TOOL)
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    request.extensions_mut().insert(VerifiedIdentity {
+        subject: "alpha".to_string(),
+        email: "alpha@example.invalid".to_string(),
+        name: None,
+        groups: vec![],
+        issuer: "https://issuer.example.invalid".to_string(),
+    });
+    let response = gw.router.clone().oneshot(request).await.unwrap();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+}
+
+/// W3 (MIK-8353 x MIK-8356, the seam pin): a signed surfaced call on a
+/// per-user backend whose caller catalogue lacks the tool. The route-stage
+/// verdict resolves (a mint) and lists alpha's cold slot (a fill), judging the
+/// name absent; the call is answered as a name that matches no tool, through
+/// the `_ =>` arm of `call_dispatch.rs` that asks for the nonce back. That
+/// refund is safe only because the route-stage verdict dropped the witness
+/// when it acted: the nonce stays spent. The control, a name nothing surfaces
+/// (no verdict, nothing acted), gets it back through the same arm.
+#[tokio::test]
+async fn w3_http_an_absent_surfaced_name_after_a_verdict_act_keeps_the_nonce() {
+    let control = hardened_signed_gateway(Surfaced::No).await;
+    let first = surfaced_call(&control, "w3-control-n1").await;
+    assert_eq!(
+        first.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "premise: a name nothing surfaces answers -32601: {first}"
+    );
+    assert_eq!(
+        control.mints.load(Ordering::SeqCst),
+        0,
+        "premise: the control's call resolved nothing"
+    );
+    let again = surfaced_call(&control, "w3-control-n1").await;
+    assert!(
+        !message(&again).contains(REPLAY),
+        "premise: the `_ =>` arm gives an effect-free call's nonce back, else \
+         this row cannot tell keep from refund: {again}"
+    );
+
+    let gw = hardened_signed_gateway(Surfaced::Yes).await;
+    let lists = gw.caller.lists();
+    let absent = surfaced_call(&gw, "w3-n1").await;
+    assert_eq!(
+        absent.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "premise: alpha's catalogue lacks the tool, so it answers as absent: {absent}"
+    );
+    assert!(
+        gw.mints.load(Ordering::SeqCst) > 0,
+        "premise: the verdict resolved alpha's credential"
+    );
+    assert!(
+        gw.caller.lists() > lists,
+        "premise: the verdict listed alpha's cold slot"
+    );
+    assert_eq!(gw.dispatched(), 0, "premise: nothing reached the upstream");
+
+    let resent = surfaced_call(&gw, "w3-n1").await;
+    assert!(
+        message(&resent).contains(REPLAY),
+        "the nonce was given back after the verdict minted and listed: {resent}"
+    );
+}
