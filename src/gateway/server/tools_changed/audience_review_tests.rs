@@ -40,6 +40,9 @@ async fn hidden_change_after_a_visible_one(listen: bool) {
     } else {
         w.legacy("a", &a).await
     };
+    // The warm-ups duo() ran may still be draining; they are not the change.
+    w.settle().await;
+    let _ = ear.told(&w).await;
     w.store_shared("alpha", alpha_with("r2"));
     assert_eq!(ear.told(&w).await, 1, "premise: A sees the alpha change");
     w.store_user("beta", "B", vec![tool("b_tool", "b"), tool("b_more", "m")]);
