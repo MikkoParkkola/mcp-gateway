@@ -217,6 +217,9 @@ mod slot_verdict_g2_managed_http_tests;
 mod slot_verdict_g3_http_tests;
 #[cfg(test)]
 mod slot_verdict_http_tests;
+/// MIK-8392.STORED.1 batch B: per-user stored reads, cold slots, touch-on-read.
+#[cfg(test)]
+mod stored_read_slot_tests;
 #[cfg(test)]
 mod slot_verdict_http_variant_tests;
 /// MIK-8356 x MIK-8353: the caller verdict's effects reach the refund witness.
