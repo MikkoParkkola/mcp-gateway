@@ -93,9 +93,25 @@ async fn l6a_cold_caller_spec_preview_withholds() {
         CLOSED,
         Surfaced::No,
     );
+    // Single-user: a multi-user gateway leaves an isolated per-user backend
+    // out of spec preview altogether (INV-2), so the row would pass unread.
+    fx.meta.set_multi_user(false);
     let alpha = super::catalogue_per_caller_tests::identity("alpha");
     let caller = super::identified_caller(&alpha);
     let scope = caller.scope();
+    let warm = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Cold,
+        CLOSED,
+        Surfaced::No,
+    );
+    warm.meta.set_multi_user(false);
+    warm_by_listing(&warm.meta).await;
+    assert!(
+        spec_lists_tool(&warm.meta, scope),
+        "premise: a warm caller is listed in spec preview"
+    );
     let filtered = fx.meta.handle_tools_list_filtered(
         crate::protocol::RequestId::Number(1),
         TOOL,
@@ -166,6 +182,14 @@ async fn l9_required_backend_anonymous_caller_spec_preview_sees_none() {
         Warmth::Warm,
         CLOSED,
         Surfaced::No,
+    );
+    // Single-user, as L6a: spec preview reads the backend at all.
+    fx.meta.set_multi_user(false);
+    warm_by_listing(&fx.meta).await;
+    let alpha = super::catalogue_per_caller_tests::identity("alpha");
+    assert!(
+        spec_lists_tool(&fx.meta, super::identified_caller(&alpha).scope()),
+        "premise: alpha, warm, is listed in spec preview"
     );
     let anonymous = super::anonymous_caller();
     let scope = anonymous.scope();
@@ -392,4 +416,17 @@ async fn k1_known_ness_reads_the_callers_slot_not_the_shared_one() {
         unlisted.1, listed.1,
         "K1: list_servers reads the shared slot's known-ness"
     );
+}
+
+/// Whether spec preview's filtered `tools/list` names [`TOOL`] to `scope`.
+#[cfg(feature = "spec-preview")]
+fn spec_lists_tool(meta: &super::MetaMcp, scope: super::InvokeScope<'_>) -> bool {
+    use super::slot_verdict_fixture::TOOL;
+    let filtered =
+        meta.handle_tools_list_filtered(crate::protocol::RequestId::Number(9), TOOL, None, scope);
+    serde_json::to_value(&filtered)
+        .expect("a response serialises")
+        .pointer("/result/tools")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|tools| tools.iter().any(|t| t["name"] == TOOL))
 }
