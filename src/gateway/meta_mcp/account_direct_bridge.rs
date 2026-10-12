@@ -99,6 +99,16 @@ impl DirectAccountGateway {
 
     /// The `tools/call` requests that reached the backend, each as its
     /// `Authorization` header and the identity key that selected its slot.
+    /// Probe only: revoke the sole operator's grant through live custody,
+    /// with no reconnect.
+    pub(crate) async fn revoke_operator_grant_for_probe(&self) {
+        self._custody
+            .handle
+            .invalidate(&operator_key())
+            .await
+            .expect("the seeded grant must revoke through real custody");
+    }
+
     pub(crate) fn tool_calls(&self) -> Vec<(Option<String>, Option<String>)> {
         self.dispatches
             .calls()
