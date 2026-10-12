@@ -116,7 +116,7 @@ impl TransitionWrite<'_> {
     /// The task this write moves.
     pub(super) fn id(&self) -> &str {
         match self {
-            Self::Settle { id, .. } | Self::Cancel { id, .. } | Self::Recover { id, .. } => *id,
+            Self::Settle { id, .. } | Self::Cancel { id, .. } | Self::Recover { id, .. } => id,
         }
     }
 }

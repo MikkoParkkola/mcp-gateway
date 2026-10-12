@@ -7,7 +7,6 @@
 
 use super::bounded_tests::logger;
 use super::rotation_tests::log_path;
-use super::*;
 use crate::security::audit::AuditFailurePolicy;
 
 /// MIK-8202.AC.16 (R6, mutant M6): the degraded probe row is written on the
@@ -23,7 +22,7 @@ async fn a_probe_row_on_a_dark_clock_is_undated() {
     let dir = tempfile::tempdir().unwrap();
     let l = logger(&dir, AuditFailurePolicy::FailClosed);
     l.set_blocking_clock_before_epoch_for_test(true);
-    l.append_bounded(|l| l.probe())
+    l.append_bounded(super::TransparencyLogger::probe)
         .await
         .expect("the probe row is kept on a dark clock");
     let text = std::fs::read_to_string(log_path(&dir)).unwrap();

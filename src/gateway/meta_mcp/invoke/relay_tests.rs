@@ -522,7 +522,7 @@ async fn reading_a_multi_target_task_stages_no_receipt() {
         let (meta, firewall) = relay_meta();
         let mut stored = stored_task(|task| {
             task.complete(&text_result(PROSE))
-                .expect("a live task takes its outcome")
+                .expect("a live task takes its outcome");
         });
         if targets == 2 {
             stored.targets.push(crate::gateway::task_service::Target {

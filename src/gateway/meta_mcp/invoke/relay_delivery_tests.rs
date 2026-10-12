@@ -729,7 +729,7 @@ async fn a_stored_result_receipts_only_what_the_backend_wrote() {
     let (meta, firewall) = relay_meta();
     let mut stored = stored_task(|task| {
         task.complete(&written)
-            .expect("a live task takes its outcome")
+            .expect("a live task takes its outcome");
     });
     stored.gateway_writes = record.clone();
     let ((), staged) = meta
@@ -756,7 +756,7 @@ async fn a_stored_result_receipts_only_what_the_backend_wrote() {
     });
     let mut stored = stored_task(|task| {
         task.complete(&backend)
-            .expect("a live task takes its outcome")
+            .expect("a live task takes its outcome");
     });
     stored.gateway_writes = record;
     let ((), staged) = meta

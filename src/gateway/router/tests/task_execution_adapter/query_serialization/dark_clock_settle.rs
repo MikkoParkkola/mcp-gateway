@@ -58,24 +58,7 @@ where
 async fn r2h_a_read_queued_behind_a_dark_clock_settle_asks_nothing_further() {
     let (state, transport, adapter, _store) = armed_fixture(Script::Hold).await;
     let log_dir = tempfile::tempdir().expect("a log directory");
-    let log = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
-        enabled: true,
-        path: log_dir
-            .path()
-            .join("audit.jsonl")
-            .to_string_lossy()
-            .into_owned(),
-        key_id: "r2h".to_string(),
-        ..TransparencyLogConfig::default()
-    }))
-    .expect("open log")
-    .with_failure_policy(AuditFailurePolicy::BestEffort);
-    let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
-    let mut meta =
-        Arc::try_unwrap(app.meta_mcp).unwrap_or_else(|_| panic!("fixture meta is exclusive"));
-    meta.enable_transparency_log(Arc::new(log));
-    app.meta_mcp = Arc::new(meta);
-    let state = Arc::new(app);
+    let state = with_audit_log(state, &log_dir);
     let executor = Arc::clone(&state.task_executor);
 
     let id = submit(&state, "mik-8202-r2h").await;
@@ -135,12 +118,7 @@ async fn r2h_a_read_queued_behind_a_dark_clock_settle_asks_nothing_further() {
          before the settle, and the read queried the peer one more time)",
         adapter.queries()
     );
-    let recovery_records: Vec<Value> = std::fs::read_to_string(log_dir.path().join("audit.jsonl"))
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|entry| entry["route"] == "task_recovery")
-        .collect();
+    let recovery_records = recovery_records(&log_dir);
     std::assert_eq!(
         recovery_records.len(),
         1,
@@ -171,4 +149,37 @@ async fn r2h_a_read_queued_behind_a_dark_clock_settle_asks_nothing_further() {
         "the read was still queued when the clock was made readable: it answered \
          after the flip, not before"
     );
+}
+
+/// `state` with a best-effort transparency log in `log_dir`, the sink the
+/// `task_recovery` records are counted from.
+fn with_audit_log(state: Arc<AppState>, log_dir: &tempfile::TempDir) -> Arc<AppState> {
+    let log = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+        enabled: true,
+        path: log_dir
+            .path()
+            .join("audit.jsonl")
+            .to_string_lossy()
+            .into_owned(),
+        key_id: "r2h".to_string(),
+        ..TransparencyLogConfig::default()
+    }))
+    .expect("open log")
+    .with_failure_policy(AuditFailurePolicy::BestEffort);
+    let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
+    let mut meta =
+        Arc::try_unwrap(app.meta_mcp).unwrap_or_else(|_| panic!("fixture meta is exclusive"));
+    meta.enable_transparency_log(Arc::new(log));
+    app.meta_mcp = Arc::new(meta);
+    Arc::new(app)
+}
+
+/// The `task_recovery` records the log in `log_dir` holds.
+fn recovery_records(log_dir: &tempfile::TempDir) -> Vec<Value> {
+    std::fs::read_to_string(log_dir.path().join("audit.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| entry["route"] == "task_recovery")
+        .collect()
 }

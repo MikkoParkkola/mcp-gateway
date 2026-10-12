@@ -797,10 +797,11 @@ fn is_terminal(status: TaskStatus) -> bool {
 fn commit_to_service(error: CommitFailure) -> ServiceError {
     match error {
         CommitFailure::Service(error) => error,
-        CommitFailure::RevisionConflict => ServiceError::Unavailable,
         // The request boundary: a client retries a clock before 1970 later
         // (MIK-8202 P4a r3). The worker never comes here; it waits instead.
-        CommitFailure::ClockUnreadable => ServiceError::Unavailable,
+        CommitFailure::RevisionConflict | CommitFailure::ClockUnreadable => {
+            ServiceError::Unavailable
+        }
     }
 }
 
