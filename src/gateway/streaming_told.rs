@@ -523,7 +523,10 @@ fn is_tools_list_changed(notification: &TaggedNotification) -> bool {
 /// A refresh read before an answer was built, held until the answer is known
 /// to have been delivered.
 #[derive(Default)]
-pub(crate) struct PendingRefresh(Option<(Arc<ViewRecord>, u64, u64, HashMap<String, ViewDigest>)>);
+pub(crate) struct PendingRefresh(Option<HeldRefresh>);
+
+/// A refresh read: the record, its epoch and stamp, and the view read.
+type HeldRefresh = (Arc<ViewRecord>, u64, u64, HashMap<String, ViewDigest>);
 
 impl PendingRefresh {
     /// Record the view as told when the answer was `delivered`; a withheld
