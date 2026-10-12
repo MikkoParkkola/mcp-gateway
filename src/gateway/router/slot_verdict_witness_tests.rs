@@ -208,6 +208,11 @@ async fn w3_http_an_absent_surfaced_name_after_a_verdict_act_keeps_the_nonce() {
         "premise: the control's call resolved nothing"
     );
     let again = surfaced_call(&control, "w3-control-n1").await;
+    assert_eq!(
+        again.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "premise: the re-sent control is answered as the absent name again: {again}"
+    );
     assert!(
         !message(&again).contains(REPLAY),
         "premise: the `_ =>` arm gives an effect-free call's nonce back, else \
