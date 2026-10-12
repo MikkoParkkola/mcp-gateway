@@ -217,8 +217,9 @@ impl MetaMcp {
         if !stored.serves_backend_output() {
             return None;
         }
-        // Visibility first, as on the live path: a withheld target answers
-        // as absent even where policy would also refuse (MIK-8392 T12).
+        // Visibility first, as on the live path: a Descriptor, Schema or Lacked
+        // target answers as absent even where policy would also refuse
+        // (MIK-8392 T12). A Refused target falls through to the policy check.
         let refused = match self.judge_stored_targets(stored, session, caller, read) {
             Err(StoredWithheld::Retry(after)) => return Some(retry_later(id, after)),
             Err(StoredWithheld::Refused(error)) => Some(error),
@@ -237,7 +238,8 @@ impl MetaMcp {
     /// Each recorded target against this caller's current view (MIK-8392):
     /// its account (task reads only) as the pre-pass recorded it, then its
     /// catalogue through the one judgement [`MetaMcp::stored_target_view`],
-    /// refused through the one guard [`visible::absent_if_withheld`].
+    /// refused through the one guard [`visible::absent_if_withheld`], except
+    /// a Refused view, which falls through to [`Self::authorize_stored`].
     fn judge_stored_targets(
         &self,
         stored: &CommittedTask,
@@ -273,6 +275,12 @@ impl MetaMcp {
                     self.cold_lease_remaining(server, caller),
                 ));
             };
+            // A Refused view is policy, not visibility: it falls through to
+            // `authorize_stored`, so the read refuses as the live call does
+            // and writes its record (MIK-8392 lead ruling 2026-10-12).
+            if judged == visible::Visibility::Withheld(visible::Withholding::Refused) {
+                continue;
+            }
             visible::absent_if_withheld(Some(judged), tool).map_err(StoredWithheld::Refused)?;
         }
         Ok(())

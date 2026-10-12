@@ -551,13 +551,14 @@ async fn t9d_a_complete_empty_catalogue_answers_absent() {
     assert_absent(&state, &get_task(&state, "key-a", &id).await, "T9d").await;
 }
 
-/// T16 (M25): the caller's identity grant for the target is withdrawn after
-/// the task ran. The schema is valid and no descriptor blocks it, so the read
-/// is withheld as Refused, answered as an absent name. Control: while the
-/// grant stands, the stored task is delivered.
+/// T16 (M25, lead ruling 2026-10-12): the caller's identity grant for the
+/// target is withdrawn after the task ran. The stored read answers exactly
+/// what the live call by the same caller answers, and both write a
+/// grant-denial record. Control: while the grant stands, the stored task is
+/// delivered.
 #[tokio::test]
-async fn t16_a_grant_withdrawn_after_the_task_ran_answers_absent() {
-    use crate::gateway::meta_mcp::grant_audit_fixture::grants;
+async fn t16_a_grant_withdrawn_after_the_task_ran_answers_as_the_live_call() {
+    use crate::gateway::meta_mcp::grant_audit_fixture::{decisions, grants};
     use crate::security::audit::AuditFailurePolicy;
     let row =
         super::grant_decisions::armed(true, false, AuditFailurePolicy::BestEffort, |m| m).await;
@@ -576,10 +577,47 @@ async fn t16_a_grant_withdrawn_after_the_task_ran_answers_absent() {
         "control: delivered: {control}"
     );
     row.state.meta_mcp.set_identity_grants(grants(vec![]));
-    let read = get_task(&row.state, "key-a", &id).await;
+    // MIK-7692: the live denial is not in a repeat scope, so it is always
+    // written; the stored denial is a changed decision (the last write for
+    // this task and caller was "ok"), so it is written at once.
+    let before = decisions(&row.dir).len();
+    let live = post(
+        &row.state,
+        "key-a",
+        super::grant_decisions::personal_invoke(9),
+    )
+    .await;
     std::assert_eq!(
-        read.pointer("/error/code"),
-        Some(&json!(-32601)),
-        "T16: a withdrawn grant answers absent: {read}"
+        live.pointer("/error/code"),
+        Some(&json!(-32004)),
+        "T16: the live call is grant-denied, not absent: {live}"
+    );
+    let after_live = decisions(&row.dir);
+    std::assert_eq!(
+        after_live.len(),
+        before + 1,
+        "T16: the live denial is recorded: {after_live:#?}"
+    );
+    std::assert_eq!(
+        after_live[before]["outcome"],
+        json!("denied"),
+        "T16: {after_live:#?}"
+    );
+    let stored = get_task(&row.state, "key-a", &id).await;
+    std::assert_eq!(
+        error_masked(&stored),
+        error_masked(&live),
+        "T16: the stored read answers what the live call answers"
+    );
+    let after_stored = decisions(&row.dir);
+    std::assert_eq!(
+        after_stored.len(),
+        before + 2,
+        "T16: the stored denial is recorded at once: {after_stored:#?}"
+    );
+    std::assert_eq!(
+        after_stored[before + 1]["outcome"],
+        json!("denied"),
+        "T16: {after_stored:#?}"
     );
 }
