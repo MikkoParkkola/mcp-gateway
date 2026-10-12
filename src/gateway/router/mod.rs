@@ -36,6 +36,7 @@ mod authorization;
 pub use authorization::CallerStanding;
 pub(crate) use authorization::{
     ADMIN_META_TOOLS, OwnedRouterAuthorizer, RouterAuthorizer, backend_tool_targets_for_call,
+    sanitize_exempt,
 };
 mod backend_handlers;
 mod handlers;
@@ -155,6 +156,9 @@ mod meta_fingerprint_tests;
 /// MIK-8154.LEASE.1 rows: the direct route takes the shared execution lease.
 #[cfg(test)]
 mod mik8154_lease_rows_tests;
+/// MIK-8154 PR 2 rows: sanitize parity and passthrough on every route.
+#[cfg(all(test, feature = "firewall"))]
+mod mik8154_rows_tests;
 #[cfg(test)]
 mod mrtr9_lease_tests;
 #[cfg(test)]

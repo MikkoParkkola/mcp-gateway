@@ -111,6 +111,9 @@ pub(super) async fn open(
             meta_mcp: Arc::clone(meta_mcp),
             tool_policy: Arc::clone(tool_policy),
             nonce: super::StdioNonce::process(),
+            sanitize: crate::security::sanitize::InputSanitizing::from_setting(
+                config.security.sanitize_input,
+            ),
         }),
         options: TaskOptions {
             ttl_ms: (config.tasks.default_ttl_ms > 0).then_some(config.tasks.default_ttl_ms),
