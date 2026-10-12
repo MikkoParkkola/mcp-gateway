@@ -8,9 +8,9 @@
 //! Nothing it names can be proven, so it is served as today.
 
 use crate::gateway::authz::AllowAll;
+use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::authz_tests::{counted_backend, ctx};
 use crate::gateway::meta_mcp::sealed_hold::{CarriedHolds, Held};
-use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::task_service::CommittedTask;
 use crate::gateway::task_service::execution::BeginOutcome;
 use crate::protocol::RequestId;
@@ -43,7 +43,13 @@ async fn t3_an_empty_target_slice_serves_the_stored_task() {
     task.complete(serde_json::json!({"content": [{"type": "text", "text": "t3-stored"}]}));
     let id = RequestId::Number(3);
     let served = meta
-        .defer_or_serve_existing(id.clone(), "gateway_invoke", &[], stored(&task), &ctx(&AllowAll))
+        .defer_or_serve_existing(
+            id.clone(),
+            "gateway_invoke",
+            &[],
+            stored(&task),
+            &ctx(&AllowAll),
+        )
         .await;
     let today = BeginOutcome::Existing(stored(&task)).into_response(id);
     assert_eq!(
@@ -51,5 +57,9 @@ async fn t3_an_empty_target_slice_serves_the_stored_task() {
         serde_json::to_value(&today).expect("JSON"),
         "T3: an empty target slice is not served as today"
     );
-    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0, "T3: a call was sent");
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "T3: a call was sent"
+    );
 }

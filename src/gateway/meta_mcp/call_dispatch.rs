@@ -404,7 +404,10 @@ impl MetaMcp {
                 }
                 // E2: plan tasks are served as today (MIK-8406 owns them);
                 // T7 pins this gap.
-                if matches!(stored.task.tool(), "gateway_execute" | "gateway_run_playbook") {
+                if matches!(
+                    stored.task.tool(),
+                    "gateway_execute" | "gateway_run_playbook"
+                ) {
                     // The holds already sit in this request's scope.
                     let held = super::sealed_hold::Held::new(
                         stored,
@@ -414,7 +417,12 @@ impl MetaMcp {
                 }
                 // A single call records at most one distinct target: the
                 // one-element slice site 5 proves.
-                let targets = stored.targets.first().cloned().into_iter().collect::<Vec<_>>();
+                let targets = stored
+                    .targets
+                    .first()
+                    .cloned()
+                    .into_iter()
+                    .collect::<Vec<_>>();
                 // The holds already sit in this request's scope.
                 let held =
                     super::sealed_hold::Held::new(stored, super::sealed_hold::CarriedHolds::none());
@@ -469,7 +477,10 @@ impl MetaMcp {
             // way nothing dispatches after this.
             if let Some(carried) = visible::take_carried(server, tool) {
                 if let Some(error) = carried.fill_error {
-                    return match self.refused_fill_outcome((server, tool), error, caller).await {
+                    return match self
+                        .refused_fill_outcome((server, tool), error, caller)
+                        .await
+                    {
                         Ok(value) => {
                             let shape = if tool_name == "gateway_invoke"
                                 || self.surfaced_tools_map.unscoped(tool_name).is_none()

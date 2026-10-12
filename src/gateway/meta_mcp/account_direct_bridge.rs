@@ -115,7 +115,12 @@ impl DirectAccountGateway {
             Second::PersonalAccount => (PERSONAL_BACKEND, Bind::Account(PERSONAL)),
             Second::External => (EXTERNAL_BACKEND, Bind::Propagation(external_cfg())),
         };
-        Self::build((ServeMode::Http, auth), binding, &[(BACKEND, first), other], |_| {})
+        Self::build(
+            (ServeMode::Http, auth),
+            binding,
+            &[(BACKEND, first), other],
+            |_| {},
+        )
     }
 
     fn build(
@@ -145,7 +150,11 @@ impl DirectAccountGateway {
             (Vec::new(), Vec::new())
         };
         let custody = custody_with(&seed);
-        let descriptors: Vec<&str> = if accounts.is_empty() { vec![WORK] } else { accounts };
+        let descriptors: Vec<&str> = if accounts.is_empty() {
+            vec![WORK]
+        } else {
+            accounts
+        };
         let (meta, dispatches) = gateway_in_with(
             binds,
             &Descriptors::same(&descriptors),
@@ -366,7 +375,11 @@ fn operator_key_for(id: &str) -> AccountKey {
 
 /// The access token the sole operator's seeded grant on `id` carries.
 fn operator_token(id: &str) -> &'static str {
-    if id == PERSONAL { ALICE_PERSONAL_TOKEN } else { ALICE_WORK_TOKEN }
+    if id == PERSONAL {
+        ALICE_PERSONAL_TOKEN
+    } else {
+        ALICE_WORK_TOKEN
+    }
 }
 
 /// MIK-8392 T11, U2: a REST capability whose dispatch runs under alice's

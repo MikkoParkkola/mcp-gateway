@@ -202,8 +202,14 @@ async fn t6_a_repeat_whose_fill_failed_answers_as_the_failed_dispatch() {
     .await;
     eprintln!("T6 answer: {again}");
     eprintln!("T6 lists {} calls {}", upstream.lists(), upstream.calls());
-    assert!(upstream.lists() >= 1, "premise: the refetch was the fill: {again}");
-    assert!(!again.to_string().contains(OUTPUT), "T6: stored output served: {again}");
+    assert!(
+        upstream.lists() >= 1,
+        "premise: the refetch was the fill: {again}"
+    );
+    assert!(
+        !again.to_string().contains(OUTPUT),
+        "T6: stored output served: {again}"
+    );
     assert_eq!(upstream.calls(), 0, "T6: the call was sent: {again}");
     assert!(
         again.to_string().contains("upstream refused tools/list"),

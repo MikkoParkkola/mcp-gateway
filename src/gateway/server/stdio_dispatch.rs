@@ -660,7 +660,9 @@ impl Gateway {
                 Ok(super::super::meta_mcp::admission::SyncAdmission::Unprotected) => None,
                 Ok(super::super::meta_mcp::admission::SyncAdmission::Owned(lease)) => Some(lease),
                 Ok(super::super::meta_mcp::admission::SyncAdmission::Replay(
-                    response, audit, target,
+                    response,
+                    audit,
+                    target,
                 )) => {
                     // STORED.2 site 1: a retained single-call result is
                     // served only on proven liveness; otherwise the call

@@ -579,14 +579,10 @@ pub(super) async fn tools_call(
             // STORED.2 site 1: a retained single-call result is served only
             // on proven liveness; otherwise the call proceeds as Unprotected
             // and the lift serves it after a live proof.
-            match state.meta_mcp.defer_or_serve_replay(
-                tool_name,
-                &arguments,
-                &caller,
-                target,
-                response,
-                audit,
-            ) {
+            match state
+                .meta_mcp
+                .defer_or_serve_replay(tool_name, &arguments, &caller, target, response, audit)
+            {
                 Some(replay) => (None, Some(replay)),
                 None => (None, None),
             }

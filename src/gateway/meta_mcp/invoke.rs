@@ -96,8 +96,7 @@ pub(crate) use caller_verdict::{CallerVerdict, TargetNaming};
 mod propagation;
 pub(crate) use propagation::ResolvedDispatch;
 pub(crate) mod worker_clock; // MIK-8202 AC12/AC13: the task worker's clock channel
-// MIK-8392 STORED.2: liveness proofs for stored replays, kept out of this
-// file's size baseline.
+// MIK-8392 STORED.2: the lift, liveness proofs and the outcome types.
 mod stored_proof;
 use bridge_dispatch::{BridgeDispatcher, run_input_bridge, undeclared_input_request};
 pub(super) use bridge_dispatch::{
@@ -115,31 +114,13 @@ use projection::{
     apply_capability_projection, call_capability_tool_with_identity, emit_projection_ab_event,
     extract_client_claim, json_is_populated,
 };
+pub(crate) use stored_proof::SourcedOutcome;
+use stored_proof::TracedOutcome;
 
 /// Monotonically increasing request counter for load-balanced cache key slot selection.
 ///
 /// Global across all backends; overflow wraps (u64 → effectively infinite for our purposes).
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-/// What `invoke_tool_traced` answered (MIK-8392 STORED.2 D8): a live value,
-/// or the lift's already-shaped stored answer.
-enum TracedOutcome {
-    /// A live dispatch's guarded value, through the ordinary path.
-    Live(GuardedValue),
-    /// The lift's stored answer, already passed through `audit_replay`:
-    /// shaped, audited and receipted, so every later layer delivers it
-    /// unchanged, never re-wrapped.
-    Stored(crate::protocol::JsonRpcResponse),
-}
-
-/// What `invoke_tool_sourced` answered (MIK-8392 STORED.2 D8): a live value
-/// to shape, or the lift's already-shaped stored answer, delivered unchanged.
-pub(crate) enum SourcedOutcome {
-    /// A live dispatch's sourced value, through the ordinary path.
-    Live(super::response_security::Sourced),
-    /// The lift's stored answer: no invocation record, no shaping.
-    Stored(crate::protocol::JsonRpcResponse),
-}
 
 impl MetaMcp {
     /// Inner implementation executed within a trace-ID scope.
@@ -238,9 +219,6 @@ impl MetaMcp {
         // MIK-8353 3a: the refund witness, carried through every may-effect
         // step below; any exit hands back what survived.
         let mut witness = nonce_settle::Witnessed::take(caller);
-        // MIK-8392 STORED.2: this invocation's deferred-replay key, if it is
-        // keyed. Pure to build; the take below consumes the entry once.
-        let deferred_key = super::visible::deferred_replay_key(server, tool, caller.retry);
         // MIK-8356 R5.2: the resolution a caller verdict carried, or a fresh one.
         let (backend, resolved) = match self
             .dispatch_resolution(
@@ -259,27 +237,12 @@ impl MetaMcp {
             Ok(std::ops::ControlFlow::Break(answer)) => return Ok(TracedOutcome::Live(answer)),
             Err(error) => return Err(error),
         };
-        // The lift: the route stage deferred this call's retained result to a
-        // live dispatch, and resolution just proved the account live, so the
-        // stored answer is served without dispatching. It sits here, before
-        // the key, the spend, the redeem and the relay can act (L0-L2).
-        if let Some(key) = &deferred_key
-            && let Some(deferred) = super::visible::take_deferred_replay(key)
+        // The lift (MIK-8392 STORED.2), right after resolution proved the
+        // account live and before the key, spend, redeem or relay can act.
+        if let Some(replay) = self
+            .lift_deferred((server, tool), &mut witness, session_id, caller)
+            .await
         {
-            // A delivered call: the signing nonce stays spent, and nothing
-            // is sent.
-            witness.spend();
-            nonce_settle::mark_dispatched(caller);
-            let replay = self
-                .audit_replay(
-                    &deferred.tool_name,
-                    &deferred.arguments,
-                    session_id,
-                    caller,
-                    deferred.response,
-                    deferred.audit,
-                )
-                .await;
             return Ok(TracedOutcome::Stored(replay));
         }
         let target = (server, backend.as_ref().map(|backend| backend.instance()));

@@ -18,13 +18,13 @@ const MARKER: &str = "stored-output-8392-stdio";
 
 fn keyed_invoke(key: &str) -> Value {
     json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {
-        "name": "gateway_invoke",
-        "arguments": {"server": BACKEND, "tool": "read", "arguments": {"folder": "inbox"}},
-        "_meta": {
-            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-            "io.modelcontextprotocol/clientCapabilities": {},
-            (crate::protocol::mrtr::IDEMPOTENCY_KEY_META): key,
-        }}})
+    "name": "gateway_invoke",
+    "arguments": {"server": BACKEND, "tool": "read", "arguments": {"folder": "inbox"}},
+    "_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {},
+        (crate::protocol::mrtr::IDEMPOTENCY_KEY_META): key,
+    }}})
 }
 
 /// R2 (P2 over stdio): a keyed `gateway_invoke` dispatches while connected;
@@ -44,15 +44,25 @@ async fn r2_stdio_keyed_invoke_after_revocation_is_not_served_the_retained_resul
     let first = Gateway::dispatch_single(&meta, &policy, &mtls, &keyed_invoke("r2"), session)
         .await
         .expect("a response");
-    assert!(first.to_string().contains(MARKER), "premise: dispatched: {first}");
+    assert!(
+        first.to_string().contains(MARKER),
+        "premise: dispatched: {first}"
+    );
     let sent = gateway.tool_calls().len();
     gateway.revoke_operator_grant().await;
     let again = Gateway::dispatch_single(&meta, &policy, &mtls, &keyed_invoke("r2"), session)
         .await
         .expect("a response");
-    assert!(!again.to_string().contains(MARKER), "R2: the stored output was served: {again}");
+    assert!(
+        !again.to_string().contains(MARKER),
+        "R2: the stored output was served: {again}"
+    );
     assert!(again.get("error").is_some(), "R2: not a refusal: {again}");
-    assert_eq!(gateway.tool_calls().len(), sent, "R2: the call reached the backend: {again}");
+    assert_eq!(
+        gateway.tool_calls().len(),
+        sent,
+        "R2: the call reached the backend: {again}"
+    );
 }
 
 /// E8a over stdio (no-leak twin; mutant M40): the sole operator's keyed call by
@@ -86,19 +96,22 @@ async fn e8a_stdio_a_stored_key_and_a_fresh_key_answer_alike_for_a_hidden_name()
     let session = super::super::STDIO_SESSION_ID;
     let call = |key: &str| {
         json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {
-            "name": "read",
-            "arguments": {"folder": "inbox"},
-            "_meta": {
-                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                "io.modelcontextprotocol/clientCapabilities": {},
-                (crate::protocol::mrtr::IDEMPOTENCY_KEY_META): key,
-            }}})
+        "name": "read",
+        "arguments": {"folder": "inbox"},
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+            (crate::protocol::mrtr::IDEMPOTENCY_KEY_META): key,
+        }}})
     };
     gateway.answer_next(json!({"content": [{"type": "text", "text": MARKER}], "isError": false}));
     let first = Gateway::dispatch_single(&meta, &policy, &mtls, &call("e8a-s"), session)
         .await
         .expect("a response");
-    assert!(first.to_string().contains(MARKER), "premise: dispatched: {first}");
+    assert!(
+        first.to_string().contains(MARKER),
+        "premise: dispatched: {first}"
+    );
     gateway.revoke_operator_grant().await;
     let mut stored = Gateway::dispatch_single(&meta, &policy, &mtls, &call("e8a-s"), session)
         .await
@@ -110,5 +123,8 @@ async fn e8a_stdio_a_stored_key_and_a_fresh_key_answer_alike_for_a_hidden_name()
     eprintln!("E8a stdio fresh key: {fresh}");
     stored["id"] = Value::Null;
     fresh["id"] = Value::Null;
-    assert_eq!(stored, fresh, "E8a stdio: the stored key answers differently");
+    assert_eq!(
+        stored, fresh,
+        "E8a stdio: the stored key answers differently"
+    );
 }
