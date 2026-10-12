@@ -719,3 +719,80 @@ async fn x1_stdio_per_user_surfaced_name_is_sanitized() {
         "X1 stdio: the NUL argument was dispatched: {answer}"
     );
 }
+
+/// A signed, keyed modern `gateway_invoke` of [`TOOL`] under `key` and `nonce`.
+fn signed_invoke_as(key: &str, nonce: &str, folder: &str) -> Value {
+    json!({
+        "name": "gateway_invoke",
+        "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"folder": folder}, "nonce": nonce},
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+            crate::protocol::mrtr::IDEMPOTENCY_KEY_META: key,
+        }
+    })
+}
+
+/// W2 (MIK-8356 x MIK-8353), the stdio twin of the HTTP witness row: the
+/// route stage's caller verdict releases the sole operator's managed
+/// credential, then execution admission refuses the call (its key reused for
+/// other arguments, 409). Something acted, so the nonce stays spent: the
+/// honest call re-sent under it is a replay. RED while the stdio witness,
+/// minted before the route stage, ignores what the verdict did.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn w2_stdio_a_verdict_release_then_an_admission_refusal_keeps_the_nonce() {
+    let stdio = operator_stdio_armed(|meta| {
+        meta.enable_message_signing(
+            crate::security::message_signing::MessageSigner::new(
+                b"w2-stdio-signing-secret-at-least-32-bytes!!".to_vec(),
+                None,
+                "w2-stdio".to_owned(),
+            ),
+            std::time::Duration::from_secs(300),
+            true,
+        );
+    });
+    let backend = stdio.gateway.backends().get(BACKEND).expect("the backend");
+    backend.store_per_user_tools_for_test(
+        &DirectAccountGateway::operator_binding(),
+        vec![tool(TOOL, &valid()), tool(SIBLING, &valid())],
+    );
+    stdio.gateway.answer_next(json!({
+        "content": [{"type": "text", "text": "w2-first"}], "isError": false
+    }));
+    let first = stdio
+        .rpc(1, "tools/call", signed_invoke_as("w2-k1", "w2-n1", "inbox"))
+        .await;
+    assert!(
+        first.to_string().contains("w2-first"),
+        "premise: the first signed call ran: {first}"
+    );
+    let sent = stdio.gateway.tool_calls().len();
+    let released = stdio.gateway.releases();
+
+    let refused = stdio
+        .rpc(2, "tools/call", signed_invoke_as("w2-k1", "w2-n2", "other"))
+        .await;
+    assert_eq!(
+        refused.pointer("/error/code"),
+        Some(&json!(409)),
+        "premise: execution admission's own refusal: {refused}"
+    );
+    assert!(
+        stdio.gateway.releases() > released,
+        "premise: the refused call's verdict released a managed credential"
+    );
+    assert_eq!(
+        stdio.gateway.tool_calls().len(),
+        sent,
+        "premise: the refusal reached no upstream"
+    );
+
+    let resent = stdio
+        .rpc(3, "tools/call", signed_invoke_as("w2-k2", "w2-n2", "other"))
+        .await;
+    assert!(
+        resent.to_string().contains("Nonce replay detected"),
+        "the nonce was given back after the verdict released a credential: {resent}"
+    );
+}
