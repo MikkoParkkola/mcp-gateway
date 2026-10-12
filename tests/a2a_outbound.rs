@@ -27,6 +27,8 @@ use stub::{Agent, Answer};
 
 /// The one tool an agent is exposed as (design r1: one tool per agent).
 const TOOL: &str = "send_message";
+/// A tool the agent does not offer: the twin of a denied `TOOL` (MIK-8361).
+const ABSENT: &str = "no_such_delegation";
 
 fn backend(a2a_url: &str, card_path: Option<&str>, headers: &[(&str, &str)]) -> Backend {
     backend_timed(a2a_url, card_path, headers, Duration::from_secs(10))
@@ -381,23 +383,35 @@ async fn a2a_7_a_delegation_passes_the_gateway_funnel() {
             .backends
             .register(std::sync::Arc::new(backend(&base, None, &[])))
     );
-    let invoke = || {
+    let invoke_tool = |tool: &str| {
         common::modern(
             "tools/call",
             json!({"name": "gateway_invoke", "arguments": {
-                "server": "agent", "tool": TOOL, "arguments": {"message": "hi"}}}),
+                "server": "agent", "tool": tool, "arguments": {"message": "hi"}}}),
         )
     };
+    let invoke = || invoke_tool(TOOL);
+    let denied_key = [("authorization", "Bearer key-denied")];
 
-    let (_, refused) =
-        common::post(&state, invoke(), &[("authorization", "Bearer key-denied")]).await;
+    let (refused_status, refused) = common::post(&state, invoke(), &denied_key).await;
     assert!(
         stub::sends(&log).is_empty(),
         "a denied delegation never reaches the agent: {refused}"
     );
-    assert!(
-        refused.to_string().contains("agent"),
-        "the refusal names the denied target: {refused}"
+    // MIK-8361: a tool the caller may not see answers as a tool that does not
+    // exist, byte for byte, from the same caller (only the echoed name and the
+    // request id differ).
+    let (absent_status, absent) = common::post(&state, invoke_tool(ABSENT), &denied_key).await;
+    assert_eq!(refused_status, absent_status, "{refused} / {absent}");
+    let normalised = |answer: &Value| {
+        let mut answer = answer.clone();
+        answer["id"] = Value::Null;
+        answer.to_string().replace(ABSENT, TOOL)
+    };
+    assert_eq!(
+        normalised(&refused),
+        normalised(&absent),
+        "the denied delegation answers as a missing name"
     );
 
     let (status, answered) =

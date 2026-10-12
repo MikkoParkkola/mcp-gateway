@@ -70,9 +70,25 @@ impl MetaMcp {
     ) -> Result<()> {
         let tool = crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "tool")?;
         if let Err(reason) = crate::security::validate_tool_name(tool) {
-            return Err(Error::Protocol(format!(
-                "Invalid tool name '{tool}': {reason}"
-            )));
+            // As every authorizer refuses a malformed name, and as
+            // `authorize_invocation` answers and audits it: the policy this
+            // call skipped would have, and so does a missing name.
+            let refusal = Error::Forbidden {
+                code: -32600,
+                status: axum::http::StatusCode::FORBIDDEN.as_u16(),
+                message: reason,
+            };
+            let server =
+                crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "server")?;
+            let authorizer = caller.authorizer;
+            crate::gateway::authz::audit_refusal(
+                authorizer.transport(),
+                authorizer.caller_name(),
+                server,
+                tool,
+                &refusal.to_string(),
+            );
+            return Err(refusal);
         }
         self.check_attestation(
             arguments,
@@ -484,3 +500,7 @@ pub(super) fn count_meta_denial(
 #[cfg(test)]
 #[path = "gate_fill_tests.rs"]
 mod fill_tests;
+
+#[cfg(test)]
+#[path = "gate_call_level_tests.rs"]
+mod call_level_tests;
