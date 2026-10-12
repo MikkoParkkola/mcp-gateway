@@ -78,7 +78,9 @@ mod tests {
     #[test]
     fn a_scenario_within_one_day_runs_once() {
         let mut runs = 0;
-        let seen = same_utc_day_with(scripted(&[7, 7]), || {
+        // Days to spare, so a helper that reruns anyway fails on `runs`, not on
+        // the script running out.
+        let seen = same_utc_day_with(scripted(&[7, 7, 7, 7]), || {
             runs += 1;
             runs
         });
