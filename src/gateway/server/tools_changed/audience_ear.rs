@@ -249,8 +249,8 @@ impl World {
         extend(&mut request);
         let response = self.router.clone().oneshot(request).await.expect("served");
         let status = response.status();
-        // A refusal has a body that ends; an open stream does not, so only the
-        // first bytes within the deadline are read.
+        // A refusal has a body that ends; an open stream does not, so a body
+        // not complete within the deadline reads as empty.
         let body = tokio::time::timeout(
             std::time::Duration::from_secs(10),
             axum::body::to_bytes(response.into_body(), usize::MAX),
