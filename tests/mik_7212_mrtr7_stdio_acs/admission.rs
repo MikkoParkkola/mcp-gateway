@@ -62,18 +62,45 @@ fn a_wrapped_tool_refusal_reads_as_a_refusal() {
     );
 }
 
-/// Busy refusals match the calls past the inflight cap one for one, to within
-/// the handshake's own permit (see row 7b's doc): a count outside that window
-/// is a refusal the cap did not cause, or excess the cap let through.
-fn assert_busy_matches_excess(refused: usize, over_cap: i64, lines: &[String]) {
-    let over_cap = usize::try_from(over_cap)
-        .ok()
-        .filter(|n| *n >= 1)
-        .expect("the over-cap group is positive");
-    eprintln!("7b server-busy refusals: {refused} of {over_cap} over the cap");
+/// Every burst call that ended before anything was answered: a response frame
+/// carrying its id that is not a busy refusal. A tool-level decline, a
+/// JSON-RPC error (a bridge timeout, a failed delivery) and an ordinary result
+/// all count. Each one freed an inflight slot mid-burst (MIK-8411).
+fn ended_ids(frames: &[Value]) -> Vec<i64> {
+    let busy = refused_ids(frames);
+    frames
+        .iter()
+        .filter(|frame| frame.get("method").is_none())
+        .filter_map(|frame| frame.get("id").and_then(Value::as_i64))
+        .filter(|id| *id >= FIRST_CALL_ID && !busy.contains(id))
+        .collect()
+}
+
+/// Row 7b's refusal count, exactly (MIK-8411). With the backend rate limiter
+/// off (`write_config_without_rate_limit`) no admitted call ends while the
+/// burst is read, so every id past the cap is refused and none before it. A
+/// call that ended would free a slot and let one over-cap call in, so any
+/// ended call means this run did not exercise the cap: that fails as a
+/// premise, never as a pass.
+fn assert_refused_exactly(refused: usize, ended: &[i64], lines: &[String]) {
+    let over_cap = usize::try_from(OVER_CAP_IDS).expect("the over-cap group is not negative");
+    eprintln!(
+        "7b server-busy refusals: {refused} of {over_cap} over the cap, {} ended",
+        ended.len()
+    );
     assert!(
-        (over_cap - 1..=over_cap).contains(&refused),
-        "{refused} of the {over_cap} calls past the cap were refused busy. {}",
+        ended.is_empty(),
+        "premise: with the rate limiter off and nothing answered, no burst call \
+         ends mid-burst, yet {} did (first: {:?}), so the cap was not exercised. {}",
+        ended.len(),
+        &ended[..ended.len().min(5)],
+        census_of(lines)
+    );
+    assert_eq!(
+        refused,
+        over_cap,
+        "every one of the {over_cap} calls past the inflight cap must be refused \
+         busy, and only those. {}",
         census_of(lines)
     );
 }
@@ -281,36 +308,37 @@ async fn ac_mrtr_7a_the_reader_keeps_reading_past_the_admission_cap() {
 /// [`ADMISSION_CAP`].
 const INFLIGHT_CAP: i64 = 1024;
 
+/// How many ids row 7b sends past the inflight cap (MIK-8411). Three, with a
+/// one-slot window, left the row decided by two refusals; sixteen, counted
+/// exactly, fails a cap off by any amount up to sixteen either way.
+const OVER_CAP_IDS: i64 = 16;
+
 /// MIK-7212.MRTR.7b — past the inflight cap the excess is refused, not queued
 /// behind the reader.
 ///
 /// The read loop consults `inflight` through a deliberately non-async
 /// `try_acquire_owned` and answers `-32000 server busy` with `try_send`, so
 /// saturation costs the client a refusal and never costs it the reader. Nothing
-/// in this row is answered, so no permit is released mid-burst and the ids the
-/// loop accepts are the ids it read first.
+/// in this row is answered and the backend rate limiter is off, so no admitted
+/// call ends mid-burst and the ids the loop accepts are the ids it read first.
 ///
-/// The boundary is asserted as a window rather than a point, and that is not
-/// slack for its own sake: `initialize`'s own dispatch takes an inflight permit
-/// and releases it at `drop(slot)`, which is not ordered against the response
-/// this row waits for, so the cap is observable to within one slot. The window
-/// still fails any regressed cap — halve the constant and the first group draws
-/// refusals — which "at least one refusal somewhere in 1025 calls" would not.
+/// The boundary is a point: `initialize` runs inline and takes no inflight
+/// slot (`stdio_loop.rs`), so exactly the first 1024 calls are accepted and
+/// exactly the next sixteen refused. Halve the cap and the first group draws
+/// refusals; raise it by one and only fifteen are refused.
 #[tokio::test]
 async fn ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued() {
     let home = tempfile::tempdir().expect("temporary home");
     let (backend_url, received) = spawn_fixture_backend().await;
-    write_config(home.path(), &backend_url);
+    write_config_without_rate_limit(home.path(), &backend_url);
     let mut session = StdioSession::spawn(home.path());
 
     session.send(&initialize_request(1)).await;
     let (_, initialized) = session.read_until_id(1).await;
     assert!(initialized.is_some(), "the child never answered initialize");
 
-    // One short of the cap, so the handshake's own permit cannot push this
-    // group over it whether or not it has been released yet.
-    let last_below_cap = FIRST_CALL_ID + INFLIGHT_CAP - 2;
-    let last_over_cap = last_below_cap + 3;
+    let last_below_cap = FIRST_CALL_ID + INFLIGHT_CAP - 1;
+    let last_over_cap = last_below_cap + OVER_CAP_IDS;
     timeout(BURST_TIMEOUT, async {
         for id in FIRST_CALL_ID..=last_over_cap {
             session.send(&asking_call(id)).await;
@@ -320,9 +348,16 @@ async fn ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued() {
     .expect("the child stopped reading stdin mid-burst: the reader parked");
 
     let wanted = usize::try_from(ADMISSION_CAP).expect("the admission cap is not negative");
+    let over_cap = usize::try_from(OVER_CAP_IDS).expect("the over-cap group is not negative");
+    // Collected until every refusal is in, not for a fixed window after the
+    // questions (MIK-8411): the busy refusals are written only once the reader
+    // reaches the tail of the burst, which a loaded runner can leave past a
+    // short settle. A call that ended breaks the premise, so it ends the wait
+    // early and `assert_refused_exactly` reports it.
     let lines = session
         .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
-            prompts_in(seen).len() + tool_refused_ids(seen).len() >= wanted
+            !ended_ids(seen).is_empty()
+                || (prompts_in(seen).len() >= wanted && refused_ids(seen).len() >= over_cap)
         })
         .await;
     let frames = frames_lenient(&lines);
@@ -341,17 +376,12 @@ async fn ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued() {
         below.is_empty(),
         "ids up to {last_below_cap} are within the inflight cap and must all be \
          accepted; {} of them were refused, so the cap has regressed below \
-         1024. First: {:?}",
+         1024. First: {:?}. {}",
         below.len(),
-        &below[..below.len().min(5)]
+        &below[..below.len().min(5)],
+        census_of(&lines)
     );
-    assert!(
-        !refused.is_empty(),
-        "{} calls is past the inflight cap, so the excess must be refused with \
-         -32000 rather than queued; nothing was refused at all",
-        last_over_cap - FIRST_CALL_ID + 1
-    );
-    assert_busy_matches_excess(refused.len(), last_over_cap - last_below_cap, &lines);
+    assert_refused_exactly(refused.len(), &ended_ids(&frames), &lines);
 
     // The refusal is not the whole invariant: a gateway that refuses everything
     // once saturated would satisfy the assertions above. Work accepted before

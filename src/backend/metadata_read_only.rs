@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Which tools the response cache may answer for (MIK-8393, from #3773).
 
+use std::collections::HashSet;
+use std::sync::Arc;
+
 use super::Backend;
 
 impl Backend {
@@ -47,44 +50,138 @@ impl Backend {
     }
 
     /// A page that is not stored (truncated, or fetched under a caller's own
-    /// credential into the shared slot) may still revoke (MIK-8393 r5-r7).
-    /// When it lists a tool without declaring it read-only, and the slot
-    /// either admits that tool or has a fill on the wire, the slot's tool list
-    /// is invalidated and its admission cleared.
+    /// credential into the shared slot) may still revoke (MIK-8393 r5-r7,
+    /// MIK-8399). It revokes when it lists a tool that the slot admits to the
+    /// cache without declaring it read-only, or that the slot permits to be
+    /// resent without declaring it resend-safe, or lists any tool not
+    /// declared read-only while a fill is on the wire. Then the slot's tool
+    /// list is invalidated, and each set keeps only the names this page
+    /// itself declares safe for it (an idempotent write keeps its retries and
+    /// loses its cache admission).
     ///
-    /// Invalidating rather than narrowing moves the cache generation, so a
-    /// fill already on the wire cannot land afterwards and re-admit the tool
-    /// (`store_if_current`); the next accepted fill re-admits what the backend
-    /// still declares. The slot is looked up, never created (#2300). A page
-    /// that revokes nothing costs nothing.
-    pub(in crate::backend) fn revoke_read_only_from_page<'a>(
+    /// `listed` is every name the page listed, read before the header and
+    /// descriptor gates dropped any; `read_only` and `resend_safe` are the
+    /// page's own sets, so a dropped name counts as not safe.
+    ///
+    /// Invalidating moves the cache generation, so a fill already on the wire
+    /// cannot land afterwards and re-grant (`store_if_current`); the next
+    /// accepted fill re-derives both sets from a complete list. The slot is
+    /// looked up, never created (#2300). A page that revokes nothing costs
+    /// nothing.
+    pub(in crate::backend) fn revoke_from_page(
         &self,
-        key: &super::PoolKey,
-        listed: impl Iterator<Item = &'a str>,
-        declared: &std::collections::HashSet<String>,
+        key: &crate::backend::PoolKey,
+        listed: &[String],
+        read_only: &HashSet<String>,
+        resend_safe: &HashSet<String>,
     ) {
-        let Some(slot) = self
-            .pool
-            .get(key)
-            .map(|slot| std::sync::Arc::clone(slot.value()))
-        else {
+        let Some(slot) = self.pool.get(key).map(|slot| Arc::clone(slot.value())) else {
             return;
         };
-        // In flight FIRST (MIK-8393 r7): a fill stores its set before it
-        // clears the mark, so with no fill in flight the admission read below
-        // sees whatever the last fill stored.
+        // In flight FIRST (MIK-8393 r7): a fill stores its sets before it
+        // clears the mark, so with no fill in flight the reads below see
+        // whatever the last fill stored.
         let in_flight = slot.tools_cache.fill_in_flight();
-        let mut writes = listed.filter(|tool| !declared.contains(*tool)).peekable();
-        let revokes = writes.peek().is_some() && {
-            let admitted = slot.read_only_declared.read();
-            in_flight || writes.any(|tool| admitted.contains(tool))
-        };
+        let not_read = || listed.iter().filter(|t| !read_only.contains(*t));
+        let revokes = not_read().next().is_some() && in_flight
+            || {
+                let admitted = slot.read_only_declared.read();
+                not_read().any(|t| admitted.contains(t))
+            }
+            || {
+                let permitted = slot.resend_permitted.read();
+                listed
+                    .iter()
+                    .any(|t| !resend_safe.contains(t) && permitted.contains(t))
+            };
         if revokes {
             slot.tools_cache.invalidate_then(|| {
-                slot.resend_permitted.write().clear();
-                slot.read_only_declared.write().clear();
+                slot.resend_permitted
+                    .write()
+                    .retain(|t| resend_safe.contains(t));
+                slot.read_only_declared
+                    .write()
+                    .retain(|t| read_only.contains(t));
             });
         }
+    }
+
+    /// The page's names as listed (before any gate dropped one), and its own
+    /// read-only and resend-safe sets. Unparseable entries declare nothing
+    /// and are dropped; no descriptor verdict is formed (`AlreadyJudged`).
+    fn page_sets(
+        name: &str,
+        pins: &std::collections::BTreeMap<String, String>,
+        tools: &[serde_json::Value],
+    ) -> (Vec<String>, HashSet<String>, HashSet<String>) {
+        let (mut parsed, _unparseable) = crate::backend::descriptor_gate::parse_listed(tools);
+        let listed = parsed.iter().map(|t| t.name.clone()).collect();
+        let prepared = crate::backend::prepare_tool_metadata(
+            name,
+            pins,
+            crate::backend::Judging::AlreadyJudged,
+            &mut parsed,
+        );
+        (
+            listed,
+            prepared.read_only_declared,
+            prepared.resend_permitted,
+        )
+    }
+
+    /// A direct drain that ended without being remembered (an error frame, a
+    /// lost transport, the page cap, a cancellation) revokes from the pages
+    /// it read, as a page that is not stored does (MIK-8399). Nothing is
+    /// stored and no verdict is committed. Pages that listed nothing revoke
+    /// nothing.
+    pub(crate) fn revoke_from_abandoned_listing(
+        &self,
+        identity_key: Option<&str>,
+        tools: &[serde_json::Value],
+    ) {
+        if tools.is_empty() {
+            return;
+        }
+        let (listed, read_only, resend_safe) =
+            Self::page_sets(&self.name, self.flagged_tool_pins(), tools);
+        self.revoke_from_page(
+            &self.pool_key_for(identity_key),
+            &listed,
+            &read_only,
+            &resend_safe,
+        );
+    }
+
+    /// The hook a tools fill hands its single-flight permit (MIK-8399 r3-r5).
+    /// If the fill ends without an answer, it narrows `entry`'s sets from the
+    /// pages it read: a name those pages list without declaring it safe
+    /// leaves the set, and every other name stays. The fill read only a
+    /// prefix of the list, so a name it did not reach says nothing. Nothing
+    /// is invalidated: the last complete catalogue keeps being served, and
+    /// the permit runs this before any newer fill can start.
+    pub(in crate::backend) fn abandoned_fill_hook(
+        &self,
+        entry: Arc<crate::backend::pool::PooledEntry>,
+        seen: Arc<parking_lot::Mutex<Vec<serde_json::Value>>>,
+    ) -> crate::backend::cached_metadata::AbandonHook {
+        let name = self.name.clone();
+        let pins = self.flagged_tool_pins().clone();
+        Box::new(move || {
+            let pages = std::mem::take(&mut *seen.lock());
+            if pages.is_empty() {
+                return;
+            }
+            let (listed, read_only, resend_safe) = Self::page_sets(&name, &pins, &pages);
+            let listed: HashSet<&String> = listed.iter().collect();
+            entry
+                .resend_permitted
+                .write()
+                .retain(|t| !listed.contains(t) || resend_safe.contains(t));
+            entry
+                .read_only_declared
+                .write()
+                .retain(|t| !listed.contains(t) || read_only.contains(t));
+        })
     }
 }
 

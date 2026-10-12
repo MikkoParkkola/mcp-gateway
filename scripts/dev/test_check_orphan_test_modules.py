@@ -36,6 +36,139 @@ def tree(root: Path, files: dict[str, str]) -> None:
         path.write_text(body, encoding="utf-8")
 
 
+class TestOnlyFiles(unittest.TestCase):
+    """MIK-8405.SPLIT.5: which reachable files compile ONLY under test. The
+    one resolver check_inventory_rows.py also uses, so these rows pin both
+    gates. The three high-rated holes the #3860 review found in a second,
+    since-deleted resolver are pinned here against this one."""
+
+    def only_test_files(self, files: dict[str, str]) -> list[str]:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tree(root, files)
+            guard = load_guard(root)
+            return sorted(str(p.relative_to(root.resolve())) for p in guard.test_only_files())
+
+    def test_a_cfg_test_mount_is_test_only_and_a_plain_one_is_not(self):
+        found = self.only_test_files(
+            {
+                "src/lib.rs": "mod a;\n",
+                "src/a/mod.rs": '#[cfg(test)]\n#[path = "x_tests.rs"]\nmod x;\nmod y;\n',
+                "src/a/x_tests.rs": "",
+                "src/a/y.rs": "",
+            }
+        )
+        self.assertEqual(found, ["src/a/x_tests.rs"])
+
+    def test_a_commented_path_attribute_mounts_nothing(self):
+        # #3860 review HIGH 1: `// #[path = ..]` above a cfg(test) mod must not
+        # point that mod at the commented file.
+        found = self.only_test_files(
+            {
+                "src/lib.rs": "mod a;\n",
+                "src/a/mod.rs": '// #[path = "orphan_tests.rs"]\n#[cfg(test)]\nmod real;\n',
+                "src/a/real.rs": "",
+                "src/a/orphan_tests.rs": "",
+            }
+        )
+        self.assertEqual(found, ["src/a/real.rs"])
+
+    def test_a_test_declaration_inside_an_unreachable_parent_reaches_nothing(self):
+        # #3860 review HIGH 2: a cfg(test) mod in a file no root reaches does
+        # not make its child test-only: neither is compiled.
+        found = self.only_test_files(
+            {
+                "src/lib.rs": "",
+                "src/a/mod.rs": "#[cfg(test)]\nmod child_tests;\n",
+                "src/a/child_tests.rs": "",
+            }
+        )
+        self.assertEqual(found, [])
+
+    def test_cfg_test_mode_is_not_test(self):
+        # #3860 review HIGH 3: `cfg(all(test_mode))` builds outside tests.
+        found = self.only_test_files(
+            {
+                "src/lib.rs": "#[cfg(all(test_mode))]\nmod m_tests;\n#[cfg(all(feature = \"x\", test))]\nmod n_tests;\n",
+                "src/m_tests.rs": "",
+                "src/n_tests.rs": "",
+            }
+        )
+        self.assertEqual(found, ["src/n_tests.rs"])
+
+    def test_a_cfg_test_on_a_use_does_not_reach_the_next_mod(self):
+        found = self.only_test_files(
+            {
+                "src/lib.rs": "#[cfg(test)]\nuse std::fmt;\nmod prod;\n",
+                "src/prod.rs": "",
+            }
+        )
+        self.assertEqual(found, [])
+
+    def test_an_inline_cfg_test_module_makes_its_children_test_only(self):
+        found = self.only_test_files(
+            {
+                "src/lib.rs": "#[cfg(test)]\nmod tests {\n    mod boot;\n}\nmod live;\n",
+                "src/tests/boot.rs": "",
+                "src/live.rs": "",
+            }
+        )
+        self.assertEqual(found, ["src/tests/boot.rs"])
+
+    def test_a_file_reached_only_from_an_integration_test_root_is_test_only(self):
+        found = self.only_test_files(
+            {
+                "src/lib.rs": "",
+                "tests/it.rs": '#[path = "../src/fixture_support.rs"]\nmod support;\n',
+                "src/fixture_support.rs": "",
+            }
+        )
+        # The integration-test root itself compiles only for tests too.
+        self.assertEqual(found, ["src/fixture_support.rs", "tests/it.rs"])
+
+
+    def test_an_inner_cfg_test_gates_its_whole_source_and_children(self):
+        # #3860 round 2 (gpt, muse): `#![cfg(test)]` gates the whole source.
+        found = self.only_test_files(
+            {
+                "src/lib.rs": "mod helpers;\nmod live;\n",
+                "src/helpers.rs": "#![cfg(test)]\nmod child;\n",
+                "src/helpers/child.rs": "",
+                "src/live.rs": "#![cfg(unix)]\n",
+            }
+        )
+        self.assertEqual(found, ["src/helpers.rs", "src/helpers/child.rs"])
+
+    def test_braces_in_another_attribute_keep_a_pending_cfg_test(self):
+        # #3860 round 2 (gpt): `{` inside `#[doc = concat!{..}]` is no item end.
+        found = self.only_test_files(
+            {
+                "src/lib.rs": '#[cfg(test)]\n#[doc = concat!{"x"}]\nmod t;\n',
+                "src/t.rs": "",
+            }
+        )
+        self.assertEqual(found, ["src/t.rs"])
+
+    def test_a_source_reached_by_a_test_and_a_production_chain_is_not_test_only(self):
+        # #3860 round 2 (gpt): one plain chain is enough to ship it.
+        found = self.only_test_files(
+            {
+                "src/lib.rs": '#[cfg(test)]\n#[path = "shared.rs"]\nmod a;\n#[path = "shared.rs"]\nmod b;\n',
+                "src/shared.rs": "",
+            }
+        )
+        self.assertEqual(found, [])
+
+    def test_a_bracket_in_a_char_literal_does_not_swallow_a_declaration(self):
+        # #3860 round 3 (muse HIGH, gpt): '[' and '{' in char literals.
+        found = self.only_test_files(
+            {
+                "src/lib.rs": "#[doc = concat!('[')]\nconst C: char = '{';\n#[cfg(test)]\nmod a;\n",
+                "src/a.rs": "",
+            }
+        )
+        self.assertEqual(found, ["src/a.rs"])
+
 class OrphanGuard(unittest.TestCase):
     def orphans_of(self, files: dict[str, str]) -> list[str]:
         # A crate root that declares each top-level module, unless the case

@@ -24,8 +24,8 @@ pub(super) async fn drain_list_pages(
     transport: &dyn crate::transport::Transport,
     backend: &str,
     family: &ListFamily,
-    headers: &[(String, String)],
-    identity_key: Option<&str>,
+    (headers, identity_key): (&[(String, String)], Option<&str>),
+    seen: Option<&parking_lot::Mutex<Vec<Value>>>,
 ) -> Result<(Option<Value>, bool)> {
     let started = tokio::time::Instant::now();
     let mut merged: Option<Value> = None;
@@ -68,6 +68,18 @@ pub(super) async fn drain_list_pages(
                     None => r.is_object() && cursor.is_some(),
                 }
         };
+        // MIK-8399: what the page declares is recorded before its shape is
+        // judged, so a page refused for a malformed cursor still narrows by
+        // the tools it listed if the fill is then abandoned.
+        if let Some(seen) = seen
+            && let Some(items) = response
+                .result
+                .as_ref()
+                .and_then(|r| r.get(family.list_key))
+                .and_then(Value::as_array)
+        {
+            seen.lock().extend(items.iter().cloned());
+        }
         let Some(mut result) = response.result.filter(readable) else {
             // A missing or malformed page is a transient page failure (F13:
             // as zero items it would make a present tool absent); keep the
