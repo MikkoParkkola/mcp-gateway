@@ -478,3 +478,23 @@ async fn a_spent_mark_vetoes_a_witnessed_refund() {
         "a call marked spent gave its nonce back"
     );
 }
+
+/// MIK-8353 slice 3a (W3): a refund asked with nothing dispatched is due only
+/// while the call still holds its witness. Without one (a may-effect step
+/// dropped it), the nonce stays spent.
+#[test]
+fn a_refund_is_due_only_with_the_witness() {
+    let (context, _) = captured("gateway_invoke", &json!({}), "w3-nonce");
+    context.want_refund();
+    assert!(!context.refund_due(), "a refund with no witness was due");
+    context.keep_witness(RefundWitness::at_capture());
+    assert!(context.refund_due(), "the witness was kept");
+    assert!(
+        context.take_witness().is_some(),
+        "and can be taken by the next step"
+    );
+    assert!(
+        !context.refund_due(),
+        "a taken witness no longer covers the refund"
+    );
+}

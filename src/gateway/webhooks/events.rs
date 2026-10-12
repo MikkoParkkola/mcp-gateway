@@ -50,12 +50,12 @@ pub(super) async fn emit(
     body: &[u8],
     payload: &Value,
     event_type: &str,
-) {
+) -> Result<(), crate::clock::ClockBeforeEpoch> {
     let (Some(hub), Some(event)) = (&state.events, &state.definition.event) else {
-        return;
+        return Ok(());
     };
     if state.definition.transform.data.is_empty() {
-        return;
+        return Ok(());
     }
     hub.webhook_received(crate::events::Inbound {
         capability: &state.capability_name,
@@ -67,5 +67,5 @@ pub(super) async fn emit(
         event_type: event_type.to_owned(),
         fields: project_data(&state.definition.transform, payload),
     })
-    .await;
+    .await
 }

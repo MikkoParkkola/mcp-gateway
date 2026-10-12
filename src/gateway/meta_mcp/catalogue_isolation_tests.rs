@@ -224,7 +224,7 @@ pub(super) async fn gateway_oauth_backend() -> Arc<Backend> {
                 callback_host: None,
                 callback_port: None,
                 callback_path: None,
-                token_refresh_buffer_secs: 300,
+                token_refresh_buffer_secs: Some(300),
             }),
             ..Default::default()
         },

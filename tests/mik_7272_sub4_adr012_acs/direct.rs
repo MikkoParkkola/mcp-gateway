@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use mcp_gateway::gateway::test_helpers::{AppState, create_router};
+use mcp_gateway::key_server::oidc::VerifiedIdentity;
 use mcp_gateway::protocol::mrtr::IDEMPOTENCY_KEY_META;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -43,7 +44,7 @@ pub(crate) async fn post_direct(state: &Arc<AppState>, mut body: Value) -> (Stat
         .as_str()
         .unwrap_or_default()
         .to_owned();
-    let request = axum::http::Request::builder()
+    let mut request = axum::http::Request::builder()
         .method("POST")
         .uri(format!("/mcp/{ROUTE_BACKEND}"))
         .header("content-type", "application/json")
@@ -54,6 +55,15 @@ pub(crate) async fn post_direct(state: &Arc<AppState>, mut body: Value) -> (Stat
             serde_json::to_vec(&body).expect("frame serializes"),
         ))
         .expect("request builds");
+    // Every call here is keyed, and a keyed direct call needs a verified
+    // execution principal, as on `/mcp` (MIK-8154 ANON.1).
+    request.extensions_mut().insert(VerifiedIdentity {
+        subject: "adr012".to_string(),
+        email: "adr012@id.local".to_string(),
+        name: None,
+        groups: Vec::new(),
+        issuer: "https://issuer.example".to_string(),
+    });
     let response = create_router(Arc::clone(state))
         .oneshot(request)
         .await

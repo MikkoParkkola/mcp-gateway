@@ -299,7 +299,7 @@ async fn a_cache_read_never_fills_an_identity_bound_backend() {
             callback_host: None,
             callback_port: None,
             callback_path: None,
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
         }),
         ..Default::default()
     };

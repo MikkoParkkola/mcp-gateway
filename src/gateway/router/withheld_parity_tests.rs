@@ -458,6 +458,49 @@ async fn row11_route_targets_resolve_a_withheld_name_as_absent() {
     assert_cells("row 11", &cells);
 }
 
+/// MIK-8154 NP3 (design r3 D1, r3.1 F3): with sanitizing on, `/mcp` intake
+/// judges a surfaced name's visibility for the sanitize exemption, through
+/// the request's memo. A repair right after that judgement does not reach the
+/// route stage or the dispatch: the call answers exactly as unrepaired
+/// (-32601), with no dispatch. RED if intake's judgement is not the memo's:
+/// the route stage then judges afresh, after the repair, and dispatches.
+#[tokio::test]
+async fn np3_intakes_judgement_is_the_requests_one() {
+    let spec = Spec::of(Reason::Schema, Side::Withheld);
+    let sanitizing = super::direct_guards_fixture::sanitizing;
+    let unrepaired = Box::pin(sanitizing(true, twin(spec)))
+        .await
+        .call_plain(spec.tool)
+        .await;
+    assert_eq!(
+        unrepaired.body.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "premise: the withheld name is not answered as absent: {}",
+        unrepaired.body
+    );
+    let raced = Box::pin(sanitizing(true, twin(spec))).await;
+    let backend = raced
+        .fx
+        .state
+        .backends
+        .get("alpha")
+        .expect("the twin serves alpha");
+    let repaired: Vec<crate::protocol::Tool> = serde_json::from_value(
+        super::withheld_twin_tests::catalogue(spec.with_side(Side::Control)),
+    )
+    .expect("the control catalogue parses");
+    crate::gateway::meta_mcp::visible::seams::after_intake(move || {
+        backend.store_shared_tools_for_test(repaired);
+    });
+    let answered = raced.call_plain(spec.tool).await;
+    assert_eq!(
+        (answered.status, &answered.body["error"], answered.calls),
+        (unrepaired.status, &unrepaired.body["error"], 0),
+        "np3: the repaired name dispatched or answered differently: {}",
+        answered.body
+    );
+}
+
 /// Row 14 (MIK-8340, perflane R3.1, one judgement per request): a surfaced
 /// tool withheld for its shared schema at the route stage stays withheld for
 /// the rest of the request. The catalogue is repaired between the route

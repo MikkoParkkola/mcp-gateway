@@ -102,7 +102,7 @@ async fn the_refresh_task_keeps_running_after_a_renewal_or_an_exhausted_one() {
     let server = TokenServer::start(&[]).await;
     let dir = tempfile::tempdir().unwrap();
     let mut renewing = client(dir.path(), &server);
-    renewing.token_refresh_buffer_secs = 300;
+    renewing.token_refresh_buffer_secs = Some(300);
     hold(&renewing, &token("a1", Some("r1"), true));
     // Reads the shared credential the renewing client writes, from the same
     // store: the renewal is complete only once the fresh token is stored, not
@@ -125,7 +125,7 @@ async fn the_refresh_task_keeps_running_after_a_renewal_or_an_exhausted_one() {
 
     let other = tempfile::tempdir().unwrap();
     let mut exhausted = refusing(other.path(), &server);
-    exhausted.token_refresh_buffer_secs = 300;
+    exhausted.token_refresh_buffer_secs = Some(300);
     hold(&exhausted, &token("a1", Some("r1"), true));
     let (guard, buffer) = crate::oauth::callback::tests::capture();
     run_until(exhausted, "the re-authorization warning", || {

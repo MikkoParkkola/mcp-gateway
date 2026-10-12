@@ -86,3 +86,87 @@ async fn f5_a_grant_revoked_before_the_send_is_refused_at_dispatch() {
         "decided at admission and again at dispatch"
     );
 }
+
+/// R-choke-fresh (MIK-8353 3a, gpt code r1): a signed call whose grant is
+/// revoked before the send is refused at the chokepoint with nothing acted
+/// (the schema warm, no mint, no continuation), so it keeps its witness and
+/// gives the nonce back: a later call admits the same nonce. The control for
+/// K-choke-consume. Mutants: mKeep, mCarryDrop.
+#[tokio::test]
+async fn a_chokepoint_refusal_with_nothing_acted_gives_the_nonce_back() {
+    use crate::gateway::meta_mcp::refund_witness::RefundWitness;
+    use crate::gateway::meta_mcp::signing::{NONCE_META, SigningInvocationContext, SigningScope};
+    const NONCE: &str = "choke-fresh-nonce";
+    let signed = |name: &str, arguments: &serde_json::Value| {
+        let mut request = serde_json::json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": {"name": name, "arguments": arguments, "_meta": {(NONCE_META): NONCE}}});
+        let context =
+            SigningInvocationContext::capture_scoped(&mut request, SigningScope::EveryToolCall);
+        (context, request["params"]["arguments"].clone())
+    };
+    let (registry, calls) = counted_backend("alpha");
+    let mut meta = MetaMcp::new(registry);
+    meta.enable_message_signing(
+        crate::security::message_signing::MessageSigner::new(
+            b"choke-fresh-key-0123456789abcdef".to_vec(),
+            None,
+            "k1".into(),
+        ),
+        std::time::Duration::from_secs(300),
+        true,
+    );
+    let warm = meta
+        .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll))
+        .await;
+    assert!(warm.is_ok(), "premise: the warm-up was sent: {warm:?}");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    let revoked = RevokedAfter {
+        allowed: 1,
+        decided: AtomicUsize::new(0),
+    };
+    let mut caller = ctx(&revoked);
+    let (mut signing, arguments) = signed("gateway_invoke", &invoke_args("alpha", "read"));
+    meta.prepare_signing_for_call(&mut signing, "gateway_invoke", &arguments, None, &caller)
+        .expect("the refusal is the chokepoint's");
+    assert!(
+        !signing.awaits_admission(),
+        "premise: the nonce was admitted"
+    );
+    // What admission leaves on the context on both adapters.
+    signing.keep_witness(RefundWitness::at_capture());
+    caller.signing = Some(&signing);
+    let response = Box::pin(meta.handle_tools_call(
+        crate::protocol::RequestId::Number(7),
+        "gateway_invoke",
+        arguments,
+        None,
+        caller,
+    ))
+    .await;
+    let wire = serde_json::to_value(&response).expect("a response serializes");
+    assert!(
+        wire.to_string().contains("grant revoked"),
+        "refused at the chokepoint: {wire}"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the backend was not reached"
+    );
+
+    let (mut later, arguments) = signed("gateway_list_servers", &serde_json::json!({}));
+    let permitted = ctx(&AllowAll);
+    meta.prepare_signing_for_call(
+        &mut later,
+        "gateway_list_servers",
+        &arguments,
+        None,
+        &permitted,
+    )
+    .expect("the nonce was given back");
+    assert!(
+        !later.awaits_admission(),
+        "the nonce was kept though nothing acted: {wire}"
+    );
+}

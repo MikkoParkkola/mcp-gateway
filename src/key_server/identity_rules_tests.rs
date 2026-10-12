@@ -610,3 +610,33 @@ async fn an_empty_subject_is_nameless_before_any_domain_refusal() {
         "refused as nameless, not as a domain mismatch: {err}"
     );
 }
+
+/// MIK-8202 P3 O3 (issuer): on a clock before 1970 the key server issues no
+/// temporary token. It answers 503 and stores nothing, rather than dating a
+/// token from 1970. Red on the seam: the unreadable clock reads as 0, so a
+/// token is issued with `iat = 0` and stored. Mutant: issue at `now = 0`.
+#[tokio::test]
+async fn an_unreadable_clock_issues_no_token() {
+    use crate::key_server::store::TokenScopes;
+    let h = Harness::start(&config_yaml("[]", "")).await;
+    let identity = VerifiedIdentity {
+        subject: "sub".to_string(),
+        email: "alice@corp.test".to_string(),
+        name: None,
+        groups: Vec::new(),
+        issuer: ISS_A.to_string(),
+    };
+    let response = {
+        let _clock = crate::clock::test_clock::before_epoch();
+        super::handler::issue(&h.ks, identity, TokenScopes::default(), None).await
+    };
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        h.ks.store.count_for_subject(ISS_A, "sub").await,
+        0,
+        "nothing stored"
+    );
+}

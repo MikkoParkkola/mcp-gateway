@@ -11,6 +11,13 @@ mod differential;
 mod http_error;
 pub mod input_bridge;
 mod meta_mcp;
+
+/// The nonce fields every entry route validates before taking them off a
+/// request (MIK-8154 S2'): the signing nonce and the chain nonce.
+pub(crate) const PROTOCOL_NONCES: [&str; 2] = [
+    meta_mcp::signing::NONCE_META,
+    crate::protocol::mrtr::CHAIN_NONCE_META,
+];
 /// Where the CLI runner notes a child it started for the call's invocation
 /// record (MIK-7926.FIX.2), without `meta_mcp` becoming crate-visible.
 pub(crate) use meta_mcp::invoke::audit::note_process;
@@ -25,10 +32,19 @@ pub(crate) use meta_mcp::publish_identity_grants;
 /// MIK-8176: execution admission (`idempotency::admission`) co-owns the holds
 /// of a stored delivery and adopts them on replay.
 pub(crate) use meta_mcp::sealed_hold;
+/// The send point's check that an exempt call is sent by the backend instance
+/// intake judged it on (MIK-8154 F2), for `backend::ops`.
+pub(crate) use meta_mcp::visible::changed_instance;
+/// How a tool call's own `arguments` are read, resolved once (MIK-8154).
+pub(crate) use meta_mcp::{ArgsPolicy, args_policy};
 /// The notes scope and the gateway, for the CLI process audit rows
 /// (MIK-7926.FIX.2), which run a real child in `capability::executor`.
 #[cfg(test)]
 pub(crate) use meta_mcp::{MetaMcp, invoke::audit::with_dispatch_scope};
+/// The gateway's one decode of a tool call's `arguments` (an object, or a
+/// JSON string holding one), shared with the sanitize step so what it checks
+/// is what dispatch uses (MIK-8154).
+pub(crate) use meta_mcp_helpers::parse_tool_arguments_cow;
 mod meta_mcp_helpers;
 mod meta_mcp_helpers_routing;
 mod meta_mcp_helpers_text;

@@ -146,6 +146,10 @@ pub struct Backend {
     semaphore: Semaphore,
     /// Request counter
     request_count: AtomicU64,
+    /// List fills that passed admission and so may start or contact the
+    /// backend: a caller reads it around a check to learn whether that check
+    /// reached outside the gateway (MIK-8353 3a).
+    list_fills: AtomicU64,
     /// Cleanup tasks for transports that `force_restart` replaced while
     /// requests were still using them, plus the shutdown latch that stops new
     /// ones being created.

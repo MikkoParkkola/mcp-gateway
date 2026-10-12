@@ -50,12 +50,18 @@ impl Store {
     /// judges its own rows (MIK-8122). A row past its effective expiry is
     /// left to the expiry path, never resumed. The held set is in place even
     /// when a stamp write fails; the next judgement writes it again.
+    ///
+    /// On a clock that cannot be read (before 1970, MIK-8202) the whole pass
+    /// is skipped with an error, so the caller retries at its next pass: a
+    /// 1969 `now` would stamp `held_until` near the epoch (burying the row
+    /// once the clock reads) and revive lapsed holds.
     pub(crate) fn apply_holds(
         &self,
         judge: &dyn Fn(&Subscription) -> Option<Judged>,
-        now: DateTime<Utc>,
+        now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
         max_ttl: chrono::Duration,
     ) -> std::io::Result<()> {
+        let now = now.map_err(std::io::Error::other)?;
         let mut state = self.state.lock();
         let mut verdicts = Vec::new();
         let mut changed = Vec::new();
@@ -125,12 +131,18 @@ impl Store {
         &self,
         name: &str,
         class: WatchClass,
+        now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
     ) -> std::io::Result<()> {
+        // Nothing is back-filled on a clock that cannot be read (before
+        // 1970): callers retry at the next poll or replay (MIK-8202).
+        let Ok(now) = now else {
+            return Ok(());
+        };
         let mut state = self.state.lock();
         let legacy: Vec<Subscription> = state
             .subs
             .values()
-            .filter(|s| s.name == name && s.watch_class.is_none() && s.live(Utc::now()))
+            .filter(|s| s.name == name && s.watch_class.is_none() && s.live(now))
             .cloned()
             .collect();
         for mut row in legacy {

@@ -21,10 +21,6 @@
     clippy::disallowed_methods,
     reason = "the one place the wall clock is read"
 )]
-#![cfg_attr(
-    not(test),
-    allow(dead_code, reason = "MIK-8202: call sites migrate later in this PR")
-)]
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -75,11 +71,6 @@ pub(crate) fn unix_secs() -> Result<u64, ClockBeforeEpoch> {
     since_epoch().map(|d| d.as_secs())
 }
 
-/// Milliseconds since the Unix epoch.
-pub(crate) fn unix_millis() -> Result<u64, ClockBeforeEpoch> {
-    since_epoch().map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-}
-
 /// Now as a `SystemTime`, for a site that compares against stored
 /// `SystemTime`s. A clock that cannot be read gives a time before the
 /// epoch, which such a site already refuses (`duration_since(UNIX_EPOCH)`
@@ -96,6 +87,18 @@ pub(crate) fn utc_now() -> Result<DateTime<Utc>, ClockBeforeEpoch> {
     let since = since_epoch()?;
     let secs = i64::try_from(since.as_secs()).map_err(|_| ClockBeforeEpoch)?;
     DateTime::from_timestamp(secs, since.subsec_nanos()).ok_or(ClockBeforeEpoch)
+}
+
+/// Stamp an audit row's `timestamp`. A recorder whose row must not vanish:
+/// on a clock that cannot be read the row is kept undated, with `timestamp`
+/// `null` and `clock_invalid` `true`, the marker the firewall audit uses.
+pub(crate) fn stamp_audit_row(fields: &mut serde_json::Map<String, serde_json::Value>) {
+    if let Ok(now) = utc_now() {
+        fields.insert("timestamp".into(), now.to_rfc3339().into());
+    } else {
+        fields.insert("timestamp".into(), serde_json::Value::Null);
+        fields.insert("clock_invalid".into(), true.into());
+    }
 }
 
 /// An access check: `check` is the site's own comparison against now in
@@ -145,34 +148,6 @@ pub(crate) enum JwtClaimTime {
     At(u64),
 }
 
-impl JwtClaimTime {
-    /// The claim `name` of decoded `claims`.
-    pub(crate) fn of(claims: &serde_json::Value, name: &str) -> Self {
-        match claims.get(name) {
-            None | Some(serde_json::Value::Null) => Self::Absent,
-            // Whole seconds, or a fractional number the decoder also
-            // accepted: its whole part.
-            Some(value) => value
-                .as_u64()
-                .or_else(|| {
-                    value
-                        .as_f64()
-                        .filter(|secs| secs.is_finite() && *secs >= 0.0)
-                        .map(|secs| {
-                            #[allow(
-                                clippy::cast_possible_truncation,
-                                clippy::cast_sign_loss,
-                                reason = "finite and non-negative; a value past u64::MAX saturates, which reads as far future"
-                            )]
-                            let whole = secs.trunc() as u64;
-                            whole
-                        })
-                })
-                .map_or(Self::Malformed, Self::At),
-        }
-    }
-}
-
 /// A test's own clock, for this thread: before the epoch, or a fixed time.
 #[cfg(test)]
 pub(crate) mod test_clock {
@@ -183,10 +158,14 @@ pub(crate) mod test_clock {
 
     thread_local! {
         static FORCED: Cell<Option<Result<Duration, ClockBeforeEpoch>>> = const { Cell::new(None) };
+        static QUEUED: std::cell::RefCell<std::collections::VecDeque<Result<Duration, ClockBeforeEpoch>>> =
+            const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
     }
 
     pub(super) fn forced() -> Option<Result<Duration, ClockBeforeEpoch>> {
-        FORCED.with(Cell::get)
+        QUEUED
+            .with(|queued| queued.borrow_mut().pop_front())
+            .or_else(|| FORCED.with(Cell::get))
     }
 
     /// Restores the real clock when dropped.
@@ -196,12 +175,27 @@ pub(crate) mod test_clock {
     impl Drop for Forced {
         fn drop(&mut self) {
             FORCED.with(|f| f.set(None));
+            QUEUED.with(|queued| queued.borrow_mut().clear());
         }
     }
 
     /// This thread's clock reads before 1970 until the guard drops.
     pub(crate) fn before_epoch() -> Forced {
         FORCED.with(|f| f.set(Some(Err(ClockBeforeEpoch))));
+        Forced(())
+    }
+
+    /// This thread's next clock reads, one each in order: `Some(secs)` reads
+    /// `secs` after the epoch, `None` before 1970. Once they are used up the
+    /// real clock reads again. A clock that fails and recovers inside one
+    /// check is laid out this way.
+    pub(crate) fn queued(reads: &[Option<u64>]) -> Forced {
+        QUEUED.with(|queued| {
+            *queued.borrow_mut() = reads
+                .iter()
+                .map(|read| read.map(Duration::from_secs).ok_or(ClockBeforeEpoch))
+                .collect();
+        });
         Forced(())
     }
 

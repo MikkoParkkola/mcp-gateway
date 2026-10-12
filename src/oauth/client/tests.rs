@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::*;
 
+mod refresh_buffer;
 mod resource_indicator;
 
 // =========================================================================
@@ -121,7 +122,7 @@ fn new_client_has_no_valid_token() {
         vec!["read".to_string()],
         storage,
         OAuthClientConfig {
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -139,7 +140,7 @@ fn client_with_valid_token_returns_true() {
         vec![],
         storage,
         OAuthClientConfig {
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -168,7 +169,7 @@ fn client_with_expired_token_returns_false() {
         vec![],
         storage,
         OAuthClientConfig {
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -197,7 +198,7 @@ fn backend_name_returns_configured_name() {
         vec![],
         storage,
         OAuthClientConfig {
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -221,7 +222,7 @@ fn needs_proactive_refresh_false_when_no_token() {
         vec![],
         storage,
         OAuthClientConfig {
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -243,7 +244,7 @@ fn needs_proactive_refresh_false_when_token_no_expiry() {
         vec![],
         storage,
         OAuthClientConfig {
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -267,7 +268,7 @@ fn needs_proactive_refresh_true_when_within_buffer() {
         vec![],
         storage,
         OAuthClientConfig {
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -298,7 +299,7 @@ fn needs_proactive_refresh_false_when_outside_buffer() {
         vec![],
         storage,
         OAuthClientConfig {
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -329,7 +330,7 @@ fn purge_keeps_configured_static_client_on_invalid_client() {
         OAuthClientConfig {
             client_id: Some("configured-static-id".to_string()),
             client_secret: Some("configured-secret".to_string()),
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -372,7 +373,7 @@ fn purge_keeps_public_configured_client_without_secret_on_invalid_client() {
         OAuthClientConfig {
             client_id: Some("configured-public-id".to_string()),
             client_secret: None,
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -407,7 +408,7 @@ fn purge_clears_dynamically_registered_client_on_invalid_client() {
         Arc::clone(&storage),
         OAuthClientConfig {
             client_secret: None,
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -460,7 +461,7 @@ fn restore_persisted_client_id_tags_loaded_id_as_registered_and_purgeable() {
         Arc::clone(&storage),
         OAuthClientConfig {
             client_secret: None,
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -504,7 +505,7 @@ fn restore_persisted_client_id_never_overwrites_configured_id() {
         OAuthClientConfig {
             client_id: Some("configured-id".to_string()),
             client_secret: None,
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );
@@ -540,7 +541,7 @@ fn purge_is_noop_without_invalid_client_marker() {
         OAuthClientConfig {
             client_id: Some("keep-me".to_string()),
             client_secret: None,
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     );

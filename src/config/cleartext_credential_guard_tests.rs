@@ -31,7 +31,7 @@ fn with_oauth(mut backend: BackendConfig) -> BackendConfig {
         callback_host: None,
         callback_port: None,
         callback_path: None,
-        token_refresh_buffer_secs: 300,
+        token_refresh_buffer_secs: Some(300),
         shared_account: false,
     });
     backend

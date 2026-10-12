@@ -331,6 +331,13 @@ impl Exchange {
     }
 
     async fn send(&mut self) -> Outcome {
+        // One clock reading dates the refreshed token. On a clock that cannot
+        // be read nothing is sent: `NotSent` keeps the stored refresh token and
+        // clears the in-flight marker (MIK-8202).
+        let now = match super::issuance_clock() {
+            Ok(now) => now,
+            Err(error) => return Outcome::NotSent(error),
+        };
         let response = match self
             .http
             .post(&self.endpoint)
@@ -403,13 +410,14 @@ impl Exchange {
             // only reads as not yet seen, which retires rather than resends.
             self.state.keeps = true;
         }
-        let token = (self.finish)(TokenInfo::from_response(
+        let token = (self.finish)(TokenInfo::from_response_at(
             answer.access_token,
             answer.token_type,
             // No new refresh token means keep the one sent (RFC 6749 section 6).
             answer.refresh_token.or_else(|| Some(self.sent.clone())),
             answer.expires_in,
             answer.scope,
+            now,
         ));
         #[cfg(test)]
         {

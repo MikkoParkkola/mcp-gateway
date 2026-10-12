@@ -25,7 +25,8 @@ use crate::transport::Transport;
 pub(crate) enum Answer {
     /// Ordinary success, `isError: false`.
     Ok,
-    /// Like `Ok`, its `tools/list` also naming a second tool, `note`.
+    /// Like `Ok`, its `tools/list` also naming a second tool, `note`, and an
+    /// open-schema backend tool named `gateway_invoke` (MIK-8154 S9f).
     WithNote,
     /// Success envelope, `isError: true` (a tool refusing a request).
     IsError,
@@ -288,6 +289,15 @@ pub(crate) async fn fixture_sanitizing(answer: Answer, on: bool) -> Fx {
     fx
 }
 
+/// Any fixture builder, run with `security.sanitize_input` = `on` (MIK-8154
+/// rows: the firewalled and code-mode fixtures under sanitization).
+pub(crate) async fn sanitizing<T, F: std::future::Future<Output = T>>(on: bool, build: F) -> T {
+    SANITIZE.with(|s| s.set(on));
+    let fx = build.await;
+    SANITIZE.with(|s| s.set(false));
+    fx
+}
+
 /// [`fixture`], for arming that needs the owned builder methods
 /// (`with_profile_registry`, `with_cost_governance`).
 pub(crate) async fn fixture_built(answer: Answer, build: impl FnOnce(MetaMcp) -> MetaMcp) -> Fx {
@@ -382,10 +392,12 @@ pub(crate) use egress::{
     fixture_audited_built_on, fixture_audited_on, fixture_firewalled_built, fixture_firewalled_on,
     fixture_hardened_signed_firewalled, fixture_inspecting_on, meta_firewall,
 };
-pub(crate) use quota::fixture_propagating;
+#[cfg(feature = "firewall")]
+pub(crate) use quota::Minting;
 use quota::{fixture_backend_config, fixture_failsafe, leaked_transparency_log};
 #[cfg(feature = "firewall")]
 pub(crate) use quota::{fixture_firewalled_budget_built, fixture_propagating_budgeted};
+pub(crate) use quota::{fixture_propagating, fixture_propagating_signed};
 pub(crate) use requests::{
     initialize, post_direct, post_meta_invoke, post_meta_invoke_nonce, send, send_with_headers,
 };
@@ -500,6 +512,20 @@ thread_local! {
     /// A transport that replaces the scripted backend (the egress matrix).
     static TRANSPORT: std::cell::RefCell<Option<Arc<dyn Transport>>> =
         const { std::cell::RefCell::new(None) };
+    /// Both backends run `input_schema_enforcement = "off"` (MIK-8353 3a).
+    static SCHEMA_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// [`fixture_hardened_signed_built`] with the input-schema check off on both
+/// backends, so a call never fills a tool list before dispatch.
+pub(crate) async fn fixture_hardened_signed_schema_off(
+    answer: Answer,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    SCHEMA_OFF.with(|s| s.set(true));
+    let fx = fixture_hardened_signed_built(answer, true, build).await;
+    SCHEMA_OFF.with(|s| s.set(false));
+    fx
 }
 
 #[cfg(feature = "firewall")]
@@ -672,5 +698,32 @@ async fn fixture_inner(
         calls,
         seen,
         _store: store,
+    }
+}
+
+/// MIK-8154 F2 rows: a reload of `name` as config reload does it, the old
+/// instance removed and a new one registered with `passthrough`, sending
+/// through the fixture's counting transport. Returned as a hook to run at a
+/// seam.
+pub(crate) fn reload_for_test(
+    fx: &Fx,
+    name: &'static str,
+    passthrough: bool,
+) -> impl FnOnce() + use<> {
+    let (state, calls, seen) = (
+        Arc::clone(&fx.state),
+        Arc::clone(&fx.calls),
+        Arc::clone(&fx.seen),
+    );
+    move || {
+        let backend = Arc::new(Backend::new(
+            name,
+            fixture_backend_config(name, passthrough),
+            &fixture_failsafe(),
+            Duration::from_secs(60),
+        ));
+        backend.set_transport_for_test(backend_transport((&calls, &seen), Answer::Ok));
+        state.backends.remove(name);
+        assert!(state.backends.register(backend), "reload registration");
     }
 }
