@@ -30,11 +30,14 @@
 //! and maximum-body rejection; retry siblings; multiple batch items; the
 //! metadata-ownership table. Row 40 is not done when this file is green.
 //!
-//! Two controls sit under the SAME meter, because a byte counter that is blind
+//! Controls sit under the SAME meter, because a byte counter that is blind
 //! proves nothing by reporting a small number:
 //! * positive — a forced deep clone of the prepared tree must cost at least
 //!   the payload's own size;
-//! * negative — one known-size allocation must be reported at its known size.
+//! * negative — one known-size allocation must be reported at its known size;
+//! * boundary — the large-allocation counters split exactly at
+//!   `alloc_meter::LARGE_BYTES`, reset per scope, and count a reallocation
+//!   grown past it (MIK-8400).
 
 use serde_json::{Value, json};
 
@@ -43,19 +46,22 @@ use super::signing_nonce_allocations_support::{
     Fixture, ONE_MIB, SESSION, THREE_MIB, error_of, invoke, isolate, nested_arguments, runtime,
 };
 
-/// What a refused dispatch may allocate, run as the serve loop runs it
+/// What a refused dispatch may allocate, measured on `dispatch_single_staged`
+/// inside the serve loop's box of it (see [`dispatch_as_served`])
 /// (MIK-8400). Two populations, each with its own cap, split at
 /// `alloc_meter::LARGE_BYTES` (2 KiB):
 ///
 /// - Small allocations are what the refusal itself does (records, strings,
-///   tables): at most [`SMALL_BUDGET`] bytes. A payload-sized copy or new
-///   per-refusal churn breaks it.
+///   tables): at most [`SMALL_BUDGET`] bytes. New per-refusal churn breaks it;
+///   a payload copy breaks one cap or the other, as small pieces or as one
+///   large block.
 /// - Large allocations store dispatch futures: the stdio dispatch boxed inside
 ///   its visibility memo (`Box::pin(Self::dispatch_relay_scoped(..))` in
 ///   `stdio_single.rs`) and the `tools/call` dispatch's own box
 ///   (`Box::pin(Self::dispatch_tools_call(..))` in `stdio_dispatch.rs`, inside
-///   `slot_rpc`), where a missing or replayed nonce is refused after the
-///   policy. The serve loop's own box of the whole dispatch holds only a
+///   `slot_rpc`), inside which a missing, malformed or replayed nonce is
+///   refused at signing admission (`prepare_signing_for_call`), after the
+///   invocation policy and before the route stage. The serve loop's own box of the whole dispatch holds only a
 ///   pointer to the first, so it is small. At most [`LARGE_ALLOCATIONS`] large
 ///   allocations and [`LARGE_BUDGET`] bytes in all: another boxed dispatch or
 ///   a growing dispatch state breaks it. No lint bounds them:
@@ -117,9 +123,13 @@ async fn dispatch(fixture: &Fixture, request: Value) -> Value {
     .expect("a request carrying an id must produce a response")
 }
 
-/// The dispatch as the serve loop runs it (`stdio_loop.rs`):
+/// The dispatch inside the serve loop's own box of it (`stdio_loop.rs`):
 /// `dispatch_single_staged` boxed whole, then its answer settled as
 /// `dispatch_single_for_client` settles it (no frame judge in this fixture).
+/// The loop wraps that box in two more layers this does not run: the
+/// notification-streaming future and the sealed-hold scope's own box. Both
+/// are inert on a refusal (no notification, no hold), but a large allocation
+/// of theirs is outside these readings.
 async fn dispatch_as_served(fixture: &Fixture, request: Value) -> Value {
     let (answer, staged) = Box::pin(super::super::Gateway::dispatch_single_staged(
         &fixture.meta,
@@ -412,4 +422,32 @@ fn the_large_allocation_count_starts_at_its_boundary() {
     );
     assert_eq!(measured.largest, LARGE_BYTES as u64, "{measured}");
     assert_eq!(measured.large_bytes, LARGE_BYTES as u64, "{measured}");
+}
+
+/// MIK-8400 control: each scope starts its large-allocation counters at zero,
+/// and a reallocation that grows a block past `LARGE_BYTES` counts as large,
+/// since the allocator was asked for a block that size.
+#[test]
+fn the_large_allocation_counters_reset_and_see_a_reallocation() {
+    if isolate(&test_path(
+        "the_large_allocation_counters_reset_and_see_a_reallocation",
+    )) {
+        return;
+    }
+    let (first, large) = measure(|| std::hint::black_box(Vec::<u8>::with_capacity(LARGE_BYTES)));
+    let (second, small) = measure(|| std::hint::black_box(Vec::<u8>::with_capacity(16)));
+    assert_eq!((first.capacity(), second.capacity()), (LARGE_BYTES, 16));
+    assert_eq!(large.large, 1, "{large}");
+    assert_eq!(
+        (small.large, small.large_bytes),
+        (0, 0),
+        "a scope kept the last one's: {small}"
+    );
+    let mut grown = Vec::<u8>::with_capacity(16);
+    let ((), regrown) = measure(|| grown.reserve_exact(LARGE_BYTES));
+    assert!(grown.capacity() >= LARGE_BYTES);
+    assert_eq!(
+        regrown.large, 1,
+        "a reallocation past the boundary was not counted: {regrown}"
+    );
 }

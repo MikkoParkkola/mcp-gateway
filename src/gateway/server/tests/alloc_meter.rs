@@ -4,7 +4,8 @@
 //! thread while a scope is open.
 //!
 //! Why a global allocator and not a proxy: the claim under test is "a refused
-//! dispatch allocates under 16 KiB". Retained heap, bytes hashed, or a counter
+//! dispatch allocates within its caps" (MIK-8400: small allocations and
+//! large ones apart). Retained heap, bytes hashed, or a counter
 //! wrapped around one suspected call site would all answer a different
 //! question. Only `GlobalAlloc` sees what the dispatch actually asks the
 //! allocator for, including the allocations nobody wrote down.
@@ -50,8 +51,9 @@ static METERED_SYSTEM: MeteredSystem = MeteredSystem;
 
 pub(super) struct MeteredSystem;
 
-/// An allocation this size or larger is counted in [`Measured::large`]: a
-/// copy of a dispatch's state machine, not a string or a small table.
+/// An allocation this size or larger is counted in [`Measured::large`]. On a
+/// refused dispatch the only ones today are boxed dispatch futures; any
+/// allocation this large counts, a long string included.
 pub(crate) const LARGE_BYTES: usize = 2 * 1024;
 
 /// Nothing below allocates, so recording cannot re-enter the allocator.
