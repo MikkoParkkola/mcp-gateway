@@ -373,12 +373,41 @@ mod fixture {
 
     /// POST `body` to `uri` and return the status and parsed body.
     pub async fn post(state: &Arc<AppState>, uri: &str, body: Value) -> (StatusCode, Value) {
-        let request = Request::builder()
+        send(state, uri, body, None).await
+    }
+
+    /// [`post`] as a verified caller: a keyed direct call needs an execution
+    /// principal (MIK-8154 ANON.1).
+    pub async fn post_verified(
+        state: &Arc<AppState>,
+        uri: &str,
+        body: Value,
+    ) -> (StatusCode, Value) {
+        let who = mcp_gateway::key_server::oidc::VerifiedIdentity {
+            subject: "p6".to_string(),
+            email: "p6@id.local".to_string(),
+            name: None,
+            groups: Vec::new(),
+            issuer: "https://issuer.example".to_string(),
+        };
+        send(state, uri, body, Some(who)).await
+    }
+
+    async fn send(
+        state: &Arc<AppState>,
+        uri: &str,
+        body: Value,
+        identity: Option<mcp_gateway::key_server::oidc::VerifiedIdentity>,
+    ) -> (StatusCode, Value) {
+        let mut request = Request::builder()
             .method("POST")
             .uri(uri)
             .header("content-type", "application/json")
             .body(Body::from(serde_json::to_vec(&body).expect("body")))
             .expect("request");
+        if let Some(identity) = identity {
+            request.extensions_mut().insert(identity);
+        }
         let response = create_router(Arc::clone(state))
             .oneshot(request)
             .await
@@ -456,8 +485,9 @@ mod routes {
         let (state, _dir) = fixture::state(false).await;
         register(&state, &url, false);
 
-        let (first_status, first) = fixture::post(&state, &direct(), tool_call(1, Some("k"))).await;
-        let (status, replay) = fixture::post(&state, &direct(), tool_call(2, Some("k"))).await;
+        let post = fixture::post_verified;
+        let (first_status, first) = post(&state, &direct(), tool_call(1, Some("k"))).await;
+        let (status, replay) = post(&state, &direct(), tool_call(2, Some("k"))).await;
 
         assert_eq!(
             calls.load(Ordering::SeqCst),

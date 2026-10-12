@@ -58,6 +58,9 @@ pub(crate) struct Runtime {
     pub expiry_seen: Mutex<ExpirySeen>,
     dropped: AtomicU64,
     projection_failed: AtomicU64,
+    /// Occurrences dropped because the host clock could not date them
+    /// (before 1970), apart from queue-capacity drops (MIK-8202).
+    clock_drops: AtomicU64,
 }
 
 impl Runtime {
@@ -75,13 +78,17 @@ impl Runtime {
             backends: std::sync::OnceLock::new(),
             reconciled: AtomicBool::new(false),
             expiry_seen: Mutex::new(ExpirySeen {
-                at: chrono::Utc::now(),
+                // A constant, not a reading, when the clock cannot be read
+                // (before 1970): the first readable tick scans every deadline
+                // up to then, as `generation: u64::MAX` already forces.
+                at: crate::clock::utc_now().unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC),
                 next: None,
                 removals: 0,
                 generation: u64::MAX,
             }),
             dropped: AtomicU64::new(0),
             projection_failed: AtomicU64::new(0),
+            clock_drops: AtomicU64::new(0),
         }
     }
 
@@ -89,6 +96,23 @@ impl Runtime {
     pub(crate) fn count_drop(&self) {
         let total = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
         tracing::warn!(dropped_total = total, "events: occurrence dropped");
+    }
+
+    /// An occurrence the host clock could not date (before 1970) was dropped.
+    /// Counted apart from queue drops, so a broken clock is not read as load.
+    pub(crate) fn count_clock_drop(&self) {
+        let total = self.clock_drops.fetch_add(1, Ordering::Relaxed) + 1;
+        tracing::warn!(
+            clock_drops_total = total,
+            clock_unreadable = true,
+            "events: occurrence dropped; the host clock reads before 1970"
+        );
+    }
+
+    /// Occurrences dropped so far for a clock that could not date them.
+    #[cfg(test)]
+    pub(crate) fn clock_drops(&self) -> u64 {
+        self.clock_drops.load(Ordering::Relaxed)
     }
 
     /// An inbound POST projected to no field.
@@ -104,6 +128,26 @@ impl EventsHub {
         if self.runtime.queue.try_send(event).is_err() {
             self.runtime.count_drop();
         }
+    }
+
+    /// Queue an occurrence dated by one read of the clock. On a clock that
+    /// cannot be read (before 1970) nothing is queued and a clock drop is
+    /// counted: an occurrence is never dated 1969, and delivery is idle on
+    /// such a clock anyway (MIK-8202).
+    pub(crate) fn emit_dated(
+        &self,
+        build: impl FnOnce(chrono::DateTime<chrono::Utc>) -> SourceEvent,
+    ) {
+        match crate::clock::utc_now() {
+            Ok(occurred_at) => self.emit(build(occurred_at)),
+            Err(_) => self.runtime.count_clock_drop(),
+        }
+    }
+
+    /// An occurrence this hub could not date was dropped (see
+    /// [`Runtime::count_clock_drop`]).
+    pub(crate) fn count_clock_drop(&self) {
+        self.runtime.count_clock_drop();
     }
 
     /// Start fan-out, the worker and the dead-letter sweep. Called once

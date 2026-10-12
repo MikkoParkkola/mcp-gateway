@@ -303,6 +303,10 @@ pub struct HttpTransport {
     /// fail-safe direction -- the counter can only ever cost a retry, never
     /// license one.
     redirects_followed: Arc<AtomicU64>,
+    /// The last failed send's error chain and kind flags, kept so a test that
+    /// fails on the sanitized message can print the real cause (MIK-8359).
+    #[cfg(test)]
+    last_send_error: parking_lot::Mutex<Option<String>>,
     /// Connected flag
     connected: AtomicBool,
     /// Request timeout (used in client builder)
@@ -459,6 +463,8 @@ impl HttpTransport {
             reinit_needed: AtomicBool::new(false),
             reinit_lock: TokioMutex::new(()),
             redirects_followed,
+            #[cfg(test)]
+            last_send_error: parking_lot::Mutex::new(None),
             connected: AtomicBool::new(false),
             timeout,
             streamable_http: RwLock::new(streamable_http),

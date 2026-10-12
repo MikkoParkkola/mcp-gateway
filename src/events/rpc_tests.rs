@@ -73,7 +73,13 @@ impl crate::events::EventSource for Plain {
     fn descriptors(&self) -> Vec<crate::events::types::EventDescriptor> {
         Vec::new()
     }
-    fn matches(&self, _: &str, _: &Value, _: &crate::events::fanout::SourceEvent) -> bool {
+    fn matches(
+        &self,
+        _: &str,
+        _: &Value,
+        _: &crate::events::fanout::SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
         true
     }
 }
@@ -83,10 +89,22 @@ impl crate::events::EventSource for Plain {
 #[test]
 fn default_lifecycle_keys_keep_integers_past_2_pow_53() {
     use crate::events::EventSource as _;
-    let key = |n: u64| Plain.lifecycle_key("p", "e", &json!({ "n": n }));
+    let key = |n: u64| {
+        Plain.lifecycle_key(
+            "p",
+            "e",
+            &json!({ "n": n }),
+            crate::clock::utc_now().expect("clock"),
+        )
+    };
     assert_ne!(key(9_007_199_254_740_993), key(9_007_199_254_740_992));
     assert_eq!(
-        Plain.lifecycle_key("p", "e", &json!({"b": 1, "a": 1.0})),
+        Plain.lifecycle_key(
+            "p",
+            "e",
+            &json!({"b": 1, "a": 1.0}),
+            crate::clock::utc_now().expect("clock")
+        ),
         r#"["e",{"a":1,"b":1}]"#
     );
 }
@@ -372,7 +390,13 @@ async fn the_commit_admits_no_silent_start_after_its_check() {
     let (hub, _events, _dir) = t16_hub().await;
     let mut started = std::collections::HashSet::new();
     let refused = hub
-        .start_key(&mut started, "p", "backend.s.resources_changed", &json!({}))
+        .start_key(
+            &mut started,
+            "p",
+            "backend.s.resources_changed",
+            &json!({}),
+            crate::clock::utc_now().expect("clock"),
+        )
         .await;
     assert_eq!(
         refused.err().map(|e| e.code),

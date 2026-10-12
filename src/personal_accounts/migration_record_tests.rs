@@ -34,6 +34,7 @@ fn legacy(access_token: &str) -> TokenInfo {
         token_endpoint: None,
         client_id: None,
         client_secret: None,
+        lifetime_secs: None,
     }
 }
 

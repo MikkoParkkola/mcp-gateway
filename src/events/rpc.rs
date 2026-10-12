@@ -538,7 +538,9 @@ impl EventsHub {
                     // A refresh may have reactivated a suspended row.
                     self.runtime.wake.notify_one();
                     let throttled = self.runtime.rates.empty(&id, std::time::Instant::now())
-                        && self.store.has_due(&id, Utc::now());
+                        // The subscribe's own read: an earlier `now` can
+                        // only under-report a due record (MIK-8202).
+                        && self.store.has_due(&id, now);
                     let answer = subscribe_answer(&id, expires_at, existing.as_ref(), throttled);
                     return Ok(self.held_answer(answer, &id));
                 }
@@ -572,6 +574,7 @@ impl EventsHub {
                 &record.principal,
                 &record.name,
                 &record.arguments,
+                now,
             )
             .await?;
         let hub = Arc::clone(self);
@@ -714,8 +717,10 @@ impl EventsHub {
         let id = subscription_id(&principal, url.as_str(), name, &arguments);
         let tail = super::tail_policy(&self.config);
         let removed = id.clone();
-        let was_there =
-            blocking(self, move |store| store.remove(&removed, Utc::now(), tail)).await?;
+        let was_there = blocking(self, move |store| {
+            store.remove(&removed, crate::clock::utc_now(), tail)
+        })
+        .await?;
         self.govern(
             &Lifecycle {
                 action: "events.unsubscribe",

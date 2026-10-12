@@ -318,28 +318,32 @@ async fn the_watch_host_admits_only_a_live_granted_key() {
         },
     };
     let live = |name: &str| holder(name, crate::gateway::auth::principal_of(name));
+    let now = crate::clock::utc_now().expect("a readable clock");
     let fx = fixture(Answer::Ok, |_| {}).await;
     let host = GatewayWatchHost::new(&fx.state);
     assert!(
-        host.may_invoke(&live("k-std"), &target),
+        host.may_invoke(&live("k-std"), &target, now),
         "a live granted key"
     );
     assert!(
-        !host.may_invoke(&live("k-deny"), &target),
+        !host.may_invoke(&live("k-deny"), &target, now),
         "a key denied `read`"
     );
     assert!(
-        !host.may_invoke(&holder("k-std", "000000000000".into()), &target),
+        !host.may_invoke(&holder("k-std", "000000000000".into()), &target, now),
         "the key's name under another digest (re-issued)"
     );
-    assert!(!host.may_invoke(&live("k-gone"), &target), "an unknown key");
+    assert!(
+        !host.may_invoke(&live("k-gone"), &target, now),
+        "an unknown key"
+    );
     let (state, _store) = super::super::tests::test_router_app_state().await;
     let gone = GatewayWatchHost::new(&state);
     let owner = Arc::downgrade(&state);
     drop(state);
     assert!(owner.upgrade().is_none(), "nothing else owns the state");
     assert!(
-        !gone.may_invoke(&live("k-std"), &target),
+        !gone.may_invoke(&live("k-std"), &target, now),
         "the gateway is gone"
     );
 }

@@ -269,8 +269,15 @@ impl Store {
     }
 
     /// Open (creating) the store at `root`, sweeping expired subscriptions
-    /// and trimming the verification tail.
-    pub(crate) fn open(root: &Path, now: DateTime<Utc>, tail: TailPolicy) -> std::io::Result<Self> {
+    /// and trimming the verification tail. On a clock that cannot be read
+    /// (before 1970) every row is kept as stored: no sweep, no trim, and a
+    /// recovered in-flight record keeps its own date (MIK-8202).
+    pub(crate) fn open(
+        root: &Path,
+        now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
+        tail: TailPolicy,
+    ) -> std::io::Result<Self> {
+        let now = now.ok();
         let subs_dir = root.join("subs");
         let verified_dir = root.join("verified");
         let outbox_dir = root.join("outbox");
@@ -311,7 +318,7 @@ impl Store {
             #[cfg(test)]
             fail_next_dead_sync: std::sync::atomic::AtomicBool::new(false),
         };
-        {
+        if let Some(now) = now {
             let mut state = store.state.lock();
             store.sweep(&mut state, now)?;
             store.trim_tails(&mut state, now, tail)?;
@@ -629,7 +636,7 @@ impl Store {
     pub(crate) fn remove(
         &self,
         id: &str,
-        now: DateTime<Utc>,
+        now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
         tail: TailPolicy,
     ) -> std::io::Result<bool> {
         self.remove_where(id, now, tail, |_| true)
@@ -638,17 +645,28 @@ impl Store {
     /// Delete subscription `id` when `still` holds for the stored row under
     /// the store lock: a revocation decided on an earlier snapshot never
     /// deletes a row a concurrent refresh has re-bound to another credential.
+    ///
+    /// On a clock that cannot be read (before 1970, MIK-8202) the commanded
+    /// removal still happens, with its pending deliveries cancelled; only
+    /// the dated work is skipped: no sweep, no trim, and no tail stamp, so
+    /// the tail dates from the pair's latest expiry or its opt-in, which is
+    /// earlier and so fails closed.
     pub(crate) fn remove_where(
         &self,
         id: &str,
-        now: DateTime<Utc>,
+        now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
         tail: TailPolicy,
         still: impl FnOnce(&Subscription) -> bool,
     ) -> std::io::Result<bool> {
+        let now = now.ok();
         let mut state = self.state.lock();
-        self.sweep(&mut state, now)?;
+        if let Some(now) = now {
+            self.sweep(&mut state, now)?;
+        }
         let Some(sub) = state.subs.get(id).cloned().filter(|s| still(s)) else {
-            self.trim_tails(&mut state, now, tail)?;
+            if let Some(now) = now {
+                self.trim_tails(&mut state, now, tail)?;
+            }
             return Ok(false);
         };
         // Cancelled in the same hold of the lock: no attempt can start for
@@ -658,6 +676,9 @@ impl Store {
         state.drop_row(id);
         // An expired row kept for its burials keeps the expiry stamp the
         // sweep gave its pair: removing it never restarts the tail (MIK-8061).
+        let Some(now) = now else {
+            return Ok(true);
+        };
         if sub.live(now) && !state.pair_live(&sub.principal, &sub.url, now) {
             let key = verified_file(&sub.principal, &sub.url);
             if let Some(mut record) = state.verified.get(&key).cloned() {

@@ -20,6 +20,27 @@ impl Backend {
             .contains(tool)
     }
 
+    /// An accepted fill's own derived state: its resend and read-only sets,
+    /// and its descriptor verdicts. Written only from the store callback, so
+    /// a fill voided by a mid-fill invalidation writes none of it (F13,
+    /// #1441, MIK-8393).
+    pub(super) fn store_prepared(
+        &self,
+        entry: &crate::backend::pool::PooledEntry,
+        identity_key: Option<&str>,
+        truncated: bool,
+        prepared: crate::backend::annotations::PreparedTools,
+    ) {
+        *entry.resend_permitted.write() = prepared.resend_permitted;
+        *entry.read_only_declared.write() = prepared.read_only_declared;
+        let listing = if truncated {
+            crate::backend::Listing::Truncated
+        } else {
+            crate::backend::Listing::Complete
+        };
+        self.commit_verdicts(identity_key.unwrap_or(""), listing, prepared.verdicts);
+    }
+
     /// Seed the shared slot's read-only set, for fixtures whose subject is the
     /// cache's keying rather than how a declaration is read.
     #[cfg(test)]

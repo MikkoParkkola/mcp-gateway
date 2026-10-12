@@ -18,7 +18,7 @@ fn resource_test_client(resource_url: &str) -> OAuthClient {
         vec!["openid".to_string()],
         storage,
         OAuthClientConfig {
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     )
@@ -132,7 +132,7 @@ fn secret_client(resource_url: &str, secret: &str) -> OAuthClient {
         storage,
         OAuthClientConfig {
             client_secret: Some(secret.to_string()),
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
     )

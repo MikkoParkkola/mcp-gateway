@@ -224,6 +224,9 @@ backends:
       Authorization: "Bearer ${RT_TOKEN}"
 ```
 
+The gateway refuses a config file other users can read, because it can hold
+credentials, so make a hand-written one yours alone: `chmod 600 gateway.yaml`.
+
 ### Run and verify
 
 ```bash

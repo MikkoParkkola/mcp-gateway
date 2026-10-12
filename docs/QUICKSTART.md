@@ -23,6 +23,7 @@ The wizard scans Claude Desktop, Claude Code, Cursor, Windsurf, Zed, Continue.de
 ### Prerequisites
 
 - **Rust toolchain** (1.95+): [rustup.rs](https://rustup.rs), or use Homebrew
+- **Node.js with `npx`**, for the manual config's example backend. Its first start downloads the package, so it needs network access once.
 
 ### 1. Install
 
@@ -60,19 +61,29 @@ DASHBOARD (opens once, then remembered in this browser):
 
 Or create the config manually:
 
+<!-- quickstart-minimal-config -->
 ```yaml
 server:
   port: 39400
 
-meta_mcp:
-  enabled: true
+backends:
+  everything:
+    command: "npx -y @modelcontextprotocol/server-everything"
 
 capabilities:
-  enabled: true
   directories:
     - ./capabilities
+```
+<!-- /quickstart-minimal-config -->
 
-backends: {}
+`everything` is the MCP reference server; replace it with any server you already
+run. The capability directory may stay empty until step 3.
+
+The gateway refuses a config file other users can read, because it can hold
+credentials, so make it yours alone:
+
+```bash
+chmod 600 gateway.yaml
 ```
 
 ### 3. Add Capabilities

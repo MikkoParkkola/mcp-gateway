@@ -73,6 +73,14 @@ impl Backend {
             .is_fresh(self.cache_ttl)
     }
 
+    /// How many list fills on this backend have passed admission (any slot,
+    /// any caller). A change across a check means a fill may have started or
+    /// contacted the backend meanwhile, possibly another caller's: read as an
+    /// effect, that errs toward keeping a nonce spent.
+    pub(crate) fn list_fills(&self) -> u64 {
+        self.list_fills.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// The shared slot's freshness. Used by readers that hold no caller.
     #[must_use]
     pub fn has_cached_tools(&self) -> bool {
@@ -332,7 +340,8 @@ impl Backend {
                                 LIST_FILL_COOLDOWN.as_secs()
                             )));
                         }
-                        admit_fill(&entry, &self.name, bound, family.cooldown)?;
+                        let counted = (self.name.as_str(), &self.list_fills);
+                        admit_fill(&entry, counted, bound, family.cooldown)?;
                         let mut guard = family.cooldown.then(|| FillGuard::arm(Arc::clone(&entry)));
                         let drained = run_bounded(&entry, &self.name, bound, async {
                             // A cold fill on the dispatch path has sent no tools/call
@@ -396,18 +405,7 @@ impl Backend {
                     // Only this accepted store's own set and verdicts (F13,
                     // #1441).
                     if let Some(prepared) = prepared {
-                        *entry.resend_permitted.write() = prepared.resend_permitted;
-                        *entry.read_only_declared.write() = prepared.read_only_declared;
-                        let listing = if truncated {
-                            super::descriptor_gate::Listing::Truncated
-                        } else {
-                            super::descriptor_gate::Listing::Complete
-                        };
-                        self.commit_verdicts(
-                            identity_key.unwrap_or(""),
-                            listing,
-                            prepared.verdicts,
-                        );
+                        self.store_prepared(&entry, identity_key, truncated, prepared);
                     }
                     // The only place a guard reaches `Stored`: a voided store
                     // drops it unrun, still `Drained`, and so stamps (F13).

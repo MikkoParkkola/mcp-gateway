@@ -685,7 +685,8 @@ WantedBy=multi-user.target
 sudo useradd -r -s /usr/sbin/nologin mcp-gateway
 sudo cp target/release/mcp-gateway /usr/local/bin/
 sudo mkdir -p /etc/mcp-gateway
-sudo cp gateway.yaml /etc/mcp-gateway/
+# Owner-only: the gateway refuses a config other users can read.
+sudo install -m 600 gateway.yaml /etc/mcp-gateway/gateway.yaml
 sudo chown -R mcp-gateway:mcp-gateway /etc/mcp-gateway
 sudo systemctl daemon-reload
 sudo systemctl enable --now mcp-gateway
