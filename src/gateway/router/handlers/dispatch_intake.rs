@@ -396,6 +396,12 @@ pub(super) async fn intake(
             api_key_name: client.as_ref().map(|c| c.name.as_str()),
             agent_id: agent_identity.proven_agent_id(),
             grant_subject: grant_subject.as_ref(),
+            caller: crate::identity_propagation::CallerProof::new(
+                verified_identity.as_ref(),
+                crate::identity_propagation::CallerProvenance::classify(
+                    client.as_ref().map(|client| client.principal.as_str()),
+                ),
+            ),
         };
         let view = crate::gateway::meta_mcp::visible::TargetView::Caller(scope, Some(&session_id));
         super::super::sanitize_exempt(&state.meta_mcp, &request, view)

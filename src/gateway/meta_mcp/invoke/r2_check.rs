@@ -60,7 +60,11 @@ impl MetaMcp {
         };
         let text = backend
             .undeclared_key_refusal(identity_key, headers, tool, arguments)
-            .await?;
+            .await;
+        // An F13 fill stores this caller's catalogue: index its slot
+        // (MIK-8356 R3.5). A slot left unfilled is not recorded.
+        self.remember_caller_slot(backend, scope.caller, identity_key);
+        let text = text?;
         // F13 text A (the backend's complete list lacks the tool) is a miss.
         // It keeps the design's exact wording on both routes; on this route
         // only, the profile-scoped "did you mean?" hint the miss after
@@ -80,6 +84,27 @@ impl MetaMcp {
         });
         Ok(text
             .map(|text| json!({ "content": [{ "type": "text", "text": text }], "isError": true })))
+    }
+
+    /// The answer to a tool the caller's own per-user catalogue withholds or
+    /// lacks (MIK-8356): an unknown name, -32601, with the "did you mean?"
+    /// hint drawn from this caller's own catalogue alone. The pool excludes
+    /// the called name in both cases, so a withheld and a lacked name get
+    /// byte-identical answers.
+    pub(super) fn absent_on_slot(
+        &self,
+        (server, backend): (&str, &crate::backend::Backend),
+        tool: &str,
+        binding: Option<&str>,
+        (scope, session_id): (super::super::InvokeScope<'_>, Option<&str>),
+    ) -> Error {
+        let names = backend.get_cached_tool_names_for(binding);
+        let tools = backend.get_cached_tools_snapshot_for(binding);
+        let candidates = self.miss_hint_pool((&names, &tools), server, (scope, session_id));
+        match did_you_mean(tool, &candidates, 3, 3) {
+            Some(hint) => Error::json_rpc(-32601, format!("Unknown tool: {tool}. {hint}")),
+            None => super::super::visible::absent_name(tool),
+        }
     }
 
     /// The "did you mean?" pool for a miss on `server`: the `names` from this

@@ -84,6 +84,7 @@ impl Backend {
                 );
                 pool
             },
+            caller_slots: DashMap::new(),
             failsafe_config: failsafe_config.clone(),
             #[cfg(test)]
             after_reprobe_lookup: crate::test_pause::Slot::default(),

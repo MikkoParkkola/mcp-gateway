@@ -119,6 +119,28 @@ pub(crate) fn meta_response_targets(
     targets
 }
 
+/// `targets` once this request's caller verdicts are taken (MIK-8356 fold
+/// kimi F2): a target the request's memo records as withheld is dropped, so a
+/// name answered as absent is attributed exactly as an absent name is (the
+/// gateway's own target when none is left). The memo is fixed for the
+/// request, so live backend state still cannot move the attribution.
+pub(crate) fn without_withheld(
+    external_tool: &str,
+    mut targets: Vec<ResponsePolicyTarget>,
+) -> Vec<ResponsePolicyTarget> {
+    let before = targets.len();
+    targets.retain(|target| {
+        !matches!(
+            super::visible::recorded_visibility(&target.server, &target.tool),
+            Some(super::visible::Visibility::Withheld(_))
+        )
+    });
+    if targets.is_empty() && before > 0 {
+        return meta_response_targets(external_tool, &[]);
+    }
+    targets
+}
+
 pub(crate) use crate::protocol::{ChainSource, UpstreamState};
 
 /// Server-owned delivery metadata supplied after wrapping and protocol shaping.

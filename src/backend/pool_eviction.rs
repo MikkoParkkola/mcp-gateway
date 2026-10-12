@@ -67,6 +67,7 @@ impl Backend {
                 // either way, which is what this call is for.
                 continue;
             };
+            self.forget_caller_slot(&entry);
             evicted += 1;
 
             let idle_transport = {
@@ -119,6 +120,12 @@ impl Backend {
         self.pool.get(key).is_some()
     }
 
+    /// How many slots the pool holds, of any key (MIK-8356 I7).
+    #[cfg(test)]
+    pub(crate) fn pool_len_for_test(&self) -> usize {
+        self.pool.len()
+    }
+
     /// Close an evicted transport off the caller's path (#2245), capped in
     /// count and counted when abandoned (#2300, `IdentitySlots::spawn_close`).
     /// `stop` drains the task with the replaced-transport cleanups.
@@ -167,6 +174,7 @@ impl Backend {
                 idle && retire(entry)
             });
             if let Some((_, entry)) = removed {
+                self.forget_caller_slot(&entry);
                 let transport = entry.transport.write().take();
                 if let Some(transport) = transport {
                     self.close_evicted(&mut cleanups, transport);

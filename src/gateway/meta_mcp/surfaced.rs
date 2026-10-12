@@ -163,7 +163,15 @@ impl MetaMcp {
 
         // List = invoke (A3), one predicate for every listing (MIK-8340): a
         // tool withheld from this caller is not shown.
-        if !self.shows_name(&surfaced.server, &surfaced.tool, scope, session_id) {
+        // MIK-8356: judged by the caller's own slot on a per-user backend; a
+        // cold caller keeps today's shared view (SLOTVIS.6's stated residual).
+        if !self.listing_names(
+            &surfaced.server,
+            &surfaced.tool,
+            scope,
+            session_id,
+            super::listing_view::ColdRule::SharedView,
+        ) {
             return None;
         }
 
@@ -179,7 +187,7 @@ impl MetaMcp {
                 );
                 return None;
             }
-            let tool = backend.get_cached_tool(&surfaced.tool);
+            let tool = self.listing_tool(&backend, &surfaced.tool, scope);
             if tool.is_none() {
                 debug!(
                     server = %surfaced.server,
@@ -255,17 +263,25 @@ impl MetaMcp {
                 continue;
             }
             let hidden = self.has_no_view_for(&b, proof).await;
+            // A per-user backend whose slot is cold for this caller has no
+            // count it could vouch for: unenumerated, as a hidden one is.
+            let mut cold = false;
             let admitted = if hidden {
                 0
             } else {
                 // Filled behind this read, as discovery does (MIK-7962);
                 // `tools_known` reports the cold slot meanwhile.
                 self.refresh_shared_behind_read(&b);
-                b.get_cached_tools_snapshot()
-                    .iter()
-                    .filter(|t| self.shows_tool(&b.name, t, scope, session_id))
-                    .count()
+                let view = self.listing_snapshot(&b, scope);
+                cold = view.is_none();
+                view.map_or(0, |(tools, _)| {
+                    tools
+                        .iter()
+                        .filter(|t| self.shows_tool(&b.name, t, scope, session_id))
+                        .count()
+                })
             };
+            let known = !hidden && !cold && self.listing_known(&b, scope);
             let status = b.status();
             let killed = self.kill_switch.is_killed(&status.name);
             let mut entry = json!({
@@ -274,7 +290,7 @@ impl MetaMcp {
                 "transport": status.transport,
                 "tools_count": admitted,
                 // Consult this before reading tools_count == 0 as "empty".
-                "tools_known": status.tools_known && !hidden,
+                "tools_known": known,
                 "circuit_breaker": status.circuit_state,
                 "status": if killed { "disabled" } else { "active" }
             });

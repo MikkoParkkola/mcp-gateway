@@ -303,3 +303,41 @@ async fn a_resume_mints_nothing_for_a_substituted_chain_or_a_refused_caller() {
     assert!(resumed.get("error").is_none(), "{resumed}");
     resumed_the_pending_step(&stub, &resumed);
 }
+
+/// C13 (MIK-8356 g3): resuming a chain that stopped to ask a question resolves
+/// each step it runs once, across the resume fingerprint and the step's
+/// invocation. The chain is `[srv:ask, srv:after]`: the first request runs
+/// `ask` and costs one; the resume runs `ask` again and then `after`, so it
+/// costs two (one per step, C11b). Before the carry it cost three: the
+/// fingerprint and `ask`'s invocation each resolved.
+#[tokio::test]
+async fn g3_c13_resume_fingerprint_reuses_carried_dispatch() {
+    use std::sync::atomic::Ordering;
+
+    let stub = Arc::new(AsksOnce::default());
+    let (meta, mints) = propagating_meta_over(Arc::clone(&stub));
+    let (who, caps) = (identity(), elicitation_caps());
+    let no_retry = &crate::protocol::mrtr::NO_RETRY;
+    let before = mints.load(Ordering::SeqCst);
+    let stop = run(&meta, 1, ctx(Some(&who), None, &caps, no_retry)).await;
+    assert_eq!(
+        mints.load(Ordering::SeqCst),
+        before + 1,
+        "C13: the first request resolved more than once: {stop}"
+    );
+    let retry = answers(&handle_in(&stop));
+    let baseline = mints.load(Ordering::SeqCst);
+    let resumed = run(&meta, 2, ctx(Some(&who), None, &caps, &retry)).await;
+    assert!(resumed.get("error").is_none(), "premise: {resumed}");
+    resumed_the_pending_step(&stub, &resumed);
+    assert_eq!(
+        stub.ran(),
+        vec!["ask", "ask", "after"],
+        "premise: the resume runs the pending step and the one after it"
+    );
+    assert_eq!(
+        mints.load(Ordering::SeqCst),
+        baseline + 2,
+        "C13: the resume resolved the credential separately for the fingerprint and the invocation"
+    );
+}

@@ -223,15 +223,65 @@ impl MetaMcp {
         // F13: a cold slot is listed first, as this caller; the slot's
         // failsafe refusing that list answers as a refused dispatch does.
         let checked_at = std::time::Instant::now();
-        let refusal = self.undeclared_key_refusal(
-            (server, backend),
-            tool,
-            arguments,
-            dispatch_binding,
-            &caller_credential.headers,
-            (caller.scope(), session_id),
-        );
-        let refusal = match refusal.await {
+        // MIK-8356: on a per-user backend the caller's own catalogue decides
+        // first, whatever the argument-key mode, with this call's resolution
+        // (no second mint). A name it withholds or lacks answers as absent; a
+        // failed fill is answered below exactly as F13's failed fill is, with
+        // no second fill.
+        let mut failed_fill = None;
+        if let Some(backend) = backend.filter(|backend| backend.keeps_per_user_catalogues()) {
+            let absent = match crate::gateway::meta_mcp::visible::recorded_visibility(server, tool)
+            {
+                Some(crate::gateway::meta_mcp::visible::Visibility::Visible) => false,
+                Some(crate::gateway::meta_mcp::visible::Visibility::Withheld(_)) => true,
+                None => {
+                    let proof = crate::identity_propagation::CallerProof::new(
+                        verified_identity,
+                        caller.provenance(),
+                    );
+                    let judged = self.judge_caller_slot(
+                        (server, tool),
+                        backend,
+                        dispatch_binding,
+                        &caller_credential.headers,
+                        proof,
+                    );
+                    match judged.await {
+                        Ok(judged) => judged == super::caller_verdict::SlotJudgement::Absent,
+                        Err(e) => {
+                            failed_fill = Some(e);
+                            false
+                        }
+                    }
+                }
+            };
+            if absent {
+                if let Some(reservation) = idem_reservation.as_mut() {
+                    reservation.release();
+                }
+                return Err(self.absent_on_slot(
+                    (server, backend),
+                    tool,
+                    dispatch_binding,
+                    (caller.scope(), session_id),
+                ));
+            }
+        }
+        let refusal = match failed_fill {
+            Some(e) => Err(e),
+            None => {
+                self.undeclared_key_refusal(
+                    (server, backend),
+                    tool,
+                    arguments,
+                    dispatch_binding,
+                    &caller_credential.headers,
+                    (caller.scope(), session_id),
+                )
+                .await
+            }
+        };
+        let refusal = match refusal {
             Ok(refusal) => refusal,
             Err(e) => {
                 let managed = caller_credential.managed.as_ref();

@@ -49,6 +49,8 @@ mod stdio_response_firewall;
 mod stdio_initialize_order;
 #[cfg(feature = "firewall")]
 mod stdio_tenant_reads;
+/// MIK-8044.SURF.2: a gateway.yaml `protocol_version` reaches the HTTP transport.
+mod surf2_protocol_version_config;
 
 mod stdio_hardened_signing;
 
@@ -120,3 +122,6 @@ mod stdio_reader_unparked;
 /// MIK-8340: a withheld surfaced name answers on stdio as an absent one.
 #[cfg(feature = "firewall")]
 mod withheld_parity_stdio;
+
+// MIK-8356 C3, C10: a stdio call judged by the sole operator's own slot.
+mod slot_verdict_g2_stdio;

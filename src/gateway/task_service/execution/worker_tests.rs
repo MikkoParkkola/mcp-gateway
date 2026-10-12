@@ -138,8 +138,9 @@ impl Fixture {
             .expect("the row moves on at the revision read");
     }
 
-    /// Fail every store write from now on, counting the attempts.
-    async fn fail_writes(&self) -> Arc<AtomicUsize> {
+    /// Fail every store write from now on, counting the attempts. Shared with
+    /// the P4a loss-arm rows (MIK-8202), which fail a settle's dated commit.
+    pub(super) async fn fail_writes(&self) -> Arc<AtomicUsize> {
         let attempts = Arc::new(AtomicUsize::new(0));
         let seen = Arc::clone(&attempts);
         self.service

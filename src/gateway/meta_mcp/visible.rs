@@ -23,6 +23,9 @@ pub(crate) enum Withholding {
     Schema,
     /// Its description failed the tool-poisoning check.
     Descriptor,
+    /// The caller's own complete catalogue on a per-user backend does not
+    /// list it (MIK-8356).
+    Lacked,
 }
 
 /// Whether a caller may be shown a tool.
@@ -99,16 +102,24 @@ impl MetaMcp {
         session_id: Option<&str>,
     ) -> Visibility {
         let judge = || self.judge_name(server, tool, scope, session_id);
-        match VISIBILITY_MEMO.try_with(|memo| memo.recorded(server, tool)) {
+        let recorded = VISIBILITY_MEMO.try_with(|memo| memo.recorded(server, tool));
+        match recorded {
             Ok(Some(recorded)) => recorded,
-            Ok(None) => {
-                let judged = judge();
-                VISIBILITY_MEMO
-                    .try_with(|memo| memo.record(server, tool, judged))
-                    .unwrap_or(judged)
-            }
+            // A per-user backend's shared-slot verdict is never memoised
+            // (MIK-8356 R5.4): the caller verdict records the first one.
+            Ok(None) if self.keeps_per_user_catalogues(server) => judge(),
+            Ok(None) => record_visibility(server, tool, judge()),
             Err(_) => judge(),
         }
+    }
+
+    /// Whether `server` keeps one catalogue per caller: its tools are judged
+    /// by the caller's own slot, never the shared one (MIK-8356). The one
+    /// predicate both the route filter and the caller verdict read.
+    pub(crate) fn keeps_per_user_catalogues(&self, server: &str) -> bool {
+        self.backends
+            .get(server)
+            .is_some_and(|backend| backend.keeps_per_user_catalogues())
     }
 
     fn judge_name(
@@ -121,7 +132,9 @@ impl MetaMcp {
         if self.descriptor_blocked(server, tool) {
             return Visibility::Withheld(Withholding::Descriptor);
         }
-        if self.surfaced_schema_withheld(server, tool) {
+        // The schema reason of a per-user backend is the caller's slot's
+        // alone (MIK-8356 R5.4): the shared slot's schema never filters it.
+        if !self.keeps_per_user_catalogues(server) && self.surfaced_schema_withheld(server, tool) {
             return Visibility::Withheld(Withholding::Schema);
         }
         self.invokable(server, tool, scope, session_id)
@@ -226,9 +239,30 @@ impl MetaMcp {
         self.visible_tool(server, tool, scope, session_id) == Visibility::Visible
     }
 
-    /// Whether a name-only walk (suggestion pools, counts over names) shows the
-    /// tool named `tool`: [`Self::tool_visible_to`] as a filter.
+    /// Whether a name-only listing (the disabled list, predictions, counts over
+    /// names, spec-preview names) shows the tool named `tool` to this caller.
+    /// On a per-user backend it is judged by the caller's own catalogue slot,
+    /// and withheld while that slot is cold (MIK-8356); elsewhere as
+    /// [`Self::shows_shared_name`].
     pub(crate) fn shows_name(
+        &self,
+        server: &str,
+        tool: &str,
+        scope: InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) -> bool {
+        self.listing_names(
+            server,
+            tool,
+            scope,
+            session_id,
+            super::listing_view::ColdRule::Withhold,
+        )
+    }
+
+    /// The shared-catalogue judgement of the tool named `tool`:
+    /// [`Self::tool_visible_to`] as a filter.
+    pub(crate) fn shows_shared_name(
         &self,
         server: &str,
         tool: &str,
@@ -241,13 +275,31 @@ impl MetaMcp {
 
 /// One visibility judgement per request (MIK-8340, perflane MIK-8356 R3.1):
 /// the first answer [`MetaMcp::tool_visible_to`] gives for a `(server, tool)`
-/// within a request, kept for the rest of that request. It also keeps what
-/// intake judged the sanitize exemption on ([`Judged`], MIK-8154).
+/// within a request, kept for the rest of that request.
+///
+/// It also carries the caller verdict's credential resolution to the
+/// dispatch (MIK-8356 R5.2): one resolution per call, on the same backend
+/// instance the verdict judged; and it keeps what intake judged the sanitize
+/// exemption on ([`Judged`], MIK-8154).
 #[derive(Default)]
-pub(crate) struct VisibilityMemo(
-    parking_lot::Mutex<std::collections::HashMap<(String, String), Visibility>>,
-    parking_lot::Mutex<Judged>,
-);
+pub(crate) struct VisibilityMemo {
+    visibility: parking_lot::Mutex<std::collections::HashMap<(String, String), Visibility>>,
+    carried_credential: parking_lot::Mutex<std::collections::HashMap<(String, String), Carried>>,
+    judged: parking_lot::Mutex<Judged>,
+}
+
+/// A caller verdict's resolution, waiting for the first invocation on its
+/// server in the same request.
+pub(crate) struct Carried {
+    /// The backend instance the verdict judged; the dispatch uses it, never
+    /// a second lookup by name (a reload in between keeps the old instance).
+    pub(crate) backend: std::sync::Arc<crate::backend::Backend>,
+    /// The credential the verdict resolved.
+    pub(crate) resolved: super::invoke::ResolvedDispatch,
+    /// The verdict's fill failed with this error (after any managed-401
+    /// recovery): the dispatch answers it as a failed dispatch, unfilled.
+    pub(crate) fill_error: Option<crate::Error>,
+}
 
 /// What intake judged a request's sanitize exemption on (MIK-8154): the digest
 /// of the playbook definition (C2e), and, for an exempt call, the backend
@@ -263,7 +315,7 @@ pub(crate) struct Judged {
 
 impl VisibilityMemo {
     fn recorded(&self, server: &str, tool: &str) -> Option<Visibility> {
-        self.0
+        self.visibility
             .lock()
             .get(&(server.to_owned(), tool.to_owned()))
             .copied()
@@ -273,7 +325,7 @@ impl VisibilityMemo {
     /// recorded answer, so the first judgement wins.
     fn record(&self, server: &str, tool: &str, judged: Visibility) -> Visibility {
         *self
-            .0
+            .visibility
             .lock()
             .entry((server.to_owned(), tool.to_owned()))
             .or_insert(judged)
@@ -283,7 +335,7 @@ impl VisibilityMemo {
 /// Record the digest of the playbook definition intake judged, in the open
 /// request's memo. Outside a memo there is no request to bind it to.
 pub(crate) fn record_judged_playbook(digest: String) {
-    let _ = VISIBILITY_MEMO.try_with(|memo| memo.1.lock().playbook = Some(digest));
+    let _ = VISIBILITY_MEMO.try_with(|memo| memo.judged.lock().playbook = Some(digest));
 }
 
 /// Record the backend instances an exempt call's targets were judged on.
@@ -292,7 +344,7 @@ pub(crate) fn record_exempt_instances(instances: &[std::sync::Arc<crate::backend
         .iter()
         .map(|backend| (backend.name.clone(), std::sync::Arc::downgrade(backend)))
         .collect();
-    let _ = VISIBILITY_MEMO.try_with(|memo| memo.1.lock().instances = judged);
+    let _ = VISIBILITY_MEMO.try_with(|memo| memo.judged.lock().instances = judged);
 }
 
 /// What this request's intake judged, or what a task worker carries from its
@@ -300,7 +352,7 @@ pub(crate) fn record_exempt_instances(instances: &[std::sync::Arc<crate::backend
 pub(crate) fn judged() -> Judged {
     // An empty memo (one a worker's dispatch opened) defers to the worker's.
     let memo = VISIBILITY_MEMO
-        .try_with(|memo| memo.1.lock().clone())
+        .try_with(|memo| memo.judged.lock().clone())
         .unwrap_or_default();
     if memo.playbook.is_some() || !memo.instances.is_empty() {
         return memo;
@@ -325,7 +377,7 @@ pub(crate) fn changed_instance(backend: &crate::backend::Backend) -> Option<Stri
             .find(|(name, _)| *name == backend.name)
             .map(|(_, instance)| !std::ptr::eq(instance.as_ptr(), backend))
     };
-    let request = VISIBILITY_MEMO.try_with(|memo| differs(&memo.1.lock()));
+    let request = VISIBILITY_MEMO.try_with(|memo| differs(&memo.judged.lock()));
     let differs = request
         .ok()
         .flatten()
@@ -350,6 +402,56 @@ tokio::task_local! {
     static WORKER_JUDGED: Judged;
 }
 
+/// Record `judged` for `(server, tool)` in the open request's memo unless an
+/// answer is already recorded; returns the recorded answer (first judgement
+/// wins). Outside a request scope nothing is kept and `judged` is returned.
+pub(crate) fn record_visibility(server: &str, tool: &str, judged: Visibility) -> Visibility {
+    VISIBILITY_MEMO
+        .try_with(|memo| memo.record(server, tool, judged))
+        .unwrap_or(judged)
+}
+
+/// Hand `carried` to the next invocation on `server` in the open request.
+/// Outside a request scope it is dropped, and the dispatch resolves itself.
+pub(crate) fn carry_dispatch(server: &str, tool: &str, carried: Carried) {
+    let key = (server.to_owned(), tool.to_owned());
+    let _ = VISIBILITY_MEMO.try_with(|memo| memo.carried_credential.lock().insert(key, carried));
+}
+
+/// Read the resolution carried for `server` without consuming it: the step
+/// resume fingerprint derives from the same resolution its dispatch will
+/// use (MIK-8356 fold F6).
+pub(crate) fn with_carried<R>(
+    server: &str,
+    tool: &str,
+    read: impl FnOnce(&Carried) -> R,
+) -> Option<R> {
+    let key = (server.to_owned(), tool.to_owned());
+    VISIBILITY_MEMO
+        .try_with(|memo| memo.carried_credential.lock().get(&key).map(read))
+        .ok()
+        .flatten()
+}
+
+/// Take the resolution carried for `server`, consuming it: a later
+/// invocation on the same server resolves again.
+pub(crate) fn take_carried(server: &str, tool: &str) -> Option<Carried> {
+    let key = (server.to_owned(), tool.to_owned());
+    VISIBILITY_MEMO
+        .try_with(|memo| memo.carried_credential.lock().remove(&key))
+        .ok()
+        .flatten()
+}
+
+/// The answer already recorded for `(server, tool)` in the open request, if
+/// any.
+pub(crate) fn recorded_visibility(server: &str, tool: &str) -> Option<Visibility> {
+    VISIBILITY_MEMO
+        .try_with(|memo| memo.recorded(server, tool))
+        .ok()
+        .flatten()
+}
+
 /// Run `request` with one visibility memo for its whole lifetime (the HTTP
 /// `tools/call` handler and each stdio request). A request already inside
 /// one keeps it, so nested entry points share the outer request's memo.
@@ -360,6 +462,28 @@ pub(crate) async fn with_visibility_memo<F: std::future::Future>(request: F) -> 
     VISIBILITY_MEMO
         .scope(VisibilityMemo::default(), request)
         .await
+}
+
+/// The answer to a name that matches no tool (-32601). A tool withheld from
+/// this caller answers with exactly this, so the two cannot be told apart.
+pub(crate) fn absent_name(tool_name: &str) -> crate::Error {
+    crate::Error::json_rpc(-32601, format!("Unknown tool: {tool_name}"))
+}
+
+/// A name this request's caller verdict withheld answers as absent at every
+/// layer that can serve a stored result for it: the invocation policy, and
+/// the two layers that skip that policy for a target signing already prepared
+/// (MIK-8356). On stdio, signing prepares before the route stage records the
+/// verdict, so a check made only inside the policy would come too early.
+///
+/// # Errors
+///
+/// [`absent_name`] when the memo records `server`'s `tool` as withheld.
+pub(crate) fn refuse_withheld(server: &str, tool: &str) -> crate::Result<()> {
+    match recorded_visibility(server, tool) {
+        Some(Visibility::Withheld(_)) => Err(absent_name(tool)),
+        _ => Ok(()),
+    }
 }
 
 /// Test-only hook between the route stage and the dispatch, for the row that

@@ -42,8 +42,16 @@ impl crate::identity_propagation::IdentityPropagation for Mint {
     }
 }
 
-/// Lists `TOOL` declared read-only and counts `tools/call`.
-struct Wire(Arc<AtomicUsize>);
+/// What one upstream's `tools/list` declares about `TOOL`.
+#[derive(Clone, Copy)]
+enum Declares {
+    ReadOnly,
+    /// Listed with no annotation: not declared read-only.
+    Nothing,
+}
+
+/// Lists `TOOL` as `Declares` says and counts `tools/call`.
+struct Wire(Arc<AtomicUsize>, Declares);
 
 #[async_trait::async_trait]
 impl crate::transport::Transport for Wire {
@@ -71,7 +79,10 @@ impl crate::transport::Transport for Wire {
         _resend: crate::transport::ResendPermission,
     ) -> crate::Result<crate::protocol::JsonRpcResponse> {
         let body = match method {
-            "tools/list" => json!({"tools": listing(TOOL, &ann(READ_ONLY))}),
+            "tools/list" => match self.1 {
+                Declares::ReadOnly => json!({"tools": listing(TOOL, &ann(READ_ONLY))}),
+                Declares::Nothing => json!({"tools": listing(TOOL, &json!({}))}),
+            },
             "tools/call" => {
                 self.0.fetch_add(1, Ordering::SeqCst);
                 json!({"content": [{"type": "text", "text": "ok"}], "isError": false})
@@ -108,9 +119,11 @@ fn person(subject: &str) -> VerifiedIdentity {
 }
 
 /// R7 (invoke level): the shared slot declares `TOOL` read-only; bob's own
-/// slot has never been listed. Enforcement is off, so nothing lists bob's
-/// slot ahead of the gate. Bob's repeat must reach the backend; once bob's
-/// own fill declares the tool, his repeat is a hit (the control).
+/// upstream lists it without the declaration. Bob's repeat must reach the
+/// backend. Since MIK-8356 a per-user call judges the caller's own catalogue
+/// first, so bob's slot is filled before the gate whatever the argument-key
+/// mode; the gate must read that fill, not the shared slot. The control:
+/// carol's own upstream declares the tool, so her repeat is a hit.
 #[tokio::test]
 async fn the_cache_asks_the_callers_own_slot() {
     use crate::backend::{Backend, BackendRegistry, PoolKey};
@@ -134,14 +147,18 @@ async fn the_cache_asks_the_callers_own_slot() {
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
-    let wire = || Arc::new(Wire(Arc::clone(&calls))) as Arc<dyn crate::transport::Transport>;
-    backend.set_transport_for_test(wire());
-    backend.set_pooled_transport_for_test(
-        &PoolKey::PerUser {
-            binding: "bob@ledger".to_string(),
-        },
-        wire(),
-    );
+    let wire = |declares| {
+        Arc::new(Wire(Arc::clone(&calls), declares)) as Arc<dyn crate::transport::Transport>
+    };
+    backend.set_transport_for_test(wire(Declares::ReadOnly));
+    for (who, declares) in [("bob", Declares::Nothing), ("carol", Declares::ReadOnly)] {
+        backend.set_pooled_transport_for_test(
+            &PoolKey::PerUser {
+                binding: format!("{who}@ledger"),
+            },
+            wire(declares),
+        );
+    }
     backend.set_read_only_declared_for_test(&[TOOL]);
     let registry = Arc::new(BackendRegistry::new());
     assert!(registry.register(Arc::clone(&backend)));
@@ -166,45 +183,45 @@ async fn the_cache_asks_the_callers_own_slot() {
     meta.enable_transparency_log(Arc::new(logger));
     meta.set_multi_user(true);
 
-    let bob = person("bob");
-    let call = async || {
+    let call = async |subject: &str| {
+        let who = person(subject);
         let answer = meta
             .invoke_tool(
                 &json!({"server": "ledger", "tool": TOOL, "arguments": {}}),
-                Some("session-bob"),
+                Some(&format!("session-{subject}")),
                 &crate::gateway::meta_mcp::MetaMcpCallerContext {
-                    verified_identity: Some(&bob),
-                    ..allow_all_ctx_named(Some("bob"), None)
+                    verified_identity: Some(&who),
+                    ..allow_all_ctx_named(Some(subject), None)
                 },
             )
             .await
-            .expect("bob's call is answered");
+            .expect("the call is answered");
         assert_eq!(answer["isError"], json!(false), "{answer}");
     };
 
-    call().await;
-    call().await;
+    call("bob").await;
+    call("bob").await;
     assert_eq!(
         calls.load(Ordering::SeqCst),
         2,
         "bob's own slot declared nothing; another slot's declaration admitted his call"
     );
 
-    backend
-        .get_tools_for_binding(
-            Some("bob@ledger"),
-            &[(
-                "Authorization".to_string(),
-                "Bearer minted-for-bob".to_string(),
-            )],
-        )
-        .await
-        .expect("bob's own fill");
-    call().await;
-    call().await;
+    call("carol").await;
+    call("carol").await;
     assert_eq!(
         calls.load(Ordering::SeqCst),
         3,
-        "after bob's own fill declared the tool, his repeat is a hit"
+        "carol's own fill declared the tool, so her repeat is a hit"
+    );
+    // Carol's declaration exists now; it must not admit bob's call either.
+    // Twice: an admitted first call is still a miss (nothing of bob's was
+    // stored), so only the repeat tells admitted from not.
+    call("bob").await;
+    call("bob").await;
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        5,
+        "carol's slot declared the tool; her declaration admitted bob's call"
     );
 }

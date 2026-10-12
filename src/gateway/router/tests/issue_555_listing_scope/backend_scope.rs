@@ -68,6 +68,7 @@ async fn agent_auth_without_identity_admits_no_backend() {
         api_key_name: None,
         agent_id: None,
         grant_subject: None,
+        caller: crate::identity_propagation::CallerProof::Anonymous,
     };
     let (_, servers) = f.state.meta_mcp.admitted_counts(scope, None);
     assert_eq!(

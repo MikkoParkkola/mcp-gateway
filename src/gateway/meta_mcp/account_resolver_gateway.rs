@@ -193,10 +193,31 @@ pub(in super::super) fn gateway_in(
     mode: ServeMode,
     auth: crate::config::AuthConfig,
 ) -> (MetaMcp, Arc<Dispatches>) {
-    let config = Config {
+    gateway_in_with(
+        binds,
+        descriptors,
+        custody,
+        identity_slots,
+        (mode, auth),
+        |_| {},
+    )
+}
+
+/// [`gateway_in`] with `configure` applied to every declared backend before
+/// the production compilation (MIK-8356 C10: argument-key enforcement Off).
+pub(in super::super) fn gateway_in_with(
+    binds: &[(&str, Bind<'_>)],
+    descriptors: &Descriptors<'_>,
+    custody: &Arc<dyn AccountCustody>,
+    identity_slots: &[String],
+    (mode, auth): (ServeMode, crate::config::AuthConfig),
+    configure: impl Fn(&mut BackendConfig),
+) -> (MetaMcp, Arc<Dispatches>) {
+    let mut config = Config {
         auth,
         ..fixture_config(binds, descriptors.compiled)
     };
+    config.backends.values_mut().for_each(&configure);
     // The production compilation, refusals included: an invalid fixture
     // configuration fails HERE rather than reaching a dispatch assertion.
     let bound = compile(&config).expect("fixture configuration must compile");

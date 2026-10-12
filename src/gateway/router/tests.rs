@@ -776,3 +776,16 @@ pub(super) fn direct_route_call(agent_id: Option<&str>) -> axum::http::Request<a
         ))
         .unwrap()
 }
+
+/// The `_meta` of a modern call declaring form elicitation and tasks. One
+/// copy for the router rows (the MIK-8340 twins and MIK-8356's entry rows);
+/// not feature-gated, so a no-default-features build keeps its users.
+pub(crate) fn modern_meta() -> serde_json::Value {
+    serde_json::json!({
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {
+            "elicitation": {"form": {}},
+            "extensions": {"io.modelcontextprotocol/tasks": {}}
+        }
+    })
+}

@@ -367,10 +367,14 @@ impl MetaMcp {
         };
         if let Some((server, tool, operation_arguments)) = &target {
             let (server, tool) = (*server, *tool);
-            if !caller
+            if caller
                 .signing
                 .is_some_and(|context| context.prepared_for(server, tool))
             {
+                // Signing ran the policy before the route stage could record
+                // this request's verdict (stdio): refuse a withheld name here.
+                super::visible::refuse_withheld(server, tool)?;
+            } else {
                 // `gateway_invoke` already arrives as a policy envelope, and it
                 // carries fields the synthesized one cannot reconstruct — the
                 // attestation token among them. Rebuilding it here dropped the

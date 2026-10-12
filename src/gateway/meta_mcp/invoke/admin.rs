@@ -138,7 +138,7 @@ impl MetaMcp {
         let mut tools_known = true;
         let mut total_tools: usize = 0;
         for b in &all_backends {
-            let (tools, truncated) = b.cached_tools_snapshot_and_truncated();
+            let (tools, truncated) = b.cached_tools_snapshot_and_truncated(None);
             tools_known &= b.cached_tools_known() && !truncated;
             total_tools += tools.len();
         }

@@ -280,7 +280,7 @@ async fn an_abandoned_page_one_read_leaves_the_catalogue_in_place() {
         let (backend, wire) = backend(vec![if cancel { Page::Held } else { Page::Lost }]);
         let _ = backend.remember_listed_tools(None, false, &[write("t")]);
         assert_eq!(
-            backend.cached_tools_snapshot_and_truncated().0.len(),
+            backend.cached_tools_snapshot_and_truncated(None).0.len(),
             1,
             "premise: a complete listing stored a catalogue"
         );
@@ -298,7 +298,7 @@ async fn an_abandoned_page_one_read_leaves_the_catalogue_in_place() {
             let _ = drain(&backend).await;
         }
         assert_eq!(
-            backend.cached_tools_snapshot_and_truncated().0.len(),
+            backend.cached_tools_snapshot_and_truncated(None).0.len(),
             1,
             "an abandoned page-one read moved the generation (cancel: {cancel})"
         );

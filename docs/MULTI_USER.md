@@ -281,6 +281,13 @@ one transport is safe to share because identity travels per request.
 it is not stateless — a backend that binds anything to the session will leak it
 across users.
 
+Each caller of such a backend also has its own tool catalogue. A call is judged
+by the caller's own catalogue, never another user's: a tool it does not offer
+answers `-32601`, as an unknown name. Listings that name tools without fetching
+them (the disabled list, counts, `gateway_list_servers`) leave the backend's
+tools out until the caller's own catalogue has been read once, for example by
+`gateway_list_tools`.
+
 ## One principal per call
 
 Authentication, audit and credential propagation carry **one** principal per

@@ -26,6 +26,32 @@ impl MetaMcp {
     ) -> Option<JsonRpcResponse> {
         match self.surfaced_for(tool_name, caller.scope(), session_id) {
             super::visible::Surfaced::Visible(server) => {
+                // MIK-8356: on a per-user backend the caller's own catalogue
+                // decides; a name it withholds or lacks answers exactly as
+                // the absent name below. A resolution refused here is left to
+                // the dispatch, which answers it as before.
+                let verdict = self
+                    .caller_verdict(
+                        (server, tool_name),
+                        caller,
+                        session_id,
+                        super::invoke::TargetNaming::SurfacedName,
+                        // The route stage took the verdict first, holding the
+                        // call's witness; this one is its memo hit.
+                        None,
+                    )
+                    .await;
+                if matches!(verdict, Ok((super::invoke::CallerVerdict::Absent, _))) {
+                    let reason = match super::visible::recorded_visibility(server, tool_name) {
+                        Some(super::visible::Visibility::Withheld(reason)) => reason,
+                        _ => super::visible::Withholding::Lacked,
+                    };
+                    self.record_withheld(server, tool_name, reason, caller, session_id)
+                        .await;
+                    return self
+                        .route_retry_to_origin_backend(id, tool_name, arguments, session_id, caller)
+                        .await;
+                }
                 let server_name = server.to_owned();
                 return Some(
                     self.invoke_named_backend_tool(
@@ -190,9 +216,13 @@ impl MetaMcp {
         // every step has run or been refused, never at a step's refusal.
         let settle =
             (caller.signing).map(|context| (context, super::signing::nonce_principal(&caller)));
-        let response = Box::pin(
+        // One visibility memo per call (MIK-8356): an entry with no request
+        // scope of its own (a task worker, an in-process caller) still takes
+        // one caller verdict and carries its resolution to dispatch. Inside
+        // a transport's scope this reuses it.
+        let response = super::visible::with_visibility_memo(Box::pin(
             self.handle_tools_call_unsettled(id, tool_name, arguments, session_id, caller),
-        )
+        ))
         .await;
         if let Some((context, principal)) = settle {
             self.settle_nonce_refund(context, principal);
@@ -479,7 +509,10 @@ impl MetaMcp {
         let result = match tool_name {
             "gateway_search" => self.code_mode_search(&arguments, session_id, caller).await,
             "gateway_execute" => self.code_mode_execute(&arguments, session_id, caller).await,
-            "gateway_list_servers" => self.list_servers(caller, session_id).await,
+            "gateway_list_servers" => {
+                self.revalidate_caller_slots(Self::proof_of(caller)).await;
+                self.list_servers(caller, session_id).await
+            }
             "gateway_list_tools" => self.list_tools(&arguments, session_id, caller).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id, caller).await,
             "gateway_invoke" => {
@@ -498,6 +531,7 @@ impl MetaMcp {
             "gateway_kill_server" => self.kill_server(&arguments),
             "gateway_revive_server" => self.revive_server(&arguments),
             "gateway_list_disabled_capabilities" => {
+                self.revalidate_caller_slots(Self::proof_of(caller)).await;
                 self.list_disabled_capabilities(caller.scope(), session_id)
             }
             "gateway_set_profile" => self.set_profile(&arguments, session_id, caller.is_admin),

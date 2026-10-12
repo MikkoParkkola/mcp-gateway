@@ -187,14 +187,17 @@ impl MetaMcp {
                 continue;
             };
             let backend_killed = self.kill_switch.is_killed(&backend.name);
-            if let Some(tools) = Self::backend_tools_for_discovery(
+            let fetched = Self::backend_tools_for_discovery(
                 &backend,
                 allow_empty_cache_fetch,
                 binding.as_deref(),
                 &headers,
             )
-            .await
-            {
+            .await;
+            // Indexed after every fill attempt, an empty fill included; a slot
+            // a failed fill left unfilled is never recorded (MIK-8356).
+            self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
+            if let Some(tools) = fetched {
                 let enriched: Vec<_> = tools
                     .iter()
                     .filter(|t| profile.tool_allowed(&t.name))
@@ -297,10 +300,13 @@ impl MetaMcp {
                 continue;
             };
             let backend_killed = self.kill_switch.is_killed(&backend.name);
-            if let Some(tools) =
+            let fetched =
                 Self::backend_tools_for_discovery(&backend, false, binding.as_deref(), &headers)
-                    .await
-            {
+                    .await;
+            // Indexed after every fill attempt, an empty fill included; a slot
+            // a failed fill left unfilled is never recorded (MIK-8356).
+            self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
+            if let Some(tools) = fetched {
                 let enriched: Vec<_> = tools
                     .iter()
                     .filter(|t| profile.tool_allowed(&t.name))
@@ -517,9 +523,11 @@ impl MetaMcp {
             return Err(Error::BackendNotFound(server.to_string()));
         };
 
-        let tools: Vec<_> = backend
+        let fetched = backend
             .get_tools_for_binding(binding.as_deref(), &headers)
-            .await?
+            .await?;
+        self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
+        let tools: Vec<_> = fetched
             .as_ref()
             .clone()
             .into_iter()
@@ -594,10 +602,13 @@ impl MetaMcp {
                 continue;
             };
             let backend_killed = self.kill_switch.is_killed(&backend.name);
-            if let Some(tools) =
+            let fetched =
                 Self::backend_tools_for_discovery(&backend, false, binding.as_deref(), &headers)
-                    .await
-            {
+                    .await;
+            // Indexed after every fill attempt, an empty fill included; a slot
+            // a failed fill left unfilled is never recorded (MIK-8356).
+            self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
+            if let Some(tools) = fetched {
                 for tool in tools.iter() {
                     if !profile.tool_allowed(&tool.name)
                         || !tool_matches_role(tool, role_filter)

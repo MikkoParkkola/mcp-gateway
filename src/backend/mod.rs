@@ -25,6 +25,8 @@ const CACHE_LIST_DRAIN_BUDGET: Duration = Duration::from_secs(120);
 
 mod annotations;
 mod cached_metadata;
+mod caller_slots;
+mod catalogue_verdict;
 mod descriptor_gate;
 mod era;
 mod fill_check;
@@ -61,6 +63,7 @@ impl Backend {
     }
 }
 
+pub(crate) use catalogue_verdict::CatalogueVerdict;
 pub(crate) use era::removed_method_refusal_message;
 #[cfg(test)]
 pub(crate) use pool::PoolKey;
@@ -100,6 +103,11 @@ pub struct Backend {
     /// not spawn duplicate connections for the same slot and distinct users
     /// never share a session (IDP.7).
     pool: DashMap<PoolKey, Arc<PooledEntry>>,
+    /// Which per-user slot holds each caller's own catalogue (MIK-8356,
+    /// design R3.5): caller principal id to that slot's binding and entry.
+    /// Written when a fill stores into the slot, removed with the entry
+    /// (`retire`), so an entry lives exactly as long as its slot.
+    caller_slots: DashMap<String, caller_slots::CallerSlot>,
     /// Failsafe configuration, cloned so a freshly created pool slot
     /// (`pooled_entry`) can build its own independent `Failsafe` (MIK-6735
     /// fix 1). The per-backend `Failsafe` this replaced is gone; every slot,
@@ -544,6 +552,10 @@ mod silence_resend_tests;
 #[cfg(test)]
 #[path = "slot_eviction_tests.rs"]
 mod slot_eviction_tests;
+
+#[cfg(test)]
+#[path = "caller_slots_g3_tests.rs"]
+mod caller_slots_g3_tests;
 
 #[cfg(test)]
 #[path = "grant_reload_eviction_tests.rs"]
