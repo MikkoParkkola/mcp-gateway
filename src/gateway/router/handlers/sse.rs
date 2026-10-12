@@ -110,6 +110,34 @@ fn get_era_refusal(state: &AppState, headers: &HeaderMap) -> Option<axum::respon
     )
 }
 
+/// Why a GET cannot open a stream at all: streaming is off, or the client does
+/// not accept an event stream.
+fn stream_request_refusal(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Option<axum::response::Response> {
+    if !state.streaming_config.enabled {
+        return Some(build_http_error_response(
+            None,
+            -32600,
+            "Streaming not enabled. Use POST to send JSON-RPC requests to /mcp",
+            StatusCode::METHOD_NOT_ALLOWED,
+        ));
+    }
+    let accept = headers
+        .get("accept")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    (!accept.contains("text/event-stream")).then(|| {
+        build_http_error_response(
+            None,
+            -32600,
+            "Must accept text/event-stream for SSE notifications",
+            StatusCode::NOT_ACCEPTABLE,
+        )
+    })
+}
+
 /// GET /mcp handler - SSE stream for server→client notifications
 /// Per MCP spec 2025-03-26, servers MAY return SSE stream or 405 Method Not Allowed.
 /// We implement the full streaming support.
@@ -147,29 +175,8 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
             )
         })
         .filter(|key| !key.is_empty());
-    // Check if streaming is enabled
-    if !state.streaming_config.enabled {
-        return gateway_reply(build_http_error_response(
-            None,
-            -32600,
-            "Streaming not enabled. Use POST to send JSON-RPC requests to /mcp",
-            StatusCode::METHOD_NOT_ALLOWED,
-        ));
-    }
-
-    // Check Accept header - must accept text/event-stream
-    let accept = headers
-        .get("accept")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    if !accept.contains("text/event-stream") {
-        return gateway_reply(build_http_error_response(
-            None,
-            -32600,
-            "Must accept text/event-stream for SSE notifications",
-            StatusCode::NOT_ACCEPTABLE,
-        ));
+    if let Some(refusal) = stream_request_refusal(&state, &headers) {
+        return gateway_reply(refusal);
     }
 
     let existing_session_id = session_id_header(&headers).map(String::from);

@@ -259,7 +259,6 @@ pub(crate) struct LiveCtx<'a> {
     pub(crate) agent: Option<&'a crate::gateway::oauth::ValidatedToken>,
     #[expect(dead_code, reason = "read by MIK-8377's live() clauses")]
     pub(crate) caller_identity: &'a crate::security::caller_identity::CallerIdentityConfig,
-    #[expect(dead_code, reason = "read by MIK-8377's live() clauses")]
     pub(crate) cf_verifier: Option<&'a crate::key_server::OidcVerifier>,
 }
 
