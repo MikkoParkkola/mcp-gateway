@@ -44,6 +44,11 @@ use super::signing_nonce_allocations_support::{
 /// The refusal budget this checkpoint asserts, per refused dispatch.
 const REFUSAL_BUDGET: u64 = 16 * 1024;
 
+/// The largest single allocation a refused dispatch may make (MIK-8400): a
+/// refusal must not copy the dispatch's state machine to the heap (5,184
+/// bytes when #3841 boxed it inside the stdio visibility memo).
+const LARGEST_ALLOCATION: u64 = 2 * 1024;
+
 /// The three refusal errors are settled production controls, pinned exactly.
 /// `wire_error_message` preserves each text.
 const MISSING_NONCE: (i64, &str) = (-32001, "Nonce required when message signing is enforced");
@@ -105,6 +110,11 @@ fn assert_within_budget(phase: &str, payload_bytes: usize, measured: Measured) {
         measured.bytes < REFUSAL_BUDGET,
         "{phase} refusal of a {payload_bytes}-byte payload allocated {measured}, \
          above the {REFUSAL_BUDGET}-byte budget"
+    );
+    assert!(
+        measured.largest < LARGEST_ALLOCATION,
+        "{phase} refusal of a {payload_bytes}-byte payload allocated {measured}: \
+         one allocation reached the {LARGEST_ALLOCATION}-byte ceiling (a boxed dispatch?)"
     );
 }
 
