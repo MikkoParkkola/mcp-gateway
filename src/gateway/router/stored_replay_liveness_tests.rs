@@ -23,6 +23,7 @@ struct Fx {
     router: axum::Router,
     gateway: DirectAccountGateway,
     _store: tempfile::TempDir,
+    _audit: Option<tempfile::TempDir>,
 }
 
 fn sole_operator() -> AuthConfig {
@@ -49,12 +50,34 @@ fn sole_operator() -> AuthConfig {
 /// surfaces [`TOOL`]; otherwise it is reachable through `gateway_invoke` and
 /// through a continuation retry routed to its origin backend.
 async fn fixture(surfaced: bool) -> Fx {
+    fixture_with(surfaced, false).await
+}
+
+/// [`fixture`] with an identity-propagation transparency log, which the
+/// direct route requires before it mints (G1).
+async fn fixture_with(surfaced: bool, audited: bool) -> Fx {
     let auth = sole_operator();
     let mut gateway = DirectAccountGateway::new(auth.clone(), &Binding::Connected);
     let (mut state, store) = super::tests::test_router_app_state_with_auth(&auth).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.backends = gateway.backends();
-    let meta = gateway.take_meta();
+    let mut meta = gateway.take_meta();
+    let audit = audited.then(|| tempfile::tempdir().expect("an audit dir"));
+    if let Some(dir) = &audit {
+        let log = Arc::new(
+            crate::security::TransparencyLogger::open(Arc::new(
+                crate::security::transparency_log::TransparencyLogConfig {
+                    enabled: true,
+                    path: dir.path().join("audit.jsonl").to_string_lossy().into_owned(),
+                    key_id: "8392".to_string(),
+                    ..crate::security::transparency_log::TransparencyLogConfig::default()
+                },
+            ))
+            .expect("open log"),
+        );
+        meta.enable_transparency_log(Arc::clone(&log));
+        state_mut.transparency_log = Some(log);
+    }
     state_mut.meta_mcp = Arc::new(if surfaced {
         meta.with_surfaced_tools(vec![SurfacedToolConfig {
             server: BACKEND.to_string(),
@@ -76,6 +99,7 @@ async fn fixture(surfaced: bool) -> Fx {
         router: super::create_router(state),
         gateway,
         _store: store,
+        _audit: audit,
     }
 }
 
@@ -96,10 +120,14 @@ fn meta(key: Option<&str>, tasks: bool) -> Value {
 }
 
 async fn send(fx: &Fx, method: &str, name: &str, params: Value) -> Value {
+    send_to(fx, "/mcp", method, name, params).await
+}
+
+async fn send_to(fx: &Fx, uri: &str, method: &str, name: &str, params: Value) -> Value {
     let body = json!({"jsonrpc": "2.0", "id": 7, "method": method, "params": params});
     let request = axum::http::Request::builder()
         .method("POST")
-        .uri("/mcp")
+        .uri(uri)
         .header("content-type", "application/json")
         .header("authorization", format!("Bearer {KEY}"))
         .header("mcp-protocol-version", "2026-07-28")
@@ -335,7 +363,7 @@ async fn two_account_fixture_revokes_one_account_only() {
                 .expect("a tool");
         gateway.backends().get(backend).expect("registered").store_shared_tools_for_test(vec![tool]);
     }
-    let fx = Fx { router: super::create_router(state), gateway, _store: tempfile::tempdir().unwrap() };
+    let fx = Fx { router: super::create_router(state), gateway, _store: tempfile::tempdir().unwrap(), _audit: None };
     let call = |backend: &str| {
         json!({"name": "gateway_invoke",
             "arguments": {"server": backend, "tool": TOOL, "arguments": {}},
@@ -367,4 +395,168 @@ fn two_backend_fixture_registers_the_external_backend() {
     assert!(gateway.backends().get(BACKEND).is_some(), "BACKEND is registered");
     assert!(gateway.backends().get(EXTERNAL_BACKEND).is_some(), "the external backend is registered");
     assert_eq!(gateway.tool_calls_to(EXTERNAL_BACKEND), 0);
+}
+
+fn execute_params(key: &str, tasks: bool) -> Value {
+    let mut params = json!({
+        "name": "gateway_execute",
+        "arguments": {"chain": [{"tool": format!("{BACKEND}:{TOOL}"), "arguments": {"folder": "inbox"}}]},
+        "_meta": meta(Some(key), tasks),
+    });
+    if tasks {
+        params["task"] = json!({});
+    }
+    params
+}
+
+/// S6 (guard; mutant M5): a keyed `gateway_execute` is retained; the same
+/// call again, while live, is served the retained result with no step re-run.
+/// Plans are not STORED.2's: a Replay with no target is served as today.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn s6_retained_gateway_execute_is_served_not_rerun() {
+    let fx = fixture(false).await;
+    answer_marker(&fx);
+    let first = send(&fx, "tools/call", "gateway_execute", execute_params("s6", false)).await;
+    assert!(first.to_string().contains(MARKER), "premise: the plan ran: {first}");
+    let sent = fx.gateway.tool_calls().len();
+    let again = send(&fx, "tools/call", "gateway_execute", execute_params("s6", false)).await;
+    assert!(again.to_string().contains(MARKER), "S6: the retained plan was not served: {again}");
+    assert_eq!(fx.gateway.tool_calls().len(), sent, "S6: a step was re-run: {again}");
+}
+
+/// Expected gap, MIK-8406: a revoked plan replay is served as today; MIK-8406
+/// flips this to a refusal. A task-augmented keyed `gateway_execute`
+/// completes; the grant is revoked; the same task call repeated is answered
+/// with the stored task. STORED.2 lists this as an OPEN gap, never as covered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plan_replay_after_revoke_is_mik_8406_gap() {
+    let fx = fixture(false).await;
+    answer_marker(&fx);
+    let made = send(&fx, "tools/call", "gateway_execute", execute_params("t7", true)).await;
+    let id = made
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("premise: a task was made: {made}"))
+        .to_owned();
+    let done = wait_terminal(&fx, &id).await;
+    assert_eq!(done.pointer("/result/status").and_then(Value::as_str), Some("completed"), "premise: {done}");
+    let sent = fx.gateway.tool_calls().len();
+    fx.gateway.revoke_operator_grant().await;
+    let again = send(&fx, "tools/call", "gateway_execute", execute_params("t7", true)).await;
+    eprintln!("T7 repeat: {again}");
+    assert_eq!(
+        again.pointer("/result/taskId").and_then(Value::as_str),
+        Some(id.as_str()),
+        "T7 gap moved: the revoked plan repeat is no longer answered with the stored task \
+         (MIK-8406 inverts this row): {again}"
+    );
+    assert_eq!(fx.gateway.tool_calls().len(), sent, "T7: a step was re-run: {again}");
+}
+
+/// G1 (guard; mutant M31): on the direct route a revoked grant's keyed replay
+/// is refused at stage 5 (the identity mint), before 7a/7b can serve a stored
+/// answer; nothing is sent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn g1_direct_route_refuses_a_revoked_keyed_replay_at_stage_five() {
+    let fx = fixture_with(false, true).await;
+    answer_marker(&fx);
+    let uri = format!("/mcp/{BACKEND}");
+    let call = || {
+        json!({"name": TOOL, "arguments": {"folder": "inbox"}, "_meta": meta(Some("g1"), false)})
+    };
+    let first = send_to(&fx, &uri, "tools/call", TOOL, call()).await;
+    assert!(first.to_string().contains(MARKER), "premise: dispatched: {first}");
+    let sent = fx.gateway.tool_calls().len();
+    fx.gateway.revoke_operator_grant().await;
+    let again = send_to(&fx, &uri, "tools/call", TOOL, call()).await;
+    eprintln!("G1 answer: {again}");
+    assert_refused_unsent(&fx, "G1", &again, sent);
+}
+
+/// U1/U2: `alpha` binds no per-user account (not isolation-guarded), so no
+/// liveness proof applies and stored answers are served as today.
+mod unguarded {
+    use std::sync::atomic::Ordering;
+
+    use serde_json::{Value, json};
+
+    use super::super::direct_guards_fixture::{Answer, Fx, fixture, send_with_headers};
+    use super::{MARKER, meta};
+
+    async fn call(fx: &Fx, params: Value) -> Value {
+        let name = params["name"].as_str().unwrap_or_default().to_owned();
+        let headers = [
+            ("mcp-protocol-version", "2026-07-28"),
+            ("mcp-method", "tools/call"),
+            ("mcp-name", name.as_str()),
+        ];
+        send_with_headers(fx, "/mcp", "k-std", "tools/call", params, None, &headers)
+            .await
+            .1
+    }
+
+    fn invoke(key: &str, tasks: bool) -> Value {
+        let mut params = json!({"name": "gateway_invoke",
+            "arguments": {"server": "alpha", "tool": "read", "arguments": {}},
+            "_meta": meta(Some(key), tasks)});
+        if tasks {
+            params["task"] = json!({});
+        }
+        params
+    }
+
+    /// U1 (guard; mutant M32): a keyed replay on an unguarded backend is
+    /// served the retained result; nothing is sent again.
+    #[tokio::test]
+    async fn u1_unguarded_keyed_replay_is_served() {
+        let fx = fixture(Answer::Text(MARKER), |_| {}).await;
+        let first = call(&fx, invoke("u1", false)).await;
+        assert!(first.to_string().contains(MARKER), "premise: dispatched: {first}");
+        let sent = fx.calls.load(Ordering::SeqCst);
+        let again = call(&fx, invoke("u1", false)).await;
+        assert!(again.to_string().contains(MARKER), "U1: not served: {again}");
+        assert_eq!(fx.calls.load(Ordering::SeqCst), sent, "U1: re-sent: {again}");
+    }
+
+    /// U2 (guard; mutant M33): a repeated task call on an unguarded backend
+    /// is answered with the stored task; nothing is sent again.
+    #[tokio::test]
+    async fn u2_unguarded_repeated_task_call_is_answered_with_the_stored_task() {
+        let fx = fixture(Answer::Text(MARKER), |_| {}).await;
+        let made = call(&fx, invoke("u2", true)).await;
+        let id = made
+            .pointer("/result/taskId")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("premise: a task was made: {made}"))
+            .to_owned();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        while fx.calls.load(Ordering::SeqCst) == 0 && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let sent = fx.calls.load(Ordering::SeqCst);
+        assert_eq!(sent, 1, "premise: the task dispatched once");
+        let again = call(&fx, invoke("u2", true)).await;
+        assert_eq!(
+            again.pointer("/result/taskId").and_then(Value::as_str),
+            Some(id.as_str()),
+            "U2: not answered with the stored task: {again}"
+        );
+        assert_eq!(fx.calls.load(Ordering::SeqCst), sent, "U2: re-sent: {again}");
+    }
+}
+
+/// The fixture's scripted backend failure (MIK-8406 P8i): with the account
+/// live, the next call reaches the backend and fails; the one after succeeds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fixture_fail_next_fails_one_call_with_the_account_live() {
+    let fx = fixture(false).await;
+    fx.gateway.fail_next(503);
+    let failed = send(&fx, "tools/call", "gateway_invoke", invoke_params(None, false)).await;
+    assert!(failed.get("error").is_some() || failed.pointer("/result/isError") == Some(&json!(true)),
+        "the scripted failure did not surface: {failed}");
+    assert_eq!(fx.gateway.tool_calls().len(), 1, "the failing call reached the backend: {failed}");
+    answer_marker(&fx);
+    let ok = send(&fx, "tools/call", "gateway_invoke", invoke_params(None, false)).await;
+    assert!(ok.to_string().contains(MARKER), "the next call succeeds: {ok}");
 }

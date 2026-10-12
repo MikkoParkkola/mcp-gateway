@@ -206,6 +206,12 @@ impl DirectAccountGateway {
             .count()
     }
 
+    /// Fail the next non-`tools/list` request with the HTTP `status` the
+    /// transport would report, with every account left live (MIK-8406 P8i).
+    pub(crate) fn fail_next(&self, status: u16) {
+        self.dispatches.answer_with(&[status]);
+    }
+
     /// Answer the next non-`tools/list` request with `result`.
     pub(crate) fn answer_next(&self, result: serde_json::Value) {
         self.dispatches.script(&[Answer::Result(result)]);
