@@ -15,6 +15,7 @@ use serde_json::Value;
 use super::{GuardedValue, MetaMcp};
 use crate::backend::{Backend, CatalogueVerdict, Lens};
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
+use crate::gateway::meta_mcp::refund_witness::{RefundWitness, schema_effect};
 use crate::gateway::meta_mcp::visible::{
     Visibility, Withholding, absent_name, note_denial_code, record_visibility, recorded_visibility,
 };
@@ -116,21 +117,34 @@ impl MetaMcp {
         tool_name: &str,
         (targets, requested): (&[crate::gateway::authz::CallTarget<'_>], usize),
         caller: &MetaMcpCallerContext<'_>,
-        session_id: Option<&str>,
-    ) -> bool {
+        (session_id, witness): (Option<&str>, Option<RefundWitness>),
+    ) -> (bool, Option<RefundWitness>) {
         if !matches!(tool_name, "gateway_invoke" | "gateway_execute")
             || requested == 0
             || targets.len() != requested
         {
-            return false;
+            return (false, witness);
         }
+        // The judgement may fill a cold catalogue: an effect, so the nonce
+        // stays spent (MIK-8353 3a).
+        let fills = || {
+            targets
+                .iter()
+                .filter_map(|target| self.backends.get(&target.server))
+                .map(|backend| backend.list_fills())
+                .sum::<u64>()
+        };
+        let fills_before = fills();
+        let mut invisible = true;
         for target in targets {
             let named = (target.server.as_str(), target.tool.as_str());
             if !self.invisible_at_route(named, caller, session_id).await {
-                return false;
+                invisible = false;
+                break;
             }
         }
-        true
+        let filled = schema_effect(fills() != fills_before);
+        (invisible, RefundWitness::carry(witness, filled))
     }
 
     /// The route stage's judgement of one requested backend target: whether
@@ -198,13 +212,22 @@ impl MetaMcp {
         caller: &MetaMcpCallerContext<'_>,
         session_id: Option<&str>,
     ) -> Option<Result<GuardedValue>> {
-        if let Some(answer) = self.withheld_gate(target, caller, session_id).await {
-            return Some(answer);
-        }
-        match self.check_or_stamp(args, session_id, caller, target) {
-            Ok(()) => None,
-            Err(refusal) => Some(self.backstop(target, caller, session_id, refusal).await),
-        }
+        // The refund witness (MIK-8353 3a): a catalogue fill the gate causes
+        // is an effect, so the nonce stays spent; whatever survives goes back
+        // to the call on drop, for its settle or the dispatch's own steps.
+        let backend = self.backends.get(target.0);
+        let fills = || backend.as_ref().map_or(0, |backend| backend.list_fills());
+        let fills_before = fills();
+        let mut witness = super::nonce_settle::Witnessed::take(caller);
+        let answer = match self.withheld_gate(target, caller, session_id).await {
+            Some(answer) => Some(answer),
+            None => match self.check_or_stamp(args, session_id, caller, target) {
+                Ok(()) => None,
+                Err(refusal) => Some(self.backstop(target, caller, session_id, refusal).await),
+            },
+        };
+        witness.carry(schema_effect(fills() != fills_before));
+        answer
     }
 
     /// The gate for one `gateway_invoke` target or chain step. `Some` is the

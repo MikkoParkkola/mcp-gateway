@@ -105,6 +105,10 @@ async fn authz_20_refused_call_consumes_no_nonce() {
     let (mut denied_signing, denied_args) = captured_external_gateway_invoke(NONCE);
     meta.prepare_signing_invocation(&mut denied_signing, &denied_args, None, &ctx(&DenyAll))
         .expect("a denied target's nonce is judged as a missing name's");
+    // Admission keeps the call's refund witness (MIK-8353 3a); this row drives
+    // the invoke directly, so it keeps one as admission would.
+    denied_signing
+        .keep_witness(crate::gateway::meta_mcp::refund_witness::RefundWitness::at_capture());
     let mut denied_caller = ctx(&DenyAll);
     denied_caller.signing = Some(&denied_signing);
     let refused = meta.invoke_tool(&denied_args, None, &denied_caller).await;

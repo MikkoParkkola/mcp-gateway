@@ -123,8 +123,10 @@ async fn a_chokepoint_refusal_with_nothing_acted_gives_the_nonce_back() {
     assert!(warm.is_ok(), "premise: the warm-up was sent: {warm:?}");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 
+    // MIK-8361: admission decides twice and the withheld gate once, so the
+    // grant is revoked at the fourth decision, the chokepoint's.
     let revoked = RevokedAfter {
-        allowed: 1,
+        allowed: 3,
         decided: AtomicUsize::new(0),
     };
     let mut caller = ctx(&revoked);

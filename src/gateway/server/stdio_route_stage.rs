@@ -96,12 +96,12 @@ impl Gateway {
             .caller_verdicts(&targets, tool_name, (caller, Some(session_id)), witness)
             .await;
         // MIK-8361, as on `/mcp`: recorded, so the gate answers it absent.
-        let invisible = meta_mcp
+        let (invisible, witness) = meta_mcp
             .invisible_call(
                 tool_name,
                 (&targets, request_targets),
                 caller,
-                Some(session_id),
+                (Some(session_id), witness),
             )
             .await;
         if invisible {

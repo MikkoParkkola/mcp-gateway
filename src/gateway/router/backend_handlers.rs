@@ -509,18 +509,26 @@ async fn backend_handler_inner(
         route: &route,
         id: &id,
     };
+    // Before the gate: a catalogue it fills is a fill the refund witness sees.
+    let fills_before = route.backend.list_fills();
     // Authorize, the firewall and the withheld gate need no credential:
     // a call they refuse or answer resolves none (MIK-8361 ORACLE.4).
     if let Err(response) = direct_gate::guard_before_credential(scope, &envelope).await {
         return response;
     }
-    let propagation =
-        match direct_preflight::propagate_identity(state, &name, &caller, &route, &preflight, &id)
-            .await
-        {
-            Ok(propagation) => propagation,
-            Err(response) => return response,
-        };
+    let propagation = match direct_preflight::propagate_identity(
+        state,
+        &name,
+        &caller,
+        &route,
+        (&preflight, fills_before),
+        &id,
+    )
+    .await
+    {
+        Ok(propagation) => propagation,
+        Err(response) => return response,
+    };
     let admitted = match direct_dispatch::admit(scope, &envelope, &preflight, &propagation).await {
         Ok(admitted) => admitted,
         Err(response) => return response,

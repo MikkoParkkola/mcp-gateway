@@ -441,13 +441,13 @@ pub(super) async fn tools_call(
     // see is answered by the gate as a missing name is, before X14, the task
     // gate, signing and admission act on it. The judgement is recorded, so
     // the gate answers it absent whatever the catalogue does next.
-    let invisible = state
+    let (invisible, witness) = state
         .meta_mcp
         .invisible_call(
             tool_name,
             (&backend_targets, request_targets),
             &caller,
-            Some(session_id.as_str()),
+            (Some(session_id.as_str()), witness),
         )
         .await;
     // The gate has judged; the window a catalogue change must not reach
