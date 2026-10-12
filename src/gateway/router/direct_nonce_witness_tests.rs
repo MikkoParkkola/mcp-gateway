@@ -182,3 +182,41 @@ async fn a_direct_spend_refusal_after_a_cold_schema_fill_keeps_the_nonce() {
     );
     assert_eq!(dispatched(&fx), 1);
 }
+
+/// Pre-admission, KEEP (MIK-8379 H1, twin of K-optional-mint): an optional
+/// propagating backend whose mint fails falls back to the static credential;
+/// the attempt counts as an effect, so the witness is never minted and the
+/// spend refusal keeps the nonce. Both backends.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn a_direct_spend_refusal_after_a_failed_optional_mint_keeps_the_nonce() {
+    use super::direct_continuation_tests::budget;
+    use super::direct_guards_fixture::fixture_optional_failing_mint;
+    for backend in BACKENDS {
+        let (fx, failing) = fixture_optional_failing_mint(Answer::Ok, budget).await;
+        let who = ("k-budget", backend);
+        let (_, first) = signed_direct(&fx, who, "n1", json!({})).await;
+        assert!(
+            first.get("error").is_none(),
+            "{backend}: the paying call: {first}"
+        );
+
+        let before = failing.count();
+        let (_, refused) = signed_direct(&fx, who, "n2", json!({})).await;
+        assert!(
+            refused.to_string().contains("budget exceeded"),
+            "{backend}: the spend refusal: {refused}"
+        );
+        assert!(
+            failing.count() > before,
+            "{backend}: the refused call attempted a mint"
+        );
+
+        let (_, again) = signed_direct(&fx, who, "n2", json!({})).await;
+        assert!(
+            refused_as_replay(&again),
+            "{backend}: the nonce was given back after a failed mint: {again}"
+        );
+        assert_eq!(dispatched(&fx), 1, "{backend}");
+    }
+}
