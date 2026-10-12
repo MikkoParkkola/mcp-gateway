@@ -80,7 +80,7 @@ New API (firewall module, `pub(crate)`): `Firewall::receipt_masks(&receipts, ans
 
 `Declared` is the default. `Recorded { from }` is returned only when:
 - the list is a non-empty `PlanProvenance.steps` (`from: Provenance`); or
-- a parse maps one-to-one onto unique declared steps, contiguous from the first. For a playbook, each `steps_completed`/`steps_failed` name names one step, with no duplicates, as a prefix in declared order, skipped steps aside. For a chain, indices 0..n with no gap, each `server:tool` equal to the declared step. For a single call, its one target from the arguments (`from: Parsed`).
+- a parse maps one-to-one onto unique declared steps. For a playbook, the executed names (`steps_completed` + `steps_failed`) are unique, and each maps one-to-one to a declared step; skipped steps may sit anywhere (lead ruling 2026-10-12, from MIK-8406 delta-2: the prefix rule is dropped). For a chain, indices 0..n contiguous from 0 with no gap (a gap signals a resume), each `server:tool` equal to the declared step. For a single call, its one target from the arguments (`from: Parsed`).
 
 Otherwise it returns `Declared`, which is empty ("could not tell") when the walk is impossible. 8406 judges every step on `Declared`, and refuses outright on an empty one. 8408 stages from the masks and uses `steps` only for the targets check.
 
@@ -294,6 +294,7 @@ These supersede the d3 body and the delta wherever they conflict.
 
 **F7. Rows (added or rewritten).**
 - G3: a snapshot whose source (or a composite constituent) is not in `stored.targets` stages nothing.
+- G15-G17 (amended): a playbook with an interior skipped step → `Recorded { from: Parsed }`; a chain whose stored steps start at 2 → `Declared`; a duplicate playbook step name → `Declared`.
 - G7a-c: the `steps` bounds (64 entries, 128 B names, 16 KiB) → dropped whole, `executed_steps` → `Declared`.
 - G37: double replay. Two re-reads both renew; each records.
 - G38: a big-step receipt is not stored; the replay stages the other receipts and counts the drop.
