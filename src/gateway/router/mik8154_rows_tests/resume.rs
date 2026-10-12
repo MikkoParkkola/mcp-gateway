@@ -154,7 +154,7 @@ async fn r4_a_resume_still_exempt_forwards_as_submitted() {
 /// models a task stored by a process with `sanitize_input` off and resumed by
 /// one restarted with it on: in one process the call is unreachable, because
 /// intake validates whenever `sanitize_input` is on, exempt calls included
-/// (dispatch_intake.rs:282), and `sanitize_input` is fixed for the process.
+/// (`dispatch_intake.rs:282`), and `sanitize_input` is fixed for the process.
 #[tokio::test]
 async fn r5_a_resume_refuses_a_dirty_meta_key_it_stored() {
     let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
@@ -181,7 +181,7 @@ async fn r5_a_resume_refuses_a_dirty_meta_key_it_stored() {
 }
 
 /// R6 (code seat, MIK-8378): re-admission validates before it judges the
-/// exemption, as intake does (dispatch_intake.rs:282 runs before the
+/// exemption, as intake does (`dispatch_intake.rs:282` runs before the
 /// exemption at :381). A stored call that is still exempt (passthrough
 /// `alpha-pt`) with a dirty own key is refused, not sent as stored. Modelled
 /// as R5 is: stored by a process with `sanitize_input` off.

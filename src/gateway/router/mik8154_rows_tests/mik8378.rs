@@ -109,7 +109,7 @@ async fn e2e_a_dirty_invoke_meta_key_is_refused() {
 /// the tool's own arguments is refused on the meta route, where the gateway
 /// reads `_full` and `_claim` (admission.rs `execution_arguments`). On the
 /// direct route the gateway does not honour them (it reads them only to key
-/// admission, direct_route.rs:140): there a `_full` is the tool's parameter
+/// admission, `direct_route.rs:140`): there a `_full` is the tool's parameter
 /// (see the E2d guard).
 #[tokio::test]
 async fn e2f_a_dirty_directive_in_tool_arguments_is_refused() {
@@ -212,7 +212,7 @@ async fn e2d_business_keys_keep_todays_stripping() {
 /// ENV.3 GUARD: `/mcp/{name}` refuses a malformed or over-long chain nonce
 /// with the code and message `/mcp` gives it, and dispatches nothing. True on
 /// the PR 2 head: `RetryFields::from_params` validates the nonce and
-/// direct_preflight refuses it before `take_nonces` runs.
+/// `direct_preflight` refuses it before `take_nonces` runs.
 #[tokio::test]
 async fn e3_the_direct_route_refuses_a_malformed_chain_nonce_like_mcp() {
     let meta_key = crate::protocol::mrtr::CHAIN_NONCE_META;
