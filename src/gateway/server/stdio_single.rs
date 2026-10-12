@@ -346,11 +346,14 @@ impl Gateway {
         Option<stdio_delivery::StdioAnswer>,
         crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
     ) {
-        // One visibility judgement per request (MIK-8340), as on HTTP.
-        // Boxed first, as on HTTP: the memo wraps a pointer, not a copy.
-        let dispatch = crate::gateway::meta_mcp::visible::with_visibility_memo(Box::pin(
+        // One visibility judgement per request (MIK-8340), as on HTTP. Not
+        // boxed here, unlike HTTP: both callers that serve a client (the serve
+        // loop and the notification path) already box this whole future, so
+        // a box here put a second heap copy of the state machine on every
+        // request, a refused one included (MIK-8400).
+        let dispatch = crate::gateway::meta_mcp::visible::with_visibility_memo(
             Self::dispatch_relay_scoped(meta_mcp, tool_policy, mtls_policy, request, client, sink),
-        ));
+        );
         if meta_mcp.relay_active() {
             return meta_mcp.collecting_staged(Box::pin(dispatch)).await;
         }
