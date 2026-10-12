@@ -247,6 +247,26 @@ pub(crate) fn per_user_shared(slot: CallerSlot, shared_slot: SharedSlot) -> PerU
     per_user_on(backend, caller_asked, shared_asked, Surfaced::Yes)
 }
 
+/// Re-attach alpha's scripted per-user upstream after a real eviction
+/// dropped its slot, as a gateway reconnects a per-user slot (the pattern of
+/// `backend/slot_eviction_tests.rs` `rearm`). Its catalogue lists `TOOL`
+/// valid; the returned counts are the new upstream's.
+pub(crate) fn rearm_alpha_slot(backend: &Backend) -> Arc<Asked> {
+    let asked = Arc::new(Asked::default());
+    let tools = vec![tool(SIBLING, &valid()), tool(TOOL, &valid())];
+    backend.set_pooled_transport_for_test(
+        &PoolKey::PerUser {
+            binding: BINDING.to_string(),
+        },
+        Arc::new(Upstream {
+            tools: serde_json::to_value(&tools).expect("tools"),
+            asked: Arc::clone(&asked),
+            fail_list: false,
+        }),
+    );
+    asked
+}
+
 fn build_per_user_backend(
     (slot, shared, warmth): (CallerSlot, &Value, Warmth),
     enforcement: InputSchemaEnforcement,

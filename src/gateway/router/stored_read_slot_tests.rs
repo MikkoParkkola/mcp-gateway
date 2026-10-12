@@ -124,14 +124,34 @@ async fn t8_alpha_s_own_slot_lacking_the_tool_answers_absent() {
     let id = finished(&gw, "s1-t8").await;
     alpha_lacks(&gw);
     let read = task_get(&gw, &id).await;
-    assert_eq!(
-        read.pointer("/error/code"),
-        Some(&json!(-32601)),
-        "T8: alpha's catalogue lacks the tool: {read}"
-    );
     assert!(
         !read.to_string().contains(OUTPUT),
         "T8: output delivered: {read}"
+    );
+    // The gateway's own answer to a name that matches no tool, as alpha, with
+    // that name swapped for TOOL (`read` is surfaced here, so it cannot be
+    // the missing name itself).
+    const MISSING: &str = "no_such_tool_8392";
+    let twin = send(
+        &gw,
+        10,
+        "tools/call",
+        MISSING,
+        json!({"name": MISSING, "arguments": {}, "_meta": modern_meta()}),
+    )
+    .await;
+    let twin: Value = serde_json::from_str(
+        &twin
+            .get("error")
+            .unwrap_or_else(|| panic!("premise: an absent name is refused: {twin}"))
+            .to_string()
+            .replace(MISSING, TOOL),
+    )
+    .expect("JSON");
+    assert_eq!(
+        read.get("error"),
+        Some(&twin),
+        "T8: a blocked stored read answers exactly as an absent name: {read}"
     );
 }
 
@@ -155,12 +175,11 @@ async fn t8t_a_truncated_slot_without_the_tool_still_delivers() {
 async fn c1_a_cold_read_resolves_once_then_warm_polls_resolve_nothing() {
     let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await;
     let id = finished(&gw, "s1-c1").await;
-    backend(&gw).age_per_user_slot_for_test(BINDING, 400);
-    backend(&gw).evict_idle_per_user_entries(std::time::Duration::from_secs(300));
-    assert!(
-        !backend(&gw).holds_per_user_slot_for_test(BINDING),
-        "premise: alpha's slot was evicted"
-    );
+    // Cold as the stored read sees it: alpha's index entry is gone. A real
+    // eviction also drops the pooled slot, and the gateway reconnects it from
+    // config; this fixture's per-user transport is scripted into the slot, so
+    // the slot stays and only the index is forgotten.
+    backend(&gw).forget_caller_slots_for_test();
     let before = gw.mints.load(Ordering::SeqCst);
     let first = task_get(&gw, &id).await;
     assert!(
@@ -199,4 +218,46 @@ async fn k1_a_warm_read_keeps_alpha_s_slot_from_idle_eviction() {
         "K1: the read touched alpha's slot, so the reaper keeps it"
     );
     assert_eq!(gw.mints.load(Ordering::SeqCst), before, "K1: no resolution");
+}
+
+/// C1r (lead, 2026-10-12): C1 after a REAL eviction, which drops alpha's
+/// pooled slot, its upstream connection and its index entry. The upstream is
+/// re-attached as a gateway reconnects a per-user slot (`rearm`, as the
+/// backend's own eviction rows do); the first stored read then claims the
+/// cold view, resolves once, refills the slot and serves. Reconnecting from
+/// config itself is not exercised by any fixture (stated in the PR).
+#[tokio::test]
+async fn c1r_a_read_after_a_real_eviction_resolves_once_and_serves() {
+    let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await;
+    let id = finished(&gw, "s1-c1r").await;
+    backend(&gw).age_per_user_slot_for_test(BINDING, 400);
+    backend(&gw).evict_idle_per_user_entries(std::time::Duration::from_secs(300));
+    assert!(
+        !backend(&gw).holds_per_user_slot_for_test(BINDING),
+        "premise: the real eviction dropped alpha's slot"
+    );
+    let upstream = crate::gateway::meta_mcp::slot_verdict_fixture::rearm_alpha_slot(&backend(&gw));
+    let before = gw.mints.load(Ordering::SeqCst);
+    let first = task_get(&gw, &id).await;
+    assert!(
+        first.to_string().contains(OUTPUT),
+        "C1r: the cold read serves: {first}"
+    );
+    assert_eq!(
+        gw.mints.load(Ordering::SeqCst) - before,
+        1,
+        "C1r: one resolution re-establishes alpha's view"
+    );
+    assert!(
+        upstream.lists() >= 1,
+        "C1r: the refill listed alpha's catalogue"
+    );
+    for _ in 0..5 {
+        let _ = task_get(&gw, &id).await;
+    }
+    assert_eq!(
+        gw.mints.load(Ordering::SeqCst) - before,
+        1,
+        "C1r: warm polls after the refill resolve nothing"
+    );
 }

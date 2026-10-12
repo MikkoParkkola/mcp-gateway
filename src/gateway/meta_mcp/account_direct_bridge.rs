@@ -126,7 +126,7 @@ impl DirectAccountGateway {
     /// Revoke the sole operator's grant through live custody, with no
     /// reconnect (MIK-8392 rows).
     pub(crate) async fn revoke_operator_grant_for_test(&self) {
-        self._custody
+        self.custody
             .handle
             .invalidate(&operator_key())
             .await

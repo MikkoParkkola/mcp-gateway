@@ -67,6 +67,34 @@ pub(super) enum SlotJudgement {
 }
 
 impl MetaMcp {
+    /// Re-establish `caller`'s cold per-user view of `server` for a stored
+    /// read that won the claim (MIK-8392 B'): resolve the caller's credential
+    /// and fill the caller's own slot, which indexes it. One resolution per
+    /// claimed attempt. A failure leaves the lease to expire; the slot was
+    /// evicted, so no stale cached list can stand in for a failed fill.
+    pub(in crate::gateway::meta_mcp) async fn warm_cold_view(
+        &self,
+        (server, tool): (&str, &str),
+        backend: &Backend,
+        caller: CallerProof<'_>,
+    ) {
+        let Ok(resolved) = self
+            .resolve_dispatch((server, tool), Some(backend), caller, caller.verified())
+            .await
+        else {
+            return;
+        };
+        let _ = self
+            .judge_caller_slot(
+                (server, tool),
+                backend,
+                resolved.binding.as_deref(),
+                &resolved.caller_credential.headers,
+                caller,
+            )
+            .await;
+    }
+
     /// The caller verdict for `(server, tool)`, taken right after route
     /// authorize and the firewall (R5.1). Idempotent within a request: a
     /// recorded answer is returned as is.

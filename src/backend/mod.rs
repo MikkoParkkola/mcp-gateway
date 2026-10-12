@@ -26,6 +26,7 @@ const CACHE_LIST_DRAIN_BUDGET: Duration = Duration::from_secs(120);
 mod annotations;
 mod cached_metadata;
 mod caller_slots;
+pub(crate) use caller_slots::ColdClaim;
 mod catalogue_verdict;
 mod descriptor_gate;
 mod era;

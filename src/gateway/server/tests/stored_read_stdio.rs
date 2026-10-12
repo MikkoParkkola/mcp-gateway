@@ -183,4 +183,23 @@ async fn t2_stdio_tasks_get_answers_absent_once_the_listing_withholds_the_tool()
         !read.to_string().contains(OUTPUT),
         "T2: output delivered: {read}"
     );
+    // The criterion: indistinguishable from a name that matches no tool. The
+    // same session calls the tool by its own name, which nothing surfaces.
+    let twin_id = next + 1;
+    let twin = session
+        .ask(
+            &json!({"jsonrpc": "2.0", "id": twin_id, "method": "tools/call",
+                "params": {"name": TOOL, "arguments": {}, "_meta": modern_meta()}}),
+            twin_id,
+        )
+        .await;
+    assert!(
+        twin.get("error").is_some(),
+        "premise: an absent name is refused: {twin}"
+    );
+    assert_eq!(
+        read.get("error"),
+        twin.get("error"),
+        "T2: a blocked stored read answers exactly as an absent name on stdio"
+    );
 }

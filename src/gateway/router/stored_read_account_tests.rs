@@ -22,6 +22,8 @@ const MARKER: &str = "stored-output-8392-t10";
 
 struct Fx {
     router: axum::Router,
+    /// For reading a task record past the stored-read check (W2).
+    state: Arc<super::AppState>,
     gateway: DirectAccountGateway,
     _store: tempfile::TempDir,
 }
@@ -73,7 +75,8 @@ async fn fixture() -> Fx {
         .expect("the backend")
         .store_shared_tools_for_test(vec![tool]);
     Fx {
-        router: super::create_router(state),
+        router: super::create_router(Arc::clone(&state)),
+        state,
         gateway,
         _store: store,
     }
@@ -117,6 +120,35 @@ async fn task_get(fx: &Fx, id: &str) -> Value {
     .await
 }
 
+/// A name no backend serves, swapped for [`TOOL`] in its answer.
+const MISSING: &str = "no_such_tool_8392";
+
+/// The gateway's own answer to a name that matches no tool on `/mcp`, with
+/// the missing name replaced by [`TOOL`]: `read` is surfaced in this fixture,
+/// so it cannot itself be the missing name (as the MIK-8387 rows mask names).
+async fn absent_twin(fx: &Fx) -> Value {
+    let twin = send(
+        fx,
+        "tools/call",
+        MISSING,
+        json!({"name": MISSING, "arguments": {}, "_meta": modern_meta()}),
+    )
+    .await;
+    let error = twin
+        .get("error")
+        .unwrap_or_else(|| panic!("premise: an absent name is refused: {twin}"));
+    serde_json::from_str(&error.to_string().replace(MISSING, TOOL)).expect("JSON")
+}
+
+/// The blocked read answers exactly as an absent name does.
+async fn assert_answers_as_absent(fx: &Fx, read: &Value, row: &str) {
+    assert_eq!(
+        read.get("error"),
+        Some(&absent_twin(fx).await),
+        "{row}: a blocked stored read answers exactly as an absent name: {read}"
+    );
+}
+
 /// T10: grant revoked after the task ran, the shared listing still offering
 /// the tool. Red on the release line: tasks/get delivers the stored output.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -155,11 +187,7 @@ async fn t10_a_stored_read_after_the_grant_is_revoked_answers_absent() {
     );
     fx.gateway.revoke_operator_grant_for_test().await;
     let read = task_get(&fx, &id).await;
-    assert_eq!(
-        read.pointer("/error/code"),
-        Some(&json!(-32601)),
-        "T10: a revoked account's stored read answers as an absent name: {read}"
-    );
+    assert_answers_as_absent(&fx, &read, "T10").await;
     assert!(
         !read.to_string().contains(MARKER),
         "T10: output delivered: {read}"
@@ -275,11 +303,7 @@ async fn t10p_a_plan_task_whose_second_targets_account_is_revoked_answers_absent
     );
     fx.gateway.revoke_operator_grant_for_test().await;
     let read = task_get(&fx, &id).await;
-    assert_eq!(
-        read.pointer("/error/code"),
-        Some(&json!(-32601)),
-        "T10p: a revoked second target's stored plan read answers absent: {read}"
-    );
+    assert_answers_as_absent(&fx, &read, "T10p").await;
     assert!(
         !read.to_string().contains(MARKER),
         "T10p: output delivered: {read}"
@@ -410,4 +434,127 @@ async fn t10pf_a_plan_tasks_frame_after_its_accounts_revoke_carries_status_only(
             );
         }
     }
+}
+
+/// W2 (lead, 2026-10-12): a credential resolved before an input-round pause
+/// is never reused after it. The task's call asks for input and parks; the
+/// account is revoked during the round; the client's answer resumes the
+/// task. The resume opens a fresh memo, so it resolves again and is refused:
+/// the backend sees no second call, and no output is delivered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn w2_a_resume_after_the_account_is_revoked_during_the_input_round_is_refused() {
+    let fx = fixture().await;
+    fx.gateway.answer_next(json!({
+        "resultType": "input_required",
+        "inputRequests": {"confirm": {"method": "elicitation/create",
+            "params": {"message": "confirm?", "requestedSchema": {"type": "object", "properties": {}}}}},
+        "requestState": "backend-state-w2"
+    }));
+    let mut meta = modern_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!("s1-w2");
+    meta["io.modelcontextprotocol/clientCapabilities"]["elicitation"] = json!({});
+    let made = send(
+        &fx,
+        "tools/call",
+        "gateway_invoke",
+        json!({"name": "gateway_invoke",
+            "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"folder": "inbox"}},
+            "task": {}, "_meta": meta.clone()}),
+    )
+    .await;
+    let id = made
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("premise: a task was made: {made}"))
+        .to_owned();
+    let bound = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let got = task_get(&fx, &id).await;
+        if got.pointer("/result/status") == Some(&json!("input_required")) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < bound,
+            "premise: the task parks on its input round: {got}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let sent = fx.gateway.tool_calls().len();
+    fx.gateway.revoke_operator_grant_for_test().await;
+    fx.gateway.answer_next(json!({
+        "content": [{"type": "text", "text": MARKER}], "isError": false
+    }));
+    let _ = send(
+        &fx,
+        "tasks/update",
+        &id,
+        json!({"taskId": id, "inputResponses": {"confirm": {"action": "accept", "content": {}}},
+            "_meta": meta}),
+    )
+    .await;
+    // Observed in the store, not through tasks/get: STORED.1 refuses a
+    // revoked account's stored read (-32601), so tasks/get cannot show the
+    // settle. Bounded: a resume that hangs fails here.
+    let store = &fx.state.task_executor.service.store;
+    let bound = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let status = store.status_for_test(&id);
+        if matches!(
+            status,
+            Some(
+                crate::protocol::tasks::TaskStatus::Completed
+                    | crate::protocol::tasks::TaskStatus::Failed
+                    | crate::protocol::tasks::TaskStatus::Cancelled
+            )
+        ) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < bound,
+            "W2: the resumed task never settled after the revoke: {status:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let digest = store
+        .owner_digest_for_test(&id)
+        .expect("the task has an owner");
+    let committed = store.get(&digest, &id).expect("the settled task reads");
+    let settled = serde_json::to_value(committed.task.wire()).expect("JSON");
+    assert_eq!(
+        settled.get("status"),
+        Some(&json!("failed")),
+        "W2: a resume after the revoke ends refused, as failed: {settled}"
+    );
+    // The oracle is independent of the resume: a LIVE call of the same tool
+    // under the same revoked account (the AccountReconnectRequired path). The
+    // task's recorded error must be that answer's code and message.
+    let live = send(
+        &fx,
+        "tools/call",
+        "gateway_invoke",
+        json!({"name": "gateway_invoke",
+            "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"folder": "inbox"}},
+            "_meta": modern_meta()}),
+    )
+    .await;
+    let live_error = live
+        .get("error")
+        .unwrap_or_else(|| panic!("premise: the live call is refused after the revoke: {live}"));
+    let recorded = settled
+        .get("error")
+        .unwrap_or_else(|| panic!("W2: the failed task records its error: {settled}"));
+    assert_eq!(
+        (recorded.get("code"), recorded.get("message")),
+        (live_error.get("code"), live_error.get("message")),
+        "W2: the resume refuses as the live call does: task {settled} vs live {live}"
+    );
+    assert_eq!(
+        fx.gateway.tool_calls().len(),
+        sent,
+        "W2: the resume reached the backend after the revoke: {settled}"
+    );
+    assert!(
+        !settled.to_string().contains(MARKER),
+        "W2: the resumed output was delivered after the revoke: {settled}"
+    );
 }

@@ -47,6 +47,17 @@ impl MetaMcp {
             if visible::account_outcome(server, &account).is_some() {
                 continue;
             }
+            // s2-d3 E5: a CLEAN resolution this request already holds (the
+            // route stage's caller verdict, carried to the dispatch) proves
+            // the account live; reading custody again would be a second read.
+            // A carried resolution whose fill failed is no proof (E4): the
+            // account is judged by its own read below.
+            if visible::with_carried(server, tool, |carried| carried.fill_error.is_none())
+                == Some(true)
+            {
+                visible::record_account_outcome(server, &account, AccountOutcome::Live);
+                continue;
+            }
             let outcome = self.judge_account(server, &account, caller).await;
             visible::record_account_outcome(server, &account, outcome);
         }

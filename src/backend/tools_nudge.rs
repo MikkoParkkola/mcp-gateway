@@ -219,6 +219,15 @@ impl super::Backend {
         })
     }
 
+    /// Forget every caller-slot index entry, leaving the pooled slots in
+    /// place (MIK-8392 C1): a caller's view reads cold, while a fixture's
+    /// scripted per-user transport, which a real eviction would drop and a
+    /// real gateway would reconnect from config, stays reachable.
+    #[cfg(test)]
+    pub(crate) fn forget_caller_slots_for_test(&self) {
+        self.caller_slots.clear();
+    }
+
     /// Withhold tool `name` from every slot's served view, as a descriptor
     /// verdict does.
     #[cfg(test)]

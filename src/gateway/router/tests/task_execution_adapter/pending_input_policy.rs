@@ -6,7 +6,9 @@
 //! base, G1 and C1 base-green regressions.
 use super::super::*;
 use super::input_round::{STATE_1, answer, ask, done, parked, update, wait_input_required};
-use super::stored_result_policy::{assert_refused, code_mode_call, strip_targets, withhold};
+use super::stored_result_policy::{
+    assert_answers_as_absent, assert_refused, code_mode_call, strip_targets, withhold,
+};
 use super::support::*;
 
 /// The backend's question text (`ask`).
@@ -72,7 +74,7 @@ async fn a_parked_call_is_refused_on_get_once_its_tool_is_withheld() {
     withhold(&state, TOOL);
     let fetched = get_task(&state, "key-a", &id).await;
 
-    assert_refused(&fetched, "withheld");
+    assert_answers_as_absent(&state, &fetched).await;
     assert_no_question(&fetched);
 }
 
@@ -86,7 +88,7 @@ async fn a_parked_chain_is_refused_on_get_once_its_step_is_withheld() {
     withhold(&state, TOOL);
     let fetched = get_task(&state, "key-a", &id).await;
 
-    assert_refused(&fetched, "withheld");
+    assert_answers_as_absent(&state, &fetched).await;
     assert_no_question(&fetched);
 }
 
@@ -117,7 +119,7 @@ async fn a_refused_round_is_shown_and_answerable_once_policy_admits_it_again() {
 
     withhold(&state, TOOL);
     let refused = get_task(&state, "key-a", &id).await;
-    assert_refused(&refused, "withheld");
+    assert_answers_as_absent(&state, &refused).await;
     assert_no_question(&refused);
 
     restore(&state);
@@ -171,6 +173,9 @@ async fn a_repeat_of_a_parked_call_is_refused_once_its_tool_is_withheld() {
     withhold(&state, TOOL);
     let repeat = post(&state, "key-a", super::input_round::create(2, "x2466-g1")).await;
 
+    // A repeat is a live tools/call: the live path's admission refuses a
+    // descriptor-blocked tool first (-32600, "withheld"), before any stored
+    // read is judged (MIK-8392 site-5 split: a repeat keeps the live answer).
     assert_refused(&repeat, "withheld");
     assert_no_question(&repeat);
     std::assert_eq!(mock.calls(), 1, "no second dispatch: {:?}", mock.seen());

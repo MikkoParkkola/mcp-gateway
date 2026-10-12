@@ -381,7 +381,9 @@ impl MetaMcp {
                 } else {
                     caller.retry.attestation.as_deref()
                 };
-                self.refuse_stored_delivery(&id, &stored, attestation, session_id, caller)
+                // MIK-8392 site-5 split: the catalogue is judged here; an
+                // account that is not live is the call's own live path.
+                self.refuse_stored_repeat(&id, &stored, attestation, session_id, caller)
                     .unwrap_or_else(|| {
                         // The holds already sit in this request's scope.
                         let held = super::sealed_hold::Held::new(

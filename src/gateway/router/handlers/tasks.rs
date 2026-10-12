@@ -386,6 +386,55 @@ pub(super) async fn tasks_get(
     params: Option<&Value>,
     caller: &RecoveryCaller<'_>,
 ) -> JsonRpcResponse {
+    // MIK-8392: one request memo, filled by the async pre-pass, then read by
+    // the synchronous delivery check inside the route.
+    crate::gateway::meta_mcp::visible::with_visibility_memo(async {
+        prepare_stored_read(state, owner, params, caller).await;
+        tasks_get_judged(state, owner, id, params, caller).await
+    })
+    .await
+}
+
+/// The caller a stored read is judged as, built as [`with_policy_caller`]
+/// builds its context: the verified identity, and the credential's provenance.
+fn stored_read_caller<'a>(
+    caller: &RecoveryCaller<'a>,
+) -> crate::identity_propagation::CallerProof<'a> {
+    crate::identity_propagation::CallerProof::new(
+        caller.verified_identity,
+        crate::identity_propagation::CallerProvenance::classify(
+            caller.client.map(|client| client.principal.as_str()),
+        ),
+    )
+}
+
+/// Fill the request's account outcomes for the named task's recorded
+/// targets (MIK-8392). An owner-scoped read: a task this caller does not own,
+/// or that is absent, is left to the route's own answer.
+async fn prepare_stored_read(
+    state: &Arc<AppState>,
+    owner: &str,
+    params: Option<&Value>,
+    caller: &RecoveryCaller<'_>,
+) {
+    let Some(task_id) = crate::gateway::task_route::task_id_param(params) else {
+        return;
+    };
+    if let Ok(stored) = state.tasks.get(owner, task_id) {
+        state
+            .meta_mcp
+            .prepare_stored_read(&stored, stored_read_caller(caller))
+            .await;
+    }
+}
+
+async fn tasks_get_judged(
+    state: &Arc<AppState>,
+    owner: &str,
+    id: RequestId,
+    params: Option<&Value>,
+    caller: &RecoveryCaller<'_>,
+) -> JsonRpcResponse {
     let owner_text = TaskOwnerText::Http(owner.to_owned());
     route(state, &owner_text)
         .get(
@@ -708,11 +757,29 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
                     .is_some()
             })
         };
-        let mut pending = self
-            .state
-            .meta_mcp
-            .task_notification_frame(notification, stored, refused, subscription)
-            .await?;
+        // MIK-8392: the pre-pass fills this frame's account outcomes in its own
+        // memo (the stream runs outside any request scope), then the check
+        // inside the frame reads them. Without it every account target would
+        // fail closed.
+        let prepared = stored.is_some().then(|| {
+            notification
+                .pointer("/params/taskId")
+                .and_then(Value::as_str)
+                .and_then(|id| self.state.tasks.get(&self.owner, id).ok())
+        });
+        let mut pending = crate::gateway::meta_mcp::visible::with_visibility_memo(async {
+            if let Some(Some(task)) = prepared.as_ref() {
+                self.state
+                    .meta_mcp
+                    .prepare_stored_read(task, stored_read_caller(&live))
+                    .await;
+            }
+            self.state
+                .meta_mcp
+                .task_notification_frame(notification, stored, refused, subscription)
+                .await
+        })
+        .await?;
         let holds = std::mem::take(&mut pending.holds);
         Some(crate::gateway::streaming::TaskFrame {
             frame: pending.frame.clone(),

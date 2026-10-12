@@ -28,6 +28,22 @@ pub(crate) enum CallerSlot {
     /// current grant), as the last listing entry's check found it. Written
     /// only from `MetaMcp::has_no_view_for` (MIK-8356, design R3.7).
     NoView,
+    /// A stored read claimed the attempt to re-establish this caller's cold
+    /// view (MIK-8392 B'): a lease, so one reader resolves per window. A
+    /// failed or abandoned attempt only delays the next one until `until`;
+    /// a success, or any fill of the caller's own slot, replaces it.
+    ColdTried { until: tokio::time::Instant },
+}
+
+/// What a claim on a cold view decided (MIK-8392).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ColdClaim {
+    /// This reader holds the lease and resolves.
+    Won,
+    /// Another reader's lease is still running: answer retryable.
+    Leased,
+    /// The view is not cold (a live slot): nothing to claim.
+    Warm,
 }
 
 impl CallerSlot {
@@ -109,8 +125,53 @@ impl Backend {
     pub(super) fn forget_caller_slot(&self, evicted: &Arc<PooledEntry>) {
         self.caller_slots.retain(|_, slot| match slot {
             CallerSlot::Held { entry, .. } => !std::ptr::eq(entry.as_ptr(), Arc::as_ptr(evicted)),
-            CallerSlot::NoView => true,
+            CallerSlot::NoView | CallerSlot::ColdTried { .. } => true,
         });
+    }
+
+    /// Claim the attempt to re-establish `principal_id`'s cold view, under
+    /// one shard guard (MIK-8392 B', muse F7): the expiry is checked inside
+    /// the same entry, and nothing awaits while it is held. A dead or retired
+    /// slot's entry, a `NoView` entry (the caller checked the grant is live
+    /// again) and an expired lease are claimable.
+    pub(crate) fn claim_cold_view(
+        &self,
+        principal_id: &str,
+        lease: std::time::Duration,
+    ) -> ColdClaim {
+        let now = tokio::time::Instant::now();
+        let fresh = CallerSlot::ColdTried { until: now + lease };
+        match self.caller_slots.entry(principal_id.to_string()) {
+            dashmap::mapref::entry::Entry::Vacant(vacant) => {
+                vacant.insert(fresh);
+                ColdClaim::Won
+            }
+            dashmap::mapref::entry::Entry::Occupied(mut occupied) => {
+                let decision = match occupied.get() {
+                    held @ CallerSlot::Held { .. } if held.live_binding().is_some() => {
+                        ColdClaim::Warm
+                    }
+                    CallerSlot::ColdTried { until } if now < *until => ColdClaim::Leased,
+                    _ => ColdClaim::Won,
+                };
+                if decision == ColdClaim::Won {
+                    occupied.insert(fresh);
+                }
+                decision
+            }
+        }
+    }
+
+    /// Mark the live slot `binding` used now, so a caller reading its stored
+    /// results keeps it from idle eviction (MIK-8392 touch-on-read). No mint,
+    /// no fill; a slot that is gone is left alone.
+    pub(crate) fn touch_caller_slot(&self, binding: &str) {
+        let key = PoolKey::PerUser {
+            binding: binding.to_string(),
+        };
+        if let Some(entry) = self.pool.get(&key) {
+            entry.value().touch();
+        }
     }
 
     /// Every binding the index currently points at (test plan I2e).

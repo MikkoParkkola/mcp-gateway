@@ -11,27 +11,19 @@
 use super::super::*;
 use super::support::*;
 
-/// The answer to a name that matches no tool: -32601, "Unknown tool", and no
-/// result. Exact code, never "any error".
-fn assert_absent(body: &Value, row: &str) {
-    std::assert_eq!(
-        body.pointer("/error/code"),
-        Some(&json!(-32601)),
-        "{row}: a blocked stored read answers as an absent name: {body}"
-    );
-    let message = body
-        .pointer("/error/message")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    assert!(
-        message.starts_with("Unknown tool"),
-        "{row}: the absent-name message: {body}"
-    );
-    assert!(body.get("result").is_none(), "{row}: no result: {body}");
+/// A blocked stored read answers exactly as the gateway's own absent name
+/// does on this route (byte for byte), and never with the stored output.
+async fn assert_absent(state: &Arc<AppState>, body: &Value, row: &str) {
     assert!(
         !body.to_string().contains("mock-backend-answered"),
         "{row}: the stored output was delivered: {body}"
     );
+    std::assert_eq!(
+        body.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "{row}: a blocked stored read answers -32601: {body}"
+    );
+    super::stored_result_policy::assert_answers_as_absent(state, body).await;
 }
 
 /// A finished `gateway_invoke` task of the mock's tool, its stored output
@@ -72,7 +64,7 @@ async fn t1_tasks_get_answers_absent_once_the_listing_withholds_the_tool() {
     let (state, _store) = state_with(&mock).await;
     let id = finished(&state, "s1-t1").await;
     withhold_by_schema(&state);
-    assert_absent(&get_task(&state, "key-a", &id).await, "T1");
+    assert_absent(&state, &get_task(&state, "key-a", &id).await, "T1").await;
 }
 
 /// T1d (P1): HTTP tasks/get, a descriptor block. Today this answers the
@@ -83,7 +75,7 @@ async fn t1d_tasks_get_answers_absent_once_the_tool_is_descriptor_blocked() {
     let (state, _store) = state_with(&mock).await;
     let id = finished(&state, "s1-t1d").await;
     backend(&state).block_tool_for_test(TOOL);
-    assert_absent(&get_task(&state, "key-a", &id).await, "T1d");
+    assert_absent(&state, &get_task(&state, "key-a", &id).await, "T1d").await;
 }
 
 /// T5: the repeated task-augmented call (same key) reaches the stored task
@@ -103,7 +95,7 @@ async fn t5_a_repeated_task_call_answers_absent_once_the_listing_withholds_the_t
     let sent = mock.calls();
     withhold_by_schema(&state);
     let repeated = post(&state, "key-a", task_invoke(3, "s1-t5", json!({ "q": 1 }))).await;
-    assert_absent(&repeated, "T5");
+    assert_absent(&state, &repeated, "T5").await;
     std::assert_eq!(mock.calls(), sent, "T5: the repeat reached the backend");
 }
 
@@ -116,7 +108,7 @@ async fn t9_tasks_get_answers_absent_once_a_complete_catalogue_lacks_the_tool() 
     let (state, _store) = state_with(&mock).await;
     let id = finished(&state, "s1-t9").await;
     delist(&state);
-    assert_absent(&get_task(&state, "key-a", &id).await, "T9");
+    assert_absent(&state, &get_task(&state, "key-a", &id).await, "T9").await;
 }
 
 /// T9 control (R2-5): a TRUNCATED catalogue without the tool proves nothing
@@ -176,7 +168,7 @@ async fn t12_a_withheld_target_answers_absent_even_where_the_policy_also_refuses
     let id = finished(&state, "s1-t12").await;
     kill(&state);
     withhold_by_schema(&state);
-    assert_absent(&get_task(&state, "key-a", &id).await, "T12");
+    assert_absent(&state, &get_task(&state, "key-a", &id).await, "T12").await;
 }
 
 /// K2 (lead rule): a policy refusal keeps the live error. Under a kill
@@ -277,7 +269,7 @@ async fn t13_pending_input_requests_answer_absent_once_the_listing_withholds_the
     );
     withhold_by_schema(&state);
     let read = get_task(&state, "key-a", &id).await;
-    assert_absent(&read, "T13");
+    assert_absent(&state, &read, "T13").await;
     assert!(
         !read.to_string().contains("inputRequests"),
         "T13: the backend's question was delivered: {read}"
@@ -299,15 +291,11 @@ async fn t14_a_peer_authored_error_answers_absent_once_the_listing_withholds_the
     );
     withhold_by_schema(&state);
     let read = get_task(&state, "key-a", &id).await;
-    std::assert_eq!(
-        read.pointer("/error/code"),
-        Some(&json!(-32601)),
-        "T14: a blocked stored read answers as an absent name: {read}"
-    );
     assert!(
         !read.to_string().contains("mock-backend-failed"),
         "T14: the peer's error was delivered: {read}"
     );
+    assert_absent(&state, &read, "T14").await;
 }
 
 /// X1 (lead rule, 2026-10-12): the stated divergence. For an explicit-backend
@@ -326,7 +314,7 @@ async fn x1_a_stored_read_answers_absent_where_the_explicit_live_call_answers_ot
         Some(&json!(-32601)),
         "premise: the explicit live call does not answer -32601: {live}"
     );
-    assert_absent(&get_task(&state, "key-a", &id).await, "X1");
+    assert_absent(&state, &get_task(&state, "key-a", &id).await, "X1").await;
 }
 
 /// The second backend a two-target task calls.
@@ -384,7 +372,7 @@ async fn t15_a_two_target_task_answers_absent_when_either_target_is_withheld() {
         let (state, _store) = two_backend_state().await;
         let id = finished_two_targets(&state, &format!("s1-t15-{withheld}")).await;
         withhold_on(&state, withheld);
-        assert_absent(&get_task(&state, "key-a", &id).await, case);
+        assert_absent(&state, &get_task(&state, "key-a", &id).await, case).await;
     }
 }
 
@@ -448,7 +436,7 @@ async fn t22_a_recorded_step_removed_from_the_playbook_still_blocks_the_read() {
     let id = finished_playbook(&state, "s1-t22").await;
     install(&state, json!([step("s1", BACKEND)]));
     withhold_on(&state, SECOND);
-    assert_absent(&get_task(&state, "key-a", &id).await, "T22");
+    assert_absent(&state, &get_task(&state, "key-a", &id).await, "T22").await;
 }
 
 /// T23 (a2a-1, MIK-8406): a conditional step that never ran is not recorded,

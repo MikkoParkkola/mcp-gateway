@@ -8,6 +8,7 @@
 
 use serde_json::json;
 
+use super::visible::{self, AccountOutcome};
 use super::{MetaMcp, MetaMcpCallerContext, error_response_preserving_status};
 use crate::gateway::task_service::CommittedTask;
 use crate::protocol::tasks::TaskStatus;
@@ -15,12 +16,15 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::{Error, Result};
 
 impl MetaMcp {
-    /// The refusal for delivering `stored`, or `None` when it may go out.
+    /// The refusal for delivering `stored` on a task read (tasks/get, a
+    /// notification frame), or `None` when it may go out.
     ///
     /// A terminal task's output and a parked task's pending input requests
     /// (#2466) are both backend output, so both are checked. A working or
     /// cancelled task delivers none. `attestation` is the token this request
-    /// presents.
+    /// presents. The request's account outcomes must already be filled by
+    /// [`Self::prepare_stored_read`] (MIK-8392); a missing one answers
+    /// retryable, never the output.
     pub(crate) fn refuse_stored_delivery(
         &self,
         id: &RequestId,
@@ -29,18 +33,154 @@ impl MetaMcp {
         session: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
     ) -> Option<JsonRpcResponse> {
+        self.refuse_stored(id, stored, (attestation, session), caller, StoredRead::Read)
+    }
+
+    /// [`Self::refuse_stored_delivery`] for a repeated task-augmented call
+    /// (`BeginOutcome::Existing`). Its catalogue is judged here; its accounts
+    /// are not: a call has a live path, so an account that is not live is
+    /// answered by that call's own resolution after this returns `None`
+    /// (MIK-8392 site-5 split, lead ruling 2026-10-12).
+    pub(crate) fn refuse_stored_repeat(
+        &self,
+        id: &RequestId,
+        stored: &CommittedTask,
+        attestation: Option<&str>,
+        session: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> Option<JsonRpcResponse> {
+        self.refuse_stored(
+            id,
+            stored,
+            (attestation, session),
+            caller,
+            StoredRead::RepeatedCall,
+        )
+    }
+
+    /// Fill this request's account outcomes for `stored`'s targets, the
+    /// async half of a stored read (MIK-8392): every read entry awaits this
+    /// inside the request's memo, then judges synchronously.
+    pub(crate) async fn prepare_stored_read(
+        &self,
+        stored: &CommittedTask,
+        caller: crate::identity_propagation::CallerProof<'_>,
+    ) {
+        if !stored.serves_backend_output() {
+            return;
+        }
+        let targets: Vec<(&str, &str)> = stored
+            .targets
+            .iter()
+            .map(|target| (target.server.as_str(), target.tool.as_str()))
+            .collect();
+        self.fill_account_outcomes(&targets, caller).await;
+        for &(server, tool) in &targets {
+            self.settle_caller_view(server, tool, caller).await;
+        }
+    }
+
+    /// The per-user half of a stored read (MIK-8392 B' and touch-on-read):
+    /// a caller's live slot is touched so reading it keeps it from idle
+    /// eviction; a cold one is re-established by the one reader that claims
+    /// it, and only while its account reads live. Every other reader answers
+    /// retryable until the lease ends.
+    async fn settle_caller_view(
+        &self,
+        server: &str,
+        tool: &str,
+        caller: crate::identity_propagation::CallerProof<'_>,
+    ) {
+        let Some(backend) = self.backends.get(server) else {
+            return;
+        };
+        if !backend.keeps_per_user_catalogues() {
+            return;
+        }
+        let Some(principal) = self.principal_for(&backend, caller) else {
+            return;
+        };
+        let id = principal.stable_actor_id();
+        if let Some(binding) = backend.caller_slot_binding(&id) {
+            backend.touch_caller_slot(&binding);
+            return;
+        }
+        let account_live = self.target_account(server, tool).is_none_or(|account| {
+            matches!(
+                visible::account_outcome(server, &account),
+                Some(AccountOutcome::Live | AccountOutcome::Unjudged)
+            )
+        });
+        if account_live
+            && backend.claim_cold_view(&id, COLD_RETRY_BACKOFF) == crate::backend::ColdClaim::Won
+        {
+            self.warm_cold_view((server, tool), &backend, caller).await;
+        }
+    }
+
+    fn refuse_stored(
+        &self,
+        id: &RequestId,
+        stored: &CommittedTask,
+        (attestation, session): (Option<&str>, Option<&str>),
+        caller: &MetaMcpCallerContext<'_>,
+        read: StoredRead,
+    ) -> Option<JsonRpcResponse> {
         if !stored.serves_backend_output() {
             return None;
         }
-        let refused = self
-            .authorize_stored(stored, attestation, session, caller)
-            .err();
+        // Visibility first, as on the live path: a withheld target answers
+        // as absent even where policy would also refuse (MIK-8392 T12).
+        let refused = match self.judge_stored_targets(stored, session, caller, read) {
+            Err(StoredWithheld::Retry) => return Some(retry_later(id)),
+            Err(StoredWithheld::Refused(error)) => Some(error),
+            Ok(()) => self
+                .authorize_stored(stored, attestation, session, caller)
+                .err(),
+        };
         // COLLUDE.1 §13.3: a stored result or pending prompt delivered again
         // renews the reader's receipt; the delivery owner commits it.
         if refused.is_none() {
             self.stage_stored_receipt(caller.relay_caller(session), caller.api_key_name, stored);
         }
         refused.map(|error| error_response_preserving_status(id.clone(), &error))
+    }
+
+    /// Each recorded target against this caller's current view (MIK-8392):
+    /// its account (task reads only) as the pre-pass recorded it, then its
+    /// catalogue through the one judgement [`MetaMcp::stored_target_view`],
+    /// refused through the one guard [`visible::absent_if_withheld`].
+    fn judge_stored_targets(
+        &self,
+        stored: &CommittedTask,
+        session: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+        read: StoredRead,
+    ) -> std::result::Result<(), StoredWithheld> {
+        let scope = caller.scope();
+        for target in &stored.targets {
+            let (server, tool) = (target.server.as_str(), target.tool.as_str());
+            if read == StoredRead::Read
+                && let Some(account) = self.target_account(server, tool)
+            {
+                match visible::account_outcome(server, &account) {
+                    // Unfilled: the pre-pass never ran for it. Fail closed,
+                    // and retryable: nothing about the grant was learned.
+                    None | Some(AccountOutcome::Unavailable) => {
+                        return Err(StoredWithheld::Retry);
+                    }
+                    Some(AccountOutcome::NoView) => {
+                        return Err(StoredWithheld::Refused(visible::absent_name(tool)));
+                    }
+                    Some(AccountOutcome::Live | AccountOutcome::Unjudged) => {}
+                }
+            }
+            let Some(judged) = self.stored_target_view(server, tool, scope, session) else {
+                return Err(StoredWithheld::Retry);
+            };
+            visible::absent_if_withheld(Some(judged), tool).map_err(StoredWithheld::Refused)?;
+        }
+        Ok(())
     }
 
     fn authorize_stored(
@@ -175,4 +315,39 @@ impl MetaMcp {
             super::invoke::relay::discard_staged();
         }
     }
+}
+
+/// How long a claimed attempt to re-establish a cold view holds before
+/// another reader may try (MIK-8392 B'): the idle reaper's own sweep, so a
+/// cold state outlasts eviction by at most one sweep, and an outage costs at
+/// most one resolution per caller per backend per minute.
+const COLD_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Which stored delivery is judged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StoredRead {
+    /// A task read: tasks/get or a notification frame.
+    Read,
+    /// A repeated task-augmented call: its accounts are judged live.
+    RepeatedCall,
+}
+
+/// Why a stored delivery does not go out.
+enum StoredWithheld {
+    /// Its target is withheld from this caller: the absent answer.
+    Refused(Error),
+    /// This caller's view is not settled yet: retry, never terminal.
+    Retry,
+}
+
+/// The retryable answer (MIK-8392 s1-d1): -32603 with a `retryable` data
+/// member, built here because the shared error converter keeps only listed
+/// data keys. It carries no output.
+fn retry_later(id: &RequestId) -> JsonRpcResponse {
+    JsonRpcResponse::error_with_data(
+        Some(id.clone()),
+        -32603,
+        "task result temporarily unavailable, retry",
+        json!({ "retryable": true }),
+    )
 }

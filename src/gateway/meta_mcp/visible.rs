@@ -140,6 +140,43 @@ impl MetaMcp {
         self.invokable(server, tool, scope, session_id)
     }
 
+    /// Whether this caller can still see a STORED task's target, judged
+    /// without a mint or a fill (MIK-8392.STORED.1), or `None` while its
+    /// per-user view is cold (the caller answers retryable). The rules are
+    /// the listing's: a descriptor block, a slot or account with no view, an
+    /// entry withheld by [`Self::visible_tool`], or a catalogue that is
+    /// populated, complete and lacks the tool, read from one snapshot. A
+    /// truncated or never-populated catalogue proves nothing about the tool,
+    /// so it is judged on the other reasons only.
+    pub(crate) fn stored_target_view(
+        &self,
+        server: &str,
+        tool: &str,
+        scope: InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) -> Option<Visibility> {
+        if self.descriptor_blocked(server, tool) {
+            return Some(Visibility::Withheld(Withholding::Descriptor));
+        }
+        let Some(backend) = self.backends.get(server) else {
+            return Some(self.judge_name(server, tool, scope, session_id));
+        };
+        let binding = match self.listing_view(&backend, scope) {
+            super::listing_view::ListingView::NoView => {
+                return Some(Visibility::Withheld(Withholding::Lacked));
+            }
+            super::listing_view::ListingView::Cold => return None,
+            super::listing_view::ListingView::Shared => None,
+            super::listing_view::ListingView::Caller(binding) => Some(binding),
+        };
+        let (tools, truncated, populated) = backend.cached_tools_view(binding.as_deref());
+        Some(match tools.iter().find(|entry| entry.name == tool) {
+            Some(entry) => self.visible_tool(server, entry, scope, session_id),
+            None if populated && !truncated => Visibility::Withheld(Withholding::Lacked),
+            None => self.invokable(server, tool, scope, session_id),
+        })
+    }
+
     /// What the name `tool_name` means for this caller.
     pub(crate) fn surfaced_for<'s>(
         &'s self,
