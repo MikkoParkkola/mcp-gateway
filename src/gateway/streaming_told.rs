@@ -227,7 +227,7 @@ impl ViewSubject {
             return Ok(());
         };
         let Some(verifier) = ctx.cf_verifier else {
-            return Err(DeadReason::Adapter);
+            return Err(DeadReason::Cf);
         };
         let age = crate::config::KeyServerOidcConfig {
             token_age: crate::key_server::TokenAgeCap::ExpOnly,
@@ -236,7 +236,7 @@ impl ViewSubject {
             .verify(assertion.expose(), &age)
             .await
             .map(drop)
-            .map_err(|_| DeadReason::Adapter)
+            .map_err(|_| DeadReason::Cf)
     }
 
     /// Whether the identity the stream was admitted under is still good, or
@@ -282,6 +282,9 @@ pub(crate) enum DeadReason {
     /// unreadable clock is folded in here: `jwt_window` answers Expired for
     /// it, and a broken host clock alerts elsewhere.
     Adapter,
+    /// The Cloudflare Access assertion the stream was admitted under no longer
+    /// verifies (a rotated or revoked key, or no verifier to ask).
+    Cf,
 }
 
 impl DeadReason {
@@ -299,6 +302,7 @@ impl DeadReason {
         match self {
             Self::Bearer => "bearer",
             Self::Adapter => "adapter",
+            Self::Cf => "cf",
         }
     }
 }

@@ -112,5 +112,5 @@ async fn a_held_assertion_with_no_verifier_is_refused_and_none_held_is_not() {
         cf_assertion: Some(Redacted::new("a.b.c")),
         ..ViewSubject::default()
     };
-    assert_eq!(held.verify_held_cf(&ctx).await, Err(DeadReason::Adapter));
+    assert_eq!(held.verify_held_cf(&ctx).await, Err(DeadReason::Cf));
 }
