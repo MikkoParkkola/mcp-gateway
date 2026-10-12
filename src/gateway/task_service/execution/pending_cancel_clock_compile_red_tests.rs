@@ -16,6 +16,7 @@ use telemetry_metrics::{
 use super::clock_tests::{Claimant, DAY, DAY_MS, HOUR, dark_claim_then_restart};
 use crate::gateway::task_service::store::StoreError;
 use crate::gateway::task_service::store::targets::UpstreamCancelState::{Done, Pending};
+use crate::test_wait::HANG_BOUND;
 
 const HELD_METRIC: &str = "mcp_task_cancel_held_past_ttl_total";
 const HELD_WARN: &str = "held past its ttl";
@@ -95,11 +96,18 @@ fn a_dark_cancel_past_its_ttl_is_held_counted_once_then_sent_once() {
             // open, so both passes run while the record is still unsent.
             let peer = r.peer();
             let release = peer.hold_next();
-            for _ in 0..2 {
+            for pass in 0..2 {
                 r.executor
                     .expiry_pass_for_test()
                     .await
                     .expect("an expiry pass");
+                if pass == 0 {
+                    // The first pass's flush has started the held send: the
+                    // second pass runs while it is in flight and unsent.
+                    tokio::time::timeout(HANG_BOUND, peer.parked.notified())
+                        .await
+                        .expect("the held send reached the peer");
+                }
                 assert!(
                     r.service.store.get(&r.owner_digest, &r.id).is_ok(),
                     "the held row was deleted"

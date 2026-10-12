@@ -399,6 +399,14 @@ async fn a_cancel_claimed_after_enumeration_keeps_its_row() {
         Some(Pending { attempts: 0 }),
         "premise: the worker's claim wrote an undated pending cancel"
     );
+    assert_eq!(
+        f.service
+            .get(OWNER, &f.id)
+            .expect("the row is readable")
+            .revision,
+        revision,
+        "premise: the claim kept the snapshot's revision, so only the locked recheck can refuse"
+    );
 
     let deleted = f
         .service

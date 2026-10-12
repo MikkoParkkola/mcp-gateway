@@ -19,7 +19,8 @@
 # diagnostic fails the check, so a broken build can never pass as "the lint
 # bites". Before any cargo run the checker is itself proven on synthetic
 # diagnostics (a clean run passes; an unrelated error, a failed build, a
-# missing build completion and a nonzero clippy exit each fail).
+# missing build completion, a nonzero clippy exit and a plant raised to an
+# error each fail).
 # CARGO_TARGET_DIR defaults to this checkout's target/, so compiled
 # dependencies are reused; CARGO=spark-cargo runs the clippy pass on the build
 # server instead.
@@ -130,7 +131,8 @@ proof unrelated_error fail 0 "$hit" "$unrelated" "$ok_end"
 proof failed_build fail 0 "$hit" "$bad_end"
 proof no_build_completion fail 0 "$hit"
 proof clippy_exit_nonzero fail 101 "$hit" "$ok_end"
-echo "check_clock_lint: checker proven on 5 synthetic runs"
+proof plant_as_error fail 0 "${hit/\"level\":\"warning\"/\"level\":\"error\"}" "$ok_end"
+echo "check_clock_lint: checker proven on 6 synthetic runs"
 
 # A detached worktree, not a tar copy: `CARGO=spark-cargo` needs a git tree.
 git -C "$root" worktree add --quiet --detach "$scratch" HEAD
@@ -186,12 +188,19 @@ RUST
 # are linted where product code is.
 printf '\nmod clock_lint_plants;\n' >> "$scratch/src/lib.rs"
 
+# CI runs every job with RUSTFLAGS=-Dwarnings, which would turn each plant
+# into an error and fail the build. `-D warnings` is passed here as well, so
+# every run (Spark's included: spark-cargo does not forward RUSTFLAGS) meets
+# CI's condition, and `--cap-lints warn` keeps the plants warnings under it.
+# They are rustc arguments, not RUSTFLAGS, so CI's compiled dependencies stay
+# valid.
 out="$scratch/clippy.json"
 rc=0
 (
   cd "$scratch"
   CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$root/target}" \
-    ${CARGO:-cargo} clippy --lib --tests --all-features --message-format=json -- -W clippy::disallowed_methods
+    ${CARGO:-cargo} clippy --lib --tests --all-features --message-format=json -- \
+    -D warnings -W clippy::disallowed_methods --cap-lints warn
 ) > "$out" 2> "$scratch/clippy.stderr" || rc=$?
 
 python3 -I "$checker" "$out" "$scratch/$plant" "$plant" "$rc" "$scratch/clippy.stderr"
