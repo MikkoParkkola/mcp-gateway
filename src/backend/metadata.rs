@@ -365,17 +365,7 @@ impl Backend {
                             Ok((items, truncated, prepared))
                         })
                         .await;
-                        let end = match &drained {
-                            Ok(_) => FillEnd::Drained,
-                            // A login in progress stamps no cooldown (MIK-7982).
-                            Err(e) if e.is_authorization_wait() => FillEnd::Pending,
-                            Err(e) => match super::fill_check::Replay::of(e) {
-                                None if super::fill_check::is_transport_failure(e) => {
-                                    FillEnd::Unreplayable
-                                }
-                                transport => FillEnd::Failed { transport },
-                            },
-                        };
+                        let end = FillEnd::of(&drained);
                         if family.stale_hit && drained.is_err() && !matches!(end, FillEnd::Pending)
                         {
                             *refresh_failed() = Some(tokio::time::Instant::now());
