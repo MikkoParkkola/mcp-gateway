@@ -75,7 +75,11 @@ impl EventsHub {
     /// worker's tick rather than the sweep (design r3 D4, L5); expiry
     /// settlement still buries their records and removes the rows.
     pub(super) async fn stop_expired_keys(&self) {
-        let now = chrono::Utc::now();
+        // On the one clock (MIK-8202), so a test can move it: a clock before
+        // 1970 judges no lease, and the tick is skipped.
+        let Ok(now) = crate::clock::utc_now() else {
+            return;
+        };
         let (lapsed, removed) = {
             let mut seen = self.runtime.expiry_seen.lock();
             let removals = self.store.removals();
