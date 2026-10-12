@@ -793,8 +793,8 @@ fn remote_transport_identity(transport: &TransportConfig) -> Option<(&'static st
     }
 }
 
+use backend_config::default_true;
 pub use backend_config::{BackendConfig, OAuthConfig, TransportConfig};
-use backend_config::{default_token_refresh_buffer, default_true};
 pub use meta_mcp_config::{MetaMcpConfig, SurfacedToolConfig};
 pub use server_config::{CleartextHttp, IdempotencyKeyMode, ServerConfig};
 

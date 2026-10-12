@@ -38,9 +38,9 @@
 //! interim step.  ES256 is not broken by Grover's algorithm at 256-bit key sizes.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+#[cfg(test)]
+use std::time::Duration;
 
-use dashmap::DashMap;
 use jsonwebtoken::{
     Algorithm, DecodingKey, Header, TokenData, Validation,
     jwk::{AlgorithmParameters, JwkSet},
@@ -116,6 +116,9 @@ pub enum OidcError {
     InsecureFetch,
 
     /// The HTTP client could not be built at startup, so nothing is fetched.
+    #[error("OIDC discovery answered HTTP {0}")]
+    DiscoveryStatus(u16),
+
     #[error("OIDC HTTP client is unavailable; see the startup log")]
     ClientUnavailable,
 }
@@ -191,203 +194,15 @@ struct IdTokenClaims {
     groups: Option<Vec<String>>,
 }
 
-/// Cached JWKS entry.
-struct CachedJwks {
-    keys: JwkSet,
-    fetched_at: Instant,
-    ttl: Duration,
-}
-
-impl CachedJwks {
-    fn is_stale(&self) -> bool {
-        self.fetched_at.elapsed() >= self.ttl
-    }
-}
-
-/// Minimal OIDC discovery document (`.well-known/openid-configuration`).
-/// Only the fields needed to locate and trust the signing keys are parsed.
 #[derive(Debug, Deserialize)]
 struct OidcDiscoveryDocument {
     issuer: String,
     jwks_uri: String,
 }
 
-/// Cached `jwks_uri` resolved from an issuer's discovery document.
-struct CachedDiscovery {
-    jwks_uri: String,
-    fetched_at: Instant,
-    ttl: Duration,
-}
-
-impl CachedDiscovery {
-    fn is_stale(&self) -> bool {
-        self.fetched_at.elapsed() >= self.ttl
-    }
-}
-
-/// JWKS cache — one entry per OIDC issuer.
-pub struct JwksCache {
-    inner: DashMap<String, CachedJwks>,
-    /// Resolved `jwks_uri` per issuer, from the OIDC discovery document.
-    discovery: DashMap<String, CachedDiscovery>,
-    /// For `https://` URLs; honours the environment's proxy settings.
-    /// `None` when the client could not be built: every fetch then fails
-    /// rather than fall back to a client without this policy.
-    http: Option<reqwest::Client>,
-    /// For `http://` to a loopback host. Never proxied: an inherited
-    /// `HTTP_PROXY` would carry the cleartext request off this machine.
-    loopback: Option<reqwest::Client>,
-    /// How long to cache a fetched JWKS (default 1 hour).
-    ttl: Duration,
-}
-
-impl JwksCache {
-    /// Create with default 1-hour TTL.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::with_remote_proxy(None)
-    }
-
-    /// The production clients; `proxy`, when given, replaces the
-    /// environment's proxy for `https://` fetches only, so a test can show
-    /// the loopback client never uses one.
-    fn with_remote_proxy(proxy: Option<reqwest::Proxy>) -> Self {
-        // Not `https_only`: that would refuse the loopback carve-out too.
-        // Every fetch picks its client by URL (`client_for`).
-        let remote = reqwest::Client::builder()
-            .redirect(remote_redirect_policy())
-            .timeout(Duration::from_secs(10));
-        let remote = match proxy {
-            Some(proxy) => remote.proxy(proxy),
-            None => remote,
-        };
-        let remote = crate::debug_trust_roots::extra_roots(remote);
-        // A loopback fetch follows no redirect: a hop off the machine would
-        // leave unproxied, and nothing legitimate needs one.
-        let loopback = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                attempt.error("OIDC refuses a redirect from a loopback fetch")
-            }))
-            .no_proxy()
-            .timeout(Duration::from_secs(10));
-        let loopback = crate::debug_trust_roots::extra_roots(loopback);
-        Self {
-            inner: DashMap::new(),
-            discovery: DashMap::new(),
-            http: built(remote.build()),
-            loopback: built(loopback.build()),
-            ttl: Duration::from_secs(3600),
-        }
-    }
-
-    /// The client allowed to fetch `url`, or a refusal for a cleartext URL
-    /// off this machine. Every fetch goes through here, so none can skip it.
-    fn client_for(&self, url: &str) -> Result<&reqwest::Client, OidcError> {
-        let client = if crate::gateway::auth::is_https_url(url) {
-            &self.http
-        } else if is_loopback_http_url(url) {
-            &self.loopback
-        } else {
-            return Err(OidcError::InsecureFetch);
-        };
-        client.as_ref().ok_or(OidcError::ClientUnavailable)
-    }
-
-    /// Test-only constructor injecting a custom HTTP client.
-    ///
-    /// Lets an in-process integration test point the JWKS fetch at a
-    /// self-signed-certificate test server (e.g. the gateway's own
-    /// `/auth/token` handler under test, MIK-6729) without weakening the
-    /// production client built by [`Self::new`].
-    /// Compiled out of non-test builds entirely — there is no way to reach
-    /// this constructor from production code.
-    #[cfg(test)]
-    pub(crate) fn with_http_client(http: reqwest::Client) -> Self {
-        Self {
-            inner: DashMap::new(),
-            discovery: DashMap::new(),
-            loopback: Some(http.clone()),
-            http: Some(http),
-            ttl: Duration::from_secs(3600),
-        }
-    }
-
-    /// Resolve the `jwks_uri` for `issuer` from its OIDC discovery document
-    /// (`discovery_url`, conventionally `{issuer}/.well-known/openid-configuration`).
-    ///
-    /// The discovered `issuer` field MUST equal the requested issuer (mix-up
-    /// defense, `OpenID Connect Discovery` §4.3), and the returned `jwks_uri` must
-    /// be HTTPS. Results are cached for the same TTL as JWKS.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OidcError`] on fetch/parse failure, issuer mismatch, or a
-    /// non-HTTPS `jwks_uri`.
-    pub async fn resolve_jwks_uri(
-        &self,
-        issuer: &str,
-        discovery_url: &str,
-    ) -> Result<String, OidcError> {
-        if let Some(cached) = self.discovery.get(issuer)
-            && !cached.is_stale()
-        {
-            return Ok(cached.jwks_uri.clone());
-        }
-
-        let client = self.client_for(discovery_url)?;
-        debug!(issuer = %issuer, "Fetching OIDC discovery from {discovery_url}");
-        let doc: OidcDiscoveryDocument = client.get(discovery_url).send().await?.json().await?;
-        let jwks_uri = validate_discovery_document(issuer, doc)?;
-
-        self.discovery.insert(
-            issuer.to_string(),
-            CachedDiscovery {
-                jwks_uri: jwks_uri.clone(),
-                fetched_at: Instant::now(),
-                ttl: self.ttl,
-            },
-        );
-        Ok(jwks_uri)
-    }
-
-    /// Return the cached JWKS for `issuer`, or fetch from `jwks_uri` if stale.
-    ///
-    /// If `force_refresh` is `true`, the cache is bypassed regardless of TTL.
-    pub async fn get_or_fetch(
-        &self,
-        issuer: &str,
-        jwks_uri: &str,
-        force_refresh: bool,
-    ) -> Result<JwkSet, OidcError> {
-        if !force_refresh
-            && let Some(cached) = self.inner.get(issuer)
-            && !cached.is_stale()
-        {
-            return Ok(cached.keys.clone());
-        }
-
-        let client = self.client_for(jwks_uri)?;
-        debug!(issuer = %issuer, "Fetching JWKS from {jwks_uri}");
-        let jwks: JwkSet = client.get(jwks_uri).send().await?.json().await?;
-
-        self.inner.insert(
-            issuer.to_string(),
-            CachedJwks {
-                keys: jwks.clone(),
-                fetched_at: Instant::now(),
-                ttl: self.ttl,
-            },
-        );
-
-        Ok(jwks)
-    }
-}
-
-impl Default for JwksCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+#[path = "oidc_jwks_cache.rs"]
+mod jwks_cache;
+pub use jwks_cache::JwksCache;
 
 /// OIDC token verifier — holds provider configs and the JWKS cache.
 pub struct OidcVerifier {
@@ -424,6 +239,39 @@ impl OidcVerifier {
         Self {
             providers,
             jwks_cache: Arc::new(JwksCache::with_http_client(http)),
+        }
+    }
+
+    /// As [`Self::with_http_client`], with the cache and fallback lifetimes
+    /// set, so a test can let one expire while the other stands.
+    #[cfg(test)]
+    pub(crate) fn with_ttls(
+        providers: Vec<KeyServerProviderConfig>,
+        http: reqwest::Client,
+        ttl: Duration,
+        fallback_ttl: Duration,
+    ) -> Self {
+        let mut cache = JwksCache::with_http_client(http);
+        cache.ttl = ttl;
+        cache.fallback_ttl = fallback_ttl;
+        Self {
+            providers,
+            jwks_cache: Arc::new(cache),
+        }
+    }
+
+    /// The lifetime of the issuer's recorded discovery entry, if any.
+    #[cfg(test)]
+    pub(crate) fn discovery_ttl(&self, issuer: &str) -> Option<Duration> {
+        self.jwks_cache.discovery.get(issuer).map(|d| d.ttl)
+    }
+
+    /// Lapse the issuer's recorded discovery entry now, as if its lifetime
+    /// had passed; tests use it instead of sleeping out a real window.
+    #[cfg(test)]
+    pub(crate) fn expire_discovery(&self, issuer: &str) {
+        if let Some(mut entry) = self.jwks_cache.discovery.get_mut(issuer) {
+            entry.ttl = Duration::ZERO;
         }
     }
 
@@ -480,13 +328,20 @@ impl OidcVerifier {
         let jwks_uri = if let Some(uri) = provider.jwks_uri.clone() {
             uri
         } else if provider.auto_discover {
-            let discovery_url = provider
-                .discovery_url
-                .clone()
-                .unwrap_or_else(|| default_discovery_url(&provider.issuer));
-            self.jwks_cache
-                .resolve_jwks_uri(&provider.issuer, &discovery_url)
-                .await?
+            // An explicit discovery URL is the operator's choice: its failure
+            // stands. Only the URL derived from the issuer falls back.
+            match provider.discovery_url.as_deref() {
+                Some(discovery_url) => {
+                    self.jwks_cache
+                        .resolve_jwks_uri(&provider.issuer, discovery_url)
+                        .await?
+                }
+                None => {
+                    self.jwks_cache
+                        .resolve_derived_jwks_uri(&provider.issuer)
+                        .await?
+                }
+            }
         } else {
             default_jwks_uri(&provider.issuer)
         };
@@ -780,3 +635,7 @@ use redirect::remote_redirect_policy;
 #[cfg(test)]
 #[path = "oidc_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "oidc_fallback_tests.rs"]
+mod fallback_tests;

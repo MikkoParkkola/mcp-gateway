@@ -698,3 +698,8 @@ mod catalogue_sole_operator_tests;
 // #2326: tool discovery omits a required backend for a caller without identity.
 #[path = "account_tool_discovery_required_tests.rs"]
 mod tool_discovery_required_tests;
+
+// MIK-8353 3a: a refresh before a spend refusal keeps the nonce spent.
+#[cfg(feature = "cost-governance")]
+#[path = "account_signed_budget_tests.rs"]
+mod signed_budget_tests;

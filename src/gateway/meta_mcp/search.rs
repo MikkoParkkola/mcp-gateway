@@ -194,11 +194,9 @@ impl MetaMcp {
                 &headers,
             )
             .await;
-            // An empty fill is a fill: index any slot this caller has filled,
-            // never one a failed fill left unpopulated (MIK-8356).
-            if fetched.is_some() || backend.holds_tools_for(binding.as_deref()) {
-                self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
-            }
+            // Indexed after every fill attempt, an empty fill included; a slot
+            // a failed fill left unfilled is never recorded (MIK-8356).
+            self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
             if let Some(tools) = fetched {
                 let enriched: Vec<_> = tools
                     .iter()
@@ -305,11 +303,9 @@ impl MetaMcp {
             let fetched =
                 Self::backend_tools_for_discovery(&backend, false, binding.as_deref(), &headers)
                     .await;
-            // An empty fill is a fill: index any slot this caller has filled,
-            // never one a failed fill left unpopulated (MIK-8356).
-            if fetched.is_some() || backend.holds_tools_for(binding.as_deref()) {
-                self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
-            }
+            // Indexed after every fill attempt, an empty fill included; a slot
+            // a failed fill left unfilled is never recorded (MIK-8356).
+            self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
             if let Some(tools) = fetched {
                 let enriched: Vec<_> = tools
                     .iter()
@@ -609,11 +605,9 @@ impl MetaMcp {
             let fetched =
                 Self::backend_tools_for_discovery(&backend, false, binding.as_deref(), &headers)
                     .await;
-            // An empty fill is a fill: index any slot this caller has filled,
-            // never one a failed fill left unpopulated (MIK-8356).
-            if fetched.is_some() || backend.holds_tools_for(binding.as_deref()) {
-                self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
-            }
+            // Indexed after every fill attempt, an empty fill included; a slot
+            // a failed fill left unfilled is never recorded (MIK-8356).
+            self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
             if let Some(tools) = fetched {
                 for tool in tools.iter() {
                     if !profile.tool_allowed(&tool.name)

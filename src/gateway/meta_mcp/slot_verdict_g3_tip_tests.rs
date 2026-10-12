@@ -39,9 +39,11 @@ async fn g3_c12_reload_between_verdict_and_dispatch() {
                 &identified_caller(&alpha),
                 None,
                 super::invoke::TargetNaming::SurfacedName,
+                None,
             )
             .await
-            .expect("the verdict resolves");
+            .expect("the verdict resolves")
+            .0;
         assert!(
             matches!(verdict, CallerVerdict::Proceed),
             "premise: {verdict:?}"

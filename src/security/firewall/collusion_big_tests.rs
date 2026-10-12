@@ -191,26 +191,31 @@ fn a_bloom_hit_on_foreign_text_is_never_evidence() {
     // Large enough that its own entries, not the headroom, fill the filter,
     // so chance hits occur at about the sizing target.
     let step: Vec<u64> = (0..100_000).map(|_| sampled()).collect();
-    let mut big = BigStep::new(&detector, ("alpha:read", "alice"), &step, usize::MAX)
+    let big = BigStep::new(&detector, ("alpha:read", "alice"), &step, usize::MAX)
         .expect("premise: the store has room");
     let own: HashSet<u64> = step.iter().copied().collect();
-    let filter = big.step_all.as_ref().expect("premise: the filter is built");
+    let filter = &big.step_all;
     let foreign: HashSet<u64> = (0..200_000)
         .map(|_| sampled())
         .filter(|h| !own.contains(h) && filter.holds(*h))
         .collect();
     assert!(!foreign.is_empty(), "premise: the filter has chance hits");
     let delivered: HashSet<u64> = big.step_ev[..10].iter().copied().collect();
-    big.keep_to(&delivered.union(&foreign).copied().collect());
+    let found: HashSet<u64> = delivered.union(&foreign).copied().collect();
+    let kept = big.keep_to(super::super::super::collusion_digest::view::Found::Set(
+        &found,
+    ));
     assert!(
-        big.excuse
+        kept.excuse
             .as_ref()
-            .is_some_and(|sketch| foreign.iter().any(|&h| sketch.holds(h))),
+            .is_some_and(|excuse| foreign.iter().any(|&h| excuse.sketch.holds(h))),
         "premise: the chance hits reached the excuse sketch"
     );
-    let evidence: HashSet<u64> = big
-        .evidence()
+    let evidence: HashSet<u64> = kept
+        .evidence
+        .as_ref()
         .expect("own text delivered")
+        .fps()
         .iter()
         .copied()
         .collect();

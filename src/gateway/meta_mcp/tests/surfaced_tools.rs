@@ -588,20 +588,32 @@ fn meta_tool_names_are_the_dispatch_arms() {
     );
 }
 
-/// Exactly three meta tools decode an inner `arguments` (MIK-8154): a new
-/// meta tool takes its policy in `META_TOOLS`, and a parsing one shows here.
+/// Exactly three meta tools decode an inner `arguments` (MIK-8154), and only
+/// `gateway_execute` a `chain` (MIK-8378): a new meta tool takes its policy in
+/// `META_TOOLS`, and a parsing one shows here.
 #[test]
 fn exactly_the_three_parsing_meta_tools_decode_inside() {
     use super::super::surfaced::{ArgsPolicy, META_TOOLS};
     let parsed: Vec<&str> = META_TOOLS
         .iter()
-        .filter(|(_, policy)| *policy == ArgsPolicy::MetaParsedInner)
+        .filter(|(_, policy)| {
+            matches!(
+                policy,
+                ArgsPolicy::MetaParsedInner | ArgsPolicy::MetaParsedChain
+            )
+        })
         .map(|(name, _)| *name)
         .collect();
     assert_eq!(
         parsed,
         ["gateway_execute", "gateway_invoke", "gateway_run_playbook"]
     );
+    let chained: Vec<&str> = META_TOOLS
+        .iter()
+        .filter(|(_, policy)| *policy == ArgsPolicy::MetaParsedChain)
+        .map(|(name, _)| *name)
+        .collect();
+    assert_eq!(chained, ["gateway_execute"]);
 }
 
 /// The pattern of every arm of the `match` that opens with `head` in

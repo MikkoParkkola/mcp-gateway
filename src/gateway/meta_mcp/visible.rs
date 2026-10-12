@@ -275,12 +275,12 @@ impl MetaMcp {
 
 /// One visibility judgement per request (MIK-8340, perflane MIK-8356 R3.1):
 /// the first answer [`MetaMcp::tool_visible_to`] gives for a `(server, tool)`
-/// within a request, kept for the rest of that request. It also keeps what
-/// intake judged the sanitize exemption on ([`Judged`], MIK-8154).
+/// within a request, kept for the rest of that request.
 ///
 /// It also carries the caller verdict's credential resolution to the
 /// dispatch (MIK-8356 R5.2): one resolution per call, on the same backend
-/// instance the verdict judged.
+/// instance the verdict judged; and it keeps what intake judged the sanitize
+/// exemption on ([`Judged`], MIK-8154).
 #[derive(Default)]
 pub(crate) struct VisibilityMemo {
     visibility: parking_lot::Mutex<std::collections::HashMap<(String, String), Visibility>>,
@@ -521,14 +521,15 @@ pub(crate) mod seams {
         static AFTER_INTAKE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
     }
 
-    /// Run `hook` once, the next time `/mcp` intake on this thread has made
-    /// its sanitize decision (MIK-8154 NP3).
+    /// Run `hook` once, the next time `/mcp` or `/mcp/{name}` intake on this
+    /// thread has made its sanitize decision (MIK-8154 NP3, F2).
     #[cfg(feature = "firewall")]
     pub(crate) fn after_intake(hook: impl FnOnce() + 'static) {
         AFTER_INTAKE.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
     }
 
-    /// Called where `/mcp` intake has made its sanitize decision.
+    /// Called where `/mcp` or `/mcp/{name}` intake has made its sanitize
+    /// decision.
     pub(crate) fn intake_judged() {
         if let Some(hook) = AFTER_INTAKE.with(|slot| slot.borrow_mut().take()) {
             hook();

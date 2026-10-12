@@ -157,10 +157,22 @@ async fn budget_fixture(answer: Answer, limit: f64) -> super::direct_guards_fixt
 #[tokio::test]
 async fn t3_direct_calls_draw_on_the_key_budget() {
     for backend in BACKENDS {
-        let fx = budget_fixture(Answer::Ok, 5.0).await;
-        for n in 1..=4 {
+        let (bodies, body, calls) = crate::test_day::same_utc_day_async(|| async move {
+            let fx = budget_fixture(Answer::Ok, 5.0).await;
+            let mut bodies = Vec::new();
+            for _ in 1..=4 {
+                bodies.push(
+                    post_direct(&fx, backend, "k-budget", "read", json!({}), None, None)
+                        .await
+                        .1,
+                );
+            }
             let (_, body) =
                 post_direct(&fx, backend, "k-budget", "read", json!({}), None, None).await;
+            (bodies, body, fx.calls.load(Ordering::SeqCst))
+        })
+        .await;
+        for (n, body) in (1..=4).zip(bodies) {
             assert!(body.get("result").is_some(), "{backend} call {n}: {body}");
             if n == 4 {
                 assert!(
@@ -169,9 +181,8 @@ async fn t3_direct_calls_draw_on_the_key_budget() {
                 );
             }
         }
-        let (_, body) = post_direct(&fx, backend, "k-budget", "read", json!({}), None, None).await;
         assert_eq!(code(&body), Some(-32003), "{backend}: {body}");
-        assert_eq!(fx.calls.load(Ordering::SeqCst), 4, "{backend}");
+        assert_eq!(calls, 4, "{backend}");
     }
 }
 
@@ -247,17 +258,22 @@ async fn t3e_a_direct_call_settles_its_reservation_with_its_spend() {
 #[tokio::test]
 async fn t3d_a_cached_success_replays_without_spend() {
     for backend in BACKENDS {
-        let fx = budget_fixture(Answer::Ok, 1.5).await;
-        let idem = Some("t3d-key");
-        let (_, first) = post_direct(&fx, backend, "k-budget", "read", json!({}), idem, None).await;
+        let (first, replay, calls, spent) = crate::test_day::same_utc_day_async(|| async move {
+            let fx = budget_fixture(Answer::Ok, 1.5).await;
+            let idem = Some("t3d-key");
+            let (_, first) =
+                post_direct(&fx, backend, "k-budget", "read", json!({}), idem, None).await;
+            let (calls, spent) = (fx.calls.load(Ordering::SeqCst), key_spend(&fx));
+            let (_, replay) =
+                post_direct(&fx, backend, "k-budget", "read", json!({}), idem, None).await;
+            let after = (fx.calls.load(Ordering::SeqCst), key_spend(&fx));
+            (first, replay, (calls, after.0), (spent, after.1))
+        })
+        .await;
         assert!(first.get("result").is_some(), "{backend}: {first}");
-        let calls = fx.calls.load(Ordering::SeqCst);
-        let spent = key_spend(&fx);
-        let (_, replay) =
-            post_direct(&fx, backend, "k-budget", "read", json!({}), idem, None).await;
         assert_eq!(replay["result"], first["result"], "{backend}: {replay}");
-        assert_eq!(fx.calls.load(Ordering::SeqCst), calls, "{backend}");
-        assert!((key_spend(&fx) - spent).abs() < f64::EPSILON, "{backend}");
+        assert_eq!(calls.1, calls.0, "{backend}");
+        assert!((spent.1 - spent.0).abs() < f64::EPSILON, "{backend}");
     }
 }
 
@@ -649,61 +665,56 @@ impl crate::gateway::input_bridge::ClientChannel for AcceptingChannel {
 #[tokio::test]
 async fn t3c_a_bridged_round_and_a_direct_call_share_one_budget() {
     for backend in BACKENDS {
-        let fx = {
-            let (enforcer, registry) = budget(2.5);
-            fixture_built(Answer::AskOnce, move |meta| {
-                meta.with_cost_governance(enforcer, registry)
-            })
-            .await
-        };
-        let channel = AcceptingChannel::default();
-        let declared = crate::protocol::meta::classify_request(
-            Some(&json!({
-                "_meta": {
-                    crate::protocol::meta::KEY_PROTOCOL_VERSION: "2026-07-28",
-                    crate::protocol::meta::KEY_CLIENT_CAPABILITIES: {"elicitation": {"form": {}}}
-                }
-            })),
-            None,
-        )
-        .declared_capabilities();
-        let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
-            api_key_name: Some("k-budget"),
-            era: crate::protocol::meta::Era::Legacy,
-            input_capabilities: declared,
-            channel: &channel,
-            ..crate::gateway::meta_mcp::anonymous_caller()
-        };
-        fx.state
-            .meta_mcp
-            .invoke_tool_for_test(
-                &json!({"server": backend, "tool": "read", "arguments": {}}),
-                Some("session-t3c"),
-                &ctx,
+        let (asked, opened, body, after) = crate::test_day::same_utc_day_async(|| async move {
+            let fx = {
+                let (enforcer, registry) = budget(2.5);
+                fixture_built(Answer::AskOnce, move |meta| {
+                    meta.with_cost_governance(enforcer, registry)
+                })
+                .await
+            };
+            let channel = AcceptingChannel::default();
+            let declared = crate::protocol::meta::classify_request(
+                Some(&json!({
+                    "_meta": {
+                        crate::protocol::meta::KEY_PROTOCOL_VERSION: "2026-07-28",
+                        crate::protocol::meta::KEY_CLIENT_CAPABILITIES: {"elicitation": {"form": {}}}
+                    }
+                })),
+                None,
             )
-            .await
-            .expect("the opening call and the bridged round fit the budget");
-        assert_eq!(
-            channel.asked.load(Ordering::SeqCst),
-            1,
-            "{backend}: one question asked"
-        );
-        assert_eq!(
-            fx.calls.load(Ordering::SeqCst),
-            2,
-            "opening call plus bridged round"
-        );
-        assert!((key_spend(&fx) - 2.0).abs() < f64::EPSILON, "spent 2.0");
+            .declared_capabilities();
+            let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
+                api_key_name: Some("k-budget"),
+                era: crate::protocol::meta::Era::Legacy,
+                input_capabilities: declared,
+                channel: &channel,
+                ..crate::gateway::meta_mcp::anonymous_caller()
+            };
+            fx.state
+                .meta_mcp
+                .invoke_tool_for_test(
+                    &json!({"server": backend, "tool": "read", "arguments": {}}),
+                    Some("session-t3c"),
+                    &ctx,
+                )
+                .await
+                .expect("the opening call and the bridged round fit the budget");
+            let opened = (fx.calls.load(Ordering::SeqCst), key_spend(&fx));
+            let (_, body) =
+                post_direct(&fx, backend, "k-budget", "read", json!({}), None, None).await;
+            let after = (fx.calls.load(Ordering::SeqCst), key_spend(&fx));
+            (channel.asked.load(Ordering::SeqCst), opened, body, after)
+        })
+        .await;
+        assert_eq!(asked, 1, "{backend}: one question asked");
+        assert_eq!(opened.0, 2, "opening call plus bridged round");
+        assert!((opened.1 - 2.0).abs() < f64::EPSILON, "spent 2.0");
 
-        let (_, body) = post_direct(&fx, backend, "k-budget", "read", json!({}), None, None).await;
         assert_eq!(code(&body), Some(-32003), "{body}");
-        assert_eq!(
-            fx.calls.load(Ordering::SeqCst),
-            2,
-            "{backend}: the direct call dispatched"
-        );
+        assert_eq!(after.0, 2, "{backend}: the direct call dispatched");
         assert!(
-            (key_spend(&fx) - 2.0).abs() < f64::EPSILON,
+            (after.1 - 2.0).abs() < f64::EPSILON,
             "{backend}: the refusal spent"
         );
     }

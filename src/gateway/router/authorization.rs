@@ -48,6 +48,12 @@ pub(crate) fn sanitize_exempt(
         servers
     } else {
         let targets = backend_tool_targets_for_call(meta_mcp, name, arguments, view);
+        // A surfaced name on a per-user backend is never exempt (MIK-8356):
+        // intake runs before the caller's own catalogue is read, so exempting
+        // it would let the answer tell a withheld name from a missing one.
+        if targets.iter().any(|t| per_user_surfaced(meta_mcp, name, t)) {
+            return false;
+        }
         targets.into_iter().map(|t| t.server).collect()
     };
     // Judged and recorded on the same instances (F2): a reload between two
@@ -63,6 +69,17 @@ pub(crate) fn sanitize_exempt(
         }
         _ => false,
     }
+}
+
+/// Whether `target` is the surfaced tool `name` itself, on a backend that keeps
+/// a catalogue per caller.
+fn per_user_surfaced(meta_mcp: &MetaMcp, name: &str, target: &CallTarget<'_>) -> bool {
+    use crate::gateway::meta_mcp::invoke::TargetNaming;
+    TargetNaming::of(meta_mcp, name, (&target.server, &target.tool)) == TargetNaming::SurfacedName
+        && meta_mcp
+            .backends
+            .get(&target.server)
+            .is_some_and(|backend| backend.keeps_per_user_catalogues())
 }
 
 pub(crate) fn backend_tool_targets_for_call<'a>(

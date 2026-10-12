@@ -104,17 +104,21 @@ fn a_refused_call_holds_nothing_back_from_the_next() {
 
 #[test]
 fn a_settled_call_counts_once_after_its_hold_drops() {
-    let enforcer = enforcer(Scope::Global, 2);
-    let first = enforcer.check(TOOL, Some(KEY));
-    assert!(first.allowed);
-    enforcer.record_spend(TOOL, Some(KEY), first.cost_usd);
-    drop(first);
-    // Spent once, reserved nothing: one more call fits, a second does not.
-    let second = enforcer.check(TOOL, Some(KEY));
-    assert!(second.allowed, "the settled call must not be counted twice");
-    enforcer.record_spend(TOOL, Some(KEY), second.cost_usd);
-    drop(second);
-    assert!(!enforcer.check(TOOL, Some(KEY)).allowed);
+    let (second_allowed, third_allowed) = crate::test_day::same_utc_day(|| {
+        let enforcer = enforcer(Scope::Global, 2);
+        let first = enforcer.check(TOOL, Some(KEY));
+        assert!(first.allowed);
+        enforcer.record_spend(TOOL, Some(KEY), first.cost_usd);
+        drop(first);
+        // Spent once, reserved nothing: one more call fits, a second does not.
+        let second = enforcer.check(TOOL, Some(KEY));
+        let second_allowed = second.allowed;
+        enforcer.record_spend(TOOL, Some(KEY), second.cost_usd);
+        drop(second);
+        (second_allowed, enforcer.check(TOOL, Some(KEY)).allowed)
+    });
+    assert!(second_allowed, "the settled call must not be counted twice");
+    assert!(!third_allowed);
 }
 
 #[test]
@@ -140,32 +144,38 @@ fn an_add_inside_the_day_reset_window_is_kept() {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    let acc = Arc::new(DailyAccumulator::stale(
-        current_day().expect("clock after 1970") - 1,
-        700,
-    ));
-    assert_eq!(acc.current(), 0, "yesterday's spend is not today's");
-    let (done, landed) = mpsc::channel();
-    let inner = Arc::clone(&acc);
-    let slot = std::rc::Rc::new(std::cell::Cell::new(None));
-    let hold = std::rc::Rc::clone(&slot);
-    AFTER_DAY_PUBLISH.with(|hook| {
-        *hook.borrow_mut() = Some(Box::new(move || {
-            hold.set(Some(std::thread::spawn(move || {
-                inner.add(5);
-                let _ = done.send(());
-            })));
-            // Unserialized, the add completes inside the window; serialized,
-            // it is blocked and this wait times out.
-            let _ = landed.recv_timeout(Duration::from_millis(500));
-        }));
+    // The rollover here is the scripted one (a day-old accumulator); the real
+    // clock's own midnight between the add and the read reruns it (MIK-8395).
+    let (before, after) = crate::test_day::same_utc_day(|| {
+        let acc = Arc::new(DailyAccumulator::stale(
+            current_day().expect("clock after 1970") - 1,
+            700,
+        ));
+        let before = acc.current();
+        let (done, landed) = mpsc::channel();
+        let inner = Arc::clone(&acc);
+        let slot = std::rc::Rc::new(std::cell::Cell::new(None));
+        let hold = std::rc::Rc::clone(&slot);
+        AFTER_DAY_PUBLISH.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                hold.set(Some(std::thread::spawn(move || {
+                    inner.add(5);
+                    let _ = done.send(());
+                })));
+                // Unserialized, the add completes inside the window; serialized,
+                // it is blocked and this wait times out.
+                let _ = landed.recv_timeout(Duration::from_millis(500));
+            }));
+        });
+        acc.add(3);
+        slot.take()
+            .expect("the reset window was reached")
+            .join()
+            .unwrap();
+        (before, acc.current())
     });
-    acc.add(3);
-    slot.take()
-        .expect("the reset window was reached")
-        .join()
-        .unwrap();
-    assert_eq!(acc.current(), 8, "an add inside the reset window was lost");
+    assert_eq!(before, 0, "yesterday's spend is not today's");
+    assert_eq!(after, 8, "an add inside the reset window was lost");
 }
 
 /// MIK-7903 (MIK-7763C.1): a check that runs after a call's spend is added,
@@ -219,32 +229,40 @@ fn dropping_a_settled_hold_keeps_other_reservations() {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let micro = (COST * 1_000_000.0) as u64;
     // GIVEN: two admitted calls, A and B
-    let enforcer = enforcer(Scope::Global, 4);
-    let a = enforcer.check(TOOL, Some(KEY));
-    let copy = a.clone();
-    let b = enforcer.check(TOOL, Some(KEY));
-    // WHEN: A settles through one clone, then both clones drop
-    enforcer.settle(a.hold.as_deref(), TOOL, Some(KEY), a.cost_usd);
-    drop(a);
-    drop(copy);
+    let (held, global) = crate::test_day::same_utc_day(|| {
+        let enforcer = enforcer(Scope::Global, 4);
+        let a = enforcer.check(TOOL, Some(KEY));
+        let copy = a.clone();
+        let b = enforcer.check(TOOL, Some(KEY));
+        // WHEN: A settles through one clone, then both clones drop
+        enforcer.settle(a.hold.as_deref(), TOOL, Some(KEY), a.cost_usd);
+        drop(a);
+        drop(copy);
+        let pending = locked(&enforcer.ledger);
+        let held = (pending.global, pending.tool(TOOL), pending.key(KEY));
+        drop(pending);
+        let global = enforcer.snapshot().global_daily_usd;
+        drop(b);
+        (held, global)
+    });
     // THEN: B's reservation is still held whole, and A's spend is recorded
-    let pending = locked(&enforcer.ledger);
     assert_eq!(
-        (pending.global, pending.tool(TOOL), pending.key(KEY)),
+        held,
         (micro, micro, micro),
         "B's reservation was released with A's"
     );
-    drop(pending);
-    assert!((enforcer.snapshot().global_daily_usd - COST).abs() < 1e-9);
-    drop(b);
+    assert!((global - COST).abs() < 1e-9);
 }
 
 /// A total at the top of the range saturates rather than wrapping to a small
 /// number that would read as budget left.
 #[test]
 fn a_daily_total_saturates_instead_of_wrapping() {
-    let acc = DailyAccumulator::stale(current_day().expect("clock after 1970"), u64::MAX - 1);
-    assert_eq!(acc.add(5), u64::MAX);
+    let total = crate::test_day::same_utc_day(|| {
+        let acc = DailyAccumulator::stale(current_day().expect("clock after 1970"), u64::MAX - 1);
+        acc.add(5)
+    });
+    assert_eq!(total, u64::MAX);
 }
 
 /// An add that sampled an earlier day than the stored one (it read the clock

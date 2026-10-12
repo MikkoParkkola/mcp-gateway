@@ -76,6 +76,13 @@ fn accounts_config(ids: &[&str]) -> AccountsConfig {
     }
 }
 
+thread_local! {
+    /// Every fixture backend runs `input_schema_enforcement = "off"`, so a
+    /// call fills no tool list before dispatch (MIK-8353 3a).
+    pub(in super::super) static SCHEMA_OFF: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
 /// The real `Config` the production compilation runs against.
 fn fixture_config(binds: &[(&str, Bind<'_>)], declared: &[&str]) -> Config {
     let mut backends = HashMap::new();
@@ -86,6 +93,11 @@ fn fixture_config(binds: &[(&str, Bind<'_>)], declared: &[&str]) -> Config {
                 http_url: format!("https://{name}.invalid/mcp"),
                 streamable_http: Some(true),
                 protocol_version: None,
+            },
+            input_schema_enforcement: if SCHEMA_OFF.with(std::cell::Cell::get) {
+                crate::config::InputSchemaEnforcement::Off
+            } else {
+                crate::config::InputSchemaEnforcement::default()
             },
             ..BackendConfig::default()
         };

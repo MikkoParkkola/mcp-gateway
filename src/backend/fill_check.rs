@@ -185,10 +185,11 @@ impl Drop for FillGuard {
 
 /// Steps 1-3 of a fill closure, before its guard is armed: the breaker, the
 /// cooldown (tools only), the limiter token. Every fill but warm-up is
-/// admitted (#1300). A refusal here stamps nothing.
+/// admitted (#1300). A refusal here stamps nothing. An admitted fill is
+/// counted on `fills` before it starts or contacts the backend (MIK-8353 3a).
 pub(super) fn admit_fill(
     entry: &PooledEntry,
-    backend: &str,
+    (backend, fills): (&str, &std::sync::atomic::AtomicU64),
     bound: FillBound,
     tools: bool,
 ) -> Result<()> {
@@ -235,6 +236,7 @@ pub(super) fn admit_fill(
             }
         })?;
     }
+    fills.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     Ok(())
 }
 

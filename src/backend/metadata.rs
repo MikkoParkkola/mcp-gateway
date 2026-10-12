@@ -69,6 +69,14 @@ impl Backend {
             .is_fresh(self.cache_ttl)
     }
 
+    /// How many list fills on this backend have passed admission (any slot,
+    /// any caller). A change across a check means a fill may have started or
+    /// contacted the backend meanwhile, possibly another caller's: read as an
+    /// effect, that errs toward keeping a nonce spent.
+    pub(crate) fn list_fills(&self) -> u64 {
+        self.list_fills.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// The shared slot's freshness. Used by readers that hold no caller.
     #[must_use]
     pub fn has_cached_tools(&self) -> bool {
@@ -332,7 +340,8 @@ impl Backend {
                                 LIST_FILL_COOLDOWN.as_secs()
                             )));
                         }
-                        admit_fill(&entry, &self.name, bound, family.cooldown)?;
+                        let counted = (self.name.as_str(), &self.list_fills);
+                        admit_fill(&entry, counted, bound, family.cooldown)?;
                         let mut guard = family.cooldown.then(|| FillGuard::arm(Arc::clone(&entry)));
                         let drained = run_bounded(&entry, &self.name, bound, async {
                             // A cold fill on the dispatch path has sent no tools/call

@@ -95,6 +95,7 @@ impl Backend {
             last_used: std::sync::atomic::AtomicU64::new(0),
             semaphore: Semaphore::new(100),
             request_count: std::sync::atomic::AtomicU64::new(0),
+            list_fills: AtomicU64::new(0),
             replaced_transport_cleanups: parking_lot::Mutex::new(super::CleanupState::default()),
             identity_slots: Arc::default(),
             lifecycle: tokio::sync::RwLock::new(()),

@@ -432,25 +432,65 @@ const PROSE: &str = "The orchard ledger for the north slope records seven rows o
     pears, the grafting dates for each rootstock, the hours the drip lines ran during the \
     dry weeks of August, and which crew pruned the older trees after the second frost.";
 
-/// `NonceGiveBack`, R1 gap (MIK-8353, split from MIK-8150 NONCE.3): a relay refusal after nonce
-/// admission keeps the nonce, so the clean re-send under it is refused as a
-/// replay. The first refusal must be the relay check's own (-32002), so the
-/// row cannot pass on some other refusal.
+/// `NonceGiveBack`, R1 Applies (MIK-8353 3b, NONCEFX.3; was the R1 gap): a
+/// relay refusal after nonce admission, with nothing before it having acted
+/// (the schema warm, no mint), gives the nonce back exactly once: the clean
+/// re-send under it is served and a third send is a replay. The first refusal
+/// must be the relay check's own (-32002), so the row cannot pass on another.
 #[tokio::test]
-async fn nonce_give_back_invoke_relay_gap_row() {
+async fn nonce_give_back_invoke_relay_row() {
     assert_eq!(
         expect(MethodKind::ToolsCall, Route::Invoke, Stage::NonceGiveBack),
-        Expect::ExpectedGap(super::Ticket::Mik8353)
+        Expect::Applies
     );
-    let (relayed, resent) = router::invoke_relay_then_resend(PROSE).await;
+    let seen = router::invoke_relay_then_resend(PROSE, "alpha").await;
     assert_eq!(
-        relayed["error"]["code"], -32002,
-        "premise: the relay refusal: {relayed}"
+        seen.relayed["error"]["code"], -32002,
+        "premise: the relay refusal: {}",
+        seen.relayed
+    );
+    assert_eq!(seen.fills, 0, "premise: the relayed call filled nothing");
+    assert!(
+        seen.resent.get("error").is_none(),
+        "R1: the relay refusal kept the nonce: {}",
+        seen.resent
     );
     assert_eq!(
-        resent["error"]["message"], REPLAY,
-        "the re-send was not refused as a replay, so the relay refusal now gives the \
-         nonce back; MIK-8353 may have closed this gap, flip the row: {resent}"
+        seen.resent_calls, 1,
+        "R1: the re-send reached the backend once"
+    );
+    assert_eq!(
+        seen.resent["result"]["isError"], false,
+        "R1: the re-send was served: {}",
+        seen.resent
+    );
+    assert_eq!(
+        seen.third["error"]["message"], REPLAY,
+        "R1: the nonce was given back more than once: {}",
+        seen.third
+    );
+}
+
+/// K-relay-cold (MIK-8353 3b): the relayed call is the first on `alpha-pt`,
+/// so its schema check filled `tools/list` before the relay check refused it.
+/// That fill drops the witness, so the nonce stays spent: the re-send is a
+/// replay. Red if the relay refund bypassed the witness.
+#[tokio::test]
+async fn a_relay_refusal_after_a_fill_keeps_the_nonce() {
+    let seen = router::invoke_relay_then_resend(PROSE, "alpha-pt").await;
+    assert_eq!(
+        seen.relayed["error"]["code"], -32002,
+        "premise: the relay refusal on alpha-pt: {}",
+        seen.relayed
+    );
+    assert!(
+        seen.fills > 0,
+        "premise: the relayed call filled tools/list"
+    );
+    assert_eq!(
+        seen.resent["error"]["message"], REPLAY,
+        "the nonce was given back after a fill: {}",
+        seen.resent
     );
 }
 
@@ -464,7 +504,8 @@ async fn nonce_give_back_direct_row() {
         expect(MethodKind::ToolsCall, Route::Direct, Stage::NonceGiveBack),
         Expect::Applies
     );
-    let (refused, again, replay, calls) = router::direct_spend_then_resend().await;
+    let (refused, again, replay, calls) =
+        crate::test_day::same_utc_day_async(router::direct_spend_then_resend).await;
     assert!(
         message(&refused).contains("daily budget exceeded"),
         "premise: the budget refused: {refused}"

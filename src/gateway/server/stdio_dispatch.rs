@@ -10,7 +10,7 @@ use super::Gateway;
 use super::StdioNonce;
 use super::stdio_route_stage::RouteStage;
 use super::{
-    STDIO_CREDENTIAL_PRINCIPAL, StdioClient, StdioTelemetry, stdio_catalogue, stdio_delivery,
+    STDIO_CREDENTIAL_PRINCIPAL, StdioClient, stdio_catalogue, stdio_delivery,
     stdio_routing_keys_only, stdio_take_merged_client_meta, stdio_tasks,
 };
 use crate::gateway::authz::ToolPolicyAuthorizer;
@@ -21,7 +21,7 @@ use crate::security::sanitize::InputSanitizing;
 impl Gateway {
     #[expect(
         clippy::too_many_lines,
-        reason = "one dispatch path; the telemetry-guard scope is part of it"
+        reason = "one dispatch path: signing, parse, routing and tools/call staging in order"
     )]
     pub(super) async fn dispatch_relay_scoped(
         meta_mcp: &Arc<MetaMcp>,
@@ -29,7 +29,6 @@ impl Gateway {
         _mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
         mut request: serde_json::Value,
         client: StdioClient<'_>,
-        protocol_telemetry_sink: &StdioTelemetry,
     ) -> Option<stdio_delivery::StdioAnswer> {
         // Borrowed views throughout: a refused request is never copied.
         // Ownership is taken once, after admission, where it executes.
@@ -54,14 +53,7 @@ impl Gateway {
             Err(response) => return Some(stdio_delivery::StdioAnswer::Built(response)),
         };
 
-        // Scoped so the guard is gone before the first await below: see
-        // [`StdioTelemetry`].
-        let parsed = {
-            let mut sink = protocol_telemetry_sink
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            Self::parse_and_observe(&request, (session_id, client.serving), sink.as_mut())
-        };
+        let parsed = Self::parse_and_observe(&request, (session_id, client.serving));
         let (id, method, params, request_shape) = match parsed {
             Ok(parsed) => parsed,
             Err(early) => return early.map(stdio_delivery::StdioAnswer::Built),
@@ -299,16 +291,15 @@ impl Gateway {
         Ok((signing_context, chain_nonce))
     }
 
-    /// Parse, classify and durably observe one inbound stdio request.
+    /// Parse, classify and observe one inbound stdio request. The observation
+    /// is in memory only; the session's saver persists it off the request
+    /// path (MIK-8364).
     ///
     /// `Err(None)` means no response is due (a notification); `Err(Some(_))`
     /// carries an already-serialized error response.
     fn parse_and_observe<'r>(
         request: &'r serde_json::Value,
         (session_id, serving): (&str, super::stdio_single::ModernServing),
-        protocol_telemetry_sink: Option<
-            &mut crate::protocol_revision_telemetry::DurableTelemetrySink,
-        >,
     ) -> std::result::Result<
         (
             crate::protocol::RequestId,
@@ -318,8 +309,7 @@ impl Gateway {
         ),
         Option<serde_json::Value>,
     > {
-        use super::super::router::helpers::parse_request_ref;
-        use crate::protocol::JsonRpcResponse;
+        use super::super::router::helpers::{is_notification_method, parse_request_ref};
 
         let (id, method, params) = match parse_request_ref(request) {
             Ok((id, method, params)) => (id, method.to_string(), params),
@@ -342,13 +332,7 @@ impl Gateway {
             // keeps the pre-handshake record at `absent`/`none`.
             crate::protocol_revision_telemetry::session_negotiated_revision(Some(session_id)),
         );
-        Self::observe_stdio_inbound(
-            request,
-            params,
-            &method,
-            session_id,
-            protocol_telemetry_sink,
-        );
+        Self::observe_stdio_inbound(request, params, &method, session_id);
 
         // ADR-014 §4, the stdio half. Stdio classifies the same body HTTP does,
         // so it declares a level the same way and gets the same filter -- one
@@ -369,28 +353,28 @@ impl Gateway {
         // a request, and HTTP refuses it, so it is refused here too (version
         // first). Every other notification stays silent, whatever its id, era
         // or revision. HTTP differs: it runs every check before its 202.
-        if method.starts_with("notifications/") {
-            if let (Some(id), crate::protocol::meta::RequestShape::Modern(fields)) =
-                (id.as_ref(), &request_shape)
-                && let Some(removed) =
-                    crate::protocol::modern_refusal::removed_method_refusal(Some(id), &method)
-            {
-                let refusal = crate::protocol::modern_refusal::unsupported_modern_version(
-                    Some(id),
-                    fields,
-                    modern_serving,
-                )
-                .unwrap_or(removed);
-                return Err(Some(refusal.to_value_lossy()));
+        // `parse_request_ref` already refused a request without an id (-32600
+        // "Missing id"), and both use `is_notification_method`, so only a
+        // notification takes the second arm (MIK-8364).
+        let id = match id {
+            Some(id) if !is_notification_method(&method) => id,
+            id => {
+                if let (Some(id), crate::protocol::meta::RequestShape::Modern(fields)) =
+                    (id.as_ref(), &request_shape)
+                    && let Some(removed) =
+                        crate::protocol::modern_refusal::removed_method_refusal(Some(id), &method)
+                {
+                    let refusal = crate::protocol::modern_refusal::unsupported_modern_version(
+                        Some(id),
+                        fields,
+                        modern_serving,
+                    )
+                    .unwrap_or(removed);
+                    return Err(Some(refusal.to_value_lossy()));
+                }
+                debug!(notification = %method, "stdio: notification (no response)");
+                return Err(None);
             }
-            debug!(notification = %method, "stdio: notification (no response)");
-            return Err(None);
-        }
-
-        // Requests must have an id
-        let Some(id) = id else {
-            let resp = JsonRpcResponse::error(None, -32600, "Missing id");
-            return Err(Some(resp.to_value_lossy()));
         };
 
         // One function answers both transports. Legacy and malformed shapes are

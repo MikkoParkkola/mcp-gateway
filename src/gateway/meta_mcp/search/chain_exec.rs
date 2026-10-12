@@ -38,6 +38,11 @@ impl MetaMcp {
             .await?;
         let resume =
             presented_resume(&self.continuation, caller.retry, &chain, fingerprint, now).await?;
+        // Planning the resume spent the chain handle: the pending step's
+        // refusal must not give the nonce back (MIK-8353 3b).
+        if resume.is_some() {
+            crate::gateway::meta_mcp::invoke::spend_witness(caller);
+        }
         let (start_step, rounds_used) = resume
             .as_ref()
             .map_or((0, 0), |plan| (plan.next_step, plan.rounds_used));

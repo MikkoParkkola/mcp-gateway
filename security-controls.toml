@@ -73,6 +73,14 @@ module = "src/security/transparency_log_session.rs"
 reason = "show_session_entries: reads one session's entries across the segments for lookup; it decides nothing and refuses no call"
 
 [[coverage.not_a_control]]
+module = "src/security/transparency_log_rotation_seams.rs"
+reason = "test-only fault injection and hooks for transparency-log rotation, compiled only under cfg(test); nothing in it ships"
+
+[[coverage.not_a_control]]
+module = "src/security/agent_identity_extract.rs"
+reason = "reads the declared agent label from the x-agent-id header and the agent_id query parameter; a label never authorizes anything (agent-identity-proof-rank) and this refuses no call; the control rows name agent_identity.rs"
+
+[[coverage.not_a_control]]
 module = "src/security/security_metrics.rs"
 reason = "D4 counters for refused credentials and calls; it counts decisions the gates already made and refuses nothing"
 
@@ -188,11 +196,11 @@ note = "gated on `security.sanitize_input`, which `SecurityConfig::default()` se
 
 [[control]]
 id = "protocol-field-validation"
-description = "a NUL or a control character in a protocol field (id, method, capability keys, protocol-position keys, the signing and chain nonces, the idempotency key) is refused, never stripped into another value"
+description = "a NUL or a control character in a protocol field (id, method, capability keys, protocol-position keys, the keys the gateway reads inside a meta tool's arguments, a tool-arguments key that cleans to a gateway directive such as `_full`, the signing and chain nonces, the idempotency key) is refused, never stripped into another value, on intake and on a resumed task"
 authority = "nfr-sec1:11"
 source = "src/security/sanitize/protocol.rs"
 probe = "none"
-reason = "observable on the wire, but no probe body is written yet: the refusal's HTTP status on `/mcp` is not pinned by a row (S2a, S2b, S2d, S4, S4d and S10 in src/gateway/router/mik8154_rows_tests.rs assert the code and message), and a probe with a guessed status would report drift on a correct install. Same `security.sanitize_input` gate as input-sanitization"
+reason = "observable on the wire, but no probe body is written yet: the refusal's HTTP status on `/mcp` is not pinned by a row (S2a, S2b, S2d, S4, S4d and S10 in src/gateway/router/mik8154_rows_tests.rs, and the MIK-8378 rows in src/gateway/router/mik8154_rows_tests/mik8378.rs, assert the code and message), and a probe with a guessed status would report drift on a correct install. Same `security.sanitize_input` gate as input-sanitization"
 
 [[control]]
 id = "admin-tool-gate"

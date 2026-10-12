@@ -396,9 +396,6 @@ pub(super) async fn intake(
             api_key_name: client.as_ref().map(|c| c.name.as_str()),
             agent_id: agent_identity.proven_agent_id(),
             grant_subject: grant_subject.as_ref(),
-            // The same caller the dispatch's scope proves (MIK-8356), so the
-            // exemption is judged on the caller's own view of a per-user
-            // backend.
             caller: crate::identity_propagation::CallerProof::new(
                 verified_identity.as_ref(),
                 crate::identity_propagation::CallerProvenance::classify(

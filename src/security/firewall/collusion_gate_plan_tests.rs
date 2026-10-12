@@ -291,12 +291,23 @@ fn a_reading_over_the_bound_falls_back_to_the_whole_text() {
             .collect::<Vec<_>>()
             .join(" ")
     );
+    // `MIK-8066` 2b: over 1 MiB a reading is a view; the fallback applies
+    // only while the fuller reading cannot be read (D7). A cap below the
+    // field-by-field reading and above the flat text makes that so.
+    fw.collusion_detector()
+        .expect("relay detection on")
+        .set_answer_text_cap(1024 * 1024);
     assert!(
-        fw.delivered_for_plan(&answer, None).is_none(),
-        "premise: field by field is over the bound"
+        fw.delivered_for_plan(&answer, None)
+            .is_some_and(|d| d.is_unread()),
+        "the field-by-field reading past the cap was not unread"
     );
     let drops = fw.relay_plan_drops();
-    assert!(fw.delivered_preferring(&answer, &flat, None).is_some());
+    assert!(
+        fw.delivered_preferring(&answer, &flat, None)
+            .is_some_and(|d| !d.is_unread()),
+        "the readable flat fallback was not used"
+    );
     assert_eq!(fw.relay_plan_drops(), drops, "no drop while the text fits");
 }
 

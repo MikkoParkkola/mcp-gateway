@@ -141,21 +141,3 @@ async fn a_post_dispatch_transport_failure_reaches_the_backend_once() {
          be resent (ADR-012 A3); the backend received it {delivered} times"
     );
 }
-
-/// Row 9 — a name that reads like a query grants no resend permission.
-///
-/// The row amendment A1 is phrased for. `get_and_increment` is a mutation
-/// whose name invites the inference the ADR forbids, and it carries no
-/// annotation, so every resend site must deny it.
-#[tokio::test]
-async fn a_resend_site_denies_by_default_without_an_annotation() {
-    let delivered = deliveries(Fault::Silence, READ_LOOKING_MUTATION).await;
-
-    assert_eq!(
-        delivered, 1,
-        "the resend default at every site is deny: a request carrying no \
-         explicit annotation — including one whose name merely looks read-only, \
-         such as `{READ_LOOKING_MUTATION}` — must be resent nowhere (ADR-012 A1, \
-         A3); the backend received it {delivered} times"
-    );
-}

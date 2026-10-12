@@ -12,6 +12,8 @@
 use crate::backend::{Backend, CatalogueVerdict};
 use crate::identity_propagation::CallerProof;
 
+use super::super::refund_witness::RefundWitness;
+
 use super::super::visible::{self, Visibility, Withholding};
 use super::super::{MetaMcp, MetaMcpCallerContext};
 
@@ -69,6 +71,13 @@ impl MetaMcp {
     /// authorize and the firewall (R5.1). Idempotent within a request: a
     /// recorded answer is returned as is.
     ///
+    /// `witness` is the call's refund witness (MIK-8353). It comes back only
+    /// from an arm that contacted nothing: a memo hit, Step 0, no principal, or
+    /// no view (each reads in-process state or the vault's stored grant, with
+    /// no provider call and no durable write). A resolution (which may mint,
+    /// refresh or lease), a catalogue fill or a 401 refresh spends it, so a
+    /// later refusal keeps the nonce spent.
+    ///
     /// # Errors
     ///
     /// The credential resolution's own refusal (a connect offer, an
@@ -79,31 +88,32 @@ impl MetaMcp {
         caller: &MetaMcpCallerContext<'_>,
         session_id: Option<&str>,
         naming: TargetNaming,
-    ) -> crate::Result<CallerVerdict> {
+        witness: Option<RefundWitness>,
+    ) -> crate::Result<(CallerVerdict, Option<RefundWitness>)> {
         let Some(backend) = self
             .backends
             .get(server)
             .filter(|backend| backend.keeps_per_user_catalogues())
         else {
-            return Ok(CallerVerdict::Proceed);
+            return Ok((CallerVerdict::Proceed, witness));
         };
         match visible::recorded_visibility(server, tool) {
-            Some(Visibility::Visible) => return Ok(CallerVerdict::Proceed),
-            Some(Visibility::Withheld(_)) => return Ok(CallerVerdict::Absent),
+            Some(Visibility::Visible) => return Ok((CallerVerdict::Proceed, witness)),
+            Some(Visibility::Withheld(_)) => return Ok((CallerVerdict::Absent, witness)),
             None => {}
         }
         // Step 0 (R5.2): descriptor and policy first, with no fill and no
         // resolution. A name they withhold is answered by the existing
         // checks, which read the same judgement.
         if self.tool_visible_to(server, tool, caller.scope(), session_id) != Visibility::Visible {
-            return Ok(CallerVerdict::Proceed);
+            return Ok((CallerVerdict::Proceed, witness));
         }
         let proof = CallerProof::new(caller.verified_identity, caller.provenance());
         // No principal on a required backend: no slot can hold this caller's
         // catalogue, so it lacks the tool, answered before any resolution.
         if self.lacks_principal_on_required(&backend, proof) {
             visible::record_visibility(server, tool, Visibility::Withheld(Withholding::Lacked));
-            return Ok(CallerVerdict::Absent);
+            return Ok((CallerVerdict::Absent, witness));
         }
         // A managed account with no current grant has no view (R3.7). Nothing
         // is resolved here: resolving would create a consent journey. The
@@ -116,7 +126,7 @@ impl MetaMcp {
             if let Some(principal) = self.principal_for(&backend, proof) {
                 backend.record_no_view(&principal.stable_actor_id());
             }
-            return Ok(match naming {
+            let verdict = match naming {
                 TargetNaming::SurfacedName => {
                     visible::record_visibility(
                         server,
@@ -126,15 +136,40 @@ impl MetaMcp {
                     CallerVerdict::Absent
                 }
                 TargetNaming::ExplicitBackend => CallerVerdict::Proceed,
-            });
+            };
+            return Ok((verdict, witness));
         }
+        // Everything below may act: the resolution may mint, refresh or lease
+        // the caller's credential, and the judgement fills the catalogue.
+        if let Some(witness) = witness {
+            witness.spend();
+        }
+        // Boxed: the acting half's state (resolution, fill, refresh) would
+        // otherwise sit inline in every dispatch future that awaits a verdict,
+        // refusals included (MIK-8400's allocation caps). It is allocated only
+        // when a per-user call gets this far.
+        Box::pin(self.caller_verdict_acting(
+            (server, tool),
+            backend,
+            proof,
+            caller.verified_identity,
+        ))
+        .await
+        .map(|verdict| (verdict, None))
+    }
+
+    /// The half of [`Self::caller_verdict`] that may act: resolve the
+    /// caller's credential, judge the caller's slot (a fill), and carry the
+    /// resolution to the dispatch.
+    async fn caller_verdict_acting(
+        &self,
+        (server, tool): (&str, &str),
+        backend: std::sync::Arc<Backend>,
+        proof: CallerProof<'_>,
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    ) -> crate::Result<CallerVerdict> {
         let resolved = self
-            .resolve_dispatch(
-                (server, tool),
-                Some(&backend),
-                proof,
-                caller.verified_identity,
-            )
+            .resolve_dispatch((server, tool), Some(&backend), proof, verified_identity)
             .await?;
         let judged = self
             .judge_caller_slot(

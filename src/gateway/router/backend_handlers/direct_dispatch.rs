@@ -23,6 +23,7 @@ use super::{BackendAuthContext, sign_and_record};
 use crate::gateway::meta_mcp::invoke::dispatch_guards::{Admission, BackendCall};
 use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use crate::gateway::meta_mcp::invoke::relay::GatewayStamps;
+use crate::gateway::meta_mcp::refund_witness::{self as rw, RefundWitness};
 use crate::protocol::meta::Era;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
@@ -49,6 +50,9 @@ pub(super) struct Admitted<'a> {
     pub(super) lease: Option<crate::gateway::meta_mcp::admission::SyncLease>,
     /// The signing nonce this call registered, if it registered one.
     pub(super) nonce: Option<AdmittedNonce>,
+    /// The refund witness (MIK-8379): minted with the nonce only when nothing
+    /// before it acted; dropped by a consume; spent at the send.
+    pub(super) witness: Option<RefundWitness>,
     /// MIK-7642 PR.C: this call's explicit-cancel registration, held for the
     /// request's life so the caller's own cancel can find it.
     pub(super) cancel_entry: Option<crate::gateway::router::inflight_calls::Registered>,
@@ -59,7 +63,31 @@ pub(super) struct Admitted<'a> {
 /// A refusal before dispatch: give back the nonce this call admitted
 /// (MIK-7698).
 fn give_back_nonce(state: &AppState, admitted: &mut Admitted<'_>) {
-    DirectRouteGuards::release_nonce(state, admitted.nonce.take());
+    DirectRouteGuards::release_nonce(state, admitted.nonce.take(), admitted.witness.take());
+}
+
+/// The witness for a nonce admitted after propagation and the schema check:
+/// only when neither may have acted, by `/mcp`'s classifiers (MIK-8379).
+fn admission_witness(
+    nonce: Option<&AdmittedNonce>,
+    propagation: &Propagation,
+    backend: &crate::backend::Backend,
+) -> Option<RefundWitness> {
+    nonce?;
+    let credential = rw::dispatch_effect(
+        propagation.identity_key.is_some() || propagation.attempted,
+        propagation.managed.is_some(),
+    );
+    let filled = rw::schema_effect(backend.list_fills() != propagation.fills_before);
+    let witness = RefundWitness::carry(Some(RefundWitness::at_capture()), credential);
+    RefundWitness::carry(witness, filled)
+}
+
+/// The send is about to happen: the nonce stays spent whatever follows.
+fn spend_witness(admitted: &mut Admitted<'_>) {
+    if let Some(witness) = admitted.witness.take() {
+        witness.spend();
+    }
 }
 
 /// SECURITY: apply tool policy, name validation, and input sanitization to
@@ -211,6 +239,7 @@ pub(super) async fn admit<'a>(
         idem_reservation: None,
         lease: None,
         nonce: None,
+        witness: None,
         cancel_entry,
         cancel_on,
     };
@@ -230,6 +259,7 @@ pub(super) async fn admit<'a>(
         super::direct_idempotency::execution_lease(scope, envelope, preflight, &mut guarded)?;
     admitted.lease = lease;
     admitted.nonce = admit_signing_nonce(scope, preflight)?;
+    admitted.witness = admission_witness(admitted.nonce.as_ref(), propagation, &route.backend);
     super::direct_idempotency::deliver_replay(
         scope,
         (envelope, preflight),
@@ -278,6 +308,11 @@ async fn forward_sanitized(
         drop(admission);
         return refused;
     }
+    // Redeemed: a continuation the caller presented was consumed.
+    admitted.witness = RefundWitness::carry(
+        admitted.witness.take(),
+        rw::retry_effect(preflight.retry.request_state.is_some()),
+    );
     // After redeem, on the exact bytes sent: the answers are in the params now.
     let permit = match super::direct_permit::mint_permit(scope, Some(&sanitized_params)) {
         Ok(permit) => permit,
@@ -287,6 +322,7 @@ async fn forward_sanitized(
         }
     };
     // Forward the sanitized params to the backend
+    spend_witness(&mut admitted);
     #[cfg(test)]
     super::direct_idempotency::seams::before_mark().await;
     super::direct_idempotency::mark(admitted.lease.as_ref());
@@ -409,6 +445,7 @@ async fn forward_plain(
             return Err(refused);
         }
     };
+    spend_witness(admitted);
     #[cfg(test)]
     super::direct_idempotency::seams::before_mark().await;
     super::direct_idempotency::mark(admitted.lease.as_ref());

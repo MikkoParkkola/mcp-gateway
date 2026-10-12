@@ -52,9 +52,11 @@ async fn s9c_direct_strips_a_control_character_in_encoded_arguments() {
 }
 
 /// S9d (fixes seat, both): a control character in an inner `arguments` key
-/// (`gateway_invoke`'s, which protocol key validation does not reach) is no
-/// way around the decode: keys are matched as sanitized, so the encoded NUL
-/// under `arg\x07uments` is refused, and nothing runs.
+/// (`gateway_invoke`'s) is no way around the decode, and nothing runs. Since
+/// MIK-8378 ENV.2 protocol key validation reaches `gateway_invoke`'s own
+/// argument keys, so `arg\x07uments` is refused as a dirty key before the
+/// decode would refuse the encoded NUL under it (was: refused by the decode,
+/// with the NUL message).
 #[tokio::test]
 async fn s9d_a_dirty_arguments_key_does_not_skip_the_decode() {
     let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
@@ -62,7 +64,11 @@ async fn s9d_a_dirty_arguments_key_does_not_skip_the_decode() {
         "name": "gateway_invoke", "arguments": {"server": "alpha", "tool": "read",
         "arg\u{7}uments": encoded(&json!({"cmd": NUL}))}}});
     let body = send_raw(&fx, "/mcp", "k-std", &body).await;
-    assert_eq!(message(&body), NUL_REFUSED, "s9d: {body}");
+    assert_eq!(body["error"]["code"], -32600, "s9d: {body}");
+    assert!(
+        message(&body).contains("control characters"),
+        "s9d: not the dirty-key refusal: {body}"
+    );
     assert_eq!(calls(&fx), 0, "s9d: dispatched");
 }
 

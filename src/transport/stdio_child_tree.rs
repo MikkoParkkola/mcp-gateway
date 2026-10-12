@@ -44,6 +44,12 @@ pub(super) struct ChildTree {
     /// `Instant`s, not through this.
     #[cfg(test)]
     pub(super) reap_deadline_for_test: Option<std::time::Duration>,
+    /// Test-only: while set, every step of this tree is `Pending` before it
+    /// starts, so a row can hold one tree in the real reaper loop and watch
+    /// the others finish around it, by event rather than by stopwatch
+    /// (MIK-8360).
+    #[cfg(test)]
+    pub(super) hold_for_test: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 /// What the kernel says about the leader, without reaping it.
@@ -134,6 +140,8 @@ impl ChildTree {
             grace_for_test: None,
             #[cfg(test)]
             reap_deadline_for_test: None,
+            #[cfg(test)]
+            hold_for_test: None,
         }
     }
 
@@ -216,6 +224,14 @@ impl ChildTree {
     pub(super) fn reap_step(&mut self, now: std::time::Instant) -> Reap {
         if let Some(status) = self.status {
             return Reap::Done(Some(status));
+        }
+        #[cfg(test)]
+        if self
+            .hold_for_test
+            .as_ref()
+            .is_some_and(|held| held.load(std::sync::atomic::Ordering::SeqCst))
+        {
+            return Reap::Pending;
         }
         let (started, phase) = if let Some(state) = self.reaping {
             state
