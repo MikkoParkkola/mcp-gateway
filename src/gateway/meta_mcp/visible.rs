@@ -146,8 +146,12 @@ impl MetaMcp {
     /// the listing's: a descriptor block, a slot or account with no view, an
     /// entry withheld by [`Self::visible_tool`], or a catalogue that is
     /// populated, complete and lacks the tool, read from one snapshot. A
-    /// truncated or never-populated catalogue proves nothing about the tool,
-    /// so it is judged on the other reasons only.
+    /// truncated catalogue proves nothing about the tool, so it is judged
+    /// on the other reasons only, as is a never-populated SHARED catalogue
+    /// (T9c). A caller slot that is gone, replaced or not populated is
+    /// retryable, never judged as never-populated (F3); a cleared cache
+    /// (ever populated, no cached value) is retryable on every view, never
+    /// complete-and-empty (F5).
     pub(crate) fn stored_target_view(
         &self,
         server: &str,
@@ -185,7 +189,32 @@ impl MetaMcp {
                 super::listing_view::ListingView::Caller(binding) => Some(binding),
             }
         };
-        let (tools, truncated, populated) = backend.cached_tools_view(binding.as_deref());
+        let (cached, truncated, populated) = backend.cached_tools_view(binding.as_deref());
+        let Some(tools) = cached else {
+            // No cached value. Cleared (ever populated) is retryable on
+            // every view, never complete-and-empty and never served (F5).
+            if populated {
+                return None;
+            }
+            // Never populated. A Caller view reads only the pooled entry
+            // that is still there and populated: gone, replaced or never
+            // filled is retryable, never judged on the other reasons (F3),
+            // so an eviction racing this read cannot serve a target the
+            // caller's own catalogue had withheld.
+            if binding.is_some() {
+                return None;
+            }
+            return Some(self.invokable(server, tool, scope, session_id));
+        };
+        // A held catalogue past its TTL is stale, by the same rule the live
+        // fill uses (F2). The pre-pass refreshes it — per-user through the
+        // cold claim, shared through the shared fill — so still stale here
+        // means the refresh failed or raced: retryable, never judged stale.
+        // Fresh judges, including a withdrawn shared tool within its TTL
+        // (the documented residual).
+        if !backend.has_cached_tools_for(binding.as_deref()) {
+            return None;
+        }
         Some(match tools.iter().find(|entry| entry.name == tool) {
             Some(entry) => self.visible_tool(server, entry, scope, session_id),
             None if populated && !truncated => Visibility::Withheld(Withholding::Lacked),
@@ -389,49 +418,11 @@ pub(crate) fn record_account_outcome(server: &str, account: &AccountKey, outcome
     });
 }
 
-/// Keep the binding the pre-pass's view read gave `(server, account)`.
-pub(crate) fn record_account_binding(server: &str, account: &AccountKey, binding: &str) {
-    let _ = VISIBILITY_MEMO.try_with(|memo| {
-        memo.account_binding
-            .lock()
-            .insert((server.to_owned(), account.clone()), binding.to_owned());
-    });
-}
-
-/// The binding the pre-pass's view read gave `(server, account)`, if any.
-pub(crate) fn account_binding(server: &str, account: &AccountKey) -> Option<String> {
-    VISIBILITY_MEMO
-        .try_with(|memo| {
-            memo.account_binding
-                .lock()
-                .get(&(server.to_owned(), account.clone()))
-                .cloned()
-        })
-        .ok()
-        .flatten()
-}
-
-/// Keep the live call's refusal for `(server, account)` in the open request;
-/// outside one it is dropped.
-pub(crate) fn record_account_refusal(server: &str, account: &AccountKey, refusal: crate::Error) {
-    let _ = VISIBILITY_MEMO.try_with(|memo| {
-        memo.account_refusal
-            .lock()
-            .insert((server.to_owned(), account.clone()), refusal);
-    });
-}
-
-/// Take the refusal kept for `(server, account)`, if any.
-pub(crate) fn take_account_refusal(server: &str, account: &AccountKey) -> Option<crate::Error> {
-    VISIBILITY_MEMO
-        .try_with(|memo| {
-            memo.account_refusal
-                .lock()
-                .remove(&(server.to_owned(), account.clone()))
-        })
-        .ok()
-        .flatten()
-}
+#[path = "visible_account_memo.rs"]
+mod account_memo;
+pub(crate) use account_memo::{
+    account_binding, record_account_binding, record_account_refusal, take_account_refusal,
+};
 
 /// The outcome recorded for `(server, account)` in the open request. Reads
 /// the memo only: outside an open memo, or before the pre-pass ran, it is

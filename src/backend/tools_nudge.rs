@@ -211,6 +211,22 @@ impl super::Backend {
             );
     }
 
+    /// Move `binding`'s (`None`: shared) catalogue timestamp back by `secs`,
+    /// as if it were listed that long ago (MIK-8392 F2): the value stays,
+    /// freshness lapses past the TTL. A missing slot is left alone.
+    #[cfg(test)]
+    pub(crate) fn age_tools_cache_for_test(&self, binding: Option<&str>, secs: u64) {
+        let key = match binding {
+            Some(binding) => super::PoolKey::PerUser {
+                binding: binding.to_string(),
+            },
+            None => super::PoolKey::Shared,
+        };
+        if let Some(slot) = self.pool.get(&key) {
+            slot.value().tools_cache.age_for_test(secs);
+        }
+    }
+
     /// Whether per-user slot `binding` is in the pool (MIK-8392 K1).
     #[cfg(test)]
     pub(crate) fn holds_per_user_slot_for_test(&self, binding: &str) -> bool {

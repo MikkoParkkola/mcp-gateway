@@ -13,7 +13,7 @@ use tower::ServiceExt;
 
 use super::slot_verdict_http_tests::{CLOSED, Gateway, gateway, gateway_tuned};
 use crate::gateway::meta_mcp::slot_verdict_fixture::{
-    BACKEND, BINDING, CallerSlot, Surfaced, TOOL, Warmth, valid,
+    BACKEND, BINDING, CallerSlot, Surfaced, TOOL, Warmth, serve_alpha_empty, valid,
 };
 use crate::key_server::oidc::VerifiedIdentity;
 
@@ -316,6 +316,110 @@ async fn p1b_passthrough_stored_read_answers_absent_when_the_shared_catalogue_la
         "P1b: {read}"
     );
     assert!(!read.to_string().contains(OUTPUT), "P1b: no output: {read}");
+}
+
+/// F3 (MIK-8392): alpha's pooled slot is evicted after its index entry is
+/// kept — the listing view still names the caller while the pool lookup
+/// finds a fresh entry, as a slot evicted between the two reads leaves it.
+/// The sync judgement answers None (retryable), never served. Red without
+/// the fix: the fresh entry reads as never-populated and the read is judged
+/// on the other reasons only, serving a target alpha's own catalogue lacks.
+#[tokio::test]
+async fn f3_an_evicted_caller_slot_read_as_never_populated_is_retryable() {
+    let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await;
+    let _ = finished(&gw, "s1-f3").await;
+    alpha_lacks(&gw);
+    let _held = backend(&gw)
+        .unpool_per_user_slot_for_test(BINDING)
+        .expect("alpha's pooled slot");
+    // The request's own identity, as `send` presents it.
+    let alpha = VerifiedIdentity {
+        subject: "alpha".to_string(),
+        email: "alpha@example.invalid".to_string(),
+        name: None,
+        groups: vec![],
+        issuer: "https://issuer.example.invalid".to_string(),
+    };
+    assert!(
+        backend(&gw)
+            .caller_slot_held(&alpha.stable_actor_id())
+            .is_some(),
+        "premise: the index still names alpha's slot"
+    );
+    let caller = crate::gateway::meta_mcp::identified_caller(&alpha);
+    assert!(
+        gw.meta
+            .stored_target_view(BACKEND, TOOL, caller.scope(), None)
+            .is_none(),
+        "F3: a caller slot gone from the pool is retryable, not served"
+    );
+}
+
+/// F2 per-user (MIK-8392): a warm read ages alpha's catalogue past its TTL
+/// and the upstream relists without the tool. The read refreshes through
+/// the cold claim — first retryable or already refreshed — then answers
+/// -32601. Control: a fresh catalogue serves with 0 resolutions. Red
+/// without the fix: the stale list serves the withdrawn tool.
+#[tokio::test]
+async fn f2_a_stale_caller_catalogue_refreshes_past_its_ttl() {
+    let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await;
+    let id = finished(&gw, "s1-f2").await;
+    let before = gw.mints.load(Ordering::SeqCst);
+    let control = task_get(&gw, &id).await;
+    assert!(
+        control.to_string().contains(OUTPUT),
+        "control: served: {control}"
+    );
+    assert_eq!(
+        gw.mints.load(Ordering::SeqCst) - before,
+        0,
+        "control: a fresh catalogue serves with 0 resolutions"
+    );
+    backend(&gw).age_tools_cache_for_test(Some(BINDING), 400);
+    let _ = serve_alpha_empty(&gw.meta);
+    let first = task_get(&gw, &id).await;
+    assert!(
+        first.pointer("/error/code") == Some(&json!(-32603))
+            || first.pointer("/error/code") == Some(&json!(-32601)),
+        "F2: first retryable or refreshed: {first}"
+    );
+    let second = task_get(&gw, &id).await;
+    assert_eq!(
+        second.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "F2: then the withdrawn tool is absent: {second}"
+    );
+    assert!(
+        !second.to_string().contains(OUTPUT),
+        "F2: no output: {second}"
+    );
+}
+
+/// F4 (MIK-8392): a cold view whose target is descriptor-blocked claims
+/// nothing — 0 resolutions, no backend traffic — and the read answers the
+/// existing -32601. Red without the fix: one resolution re-establishes a
+/// view the read then refuses anyway.
+#[tokio::test]
+async fn f4_a_cold_descriptor_blocked_read_resolves_nothing() {
+    let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await;
+    let id = finished(&gw, "s1-f4").await;
+    backend(&gw).forget_caller_slots_for_test();
+    backend(&gw).block_tool_for_test(TOOL);
+    let before_mints = gw.mints.load(Ordering::SeqCst);
+    let before_lists = gw.caller.lists();
+    let read = task_get(&gw, &id).await;
+    assert_eq!(
+        read.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "F4: the existing answer: {read}"
+    );
+    assert!(!read.to_string().contains(OUTPUT), "F4: no output: {read}");
+    assert_eq!(
+        gw.mints.load(Ordering::SeqCst),
+        before_mints,
+        "F4: 0 resolutions"
+    );
+    assert_eq!(gw.caller.lists(), before_lists, "F4: no backend traffic");
 }
 
 #[path = "stored_read_lease_tests.rs"]

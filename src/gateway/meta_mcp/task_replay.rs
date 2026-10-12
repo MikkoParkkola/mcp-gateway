@@ -60,15 +60,19 @@ impl MetaMcp {
 
     /// Fill this request's account outcomes for `stored`'s targets, the
     /// async half of a stored read (MIK-8392): every read entry awaits this
-    /// inside the request's memo, then judges synchronously.
+    /// inside the request's memo, then judges synchronously. `scope` is this
+    /// request's live policy caller, so a cold claim already refused without
+    /// the caller's catalogue is skipped before it resolves (F4).
     pub(crate) async fn prepare_stored_read(
         &self,
         stored: &CommittedTask,
-        caller: crate::identity_propagation::CallerProof<'_>,
+        scope: super::visibility::InvokeScope<'_>,
+        session_id: Option<&str>,
     ) {
         if !stored.serves_backend_output() {
             return;
         }
+        let caller = scope.caller;
         let targets: Vec<(&str, &str)> = stored
             .targets
             .iter()
@@ -88,7 +92,9 @@ impl MetaMcp {
         self.fill_account_outcomes(&targets, caller).await;
         for &(server, tool) in &targets {
             self.keep_permanent_refusal(server, tool, caller).await;
-            self.settle_caller_view(server, tool, caller).await;
+            self.settle_caller_view(server, tool, scope, session_id)
+                .await;
+            self.settle_shared_view(server).await;
         }
     }
 
@@ -124,8 +130,10 @@ impl MetaMcp {
         &self,
         server: &str,
         tool: &str,
-        caller: crate::identity_propagation::CallerProof<'_>,
+        scope: super::visibility::InvokeScope<'_>,
+        session_id: Option<&str>,
     ) {
+        let caller = scope.caller;
         let Some(backend) = self.backends.get(server) else {
             return;
         };
@@ -156,12 +164,22 @@ impl MetaMcp {
                 .target_account(server, tool)
                 .and_then(|account| visible::account_binding(server, &account));
             if current.is_none_or(|current| current == held.binding()) {
-                backend.touch_caller_slot(held.binding());
-                return;
+                // MIK-8392 F2: a held catalogue past its TTL is stale, by
+                // the same rule the live fill uses. Treat the view as cold:
+                // forget, claim the lease and refresh through `warm_cold_view`
+                // (one resolution per lease window), retryable meanwhile,
+                // exactly as a cold view. A fresh catalogue touches and
+                // stays warm: no extra resolution (C1, K1).
+                if backend.has_cached_tools_for(Some(held.binding())) {
+                    backend.touch_caller_slot(held.binding());
+                    return;
+                }
+                backend.forget_caller_held(&id, &held);
+            } else {
+                #[cfg(test)]
+                backend.after_warm_capture.pause().await;
+                backend.forget_caller_held(&id, &held);
             }
-            #[cfg(test)]
-            backend.after_warm_capture.pause().await;
-            backend.forget_caller_held(&id, &held);
         }
         let account = self
             .target_account(server, tool)
@@ -176,12 +194,69 @@ impl MetaMcp {
         ) {
             return;
         }
+        // MIK-8392 F4: a cold claim's winner would resolve the caller's
+        // credential and list the backend before any policy check. Skip the
+        // claim when the target is already refused without the caller's
+        // catalogue — descriptor-blocked, or refused by the invocation
+        // policy (the silent check the name judgement uses, plus the
+        // dispatch admission for the kill switch) — so a doomed read
+        // causes no resolution and no backend traffic. The sync judgement
+        // still runs, so the answer and its audit record are unchanged.
+        if backend.is_blocked_tool(tool) {
+            return;
+        }
+        if self.may_invoke(server, tool, scope, session_id).is_err() {
+            return;
+        }
+        let call = super::invoke::dispatch_guards::BackendCall {
+            server,
+            tool,
+            session_id,
+            api_key_name: scope.api_key_name,
+            trace_id: "",
+            caller_key: None,
+        };
+        if self.admit_target(&call).is_err() {
+            return;
+        }
         if let crate::backend::ColdClaim::Won(generation) =
             backend.claim_cold_view(&id, COLD_RETRY_BACKOFF, account_live)
         {
             self.warm_cold_view((server, tool), &backend, caller, generation)
                 .await;
         }
+    }
+
+    /// The shared half of a stored read (MIK-8392 F2): a shared catalogue
+    /// past its TTL is refreshed through the live call's catalogue fill,
+    /// under the gateway's credentials and no caller credential, before the
+    /// read judges it — so a stored read can serve a withdrawn shared tool
+    /// for at most one TTL. Only a stale HELD list refreshes: a
+    /// never-populated shared catalogue keeps T9c (judged on the other
+    /// reasons, no fill), and a cleared one keeps F5 (retryable, no fill).
+    /// A failed refresh leaves the list stale, and the sync judgement
+    /// answers retryable.
+    async fn settle_shared_view(&self, server: &str) {
+        let Some(backend) = self.backends.get(server) else {
+            return;
+        };
+        // Only backends whose stored read judges the shared catalogue:
+        // those without per-user catalogues, plus Passthrough, which is
+        // never indexed and judges shared (P1).
+        let passthrough = backend.identity_propagation_config().is_some_and(|idp| {
+            matches!(
+                idp.strategy,
+                crate::identity_propagation::PropagationStrategyKind::Passthrough
+            )
+        });
+        if backend.keeps_per_user_catalogues() && !passthrough {
+            return;
+        }
+        let (cached, _, _) = backend.cached_tools_view(None);
+        if cached.is_none() || backend.has_cached_tools_for(None) {
+            return;
+        }
+        let _ = backend.tools_for_check(None, &[], true).await;
     }
 
     /// A stored read found no account outcome for `server`'s target: every
@@ -230,13 +305,20 @@ impl MetaMcp {
         // (MIK-8392 T12). A Refused target falls through to the policy check;
         // a cold one defers its retry until after policy and accounts, as the
         // live path fills a cold slot only after route policy.
-        let cold = match self.judge_stored_visibility(stored, session, caller) {
+        let (cold, caller_catalogue) = match self.judge_stored_visibility(stored, session, caller) {
             Err(error) => return Some(error_response_preserving_status(id.clone(), &error)),
-            Ok(cold) => cold,
+            Ok(judged) => judged,
         };
         // Policy before accounts, as on the live path: route authorize before
         // caller verdicts, and the dispatch policy before its resolution.
         if let Err(error) = self.authorize_stored(stored, attestation, session, caller) {
+            return Some(error_response_preserving_status(id.clone(), &error));
+        }
+        // MIK-8392 F1: a removed backend answers as the live call does
+        // (`BackendNotFound`, the invoke path's answer for an unknown
+        // server), after policy, as the live call refuses on policy before
+        // it dispatches.
+        if let Some(error) = self.unknown_server_refusal(stored) {
             return Some(error_response_preserving_status(id.clone(), &error));
         }
         if let Err(withheld) = self.judge_stored_accounts(stored, read) {
@@ -246,6 +328,12 @@ impl MetaMcp {
                     error_response_preserving_status(id.clone(), &error)
                 }
             });
+        }
+        // The caller's own catalogue is judged after its account, as the
+        // live caller verdict resolves the credential before it reads the
+        // caller's slot (MIK-8392 Ub).
+        if let Some(error) = caller_catalogue {
+            return Some(error_response_preserving_status(id.clone(), &error));
         }
         if let Some(after) = cold {
             return Some(retry_later(id, after));
@@ -267,9 +355,10 @@ impl MetaMcp {
         stored: &CommittedTask,
         session: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
-    ) -> std::result::Result<Option<Option<std::time::Duration>>, Error> {
+    ) -> std::result::Result<StoredVisibility, Error> {
         let scope = caller.scope();
         let mut cold: Option<Option<std::time::Duration>> = None;
+        let mut caller_catalogue: Option<Error> = None;
         for target in &stored.targets {
             let (server, tool) = (target.server.as_str(), target.tool.as_str());
             let Some(judged) = self.stored_target_view(server, tool, scope, session) else {
@@ -284,9 +373,50 @@ impl MetaMcp {
             if judged == visible::Visibility::Withheld(visible::Withholding::Refused) {
                 continue;
             }
+            // A per-user backend's Lacked or Schema verdict is the caller's
+            // own catalogue's: the live caller verdict reads it only after
+            // the account resolves, so it is answered after the account
+            // judgement. A descriptor block, or a shared catalogue's verdict,
+            // is answered now, before policy (T12).
+            let own_catalogue = self.keeps_per_user_catalogues(server)
+                && matches!(
+                    judged,
+                    visible::Visibility::Withheld(
+                        visible::Withholding::Lacked | visible::Withholding::Schema
+                    )
+                );
+            if own_catalogue {
+                if caller_catalogue.is_none() {
+                    caller_catalogue = visible::absent_if_withheld(Some(judged), tool).err();
+                }
+                continue;
+            }
             visible::absent_if_withheld(Some(judged), tool)?;
         }
-        Ok(cold)
+        Ok((cold, caller_catalogue))
+    }
+
+    /// The live call's answer for a target whose server is neither a
+    /// registered backend nor the capability provider offering that tool:
+    /// `BackendNotFound` (MIK-8392 F1), the invoke path's answer for an
+    /// unknown server (`dispatch.rs` answers it when no backend was
+    /// captured). A capability tool still judges through the catalogue and
+    /// policy path; a personal-account backend that was removed answers
+    /// here too, as its live call does.
+    fn unknown_server_refusal(&self, stored: &CommittedTask) -> Option<Error> {
+        for target in &stored.targets {
+            let (server, tool) = (target.server.as_str(), target.tool.as_str());
+            if self.backends.get(server).is_some() {
+                continue;
+            }
+            let offered = self
+                .get_capabilities()
+                .is_some_and(|cap| cap.name == server && cap.get(tool).is_some());
+            if !offered {
+                return Some(Error::BackendNotFound(server.to_string()));
+            }
+        }
+        None
     }
 
     /// Each recorded target's account (task reads only) as the pre-pass
@@ -477,6 +607,11 @@ enum StoredRead {
 }
 
 /// Why a stored delivery does not go out.
+/// A stored read's visibility verdict that is answered later: the first cold
+/// view's remaining lease (retry), and the first refusal by the caller's own
+/// per-user catalogue (answered after the account judgement).
+type StoredVisibility = (Option<Option<std::time::Duration>>, Option<Error>);
+
 enum StoredWithheld {
     /// Its target is withheld from this caller: the absent answer.
     Refused(Error),

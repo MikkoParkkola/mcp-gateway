@@ -359,7 +359,9 @@ impl StdioTasks {
         };
         crate::gateway::meta_mcp::visible::with_visibility_memo(async {
             // MIK-8392: fill the account outcomes of the named task's
-            // recorded targets before the delivery check reads them.
+            // recorded targets before the delivery check reads them. Runs
+            // under the request's live policy caller, so a cold claim
+            // already refused is skipped before it resolves (F4).
             if let (Some(owner_text), Some(task_id)) = (
                 owner.text(),
                 crate::gateway::task_route::task_id_param(params),
@@ -367,7 +369,7 @@ impl StdioTasks {
             {
                 self.host
                     .meta_mcp
-                    .prepare_stored_read(&stored, caller.scope().caller)
+                    .prepare_stored_read(&stored, caller.scope(), Some(session_id))
                     .await;
             }
             route

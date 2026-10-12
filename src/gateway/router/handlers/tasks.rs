@@ -608,7 +608,7 @@ pub(super) async fn tasks_cancel(
 }
 
 mod stored_read;
-use stored_read::{prepare_stored_read, stored_read_caller};
+use stored_read::{prepare_stored_read, prepare_stored_read_with_policy};
 #[cfg(test)]
 mod agent_owner_tests;
 #[cfg(test)]
@@ -738,10 +738,7 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
         });
         let mut pending = crate::gateway::meta_mcp::visible::with_visibility_memo(async {
             if let Some(Some(task)) = prepared.as_ref() {
-                self.state
-                    .meta_mcp
-                    .prepare_stored_read(task, stored_read_caller(&live))
-                    .await;
+                prepare_stored_read_with_policy(&self.state, task, &live).await;
             }
             self.state
                 .meta_mcp

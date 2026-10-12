@@ -279,6 +279,21 @@ impl Backend {
         entry.retired.store(true, Ordering::SeqCst);
     }
 
+    /// Remove per-user slot `binding`'s pooled entry WITHOUT retiring it or
+    /// touching the index, handing the entry back so the caller holds it
+    /// (MIK-8392 F3): the index entry stays live (its `Weak` still
+    /// upgrades, unretired) while a pool lookup by binding finds nothing,
+    /// as a slot evicted between the listing view and the catalogue read
+    /// leaves it. The caller must hold the returned entry for the index to
+    /// keep reading as held.
+    #[cfg(test)]
+    pub(crate) fn unpool_per_user_slot_for_test(&self, binding: &str) -> Option<Arc<PooledEntry>> {
+        let key = PoolKey::PerUser {
+            binding: binding.to_string(),
+        };
+        self.pool.remove(&key).map(|(_, entry)| entry)
+    }
+
     /// Every binding the index currently points at (test plan I2e).
     #[cfg(test)]
     pub(crate) fn indexed_bindings_for_test(&self) -> Vec<String> {
