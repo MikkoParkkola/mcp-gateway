@@ -101,7 +101,7 @@ pub(super) fn fixture_backend_config(name: &str, passthrough: bool) -> BackendCo
             crate::identity_propagation::IdentityPropagationConfig {
                 strategy: crate::identity_propagation::PropagationStrategyKind::SignedAssertion,
                 audience: format!("aud-{name}"),
-                required: true,
+                required: !super::OPTIONAL.with(std::cell::Cell::get),
                 session_mode: crate::identity_propagation::SessionMode::Stateless,
                 token_exchange_endpoint: None,
                 token_exchange_scope: None,
@@ -174,4 +174,60 @@ pub(crate) async fn fixture_propagating_signed(
     super::PROPAGATING.with(|p| p.set(false));
     super::HARDENED.with(|h| h.set(false));
     (fx, minting)
+}
+
+/// A propagation strategy whose every mint fails after it was attempted, as a
+/// token exchange that reached its issuer and errored (MIK-8379 H1). Counts
+/// its attempts.
+#[derive(Default)]
+pub(crate) struct FailingMint(std::sync::atomic::AtomicUsize);
+
+impl FailingMint {
+    /// Mints attempted so far.
+    pub(crate) fn count(&self) -> usize {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::identity_propagation::IdentityPropagation for FailingMint {
+    async fn propagate(
+        &self,
+        _identity: &crate::key_server::oidc::VerifiedIdentity,
+        _backend: &crate::identity_propagation::BackendDescriptor,
+    ) -> Result<
+        crate::identity_propagation::PropagatedCredential,
+        crate::identity_propagation::PropagationError,
+    > {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(crate::identity_propagation::PropagationError::Refuse(
+            "the issuer refused the exchange".to_string(),
+        ))
+    }
+}
+
+/// The hardened, signed fixture whose backends declare OPTIONAL identity
+/// propagation through a [`FailingMint`]: every propagated call attempts a
+/// mint, fails, and falls back to the static credential (IDP.5). `build` arms
+/// the signed `MetaMcp` further (a spend budget).
+pub(crate) async fn fixture_optional_failing_mint(
+    answer: Answer,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> (Fx, Arc<FailingMint>) {
+    let failing = Arc::new(FailingMint::default());
+    let strategy = Arc::clone(&failing);
+    super::HARDENED.with(|h| h.set(true));
+    super::PROPAGATING.with(|p| p.set(true));
+    super::OPTIONAL.with(|o| o.set(true));
+    let fx = super::fixture_inner(answer, false, |meta| {
+        let mut meta = build(super::signing(meta, true));
+        meta.enable_transparency_log(leaked_transparency_log());
+        meta.set_identity_propagation(strategy);
+        meta
+    })
+    .await;
+    super::OPTIONAL.with(|o| o.set(false));
+    super::PROPAGATING.with(|p| p.set(false));
+    super::HARDENED.with(|h| h.set(false));
+    (fx, failing)
 }

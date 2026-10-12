@@ -387,7 +387,9 @@ pub(crate) use quota::Minting;
 use quota::{fixture_backend_config, fixture_failsafe, leaked_transparency_log};
 #[cfg(feature = "firewall")]
 pub(crate) use quota::{fixture_firewalled_budget_built, fixture_propagating_budgeted};
-pub(crate) use quota::{fixture_propagating, fixture_propagating_signed};
+pub(crate) use quota::{
+    fixture_optional_failing_mint, fixture_propagating, fixture_propagating_signed,
+};
 pub(crate) use requests::{
     initialize, post_direct, post_meta_invoke, post_meta_invoke_nonce, send, send_with_headers,
 };
@@ -499,6 +501,8 @@ thread_local! {
     /// (`aud-<name>`), so one caller reaches them under two bindings
     /// (MIK-8293 S3c).
     static PROPAGATING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// With `PROPAGATING`, propagation is optional (`required: false`).
+    static OPTIONAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// A transport that replaces the scripted backend (the egress matrix).
     static TRANSPORT: std::cell::RefCell<Option<Arc<dyn Transport>>> =
         const { std::cell::RefCell::new(None) };
