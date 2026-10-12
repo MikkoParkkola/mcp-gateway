@@ -5,7 +5,6 @@
 
 use super::*;
 use axum::http::header::CONTENT_TYPE;
-use axum::response::IntoResponse as _;
 
 fn judge() -> Arc<StreamJudge> {
     Arc::new(StreamJudge::new(
