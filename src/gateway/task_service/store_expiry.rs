@@ -172,6 +172,10 @@ impl TaskStore {
     /// a pair that has since moved or gone is refused there rather than acted on
     /// from this view. Nothing here reads the directory: the committed image is
     /// the only enumeration this store has.
+    ///
+    /// A cancelled row whose upstream cancel is still unsent is NOT a
+    /// candidate: retention holds it past its TTL (MIK-8202 P4b). The hold is
+    /// reported once per row, on this thread, never once per pass.
     pub(in crate::gateway::task_service) fn expired_candidates(
         &self,
         now: DateTime<Utc>,
@@ -180,17 +184,39 @@ impl TaskStore {
         if !state.ready {
             return Vec::new();
         }
-        state
-            .entries
-            .iter()
-            .filter(|(_, entry)| {
-                matches!(
-                    entry.task.status(),
-                    TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
-                ) && entry.task.retention_elapsed(now)
-            })
-            .map(|(id, entry)| (id.clone(), entry.record.revision))
-            .collect()
+        let mut out = Vec::new();
+        let mut held = Vec::new();
+        for (id, entry) in state.entries.iter() {
+            let terminal = matches!(
+                entry.task.status(),
+                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+            );
+            if !terminal || !entry.task.retention_elapsed(now) {
+                continue;
+            }
+            if entry.task.status() == TaskStatus::Cancelled
+                && entry.record.upstream_cancel_pending.is_some()
+            {
+                held.push(id.clone());
+                continue;
+            }
+            out.push((id.clone(), entry.record.revision));
+        }
+        drop(state);
+        let mut state = self.0.state();
+        for id in &held {
+            if state.cancel_hold_warned.insert(id.clone()) {
+                tracing::warn!(
+                    task_id = %id,
+                    "held past its ttl: its upstream cancel is unsent (clock before 1970)"
+                );
+                telemetry_metrics::counter!("mcp_task_cancel_held_past_ttl_total").increment(1);
+            }
+        }
+        // Rows no longer held (sent, given up, deleted) leave the set, so it
+        // never outlives the rows it names.
+        state.cancel_hold_warned.retain(|id| held.contains(id));
+        out
     }
 
     /// Delete one terminal record and drop its dedupe entry TOGETHER, per §13.3.

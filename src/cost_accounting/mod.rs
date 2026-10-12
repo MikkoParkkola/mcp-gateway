@@ -21,7 +21,6 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -41,8 +40,9 @@ pub const DEFAULT_PRICE_PER_MILLION: f64 = 15.0;
 /// A single recorded tool-call cost event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CostRecord {
-    /// Unix timestamp (seconds) of the call.
-    pub timestamp: u64,
+    /// Unix timestamp (seconds) of the call, `None` when the clock read
+    /// before 1970 and the call could not be dated (MIK-8202 P4b).
+    pub timestamp: Option<u64>,
     /// Backend server name.
     pub backend: String,
     /// Tool name.
@@ -60,7 +60,7 @@ impl CostRecord {
         #[allow(clippy::cast_precision_loss)]
         let estimated_cost_usd = token_count as f64 * price_per_million / 1_000_000.0;
         Self {
-            timestamp: now_secs(),
+            timestamp: crate::clock::unix_secs().ok(),
             backend: backend.to_string(),
             tool: tool.to_string(),
             token_count,
@@ -130,8 +130,9 @@ pub struct SessionCost {
     total_cost_micro_usd: AtomicU64,
     /// Call count.
     call_count: AtomicU64,
-    /// Session start time.
-    pub started_at: u64,
+    /// Session start time, `None` when the clock read before 1970 at the
+    /// first call (MIK-8202 P4b).
+    pub started_at: Option<u64>,
 }
 
 impl SessionCost {
@@ -143,7 +144,7 @@ impl SessionCost {
             total_tokens: AtomicU64::new(0),
             total_cost_micro_usd: AtomicU64::new(0),
             call_count: AtomicU64::new(0),
-            started_at: now_secs(),
+            started_at: crate::clock::unix_secs().ok(),
         }
     }
 
@@ -185,8 +186,8 @@ pub struct SessionCostSnapshot {
     pub session_id: String,
     /// API key name (if any).
     pub api_key_name: Option<String>,
-    /// Session start (unix secs).
-    pub started_at: u64,
+    /// Session start (unix secs), `None` when undated (MIK-8202 P4b).
+    pub started_at: Option<u64>,
     /// Total calls recorded.
     pub call_count: u64,
     /// Total tokens across all calls.
@@ -213,7 +214,9 @@ pub struct KeyCost {
     /// Hourly spend for the windows and all-time per-tool sums (MIK-8000):
     /// bounded by the clock and the catalog, never by the call count.
     spend: parking_lot::Mutex<(HourBuckets, ToolTally)>,
-    /// Unix second of the latest spend, for the idle sweep.
+    /// Unix second of the latest spend, for the idle sweep. Stored as 0
+    /// when undated (a key born, or spending only, on a clock before 1970);
+    /// 0 is never read as a time (MIK-8202 P4b).
     last_spend: AtomicU64,
 }
 
@@ -225,45 +228,61 @@ impl KeyCost {
             budgeted: false,
             spend: parking_lot::Mutex::default(),
             // A key is born active: a sweep between its creation and its
-            // first spend must not take it for a month-idle one.
-            last_spend: AtomicU64::new(now_secs()),
+            // first spend must not take it for a month-idle one. Born on a
+            // dark clock it is undated (0), which the sweep never reads as
+            // a time, so it is never swept as idle either (MIK-8202 P4b).
+            last_spend: AtomicU64::new(crate::clock::unix_secs().unwrap_or_default()),
         }
     }
 
-    fn record(&self, rec: &CostRecord, now: u64) {
+    fn record(&self, rec: &CostRecord, now: Option<u64>) {
         let micro = tally::micro(rec.estimated_cost_usd);
         let mut spend = self.spend.lock();
-        spend.0.add(rec.timestamp, now, rec.token_count, micro);
+        // An undated record counts in the lifetime sums but enters no time
+        // window: it cannot be dated (MIK-8202 P4b).
+        if let (Some(at), Some(now)) = (rec.timestamp, now) {
+            spend.0.add(at, now, rec.token_count, micro);
+        }
         spend.1.add(&rec.backend, &rec.tool, rec.token_count, micro);
-        self.last_spend.fetch_max(rec.timestamp, Ordering::Relaxed);
+        if let Some(at) = rec.timestamp {
+            self.last_spend.fetch_max(at, Ordering::Relaxed);
+        }
     }
 
     /// True when the key has had no spend for the 30-day window and no
-    /// budget was set for it: every window it reports would read zero.
+    /// budget was set for it: every window it reports would read zero. A key
+    /// with no dated spend is never idle (MIK-8202 P4b).
     fn idle(&self, now: u64) -> bool {
-        !self.budgeted && self.last_spend.load(Ordering::Relaxed) + BudgetWindow::Month.secs() < now
+        let last = self.last_spend.load(Ordering::Relaxed);
+        last != 0 && !self.budgeted && last + BudgetWindow::Month.secs() < now
     }
 
-    /// Compute cost totals for a given rolling window.
-    fn window_totals(&self, window_secs: u64) -> (u64, f64) {
-        self.spend.lock().0.totals(now_secs(), window_secs)
+    /// Compute cost totals for a given rolling window, `None` when the clock
+    /// cannot date the window (MIK-8202 P4b).
+    fn window_totals(&self, window_secs: u64) -> Option<(u64, f64)> {
+        let now = crate::clock::unix_secs().ok()?;
+        Some(self.spend.lock().0.totals(now, window_secs))
     }
 
     /// Cost within the budget window (used for limit checks).
-    fn budget_window_cost(&self) -> f64 {
-        self.window_totals(self.budget.window.secs()).1
+    fn budget_window_cost(&self) -> Option<f64> {
+        self.window_totals(self.budget.window.secs())
+            .map(|(_, cost)| cost)
     }
 
     /// Check budget status.
     ///
     /// Returns `BudgetStatus::Ok` if within limits, `Warning` if approaching
-    /// the hard cap, `Exceeded` if over it.
+    /// the hard cap, `Exceeded` if over it, `Unknown` when the clock cannot
+    /// date the spend (MIK-8202 P4b).
     #[must_use]
     pub fn budget_status(&self) -> BudgetStatus {
         let Some(hard) = self.budget.hard_limit_usd else {
             return BudgetStatus::Ok;
         };
-        let spent = self.budget_window_cost();
+        let Some(spent) = self.budget_window_cost() else {
+            return BudgetStatus::Unknown;
+        };
         if spent >= hard {
             BudgetStatus::Exceeded { spent, limit: hard }
         } else if spent >= hard * self.budget.warning_fraction {
@@ -279,29 +298,28 @@ impl KeyCost {
 
     /// Produce a serialisable snapshot with all three time windows.
     #[must_use]
-    #[allow(clippy::similar_names)] // cost_24h / cost_7d / cost_30d are intentionally parallel
     pub fn snapshot(&self) -> KeyCostSnapshot {
-        let (tokens_24h, cost_24h) = self.window_totals(BudgetWindow::Day.secs());
-        let (tokens_7d, cost_7d) = self.window_totals(BudgetWindow::Week.secs());
-        let (tokens_30d, cost_30d) = self.window_totals(BudgetWindow::Month.secs());
+        let window = |secs| {
+            self.window_totals(secs).map_or(
+                WindowStats {
+                    tokens: None,
+                    cost_usd: None,
+                },
+                |(tokens, cost_usd)| WindowStats {
+                    tokens: Some(tokens),
+                    cost_usd: Some(cost_usd),
+                },
+            )
+        };
 
         // All-time per-tool sums.
         let (_, by_tool, _) = self.spend.lock().1.breakdown();
 
         KeyCostSnapshot {
             api_key_name: self.name.clone(),
-            window_24h: WindowStats {
-                tokens: tokens_24h,
-                cost_usd: cost_24h,
-            },
-            window_7d: WindowStats {
-                tokens: tokens_7d,
-                cost_usd: cost_7d,
-            },
-            window_30d: WindowStats {
-                tokens: tokens_30d,
-                cost_usd: cost_30d,
-            },
+            window_24h: window(BudgetWindow::Day.secs()),
+            window_7d: window(BudgetWindow::Week.secs()),
+            window_30d: window(BudgetWindow::Month.secs()),
             hard_limit_usd: self.budget.hard_limit_usd,
             budget_status: format!("{:?}", self.budget_status()),
             by_tool,
@@ -330,15 +348,18 @@ pub enum BudgetStatus {
         /// Configured hard limit (USD).
         limit: f64,
     },
+    /// The clock cannot date the spend, so no judgement is made (MIK-8202 P4b).
+    Unknown,
 }
 
 /// Aggregate stats for a rolling time window.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowStats {
-    /// Total tokens in the window.
-    pub tokens: u64,
-    /// Total cost in USD.
-    pub cost_usd: f64,
+    /// Total tokens in the window, `None` when the clock cannot date it
+    /// (MIK-8202 P4b).
+    pub tokens: Option<u64>,
+    /// Total cost in USD, `None` when the clock cannot date it (MIK-8202 P4b).
+    pub cost_usd: Option<f64>,
 }
 
 /// Serialisable snapshot for a single API key.
@@ -483,8 +504,11 @@ impl CostTracker {
                 .or_insert_with(|| Arc::new(KeyCost::new(key_name, self.default_budget.clone())))
                 .record(&rec, rec.timestamp);
             // The entry guard is dropped above: `retain` takes every shard lock.
-            if tally::sweep_due(&self.next_key_sweep, rec.timestamp) {
-                self.per_key.retain(|_, key| !key.idle(rec.timestamp));
+            // Housekeeping skips its pass when the record is undated (MIK-8202).
+            if let Some(now) = rec.timestamp {
+                if tally::sweep_due(&self.next_key_sweep, now) {
+                    self.per_key.retain(|_, key| !key.idle(now));
+                }
             }
         }
     }
@@ -507,7 +531,8 @@ impl CostTracker {
     /// `caller_key`'s session-less breakdown, `None` when it has none.
     #[must_use]
     pub fn caller_snapshot(&self, caller_key: &str) -> Option<SessionCostSnapshot> {
-        self.per_caller.snapshot(caller_key, now_secs())
+        self.per_caller
+            .snapshot(caller_key, crate::clock::unix_secs().ok())
     }
 
     /// Check whether a key has exceeded its budget.
@@ -642,15 +667,6 @@ impl CostTracker {
             .get(session_id)
             .map_or(0, |session| session.by_tool.lock().len())
     }
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_secs()
 }
 
 // ── Cost governance submodules ────────────────────────────────────────────────

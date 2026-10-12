@@ -9,7 +9,7 @@
 //! - Overall health status
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use parking_lot::RwLock;
 use serde::Serialize;
@@ -54,18 +54,14 @@ impl HealthTracker {
         }
     }
 
-    /// Record a successful request
-    #[allow(clippy::cast_possible_truncation)] // millis since epoch fits u64 for centuries
+    /// Record a successful request. On a clock before 1970 the success
+    /// still counts, but the last-success time is left unchanged (MIK-8202).
     pub fn record_success(&self, latency: Duration) {
         self.success_count.fetch_add(1, Ordering::Relaxed);
         self.consecutive_failures.store(0, Ordering::Relaxed);
-        self.last_success.store(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64,
-            Ordering::Relaxed,
-        );
+        if let Ok(now_ms) = crate::clock::unix_millis() {
+            self.last_success.store(now_ms, Ordering::Relaxed);
+        }
 
         // Record latency
         self.latencies.write().record(latency);
@@ -77,18 +73,14 @@ impl HealthTracker {
         }
     }
 
-    /// Record a failed request
-    #[allow(clippy::cast_possible_truncation)] // millis since epoch fits u64 for centuries
+    /// Record a failed request. On a clock before 1970 the failure
+    /// still counts, but the last-failure time is left unchanged (MIK-8202).
     pub fn record_failure(&self) {
         self.failure_count.fetch_add(1, Ordering::Relaxed);
         let consecutive = self.consecutive_failures.fetch_add(1, Ordering::Relaxed) + 1;
-        self.last_failure.store(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64,
-            Ordering::Relaxed,
-        );
+        if let Ok(now_ms) = crate::clock::unix_millis() {
+            self.last_failure.store(now_ms, Ordering::Relaxed);
+        }
 
         // Mark as unhealthy after threshold
         if consecutive >= 3 && self.healthy.load(Ordering::Relaxed) {

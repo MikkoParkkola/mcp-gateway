@@ -73,6 +73,13 @@ impl TaskExecutor {
             joined: Some(joined),
         })
     }
+
+    /// One expiry pass, for tests (MIK-8202 P4b): runs [`sweep`] once instead
+    /// of waiting on the interval.
+    #[cfg(test)]
+    pub(crate) async fn expiry_pass_for_test(self: &Arc<Self>) -> Result<(), ServiceError> {
+        sweep(self).await
+    }
 }
 
 /// The gateway's handle on a running sweep.

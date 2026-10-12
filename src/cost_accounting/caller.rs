@@ -22,14 +22,15 @@ use super::{CostRecord, SessionCostSnapshot};
 pub const CALLER_COST_IDLE: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// One caller's counters: `(backend, tool)` -> `[calls, tokens, micro-USD]`.
+/// The spends are `None` while the clock cannot date them (MIK-8202 P4b).
 struct CallerCost {
-    first_spend: u64,
-    last_spend: u64,
+    first_spend: Option<u64>,
+    last_spend: Option<u64>,
     by_tool: ToolTally,
 }
 
 impl CallerCost {
-    fn new(now: u64) -> Self {
+    fn new(now: Option<u64>) -> Self {
         Self {
             first_spend: now,
             last_spend: now,
@@ -37,8 +38,13 @@ impl CallerCost {
         }
     }
 
-    fn expired(&self, now: u64) -> bool {
-        self.last_spend + CALLER_COST_IDLE.as_secs() <= now
+    /// An entry neither side can date is not expired: it is kept, never
+    /// swept (MIK-8202 P4b).
+    fn expired(&self, now: Option<u64>) -> bool {
+        matches!(
+            (self.last_spend, now),
+            (Some(last), Some(now)) if last + CALLER_COST_IDLE.as_secs() <= now
+        )
     }
 }
 
@@ -51,7 +57,9 @@ pub(crate) struct CallerCosts {
 
 impl CallerCosts {
     /// Add `rec` to `key`'s counters. An empty key is no identity: not kept.
-    pub(crate) fn record(&self, key: &str, rec: &CostRecord, now: u64) {
+    /// A call the clock cannot date still counts; only its spends stay
+    /// undated and the sweep is skipped (MIK-8202 P4b).
+    pub(crate) fn record(&self, key: &str, rec: &CostRecord, now: Option<u64>) {
         if key.is_empty() {
             return;
         }
@@ -68,19 +76,23 @@ impl CallerCosts {
             entry
                 .by_tool
                 .add(&rec.backend, &rec.tool, rec.token_count, micro);
-            entry.last_spend = now;
+            if now.is_some() {
+                entry.last_spend = now;
+            }
         }
         // The shard guard is dropped above: `retain` takes every shard lock,
         // and a held guard would deadlock it.
-        if tally::sweep_due(&self.next_sweep, now) {
-            self.by_caller.retain(|_, cost| !cost.expired(now));
+        if let Some(now) = now {
+            if tally::sweep_due(&self.next_sweep, now) {
+                self.by_caller.retain(|_, cost| !cost.expired(Some(now)));
+            }
         }
     }
 
     /// `key`'s breakdown, or `None` for an empty key, no spend, or an entry
     /// past its idle window (reading never extends it). The snapshot's
     /// session id is empty: the caller key embeds the principal.
-    pub(crate) fn snapshot(&self, key: &str, now: u64) -> Option<SessionCostSnapshot> {
+    pub(crate) fn snapshot(&self, key: &str, now: Option<u64>) -> Option<SessionCostSnapshot> {
         if key.is_empty() {
             return None;
         }

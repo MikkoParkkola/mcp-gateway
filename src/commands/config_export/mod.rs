@@ -35,7 +35,6 @@ mod tests;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
@@ -311,10 +310,8 @@ fn create_backup(path: &Path) -> Result<Option<PathBuf>, String> {
         .file_name()
         .ok_or_else(|| format!("Cannot determine file name for {}", path.display()))?
         .to_string_lossy();
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| format!("System clock error while creating backup: {e}"))?
-        .as_nanos();
+    let timestamp = crate::clock::unix_nanos()
+        .map_err(|e| format!("System clock error while creating backup: {e}"))?;
     let backup_path = parent.join(format!("{file_name}{BACKUP_MARKER}{timestamp}"));
 
     std::fs::copy(path, &backup_path).map_err(|e| {

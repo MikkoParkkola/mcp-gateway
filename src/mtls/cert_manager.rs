@@ -407,12 +407,8 @@ fn load_crls(path: &str) -> Result<Vec<CertificateRevocationListDer<'static>>> {
 /// from the current time and add the requested days.  The `rcgen::date_time_ymd`
 /// helper is used so we do not need to depend on the `time` crate directly.
 fn validity_to_date(days: u32) -> Result<time::OffsetDateTime> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let now_secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| Error::Config(format!("System time error: {e}")))?
-        .as_secs();
+    let now_secs =
+        crate::clock::unix_secs().map_err(|e| Error::Config(format!("System time error: {e}")))?;
 
     let future_secs = now_secs.saturating_add(u64::from(days) * 86_400);
 

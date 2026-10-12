@@ -11,7 +11,7 @@
 //! ahead of the committed image. Losing the *answer* to a cancelled call is
 //! acceptable; losing the publish or the poison that follows a write is not.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -31,8 +31,11 @@ pub(super) use disk::after_load;
 #[cfg(test)]
 pub(super) use disk::read_bounded;
 use disk::{Fault, fire, open_blocking, write_record};
+pub(crate) use error::StoreError;
 #[path = "store_disk.rs"]
 mod disk;
+#[path = "store_error.rs"]
+mod error;
 #[path = "store_expiry.rs"]
 mod expiry;
 #[path = "store_holds.rs"]
@@ -64,38 +67,6 @@ const STORE_MODE: u32 = 0o700;
 /// Attempts to find an unused temporary name before giving up, mirroring the
 /// reviewed `oauth::storage::create_secret_tmp` retry bound.
 const TEMP_ATTEMPTS: u64 = 8;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum StoreError {
-    #[error("task store unavailable")]
-    Unavailable,
-    #[error("unsafe task store")]
-    UnsafeStore,
-    /// The store directory or lease could not be inspected (not absent, not
-    /// unsafe): a failure to look, distinct from `Unavailable`.
-    #[error("task store path could not be inspected")]
-    Uninspectable,
-    #[error("corrupt task record")]
-    CorruptRecord,
-    #[error("task store is already owned")]
-    AlreadyOwned,
-    #[error("task not found")]
-    NotFound,
-    #[error("task revision changed")]
-    RevisionConflict,
-    #[error("task capacity exceeded")]
-    Capacity,
-    #[error("task storage operation failed")]
-    Storage,
-    /// The model refused the offered event, whether as a malformed payload or as
-    /// an illegal transition. Nothing was serialized and nothing was written.
-    #[error("invalid task transition")]
-    InvalidTransition,
-    /// The offered record reuses a live task identifier or admission identity.
-    /// Writing it would replace a task or leave a store the loader will reject.
-    #[error("duplicate task record")]
-    Duplicate,
-}
 
 /// Bounds on durable task count and encoded record bytes, enforced during
 /// store opening and before writes. `Default` supplies the gateway defaults.
@@ -168,6 +139,10 @@ struct State {
     /// store's caps.
     reserved: Vec<(AdmissionRecord, String)>,
     sealed: BTreeSet<String>,
+    /// Rows already reported as held past their TTL for an unsent upstream
+    /// cancel, so the WARN and the metric fire once per row, never once per
+    /// pass (MIK-8202 P4b). Ephemeral: kept to the rows currently held.
+    cancel_hold_warned: HashSet<String>,
 }
 
 /// How many rows the last load skipped, by whether each kept its key.
@@ -221,6 +196,7 @@ impl TaskStore {
                 entries: loaded.entries,
                 reserved: loaded.reserved,
                 sealed: loaded.sealed,
+                cancel_hold_warned: HashSet::new(),
             }),
             lease: Mutex::new(Some(lease)),
             dir_id,

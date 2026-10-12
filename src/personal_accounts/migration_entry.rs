@@ -126,9 +126,7 @@ pub(in crate::personal_accounts) fn migrate_backend(
         revision,
         // An unreadable clock reads as "everything has expired": it can only
         // refuse an unrefreshable credential, never admit one.
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(u64::MAX, |since| since.as_secs()),
+        crate::clock::unix_secs().unwrap_or(u64::MAX),
     )?;
 
     let account = account_key(request)?;

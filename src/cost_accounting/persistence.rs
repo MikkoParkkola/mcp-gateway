@@ -59,6 +59,42 @@ impl ToolTotal {
     }
 }
 
+// ── EnforcerSaveSnapshot ──────────────────────────────────────────────────────
+
+/// What `BudgetEnforcer::snapshot_for_save` hands the save path (MIK-8202
+/// P4b): the persistable slice of the UI `EnforcerSnapshot` with a concrete
+/// save-time reading. Typed apart from the UI snapshot so a save can never
+/// stamp `saved_at` from the UI's undated `taken_at: None`.
+#[cfg(feature = "cost-governance")]
+#[derive(Debug, Clone)]
+pub(crate) struct EnforcerSaveSnapshot {
+    /// Per-tool today's spend (`tool_name` -> USD).
+    pub(crate) tool_daily: HashMap<String, f64>,
+    /// Per-key today's spend (`key_name` -> USD).
+    pub(crate) key_daily: HashMap<String, f64>,
+    /// The save's own clock reading; copied into `PersistedCosts.saved_at`.
+    pub(crate) taken_at: u64,
+    /// Today's spend of unbudgeted tools past the per-tool map's cap (USD).
+    pub(crate) tool_overflow_usd: f64,
+    /// Today's spend of unbudgeted keys past the per-key map's cap (USD).
+    pub(crate) key_overflow_usd: f64,
+}
+
+#[cfg(feature = "cost-governance")]
+impl EnforcerSaveSnapshot {
+    /// Split the save's persistable slice out of a UI snapshot taken at the
+    /// save's own reading.
+    pub(crate) fn from_snapshot(snap: super::enforcer::EnforcerSnapshot, taken_at: u64) -> Self {
+        Self {
+            tool_daily: snap.tool_daily,
+            key_daily: snap.key_daily,
+            taken_at,
+            tool_overflow_usd: snap.tool_overflow_usd,
+            key_overflow_usd: snap.key_overflow_usd,
+        }
+    }
+}
+
 // ── I/O ───────────────────────────────────────────────────────────────────────
 
 /// Save cost state to disk at `path`.
