@@ -183,19 +183,24 @@ fn a_forward_beyond_the_step_gets_no_seam_on_an_over_bound_answer() {
     );
 }
 
-/// Key-a's plan of several steps, each `(answer member, items)` labelled by
-/// its index and staged whole, kept by the production path to one
-/// over-bound answer carrying every member, then recorded.
-fn keep_steps_over_bound(fw: &Firewall, steps: &[(&str, Vec<Value>)]) {
+/// Key-a's plan of several steps, step i producing `steps[i]`, each with its
+/// own receipt and label, kept by the production path to one over-bound
+/// answer whose one array carries every step's parts in order (each item
+/// labelled by its step), then recorded. One array, so a run spans steps.
+fn keep_steps_over_bound(fw: &Firewall, steps: &[&[String]]) {
     let mut receipts = Vec::new();
     let mut members = Vec::new();
-    let mut answer = serde_json::Map::new();
-    for (label, (member, items)) in (0u32..).zip(steps) {
+    let mut items = Vec::new();
+    for (label, parts) in (0u32..).zip(steps) {
         let staging = PlanStaging::default();
         staging.set_caller("key-a");
-        let step = json!({ *member: items });
         let digest = fw
-            .receipt_digest("alpha", "read", &step, Some(&staging))
+            .receipt_digest(
+                "alpha",
+                "read",
+                &json!({ "parts": chunks(parts) }),
+                Some(&staging),
+            )
             .expect("staged");
         receipts.push(Receipt {
             key: "key-a".to_string(),
@@ -208,11 +213,12 @@ fn keep_steps_over_bound(fw: &Firewall, steps: &[(&str, Vec<Value>)]) {
             step: Some(label),
             kind: Kind::Delivered,
         });
-        members.push((format!("/{member}"), label));
-        answer.insert((*member).to_string(), Value::Array(items.clone()));
+        for part in chunks(parts) {
+            members.push((format!("/parts/{}", items.len()), label));
+            items.push(part);
+        }
     }
-    answer.insert("pad".to_string(), Value::String(pad(1_200 * 1024)));
-    let answer = Value::Object(answer);
+    let answer = json!({ "parts": items, "pad": pad(1_200 * 1024) });
     with_plan_members(members, || keep_plan_receipts(fw, &mut receipts, &answer));
     for r in &receipts {
         fw.record_digest(RelayCaller::Keyed("key-a"), &r.server, &r.tool, &r.digest);
@@ -227,20 +233,15 @@ fn chunks(parts: &[String]) -> Vec<Value> {
 }
 
 /// `MIK-8066` T-seams-view, second half (guard, B4s): two steps, each with
-/// its own receipt and label; a forward spanning step 0's last part and
-/// step 1's first part gets no cross-step excuse on an over-bound answer.
+/// its own receipt and label, their parts adjacent in one answer array (so a
+/// run spans both); a forward spanning step 0's last part and step 1's first
+/// part gets no cross-step excuse on an over-bound answer.
 /// Red proof: the mutant "cross-step seams formed on a view", KILLED.
 #[test]
 fn a_forward_spanning_two_steps_gets_no_seam_on_an_over_bound_answer() {
     let fw = observing();
     let parts: Vec<String> = (0..4).map(piece).collect();
-    keep_steps_over_bound(
-        &fw,
-        &[
-            ("first", chunks(&parts[..2])),
-            ("second", chunks(&parts[2..])),
-        ],
-    );
+    keep_steps_over_bound(&fw, &[&parts[..2], &parts[2..]]);
     let spanning = format!("{}{}", parts[1], parts[2]);
     assert!(
         reported_after_carol(&fw, "key-a", &spanning),
@@ -250,8 +251,10 @@ fn a_forward_spanning_two_steps_gets_no_seam_on_an_over_bound_answer() {
 
 /// `MIK-8066` T11k (guard, D4): a step holds a string as a KEY; the answer
 /// delivers it as a VALUE. Leaf hashes include `is_key`, so the piece is not
-/// the step's, and a forward through it gets no seam. Red proof: the mutant
-/// "`is_key` ignored in leaf hashes", KILLED.
+/// the step's, and a subset forward through it (part 0 then part 2, across
+/// the omitted part 1, the shape T10 excuses) gets no seam. Red proof: the
+/// mutants "`is_key` ignored in leaf hashes" and "ownership without an exact
+/// leaf-hash match", KILLED.
 #[test]
 fn a_key_delivered_as_a_value_gets_no_seam_on_an_over_bound_answer() {
     let fw = observing();
@@ -259,6 +262,7 @@ fn a_key_delivered_as_a_value_gets_no_seam_on_an_over_bound_answer() {
     // The step carries part 0 as a key, the answer carries it as a value.
     let staged_items = vec![
         json!({ parts[0].clone(): "v", "kind": "chunk" }),
+        json!({"part": parts[1], "kind": "chunk"}),
         json!({"part": parts[2], "kind": "chunk"}),
     ];
     let staging = PlanStaging::default();
@@ -282,8 +286,7 @@ fn a_key_delivered_as_a_value_gets_no_seam_on_an_over_bound_answer() {
         step: Some(0),
         kind: Kind::Delivered,
     }];
-    let answer =
-        json!({ "parts": chunks(&[parts[0].clone(), parts[2].clone()]), "pad": pad(1_200 * 1024) });
+    let answer = json!({ "parts": chunks(&parts), "pad": pad(1_200 * 1024) });
     with_plan_members(vec![("/parts".to_string(), 0)], || {
         keep_plan_receipts(&fw, &mut receipts, &answer);
     });

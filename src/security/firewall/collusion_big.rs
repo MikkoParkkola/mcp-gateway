@@ -599,24 +599,6 @@ impl CollusionDetector {
             .map(|v| v.entries().to_vec())
     }
 
-    /// The view's entry cap A (`PLAN_ANSWER_FPS`), for rows outside this
-    /// module.
-    pub(crate) fn view_entry_cap(&self) -> usize {
-        self.views
-            .entry_cap
-            .load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    /// Whether a view of `distinct` sampled hashes is admitted
-    /// under the entry cap A.
-    pub(crate) fn view_admits(&self, distinct: usize) -> bool {
-        distinct
-            <= self
-                .views
-                .entry_cap
-                .load(std::sync::atomic::Ordering::Relaxed)
-    }
-
     /// The most `VIEW_BYTES` a build of `answer` reserves at once.
     pub(crate) fn view_build_peak(&self, answer: &serde_json::Value) -> usize {
         self.view_build_probe(answer)

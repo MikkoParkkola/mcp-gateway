@@ -89,19 +89,25 @@ fn the_view_equals_the_sampled_reference_at_both_rates() {
     }
 }
 
-/// A view of exactly A distinct hashes is admitted; A + 1 is refused.
+/// The entry cap A, through the gate's own build: an answer whose view has
+/// exactly n distinct hashes builds a view under a cap of n and is refused
+/// (entry cap) under a cap of n - 1.
 #[test]
 fn the_view_entry_cap_admits_a_and_refuses_a_plus_one() {
     let fw = firewall();
     let detector = fw.collusion_detector().expect("relay detection on");
-    let a = detector.view_entry_cap();
+    let answer = json!({ "a": filler(1401, 64 * 1024), "b": filler(1402, 64 * 1024) });
+    let n = detector.view_of(&answer).expect("premise: a view").len();
+    assert!(n > 1, "premise: the view has entries ({n})");
+    detector.set_view_entry_cap(n);
     assert!(
-        detector.view_admits(a),
-        "a view of exactly A entries was refused"
+        detector.view_of(&answer).is_some(),
+        "a view of exactly the cap was refused"
     );
+    detector.set_view_entry_cap(n - 1);
     assert!(
-        !detector.view_admits(a + 1),
-        "a view of A + 1 entries was admitted"
+        detector.view_of(&answer).is_none(),
+        "a view one past the cap was admitted"
     );
 }
 
@@ -271,18 +277,12 @@ fn retention_through_the_view_keeps_what_the_full_set_keeps() {
     use super::super::Delivered;
     let fw = firewall();
     let detector = fw.collusion_detector().expect("relay detection on");
-    for seed in 0..4u64 {
-        let texts: Vec<String> = (0..4)
-            .map(|i| filler(1100 + seed * 10 + i, 6 * 1024))
-            .collect();
-        let step = json!({ "content": texts[..3].to_vec() });
-        let partial = texts[1][..3 * 1024].to_owned();
-        let shown = [texts[0].clone(), partial, texts[3].clone()];
+    let compare = |step: &Value, shown: &[String], case: &str| {
         let answer = Value::Array(shown.iter().cloned().map(Value::String).collect());
         let keep = |delivered: &Delivered<'_>| {
             let staged = PlanStaging::default();
             let digest = fw
-                .receipt_digest("alpha", "read", &step, Some(&staged))
+                .receipt_digest("alpha", "read", step, Some(&staged))
                 .expect("staged");
             let kept = fw.cap_kept(fw.retain_delivered(digest, delivered, None));
             let mut fps = kept.fingerprints(detector);
@@ -297,9 +297,23 @@ fn retention_through_the_view_keeps_what_the_full_set_keeps() {
         assert_eq!(
             keep(&by_view),
             keep(&by_set),
-            "retention through the view differs from the full set (seed {seed})"
+            "retention through the view differs from the full set ({case})"
         );
+    };
+    for seed in 0..4u64 {
+        let texts: Vec<String> = (0..4)
+            .map(|i| filler(1100 + seed * 10 + i, 6 * 1024))
+            .collect();
+        let step = json!({ "content": texts[..3].to_vec() });
+        let partial = texts[1][..3 * 1024].to_owned();
+        let shown = [texts[0].clone(), partial, texts[3].clone()];
+        compare(&step, &shown, &format!("seed {seed}"));
     }
+    // A step leaf the answer delivers split across two adjacent values: its
+    // k-grams across the split are found only in the values run together.
+    let (head, tail) = (filler(1190, 6 * 1024), filler(1191, 6 * 1024));
+    let step = json!({ "content": [format!("{head}{tail}")] });
+    compare(&step, &[head, tail], "a leaf split across two values");
 }
 
 /// Each auxiliary reservation is charged before the build allocates: an

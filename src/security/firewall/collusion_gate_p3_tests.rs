@@ -71,7 +71,9 @@ fn a_big_step_inside_an_answer_over_the_bound_is_excused_and_evidence() {
     let fw = firewall();
     let detector = fw.collusion_detector().expect("relay detection on");
     let (text, step) = step_of(901, 100 * 1024);
-    let mut steps = to_the_bound(9);
+    // Filler seeds 9000..9010: none repeats the P1 step's text, so its middle
+    // is evidence only through the step's own `step_ev`.
+    let mut steps = to_the_bound(90);
     steps.push(step);
     let answer = json!({"whole": text, "pad": filler(902, 1_400 * 1024)});
     let _ = deliver_plan(&fw, &steps, &answer);
@@ -244,12 +246,25 @@ fn an_answer_with_no_view_room_fails_closed() {
 }
 
 /// `MIK-8066` T23c (guard): unread plans' holders never count toward
-/// `Common`. Nine unread plans of distinct callers carry one text that one
-/// real recipient (carol) also holds; it stays evidence against bob. A build
-/// counting unread holders as callers makes it common, and bob passes.
+/// `Common`. Nine unread plans of distinct callers (one shared unread
+/// holder, A4) carry one text that one real recipient (carol) also holds;
+/// with the Common threshold at its minimum, 2, it stays evidence against
+/// bob. A build counting the unread holder as a caller makes it common (carol
+/// plus the holder), and bob passes.
 #[test]
 fn unread_holders_never_make_text_common() {
-    let fw = firewall();
+    let fw = Firewall::from_config(
+        crate::security::firewall::FirewallConfig {
+            collusion: super::CollusionConfig {
+                action: super::CollusionAction::Observe,
+                sources: vec!["alpha:*".to_string()],
+                common_principals: 2,
+                ..super::CollusionConfig::default()
+            },
+            ..crate::security::firewall::FirewallConfig::default()
+        },
+        None,
+    );
     let detector = fw.collusion_detector().expect("relay detection on");
     detector.set_answer_text_cap(512 * 1024);
     let (text, step) = step_of(941, 300 * 1024);
