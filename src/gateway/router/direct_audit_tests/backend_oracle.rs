@@ -237,6 +237,8 @@ async fn e1_an_empty_grant_answers_every_name_alike_with_its_grant_message() {
         for name in ["alpha", WITHHELD, NOSUCH] {
             let mut auth = key_for_alpha(None);
             auth.api_keys[0].backends = Vec::new();
+            // No backend name inside the key's name: the answer replaces it.
+            auth.api_keys[0].name = "grant-client".to_string();
             let fx = fixture(Setup {
                 auth: Some(auth),
                 ..Setup::default()
