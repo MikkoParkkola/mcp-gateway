@@ -110,7 +110,15 @@ fn http_shutdown_saves_costs() {
         // The shutdown save must be stamped after the seed. In the first
         // seconds of a day the seed is midnight itself, so wait for the clock
         // to pass it (MIK-8395).
+        let deadline = Instant::now() + mcp_gateway::gateway::test_helpers::HANG_BOUND;
         while costs::now_secs() <= seeded.saved_at {
+            if Instant::now() > deadline {
+                let _ = child.kill();
+                panic!(
+                    "the clock never passed the seed's stamp {}: is the host clock stalled?",
+                    seeded.saved_at
+                );
+            }
             std::thread::sleep(Duration::from_millis(50));
         }
         let signalled = Command::new("kill")
