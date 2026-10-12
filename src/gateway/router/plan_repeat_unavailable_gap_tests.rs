@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8406 gap row (lead ruling 2026-10-12), on MIK-8392 STORED.1's code:
+//! Characterization row, owner STORED.2 (lead ruling 2026-10-12; first written as a MIK-8406 gap row), on MIK-8392 STORED.1's code:
 //! the operator's managed account turns Unavailable (custody fails) while its
 //! tool stays in the warm catalogue. The live call is refused, yet the
 //! repeated task-augmented plan call is answered with the stored task:
@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use super::{BACKEND, TOOL, answer_marker, execute_params, fixture, meta, send, wait_terminal};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn plan_repeat_unavailable_account_is_mik_8406_gap() {
+async fn plan_repeat_unavailable_account_differs_from_live_owner_stored2() {
     let fx = fixture(false).await;
     answer_marker(&fx);
     let made = send(
@@ -63,12 +63,18 @@ async fn plan_repeat_unavailable_account_is_mik_8406_gap() {
         execute_params("gap-u", true),
     )
     .await;
-    eprintln!("gap-u live: {live}\ngap-u repeat: {again}");
+    // Characterization (lead ruling 2026-10-12): no leak, but the repeat
+    // and its live twin differ. Owner: STORED.2 (site 5 vs the catalogue
+    // refusal), not MIK-8406. Pins today's two answers.
     assert_eq!(
-        again.pointer("/result/taskId").and_then(Value::as_str),
-        Some(id.as_str()),
-        "the gap has closed: the repeat is no longer answered with the stored task \
-         (MIK-8406 flips this row to the live twin's answer): {again}"
+        live.pointer("/error/code"),
+        Some(&json!(-32603)),
+        "live twin moved: {live}"
+    );
+    assert_eq!(
+        again.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "repeat moved (differs from live; owner STORED.2): {again}"
     );
     assert_eq!(
         fx.gateway.tool_calls().len(),
