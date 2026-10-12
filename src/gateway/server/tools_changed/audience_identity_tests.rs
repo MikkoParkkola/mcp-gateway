@@ -58,3 +58,20 @@ async fn r8_control_listen_without_a_certificate_is_told_nothing() {
         "alpha is not shown without a certificate"
     );
 }
+
+/// R7: with agent auth on, a listen stream opened with an agent token is told
+/// a visible change; the OAuth agent it was opened with is part of its view
+/// (kills M33b).
+#[tokio::test]
+async fn r7_listen_with_an_agent_token_is_told_a_visible_change() {
+    let w = World::start_agent().await;
+    let mut ear = w.listen(&super::audience_access::agent_token()).await;
+    w.settle().await;
+    let _ = ear.told(&w).await;
+    w.store_shared("alpha", alpha_with("r2"));
+    assert_eq!(
+        ear.told(&w).await,
+        1,
+        "the agent's scope admits alpha, so its change is visible"
+    );
+}

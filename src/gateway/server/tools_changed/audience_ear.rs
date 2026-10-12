@@ -195,7 +195,7 @@ impl World {
             key_server,
             None,
             |meta| meta,
-            super::audience_fixture::McpAccess::PublicPath,
+            super::audience_access::McpAccess::PublicPath,
         )
         .await
     }
@@ -209,7 +209,21 @@ impl World {
             key_server,
             None,
             |meta| meta,
-            super::audience_fixture::McpAccess::MtlsCert,
+            super::audience_access::McpAccess::MtlsCert,
+        )
+        .await
+    }
+
+    /// A gateway with agent auth on; callers present [`agent_token`].
+    pub(super) async fn start_agent() -> Self {
+        let key_server = std::sync::Arc::new(crate::key_server::KeyServer::new(
+            crate::config::KeyServerConfig::default(),
+        ));
+        Self::start_on(
+            key_server,
+            None,
+            |meta| meta,
+            super::audience_access::McpAccess::AgentToken,
         )
         .await
     }

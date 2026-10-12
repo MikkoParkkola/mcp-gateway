@@ -274,17 +274,6 @@ pub(super) struct World {
     _adapter: Option<tempfile::TempDir>,
 }
 
-/// Whether the fixture's `/mcp` route needs a credential.
-pub(super) enum McpAccess {
-    Authenticated,
-    /// `/mcp` is a public path: a caller that presents nothing is admitted
-    /// anonymously.
-    PublicPath,
-    /// An mTLS policy admits any presented certificate to `alpha` and
-    /// nothing else: a caller that presents none is shown nothing.
-    MtlsCert,
-}
-
 impl World {
     pub(super) async fn start() -> Self {
         Self::start_with(|meta| meta).await
@@ -293,7 +282,13 @@ impl World {
     /// As [`Self::start`], with `configure` applied to the Meta-MCP last.
     pub(super) async fn start_with(configure: impl FnOnce(MetaMcp) -> MetaMcp) -> Self {
         let key_server = Arc::new(KeyServer::new(crate::config::KeyServerConfig::default()));
-        Self::start_on(key_server, None, configure, McpAccess::Authenticated).await
+        Self::start_on(
+            key_server,
+            None,
+            configure,
+            super::audience_access::McpAccess::Authenticated,
+        )
+        .await
     }
 
     /// As [`Self::start_with`], with an Open `WebUI` adapter that k-std may
@@ -326,7 +321,7 @@ impl World {
             key_server,
             Some((config, dir)),
             configure,
-            McpAccess::Authenticated,
+            super::audience_access::McpAccess::Authenticated,
         )
         .await
     }
@@ -350,7 +345,7 @@ impl World {
                 Arc::clone(&oidc.ks),
                 None,
                 |meta| meta,
-                McpAccess::Authenticated,
+                super::audience_access::McpAccess::Authenticated,
             )
             .await,
             oidc,
@@ -361,16 +356,11 @@ impl World {
         key_server: Arc<KeyServer>,
         live: Option<(crate::config::Config, tempfile::TempDir)>,
         configure: impl FnOnce(MetaMcp) -> MetaMcp,
-        access: McpAccess,
+        access: super::audience_access::McpAccess,
     ) -> Self {
         let auth = AuthConfig {
             enabled: true,
-            public_paths: match access {
-                McpAccess::Authenticated | McpAccess::MtlsCert => {
-                    AuthConfig::default().public_paths
-                }
-                McpAccess::PublicPath => vec!["/mcp".to_string()],
-            },
+            public_paths: super::audience_access::public_paths(&access),
             api_keys: vec![
                 api_key("k-std", &[]),
                 api_key("k-deny", &["read", "fetch", "hidden_cap"]),
@@ -426,25 +416,7 @@ impl World {
             st.live_config = Arc::new(crate::config_reload::LiveConfig::new(config));
             dir
         });
-        if matches!(access, McpAccess::MtlsCert) {
-            st.mtls_policy = Arc::new(crate::mtls::MtlsPolicy::from_config(
-                &crate::mtls::MtlsConfig {
-                    enabled: true,
-                    policies: vec![crate::mtls::config::PolicyRuleConfig {
-                        match_criteria: crate::mtls::config::CertMatchConfig {
-                            any: Some(true),
-                            ..Default::default()
-                        },
-                        allow: crate::mtls::config::ToolScopeConfig {
-                            backends: vec!["alpha".to_string()],
-                            tools: vec!["*".to_string()],
-                        },
-                        deny: Default::default(),
-                    }],
-                    ..Default::default()
-                },
-            ));
-        }
+        super::audience_access::apply(st, &access);
         st.backends.set_change_feed(feed.clone());
         for backend in [
             shared_backend("alpha", &probe),
