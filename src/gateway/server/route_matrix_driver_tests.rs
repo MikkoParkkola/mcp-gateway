@@ -16,10 +16,12 @@ use crate::config::{BackendConfig, FailsafeConfig};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
+#[cfg(feature = "firewall")]
+pub(crate) use super::signing_allocation_tests::route_matrix_stdio_tasks::stdio_task_traced;
 pub(crate) use super::signing_allocation_tests::route_matrix_stdio_tasks::{
-    served_sanitizing, stdio_blocked_task, stdio_sanitizing, stdio_task_read,
-    stdio_task_refused_without_a_grant, stdio_task_surfaced, stdio_x14_consumed_then_refused,
-    stdio_x14_signed_round,
+    served_sanitizing, served_sanitizing_call, served_sanitizing_with, stdio_blocked_task,
+    stdio_sanitizing, stdio_task_read, stdio_task_refused_without_a_grant, stdio_task_surfaced,
+    stdio_x14_consumed_then_refused, stdio_x14_signed_round,
 };
 
 /// A backend serving two tools, `read` and `write`, counting the `tools/call`
@@ -586,7 +588,8 @@ pub(crate) fn stdio_admission_then_resend() -> (Value, Value, Value, usize) {
                         channel: &crate::gateway::input_bridge::NoClientChannel,
                         handshake_capabilities: crate::protocol::meta::Declared::NONE,
                         tasks: None,
-                        modern: false,
+                        serving: crate::gateway::server::stdio_single::ModernServing::Enabled,
+                        discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
                         sanitize: super::stdio_single::InputSanitizing::Off,
                     },
                     &super::StdioTelemetry::default(),
@@ -654,7 +657,9 @@ pub(crate) fn stdio_refund_through_delivery() -> [Delivered; 3] {
                             channel: &crate::gateway::input_bridge::NoClientChannel,
                             handshake_capabilities: crate::protocol::meta::Declared::NONE,
                             tasks: None,
-                            modern: false,
+                            serving: crate::gateway::server::stdio_single::ModernServing::Enabled,
+                            discover:
+                                crate::gateway::server::stdio_single::DiscoverListing::Configured,
                             sanitize: super::stdio_single::InputSanitizing::Off,
                         },
                         &super::StdioTelemetry::default(),

@@ -16,9 +16,12 @@ use crate::gateway::meta_mcp::MetaMcp;
 
 #[path = "route_matrix_driver_step_tests.rs"]
 mod step;
+#[path = "route_matrix_driver_trace_tests.rs"]
+mod trace;
 pub(crate) use step::{
     playbook_as, playbook_budgeted, playbook_exposed, playbook_minting, playbook_then_task,
 };
+pub(crate) use trace::{audit_events, task_submit_traced};
 
 /// What one call through a route produced.
 pub(crate) struct Sent {
@@ -558,7 +561,12 @@ async fn task_submit_fixture(
             super::direct_guards_fixture::fixture_built_on(transport, |meta| meta).await
         }
     };
-    let params = serde_json::json!({
+    (fx, calls, task_submit_params())
+}
+
+/// The R4a task-augmented call's params.
+fn task_submit_params() -> serde_json::Value {
+    serde_json::json!({
         "name": "read",
         "arguments": {},
         "task": {},
@@ -570,8 +578,7 @@ async fn task_submit_fixture(
             },
             crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "x14-submit"
         }
-    });
-    (fx, calls, params)
+    })
 }
 
 /// One R4a call sent with the API key `key`, on a fixture that surfaces

@@ -20,9 +20,6 @@ auth:
   # Per-client rate_limit below still enforces request throttling.
   client_circuit_breaker:
     enabled: true
-    failure_threshold: 5
-    success_threshold: 2
-    reset_timeout: "30s"
 
   # API keys with different tool access levels. Each variable holds the
   # key's digest, never the key: printf %s "$KEY" | mcp-gateway hash-key

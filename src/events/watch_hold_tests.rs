@@ -132,7 +132,7 @@ async fn another_sources_judgement_keeps_a_watch_hold() {
     hub.store
         .apply_holds(
             &not_mine,
-            Utc::now(),
+            Ok(Utc::now()),
             crate::duration_bound::delta!(hours, 1),
         )
         .expect("io");

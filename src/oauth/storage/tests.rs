@@ -757,3 +757,24 @@ async fn a_polled_save_heals_a_corrupt_final_when_the_lock_is_free() {
         .collect();
     assert!(leftovers.is_empty(), "{leftovers:?}");
 }
+
+/// MIK-8202 P3 O1 (access): on a clock before 1970, a backend token reads as
+/// expired whatever its stamp, so the caller refreshes or refuses rather than
+/// using it. Red on the seam: the unreadable clock reads as 0 and
+/// `0 + 60 >= expires_at` is false, so a token that expired an hour ago is
+/// used. Mutant: an unreadable clock answers Live.
+#[test]
+fn an_unreadable_clock_reads_every_token_as_expired() {
+    let now = crate::clock::unix_secs().expect("now");
+    let token = |expires_at| TokenInfo {
+        expires_at: Some(expires_at),
+        ..TokenInfo::from_response("tok".to_string(), None, None, None, None)
+    };
+    let (stale, fresh) = (token(now - 3600), token(now + 86_400));
+    let _clock = crate::clock::test_clock::before_epoch();
+    assert!(stale.is_expired(), "a token that expired an hour ago");
+    assert!(
+        fresh.is_expired(),
+        "an unreadable clock cannot date a live one"
+    );
+}

@@ -33,8 +33,7 @@ use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
 use crate::protocol::RequestId;
 use crate::security::{
-    AgentIdentity, extract_agent_identity, log_agent_identity, sanitize_json_value,
-    validate_agent_identity,
+    AgentIdentity, extract_agent_identity, log_agent_identity, validate_agent_identity,
 };
 
 /// What the prelude hands the frame judge: consumed by value on the listen
@@ -277,6 +276,24 @@ pub(super) async fn intake(
     // Get or create session for this client
     let existing_session_id = session_id_header(&headers).map(String::from);
 
+    // MIK-8154 S2': the protocol fields are validated before anything reads
+    // them (the session and hardened checks below; signing and the chain
+    // nonce take theirs off later), and never rewritten. No session yet.
+    if state.sanitize_input
+        && let Err(e) = crate::security::sanitize::validate_protocol_fields(
+            &request,
+            &crate::gateway::PROTOCOL_NONCES,
+            crate::security::sanitize::ProtocolRoute::Meta,
+        )
+    {
+        return Err(build_error_response(
+            None,
+            -32600,
+            e.to_string(),
+            "",
+            StatusCode::BAD_REQUEST,
+        ));
+    }
     // Not a stream reader, so no branch subscribes: a held subscription
     // fakes a deliverable prompt.
     let opened = if declares_modern_by_header {
@@ -357,14 +374,46 @@ pub(super) async fn intake(
             ));
         }
     };
-    // Optionally sanitize input
-    let mut request = if state.sanitize_input {
-        match sanitize_json_value(&request) {
+    // MIK-8154 SAN.1: one sanitize step, after the call's backend targets are
+    // mapped on the caller's view (a surfaced name judged through the request's
+    // visibility memo) and before restore and every check; a request whose
+    // every target is `passthrough` is exempt (option (a)).
+    let exempt = state.sanitize_input && {
+        let authorizer = super::super::RouterAuthorizer {
+            state,
+            client: client.as_ref(),
+            oauth_agent_identity: oauth_agent_identity.as_ref(),
+            cert_identity: cert_identity.as_ref(),
+            principal: super::super::authorization::refusal_principal(
+                client.as_ref(),
+                oauth_agent_identity.as_ref(),
+                cert_identity.as_ref(),
+            ),
+        };
+        let scope = crate::gateway::meta_mcp::InvokeScope {
+            authorizer: &authorizer,
+            is_admin: client.as_ref().is_some_and(|c| c.admin),
+            api_key_name: client.as_ref().map(|c| c.name.as_str()),
+            agent_id: agent_identity.proven_agent_id(),
+            grant_subject: grant_subject.as_ref(),
+        };
+        let view = crate::gateway::meta_mcp::visible::TargetView::Caller(scope, Some(&session_id));
+        super::super::sanitize_exempt(&state.meta_mcp, &request, view)
+    };
+    // Intake has judged; the window a catalogue change must not reach (NP3).
+    #[cfg(test)]
+    crate::gateway::meta_mcp::visible::seams::intake_judged();
+    let mut request = if state.sanitize_input && !exempt {
+        match crate::security::sanitize::sanitize_request(
+            &request,
+            crate::security::sanitize::ProtocolRoute::Meta,
+        ) {
             Ok(sanitized) => sanitized,
+            // The protocol fields passed validation, so the id is answered.
             Err(e) => {
                 return Err(build_error_response(
-                    None,
-                    -32600,
+                    raw_id.clone(),
+                    e.to_rpc_code(),
                     e.to_string(),
                     &session_id,
                     StatusCode::BAD_REQUEST,

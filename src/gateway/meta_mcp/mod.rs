@@ -113,6 +113,7 @@ mod slot_quota_release_tests;
 mod spec_preview;
 mod support;
 mod surfaced;
+pub(crate) use surfaced::{ArgsPolicy, args_policy};
 mod task_confirmation;
 pub(crate) mod task_notify;
 mod task_replay;
@@ -137,6 +138,7 @@ mod builders;
 mod call_dispatch;
 mod caller_context;
 mod handlers;
+pub(crate) mod passthrough;
 mod session_tools;
 pub use caller_context::MetaMcpCallerContext;
 

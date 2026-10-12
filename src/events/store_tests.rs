@@ -54,7 +54,7 @@ fn sub(principal: &str, url: &str, now: DateTime<Utc>) -> Subscription {
 fn records_survive_reopen_and_secrets_stay_out_of_debug() {
     let dir = tempfile::tempdir().expect("dir");
     let now = Utc::now();
-    let store = Store::open(dir.path(), now, TAIL).expect("open");
+    let store = Store::open(dir.path(), Ok(now), TAIL).expect("open");
     let s = sub("p", "https://h/a", now);
     store
         .admit(s.clone(), true, CAPS, grace(), now, TAIL)
@@ -62,7 +62,7 @@ fn records_survive_reopen_and_secrets_stay_out_of_debug() {
         .expect("admitted");
     assert!(!format!("{s:?}").contains("whsec_x"));
     drop(store);
-    let store = Store::open(dir.path(), now, TAIL).expect("reopen");
+    let store = Store::open(dir.path(), Ok(now), TAIL).expect("reopen");
     assert!(store.get(&s.id).is_some());
     assert!(store.is_verified("p", "https://h/a", now, TAIL));
     assert!(
@@ -75,7 +75,7 @@ fn records_survive_reopen_and_secrets_stay_out_of_debug() {
 fn tail_lives_for_its_ttl_and_is_capped_per_principal() {
     let dir = tempfile::tempdir().expect("dir");
     let t0 = Utc::now();
-    let store = Store::open(dir.path(), t0, TAIL).expect("open");
+    let store = Store::open(dir.path(), Ok(t0), TAIL).expect("open");
     let urls = ["https://h/1", "https://h/22", "https://h/333"];
     for (n, url) in urls.iter().enumerate() {
         let at = t0
@@ -85,7 +85,7 @@ fn tail_lives_for_its_ttl_and_is_capped_per_principal() {
             .admit(s.clone(), true, CAPS, grace(), at, TAIL)
             .expect("io")
             .expect("admitted");
-        store.remove(&s.id, at, TAIL).expect("remove");
+        store.remove(&s.id, Ok(at), TAIL).expect("remove");
     }
     let now = t0 + crate::duration_bound::delta!(seconds, 10);
     assert!(
@@ -105,7 +105,7 @@ fn tail_lives_for_its_ttl_and_is_capped_per_principal() {
 fn a_live_subscriptions_verification_is_never_evicted() {
     let dir = tempfile::tempdir().expect("dir");
     let now = Utc::now();
-    let store = Store::open(dir.path(), now, TAIL).expect("open");
+    let store = Store::open(dir.path(), Ok(now), TAIL).expect("open");
     store
         .admit(
             sub("p", "https://live/xyz", now),
@@ -128,7 +128,7 @@ fn a_live_subscriptions_verification_is_never_evicted() {
             .admit(s.clone(), true, CAPS, grace(), now, TAIL)
             .expect("io")
             .expect("admitted");
-        store.remove(&s.id, now, TAIL).expect("remove");
+        store.remove(&s.id, Ok(now), TAIL).expect("remove");
     }
     assert!(store.is_verified("p", "https://live/xyz", now, TAIL));
 }
@@ -137,7 +137,7 @@ fn a_live_subscriptions_verification_is_never_evicted() {
 fn caps_are_checked_with_the_commit_and_refresh_is_never_capped() {
     let dir = tempfile::tempdir().expect("dir");
     let now = Utc::now();
-    let store = Store::open(dir.path(), now, TAIL).expect("open");
+    let store = Store::open(dir.path(), Ok(now), TAIL).expect("open");
     let caps = Caps {
         per_principal: 1,
         global: 2,
@@ -174,7 +174,7 @@ fn caps_are_checked_with_the_commit_and_refresh_is_never_capped() {
 fn expired_rows_are_swept_on_admission_and_free_their_slot() {
     let dir = tempfile::tempdir().expect("dir");
     let now = Utc::now();
-    let store = Store::open(dir.path(), now, TAIL).expect("open");
+    let store = Store::open(dir.path(), Ok(now), TAIL).expect("open");
     let caps = Caps {
         per_principal: 1,
         global: 1,
@@ -215,7 +215,7 @@ fn expired_rows_are_swept_on_admission_and_free_their_slot() {
 fn rotation_keeps_the_stored_secret_as_previous() {
     let dir = tempfile::tempdir().expect("dir");
     let now = Utc::now();
-    let store = Store::open(dir.path(), now, TAIL).expect("open");
+    let store = Store::open(dir.path(), Ok(now), TAIL).expect("open");
     let first = sub("p", "https://h/1", now);
     store
         .admit(first.clone(), true, CAPS, grace(), now, TAIL)
@@ -240,7 +240,7 @@ fn rotation_keeps_the_stored_secret_as_previous() {
 fn an_expired_rows_secret_is_not_carried_into_a_new_grace() {
     let dir = tempfile::tempdir().expect("dir");
     let now = Utc::now();
-    let store = Store::open(dir.path(), now, TAIL).expect("open");
+    let store = Store::open(dir.path(), Ok(now), TAIL).expect("open");
     let mut first = sub("p", "https://h/1", now);
     first.expires_at = Some(now + crate::duration_bound::delta!(seconds, 1));
     store
@@ -264,7 +264,7 @@ fn an_expired_rows_secret_is_not_carried_into_a_new_grace() {
 fn unsubscribing_an_expired_row_does_not_restart_its_tail() {
     let dir = tempfile::tempdir().expect("dir");
     let now = Utc::now();
-    let store = Store::open(dir.path(), now, TAIL).expect("open");
+    let store = Store::open(dir.path(), Ok(now), TAIL).expect("open");
     let mut old = sub("p", "https://h/1", now);
     old.expires_at = Some(now + crate::duration_bound::delta!(seconds, 1));
     store
@@ -273,7 +273,7 @@ fn unsubscribing_an_expired_row_does_not_restart_its_tail() {
         .expect("old");
     let late = now + crate::duration_bound::delta!(hours, 2);
     assert!(
-        !store.remove(&old.id, late, TAIL).expect("io"),
+        !store.remove(&old.id, Ok(late), TAIL).expect("io"),
         "already swept"
     );
     assert!(
@@ -286,7 +286,7 @@ fn unsubscribing_an_expired_row_does_not_restart_its_tail() {
 fn a_skipped_challenge_without_a_usable_opt_in_is_refused() {
     let dir = tempfile::tempdir().expect("dir");
     let now = Utc::now();
-    let store = Store::open(dir.path(), now, TAIL).expect("open");
+    let store = Store::open(dir.path(), Ok(now), TAIL).expect("open");
     let s = sub("p", "https://h/1", now);
     assert_eq!(
         store
@@ -305,7 +305,7 @@ fn a_skipped_challenge_without_a_usable_opt_in_is_refused() {
 fn one_principals_churn_evicts_its_own_tail_before_anothers() {
     let dir = tempfile::tempdir().expect("dir");
     let t0 = Utc::now();
-    let store = Store::open(dir.path(), t0, TAIL).expect("open");
+    let store = Store::open(dir.path(), Ok(t0), TAIL).expect("open");
     let cycle = |principal: &str, url: &str, secs: i64| {
         let at = t0 + chrono::TimeDelta::try_seconds(secs).expect("in range");
         let s = sub(principal, url, at);
@@ -313,7 +313,7 @@ fn one_principals_churn_evicts_its_own_tail_before_anothers() {
             .admit(s.clone(), true, CAPS, grace(), at, TAIL)
             .expect("io")
             .expect("admitted");
-        store.remove(&s.id, at, TAIL).expect("remove");
+        store.remove(&s.id, Ok(at), TAIL).expect("remove");
     };
     cycle("q", "https://h/1", 0);
     cycle("p", "https://h/22", 1);
@@ -335,7 +335,7 @@ fn one_principals_churn_evicts_its_own_tail_before_anothers() {
 fn admit_reports_inserted_then_refreshed() {
     let dir = tempfile::tempdir().expect("dir");
     let now = Utc::now();
-    let store = Store::open(dir.path(), now, TAIL).expect("open");
+    let store = Store::open(dir.path(), Ok(now), TAIL).expect("open");
     let s = sub("p", "https://h/1", now);
     assert_eq!(
         store
@@ -355,7 +355,7 @@ fn admit_reports_inserted_then_refreshed() {
 fn a_version_zero_record_is_not_loaded() {
     let dir = tempfile::tempdir().expect("dir");
     let now = Utc::now();
-    let store = Store::open(dir.path(), now, TAIL).expect("open");
+    let store = Store::open(dir.path(), Ok(now), TAIL).expect("open");
     let s = sub("p", "https://h/a", now);
     store
         .admit(s.clone(), true, CAPS, grace(), now, TAIL)
@@ -367,7 +367,7 @@ fn a_version_zero_record_is_not_loaded() {
     let mut value: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
     value["v"] = serde_json::json!(0);
     write_record(&subs, &name, &value).expect("rewrite");
-    let store = Store::open(dir.path(), now, TAIL).expect("reopen");
+    let store = Store::open(dir.path(), Ok(now), TAIL).expect("reopen");
     assert!(store.get(&s.id).is_none(), "a version 0 record is skipped");
 }
 
@@ -377,7 +377,7 @@ fn a_version_zero_record_is_not_loaded() {
 fn an_over_cap_tail_is_trimmed_before_it_is_reused() {
     let dir = tempfile::tempdir().expect("dir");
     let t0 = Utc::now();
-    let store = Store::open(dir.path(), t0, TAIL).expect("open");
+    let store = Store::open(dir.path(), Ok(t0), TAIL).expect("open");
     let urls = ["https://h/1", "https://h/22", "https://h/333"];
     for (n, url) in urls.iter().enumerate() {
         let at = t0
@@ -387,7 +387,7 @@ fn an_over_cap_tail_is_trimmed_before_it_is_reused() {
             .admit(s.clone(), true, CAPS, grace(), at, TAIL)
             .expect("io")
             .expect("admitted");
-        store.remove(&s.id, at, TAIL).expect("remove");
+        store.remove(&s.id, Ok(at), TAIL).expect("remove");
     }
     let narrow = TailPolicy {
         max: 1,
@@ -417,7 +417,7 @@ fn tails_of_rows_that_expire_before_the_commit_are_capped_first() {
         max: 1,
         max_per_principal: 1,
     };
-    let store = Store::open(dir.path(), asked, long).expect("open");
+    let store = Store::open(dir.path(), Ok(asked), long).expect("open");
     for (url, mins) in [("https://h/1", 10), ("https://h/22", 20)] {
         let s = Subscription {
             expires_at: Some(asked + chrono::TimeDelta::try_minutes(mins).expect("in range")),
@@ -445,7 +445,7 @@ fn tails_of_rows_that_expire_before_the_commit_are_capped_first() {
 fn the_grant_is_fixed_at_the_commit_instant() {
     let dir = tempfile::tempdir().expect("dir");
     let asked = Utc::now() - crate::duration_bound::delta!(hours, 2);
-    let store = Store::open(dir.path(), asked, TAIL).expect("open");
+    let store = Store::open(dir.path(), Ok(asked), TAIL).expect("open");
     let s = sub("p", "https://h/a", asked);
     let grant = Grant {
         ttl: Some(crate::duration_bound::delta!(hours, 1)),
@@ -483,7 +483,7 @@ fn the_grant_is_fixed_at_the_commit_instant() {
 fn a_held_refresh_keeps_the_rows_watch_class() {
     let dir = tempfile::tempdir().expect("dir");
     let now = Utc::now();
-    let store = Store::open(dir.path(), now, TAIL).expect("open");
+    let store = Store::open(dir.path(), Ok(now), TAIL).expect("open");
     let mut s = sub("p", "https://h/a", now);
     s.watch_class = Some(crate::events::records::WatchClass::Free);
     store

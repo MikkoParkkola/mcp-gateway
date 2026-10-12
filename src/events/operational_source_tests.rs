@@ -12,6 +12,7 @@ use super::super::{EventSource, EventsHub, LiveCredentials, Services};
 use super::*;
 use crate::config::{ApiKeyConfig, ApiKeyKind, Config, api_key_digest_spec};
 use crate::config_reload::LiveConfig;
+use chrono::Utc;
 
 fn key(name: &str, secret: &str, admin: bool) -> ApiKeyConfig {
     ApiKeyConfig {
@@ -137,10 +138,30 @@ async fn operational_events_are_operator_only_except_own_budget() {
         }
     }
     let budget = |scope: &str| event(BUDGET_THRESHOLD, json!({"scope": scope, "percent": 50}));
-    assert!(source.matches(&dev, &own, &budget("key:dev")));
-    assert!(!source.matches(&dev, &own, &budget("key:ops")));
-    assert!(!source.matches(&dev, &own, &budget("global")));
-    assert!(source.matches(&ops, &none, &budget("global")));
+    assert!(source.matches(
+        &dev,
+        &own,
+        &budget("key:dev"),
+        crate::clock::utc_now().expect("clock")
+    ));
+    assert!(!source.matches(
+        &dev,
+        &own,
+        &budget("key:ops"),
+        crate::clock::utc_now().expect("clock")
+    ));
+    assert!(!source.matches(
+        &dev,
+        &own,
+        &budget("global"),
+        crate::clock::utc_now().expect("clock")
+    ));
+    assert!(source.matches(
+        &ops,
+        &none,
+        &budget("global"),
+        crate::clock::utc_now().expect("clock")
+    ));
     live.set(config(keys(false)));
     for (name, args) in [
         (KILL_SWITCH_CHANGED, &none),
@@ -202,6 +223,22 @@ async fn health_and_kill_switch_transitions_become_events() {
             ),
         ]
     );
+}
+
+/// MIK-8202 E2: an operational transition the clock cannot date (before
+/// 1970) is not emitted: it is counted as a clock drop.
+#[tokio::test]
+async fn an_undatable_operational_event_is_dropped_and_counted() {
+    let dir = tempfile::tempdir().expect("dir");
+    let (hub, _) = hub(dir.path(), Vec::new());
+    let kill = crate::kill_switch::KillSwitch::new();
+    hub.install_operational_source(&kill, &crate::backend::BackendRegistry::new());
+    {
+        let _clock = crate::clock::test_clock::before_epoch();
+        kill.kill("alpha");
+    }
+    assert!(drained(&hub).is_empty(), "emitted an occurrence dated 1969");
+    assert_eq!(hub.runtime.clock_drops(), 1, "the drop is counted");
 }
 
 /// The budget hook end to end: one spend that uses up `dev`'s budget is
@@ -345,7 +382,8 @@ fn a_principal_two_live_keys_share_has_no_standing() {
         let dir = tempfile::tempdir().expect("dir");
         let (hub, _live) = hub(dir.path(), keys);
         // WHEN: the shared principal's standing is read
-        let standing = source(&hub).standing(&principal("s-dev"));
+        let standing =
+            source(&hub).standing(&principal("s-dev"), crate::clock::utc_now().expect("clock"));
         // THEN: it has none, so it is neither admin nor either key's holder
         assert!(
             standing.is_none(),
@@ -366,7 +404,8 @@ fn a_principal_the_bearer_and_a_key_share_has_no_standing() {
     };
     let dir = tempfile::tempdir().expect("dir");
     let (hub, _live) = hub_with(dir.path(), vec![key("dev", "s-dev", false)], credentials);
-    let standing = source(&hub).standing(&principal("s-dev"));
+    let standing =
+        source(&hub).standing(&principal("s-dev"), crate::clock::utc_now().expect("clock"));
     assert!(
         standing.is_none(),
         "a key sharing the bearer's principal resolved to {:?}",
@@ -387,7 +426,8 @@ fn a_principal_one_live_key_derives_keeps_its_standing() {
     ] {
         let dir = tempfile::tempdir().expect("dir");
         let (hub, _live) = hub(dir.path(), keys);
-        let standing = source(&hub).standing(&principal("s-dev"));
+        let standing =
+            source(&hub).standing(&principal("s-dev"), crate::clock::utc_now().expect("clock"));
         let (admin, name) = standing
             .map(|s| (s.admin, s.key))
             .expect("dev has standing");
@@ -409,11 +449,62 @@ fn the_bearer_alone_keeps_its_admin_standing() {
         };
         let dir = tempfile::tempdir().expect("dir");
         let (hub, _live) = hub_with(dir.path(), keys, credentials);
-        let standing = source(&hub).standing(&principal("s-dev"));
+        let standing =
+            source(&hub).standing(&principal("s-dev"), crate::clock::utc_now().expect("clock"));
         let (admin, name) = standing
             .map(|s| (s.admin, s.key))
             .expect("the bearer has standing");
         assert!(admin, "the bearer is an admin");
         assert!(name.is_none(), "the bearer holds no key");
+    }
+}
+
+/// MIK-8202: an operator's standing is judged on one clock reading. A clock
+/// that reads, fails, then reads while the keys are scanned keeps an
+/// unexpired admin key's standing, never refusing with -32012 (which ends
+/// the subscription). A clock that fails at the reading is no verdict on the
+/// principal: an internal error, never -32012.
+#[tokio::test]
+async fn standing_is_judged_on_one_clock_reading() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = crate::clock::utc_now().expect("a readable clock");
+    let secs = u64::try_from(now.timestamp()).expect("after 1970");
+    let expiring = |name: &str, secret: &str, admin: bool| ApiKeyConfig {
+        expires_at: Some(now + crate::duration_bound::delta!(days, 1)),
+        ..key(name, secret, admin)
+    };
+    let (hub, _) = hub(
+        dir.path(),
+        vec![
+            expiring("dev", "s-dev", false),
+            expiring("ops", "s-ops", true),
+        ],
+    );
+    let source = source(&hub);
+    {
+        let _clock = crate::clock::test_clock::queued(&[Some(secs), None, None, Some(secs)]);
+        let verdict = source
+            .authorize(&principal("s-ops"), KILL_SWITCH_CHANGED, &json!({}))
+            .await;
+        assert!(verdict.is_ok(), "a live admin key refused: {verdict:?}");
+        assert!(
+            crate::clock::utc_now().is_err(),
+            "the key scan read the clock again"
+        );
+    }
+    {
+        let _clock = crate::clock::test_clock::queued(&[None, Some(secs), Some(secs)]);
+        let refused = source
+            .authorize(&principal("s-ops"), KILL_SWITCH_CHANGED, &json!({}))
+            .await
+            .expect_err("no verdict on an unreadable clock");
+        assert_ne!(
+            refused.code, -32012,
+            "an unreadable clock ended the subscription"
+        );
+        assert!(
+            refused.is_clock_unreadable(),
+            "a clock failure not told apart: {refused:?}"
+        );
     }
 }

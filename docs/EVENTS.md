@@ -29,9 +29,6 @@ events:
   enabled: true
   sources:
     schedule: true
-  schedule:
-    max_timers: 1000              # distinct timers across all principals
-    max_timers_per_principal: 20  # distinct timers one principal may hold
 ```
 
 Subscribe with:
@@ -67,8 +64,8 @@ Rules:
   by the response firewall like any payload; a blocked label is
   dead-lettered `firewall_blocked`.
 - **Caps**: subscriptions with the same cron, timezone and label share one
-  timer. A principal holding `max_timers_per_principal` distinct timers is
-  refused a new one with `-32013`, and so is any subscribe past `max_timers`.
+  timer. A principal holding 20 distinct timers is refused a new one with
+  `-32013`, and so is any subscribe past 1000 timers across all principals.
 - **Missed ticks are not sent late.** A tick due while the gateway was down
   is skipped, and so is one the gateway could not check in its own minute
   while running (a stalled runtime or a clock step): there is no catch-up. A restart within the same minute does not repeat a tick: the

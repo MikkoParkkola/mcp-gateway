@@ -128,3 +128,23 @@ fn attribution_fields_are_inside_the_hash_chain() {
     std::fs::write(&path, tampered).unwrap();
     assert!(!verify_log(&path).unwrap().ok);
 }
+
+/// MIK-8202 E4: an invocation recorded on a clock before 1970 is kept,
+/// undated: `timestamp` is `null` and `clock_invalid` is `true`, never a 1969
+/// stamp. On a readable clock the row carries a time and no marker.
+#[test]
+fn an_invocation_on_an_unreadable_clock_is_recorded_undated() {
+    let dir = tempfile::tempdir().expect("dir");
+    let (logger, path) = open(&dir);
+    write(&logger, Map::new()).expect("dated row");
+    {
+        let _clock = crate::clock::test_clock::before_epoch();
+        write(&logger, Map::new()).expect("undated row kept");
+    }
+    let rows = invocations(&path);
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert!(rows[0]["timestamp"].is_string(), "{}", rows[0]);
+    assert!(rows[0].get("clock_invalid").is_none(), "{}", rows[0]);
+    assert_eq!(rows[1]["timestamp"], Value::Null, "{}", rows[1]);
+    assert_eq!(rows[1]["clock_invalid"], true, "{}", rows[1]);
+}
