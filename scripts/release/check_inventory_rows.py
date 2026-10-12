@@ -30,11 +30,9 @@ from __future__ import annotations
 
 import functools
 import importlib.util
-import io
 import re
 import subprocess
 import sys
-import tarfile
 import tempfile
 from pathlib import Path
 
@@ -94,7 +92,7 @@ def test_only(text: str) -> bool:
     only under test, by the orphan gate's one cfg judgement (`cfg_is_test`).
     Several attributes may share the line (`#[cfg(test)] #[cfg(unix)]`), so
     each expression is read to its balancing `)`."""
-    text = text.strip()
+    text = re.sub(r"/\*.*?\*/", " ", text).strip()
     if not text.startswith("#["):
         return False
     gate = orphan_gate()
@@ -197,30 +195,45 @@ def orphan_gate():
     return module
 
 
-# The trees a crate root can sit in; the walk needs nothing else.
-CRATE_DIRS = ("src", "tests", "benches", "examples")
-
-
 @functools.lru_cache(maxsize=None)
 def mount_status(root: Path, commit: str) -> tuple[frozenset[str], frozenset[str]]:
     """(reachable, test-only) source paths as `commit` has them,
     repo-relative. Read from the commit, never the working tree, so the
     mounts are judged on the same revision as the diff, the file contents and
-    the rows: a dirty or different checkout cannot change the verdict."""
-    present = set(git("ls-tree", "--name-only", commit).split("\n"))
-    dirs = [d for d in CRATE_DIRS if d in present]
-    archive = subprocess.run(
-        ["git", "archive", "--format=tar", commit, "--", *dirs],
-        cwd=root, check=True, capture_output=True,
+    the rows: a dirty or different checkout cannot change the verdict. Every
+    committed `.rs` blob is written out straight from the object store, so a
+    `#[path]` into any directory resolves, and no export-ignore attribute
+    (which `git archive` would honour) can hide a source."""
+    run = lambda args, data=None: subprocess.run(
+        ["git", *args], cwd=root, input=data, check=True, capture_output=True
     ).stdout
+    blobs = []
+    for entry in run(["ls-tree", "-r", "-z", "--full-tree", commit]).split(b"\0"):
+        meta, _, path = entry.partition(b"\t")
+        if path.endswith(b".rs") and meta.split(b" ")[1:2] == [b"blob"]:
+            mode, _, sha = meta.split(b" ")
+            blobs.append((sha, path.decode(), mode == b"120000"))
+    contents = run(["cat-file", "--batch"], b"".join(sha + b"\n" for sha, _, _ in blobs))
     gate = orphan_gate()
     with tempfile.TemporaryDirectory() as tree:
-        with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
-            tar.extractall(tree, filter="data")
+        at = 0
+        for _, path, link in blobs:
+            header_end = contents.index(b"\n", at)
+            size = int(contents[at:header_end].split(b" ")[2])
+            body = contents[header_end + 1 : header_end + 1 + size]
+            at = header_end + 1 + size + 1
+            target = Path(tree, path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if link:  # a symlink's blob is its target; rustc follows it
+                target.symlink_to(body.decode())
+            else:
+                target.write_bytes(body)
         gate.ROOT = Path(tree)
         try:
             base = Path(tree).resolve()
-            rel = lambda paths: frozenset(p.relative_to(base).as_posix() for p in paths)
+            rel = lambda paths: frozenset(
+                p.relative_to(base).as_posix() for p in paths if p.is_relative_to(base)
+            )
             live = gate.reachable()
             return rel(live), rel(gate.test_only_files(live))
         finally:

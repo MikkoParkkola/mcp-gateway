@@ -75,10 +75,11 @@ def cfg_is_test(expr: str) -> bool:
     expr = expr.strip()
     if expr == "test":
         return True
-    if not (expr.startswith("all(") and expr.endswith(")")):
+    opener = re.match(r"all\s*\(", expr)
+    if not (opener and expr.endswith(")")):
         return False
-    operands, depth, start = [], 0, len("all(")
-    for i in range(start, len(expr) - 1):
+    operands, depth, start = [], 0, opener.end()
+    for i in range(opener.end(), len(expr) - 1):
         ch = expr[i]
         if ch == "(":
             depth += 1
@@ -158,10 +159,14 @@ def blank(text: str) -> tuple[str, dict[int, str]]:
         elif text[i] == "'":
             # A char literal ('x', '\n', '"') or a lifetime ('a): only the
             # literal forms are skipped, so a lifetime never swallows code.
+            # Their contents are blanked: a '{' or '[' is not a brace.
             if text.startswith("\\", i + 1):
                 j = text.find("'", i + 3)
-                i = n if j < 0 else j + 1
+                j = n if j < 0 else j
+                wipe(i + 1, j)
+                i = j + 1
             elif i + 2 < n and text[i + 2] == "'":
+                wipe(i + 1, i + 2)
                 i += 3
             else:
                 i += 1
@@ -330,14 +335,13 @@ def compiled_outside_tests() -> set[Path]:
     stack = [(root.resolve(), True) for root in library_roots()]
     while stack:
         path, owns_dir = stack.pop()
-        if (path, owns_dir) in seen or not path.is_file() or file_is_test(path):
+        if (path, owns_dir) in seen or not path.is_file():
+            continue
+        declared, file_test = _scan(path, owns_dir)
+        if file_test:
             continue
         seen.add((path, owns_dir))
-        stack.extend(
-            (child, via_path)
-            for child, via_path, test in declarations_with_cfg(path, owns_dir)
-            if not test
-        )
+        stack.extend((child, via_path) for child, via_path, test in declared if not test)
     return {path for path, _ in seen}
 
 

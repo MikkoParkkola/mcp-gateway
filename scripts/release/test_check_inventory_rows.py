@@ -311,6 +311,32 @@ class TestNamedFiles(unittest.TestCase):
         self.repo.commit("add")
         self.assertEqual(self.repo.missing(), ["live"])
 
+    def test_a_path_mount_through_another_directory_is_followed(self) -> None:
+        # #3860 round 3 (muse HIGH): only src/tests/benches/examples were
+        # written out, so a chain through gen/ read as unreachable.
+        self.repo.write("src/lib.rs", 'pub mod cli;\n#[path = "../gen/hub.rs"]\npub mod hub;\n')
+        self.repo.write("gen/hub.rs", '#[path = "../src/oauth/mod.rs"]\npub mod oauth;\n')
+        self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\npub fn routed() {}\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), ["routed"])
+
+    def test_an_export_ignored_source_is_still_judged(self) -> None:
+        # #3860 round 3 (gpt): git archive honours export-ignore.
+        self.repo.write(".gitattributes", "src/oauth/** export-ignore\n")
+        self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\npub fn hidden() {}\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), ["hidden"])
+
+    def test_a_commented_cfg_test_does_not_hide_a_function(self) -> None:
+        # #3860 round 3 (gpt): `/* #[cfg(test)] */` beside an attribute.
+        self.repo.write(
+            "src/oauth/mod.rs",
+            "pub fn existing() {}\n#[inline] /* #[cfg(test)] */\nfn live() {}\n"
+            "#[cfg(all (test, unix))]\nfn probe() {}\n",
+        )
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), ["live"])
+
 class PathspecShape(unittest.TestCase):
     """`--all` hands the prefixes to git as pathspecs, and a pathspec names
     one path: a bare stem matched `task_confirmation/` and never scanned

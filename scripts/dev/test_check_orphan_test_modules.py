@@ -159,6 +159,16 @@ class TestOnlyFiles(unittest.TestCase):
         )
         self.assertEqual(found, [])
 
+    def test_a_bracket_in_a_char_literal_does_not_swallow_a_declaration(self):
+        # #3860 round 3 (muse HIGH, gpt): '[' and '{' in char literals.
+        found = self.only_test_files(
+            {
+                "src/lib.rs": "#[doc = concat!('[')]\nconst C: char = '{';\n#[cfg(test)]\nmod a;\n",
+                "src/a.rs": "",
+            }
+        )
+        self.assertEqual(found, ["src/a.rs"])
+
 class OrphanGuard(unittest.TestCase):
     def orphans_of(self, files: dict[str, str]) -> list[str]:
         # A crate root that declares each top-level module, unless the case
