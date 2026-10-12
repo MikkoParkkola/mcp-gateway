@@ -179,6 +179,8 @@ struct Setup {
     list_fail: bool,
     /// MIK-8382: `security.sanitize_input` (the router's default here is off).
     sanitize: bool,
+    /// MIK-8382: `beta` is a `passthrough: true` backend.
+    beta_passthrough: bool,
     /// The backends' chain policy; under `Require` the gateway also has a
     /// chain identity, so their unchained answers are refused unread (MIK-7636).
     chain: crate::config::ChainMode,
@@ -263,6 +265,7 @@ async fn fixture(setup: Setup) -> Fixture {
             name,
             BackendConfig {
                 signature_chain: setup.chain,
+                passthrough: setup.beta_passthrough && name == "beta",
                 ..BackendConfig::default()
             },
             &FailsafeConfig::default(),
