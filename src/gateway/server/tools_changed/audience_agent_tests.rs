@@ -173,3 +173,21 @@ fn agent_5_a_stream_whose_live_agent_is_another_client_is_dead() {
         "control: the attached agent, still valid, is live"
     );
 }
+
+/// AGENT.6 (the predicate's last side): a stream attached as a1 whose held
+/// bearer now validates as no agent is dead, never judged as a caller without
+/// one. Unreachable while the listener registry and the request middleware
+/// agree that agent auth is on; the predicate keeps it closed if they ever
+/// disagree (the fixture once did, MIK-8377).
+#[test]
+fn agent_6_a_stream_whose_agent_is_gone_is_dead() {
+    let identity = crate::security::caller_identity::CallerIdentityConfig::default();
+    let subject = crate::gateway::streaming::ViewSubject {
+        oauth_agent: Some(attached("a1")),
+        ..crate::gateway::streaming::ViewSubject::default()
+    };
+    assert!(
+        subject.live(&ctx(None, &identity)).is_err(),
+        "an attached agent with no live agent is dead"
+    );
+}
