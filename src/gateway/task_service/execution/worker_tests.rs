@@ -156,6 +156,13 @@ impl Fixture {
     }
 }
 
+/// A cancel receiver nothing will signal (MIK-8202 P4a: settles take one).
+/// Its sender is dropped, so a clock wait would stop at once; these rows never
+/// meet a dark clock.
+fn rx() -> tokio::sync::watch::Receiver<bool> {
+    tokio::sync::watch::channel(false).1
+}
+
 pub(super) fn complete() -> TaskTransition {
     TaskTransition::Complete(json!({"content": [{"type": "text", "text": "done"}]}))
 }
@@ -172,7 +179,7 @@ async fn a_settlement_that_lost_its_revision_retries_at_the_current_one() {
 
     let delivered = fx
         .executor
-        .settle_cas(OWNER, &fx.id, fx.revision, complete())
+        .settle_cas(OWNER, &fx.id, fx.revision, complete(), &mut rx())
         .await;
 
     assert!(delivered, "the retried settlement stored backend output");
@@ -191,7 +198,7 @@ async fn a_settlement_that_lost_to_a_terminal_row_leaves_it_alone() {
 
     let delivered = fx
         .executor
-        .settle_cas(OWNER, &fx.id, fx.revision, complete())
+        .settle_cas(OWNER, &fx.id, fx.revision, complete(), &mut rx())
         .await;
 
     assert!(!delivered, "the later settlement delivered nothing");
@@ -220,7 +227,7 @@ async fn a_settlement_whose_retry_also_fails_reports_nothing_delivered() {
 
     let delivered = fx
         .executor
-        .settle_cas(OWNER, &fx.id, fx.revision, complete())
+        .settle_cas(OWNER, &fx.id, fx.revision, complete(), &mut rx())
         .await;
 
     assert!(!delivered);
@@ -243,7 +250,7 @@ async fn a_settlement_whose_first_write_fails_does_not_retry() {
 
     let delivered = fx
         .executor
-        .settle_cas(OWNER, &fx.id, fx.revision, complete())
+        .settle_cas(OWNER, &fx.id, fx.revision, complete(), &mut rx())
         .await;
 
     assert!(!delivered);
@@ -280,7 +287,7 @@ async fn a_marker_on_a_moved_or_settled_row_is_refused() {
 
     assert!(
         fx.executor
-            .settle_cas(OWNER, &fx.id, fx.stored_revision(), complete())
+            .settle_cas(OWNER, &fx.id, fx.stored_revision(), complete(), &mut rx())
             .await
     );
     let settled = fx

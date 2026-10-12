@@ -101,14 +101,14 @@ async fn list_local_grants(
 ) -> Result<(), String> {
     let path = expand_home_path(file);
     let grant_file = read_identity_grants_file(&path).await?;
-    let now = Utc::now();
+    let now = super::clock_now()?;
     let grants = grant_file
         .grants
         .into_iter()
         .filter(|grant| !active_only || is_grant_active(grant, now))
         .collect::<Vec<_>>();
 
-    print_grants(&path, &grants, format);
+    print_grants(&path, &grants, format, now);
     Ok(())
 }
 
@@ -193,10 +193,9 @@ async fn revoke_local_grant(
     revoked_at: Option<&str>,
 ) -> Result<(PathBuf, IdentityGrant), String> {
     let path = expand_home_path(file);
-    let revoked_at = revoked_at.map_or_else(
-        || Ok(Utc::now()),
-        |value| parse_timestamp(value, "revoked-at"),
-    )?;
+    let revoked_at = revoked_at.map_or_else(super::clock_now, |value| {
+        parse_timestamp(value, "revoked-at")
+    })?;
     let grant_id = grant_id.to_string();
     let shown = path.display().to_string();
     let change: journal::GrantChange = Box::new(move |grant_file: &mut IdentityGrantFile| {
@@ -214,7 +213,7 @@ async fn revoke_local_grant(
     Ok((path, updated))
 }
 
-fn print_grants(path: &Path, grants: &[IdentityGrant], format: OutputFormat) {
+fn print_grants(path: &Path, grants: &[IdentityGrant], format: OutputFormat, now: DateTime<Utc>) {
     match format {
         OutputFormat::Json => println!(
             "{}",
@@ -239,7 +238,6 @@ fn print_grants(path: &Path, grants: &[IdentityGrant], format: OutputFormat) {
                 "GRANT", "SUBJECT", "AGENT", "CAPABILITY", "STATUS"
             );
             println!("{}", "-".repeat(122));
-            let now = Utc::now();
             for grant in grants {
                 println!(
                     "{:<28}  {:<24}  {:<16}  {:<24}  {:<8}  {}",
@@ -374,10 +372,13 @@ fn parse_expiry(
         }
         // MIK-8207: both the duration and the sum are checked; either one
         // out of range used to panic.
-        (None, Some(seconds)) => Duration::try_seconds(seconds)
-            .and_then(|ttl| Utc::now().checked_add_signed(ttl))
-            .map(Some)
-            .ok_or_else(|| format!("--ttl-seconds {seconds} is too large")),
+        (None, Some(seconds)) => {
+            let now = super::clock_now()?;
+            Duration::try_seconds(seconds)
+                .and_then(|ttl| now.checked_add_signed(ttl))
+                .map(Some)
+                .ok_or_else(|| format!("--ttl-seconds {seconds} is too large"))
+        }
         (None, None) => Ok(None),
     }
 }

@@ -385,8 +385,8 @@ async fn store_06_malformed_ids_never_derive_paths_or_change_storage() {
     for (index, (id, targets)) in cases.into_iter().enumerate() {
         let mut planted = self::task();
         planted.complete(
-            json!({"content":[{"type":"text","text":format!("distinct outside payload {index}")}]}),
-        );
+            &json!({"content":[{"type":"text","text":format!("distinct outside payload {index}")}]}),
+        ).expect("a live task takes its outcome");
         let bytes =
             serde_json::to_vec(&PreparedTask::for_test(&planted, OWNER, 42).record).unwrap();
         for target in targets {
@@ -739,7 +739,9 @@ async fn store_04_count_and_byte_reservations_reject_before_write() {
     );
     assert_eq!(files(&path), before);
     let mut large = task();
-    large.complete(json!({"content":[{"text":"x".repeat(8192)}]}));
+    large
+        .complete(&json!({"content":[{"text":"x".repeat(8192)}]}))
+        .expect("a live task takes its outcome");
     assert_eq!(
         store
             .create(PreparedTask::for_test(&large, OTHER, 3))

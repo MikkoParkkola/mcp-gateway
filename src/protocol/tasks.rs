@@ -68,7 +68,11 @@ pub struct TaskChange {
 }
 
 /// A transition or snapshot that cannot represent a legal task.
+///
+/// `#[non_exhaustive]` since 4.0 (MIK-8202 P4a): a later variant breaks no
+/// downstream `match`.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum TaskModelError {
     /// Payload has the wrong shape or reuses an input key.
     #[error("invalid task input")]
@@ -79,6 +83,10 @@ pub enum TaskModelError {
     /// A serialized private model cannot be restored safely.
     #[error("invalid task snapshot")]
     InvalidSnapshot,
+    /// The host clock reads before 1970, so nothing can be dated. Nothing was
+    /// applied; the caller still holds its outcome and may retry later.
+    #[error("the host clock reads before 1970")]
+    ClockUnreadable,
 }
 
 /// Private model snapshot, separate from the public protocol projection.
@@ -155,16 +163,20 @@ pub struct Task {
 
 impl Task {
     /// Start a task with the release's default retention and poll cadence.
-    #[must_use]
-    pub fn create(tool: &str) -> Self {
-        Self::create_at(
+    ///
+    /// # Errors
+    /// [`TaskModelError::ClockUnreadable`] when the host clock reads before
+    /// 1970: a task is never dated at the epoch (MIK-8202 P4a A3).
+    pub fn create(tool: &str) -> Result<Self, TaskModelError> {
+        let at = crate::clock::utc_now().map_err(|_| TaskModelError::ClockUnreadable)?;
+        Ok(Self::create_at(
             tool,
-            Utc::now(),
+            at,
             TaskOptions {
                 ttl_ms: Some(crate::config::DEFAULT_TASK_TTL_MS),
                 poll_interval_ms: Some(1_000),
             },
-        )
+        ))
     }
 
     /// Construct with a controlled creation time and immutable record options.
@@ -294,14 +306,41 @@ impl Task {
         &self.wire
     }
 
-    /// Record an object result if the task is live. Late outcomes are ignored.
-    pub fn complete(&mut self, result: Value) {
-        let _ = self.transition(TaskTransition::Complete(result), Utc::now());
+    /// Record an object result if the task is live. A late outcome on a
+    /// terminal task is ignored (`Ok`). The result is cloned in only once it
+    /// is applied, so on `Err` the caller still holds it.
+    ///
+    /// # Errors
+    /// [`TaskModelError::InvalidInput`] for a non-object result, and
+    /// [`TaskModelError::ClockUnreadable`] when the host clock reads before
+    /// 1970; either way nothing is applied (MIK-8202 P4a A3).
+    pub fn complete(&mut self, result: &Value) -> Result<(), TaskModelError> {
+        // Judged before the clock read, so a late or malformed outcome gets
+        // the same answer whatever the clock says.
+        if self.is_terminal() {
+            return Ok(());
+        }
+        if !result.is_object() {
+            return Err(TaskModelError::InvalidInput);
+        }
+        let at = crate::clock::utc_now().map_err(|_| TaskModelError::ClockUnreadable)?;
+        self.transition(TaskTransition::Complete(result.clone()), at)
+            .map(drop)
     }
 
     /// Record a JSON-RPC failure if live, preserving code, message and data.
-    pub fn fail(&mut self, error: JsonRpcError) {
-        let _ = self.transition(TaskTransition::Fail(error), Utc::now());
+    /// A late outcome on a terminal task is ignored (`Ok`).
+    ///
+    /// # Errors
+    /// [`TaskModelError::ClockUnreadable`] when the host clock reads before
+    /// 1970; nothing is applied and the caller still holds `error`.
+    pub fn fail(&mut self, error: &JsonRpcError) -> Result<(), TaskModelError> {
+        if self.is_terminal() {
+            return Ok(());
+        }
+        let at = crate::clock::utc_now().map_err(|_| TaskModelError::ClockUnreadable)?;
+        self.transition(TaskTransition::Fail(error.clone()), at)
+            .map(drop)
     }
 
     /// Apply a legal event at an explicit time supplied by the owning service.

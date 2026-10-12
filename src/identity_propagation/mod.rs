@@ -619,7 +619,7 @@ pub(crate) async fn audit_identity_propagation(
     fields.insert("action".into(), action.into());
     fields.insert("subject".into(), subject.into());
     fields.insert("backend".into(), backend.into());
-    fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
+    crate::clock::stamp_audit_row(&mut fields);
     if let Some(audience) = audience {
         fields.insert("audience".into(), audience.into());
     }

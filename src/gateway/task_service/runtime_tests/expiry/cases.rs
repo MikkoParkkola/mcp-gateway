@@ -57,7 +57,7 @@ async fn expiry_deletes_every_expired_terminal_row_with_its_key_and_capacity() {
     let refused = service
         .create(
             request("x-newcomer", &operation, &representation),
-            &Task::create("write"),
+            &Task::create("write").expect("the test clock reads after 1970"),
             "fixture",
             move || slot.try_acquire_owned().ok(),
         )
@@ -87,7 +87,7 @@ async fn expiry_deletes_every_expired_terminal_row_with_its_key_and_capacity() {
         let created = service
             .create(
                 request(key, &operation, &representation),
-                &Task::create("write"),
+                &Task::create("write").expect("the test clock reads after 1970"),
                 "fixture",
                 move || slot.try_acquire_owned().ok(),
             )

@@ -5,7 +5,10 @@
 
 use std::time::Duration;
 
-use super::TaskExecutor;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use super::{TaskExecutor, TransitionWrite};
 use crate::gateway::task_service::record::{ErrorAuthor, UpstreamRecord};
 use crate::protocol::tasks::TaskTransition;
 
@@ -69,5 +72,88 @@ impl TaskExecutor {
         )
         .await
         .expect("the cancel commits");
+    }
+}
+
+/// MIK-8202 P4a r4.1: counts each task's `commit_transition` attempts and,
+/// before a chosen attempt, commits one concurrent write so that attempt
+/// loses its compare-and-set. Cloneable; every clone shares one state.
+#[derive(Clone, Default)]
+pub(crate) struct CommitAttemptHook(Arc<parking_lot::Mutex<HookState>>);
+
+#[derive(Default)]
+struct HookState {
+    attempts: HashMap<String, usize>,
+    conflicts: HashSet<(String, usize)>,
+}
+
+impl CommitAttemptHook {
+    /// The commit attempts made for `id` since the hook was taken.
+    pub(crate) fn attempts(&self, id: &str) -> usize {
+        self.0.lock().attempts.get(id).copied().unwrap_or(0)
+    }
+
+    /// Before attempt `attempt` (1-based) for `id`, commit one `StatusMessage`
+    /// write at the record's current revision. Several attempts may be named.
+    pub(crate) fn inject_conflict_before(&self, id: &str, attempt: usize) {
+        self.0.lock().conflicts.insert((id.to_owned(), attempt));
+    }
+
+    /// Count one attempt for `id`; its number when a conflict is due before it.
+    fn attempt(&self, id: &str) -> Option<usize> {
+        let mut state = self.0.lock();
+        let count = state.attempts.entry(id.to_owned()).or_default();
+        *count += 1;
+        let attempt = *count;
+        state
+            .conflicts
+            .remove(&(id.to_owned(), attempt))
+            .then_some(attempt)
+    }
+}
+
+impl TransitionWrite<'_> {
+    /// The task this write moves.
+    pub(super) fn id(&self) -> &str {
+        match self {
+            Self::Settle { id, .. } | Self::Cancel { id, .. } | Self::Recover { id, .. } => *id,
+        }
+    }
+}
+
+impl TaskExecutor {
+    /// Test-only: the executor's commit-attempt hook, installed on first use.
+    pub(crate) fn commit_hook_for_test(&self) -> CommitAttemptHook {
+        self.commit_hook
+            .get_or_init(CommitAttemptHook::default)
+            .clone()
+    }
+
+    /// Called before every commit attempt. An injected write is dated at the
+    /// record's own `last_updated_at`, so it never reads the store clock, and
+    /// carries the attempt number: an unchanged status message is a no-op
+    /// that would not move the revision.
+    pub(super) async fn before_commit_attempt_for_test(&self, id: &str) {
+        let Some(attempt) = self.commit_hook.get().and_then(|hook| hook.attempt(id)) else {
+            return;
+        };
+        let owner = self
+            .service
+            .store
+            .owner_digest_for_test(id)
+            .expect("the task exists");
+        let current = self.service.store.get(&owner, id).expect("readable");
+        let message = format!("injected before commit attempt {attempt}");
+        self.service
+            .store
+            .transition(
+                &owner,
+                id,
+                current.revision,
+                TaskTransition::StatusMessage(Some(message)),
+                current.task.last_updated_at(),
+            )
+            .await
+            .expect("the injected write commits");
     }
 }

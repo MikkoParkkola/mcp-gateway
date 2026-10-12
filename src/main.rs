@@ -10,6 +10,11 @@
 mod stdout;
 
 mod allocator;
+// The library's wall-clock reader, compiled again for the CLI commands
+// (MIK-8202 P4a); clock.rs states why this copy may hold no shared state.
+#[path = "clock.rs"]
+#[allow(dead_code, reason = "the binary uses a subset")]
+mod clock;
 mod commands;
 // Its one user in this crate is `dashboard-link`, compiled with `webui`.
 #[cfg(feature = "webui")]
