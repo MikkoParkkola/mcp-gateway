@@ -211,6 +211,19 @@ impl super::Backend {
             );
     }
 
+    /// Age per-user slot `binding`'s held catalogue past the TTL, so the next
+    /// check refetches it (MIK-8392 T6).
+    #[cfg(test)]
+    pub(crate) fn stale_per_user_tools_for_test(&self, binding: &str) {
+        let key = super::PoolKey::PerUser {
+            binding: binding.to_string(),
+        };
+        self.pooled_entry(&key)
+            .expect("a per-user slot is admitted")
+            .tools_cache
+            .backdate_for_test(self.cache_ttl);
+    }
+
     /// Whether per-user slot `binding` is in the pool (MIK-8392 K1).
     #[cfg(test)]
     pub(crate) fn holds_per_user_slot_for_test(&self, binding: &str) -> bool {

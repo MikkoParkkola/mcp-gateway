@@ -169,6 +169,48 @@ async fn t8t_a_truncated_slot_without_the_tool_still_delivers() {
     assert!(read.to_string().contains(OUTPUT), "T8t: {read}");
 }
 
+/// T6 (mutant M11; MIK-8392 STORED.2 E4): a repeated task call whose route
+/// stage carried a FAILED fill. Alpha's slot holds a stale, truncated list
+/// without the tool, so the catalogue proves nothing and the refetch is the
+/// fill; alpha's upstream refuses it. Site 5 answers as the failed dispatch
+/// does: no stored output, nothing sent. Counting the carried resolution as
+/// proof regardless of its fill error (M11) serves the stored output.
+#[tokio::test]
+async fn t6_a_repeat_whose_fill_failed_answers_as_the_failed_dispatch() {
+    let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await;
+    let key = "s2-t6";
+    let _ = finished(&gw, key).await;
+    let upstream = crate::gateway::meta_mcp::slot_verdict_fixture::rearm_alpha_slot_with(
+        &backend(&gw),
+        &crate::gateway::meta_mcp::slot_verdict_fixture::valid(),
+        true,
+    );
+    alpha_lacks(&gw);
+    backend(&gw).mark_per_user_truncated_for_test(BINDING);
+    backend(&gw).stale_per_user_tools_for_test(BINDING);
+    let mut meta = modern_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+    let again = send(
+        &gw,
+        3,
+        "tools/call",
+        "gateway_invoke",
+        json!({"name": "gateway_invoke",
+            "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"q": "x"}},
+            "task": {}, "_meta": meta}),
+    )
+    .await;
+    eprintln!("T6 answer: {again}");
+    eprintln!("T6 lists {} calls {}", upstream.lists(), upstream.calls());
+    assert!(upstream.lists() >= 1, "premise: the refetch was the fill: {again}");
+    assert!(!again.to_string().contains(OUTPUT), "T6: stored output served: {again}");
+    assert_eq!(upstream.calls(), 0, "T6: the call was sent: {again}");
+    assert!(
+        again.to_string().contains("upstream refused tools/list"),
+        "T6: not the failed dispatch's answer for the fill error: {again}"
+    );
+}
+
 /// C1: alpha's slot is evicted after the task. The first read re-establishes
 /// it with exactly one resolution and serves; N warm polls after it resolve
 /// nothing. Red on base: no cold path, the read is judged on the shared view

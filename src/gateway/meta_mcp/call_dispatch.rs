@@ -696,3 +696,7 @@ pub(super) fn task_backend_name(meta: &MetaMcp, tool_name: &str, arguments: &Val
         other => other.to_owned(),
     }
 }
+
+#[cfg(test)]
+#[path = "stored_site5_tests.rs"]
+mod stored_site5_tests;

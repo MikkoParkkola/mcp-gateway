@@ -1136,6 +1136,16 @@ mod r6m_token_exchange {
         endpoint: String,
         alice: &crate::key_server::oidc::VerifiedIdentity,
     ) -> (axum::Router, Arc<AtomicUsize>, (tempfile::TempDir, tempfile::TempDir)) {
+        gateway_armed(key, endpoint, alice, |meta| meta).await
+    }
+
+    /// [`gateway`], with `arm` applied to the `MetaMcp` before it serves.
+    pub(super) async fn gateway_armed(
+        key: &Arc<crate::gateway::oauth::GatewayKeyPair>,
+        endpoint: String,
+        alice: &crate::key_server::oidc::VerifiedIdentity,
+        arm: impl FnOnce(crate::gateway::meta_mcp::MetaMcp) -> crate::gateway::meta_mcp::MetaMcp,
+    ) -> (axum::Router, Arc<AtomicUsize>, (tempfile::TempDir, tempfile::TempDir)) {
         use crate::config::{BackendConfig, TransportConfig};
         use crate::identity_propagation::{
             IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
@@ -1220,7 +1230,7 @@ mod r6m_token_exchange {
         let (mut state, store) = super::super::tests::test_router_app_state_with_auth(&auth).await;
         let state_mut = Arc::get_mut(&mut state).expect("state is unique");
         state_mut.backends = registry;
-        state_mut.meta_mcp = Arc::new(meta);
+        state_mut.meta_mcp = Arc::new(arm(meta));
         state_mut.transparency_log = Some(log);
         (super::super::create_router(state), sends, (log_dir, store))
     }
@@ -1441,12 +1451,93 @@ async fn s2b_token_exchange_replay_is_lifted_when_the_mint_succeeds() {
     drop(idp);
 }
 
+/// L0 (mutant M2b): with the meta idempotency cache armed, as the boot path
+/// always arms it, the lift answers before the key check: the keyed repeat
+/// is the first answer byte-for-byte and nothing is re-sent. Lifting after
+/// the key check (M2b) lets the cache answer instead, re-stamped as a fresh
+/// cache hit.
+#[tokio::test]
+async fn l0_the_lift_answers_before_an_armed_idempotency_cache() {
+    let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
+    let idp = r6m_token_exchange::LiveIdp::start(&key).await;
+    let alice = r6m_token_exchange::alice();
+    let (router, sends, _dirs) =
+        r6m_token_exchange::gateway_armed(&key, idp.endpoint(), &alice, |mut meta| {
+            meta.enable_idempotency(
+                Arc::new(crate::idempotency::IdempotencyCache::new()),
+                std::time::Duration::from_secs(60),
+            );
+            meta
+        })
+        .await;
+    let call = || {
+        json!({"name": "gateway_invoke",
+            "arguments": {"server": r6m_token_exchange::TX, "tool": TOOL,
+                "arguments": {"folder": "inbox"}},
+            "_meta": meta(Some("l0"), false)})
+    };
+    let first = r6m_token_exchange::send_as(&router, &alice, call()).await;
+    assert!(first.to_string().contains(MARKER), "premise: dispatched: {first}");
+    let again = r6m_token_exchange::send_as(&router, &alice, call()).await;
+    eprintln!("L0 first: {first}");
+    eprintln!("L0 again: {again}");
+    assert_eq!(sends.load(std::sync::atomic::Ordering::SeqCst), 1, "L0: re-sent: {again}");
+    assert_eq!(again, first, "L0: the repeat is not the first answer");
+    drop(idp);
+}
+
+/// L5 (mutant M4): a lifted replay keeps its signing nonce spent. Alice's
+/// signed call under nonce `n1` dispatches; its keyed repeat, signed under a
+/// fresh `n2` (the nonce is not part of the fingerprint), is lifted with no
+/// second send; a fresh-key call re-using `n2` is then refused as a replay
+/// and never sent, while `n3` is served (control). A lift that hands its
+/// nonce back (M4) lets the re-used `n2` through.
+#[tokio::test]
+async fn l5_a_lifted_replay_keeps_its_nonce_spent() {
+    let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
+    let idp = r6m_token_exchange::LiveIdp::start(&key).await;
+    let alice = r6m_token_exchange::alice();
+    let (router, sends, _dirs) =
+        r6m_token_exchange::gateway_armed(&key, idp.endpoint(), &alice, |mut meta| {
+            meta.enable_message_signing(
+                crate::security::message_signing::MessageSigner::new(
+                    b"l5-signing-key-0123456789abcdef-l5".to_vec(),
+                    None,
+                    "l5".into(),
+                ),
+                std::time::Duration::from_secs(300),
+                true,
+            );
+            meta
+        })
+        .await;
+    let call = |idem: &str, nonce: &str| {
+        json!({"name": "gateway_invoke",
+            "arguments": {"server": r6m_token_exchange::TX, "tool": TOOL,
+                "arguments": {"folder": "inbox"}, "nonce": nonce},
+            "_meta": meta(Some(idem), false)})
+    };
+    let first = r6m_token_exchange::send_as(&router, &alice, call("l5", "n1")).await;
+    assert!(first.to_string().contains(MARKER), "premise: dispatched: {first}");
+    assert_eq!(sends.load(std::sync::atomic::Ordering::SeqCst), 1, "premise: one send: {first}");
+    let again = r6m_token_exchange::send_as(&router, &alice, call("l5", "n2")).await;
+    assert!(again.to_string().contains(MARKER), "premise: the lifted replay was served: {again}");
+    assert_eq!(sends.load(std::sync::atomic::Ordering::SeqCst), 1, "premise: the replay was lifted: {again}");
+    let reused = r6m_token_exchange::send_as(&router, &alice, call("l5-reuse", "n2")).await;
+    eprintln!("L5 reused nonce: {reused}");
+    assert_eq!(sends.load(std::sync::atomic::Ordering::SeqCst), 1, "L5: a re-used nonce was sent after a lift: {reused}");
+    assert!(!reused.to_string().contains(MARKER), "L5: a re-used nonce was served: {reused}");
+    let fresh = r6m_token_exchange::send_as(&router, &alice, call("l5-fresh", "n3")).await;
+    assert!(fresh.to_string().contains(MARKER), "control: a fresh nonce is served: {fresh}");
+    drop(idp);
+}
+
 /// L4' (mutants M8, M2b): a lifted replay writes ONE invocation record, and
 /// it reads as the first execution's did: the same request hash (the
 /// envelope the route stage passes, `gateway_invoke`'s own arguments) and the
-/// same response hash (the stored execution's facts). A wrong envelope (M8)
-/// changes the request hash; a replay answered by the idempotency cache
-/// instead of the lift (M2b) writes no such record.
+/// same response hash (the stored execution's facts, MIK-7641), and the
+/// same backend and tool, which come from the envelope the lift hands
+/// `audit_replay`. A wrong envelope (M8) loses the backend and tool.
 #[tokio::test]
 async fn l4_a_lifted_replay_records_the_first_execution_s_hashes() {
     let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
@@ -1482,7 +1573,7 @@ async fn l4_a_lifted_replay_records_the_first_execution_s_hashes() {
     eprintln!("L4' first: {original:?}");
     eprintln!("L4' replay: {replayed:?}");
     assert_eq!(replayed.len(), 1, "L4': not one replay record: {replayed:?}");
-    for field in ["request_hash", "response_hash", "outcome"] {
+    for field in ["request_hash", "response_hash", "outcome", "server", "tool", "route"] {
         assert_eq!(
             replayed[0].get(field),
             original[0].get(field),

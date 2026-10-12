@@ -240,6 +240,16 @@ impl<T> CachedMetadata<T> {
         on_cleared();
     }
 
+    /// Move the held value's age back by `by`, as that much time would
+    /// (MIK-8392 T6: a stale catalogue refetches on the next check).
+    #[cfg(test)]
+    pub(crate) fn backdate_for_test(&self, by: Duration) {
+        let mut state = self.state.write();
+        state.cached_at = state
+            .cached_at
+            .map(|at| at.checked_sub(by).expect("an uptime past the TTL"));
+    }
+
     fn clear_locked(state: &mut CachedMetadataState<T>) {
         state.value = None;
         state.cached_at = None;
