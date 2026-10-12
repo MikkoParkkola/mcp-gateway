@@ -649,7 +649,13 @@ impl World {
             self.state
                 .multiplexer
                 .get_or_create_session_scoped(Some(id), &owner, held);
-        self.state.multiplexer.take_baseline(&minted).await;
+        self.state
+            .multiplexer
+            .take_baseline(
+                &minted,
+                &*crate::gateway::router::tests::view_judge_for(&self.state),
+            )
+            .await;
         self.minted.borrow_mut().insert(id.to_string(), minted);
         Ear::Legacy(rx)
     }
@@ -670,7 +676,13 @@ impl World {
                 .multiplexer
                 .get_or_create_session_scoped(Some(id), &owner, held);
         // As the GET handler does when a stream attaches (MIK-8350).
-        self.state.multiplexer.take_baseline(&minted).await;
+        self.state
+            .multiplexer
+            .take_baseline(
+                &minted,
+                &*crate::gateway::router::tests::view_judge_for(&self.state),
+            )
+            .await;
         self.minted.borrow_mut().insert(id.to_string(), minted);
         Ear::Legacy(rx)
     }
@@ -683,6 +695,19 @@ impl World {
 
     /// As [`Self::listen`], with an Open `WebUI` `assertion`.
     pub(super) async fn listen_as(&self, bearer: &str, assertion: Option<&str>) -> Ear {
+        let mut ear = self.listen_undrained(bearer, assertion).await;
+        // The constant attach hint (M-B10) is not a change: rows count what a
+        // change sends after attach, so it is read here and set aside.
+        let Ear::Listen(events) = &mut ear else {
+            unreachable!("a listen stream")
+        };
+        events.next().await.expect("the attach hint follows the acknowledgement");
+        ear
+    }
+
+    /// As [`Self::listen_as`], stopping at the acknowledgement: the attach
+    /// hint is still unread.
+    pub(super) async fn listen_undrained(&self, bearer: &str, assertion: Option<&str>) -> Ear {
         let body = json!({
             "jsonrpc": "2.0", "id": "listen", "method": "subscriptions/listen",
             "params": {
@@ -888,14 +913,22 @@ impl Ear {
                 methods
             }
             Self::Listen(events) => {
+                // Every listener receives every sentinel, so each call marks
+                // its own: another ear's older one, still queued here, is not
+                // the end of this read.
+                static MARK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                let mark = MARK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 world.state.subscriptions.publish(json!({
-                    "jsonrpc": "2.0", "method": SENTINEL
+                    "jsonrpc": "2.0", "method": SENTINEL, "params": { "mark": mark }
                 }));
                 let mut methods = Vec::new();
                 while let Some(event) = events.next().await {
                     let method = event["method"].as_str().unwrap_or_default().to_string();
                     if method == SENTINEL {
-                        return methods;
+                        if event["params"]["mark"] == json!(mark) {
+                            return methods;
+                        }
+                        continue;
                     }
                     methods.push(method);
                 }

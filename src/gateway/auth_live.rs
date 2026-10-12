@@ -18,6 +18,12 @@ use super::{
 pub(crate) struct HeldCredential {
     session: Option<String>,
     bearer: Option<String>,
+    /// Whether the request carried any `Authorization` header, parsed as a
+    /// bearer or not. The middleware lets a presented `Authorization` header
+    /// decide alone, so a header that is not a bearer leaves the dashboard
+    /// session unable to stand in for it (MIK-8350 D-ORDER-2). Not part of the
+    /// ownership digest: ownership stays keyed on the bearer and session.
+    authorization_present: bool,
 }
 
 impl std::fmt::Debug for HeldCredential {
@@ -52,7 +58,12 @@ impl HeldCredential {
 pub(crate) fn held_credential(headers: &axum::http::HeaderMap) -> Option<HeldCredential> {
     let session = session_cookie_value(headers);
     let bearer = super::presented_credential(headers);
-    (session.is_some() || bearer.is_some()).then_some(HeldCredential { session, bearer })
+    let authorization_present = headers.contains_key(axum::http::header::AUTHORIZATION);
+    (session.is_some() || bearer.is_some()).then_some(HeldCredential {
+        session,
+        bearer,
+        authorization_present,
+    })
 }
 
 /// The client `credential` authenticates as right now.
@@ -73,6 +84,23 @@ pub(crate) async fn current_client(
     state: &AuthState,
     credential: Option<&HeldCredential>,
 ) -> Option<AuthenticatedClient> {
+    current_caller(state, credential)
+        .await
+        .map(|(client, _)| client)
+}
+
+/// [`current_client`], and the verified identity the key server resolved for a
+/// key-server bearer (`None` for every other credential): the same pair a POST
+/// of that credential is judged under (MIK-8350 D11). A held bearer decides
+/// alone, as at admission: the dashboard session counts only when no
+/// `Authorization` header was presented at all.
+pub(crate) async fn current_caller(
+    state: &AuthState,
+    credential: Option<&HeldCredential>,
+) -> Option<(
+    AuthenticatedClient,
+    Option<crate::key_server::oidc::VerifiedIdentity>,
+)> {
     // Dead here, in either gateway mode, unless the held bearer is a valid
     // agent token: ingress refused every other request already.
     let mut agent_validated = false;
@@ -82,33 +110,38 @@ pub(crate) async fn current_client(
         agent_validated = true;
     }
     if !state.auth_config.enabled {
-        return Some(anonymous_client());
+        return Some((anonymous_client(), None));
     }
     let credential = credential?;
-    // A delivery is not operator activity: checked, never extended, or server
-    // push alone would keep an unattended session alive (E5).
-    if let Some(handle) = &credential.session
-        && state.dashboard_bootstrap.check_session(
+    // A presented `Authorization` header decides the request alone (the
+    // middleware's rule): a live cookie beside it neither overrides it nor
+    // stands in for it when it is wrong. The session counts only with none.
+    let Some(token) = credential.bearer.as_deref() else {
+        if credential.authorization_present {
+            return None;
+        }
+        // A delivery is not operator activity: checked, never extended, or
+        // server push alone would keep an unattended session alive (E5).
+        let handle = credential.session.as_ref()?;
+        return (state.dashboard_bootstrap.check_session(
             handle,
             Now::read(),
             &session_limits(state),
             Touch::No,
-        ) == SessionCheck::Valid
-    {
-        return Some(dashboard_client());
-    }
-    let token = credential.bearer.as_deref()?;
+        ) == SessionCheck::Valid)
+            .then(|| (dashboard_client(), None));
+    };
     if let Some((client, _)) = state.auth_config.validate_token_with_origin(token) {
-        return Some(client);
+        return Some((client, None));
     }
     match key_server_credential(state, token).await {
-        KsCredential::Credential(found) => return Some(found.0),
+        KsCredential::Credential(found) => return Some((found.0, Some(found.1.identity))),
         // A recognised credential that names no one is dead, never the
         // anonymous client (MIK-8286).
         KsCredential::Refused => return None,
         KsCredential::NotOurs => {}
     }
-    agent_validated.then(super::public_client)
+    agent_validated.then(|| (super::public_client(), None))
 }
 
 /// Who a notification is for: callers who may access one backend, or every

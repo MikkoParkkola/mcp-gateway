@@ -361,7 +361,10 @@ impl AppState {
     /// Both audiences are scoped to callers who may access `backend` now.
     pub async fn announce_tools_changed(&self, backend: &str) {
         self.proxy_manager
-            .broadcast_tools_list_changed(backend)
+            .broadcast_tools_list_changed_judged(
+                backend,
+                Some(&view_judge::RouterViewJudge::new(self)),
+            )
             .await;
         self.subscriptions.publish_for_backend(
             crate::gateway::subscription_registry::tools_list_changed(),
@@ -379,7 +382,10 @@ impl AppState {
     /// reports the backend's shared tools to external subscribers.
     pub async fn announce_backend_view_changed(&self, backend: &str) {
         self.proxy_manager
-            .broadcast_tools_list_changed(backend)
+            .broadcast_tools_list_changed_judged(
+                backend,
+                Some(&view_judge::RouterViewJudge::new(self)),
+            )
             .await;
         self.subscriptions.publish_for_backend(
             crate::gateway::subscription_registry::tools_list_changed(),
@@ -508,11 +514,9 @@ fn unauthenticated_routes() -> Router<Arc<AppState>> {
 /// the middleware uses, so the two cannot disagree about who may see what.
 /// MIN.2: every session-stream copy is judged for its session's caller, on
 /// the same process read history the answers are judged against.
-fn bind_multiplexer(state: &Arc<AppState>, auth_state: &AuthState) {
+fn bind_multiplexer(state: &AppState, auth_state: &AuthState) {
     state.multiplexer.set_authorizer(auth_state.clone());
-    let judge = view_judge::RouterViewJudge::new(state);
-    state.multiplexer.set_view_judge(Arc::clone(&judge));
-    state.subscriptions.set_view_judge(judge);
+
     if let Some(judge) = crate::gateway::outbound::SessionJudge::new(
         helpers::read_guard(state),
         state.meta_mcp.rejection_audit(),

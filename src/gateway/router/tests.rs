@@ -489,6 +489,14 @@ pub(crate) async fn audience_owner(
     }
 }
 
+/// The judge the router passes the multiplexer, for rows that take a listener's
+/// baseline by hand.
+pub(crate) fn view_judge_for(
+    state: &Arc<AppState>,
+) -> Arc<dyn crate::gateway::streaming::ViewJudge> {
+    super::view_judge::OwnedViewJudge::new(state, None)
+}
+
 /// Authenticated fixture whose executor capacity comes from the supplied config.
 pub(super) async fn test_router_app_state_with_auth_and_config(
     auth: &AuthConfig,

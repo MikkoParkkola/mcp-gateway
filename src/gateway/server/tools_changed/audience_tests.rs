@@ -293,7 +293,15 @@ async fn m_b9_a_caller_who_listed_during_the_pending_nudge_is_not_told() {
     let hold = super::drain_seam::Hold::arm();
     w.store_shared("alpha", vec![tool("write", "w2")]);
     hold.reached().await;
-    assert!(w.served_names(STD).await.contains(&"write".to_string()));
+    // The listing is the listener's own: a refresh follows the session that
+    // listed, not every session that shares its credential (design B9).
+    let listed = w.post_in(STD, "std", "tools/list", serde_json::json!({})).await;
+    assert!(
+        listed["result"]["tools"]
+            .as_array()
+            .is_some_and(|tools| tools.iter().any(|t| t["name"] == "write")),
+        "premise: the listing shows the change: {listed}"
+    );
     hold.release();
     assert_eq!(
         ear.told(&w).await,
@@ -324,7 +332,7 @@ async fn m_rekey_a_resumed_session_is_judged_against_its_new_credential() {
 #[tokio::test]
 async fn m_b10_a_listen_attach_gets_one_constant_list_changed() {
     let w = World::start().await;
-    let mut ear = w.listen(STD).await;
+    let mut ear = w.listen_undrained(STD, None).await;
     assert_eq!(
         ear.told(&w).await,
         1,

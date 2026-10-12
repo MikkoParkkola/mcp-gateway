@@ -275,6 +275,21 @@ struct ClientSession {
 }
 
 impl ClientSession {
+    /// Hold `credential`. A different credential is a different caller, so
+    /// what the session was last told no longer describes it: the record is
+    /// cleared and the next attach takes a fresh baseline (MIK-8350). The same
+    /// credential keeps its record, so a frame withheld at write stays owed.
+    fn replace_credential(&self, credential: Option<HeldCredential>) {
+        let mut held = self.credential.write();
+        let changed = held.as_ref().map(HeldCredential::digest)
+            != credential.as_ref().map(HeldCredential::digest);
+        *held = credential;
+        drop(held);
+        if changed {
+            self.told.write().clear();
+        }
+    }
+
     /// Whether `fingerprint` differs from what this session was last told of
     /// `backend`: the generation to commit under if so. A session with no
     /// record yet has taken no baseline, so it records this one and is owed
@@ -360,9 +375,6 @@ pub struct NotificationMultiplexer {
     /// The cross-tenant read judge of every session stream (MIK-7116.MIN.2);
     /// unset when the verdict is off, which is the plain fast path.
     reads: std::sync::OnceLock<crate::gateway::outbound::SessionJudge>,
-    /// What each session is shown, for the per-listener `list_changed` filter
-    /// (MIK-8350); unset means every authorized session is told, as before.
-    views: std::sync::OnceLock<Arc<dyn ViewJudge>>,
     /// Test pause between a frame leaving the session queue and the write-time
     /// credential check (MIK-8350): a row revokes the credential there, so the
     /// frame is withheld at write and not at the decision.
@@ -385,7 +397,6 @@ impl NotificationMultiplexer {
             event_counter: std::sync::atomic::AtomicU64::new(1),
             authorizer: RwLock::new(None),
             reads: std::sync::OnceLock::new(),
-            views: std::sync::OnceLock::new(),
             #[cfg(test)]
             before_write_check: Arc::default(),
         }
@@ -399,10 +410,7 @@ impl NotificationMultiplexer {
     /// Take `session_id`'s baseline: what each backend shows its credential
     /// now, recorded as what it was last told. Called when a stream opens, so
     /// the first change after attach is judged against what it saw.
-    pub(crate) async fn take_baseline(&self, session_id: &str) {
-        let Some(judge) = self.views.get().cloned() else {
-            return;
-        };
+    pub(crate) async fn take_baseline(&self, session_id: &str, judge: &dyn ViewJudge) {
         let Some(authorizer) = self.authorizer.read().clone() else {
             return;
         };
@@ -425,9 +433,32 @@ impl NotificationMultiplexer {
         }
     }
 
-    /// Install the per-listener view judge (once; the router does it).
-    pub(crate) fn set_view_judge(&self, judge: Arc<dyn ViewJudge>) {
-        let _ = self.views.set(judge);
+    /// The caller of `session_id` has just been shown its current view (a
+    /// `tools/list` answer, a profile switch): record that as told for every
+    /// backend and bump the generation, so a hint already queued from before
+    /// is not written for a view the caller now holds (MIK-8350 B9).
+    pub(crate) async fn refresh_told(&self, session_id: &str, judge: &dyn ViewJudge) {
+        let Some(authorizer) = self.authorizer.read().clone() else {
+            return;
+        };
+        let Some(session) = self.sessions.read().get(session_id).map(Arc::clone) else {
+            return;
+        };
+        let credential = session.credential.read().clone();
+        let baseline = judge
+            .baseline(&authorizer, credential.as_ref(), session_id)
+            .await;
+        let mut told = session.told.write();
+        for (backend, fingerprint) in baseline {
+            let generation = told.get(&backend).map_or(0, |t| t.generation + 1);
+            told.insert(
+                backend,
+                Told {
+                    fingerprint,
+                    generation,
+                },
+            );
+        }
     }
 
     /// Whether session streams are judged at all.
@@ -680,7 +711,7 @@ impl NotificationMultiplexer {
         credential: Option<HeldCredential>,
     ) -> Arc<ClientSession> {
         let session = self.open_session_for(session_id, owner);
-        *session.credential.write() = credential;
+        session.replace_credential(credential);
         session
     }
 
@@ -701,7 +732,19 @@ impl NotificationMultiplexer {
         notification: &TaggedNotification,
         backend: &str,
     ) -> usize {
-        self.broadcast_to_backend_raw(notification, backend, None)
+        self.broadcast_to_backend_raw(notification, backend, None, None)
+            .await
+    }
+
+    /// [`Self::broadcast_to_backend`] for a `tools/list_changed`, told only to
+    /// the sessions `judge` finds a moved view for (MIK-8350).
+    pub(crate) async fn broadcast_to_backend_judged(
+        &self,
+        notification: &TaggedNotification,
+        backend: &str,
+        judge: &dyn ViewJudge,
+    ) -> usize {
+        self.broadcast_to_backend_raw(notification, backend, None, Some(judge))
             .await
     }
 
@@ -713,6 +756,7 @@ impl NotificationMultiplexer {
         notification: &TaggedNotification,
         backend: &str,
         raw: Option<&Value>,
+        judge: Option<&dyn ViewJudge>,
     ) -> usize {
         let hidden = raw.and_then(|raw| self.reads.get().and_then(|judge| judge.raw(raw)));
         let Some(authorizer) = self.authorizer.read().clone() else {
@@ -740,7 +784,7 @@ impl NotificationMultiplexer {
             // own view of `backend` moved since it was last told. The record
             // is made when the stream writes the frame, not here.
             let mut commit = None;
-            if hint && let Some(judge) = self.views.get() {
+            if hint && let Some(judge) = judge {
                 let Some(fingerprint) = judge
                     .fingerprint(
                         &authorizer,

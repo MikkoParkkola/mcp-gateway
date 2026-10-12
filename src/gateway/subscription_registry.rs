@@ -153,6 +153,12 @@ impl Listener {
         crate::gateway::auth::live::current_client(&self.authorizer, self.credential.as_ref()).await
     }
 
+    /// Give this listener the judge of its own view (MIK-8350); without one it
+    /// is told every `tools/list_changed` for a backend it may access.
+    pub(crate) fn set_views(&mut self, judge: Arc<dyn crate::gateway::streaming::ViewJudge>) {
+        self.views = Some(judge);
+    }
+
     /// Record what every backend shows this listener now, as the baseline the
     /// first change is judged against; entries it already has are kept.
     pub(crate) async fn take_baseline(&mut self) {
@@ -165,6 +171,20 @@ impl Listener {
         {
             self.told.entry(backend).or_insert(fingerprint);
         }
+    }
+
+    /// Whether this listener judges views, and so is owed the attach hint.
+    pub(crate) fn judges_views_at_attach(&self) -> bool {
+        self.views.is_some()
+    }
+
+    /// Whether `published` is a `tools/list_changed` this listener judges by
+    /// its own view.
+    pub(crate) fn judges_views(&self, published: &Published) -> bool {
+        self.views.is_some()
+            && matches!(published.audience, OwnedAudience::Backend(_))
+            && published.notification.get("method").and_then(Value::as_str)
+                == Some("notifications/tools/list_changed")
     }
 
     /// Whether `published` is a `tools/list_changed` this listener is owed:
@@ -219,8 +239,6 @@ pub struct SubscriptionRegistry {
     /// The authorizer every listener is re-validated against. Required at
     /// construction, so a registry that delivers without one cannot exist.
     authorizer: AuthState,
-    /// The per-listener view judge (MIK-8350); unset tells every listener.
-    views: std::sync::OnceLock<Arc<dyn crate::gateway::streaming::ViewJudge>>,
 }
 
 impl std::fmt::Debug for SubscriptionRegistry {
@@ -241,13 +259,7 @@ impl SubscriptionRegistry {
             sender,
             permits: Arc::new(Semaphore::new(capacity)),
             authorizer,
-            views: std::sync::OnceLock::new(),
         }
-    }
-
-    /// Install the per-listener view judge (once; the router does it).
-    pub(crate) fn set_view_judge(&self, judge: Arc<dyn crate::gateway::streaming::ViewJudge>) {
-        let _ = self.views.set(judge);
     }
 
     /// Admit a listener that presented no credential, or `None` when the
@@ -271,7 +283,7 @@ impl SubscriptionRegistry {
             credential,
             authorizer: self.authorizer.clone(),
             told: std::collections::HashMap::new(),
-            views: self.views.get().cloned(),
+            views: None,
             _permit: permit,
         })
     }

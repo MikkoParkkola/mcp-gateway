@@ -268,6 +268,23 @@ pub(crate) fn subscription_stream(
         };
         yield Ok::<_, Infallible>(Event::default().event("message").data(ack));
 
+        // MIK-8350 B10: one constant hint after the acknowledgement, so a
+        // client that attaches re-lists once whatever changed while it was
+        // away; it carries nothing about any backend's data.
+        if listener.judges_views_at_attach() {
+            let hint = crate::gateway::subscription_registry::tools_list_changed();
+            if delivers(&filter, &hint)
+                && let Some(frame) = judge.judge_document(subscription.tag(hint))
+            {
+                let recorded = judge.record(frame).await;
+                if !recorded.is_withheld()
+                    && let Some(data) = sse_data(&recorded)
+                {
+                    yield Ok(Event::default().event("message").data(data));
+                }
+            }
+        }
+
         let mut graceful = true;
         loop {
             match listener.recv().await {
@@ -279,8 +296,13 @@ pub(crate) fn subscription_stream(
                     }
                     // Re-validated at delivery, only for wanted items: a token
                     // revoked or expired after the stream opened is not told.
-                    match listener.delivery(&published).await {
+                    // MIK-8350: a hint for a backend this caller just lost is
+                    // still owed once (its list shrank), so scope alone does not
+                    // withhold it; the view verdict below decides.
+                    let delivery = listener.delivery(&published).await;
+                    match delivery {
                         Delivery::Deliver => {}
+                        Delivery::OutOfScope if listener.judges_views(&published) => {}
                         Delivery::OutOfScope => continue,
                         Delivery::Dead => {
                             // Skipping would hold one of the listener slots for

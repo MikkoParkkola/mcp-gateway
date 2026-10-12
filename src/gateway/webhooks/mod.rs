@@ -521,7 +521,7 @@ async fn webhook_handler(
         let raw = with_id.as_ref().unwrap_or(&payload);
         let reached = state
             .multiplexer
-            .broadcast_to_backend_raw(&notification, &state.backend, Some(raw))
+            .broadcast_to_backend_raw(&notification, &state.backend, Some(raw), None)
             .await;
         state.stats.delivered.fetch_add(1, Ordering::Relaxed);
         debug!(
