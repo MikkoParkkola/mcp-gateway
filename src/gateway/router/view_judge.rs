@@ -322,16 +322,17 @@ impl AppState {
         headers: &axum::http::HeaderMap,
         subject: ViewSubject,
         (id, session_id): (crate::protocol::RequestId, &str),
-    ) -> Result<crate::gateway::subscription_registry::Listener, axum::response::Response> {
+    ) -> Result<crate::gateway::subscription_registry::Listener, Box<axum::response::Response>>
+    {
         use crate::gateway::subscription_registry::ListenRefusal;
         let refuse = |code, message, status| {
-            Err(super::helpers::build_error_response(
+            Err(Box::new(super::helpers::build_error_response(
                 Some(id.clone()),
                 code,
                 message,
                 session_id,
                 status,
-            ))
+            )))
         };
         let listener = match self
             .subscriptions
@@ -356,7 +357,7 @@ impl AppState {
         };
         match listener.take_baseline().await {
             Ok(()) => Ok(listener),
-            Err(_) => Err(dead_attach_refusal()),
+            Err(_) => Err(Box::new(dead_attach_refusal())),
         }
     }
 

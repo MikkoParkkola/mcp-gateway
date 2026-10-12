@@ -295,7 +295,7 @@ async fn meta_mcp_dispatch(
                 .await
             {
                 Ok(listener) => listener,
-                Err(refusal) => return refusal,
+                Err(refusal) => return *refusal,
             };
 
             // The request's own id, never minted: the specification defines the

@@ -181,10 +181,15 @@ impl Listener {
             .await
         {
             crate::gateway::streaming::Judged::Live(caller) => caller,
-            crate::gateway::streaming::Judged::Dead(reason) => {
+            crate::gateway::streaming::Judged::Dead(reason)
+                if self.credential.is_some()
+                    || reason != crate::gateway::streaming::DeadReason::Bearer =>
+            {
                 reason.count();
                 return Err(reason);
             }
+            // Presented nothing: left as before, with nothing to baseline.
+            crate::gateway::streaming::Judged::Dead(_) => return Ok(()),
         };
         let (stamp, now) = view
             .record

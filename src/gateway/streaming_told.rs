@@ -565,11 +565,14 @@ impl NotificationMultiplexer {
                     .await;
                 record.state().baseline(stamp, view);
             }
-            // A caller that does not resolve at attach gets no stream.
-            Judged::Dead(reason) => {
+            // A caller that does not resolve at attach gets no stream, unless
+            // it presented nothing at all: a public path admits it
+            // anonymously, and nothing is ever delivered to it.
+            Judged::Dead(reason) if credential.is_some() || reason != DeadReason::Bearer => {
                 reason.count();
                 return Err(reason);
             }
+            Judged::Dead(_) => {}
         }
         Ok(Some(StreamView {
             subject,
