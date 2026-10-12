@@ -353,7 +353,7 @@ async fn a_direct_chokepoint_refusal_with_nothing_acted_gives_the_nonce_back() {
     use super::backend_handlers::direct_permit_seams as seams;
     use super::direct_continuation_tests::signed_call;
     use super::direct_guards_fixture::fixture_hardened_signed;
-    for backend in BACKENDS {
+    for backend in super::direct_continuation_tests::BACKENDS {
         let fx = fixture_hardened_signed(Answer::Ok, true).await;
         let who = ("k-std", backend);
         let (_, first) = signed_call(&fx, who, &format!("{backend}-n1"), json!({})).await;
