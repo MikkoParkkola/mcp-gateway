@@ -107,3 +107,35 @@ async fn live_1_cert_a_get_stream_past_its_certificate_not_after_is_closed() {
         "past notAfter the GET stream is closed"
     );
 }
+
+/// BASELINE-DEAD: a certificate already past `notAfter` when the GET stream
+/// attaches makes its baseline Dead, so the stream closes before any frame.
+#[tokio::test]
+async fn baseline_dead_a_stream_attached_past_not_after_is_closed() {
+    let w = World::start().await;
+    let not_after = crate::clock::unix_secs().expect("clock after 1970") - 1;
+    let mut ear = w.sse_with("k-std", with_cert(not_after)).await;
+    assert!(
+        ear.closed(&w).await,
+        "a stream whose identity is dead at attach is closed"
+    );
+}
+
+/// QUEUED-THEN-DEAD: a hint queued while the certificate was valid, then
+/// held at the GET write check while `notAfter` passes, is not written; the
+/// stream closes. The write-time re-check sees the lapse.
+#[tokio::test]
+async fn queued_then_dead_a_hint_held_past_not_after_is_not_written() {
+    let w = World::start().await;
+    let not_after = crate::clock::unix_secs().expect("clock after 1970") + VALID_FOR;
+    let mut ear = w.sse_with("k-std", with_cert(not_after)).await;
+    let (reached, release) = w.state.multiplexer.before_write_check.arm();
+    w.store_shared("alpha", alpha("r2"));
+    crate::test_pause::within("the frame reaching the write check", reached.notified()).await;
+    let _past = crate::clock::test_clock::at_secs(not_after + 1);
+    release.notify_one();
+    assert!(
+        ear.closed(&w).await,
+        "the held hint is not written once notAfter has passed"
+    );
+}
