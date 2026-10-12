@@ -78,7 +78,10 @@ fn answer(request: &Value, calls: &AtomicUsize) -> Value {
             "serverInfo": { "name": "fixture", "version": "0" }
         }),
         Some("tools/list") => json!({
-            "tools": [ { "name": TOOL, "description": "d", "inputSchema": { "type": "object" } } ]
+            // MIK-8393: the tool declares itself read-only, so a repeat may
+            // be a cache hit.
+            "tools": [ { "name": TOOL, "description": "d", "inputSchema": { "type": "object" },
+                         "annotations": { "readOnlyHint": true } } ]
         }),
         Some("tools/call") => {
             let n = calls.fetch_add(1, Ordering::SeqCst) + 1;

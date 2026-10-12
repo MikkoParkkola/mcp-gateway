@@ -124,6 +124,8 @@ pub(super) async fn drain(
             }
         }
     }
+    // An abandoned drain is never shown and never remembered, so it neither
+    // judges a descriptor nor revokes cache admission (MIK-8393).
     telemetry_metrics::counter!(
         "mcp_direct_tools_list_page_cap_exceeded_total",
         "backend" => backend_name.to_owned()

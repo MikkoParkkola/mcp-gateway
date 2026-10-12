@@ -220,9 +220,11 @@ impl Backend {
         // Derived from the list just dropped; a stale set would keep
         // permitting a resend for a tool that is no longer read-only. Cleared
         // under the cache's guard, so a fill stored after keeps its own set.
-        entry
-            .tools_cache
-            .invalidate_then(|| entry.resend_permitted.write().clear());
+        entry.tools_cache.invalidate_then(|| {
+            entry.resend_permitted.write().clear();
+            // MIK-8393: the cache's admission set is derived from the same list.
+            entry.read_only_declared.write().clear();
+        });
     }
 
     /// Test-only: fill the shared slot's tool list, as a reader's read does.

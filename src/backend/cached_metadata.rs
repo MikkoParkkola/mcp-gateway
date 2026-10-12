@@ -98,6 +98,13 @@ impl<T> CachedMetadata<T> {
         map(state.value.as_ref())
     }
 
+    /// Whether a fill is on the wire now. A fill publishes its value and
+    /// derived state (`on_stored`) before it clears this mark, so a reader
+    /// that sees no fill in flight also sees what the last fill stored.
+    pub(super) fn fill_in_flight(&self) -> bool {
+        self.state.read().in_flight.is_some()
+    }
+
     pub(crate) fn is_fresh(&self, ttl: Duration) -> bool {
         let state = self.state.read();
         matches!(
