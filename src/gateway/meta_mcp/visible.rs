@@ -328,6 +328,11 @@ pub(crate) struct VisibilityMemo {
     /// account outcome and a caller-view judgement are kept apart.
     offer_pending:
         parking_lot::Mutex<std::collections::HashMap<(String, AccountKey), AccountOutcome>>,
+    /// MIK-8392 (lead ruling 2026-10-12): the live call's own refusal for an
+    /// account that can never bind this caller, so a stored read answers what
+    /// the live call answers instead of "retry" forever.
+    account_refusal:
+        parking_lot::Mutex<std::collections::HashMap<(String, AccountKey), crate::Error>>,
     /// A task worker's memo (MIK-8392, muse F13): it carries account outcomes
     /// and credentials but never keeps a visibility judgement, so a task's
     /// visibility is still judged live at every step, however long it runs.
@@ -366,6 +371,28 @@ pub(crate) fn record_account_outcome(server: &str, account: &AccountKey, outcome
             .entry((server.to_owned(), account.clone()))
             .or_insert(outcome);
     });
+}
+
+/// Keep the live call's refusal for `(server, account)` in the open request;
+/// outside one it is dropped.
+pub(crate) fn record_account_refusal(server: &str, account: &AccountKey, refusal: crate::Error) {
+    let _ = VISIBILITY_MEMO.try_with(|memo| {
+        memo.account_refusal
+            .lock()
+            .insert((server.to_owned(), account.clone()), refusal);
+    });
+}
+
+/// Take the refusal kept for `(server, account)`, if any.
+pub(crate) fn take_account_refusal(server: &str, account: &AccountKey) -> Option<crate::Error> {
+    VISIBILITY_MEMO
+        .try_with(|memo| {
+            memo.account_refusal
+                .lock()
+                .remove(&(server.to_owned(), account.clone()))
+        })
+        .ok()
+        .flatten()
 }
 
 /// The outcome recorded for `(server, account)` in the open request. Reads

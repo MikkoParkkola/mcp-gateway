@@ -207,6 +207,13 @@ impl VaultStrategy {
     /// answer this strategy will mint under, for its audit subject and for the
     /// actor the prepared credential is rechecked against. Asking here rather
     /// than re-deriving it there keeps one answer.
+    /// Whether an account key can be built for `principal` under this
+    /// descriptor. A principal that cannot bind never will: no grant can be
+    /// stored or read for it (MIK-8392). No custody read.
+    pub(crate) fn binds(&self, principal: Principal<'_>) -> bool {
+        account_key(Some(principal), &self.descriptor).is_ok()
+    }
+
     pub(crate) fn principal<'a>(&self, caller: CallerProof<'a>) -> Option<Principal<'a>> {
         match caller {
             CallerProof::Verified(identity) => Some(Principal::Verified(identity)),

@@ -153,9 +153,9 @@ fn a_binding_the_slot_rule_refuses_is_no_view() {
 }
 
 /// A principal no account key can be built for is refused before custody,
-/// as `Refuse`, and so reads as Unavailable (retryable). Pinned on purpose:
-/// it is a permanent condition answered as a transient one, raised to the
-/// lead with this row.
+/// as `Refuse`, so its outcome is Unavailable (not proven). The stored read
+/// does not answer it as retryable: `keep_permanent_refusal` keeps the live
+/// call's own refusal, and row Ub checks the two answers are equal.
 #[tokio::test]
 async fn an_unbindable_principal_reads_unavailable_without_a_custody_read() {
     let (strategy, custody) = vault(Answer::Lease { revision: REVISION });

@@ -558,3 +558,100 @@ async fn w2_a_resume_after_the_account_is_revoked_during_the_input_round_is_refu
         "W2: the resumed output was delivered after the revoke: {settled}"
     );
 }
+
+/// Ub (lead ruling 2026-10-12): a verified caller whose subject is empty can
+/// never bind the managed account. Its stored read answers exactly what its
+/// live tools/call answers (byte-equal error, never "retryable"), with
+/// nothing dispatched and no custody read. Mutant: `unbindable` always false
+/// turns the read retryable, and this row red.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ub_an_unbindable_callers_stored_read_answers_its_live_refusal() {
+    let auth = AuthConfig::default();
+    let mut gateway = DirectAccountGateway::new(auth.clone(), &Binding::Connected);
+    let (mut state, _store) = super::tests::test_router_app_state_with_auth(&auth).await;
+    let state_mut = Arc::get_mut(&mut state).expect("state is unique");
+    state_mut.backends = gateway.backends();
+    state_mut.meta_mcp =
+        Arc::new(
+            gateway
+                .take_meta()
+                .with_surfaced_tools(vec![SurfacedToolConfig {
+                    server: BACKEND.to_string(),
+                    tool: TOOL.to_string(),
+                }]),
+        );
+    let router = super::create_router(Arc::clone(&state));
+    let nobody = |method: &str, name: &str, params: Value| {
+        let body = json!({"jsonrpc": "2.0", "id": 5, "method": method, "params": params});
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("content-type", "application/json")
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("mcp-method", method)
+            .header("mcp-name", name)
+            .body(axum::body::Body::from(body.to_string()))
+            .expect("a request");
+        request
+            .extensions_mut()
+            .insert(crate::key_server::oidc::VerifiedIdentity {
+                subject: String::new(),
+                email: "nobody@example.invalid".to_string(),
+                name: None,
+                groups: vec![],
+                issuer: "https://issuer.example.invalid".to_string(),
+            });
+        let router = router.clone();
+        async move {
+            let response = router.oneshot(request).await.expect("an answer");
+            let bytes = to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("a body");
+            serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null)
+        }
+    };
+    let call = json!({"name": "gateway_invoke",
+        "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"folder": "inbox"}},
+        "_meta": modern_meta()});
+    let mut tasked = call.clone();
+    tasked["task"] = json!({});
+    tasked["_meta"][crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!("s1-ub");
+    let made = nobody("tools/call", "gateway_invoke", tasked).await;
+    let id = made
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("premise: a task was made: {made}"))
+        .to_owned();
+    let bound = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while state
+        .task_executor
+        .service
+        .store
+        .status_for_test(&id)
+        .is_some_and(|status| status == crate::protocol::tasks::TaskStatus::Working)
+    {
+        assert!(
+            std::time::Instant::now() < bound,
+            "premise: the task settles"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let reads = gateway.resolves();
+    let read = nobody(
+        "tasks/get",
+        &id,
+        json!({"taskId": id, "_meta": modern_meta()}),
+    )
+    .await;
+    let live = nobody("tools/call", "gateway_invoke", call).await;
+    let live_error = live
+        .get("error")
+        .unwrap_or_else(|| panic!("premise: the live call is refused: {live}"));
+    assert_eq!(
+        read.get("error"),
+        Some(live_error),
+        "Ub: the stored read answers the live call's refusal: {read}"
+    );
+    assert_eq!(gateway.dispatched(), 0, "Ub: nothing dispatched");
+    assert_eq!(gateway.resolves(), reads, "Ub: no custody read");
+}

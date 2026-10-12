@@ -95,6 +95,27 @@ impl MetaMcp {
             .await;
     }
 
+    /// The live call's own refusal for `caller` on `(server, tool)`: the
+    /// error `resolve_dispatch` answers, or `None` when it resolves. A stored
+    /// read uses it for a refusal that never changes (MIK-8392, lead ruling
+    /// 2026-10-12), so it answers exactly what the live call answers. It runs
+    /// what a live call runs, including the refusal's audit record.
+    pub(in crate::gateway::meta_mcp) async fn live_refusal(
+        &self,
+        (server, tool): (&str, &str),
+        caller: CallerProof<'_>,
+    ) -> Option<crate::Error> {
+        let backend = self.backends.get(server);
+        self.resolve_dispatch(
+            (server, tool),
+            backend.as_deref(),
+            caller,
+            caller.verified(),
+        )
+        .await
+        .err()
+    }
+
     /// The caller verdict for `(server, tool)`, taken right after route
     /// authorize and the firewall (R5.1). Idempotent within a request: a
     /// recorded answer is returned as is.

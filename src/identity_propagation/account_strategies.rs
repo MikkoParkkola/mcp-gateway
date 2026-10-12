@@ -732,6 +732,20 @@ impl AccountStrategyRegistry {
         }
     }
 
+    /// Whether `caller` has a principal for managed descriptor
+    /// `descriptor_id` that can never bind an account key (MIK-8392): a
+    /// permanent refusal, not a transient one. False for anything else,
+    /// including an external descriptor or no principal at all.
+    pub(crate) fn unbindable(&self, descriptor_id: &str, caller: CallerProof<'_>) -> bool {
+        let Some(installed) = self.installed(descriptor_id) else {
+            return false;
+        };
+        let Some(vault) = installed.minter.managed() else {
+            return false;
+        };
+        Self::principal(installed.as_ref(), caller).is_some_and(|principal| !vault.binds(principal))
+    }
+
     /// The caller's current view of descriptor `descriptor_id`, read without
     /// refreshing or minting (MIK-8392): `None` when the descriptor has no
     /// managed custody to read (an external or token-exchange account, or

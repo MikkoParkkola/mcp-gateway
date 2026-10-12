@@ -76,7 +76,31 @@ impl MetaMcp {
             .collect();
         self.fill_account_outcomes(&targets, caller).await;
         for &(server, tool) in &targets {
+            self.keep_permanent_refusal(server, tool, caller).await;
             self.settle_caller_view(server, tool, caller).await;
+        }
+    }
+
+    /// An account that read unavailable because this caller can never bind
+    /// it is refused for good: keep the live call's own answer, so the read
+    /// answers it rather than "retry" (MIK-8392, lead ruling 2026-10-12).
+    /// Busy, shutting-down and store failures stay retryable.
+    async fn keep_permanent_refusal(
+        &self,
+        server: &str,
+        tool: &str,
+        caller: crate::identity_propagation::CallerProof<'_>,
+    ) {
+        let Some(account) = self.target_account(server, tool) else {
+            return;
+        };
+        if visible::account_outcome(server, &account) != Some(AccountOutcome::Unavailable)
+            || !self.account_strategies.unbindable(&account.0, caller)
+        {
+            return;
+        }
+        if let Some(refusal) = self.live_refusal((server, tool), caller).await {
+            visible::record_account_refusal(server, &account, refusal);
         }
     }
 
@@ -167,7 +191,8 @@ impl MetaMcp {
                     // Unfilled: the pre-pass never ran for it. Fail closed,
                     // and retryable: nothing about the grant was learned.
                     None | Some(AccountOutcome::Unavailable) => {
-                        return Err(StoredWithheld::Retry);
+                        return Err(visible::take_account_refusal(server, &account)
+                            .map_or(StoredWithheld::Retry, StoredWithheld::Refused));
                     }
                     Some(AccountOutcome::NoView) => {
                         return Err(StoredWithheld::Refused(visible::absent_name(tool)));
