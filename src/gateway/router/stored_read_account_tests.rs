@@ -454,14 +454,9 @@ async fn t10pf_a_plan_tasks_frame_after_its_accounts_revoke_carries_status_only(
     }
 }
 
-/// W2 (lead, 2026-10-12): a credential resolved before an input-round pause
-/// is never reused after it. The task's call asks for input and parks; the
-/// account is revoked during the round; the client's answer resumes the
-/// task. The resume opens a fresh memo, so it resolves again and is refused:
-/// the backend sees no second call, and no output is delivered.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn w2_a_resume_after_the_account_is_revoked_during_the_input_round_is_refused() {
-    let fx = fixture().await;
+/// A task of the operator's `read` that asked for input and parked, with the
+/// request metadata that made it (reused for the resume).
+async fn parked_input_task(fx: &Fx) -> (String, Value) {
     fx.gateway.answer_next(json!({
         "resultType": "input_required",
         "inputRequests": {"confirm": {"method": "elicitation/create",
@@ -472,7 +467,7 @@ async fn w2_a_resume_after_the_account_is_revoked_during_the_input_round_is_refu
     meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!("s1-w2");
     meta["io.modelcontextprotocol/clientCapabilities"]["elicitation"] = json!({});
     let made = send(
-        &fx,
+        fx,
         "tools/call",
         "gateway_invoke",
         json!({"name": "gateway_invoke",
@@ -487,7 +482,7 @@ async fn w2_a_resume_after_the_account_is_revoked_during_the_input_round_is_refu
         .to_owned();
     let bound = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
-        let got = task_get(&fx, &id).await;
+        let got = task_get(fx, &id).await;
         if got.pointer("/result/status") == Some(&json!("input_required")) {
             break;
         }
@@ -497,6 +492,18 @@ async fn w2_a_resume_after_the_account_is_revoked_during_the_input_round_is_refu
         );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
+    (id, meta)
+}
+
+/// W2 (lead, 2026-10-12): a credential resolved before an input-round pause
+/// is never reused after it. The task's call asks for input and parks; the
+/// account is revoked during the round; the client's answer resumes the
+/// task. The resume opens a fresh memo, so it resolves again and is refused:
+/// the backend sees no second call, and no output is delivered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn w2_a_resume_after_the_account_is_revoked_during_the_input_round_is_refused() {
+    let fx = fixture().await;
+    let (id, meta) = parked_input_task(&fx).await;
     let sent = fx.gateway.tool_calls().len();
     fx.gateway.revoke_operator_grant_for_test().await;
     fx.gateway.answer_next(json!({

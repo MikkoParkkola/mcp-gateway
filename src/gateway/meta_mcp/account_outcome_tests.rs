@@ -109,7 +109,7 @@ fn outcome(view: Result<String, crate::identity_propagation::PropagationError>) 
     view_outcome(view, |_| false)
 }
 
-/// O1 + O2, one case per custody answer; M7 (Unavailable read as NoView)
+/// O1 + O2, one case per custody answer; M7 (Unavailable read as `NoView`)
 /// and M22 (a `view_binding` that is not `checked(..).ok()`) fail here.
 #[tokio::test]
 async fn o1_o2_each_custody_answer_maps_to_one_exact_outcome() {

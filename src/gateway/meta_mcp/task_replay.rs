@@ -176,13 +176,15 @@ impl MetaMcp {
     /// A stored read found no account outcome for `server`'s target: every
     /// read entry runs the pre-pass first, so this is a broken invariant
     /// (MIK-8392 N0). It still fails closed; tests observe it by count.
-    fn unfilled_outcome_read(&self, server: &str) {
+    fn unfilled_outcome_read(backends: &crate::backend::BackendRegistry, server: &str) {
         #[cfg(test)]
-        if let Some(backend) = self.backends.get(server) {
+        if let Some(backend) = backends.get(server) {
             backend
                 .unfilled_outcome_reads
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
+        #[cfg(not(test))]
+        let _ = backends;
         #[cfg(all(not(test), debug_assertions))]
         panic!("stored read of {server} without the account pre-pass");
         #[cfg(not(any(test, debug_assertions)))]
@@ -215,8 +217,9 @@ impl MetaMcp {
         if !stored.serves_backend_output() {
             return None;
         }
-        // Visibility first, as on the live path: a withheld target answers
-        // as absent even where policy would also refuse (MIK-8392 T12).
+        // Visibility first, as on the live path: a Descriptor, Schema or Lacked
+        // target answers as absent even where policy would also refuse
+        // (MIK-8392 T12). A Refused target falls through to the policy check.
         let refused = match self.judge_stored_targets(stored, session, caller, read) {
             Err(StoredWithheld::Retry(after)) => return Some(retry_later(id, after)),
             Err(StoredWithheld::Refused(error)) => Some(error),
@@ -235,7 +238,8 @@ impl MetaMcp {
     /// Each recorded target against this caller's current view (MIK-8392):
     /// its account (task reads only) as the pre-pass recorded it, then its
     /// catalogue through the one judgement [`MetaMcp::stored_target_view`],
-    /// refused through the one guard [`visible::absent_if_withheld`].
+    /// refused through the one guard [`visible::absent_if_withheld`], except
+    /// a Refused view, which falls through to [`Self::authorize_stored`].
     fn judge_stored_targets(
         &self,
         stored: &CommittedTask,
@@ -251,7 +255,7 @@ impl MetaMcp {
             {
                 let outcome = visible::account_outcome(server, &account);
                 if outcome.is_none() {
-                    self.unfilled_outcome_read(server);
+                    Self::unfilled_outcome_read(&self.backends, server);
                 }
                 match outcome {
                     // Unfilled: the pre-pass never ran for it. Fail closed,
@@ -271,6 +275,12 @@ impl MetaMcp {
                     self.cold_lease_remaining(server, caller),
                 ));
             };
+            // A Refused view is policy, not visibility: it falls through to
+            // `authorize_stored`, so the read refuses as the live call does
+            // and writes its record (MIK-8392 lead ruling 2026-10-12).
+            if judged == visible::Visibility::Withheld(visible::Withholding::Refused) {
+                continue;
+            }
             visible::absent_if_withheld(Some(judged), tool).map_err(StoredWithheld::Refused)?;
         }
         Ok(())

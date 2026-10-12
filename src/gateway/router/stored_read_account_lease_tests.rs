@@ -60,7 +60,7 @@ fn assert_retryable(read: &Value, row: &str) {
 }
 
 /// U1: custody fails on a warm read: retryable (M21, Unavailable read as
-/// NoView, answers -32601); once custody recovers, the same read serves.
+/// `NoView`, answers -32601); once custody recovers, the same read serves.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn u1_a_failing_custody_read_answers_retryable_then_serves() {
     let fx = fixture().await;
@@ -99,7 +99,7 @@ async fn c6_a_cold_read_under_failing_custody_answers_retryable() {
     );
 }
 
-/// Record the operator's NoView index entry the way production does: a
+/// Record the operator's `NoView` index entry the way production does: a
 /// listing after the grant is gone.
 async fn list_tools(fx: &Fx) {
     let _ = send(
@@ -120,7 +120,7 @@ fn assert_absent(read: &Value, row: &str) {
     assert!(!read.to_string().contains(MARKER), "{row}: output: {read}");
 }
 
-/// L4: a NoView entry while the account is NoView: -32601, and no cold
+/// L4: a `NoView` entry while the account is `NoView`: -32601, and no cold
 /// attempt (one custody read, the pre-pass's own; M20 claims anyway).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn l4_a_no_view_entry_with_a_revoked_account_stays_absent() {
@@ -137,7 +137,7 @@ async fn l4_a_no_view_entry_with_a_revoked_account_stays_absent() {
     );
 }
 
-/// L4b: no index entry and a NoView account: -32601 and no claim (M42).
+/// L4b: no index entry and a `NoView` account: -32601 and no claim (M42).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn l4b_no_entry_with_a_revoked_account_claims_nothing() {
     let fx = fixture().await;
@@ -157,8 +157,8 @@ async fn l4b_no_entry_with_a_revoked_account_claims_nothing() {
     );
 }
 
-/// L5: a NoView entry, then the grant is reconnected (account Live): the
-/// read claims, resolves once and serves (M43: NoView never claimable).
+/// L5: a `NoView` entry, then the grant is reconnected (account Live): the
+/// read claims, resolves once and serves (M43: `NoView` never claimable).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn l5_a_reconnected_grant_reclaims_a_no_view_entry() {
     let fx = fixture().await;

@@ -17,7 +17,7 @@ use crate::gateway::meta_mcp::slot_verdict_fixture::{
     BINDING, CallerSlot, Surfaced, rearm_alpha_slot_with, valid,
 };
 
-/// The lease a cold claim takes (task_replay.rs COLD_RETRY_BACKOFF).
+/// The lease a cold claim takes (`task_replay.rs` `COLD_RETRY_BACKOFF`).
 const LEASE: Duration = Duration::from_secs(60);
 
 /// Drop alpha's slot by a real idle eviction, then re-attach its upstream
@@ -58,7 +58,7 @@ fn assert_retryable(read: &Value, row: &str) -> Option<u64> {
 /// the lease resolve nothing; once the lease has run out on the tokio clock
 /// (R2: a std clock never expires under `advance`), one read resolves again
 /// and serves, and warm polls after it resolve nothing. Mutants: M6b
-/// (expiry check removed), M23 (std::time::Instant).
+/// (expiry check removed), M23 (`std::time::Instant`).
 #[tokio::test]
 async fn c2_a_failed_cold_attempt_retries_after_its_lease() {
     let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await;
