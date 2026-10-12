@@ -1,0 +1,47 @@
+diff --git a/src/gateway/meta_mcp/invoke/caller_verdict.rs b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+index cd27f5e5c..ad6920ba7 100644
+--- a/src/gateway/meta_mcp/invoke/caller_verdict.rs
++++ b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+@@ -73,6 +73,16 @@ impl MetaMcp {
+     ///
+     /// The credential resolution's own refusal (a connect offer, an
+     /// unbound account backend).
++    pub(crate) async fn caller_verdict_disabled_for_mutant(
++        &self,
++        _target: (&str, &str),
++        _caller: &MetaMcpCallerContext<'_>,
++        _session_id: Option<&str>,
++        _naming: TargetNaming,
++    ) -> crate::Result<CallerVerdict> {
++        Ok(CallerVerdict::Proceed)
++    }
++
+     pub(crate) async fn caller_verdict(
+         &self,
+         (server, tool): (&str, &str),
+diff --git a/src/gateway/meta_mcp/invoke/pre_dispatch.rs b/src/gateway/meta_mcp/invoke/pre_dispatch.rs
+index 2c4ef934b..e311d7786 100644
+--- a/src/gateway/meta_mcp/invoke/pre_dispatch.rs
++++ b/src/gateway/meta_mcp/invoke/pre_dispatch.rs
+@@ -208,7 +208,7 @@ impl MetaMcp {
+         // failed fill is answered below exactly as F13's failed fill is, with
+         // no second fill.
+         let mut failed_fill = None;
+-        if let Some(backend) = backend.filter(|backend| backend.keeps_per_user_catalogues()) {
++        if let Some(backend) = backend.filter(|_| false) {
+             let absent = match crate::gateway::meta_mcp::visible::recorded_visibility(server, tool)
+             {
+                 Some(crate::gateway::meta_mcp::visible::Visibility::Visible) => false,
+diff --git a/src/gateway/router/handlers/dispatch_tools_call.rs b/src/gateway/router/handlers/dispatch_tools_call.rs
+index b196feea0..1685b5d0a 100644
+--- a/src/gateway/router/handlers/dispatch_tools_call.rs
++++ b/src/gateway/router/handlers/dispatch_tools_call.rs
+@@ -391,7 +391,7 @@ pub(super) async fn tools_call(
+         // A refusal or a failed fill is answered by the dispatch, as before.
+         let _ = state
+             .meta_mcp
+-            .caller_verdict(
++            .caller_verdict_disabled_for_mutant(
+                 (target.server, target.tool),
+                 &caller,
+                 Some(session_id.as_str()),

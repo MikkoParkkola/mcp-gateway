@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/authorization.rs b/src/gateway/router/authorization.rs
+index 40b77f3be..308b4be7d 100644
+--- a/src/gateway/router/authorization.rs
++++ b/src/gateway/router/authorization.rs
+@@ -79,7 +79,7 @@ fn per_user_surfaced(meta_mcp: &MetaMcp, name: &str, target: &CallTarget<'_>) ->
+         && meta_mcp
+             .backends
+             .get(&target.server)
+-            .is_some_and(|backend| backend.keeps_per_user_catalogues())
++            .is_some()
+ }
+ 
+ pub(crate) fn backend_tool_targets_for_call<'a>(

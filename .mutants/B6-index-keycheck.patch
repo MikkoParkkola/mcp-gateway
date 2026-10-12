@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/key_check.rs b/src/gateway/router/backend_handlers/key_check.rs
+index 2dc19ddf9..10bd86595 100644
+--- a/src/gateway/router/backend_handlers/key_check.rs
++++ b/src/gateway/router/backend_handlers/key_check.rs
+@@ -61,7 +61,7 @@ pub(super) async fn key_refusal(
+         failed
+             .state
+             .meta_mcp
+-            .remember_caller_slot(backend, proof, identity_key);
++            .remember_caller_slot(backend, proof, None);
+         match verdict {
+             Ok(CatalogueVerdict::Withholds | CatalogueVerdict::Lacks) => {
+                 let response = error_response_preserving_status(id.clone(), &absent_name(tool));

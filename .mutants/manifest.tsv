@@ -1,0 +1,18 @@
+head_sha	6f17f8e2d98cd667659e4012ed26d572369757f6
+B6-noview-marker	linux	B6-noview-marker.patch	--lib -- n1_a_revoked_operators
+B6-index-codemode	linux	B6-index-codemode.patch	--lib -- i2f_index_written
+B6-index-search	linux	B6-index-search.patch	--lib -- i2f_index_written
+B6-index-listall	linux	B6-index-listall.patch	--lib -- i2f_index_written
+B6-index-keycheck	linux	B6-index-keycheck.patch	--lib -- i2g_index_written
+B6-record-unfilled	linux	B6-record-unfilled.patch	--lib -- i2h_
+B6-memo-noprincipal	linux	B6-memo-noprincipal.patch	--lib -- m2_absent_is_returned
+B6-sanitize-exempt	linux	B6-sanitize-exempt.patch	--lib -- x1_per_user_surfaced_names
+B6-sanitize-peruser	linux	B6-sanitize-peruser.patch	--lib -- x1_per_user_surfaced_names
+NV-a-shared_spec	linux	NV-a-shared_spec.patch	--lib -- l9_required_backend_anonymous_caller_spec_preview_sees_none
+G-I6b	linux	G-I6b.patch	--lib -- g3_i6_index_bounded_by_admission
+M06b_http	linux	M06b_http.patch	--lib -- c10_http_per_user_visibility_runs_with_enforcement_off
+M06b_step	linux	M06b_step.patch	--lib -- c10_step_per_user_visibility_runs_with_enforcement_off
+FJ-entry	linux	FJ-entry.patch	--lib -- c4_http_gateway_invoke_target_judged_by_the_callers_slot
+F5a-stdio	linux	F5a-stdio.patch	--lib -- f5a_stdio_route_authorize_refusal_resolves_nothing
+F5b-stdio	linux	F5b-stdio.patch	--lib -- f5b_stdio_firewall_refusal_resolves_nothing
+LV-shared_l6sp	linux	LV-shared_l6sp.patch	--lib -- l6a_cold_caller_spec_preview_withholds

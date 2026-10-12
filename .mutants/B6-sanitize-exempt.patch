@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/authorization.rs b/src/gateway/router/authorization.rs
+index 40b77f3be..15b5973e2 100644
+--- a/src/gateway/router/authorization.rs
++++ b/src/gateway/router/authorization.rs
+@@ -51,7 +51,7 @@ pub(crate) fn sanitize_exempt(
+         // A surfaced name on a per-user backend is never exempt (MIK-8356):
+         // intake runs before the caller's own catalogue is read, so exempting
+         // it would let the answer tell a withheld name from a missing one.
+-        if targets.iter().any(|t| per_user_surfaced(meta_mcp, name, t)) {
++        if false && targets.iter().any(|t| per_user_surfaced(meta_mcp, name, t)) {
+             return false;
+         }
+         targets.into_iter().map(|t| t.server).collect()

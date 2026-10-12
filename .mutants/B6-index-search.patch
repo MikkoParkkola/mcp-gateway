@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/search.rs b/src/gateway/meta_mcp/search.rs
+index 0b5e281cd..107df0484 100644
+--- a/src/gateway/meta_mcp/search.rs
++++ b/src/gateway/meta_mcp/search.rs
+@@ -305,7 +305,6 @@ impl MetaMcp {
+                     .await;
+             // Indexed after every fill attempt, an empty fill included; a slot
+             // a failed fill left unfilled is never recorded (MIK-8356).
+-            self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
+             if let Some(tools) = fetched {
+                 let enriched: Vec<_> = tools
+                     .iter()

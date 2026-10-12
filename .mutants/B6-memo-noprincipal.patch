@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/invoke/caller_verdict.rs b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+index cd27f5e5c..bab26efae 100644
+--- a/src/gateway/meta_mcp/invoke/caller_verdict.rs
++++ b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+@@ -102,7 +102,6 @@ impl MetaMcp {
+         // No principal on a required backend: no slot can hold this caller's
+         // catalogue, so it lacks the tool, answered before any resolution.
+         if self.lacks_principal_on_required(&backend, proof) {
+-            visible::record_visibility(server, tool, Visibility::Withheld(Withholding::Lacked));
+             return Ok(CallerVerdict::Absent);
+         }
+         // A managed account with no current grant has no view (R3.7). Nothing
