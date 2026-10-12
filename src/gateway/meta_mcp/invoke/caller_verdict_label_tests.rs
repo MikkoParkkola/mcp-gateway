@@ -169,9 +169,16 @@ async fn m2_absent_is_returned_exactly_when_the_memo_records_withheld() {
         let (verdict, recorded) = with_visibility_memo(async {
             let verdict = fx
                 .meta
-                .caller_verdict((BACKEND, TOOL), &caller, None, TargetNaming::SurfacedName)
+                .caller_verdict(
+                    (BACKEND, TOOL),
+                    &caller,
+                    None,
+                    TargetNaming::SurfacedName,
+                    None,
+                )
                 .await
-                .expect("the verdict resolves");
+                .expect("the verdict resolves")
+                .0;
             (verdict, recorded_visibility(BACKEND, TOOL))
         })
         .await;
@@ -202,9 +209,11 @@ async fn m2_absent_is_returned_exactly_when_the_memo_records_withheld() {
                 &anonymous,
                 None,
                 TargetNaming::SurfacedName,
+                None,
             )
             .await
-            .expect("the verdict resolves");
+            .expect("the verdict resolves")
+            .0;
         (verdict, recorded_visibility(BACKEND, TOOL))
     })
     .await;
