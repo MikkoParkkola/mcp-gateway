@@ -319,4 +319,17 @@ async fn e2i_a_chain_does_not_refuse_its_unread_single_call_arguments() {
         "e2i: a valid chain was refused: {body}"
     );
     assert_eq!(calls(&fx), 1, "e2i: the chain did not run: {body}");
+    // The two boundaries of dispatch's branch test (`chain` as an array):
+    // an empty array still selects chain mode, so the unread single-call
+    // directive is not refused; a `chain` that is no array selects the single
+    // call, whose directive is then read and refused.
+    let empty = json!({"name": "gateway_execute", "arguments": {
+        "chain": [], "arguments": {"_fu\u{7}ll": true}}});
+    let (_, chain_mode) = send(&fx, "/mcp", "k-std", "tools/call", empty, None).await;
+    assert!(!refused_dirty(&chain_mode), "e2i empty chain: {chain_mode}");
+    let not_array = json!({"name": "gateway_execute", "arguments": {
+        "chain": "x", "tool": "alpha:read", "arguments": {"_fu\u{7}ll": true}}});
+    let (_, single) = send(&fx, "/mcp", "k-std", "tools/call", not_array, None).await;
+    assert!(refused_dirty(&single), "e2i chain not an array: {single}");
+    assert_eq!(calls(&fx), 1, "e2i: a boundary case dispatched: {single}");
 }
