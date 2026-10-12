@@ -1,0 +1,13 @@
+diff --git a/src/backend/metadata_read_only.rs b/src/backend/metadata_read_only.rs
+index 9992afdeb..241f02de7 100644
+--- a/src/backend/metadata_read_only.rs
++++ b/src/backend/metadata_read_only.rs
+@@ -168,7 +168,7 @@ impl Backend {
+         let pins = self.flagged_tool_pins().clone();
+         Box::new(move || {
+             let pages = std::mem::take(&mut *seen.lock());
+-            if pages.is_empty() {
++            if true || pages.is_empty() {
+                 return;
+             }
+             let (listed, read_only, resend_safe) = Self::page_sets(&name, &pins, &pages);

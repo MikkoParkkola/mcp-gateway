@@ -1,0 +1,13 @@
+diff --git a/src/backend/annotations.rs b/src/backend/annotations.rs
+index 642980d67..d1016089e 100644
+--- a/src/backend/annotations.rs
++++ b/src/backend/annotations.rs
+@@ -213,7 +213,7 @@ fn names_failing(
+ fn names_passing(tools: &[Tool], failing: &HashSet<String>) -> HashSet<String> {
+     tools
+         .iter()
+-        .filter(|tool| !failing.contains(&tool.name))
++        .filter(|tool| tool.annotations.is_some() || !failing.contains(&tool.name))
+         .map(|tool| tool.name.clone())
+         .collect()
+ }

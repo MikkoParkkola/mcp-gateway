@@ -1,0 +1,12 @@
+diff --git a/src/backend/metadata_read_only.rs b/src/backend/metadata_read_only.rs
+index 9992afdeb..fb3008d55 100644
+--- a/src/backend/metadata_read_only.rs
++++ b/src/backend/metadata_read_only.rs
+@@ -172,6 +172,7 @@ impl Backend {
+                 return;
+             }
+             let (listed, read_only, resend_safe) = Self::page_sets(&name, &pins, &pages);
++            entry.tools_cache.invalidate_then(|| {});
+             let listed: HashSet<&String> = listed.iter().collect();
+             entry
+                 .resend_permitted

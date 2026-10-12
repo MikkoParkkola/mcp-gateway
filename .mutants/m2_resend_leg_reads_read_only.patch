@@ -1,0 +1,13 @@
+diff --git a/src/backend/metadata_read_only.rs b/src/backend/metadata_read_only.rs
+index 9992afdeb..23d3aa9eb 100644
+--- a/src/backend/metadata_read_only.rs
++++ b/src/backend/metadata_read_only.rs
+@@ -92,7 +92,7 @@ impl Backend {
+                 let permitted = slot.resend_permitted.read();
+                 listed
+                     .iter()
+-                    .any(|t| !resend_safe.contains(t) && permitted.contains(t))
++                    .any(|t| !read_only.contains(t) && permitted.contains(t))
+             };
+         if revokes {
+             slot.tools_cache.invalidate_then(|| {

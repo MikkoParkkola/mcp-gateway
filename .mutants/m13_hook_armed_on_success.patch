@@ -1,0 +1,12 @@
+diff --git a/src/backend/cached_metadata.rs b/src/backend/cached_metadata.rs
+index 6c773c24f..6d4e41103 100644
+--- a/src/backend/cached_metadata.rs
++++ b/src/backend/cached_metadata.rs
+@@ -341,7 +341,6 @@ impl<T> CachedMetadata<T> {
+                         });
+                         // Answered: stored, or refused because an
+                         // invalidation already ran. Nothing to narrow.
+-                        permit.on_abandon = None;
+                         value
+                     });
+                     drop(permit);

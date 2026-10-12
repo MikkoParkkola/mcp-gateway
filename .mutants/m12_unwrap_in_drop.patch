@@ -1,0 +1,13 @@
+diff --git a/src/backend/metadata_read_only.rs b/src/backend/metadata_read_only.rs
+index 9992afdeb..f7ab9f275 100644
+--- a/src/backend/metadata_read_only.rs
++++ b/src/backend/metadata_read_only.rs
+@@ -114,7 +114,7 @@ impl Backend {
+         pins: &std::collections::BTreeMap<String, String>,
+         tools: &[serde_json::Value],
+     ) -> (Vec<String>, HashSet<String>, HashSet<String>) {
+-        let (mut parsed, _unparseable) = crate::backend::descriptor_gate::parse_listed(tools);
++        let mut parsed: Vec<crate::protocol::Tool> = tools.iter().map(|v| serde_json::from_value(v.clone()).unwrap()).collect();
+         let listed = parsed.iter().map(|t| t.name.clone()).collect();
+         let prepared = crate::backend::prepare_tool_metadata(
+             name,

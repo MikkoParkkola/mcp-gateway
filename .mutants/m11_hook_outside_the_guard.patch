@@ -1,0 +1,21 @@
+diff --git a/src/backend/cached_metadata.rs b/src/backend/cached_metadata.rs
+index 6c773c24f..d2d6b0f69 100644
+--- a/src/backend/cached_metadata.rs
++++ b/src/backend/cached_metadata.rs
+@@ -84,13 +84,13 @@ impl<T> Drop for FetchPermit<'_, T> {
+         // cache's state; it narrows the slot's sets only, the same lock order
+         // `invalidate_then` and `store_if_current` use.
+         {
+-            let mut state = self.cache.state.write();
++            let current = self.cache.state.read().generation == self.generation;
+             if let Some(hook) = self.on_abandon.take()
+-                && state.generation == self.generation
++                && current
+             {
+                 hook();
+             }
+-            state.in_flight = None;
++            self.cache.state.write().in_flight = None;
+         }
+         let _ = self.sender.send(());
+     }
