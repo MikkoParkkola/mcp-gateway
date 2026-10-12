@@ -658,56 +658,13 @@ fn contradiction(declared: &DeclaredLabel, proven: &ProvenPrincipal) -> String {
     )
 }
 
-// ── Private helpers ───────────────────────────────────────────────────────────
+// ── Private helpers (agent_identity_extract.rs) ───────────────────────────────
 
-fn extract_from_header(headers: &axum::http::HeaderMap) -> Option<String> {
-    headers
-        .get("x-agent-id")
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-}
-
-fn extract_from_query(query: &str) -> Option<String> {
-    query
-        .split('&')
-        .find_map(|pair| {
-            let (k, v) = pair.split_once('=')?;
-            (k == "agent_id").then_some(v)
-        })
-        .filter(|s| !s.is_empty())
-        .map(percent_decode)
-}
-
-/// Percent-decode a query parameter value (`%XX` sequences only; `+` kept as-is).
-fn percent_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = String::with_capacity(s.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%'
-            && i + 2 < bytes.len()
-            && let (Some(hi), Some(lo)) = (hex_digit(bytes[i + 1]), hex_digit(bytes[i + 2]))
-        {
-            out.push((hi << 4 | lo) as char);
-            i += 3;
-            continue;
-        }
-        out.push(bytes[i] as char);
-        i += 1;
-    }
-    out
-}
-
-fn hex_digit(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
-    }
-}
+#[path = "agent_identity_extract.rs"]
+mod extract;
+#[cfg(test)]
+use extract::percent_decode;
+use extract::{extract_from_header, extract_from_query};
 
 // ── Audit ─────────────────────────────────────────────────────────────────────
 
