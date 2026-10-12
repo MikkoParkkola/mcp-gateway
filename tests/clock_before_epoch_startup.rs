@@ -159,6 +159,15 @@ fn the_trust_baseline_cli_writes_nothing_on_a_clock_before_1970() {
         .iter()
         .map(|f| std::fs::read(f).expect("seeded output"))
         .collect();
+    // The input changes before the dark run, so a write made before the clock
+    // refusal (mutant M11) would change the baseline's bytes, not rewrite them.
+    let changed = std::fs::read_to_string(caps.join("weather.yaml"))
+        .expect("capability")
+        .replace(
+            "Read weather forecasts",
+            "Read weather forecasts and alerts",
+        );
+    std::fs::write(caps.join("weather.yaml"), changed).expect("changed capability");
 
     let dark = update_trust_baseline(root.path(), true);
     let stderr = String::from_utf8_lossy(&dark.stderr);

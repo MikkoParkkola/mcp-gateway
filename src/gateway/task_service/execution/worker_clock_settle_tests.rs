@@ -300,6 +300,7 @@ async fn r2g_a_cancel_during_the_wait_gives_no_receipt() {
     let fx = day_task("r2g-cancel-in-wait").await;
     fx.service.store.set_clock_for_test(dark());
     let flip = flip_when_waiting(&fx, 1, None, Some(TaskTransition::Cancel));
+    let hook = fx.executor.commit_hook_for_test();
 
     let (_tx, mut rx) = watch::channel(false);
     let delivered = fx
@@ -309,6 +310,13 @@ async fn r2g_a_cancel_during_the_wait_gives_no_receipt() {
     flip.abort();
 
     assert!(!delivered, "no receipt for an outcome that was not stored");
+    // M2h (the terminal guard removed): the worker would commit once more onto
+    // the cancelled record. With the guard, the dark first attempt is the only one.
+    assert_eq!(
+        hook.attempts(&fx.id),
+        1,
+        "no commit after the re-read found the record terminal"
+    );
     let stored = fx.service.get(OWNER, &fx.id).expect("the owner reads it");
     assert_eq!(
         stored.task.status(),
