@@ -247,6 +247,10 @@ async fn an_anonymous_public_path_stream_is_told_nothing_of_a_change() {
         0,
         "no hint reaches a caller with no view"
     );
+    assert!(
+        ear.is_open(&w).await,
+        "an anonymous stream stays open past a change it is told nothing of"
+    );
 }
 
 /// The exemption stops at public paths: with `/mcp` authenticated, the same

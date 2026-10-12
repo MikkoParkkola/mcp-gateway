@@ -183,7 +183,7 @@ impl Listener {
             crate::gateway::streaming::Judged::Live(caller) => caller,
             crate::gateway::streaming::Judged::Dead(reason) => {
                 use crate::gateway::streaming::{AtAttach, dead_at_attach};
-                match dead_at_attach(self.credential.as_ref(), reason) {
+                match dead_at_attach(self.credential.as_ref(), reason, &view.subject) {
                     AtAttach::Refuse => {
                         reason.count();
                         return Err(reason);

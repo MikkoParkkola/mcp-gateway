@@ -273,10 +273,26 @@ pub(crate) enum AtAttach {
     OpenAnonymous,
 }
 
-pub(crate) fn dead_at_attach(credential: Option<&HeldCredential>, reason: DeadReason) -> AtAttach {
-    match (credential, reason) {
-        (None, DeadReason::Bearer) => AtAttach::OpenAnonymous,
-        (Some(_), _) | (None, DeadReason::Adapter | DeadReason::Cf) => AtAttach::Refuse,
+pub(crate) fn dead_at_attach(
+    credential: Option<&HeldCredential>,
+    reason: DeadReason,
+    subject: &ViewSubject,
+) -> AtAttach {
+    match (credential, reason, subject) {
+        (
+            None,
+            DeadReason::Bearer,
+            ViewSubject {
+                cf_assertion: None,
+                cert: None,
+                adapter: None,
+                oauth_agent: None,
+                verified_identity: None,
+                proxy_peer: None,
+                ..
+            },
+        ) => AtAttach::OpenAnonymous,
+        _ => AtAttach::Refuse,
     }
 }
 
@@ -506,10 +522,14 @@ impl StreamView {
         // identity provider, and the gate covers cache reads only.
         let caller = match self.judge.resolve(auth, (credential, &self.subject)).await {
             Judged::Live(caller) => caller,
-            Judged::Dead(reason) => {
-                reason.count();
-                return Judged::Dead(reason);
-            }
+            // An anonymous stream's `Bearer` death is silence, not a close.
+            Judged::Dead(reason) => match (credential, reason) {
+                (None, DeadReason::Bearer) => return Judged::Live(None),
+                _ => {
+                    reason.count();
+                    return Judged::Dead(reason);
+                }
+            },
         };
         let (stamp, digest) = self
             .record
@@ -586,7 +606,7 @@ impl NotificationMultiplexer {
             // A caller that does not resolve at attach gets no stream, unless
             // it presented nothing at all: a public path admits it
             // anonymously, and nothing is ever delivered to it.
-            Judged::Dead(reason) => match dead_at_attach(credential.as_ref(), reason) {
+            Judged::Dead(reason) => match dead_at_attach(credential.as_ref(), reason, &subject) {
                 AtAttach::Refuse => {
                     reason.count();
                     return Err(reason);
@@ -754,11 +774,14 @@ impl NotificationMultiplexer {
             ));
         }
         for (subject, record) in views {
-            // A dead caller is closed by the write-time check; the copy still
-            // goes so it can be.
-            let Judged::Live(caller) = judge.resolve(authorizer, (credential, &subject)).await
-            else {
-                return true;
+            let caller = match judge.resolve(authorizer, (credential, &subject)).await {
+                Judged::Live(caller) => caller,
+                // A dead caller is closed by the write-time check, so the copy
+                // still goes; an anonymous `Bearer` death is silence, not a move.
+                Judged::Dead(reason) => match (credential, reason) {
+                    (None, DeadReason::Bearer) => continue,
+                    _ => return true,
+                },
             };
             let (stamp, digest) = record
                 .read(async {

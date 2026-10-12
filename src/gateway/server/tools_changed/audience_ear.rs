@@ -183,6 +183,20 @@ impl Ear {
         true
     }
 
+    /// Whether a GET stream is still open: `true` when its body has not ended.
+    /// Reads with a short window, so "no event yet" and "stream ended" are told
+    /// apart. Call after a drain, when no frame is expected. Publishes nothing.
+    pub(super) async fn is_open(&mut self, world: &World) -> bool {
+        let Self::Sse { events, .. } = self else {
+            panic!("is_open() reads a GET stream");
+        };
+        world.settle().await;
+        match tokio::time::timeout(std::time::Duration::from_millis(100), events.recv()).await {
+            Ok(Some(_)) | Err(_) => true,
+            Ok(None) => false,
+        }
+    }
+
     /// How many `tools/list_changed` frames this listener was sent.
     pub(super) async fn told(&mut self, world: &World) -> usize {
         self.frames(world)
