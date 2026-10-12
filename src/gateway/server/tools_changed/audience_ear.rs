@@ -12,6 +12,7 @@ use axum::body::Body;
 use tower::ServiceExt as _;
 
 use super::audience_fixture::{ARRIVAL, LIST_CHANGED, SENTINEL, World, asserted};
+use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::streaming::SessionFrame;
 
 /// A listen response body read as SSE `data:` events.
@@ -215,14 +216,14 @@ impl World {
     }
 
     /// A gateway with agent auth on; callers present [`agent_token`].
-    pub(super) async fn start_agent() -> Self {
+    pub(super) async fn start_agent(configure: impl FnOnce(MetaMcp) -> MetaMcp) -> Self {
         let key_server = std::sync::Arc::new(crate::key_server::KeyServer::new(
             crate::config::KeyServerConfig::default(),
         ));
         Self::start_on(
             key_server,
             None,
-            |meta| meta,
+            configure,
             super::audience_access::McpAccess::AgentToken,
         )
         .await

@@ -22,16 +22,22 @@ pub(super) enum McpAccess {
     AgentToken,
 }
 
-const AGENT_ID: &str = "agent-r7";
-const AGENT_SECRET: &str = "agent-r7-secret-0123456789-0123456789";
+/// The two agents the fixture registers under [`McpAccess::AgentToken`]. Both
+/// share one display name, so they are one principal and two proven agent ids.
+pub(super) const AGENT_A: &str = "agent-a";
+pub(super) const AGENT_B: &str = "agent-b";
 
-/// A bearer the fixture's agent registry validates under [`McpAccess::AgentToken`].
-pub(super) fn agent_token() -> String {
+fn agent_secret(id: &str) -> String {
+    format!("{id}-secret-0123456789-0123456789")
+}
+
+/// A bearer the fixture's agent registry validates for `id`.
+pub(super) fn agent_token(id: &str) -> String {
     let now = chrono::Utc::now().timestamp();
     jsonwebtoken::encode(
         &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
-        &serde_json::json!({ "sub": AGENT_ID, "exp": now + 3600, "iat": now }),
-        &jsonwebtoken::EncodingKey::from_secret(AGENT_SECRET.as_bytes()),
+        &serde_json::json!({ "sub": id, "exp": now + 3600, "iat": now }),
+        &jsonwebtoken::EncodingKey::from_secret(agent_secret(id).as_bytes()),
     )
     .expect("sign agent token")
 }
@@ -67,15 +73,20 @@ pub(super) fn apply(st: &mut AppState, access: &McpAccess) {
         }
         McpAccess::AgentToken => {
             let registry = Arc::new(crate::gateway::oauth::AgentRegistry::new());
-            registry.register(crate::gateway::oauth::AgentDefinition {
-                client_id: AGENT_ID.to_string(),
-                name: AGENT_ID.to_string(),
-                hs256_secret: Some(AGENT_SECRET.to_string()),
-                rs256_public_key: None,
-                scopes: vec!["tools:alpha:*:execute".to_string()],
-                issuer: None,
-                audience: None,
-            });
+            for id in [AGENT_A, AGENT_B] {
+                registry.register(crate::gateway::oauth::AgentDefinition {
+                    client_id: id.to_string(),
+                    name: "shared".to_string(),
+                    hs256_secret: Some(agent_secret(id)),
+                    rs256_public_key: None,
+                    scopes: vec![
+                        "tools:alpha:*:execute".to_string(),
+                        "tools:caps:*:execute".to_string(),
+                    ],
+                    issuer: None,
+                    audience: None,
+                });
+            }
             st.agent_auth = crate::gateway::oauth::AgentAuthState::new(true, registry);
         }
         McpAccess::Authenticated | McpAccess::PublicPath => {}
