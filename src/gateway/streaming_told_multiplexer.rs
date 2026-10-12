@@ -4,7 +4,12 @@
 //! a stream's view, reading a refresh, and fanning a judged hint out. Split
 //! from `streaming_told.rs` for size; it shares that module's private types.
 
-use super::*;
+use super::{
+    Arc, AtAttach, Audience, AuthState, ClientSession, CopyAudience, DeadReason, Delivery,
+    HeldCredential, Judged, NotificationMultiplexer, Peek, PendingRefresh, StreamView,
+    TaggedNotification, Value, ViewJudge, ViewSubject, dead_at_attach, delivery,
+    is_tools_list_changed,
+};
 
 impl NotificationMultiplexer {
     /// The view `session_id`'s stream opens with: its own subject's record on

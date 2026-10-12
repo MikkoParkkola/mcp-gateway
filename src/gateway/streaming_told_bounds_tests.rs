@@ -36,7 +36,7 @@ fn idle_records_are_dropped_at_the_bound() {
     let session = multiplexer
         .sessions
         .read()
-        .get(&id)
+        .get(id.as_str())
         .map(Arc::clone)
         .expect("the session exists");
     for n in 0..(MAX_IDLE_RECORDS * 4) {
@@ -60,7 +60,7 @@ fn a_record_an_open_stream_holds_is_kept() {
     let session = multiplexer
         .sessions
         .read()
-        .get(&id)
+        .get(id.as_str())
         .map(Arc::clone)
         .expect("the session exists");
     let held = session.record_for(&subject_labelled("held", None));
