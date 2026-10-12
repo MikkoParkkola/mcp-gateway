@@ -213,7 +213,13 @@ fn baseline_for(
 /// The answer for a caller that no longer resolves when its stream opens:
 /// what the auth layer says to an invalid credential, with no reason in it.
 pub(super) fn dead_attach_refusal() -> axum::response::Response {
-    crate::gateway::middleware::bearer_unauthorized_response("Invalid token")
+    let mut response = crate::gateway::middleware::bearer_unauthorized_response("Invalid token");
+    // Byte for byte what the auth layer answers, not an event, even when the
+    // client offered a stream.
+    response
+        .extensions_mut()
+        .insert(crate::gateway::streaming::Unframed);
+    response
 }
 
 /// Whether the URL asked for Code Mode by `?codemode=search_and_execute`: the

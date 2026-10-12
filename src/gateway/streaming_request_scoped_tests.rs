@@ -157,3 +157,27 @@ async fn a_notification_raised_after_the_first_frame_is_framed_before_the_result
     assert!(second.contains("notifications/message"), "{second}");
     assert!(last.contains(r#""result""#), "{last}");
 }
+
+/// A refusal marked `Unframed` reaches the client as the auth layer's would,
+/// whatever was queued beside it: no event wraps it (MIK-8350).
+#[tokio::test]
+async fn an_unframed_refusal_is_passed_through_as_built() {
+    let mut refusal = (
+        axum::http::StatusCode::UNAUTHORIZED,
+        [(CONTENT_TYPE, "application/json")],
+        "{\"error\":{\"code\":-32000,\"message\":\"Invalid token\"}}".to_string(),
+    )
+        .into_response();
+    refusal
+        .extensions_mut()
+        .insert(crate::gateway::streaming::Unframed);
+
+    let response =
+        request_scoped_event_stream(refusal, vec![note("notifications/progress")], judge()).await;
+    assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    let body = body_text(response).await;
+    assert_eq!(
+        body,
+        "{\"error\":{\"code\":-32000,\"message\":\"Invalid token\"}}"
+    );
+}
