@@ -50,11 +50,25 @@ fn sole_operator() -> AuthConfig {
 
 /// A playbook named `name` of reads, one per `(server, condition)`.
 fn reads(name: &str, steps: &[(&str, Option<&str>)]) -> crate::playbook::PlaybookDefinition {
-    let steps: Vec<Value> = steps
+    let named: Vec<(String, &str, Option<&str>)> = steps
         .iter()
         .enumerate()
-        .map(|(n, (server, condition))| {
-            let mut step = json!({"name": format!("s{n}"), "server": server, "tool": TOOL,
+        .map(|(n, (server, condition))| (format!("s{n}"), *server, *condition))
+        .collect();
+    playbook_of(name, "abort", &named)
+}
+
+/// A playbook named `name` of reads, one per `(step name, server,
+/// condition)`, handling a failed step by `on_error`.
+fn playbook_of(
+    name: &str,
+    on_error: &str,
+    steps: &[(String, &str, Option<&str>)],
+) -> crate::playbook::PlaybookDefinition {
+    let steps: Vec<Value> = steps
+        .iter()
+        .map(|(step, server, condition)| {
+            let mut step = json!({"name": step, "server": server, "tool": TOOL,
                                   "arguments": {"folder": "inbox"}});
             if let Some(condition) = condition {
                 step["condition"] = json!(condition);
@@ -63,8 +77,16 @@ fn reads(name: &str, steps: &[(&str, Option<&str>)]) -> crate::playbook::Playboo
         })
         .collect();
     serde_json::from_value(json!({"playbook": "1.0", "name": name,
-        "description": "reads", "steps": steps}))
+        "description": "reads", "steps": steps, "on_error": on_error}))
     .expect("the playbook deserialises")
+}
+
+/// Steps named `names` in order, each a read on its server, no condition.
+fn steps_named<'a>(names: &[(&str, &'a str)]) -> Vec<(String, &'a str, Option<&'a str>)> {
+    names
+        .iter()
+        .map(|(step, server)| ((*step).to_string(), *server, None))
+        .collect()
 }
 
 /// Every playbook the rows run: two reads on the managed account; a live
@@ -87,6 +109,33 @@ fn playbooks() -> Vec<crate::playbook::PlaybookDefinition> {
                 (BACKEND, None),
                 (PERSONAL_BACKEND, Some("$inputs.deep == 'true'")),
             ],
+        ),
+        // P8h: the conditional step sits between two executed ones.
+        reads(
+            "interior_skip",
+            &[
+                (BACKEND, None),
+                (PERSONAL_BACKEND, Some("$inputs.deep == 'true'")),
+                (BACKEND, None),
+            ],
+        ),
+        // P8b: a failed step is recorded and the plan carries on.
+        playbook_of(
+            "work_then_failing_personal",
+            "continue",
+            &steps_named(&[("work", BACKEND), ("personal", PERSONAL_BACKEND)]),
+        ),
+        // P8c: a failed step aborts, so the answer is the abort error.
+        playbook_of(
+            "work_then_aborting_personal",
+            "abort",
+            &steps_named(&[("work", BACKEND), ("personal", PERSONAL_BACKEND)]),
+        ),
+        // P8g: two steps share one name.
+        playbook_of(
+            "repeated_name",
+            "abort",
+            &steps_named(&[("same", BACKEND), ("same", PERSONAL_BACKEND)]),
         ),
     ]
 }
@@ -377,4 +426,128 @@ async fn p8_control_unrun_conditional_step_revoked_does_not_block() {
         sent,
         "P8: the replay was sent: {again}"
     );
+}
+
+/// A keyed `gateway_run_playbook` of `playbook` with no inputs, sent once.
+async fn run_playbook(fx: &Fx, playbook: &str, key: &str) -> Value {
+    send(
+        fx,
+        "gateway_run_playbook",
+        playbook_params(playbook, key, json!({})),
+    )
+    .await
+}
+
+fn sent_to_both(fx: &Fx) -> usize {
+    fx.gateway.tool_calls_to(BACKEND) + fx.gateway.tool_calls_to(PERSONAL_BACKEND)
+}
+
+/// P8b (kills M14, failed steps not judged): the second step's account is
+/// revoked before the run, so that step fails and the plan continues; its
+/// result records the step in `steps_failed`. The replay is refused, because
+/// a failed step may have dispatched.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn p8b_failed_step_target_revoked_refuses_the_replay() {
+    let fx = fixture_with(Some(Second::PersonalAccount)).await;
+    fx.gateway.revoke_operator_grant_on(PERSONAL_BACKEND).await;
+    fx.gateway
+        .answer_next(json!({"content": [{"type": "text", "text": MARKER}], "isError": false}));
+    let first = run_playbook(&fx, "work_then_failing_personal", "P8b").await;
+    let text = first.to_string();
+    assert!(
+        text.contains(MARKER) && text.contains("steps_failed") && text.contains("personal"),
+        "premise: step 1 completed and step 2 failed: {first}"
+    );
+    let sent = sent_to_both(&fx);
+    let again = run_playbook(&fx, "work_then_failing_personal", "P8b").await;
+    assert_refused_unsent(&fx, "P8b", &again, sent);
+}
+
+/// P8c (kills M15, an unreadable answer served): the plan aborts at step 2,
+/// so the retained answer is the abort error, not a `PlaybookResult`. It
+/// replays before step 1's account is revoked; after, the declared list is
+/// judged and step 1's revoked account refuses.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn p8c_abort_error_answer_falls_back_to_the_declared_list() {
+    let fx = fixture_with(Some(Second::PersonalAccount)).await;
+    fx.gateway.revoke_operator_grant_on(PERSONAL_BACKEND).await;
+    fx.gateway
+        .answer_next(json!({"content": [{"type": "text", "text": MARKER}], "isError": false}));
+    let mut first = run_playbook(&fx, "work_then_aborting_personal", "P8c").await;
+    assert!(
+        first.get("error").is_some() && fx.gateway.tool_calls_to(BACKEND) == 1,
+        "premise: step 1 ran and the plan aborted with an error: {first}"
+    );
+    let sent = sent_to_both(&fx);
+    let mut replayed = run_playbook(&fx, "work_then_aborting_personal", "P8c").await;
+    first["id"] = Value::Null;
+    replayed["id"] = Value::Null;
+    assert_eq!(
+        replayed, first,
+        "premise: the abort error answer is retained and replayed"
+    );
+    fx.gateway.revoke_operator_grant_on(BACKEND).await;
+    let mut again = run_playbook(&fx, "work_then_aborting_personal", "P8c").await;
+    again["id"] = Value::Null;
+    assert_ne!(
+        again, first,
+        "P8c: the stored plan output was served after revocation: {again}"
+    );
+    assert!(again.get("error").is_some(), "P8c: not a refusal: {again}");
+    assert_eq!(sent_to_both(&fx), sent, "P8c: the replay reached a backend");
+}
+
+/// P8g (kills M20, a repeated name mapped to its first match): both steps are
+/// named `same`; the second step's account is revoked. The name cannot be
+/// mapped one-to-one, so the declared list is judged and the replay refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn p8g_repeated_step_name_falls_back_to_the_declared_list() {
+    let fx = fixture_with(Some(Second::PersonalAccount)).await;
+    run_two_account(&fx, "repeated_name", "P8g", 2).await;
+    let sent = sent_to_both(&fx);
+    fx.gateway.revoke_operator_grant_on(PERSONAL_BACKEND).await;
+    let again = run_playbook(&fx, "repeated_name", "P8g").await;
+    assert_refused_unsent(&fx, "P8g", &again, sent);
+}
+
+/// P8i (P8g's live twin; kills M22, Declared refusing outright): the same
+/// plan with nothing revoked is served stored.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn p8i_repeated_step_name_all_live_is_served() {
+    let fx = fixture_with(Some(Second::PersonalAccount)).await;
+    run_two_account(&fx, "repeated_name", "P8i", 2).await;
+    let sent = sent_to_both(&fx);
+    let again = run_playbook(&fx, "repeated_name", "P8i").await;
+    assert!(
+        again.to_string().contains(MARKER),
+        "P8i: not served stored: {again}"
+    );
+    assert_eq!(sent_to_both(&fx), sent, "P8i: the replay was sent");
+}
+
+/// P8h (lead ruling, delta-2; kills M21, the playbook prefix rule): steps 1
+/// and 3 ran, step 2 was skipped between them. (i) Revoking only the skipped
+/// step's account serves; (ii) revoking the executed steps' account refuses.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn p8h_interior_skipped_step_is_not_judged() {
+    let fx = fixture_with(Some(Second::PersonalAccount)).await;
+    run_two_account(&fx, "interior_skip", "P8h", 2).await;
+    assert_eq!(
+        (
+            fx.gateway.tool_calls_to(BACKEND),
+            fx.gateway.tool_calls_to(PERSONAL_BACKEND)
+        ),
+        (2, 0),
+        "premise: steps 1 and 3 ran, step 2 did not"
+    );
+    let sent = sent_to_both(&fx);
+    fx.gateway.revoke_operator_grant_on(PERSONAL_BACKEND).await;
+    let served = run_playbook(&fx, "interior_skip", "P8h").await;
+    assert!(
+        served.to_string().contains(MARKER),
+        "P8h (i): an interior skipped step blocked the replay: {served}"
+    );
+    fx.gateway.revoke_operator_grant_on(BACKEND).await;
+    let again = run_playbook(&fx, "interior_skip", "P8h").await;
+    assert_refused_unsent(&fx, "P8h (ii)", &again, sent);
 }
