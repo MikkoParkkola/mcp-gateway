@@ -117,16 +117,16 @@ fn directive_keys(slot: Option<&Value>) -> Result<()> {
 fn meta_tool_arguments(name: &str, arguments: &Value) -> Result<()> {
     own_keys(arguments)?;
     match name {
-        "gateway_execute" => {
-            directive_keys(arguments.get("arguments"))?;
-            match arguments.get("chain") {
-                Some(Value::Array(chain)) => chain.iter().try_for_each(|step| {
-                    own_keys(step)?;
-                    directive_keys(step.get("arguments"))
-                }),
-                _ => Ok(()),
-            }
-        }
+        // Dispatch takes the chain branch whenever `chain` is an array
+        // (search.rs `code_mode_execute`) and then never reads the single-call
+        // `arguments`, so each slot is checked only on the branch that reads it.
+        "gateway_execute" => match arguments.get("chain") {
+            Some(Value::Array(chain)) => chain.iter().try_for_each(|step| {
+                own_keys(step)?;
+                directive_keys(step.get("arguments"))
+            }),
+            _ => directive_keys(arguments.get("arguments")),
+        },
         "gateway_invoke" => {
             if let Some(Value::String(nonce)) = arguments.get("nonce") {
                 validate_protocol_text(nonce)?;
