@@ -186,7 +186,10 @@ pub(crate) struct ViewSubject {
     pub(crate) cert_not_after: Option<u64>,
     /// The raw Cloudflare Access assertion, when that is the identity source;
     /// re-verified per decision by MIK-8377 and dropped with the stream.
-    #[expect(dead_code, reason = "read by MIK-8377's live() clause")]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read by MIK-8377's live() clause")
+    )]
     pub(crate) cf_assertion: Option<Redacted>,
     /// The trusted proxy's peer address, when that is the identity source.
     #[expect(dead_code, reason = "read by MIK-8377's live() clause")]
@@ -235,8 +238,11 @@ impl ViewSubject {
 /// re-verified with, read from the current state, never captured at attach.
 #[derive(Clone, Copy)]
 pub(crate) struct LiveCtx<'a> {
+    #[expect(dead_code, reason = "read by MIK-8377's live() clauses")]
     pub(crate) agent: Option<&'a crate::gateway::oauth::ValidatedToken>,
+    #[expect(dead_code, reason = "read by MIK-8377's live() clauses")]
     pub(crate) caller_identity: &'a crate::security::caller_identity::CallerIdentityConfig,
+    #[expect(dead_code, reason = "read by MIK-8377's live() clauses")]
     pub(crate) cf_verifier: Option<&'a crate::key_server::OidcVerifier>,
 }
 

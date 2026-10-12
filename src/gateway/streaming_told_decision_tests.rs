@@ -197,7 +197,8 @@ fn a_withheld_listing_leaves_the_record_alone_and_a_delivered_one_moves_it() {
     assert_eq!(delivered.record.state().peek(6, "a", &moved), Peek::Quiet);
 }
 
-#[tokio::test]
+#[cfg(feature = "metrics")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_caller_dead_at_attach_gets_no_stream_and_is_counted() {
     let multiplexer = NotificationMultiplexer::new(
         Arc::new(crate::backend::BackendRegistry::new()),
@@ -208,8 +209,24 @@ async fn a_caller_dead_at_attach_gets_no_stream_and_is_counted() {
     let (session, _rx) = multiplexer.get_or_create_session_scoped(Some("s"), &owner, None);
     let judge = Fake::answering("s0", "x");
     judge.die();
-    let attached = multiplexer
-        .attach_view(&session, ViewSubject::default(), judge)
-        .await;
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let handle = recorder.handle();
+    let attached = telemetry_metrics::with_local_recorder(&recorder, || {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(multiplexer.attach_view(
+                &session,
+                ViewSubject::default(),
+                judge,
+            ))
+        })
+    });
     assert!(matches!(attached, Err(DeadReason::Bearer)));
+    let text = handle.render();
+    assert!(
+        text.lines().any(
+            |l| l.starts_with(r#"mcp_view_liveness_dead_total{reason="bearer"} "#)
+                && l.ends_with(" 1")
+        ),
+        "{text}"
+    );
 }
