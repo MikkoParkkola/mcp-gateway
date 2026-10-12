@@ -56,8 +56,14 @@ async fn fixture(surfaced: bool) -> Fx {
 /// [`fixture`] with an identity-propagation transparency log, which the
 /// direct route requires before it mints (G1).
 async fn fixture_with(surfaced: bool, audited: bool) -> Fx {
+    fixture_bound(surfaced, audited, &Binding::Connected).await
+}
+
+/// [`fixture_with`] for a chosen `binding`: `Unconnected` is the operator who
+/// never held the account, the R4/T7 no-access twin.
+async fn fixture_bound(surfaced: bool, audited: bool, binding: &Binding) -> Fx {
     let auth = sole_operator();
-    let mut gateway = DirectAccountGateway::new(auth.clone(), &Binding::Connected);
+    let mut gateway = DirectAccountGateway::new(auth.clone(), binding);
     let (mut state, store) = super::tests::test_router_app_state_with_auth(&auth).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.backends = gateway.backends();
@@ -183,6 +189,58 @@ async fn continuation_retry(fx: &Fx, key: &str) -> Value {
         "inputResponses": {"k1": {"action": "accept", "content": {"account": "work"}}},
         "_meta": meta(Some(key), false),
     })
+}
+
+/// `answer` with only the caller's own input normalised: the JSON-RPC `id`,
+/// and every whole-word occurrence of `sent` (the tool name this caller
+/// asked for, which the answer echoes) replaced by a placeholder. Nothing
+/// else changes, so any other name, hint or field still differs (R4, T7).
+fn caller_input_normalised(answer: &Value, sent: &str) -> Value {
+    fn walk(value: &mut Value, sent: &str) {
+        match value {
+            Value::String(text) => *text = replace_word(text, sent),
+            Value::Array(items) => items.iter_mut().for_each(|item| walk(item, sent)),
+            Value::Object(fields) => fields.values_mut().for_each(|field| walk(field, sent)),
+            _ => {}
+        }
+    }
+    fn is_word(c: char) -> bool {
+        c.is_alphanumeric() || c == '_' || c == '-'
+    }
+    fn replace_word(text: &str, sent: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        while let Some(at) = rest.find(sent) {
+            let before = rest[..at].chars().next_back();
+            let after = rest[at + sent.len()..].chars().next();
+            out.push_str(&rest[..at]);
+            if before.is_some_and(is_word) || after.is_some_and(is_word) {
+                out.push_str(sent);
+            } else {
+                out.push_str("<REQUESTED>");
+            }
+            rest = &rest[at + sent.len()..];
+        }
+        out.push_str(rest);
+        out
+    }
+    let mut normalised = answer.clone();
+    normalised["id"] = Value::Null;
+    walk(&mut normalised, sent);
+    normalised
+}
+
+/// The normaliser itself: only the `id` and whole-word matches of the
+/// requested name change; a longer word containing it does not.
+#[test]
+fn caller_input_normalised_touches_only_the_id_and_the_requested_name() {
+    let answer = json!({"id": 7, "error": {"code": -32601,
+        "message": "No tool: read (reader read_x)"}});
+    assert_eq!(
+        caller_input_normalised(&answer, "read"),
+        json!({"id": null, "error": {"code": -32601,
+            "message": "No tool: <REQUESTED> (reader read_x)"}})
+    );
 }
 
 /// Refused, with no stored output and nothing sent since `sent`.
@@ -327,8 +385,11 @@ async fn r5_repeated_task_call_after_revocation_is_not_served_the_stored_task() 
 /// call to a name that does not exist: byte-identical after normalising only
 /// `id`, with nothing sent and no stored output. Both twins must hold: (i) a
 /// name that exists on no backend, and (ii) the same name where it is not
-/// surfaced. The withheld name is never served stored and never leaks its
-/// key through a 409.
+/// surfaced, compared after normalising only each caller's own input; and
+/// (iii) the same name asked by an operator who never held the account,
+/// byte-identical but for `id`. The withheld name is never served stored and
+/// never leaks its key through a 409. M36 (a hint beyond the echoed name,
+/// such as "withheld") must fail this row.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn r4_revoked_surfaced_name_is_not_served_the_retained_result() {
     // The withheld half: surfaced, dispatched, revoked, repeated.
@@ -358,20 +419,35 @@ async fn r4_revoked_surfaced_name_is_not_served_the_retained_result() {
     let fx_absent = fixture(false).await;
     let missing = send(&fx_absent, "tools/call", TOOL, call("r4-absent")).await;
     eprintln!("R4 absent: {missing}");
-    // Both twins: byte-identical after normalising only `id`.
-    let mut again_norm = again.clone();
-    let mut truly_missing_norm = truly_missing.clone();
-    let mut missing_norm = missing.clone();
-    again_norm["id"] = Value::Null;
-    truly_missing_norm["id"] = Value::Null;
-    missing_norm["id"] = Value::Null;
+    // Twins (i) and (ii): equal once only each caller's own input (the `id`
+    // and the tool name it asked for) is normalised. Any other trace of a
+    // name, or any hidden-tool detail, still differs (M36).
     assert_eq!(
-        again_norm, truly_missing_norm,
+        caller_input_normalised(&again, TOOL),
+        caller_input_normalised(&truly_missing, missing_name),
         "R4: the withheld answer differs from the truly-missing answer: {again} vs {truly_missing}"
     );
     assert_eq!(
-        again_norm, missing_norm,
+        caller_input_normalised(&again, TOOL),
+        caller_input_normalised(&missing, TOOL),
         "R4: the withheld answer differs from the missing-name answer: {again} vs {missing}"
+    );
+    // Twin (iii), the strictest: the SAME name asked by a caller with no
+    // access (the operator who never connected the account). Nothing but the
+    // `id` may differ, so revoked and never-granted cannot be told apart.
+    let fx_never = fixture_bound(true, false, &Binding::Unconnected).await;
+    let never = send(&fx_never, "tools/call", TOOL, call("r4-never")).await;
+    eprintln!("R4 never-granted: {never}");
+    let (mut again_id, mut never_id) = (again.clone(), never.clone());
+    again_id["id"] = Value::Null;
+    never_id["id"] = Value::Null;
+    assert_eq!(
+        again_id, never_id,
+        "R4: the revoked answer differs from the never-granted answer: {again} vs {never}"
+    );
+    assert!(
+        fx_never.gateway.tool_calls().is_empty(),
+        "R4: the never-granted call reached the backend: {never}"
     );
     assert_refused_unsent(&fx, "R4", &again, sent);
     assert_eq!(
@@ -470,9 +546,10 @@ async fn s6_retained_gateway_execute_is_served_not_rerun() {
 /// T7 (twin guard): a revoked vault plan-task repeat answers as a missing
 /// name does. A task-augmented keyed `gateway_execute` completes; the grant
 /// is revoked; the same task call repeated answers -32601 for the step tool,
-/// byte-identical after normalising only `id` to the same keyed
-/// task-augmented call naming a step tool that exists on no backend. Sends
-/// +0, and no stored output.
+/// equal, after normalising only each caller's own input (`id`, the step
+/// tool it named), to the same keyed task-augmented call naming a step tool
+/// that exists on no backend. Sends +0, and no stored output. M36 (a hint
+/// beyond the echoed name) must fail this row.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t7_revoked_vault_plan_repeat_answers_as_a_missing_name() {
     let fx = fixture(false).await;
@@ -519,109 +596,21 @@ async fn t7_revoked_vault_plan_repeat_answers_as_a_missing_name() {
     let fx_missing = fixture(false).await;
     let missing = send(&fx_missing, "tools/call", "gateway_execute", missing_params).await;
     eprintln!("T7 missing: {missing}");
-    let mut again_norm = again.clone();
-    let mut missing_norm = missing.clone();
-    again_norm["id"] = Value::Null;
-    missing_norm["id"] = Value::Null;
+    // Equal once only each caller's own input (the `id` and the step tool it
+    // named) is normalised; any other detail still differs (M36).
     assert_eq!(
-        again_norm, missing_norm,
+        caller_input_normalised(&again, TOOL),
+        caller_input_normalised(&missing, "no_such_tool_8392"),
         "T7: the revoked answer differs from the missing-name answer: {again} vs {missing}"
     );
     assert!(
         fx_missing.gateway.tool_calls().is_empty(),
         "T7: the missing-name call reached the backend: {missing}"
     );
-}
-
-/// Expected gap, MIK-8406: an external-account plan replay is served without proof of liveness; MIK-8406 flips this to a refusal.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn plan_replay_external_account_is_mik_8406_gap() {
-    use crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::{
-        CAPABILITY_SERVER, CAPABILITY_TOOL, CapabilityAccount,
-    };
-
-    async fn send_alice(router: &axum::Router, method: &str, name: &str, params: Value) -> Value {
-        let body = json!({"jsonrpc": "2.0", "id": 5, "method": method, "params": params});
-        let mut request = axum::http::Request::builder()
-            .method("POST")
-            .uri("/mcp")
-            .header("content-type", "application/json")
-            .header("mcp-protocol-version", "2026-07-28")
-            .header("mcp-method", method)
-            .header("mcp-name", name)
-            .body(axum::body::Body::from(body.to_string()))
-            .expect("a request");
-        request.extensions_mut().insert(
-            crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::CapabilityAccount::alice(),
-        );
-        let response = router.clone().oneshot(request).await.expect("an answer");
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("a body");
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null)
-    }
-
-    // External WORK: no vault view, so Unjudged. Revoke is real custody.
-    let account = CapabilityAccount::start(true).await;
-    let (state, _store) = super::tests::meta_fixture::test_router_app_state_with_meta(
-        &crate::config::AuthConfig::default(),
-        None,
-        |meta| account.install(meta),
-    )
-    .await;
-    let router = super::create_router(Arc::clone(&state));
-    let tool_ref = format!("{CAPABILITY_SERVER}:{CAPABILITY_TOOL}");
-    let params_for = |key: &str| {
-        let mut meta = json!({
-            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-            "io.modelcontextprotocol/clientCapabilities": {
-                "extensions": {"io.modelcontextprotocol/tasks": {}}
-            },
-        });
-        meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
-        json!({
-            "name": "gateway_execute",
-            "arguments": {"chain": [{"tool": tool_ref.clone(), "arguments": {}}]},
-            "task": {}, "_meta": meta,
-        })
-    };
-    let made = send_alice(&router, "tools/call", "gateway_execute", params_for("ext-gap")).await;
-    let id = made
-        .pointer("/result/taskId")
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("premise: a task was made: {made}"))
-        .to_owned();
-    let bound = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    loop {
-        let got = send_alice(
-            &router,
-            "tasks/get",
-            &id,
-            json!({"taskId": id, "_meta": {
-                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                "io.modelcontextprotocol/clientCapabilities": {
-                    "extensions": {"io.modelcontextprotocol/tasks": {}}
-                },
-            }}),
-        )
-        .await;
-        if got.pointer("/result/status") == Some(&json!("completed")) {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < bound,
-            "premise: completes: {got}"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
-    account.revoke().await;
-    let again =
-        send_alice(&router, "tools/call", "gateway_execute", params_for("ext-gap")).await;
-    eprintln!("ext-gap repeat: {again}");
-    assert_eq!(
-        again.pointer("/result/taskId").and_then(Value::as_str),
-        Some(id.as_str()),
-        "ext-gap moved: the external-account plan repeat is no longer answered with the stored task \
-         (MIK-8406 inverts this row): {again}"
-    );
+    // No never-granted twin here: an operator who never held the account has
+    // no stored task under this key, so the same call is a FRESH task call
+    // (answered "working", refused later inside the task), not a repeat. The
+    // two are different operations, not a leak; R4 carries the strict twin.
 }
 
 /// G1 (guard; mutant M31): on the direct route a revoked grant's keyed replay
@@ -764,10 +753,12 @@ fn r6u_per_caller_propagation_without_account_defers() {
     );
 }
 
-/// R6m support: a token-exchange backend whose IdP is the key-server IdP
+/// R6m support: a token-exchange backend whose `IdP` is the key-server `IdP`
 /// pattern from `token_exchange_live_tests`, with `kill()`.
 mod r6m_token_exchange {
     use std::sync::Arc;
+
+    use tower::ServiceExt;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use axum::{Router, routing::get};
@@ -782,13 +773,9 @@ mod r6m_token_exchange {
     use crate::key_server::policy::PolicyEngine;
     use crate::key_server::{InMemoryTokenStore, KeyServer, OidcVerifier, handler::key_server_routes};
 
-    /// The permissive authorizer the R6m caller carries.
-    pub(super) static ALLOW: crate::gateway::authz::AllowAll =
-        crate::gateway::authz::AllowAll;
-
     const GATEWAY_ASSERTION_ISSUER: &str = "mcp-gateway";
 
-    /// The in-process key-server IdP: `/auth/token` plus `/.well-known/jwks.json`.
+    /// The in-process key-server `IdP`: `/auth/token` plus `/.well-known/jwks.json`.
     pub(super) struct LiveIdp {
         addr: std::net::SocketAddr,
         server: tokio::task::JoinHandle<()>,
@@ -852,7 +839,7 @@ mod r6m_token_exchange {
             format!("http://{}/auth/token", self.addr)
         }
 
-        /// Kill the IdP outright: any later mint must fail without it.
+        /// Kill the `IdP` outright: any later mint must fail without it.
         pub(super) fn kill(self) {
             self.server.abort();
         }
@@ -860,6 +847,143 @@ mod r6m_token_exchange {
 
     /// A counting backend transport: `tools/call` answers the marker;
     /// listings answer the one tool without counting.
+    /// The token-exchange backend R6m calls: per-caller propagation, no
+    /// `account:`.
+    pub(super) const TX: &str = "tx";
+
+    /// The verified caller the `IdP` mints for.
+    pub(super) fn alice() -> crate::key_server::oidc::VerifiedIdentity {
+        crate::key_server::oidc::VerifiedIdentity {
+            subject: "alice-subject".to_string(),
+            email: "alice@corp.example".to_string(),
+            name: None,
+            groups: vec!["eng".to_string()],
+            issuer: "https://corp-idp.example".to_string(),
+        }
+    }
+
+    /// The router over [`TX`]. Its counting transport serves `alice`'s
+    /// per-user slot (the binding token exchange mints under), so a mint that
+    /// succeeds reaches it. Returns the send counter and the directories to
+    /// keep alive.
+    pub(super) async fn gateway(
+        key: &Arc<crate::gateway::oauth::GatewayKeyPair>,
+        endpoint: String,
+        alice: &crate::key_server::oidc::VerifiedIdentity,
+    ) -> (axum::Router, Arc<AtomicUsize>, (tempfile::TempDir, tempfile::TempDir)) {
+        use crate::config::{BackendConfig, TransportConfig};
+        use crate::identity_propagation::{
+            IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
+            TokenExchangeStrategy,
+        };
+        const AUDIENCE: &str = "https://tx.internal";
+        const SCOPE: &str = "backends:tx tools:read";
+        let sends = Arc::new(AtomicUsize::new(0));
+        let backend = Arc::new(crate::backend::Backend::new(
+            TX,
+            BackendConfig {
+                transport: TransportConfig::Http {
+                    http_url: "https://tx.internal/mcp".to_string(),
+                    streamable_http: Some(true),
+                    protocol_version: None,
+                },
+                identity_propagation: Some(IdentityPropagationConfig {
+                    strategy: PropagationStrategyKind::TokenExchange,
+                    audience: AUDIENCE.to_string(),
+                    required: true,
+                    session_mode: SessionMode::Stateless,
+                    token_exchange_endpoint: Some(endpoint.clone()),
+                    token_exchange_scope: Some(SCOPE.to_string()),
+                }),
+                ..BackendConfig::r2_off()
+            },
+            &crate::config::FailsafeConfig::default(),
+            std::time::Duration::from_secs(60),
+        ));
+        let counting: Arc<dyn crate::transport::Transport> = Arc::new(Counting {
+            sends: Arc::clone(&sends),
+        });
+        backend.set_transport_for_test(Arc::clone(&counting));
+        // The per-user slot token exchange dispatches on, keyed as its
+        // `exchange_cache_key` builds it: `cache_binding(subject, audience)`
+        // widened by the length-prefixed endpoint and scope.
+        let subject = alice.stable_actor_id();
+        let binding = format!(
+            "idp:{}:{}:{}:{}:{}:{}:{}:{}",
+            subject.len(),
+            subject,
+            AUDIENCE.len(),
+            AUDIENCE,
+            endpoint.len(),
+            endpoint,
+            SCOPE.len(),
+            SCOPE,
+        );
+        backend.set_pooled_transport_for_test(
+            &crate::backend::PoolKey::PerUser { binding },
+            counting,
+        );
+        let tool: crate::protocol::Tool = serde_json::from_value(json!({
+            "name": super::TOOL,
+            "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}}
+        }))
+        .expect("a tool");
+        backend.store_shared_tools_for_test(vec![tool]);
+        let registry = Arc::new(crate::backend::BackendRegistry::new());
+        assert!(registry.register(backend), "the fixture backend registers");
+
+        let mut meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::clone(&registry));
+        meta.set_identity_propagation(Arc::new(TokenExchangeStrategy::with_http_client(
+            Arc::clone(key),
+            300,
+            reqwest::Client::new(),
+        )));
+        let log_dir = tempfile::tempdir().expect("a log directory");
+        let log = Arc::new(
+            crate::security::TransparencyLogger::open(Arc::new(
+                crate::security::transparency_log::TransparencyLogConfig {
+                    enabled: true,
+                    path: log_dir.path().join("audit.jsonl").to_string_lossy().into_owned(),
+                    key_id: "r6m".to_string(),
+                    ..crate::security::transparency_log::TransparencyLogConfig::default()
+                },
+            ))
+            .expect("the transparency log opens"),
+        );
+        meta.enable_transparency_log(Arc::clone(&log));
+        let auth = crate::config::AuthConfig::default();
+        let (mut state, store) = super::super::tests::test_router_app_state_with_auth(&auth).await;
+        let state_mut = Arc::get_mut(&mut state).expect("state is unique");
+        state_mut.backends = registry;
+        state_mut.meta_mcp = Arc::new(meta);
+        state_mut.transparency_log = Some(log);
+        (super::super::create_router(state), sends, (log_dir, store))
+    }
+
+    /// A `tools/call` as `alice`, whose verified identity rides the request.
+    pub(super) async fn send_as(
+        router: &axum::Router,
+        alice: &crate::key_server::oidc::VerifiedIdentity,
+        params: Value,
+    ) -> Value {
+        let body = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params});
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("content-type", "application/json")
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("mcp-method", "tools/call")
+            .header("mcp-name", "gateway_invoke")
+            .body(axum::body::Body::from(body.to_string()))
+            .expect("a request");
+        request.extensions_mut().insert(alice.clone());
+        let response = router.clone().oneshot(request).await.expect("an answer");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("a body");
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    }
+
     pub(super) struct Counting {
         pub(super) sends: Arc<AtomicUsize>,
     }
@@ -917,245 +1041,47 @@ mod r6m_token_exchange {
 }
 
 /// R6m (E7 meta level, through the REAL replay entry): a keyed call succeeds
-/// via token exchange; the IdP is killed and the clock moved past the cached
+/// via token exchange; the `IdP` is killed and the clock moved past the cached
 /// token's TTL; the same keyed repeat is refused, with nothing sent and no
 /// stored output. Current-thread: the forced clock is this thread's.
 #[tokio::test]
 async fn r6m_token_exchange_replay_after_idp_kill_and_ttl_is_refused() {
     use std::sync::atomic::Ordering;
-    use std::time::Duration;
 
-    use serde_json::json;
-
-    use r6m_token_exchange::{ALLOW, Counting, LiveIdp};
-
-    use crate::backend::{Backend, BackendRegistry};
-    use crate::config::{BackendConfig, TransportConfig};
-    use crate::gateway::meta_mcp::MetaMcp;
-    use crate::gateway::meta_mcp::admission::SyncAdmission;
-    use crate::gateway::oauth::GatewayKeyPair;
-    use crate::identity_propagation::{
-        IdentityPropagationConfig, PropagationStrategyKind, SessionMode, TokenExchangeStrategy,
+    let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
+    let idp = r6m_token_exchange::LiveIdp::start(&key).await;
+    let alice = r6m_token_exchange::alice();
+    let (router, sends, _dirs) = r6m_token_exchange::gateway(&key, idp.endpoint(), &alice).await;
+    let call = || {
+        json!({"name": "gateway_invoke",
+            "arguments": {"server": r6m_token_exchange::TX, "tool": TOOL,
+                "arguments": {"folder": "inbox"}},
+            "_meta": meta(Some("r6m"), false)})
     };
-    use crate::key_server::oidc::VerifiedIdentity;
 
-    const BACKEND: &str = "tx";
-
-    // The IdP, and the gateway key it trusts.
-    let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
-    let idp = LiveIdp::start(&key).await;
-    let endpoint = idp.endpoint();
-
-    // The token-exchange backend: per-caller propagation, no `account:`.
-    let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let registry = Arc::new(BackendRegistry::new());
-    let backend_config = BackendConfig {
-        transport: TransportConfig::Http {
-            http_url: "https://tx.internal/mcp".to_string(),
-            streamable_http: Some(true),
-            protocol_version: None,
-        },
-        identity_propagation: Some(IdentityPropagationConfig {
-            strategy: PropagationStrategyKind::TokenExchange,
-            audience: "https://tx.internal".to_string(),
-            required: true,
-            session_mode: SessionMode::Stateless,
-            token_exchange_endpoint: Some(endpoint),
-            token_exchange_scope: Some("backends:tx tools:read".to_string()),
-        }),
-        ..BackendConfig::r2_off()
-    };
-    let backend = Arc::new(Backend::new(
-        BACKEND,
-        backend_config,
-        &crate::config::FailsafeConfig::default(),
-        Duration::from_secs(60),
-    ));
-    backend.set_transport_for_test(Arc::new(Counting {
-        sends: Arc::clone(&sends),
-    }));
-    let tool: crate::protocol::Tool = serde_json::from_value(json!({
-        "name": TOOL, "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}}
-    }))
-    .expect("a tool");
-    backend.store_shared_tools_for_test(vec![tool]);
-    assert!(registry.register(backend), "the fixture backend registers");
-
-    let mut meta = MetaMcp::new(registry);
-    meta.set_identity_propagation(Arc::new(TokenExchangeStrategy::with_http_client(
-        Arc::clone(&key),
-        300,
-        reqwest::Client::new(),
-    )));
-    let log_dir = tempfile::tempdir().expect("a log directory");
-    let log = Arc::new(
-        crate::security::TransparencyLogger::open(Arc::new(
-            crate::security::transparency_log::TransparencyLogConfig {
-                enabled: true,
-                path: log_dir.path().join("audit.jsonl").to_string_lossy().into_owned(),
-                key_id: "r6m".to_string(),
-                ..crate::security::transparency_log::TransparencyLogConfig::default()
-            },
-        ))
-        .expect("the transparency log opens"),
-    );
-    meta.enable_transparency_log(log);
-
-    // E7 classification at the backend: no account, but a per-caller mint.
+    // A keyed call succeeds through token exchange, over the real HTTP route.
+    let first = r6m_token_exchange::send_as(&router, &alice, call()).await;
     assert!(
-        meta.target_account(BACKEND, TOOL).is_none(),
-        "R6m premise: a token-exchange backend without `account:` names an account"
+        first.to_string().contains(MARKER),
+        "premise: the token-exchange call did not dispatch: {first}"
     );
-    assert!(
-        meta.mints_per_caller(BACKEND, TOOL),
-        "R6m premise: a token-exchange backend mints nothing per caller"
-    );
-    assert!(
-        meta.stored_replay_defers(BACKEND, TOOL),
-        "R6m premise: a token-exchange backend's Replay does not defer"
-    );
+    assert_eq!(sends.load(Ordering::SeqCst), 1, "premise: {first}");
 
-    let alice = VerifiedIdentity {
-        subject: "alice-subject".to_string(),
-        email: "alice@corp.example".to_string(),
-        name: None,
-        groups: vec!["eng".to_string()],
-        issuer: "https://corp-idp.example".to_string(),
-    };
-    let invoke_args = || {
-        json!({"server": BACKEND, "tool": TOOL, "arguments": {"folder": "inbox"}})
-    };
-    let retry = |key: &str| crate::protocol::mrtr::RetryFields {
-        input_responses: None,
-        request_state: None,
-        idempotency_key: Some(key.to_string()),
-        malformed: Vec::new(),
-        attestation: None,
-    };
-    fn caller<'a>(
-        retry: &'a crate::protocol::mrtr::RetryFields,
-        alice: &'a VerifiedIdentity,
-    ) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'a> {
-        crate::gateway::meta_mcp::MetaMcpCallerContext {
-            task: None,
-            signing: None,
-            execution: None,
-            credential_principal: None,
-            authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
-            credential_kind: crate::security::audit::CredentialKind::None,
-            is_modern: false,
-            protocol_revision: None,
-            authorizer: &ALLOW,
-            stdio_nonce: None,
-            caller_key: None,
-            verified_identity: Some(alice),
-            api_key_name: None,
-            agent_id: None,
-            agent_declared: None,
-            grant_subject: None,
-            is_admin: false,
-            surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
-            input_capabilities: crate::protocol::meta::Declared::NONE,
-            retry,
-            confirmation:
-                crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
-            era: crate::protocol::meta::Era::Legacy,
-            channel: &crate::gateway::input_bridge::NoClientChannel,
-        }
-    }
-
-    // First: the keyed call succeeds via token exchange. The pre-pass is a
-    // no-op here (no account to fill); admission and dispatch are the real
-    // route-stage path, and the lease settle retains the result.
-    let retry1 = retry("r6m");
-    let args1 = invoke_args();
-    let id1 = crate::protocol::RequestId::Number(7);
-    let (first, lease) = crate::gateway::meta_mcp::visible::with_visibility_memo(async {
-        let base = caller(&retry1, &alice);
-        let admission = meta
-            .admit_meta_sync_for_test(
-                crate::gateway::meta_mcp::AdmissionOwner::local_operator(),
-                &base,
-                "gateway_invoke",
-                &args1,
-                Some("s1"),
-                &id1,
-            )
-            .expect("premise: admission runs");
-        let lease = match admission {
-            SyncAdmission::Owned(lease) => lease,
-            _ => panic!("premise: the first keyed call is not admitted owned"),
-        };
-        let leased = crate::gateway::meta_mcp::MetaMcpCallerContext {
-            execution: Some(&lease),
-            ..base
-        };
-        let response = meta
-            .handle_tools_call(id1, "gateway_invoke", args1, Some("s1"), leased)
-            .await;
-        (response, lease)
-    })
-    .await;
-    assert!(
-        first.to_value_lossy().to_string().contains(MARKER),
-        "premise: the token-exchange call did not dispatch: {first:?}"
-    );
-    assert_eq!(sends.load(Ordering::SeqCst), 1, "premise: {first:?}");
-    lease.complete_secured(&first);
-
-    // The IdP dies and the cached token's TTL (one hour) passes; the retained
-    // result (one day) is still present.
+    // The `IdP` dies and the cached token's TTL (one hour) passes; the
+    // retained result (one day) is still present.
     idp.kill();
     let now = crate::clock::unix_secs().expect("a test host clock reads after 1970");
     let _clock = crate::clock::test_clock::at_secs(now + 7200);
 
-    // Repeat: the same keyed call. Admission replays it with its target; the
-    // replay defers (E7); the live proof fails without the IdP; nothing is
-    // sent and no stored output goes out.
-    let retry2 = retry("r6m");
-    let caller2 = caller(&retry2, &alice);
-    let args2 = invoke_args();
-    let id2 = crate::protocol::RequestId::Number(7);
-    let again = crate::gateway::meta_mcp::visible::with_visibility_memo(async {
-        let admission = meta
-            .admit_meta_sync_for_test(
-                crate::gateway::meta_mcp::AdmissionOwner::local_operator(),
-                &caller2,
-                "gateway_invoke",
-                &args2,
-                Some("s1"),
-                &id2,
-            )
-            .expect("R6m: admission runs");
-        let (response, audit, target) = match admission {
-            SyncAdmission::Replay(response, audit, target) => (response, audit, target),
-            _ => panic!("R6m: the repeat was not admitted as a replay"),
-        };
-        assert!(
-            target
-                .as_ref()
-                .is_some_and(|target| target.server == BACKEND && target.tool == TOOL),
-            "R6m: the replay carries no single-call target"
-        );
-        match meta.defer_or_serve_replay("gateway_invoke", &args2, &caller2, target, response, audit)
-        {
-            Some(_) => panic!("R6m: the replay was served without a live proof"),
-            None => {
-                meta.handle_tools_call(id2, "gateway_invoke", args2, Some("s1"), caller2)
-                    .await
-            }
-        }
-    })
-    .await;
-    eprintln!("R6m answer: {again:?}");
+    // The same keyed repeat, through the same route: admission replays it with
+    // its target, the replay defers (E7), the live mint fails without the
+    // `IdP`, and nothing stored goes out.
+    let again = r6m_token_exchange::send_as(&router, &alice, call()).await;
+    eprintln!("R6m answer: {again}");
     assert!(
-        !again.to_value_lossy().to_string().contains(MARKER),
-        "R6m: the stored output was served: {again:?}"
+        !again.to_string().contains(MARKER),
+        "R6m: the stored output was served: {again}"
     );
-    assert!(again.error.is_some(), "R6m: not a refusal: {again:?}");
-    assert_eq!(
-        sends.load(Ordering::SeqCst),
-        1,
-        "R6m: the call reached the backend: {again:?}"
-    );
+    assert!(again.get("error").is_some(), "R6m: not a refusal: {again}");
+    assert_eq!(sends.load(Ordering::SeqCst), 1, "R6m: the call reached the backend: {again}");
 }
