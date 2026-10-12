@@ -129,6 +129,24 @@ async fn send(fx: &Fx, method: &str, name: &str, params: Value) -> Value {
     send_to(fx, "/mcp", method, name, params).await
 }
 
+async fn send_full(fx: &Fx, name: &str, params: Value) -> (axum::http::StatusCode, Value) {
+    let body = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params});
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", name)
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = fx.router.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
 async fn send_to(fx: &Fx, uri: &str, method: &str, name: &str, params: Value) -> Value {
     let body = json!({"jsonrpc": "2.0", "id": 7, "method": method, "params": params});
     let request = axum::http::Request::builder()
@@ -402,7 +420,7 @@ async fn r4_revoked_surfaced_name_is_not_served_the_retained_result() {
     assert!(first.to_string().contains(MARKER), "premise: dispatched: {first}");
     let sent = fx.gateway.tool_calls().len();
     fx.gateway.revoke_operator_grant().await;
-    let again = send(&fx, "tools/call", TOOL, call("r4")).await;
+    let (again_status, again) = send_full(&fx, TOOL, call("r4")).await;
     eprintln!("R4 answer: {again}");
     // Twin (i): a name that exists on no backend, on the same fixture.
     // Fresh key, same shape.
@@ -412,7 +430,7 @@ async fn r4_revoked_surfaced_name_is_not_served_the_retained_result() {
         "arguments": {"folder": "inbox"},
         "_meta": meta(Some("r4-missing"), false),
     });
-    let truly_missing = send(&fx, "tools/call", missing_name, missing_call).await;
+    let (missing_status, truly_missing) = send_full(&fx, missing_name, missing_call).await;
     eprintln!("R4 truly-missing: {truly_missing}");
     // Twin (ii): never surfaced, so the same name matches no tool.
     // Fresh key, same shape.
@@ -448,6 +466,10 @@ async fn r4_revoked_surfaced_name_is_not_served_the_retained_result() {
     assert!(
         fx_never.gateway.tool_calls().is_empty(),
         "R4: the never-granted call reached the backend: {never}"
+    );
+    assert_eq!(
+        again_status, missing_status,
+        "R4: the revoked repeat's HTTP status differs from a missing name's"
     );
     assert_refused_unsent(&fx, "R4", &again, sent);
     assert_eq!(
@@ -804,6 +826,57 @@ async fn t4_live_task_repeat_is_served_at_the_base_custody_cost() {
 /// Custody resolutions a live task repeat costs on the release base.
 /// Measured on 573338311 (release base), and the same with STORED.2 (E10b).
 const T4_BASE_RESOLVES: usize = 2;
+
+/// E8a (no-leak twin; mutant M40): a revoked caller's keyed repeat by the
+/// surfaced name with the key that HAS a stored result answers byte-for-byte
+/// (normalising only `id`), and with the same HTTP status, as the same call
+/// with a fresh key that has none: no key state is consulted before the live
+/// answer. Consulting stored-key state first (M40) reveals the key (a 409).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn e8a_a_stored_key_and_a_fresh_key_answer_alike_for_a_hidden_name() {
+    let fx = fixture(true).await;
+    answer_marker(&fx);
+    let call = |key: &str| {
+        json!({"name": TOOL, "arguments": {"folder": "inbox"}, "_meta": meta(Some(key), false)})
+    };
+    let first = send(&fx, "tools/call", TOOL, call("e8a")).await;
+    assert!(first.to_string().contains(MARKER), "premise: dispatched: {first}");
+    fx.gateway.revoke_operator_grant().await;
+    let (stored_status, stored) = send_full(&fx, TOOL, call("e8a")).await;
+    let (fresh_status, fresh) = send_full(&fx, TOOL, call("e8a-fresh")).await;
+    eprintln!("E8a stored key: {stored}");
+    eprintln!("E8a fresh key: {fresh}");
+    let (mut stored_id, mut fresh_id) = (stored.clone(), fresh.clone());
+    stored_id["id"] = Value::Null;
+    fresh_id["id"] = Value::Null;
+    assert_eq!(stored_id, fresh_id, "E8a: the stored key answers differently: {stored} vs {fresh}");
+    assert_eq!(stored_status, fresh_status, "E8a: the stored key's HTTP status differs");
+}
+
+/// N1 (no execution; mutant M39): a live surfaced tool runs once under a key,
+/// then its description is blocked, so the name has no target for the
+/// caller. The keyed repeat is admitted unprotected (E8) and the live path
+/// refuses it: nothing reaches the backend and no stored output is served.
+/// Removing the live withheld-tool refusal (M39) lets it through.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn n1_a_hidden_name_with_a_stored_key_never_executes() {
+    let fx = fixture(true).await;
+    answer_marker(&fx);
+    let call = || {
+        json!({"name": TOOL, "arguments": {"folder": "inbox"}, "_meta": meta(Some("n1"), false)})
+    };
+    let first = send(&fx, "tools/call", TOOL, call()).await;
+    assert!(first.to_string().contains(MARKER), "premise: dispatched: {first}");
+    let sent = fx.gateway.tool_calls().len();
+    fx.gateway
+        .backends()
+        .get(BACKEND)
+        .expect("the backend")
+        .block_tool_for_test(TOOL);
+    let again = send(&fx, "tools/call", TOOL, call()).await;
+    eprintln!("N1 answer: {again}");
+    assert_refused_unsent(&fx, "N1", &again, sent);
+}
 
 /// G1 (guard; mutant M31): on the direct route a revoked grant's keyed replay
 /// is refused at stage 5 (the identity mint), before 7a/7b can serve a stored
