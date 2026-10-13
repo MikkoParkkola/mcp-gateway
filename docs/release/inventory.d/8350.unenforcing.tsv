@@ -20,3 +20,4 @@ src/gateway/router/view_judge.rs	resolve	1	Forwards to resolve_caller for the li
 src/gateway/router/view_judge.rs	resolve	2	Forwards to resolve_caller for one fan-out; decides nothing itself (MIK-8350)
 src/gateway/router/view_judge.rs	baseline_for	1	Collects the per-backend view digests for a resolved caller; a hint it gates carries no tool data and access is checked again at delivery (MIK-8350)
 src/gateway/server/support.rs	with_not_after	1	Captures client certificate notAfter for future MIK-8377 checks; no expiry enforcement here (MIK-8350)
+src/gateway/router/app_state_announce.rs	announce_backend_view_changed	1	Delegates a content-free view-change nudge to the existing judged proxy broadcast and scoped subscription publication; the caller/view decisions remain in those judges and this function grants no access (MIK-8350)
