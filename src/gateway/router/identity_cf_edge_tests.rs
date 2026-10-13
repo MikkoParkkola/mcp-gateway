@@ -19,6 +19,17 @@ fn map(pairs: &[(&str, &str)]) -> HeaderMap {
     map
 }
 
+fn subject_of(
+    result: Result<Option<HeaderAdmission>, IdentityHeaderRefusal>,
+) -> Result<Option<GrantSubject>, IdentityHeaderRefusal> {
+    result.map(|admission| {
+        admission.map(|admission| match admission {
+            HeaderAdmission::Proxy { subject, .. }
+            | HeaderAdmission::Cloudflare { subject, .. } => subject,
+        })
+    })
+}
+
 fn identity(issuer: &str, subject: &str) -> VerifiedIdentity {
     VerifiedIdentity {
         subject: subject.to_string(),
@@ -32,20 +43,20 @@ fn identity(issuer: &str, subject: &str) -> VerifiedIdentity {
 #[tokio::test]
 async fn a_gateway_identity_header_is_refused_in_access_mode() {
     let h = map(&[(HEADER_GATEWAY_IDENTITY, "someone")]);
-    let result = cloudflare_access_identity(&h, None).await;
+    let result = subject_of(cloudflare_access_identity(&h, None).await);
     assert_eq!(result, Err(IdentityHeaderRefusal::WrongModeHeader));
 }
 
 #[tokio::test]
 async fn no_access_headers_means_no_identity() {
-    let result = cloudflare_access_identity(&HeaderMap::new(), None).await;
+    let result = subject_of(cloudflare_access_identity(&HeaderMap::new(), None).await);
     assert_eq!(result, Ok(None));
 }
 
 #[tokio::test]
 async fn an_assertion_without_a_verifier_is_refused() {
     let h = map(&[(HEADER_CF_ACCESS_JWT, "a.b.c")]);
-    let result = cloudflare_access_identity(&h, None).await;
+    let result = subject_of(cloudflare_access_identity(&h, None).await);
     assert_eq!(result, Err(IdentityHeaderRefusal::AccessAssertion));
 }
 

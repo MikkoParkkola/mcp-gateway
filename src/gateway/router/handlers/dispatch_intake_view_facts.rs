@@ -3,40 +3,27 @@
 //! MIK-8350 D16: what a stream opened by a request keeps of the identity the
 //! request was admitted under, read once at intake.
 
-use axum::http::{Extensions, HeaderMap};
+use axum::http::Extensions;
 
 use super::Intake;
-use crate::gateway::router::AppState;
-use crate::gateway::streaming::{Redacted, ViewSubject};
-use crate::key_server::oidc::VerifiedIdentity;
+use crate::gateway::streaming::{HeldSource, ViewSubject};
 
 /// The facts that outlive the request: the adapter's verdict on its
-/// assertion, the raw Cloudflare Access assertion or the trusted proxy's peer
-/// (whichever is the identity source), and the certificate's `notAfter`.
+/// assertion, the identity source the admission selected, and the
+/// certificate's `notAfter`.
 pub(super) struct ViewFacts {
     adapter: Option<crate::gateway::openwebui_adapter::AdapterAssertion>,
-    cf_assertion: Option<Redacted>,
-    proxy_peer: Option<std::net::SocketAddr>,
+    source: HeldSource,
     cert_not_after: Option<u64>,
 }
 
 impl ViewFacts {
-    pub(super) fn capture(
-        state: &AppState,
-        (headers, extensions): (&HeaderMap, &Extensions),
-        verified: Option<&VerifiedIdentity>,
-    ) -> Self {
-        let (cf_assertion, proxy_peer) = crate::gateway::router::identity::identity_source_facts(
-            state.meta_mcp.caller_identity(),
-            (headers, extensions),
-            verified,
-        );
+    pub(super) fn capture(extensions: &Extensions, source: HeldSource) -> Self {
         Self {
             adapter: extensions
                 .get::<crate::gateway::openwebui_adapter::AdapterAssertion>()
                 .copied(),
-            cf_assertion,
-            proxy_peer,
+            source,
             cert_not_after: extensions
                 .get::<crate::mtls::identity::CertNotAfter>()
                 .map(|not_after| not_after.0),
@@ -57,8 +44,7 @@ impl Intake<'_> {
             verified_identity: self.verified_identity.clone(),
             adapter: facts.adapter,
             cert_not_after: facts.cert_not_after,
-            cf_assertion: facts.cf_assertion.clone(),
-            proxy_peer: facts.proxy_peer,
+            identity_source: facts.source.clone(),
             cf_grace: std::sync::Arc::default(),
         }
     }

@@ -22,6 +22,27 @@ pub(super) enum Attach {
     Listen,
 }
 
+/// What one read of an [`Events`] stream found: an event, the end of the
+/// stream, a passed deadline, or a body error. Only `Eof` proves closure.
+#[derive(Debug, PartialEq)]
+pub(super) enum EventOutcome {
+    Event(Value),
+    Eof,
+    Timeout,
+    Error(String),
+}
+
+impl EventOutcome {
+    /// The event this outcome carries, or a panic naming `what` was being
+    /// read and the outcome that arrived instead.
+    pub(super) fn expect_event(self, what: &str) -> Value {
+        match self {
+            Self::Event(value) => value,
+            other => panic!("{what}: {other:?}"),
+        }
+    }
+}
+
 /// A listen response body read as SSE `data:` events.
 pub(super) struct Events {
     pub(super) stream: std::pin::Pin<Box<axum::body::BodyDataStream>>,
@@ -29,39 +50,127 @@ pub(super) struct Events {
 }
 
 impl Events {
-    /// The next event, or `None` if the stream ends or `ARRIVAL` passes.
-    pub(super) async fn next(&mut self) -> Option<Value> {
+    /// The next event within `ARRIVAL`: `Timeout` when that deadline
+    /// passes, `Eof` only when the stream actually ends.
+    pub(super) async fn next(&mut self) -> EventOutcome {
         let deadline = tokio::time::Instant::now() + ARRIVAL;
         self.next_by(Some(deadline)).await
     }
 
-    /// The next event, waiting without a deadline; `None` only when the
+    /// The next event, waiting without a deadline; `Eof` only when the
     /// stream ends. A real client reads continuously, which is what drives
     /// the server's write loop.
-    pub(super) async fn next_unbounded(&mut self) -> Option<Value> {
+    pub(super) async fn next_unbounded(&mut self) -> EventOutcome {
         self.next_by(None).await
     }
 
-    async fn next_by(&mut self, deadline: Option<tokio::time::Instant>) -> Option<Value> {
+    async fn next_by(&mut self, deadline: Option<tokio::time::Instant>) -> EventOutcome {
         loop {
             if let Some(end) = self.buffer.find("\n\n") {
                 let block: String = self.buffer.drain(..end + 2).collect();
                 if let Some(data) = block.lines().find_map(|l| l.strip_prefix("data:"))
                     && let Ok(value) = serde_json::from_str(data.trim())
                 {
-                    return Some(value);
+                    return EventOutcome::Event(value);
                 }
                 continue;
             }
             let chunk = match deadline {
-                Some(deadline) => tokio::time::timeout_at(deadline, self.stream.next())
-                    .await
-                    .ok()??
-                    .ok()?,
-                None => self.stream.next().await?.ok()?,
+                Some(deadline) => match tokio::time::timeout_at(deadline, self.stream.next()).await
+                {
+                    Err(_) => return EventOutcome::Timeout,
+                    Ok(None) => return EventOutcome::Eof,
+                    Ok(Some(Ok(chunk))) => chunk,
+                    Ok(Some(Err(error))) => return EventOutcome::Error(error.to_string()),
+                },
+                None => match self.stream.next().await {
+                    None => return EventOutcome::Eof,
+                    Some(Ok(chunk)) => chunk,
+                    Some(Err(error)) => return EventOutcome::Error(error.to_string()),
+                },
             };
             self.buffer.push_str(&String::from_utf8_lossy(&chunk));
         }
+    }
+}
+
+/// A GET stream body read continuously by an owned task into a channel, as
+/// a real client reads it. The task forwards each event, then exactly one
+/// terminal outcome (`Eof` or `Error`), and ends; dropping the relay
+/// aborts the task, and a dropped receiver ends it too.
+pub(super) struct Relay {
+    events: tokio::sync::mpsc::UnboundedReceiver<EventOutcome>,
+    task: tokio::task::JoinHandle<()>,
+    terminal: Option<EventOutcome>,
+}
+
+impl Drop for Relay {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+impl Relay {
+    /// The next forwarded outcome. Once a terminal outcome is observed it
+    /// is cached and re-observed identically by every later call, so no
+    /// reader can consume the only closure proof. A channel that closes
+    /// without a terminal outcome is a broken relay invariant.
+    pub(super) async fn recv(&mut self) -> EventOutcome {
+        if let Some(terminal) = &self.terminal {
+            return match terminal {
+                EventOutcome::Event(value) => EventOutcome::Event(value.clone()),
+                EventOutcome::Eof => EventOutcome::Eof,
+                EventOutcome::Timeout => EventOutcome::Timeout,
+                EventOutcome::Error(error) => EventOutcome::Error(error.clone()),
+            };
+        }
+        match self.events.recv().await {
+            Some(EventOutcome::Event(value)) => EventOutcome::Event(value),
+            Some(EventOutcome::Eof) => {
+                self.terminal = Some(EventOutcome::Eof);
+                EventOutcome::Eof
+            }
+            Some(EventOutcome::Error(error)) => {
+                self.terminal = Some(EventOutcome::Error(error.clone()));
+                EventOutcome::Error(error)
+            }
+            Some(EventOutcome::Timeout) => {
+                let error = "unbounded read returned Timeout".to_string();
+                self.terminal = Some(EventOutcome::Error(error.clone()));
+                EventOutcome::Error(error)
+            }
+            None => panic!("VOID: the GET relay channel closed without a terminal outcome"),
+        }
+    }
+}
+
+/// Read `body` continuously in an owned task, forwarding its outcomes: the
+/// one forwarder shared by every GET stream this fixture opens.
+pub(super) fn spawn_relay(mut body: Events) -> Relay {
+    let (tx, events) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        loop {
+            let outcome = match body.next_unbounded().await {
+                EventOutcome::Event(value) => {
+                    if tx.send(EventOutcome::Event(value)).is_err() {
+                        break;
+                    }
+                    continue;
+                }
+                EventOutcome::Eof => EventOutcome::Eof,
+                EventOutcome::Error(error) => EventOutcome::Error(error),
+                EventOutcome::Timeout => {
+                    EventOutcome::Error("unbounded read returned Timeout".to_string())
+                }
+            };
+            let _ = tx.send(outcome);
+            break;
+        }
+    });
+    Relay {
+        events,
+        task,
+        terminal: None,
     }
 }
 
@@ -71,10 +180,10 @@ pub(super) enum Ear {
     /// real stream checks the credential again as it writes a frame, so
     /// this ear does too.
     Legacy(Receiver<SessionFrame>, String),
-    /// A GET stream read through the real route: the write path runs. A task
-    /// reads its body continuously into `events`, as a real client does.
+    /// A GET stream read through the real route: the write path runs. The
+    /// relay's task reads its body continuously, as a real client does.
     Sse {
-        events: tokio::sync::mpsc::UnboundedReceiver<Value>,
+        relay: Relay,
         session: String,
     },
     Listen(Events),
@@ -114,7 +223,7 @@ impl Ear {
                 }
                 methods
             }
-            Self::Sse { events, session } => {
+            Self::Sse { relay, session } => {
                 // The sentinel rides this session's own stream, past the same
                 // write check as every frame, so everything queued before it
                 // is read first. A stream the write check closed ends here.
@@ -128,17 +237,31 @@ impl Ear {
                     },
                 );
                 let mut methods = Vec::new();
-                while let Ok(Some(event)) = tokio::time::timeout(ARRIVAL, events.recv()).await {
-                    let method = event["method"].as_str().unwrap_or_default().to_string();
-                    if method == SENTINEL {
-                        return methods;
-                    }
-                    // The stream's own `connected` event carries no method.
-                    if !method.is_empty() {
-                        methods.push(method);
+                loop {
+                    match tokio::time::timeout(ARRIVAL, relay.recv()).await {
+                        Ok(EventOutcome::Event(event)) => {
+                            let method = event["method"].as_str().unwrap_or_default().to_string();
+                            if method == SENTINEL {
+                                return methods;
+                            }
+                            // The stream's own `connected` event carries no method.
+                            if !method.is_empty() {
+                                methods.push(method);
+                            }
+                        }
+                        Ok(EventOutcome::Eof) => return methods,
+                        Ok(EventOutcome::Error(error)) => {
+                            panic!(
+                                "VOID: the GET stream errored before its sentinel: {error}: {methods:?}"
+                            )
+                        }
+                        Ok(EventOutcome::Timeout) | Err(_) => {
+                            panic!(
+                                "VOID: no sentinel within ARRIVAL — the GET drain is unproven: {methods:?}"
+                            )
+                        }
                     }
                 }
-                methods
             }
             Self::Listen(events) => {
                 // Every listener receives every sentinel, so each call marks
@@ -150,17 +273,33 @@ impl Ear {
                     "jsonrpc": "2.0", "method": SENTINEL, "params": { "mark": mark }
                 }));
                 let mut methods = Vec::new();
-                while let Some(event) = events.next().await {
-                    let method = event["method"].as_str().unwrap_or_default().to_string();
-                    if method == SENTINEL {
-                        if event["params"]["mark"] == json!(mark) {
-                            return methods;
+                loop {
+                    match events.next().await {
+                        EventOutcome::Event(event) => {
+                            let method = event["method"].as_str().unwrap_or_default().to_string();
+                            if method == SENTINEL {
+                                if event["params"]["mark"] == json!(mark) {
+                                    return methods;
+                                }
+                                continue;
+                            }
+                            methods.push(method);
                         }
-                        continue;
+                        EventOutcome::Eof => {
+                            panic!("the listen stream ended before its sentinel: {methods:?}")
+                        }
+                        EventOutcome::Timeout => {
+                            panic!(
+                                "VOID: no sentinel within ARRIVAL — closure unproven: {methods:?}"
+                            )
+                        }
+                        EventOutcome::Error(error) => {
+                            panic!(
+                                "VOID: listen body error before its sentinel: {error}: {methods:?}"
+                            )
+                        }
                     }
-                    methods.push(method);
                 }
-                panic!("the listen stream ended before its sentinel: {methods:?}");
             }
         }
     }
@@ -175,25 +314,38 @@ impl Ear {
         world.state.subscriptions.publish(json!({
             "jsonrpc": "2.0", "method": SENTINEL, "params": { "mark": u64::MAX }
         }));
-        while let Some(event) = events.next().await {
-            if event["params"]["mark"] == json!(u64::MAX) {
-                return false;
+        loop {
+            match events.next().await {
+                EventOutcome::Event(event) => {
+                    if event["params"]["mark"] == json!(u64::MAX) {
+                        return false;
+                    }
+                }
+                EventOutcome::Eof => return true,
+                EventOutcome::Timeout => {
+                    panic!("VOID: no sentinel within ARRIVAL — closure unproven")
+                }
+                EventOutcome::Error(error) => {
+                    panic!("VOID: listen body error before its sentinel: {error}")
+                }
             }
         }
-        true
     }
 
     /// Whether a GET stream is still open: `true` when its body has not ended.
     /// Reads with a short window, so "no event yet" and "stream ended" are told
     /// apart. Call after a drain, when no frame is expected. Publishes nothing.
     pub(super) async fn is_open(&mut self, world: &World) -> bool {
-        let Self::Sse { events, .. } = self else {
+        let Self::Sse { relay, .. } = self else {
             panic!("is_open() reads a GET stream");
         };
         world.settle().await;
-        match tokio::time::timeout(std::time::Duration::from_millis(100), events.recv()).await {
-            Ok(Some(_)) | Err(_) => true,
-            Ok(None) => false,
+        match tokio::time::timeout(std::time::Duration::from_millis(100), relay.recv()).await {
+            Ok(EventOutcome::Event(_) | EventOutcome::Timeout) | Err(_) => true,
+            Ok(EventOutcome::Eof) => false,
+            Ok(EventOutcome::Error(error)) => {
+                panic!("VOID: the GET stream errored while probing openness: {error}")
+            }
         }
     }
 
@@ -322,19 +474,12 @@ impl World {
             .and_then(|v| v.to_str().ok())
             .expect("the stream names its session")
             .to_string();
-        let mut body = Events {
+        let body = Events {
             stream: Box::pin(response.into_body().into_data_stream()),
             buffer: String::new(),
         };
-        let (tx, events) = tokio::sync::mpsc::unbounded_channel();
-        tokio::spawn(async move {
-            while let Some(event) = body.next_unbounded().await {
-                if tx.send(event).is_err() {
-                    break;
-                }
-            }
-        });
-        (status, Some(Ear::Sse { events, session }))
+        let relay = spawn_relay(body);
+        (status, Some(Ear::Sse { relay, session }))
     }
 
     /// As [`Self::legacy`], owned as the router owns it, so a POST under
@@ -412,7 +557,7 @@ impl World {
         events
             .next()
             .await
-            .expect("the attach hint follows the acknowledgement");
+            .expect_event("the attach hint follows the acknowledgement");
         ear
     }
 
@@ -437,7 +582,7 @@ impl World {
         let Ear::Listen(events) = &mut ear else {
             unreachable!("a listen stream")
         };
-        events.next().await.expect("the attach hint");
+        events.next().await.expect_event("the attach hint");
         ear
     }
 
@@ -451,7 +596,7 @@ impl World {
         let Ear::Listen(events) = &mut ear else {
             unreachable!("a listen stream")
         };
-        events.next().await.expect("the attach hint");
+        events.next().await.expect_event("the attach hint");
         ear
     }
 
@@ -502,7 +647,11 @@ impl World {
         events
             .next()
             .await
-            .expect("the acknowledgement opens the stream");
+            .expect_event("the acknowledgement opens the stream");
         Ear::Listen(events)
     }
 }
+
+#[cfg(test)]
+#[path = "audience_ear_tests.rs"]
+mod ear_tests;

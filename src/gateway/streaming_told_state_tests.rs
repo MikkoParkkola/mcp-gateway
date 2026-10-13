@@ -109,8 +109,28 @@ async fn a_held_assertion_with_no_verifier_is_refused_and_none_held_is_not() {
     };
     assert_eq!(ViewSubject::default().verify_held_cf(&ctx).await, Ok(()));
     let held = ViewSubject {
-        cf_assertion: Some(Redacted::new("a.b.c")),
+        identity_source: HeldSource::Cloudflare(
+            crate::key_server::oidc::VerifiedAssertion::for_test("a.b.c"),
+        ),
         ..ViewSubject::default()
     };
     assert_eq!(held.verify_held_cf(&ctx).await, Err(DeadReason::Cf));
+}
+
+#[test]
+fn the_assertion_never_reaches_a_formatted_string() {
+    const ASSERTION: &str = "[REDACTED]";
+    let secret = crate::key_server::oidc::VerifiedAssertion::for_test(ASSERTION);
+    let shown = format!("{secret:?}");
+    assert!(!shown.contains("signature") && !shown.contains("payload"));
+    let shown = format!("{:?}", HeldSource::Cloudflare(secret));
+    assert!(!shown.contains("signature") && !shown.contains("payload"));
+    let subject = ViewSubject {
+        identity_source: HeldSource::Cloudflare(
+            crate::key_server::oidc::VerifiedAssertion::for_test(ASSERTION),
+        ),
+        ..ViewSubject::default()
+    };
+    let shown = format!("{subject:?} {:?}", subject.identity_source);
+    assert!(!shown.contains("signature") && !shown.contains("payload"));
 }

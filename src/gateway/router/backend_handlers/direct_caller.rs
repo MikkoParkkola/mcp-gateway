@@ -159,7 +159,7 @@ pub(super) async fn resolve_caller(
     )
     .await
     {
-        Ok(subject) => subject,
+        Ok(admission) => admission.subject,
         Err(refusal) => return Err(super::super::identity::identity_refusal_response(refusal)),
     };
     caller.spend_key = super::super::identity::caller_key(

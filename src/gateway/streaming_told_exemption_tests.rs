@@ -101,7 +101,9 @@ async fn attached(subject: ViewSubject) -> std::result::Result<Option<StreamView
 #[tokio::test]
 async fn a_subject_with_only_a_cf_assertion_is_refused_at_attach() {
     let subject = ViewSubject {
-        cf_assertion: Some(Redacted::new("assertion")),
+        identity_source: HeldSource::Cloudflare(
+            crate::key_server::oidc::VerifiedAssertion::for_test("assertion"),
+        ),
         ..ViewSubject::default()
     };
     assert!(matches!(attached(subject).await, Err(DeadReason::Bearer)));

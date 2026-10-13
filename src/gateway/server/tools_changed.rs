@@ -385,6 +385,8 @@ mod audience_l2_tests;
 #[cfg(test)]
 mod audience_review_tests;
 #[cfg(test)]
+mod audience_source_tests;
+#[cfg(test)]
 mod audience_sse_tests;
 #[cfg(test)]
 mod audience_tests;

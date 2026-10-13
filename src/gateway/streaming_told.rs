@@ -137,66 +137,11 @@ impl ToldState {
     }
 }
 
-/// A secret carried only so it can be checked again: its `Debug` and `Display`
-/// never show a byte of it.
-#[derive(Clone)]
-pub(crate) struct Redacted(String);
-
-impl Redacted {
-    pub(crate) fn new(secret: impl Into<String>) -> Self {
-        Self(secret.into())
-    }
-
-    /// The secret, for the check that needs it.
-    pub(crate) fn expose(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Debug for Redacted {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("<redacted>")
-    }
-}
-
-impl std::fmt::Display for Redacted {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("<redacted>")
-    }
-}
-
-/// How many transient Cloudflare failures a stream survives.
-const CF_MAX_TRANSIENT: u32 = 3;
-
-/// Per-stream Cloudflare grace: transient failures stay this decision.
-#[derive(Debug, Default)]
-pub(crate) struct CfGrace {
-    consecutive: u32,
-    last_good: Option<u64>,
-}
-
-/// What a Cloudflare re-verification means for the stream.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum CfVerdict {
-    Good,
-    Transient,
-    Dead,
-}
-
-// `Ok` is `Good`; unreachable-provider errors are `Transient`; the rest is `Dead`.
-pub(super) fn cf_verdict(
-    result: &Result<crate::key_server::oidc::VerifiedIdentity, crate::key_server::oidc::OidcError>,
-) -> CfVerdict {
-    match result {
-        Ok(_) => CfVerdict::Good,
-        Err(
-            crate::key_server::oidc::OidcError::HttpError(_)
-            | crate::key_server::oidc::OidcError::DiscoveryStatus(_)
-            | crate::key_server::oidc::OidcError::ClientUnavailable,
-        ) => CfVerdict::Transient,
-        Err(_) => CfVerdict::Dead,
-    }
-}
+#[path = "streaming_told_cf.rs"]
+mod cf;
+pub(crate) use cf::{CfGrace, HeldSource};
+#[cfg(test)]
+pub(super) use cf::{CfVerdict, cf_verdict};
 
 /// The identities and request surface a stream was opened under, besides its
 /// credential: part of what its caller is shown, so the judge builds the scope
@@ -217,12 +162,11 @@ pub(crate) struct ViewSubject {
     /// checked per decision by MIK-8377.
     #[expect(dead_code, reason = "read by MIK-8377's live() clause")]
     pub(crate) cert_not_after: Option<u64>,
-    /// The raw Cloudflare Access assertion, when that is the identity source;
-    /// re-verified per decision by MIK-8377 and dropped with the stream.
-    /// Kept raw for the stream's life: re-verifying needs the token itself.
-    pub(crate) cf_assertion: Option<Redacted>,
-    /// The trusted proxy's peer address, when that is the identity source.
-    pub(crate) proxy_peer: Option<std::net::SocketAddr>,
+    /// The header identity this stream was admitted under, when one was:
+    /// the verified Cloudflare assertion (re-verified per decision by
+    /// MIK-8377 and dropped with the stream; re-verifying needs the token
+    /// itself) or the trusted proxy's peer address.
+    pub(crate) identity_source: HeldSource,
     /// Grace for transient Cloudflare re-verification failures.
     pub(crate) cf_grace: Arc<parking_lot::Mutex<CfGrace>>,
 }
@@ -255,53 +199,6 @@ impl ViewSubject {
             )
             .as_bytes(),
         )
-    }
-
-    /// Re-verify the held Cloudflare Access assertion against the verifier's
-    /// current keys, as admission did, so a rotated or revoked key ends the
-    /// stream. Nothing to check for a stream that holds no assertion; a
-    /// missing verifier refuses, as admission does.
-    pub(crate) async fn verify_held_cf(&self, ctx: &LiveCtx<'_>) -> Result<(), DeadReason> {
-        let Some(assertion) = &self.cf_assertion else {
-            return Ok(());
-        };
-        let Some(verifier) = ctx.cf_verifier else {
-            return Err(DeadReason::Cf);
-        };
-        let age = crate::config::KeyServerOidcConfig {
-            token_age: crate::key_server::TokenAgeCap::ExpOnly,
-        };
-        let outcome = verifier.verify(assertion.expose(), &age).await;
-        match cf_verdict(&outcome) {
-            CfVerdict::Good => {
-                let mut grace = self.cf_grace.lock();
-                grace.consecutive = 0;
-                if let Ok(now) = crate::clock::unix_secs() {
-                    grace.last_good = Some(now);
-                }
-                Ok(())
-            }
-            CfVerdict::Dead => Err(DeadReason::Cf),
-            CfVerdict::Transient => {
-                let Ok(now) = crate::clock::unix_secs() else {
-                    return Err(DeadReason::Cf);
-                };
-                let mut grace = self.cf_grace.lock();
-                if grace.last_good.is_none() {
-                    grace.last_good = Some(now);
-                }
-                grace.consecutive = grace.consecutive.saturating_add(1);
-                if grace.consecutive >= CF_MAX_TRANSIENT {
-                    return Err(DeadReason::Cf);
-                }
-                let ttl = verifier.jwks_ttl().as_secs();
-                let since = grace.last_good.map_or(0, |last| now.saturating_sub(last));
-                if since > ttl {
-                    return Err(DeadReason::Cf);
-                }
-                Ok(())
-            }
-        }
     }
 
     /// Whether the identity the stream was admitted under is still good, or
@@ -348,12 +245,11 @@ pub(crate) fn dead_at_attach(
             None,
             DeadReason::Bearer,
             ViewSubject {
-                cf_assertion: None,
+                identity_source: HeldSource::None,
                 cert: None,
                 adapter: None,
                 oauth_agent: None,
                 verified_identity: None,
-                proxy_peer: None,
                 ..
             },
         ) => AtAttach::OpenAnonymous,

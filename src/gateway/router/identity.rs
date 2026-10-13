@@ -34,42 +34,27 @@ const HEADER_IDENTITY_MAX_LEN: usize = 512;
 /// set, typically 800-2000+ bytes, so it gets its own, larger bound.
 const HEADER_CF_ACCESS_JWT_MAX_LEN: usize = 8 * 1024;
 
-/// The identity source facts a held stream keeps beside its subject, so a
-/// check made later can ask the same question again (MIK-8350 D16): the raw
-/// Cloudflare Access assertion when that header identity is the one in force,
-/// and the direct peer when the trusted proxy is. Neither when a verified
-/// identity (a token's, the adapter's) takes precedence, as in
-/// [`caller_grant_subject`].
-pub(super) fn identity_source_facts(
-    config: &CallerIdentityConfig,
-    (headers, extensions): (&HeaderMap, &axum::http::Extensions),
-    verified: Option<&VerifiedIdentity>,
-) -> (
-    Option<crate::gateway::streaming::Redacted>,
-    Option<SocketAddr>,
-) {
-    if verified
-        .and_then(grant_subject_from_verified_identity)
-        .is_some()
-    {
-        return (None, None);
-    }
-    match config.mode {
-        CallerIdentityMode::Off => (None, None),
-        CallerIdentityMode::TrustedProxy => (
-            None,
-            extensions
-                .get::<axum::extract::ConnectInfo<SocketAddr>>()
-                .map(|info| info.0),
-        ),
-        CallerIdentityMode::CloudflareAccess => (
-            headers
-                .get(HEADER_CF_ACCESS_JWT)
-                .and_then(|value| value.to_str().ok())
-                .map(crate::gateway::streaming::Redacted::new),
-            None,
-        ),
-    }
+/// What [`caller_grant_subject`] resolved: the caller's grant subject and,
+/// beside it, the header identity a held stream keeps so a check made later
+/// can ask the same question again (MIK-8350 D16) — present only when that
+/// header identity was admitted and selected, never re-derived from the
+/// raw headers.
+pub(super) struct CallerAdmission {
+    pub(super) subject: Option<GrantSubject>,
+    pub(super) source: crate::gateway::streaming::HeldSource,
+}
+
+/// A header identity admission actually made: its subject and the fact a
+/// stream holds for it.
+enum HeaderAdmission {
+    Proxy {
+        subject: GrantSubject,
+        peer: SocketAddr,
+    },
+    Cloudflare {
+        subject: GrantSubject,
+        held: crate::key_server::oidc::VerifiedAssertion,
+    },
 }
 
 /// Why a request's identity headers were refused. Each maps to one status.
@@ -141,7 +126,7 @@ pub(super) async fn caller_grant_subject(
     access_verifier: Option<&OidcVerifier>,
     cert_identity: Option<&CertIdentity>,
     oauth_agent_identity: Option<&OAuthAgentIdentity>,
-) -> Result<Option<GrantSubject>, IdentityHeaderRefusal> {
+) -> Result<CallerAdmission, IdentityHeaderRefusal> {
     let header_identity = match config.mode {
         CallerIdentityMode::Off => Ok(None),
         CallerIdentityMode::TrustedProxy => trusted_proxy_identity(headers, peer, config),
@@ -164,11 +149,27 @@ pub(super) async fn caller_grant_subject(
         if header_identity.is_some() {
             ignored("oidc_precedence");
         }
-        return Ok(Some(verified));
+        return Ok(CallerAdmission {
+            subject: Some(verified),
+            source: crate::gateway::streaming::HeldSource::None,
+        });
     }
-    Ok(header_identity
-        .or_else(|| cert_identity.and_then(grant_subject_from_cert_identity))
-        .or_else(|| oauth_agent_identity.and_then(grant_subject_from_oauth_agent)))
+    Ok(match header_identity {
+        Some(HeaderAdmission::Proxy { subject, peer }) => CallerAdmission {
+            subject: Some(subject),
+            source: crate::gateway::streaming::HeldSource::TrustedProxy { _peer: peer },
+        },
+        Some(HeaderAdmission::Cloudflare { subject, held }) => CallerAdmission {
+            subject: Some(subject),
+            source: crate::gateway::streaming::HeldSource::Cloudflare(held),
+        },
+        None => CallerAdmission {
+            subject: cert_identity
+                .and_then(grant_subject_from_cert_identity)
+                .or_else(|| oauth_agent_identity.and_then(grant_subject_from_oauth_agent)),
+            source: crate::gateway::streaming::HeldSource::None,
+        },
+    })
 }
 
 fn ignored(reason: &'static str) {
@@ -193,7 +194,7 @@ fn trusted_proxy_identity(
     headers: &HeaderMap,
     peer: Option<SocketAddr>,
     config: &CallerIdentityConfig,
-) -> Result<Option<GrantSubject>, IdentityHeaderRefusal> {
+) -> Result<Option<HeaderAdmission>, IdentityHeaderRefusal> {
     if any_present(headers, &[HEADER_CF_ACCESS_USER_ID, HEADER_CF_ACCESS_EMAIL]) {
         ignored("cf_access_in_trusted_proxy");
     }
@@ -201,16 +202,15 @@ fn trusted_proxy_identity(
         return Ok(None);
     }
     // No `ConnectInfo` is no proven peer (the reading of `auth.rs`).
-    let trusted = peer.is_some_and(|peer| {
+    let Some(peer) = peer.filter(|peer| {
         let peer = peer.ip().to_canonical();
         config
             .trusted_proxies
             .iter()
             .any(|entry| entry.to_canonical() == peer)
-    });
-    if !trusted {
+    }) else {
         return Err(IdentityHeaderRefusal::UntrustedPeer);
-    }
+    };
     if any_present(
         headers,
         &[HEADER_GATEWAY_IDENTITY, HEADER_GATEWAY_IDENTITY_AUTHORITY],
@@ -222,12 +222,13 @@ fn trusted_proxy_identity(
         HEADER_GATEWAY_IDENTITY_LABEL,
         HEADER_IDENTITY_MAX_LEN,
     )?;
-    Ok(strict_header(
+    let subject = strict_header(
         headers,
         HEADER_GATEWAY_IDENTITY_SUBJECT,
         HEADER_IDENTITY_MAX_LEN,
     )?
-    .and_then(|subject| GrantSubject::checked(config.authority.clone(), subject, label)))
+    .and_then(|subject| GrantSubject::checked(config.authority.clone(), subject, label));
+    Ok(subject.map(|subject| HeaderAdmission::Proxy { subject, peer }))
 }
 
 /// `cloudflare_access`: the identity is a verified `Cf-Access-Jwt-Assertion`
@@ -236,7 +237,7 @@ fn trusted_proxy_identity(
 async fn cloudflare_access_identity(
     headers: &HeaderMap,
     verifier: Option<&OidcVerifier>,
-) -> Result<Option<GrantSubject>, IdentityHeaderRefusal> {
+) -> Result<Option<HeaderAdmission>, IdentityHeaderRefusal> {
     if any_present(headers, &GATEWAY_IDENTITY_HEADERS) {
         return Err(IdentityHeaderRefusal::WrongModeHeader);
     }
@@ -254,12 +255,12 @@ async fn cloudflare_access_identity(
     let age = KeyServerOidcConfig {
         token_age: TokenAgeCap::ExpOnly,
     };
-    let identity = verifier
-        .verify(&assertion, &age)
+    let (identity, held) = verifier
+        .verify_checked(assertion, &age)
         .await
         .map_err(|_| IdentityHeaderRefusal::AccessAssertion)?;
     grant_subject_from_verified_identity(&identity)
-        .map(Some)
+        .map(|subject| Some(HeaderAdmission::Cloudflare { subject, held }))
         .ok_or(IdentityHeaderRefusal::AccessAssertion)
 }
 
@@ -462,6 +463,10 @@ fn trimmed_non_empty(value: &str) -> Option<String> {
 }
 
 #[cfg(test)]
+#[path = "identity_test_fixture.rs"]
+mod test_fixture;
+
+#[cfg(test)]
 #[path = "identity_header_tests.rs"]
 mod tests;
 
@@ -474,8 +479,8 @@ mod control_tests;
 mod cf_edge_tests;
 
 #[cfg(test)]
-#[path = "identity_source_facts_tests.rs"]
-mod source_facts_tests;
+#[path = "identity_admission_tests.rs"]
+mod admission_tests;
 
 #[cfg(all(test, feature = "firewall"))]
 #[path = "caller_key_tests.rs"]

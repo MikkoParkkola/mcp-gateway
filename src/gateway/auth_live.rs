@@ -54,12 +54,15 @@ impl HeldCredential {
 }
 
 /// The session cookie and bearer credential `headers` present, held for later
-/// re-validation; `None` when they present neither.
+/// re-validation; `None` when they present neither. Any `Authorization`
+/// header is held, even an unsupported scheme such as Basic or Digest with
+/// neither a session nor a supported credential; supported credentials are
+/// held exactly as before, and no header at all still holds nothing.
 pub(crate) fn held_credential(headers: &axum::http::HeaderMap) -> Option<HeldCredential> {
     let session = session_cookie_value(headers);
     let bearer = super::presented_credential(headers);
     let authorization_present = headers.contains_key(axum::http::header::AUTHORIZATION);
-    (session.is_some() || bearer.is_some()).then_some(HeldCredential {
+    (session.is_some() || bearer.is_some() || authorization_present).then_some(HeldCredential {
         session,
         bearer,
         authorization_present,
@@ -490,5 +493,68 @@ mod tests {
         );
         assert_ne!(plain.authorization_present, other.authorization_present);
         assert_eq!(plain.digest(), other.digest());
+    }
+
+    /// C0 T5: an `Authorization` header of a non-Bearer scheme, with no
+    /// session cookie, is still a presented credential: it must be held
+    /// (so it decides the request alone, as the middleware had it), with
+    /// the flag-free no-part digest G-DIGEST pins.
+    #[tokio::test]
+    async fn t5_basic_only_authorization_is_held() {
+        // Controls: no headers hold nothing; a cookie alone holds.
+        assert!(
+            held_credential(&axum::http::HeaderMap::new()).is_none(),
+            "control: no headers present no credential"
+        );
+        let cookie = format!("{}=handle", crate::gateway::auth::SESSION_COOKIE);
+        let mut cookie_only = axum::http::HeaderMap::new();
+        cookie_only.insert(
+            axum::http::header::COOKIE,
+            cookie.parse().expect("premise: a cookie header"),
+        );
+        assert!(
+            held_credential(&cookie_only).is_some(),
+            "control: a session cookie alone is held"
+        );
+
+        let mut basic_only = axum::http::HeaderMap::new();
+        basic_only.insert(
+            axum::http::header::AUTHORIZATION,
+            "Basic abc"
+                .parse()
+                .expect("premise: an authorization header"),
+        );
+        let held = held_credential(&basic_only);
+        assert!(
+            held.is_some(),
+            "own T5: a Basic-only Authorization header must be held"
+        );
+        let held = held.expect("own T5: the held Basic-only credential");
+        assert!(
+            held.authorization_present,
+            "dependent T5: the held credential records the Authorization header"
+        );
+        assert!(
+            held.session.is_none() && held.bearer.is_none(),
+            "dependent T5: a Basic-only credential holds neither part"
+        );
+        assert_eq!(
+            held.digest(),
+            HeldCredential {
+                session: None,
+                bearer: None,
+                authorization_present: false,
+            }
+            .digest(),
+            "dependent T5: the ownership digest stays the flag-free no-part digest"
+        );
+        let key_server = Arc::new(crate::key_server::KeyServer::new(
+            crate::config::KeyServerConfig::default(),
+        ));
+        let state = authorizer(key_server);
+        assert!(
+            current_caller(&state, Some(&held)).await.is_none(),
+            "dependent T5: a Basic-only credential resolves no caller under authentication"
+        );
     }
 }

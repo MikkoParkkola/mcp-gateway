@@ -136,7 +136,7 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
     }
     // The owner the POST that minted the session used, so a subject resumes
     // its own stream and nobody else's.
-    let (subject, owner) =
+    let (admission, owner) =
         match request_session_owner(&state, &headers, &extensions, client.as_ref()).await {
             Ok(resolved) => resolved,
             Err(refusal) => return gateway_reply(refusal),
@@ -147,7 +147,7 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
         .judges_reads()
         .then(|| {
             crate::gateway::router::identity::caller_key(
-                subject.as_ref(),
+                admission.subject.as_ref(),
                 extensions.get::<CertIdentity>(),
                 client.as_ref(),
             )
@@ -193,7 +193,12 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
     let Ok(view) = state
         .attach_get_view(
             &session_id,
-            (subject.clone(), (&headers, &extensions), uri.query()),
+            (
+                admission.subject,
+                admission.source,
+                &extensions,
+                uri.query(),
+            ),
         )
         .await
     else {

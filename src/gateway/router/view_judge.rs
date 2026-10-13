@@ -14,7 +14,8 @@ use crate::gateway::auth::AuthState;
 use crate::gateway::auth::live::{HeldCredential, current_caller};
 use crate::gateway::meta_mcp::InvokeScope;
 use crate::gateway::streaming::{
-    DeadReason, Judged, LiveCtx, PendingRefresh, ResolvedCaller, ViewDigest, ViewJudge, ViewSubject,
+    DeadReason, HeldSource, Judged, LiveCtx, PendingRefresh, ResolvedCaller, ViewDigest, ViewJudge,
+    ViewSubject,
 };
 
 /// Judges from the state the caller holds. Borrowed for the span of one
@@ -275,23 +276,18 @@ impl AppState {
             .await
     }
 
-    /// [`Self::attach_view`] for a GET: the subject is read from the request
-    /// the way the intake reads it for a POST.
+    /// [`Self::attach_view`] for a GET: the subject is the admission the
+    /// request resolved, the way the intake resolves it for a POST.
     pub(super) async fn attach_get_view(
         self: &Arc<Self>,
         session_id: &str,
-        (grant_subject, (headers, extensions), query): (
+        (grant_subject, source, extensions, query): (
             Option<crate::identity_grants::GrantSubject>,
-            (&axum::http::HeaderMap, &axum::http::Extensions),
+            HeldSource,
+            &axum::http::Extensions,
             Option<&str>,
         ),
     ) -> Result<Option<crate::gateway::streaming::StreamView>, DeadReason> {
-        let verified = extensions.get::<crate::key_server::oidc::VerifiedIdentity>();
-        let (cf_assertion, proxy_peer) = super::identity::identity_source_facts(
-            self.meta_mcp.caller_identity(),
-            (headers, extensions),
-            verified,
-        );
         let subject = ViewSubject {
             grant_subject,
             oauth_agent: extensions
@@ -308,8 +304,7 @@ impl AppState {
             cert_not_after: extensions
                 .get::<crate::mtls::identity::CertNotAfter>()
                 .map(|not_after| not_after.0),
-            cf_assertion,
-            proxy_peer,
+            identity_source: source,
             cf_grace: Arc::default(),
         };
         self.attach_view(session_id, subject).await
