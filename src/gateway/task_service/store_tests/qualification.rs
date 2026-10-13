@@ -247,7 +247,15 @@ async fn task_q_expiry_refusals_leave_durable_and_admission_capacity() {
                 let held = admission.snapshot();
                 let before = files(&path);
                 assert_eq!(
-                    store.expire(&id, 1, &admission).await.unwrap_err(),
+                    store
+                        .expire(
+                            &id,
+                            1,
+                            &admission,
+                            crate::gateway::task_service::store::CancelHold::Undated
+                        )
+                        .await
+                        .unwrap_err(),
                     StoreError::InvalidTransition
                 );
                 assert_eq!(admission.snapshot(), held);
@@ -267,7 +275,15 @@ async fn task_q_expiry_refusals_leave_durable_and_admission_capacity() {
                 let held = admission.snapshot();
                 let before = files(&path);
                 assert_eq!(
-                    store.expire(&id, 1, &admission).await.unwrap_err(),
+                    store
+                        .expire(
+                            &id,
+                            1,
+                            &admission,
+                            crate::gateway::task_service::store::CancelHold::Undated
+                        )
+                        .await
+                        .unwrap_err(),
                     StoreError::RevisionConflict
                 );
                 assert_eq!(admission.snapshot(), held);
@@ -284,7 +300,12 @@ async fn task_q_expiry_refusals_leave_durable_and_admission_capacity() {
                 let before = files(&path);
                 assert_eq!(
                     store
-                        .expire(super::FOREIGN_NAME, 2, &admission)
+                        .expire(
+                            super::FOREIGN_NAME,
+                            2,
+                            &admission,
+                            crate::gateway::task_service::store::CancelHold::Undated
+                        )
                         .await
                         .unwrap_err(),
                     StoreError::NotFound
@@ -303,7 +324,15 @@ async fn task_q_expiry_refusals_leave_durable_and_admission_capacity() {
                 let before = files(&path);
                 let foreign = services();
                 assert_eq!(
-                    store.expire(&id, 2, &foreign).await.unwrap_err(),
+                    store
+                        .expire(
+                            &id,
+                            2,
+                            &foreign,
+                            crate::gateway::task_service::store::CancelHold::Undated
+                        )
+                        .await
+                        .unwrap_err(),
                     StoreError::NotFound
                 );
                 assert_eq!(admission.snapshot(), held);
@@ -322,7 +351,15 @@ async fn task_q_expiry_refusals_leave_durable_and_admission_capacity() {
                 store.close().await.unwrap();
                 let before = files(&path);
                 assert_eq!(
-                    closed.expire(&id, 2, &admission).await.unwrap_err(),
+                    closed
+                        .expire(
+                            &id,
+                            2,
+                            &admission,
+                            crate::gateway::task_service::store::CancelHold::Undated
+                        )
+                        .await
+                        .unwrap_err(),
                     StoreError::Unavailable
                 );
                 assert_eq!(admission.snapshot(), held);
@@ -358,7 +395,15 @@ async fn task_q_expiry_refusals_leave_durable_and_admission_capacity() {
                 let held = admission.snapshot();
                 let before = files(&path);
                 assert_eq!(
-                    store.expire(&id, 2, &admission).await.unwrap_err(),
+                    store
+                        .expire(
+                            &id,
+                            2,
+                            &admission,
+                            crate::gateway::task_service::store::CancelHold::Undated
+                        )
+                        .await
+                        .unwrap_err(),
                     StoreError::Unavailable
                 );
                 assert_eq!(admission.snapshot(), held);
@@ -392,7 +437,15 @@ async fn task_q_retry_keeps_handle_until_store_expiry_transaction() {
     assert_eq!(still_binding, binding);
     assert_eq!(admission.snapshot(), held);
 
-    store.expire(&id, 2, &admission).await.unwrap();
+    store
+        .expire(
+            &id,
+            2,
+            &admission,
+            crate::gateway::task_service::store::CancelHold::Undated,
+        )
+        .await
+        .unwrap();
     assert_eq!(
         store.get(binding.principal_digest(), &id).unwrap_err(),
         StoreError::NotFound

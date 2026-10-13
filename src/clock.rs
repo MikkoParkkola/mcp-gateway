@@ -83,6 +83,18 @@ pub(crate) fn unix_secs() -> Result<u64, ClockBeforeEpoch> {
     since_epoch().map(|d| d.as_secs())
 }
 
+/// Milliseconds since the Unix epoch (MIK-8202 P4b: health and breaker stamps).
+pub(crate) fn unix_millis() -> Result<u64, ClockBeforeEpoch> {
+    since_epoch().map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// Whether a wall-clock reading is at or after the epoch, hence usable
+/// (MIK-8202 P4b: the auth dashboard's injected `Now` judges this through
+/// the clock module rather than comparing against `UNIX_EPOCH` itself).
+pub(crate) fn wall_readable(wall: SystemTime) -> bool {
+    wall.duration_since(UNIX_EPOCH).is_ok()
+}
+
 /// Now as a `SystemTime`, for a site that compares against stored
 /// `SystemTime`s. A clock that cannot be read gives a time before the
 /// epoch, which such a site already refuses (`duration_since(UNIX_EPOCH)`

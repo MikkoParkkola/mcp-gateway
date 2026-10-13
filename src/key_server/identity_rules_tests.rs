@@ -8,6 +8,13 @@
 //! `/auth/token` routes. Configs and rules are built through serde so every
 //! cell compiles against both the old and the new config shape.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use serde_json::json;
 
 use super::oidc_test_harness::{AUD, Harness, ISS_A, ISS_B, config_yaml, load};

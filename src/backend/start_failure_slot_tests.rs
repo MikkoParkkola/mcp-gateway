@@ -11,7 +11,6 @@
 //! the entry shows in its strong count before it evicts (MIK-7664).
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use super::slot_eviction_tests::{per_user_backend, slot};
@@ -20,13 +19,13 @@ use super::slot_eviction_tests::{per_user_backend, slot};
 /// claiming the slot, and that entry then evicted by the idle reaper
 /// WHEN the request resumes and its start fails on the fresh entry
 /// THEN the failure is on the fresh entry's breaker, not the evicted one's.
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn a_start_failure_after_the_eviction_race_lands_on_the_live_slot() {
     const BINDING: &str = "idp:alpha@ledger";
     let backend = per_user_backend("race");
     let key = slot(BINDING);
     let stale = backend.pooled_entry(&key).unwrap();
-    stale.last_used.store(0, Ordering::Relaxed);
+    tokio::time::advance(Duration::from_secs(2)).await;
 
     let all = u32::try_from(backend.semaphore.available_permits()).expect("permit count");
     let permits = backend.semaphore.acquire_many(all).await.expect("permits");

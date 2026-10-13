@@ -5,6 +5,13 @@
 //! instead of resuming it. Real store, real executor, one real working task;
 //! each exit is paired with the control that does not take it.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::Arc;
 
 use serde_json::json;

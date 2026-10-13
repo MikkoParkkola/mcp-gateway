@@ -85,12 +85,12 @@ impl UsageAnalytics {
     }
 
     /// Count users whose last tool call falls within the past `window`.
+    /// On a clock before 1970 no user can be judged active: 0 (MIK-8202 P4b).
     #[must_use]
     pub fn active_users(&self, window: Duration) -> usize {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_secs();
+        let Ok(now) = crate::clock::unix_secs() else {
+            return 0;
+        };
         let cutoff = now.saturating_sub(window.as_secs());
         self.snapshots
             .iter()

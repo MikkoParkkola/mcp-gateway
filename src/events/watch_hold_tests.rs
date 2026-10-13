@@ -4,6 +4,13 @@
 //! that is not watchable now is held (nothing polled), resumes by itself when
 //! it is again, and lapses at its bound, as MIK-8057 holds webhooks.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::Arc;
 
 use serde_json::json;

@@ -3,6 +3,13 @@
 //! Unit rows for the browser-session cookie rules: what counts as presenting a
 //! session, and which cookie lines yield a usable token.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use axum::http::{HeaderMap, HeaderValue, header};
 
 use super::{Session, presents_session, sole_cookie};

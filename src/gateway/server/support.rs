@@ -352,10 +352,12 @@ pub(super) async fn shutdown_signal(shutdown_tx: tokio::sync::broadcast::Sender<
     let _ = shutdown_tx.send(());
 }
 
-/// Build a `PersistedCosts` snapshot from the current enforcer state.
+/// Build a `PersistedCosts` snapshot from the save's own snapshot. It takes
+/// the save's concrete reading, never the UI snapshot's `Option` (MIK-8202
+/// P4b): `saved_at` is always dated.
 #[cfg(feature = "cost-governance")]
 pub(super) fn build_persisted_costs(
-    snap: &crate::cost_accounting::enforcer::EnforcerSnapshot,
+    snap: &crate::cost_accounting::persistence::EnforcerSaveSnapshot,
 ) -> crate::cost_accounting::persistence::PersistedCosts {
     use crate::cost_accounting::persistence::ToolTotal;
 

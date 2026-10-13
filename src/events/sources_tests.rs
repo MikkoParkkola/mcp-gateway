@@ -3,6 +3,13 @@
 //! I4 source rows that need no gateway: the burst clause of T38 and the
 //! terminal-status filter of T40.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::backend_source::QUIET;
 use super::*;
 use crate::protocol::tasks::TaskStatus;

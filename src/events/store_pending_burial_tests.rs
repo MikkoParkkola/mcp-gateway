@@ -3,6 +3,13 @@
 //! A burial keeps its receipt, and an eviction reports what it removed,
 //! when the disk fails part way (MIK-7805).
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::*;
 
 /// MIK-7805 AC5: a burial that is durable keeps its receipt even when the

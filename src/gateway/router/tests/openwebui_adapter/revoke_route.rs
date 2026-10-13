@@ -5,6 +5,13 @@
 //! T-C07a, T-C07c). Real router, auth, adapter, store and custody; only the
 //! provider transport is faked (`personal_accounts::revoke_fixture`).
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::Arc;
 
 use axum::body::Body;

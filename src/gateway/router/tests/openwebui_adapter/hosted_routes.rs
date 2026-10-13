@@ -4,6 +4,13 @@
 //! §6.4; §11.2 rows T-GUARD, T-GUARD2, T-HDR, T-POST-NOBRIDGE, T-C07a).
 //! Real router, auth, adapter, origin guard, store and custody.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::Arc;
 
 use axum::body::Body;

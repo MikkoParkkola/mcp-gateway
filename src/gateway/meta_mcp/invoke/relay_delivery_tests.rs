@@ -3,6 +3,13 @@
 //! MIK-7887.RECEIPT.3/.4: a receipt follows delivery, and describes the
 //! answer as it was delivered.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::*;
 
 /// MIK-7887.RECEIPT.3: a bridged prompt is receipted only once the channel

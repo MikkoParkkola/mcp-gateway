@@ -28,8 +28,10 @@ pub struct PersistedProfiles {
 pub struct PersistedUserProfile {
     /// User identifier (redundant with map key, kept for ergonomics).
     pub user_id: String,
-    /// Unix timestamp (seconds) when the profile was first created.
-    pub created_at: u64,
+    /// Unix timestamp (seconds) when the profile was first created, null
+    /// when undated (MIK-8202 P4b).
+    #[serde(default)]
+    pub created_at: Option<u64>,
     /// Per-tool usage records.
     pub tools: Vec<PersistedToolUsage>,
 }
@@ -41,8 +43,10 @@ pub struct PersistedToolUsage {
     pub tool_name: String,
     /// Number of invocations.
     pub call_count: u64,
-    /// Unix timestamp (seconds) of the last invocation.
-    pub last_used_secs: u64,
+    /// Unix timestamp (seconds) of the last invocation, null when undated
+    /// (MIK-8202 P4b).
+    #[serde(default)]
+    pub last_used_secs: Option<u64>,
 }
 
 impl From<ToolSuggestion> for PersistedToolUsage {
@@ -115,17 +119,17 @@ mod tests {
             "alice".to_string(),
             PersistedUserProfile {
                 user_id: "alice".to_string(),
-                created_at: 1_699_000_000,
+                created_at: Some(1_699_000_000),
                 tools: vec![
                     PersistedToolUsage {
                         tool_name: "search".to_string(),
                         call_count: 42,
-                        last_used_secs: 1_700_000_000,
+                        last_used_secs: Some(1_700_000_000),
                     },
                     PersistedToolUsage {
                         tool_name: "summarise".to_string(),
                         call_count: 7,
-                        last_used_secs: 1_699_900_000,
+                        last_used_secs: Some(1_699_900_000),
                     },
                 ],
             },
@@ -211,7 +215,7 @@ mod tests {
         let suggestion = crate::tool_profiles::ToolSuggestion {
             tool_name: "read_file".to_string(),
             call_count: 5,
-            last_used_secs: 1_700_000_000,
+            last_used_secs: Some(1_700_000_000),
         };
 
         // WHEN: converted
@@ -220,6 +224,6 @@ mod tests {
         // THEN: all fields are preserved
         assert_eq!(usage.tool_name, "read_file");
         assert_eq!(usage.call_count, 5);
-        assert_eq!(usage.last_used_secs, 1_700_000_000);
+        assert_eq!(usage.last_used_secs, Some(1_700_000_000));
     }
 }

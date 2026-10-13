@@ -6,6 +6,13 @@
 //! registry-level cell would test the channel and not the loop that decides.
 //! A child of `notifications`, declared there with `#[path]`, so it reads the
 //! same bounded stream reader and shaped assertions.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::super::super::*;
 use super::super::support::*;
 use super::helpers::{
