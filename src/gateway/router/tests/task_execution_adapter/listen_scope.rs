@@ -240,13 +240,77 @@ async fn an_uncredentialed_tools_call_on_public_mcp_is_still_served() {
 #[tokio::test]
 async fn with_auth_off_every_listener_is_told() {
     let (state, _store) = test_router_app_state().await;
+    let mock = MockBackend::answering(Answer::ok());
+    register(&state, "alpha", &mock);
+    let backend = state.backends.get("alpha").expect("alpha");
+    backend.store_shared_tools_for_test(vec![]);
+    std::assert!(
+        backend.has_cached_tools() && backend.cached_tools_known(),
+        "VOID premise: alpha baseline must be known-empty before attach"
+    );
     let mut first = admitted(&state, None, 6).await;
     let mut second = admitted(&state, None, 7).await;
+    for ear in [&mut first, &mut second] {
+        let _ = expect_message(ear, "the attach hint").await;
+    }
+    backend.store_shared_tools_for_test(vec![
+        serde_json::from_value(json!({"name": "added", "inputSchema": {"type": "object"}}))
+            .expect("a tool"),
+    ]);
+    let (cached, _) = backend.cached_tools_snapshot_and_truncated(None);
+    let names: Vec<&str> = cached.iter().map(|tool| tool.name.as_str()).collect();
+    std::assert_eq!(
+        names,
+        vec!["added"],
+        "VOID premise: alpha cache must hold the added tool"
+    );
+    std::assert!(
+        backend.has_cached_tools() && backend.cached_tools_known(),
+        "VOID premise: alpha changed cache must be known"
+    );
 
     state.announce_tools_changed("alpha").await;
+    state.subscriptions.publish(json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/tools/list_changed",
+        "params": {"_meta": {"mik7272/test-marker": "listen-scope-L4"}}
+    }));
 
     for (who, stream) in [("first", &mut first), ("second", &mut second)] {
-        let told = expect_message(stream, &format!("the {who} listener's frame")).await;
-        std::assert_eq!(told["method"], "notifications/tools/list_changed", "{told}");
+        let collected = tokio::time::timeout(super::helpers::ARRIVES_WITHIN, async {
+            let mut preceding: Vec<Value> = Vec::new();
+            loop {
+                match stream.next(super::helpers::ARRIVES_WITHIN).await {
+                    StreamEvent::Message(message) => {
+                        if message["params"]["_meta"]["mik7272/test-marker"]
+                            == json!("listen-scope-L4")
+                        {
+                            break;
+                        }
+                        preceding.push(message);
+                    }
+                    StreamEvent::Closed => {
+                        panic!("VOID: the {who} listener closed before the marker")
+                    }
+                    StreamEvent::Silent => {
+                        panic!("VOID: the {who} listener was silent before the marker")
+                    }
+                }
+            }
+            preceding
+        })
+        .await
+        .unwrap_or_else(|_| panic!("VOID: the {who} listener timed out before the marker"));
+        std::assert_eq!(
+            collected.len(),
+            1,
+            "the {who} listener must be told exactly once before the marker: {collected:?}"
+        );
+        std::assert_eq!(
+            collected[0]["method"],
+            "notifications/tools/list_changed",
+            "{}",
+            collected[0]
+        );
     }
 }

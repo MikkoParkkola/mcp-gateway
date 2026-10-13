@@ -21,6 +21,12 @@ use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+#[path = "http/catalogue.rs"]
+mod catalogue;
+use catalogue::{
+    CatalogueMock, SseReader, marker_notification, register_empty_alpha, show_added_alpha,
+};
+
 #[path = "http/fixture.rs"]
 mod fixture;
 use fixture::{modern_call, post, post_modern};
@@ -102,6 +108,8 @@ async fn ac_sub_1_the_acknowledgement_names_the_honoured_filter() {
 #[tokio::test]
 async fn ac_sub_1_a_notification_reaches_a_listener_tagged_with_its_subscription() {
     let (state, _store_dir) = state(true).await;
+    let (mock, url) = CatalogueMock::start().await;
+    let backend = register_empty_alpha(&state, &url).await;
     let (status, _, mut stream) = open_listen(
         &state,
         json!({ "notifications": { "toolsListChanged": true } }),
@@ -109,16 +117,26 @@ async fn ac_sub_1_a_notification_reaches_a_listener_tagged_with_its_subscription
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let ack = next_data(&mut stream)
-        .await
-        .expect("the ack opens the stream");
+    let mut reader = SseReader::new(&mut stream);
+    let ack = reader.next_event("the ack").await;
     let subscription = ack["params"]["_meta"]["io.modelcontextprotocol/subscriptionId"].clone();
+    let hint = reader.next_event("the B10 attach hint").await;
+    assert_eq!(
+        hint["method"], "notifications/tools/list_changed",
+        "the attach hint is drained here, it is not the asserted event"
+    );
 
-    state.announce_tools_changed("any").await;
+    show_added_alpha(&backend, &mock).await;
+    state.announce_tools_changed("alpha").await;
+    state.subscriptions.publish(marker_notification());
 
-    let event = next_data(&mut stream)
-        .await
-        .expect("a subscribed notification must reach the open stream");
+    let preceding = reader.collect_until_marker().await;
+    assert_eq!(
+        preceding.len(),
+        1,
+        "exactly one real notification must precede the marker: {preceding:?}"
+    );
+    let event = &preceding[0];
     assert_eq!(event["method"], "notifications/tools/list_changed");
     assert_eq!(
         event["params"]["_meta"]["io.modelcontextprotocol/subscriptionId"], subscription,
@@ -126,6 +144,11 @@ async fn ac_sub_1_a_notification_reaches_a_listener_tagged_with_its_subscription
          which is how a client with two subscriptions tells them apart: \
          {event}"
     );
+
+    drop(reader);
+    drop(stream);
+    backend.stop().await.expect("VOID cleanup: backend stops");
+    mock.shutdown().await;
 }
 
 #[tokio::test]

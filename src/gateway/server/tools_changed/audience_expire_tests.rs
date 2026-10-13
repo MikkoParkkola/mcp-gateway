@@ -57,4 +57,20 @@ async fn a_expire_a_get_stream_past_its_assertion_window_is_closed() {
     let _past = crate::clock::test_clock::at_secs(issued + LIFETIME + SKEW + 1);
     w.store_shared("alpha", alpha_with("r2"));
     assert_eq!(ear.told(&w).await, 0, "a dead stream is told nothing");
+    assert!(
+        !ear.is_open(&w).await,
+        "one second past the window the GET stream itself has ended, not merely gone quiet"
+    );
+
+    let fresh = adapter_assertion("alice");
+    let mut live = w.sse_as("k-std", Some(&fresh)).await;
+    assert_eq!(
+        live.told(&w).await,
+        0,
+        "a fresh live stream attached after r2 is told nothing further"
+    );
+    assert!(
+        live.is_open(&w).await,
+        "a fresh live stream at the same instant stays open while quiet"
+    );
 }
