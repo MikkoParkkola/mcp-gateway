@@ -109,7 +109,7 @@ impl Gateway {
         let sanitize =
             super::stdio_single::InputSanitizing::from_setting(self.config.security.sanitize_input);
 
-        self.install_stdio_startup_catalogue(&meta_mcp, &grant_sink, &warmer)
+        self.install_stdio_startup_catalogue(&meta_mcp, grant_sink.as_ref(), &warmer)
             .await?;
 
         // Warm-start backends (same as HTTP mode). Held for the rest of the

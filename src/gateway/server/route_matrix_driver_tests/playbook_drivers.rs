@@ -108,7 +108,7 @@ pub(crate) async fn stdio_params_counted(
         calls: Arc::clone(&calls),
         answer: text_result("ok"),
     });
-    stdio_params_over((backend, calls), audit, tune, (definition, policy, params)).await
+    super::stdio_params_over((backend, calls), audit, tune, (definition, policy, params)).await
 }
 
 /// A backend serving `read` whose first `tools/call` fails and whose later

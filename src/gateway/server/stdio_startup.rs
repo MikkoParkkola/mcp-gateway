@@ -21,7 +21,7 @@ impl Gateway {
     pub(super) async fn install_stdio_startup_catalogue(
         &self,
         meta_mcp: &Arc<MetaMcp>,
-        grant_sink: &Option<Arc<IdentityGrantSink>>,
+        grant_sink: Option<&Arc<IdentityGrantSink>>,
         warmer: &WarmerGuard,
     ) -> Result<()> {
         // Account strategies must exist before stdio can admit a request, just
@@ -39,7 +39,7 @@ impl Gateway {
                 &self.config,
                 account_custody.as_ref(),
                 &gateway_key_pair,
-                &meta_mcp,
+                meta_mcp,
                 account_bindings::ServeMode::Stdio,
             )?;
         }
@@ -106,7 +106,7 @@ impl Gateway {
                     self.config.meta_mcp.cache_ttl,
                 )?
                 .with_env(Arc::clone(&self.env))
-                .with_identity_grant_sink_opt(grant_sink.clone())
+                .with_identity_grant_sink_opt(grant_sink.cloned())
                 .with_capabilities(meta_mcp.get_capabilities())
                 .with_on_registered(warmer.hook()),
             );
