@@ -74,6 +74,8 @@ mod listen_payload;
 mod agent_task_owner;
 
 // MIK-7798: an agent-JWT listener is re-validated at every delivery.
+#[path = "adapter_listener_expiry.rs"]
+mod adapter_listener_expiry;
 #[path = "agent_listener_liveness.rs"]
 mod agent_listener_liveness;
 

@@ -242,7 +242,30 @@ impl Listener {
             Delivery::Deliver | Delivery::OutOfScope => {}
         }
         let (Some(backend), Some(view)) = (backend, &self.view) else {
-            return Admit::Send(None);
+            // Held-identity judgement for every non-tools delivery: a
+            // listener with no view is sent as before, and a live view
+            // carries the frame without any catalogue read. An anonymous
+            // `Bearer` death also sends, mirroring `owed`'s carve-out — an
+            // adapter/CF subject always carries a credential, so it cannot
+            // mask an expired held identity. Any other death is counted
+            // once and closes the stream.
+            let Some(view) = &self.view else {
+                return Admit::Send(None);
+            };
+            return match view
+                .judge
+                .resolve(&self.authorizer, (self.credential.as_ref(), &view.subject))
+                .await
+            {
+                crate::gateway::streaming::Judged::Live(_) => Admit::Send(None),
+                crate::gateway::streaming::Judged::Dead(
+                    crate::gateway::streaming::DeadReason::Bearer,
+                ) if self.credential.is_none() => Admit::Send(None),
+                crate::gateway::streaming::Judged::Dead(reason) => {
+                    reason.count();
+                    Admit::Close
+                }
+            };
         };
         match view
             .owed(&self.authorizer, self.credential.as_ref(), "", backend)
