@@ -119,11 +119,13 @@ async fn a_held_assertion_with_no_verifier_is_refused_and_none_held_is_not() {
 
 #[test]
 fn the_assertion_never_reaches_a_formatted_string() {
-    const ASSERTION: &str = "[REDACTED]";
+    const ASSERTION: &str = "8350.redaction.payload.signature.canary";
     let secret = crate::key_server::oidc::VerifiedAssertion::for_test(ASSERTION);
     let shown = format!("{secret:?}");
+    assert!(!shown.contains(ASSERTION));
     assert!(!shown.contains("signature") && !shown.contains("payload"));
     let shown = format!("{:?}", HeldSource::Cloudflare(secret));
+    assert!(!shown.contains(ASSERTION));
     assert!(!shown.contains("signature") && !shown.contains("payload"));
     let subject = ViewSubject {
         identity_source: HeldSource::Cloudflare(
@@ -132,5 +134,6 @@ fn the_assertion_never_reaches_a_formatted_string() {
         ..ViewSubject::default()
     };
     let shown = format!("{subject:?} {:?}", subject.identity_source);
+    assert!(!shown.contains(ASSERTION));
     assert!(!shown.contains("signature") && !shown.contains("payload"));
 }
