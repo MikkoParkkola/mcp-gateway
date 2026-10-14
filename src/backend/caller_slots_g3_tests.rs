@@ -238,3 +238,42 @@ async fn g3_retired_entry_still_in_pool_reads_as_absent() {
         "the index listed a retired slot as live"
     );
 }
+
+/// MIK-8392 coverage row for `claim_cold_view`'s two refusing arms.
+/// Mutants: a live Held slot claimed as `Won` (the warm entry is replaced
+/// by a cold lease and its reader re-resolves), and a `NoView` entry
+/// claimed while the account is not live (a revoked view is re-established).
+/// Each arm sits beside the control that takes the claiming branch.
+#[tokio::test]
+async fn g3_cold_claim_keeps_a_warm_slot_and_a_revoked_view() {
+    const LEASE: Duration = Duration::from_secs(60);
+    let backend = per_user_backend("g3-cold-claim");
+    fill_slot(&backend, "g3:warm").await;
+    backend.record_caller_slot(ALPHA, "g3:warm");
+    assert_eq!(
+        backend.claim_cold_view(ALPHA, LEASE, true),
+        super::ColdClaim::Warm,
+        "a live slot is not cold: nothing to claim"
+    );
+    assert_eq!(
+        backend.caller_slot_binding(ALPHA).as_deref(),
+        Some("g3:warm"),
+        "the warm entry is kept"
+    );
+
+    const BETA: &str = "beta";
+    backend.record_no_view(BETA);
+    assert_eq!(
+        backend.claim_cold_view(BETA, LEASE, false),
+        super::ColdClaim::NoView,
+        "a revoked view stays absent while the account is not live"
+    );
+    assert!(backend.caller_has_no_view(BETA), "the NoView entry is kept");
+    assert!(
+        matches!(
+            backend.claim_cold_view(BETA, LEASE, true),
+            super::ColdClaim::Won(_)
+        ),
+        "control: the grant came back, so the view is claimed"
+    );
+}
