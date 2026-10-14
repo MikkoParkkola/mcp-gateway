@@ -25,7 +25,10 @@ const SUBSCRIPTION: i64 = 7811;
 /// Two tasks `key-a` owns, both dispatched to the holding backend and both
 /// still held there, so both ids exist and are owned before the listen
 /// filter names them.
-async fn two_owned_tasks(state: &Arc<AppState>, gate: &mut ReleasedOnDrop) -> (String, String) {
+pub(super) async fn two_owned_tasks(
+    state: &Arc<AppState>,
+    gate: &mut ReleasedOnDrop,
+) -> (String, String) {
     let first = task_id(
         &post(
             state,

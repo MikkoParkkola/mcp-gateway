@@ -353,11 +353,12 @@ fn resolve_identity(
 
 /// What `verify_assertion` judged about an accepted assertion, kept on the
 /// request so a stream held open past it can ask the same question again
-/// (MIK-8350): the expiry and the skew that admitted it. The future-`iat`
-/// test is an admission-only refusal and needs no second look.
+/// (MIK-8350): the expiry, the signed issued-at and the skew that admitted
+/// it, so the future-`iat` test is judged again too.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct AdapterAssertion {
     expires_at: u64,
+    issued_at: i64,
     skew: u64,
 }
 
@@ -371,11 +372,21 @@ impl AdapterAssertion {
             JwtClaimTime::Absent,
             self.skew,
         ) == Validity::Live
+            && check_issued_at(self.issued_at, self.skew).is_ok()
     }
 
     #[cfg(test)]
     pub(crate) const fn for_test(expires_at: u64, skew: u64) -> Self {
-        Self { expires_at, skew }
+        Self {
+            expires_at,
+            issued_at: 0,
+            skew,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn verified_for_test(issued_at: i64, expires_at: i64, skew: u64) -> Option<Self> {
+        tests::verified_receipt(issued_at, expires_at, skew)
     }
 }
 
@@ -440,13 +451,7 @@ fn verify_assertion(
 
     // Future-dated issuance, beyond the configured skew, is refused: it is how
     // a token's effective lifetime gets extended past the bound just checked.
-    // A clock it cannot read refuses (MIK-8202).
-    let now = now_seconds().map_err(|_| Refusal::Invalid("clock reads before 1970"))?;
-    let skew = i64::try_from(runtime.clock_skew_seconds)
-        .map_err(|_| Refusal::Invalid("configured clock skew out of range"))?;
-    if claims.iat > now.saturating_add(skew) {
-        return Err(Refusal::Invalid("issued in the future"));
-    }
+    check_issued_at(claims.iat, runtime.clock_skew_seconds)?;
 
     // An email or group list is not carried: an adapter asserts a subject,
     // and either taken from it would flow into role mapping as if an IdP had
@@ -466,6 +471,7 @@ fn verify_assertion(
         identity,
         AdapterAssertion {
             expires_at,
+            issued_at: claims.iat,
             skew: runtime.clock_skew_seconds,
         },
     ))
@@ -501,6 +507,19 @@ pub(crate) fn session_principal(installation_id: &str, user_id: &str) -> (String
     (namespaced_issuer(installation_id), user_id.to_owned())
 }
 
+/// The future-`iat` test admission applies, shared with a held assertion's
+/// `live` so the two cannot diverge. A clock it cannot read refuses
+/// (MIK-8202).
+fn check_issued_at(issued_at: i64, skew: u64) -> Result<(), Refusal> {
+    let now = now_seconds().map_err(|_| Refusal::Invalid("clock reads before 1970"))?;
+    let skew =
+        i64::try_from(skew).map_err(|_| Refusal::Invalid("configured clock skew out of range"))?;
+    if issued_at > now.saturating_add(skew) {
+        return Err(Refusal::Invalid("issued in the future"));
+    }
+    Ok(())
+}
+
 fn now_seconds() -> Result<i64, clock::ClockBeforeEpoch> {
     clock::unix_secs().map(|secs| i64::try_from(secs).unwrap_or(i64::MAX))
 }
@@ -517,160 +536,5 @@ fn refuse(refusal: &Refusal) -> Response {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use jsonwebtoken::{EncodingKey, Header, encode};
-    use serde_json::{Value, json};
-
-    const SECRET: &[u8] = b"fixture-adapter-signing-secret-123456789";
-
-    fn runtime(installation: &str) -> AdapterRuntime {
-        AdapterRuntime {
-            installation_id: installation.to_string(),
-            header: "x-openwebui-assertion".to_string(),
-            issuer: "open-webui".to_string(),
-            allowed_api_key_names: vec!["owui".to_string()],
-            max_lifetime_seconds: 300,
-            clock_skew_seconds: 30,
-            secret: SECRET.to_vec(),
-        }
-    }
-
-    fn claims(subject: &str) -> Value {
-        let now = now_seconds().expect("the test host clock reads after 1970");
-        json!({"iss":"open-webui", "sub":subject, "iat":now, "exp":now+120,
-            "email":"untrusted@example.invalid", "roles":["admin"], "groups":["admin"]})
-    }
-
-    fn token(claims: &Value, algorithm: Algorithm, secret: &[u8]) -> String {
-        encode(
-            &Header::new(algorithm),
-            claims,
-            &EncodingKey::from_secret(secret),
-        )
-        .unwrap()
-    }
-
-    /// MIK-8286 R6 (pin): an assertion whose subject is empty names no one
-    /// and is refused (the adapter answers 403 through `refuse`), now through
-    /// `VerifiedIdentity::checked` rather than a check of its own. Mutant:
-    /// the emptiness test in `names_someone` removed.
-    #[test]
-    fn an_assertion_naming_no_one_is_refused() {
-        let key = DecodingKey::from_secret(SECRET);
-        let nameless = token(&claims(""), Algorithm::HS256, SECRET);
-        assert!(matches!(
-            verify(&runtime("desk"), &key, &nameless),
-            Err(Refusal::Invalid("empty subject"))
-        ));
-    }
-
-    #[test]
-    fn identities_are_namespaced_and_profile_claims_are_discarded() {
-        let key = DecodingKey::from_secret(SECRET);
-        let alice = token(&claims("alice"), Algorithm::HS256, SECRET);
-        let bob = token(&claims("bob"), Algorithm::HS256, SECRET);
-        let a = verify(&runtime("desk"), &key, &alice).unwrap_or_else(|_| panic!("valid Alice"));
-        let b = verify(&runtime("desk"), &key, &bob).unwrap_or_else(|_| panic!("valid Bob"));
-        let other = verify(&runtime("laptop"), &key, &alice)
-            .unwrap_or_else(|_| panic!("valid installation"));
-        assert_ne!(a.stable_actor_id(), b.stable_actor_id());
-        assert_ne!(a.stable_actor_id(), other.stable_actor_id());
-        assert_eq!(a.subject, "alice");
-        assert!(a.email.is_empty());
-        assert!(a.name.is_none());
-        assert!(a.groups.is_empty());
-        assert_ne!(a.issuer, "open-webui");
-    }
-
-    fn trusted(installation: &str, secret: &[u8]) -> Trusted {
-        let mut runtime = runtime(installation);
-        runtime.secret = secret.to_vec();
-        Trusted {
-            decoding_key: DecodingKey::from_secret(secret),
-            runtime,
-        }
-    }
-
-    /// Installations sharing a header are resolved by SIGNATURE, and exactly
-    /// one of them must succeed.
-    #[test]
-    fn shared_header_resolves_to_exactly_one_installation() {
-        const OTHER: &[u8] = b"fixture-second-installation-secret-987654321";
-        let candidates = vec![trusted("desk", SECRET), trusted("laptop", OTHER)];
-        let desk = token(&claims("alice"), Algorithm::HS256, SECRET);
-        let laptop = token(&claims("alice"), Algorithm::HS256, OTHER);
-
-        let (first, _) = resolve_identity(&candidates, "owui", &desk)
-            .unwrap_or_else(|_| panic!("desk assertion"));
-        let (second, _) = resolve_identity(&candidates, "owui", &laptop)
-            .unwrap_or_else(|_| panic!("laptop assertion"));
-        // Order-independent: the second installation is reachable even though
-        // it is not the first candidate tried.
-        assert_ne!(first.stable_actor_id(), second.stable_actor_id());
-        assert_eq!(first.subject, second.subject);
-
-        // Signed by neither, and presented by an API key neither installation
-        // lists: both are refusals, not a fallback to some other installation.
-        assert!(
-            resolve_identity(
-                &candidates,
-                "owui",
-                &token(&claims("alice"), Algorithm::HS256, b"unconfigured-secret")
-            )
-            .is_err()
-        );
-        assert!(resolve_identity(&candidates, "unlisted", &desk).is_err());
-
-        // Two installations that both verify the same assertion give two
-        // answers to "who is this", so the assertion is refused outright.
-        let ambiguous = vec![trusted("desk", SECRET), trusted("laptop", SECRET)];
-        assert!(resolve_identity(&ambiguous, "owui", &desk).is_err());
-    }
-
-    #[test]
-    fn invalid_signatures_algorithms_and_claims_are_refused() {
-        let runtime = runtime("desk");
-        let key = DecodingKey::from_secret(SECRET);
-        assert!(
-            verify(
-                &runtime,
-                &key,
-                &token(&claims("alice"), Algorithm::HS256, b"wrong-key")
-            )
-            .is_err()
-        );
-        assert!(
-            verify(
-                &runtime,
-                &key,
-                &token(&claims("alice"), Algorithm::HS384, SECRET)
-            )
-            .is_err()
-        );
-        for field in ["sub", "iat", "exp", "iss"] {
-            let mut value = claims("alice");
-            value.as_object_mut().unwrap().remove(field);
-            assert!(
-                verify(&runtime, &key, &token(&value, Algorithm::HS256, SECRET)).is_err(),
-                "missing {field}"
-            );
-        }
-        let now = now_seconds().expect("the test host clock reads after 1970");
-        for (field, value) in [
-            ("sub", json!("")),
-            ("iss", json!("attacker")),
-            ("exp", json!(now - 60)),
-            ("exp", json!(now + 3600)),
-            ("iat", json!(now + 60)),
-            ("iat", json!(i64::MIN)),
-        ] {
-            let mut invalid = claims("alice");
-            invalid[field] = value;
-            assert!(
-                verify(&runtime, &key, &token(&invalid, Algorithm::HS256, SECRET)).is_err(),
-                "invalid {field}"
-            );
-        }
-    }
-}
+#[path = "openwebui_adapter_tests.rs"]
+mod tests;

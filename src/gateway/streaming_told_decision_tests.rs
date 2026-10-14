@@ -84,11 +84,11 @@ impl ViewJudge for Fake {
 }
 
 pub(super) fn view(judge: &Arc<Fake>) -> StreamView {
-    let view = StreamView {
-        subject: Arc::new(ViewSubject::default()),
-        record: Arc::new(ViewRecord::default()),
-        judge: Arc::clone(judge) as Arc<dyn ViewJudge>,
-    };
+    let view = StreamView::new(
+        Arc::new(ViewSubject::default()),
+        Arc::new(ViewRecord::default()),
+        Arc::clone(judge) as Arc<dyn ViewJudge>,
+    );
     // Stamp 0: the record's own reads start at 1, as they do after an attach.
     view.record.state().baseline(
         0,

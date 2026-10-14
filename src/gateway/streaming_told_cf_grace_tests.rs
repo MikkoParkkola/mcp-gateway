@@ -582,3 +582,6 @@ async fn assertion_expiring_during_jwks_fetch_fails_closed() {
         "own T1b: an assertion expiring during the JWKS fetch fails closed"
     );
 }
+
+#[path = "streaming_told_cf_custody_tests.rs"]
+pub(super) mod custody_tests;

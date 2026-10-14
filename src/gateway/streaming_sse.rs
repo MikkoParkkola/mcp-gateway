@@ -172,6 +172,7 @@ pub(crate) fn create_sse_response_with_view(
                 }
             }
         }
+        drop(view);
     };
 
     Some(Sse::new(stream).keep_alive(KeepAlive::new().interval(keep_alive_interval).text("ping")))
@@ -481,6 +482,7 @@ pub(crate) fn subscription_stream(
         {
             yield Ok(Event::default().event("message").data(end));
         }
+        drop(listener);
     };
 
     Sse::new(stream)

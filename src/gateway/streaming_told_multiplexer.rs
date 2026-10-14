@@ -53,11 +53,9 @@ impl NotificationMultiplexer {
                 AtAttach::OpenAnonymous => {}
             },
         }
-        Ok(Some(StreamView {
-            subject,
-            record,
-            judge,
-        }))
+        let view = StreamView::new(subject, record, judge);
+        session.register_view(&view);
+        Ok(Some(view))
     }
 
     /// Take `session_id`'s baseline for the default subject: for a session no
@@ -86,7 +84,7 @@ impl NotificationMultiplexer {
         let Some(session) = self.sessions.read().get(session_id).map(Arc::clone) else {
             return PendingRefresh::default();
         };
-        let Some((_, record)) = session.existing_record(subject) else {
+        let Some(record) = session.existing_record(subject) else {
             return PendingRefresh::default();
         };
         let epoch = record.epoch();
@@ -207,33 +205,82 @@ impl NotificationMultiplexer {
         judge: &dyn ViewJudge,
     ) -> bool {
         let mut views = session.views();
+        // The secret-free default fallback is only for a session no stream
+        // has opened a view on. A closed registration is not a cold session,
+        // so it is never re-judged as the default subject.
+        let mut cold: Option<(Arc<ViewSubject>, super::custody::CloseLease)> = None;
         if views.is_empty() {
+            if !session.never_opened() {
+                return false;
+            }
+            let subject = Arc::new(ViewSubject::default());
+            let lease = super::custody::CloseLease::new();
             views.push((
-                Arc::new(ViewSubject::default()),
-                session.record_for(&ViewSubject::default()),
+                Arc::downgrade(&subject),
+                session.record_for(&subject),
+                lease.subscribe(),
             ));
+            cold = Some((subject, lease));
         }
-        for (subject, record) in views {
-            let caller = match judge.resolve(authorizer, (credential, &subject)).await {
-                Judged::Live(caller) => caller,
+        for (weak, record, close) in views {
+            if super::custody::is_closed(&close) {
+                continue;
+            }
+            let Some(subject) = weak.upgrade() else {
+                continue;
+            };
+            // The whole resolve, read and peek is one cancellable operation:
+            // closure wins, and the losing future and its upgraded subject
+            // are dropped before anything is recorded or enqueued.
+            let wait = close.clone();
+            let checked = close.clone();
+            let fut_subject = Arc::clone(&subject);
+            let fut_record = Arc::clone(&record);
+            let outcome = tokio::select! {
+                biased;
+                () = super::custody::wait_closed(wait) => None,
+                judged = async move {
+                    let resolved = judge
+                        .resolve(authorizer, (credential, &fut_subject))
+                        .await;
+                    if super::custody::is_closed(&checked) {
+                        return Judged::Live(false);
+                    }
+                    let caller = match resolved {
+                        Judged::Live(caller) => caller,
+                        Judged::Dead(reason) => return Judged::Dead(reason),
+                    };
+                    let (stamp, digest) = fut_record
+                        .read(async {
+                            judge.digest(
+                                &caller,
+                                &fut_subject,
+                                session.id.expose_secret(),
+                                backend,
+                            )
+                        })
+                        .await;
+                    if super::custody::is_closed(&checked) {
+                        return Judged::Live(false);
+                    }
+                    Judged::Live(fut_record.state().peek(stamp, backend, &digest) == Peek::Owed)
+                } => Some(judged),
+            };
+            drop(subject);
+            match outcome {
+                None | Some(Judged::Live(false)) => {}
+                Some(Judged::Live(true)) => return true,
                 // A dead caller is closed by the write-time check, so the copy
                 // still goes; an anonymous `Bearer` death is silence, not a move.
-                Judged::Dead(reason) => {
+                Some(Judged::Dead(reason)) => {
                     if let (None, DeadReason::Bearer) = (credential, reason) {
                         continue;
                     }
                     return true;
                 }
-            };
-            let (stamp, digest) = record
-                .read(async {
-                    judge.digest(&caller, &subject, session.id.expose_secret(), backend)
-                })
-                .await;
-            if record.state().peek(stamp, backend, &digest) == Peek::Owed {
-                return true;
             }
         }
+        drop(cold);
         false
     }
 }

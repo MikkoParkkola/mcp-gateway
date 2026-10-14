@@ -160,11 +160,11 @@ impl Listener {
         judge: Arc<dyn crate::gateway::streaming::ViewJudge>,
         subject: crate::gateway::streaming::ViewSubject,
     ) {
-        self.view = Some(crate::gateway::streaming::StreamView {
-            subject: Arc::new(subject),
-            record: Arc::new(crate::gateway::streaming::ViewRecord::default()),
+        self.view = Some(crate::gateway::streaming::StreamView::new(
+            Arc::new(subject),
+            Arc::new(crate::gateway::streaming::ViewRecord::default()),
             judge,
-        });
+        ));
     }
 
     /// Record what every backend shows this listener now, as the baseline the

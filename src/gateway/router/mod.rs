@@ -70,6 +70,8 @@ mod well_known;
 mod direct_guards;
 
 #[cfg(test)]
+mod adapter_get_rollback_tests;
+#[cfg(test)]
 mod audit_degraded_tests;
 #[cfg(test)]
 mod body_limit_tests;

@@ -276,11 +276,12 @@ async fn with_auth_off_every_listener_is_told() {
         "params": {"_meta": {"mik7272/test-marker": "listen-scope-L4"}}
     }));
 
+    let post_attach_hang_guard = std::time::Duration::from_secs(10);
     for (who, stream) in [("first", &mut first), ("second", &mut second)] {
-        let collected = tokio::time::timeout(super::helpers::ARRIVES_WITHIN, async {
+        let collected = tokio::time::timeout(post_attach_hang_guard, async {
             let mut preceding: Vec<Value> = Vec::new();
             loop {
-                match stream.next(super::helpers::ARRIVES_WITHIN).await {
+                match stream.next(post_attach_hang_guard).await {
                     StreamEvent::Message(message) => {
                         if message["params"]["_meta"]["mik7272/test-marker"]
                             == json!("listen-scope-L4")

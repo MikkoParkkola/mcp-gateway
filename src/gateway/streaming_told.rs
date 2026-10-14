@@ -5,8 +5,8 @@
 //! view of that backend moved.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Weak};
 
 use serde_json::Value;
 
@@ -136,6 +136,10 @@ impl ToldState {
         owed
     }
 }
+
+#[path = "streaming_told_custody.rs"]
+mod custody;
+use custody::{ActiveView, CloseLease};
 
 #[path = "streaming_told_cf.rs"]
 mod cf;
@@ -340,9 +344,20 @@ pub(crate) trait ViewJudge: Send + Sync {
     ) -> HashMap<String, ViewDigest>;
 }
 
-/// One view held on a session: the key of its subject, the subject and its
-/// record.
-pub(super) type ViewEntry = (String, Arc<ViewSubject>, Arc<ViewRecord>);
+/// One view held on a session: the key of its subject, its durable record
+/// and the weak registrations of the streams currently open on it. No raw
+/// subject is retained here (MIK-8350): a registration is only a weak
+/// subject plus that attachment's close receiver.
+#[derive(Debug)]
+pub(super) struct ViewEntry {
+    key: String,
+    pub(super) record: Arc<ViewRecord>,
+    active: Vec<ActiveView>,
+    /// Session history: a stream has opened on this session, on this entry
+    /// or on one since pruned idle, carried across that pruning by
+    /// `record_for`. It is not this entry's own current admission.
+    opened: bool,
+}
 
 /// One view's record: what its caller was last told, the stamps writes are
 /// ordered by, and the gate that makes stamp order equal data order.
@@ -391,6 +406,9 @@ pub(crate) struct StreamView {
     pub(crate) subject: Arc<ViewSubject>,
     pub(crate) record: Arc<ViewRecord>,
     pub(crate) judge: Arc<dyn ViewJudge>,
+    /// This attachment's close lease, shared by its clones only: the last
+    /// clone dropping signals closure to the session's registration.
+    close_lease: Arc<CloseLease>,
 }
 
 impl std::fmt::Debug for StreamView {
@@ -440,44 +458,94 @@ impl ClientSession {
     /// The record of the view `subject` opens, made on first use.
     fn record_for(&self, subject: &ViewSubject) -> Arc<ViewRecord> {
         let key = subject.key();
-        if let Some((_, _, record)) = self.records.read().iter().find(|(k, ..)| *k == key) {
-            return Arc::clone(record);
+        if let Some(entry) = self.records.read().iter().find(|entry| entry.key == key) {
+            return Arc::clone(&entry.record);
         }
         let mut records = self.records.write();
-        if let Some((_, _, record)) = records.iter().find(|(k, ..)| *k == key) {
-            return Arc::clone(record);
+        if let Some(entry) = records.iter().find(|entry| entry.key == key) {
+            return Arc::clone(&entry.record);
         }
+        // Session history is captured before any pruning, so dropping the
+        // last opened record idle cannot make the session read never-opened.
+        let opened = records.iter().any(|entry| entry.opened);
         // Bounded: a record no stream holds is dropped to make room. Records
         // still held by an open stream stay, so growth is bounded by the
         // streams a client can hold open, not by the subjects it presents.
         if records.len() >= MAX_IDLE_RECORDS {
-            records.retain(|(_, _, held)| Arc::strong_count(held) > 1);
+            records.retain(|entry| Arc::strong_count(&entry.record) > 1);
         }
         let record = Arc::new(ViewRecord::default());
-        records.push((key, Arc::new(subject.clone()), Arc::clone(&record)));
+        records.push(ViewEntry {
+            key,
+            record: Arc::clone(&record),
+            active: Vec::new(),
+            opened,
+        });
         record
     }
 
     /// The record of the view `subject` opens, if a stream opened it.
-    fn existing_record(
-        &self,
-        subject: &ViewSubject,
-    ) -> Option<(Arc<ViewSubject>, Arc<ViewRecord>)> {
+    fn existing_record(&self, subject: &ViewSubject) -> Option<Arc<ViewRecord>> {
         let key = subject.key();
         self.records
             .read()
             .iter()
-            .find(|(k, ..)| *k == key)
-            .map(|(_, held, record)| (Arc::clone(held), Arc::clone(record)))
+            .find(|entry| entry.key == key)
+            .map(|entry| Arc::clone(&entry.record))
     }
 
-    /// Every view held on this session.
-    fn views(&self) -> Vec<(Arc<ViewSubject>, Arc<ViewRecord>)> {
-        self.records
-            .read()
-            .iter()
-            .map(|(_, subject, record)| (Arc::clone(subject), Arc::clone(record)))
-            .collect()
+    /// Register one admitted attachment on its view's entry, as its own
+    /// weak registration beside any concurrent same-key attachments.
+    fn register_view(&self, view: &StreamView) {
+        let key = view.subject.key();
+        let mut records = self.records.write();
+        let Some(entry) = records.iter_mut().find(|entry| entry.key == key) else {
+            records.push(ViewEntry {
+                key,
+                record: Arc::clone(&view.record),
+                active: vec![ActiveView::new(
+                    Arc::downgrade(&view.subject),
+                    view.close_receiver(),
+                )],
+                opened: true,
+            });
+            return;
+        };
+        entry.active.retain(|active| !active.is_dead());
+        entry.active.push(ActiveView::new(
+            Arc::downgrade(&view.subject),
+            view.close_receiver(),
+        ));
+        entry.opened = true;
+    }
+
+    /// Whether no stream has ever opened a view on this session.
+    fn never_opened(&self) -> bool {
+        self.records.read().iter().all(|entry| !entry.opened)
+    }
+
+    /// Every active attachment held on this session, as a weak subject, its
+    /// record and its close receiver. Dead registrations are pruned.
+    fn views(
+        &self,
+    ) -> Vec<(
+        Weak<ViewSubject>,
+        Arc<ViewRecord>,
+        tokio::sync::watch::Receiver<bool>,
+    )> {
+        let mut records = self.records.write();
+        let mut views = Vec::new();
+        for entry in &mut *records {
+            entry.active.retain(|active| !active.is_dead());
+            for active in &entry.active {
+                views.push((
+                    active.subject_weak(),
+                    Arc::clone(&entry.record),
+                    active.close_receiver(),
+                ));
+            }
+        }
+        views
     }
 }
 
@@ -491,6 +559,26 @@ pub(crate) struct Owed {
 }
 
 impl StreamView {
+    /// One attachment's view, with the close lease it alone owns.
+    pub(crate) fn new(
+        subject: Arc<ViewSubject>,
+        record: Arc<ViewRecord>,
+        judge: Arc<dyn ViewJudge>,
+    ) -> Self {
+        Self {
+            subject,
+            record,
+            judge,
+            close_lease: Arc::new(CloseLease::new()),
+        }
+    }
+
+    /// A receiver for this attachment's closure, retained by its session
+    /// registration without owning the lease.
+    fn close_receiver(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.close_lease.subscribe()
+    }
+
     /// What `backend` shows this stream's caller now, against what it was
     /// told: the record to make if the hint is written, or `None` when its
     /// view did not move. Nothing is recorded yet (MIK-8350 B2').
@@ -583,3 +671,7 @@ mod decision_tests;
 #[cfg(test)]
 #[path = "streaming_told_gap_tests.rs"]
 mod gap_tests;
+
+#[cfg(test)]
+#[path = "streaming_told_custody_tests.rs"]
+pub(super) mod custody_tests;

@@ -158,11 +158,11 @@ async fn a_subject_with_no_credential_keeps_its_stream_at_attach() {
 async fn an_anonymous_dead_bearer_hint_is_skipped_never_closed() {
     let judge = Fake::answering("s0", "x");
     judge.die();
-    let view = StreamView {
-        subject: Arc::new(ViewSubject::default()),
-        record: Arc::new(ViewRecord::default()),
-        judge: Arc::clone(&judge) as Arc<dyn ViewJudge>,
-    };
+    let view = StreamView::new(
+        Arc::new(ViewSubject::default()),
+        Arc::new(ViewRecord::default()),
+        Arc::clone(&judge) as Arc<dyn ViewJudge>,
+    );
     assert_eq!(view.decide(&auth(), None, "", "a").await, Decision::Skip);
 }
 

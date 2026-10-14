@@ -43,9 +43,9 @@ fn idle_records_are_dropped_at_the_bound() {
         drop(session.record_for(&subject_labelled(&format!("user-{n}"), None)));
     }
     assert!(
-        session.views().len() <= MAX_IDLE_RECORDS,
+        session.records.read().len() <= MAX_IDLE_RECORDS,
         "idle records stay bounded: {}",
-        session.views().len()
+        session.records.read().len()
     );
 }
 

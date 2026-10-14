@@ -70,8 +70,8 @@ impl ClientSession {
         *held = credential;
         drop(held);
         if changed {
-            for (_, _, record) in self.records.read().iter() {
-                record.clear();
+            for entry in self.records.read().iter() {
+                entry.record.clear();
             }
         }
     }

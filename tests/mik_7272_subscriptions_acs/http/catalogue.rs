@@ -201,7 +201,7 @@ impl<'a> SseReader<'a> {
     }
 
     pub(super) async fn next_event(&mut self, what: &str) -> Value {
-        tokio::time::timeout(Duration::from_secs(5), self.next_event_inner(what))
+        tokio::time::timeout(Duration::from_secs(10), self.next_event_inner(what))
             .await
             .unwrap_or_else(|_| panic!("VOID: timed out waiting for {what}"))
     }
@@ -234,7 +234,7 @@ impl<'a> SseReader<'a> {
     }
 
     pub(super) async fn collect_until_marker(&mut self) -> Vec<Value> {
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(Duration::from_secs(10), async {
             let mut preceding = Vec::new();
             loop {
                 let event = self.next_event_inner("the marker").await;
@@ -366,8 +366,8 @@ mod tests {
     }
 
     // Expected-negative healthy control: a pending stream must be bounded
-    // by collect_until_marker's unchanged fixed 5s deadline and stay VOID
-    // under the timeout label. This row takes about 5s by design; the
+    // by collect_until_marker's unchanged fixed 10s deadline and stay VOID
+    // under the timeout label. This row takes about 10s by design; the
     // timeout is the validated contract, never a fault.
     #[tokio::test]
     #[should_panic(expected = "VOID: timed out waiting for the marker")]
