@@ -92,9 +92,20 @@ impl TaskExecutor {
         author: ErrorAuthor,
         at: Option<DateTime<Utc>>,
     ) -> Result<(CommittedTask, bool, String), CommitFailure> {
-        // Startup recovery dates its settle at the store's clock (`Some`); a
-        // request-side settle (`None`) keeps the wall clock it always read.
-        let now = at.unwrap_or_else(Utc::now);
+        // A caller that already holds a time passes it (`Some`): startup
+        // recovery, and a worker settle after its clock wait. `None` reads the
+        // store's clock, never chrono's, which aborts before 1970 (MIK-8202
+        // P4a A2). An unreadable clock stays typed as `ClockUnreadable` so the
+        // worker can wait for it; only `commit_to_service` maps it for a
+        // request.
+        let now = match at {
+            Some(at) => at,
+            None => self
+                .service
+                .store
+                .now()
+                .map_err(|_| CommitFailure::ClockUnreadable)?,
+        };
         match self
             .service
             .store

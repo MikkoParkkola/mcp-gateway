@@ -23,6 +23,7 @@ use tokio::task::JoinHandle;
 use super::{TaskExecutor, UpstreamHandle, UpstreamRecovery};
 use crate::gateway::task_service::TaskService;
 use crate::gateway::task_service::record::UpstreamRecord;
+use crate::gateway::task_service::store::StoreError;
 use crate::gateway::task_service::store::targets::CancelClaim;
 use crate::protocol::tasks::TaskStatus;
 
@@ -182,7 +183,20 @@ impl Sender {
             return false;
         }
         let offer = offered.or_else(|| parked.take());
-        match store.claim_upstream_cancel(owner, id, offer.clone()).await {
+        let claim = match store.claim_upstream_cancel(owner, id, offer.clone()).await {
+            // MIK-8202 P4b: the claim met a dark clock. Write the same claim
+            // undated — the write needs no time — instead of parking the
+            // offer in memory, so it survives a restart. Every sender meets
+            // here, so one arm covers the owner, a worker, the sweep and
+            // the start-feed.
+            Err(StoreError::ClockUnreadable) => {
+                store
+                    .claim_upstream_cancel_undated(owner, id, offer.clone())
+                    .await
+            }
+            dated => dated,
+        };
+        match claim {
             Ok(CancelClaim::Claimed(_)) => true,
             Ok(CancelClaim::AlreadyClaimed) => false,
             Ok(CancelClaim::NotOurs) => {
@@ -218,7 +232,9 @@ impl Sender {
         };
         let attempt = match (&pending.backend, due) {
             (Some(_), _) if pending.aged(now) => None,
-            (Some(_), Some(Due::ByTime)) if pending.next_after > now => return,
+            (Some(_), Some(Due::ByTime)) if pending.next_after.is_some_and(|at| at > now) => {
+                return;
+            }
             (Some(backend), _) => {
                 let handle = UpstreamHandle {
                     backend: backend.clone(),
@@ -418,3 +434,11 @@ mod tests;
 #[cfg(test)]
 #[path = "pending_cancel_edge_tests.rs"]
 mod edge_tests;
+
+#[cfg(test)]
+#[path = "pending_cancel_clock_tests.rs"]
+mod clock_tests;
+
+#[cfg(test)]
+#[path = "pending_cancel_clock_compile_red_tests.rs"]
+mod clock_compile_red_tests;

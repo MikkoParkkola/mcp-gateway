@@ -86,6 +86,12 @@ pub(crate) fn check_config_command(path: &std::path::Path) -> String {
     format!("mcp-gateway doctor --config {arg}")
 }
 
+/// Now for a CLI command, or the error it exits non-zero with: chrono's own
+/// clock read panics on a clock before 1970 (MIK-8202 P4a).
+pub(crate) fn clock_now() -> Result<chrono::DateTime<chrono::Utc>, String> {
+    crate::clock::utc_now().map_err(|error| format!("the {error}"))
+}
+
 // ── init ─────────────────────────────────────────────────────────────────────
 
 /// Generate a starter gateway configuration file.

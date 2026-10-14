@@ -266,11 +266,11 @@ fn a_budget_named_other_never_sees_overflow_spend() {
 
 #[test]
 fn a_restore_applies_the_cap_and_keeps_the_saved_overflow() {
-    use super::super::persistence::{PersistedCosts, ToolTotal, now_secs};
+    use super::super::persistence::{PersistedCosts, ToolTotal};
     let (rows, snap) = crate::test_day::same_utc_day(|| {
         // GIVEN: a same-day snapshot saved before the cap, with 400 tool names
         let mut saved = PersistedCosts {
-            saved_at: now_secs(),
+            saved_at: crate::clock::unix_secs().expect("a readable clock"),
             tool_overflow_usd: 0.5,
             ..PersistedCosts::default()
         };
@@ -386,11 +386,11 @@ fn the_first_spend_of_a_new_day_sweeps_whatever_the_minute_throttle_says() {
 
 #[test]
 fn a_restore_skips_rows_that_hold_no_spend() {
-    use super::super::persistence::{PersistedCosts, ToolTotal, now_secs};
+    use super::super::persistence::{PersistedCosts, ToolTotal};
     let (tools, keys, snap) = crate::test_day::same_utc_day(|| {
         // GIVEN: a same-day save holding zero rows left from the day before
         let mut saved = PersistedCosts {
-            saved_at: now_secs(),
+            saved_at: crate::clock::unix_secs().expect("a readable clock"),
             ..PersistedCosts::default()
         };
         for i in 0..300 {

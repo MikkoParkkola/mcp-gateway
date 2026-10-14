@@ -67,7 +67,10 @@ async fn the_health_probe_does_not_restart_a_backend_mid_stop() {
         entered_close: Arc::clone(&entered_close),
         release: Arc::clone(&release),
     }));
-    backend.shared_entry().last_used.store(0, Ordering::Relaxed);
+    // Age the slot past its 1 s idle deadline in real time: this test spawns
+    // a real child and polls it, so it cannot pause the clock (MIK-8202 P4b).
+    // timing: precondition
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
 
     let stopper = {
         let backend = Arc::clone(&backend);
@@ -119,7 +122,7 @@ async fn the_health_probe_does_not_restart_a_backend_mid_stop() {
 // incremented entry - and is not what this test proves. What it proves is the
 // invariant that construction exists to protect: an evictor that can see a
 // live lease must decline, and must not close a transport out from under it.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_leased_slot_is_never_evicted() {
     let backend = per_user_backend();
     let key = per_user_key("userA");
@@ -129,11 +132,7 @@ async fn a_leased_slot_is_never_evicted() {
     let lease = backend.begin_activity(&key).unwrap();
     // begin_activity touches the idle clock, so re-stale it: the lease must be
     // the ONLY thing keeping this slot alive, or the test proves nothing.
-    backend
-        .pooled_entry(&key)
-        .unwrap()
-        .last_used
-        .store(0, Ordering::Relaxed);
+    tokio::time::advance(Duration::from_secs(2)).await;
 
     assert_eq!(
         backend.evict_idle_per_user_entries(Duration::from_secs(1)),
@@ -151,11 +150,7 @@ async fn a_leased_slot_is_never_evicted() {
 
     drop(lease);
     // Dropping the guard touches the clock too.
-    backend
-        .pooled_entry(&key)
-        .unwrap()
-        .last_used
-        .store(0, Ordering::Relaxed);
+    tokio::time::advance(Duration::from_secs(2)).await;
 
     assert_eq!(
         backend.evict_idle_per_user_entries(Duration::from_secs(1)),

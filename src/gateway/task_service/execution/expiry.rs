@@ -20,7 +20,7 @@ use tokio::time::MissedTickBehavior;
 
 use super::TaskExecutor;
 use crate::gateway::task_service::service::ServiceError;
-use crate::gateway::task_service::store::StoreError;
+use crate::gateway::task_service::store::{CancelHold, StoreError};
 
 impl TaskExecutor {
     /// Start the periodic sweep and hand back the guard that stops it.
@@ -72,6 +72,13 @@ impl TaskExecutor {
             stop,
             joined: Some(joined),
         })
+    }
+
+    /// One expiry pass, for tests (MIK-8202 P4b): runs [`sweep`] once instead
+    /// of waiting on the interval.
+    #[cfg(test)]
+    pub(crate) async fn expiry_pass_for_test(self: &Arc<Self>) -> Result<(), ServiceError> {
+        sweep(self).await
     }
 }
 
@@ -143,7 +150,14 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
     };
     // The deletion snapshot is taken FIRST, so a round cancelled below is
     // deleted by a later pass, never in the same one.
-    let candidates = service.store.expired_candidates(now);
+    // Retention holds an undated unsent cancel only while an adapter exists
+    // to send it (MIK-8202 P4b).
+    let hold = if executor.recovery().is_some() {
+        CancelHold::Undated
+    } else {
+        CancelHold::Off
+    };
+    let candidates = service.store.expired_candidates(now, hold);
     // An open input round past its TTL is cancelled here, continuation and
     // all; a later pass deletes it like any terminal row after retention.
     let mut round_failure = None;
@@ -187,7 +201,7 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
     for (id, revision) in candidates {
         match service
             .store
-            .expire(&id, revision, service.admission_arc())
+            .expire(&id, revision, service.admission_arc(), hold)
             .await
         {
             Ok(()) => {

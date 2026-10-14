@@ -5,6 +5,13 @@
 //! side matches nothing, and two gateways that share a signing key do not
 //! accept each other's tokens.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use chrono::Utc;
 use uuid::Uuid;
 

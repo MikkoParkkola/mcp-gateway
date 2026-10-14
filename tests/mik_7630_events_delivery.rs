@@ -7,6 +7,10 @@
 //! accepts them and emits nothing, so every row goes red at its first
 //! delivery assertion. Receiver rows trust its CA through
 //! `Receiver::trust_env` (MIK-8188).
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code reads the host clock (MIK-8202 AC.14)"
+)]
 #![cfg(unix)]
 
 #[path = "mik_7630_events/delivery.rs"]

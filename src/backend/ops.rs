@@ -1,15 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Request/notify dispatch through the per-identity pool, plus status,
-//! circuit-breaker, and health-metric accessors on [`super::Backend`].
+//! Request/notify dispatch through the per-identity pool on
+//! [`super::Backend`]. The status and health-metric accessors live in
+//! `status.rs`.
 
 use std::sync::atomic::Ordering;
 
 use serde_json::Value;
 
 use super::Backend;
-use super::registry::{BackendLifecycle, BackendRuntimeState, BackendRuntimeStatus, BackendStatus};
-use crate::config::TransportConfig;
 use crate::failsafe::{RetryPolicy, with_retry};
 use crate::protocol::JsonRpcResponse;
 use crate::protocol::param_headers::{is_param_header, mirror_headers};
@@ -68,7 +67,7 @@ impl Backend {
     /// outbound headers, e.g. a propagated end-user identity credential
     /// (MIK-6710).
     ///
-    /// Delegates to [`TransportConfig::carries_identity_headers`], which is
+    /// Delegates to [`TransportConfig::carries_identity_headers`](crate::config::TransportConfig::carries_identity_headers), which is
     /// evaluated from config alone -- valid before [`Backend::start`] has ever
     /// run. The identity-propagation dispatch gate
     /// (`MetaMcp::resolve_caller_credential`, the direct backend route's
@@ -619,144 +618,6 @@ impl Backend {
         let tool = params.and_then(|p| p.get("name")).and_then(Value::as_str)?;
         self.blocked_tool_refusal(identity_key, tool)
             .map(crate::Error::Protocol)
-    }
-
-    /// Pass-through mode: exempt from input sanitization on every route, and
-    /// from tool policy on `/mcp/{name}`. Only for fully-trusted backends.
-    #[must_use]
-    pub fn passthrough(&self) -> bool {
-        self.config.passthrough
-    }
-
-    /// Return the HTTP URL if this backend uses an HTTP-based transport.
-    ///
-    /// Returns `None` for stdio backends.
-    #[must_use]
-    pub fn transport_url(&self) -> Option<&str> {
-        match &self.config.transport {
-            TransportConfig::Http { http_url: url, .. }
-            | TransportConfig::WebSocket { ws_url: url, .. } => Some(url.as_str()),
-            TransportConfig::Stdio { .. } => None,
-            #[cfg(feature = "a2a")]
-            TransportConfig::A2a { a2a_url, .. } => Some(a2a_url.as_str()),
-        }
-    }
-
-    /// Get backend status.
-    ///
-    /// Reports the canonical Shared slot's circuit/health state (MIK-6735
-    /// fix 1): this is the backend-wide, single-tenant view -- the same one
-    /// `status()` reported before per-user slots existed -- and deliberately
-    /// does not aggregate across per-user slots, which each fail
-    /// independently and are not surfaced individually here.
-    /// Coarse lifecycle state, distinct from health.
-    ///
-    /// `running: bool` cannot express "stopped on purpose". Reporting a
-    /// deliberately-stopped backend as unhealthy would trip its circuit breaker
-    /// and show it as broken while it behaves exactly as configured; reporting
-    /// it as healthy would hide that its process is gone.
-    ///
-    /// A backend is `Dormant` only if it opted into being stopped when idle,
-    /// its transport is released, and nothing is actually wrong with it. If the
-    /// breaker is open or the health tracker says otherwise, it is `Unhealthy`
-    /// regardless — a real failure is never disguised as a nap.
-    #[must_use]
-    pub fn lifecycle(&self) -> BackendLifecycle {
-        if self.is_running() {
-            return BackendLifecycle::Running;
-        }
-        let entry = self.shared_entry();
-        if self.is_circuit_tripped() || !entry.failsafe.health_metrics().healthy {
-            return BackendLifecycle::Unhealthy;
-        }
-        // Dormant only if the reaper actually stopped it. Inferring from
-        // configuration alone would report a backend whose first start FAILED as
-        // sleeping: nothing has updated the failsafe yet, so it still looks
-        // healthy, and "never came up" would be indistinguishable from "resting".
-        if entry
-            .stopped_when_idle
-            .load(std::sync::atomic::Ordering::SeqCst)
-        {
-            return BackendLifecycle::Dormant;
-        }
-        BackendLifecycle::NotStarted
-    }
-
-    /// The per-request timeout this backend was configured with.
-    ///
-    /// Exposed so callers that wrap a backend call in a ceiling of their own can
-    /// derive it from the operator's setting instead of hard-coding a number
-    /// that silently pre-empts any backend configured to take longer.
-    #[must_use]
-    pub fn request_timeout(&self) -> std::time::Duration {
-        self.config.timeout
-    }
-
-    /// Get backend status.
-    ///
-    /// Reports the canonical Shared slot's circuit/health state (MIK-6735
-    /// fix 1): this is the backend-wide, single-tenant view -- the same one
-    /// `status()` reported before per-user slots existed -- and deliberately
-    /// does not aggregate across per-user slots, which each fail
-    /// independently and are not surfaced individually here.
-    pub fn status(&self) -> BackendStatus {
-        let entry = self.shared_entry();
-        let health = entry.failsafe.health_metrics();
-        let (tools_cached, tools_known) = self.cached_tools_count_and_known();
-        BackendStatus {
-            name: self.name.clone(),
-            running: self.is_running(),
-            lifecycle: self.lifecycle(),
-            transport: self.config.transport.transport_type().to_string(),
-            tools_cached,
-            tools_known,
-            circuit_state: entry.failsafe.circuit_breaker.state(),
-            request_count: self.request_count.load(Ordering::Relaxed),
-            healthy: health.healthy,
-            consecutive_failures: health.consecutive_failures,
-            latency_p95_ms: health.latency_p95_ms,
-            runtime: self.runtime_status(),
-        }
-    }
-
-    fn runtime_status(&self) -> Option<BackendRuntimeStatus> {
-        let plan = self.runtime_plan.as_ref()?;
-        let state = if plan.is_denied() {
-            BackendRuntimeState::Denied
-        } else if plan.requires_confirmation() {
-            BackendRuntimeState::ConfirmationRequired
-        } else {
-            BackendRuntimeState::Ready
-        };
-
-        Some(BackendRuntimeStatus {
-            profile: self
-                .config
-                .runtime_profile
-                .clone()
-                .unwrap_or_else(|| plan.policy.id.clone()),
-            provider: plan.provider,
-            policy_id: plan.policy.id.clone(),
-            license_tier: plan.audit.license_tier,
-            state,
-            denied_reasons: plan.denied.iter().map(|denial| denial.reason).collect(),
-            confirmation_ids: plan
-                .confirmations
-                .iter()
-                .map(|confirmation| confirmation.id.clone())
-                .collect(),
-            restart_max_attempts: plan.policy.restart.max_restarts,
-            restart_backoff_secs: plan.policy.restart.backoff_secs,
-            health_check: plan.lifecycle.health_check.clone(),
-            restart_command_hint: plan.lifecycle.restart_command_hint.clone(),
-            rollback_step: plan.rollback_step.clone(),
-        })
-    }
-
-    /// Get health metrics for this backend's canonical Shared slot (MIK-6735
-    /// fix 1).
-    pub fn health_metrics(&self) -> crate::failsafe::HealthMetrics {
-        self.shared_entry().failsafe.health_metrics()
     }
 }
 

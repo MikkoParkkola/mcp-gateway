@@ -11,10 +11,13 @@ use crate::identity_grants::{CapabilityExposure, GrantSubject};
 use crate::protocol::ToolAnnotations;
 use crate::transform::TransformConfig;
 
+mod caller_state;
 mod process;
 mod protocols;
 mod providers;
+mod schema_fields;
 mod webhook;
+pub use caller_state::creates_caller_addressed_external_state;
 pub use process::{
     CliArg, CliConfig, CliOutput, ConditionalArg, DEFAULT_MAX_OUTPUT_BYTES, EachArg, JsonArg,
     MAX_OUTPUT_BYTES_CEILING, McpConfig, McpTransport, PrepareCall, ProcessConfig, RootName,
@@ -22,6 +25,7 @@ pub use process::{
 };
 pub use protocols::{GraphqlConfig, JsonRpcConfig, PathSelectorConfig, ProtocolConfig, RestConfig};
 pub use providers::{Integrity, ProvidersConfig};
+pub use schema_fields::extract_schema_fields;
 pub use webhook::WebhookEvent;
 
 /// A capability definition describing how to call a REST API
@@ -494,71 +498,6 @@ pub struct CapabilityMetadata {
     pub chains_with: Vec<String>,
 }
 
-/// Extract searchable field names and descriptions from a JSON Schema object.
-///
-/// Walks the `properties` map (one level deep) and collects:
-/// - each property name (e.g. `symbol`, `exchange`)
-/// - the `description` string of each property, split into words
-/// - the top-level schema `description` string, split into words
-///
-/// Only non-empty, non-duplicate tokens are returned; all tokens are
-/// lowercased so callers can do case-insensitive matching cheaply.
-///
-/// # Example
-///
-/// ```json
-/// {
-///   "type": "object",
-///   "description": "Stock query parameters",
-///   "properties": {
-///     "symbol": { "type": "string", "description": "Stock ticker symbol" },
-///     "exchange": { "type": "string" }
-///   }
-/// }
-/// ```
-///
-/// Returns: `["symbol", "exchange", "stock", "ticker", "query", "parameters"]`
-#[must_use]
-pub fn extract_schema_fields(schema: &serde_json::Value) -> Vec<String> {
-    let mut seen = std::collections::HashSet::new();
-    let mut fields = Vec::new();
-
-    // Collect a token, deduplicating across the whole result set.
-    let mut push = |token: &str| {
-        let token = token.trim().to_lowercase();
-        if !token.is_empty() && seen.insert(token.clone()) {
-            fields.push(token);
-        }
-    };
-
-    collect_schema_tokens(schema, &mut push);
-    fields
-}
-
-/// Recursively collect tokens from a JSON Schema node.
-fn collect_schema_tokens(schema: &serde_json::Value, push: &mut impl FnMut(&str)) {
-    // Top-level description words
-    if let Some(desc) = schema.get("description").and_then(|v| v.as_str()) {
-        for word in desc.split_whitespace() {
-            let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
-            push(clean);
-        }
-    }
-
-    // Property names and their descriptions
-    if let Some(props) = schema.get("properties").and_then(|v| v.as_object()) {
-        for (name, prop_schema) in props {
-            push(name);
-            if let Some(desc) = prop_schema.get("description").and_then(|v| v.as_str()) {
-                for word in desc.split_whitespace() {
-                    let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
-                    push(clean);
-                }
-            }
-        }
-    }
-}
-
 impl CapabilityDefinition {
     /// SHA-256 of the whole definition as JSON with every object's keys
     /// sorted, providers with their typed process configs included and the
@@ -677,102 +616,6 @@ mod tests;
 #[cfg(test)]
 #[path = "cwe532_debug_redaction_tests.rs"]
 mod cwe532_debug_redaction;
-
-/// `true` when this capability hands a caller-chosen destination to a third
-/// party that will later call it.
-///
-/// Such a call creates persistent state outside this gateway, addressed by the
-/// caller and authorised by the operator's credential — an out-of-band channel
-/// that needs no readable response. `linear_create_webhook` is the shape:
-/// a URL parameter, posted to Linear, which then delivers events to it.
-///
-/// Derived from the definition rather than a hand-kept list, so a capability
-/// added later inherits the rule instead of needing to be remembered. The
-/// ticket that filed this recorded a hand count of six URL-taking capabilities;
-/// the count was wrong, which is the argument for deriving it.
-#[must_use]
-pub fn creates_caller_addressed_external_state(def: &CapabilityDefinition) -> bool {
-    // Not an HTTP method test: a capability backed by a CLI has no method, and
-    // `gws_gmail_watch` — which registers a Pub/Sub topic — is exactly that. A
-    // read-only capability cannot register anything, so that flag is the
-    // transport-independent question, with the method as a fallback where the
-    // flag was left at its default.
-    // An explicit `read_only: true` settles it. The previous form OR'd the
-    // provider method in, so a capability that declared itself read-only but
-    // reached its API with POST — which plenty do — was treated as mutating,
-    // and an unauthenticated laptop client lost a tool it should have.
-    if def.metadata.read_only {
-        return false;
-    }
-    // An explicit declaration wins over EVERY inference below, which is why it
-    // is read here rather than further down. Name inference is a fallback, not
-    // the contract: `gws_gmail_watch` registers a Pub/Sub topic, whose
-    // destination is not a URL and whose name is not "webhook", and inference
-    // alone missed it. Read after the inference short-circuits — as it was
-    // until MIK-7262 — the declaration lost to the very heuristics it exists to
-    // overrule: a GET-reached or `properties`-less definition returned `false`
-    // before anyone looked at what its author said.
-    // It stays BELOW `read_only` deliberately: that flag is also an author
-    // declaration, and the older one. Two explicit declarations in conflict
-    // resolve to read-only rather than silently reversing the ruling above.
-    if let Some(declared) = def.metadata.registers_external_callback {
-        return declared;
-    }
-    let mutating = def
-        .providers
-        .named
-        .values()
-        .chain(def.providers.fallback.iter())
-        .any(|p| {
-            matches!(
-                p.config.method.to_ascii_uppercase().as_str(),
-                "POST" | "PUT" | "PATCH"
-            )
-        })
-        // A CLI-backed capability has no HTTP method; not being read-only is
-        // what makes it mutating there.
-        || def.providers.named.values().any(|p| p.service == "cli");
-    if !mutating {
-        return false;
-    }
-    let Some(props) = def
-        .schema
-        .input
-        .get("properties")
-        .and_then(|p| p.as_object())
-    else {
-        return false;
-    };
-    // Narrow deliberately. "Mutating, and takes a URL" is too broad: archiving a
-    // page or attaching a link posts a URL as DATA, and blocking those behind
-    // admin would take ordinary tools away from the single-user client for no
-    // security gain. What matters is REGISTERING an address the third party
-    // will later deliver to.
-    let name = def.name.to_ascii_lowercase();
-    let registers_a_callback = ["webhook", "subscribe", "callback", "watch", "notify"]
-        .iter()
-        .any(|k| name.contains(k));
-    if !registers_a_callback {
-        return false;
-    }
-
-    props.iter().any(|(name, spec)| {
-        let lower = name.to_ascii_lowercase();
-        // Not only URLs. A Pub/Sub topic, a queue name or an address is just as
-        // much a caller-chosen destination that a third party will deliver to.
-        let looks_like_a_destination = lower == "url"
-            || lower.ends_with("_url")
-            || lower == "callback"
-            || lower == "webhook"
-            || lower == "endpoint"
-            || lower == "address"
-            || lower.contains("topic")
-            || lower.contains("queue")
-            || lower.contains("channel");
-        let declared_uri = spec.get("format").and_then(|f| f.as_str()) == Some("uri");
-        looks_like_a_destination || declared_uri
-    })
-}
 
 #[cfg(test)]
 mod caller_addressed_state_tests;

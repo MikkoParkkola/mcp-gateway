@@ -4,6 +4,13 @@
 //! `_meta` attestation token of the request that created it into the worker's
 //! dispatch, where the funnel re-validates it. Enforce is built from an env
 //! file through the overlay, never hand-built.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::super::*;
 use super::support::*;
 use pretty_assertions::assert_eq;

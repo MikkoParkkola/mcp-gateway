@@ -5,7 +5,7 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
 use crate::config::CircuitBreakerConfig;
@@ -73,8 +73,9 @@ pub struct CircuitBreakerStats {
     pub state: CircuitState,
     /// Number of times the circuit has tripped (Closed→Open)
     pub trips_count: u64,
-    /// Epoch-millisecond timestamp of the last trip (0 = never)
-    pub last_trip_ms: u64,
+    /// Epoch-millisecond timestamp of the last trip, `None` when the trip
+    /// could not be dated or the breaker never tripped (MIK-8202 P4b).
+    pub last_trip_ms: Option<u64>,
     /// Milliseconds until a retry probe is allowed (0 when not open)
     pub retry_after_ms: u64,
     /// Current consecutive failure count
@@ -114,11 +115,14 @@ pub struct CircuitBreaker {
     failures: AtomicU32,
     /// Success count (in half-open)
     successes: AtomicU32,
-    /// Last state change timestamp (as millis since epoch)
-    last_state_change: AtomicU64,
+    /// When the state last changed, on the monotonic clock: the open-state
+    /// age is a duration, so a dark wall clock never wedges the breaker
+    /// (MIK-8202 P4b). Tokio's `Instant`, so a paused test clock advances it.
+    last_state_change: Mutex<tokio::time::Instant>,
     /// Number of times the circuit has transitioned Closed→Open
     trips_count: AtomicU64,
-    /// Epoch-millisecond timestamp of the last Closed→Open transition (0 = never)
+    /// Epoch-millisecond timestamp of the last Closed→Open transition, 0
+    /// when never or undated; 0 is never read as a time (MIK-8202 P4b).
     last_trip_ms: AtomicU64,
     /// Structured record of the most recent Open transition (MIK-6119).
     last_open_event: RwLock<Option<BreakerOpenEvent>>,
@@ -147,7 +151,7 @@ impl CircuitBreaker {
             state: RwLock::new(CircuitState::Closed),
             failures: AtomicU32::new(0),
             successes: AtomicU32::new(0),
-            last_state_change: AtomicU64::new(0),
+            last_state_change: Mutex::new(tokio::time::Instant::now()),
             trips_count: AtomicU64::new(0),
             last_trip_ms: AtomicU64::new(0),
             last_open_event: RwLock::new(None),
@@ -163,9 +167,8 @@ impl CircuitBreaker {
     /// Check if requests can proceed.
     ///
     /// When the circuit is `Open`, checks whether the reset timeout has elapsed
-    /// since the last state change using wall-clock epoch milliseconds (the same
-    /// unit used by `transition_to`).  If the timeout has elapsed, the circuit
-    /// moves to `HalfOpen` and returns `true`.
+    /// since the last state change on the monotonic clock. If the timeout has
+    /// elapsed, the circuit moves to `HalfOpen` and returns `true`.
     #[tracing::instrument(skip(self), fields(backend = %self.name))]
     pub fn can_proceed(&self) -> bool {
         if !self.enabled {
@@ -180,14 +183,10 @@ impl CircuitBreaker {
                 true
             }
             CircuitState::Open => {
-                // Compare elapsed epoch-ms against the reset timeout.
-                let last_change_ms = self.last_state_change.load(Ordering::Relaxed);
-                let now_ms = epoch_millis_now();
-                let elapsed_ms = now_ms.saturating_sub(last_change_ms);
-                #[allow(clippy::cast_possible_truncation)]
-                let timeout_ms = self.reset_timeout.as_millis() as u64;
+                let elapsed = tokio::time::Instant::now()
+                    .saturating_duration_since(*self.last_state_change.lock());
 
-                if elapsed_ms >= timeout_ms {
+                if elapsed >= self.reset_timeout {
                     tracing::debug!("Reset timeout elapsed, transitioning to half-open");
                     self.transition_to(CircuitState::HalfOpen);
                     true
@@ -343,22 +342,26 @@ impl CircuitBreaker {
         *self.state.read()
     }
 
-    /// Return a rich observability snapshot without holding any lock.
+    /// Return a rich observability snapshot.
     ///
     /// The `retry_after_ms` field is non-zero only when the circuit is `Open`
-    /// and is computed as `reset_timeout - elapsed_since_trip`.  It is clamped
-    /// to zero when the reset timeout has already elapsed.
+    /// and is computed as `reset_timeout - elapsed_since_trip` on the
+    /// monotonic clock. It is clamped to zero when the reset timeout has
+    /// already elapsed.
     #[must_use]
     pub fn stats(&self) -> CircuitBreakerStats {
         let state = *self.state.read();
-        let last_trip_ms = self.last_trip_ms.load(Ordering::Relaxed);
+        let last_trip_ms = match self.last_trip_ms.load(Ordering::Relaxed) {
+            0 => None,
+            ms => Some(ms),
+        };
 
-        let retry_after_ms = if state == CircuitState::Open && last_trip_ms > 0 {
-            let now_ms = epoch_millis_now();
-            let elapsed_ms = now_ms.saturating_sub(last_trip_ms);
+        let retry_after_ms = if state == CircuitState::Open {
+            let elapsed = tokio::time::Instant::now()
+                .saturating_duration_since(*self.last_state_change.lock());
             #[allow(clippy::cast_possible_truncation)]
-            let reset_ms = self.reset_timeout.as_millis() as u64;
-            reset_ms.saturating_sub(elapsed_ms)
+            let retry_after_ms = self.reset_timeout.saturating_sub(elapsed).as_millis() as u64;
+            retry_after_ms
         } else {
             0
         };
@@ -383,8 +386,10 @@ impl CircuitBreaker {
         }
 
         *state = new_state;
-        let epoch_ms = epoch_millis_now();
-        self.last_state_change.store(epoch_ms, Ordering::Relaxed);
+        *self.last_state_change.lock() = tokio::time::Instant::now();
+        // A trip on a dark clock is undated (0 reads back as `None`); it is
+        // never stamped 0 as a time (MIK-8202 P4b).
+        let trip_ms = crate::clock::unix_millis().unwrap_or_default();
 
         match new_state {
             CircuitState::Closed => {
@@ -399,7 +404,7 @@ impl CircuitBreaker {
                 // (MIK-6119) — keep this arm to bookkeeping only to avoid a
                 // duplicate log line.
                 self.trips_count.fetch_add(1, Ordering::Relaxed);
-                self.last_trip_ms.store(epoch_ms, Ordering::Relaxed);
+                self.last_trip_ms.store(trip_ms, Ordering::Relaxed);
                 debug!(backend = %self.name, "Circuit breaker state → Open");
             }
             CircuitState::HalfOpen => {
@@ -490,14 +495,23 @@ pub fn build_circuit_breaker_error(server: &str, stats: &CircuitBreakerStats) ->
 
     match stats.state {
         CircuitState::Open => {
-            let opened_ago_ms = if stats.last_trip_ms > 0 {
-                epoch_millis_now().saturating_sub(stats.last_trip_ms)
-            } else {
-                0
-            };
+            // A trip the clock could not date, or a clock that went dark
+            // since, renders "unknown": never a time measured from 0
+            // (MIK-8202 P4b).
+            let opened = stats
+                .last_trip_ms
+                .and_then(|trip| {
+                    crate::clock::unix_millis()
+                        .ok()
+                        .map(|now| now.saturating_sub(trip))
+                })
+                .map_or_else(
+                    || "an unknown time ago".to_owned(),
+                    |ms| format!("~{ms}ms ago"),
+                );
             format!(
                 "Circuit breaker for '{server}' is {state_label} (tripped {trips} time(s)). \
-                 Opened ~{opened_ago_ms}ms ago. \
+                 Opened {opened}. \
                  Retry probe allowed in ~{retry_after_ms}ms.",
                 retry_after_ms = stats.retry_after_ms,
             )
@@ -509,17 +523,14 @@ pub fn build_circuit_breaker_error(server: &str, stats: &CircuitBreakerStats) ->
     }
 }
 
-/// Current time as milliseconds since UNIX epoch.
-///
-/// Truncation to `u64` is safe: epoch-ms fits comfortably for centuries.
-#[allow(clippy::cast_possible_truncation)]
-pub(crate) fn epoch_millis_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
-
 #[cfg(test)]
 #[path = "circuit_breaker_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "circuit_breaker_clock_tests.rs"]
+mod clock_tests;
+
+#[cfg(test)]
+#[path = "circuit_breaker_clock_compile_red_tests.rs"]
+mod clock_compile_red_tests;

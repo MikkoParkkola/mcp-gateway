@@ -19,6 +19,8 @@ mod construct;
 mod control_plane_store;
 #[cfg(all(test, feature = "cost-governance"))]
 mod cost_restart_tests;
+#[cfg(all(test, feature = "cost-governance"))]
+mod cost_save_stamp_tests;
 mod events_wiring;
 #[cfg(test)]
 mod gh475_budget_decides_tests;
@@ -36,6 +38,7 @@ mod replica_state_tests;
 pub(super) mod route_matrix_driver_tests;
 mod run;
 mod run_steps;
+mod run_wiring;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 pub(crate) mod signing_allocation_tests;

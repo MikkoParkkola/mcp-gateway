@@ -189,3 +189,17 @@ async fn the_lock_free_read_follows_every_transition() {
     assert_eq!(cache.cached_now(), None, "silence is not a determination");
     assert_eq!(cache.cached_now(), cache.cached().await);
 }
+
+/// MIK-8202.AC.16 (R9, mutant M9): an era observation made on a clock that
+/// reads before 1970 is undated: `probed_at` is `None`, so the operator read
+/// omits `era_probed_at` rather than showing 1969 or the epoch; the era
+/// itself is still recorded. Mutant M9: `probed_at` is the epoch on the clock
+/// error.
+#[test]
+fn an_observation_on_a_clock_before_1970_is_undated() {
+    let _clock = crate::clock::test_clock::before_epoch();
+    let observed = EraObservation::observed_now(&modern_document(), ProbeTrigger::Start);
+    assert_eq!(observed.probed_at, None);
+    assert_eq!(observed.era, Era::Modern);
+    assert!(!observed.render().contains_key("era_probed_at"));
+}

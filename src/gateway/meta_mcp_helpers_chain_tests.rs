@@ -379,7 +379,7 @@ fn make_cb_stats_closed() -> CircuitBreakerStats {
     CircuitBreakerStats {
         state: crate::failsafe::CircuitState::Closed,
         trips_count: 0,
-        last_trip_ms: 0,
+        last_trip_ms: None,
         retry_after_ms: 0,
         current_failures: 0,
         failure_threshold: 5,
@@ -390,7 +390,7 @@ fn make_cb_stats_open() -> CircuitBreakerStats {
     CircuitBreakerStats {
         state: crate::failsafe::CircuitState::Open,
         trips_count: 3,
-        last_trip_ms: 1_717_000_000_000,
+        last_trip_ms: Some(1_717_000_000_000),
         retry_after_ms: 29_000,
         current_failures: 5,
         failure_threshold: 5,
@@ -407,7 +407,7 @@ fn build_circuit_breaker_stats_json_closed_state() {
     assert_eq!(json["server"], "my-backend");
     assert_eq!(json["state"], "closed");
     assert_eq!(json["trips_count"], 0);
-    assert_eq!(json["last_trip_ms"], 0);
+    assert!(json["last_trip_ms"].is_null());
     assert_eq!(json["retry_after_ms"], 0);
     assert_eq!(json["current_failures"], 0);
     assert_eq!(json["failure_threshold"], 5);
@@ -432,7 +432,7 @@ fn build_circuit_breaker_stats_json_half_open_state() {
     let stats = CircuitBreakerStats {
         state: crate::failsafe::CircuitState::HalfOpen,
         trips_count: 1,
-        last_trip_ms: 1_717_000_000_000,
+        last_trip_ms: Some(1_717_000_000_000),
         retry_after_ms: 0,
         current_failures: 0,
         failure_threshold: 5,

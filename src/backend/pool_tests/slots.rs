@@ -176,21 +176,13 @@ fn pool_key_collapses_to_shared_without_per_user_identity() {
 // POOL.2: idle per-user slots are evicted and their transports closed, the
 // shared canonical slot is NEVER evicted, and a later request lazily
 // re-creates a fresh slot.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn evict_idle_per_user_entries_reaps_idle_users_but_spares_shared() {
     let backend = per_user_backend();
     backend.set_pooled_transport_for_test(&per_user_key("userA"), Arc::new(SessionMock::new("A")));
 
     // Age BOTH the user slot and the shared slot into the deep past.
-    for key in [per_user_key("userA"), PoolKey::Shared] {
-        backend
-            .pool
-            .get(&key)
-            .unwrap()
-            .value()
-            .last_used
-            .store(0, Ordering::Relaxed);
-    }
+    tokio::time::advance(Duration::from_secs(2)).await;
 
     let closed = backend.evict_idle_per_user_entries(Duration::from_secs(1));
     assert_eq!(closed, 1, "only the per-user slot is reaped");

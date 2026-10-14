@@ -8,6 +8,13 @@
 //! sanitized and passthrough backends alike. A surfaced tool on `/mcp` carries
 //! the same `_meta` token into the envelope the dispatch funnel checks.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::*;
 use crate::attestation::{
     AttestationMode, AttestationValidator, BnautAttestationSigner, TokenRequest,

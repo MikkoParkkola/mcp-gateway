@@ -3,6 +3,13 @@
 //! MIK-7887.RECEIPT.3/.4: a receipt follows delivery, and describes the
 //! answer as it was delivered.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::*;
 
 /// MIK-7887.RECEIPT.3: a bridged prompt is receipted only once the channel
@@ -642,13 +649,14 @@ async fn a_built_task_envelope_is_read_as_one() {
     use crate::protocol::tasks::{Task, TaskTransition};
     let (meta, firewall) = relay_meta();
     let stored = text_result(PROSE);
-    let mut task = Task::create("gateway_invoke");
+    let mut task = Task::create("gateway_invoke").expect("the test clock reads after 1970");
     task.transition(
         TaskTransition::StatusMessage(Some(OTHER_PROSE.to_owned())),
         chrono::Utc::now(),
     )
     .expect("a status message");
-    task.complete(stored.clone());
+    task.complete(&stored)
+        .expect("a live task takes its outcome");
     let replay = CommittedTask {
         task,
         revision: 1,
@@ -726,7 +734,10 @@ async fn a_stored_result_receipts_only_what_the_backend_wrote() {
     assert!(!record.is_empty(), "premise: the note was taken");
 
     let (meta, firewall) = relay_meta();
-    let mut stored = stored_task(|task| task.complete(written.clone()));
+    let mut stored = stored_task(|task| {
+        task.complete(&written)
+            .expect("a live task takes its outcome");
+    });
     stored.gateway_writes = record.clone();
     let ((), staged) = meta
         .collecting_staged(async {
@@ -750,7 +761,10 @@ async fn a_stored_result_receipts_only_what_the_backend_wrote() {
         "content": [{"type": "text", "text": PROSE}],
         "_cost_warnings": [BACKEND_ADVICE],
     });
-    let mut stored = stored_task(|task| task.complete(backend));
+    let mut stored = stored_task(|task| {
+        task.complete(&backend)
+            .expect("a live task takes its outcome");
+    });
     stored.gateway_writes = record;
     let ((), staged) = meta
         .collecting_staged(async {

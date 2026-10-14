@@ -13,6 +13,13 @@
 //! read through publish: B cannot read until A has published. What remains
 //! observable is what a held lock does to the second trigger, which is T10b.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;

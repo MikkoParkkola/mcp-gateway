@@ -210,9 +210,6 @@ src/gateway/task_service/execution/upstream.rs	acquire_query_lease	1	Takes the p
 src/gateway/task_service/execution/upstream.rs	query_slot	1	Creates or returns the per-record query mutex
 src/gateway/task_service/execution/upstream.rs	release	1	Releases a query lease and its directory entry
 src/gateway/task_service/execution/upstream.rs	release_query_slot	1	Drops a query slot's directory entry when unused
-src/gateway/task_service/execution/worker.rs	is_terminal	1	Status predicate for the three terminal states
-src/gateway/task_service/execution/worker.rs	settle_cas	1	Delegates to settle_cas_by with the gateway as author; the owner-scoped decision is there
-src/gateway/task_service/execution/worker.rs	settle_cas_with	1	Delegates to settle_cas_by with the given author; the owner-scoped decision is there
 src/gateway/task_service/execution/worker.rs	settle_descriptor_refused	1	Builds the descriptor-refusal payload and settles through settle_cas; run_dispatched decides the refusal
 src/gateway/task_service/execution/worker.rs	settle_interrupted	1	Builds the not_executed payload and settles through settle_cas; run_dispatched decides the host is gone
 src/gateway/task_service/execution/worker.rs	split_create	1	Maps CreateOutcome to BeginOutcome and the worker permit

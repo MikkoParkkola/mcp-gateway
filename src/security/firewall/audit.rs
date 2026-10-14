@@ -5,7 +5,8 @@
 //!
 //! Every entry is a single JSON line (NDJSON format) containing:
 //!
-//! * `timestamp` — RFC 3339 timestamp of the event.
+//! * `timestamp` — RFC 3339 timestamp of the event, or `null` with
+//!   `clock_invalid: true` when the host clock reads before 1970 (MIK-8202).
 //! * `event` — `"request"` or `"response"`.
 //! * `session_id`, `server`, `tool`, `caller` — identity fields. `session_id`
 //!   is the session's 8-hex fingerprint: the id itself is a credential (F9).
@@ -31,7 +32,6 @@ use std::io::{self, BufWriter, Write};
 use std::path::Path;
 use std::sync::Mutex;
 
-use chrono::Utc;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -82,6 +82,23 @@ const _: () = {
 };
 
 /// Every finding of `verdict` as the audit log may hold it.
+/// A row's `timestamp` and `clock_invalid`. A security row is kept even on a
+/// clock it cannot read (d1 seats, gpt + kimi, over the `crate::clock`
+/// recorder default): undated (`null`) and marked `clock_invalid`, never 1969
+/// or the epoch, so a refused send never vanishes from the log (MIK-8202 P4a).
+/// No verdict depends on it.
+fn audit_time(kind: &str) -> (Option<String>, Option<bool>) {
+    if let Ok(now) = crate::clock::utc_now() {
+        (Some(now.to_rfc3339()), None)
+    } else {
+        tracing::warn!(
+            kind,
+            "Firewall: audit row kept undated, the host clock reads before 1970"
+        );
+        (None, Some(true))
+    }
+}
+
 fn audit_findings(verdict: &FirewallVerdict) -> Vec<AuditFinding> {
     verdict.findings.iter().map(AuditFinding::from).collect()
 }
@@ -89,7 +106,9 @@ fn audit_findings(verdict: &FirewallVerdict) -> Vec<AuditFinding> {
 /// A single audit log entry (serialised as one JSON line).
 #[derive(Serialize)]
 struct AuditEntry<'a> {
-    timestamp: String,
+    /// `None` (`null`) when the host clock reads before 1970; `clock_invalid`
+    /// is then set.
+    timestamp: Option<String>,
     event: &'a str,
     /// A fingerprint: the id is its anonymous holder's credential (F9).
     session_id: String,
@@ -115,8 +134,8 @@ struct AuditEntry<'a> {
     /// from (`invoke`, `step`, `retry`, `bridged`). Absent on every other row.
     #[serde(skip_serializing_if = "Option::is_none")]
     source: Option<&'a str>,
-    /// Set when the row's `timestamp` is the epoch because the host clock
-    /// read before 1970 (MIK-8202). Absent on every row with a real time.
+    /// Set when the row's `timestamp` is `null` because the host clock read
+    /// before 1970 (MIK-8202 P4a). Absent on every row with a real time.
     #[serde(skip_serializing_if = "Option::is_none")]
     clock_invalid: Option<bool>,
 }
@@ -195,8 +214,9 @@ impl AuditLogger {
                 .collect();
             hashed.into_iter().collect()
         });
+        let (timestamp, clock_invalid) = audit_time("request");
         let entry = AuditEntry {
-            timestamp: Utc::now().to_rfc3339(),
+            timestamp,
             event: "request",
             session_id: session_fp(session_id),
             server,
@@ -212,7 +232,7 @@ impl AuditLogger {
             policy_targets: None,
             tenants,
             source: None,
-            clock_invalid: None,
+            clock_invalid,
         };
         self.write_entry(&entry);
     }
@@ -229,22 +249,9 @@ impl AuditLogger {
         verdict: &FirewallVerdict,
         source: &'static str,
     ) {
-        // A security row is kept even on a clock it cannot read (d1 seats,
-        // gpt + kimi, over the `crate::clock` recorder default): stamped with
-        // the epoch and marked `clock_invalid`, so a refused send never
-        // vanishes from the log. The send's verdict does not depend on it.
-        let (now, clock_invalid) = if let Ok(now) = crate::clock::utc_now() {
-            (now, None)
-        } else {
-            tracing::warn!(
-                source,
-                "Firewall: dispatch audit row stamped with the epoch, the host clock reads before 1970"
-            );
-            // The epoch as a constant, not a clock read.
-            (chrono::DateTime::<Utc>::default(), Some(true))
-        };
+        let (timestamp, clock_invalid) = audit_time("dispatch");
         let entry = AuditEntry {
-            timestamp: now.to_rfc3339(),
+            timestamp,
             event: "dispatch",
             session_id: session_fp(correlation.session_id),
             server: correlation.external_server,
@@ -299,8 +306,9 @@ impl AuditLogger {
         artifact: ResponseArtifactKind,
         verdict: &FirewallVerdict,
     ) {
+        let (timestamp, clock_invalid) = audit_time("response");
         let entry = AuditEntry {
-            timestamp: Utc::now().to_rfc3339(),
+            timestamp,
             event: "response",
             session_id: session_fp(correlation.session_id),
             server: correlation.external_server,
@@ -316,7 +324,7 @@ impl AuditLogger {
             policy_targets: Some(targets),
             tenants: None,
             source: None,
-            clock_invalid: None,
+            clock_invalid,
         };
         self.write_entry(&entry);
     }
@@ -555,19 +563,15 @@ mod tests {
         assert!(row.get("clock_invalid").is_none(), "{row}");
     }
 
-    /// On a host clock before 1970 the row is still written (d1 seats): the
-    /// epoch, marked `clock_invalid`, and still content-free.
+    /// On a host clock before 1970 the row is still written (d1 seats):
+    /// undated (`timestamp` null, MIK-8202 P4a A7, no longer the epoch),
+    /// marked `clock_invalid`, and still content-free.
     #[test]
     fn a_dispatch_row_on_a_clock_before_1970_is_kept_and_marked() {
         let _clock = crate::clock::test_clock::before_epoch();
         let row = dispatch_row();
         assert_eq!(row["clock_invalid"], true, "{row}");
-        assert!(
-            row["timestamp"]
-                .as_str()
-                .is_some_and(|t| t.starts_with("1970-01-01T00:00:00")),
-            "{row}"
-        );
+        assert!(row["timestamp"].is_null(), "{row}");
         assert!(row["findings"][0].get("matched").is_none(), "{row}");
     }
 }
