@@ -15,7 +15,7 @@ use crate::key_server::oidc::VerifiedIdentity;
 use crate::personal_accounts::identity::{AccountDescriptor, Principal};
 use crate::personal_accounts::{
     AccountCustody, AccountError, AccountKey, AccountServiceError, CredentialLease, CustodyError,
-    RejectionOutcome, ReleasedCredentials, VaultStrategy,
+    RejectionOutcome, ReleasedCredentials, VaultStrategy, ViewBinding,
 };
 
 const REVISION: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -105,7 +105,7 @@ fn vault(answer: Answer) -> (VaultStrategy, Arc<Scripted>) {
 
 /// The production mapping with no slot rule refusing (the slot rules are
 /// T8/T10's, on a real backend).
-fn outcome(view: Result<String, crate::identity_propagation::PropagationError>) -> AccountOutcome {
+fn outcome(view: &ViewBinding) -> AccountOutcome {
     view_outcome(view, |_| false)
 }
 
@@ -125,21 +125,40 @@ async fn o1_o2_each_custody_answer_maps_to_one_exact_outcome() {
             },
             AccountOutcome::NoView,
         ),
-        (Answer::Busy, AccountOutcome::Unavailable),
+        (Answer::Busy, AccountOutcome::Transient),
         (Answer::ShuttingDown, AccountOutcome::Unavailable),
         (Answer::StoreError, AccountOutcome::Unavailable),
     ];
     for (answer, expected) in cases {
         let (strategy, custody) = vault(answer);
+        // Each product call measured on its own, so no call the test makes
+        // can satisfy another call's count and hide a second product read.
+        let reads = |custody: &Scripted| custody.reads.load(Ordering::SeqCst);
+        let before = reads(&custody);
         let checked = strategy.view_binding_checked(Principal::SoleOperator).await;
-        let plain = strategy.view_binding(Principal::SoleOperator).await;
-        assert_eq!(plain, checked.as_ref().ok().cloned(), "O2 {answer:?}");
-        assert_eq!(outcome(checked), expected, "O1 {answer:?}");
         assert_eq!(
-            custody.reads.load(Ordering::SeqCst),
-            2,
-            "{answer:?}: one read each"
+            reads(&custody) - before,
+            1,
+            "{answer:?}: view_binding_checked reads custody once"
         );
+        let before = reads(&custody);
+        let plain = strategy.view_binding(Principal::SoleOperator).await;
+        assert_eq!(
+            reads(&custody) - before,
+            1,
+            "{answer:?}: view_binding reads custody once"
+        );
+        let before = reads(&custody);
+        let classified = strategy
+            .view_binding_classified(Principal::SoleOperator)
+            .await;
+        assert_eq!(
+            reads(&custody) - before,
+            1,
+            "{answer:?}: view_binding_classified reads custody once"
+        );
+        assert_eq!(plain, checked.as_ref().ok().cloned(), "O2 {answer:?}");
+        assert_eq!(outcome(&classified), expected, "O1 {answer:?}");
     }
 }
 
@@ -147,7 +166,7 @@ async fn o1_o2_each_custody_answer_maps_to_one_exact_outcome() {
 #[test]
 fn a_binding_the_slot_rule_refuses_is_no_view() {
     assert_eq!(
-        view_outcome(Ok("acct:v1:x".into()), |_| true),
+        view_outcome(&ViewBinding::Bound("acct:v1:x".into()), |_| true),
         AccountOutcome::NoView
     );
 }
@@ -166,9 +185,9 @@ async fn an_unbindable_principal_reads_unavailable_without_a_custody_read() {
         groups: vec![],
         issuer: "https://issuer.example.invalid".into(),
     };
-    let checked = strategy
-        .view_binding_checked(Principal::Verified(&nameless))
+    let classified = strategy
+        .view_binding_classified(Principal::Verified(&nameless))
         .await;
-    assert_eq!(outcome(checked), AccountOutcome::Unavailable);
+    assert_eq!(outcome(&classified), AccountOutcome::Unavailable);
     assert_eq!(custody.reads.load(Ordering::SeqCst), 0);
 }

@@ -9,7 +9,8 @@
 //! backend's managed `account`, or a capability's `auth.account`. A target
 //! with neither binds no per-user account, so it has nothing to judge here.
 
-use crate::identity_propagation::{CallerProof, PropagationError};
+use crate::identity_propagation::CallerProof;
+use crate::personal_accounts::ViewBinding;
 
 use super::MetaMcp;
 use super::visible::{self, AccountKey, AccountOutcome};
@@ -72,15 +73,15 @@ impl MetaMcp {
     ) -> AccountOutcome {
         let Some(view) = self
             .account_strategies
-            .view_binding_checked(&account.0, caller)
+            .view_binding_classified(&account.0, caller)
             .await
         else {
             return AccountOutcome::Unjudged;
         };
-        if let Ok(binding) = &view {
+        if let ViewBinding::Bound(binding) = &view {
             visible::record_account_binding(server, account, binding);
         }
-        view_outcome(view, |binding| {
+        let outcome = view_outcome(&view, |binding| {
             // A binding the isolation guard or the per-user slot rule would
             // refuse is no view either (as `has_no_view_for`). Only an
             // identity-propagation backend has those rules; a capability
@@ -90,27 +91,37 @@ impl MetaMcp {
                     && (self.meta_route_isolation_refused_for_caller(&backend, Some(binding))
                         || !backend.fetch_carries_caller_identity(Some(binding)))
             })
-        })
+        });
+        // The stored read's one audit write for a busy custody, through the
+        // same helper the live call uses (MIK-8392 Busy parity, gap-4).
+        if outcome == AccountOutcome::Transient
+            && let ViewBinding::Transient(error) = &view
+        {
+            self.account_strategies
+                .audit_transient_refusal(
+                    self.transparency_logger.as_ref(),
+                    &account.0,
+                    caller,
+                    &error.to_string(),
+                )
+                .await;
+        }
+        outcome
     }
 }
 
 /// A mint-free view read's outcome. A refusal a connect journey fixes
 /// (absent, revoked, reconnect required, a changed descriptor) is no view;
-/// any other failure (busy, shutting down, a store error) proves nothing
-/// either way, so it is unavailable. `slot_refuses` judges a binding the
-/// vault did hand back.
-fn view_outcome(
-    view: Result<String, PropagationError>,
-    slot_refuses: impl FnOnce(&String) -> bool,
-) -> AccountOutcome {
+/// a busy custody is transient; any other failure (shutting down, a store
+/// error) proves nothing either way, so it is unavailable. `slot_refuses`
+/// judges a binding the vault did hand back.
+fn view_outcome(view: &ViewBinding, slot_refuses: impl FnOnce(&String) -> bool) -> AccountOutcome {
     match view {
-        Ok(binding) if slot_refuses(&binding) => AccountOutcome::NoView,
-        Ok(_) => AccountOutcome::Live,
-        Err(
-            PropagationError::AccountNotConnected(_)
-            | PropagationError::AccountReconnectRequired(_),
-        ) => AccountOutcome::NoView,
-        Err(_) => AccountOutcome::Unavailable,
+        ViewBinding::Bound(binding) if slot_refuses(binding) => AccountOutcome::NoView,
+        ViewBinding::Bound(_) => AccountOutcome::Live,
+        ViewBinding::NoView(_) => AccountOutcome::NoView,
+        ViewBinding::Transient(_) => AccountOutcome::Transient,
+        ViewBinding::Unavailable(_) => AccountOutcome::Unavailable,
     }
 }
 

@@ -38,6 +38,41 @@ pub(crate) fn record_account_refusal(server: &str, account: &AccountKey, refusal
     });
 }
 
+/// Keep this request's transient busy custody for `(server, tool)`, with
+/// the busy reason; outside a request nothing is kept.
+pub(crate) fn record_account_transient(server: &str, tool: &str, reason: String) {
+    let _ = VISIBILITY_MEMO.try_with(|memo| {
+        memo.account_transient
+            .lock()
+            .insert((server.to_owned(), tool.to_owned()), reason);
+    });
+}
+
+/// The transient kept for `(server, tool)`, without consuming it.
+pub(crate) fn account_transient(server: &str, tool: &str) -> Option<String> {
+    VISIBILITY_MEMO
+        .try_with(|memo| {
+            memo.account_transient
+                .lock()
+                .get(&(server.to_owned(), tool.to_owned()))
+                .cloned()
+        })
+        .ok()
+        .flatten()
+}
+
+/// Take the transient kept for `(server, tool)`, consuming it once.
+pub(crate) fn take_account_transient(server: &str, tool: &str) -> Option<String> {
+    VISIBILITY_MEMO
+        .try_with(|memo| {
+            memo.account_transient
+                .lock()
+                .remove(&(server.to_owned(), tool.to_owned()))
+        })
+        .ok()
+        .flatten()
+}
+
 /// Take the refusal kept for `(server, account)`, if any.
 pub(crate) fn take_account_refusal(server: &str, account: &AccountKey) -> Option<crate::Error> {
     VISIBILITY_MEMO

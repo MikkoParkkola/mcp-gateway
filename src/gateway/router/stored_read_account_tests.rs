@@ -25,6 +25,9 @@ struct Fx {
     /// For reading a task record past the stored-read check (W2).
     state: Arc<super::AppState>,
     gateway: DirectAccountGateway,
+    /// The transparency log this fixture's `MetaMcp` writes (MIK-8392 B1).
+    audit_path: std::path::PathBuf,
+    _audit: tempfile::TempDir,
     _store: tempfile::TempDir,
 }
 
@@ -54,17 +57,30 @@ async fn fixture() -> Fx {
     let auth = sole_operator();
     let mut gateway = DirectAccountGateway::new(auth.clone(), &Binding::Connected);
     let (mut state, store) = super::tests::test_router_app_state_with_auth(&auth).await;
+    let audit = tempfile::tempdir().expect("a log directory");
+    let audit_path = audit.path().join("audit.jsonl");
+    let log = Arc::new(
+        crate::security::TransparencyLogger::open(Arc::new(
+            crate::security::transparency_log::TransparencyLogConfig {
+                enabled: true,
+                path: audit_path.to_string_lossy().into_owned(),
+                key_id: "8392".to_string(),
+                ..crate::security::transparency_log::TransparencyLogConfig::default()
+            },
+        ))
+        .expect("open log"),
+    );
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.backends = gateway.backends();
-    state_mut.meta_mcp =
-        Arc::new(
-            gateway
-                .take_meta()
-                .with_surfaced_tools(vec![SurfacedToolConfig {
-                    server: BACKEND.to_string(),
-                    tool: TOOL.to_string(),
-                }]),
-        );
+    let mut meta = gateway
+        .take_meta()
+        .with_surfaced_tools(vec![SurfacedToolConfig {
+            server: BACKEND.to_string(),
+            tool: TOOL.to_string(),
+        }]);
+    meta.enable_transparency_log(Arc::clone(&log));
+    state_mut.meta_mcp = Arc::new(meta);
+    state_mut.transparency_log = Some(log);
     let tool: crate::protocol::Tool = serde_json::from_value(json!({
         "name": TOOL, "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}}
     }))
@@ -78,6 +94,8 @@ async fn fixture() -> Fx {
         router: super::create_router(Arc::clone(&state)),
         state,
         gateway,
+        audit_path,
+        _audit: audit,
         _store: store,
     }
 }
@@ -686,3 +704,6 @@ mod lease;
 
 #[path = "stored_read_ub_audit_tests.rs"]
 mod ub_audit;
+
+#[path = "stored_read_busy_parity_tests.rs"]
+mod busy_parity;

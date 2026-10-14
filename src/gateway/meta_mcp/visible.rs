@@ -382,6 +382,10 @@ pub(crate) struct VisibilityMemo {
     /// the live call answers instead of "retry" forever.
     account_refusal:
         parking_lot::Mutex<std::collections::HashMap<(String, AccountKey), crate::Error>>,
+    /// MIK-8392 Busy parity: a transient busy custody met by this request's
+    /// mint-free view read, carried to the dispatch and consumed once there,
+    /// so nothing in the request reads custody a second time.
+    account_transient: parking_lot::Mutex<std::collections::HashMap<(String, String), String>>,
 }
 
 /// The account a target's dispatch would use (MIK-8392): a managed
@@ -402,9 +406,12 @@ pub(crate) enum AccountOutcome {
     /// descriptor): visibility is judged on the catalogue only (stated
     /// residual).
     Unjudged,
-    /// Custody could not be read (busy, shutting down, store failure): not a
+    /// Custody could not be read (shutting down, store failure): not a
     /// finding about the grant, so a reader answers retryable.
     Unavailable,
+    /// Custody is at its in-flight bound (MIK-8392 Busy parity): transient,
+    /// audited once as such, and answered exactly as a live call answers it.
+    Transient,
 }
 
 /// Record `outcome` for `(server, account)` in the open request's memo unless
@@ -421,7 +428,8 @@ pub(crate) fn record_account_outcome(server: &str, account: &AccountKey, outcome
 #[path = "visible_account_memo.rs"]
 mod account_memo;
 pub(crate) use account_memo::{
-    account_binding, record_account_binding, record_account_refusal, take_account_refusal,
+    account_binding, account_transient, record_account_binding, record_account_refusal,
+    record_account_transient, take_account_refusal, take_account_transient,
 };
 
 /// The outcome recorded for `(server, account)` in the open request. Reads

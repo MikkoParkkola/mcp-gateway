@@ -116,7 +116,9 @@ async fn o5_an_external_account_is_unjudged_with_no_custody_read() {
     let custody = custody_with(&[]);
     let (_meta, registry) =
         installed_gateway(&[("partner", external("partner"))], &custody.installed());
-    let view = registry.view_binding_checked("partner", operator()).await;
+    let view = registry
+        .view_binding_classified("partner", operator())
+        .await;
     assert!(
         view.is_none(),
         "O5: an external account is unjudged: {view:?}"

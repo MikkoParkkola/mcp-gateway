@@ -8,7 +8,8 @@
 
 use super::MetaMcp;
 use crate::backend::Backend;
-use crate::identity_propagation::CallerProof;
+use crate::identity_propagation::{CallerProof, PropagationError};
+use crate::personal_accounts::ViewBinding;
 use crate::protocol::Tool;
 use std::sync::Arc;
 use tracing::debug;
@@ -86,30 +87,45 @@ impl MetaMcp {
     /// either, and neither does one whose binding the isolation guard or the
     /// per-user slot rule would refuse (MIK-7690).
     pub(super) async fn has_no_view_for(&self, backend: &Backend, caller: CallerProof<'_>) -> bool {
+        // The listing behaviour is unchanged: a busy custody reads as no
+        // view here, exactly as `view_binding` read it (MIK-8392).
+        self.has_no_view_for_classified(backend, caller)
+            .await
+            .unwrap_or(true)
+    }
+
+    /// [`Self::has_no_view_for`] with a busy custody kept distinct for the
+    /// caller verdict (MIK-8392 Busy parity): `Err` is the transient, never
+    /// a finding of no view.
+    pub(super) async fn has_no_view_for_classified(
+        &self,
+        backend: &Backend,
+        caller: CallerProof<'_>,
+    ) -> std::result::Result<bool, PropagationError> {
         if self.lacks_principal_on_required(backend, caller) {
-            return true;
+            return Ok(true);
         }
         let required = backend
             .identity_propagation_config()
             .is_some_and(|cfg| cfg.required);
         if !required {
-            return false;
+            return Ok(false);
         }
         let Some(principal) = self.principal_for(backend, caller) else {
-            return true;
+            return Ok(true);
         };
         let Some(vault) = self
             .account_strategies
             .managed_vault(backend.account_descriptor_id())
         else {
-            return false;
+            return Ok(false);
         };
-        match vault.view_binding(principal).await {
-            Some(binding) => {
-                self.meta_route_isolation_refused_for_caller(backend, Some(&binding))
-                    || !backend.fetch_carries_caller_identity(Some(&binding))
-            }
-            None => true,
+        match vault.view_binding_classified(principal).await {
+            ViewBinding::Bound(binding) => Ok(self
+                .meta_route_isolation_refused_for_caller(backend, Some(&binding))
+                || !backend.fetch_carries_caller_identity(Some(&binding))),
+            ViewBinding::Transient(error) => Err(error),
+            ViewBinding::NoView(_) | ViewBinding::Unavailable(_) => Ok(true),
         }
     }
 

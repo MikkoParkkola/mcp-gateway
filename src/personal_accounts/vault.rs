@@ -140,6 +140,15 @@ where
     }
 }
 
+/// The typed outcome of a mint-free view read (MIK-8392 Busy parity).
+#[derive(Debug)]
+pub(crate) enum ViewBinding {
+    Bound(String),
+    NoView(PropagationError),
+    Transient(PropagationError),
+    Unavailable(PropagationError),
+}
+
 /// Managed personal-account custody as an identity-propagation strategy.
 ///
 /// Installed PER BACKEND, because the descriptor is what the account key is
@@ -359,16 +368,49 @@ impl VaultStrategy {
         &self,
         principal: Principal<'_>,
     ) -> Result<String, PropagationError> {
-        let account = account_key(Some(principal), &self.descriptor).map_err(|error| {
-            PropagationError::Refuse(format!("account identity binding refused: {error}"))
-        })?;
-        let current = self
-            .custody
-            .resolve(&account)
-            .await
-            .map_err(|error| refusal("managed account view", &error))?;
-        self.fence_changed_descriptor(&current)?;
-        cache_binding(&account, &current)
+        match self.view_binding_classified(principal).await {
+            ViewBinding::Bound(binding) => Ok(binding),
+            ViewBinding::NoView(error)
+            | ViewBinding::Transient(error)
+            | ViewBinding::Unavailable(error) => Err(error),
+        }
+    }
+
+    /// The mint-free view read with a busy custody kept distinct (MIK-8392
+    /// Busy parity): decided from [`CustodyError::Busy`] itself, never text.
+    pub(crate) async fn view_binding_classified(&self, principal: Principal<'_>) -> ViewBinding {
+        let account = match account_key(Some(principal), &self.descriptor) {
+            Ok(account) => account,
+            Err(error) => {
+                return ViewBinding::Unavailable(PropagationError::Refuse(format!(
+                    "account identity binding refused: {error}"
+                )));
+            }
+        };
+        let current = match self.custody.resolve(&account).await {
+            Ok(current) => current,
+            Err(error) => {
+                return match error {
+                    CustodyError::Busy => {
+                        ViewBinding::Transient(refusal("managed account view", &error))
+                    }
+                    _ => match refusal("managed account view", &error) {
+                        error @ (PropagationError::AccountNotConnected(_)
+                        | PropagationError::AccountReconnectRequired(_)) => {
+                            ViewBinding::NoView(error)
+                        }
+                        error => ViewBinding::Unavailable(error),
+                    },
+                };
+            }
+        };
+        if let Err(error) = self.fence_changed_descriptor(&current) {
+            return ViewBinding::NoView(error);
+        }
+        match cache_binding(&account, &current) {
+            Ok(binding) => ViewBinding::Bound(binding),
+            Err(error) => ViewBinding::Unavailable(error),
+        }
     }
 
     /// Refuse a grant stored under a descriptor revision other than the live

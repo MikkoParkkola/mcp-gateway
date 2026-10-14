@@ -30,6 +30,10 @@ pub(crate) enum CallerVerdict {
     /// carried; the dispatch's own check answers the failure as a failed
     /// dispatch (backend unavailable, with managed-401 recovery).
     Unavailable,
+    /// The mint-free view read met a busy custody (MIK-8392 Busy parity):
+    /// the busy is carried in the request memo and the dispatch answers
+    /// the one retryable transient answer, with no second custody read.
+    Transient,
 }
 
 /// How a call named its per-user target. It decides what a caller with no
@@ -131,9 +135,12 @@ impl MetaMcp {
     /// `witness` is the call's refund witness (MIK-8353). It comes back only
     /// from an arm that contacted nothing: a memo hit, Step 0, no principal, or
     /// no view (each reads in-process state or the vault's stored grant, with
-    /// no provider call and no durable write). A resolution (which may mint,
-    /// refresh or lease), a catalogue fill or a 401 refresh spends it, so a
-    /// later refusal keeps the nonce spent.
+    /// no provider call and no durable write). A busy custody comes back too:
+    /// a call refused before its backend was reached gives its nonce back
+    /// (`invoke/nonce_settle.rs:27-31`), and an `idp_refuse` audit append is
+    /// not an effect a replay would repeat, so it does not spend the witness.
+    /// A resolution (which may mint, refresh or lease), a catalogue fill or a
+    /// 401 refresh spends it, so a later refusal keeps the nonce spent.
     ///
     /// # Errors
     ///
@@ -179,7 +186,46 @@ impl MetaMcp {
         // reader after this answers as absent; a dispatch naming the backend
         // proceeds to that account's connect offer, the same for every tool
         // name (MIK-6745 section 9.2, predicate D).
-        if self.has_no_view_for(&backend, proof).await {
+        // A busy custody already met in this request (the route stage's
+        // verdict, read again on a surfaced route): no second custody read
+        // and no second audit record (MIK-8392 Busy parity).
+        if visible::account_transient(server, tool).is_some() {
+            return Ok((CallerVerdict::Transient, witness));
+        }
+        let no_view = match self.has_no_view_for_classified(&backend, proof).await {
+            Ok(no_view) => no_view,
+            Err(error) => {
+                // A busy custody is not "no view": no marker is recorded,
+                // nothing proceeds to the acting resolution. The witness
+                // is kept, as on the no-view arm: this call reaches no
+                // backend and its answer is retryable, so its nonce is
+                // given back (`invoke/nonce_settle.rs:27-31`); the
+                // `idp_refuse` append below is not an effect a replay
+                // would repeat. The busy is carried request-local and
+                // consumed once at the dispatch.
+                let reason = error.to_string();
+                visible::record_account_transient(server, tool, reason.clone());
+                if let Some(account) = self.target_account(server, tool) {
+                    visible::record_account_outcome(
+                        server,
+                        &account,
+                        visible::AccountOutcome::Transient,
+                    );
+                }
+                if let Some(descriptor) = backend.account_descriptor_id() {
+                    self.account_strategies
+                        .audit_transient_refusal(
+                            self.transparency_logger.as_ref(),
+                            descriptor,
+                            proof,
+                            &reason,
+                        )
+                        .await;
+                }
+                return Ok((CallerVerdict::Transient, witness));
+            }
+        };
+        if no_view {
             if let Some(principal) = self.principal_for(&backend, proof) {
                 backend.record_no_view(&principal.stable_actor_id());
             }
@@ -262,6 +308,17 @@ impl MetaMcp {
         >,
     > {
         use std::ops::ControlFlow::{Break, Continue};
+        // The verdict's busy custody, consumed once: the one retryable
+        // transient answer, with no acting resolution and no mint — and
+        // no second custody read in this request (MIK-8392 Busy parity).
+        // The witness is kept: nothing reached the backend, so the nonce
+        // is given back (`nonce_settle.rs:27-31`); the invoke asks for the
+        // refund as it returns this error.
+        if visible::take_account_transient(server, tool).is_some() {
+            return Err(crate::personal_accounts::refusal::transient_retry_error(
+                None,
+            ));
+        }
         match visible::take_carried(server, tool) {
             // The verdict's fill failed: answered as a failed dispatch is,
             // with nothing filled or sent again (F13, A11-c).

@@ -142,6 +142,45 @@ pub(crate) fn mark_rejection(outcome: super::RejectionOutcome, refused: &Error) 
     }
 }
 
+/// The one retryable answer for a transient custody / unsettled view
+/// (MIK-8392 Busy parity): -32603, one neutral message, `retryable` data,
+/// and `retry_after_ms` only while a lease runs. Sealed like an offer, so
+/// only a gateway-built one is forwarded as such; a live call and a stored
+/// read both build through here and therefore answer byte-equal errors.
+pub(crate) fn transient_retry_error(after: Option<std::time::Duration>) -> Error {
+    let mut data = json!({ "retryable": true });
+    if let Some(after) = after {
+        data["retry_after_ms"] = json!(u64::try_from(after.as_millis()).unwrap_or(u64::MAX));
+    }
+    if let Some(seal) = SEAL.as_ref() {
+        data[SEAL_KEY] = Value::String(seal.clone());
+    }
+    Error::JsonRpc {
+        code: -32603,
+        message: "temporarily unavailable, retry".to_owned(),
+        data: Some(data),
+    }
+}
+
+/// The retryable data of a sealed, gateway-built transient answer, seal
+/// removed; `None` for every other error, a backend's included.
+pub(crate) fn transient_data(error: &Error) -> Option<Value> {
+    let Error::JsonRpc {
+        data: Some(data), ..
+    } = error
+    else {
+        return None;
+    };
+    let seal = SEAL.as_ref()?;
+    (data.get(SEAL_KEY).and_then(Value::as_str) == Some(seal.as_str())).then_some(())?;
+    (data.get("retryable").and_then(Value::as_bool) == Some(true)).then_some(())?;
+    let forwarded: serde_json::Map<String, Value> = ["retryable", "retry_after_ms"]
+        .into_iter()
+        .filter_map(|key| Some((key.to_owned(), data.get(key)?.clone())))
+        .collect();
+    Some(Value::Object(forwarded))
+}
+
 /// The gateway-built rejection mark inside `error`, if it is one.
 pub(crate) fn upstream_rejection(error: &Error) -> Option<UpstreamRejection> {
     let Error::JsonRpc {

@@ -466,6 +466,11 @@ impl MetaMcp {
                     return Err(visible::take_account_refusal(server, &account)
                         .map_or(StoredWithheld::Retry(None), StoredWithheld::Refused));
                 }
+                // A busy custody: the same retryable answer the live call
+                // gives (MIK-8392 Busy parity), never a permanent refusal.
+                Some(AccountOutcome::Transient) => {
+                    return Err(StoredWithheld::Retry(None));
+                }
                 Some(AccountOutcome::NoView) => {
                     return Err(StoredWithheld::Refused(visible::absent_name(tool)));
                 }
@@ -638,19 +643,14 @@ enum StoredWithheld {
     Retry(Option<std::time::Duration>),
 }
 
-/// The retryable answer (MIK-8392 s1-d1): -32603 with a `retryable` data
-/// member, built here because the shared error converter keeps only listed
-/// data keys. It carries no output.
+/// The retryable answer (MIK-8392 s1-d1, Busy parity): built through the
+/// one sealed transient builder the live call also uses, converted the
+/// same way, so the two error objects are byte-equal apart from the id.
+/// It carries no output.
 fn retry_later(id: &RequestId, after: Option<std::time::Duration>) -> JsonRpcResponse {
-    let mut data = json!({ "retryable": true });
-    if let Some(after) = after {
-        data["retry_after_ms"] = json!(u64::try_from(after.as_millis()).unwrap_or(u64::MAX));
-    }
-    JsonRpcResponse::error_with_data(
-        Some(id.clone()),
-        -32603,
-        "task result temporarily unavailable, retry",
-        data,
+    error_response_preserving_status(
+        id.clone(),
+        &crate::personal_accounts::refusal::transient_retry_error(after),
     )
 }
 
