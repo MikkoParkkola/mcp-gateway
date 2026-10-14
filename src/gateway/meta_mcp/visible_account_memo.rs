@@ -151,3 +151,7 @@ pub(crate) fn take_account_refusal(server: &str, account: &AccountKey) -> Option
         .ok()
         .flatten()
 }
+
+#[cfg(test)]
+#[path = "visible_account_memo_tests.rs"]
+mod tests;
