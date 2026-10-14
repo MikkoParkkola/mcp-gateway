@@ -305,9 +305,7 @@ impl MetaMcp {
         if let Some(refusal) = self.refuse_unadmitted(&id, &caller) {
             return refusal;
         }
-        if let Some(answer) =
-            self.task_intake_transient(tool_name, &arguments, &caller, session_id, &id)
-        {
+        if let Some(answer) = self.task_intake_transient(tool_name, &arguments, &caller, &id) {
             return answer;
         }
         if let Some(intent) = caller.task.take() {
@@ -355,10 +353,12 @@ impl MetaMcp {
         tool_name: &str,
         arguments: &Value,
         caller: &MetaMcpCallerContext<'_>,
-        session_id: Option<&str>,
         id: &RequestId,
     ) -> Option<JsonRpcResponse> {
         caller.task.as_ref()?;
+        // No policy check here: the invocation policy already ran for this
+        // call before intake (admission.rs:391, or signing.rs:642 for a signed
+        // `gateway_invoke`), so a refused target never reaches this answer.
         let targets: Vec<(String, String)> = match tool_name {
             "gateway_invoke" => match (
                 arguments.get("server").and_then(Value::as_str),
@@ -373,9 +373,11 @@ impl MetaMcp {
                 .map(|steps| {
                     steps
                         .iter()
-                        .filter_map(|step| step.get("tool").and_then(Value::as_str))
-                        .filter_map(|named| named.split_once(':'))
-                        .map(|(server, tool)| (server.to_owned(), tool.to_owned()))
+                        .filter_map(|step| {
+                            let (server, tool) =
+                                step.get("tool").and_then(Value::as_str)?.split_once(':')?;
+                            Some((server.to_owned(), tool.to_owned()))
+                        })
                         .collect()
                 })
                 .unwrap_or_default(),
@@ -384,31 +386,6 @@ impl MetaMcp {
                 .map(|server| vec![(server.to_owned(), tool_name.to_owned())])
                 .unwrap_or_default(),
         };
-        // Policy first (seat finding 1): the sync path refuses a
-        // kill-switched or disabled target in its invocation policy,
-        // before any transient is answered, so a client is never told to
-        // retry a refused target. Only a target carrying a transient is
-        // checked here; every other call runs these checks once, in its
-        // invoke, as today.
-        for (server, tool) in targets
-            .iter()
-            .filter(|(server, tool)| super::visible::account_transient(server, tool).is_some())
-        {
-            let scope = caller.scope();
-            if let Err(error) = self.may_invoke(server, tool, scope, session_id) {
-                return Some(error_response_preserving_status(id.clone(), &error));
-            }
-            if let Err(error) = self.admit_target(&super::invoke::dispatch_guards::BackendCall {
-                server,
-                tool,
-                session_id,
-                api_key_name: scope.api_key_name,
-                trace_id: "",
-                caller_key: None,
-            }) {
-                return Some(error_response_preserving_status(id.clone(), &error));
-            }
-        }
         if targets
             .iter()
             .any(|(server, tool)| super::visible::take_account_transient(server, tool).is_some())

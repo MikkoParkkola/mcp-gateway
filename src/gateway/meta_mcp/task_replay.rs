@@ -259,12 +259,6 @@ impl MetaMcp {
         let _ = backend.tools_for_check(None, &[], true).await;
     }
 
-    /// MIK-8392 F4: whether `server`'s `tool` is refused for this caller
-    /// without reading any catalogue: descriptor-blocked, refused by the
-    /// invocation policy (the silent check the name judgement uses), or by
-    /// the dispatch admission (the kill switch). A read so refused triggers
-    /// no credential resolution and no backend listing; the sync judgement
-    /// still answers it, with its audit record.
     /// [`Self::refused_without_catalogue`] for any stored target, a
     /// capability-provider one with no registry backend included (seat
     /// finding 3): only the descriptor block needs the backend itself;
@@ -293,6 +287,12 @@ impl MetaMcp {
         }
     }
 
+    /// MIK-8392 F4: whether `server`'s `tool` is refused for this caller
+    /// without reading any catalogue: descriptor-blocked, refused by the
+    /// invocation policy (the silent check the name judgement uses), or by
+    /// the dispatch admission (the kill switch). A read so refused triggers
+    /// no credential resolution and no backend listing; the sync judgement
+    /// still answers it, with its audit record.
     fn refused_without_catalogue(
         &self,
         backend: &crate::backend::Backend,

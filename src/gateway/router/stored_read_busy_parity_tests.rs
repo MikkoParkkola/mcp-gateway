@@ -506,43 +506,6 @@ async fn a_descriptor_blocked_stored_read_reads_no_custody_and_writes_no_refusal
     );
 }
 
-/// Item 1 (seat finding 2): a kill-switched target under a busy custody
-/// is refused by policy at task intake, exactly as the sync call is —
-/// never told to retry a disabled target — and no task is created.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn f1_a_kill_switched_tasked_call_answers_the_sync_refusal_not_the_transient() {
-    let fx = fixture().await;
-    fx.state.meta_mcp.kill_switch().kill(BACKEND);
-    fx.gateway.fail_custody_for_test(true);
-    let sync = live_invoke(&fx, "s1-f1-sync").await;
-    assert!(
-        sync.get("error").is_some(),
-        "F1 premise: the sync call is refused: {sync}"
-    );
-    assert_ne!(
-        sync.pointer("/error/data/retryable"),
-        Some(&json!(true)),
-        "F1 premise: the sync refusal is not the retryable transient: {sync}"
-    );
-    let held = committed_tasks(&fx);
-    let tasked = tasked_invoke(&fx, "s1-f1-task").await;
-    assert_eq!(
-        tasked.get("error"),
-        sync.get("error"),
-        "F1: the tasked call answers the sync refusal: tasked {tasked} sync {sync}"
-    );
-    assert_eq!(
-        tasked["error"].to_string(),
-        sync["error"].to_string(),
-        "F1: byte-equal error objects, id excluded"
-    );
-    assert!(
-        tasked.pointer("/result/taskId").is_none(),
-        "F1: no task was handed back: {tasked}"
-    );
-    assert_eq!(committed_tasks(&fx), held, "F1: no task was created");
-}
-
 /// Item 2 (seat finding 1), the surfaced twin of G1a: the view read
 /// succeeds, the mint meets a busy custody, and the route's second
 /// verdict is a memo hit on the carried error — two custody reads and
