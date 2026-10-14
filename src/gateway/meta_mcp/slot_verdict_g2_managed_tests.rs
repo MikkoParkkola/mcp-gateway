@@ -121,7 +121,7 @@ async fn managed_index_entry_checked_against_current_grant() {
 }
 
 /// L8b (guard): a warm name-only listing mints nothing. Custody's release
-/// count stands in for `VaultStrategy::prepare_held` (every `prepare`
+/// count stands in for `VaultStrategy::prepare_held_classified` (every `prepare`
 /// releases; `view_binding` only resolves), so it stays at its baseline.
 /// The control runs first, while [`TOOL`] is still callable: a managed call
 /// that resolves a credential moves the counter. Green on base.

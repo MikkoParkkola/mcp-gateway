@@ -310,8 +310,7 @@ async fn tasked_invoke(fx: &Fx, key: &str) -> Value {
 /// G1a: the view read succeeds, the acting resolution meets a busy
 /// custody at the mint. The verdict's error is carried to the dispatch:
 /// two custody reads for the call (view + mint), one `idp_refuse`, and
-/// the resolution refusal the live call has always answered (its
-/// retryable form is MIK-8428, not this row).
+/// the shared retryable answer (MIK-8428 Case B, fixed by #3892).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn g1a_a_mint_time_busy_resolves_once_per_call() {
     let fx = fixture().await;
@@ -324,10 +323,10 @@ async fn g1a_a_mint_time_busy_resolves_once_per_call() {
         live.get("error").is_some() && !live.to_string().contains(MARKER),
         "G1a premise: the call is refused at its resolution: {live}"
     );
-    assert_ne!(
+    assert_eq!(
         live.pointer("/error/data/retryable"),
         Some(&json!(true)),
-        "G1a premise: today's mint refusal, not the view's transient answer: {live}"
+        "G1a: a mint-time busy answers the shared transient (MIK-8428 Case B, fixed by #3892): {live}"
     );
     assert_eq!(
         fx.gateway.resolves() - reads,
@@ -521,10 +520,10 @@ async fn f2_a_mint_time_busy_surfaced_call_resolves_once() {
         live.get("error").is_some() && !live.to_string().contains(MARKER),
         "F2 premise: the surfaced call is refused at its resolution: {live}"
     );
-    assert_ne!(
+    assert_eq!(
         live.pointer("/error/data/retryable"),
         Some(&json!(true)),
-        "F2 premise: today's mint refusal, not the view's transient: {live}"
+        "F2: a mint-time busy answers the shared transient (MIK-8428 Case B, fixed by #3892): {live}"
     );
     assert_eq!(
         fx.gateway.resolves() - reads,

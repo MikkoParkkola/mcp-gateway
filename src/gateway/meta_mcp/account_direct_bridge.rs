@@ -414,6 +414,16 @@ impl CapabilityAccount {
         self.custody.fail_after(allowed);
     }
 
+    /// Make only the mint's refresh step answer `Busy` (#3892 R8).
+    pub(crate) fn fail_refresh_for_test(&self) {
+        self.custody.busy_at(super::BusyStep::Refresh);
+    }
+
+    /// Make only the mint's release step answer `Busy` (#3892 R7).
+    pub(crate) fn fail_release_for_test(&self) {
+        self.custody.busy_at(super::BusyStep::Release);
+    }
+
     /// The `idp_refuse` records in this fixture's transparency log.
     pub(crate) fn idp_refusals_for_test(&self) -> usize {
         self.idp_refusal_reasons_for_test().len()

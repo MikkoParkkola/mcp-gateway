@@ -478,7 +478,13 @@ impl AccountStrategyRegistry {
         let minted = Self::mint(installed.as_ref(), principal, &backend).await;
         let (credential, managed) = match minted {
             Ok(minted) => minted,
-            Err(error) => {
+            // A busy custody at the mint (MIK-8428): see `transient_mint_refusal`.
+            Err(crate::personal_accounts::MintError::Busy(error)) => {
+                return Err(self
+                    .transient_mint_refusal(logger.as_ref(), descriptor_id, caller, &error)
+                    .await);
+            }
+            Err(crate::personal_accounts::MintError::Other(error)) => {
                 let reason = error.to_string();
                 Self::audit_refusal(
                     logger.as_ref(),
@@ -687,11 +693,13 @@ impl AccountStrategyRegistry {
         installed: &InstalledAccount,
         principal: Principal<'_>,
         backend: &BackendDescriptor,
-    ) -> std::result::Result<(super::PropagatedCredential, Option<ManagedLease>), PropagationError>
-    {
+    ) -> std::result::Result<
+        (super::PropagatedCredential, Option<ManagedLease>),
+        crate::personal_accounts::MintError,
+    > {
         match &installed.minter {
             Minter::Managed(vault) => vault
-                .prepare_held(principal, backend)
+                .prepare_held_classified(principal, backend)
                 .await
                 .map(|(credential, managed)| (credential, Some(managed))),
             // An external strategy exchanges the CALLER'S OWN token, so it has
@@ -704,10 +712,12 @@ impl AccountStrategyRegistry {
                 Some(identity) => strategy
                     .propagate(identity, backend)
                     .await
-                    .map(|credential| (credential, None)),
+                    .map(|credential| (credential, None))
+                    .map_err(crate::personal_accounts::MintError::Other),
                 None => Err(PropagationError::Refuse(
                     "an external account descriptor mints only for a verified caller".to_string(),
-                )),
+                )
+                .into()),
             },
         }
     }

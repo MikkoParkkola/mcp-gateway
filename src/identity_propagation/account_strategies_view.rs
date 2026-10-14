@@ -64,4 +64,21 @@ impl AccountStrategyRegistry {
         )
         .await;
     }
+
+    /// A busy custody met at the mint (MIK-8428): write the one transient
+    /// record through [`Self::audit_transient_refusal`] and answer the one
+    /// sealed retryable error. A mint-time Busy released nothing, so this
+    /// replaces the site's refusal record and `Config` fold, never adds to
+    /// them.
+    pub(crate) async fn transient_mint_refusal(
+        &self,
+        logger: Option<&Arc<TransparencyLogger>>,
+        descriptor_id: &str,
+        caller: CallerProof<'_>,
+        error: &PropagationError,
+    ) -> crate::Error {
+        self.audit_transient_refusal(logger, descriptor_id, caller, &error.to_string())
+            .await;
+        crate::personal_accounts::refusal::transient_retry_error(None)
+    }
 }

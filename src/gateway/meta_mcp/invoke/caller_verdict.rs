@@ -251,21 +251,43 @@ impl MetaMcp {
         }
         // Everything below may act: the resolution may mint, refresh or lease
         // the caller's credential, and the judgement fills the catalogue.
-        if let Some(witness) = witness {
-            witness.spend();
-        }
+        // The witness is spent once the outcome is known, below: a sealed
+        // transient (a busy custody at the view or the mint) released
+        // nothing, so it alone returns the witness unspent for the nonce
+        // refund (`nonce_settle.rs:27-31`); spending is only consuming the
+        // token, so deferring it past the acting half changes nothing else.
         // Boxed: the acting half's state (resolution, fill, refresh) would
         // otherwise sit inline in every dispatch future that awaits a verdict,
         // refusals included (MIK-8400's allocation caps). It is allocated only
         // when a per-user call gets this far.
-        Box::pin(self.caller_verdict_acting(
+        match Box::pin(self.caller_verdict_acting(
             (server, tool),
             backend,
             proof,
             caller.verified_identity,
         ))
         .await
-        .map(|verdict| (verdict, None))
+        {
+            Ok(verdict) => {
+                if let Some(witness) = witness {
+                    witness.spend();
+                }
+                Ok((verdict, None))
+            }
+            // A sealed transient resolution error (MIK-8428 mint Busy):
+            // carried to the dispatch here, witness unspent, so the call
+            // is answered once and its nonce refunded like a view Busy.
+            Err(error) if crate::personal_accounts::refusal::transient_data(&error).is_some() => {
+                visible::record_resolution_error(server, tool, error);
+                Ok((CallerVerdict::Proceed, witness))
+            }
+            Err(error) => {
+                if let Some(witness) = witness {
+                    witness.spend();
+                }
+                Err(error)
+            }
+        }
     }
 
     /// The caller verdict for each of one request's `targets`, in order, as
@@ -339,9 +361,13 @@ impl MetaMcp {
         // The verdict's acting resolution already failed in this request
         // (MIK-8392 G1a): answer its error, consumed once, without
         // resolving a second time. The witness is spent, as on the fresh
-        // resolution's failure: that resolution may have minted.
+        // resolution's failure: that resolution may have minted. A sealed
+        // transient is the one exception (MIK-8428): its mint-time Busy
+        // released nothing, so the witness stays for the nonce refund.
         if let Some(error) = visible::take_resolution_error(server, tool) {
-            witness.spend();
+            if crate::personal_accounts::refusal::transient_data(&error).is_none() {
+                witness.spend();
+            }
             return Err(error);
         }
         match visible::take_carried(server, tool) {
@@ -381,11 +407,20 @@ impl MetaMcp {
                         verified_identity,
                     )
                     .await;
-                if resolved.is_err() {
-                    // A failed resolution may have minted or refreshed before it failed.
-                    witness.spend();
-                }
-                Ok(Continue((backend, resolved?)))
+                // A failed resolution may have minted or refreshed before
+                // it failed, so it spends the witness — except a sealed
+                // transient (MIK-8428), whose busy custody released
+                // nothing: the witness stays for the nonce refund.
+                let resolved = match resolved {
+                    Ok(resolved) => resolved,
+                    Err(error) => {
+                        if crate::personal_accounts::refusal::transient_data(&error).is_none() {
+                            witness.spend();
+                        }
+                        return Err(error);
+                    }
+                };
+                Ok(Continue((backend, resolved)))
             }
         }
     }

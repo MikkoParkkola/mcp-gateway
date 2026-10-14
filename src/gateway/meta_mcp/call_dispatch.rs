@@ -305,6 +305,23 @@ impl MetaMcp {
         if let Some(refusal) = self.refuse_unadmitted(&id, &caller) {
             return refusal;
         }
+        // A capability account has no route-stage verdict, so its busy
+        // custody is judged here for a task call (MIK-8428): after
+        // admission/policy, before the transient answer below and before
+        // any task or key. Sync calls skip it and gain no extra read. A
+        // repeat of a key that already owns a task skips it too: it
+        // serves stored output and must not be account-judged at intake
+        // (`already_admitted` is read-only; `begin_task` re-decides).
+        let repeated = caller.task.as_ref().is_some_and(|intent| {
+            intent
+                .executor
+                .service
+                .already_admitted(intent.request.borrow())
+        });
+        if caller.task.is_some() && !repeated {
+            self.judge_capability_accounts_for_task(tool_name, &arguments, &caller, session_id)
+                .await;
+        }
         if let Some(answer) = Self::task_intake_transient(&caller, &id) {
             return answer;
         }
@@ -426,12 +443,15 @@ impl MetaMcp {
                 // MIK-8392: the repeat runs the stored-read pre-pass too, so
                 // a catalogue past its TTL is refreshed before it is judged
                 // (otherwise it would answer retryable until other traffic
-                // refreshed it).
+                // refreshed it) — but not its account fill: a repeat's
+                // accounts are judged live, and the fill would read custody
+                // and audit a busy custody for a call that serves stored
+                // output (`prepare_repeated_call`).
                 // Boxed as a trait object: its future (credential resolution,
                 // fills) must not become part of this dispatch's own
                 // recursive future type (the Send check overflows).
                 let prepare: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> =
-                    Box::pin(self.prepare_stored_read(&stored, caller.scope(), session_id));
+                    Box::pin(self.prepare_repeated_call(&stored, caller.scope(), session_id));
                 prepare.await;
                 // MIK-8392 site-5 split: the catalogue is judged here; an
                 // account that is not live is the call's own live path.

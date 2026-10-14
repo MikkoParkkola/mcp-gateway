@@ -149,6 +149,41 @@ pub(crate) enum ViewBinding {
     Unavailable(PropagationError),
 }
 
+/// A mint refusal with a busy custody kept typed (MIK-8428): decided from
+/// [`CustodyError::Busy`] itself at the custody boundary, never from text.
+/// Every other refusal keeps its [`PropagationError`] unchanged.
+#[derive(Debug)]
+pub(crate) enum MintError {
+    Busy(PropagationError),
+    Other(PropagationError),
+}
+
+impl MintError {
+    /// The refusal as callers that do not distinguish a busy custody see it.
+    pub(crate) fn into_error(self) -> PropagationError {
+        match self {
+            Self::Busy(error) | Self::Other(error) => error,
+        }
+    }
+}
+
+impl From<PropagationError> for MintError {
+    fn from(error: PropagationError) -> Self {
+        Self::Other(error)
+    }
+}
+
+/// Map one custody boundary's failure, keeping `Busy` typed: the busy arm
+/// carries the same refusal text the view read carries for its resolve
+/// (this file's `view_binding_classified`), so the one transient audit
+/// record's reason bytes match on the live mint and the stored read.
+fn mint_refusal(context: &str, error: &CustodyError) -> MintError {
+    match error {
+        CustodyError::Busy => MintError::Busy(refusal("managed account view", error)),
+        _ => MintError::Other(refusal(context, error)),
+    }
+}
+
 /// Managed personal-account custody as an identity-propagation strategy.
 ///
 /// Installed PER BACKEND, because the descriptor is what the account key is
@@ -267,6 +302,19 @@ impl VaultStrategy {
         principal: Principal<'_>,
         backend: &BackendDescriptor,
     ) -> Result<(PropagatedCredential, CredentialLease), PropagationError> {
+        self.prepare_classified(principal, backend)
+            .await
+            .map_err(MintError::into_error)
+    }
+
+    /// [`Self::prepare`] with a busy custody kept typed to the caller
+    /// (MIK-8428): the same body, decided from [`CustodyError::Busy`] at
+    /// each custody boundary.
+    async fn prepare_classified(
+        &self,
+        principal: Principal<'_>,
+        backend: &BackendDescriptor,
+    ) -> Result<(PropagatedCredential, CredentialLease), MintError> {
         // Read the clock first, before custody resolves, refreshes or releases
         // anything (MIK-8202 P4a): chrono's own clock read panics before 1970,
         // and a dispatch on such a clock is refused with nothing moved. The
@@ -287,11 +335,11 @@ impl VaultStrategy {
         // minting under the wrong audience is exactly the substitution the
         // per-backend install exists to prevent.
         if backend.audience != self.descriptor.resource {
-            return Err(PropagationError::Misconfigured(format!(
+            return Err(MintError::Other(PropagationError::Misconfigured(format!(
                 "backend '{}' expects audience '{}' but account descriptor '{}' is scoped to \
-                 a different resource",
+                     a different resource",
                 backend.id, backend.audience, self.descriptor.descriptor_id
-            )));
+            ))));
         }
 
         // The principal's authority + subject + the CONFIGURED resource and
@@ -308,24 +356,30 @@ impl VaultStrategy {
             .custody
             .resolve(&account)
             .await
-            .map_err(|error| refusal("managed account is not usable", &error))?;
+            .map_err(|error| mint_refusal("managed account is not usable", &error))?;
         self.fence_changed_descriptor(&current)?;
         let lease = self
             .custody
             .refresh_if_expired(&account)
             .await
-            .map_err(|error| refusal("managed account is not usable", &error))?;
+            .map_err(|error| mint_refusal("managed account is not usable", &error))?;
         // Again on the lease actually released: the grant may have been
         // replaced between the read and the refresh.
         self.fence_changed_descriptor(&lease)?;
         let binding = cache_binding(&account, &lease)?;
         // The lease alone authorizes nothing. This is the recheck against
         // current durable state, and the only point a credential exists.
-        let credentials = self
-            .custody
-            .release(&lease)
-            .await
-            .map_err(|error| refusal("managed account credential was not released", &error))?;
+        // A busy custody HERE is not a transient (MIK-8428): the refresh above
+        // may already have refreshed or rotated the grant with the provider,
+        // an effect that spends the call's nonce witness, so this site keeps
+        // the plain refusal (no retryable answer, no refund). Only the resolve
+        // and refresh admissions, refused before anything ran, are `Busy`.
+        let credentials = self.custody.release(&lease).await.map_err(|error| {
+            MintError::Other(refusal(
+                "managed account credential was not released",
+                &error,
+            ))
+        })?;
 
         let credential = PropagatedCredential {
             headers: vec![(
@@ -350,7 +404,7 @@ impl VaultStrategy {
 
     /// A current-grant check for listings: the cache binding `principal`'s
     /// credential would carry, read from the current lease without refreshing,
-    /// releasing or minting (MIK-7690). `None` where [`Self::prepare_held`]
+    /// releasing or minting (MIK-7690). `None` where [`Self::prepare_held_classified`]
     /// refuses before minting: no account key, no usable grant, or a grant
     /// fenced by a changed descriptor. A credential that fails header
     /// validation at mint is not predicted here.
@@ -460,7 +514,7 @@ impl VaultStrategy {
 /// One managed credential's custody handle: the vault that released it and
 /// the lease it was released under (A11-e′).
 ///
-/// Only [`VaultStrategy::prepare_held`] builds one, so no other strategy can
+/// Only [`VaultStrategy::prepare_held_classified`] builds one, so no other strategy can
 /// hand a dispatch site a forced refresh. The lease is a non-secret binding:
 /// holding it is not holding a token.
 pub(crate) struct ManagedLease {
@@ -521,13 +575,14 @@ impl ManagedLease {
 
 impl VaultStrategy {
     /// [`Self::prepare`], keeping the custody handle with the lease so a 401
-    /// seen after dispatch can force a refresh of exactly this grant.
-    pub(crate) async fn prepare_held(
+    /// seen after dispatch can force a refresh of exactly this grant; a busy
+    /// custody is kept typed (MIK-8428).
+    pub(crate) async fn prepare_held_classified(
         self: &Arc<Self>,
         principal: Principal<'_>,
         backend: &BackendDescriptor,
-    ) -> Result<(PropagatedCredential, ManagedLease), PropagationError> {
-        let (credential, lease) = self.prepare(principal, backend).await?;
+    ) -> Result<(PropagatedCredential, ManagedLease), MintError> {
+        let (credential, lease) = self.prepare_classified(principal, backend).await?;
         Ok((
             credential,
             ManagedLease {

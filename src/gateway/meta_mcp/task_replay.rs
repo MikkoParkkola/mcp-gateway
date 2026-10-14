@@ -69,6 +69,32 @@ impl MetaMcp {
         scope: super::visibility::InvokeScope<'_>,
         session_id: Option<&str>,
     ) {
+        self.prepare_stored_read_kind(stored, scope, session_id, StoredRead::Read)
+            .await;
+    }
+
+    /// The repeat's pre-pass: its accounts are judged live and
+    /// [`Self::judge_stored_accounts`] skips a `RepeatedCall`, so the
+    /// account fill (a custody read and, on a busy custody, a transient
+    /// `idp_refuse`) must not run for it. The catalogue refresh below it
+    /// still runs, as the repeat's visibility judgement reads it.
+    pub(super) async fn prepare_repeated_call(
+        &self,
+        stored: &CommittedTask,
+        scope: super::visibility::InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) {
+        self.prepare_stored_read_kind(stored, scope, session_id, StoredRead::RepeatedCall)
+            .await;
+    }
+
+    async fn prepare_stored_read_kind(
+        &self,
+        stored: &CommittedTask,
+        scope: super::visibility::InvokeScope<'_>,
+        session_id: Option<&str>,
+        read: StoredRead,
+    ) {
         if !stored.serves_backend_output() {
             return;
         }
@@ -93,6 +119,14 @@ impl MetaMcp {
         // account-judged (MIK-8392 seat finding 1): no custody read and no
         // audit write for it, as the live Step 0 does neither. Its answer
         // comes from the policy layers in `refuse_stored`, before accounts.
+        // A repeat still fills (so an unbindable caller's permanent refusal
+        // below is kept, Ub-repeat) but writes no busy `idp_refuse`: it
+        // serves its stored output (#3892 review finding 6, R5).
+        let writes = if read == StoredRead::RepeatedCall {
+            super::account_outcome::AccountWrites::PermanentOnly
+        } else {
+            super::account_outcome::AccountWrites::All
+        };
         let judged: Vec<(&str, &str)> = targets
             .iter()
             .copied()
@@ -100,7 +134,7 @@ impl MetaMcp {
                 !self.target_refused_without_catalogue((server, tool), scope, session_id)
             })
             .collect();
-        self.fill_account_outcomes(&judged, caller).await;
+        self.fill_account_outcomes(&judged, caller, writes).await;
         for &(server, tool) in &targets {
             self.keep_permanent_refusal(server, tool, caller).await;
             self.settle_caller_view(server, tool, scope, session_id)

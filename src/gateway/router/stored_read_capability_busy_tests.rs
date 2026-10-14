@@ -502,13 +502,16 @@ async fn r5_a_repeated_capability_task_writes_no_busy_idp_refuse() {
     );
 }
 
-/// R6 (MIK-8428 Case A): the intake view succeeds, then the worker's
-/// mint meets Busy. The task must settle with the shared retryable
-/// error and release its idempotency reservation as pre-send, so the
-/// same keyed call is fresh after recovery rather than replaying a
-/// stale terminal failure.
+/// R6 (MIK-8428 Case A, RESIDUAL): the intake view succeeds, then the
+/// worker's mint meets Busy. The task settles with the shared
+/// retryable error — that half is fixed. Releasing the idempotency
+/// reservation as pre-send is NOT: the repeat is decided by admission
+/// (`BeginOutcome::Existing`) before any settle classification runs,
+/// so the same keyed call still replays the stale failed task after
+/// recovery. This row pins today's behaviour as the executable
+/// statement of that residual; MIK-8428 Case A owns the release.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn r6_a_worker_mint_busy_settles_retryable_and_releases_the_key() {
+async fn r6_a_worker_mint_busy_settles_retryable_but_still_holds_its_key() {
     let harness = capability_harness(false).await;
     harness.account.fail_custody_after_for_test(1);
     let made = capability_tasked(&harness, "s3892-r6").await;
@@ -536,18 +539,151 @@ async fn r6_a_worker_mint_busy_settles_retryable_and_releases_the_key() {
         "R6: retryable: {settled}"
     );
 
+    // RESIDUAL (MIK-8428 Case A): the reservation is not released as
+    // pre-send, so the same-key retry after recovery is answered with
+    // the SAME failed task instead of running fresh. When Case A
+    // lands, this half flips to a new completed task.
     harness.account.fail_custody_for_test(false);
     let resent = capability_tasked(&harness, "s3892-r6").await;
     let retry_id = task_id(&resent, "R6 retry");
+    assert_eq!(
+        retry_id, id,
+        "R6 residual: the same-key retry replays the stale failed task (MIK-8428 Case A): {resent}"
+    );
     let retried = settled_wire(&harness, &retry_id, "R6 retry").await;
     assert_eq!(
         retried.get("status"),
-        Some(&json!("completed")),
-        "R6: the same-key retry is served, not replayed as the stale failure: {retried}"
+        Some(&json!("failed")),
+        "R6 residual: the replayed task is still the failed one: {retried}"
     );
-    let got = task_get(&harness, &retry_id).await;
+}
+
+/// R7 (#3892, lead ruling): a busy custody at RELEASE is not a transient. The
+/// refresh before it may already have refreshed or rotated the grant with
+/// the provider, an effect that spends the nonce witness, so the signed call
+/// answers the plain refusal (no retry data) and its re-send is refused as a
+/// replay. Mutant: the release site mapped back to the typed Busy.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn r7_a_release_busy_is_not_retryable_and_keeps_the_nonce_spent() {
+    let harness = capability_harness(true).await;
+    harness.account.fail_release_for_test();
+    let refused = signed_capability_invoke(&harness, "s3892-r7-n1").await;
     assert!(
-        got.get("error").is_none() && got.pointer("/result/status") == Some(&json!("completed")),
-        "R6: the retry's output is served: {got}"
+        refused.get("error").is_some(),
+        "R7 premise: a release-site busy refuses the call: {refused}"
+    );
+    assert!(
+        refused.pointer("/error/data/retryable").is_none(),
+        "R7: a release-site busy is answered retryable: {refused}"
+    );
+
+    harness.account.fail_custody_for_test(false);
+    let resent = signed_capability_invoke(&harness, "s3892-r7-n1").await;
+    assert!(
+        refused_as_replay(&resent),
+        "R7: the nonce was given back after a release-site busy: {resent}"
+    );
+}
+
+/// R8 (#3892, the refund control for R7): a busy custody at REFRESH is
+/// refused at admission before the refresh runs, so nothing changed: the
+/// signed call answers the shared retryable error and the same signed
+/// request is served after recovery. Mutant: the refresh site mapped to
+/// a plain refusal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn r8_a_refresh_busy_is_retryable_and_gives_its_nonce_back() {
+    let harness = capability_harness(true).await;
+    harness.account.fail_refresh_for_test();
+    let busy = signed_capability_invoke(&harness, "s3892-r8-n1").await;
+    assert_retryable(&busy, "R8 busy");
+
+    harness.account.fail_custody_for_test(false);
+    let resent = signed_capability_invoke(&harness, "s3892-r8-n1").await;
+    assert!(
+        !refused_as_replay(&resent),
+        "R8: the nonce was kept spent after a refresh-site busy: {resent}"
+    );
+    assert!(
+        resent.get("error").is_none() && resent.get("result").is_some(),
+        "R8: the same signed request is served after recovery: {resent}"
+    );
+}
+
+/// Gap (residual owned by MIK-8428; lead ruling on #3892): the direct
+/// `/mcp/{backend}` route answers a mint-time busy custody through its
+/// account refusal (`direct_preflight.rs` -> `direct_refusal`,
+/// `router/accounts/offer.rs`): HTTP 403, JSON-RPC -32003, with the
+/// transient text. A retryable state is labelled forbidden, so a client
+/// does not retry it: availability only, never a wrong grant. The direct
+/// route has no stored twin, so its status mapping was left out of #3892.
+/// This row pins today's answer so a change to it is seen.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn gap_direct_route_labels_a_mint_busy_forbidden() {
+    let fx = super::fixture().await;
+    fx.gateway.fail_custody_for_test(true);
+    let body = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+        "params": {"name": super::TOOL, "arguments": {"folder": "inbox"},
+            "_meta": modern_meta()}});
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri(format!("/mcp/{}", super::BACKEND))
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", super::KEY))
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", super::TOOL)
+        .body(axum::body::Body::from(body.to_string()))
+        .expect("a request");
+    let response = fx.router.clone().oneshot(request).await.expect("an answer");
+    let status = response.status();
+    let answer = body_of(response).await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::FORBIDDEN,
+        "gap: the direct route's mint busy status changed: {answer}"
+    );
+    assert_eq!(
+        answer.pointer("/error/code"),
+        Some(&json!(-32003)),
+        "gap: the direct route's mint busy code changed: {answer}"
+    );
+    assert_eq!(
+        answer.pointer("/error/message").and_then(Value::as_str),
+        Some("JSON-RPC error -32603: temporarily unavailable, retry"),
+        "gap: the direct route's mint busy text changed: {answer}"
+    );
+}
+
+/// Gap (residual owned by MIK-8428; lead ruling on #3892): a request the
+/// gateway forwards under the caller's credential (`prompts/get` through
+/// `caller_forward.rs`) answers a mint-time busy custody with -32603 and
+/// the transient text but without the retry data, because the forwarder
+/// keeps only the code and message. It has no stored twin; this row pins
+/// today's answer so a change to it is seen.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn gap_caller_forward_drops_retry_data() {
+    let fx = super::fixture().await;
+    fx.gateway.fail_custody_for_test(true);
+    let name = format!("{}/any_prompt", super::BACKEND);
+    let answer = super::send(
+        &fx,
+        "prompts/get",
+        &name,
+        json!({"name": name, "_meta": modern_meta()}),
+    )
+    .await;
+    assert_eq!(
+        answer.pointer("/error/code"),
+        Some(&json!(-32603)),
+        "gap: the forwarded mint busy code changed: {answer}"
+    );
+    assert_eq!(
+        answer.pointer("/error/message").and_then(Value::as_str),
+        Some("JSON-RPC error -32603: temporarily unavailable, retry"),
+        "gap: the forwarded mint busy text changed: {answer}"
+    );
+    assert!(
+        answer.pointer("/error/data/retryable").is_none(),
+        "gap: the forwarder now carries the retry data (update MIK-8428): {answer}"
     );
 }
