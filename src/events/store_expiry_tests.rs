@@ -3,6 +3,13 @@
 //! MIK-8061: an expired subscription buries the records that were replayed
 //! or tried, instead of dropping them; an unsubscribe still drops them.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::super::Revived;
 use super::*;
 

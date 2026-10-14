@@ -32,6 +32,10 @@
 //! from "expired"; the unit cases in `mik_7212_acs.rs` do that, and these prove
 //! the guard is reached at all.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code reads the host clock (MIK-8202 AC.14)"
+)]
 #[path = "mik_7212_mrtr_component_acs/arrival.rs"]
 mod arrival;
 #[path = "mik_7212_mrtr_component_acs/forgery_and_bounds.rs"]

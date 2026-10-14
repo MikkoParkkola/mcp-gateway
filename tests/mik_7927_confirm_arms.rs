@@ -19,6 +19,10 @@
 //!   can lower the budget, but `ContinuationState::new` is the only
 //!   constructor and builds its keyring at the full budget.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code reads the host clock (MIK-8202 AC.14)"
+)]
 use std::sync::Arc;
 
 use axum::body::Body;

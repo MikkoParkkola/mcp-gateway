@@ -3,6 +3,13 @@
 //! A3 cells for the direct route `POST /mcp/{name}`, the spec-preview
 //! methods, and the audit silence of discovery.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;

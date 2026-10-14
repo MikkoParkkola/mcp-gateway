@@ -4,6 +4,13 @@
 //! the graceful end goes only to a credential that still authenticates. A dead
 //! one gets nothing and learns of the refusal when it re-subscribes.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::*;
 
 pub(super) fn bearer(token: &str) -> Option<HeldCredential> {

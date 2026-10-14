@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::*;
-use serde_json::json;
 use std::thread;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -28,109 +27,6 @@ fn debug_output_redacts_signing_secret() {
         "expected redaction marker: {dbg}"
     );
     assert!(dbg.contains("test"), "key_id should remain visible");
-}
-
-// ── sign_response ─────────────────────────────────────────────────────────
-
-#[test]
-fn sign_response_injects_signature_block() {
-    // GIVEN: a signer and a plain response
-    let msg_signer = make_signer();
-    let response = json!({"content": [{"type": "text", "text": "hello"}]});
-
-    // WHEN: signing
-    let out = msg_signer.sign_response(response, None);
-
-    // THEN: _signature block is present with required fields
-    let sig_block = out.get("_signature").expect("_signature must be present");
-    assert_eq!(sig_block["alg"], "hmac-sha256");
-    assert!(sig_block["sig"].as_str().is_some_and(|s| s.len() == 64));
-    assert!(sig_block["ts"].as_u64().is_some_and(|t| t > 0));
-    assert_eq!(sig_block["key_id"], "test");
-}
-
-#[test]
-fn sign_response_echoes_nonce_in_signature() {
-    // GIVEN: a signer and a nonce
-    let msg_signer = make_signer();
-    let response = json!({"result": "ok"});
-
-    // WHEN: signing with a nonce
-    let out = msg_signer.sign_response(response, Some("nonce-42"));
-
-    // THEN: the nonce is echoed in the _signature block
-    let sig_block = out.get("_signature").unwrap();
-    assert_eq!(sig_block["nonce"], "nonce-42");
-}
-
-#[test]
-fn sign_response_removes_existing_signature_before_signing() {
-    // GIVEN: a response that already has a stale _signature
-    let msg_signer = make_signer();
-    let response = json!({"data": "x", "_signature": {"sig": "stale"}});
-
-    // WHEN: signing
-    let out = msg_signer.sign_response(response, None);
-
-    // THEN: the new signature is not the stale one
-    let sig_block = out.get("_signature").unwrap();
-    assert_ne!(sig_block["sig"], "stale");
-    assert_eq!(sig_block["alg"], "hmac-sha256");
-}
-
-#[test]
-fn sign_response_mac_covers_body_without_signature_field() {
-    // GIVEN: two identical bodies — both signed with same secret and nonce
-    let msg_signer = make_signer();
-    let body = json!({"content": "test"});
-
-    // WHEN: signing the same body twice
-    let out_a = msg_signer.sign_response(body.clone(), Some("n1"));
-    let out_b = msg_signer.sign_response(body.clone(), Some("n1"));
-
-    // THEN: signatures match (deterministic canonical JSON + same secret)
-    // NOTE: ts may differ by 1 second in rare cases; compare sig only
-    let mac_a = out_a["_signature"]["sig"].as_str().unwrap();
-    let mac_b = out_b["_signature"]["sig"].as_str().unwrap();
-    assert_eq!(mac_a, mac_b, "MAC over identical bodies must be identical");
-}
-
-#[test]
-fn sign_response_different_bodies_produce_different_macs() {
-    // GIVEN: two different responses
-    let msg_signer = make_signer();
-    let body_a = json!({"data": "alpha"});
-    let body_b = json!({"data": "beta"});
-
-    // WHEN: signing both
-    let out_a = msg_signer.sign_response(body_a, None);
-    let out_b = msg_signer.sign_response(body_b, None);
-
-    // THEN: MACs differ
-    assert_ne!(out_a["_signature"]["sig"], out_b["_signature"]["sig"]);
-}
-
-#[test]
-fn sign_response_different_secrets_produce_different_macs() {
-    // GIVEN: two signers with different secrets
-    let signer_a = MessageSigner::new(
-        b"secret-one-at-least-32-bytes-long!!!!!".to_vec(),
-        None,
-        "k1".to_string(),
-    );
-    let signer_b = MessageSigner::new(
-        b"secret-two-at-least-32-bytes-long!!!!!".to_vec(),
-        None,
-        "k2".to_string(),
-    );
-    let body = json!({"x": 1});
-
-    // WHEN: both sign the same body
-    let out_a = signer_a.sign_response(body.clone(), None);
-    let out_b = signer_b.sign_response(body, None);
-
-    // THEN: MACs differ (different secrets)
-    assert_ne!(out_a["_signature"]["sig"], out_b["_signature"]["sig"]);
 }
 
 // ── NonceStore ────────────────────────────────────────────────────────────

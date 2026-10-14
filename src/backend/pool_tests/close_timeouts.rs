@@ -47,13 +47,7 @@ async fn a_wedged_close_cannot_wedge_the_idle_sweep() {
         b.budgets.close_stage = Duration::from_secs(10);
     }
     backend.set_transport_for_test(Arc::new(WedgedCloseMock));
-    backend
-        .pool
-        .get(&PoolKey::Shared)
-        .unwrap()
-        .value()
-        .last_used
-        .store(0, Ordering::Relaxed);
+    tokio::time::advance(Duration::from_secs(2)).await;
 
     // Generous relative to the 10s budget: this asserts the close is bounded at
     // all, not where the bound sits.
@@ -186,13 +180,10 @@ async fn a_close_that_times_out_still_reaps_the_child() {
     backend.set_transport_for_test(Arc::new(RealChildWedgedClose {
         child: tokio::sync::Mutex::new(Some(child)),
     }));
-    backend
-        .pool
-        .get(&PoolKey::Shared)
-        .expect("the pool entry exists once a transport is installed")
-        .value()
-        .last_used
-        .store(0, Ordering::Relaxed);
+    // Age the slot past its 1 s idle deadline in real time: this test needs
+    // the OS reap, so it cannot pause the clock (MIK-8202 P4b).
+    // timing: precondition
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
 
     assert!(
         backend.stop_if_idle().await,
@@ -235,13 +226,10 @@ async fn a_surviving_transport_clone_orphans_the_child() {
         child: tokio::sync::Mutex::new(Some(child)),
     });
     backend.set_transport_for_test(Arc::clone(&survivor));
-    backend
-        .pool
-        .get(&PoolKey::Shared)
-        .expect("the pool entry exists once a transport is installed")
-        .value()
-        .last_used
-        .store(0, Ordering::Relaxed);
+    // Age the slot past its 1 s idle deadline in real time: this test needs
+    // the OS reap, so it cannot pause the clock (MIK-8202 P4b).
+    // timing: precondition
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
 
     assert!(
         backend.stop_if_idle().await,
@@ -288,13 +276,10 @@ async fn a_caller_scoped_clone_delays_the_reap_but_does_not_leak_it() {
         child: tokio::sync::Mutex::new(Some(child)),
     });
     backend.set_transport_for_test(Arc::clone(&transport));
-    backend
-        .pool
-        .get(&PoolKey::Shared)
-        .expect("the pool entry exists once a transport is installed")
-        .value()
-        .last_used
-        .store(0, Ordering::Relaxed);
+    // Age the slot past its 1 s idle deadline in real time: this test needs
+    // the OS reap, so it cannot pause the clock (MIK-8202 P4b).
+    // timing: precondition
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
 
     {
         // Stands in for the caller's local `let transport = self.shared_transport()`.

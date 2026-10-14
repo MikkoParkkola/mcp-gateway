@@ -688,6 +688,9 @@ pub(crate) fn build_server_safety_status(
 ///   "failure_threshold": 5
 /// }
 /// ```
+///
+/// `last_trip_ms` is null when the trip could not be dated or the breaker
+/// never tripped (MIK-8202 P4b).
 pub(crate) fn build_circuit_breaker_stats_json(server: &str, stats: &CircuitBreakerStats) -> Value {
     json!({
         "server": server,

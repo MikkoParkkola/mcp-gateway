@@ -2,6 +2,13 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Gateway operational events (event-sources design §7: U5-U7).
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::Arc;
 use std::time::Duration;
 

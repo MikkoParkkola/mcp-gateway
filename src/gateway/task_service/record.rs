@@ -166,10 +166,14 @@ pub(crate) struct PendingCancel {
     pub(crate) backend: Option<String>,
     /// Sends that reached a ready backend and were not confirmed.
     pub(crate) attempts: u8,
-    /// Unix seconds before which no retry is due.
-    pub(crate) next_after: i64,
-    /// Unix seconds of the claim; the age cap counts from here.
-    pub(crate) claimed_at: i64,
+    /// Unix seconds before which no retry is due, `None` when the claim met
+    /// a dark clock and is due at once (MIK-8202 P4b).
+    #[serde(default)]
+    pub(crate) next_after: Option<i64>,
+    /// Unix seconds of the claim; the age cap counts from here. `None`
+    /// until the first readable reading dates it (MIK-8202 P4b).
+    #[serde(default)]
+    pub(crate) claimed_at: Option<i64>,
 }
 
 impl PendingCancel {

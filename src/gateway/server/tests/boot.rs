@@ -3,6 +3,13 @@
 //! Boot wiring: identity grants, the idempotency cache, meta-MCP sections,
 //! provenance signing and background tasks (moved from `server/mod.rs`, MIK-8144).
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::*;
 
 pub(super) fn test_grant_file() -> IdentityGrantFile {

@@ -21,6 +21,13 @@
 //! old and settled at `Utc::now()`, so a deadline anchored on `lastUpdatedAt`
 //! would retain rows these assertions require gone.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
