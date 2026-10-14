@@ -93,6 +93,7 @@ mod attestation_tasks;
 mod caller_key_ttl;
 /// G4: a task keys its arm and hints on its caller.
 mod caller_keyed_hints;
+mod cancel_chain;
 mod capacity;
 mod client_extensions;
 mod confirmation;
