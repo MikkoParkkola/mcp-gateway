@@ -3,6 +3,13 @@
 //! SIGNING.1/.4: shared finalizer composition using the real signer and Node MAC
 //! oracle. Supplied shaping/context are component fixtures, not adapter proof.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::Arc;

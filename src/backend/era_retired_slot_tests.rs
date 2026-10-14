@@ -102,7 +102,7 @@ fn entry_of(backend: &Arc<Backend>, binding: &str) -> Arc<PooledEntry> {
 
 /// MIK-7643: both removal sites retire what they remove, before it leaves the
 /// map: a revoked busy slot and an idle slot the reaper takes.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn every_removed_slot_is_retired() {
     let backend = per_user_backend("era-retire-removal");
     let (revoked, _) = Peer::new(Answer::Modern);
@@ -112,7 +112,7 @@ async fn every_removed_slot_is_retired() {
     let revoked = entry_of(&backend, BINDING);
     revoked.in_flight.fetch_add(1, Ordering::SeqCst);
     let idle = entry_of(&backend, "idle:beta");
-    idle.last_used.store(0, Ordering::SeqCst);
+    tokio::time::advance(Duration::from_secs(2)).await;
 
     assert_eq!(backend.evict_identity_slots("rev:"), 1);
     assert_eq!(
@@ -126,7 +126,7 @@ async fn every_removed_slot_is_retired() {
 
 /// MIK-7643 guard: the reaper retires only what it removes. A busy slot and a
 /// recently used one stay pooled and serving.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_reaper_leaves_busy_and_recent_slots_serving() {
     let backend = per_user_backend("era-retire-reaper");
     let (busy, _) = Peer::new(Answer::Modern);
@@ -134,7 +134,9 @@ async fn the_reaper_leaves_busy_and_recent_slots_serving() {
     backend.set_pooled_transport_for_test(&slot("busy:alpha"), busy);
     backend.set_pooled_transport_for_test(&slot("recent:beta"), recent);
     let busy = entry_of(&backend, "busy:alpha");
-    busy.last_used.store(0, Ordering::SeqCst);
+    // Stale the busy slot past the 3600 s TTL before the recent one is
+    // touched, so the touch still reads as fresh.
+    tokio::time::advance(Duration::from_secs(4000)).await;
     busy.in_flight.fetch_add(1, Ordering::SeqCst);
     let recent = entry_of(&backend, "recent:beta");
     recent.touch();

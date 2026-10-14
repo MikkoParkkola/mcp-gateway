@@ -436,7 +436,7 @@ mod cost_section_tests {
             tool_limits: std::collections::HashMap::new(),
             key_daily: std::collections::HashMap::new(),
             key_limits: std::collections::HashMap::new(),
-            taken_at: 0,
+            taken_at: Some(0),
             tool_overflow_usd: 1.25,
             key_overflow_usd: 0.5,
         };

@@ -26,7 +26,6 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
 use super::consent::{GuardedCommit, GuardedCommitError};
@@ -222,9 +221,7 @@ fn version_of(record: &GrantRecord) -> GrantVersion {
 /// A clock that cannot read backwards into "still valid": an unreadable clock
 /// means refresh, never serve.
 fn expired(record: &GrantRecord) -> bool {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(u64::MAX, |since| since.as_secs());
+    let now = crate::clock::unix_secs().unwrap_or(u64::MAX);
     record.expires_at <= now
 }
 

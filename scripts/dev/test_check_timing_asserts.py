@@ -13,27 +13,11 @@ poll-budget rules, and the short product timer.
 
 from __future__ import annotations
 
-import importlib.util
-import os
-import subprocess
-import tempfile
 import unittest
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parent / "check-timing-asserts.py"
-SPEC = importlib.util.spec_from_file_location("guard", SCRIPT)
-guard = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(guard)
-
-PATH = "src/x_tests.rs"
-
-
-def wrap(body: str, prelude: str = "") -> str:
-    return f"{prelude}\nfn case() {{\n    let start = Instant::now();\n{body}\n}}\n"
-
-
-def scan(body: str, prelude: str = "", consts=None):
-    return guard.scan_text(PATH, wrap(body, prelude), consts or {})
+from check_timing_asserts_fixtures import PATH, guard, scan, ScratchGit
+from check_timing_asserts_moved_rows import MovedRows
 
 
 class Windows(unittest.TestCase):
@@ -503,16 +487,11 @@ class BaseRef(unittest.TestCase):
     """`--base` reads the list at a commit; only a commit without one skips."""
 
     def setUp(self):
-        self.dir = tempfile.TemporaryDirectory()
-        root = Path(self.dir.name)
-        self.saved = guard.ROOT, guard.ALLOWLIST
-        guard.ROOT, guard.ALLOWLIST = root, root / "scripts/dev/timing-asserts-allowlist.tsv"
-
-        def git(*args):
-            env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
-                   "GIT_COMMITTER_EMAIL": "t@t", "PATH": os.environ["PATH"], "HOME": self.dir.name}
-            return subprocess.run(["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", *args], cwd=root, check=True, capture_output=True, text=True, env=env).stdout.strip()
-
+        self.scratch = ScratchGit()
+        self.dir = self.scratch.dir
+        root = self.scratch.root
+        self.saved = self.scratch.saved
+        git = self.scratch.git
         self.git = git
 
         git("init", "-q")
@@ -528,8 +507,7 @@ class BaseRef(unittest.TestCase):
         self.listed = git("rev-parse", "HEAD")
 
     def tearDown(self):
-        guard.ROOT, guard.ALLOWLIST = self.saved
-        self.dir.cleanup()
+        self.scratch.close()
 
     def test_the_list_at_the_base_is_read(self):
         self.assertEqual(guard.read_base(self.listed), [self.row])

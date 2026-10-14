@@ -10,6 +10,10 @@
 //! cache or the replay store; without it these tests could pass on two plain
 //! dispatches.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code reads the host clock (MIK-8202 AC.14)"
+)]
 #[path = "common/signing_gateway.rs"]
 pub mod signing_gateway;
 

@@ -6,7 +6,6 @@
 
 use super::metadata::{self, AuthorizationServerMetadata, IssuerSource, ProtectedResourceMetadata};
 use super::storage::{TokenInfo, TokenStorage};
-use crate::security::ssrf::is_ssrf_refusal;
 use crate::{Error, Result};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -18,97 +17,8 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tracing::{debug, info};
 
-/// Provenance of a `client_id` (MIK-6750 r7, Defect 2).
-///
-/// `purge_client_id_if_invalid` must never clear a [`Configured`](Self::Configured)
-/// id: it is operator-supplied config (Slack, Figma, …) and erasing it on an
-/// `invalid_client` rejection would delete valid configuration and guarantee
-/// every subsequent attempt also fails, using a generated/DCR id the operator
-/// never intended. Only a [`Registered`](Self::Registered) id — obtained via
-/// Dynamic Client Registration, generated as a DCR fallback, or loaded from a
-/// prior registration's persisted record — is safe to purge and re-register.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ClientIdSource {
-    /// Came from `OAuthClientConfig.client_id`. Never purgeable.
-    Configured,
-    /// Obtained via Dynamic Client Registration, a generated fallback, or a
-    /// load of a previously dynamically-registered id from storage.
-    Registered,
-}
-
-/// The Dynamic Client Registration body this gateway sends.
-///
-/// A free function so it can be asserted without a live authorization server:
-/// these fields are what every server the gateway registers with sees, and they
-/// were previously observable only by running one.
-///
-/// `application_type` is required by MCP 2026-07-28 and is not cosmetic.
-/// `OpenID` Connect defaults an unstated value to `web`, which constrains
-/// redirect URIs to https and forbids a literal loopback address — exactly what
-/// a locally-running gateway registers. Saying `native` makes the registration
-/// describe this client.
-#[must_use]
-pub fn registration_body(backend_name: &str, redirect_uri: &str) -> serde_json::Value {
-    serde_json::json!({
-        "client_name": format!("MCP Gateway - {backend_name}"),
-        "application_type": "native",
-        "redirect_uris": [redirect_uri],
-        "grant_types": ["authorization_code", "refresh_token"],
-        "response_types": ["code"],
-        "token_endpoint_auth_method": "none"
-    })
-}
-
-/// Check the `iss` an authorization server returned against the one recorded.
-///
-/// MCP 2026-07-28, adopting RFC 9207: authorization servers **SHOULD** include
-/// `iss` in the authorization response, and MCP clients **MUST** validate a
-/// present `iss` against the recorded issuer before redeeming the code.
-///
-/// The attack is mix-up. A client that talks to several authorization servers
-/// receives codes at one redirect endpoint and cannot otherwise tell which
-/// server sent one; an attacker who controls a server it trusts can obtain a
-/// code from a different one and have the client redeem it at the wrong token
-/// endpoint. `state` does not close this — the attacker's own flow carries a
-/// state the client itself issued.
-///
-/// Absence is allowed, deliberately. The specification makes including `iss` a
-/// SHOULD and validating a **present** one a MUST; refusing its absence would
-/// be a stricter rule than the specification states, imposed on servers this
-/// gateway does not control and many of which have not adopted RFC 9207.
-///
-/// # Errors
-///
-/// Returns the mismatch when a present `iss` is not the recorded issuer.
-pub fn validate_issuer(returned: Option<&str>, recorded: &str) -> std::result::Result<(), String> {
-    match returned {
-        None => Ok(()),
-        // Exact string comparison, as issuer identifiers are defined. A
-        // trailing slash, a case change or an explicit default port makes a
-        // different identifier, and normalising any of them would reopen the
-        // mix-up through a URL that merely looks the same.
-        Some(iss) if iss == recorded => Ok(()),
-        Some(iss) => Err(format!(
-            "authorization response came from issuer '{iss}', not the recorded '{recorded}'; \
-             the code was not redeemed"
-        )),
-    }
-}
-
-/// The storage key for a credential, keyed by the issuer that granted it.
-///
-/// MCP 2026-07-28: a client **MUST** key persisted credentials by the issuer
-/// identifier, **MUST NOT** reuse them with a different authorization server,
-/// and **MUST** re-register when the authorization server changes.
-///
-/// Keyed by backend alone, moving a backend from one authorization server to
-/// another silently reuses a client id the new server never issued — and the
-/// failure surfaces as a confusing rejection later rather than as the
-/// re-registration it should have been.
-#[must_use]
-pub fn storage_key(backend_name: &str, issuer: &str) -> String {
-    format!("{backend_name}\u{0}{issuer}")
-}
+use identity::ClientIdSource;
+pub use identity::{registration_body, storage_key, validate_issuer};
 
 /// OAuth client for a specific backend
 pub struct OAuthClient {
@@ -465,159 +375,6 @@ impl OAuthClient {
             *self.client_id_source.write() = Some(ClientIdSource::Registered);
         }
     }
-
-    /// Get a valid access token, refreshing or re-authorizing as needed
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if token refresh and re-authorization both fail.
-    pub async fn get_token(&self) -> Result<String> {
-        // Check if we have a valid cached token
-        {
-            let token = self.current_token.read();
-            if let Some(ref t) = *token
-                && !t.is_expired()
-            {
-                return Ok(t.access_token.clone());
-            }
-        }
-
-        // Try to refresh if we have a refresh token
-        // A refresh sends the stored refresh token (MIK-8018); a cached one
-        // only says this client has a grant to refresh.
-        let has_refresh_token = self
-            .current_token
-            .read()
-            .as_ref()
-            .is_some_and(|t| t.refresh_token.is_some());
-
-        if has_refresh_token {
-            match self.refresh_token().await {
-                Ok(new_token) => return Ok(new_token),
-                // A policy refusal is not an expired grant: re-authorizing
-                // would only walk past it (MIK-7701).
-                Err(e) if is_ssrf_refusal(&e) => return Err(e),
-                Err(_) => {}
-            }
-        }
-
-        // Need to authorize from scratch
-        let token = self
-            .authorize_shared(super::login_gate::interactive(), None)
-            .await?;
-        Ok(token)
-    }
-
-    /// The cached access token, if it is unexpired: one read of the cell, so
-    /// no expiry can land between the check and the copy (MIK-8339).
-    pub(crate) fn live_token(&self) -> Option<String> {
-        self.current_token
-            .read()
-            .as_ref()
-            .filter(|token| !token.is_expired())
-            .map(|token| token.access_token.clone())
-    }
-
-    /// The token step a detached request-time task runs (MIK-8339), for a
-    /// caller that captured `since` (its cancel epoch) and `cohort` before
-    /// it queued. Before a login is led or joined, the refresh observes a
-    /// restart or stop (`AuthorizationCancelled`) and ends at
-    /// [`grants::OAUTH_AUTHORIZATION_WINDOW`] through
-    /// [`LoginGate::classify`](super::login_gate::LoginGate::classify),
-    /// never falling into a login after its bound. A refresh that succeeds
-    /// after a revocation is not handed back.
-    pub(crate) async fn get_token_detached(
-        &self,
-        interactive: bool,
-        since: u64,
-        cohort: &std::sync::Arc<super::login_gate::Cohort>,
-        deadline: tokio::time::Instant,
-    ) -> Result<String> {
-        if let Some(access) = self.live_token() {
-            return Ok(access);
-        }
-        let cancelled = || Error::AuthorizationCancelled {
-            backend: self.backend_name.clone(),
-        };
-        let has_refresh_token = self
-            .current_token
-            .read()
-            .as_ref()
-            .is_some_and(|t| t.refresh_token.is_some());
-        if has_refresh_token {
-            let refreshed = match &self.login_gate {
-                Some(gate) => tokio::select! {
-                    biased;
-                    () = gate.revoked_since(since) => return Err(cancelled()),
-                    () = tokio::time::sleep_until(super::login_gate::stage_end(
-                        grants::OAUTH_AUTHORIZATION_WINDOW,
-                        deadline,
-                    )) => {
-                        return Err(gate.classify(
-                            cohort,
-                            &self.backend_name,
-                            Error::BackendTimeout(self.backend_name.clone()),
-                        ));
-                    }
-                    refreshed = self.refresh_token() => refreshed,
-                },
-                None => self.refresh_token().await,
-            };
-            match refreshed {
-                Ok(token) => {
-                    if self
-                        .login_gate
-                        .as_ref()
-                        .is_some_and(|gate| gate.is_revoked(since))
-                    {
-                        return Err(cancelled());
-                    }
-                    return Ok(token);
-                }
-                Err(e) if is_ssrf_refusal(&e) => return Err(e),
-                Err(_) => {}
-            }
-        }
-        self.authorize_shared_with(interactive, Some(since), Some(cohort), Some(deadline))
-            .await
-    }
-
-    /// Return the backend name (used by the background refresh task for logging).
-    #[must_use]
-    pub fn backend_name(&self) -> &str {
-        &self.backend_name
-    }
-
-    /// Check if the client has a valid token
-    pub fn has_valid_token(&self) -> bool {
-        let token = self.current_token.read();
-        token.as_ref().is_some_and(|t| !t.is_expired())
-    }
-
-    /// Return true if the token should be proactively refreshed.
-    ///
-    /// Triggers when the remaining lifetime is below [`refresh_buffer`]: a set
-    /// buffer, else max(300 s, 10 % of the token lifetime).
-    #[must_use]
-    pub fn needs_proactive_refresh(&self) -> bool {
-        let token = self.current_token.read();
-        let Some(ref t) = *token else { return false };
-
-        // Tokens with no expiry never need proactive refresh
-        let Some(expires_at) = t.expires_at else {
-            return false;
-        };
-
-        // A scheduler: on a clock that cannot be read the proactive pass is
-        // skipped; `is_expired` still guards every use (MIK-8202).
-        let Ok(now) = crate::clock::unix_secs() else {
-            return false;
-        };
-
-        let remaining = expires_at.saturating_sub(now);
-
-        remaining < refresh_buffer(self.token_refresh_buffer_secs, t.lifetime_secs)
-    }
 }
 
 /// The floor of a derived refresh buffer, and the whole buffer for a token
@@ -697,6 +454,7 @@ mod browser;
 mod deadline_tests;
 pub(crate) mod destination;
 mod discovery;
+mod identity;
 #[cfg(test)]
 mod refresh_flight_tests;
 #[cfg(test)]
@@ -733,6 +491,7 @@ mod registration;
 mod renewal;
 #[cfg(test)]
 mod tests;
+mod token_access;
 
 #[cfg(test)]
 mod cwe532_debug_redaction {

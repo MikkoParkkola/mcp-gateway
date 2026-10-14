@@ -8,6 +8,13 @@
 //! `VerifiedIdentity` is injected: the owner under test is the one
 //! `route_task_owner` derives when gateway authentication is off. The keyless
 //! row is the control: callers with no agent identity still share one pool.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::super::super::*;
 use super::super::support::*;
 use super::helpers::{

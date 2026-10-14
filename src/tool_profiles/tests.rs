@@ -230,7 +230,7 @@ fn tool_suggestion_equality_is_structural() {
     let a = ToolSuggestion {
         tool_name: "search".to_string(),
         call_count: 5,
-        last_used_secs: 1_700_000_000,
+        last_used_secs: Some(1_700_000_000),
     };
     let b = a.clone();
     assert_eq!(a, b);

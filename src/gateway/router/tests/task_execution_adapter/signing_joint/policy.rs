@@ -7,6 +7,13 @@
 //! `AttestationValidator` with zero grace. Existing `signed_state/cases` stay
 //! untouched; this module only reinstalls the exclusive `MetaMcp`.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::*;
 
 use std::sync::Arc;

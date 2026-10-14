@@ -11,6 +11,10 @@
 //! saved on an earlier day.
 // Unix-only: stops the gateway with `kill -TERM`; Windows has no SIGTERM.
 #![cfg(all(unix, feature = "cost-governance"))]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code reads the host clock; the crate's clock module is private (MIK-8202 AC.14)"
+)]
 
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
@@ -20,9 +24,17 @@ mod same_utc_day;
 
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mcp_gateway::cost_accounting::persistence::{self as costs, PersistedCosts, ToolTotal};
+
+/// Seconds since the epoch, as the gateway dates a cost save.
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("the host clock reads after 1970")
+        .as_secs()
+}
 
 fn spawn(dir: &Path) -> (Child, std::path::PathBuf) {
     let config = dir.join("gateway.yaml");
@@ -79,7 +91,7 @@ fn http_shutdown_saves_costs() {
         std::fs::create_dir_all(&state).expect("state dir");
         let file = state.join("costs.json");
         let mut seeded = PersistedCosts {
-            saved_at: seed_saved_at(costs::now_secs()),
+            saved_at: seed_saved_at(now_secs()),
             ..PersistedCosts::default()
         };
         seeded.tool_totals.insert(
@@ -111,7 +123,7 @@ fn http_shutdown_saves_costs() {
         // seconds of a day the seed is midnight itself, so wait for the clock
         // to pass it (MIK-8395).
         let deadline = Instant::now() + mcp_gateway::gateway::test_helpers::HANG_BOUND;
-        while costs::now_secs() <= seeded.saved_at {
+        while now_secs() <= seeded.saved_at {
             if Instant::now() > deadline {
                 let _ = child.kill();
                 panic!(

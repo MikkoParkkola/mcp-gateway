@@ -16,7 +16,7 @@ use super::*;
 // skipped. If it is not, the reaper stops the child and health restarts it, and
 // "hibernation" becomes a spawn/kill cycle every health interval — strictly
 // worse than never stopping at all.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn idle_backend_stops_once_and_stays_stopped_under_health_traffic() {
     let backend = stoppable_backend(Duration::from_secs(1));
     let transport = Arc::new(SessionMock::new("shared"));
@@ -29,13 +29,7 @@ async fn idle_backend_stops_once_and_stays_stopped_under_health_traffic() {
     );
 
     // Age the slot past any plausible deadline.
-    backend
-        .pool
-        .get(&PoolKey::Shared)
-        .unwrap()
-        .value()
-        .last_used
-        .store(0, Ordering::Relaxed);
+    tokio::time::advance(Duration::from_secs(2)).await;
 
     // One reaper sweep.
     let stopped = backend.stop_if_idle().await;
@@ -79,19 +73,19 @@ async fn idle_backend_stops_once_and_stays_stopped_under_health_traffic() {
 // default health interval against a 300s deadline, the clock was refreshed
 // forever and the feature could never fire. This is the regression test for that
 // exact no-op.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn internal_starts_do_not_defer_stopping() {
     let backend = stoppable_backend(Duration::from_secs(1));
     backend.set_transport_for_test(Arc::new(SessionMock::new("warm")));
 
     // Stale: no client has touched it.
-    backend
+    tokio::time::advance(Duration::from_secs(2)).await;
+    let idle_at = backend
         .pool
         .get(&PoolKey::Shared)
         .unwrap()
         .value()
-        .last_used
-        .store(0, Ordering::Relaxed);
+        .last_used_for_test();
 
     // Exactly what the health loop does, every 10s by default.
     backend
@@ -105,9 +99,8 @@ async fn internal_starts_do_not_defer_stopping() {
             .get(&PoolKey::Shared)
             .unwrap()
             .value()
-            .last_used
-            .load(Ordering::Relaxed),
-        0,
+            .last_used_for_test(),
+        idle_at,
         "internal health/metadata traffic must NOT refresh the client idle clock"
     );
     assert!(
@@ -121,13 +114,6 @@ async fn internal_starts_do_not_defer_stopping() {
 async fn client_traffic_defers_stopping() {
     let backend = stoppable_backend(Duration::from_secs(3600));
     backend.set_transport_for_test(Arc::new(SessionMock::new("live")));
-    backend
-        .pool
-        .get(&PoolKey::Shared)
-        .unwrap()
-        .value()
-        .last_used
-        .store(0, Ordering::Relaxed);
 
     drop(backend.begin_activity(&PoolKey::Shared).unwrap());
 
@@ -140,7 +126,7 @@ async fn client_traffic_defers_stopping() {
 // GW.IDLE.5 — a request in flight past the deadline must never be torn down.
 // `last_used` records when a request STARTED, so the clock alone cannot express
 // "work is happening right now".
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn in_flight_request_is_never_stopped() {
     let backend = stoppable_backend(Duration::from_secs(1));
     let transport = Arc::new(SessionMock::new("busy"));
@@ -149,13 +135,7 @@ async fn in_flight_request_is_never_stopped() {
     // A request is running...
     let activity = backend.begin_activity(&PoolKey::Shared).unwrap();
     // ...but it began long ago (a slow upstream call).
-    backend
-        .pool
-        .get(&PoolKey::Shared)
-        .unwrap()
-        .value()
-        .last_used
-        .store(0, Ordering::Relaxed);
+    tokio::time::advance(Duration::from_secs(2)).await;
 
     assert!(
         !backend.stop_if_idle().await,
@@ -168,13 +148,7 @@ async fn in_flight_request_is_never_stopped() {
 
     // Once it finishes, the backend becomes eligible again.
     drop(activity);
-    backend
-        .pool
-        .get(&PoolKey::Shared)
-        .unwrap()
-        .value()
-        .last_used
-        .store(0, Ordering::Relaxed);
+    tokio::time::advance(Duration::from_secs(2)).await;
     assert!(
         backend.stop_if_idle().await,
         "stopping resumes once the request completes"
@@ -182,18 +156,12 @@ async fn in_flight_request_is_never_stopped() {
 }
 
 // A backend that did not opt in is never stopped, however idle.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn backend_without_the_setting_is_never_stopped() {
     let backend = per_user_backend(); // no stop_when_idle_for
     let transport = Arc::new(SessionMock::new("optout"));
     backend.set_transport_for_test(transport.clone());
-    backend
-        .pool
-        .get(&PoolKey::Shared)
-        .unwrap()
-        .value()
-        .last_used
-        .store(0, Ordering::Relaxed);
+    tokio::time::advance(Duration::from_secs(2)).await;
 
     assert!(
         !backend.stop_if_idle().await,
@@ -203,17 +171,11 @@ async fn backend_without_the_setting_is_never_stopped() {
 }
 
 // Stopping an already-stopped backend is a no-op, not a double close.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn stopping_is_idempotent() {
     let backend = stoppable_backend(Duration::from_secs(1));
     backend.set_transport_for_test(Arc::new(SessionMock::new("once")));
-    backend
-        .pool
-        .get(&PoolKey::Shared)
-        .unwrap()
-        .value()
-        .last_used
-        .store(0, Ordering::Relaxed);
+    tokio::time::advance(Duration::from_secs(2)).await;
 
     assert!(backend.stop_if_idle().await, "first call stops it");
     assert!(
@@ -242,19 +204,13 @@ async fn subsecond_deadline_does_not_stop_a_fresh_backend() {
 // Reporting a deliberately-stopped backend as unhealthy would trip its circuit
 // breaker and show it broken while it behaves exactly as configured. Reporting
 // it as healthy would hide that its process is gone.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_stopped_backend_reports_dormant_not_unhealthy() {
     let backend = stoppable_backend(Duration::from_secs(1));
     backend.set_transport_for_test(Arc::new(SessionMock::new("shared")));
     assert_eq!(backend.lifecycle(), BackendLifecycle::Running);
 
-    backend
-        .pool
-        .get(&PoolKey::Shared)
-        .unwrap()
-        .value()
-        .last_used
-        .store(0, Ordering::Relaxed);
+    tokio::time::advance(Duration::from_secs(2)).await;
     assert!(backend.stop_if_idle().await);
 
     assert_eq!(
@@ -274,17 +230,11 @@ async fn a_stopped_backend_reports_dormant_not_unhealthy() {
 }
 
 // A real failure is never disguised as a nap.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_failed_backend_reports_unhealthy_even_if_it_opted_into_stopping() {
     let backend = stoppable_backend(Duration::from_secs(1));
     backend.set_transport_for_test(Arc::new(SessionMock::new("shared")));
-    backend
-        .pool
-        .get(&PoolKey::Shared)
-        .unwrap()
-        .value()
-        .last_used
-        .store(0, Ordering::Relaxed);
+    tokio::time::advance(Duration::from_secs(2)).await;
     assert!(backend.stop_if_idle().await);
     assert_eq!(backend.lifecycle(), BackendLifecycle::Dormant);
 
@@ -310,17 +260,11 @@ async fn a_never_started_backend_is_not_dormant() {
 
 // The health loop must skip a dormant backend: probing it would start it, and
 // hibernation would degrade into a spawn/kill cycle every health interval.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_health_loop_skips_a_dormant_backend_but_still_probes_a_failed_one() {
     let backend = stoppable_backend(Duration::from_secs(1));
     backend.set_transport_for_test(Arc::new(SessionMock::new("shared")));
-    backend
-        .pool
-        .get(&PoolKey::Shared)
-        .unwrap()
-        .value()
-        .last_used
-        .store(0, Ordering::Relaxed);
+    tokio::time::advance(Duration::from_secs(2)).await;
     assert!(backend.stop_if_idle().await);
 
     // This is the serve path's gate, verbatim.
@@ -347,7 +291,7 @@ async fn the_health_loop_skips_a_dormant_backend_but_still_probes_a_failed_one()
 //
 // The earlier co-simulation test did NOT cover this: it stopped the backend and
 // only then evaluated the gate, so the overlap never happened.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_probe_in_progress_blocks_the_reaper() {
     use tokio::sync::oneshot;
 
@@ -398,13 +342,7 @@ async fn a_probe_in_progress_blocks_the_reaper() {
 
     let backend = stoppable_backend(Duration::from_secs(1));
     backend.set_transport_for_test(transport.clone());
-    backend
-        .pool
-        .get(&PoolKey::Shared)
-        .unwrap()
-        .value()
-        .last_used
-        .store(0, Ordering::Relaxed);
+    tokio::time::advance(Duration::from_secs(2)).await;
 
     // Start a REAL health probe and wait until it is genuinely mid-flight.
     let probing = Arc::clone(&backend);
@@ -428,17 +366,17 @@ async fn a_probe_in_progress_blocks_the_reaper() {
 
 // An internal lease must NOT defer the idle deadline, or health traffic keeps
 // the backend warm forever - the original no-op by another route.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_internal_lease_does_not_refresh_the_idle_clock() {
     let backend = stoppable_backend(Duration::from_secs(1));
     backend.set_transport_for_test(Arc::new(SessionMock::new("probing")));
-    backend
+    tokio::time::advance(Duration::from_secs(2)).await;
+    let idle_at = backend
         .pool
         .get(&PoolKey::Shared)
         .unwrap()
         .value()
-        .last_used
-        .store(0, Ordering::Relaxed);
+        .last_used_for_test();
 
     drop(backend.begin_internal_activity());
 
@@ -448,9 +386,8 @@ async fn an_internal_lease_does_not_refresh_the_idle_clock() {
             .get(&PoolKey::Shared)
             .unwrap()
             .value()
-            .last_used
-            .load(Ordering::Relaxed),
-        0,
+            .last_used_for_test(),
+        idle_at,
         "internal work must protect the transport WITHOUT claiming client activity"
     );
     assert!(
@@ -465,30 +402,18 @@ async fn an_internal_lease_does_not_refresh_the_idle_clock() {
 // torn down" was false here: a request can hold the entry and have incremented
 // in_flight while the clock still reads stale, notably while it waits on the
 // backend semaphore.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn per_user_eviction_spares_a_slot_with_work_in_flight() {
     let backend = per_user_backend();
     let key = per_user_key("userA");
     let transport = Arc::new(SessionMock::new("A"));
     backend.set_pooled_transport_for_test(&key, transport.clone());
 
-    backend
-        .pool
-        .get(&key)
-        .unwrap()
-        .value()
-        .last_used
-        .store(0, Ordering::Relaxed);
+    tokio::time::advance(Duration::from_secs(2)).await;
 
     // A request is running against this per-user slot.
     let activity = backend.begin_activity(&key).unwrap();
-    backend
-        .pool
-        .get(&key)
-        .unwrap()
-        .value()
-        .last_used
-        .store(0, Ordering::Relaxed);
+    tokio::time::advance(Duration::from_secs(2)).await;
 
     let closed = backend.evict_idle_per_user_entries(Duration::from_secs(1));
     assert_eq!(
@@ -501,13 +426,7 @@ async fn per_user_eviction_spares_a_slot_with_work_in_flight() {
     );
 
     drop(activity);
-    backend
-        .pool
-        .get(&key)
-        .unwrap()
-        .value()
-        .last_used
-        .store(0, Ordering::Relaxed);
+    tokio::time::advance(Duration::from_secs(2)).await;
     assert_eq!(
         backend.evict_idle_per_user_entries(Duration::from_secs(1)),
         1,
@@ -531,17 +450,11 @@ async fn a_backend_that_never_started_is_not_reported_dormant() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn dormant_is_cleared_once_the_backend_is_running_again() {
     let backend = stoppable_backend(Duration::from_secs(1));
     backend.set_transport_for_test(Arc::new(SessionMock::new("first")));
-    backend
-        .pool
-        .get(&PoolKey::Shared)
-        .unwrap()
-        .value()
-        .last_used
-        .store(0, Ordering::Relaxed);
+    tokio::time::advance(Duration::from_secs(2)).await;
     assert!(backend.stop_if_idle().await);
     assert_eq!(backend.lifecycle(), BackendLifecycle::Dormant);
 
@@ -557,17 +470,11 @@ async fn dormant_is_cleared_once_the_backend_is_running_again() {
 // force_restart() calls start_entry() directly, bypassing ensure_entry_started.
 // Clearing the dormant flag only in the latter left a restarted backend flagged
 // as stopped-for-idleness while it was actually running.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_restarted_backend_is_not_flagged_dormant() {
     let backend = stoppable_backend(Duration::from_secs(1));
     backend.set_transport_for_test(Arc::new(SessionMock::new("first")));
-    backend
-        .pool
-        .get(&PoolKey::Shared)
-        .unwrap()
-        .value()
-        .last_used
-        .store(0, Ordering::Relaxed);
+    tokio::time::advance(Duration::from_secs(2)).await;
     assert!(backend.stop_if_idle().await);
     assert!(
         backend

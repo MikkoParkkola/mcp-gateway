@@ -6,6 +6,10 @@
 //! Each test carries its acceptance criterion verbatim and asserts it in the
 //! same polarity the AC states.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code reads the host clock (MIK-8202 AC.14)"
+)]
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;

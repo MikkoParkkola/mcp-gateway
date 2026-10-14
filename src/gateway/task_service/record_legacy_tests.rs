@@ -3,6 +3,13 @@
 //! MIK-7686: the committed view of a legacy row (before `TARGET_VERSION`)
 //! names the one call its own upstream descriptor captured, and nothing else.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use serde_json::json;
 
 use super::{AdmissionRecord, CommittedTask, Record, TARGET_VERSION, Target, UpstreamRecord};

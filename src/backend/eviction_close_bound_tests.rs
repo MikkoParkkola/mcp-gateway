@@ -94,12 +94,7 @@ async fn a_wedged_close_does_not_stall_grant_reload_eviction() {
 #[tokio::test(start_paused = true)]
 async fn a_wedged_close_does_not_stall_the_idle_reaper() {
     let backend = backend_with_wedged_slots(&["idle:alpha"]);
-    backend
-        .pool
-        .get(&slot("idle:alpha"))
-        .expect("the slot exists once a transport is installed")
-        .last_used
-        .store(0, Ordering::Relaxed);
+    tokio::time::advance(Duration::from_secs(2)).await;
 
     let closed = backend.evict_idle_per_user_entries(Duration::from_secs(1));
 

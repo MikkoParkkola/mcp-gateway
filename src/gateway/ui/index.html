@@ -1258,10 +1258,10 @@ async function refreshCosts() {
     } else {
       keysTbody.innerHTML = keys.map(k => `<tr>
         <td><strong>${esc(k.api_key_name)}</strong></td>
-        <td>${(k.window_24h?.tokens ?? 0).toLocaleString()}</td>
-        <td>$${(k.window_24h?.cost_usd ?? 0).toFixed(6)}</td>
-        <td>$${(k.window_7d?.cost_usd ?? 0).toFixed(6)}</td>
-        <td>$${(k.window_30d?.cost_usd ?? 0).toFixed(6)}</td>
+        <td>${k.window_24h?.tokens?.toLocaleString() ?? "unknown"}</td>
+        <td>$${k.window_24h?.cost_usd?.toFixed(6) ?? "unknown"}</td>
+        <td>$${k.window_7d?.cost_usd?.toFixed(6) ?? "unknown"}</td>
+        <td>$${k.window_30d?.cost_usd?.toFixed(6) ?? "unknown"}</td>
         <td>${esc(k.budget_status ?? 'Ok')}</td>
       </tr>`).join('');
     }
