@@ -6,17 +6,10 @@
 //! in the same state, and a signed live call it refuses gives its nonce
 //! back. Driven through `/mcp` as the sole operator.
 
-use std::sync::Arc;
-
-use axum::body::to_bytes;
 use serde_json::{Value, json};
-use tower::ServiceExt;
 
-use super::{BACKEND, Fx, KEY, MARKER, TOOL, fixture, modern_meta, send, sole_operator, task_get};
-use crate::config::SurfacedToolConfig;
-use crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::{
-    Binding, DirectAccountGateway,
-};
+use super::busy_nonce::{refused_as_replay, signed_fixture, signed_invoke};
+use super::{BACKEND, Fx, MARKER, TOOL, fixture, modern_meta, send, task_get};
 
 /// A finished task of the operator's `read`, its output served once.
 /// Replicated from the lease rows' helper rather than widening its
@@ -192,96 +185,6 @@ async fn b3_a_busy_surfaced_call_leaves_no_no_view_marker() {
         next.to_string().contains(MARKER),
         "B3: the next call serves after recovery: {next}"
     );
-}
-
-/// The parent fixture with message signing armed (nonce required), a
-/// local copy so the shared fixture keeps no signing config.
-async fn signed_fixture() -> Fx {
-    let auth = sole_operator();
-    let mut gateway = DirectAccountGateway::new(auth.clone(), &Binding::Connected);
-    let (mut state, store) = super::super::tests::test_router_app_state_with_auth(&auth).await;
-    let audit = tempfile::tempdir().expect("a log directory");
-    let audit_path = audit.path().join("audit.jsonl");
-    let log = Arc::new(
-        crate::security::TransparencyLogger::open(Arc::new(
-            crate::security::transparency_log::TransparencyLogConfig {
-                enabled: true,
-                path: audit_path.to_string_lossy().into_owned(),
-                key_id: "8392".to_string(),
-                ..crate::security::transparency_log::TransparencyLogConfig::default()
-            },
-        ))
-        .expect("open log"),
-    );
-    let state_mut = Arc::get_mut(&mut state).expect("state is unique");
-    state_mut.backends = gateway.backends();
-    let mut meta = gateway
-        .take_meta()
-        .with_surfaced_tools(vec![SurfacedToolConfig {
-            server: BACKEND.to_string(),
-            tool: TOOL.to_string(),
-        }]);
-    meta.enable_transparency_log(Arc::clone(&log));
-    meta.enable_message_signing(
-        crate::security::message_signing::MessageSigner::new(
-            b"busy-parity-signing-secret-at-least-32-bytes".to_vec(),
-            None,
-            "busy-parity".into(),
-        ),
-        std::time::Duration::from_secs(300),
-        true,
-    );
-    state_mut.meta_mcp = Arc::new(meta);
-    state_mut.transparency_log = Some(log);
-    let tool: crate::protocol::Tool = serde_json::from_value(json!({
-        "name": TOOL, "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}}
-    }))
-    .expect("a tool");
-    gateway
-        .backends()
-        .get(BACKEND)
-        .expect("the backend")
-        .store_shared_tools_for_test(vec![tool]);
-    Fx {
-        router: super::super::create_router(Arc::clone(&state)),
-        state,
-        gateway,
-        audit_path,
-        _audit: audit,
-        _store: store,
-    }
-}
-
-/// A signed `gateway_invoke` of the operator's `read` under `nonce`
-/// (the nonce rides in `arguments`, as `mcp_nonce_witness_tests` sends it).
-async fn signed_invoke(fx: &Fx, nonce: &str) -> Value {
-    let body = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {
-        "name": "gateway_invoke",
-        "arguments": {"server": BACKEND, "tool": TOOL,
-            "arguments": {"folder": "inbox"}, "nonce": nonce},
-        "_meta": modern_meta(),
-    }});
-    let request = axum::http::Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("content-type", "application/json")
-        .header("authorization", format!("Bearer {KEY}"))
-        .header("mcp-protocol-version", "2026-07-28")
-        .header("mcp-method", "tools/call")
-        .header("mcp-name", "gateway_invoke")
-        .body(axum::body::Body::from(body.to_string()))
-        .expect("a request");
-    let response = fx.router.clone().oneshot(request).await.expect("an answer");
-    let bytes = to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("a body");
-    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
-}
-
-fn refused_as_replay(body: &Value) -> bool {
-    body["error"]["message"]
-        .as_str()
-        .is_some_and(|m| m.to_lowercase().contains("replay"))
 }
 
 /// B4: a signed live call refused by a busy custody reaches no backend,

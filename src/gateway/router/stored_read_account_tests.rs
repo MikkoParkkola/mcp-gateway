@@ -705,5 +705,8 @@ mod lease;
 #[path = "stored_read_ub_audit_tests.rs"]
 mod ub_audit;
 
+#[path = "stored_read_busy_nonce_tests.rs"]
+mod busy_nonce;
+
 #[path = "stored_read_busy_parity_tests.rs"]
 mod busy_parity;
