@@ -196,19 +196,21 @@ impl super::Backend {
     }
 
     /// Set per-user slot `binding`'s last use `secs` into the past, as that
-    /// much idle time would (MIK-8392 K1: eviction reads the wall clock).
+    /// much idle time would (MIK-8392 K1: eviction reads the monotonic idle
+    /// clock). A boot too recent to go back that far is clamped to now.
     #[cfg(test)]
     pub(crate) fn age_per_user_slot_for_test(&self, binding: &str, secs: u64) {
         let key = super::PoolKey::PerUser {
             binding: binding.to_string(),
         };
-        self.pooled_entry(&key)
+        let now = tokio::time::Instant::now();
+        *self
+            .pooled_entry(&key)
             .expect("a per-user slot is admitted")
             .last_used
-            .store(
-                super::pool::now_unix_secs().saturating_sub(secs),
-                std::sync::atomic::Ordering::SeqCst,
-            );
+            .lock() = now
+            .checked_sub(std::time::Duration::from_secs(secs))
+            .unwrap_or(now);
     }
 
     /// Move `binding`'s (`None`: shared) catalogue timestamp back by `secs`,

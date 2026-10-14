@@ -7,7 +7,13 @@
 //! `pub(in crate::gateway::task_service)`), and log events keep the parent's
 //! target.
 
-use super::*;
+use super::{
+    Arc, BeginOutcome, CancelOutcome, CommitFailure, CommitObserver, CommitStage, CommittedTask,
+    CreateOutcome, CreateWrite, DrainOutcome, Duration, EXECUTION_TARGET, ErrorAuthor, Handoff,
+    HandoffRegistry, Mutex, PublicationHook, Semaphore, ServiceError, SubscriptionRegistry, Target,
+    Task, TaskCall, TaskExecutor, TaskIntent, TaskService, TaskTransition, TransitionWrite,
+    UpstreamRecovery, commit_and_run, commit_to_service, is_terminal, json, oneshot, upstream,
+};
 
 impl TaskExecutor {
     pub(crate) fn new(
@@ -198,8 +204,8 @@ impl TaskExecutor {
     /// because a hook failure is a store failure and this seam is a barrier.
     #[cfg(test)]
     pub(crate) async fn barrier_on_publication(&self, barrier: Arc<dyn Fn() + Send + Sync>) {
-        let hook: super::store::CommitHook = Arc::new(move |stage| {
-            if matches!(stage, super::store::CommitStage::Published) {
+        let hook: super::super::store::CommitHook = Arc::new(move |stage| {
+            if matches!(stage, super::super::store::CommitStage::Published) {
                 barrier();
             }
             Ok(())
@@ -213,8 +219,8 @@ impl TaskExecutor {
     /// holds an owner between taking its handoff and committing its write.
     #[cfg(test)]
     pub(crate) async fn barrier_on_record_write(&self, barrier: Arc<dyn Fn() + Send + Sync>) {
-        let hook: super::store::CommitHook = Arc::new(move |stage| {
-            if matches!(stage, super::store::CommitStage::Write) {
+        let hook: super::super::store::CommitHook = Arc::new(move |stage| {
+            if matches!(stage, super::super::store::CommitStage::Write) {
                 barrier();
             }
             Ok(())
