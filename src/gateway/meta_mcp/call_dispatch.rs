@@ -356,9 +356,13 @@ impl MetaMcp {
         id: &RequestId,
     ) -> Option<JsonRpcResponse> {
         caller.task.as_ref()?;
-        // No policy check here: the invocation policy already ran for this
-        // call before intake (admission.rs:391, or signing.rs:642 for a signed
-        // `gateway_invoke`), so a refused target never reaches this answer.
+        // No policy check here: for a `gateway_invoke` and for an unsigned
+        // call the invocation policy already ran before intake (admission.rs:391,
+        // or signing.rs:642 for a signed `gateway_invoke`). A signed call by
+        // surfaced name is not covered by either (admission only refuses a
+        // withheld name there), so it may answer retryable for a refused target;
+        // the worker re-checks policy at dispatch, so nothing executes
+        // (MIK-8428, stated residual).
         let targets: Vec<(String, String)> = match tool_name {
             "gateway_invoke" => match (
                 arguments.get("server").and_then(Value::as_str),
