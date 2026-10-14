@@ -247,6 +247,7 @@ async fn g3_retired_entry_still_in_pool_reads_as_absent() {
 #[tokio::test]
 async fn g3_cold_claim_keeps_a_warm_slot_and_a_revoked_view() {
     const LEASE: Duration = Duration::from_secs(60);
+    const BETA: &str = "beta";
     let backend = per_user_backend("g3-cold-claim");
     fill_slot(&backend, "g3:warm").await;
     backend.record_caller_slot(ALPHA, "g3:warm");
@@ -261,7 +262,6 @@ async fn g3_cold_claim_keeps_a_warm_slot_and_a_revoked_view() {
         "the warm entry is kept"
     );
 
-    const BETA: &str = "beta";
     backend.record_no_view(BETA);
     assert_eq!(
         backend.claim_cold_view(BETA, LEASE, false),
