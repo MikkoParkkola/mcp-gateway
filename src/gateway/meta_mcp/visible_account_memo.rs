@@ -61,6 +61,19 @@ pub(crate) fn account_transient(server: &str, tool: &str) -> Option<String> {
         .flatten()
 }
 
+/// Take any one transient this request holds, consuming it: the task
+/// intake trigger, which answers for the whole call.
+pub(crate) fn take_any_account_transient() -> Option<String> {
+    VISIBILITY_MEMO
+        .try_with(|memo| {
+            let mut held = memo.account_transient.lock();
+            let first = held.keys().next().cloned()?;
+            held.remove(&first)
+        })
+        .ok()
+        .flatten()
+}
+
 /// Take the transient kept for `(server, tool)`, consuming it once.
 pub(crate) fn take_account_transient(server: &str, tool: &str) -> Option<String> {
     VISIBILITY_MEMO

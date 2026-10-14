@@ -305,7 +305,7 @@ impl MetaMcp {
         if let Some(refusal) = self.refuse_unadmitted(&id, &caller) {
             return refusal;
         }
-        if let Some(answer) = self.task_intake_transient(tool_name, &arguments, &caller, &id) {
+        if let Some(answer) = Self::task_intake_transient(&caller, &id) {
             return answer;
         }
         if let Some(intent) = caller.task.take() {
@@ -347,11 +347,20 @@ impl MetaMcp {
     /// which the task worker never gets, so answer it here, before any
     /// task exists — the shared transient answer, refund asked as the
     /// sync path asks it, settled when this call returns. `None` when the
-    /// call is not task-augmented or no target carries a transient.
+    /// call is not task-augmented or its verdict recorded no transient.
+    ///
+    /// Any transient held here is this call's own, so no target parsing
+    /// is needed to own it. `with_visibility_memo` opens a fresh memo
+    /// unless the future already runs inside this request's one
+    /// (visible.rs:623-630). On HTTP that scope wraps one POST's
+    /// dispatch (router/handlers.rs:149-151). A stdio batch loop does not
+    /// open a batch memo (server/stdio_loop.rs:460-485); each item goes
+    /// through `dispatch_single_staged`, which opens its own
+    /// (server/stdio_single.rs:334-338), awaited before the next item
+    /// (server/stdio_notify.rs:100-144). Chain and playbook steps and
+    /// nested relay rounds run inside this one `tools/call`, so their
+    /// transient is this call's by definition.
     fn task_intake_transient(
-        &self,
-        tool_name: &str,
-        arguments: &Value,
         caller: &MetaMcpCallerContext<'_>,
         id: &RequestId,
     ) -> Option<JsonRpcResponse> {
@@ -363,44 +372,12 @@ impl MetaMcp {
         // withheld name there), so it may answer retryable for a refused target;
         // the worker re-checks policy at dispatch, so nothing executes
         // (MIK-8428, stated residual).
-        let targets: Vec<(String, String)> = match tool_name {
-            "gateway_invoke" => match (
-                arguments.get("server").and_then(Value::as_str),
-                arguments.get("tool").and_then(Value::as_str),
-            ) {
-                (Some(server), Some(tool)) => vec![(server.to_owned(), tool.to_owned())],
-                _ => Vec::new(),
-            },
-            "gateway_execute" => arguments
-                .get("chain")
-                .and_then(Value::as_array)
-                .map(|steps| {
-                    steps
-                        .iter()
-                        .filter_map(|step| {
-                            let (server, tool) =
-                                step.get("tool").and_then(Value::as_str)?.split_once(':')?;
-                            Some((server.to_owned(), tool.to_owned()))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-            _ => self
-                .surfaced_server_unscoped(tool_name)
-                .map(|server| vec![(server.to_owned(), tool_name.to_owned())])
-                .unwrap_or_default(),
-        };
-        if targets
-            .iter()
-            .any(|(server, tool)| super::visible::take_account_transient(server, tool).is_some())
-        {
-            caller.signing.inspect(|signing| signing.want_refund());
-            return Some(error_response_preserving_status(
-                id.clone(),
-                &crate::personal_accounts::refusal::transient_retry_error(None),
-            ));
-        }
-        None
+        super::visible::take_any_account_transient()?;
+        caller.signing.inspect(|signing| signing.want_refund());
+        Some(error_response_preserving_status(
+            id.clone(),
+            &crate::personal_accounts::refusal::transient_retry_error(None),
+        ))
     }
 
     pub(super) async fn begin_task(

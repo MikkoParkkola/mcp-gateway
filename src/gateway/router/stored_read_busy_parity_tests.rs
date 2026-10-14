@@ -537,3 +537,59 @@ async fn f2_a_mint_time_busy_surfaced_call_resolves_once() {
         "F2: one resolution wrote one idp_refuse"
     );
 }
+
+/// A task-augmented, keyed single-tool `gateway_execute` of `read` (code
+/// mode's single-tool shape: a `tool`, no `chain`).
+async fn tasked_execute_single(fx: &Fx, key: &str) -> Value {
+    let mut meta = modern_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+    send(
+        fx,
+        "tools/call",
+        "gateway_execute",
+        json!({"name": "gateway_execute",
+            "arguments": {"tool": format!("{BACKEND}:{TOOL}"), "arguments": {"folder": "inbox"}},
+            "task": {}, "_meta": meta}),
+    )
+    .await
+}
+
+/// A single-tool `gateway_execute` task call whose verdict met a busy
+/// custody is answered at intake like any other shape: no task, no held
+/// key — the same keyed call serves once custody recovers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn g2_a_single_tool_execute_tasked_call_meeting_busy_creates_no_task() {
+    let fx = fixture().await;
+    fx.gateway.fail_custody_for_test(true);
+    let reads = fx.gateway.resolves();
+    let before = refusals(&fx);
+    let held = committed_tasks(&fx);
+    let busy = tasked_execute_single(&fx, "s1-g2-exec").await;
+    assert_retryable(&busy, "G2 execute");
+    assert!(
+        busy.pointer("/result/taskId").is_none(),
+        "G2 execute: no task was handed back: {busy}"
+    );
+    assert_eq!(
+        committed_tasks(&fx),
+        held,
+        "G2 execute: the task store holds no task for the key"
+    );
+    assert_eq!(refusals(&fx) - before, 1, "G2 execute: one idp_refuse");
+    assert_eq!(
+        fx.gateway.resolves() - reads,
+        1,
+        "G2 execute: one custody read, at intake"
+    );
+    fx.gateway.fail_custody_for_test(false);
+    fx.gateway.answer_next(json!({
+        "content": [{"type": "text", "text": MARKER}], "isError": false
+    }));
+    let resent = tasked_execute_single(&fx, "s1-g2-exec").await;
+    let id = resent
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("G2 execute: the re-sent call makes its task: {resent}"))
+        .to_owned();
+    served(&fx, &id).await;
+}
