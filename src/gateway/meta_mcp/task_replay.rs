@@ -89,7 +89,20 @@ impl MetaMcp {
                 })
             })
             .collect();
-        self.fill_account_outcomes(&targets, caller).await;
+        // A target policy already refuses without any catalogue is never
+        // account-judged (MIK-8392 seat finding 1): no custody read and no
+        // audit write for it, as the live Step 0 does neither. Its answer
+        // comes from the policy layers in `refuse_stored`, before accounts.
+        let judged: Vec<(&str, &str)> = targets
+            .iter()
+            .copied()
+            .filter(|&(server, tool)| {
+                self.backends.get(server).is_none_or(|backend| {
+                    !self.refused_without_catalogue(&backend, (server, tool), scope, session_id)
+                })
+            })
+            .collect();
+        self.fill_account_outcomes(&judged, caller).await;
         for &(server, tool) in &targets {
             self.keep_permanent_refusal(server, tool, caller).await;
             self.settle_caller_view(server, tool, scope, session_id)

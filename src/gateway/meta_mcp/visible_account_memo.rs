@@ -73,6 +73,28 @@ pub(crate) fn take_account_transient(server: &str, tool: &str) -> Option<String>
         .flatten()
 }
 
+/// Keep the route verdict's resolution error for `(server, tool)` in the
+/// open request; outside one it is dropped.
+pub(crate) fn record_resolution_error(server: &str, tool: &str, error: crate::Error) {
+    let _ = VISIBILITY_MEMO.try_with(|memo| {
+        memo.resolution_error
+            .lock()
+            .insert((server.to_owned(), tool.to_owned()), error);
+    });
+}
+
+/// Take the resolution error kept for `(server, tool)`, consuming it once.
+pub(crate) fn take_resolution_error(server: &str, tool: &str) -> Option<crate::Error> {
+    VISIBILITY_MEMO
+        .try_with(|memo| {
+            memo.resolution_error
+                .lock()
+                .remove(&(server.to_owned(), tool.to_owned()))
+        })
+        .ok()
+        .flatten()
+}
+
 /// Take the refusal kept for `(server, account)`, if any.
 pub(crate) fn take_account_refusal(server: &str, account: &AccountKey) -> Option<crate::Error> {
     VISIBILITY_MEMO

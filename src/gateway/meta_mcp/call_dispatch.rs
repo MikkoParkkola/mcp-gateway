@@ -305,6 +305,47 @@ impl MetaMcp {
         if let Some(refusal) = self.refuse_unadmitted(&id, &caller) {
             return refusal;
         }
+        // A task-augmented call whose intake verdict met a busy custody
+        // (MIK-8392 G2): the transient lives only in this request's memo,
+        // which the task worker never gets, so answer it here, before any
+        // task exists — the shared transient answer, refund asked as the
+        // sync path asks it, settled when this call returns.
+        if caller.task.is_some() {
+            let targets: Vec<(String, String)> = match tool_name {
+                "gateway_invoke" => match (
+                    arguments.get("server").and_then(Value::as_str),
+                    arguments.get("tool").and_then(Value::as_str),
+                ) {
+                    (Some(server), Some(tool)) => vec![(server.to_owned(), tool.to_owned())],
+                    _ => Vec::new(),
+                },
+                "gateway_execute" => arguments
+                    .get("chain")
+                    .and_then(Value::as_array)
+                    .map(|steps| {
+                        steps
+                            .iter()
+                            .filter_map(|step| step.get("tool").and_then(Value::as_str))
+                            .filter_map(|named| named.split_once(':'))
+                            .map(|(server, tool)| (server.to_owned(), tool.to_owned()))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                _ => self
+                    .surfaced_server_unscoped(tool_name)
+                    .map(|server| vec![(server.to_owned(), tool_name.to_owned())])
+                    .unwrap_or_default(),
+            };
+            if targets.iter().any(|(server, tool)| {
+                super::visible::take_account_transient(server, tool).is_some()
+            }) {
+                caller.signing.inspect(|signing| signing.want_refund());
+                return error_response_preserving_status(
+                    id,
+                    &crate::personal_accounts::refusal::transient_retry_error(None),
+                );
+            }
+        }
         if let Some(intent) = caller.task.take() {
             // A `require` backend's answer must be a checked chain (inc3 R2).
             if let Err(error) =

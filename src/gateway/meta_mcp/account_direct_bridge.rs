@@ -223,6 +223,11 @@ impl DirectAccountGateway {
         self.custody.fail_reads(failing);
     }
 
+    /// Allow `allowed` further custody reads, then fail busy (G1a).
+    pub(crate) fn fail_custody_after_for_test(&self, allowed: usize) {
+        self.custody.fail_after(allowed);
+    }
+
     /// Credential releases custody made: one per `prepare` (MIK-8356 F5: a
     /// refused call resolves nothing).
     pub(crate) fn releases(&self) -> usize {

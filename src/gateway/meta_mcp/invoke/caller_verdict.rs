@@ -274,13 +274,23 @@ impl MetaMcp {
     ) -> Option<RefundWitness> {
         for target in targets {
             let target = target.as_target();
-            let target = (target.server, target.tool);
-            let naming = TargetNaming::of(self, tool_name, target);
-            witness = self
-                .caller_verdict(target, caller, session_id, naming, witness)
+            let (server, tool) = (target.server, target.tool);
+            let naming = TargetNaming::of(self, tool_name, (server, tool));
+            witness = match self
+                .caller_verdict((server, tool), caller, session_id, naming, witness)
                 .await
-                .ok()
-                .and_then(|(_, witness)| witness);
+            {
+                Ok((_, witness)) => witness,
+                Err(error) => {
+                    // The acting resolution failed (MIK-8392 G1a): carry
+                    // its error to the dispatch so it answers without
+                    // resolving (and auditing) again in this request.
+                    // The witness stays spent, as the verdict spent it:
+                    // the resolution may have minted.
+                    visible::record_resolution_error(server, tool, error);
+                    None
+                }
+            };
         }
         witness
     }
@@ -318,6 +328,14 @@ impl MetaMcp {
             return Err(crate::personal_accounts::refusal::transient_retry_error(
                 None,
             ));
+        }
+        // The verdict's acting resolution already failed in this request
+        // (MIK-8392 G1a): answer its error, consumed once, without
+        // resolving a second time. The witness is spent, as on the fresh
+        // resolution's failure: that resolution may have minted.
+        if let Some(error) = visible::take_resolution_error(server, tool) {
+            witness.spend();
+            return Err(error);
         }
         match visible::take_carried(server, tool) {
             // The verdict's fill failed: answered as a failed dispatch is,

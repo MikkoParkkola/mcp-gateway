@@ -113,6 +113,33 @@ pub(super) async fn signed_invoke(fx: &Fx, nonce: &str) -> Value {
     serde_json::from_slice(&bytes).unwrap_or(Value::Null)
 }
 
+/// [`signed_invoke`] as a task-augmented keyed call (MIK-8392 G2c).
+pub(super) async fn signed_task_invoke(fx: &Fx, nonce: &str, key: &str) -> Value {
+    let mut meta = modern_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+    let body = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {
+        "name": "gateway_invoke",
+        "arguments": {"server": BACKEND, "tool": TOOL,
+            "arguments": {"folder": "inbox"}, "nonce": nonce},
+        "task": {}, "_meta": meta,
+    }});
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", "gateway_invoke")
+        .body(axum::body::Body::from(body.to_string()))
+        .expect("a request");
+    let response = fx.router.clone().oneshot(request).await.expect("an answer");
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("a body");
+    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+}
+
 pub(super) fn refused_as_replay(body: &Value) -> bool {
     body["error"]["message"]
         .as_str()

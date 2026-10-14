@@ -52,12 +52,15 @@ impl AccountStrategyRegistry {
             || audit_subject(caller.verified()),
             Principal::stable_actor_id,
         );
+        // The reason names the transience itself, never a policy refusal:
+        // the `PropagationError` text alone need not say so.
+        let reason = format!("transient: {reason}");
         Self::audit_refusal(
             logger,
             &subject_id,
             descriptor_id,
             installed.audience.as_str(),
-            reason,
+            &reason,
         )
         .await;
     }

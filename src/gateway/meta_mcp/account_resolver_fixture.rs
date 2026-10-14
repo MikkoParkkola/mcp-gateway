@@ -411,6 +411,9 @@ pub(super) struct Custody {
     resolves: Arc<AtomicUsize>,
     /// While set, every `resolve` answers `Busy` (MIK-8392 U1, C6).
     failing: Arc<std::sync::atomic::AtomicBool>,
+    /// Test-only (MIK-8392 G1a): after this many more allowed `resolve`s,
+    /// every further one answers `Busy`; `None` never fails on the count.
+    fail_after: Arc<Mutex<Option<usize>>>,
     /// Kept alive: dropping it removes the store directory under the locks.
     _root: tempfile::TempDir,
 }
@@ -434,12 +437,20 @@ impl Custody {
             inner: Arc::clone(&self.handle) as Arc<dyn AccountCustody>,
             resolves: Arc::clone(&self.resolves),
             failing: Arc::clone(&self.failing),
+            fail_after: Arc::clone(&self.fail_after),
         })
     }
 
     /// Make every custody read fail as busy, or recover.
     pub(super) fn fail_reads(&self, failing: bool) {
         self.failing.store(failing, Ordering::SeqCst);
+        *self.fail_after.lock() = None;
+    }
+
+    /// Allow `allowed` further custody reads; every read after that fails
+    /// busy until [`Self::fail_reads`] recovers.
+    pub(super) fn fail_after(&self, allowed: usize) {
+        *self.fail_after.lock() = Some(allowed);
     }
 
     /// Custody reads made through [`Self::installed`].
@@ -453,6 +464,7 @@ struct CountedResolves {
     inner: Arc<dyn AccountCustody>,
     resolves: Arc<AtomicUsize>,
     failing: Arc<std::sync::atomic::AtomicBool>,
+    fail_after: Arc<Mutex<Option<usize>>>,
 }
 
 #[async_trait::async_trait]
@@ -461,6 +473,15 @@ impl AccountCustody for CountedResolves {
         self.resolves.fetch_add(1, Ordering::SeqCst);
         if self.failing.load(Ordering::SeqCst) {
             return Err(CustodyError::Busy);
+        }
+        {
+            let mut budget = self.fail_after.lock();
+            if let Some(remaining) = budget.as_mut() {
+                if *remaining == 0 {
+                    return Err(CustodyError::Busy);
+                }
+                *remaining -= 1;
+            }
         }
         self.inner.resolve(account).await
     }
@@ -531,6 +552,7 @@ pub(super) fn custody_with_steps(
         observer,
         resolves: Arc::new(AtomicUsize::new(0)),
         failing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        fail_after: Arc::new(Mutex::new(None)),
         _root: root,
     }
 }

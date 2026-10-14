@@ -386,6 +386,10 @@ pub(crate) struct VisibilityMemo {
     /// mint-free view read, carried to the dispatch and consumed once there,
     /// so nothing in the request reads custody a second time.
     account_transient: parking_lot::Mutex<std::collections::HashMap<(String, String), String>>,
+    /// The route verdict's resolution error for a target (MIK-8392 G1a),
+    /// carried to that target's dispatch so it answers without resolving
+    /// (and auditing) a second time in one request.
+    resolution_error: parking_lot::Mutex<std::collections::HashMap<(String, String), crate::Error>>,
 }
 
 /// The account a target's dispatch would use (MIK-8392): a managed
@@ -429,7 +433,8 @@ pub(crate) fn record_account_outcome(server: &str, account: &AccountKey, outcome
 mod account_memo;
 pub(crate) use account_memo::{
     account_binding, account_transient, record_account_binding, record_account_refusal,
-    record_account_transient, take_account_refusal, take_account_transient,
+    record_account_transient, record_resolution_error, take_account_refusal,
+    take_account_transient, take_resolution_error,
 };
 
 /// The outcome recorded for `(server, account)` in the open request. Reads
