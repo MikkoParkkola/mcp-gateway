@@ -365,13 +365,14 @@ impl MetaMcp {
         id: &RequestId,
     ) -> Option<JsonRpcResponse> {
         caller.task.as_ref()?;
-        // No policy check here: for a `gateway_invoke` and for an unsigned
-        // call the invocation policy already ran before intake (admission.rs:391,
-        // or signing.rs:642 for a signed `gateway_invoke`). A signed call by
-        // surfaced name is not covered by either (admission only refuses a
-        // withheld name there), so it may answer retryable for a refused target;
-        // the worker re-checks policy at dispatch, so nothing executes
-        // (MIK-8428, stated residual).
+        // No policy check here: the invocation policy already ran before
+        // intake for a `gateway_invoke` (signing.rs:642 when signed,
+        // admission.rs:391 otherwise), for a surfaced name, signed or not
+        // (admission.rs:368-391; signing prepares only `gateway_invoke`), and
+        // for a keyed `gateway_execute` or playbook plan (admission_plan.rs:63-131).
+        // An unkeyed task-augmented `gateway_execute` or playbook gets it only
+        // at dispatch, so it may answer retryable for a refused target; no task
+        // is created, so nothing executes (MIK-8428 Case D, inferred, not run).
         super::visible::take_any_account_transient()?;
         caller.signing.inspect(|signing| signing.want_refund());
         Some(error_response_preserving_status(
