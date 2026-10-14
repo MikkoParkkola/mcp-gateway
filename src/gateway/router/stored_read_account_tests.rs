@@ -710,3 +710,6 @@ mod busy_nonce;
 
 #[path = "stored_read_busy_parity_tests.rs"]
 mod busy_parity;
+
+#[path = "stored_read_capability_busy_tests.rs"]
+mod capability_busy;

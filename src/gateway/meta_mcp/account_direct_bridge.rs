@@ -408,12 +408,24 @@ impl CapabilityAccount {
         self.custody.resolves()
     }
 
+    /// Allow `allowed` further custody reads, then fail busy
+    /// (#3892 R6 test seam: intake view fine, worker mint busy).
+    pub(crate) fn fail_custody_after_for_test(&self, allowed: usize) {
+        self.custody.fail_after(allowed);
+    }
+
     /// The `idp_refuse` records in this fixture's transparency log.
     pub(crate) fn idp_refusals_for_test(&self) -> usize {
+        self.idp_refusal_reasons_for_test().len()
+    }
+
+    /// The reasons of those records, in order (#3892 R1).
+    pub(crate) fn idp_refusal_reasons_for_test(&self) -> Vec<String> {
         crate::gateway::meta_mcp::grant_audit_fixture::entries(&self.log_dir)
             .iter()
             .filter(|entry| entry["action"] == "idp_refuse")
-            .count()
+            .map(|entry| entry["reason"].as_str().unwrap_or_default().to_owned())
+            .collect()
     }
 
     /// Revoke alice's grant through live custody.
