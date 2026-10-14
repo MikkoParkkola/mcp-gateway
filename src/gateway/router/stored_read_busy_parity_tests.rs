@@ -467,3 +467,110 @@ async fn m2_after_a_busy_call_a_reader_without_a_recheck_still_sees_the_tool() {
         "M2: the tool is stale-hidden from a reader with no re-check: {after}"
     );
 }
+
+/// Item 3, descriptor clause: a descriptor-blocked target under a busy
+/// custody: the stored read still answers the descriptor refusal, with
+/// no custody read and no `idp_refuse` for the busy account.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_descriptor_blocked_stored_read_reads_no_custody_and_writes_no_refusal() {
+    let fx = fixture().await;
+    let id = finished_task(&fx, "s1-a-desc").await;
+    fx.gateway
+        .backends()
+        .get(BACKEND)
+        .expect("the backend")
+        .block_tool_for_test(TOOL);
+    let control = task_get(&fx, &id).await;
+    assert!(
+        control.get("error").is_some() && !control.to_string().contains(MARKER),
+        "descriptor premise: the blocked read is refused: {control}"
+    );
+    fx.gateway.fail_custody_for_test(true);
+    let reads = fx.gateway.resolves();
+    let before = refusals(&fx);
+    let read = task_get(&fx, &id).await;
+    assert_eq!(
+        read.get("error"),
+        control.get("error"),
+        "descriptor: still the descriptor refusal under busy custody: {read}"
+    );
+    assert_eq!(
+        fx.gateway.resolves() - reads,
+        0,
+        "descriptor: the pre-pass read custody for a blocked target"
+    );
+    assert_eq!(
+        refusals(&fx) - before,
+        0,
+        "descriptor: the pre-pass wrote an idp_refuse for a blocked target"
+    );
+}
+
+/// Item 1 (seat finding 2): a kill-switched target under a busy custody
+/// is refused by policy at task intake, exactly as the sync call is —
+/// never told to retry a disabled target — and no task is created.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn f1_a_kill_switched_tasked_call_answers_the_sync_refusal_not_the_transient() {
+    let fx = fixture().await;
+    fx.state.meta_mcp.kill_switch().kill(BACKEND);
+    fx.gateway.fail_custody_for_test(true);
+    let sync = live_invoke(&fx, "s1-f1-sync").await;
+    assert!(
+        sync.get("error").is_some(),
+        "F1 premise: the sync call is refused: {sync}"
+    );
+    assert_ne!(
+        sync.pointer("/error/data/retryable"),
+        Some(&json!(true)),
+        "F1 premise: the sync refusal is not the retryable transient: {sync}"
+    );
+    let held = committed_tasks(&fx);
+    let tasked = tasked_invoke(&fx, "s1-f1-task").await;
+    assert_eq!(
+        tasked.get("error"),
+        sync.get("error"),
+        "F1: the tasked call answers the sync refusal: tasked {tasked} sync {sync}"
+    );
+    assert_eq!(
+        tasked["error"].to_string(),
+        sync["error"].to_string(),
+        "F1: byte-equal error objects, id excluded"
+    );
+    assert!(
+        tasked.pointer("/result/taskId").is_none(),
+        "F1: no task was handed back: {tasked}"
+    );
+    assert_eq!(committed_tasks(&fx), held, "F1: no task was created");
+}
+
+/// Item 2 (seat finding 1), the surfaced twin of G1a: the view read
+/// succeeds, the mint meets a busy custody, and the route's second
+/// verdict is a memo hit on the carried error — two custody reads and
+/// one `idp_refuse` for the whole surfaced-name call.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn f2_a_mint_time_busy_surfaced_call_resolves_once() {
+    let fx = fixture().await;
+    fx.gateway.fail_custody_after_for_test(1);
+    let reads = fx.gateway.resolves();
+    let before = refusals(&fx);
+    let live = surfaced_call(&fx).await;
+    assert!(
+        live.get("error").is_some() && !live.to_string().contains(MARKER),
+        "F2 premise: the surfaced call is refused at its resolution: {live}"
+    );
+    assert_ne!(
+        live.pointer("/error/data/retryable"),
+        Some(&json!(true)),
+        "F2 premise: today's mint refusal, not the view's transient: {live}"
+    );
+    assert_eq!(
+        fx.gateway.resolves() - reads,
+        2,
+        "F2: view + mint, the second verdict read no custody again"
+    );
+    assert_eq!(
+        refusals(&fx) - before,
+        1,
+        "F2: one resolution wrote one idp_refuse"
+    );
+}

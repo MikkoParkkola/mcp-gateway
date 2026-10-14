@@ -186,6 +186,13 @@ impl MetaMcp {
         // reader after this answers as absent; a dispatch naming the backend
         // proceeds to that account's connect offer, the same for every tool
         // name (MIK-6745 section 9.2, predicate D).
+        // The route verdict's acting resolution already failed for this
+        // target in this request (MIK-8392 G1a twin): a memo hit. The
+        // dispatch answers the carried error; resolving here would read
+        // custody and audit a second time.
+        if visible::has_resolution_error(server, tool) {
+            return Ok((CallerVerdict::Proceed, witness));
+        }
         // A busy custody already met in this request (the route stage's
         // verdict, read again on a surfaced route): no second custody read
         // and no second audit record (MIK-8392 Busy parity).

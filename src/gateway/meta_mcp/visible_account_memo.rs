@@ -83,6 +83,18 @@ pub(crate) fn record_resolution_error(server: &str, tool: &str, error: crate::Er
     });
 }
 
+/// Whether a resolution error is kept for `(server, tool)`, without
+/// consuming it: a repeated verdict reads it as a memo hit (G1a twin).
+pub(crate) fn has_resolution_error(server: &str, tool: &str) -> bool {
+    VISIBILITY_MEMO
+        .try_with(|memo| {
+            memo.resolution_error
+                .lock()
+                .contains_key(&(server.to_owned(), tool.to_owned()))
+        })
+        .unwrap_or(false)
+}
+
 /// Take the resolution error kept for `(server, tool)`, consuming it once.
 pub(crate) fn take_resolution_error(server: &str, tool: &str) -> Option<crate::Error> {
     VISIBILITY_MEMO

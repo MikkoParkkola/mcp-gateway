@@ -97,9 +97,7 @@ impl MetaMcp {
             .iter()
             .copied()
             .filter(|&(server, tool)| {
-                self.backends.get(server).is_none_or(|backend| {
-                    !self.refused_without_catalogue(&backend, (server, tool), scope, session_id)
-                })
+                !self.target_refused_without_catalogue((server, tool), scope, session_id)
             })
             .collect();
         self.fill_account_outcomes(&judged, caller).await;
@@ -267,6 +265,34 @@ impl MetaMcp {
     /// the dispatch admission (the kill switch). A read so refused triggers
     /// no credential resolution and no backend listing; the sync judgement
     /// still answers it, with its audit record.
+    /// [`Self::refused_without_catalogue`] for any stored target, a
+    /// capability-provider one with no registry backend included (seat
+    /// finding 3): only the descriptor block needs the backend itself;
+    /// `may_invoke` and dispatch admission decide from the name alone.
+    fn target_refused_without_catalogue(
+        &self,
+        (server, tool): (&str, &str),
+        scope: super::visibility::InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) -> bool {
+        if let Some(backend) = self.backends.get(server) {
+            self.refused_without_catalogue(&backend, (server, tool), scope, session_id)
+        } else {
+            if self.may_invoke(server, tool, scope, session_id).is_err() {
+                return true;
+            }
+            let call = super::invoke::dispatch_guards::BackendCall {
+                server,
+                tool,
+                session_id,
+                api_key_name: scope.api_key_name,
+                trace_id: "",
+                caller_key: None,
+            };
+            self.admit_target(&call).is_err()
+        }
+    }
+
     fn refused_without_catalogue(
         &self,
         backend: &crate::backend::Backend,

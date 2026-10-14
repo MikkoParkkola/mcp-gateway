@@ -287,7 +287,7 @@ pub(crate) struct CapabilityAccount {
     log: Arc<crate::security::TransparencyLogger>,
     external: bool,
     personal: bool,
-    _log_dir: tempfile::TempDir,
+    log_dir: tempfile::TempDir,
 }
 
 /// The capability server and tool [`CapabilityAccount`] serves.
@@ -314,7 +314,7 @@ impl CapabilityAccount {
             log,
             external,
             personal: false,
-            _log_dir: dir,
+            log_dir: dir,
         }
     }
 
@@ -396,6 +396,24 @@ impl CapabilityAccount {
             .expect("the capability registers");
         meta.set_capabilities(backend);
         meta
+    }
+
+    /// Make every custody read fail as busy, or recover (seat finding 3).
+    pub(crate) fn fail_custody_for_test(&self, failing: bool) {
+        self.custody.fail_reads(failing);
+    }
+
+    /// Custody lookups since this fixture started.
+    pub(crate) fn resolves(&self) -> usize {
+        self.custody.resolves()
+    }
+
+    /// The `idp_refuse` records in this fixture's transparency log.
+    pub(crate) fn idp_refusals_for_test(&self) -> usize {
+        crate::gateway::meta_mcp::grant_audit_fixture::entries(&self.log_dir)
+            .iter()
+            .filter(|entry| entry["action"] == "idp_refuse")
+            .count()
     }
 
     /// Revoke alice's grant through live custody.

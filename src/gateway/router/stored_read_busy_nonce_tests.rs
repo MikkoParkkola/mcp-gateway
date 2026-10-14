@@ -189,9 +189,13 @@ impl crate::transport::Transport for LookAlike {
     }
 }
 
-/// N1: a backend's look-alike error after a real dispatch does not earn a
-/// nonce refund: the same signed request re-sent is refused as a replay
-/// and nothing dispatches again.
+/// N1: the managed-route look-alike control. A backend that answers an
+/// unsealed, Busy-shaped error after a real dispatch earns no nonce refund:
+/// the same signed request re-sent is refused as a replay and nothing
+/// dispatches again. On this route the dispatch's resolution spends the
+/// witness before the send (`dispatch_resolution`'s carried arm), so this row
+/// does NOT pin the general refund-after-dispatch property; that is pinned by
+/// `n1d` (`mcp_nonce_tests.rs`) and the give-back rows.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn n1_a_backend_look_alike_after_a_dispatch_keeps_the_nonce() {
     let fx = signed_fixture().await;

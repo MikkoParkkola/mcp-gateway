@@ -305,46 +305,10 @@ impl MetaMcp {
         if let Some(refusal) = self.refuse_unadmitted(&id, &caller) {
             return refusal;
         }
-        // A task-augmented call whose intake verdict met a busy custody
-        // (MIK-8392 G2): the transient lives only in this request's memo,
-        // which the task worker never gets, so answer it here, before any
-        // task exists — the shared transient answer, refund asked as the
-        // sync path asks it, settled when this call returns.
-        if caller.task.is_some() {
-            let targets: Vec<(String, String)> = match tool_name {
-                "gateway_invoke" => match (
-                    arguments.get("server").and_then(Value::as_str),
-                    arguments.get("tool").and_then(Value::as_str),
-                ) {
-                    (Some(server), Some(tool)) => vec![(server.to_owned(), tool.to_owned())],
-                    _ => Vec::new(),
-                },
-                "gateway_execute" => arguments
-                    .get("chain")
-                    .and_then(Value::as_array)
-                    .map(|steps| {
-                        steps
-                            .iter()
-                            .filter_map(|step| step.get("tool").and_then(Value::as_str))
-                            .filter_map(|named| named.split_once(':'))
-                            .map(|(server, tool)| (server.to_owned(), tool.to_owned()))
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-                _ => self
-                    .surfaced_server_unscoped(tool_name)
-                    .map(|server| vec![(server.to_owned(), tool_name.to_owned())])
-                    .unwrap_or_default(),
-            };
-            if targets.iter().any(|(server, tool)| {
-                super::visible::take_account_transient(server, tool).is_some()
-            }) {
-                caller.signing.inspect(|signing| signing.want_refund());
-                return error_response_preserving_status(
-                    id,
-                    &crate::personal_accounts::refusal::transient_retry_error(None),
-                );
-            }
+        if let Some(answer) =
+            self.task_intake_transient(tool_name, &arguments, &caller, session_id, &id)
+        {
+            return answer;
         }
         if let Some(intent) = caller.task.take() {
             // A `require` backend's answer must be a checked chain (inc3 R2).
@@ -378,6 +342,84 @@ impl MetaMcp {
             confirmed_in_band,
         )
         .await
+    }
+
+    /// A task-augmented call whose intake verdict met a busy custody
+    /// (MIK-8392 G2): the transient lives only in this request's memo,
+    /// which the task worker never gets, so answer it here, before any
+    /// task exists — the shared transient answer, refund asked as the
+    /// sync path asks it, settled when this call returns. `None` when the
+    /// call is not task-augmented or no target carries a transient.
+    fn task_intake_transient(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        caller: &MetaMcpCallerContext<'_>,
+        session_id: Option<&str>,
+        id: &RequestId,
+    ) -> Option<JsonRpcResponse> {
+        caller.task.as_ref()?;
+        let targets: Vec<(String, String)> = match tool_name {
+            "gateway_invoke" => match (
+                arguments.get("server").and_then(Value::as_str),
+                arguments.get("tool").and_then(Value::as_str),
+            ) {
+                (Some(server), Some(tool)) => vec![(server.to_owned(), tool.to_owned())],
+                _ => Vec::new(),
+            },
+            "gateway_execute" => arguments
+                .get("chain")
+                .and_then(Value::as_array)
+                .map(|steps| {
+                    steps
+                        .iter()
+                        .filter_map(|step| step.get("tool").and_then(Value::as_str))
+                        .filter_map(|named| named.split_once(':'))
+                        .map(|(server, tool)| (server.to_owned(), tool.to_owned()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            _ => self
+                .surfaced_server_unscoped(tool_name)
+                .map(|server| vec![(server.to_owned(), tool_name.to_owned())])
+                .unwrap_or_default(),
+        };
+        // Policy first (seat finding 1): the sync path refuses a
+        // kill-switched or disabled target in its invocation policy,
+        // before any transient is answered, so a client is never told to
+        // retry a refused target. Only a target carrying a transient is
+        // checked here; every other call runs these checks once, in its
+        // invoke, as today.
+        for (server, tool) in targets
+            .iter()
+            .filter(|(server, tool)| super::visible::account_transient(server, tool).is_some())
+        {
+            let scope = caller.scope();
+            if let Err(error) = self.may_invoke(server, tool, scope, session_id) {
+                return Some(error_response_preserving_status(id.clone(), &error));
+            }
+            if let Err(error) = self.admit_target(&super::invoke::dispatch_guards::BackendCall {
+                server,
+                tool,
+                session_id,
+                api_key_name: scope.api_key_name,
+                trace_id: "",
+                caller_key: None,
+            }) {
+                return Some(error_response_preserving_status(id.clone(), &error));
+            }
+        }
+        if targets
+            .iter()
+            .any(|(server, tool)| super::visible::take_account_transient(server, tool).is_some())
+        {
+            caller.signing.inspect(|signing| signing.want_refund());
+            return Some(error_response_preserving_status(
+                id.clone(),
+                &crate::personal_accounts::refusal::transient_retry_error(None),
+            ));
+        }
+        None
     }
 
     pub(super) async fn begin_task(

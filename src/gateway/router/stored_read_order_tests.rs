@@ -262,3 +262,107 @@ async fn order_unbindable_caller_with_a_withheld_tool_answers_absence() {
         "order: the stored read answers what the live call answers"
     );
 }
+
+/// Item 3 (seat finding 3), the `may_invoke` clause on a capability
+/// target with no registry backend: alice's Personal capability after
+/// her identity grant is withdrawn and her managed custody is busy.
+/// The stored pre-pass must not judge the account at all — no custody
+/// read, no `idp_refuse` — and the read answers the live grant denial.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn capability_grant_withdrawn_under_busy_custody_is_not_account_judged() {
+    let account = CapabilityAccount::start_personal().await;
+    let (state, _store) = super::tests::meta_fixture::test_router_app_state_with_meta(
+        &AuthConfig::default(),
+        None,
+        |meta| account.install(meta),
+    )
+    .await;
+    state.meta_mcp.set_identity_grants(
+        crate::identity_grants::LocalIdentityGrantStore::from_grants([
+            CapabilityAccount::alice_grant(),
+        ]),
+    );
+    let router = super::create_router(Arc::clone(&state));
+    let alice = CapabilityAccount::alice();
+    let mut meta = modern_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!("s1-a-cap");
+    let made = send_as(
+        &router,
+        &alice,
+        "tools/call",
+        "gateway_invoke",
+        json!({"name": "gateway_invoke",
+            "arguments": {"server": CAPABILITY_SERVER, "tool": CAPABILITY_TOOL, "arguments": {}},
+            "task": {}, "_meta": meta}),
+    )
+    .await;
+    let id = made
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("premise: a task was made: {made}"))
+        .to_owned();
+    let bound = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let got = send_as(
+            &router,
+            &alice,
+            "tasks/get",
+            &id,
+            json!({"taskId": id, "_meta": modern_meta()}),
+        )
+        .await;
+        if got.pointer("/result/status") == Some(&json!("completed")) {
+            assert!(got.get("error").is_none(), "control: delivered: {got}");
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < bound,
+            "premise: completes: {got}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    state
+        .meta_mcp
+        .set_identity_grants(crate::identity_grants::LocalIdentityGrantStore::new());
+    account.fail_custody_for_test(true);
+    let live = send_as(
+        &router,
+        &alice,
+        "tools/call",
+        "gateway_invoke",
+        json!({"name": "gateway_invoke",
+            "arguments": {"server": CAPABILITY_SERVER, "tool": CAPABILITY_TOOL, "arguments": {}},
+            "_meta": modern_meta()}),
+    )
+    .await;
+    assert_eq!(
+        live.pointer("/error/code"),
+        Some(&json!(-32004)),
+        "premise: the live call is grant-denied: {live}"
+    );
+    let reads = account.resolves();
+    let before = account.idp_refusals_for_test();
+    let stored = send_as(
+        &router,
+        &alice,
+        "tasks/get",
+        &id,
+        json!({"taskId": id, "_meta": modern_meta()}),
+    )
+    .await;
+    assert_eq!(
+        error_masked(&stored),
+        error_masked(&live),
+        "capability: the stored read answers the live grant denial: {stored}"
+    );
+    assert_eq!(
+        account.resolves() - reads,
+        0,
+        "capability: the pre-pass read custody for a grant-refused target"
+    );
+    assert_eq!(
+        account.idp_refusals_for_test() - before,
+        0,
+        "capability: the pre-pass wrote an idp_refuse for a grant-refused target"
+    );
+}
