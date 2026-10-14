@@ -13,7 +13,7 @@ use tower::ServiceExt as _;
 
 use super::audience_fixture::{ARRIVAL, LIST_CHANGED, SENTINEL, World, asserted};
 use crate::gateway::meta_mcp::MetaMcp;
-use crate::gateway::streaming::SessionFrame;
+use crate::gateway::streaming::{DeadReason, SessionFrame, StreamView};
 
 /// Which attach route a refusal is read from.
 #[derive(Clone, Copy, Debug)]
@@ -179,7 +179,14 @@ pub(super) enum Ear {
     /// A bare receiver of the session's queue, with the session it reads: a
     /// real stream checks the credential again as it writes a frame, so
     /// this ear does too.
-    Legacy(Receiver<SessionFrame>, String),
+    Legacy {
+        rx: Receiver<SessionFrame>,
+        session: String,
+        /// The genuine attach admission, held only as RAII custody: an
+        /// admitted view lives exactly as long as this ear, while an
+        /// `Ok(None)` and an `Err` refusal stay distinct from it.
+        _view_admission: Result<Option<StreamView>, DeadReason>,
+    },
     /// A GET stream read through the real route: the write path runs. The
     /// relay's task reads its body continuously, as a real client does.
     Sse {
@@ -203,7 +210,7 @@ impl Ear {
     pub(super) async fn frames(&mut self, world: &World) -> Vec<String> {
         world.settle().await;
         match self {
-            Self::Legacy(rx, session) => {
+            Self::Legacy { rx, session, .. } => {
                 let mut methods = Vec::new();
                 while let Ok(frame) = rx.try_recv() {
                     if !world
@@ -496,7 +503,8 @@ impl World {
             self.state
                 .multiplexer
                 .get_or_create_session_scoped(Some(id), &owner, held);
-        self.state
+        let view_admission = self
+            .state
             .multiplexer
             .take_baseline(
                 &minted,
@@ -506,7 +514,11 @@ impl World {
         self.minted
             .borrow_mut()
             .insert(id.to_string(), minted.clone());
-        Ear::Legacy(rx, minted)
+        Ear::Legacy {
+            rx,
+            session: minted,
+            _view_admission: view_admission,
+        }
     }
 
     /// A legacy GET session opened with exactly these request headers.
@@ -525,7 +537,8 @@ impl World {
                 .multiplexer
                 .get_or_create_session_scoped(Some(id), &owner, held);
         // As the GET handler does when a stream attaches (MIK-8350).
-        self.state
+        let view_admission = self
+            .state
             .multiplexer
             .take_baseline(
                 &minted,
@@ -535,7 +548,11 @@ impl World {
         self.minted
             .borrow_mut()
             .insert(id.to_string(), minted.clone());
-        Ear::Legacy(rx, minted)
+        Ear::Legacy {
+            rx,
+            session: minted,
+            _view_admission: view_admission,
+        }
     }
 }
 
@@ -652,6 +669,9 @@ impl World {
     }
 }
 
+#[cfg(test)]
+#[path = "audience_fixture_custody_controls.rs"]
+mod custody_controls;
 #[cfg(test)]
 #[path = "audience_ear_tests.rs"]
 mod ear_tests;

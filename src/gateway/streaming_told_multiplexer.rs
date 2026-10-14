@@ -59,12 +59,17 @@ impl NotificationMultiplexer {
     }
 
     /// Take `session_id`'s baseline for the default subject: for a session no
-    /// stream has opened a view on (a bare receiver).
+    /// stream has opened a view on (a bare receiver). The actual admission
+    /// is returned, so the caller holds an admitted view for exactly as
+    /// long as its simulated stream lives; a refusal stays a refusal.
     #[cfg(test)]
-    pub(crate) async fn take_baseline(&self, session_id: &str, judge: &Arc<dyn ViewJudge>) {
-        let _ = self
-            .attach_view(session_id, ViewSubject::default(), Arc::clone(judge))
-            .await;
+    pub(crate) async fn take_baseline(
+        &self,
+        session_id: &str,
+        judge: &Arc<dyn ViewJudge>,
+    ) -> Result<Option<StreamView>, DeadReason> {
+        self.attach_view(session_id, ViewSubject::default(), Arc::clone(judge))
+            .await
     }
 
     /// Read what `session_id`'s caller, under `subject`, is shown now, ahead

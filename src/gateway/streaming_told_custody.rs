@@ -90,3 +90,29 @@ pub(super) async fn wait_closed(mut close: watch::Receiver<bool>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::wait_closed;
+
+    #[tokio::test]
+    async fn wait_closed_returns_when_the_sender_is_gone() {
+        let (sender, receiver) = tokio::sync::watch::channel(false);
+        drop(sender);
+        assert!(!*receiver.borrow(), "premise: the retained value is false");
+        assert!(
+            receiver.has_changed().is_err(),
+            "premise: the native channel reports closed"
+        );
+        let started = tokio::time::Instant::now();
+        if let Err(elapsed) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), wait_closed(receiver)).await
+        {
+            panic!(
+                "VOID: wait_closed did not complete after sender drop: \
+                 {elapsed} (actual elapsed {:?})",
+                started.elapsed()
+            );
+        }
+    }
+}
