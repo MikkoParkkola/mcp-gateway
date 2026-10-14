@@ -214,6 +214,11 @@ closed: nothing is admitted. D7 keeps a gateway from starting into it. It is not
   new one at the same count. That is the transition's accepted limit until PR2 empties the
   baseline. It is also why PR1 migrates every ACCESS row, not only the reads that are wrong
   today.
+- **Superseded in P4b.** The baseline, its tsv and `check_clock_baseline.py` are deleted. The
+  lint is clippy's `disallowed_methods` with the five clock entries in `clippy.toml`; the only
+  product allow is `src/clock.rs`. Test code carries a test-scoped allow, one per file or test
+  module (AC.14). `scripts/dev/check_clock_lint.sh --self-test` proves in CI that each entry
+  still bites, and `clock_tests.rs` guards the allow scopes and aliases clippy cannot see.
 
 **PR2 (Fixes MIK-8202), the mechanical half.** It migrates the remaining rows (RETENTION
 sweeps, records, rate windows, outbound OAuth), deletes the duplicate helpers, and empties and

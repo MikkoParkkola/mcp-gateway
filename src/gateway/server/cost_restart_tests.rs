@@ -37,7 +37,7 @@ fn spend_before_a_restart_still_counts_against_the_daily_budget() {
         first.record_spend("search", Some("dev"), 0.6);
         cost_persistence::save(
             &dir.path().join("costs.json"),
-            &build_persisted_costs(&first.snapshot()),
+            &build_persisted_costs(&first.snapshot_for_save().expect("a readable clock")),
         )
         .expect("shutdown save");
         drop(first);
@@ -75,7 +75,7 @@ fn spend_saved_on_an_earlier_day_does_not_count_today() {
     let (snap, allowed) = same_utc_day(|| {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut persisted = PersistedCosts {
-            saved_at: cost_persistence::now_secs() - 2 * 86_400,
+            saved_at: crate::clock::unix_secs().expect("a readable clock") - 2 * 86_400,
             ..PersistedCosts::default()
         };
         persisted.tool_totals.insert(
@@ -118,7 +118,7 @@ fn a_save_dates_its_spend_by_when_the_snapshot_was_taken() {
         let (_, first) = boot_cost_governance(&cfg, dir.path());
         let first = first.expect("enforcer");
         first.record_spend("search", Some("dev"), 0.6);
-        let mut snap = first.snapshot();
+        let mut snap = first.snapshot_for_save().expect("a readable clock");
         snap.taken_at -= 2 * 86_400;
         let persisted = build_persisted_costs(&snap);
         let dated_by_snapshot = (persisted.saved_at, snap.taken_at);

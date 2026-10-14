@@ -10,6 +10,10 @@
 //! is this same binary over stdio (which the destination policy does not
 //! cover), running `standard` and forwarding to the counting HTTP fixture.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code reads the host clock (MIK-8202 AC.14)"
+)]
 use signing_gateway::gateway_bin;
 
 #[path = "common/signing_gateway.rs"]

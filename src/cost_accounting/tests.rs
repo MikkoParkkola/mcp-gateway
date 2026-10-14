@@ -71,7 +71,7 @@ fn session_cost_groups_by_backend_and_tool() {
 
 /// Record `rec` on `kc` at the current time.
 fn spend(kc: &KeyCost, rec: &CostRecord) {
-    kc.record(rec, now_secs());
+    kc.record(rec, crate::clock::unix_secs().ok());
 }
 
 #[test]
@@ -79,11 +79,13 @@ fn key_cost_window_totals_exclude_old_records() {
     let kc = KeyCost::new("k1", BudgetConfig::default());
     // Insert a record manually with a very old timestamp
     let mut old_rec = CostRecord::new("s", "t", 9_999, 15.0);
-    old_rec.timestamp = 1; // epoch + 1 second — definitely older than 24 h
+    old_rec.timestamp = Some(1); // epoch + 1 second — definitely older than 24 h
     spend(&kc, &old_rec);
     spend(&kc, &CostRecord::new("s", "t", 100, 15.0));
 
-    let (tokens, _) = kc.window_totals(BudgetWindow::Day.secs());
+    let (tokens, _) = kc
+        .window_totals(BudgetWindow::Day.secs())
+        .expect("a readable clock");
     // Only the recent record should count
     assert_eq!(tokens, 100);
 }
@@ -135,7 +137,7 @@ fn key_cost_budget_status_exceeded_at_100_percent() {
 fn key_cost_keeps_no_bucket_for_spend_past_the_month() {
     let kc = KeyCost::new("k5", BudgetConfig::default());
     let mut old = CostRecord::new("s", "t", 100, 15.0);
-    old.timestamp = 1;
+    old.timestamp = Some(1);
     spend(&kc, &old);
     spend(&kc, &CostRecord::new("s", "t", 50, 15.0));
     // One hour bucket (the current one); the old spend lives on only in the
@@ -160,7 +162,7 @@ fn cost_tracker_records_session_and_key() {
     let key_snap = tracker.key_snapshot("alice").unwrap();
     assert_eq!(key_snap.api_key_name, "alice");
     // 1500 tokens in 24 h window
-    assert_eq!(key_snap.window_24h.tokens, 1_500);
+    assert_eq!(key_snap.window_24h.tokens, Some(1_500));
 }
 
 #[test]
@@ -265,9 +267,12 @@ fn an_empty_session_id_opens_no_session_bucket() {
     assert!(tracker.all_sessions().is_empty());
     assert_eq!(
         tracker.key_snapshot("alice").unwrap().window_24h.tokens,
-        200
+        Some(200)
     );
-    assert_eq!(tracker.key_snapshot("bob").unwrap().window_24h.tokens, 100);
+    assert_eq!(
+        tracker.key_snapshot("bob").unwrap().window_24h.tokens,
+        Some(100)
+    );
 }
 
 #[test]
@@ -312,7 +317,7 @@ fn many_calls_on_one_key_hold_a_bounded_number_of_entries() {
     );
     assert_eq!(
         tracker.key_snapshot("anonymous").unwrap().window_24h.tokens,
-        10_000
+        Some(10_000)
     );
 }
 
@@ -339,7 +344,7 @@ fn a_key_idle_for_a_month_reports_zero_windows_but_keeps_its_tool_rows() {
     // GIVEN: a key whose only spend was 31 days ago
     let kc = KeyCost::new("idle", BudgetConfig::default());
     let mut old = CostRecord::new("srv", "t", 7, 15.0);
-    old.timestamp = now_secs() - 31 * 86_400;
+    old.timestamp = Some(crate::clock::unix_secs().expect("a readable clock") - 31 * 86_400);
     spend(&kc, &old);
     // THEN: every window reads zero; the all-time row is still there
     let snap = kc.snapshot();
@@ -349,7 +354,7 @@ fn a_key_idle_for_a_month_reports_zero_windows_but_keeps_its_tool_rows() {
             snap.window_7d.tokens,
             snap.window_30d.tokens
         ),
-        (0, 0, 0)
+        (Some(0), Some(0), Some(0))
     );
     assert_eq!(snap.by_tool[0].token_count, 7);
 }
@@ -357,7 +362,7 @@ fn a_key_idle_for_a_month_reports_zero_windows_but_keeps_its_tool_rows() {
 #[test]
 fn the_sweep_drops_idle_keys_and_keeps_budgeted_ones() {
     let tracker = CostTracker::new();
-    let month_ago = now_secs() - 31 * 86_400;
+    let month_ago = crate::clock::unix_secs().expect("a readable clock") - 31 * 86_400;
     // GIVEN: an idle key, and an idle key with a set budget
     tracker.set_key_budget("budgeted", BudgetConfig::default());
     for name in ["idle", "budgeted"] {
@@ -406,8 +411,10 @@ fn setting_a_budget_on_a_spending_key_keeps_its_spend_and_shields_it() {
     // WHEN: a budget is set on it
     tracker.set_key_budget("k", limited);
     let key = tracker.per_key.get("k").map(|k| Arc::clone(&k)).unwrap();
-    key.last_spend
-        .store(now_secs() - 31 * 86_400, Ordering::Relaxed);
+    key.last_spend.store(
+        crate::clock::unix_secs().expect("a readable clock") - 31 * 86_400,
+        Ordering::Relaxed,
+    );
     // The first record ran the sweep: make the next one due again
     tracker.next_key_sweep.store(0, Ordering::Relaxed);
     tracker.record("", Some("other"), "srv", "t", 1, 15.0);
@@ -415,7 +422,7 @@ fn setting_a_budget_on_a_spending_key_keeps_its_spend_and_shields_it() {
     let snap = tracker
         .key_snapshot("k")
         .expect("a budgeted key is never swept");
-    assert_eq!(snap.window_24h.tokens, 40);
+    assert_eq!(snap.window_24h.tokens, Some(40));
     assert_eq!(snap.by_tool[0].token_count, 40);
     assert_eq!(snap.hard_limit_usd, Some(5.0));
 }

@@ -35,7 +35,7 @@ fn cut_back(file: &std::fs::File, path: &Path, good: u64) -> io::Result<()> {
 
 impl TransparencyLogger {
     #[cfg_attr(not(test), allow(clippy::unused_self))] // the clock offset is a test seam
-    fn now(&self) -> u64 {
+    fn now(&self) -> Option<u64> {
         #[cfg(test)]
         let offset = self
             .hooks
@@ -77,8 +77,12 @@ impl TransparencyLogger {
         let rot = &self.config.rotation;
         let now = self.now();
         let too_big = active_bytes + line.len() as u64 + 1 > rot.max_segment_bytes;
+        // Age rotation needs both a dated segment and a readable clock; size
+        // rotation never depends on the clock (MIK-8202 P4a).
         let too_old = rot.max_segment_age_secs > 0
-            && now >= inner.seg.opened_at.saturating_add(rot.max_segment_age_secs);
+            && now
+                .zip(inner.seg.opened_at)
+                .is_some_and(|(now, at)| now >= at.saturating_add(rot.max_segment_age_secs));
         // Retention also runs before the append, not only after a rotation:
         // a log opened over the limit (retain_segments lowered, or a crash
         // mid-retention) is trimmed on its first write. Its expiry records
@@ -280,7 +284,7 @@ impl TransparencyLogger {
         inner: &mut Inner,
         path: &Path,
         g: &ExclusiveFileLock,
-        now: u64,
+        now: Option<u64>,
     ) -> io::Result<()> {
         let seq = inner.seg.seq;
         let seal = housekeeping(

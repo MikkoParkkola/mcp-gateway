@@ -8,6 +8,13 @@
 //! The harness restates `hosted_routes.rs`'s config because the session
 //! endpoint's port is per test and that module's helpers are private.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::Arc;
 
 use axum::body::Body;

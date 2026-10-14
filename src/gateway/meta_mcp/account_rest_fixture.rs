@@ -34,6 +34,13 @@
 //! NO SLEEPS, NO ENV READS, NO REAL PROVIDER. Every token, key and host here is
 //! synthetic and every `.invalid` host is unroutable by construction.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;

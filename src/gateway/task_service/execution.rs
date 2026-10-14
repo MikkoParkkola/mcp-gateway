@@ -219,6 +219,9 @@ pub struct TaskExecutor {
     /// it took (MIK-8222).
     #[cfg(test)]
     produce_seam_wait: std::sync::OnceLock<Duration>,
+    /// Test-only: counts commit attempts and injects conflicts (MIK-8202 r4.1).
+    #[cfg(test)]
+    commit_hook: std::sync::OnceLock<test_hooks::CommitAttemptHook>,
 }
 
 impl TaskExecutor {
@@ -242,6 +245,8 @@ impl TaskExecutor {
             shutdown: tokio_util::sync::CancellationToken::new(),
             #[cfg(test)]
             produce_seam_wait: std::sync::OnceLock::new(),
+            #[cfg(test)]
+            commit_hook: std::sync::OnceLock::new(),
         })
     }
 
@@ -595,6 +600,21 @@ impl TaskExecutor {
         &self,
         write: TransitionWrite<'_>,
     ) -> Result<CommittedTask, CommitFailure> {
+        self.commit_dated(write, None).await
+    }
+
+    /// [`Self::commit_transition`] dating a `Settle` at `at`, a time the caller
+    /// already read; `None` reads the store's clock. A worker settle that waited
+    /// out a clock before 1970 commits at the time the wait read, so no later
+    /// attempt reads the clock again (MIK-8202 P4a r4). `Cancel` and `Recover`
+    /// keep their own dating.
+    pub(super) async fn commit_dated(
+        &self,
+        write: TransitionWrite<'_>,
+        at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<CommittedTask, CommitFailure> {
+        #[cfg(test)]
+        self.before_commit_attempt_for_test(write.id()).await;
         let (committed, changed, id) = match write {
             TransitionWrite::Settle {
                 principal,
@@ -605,7 +625,8 @@ impl TaskExecutor {
                 author,
                 writes,
             } => {
-                self.transition_write(principal, id, revision, (event, targets, writes), author)
+                let outcome = (event, targets, writes);
+                self.transition_write(principal, id, revision, outcome, author, at)
                     .await?
             }
             // Its own arm, never merged with `Settle`: the two carry the same
@@ -641,18 +662,47 @@ impl TaskExecutor {
                 id,
                 revision,
             } => {
-                self.transition_write(
-                    principal,
-                    id,
-                    revision,
+                let cancel = || {
                     (
                         TaskTransition::Cancel,
                         None,
                         crate::gateway::gateway_writes::WriteRecord::default(),
-                    ),
-                    ErrorAuthor::Gateway,
-                )
-                .await?
+                    )
+                };
+                match self
+                    .transition_write(
+                        principal,
+                        id,
+                        revision,
+                        cancel(),
+                        ErrorAuthor::Gateway,
+                        None,
+                    )
+                    .await
+                {
+                    // An owner can always cancel (MIK-8202 P4a, lead ruling): on a
+                    // clock before 1970 the cancel neither waits nor refuses. It is
+                    // dated at the record's own last change, a real time the record
+                    // already carries, never 1969 or 0.
+                    Err(CommitFailure::ClockUnreadable) => {
+                        let dated = self
+                            .service
+                            .get(principal, id)
+                            .map_err(CommitFailure::Service)?
+                            .task
+                            .last_updated_at();
+                        self.transition_write(
+                            principal,
+                            id,
+                            revision,
+                            cancel(),
+                            ErrorAuthor::Gateway,
+                            Some(dated),
+                        )
+                        .await?
+                    }
+                    other => other?,
+                }
             }
         };
         if changed {
@@ -677,12 +727,13 @@ impl TaskExecutor {
             crate::gateway::gateway_writes::WriteRecord,
         ),
         author: ErrorAuthor,
+        at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<(CommittedTask, bool, String), CommitFailure> {
         let owner = self
             .service
             .owner(principal)
             .map_err(CommitFailure::Service)?;
-        self.transition_digest_write(owner.as_digest(), id, revision, outcome, author, None)
+        self.transition_digest_write(owner.as_digest(), id, revision, outcome, author, at)
             .await
     }
 
@@ -735,7 +786,7 @@ impl TaskExecutor {
 
 /// The three states a task never leaves.
 ///
-/// Spelled here as well as at `worker.rs:510` because that one is private to
+/// Spelled here as well as at `worker_settle.rs` because that one is private to
 /// the worker module; the two are the same three variants and a fourth
 /// terminal status would have to be added to both by the same edit that adds
 /// it to [`TaskStatus`].
@@ -749,7 +800,11 @@ fn is_terminal(status: TaskStatus) -> bool {
 fn commit_to_service(error: CommitFailure) -> ServiceError {
     match error {
         CommitFailure::Service(error) => error,
-        CommitFailure::RevisionConflict => ServiceError::Unavailable,
+        // The request boundary: a client retries a clock before 1970 later
+        // (MIK-8202 P4a r3). The worker never comes here; it waits instead.
+        CommitFailure::RevisionConflict | CommitFailure::ClockUnreadable => {
+            ServiceError::Unavailable
+        }
     }
 }
 

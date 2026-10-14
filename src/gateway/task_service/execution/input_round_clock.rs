@@ -8,6 +8,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 
 use super::{Settling, TaskCall, TaskExecutor, dispatch};
+use crate::gateway::task_service::ErrorAuthor;
 use crate::gateway::task_service::execution::OwnedCallerContext;
 use crate::gateway::task_service::host::LiveHost;
 use crate::protocol::JsonRpcResponse;
@@ -22,14 +23,15 @@ pub(super) const CLOCK_RETRY: Duration = if cfg!(test) {
 };
 
 /// What a wait for a readable clock came to.
-pub(super) enum ClockWait {
+pub(in crate::gateway::task_service::execution) enum ClockWait {
     /// The store's now, and the same instant in the seconds round deadlines
     /// are kept in.
     Read(chrono::DateTime<chrono::Utc>, u64),
     /// The task was cancelled; nothing is left to run.
     Stopped,
     /// The clock stayed unreadable for the task's whole retention, measured on
-    /// monotonic time: the task must end failed ([`clock_expired`]).
+    /// monotonic time: the task settles without waiting again, at its own
+    /// `last_updated_at` (`settle_dated_last_known`).
     Expired,
 }
 
@@ -44,16 +46,20 @@ pub(super) fn clock_expired() -> crate::protocol::JsonRpcError {
     }
 }
 
-/// The store's now, waiting out a clock before 1970: a round is neither
-/// parked nor resumed nor closed on a time it cannot read, so nothing is lost
+/// The store's now, waiting out a clock before 1970: nothing is parked,
+/// resumed, closed or settled on a time this cannot read, so nothing is lost
 /// while the clock is wrong (MIK-8202). Bounded: once the task's own `ttlMs`
 /// has elapsed on monotonic time since the wait began, the wait ends
 /// [`ClockWait::Expired`], since that clock cannot date the record's expiry;
 /// an unlimited task is bounded by the release default ttl. Executor shutdown
 /// drops the worker, wait and all.
+///
+/// The bound is exact (MIK-8202 P4a r4.1): each sleep is cut to what is left
+/// of it, and expiry is judged before a recovered clock is accepted, so the
+/// wait never runs a poll interval past the task's ttl.
 // ponytail: polls on monotonic time and holds this worker's slot while the
 // clock is unreadable; a clock-recovered signal would free it sooner.
-pub(super) async fn readable_now(
+pub(in crate::gateway::task_service::execution) async fn readable_now(
     store: &crate::gateway::task_service::store::TaskStore,
     id: &str,
     cancel_rx: &mut watch::Receiver<bool>,
@@ -63,34 +69,38 @@ pub(super) async fn readable_now(
         if *cancel_rx.borrow() {
             return ClockWait::Stopped;
         }
+        let bound = store.clock_wait_bound(id);
+        if let (Some(began), Some(bound)) = (since, bound)
+            && began.elapsed() >= bound
+        {
+            tracing::warn!(task_id = %id, "the host clock stayed before 1970 for the task's ttl: the wait ends");
+            return ClockWait::Expired;
+        }
         if let Ok(at) = store.now() {
             return ClockWait::Read(at, u64::try_from(at.timestamp()).unwrap_or_default());
         }
-        match since {
+        let began = match since {
             None => {
-                since = Some(tokio::time::Instant::now());
-                // Once per round: the operator learns why a worker is held.
+                let began = tokio::time::Instant::now();
+                since = Some(began);
+                // Once per wait: the operator learns why a worker is held.
                 telemetry_metrics::counter!("mcp_task_clock_waits_total").increment(1);
                 tracing::warn!(
                     task_id = %id,
-                    "the host clock reads before 1970: this input round waits for it, holding a task worker"
+                    "the host clock reads before 1970: this task waits for it, holding a task worker"
                 );
+                began
             }
-            Some(began) => match store.clock_wait_bound(id) {
-                // The row left the store: nothing is left to wait for.
-                None => return ClockWait::Stopped,
-                Some(bound) if began.elapsed() >= bound => {
-                    tracing::warn!(task_id = %id, "the host clock stayed before 1970 for the task's ttl: the task fails");
-                    return ClockWait::Expired;
-                }
-                Some(_) => {}
-            },
-        }
+            // The row left the store: nothing is left to wait for.
+            Some(_) if bound.is_none() => return ClockWait::Stopped,
+            Some(began) => began,
+        };
+        let left = bound.map_or(CLOCK_RETRY, |bound| bound.saturating_sub(began.elapsed()));
         // The cancel signal first, then the retry: a timeout polls its inner
         // future before its timer, as the old biased select did.
         // A dropped sender can no longer cancel: stop, as `dispatch` does. A
         // change (the loop re-reads the flag) or a due retry loops.
-        if let Ok(Err(_)) = tokio::time::timeout(CLOCK_RETRY, cancel_rx.changed()).await {
+        if let Ok(Err(_)) = tokio::time::timeout(CLOCK_RETRY.min(left), cancel_rx.changed()).await {
             return ClockWait::Stopped;
         }
     }
@@ -100,15 +110,20 @@ pub(super) async fn readable_now(
 /// task here. `None` once the task is cancelled or failed.
 pub(super) async fn readable_or_fail(
     executor: &TaskExecutor,
-    (principal, id, revision): (&str, &str, u64),
+    (principal, id, _): (&str, &str, u64),
     cancel_rx: &mut watch::Receiver<bool>,
 ) -> Option<(chrono::DateTime<chrono::Utc>, u64)> {
     match readable_now(&executor.service.store, id, cancel_rx).await {
         ClockWait::Read(at, now) => Some((at, now)),
         ClockWait::Stopped => None,
+        // Never through a settle that reads the clock: it would wait again
+        // (MIK-8202 P4a r4, `settle_dated_last_known`).
         ClockWait::Expired => {
-            let event = TaskTransition::Fail(clock_expired());
-            executor.settle_cas(principal, id, revision, event).await;
+            let event = (TaskTransition::Fail(clock_expired()), None);
+            let writes = crate::gateway::gateway_writes::WriteRecord::default();
+            executor
+                .settle_dated_last_known(principal, id, event, ErrorAuthor::Gateway, writes)
+                .await;
             None
         }
     }
@@ -153,6 +168,18 @@ pub(super) enum Resealed {
 }
 
 impl Settling<'_> {
+    /// A clock that stayed before 1970 for the task's ttl fails the task,
+    /// dated at the record's own `last_updated_at` and never waiting again
+    /// (MIK-8202 P4a r4: P2's Expired sites share the worker's fallback).
+    pub(super) async fn settle_expired(&self) {
+        let event = (TaskTransition::Fail(clock_expired()), self.plan_targets());
+        let writes = crate::gateway::gateway_writes::WriteRecord::default();
+        self.executor
+            .settle_dated_last_known(self.principal, self.id, event, ErrorAuthor::Gateway, writes)
+            .await;
+        self.state.meta_mcp().commit_staged_relay(false);
+    }
+
     /// AC12: wait for a clock that reads, then mint the withheld round's
     /// continuation with that one checked time and its original binding.
     pub(super) async fn reseal_withheld(&self, cancel_rx: &mut watch::Receiver<bool>) -> Resealed {
@@ -164,15 +191,14 @@ impl Settling<'_> {
             ClockWait::Read(at, now) => (at, now),
             ClockWait::Stopped => return Resealed::Done,
             ClockWait::Expired => {
-                self.settle(TaskTransition::Fail(clock_expired()), false)
-                    .await;
+                self.settle_expired().await;
                 return Resealed::Done;
             }
         };
         let continuation = self.state.meta_mcp().continuation();
         let Some(result) = withheld.seal(&continuation, now).await else {
             let abandoned = TaskTransition::Complete(super::abandoned_input_round());
-            self.settle(abandoned, false).await;
+            self.settle(abandoned, false, cancel_rx).await;
             return Resealed::Done;
         };
         let response = JsonRpcResponse::success(crate::protocol::RequestId::Number(0), result);

@@ -4,6 +4,13 @@
 //! denials are counted by kind and route, with constant labels only.
 //! A child of `direct_audit_tests`, whose fixture drives the real router.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::*;
 
 /// Run `f` with a recorder scoped to this thread; return its output and the

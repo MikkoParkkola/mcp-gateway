@@ -10,6 +10,13 @@
 //! on writes, the page no longer advertising mutation) is in
 //! `tests/e2min_control_plane_authority.rs`.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::{control_plane_grant_from_identity, merge_store_into_snapshot};
 use crate::control_plane::{
     ControlPlaneAction, ControlPlaneActor, ControlPlaneAuditEvent, ControlPlaneGrant,

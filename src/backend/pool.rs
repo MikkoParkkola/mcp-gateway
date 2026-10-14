@@ -5,7 +5,7 @@
 //! pool slots.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use parking_lot::RwLock;
@@ -18,14 +18,6 @@ use crate::transport::Transport;
 
 #[path = "pool_eviction.rs"]
 mod eviction;
-
-/// Seconds since the Unix epoch, saturating to 0 on a pre-epoch clock.
-pub(crate) fn now_unix_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
 
 /// Identifies one transport/session slot in a backend's connection pool
 /// (MIK-6735).
@@ -65,7 +57,11 @@ pub(crate) enum PoolKey {
 pub(crate) struct PooledEntry {
     pub(crate) transport: RwLock<Option<Arc<dyn Transport>>>,
     pub(crate) start_lock: Mutex<()>,
-    pub(crate) last_used: AtomicU64,
+    /// When a client last used this slot, on the monotonic clock: idleness
+    /// is a duration, so a dark wall clock neither hides nor fakes it
+    /// (MIK-8202 P4b). Tokio's `Instant`, so a paused test clock advances
+    /// it with the timeouts, as `tools_fill_failed_at` below.
+    pub(crate) last_used: parking_lot::Mutex<tokio::time::Instant>,
     /// Set when the reaper stopped this slot for idleness, cleared when it is
     /// started again.
     ///
@@ -229,7 +225,7 @@ impl PooledEntry {
         Self {
             transport: RwLock::new(None),
             start_lock: Mutex::new(()),
-            last_used: AtomicU64::new(now_unix_secs()),
+            last_used: parking_lot::Mutex::new(tokio::time::Instant::now()),
             stopped_when_idle: std::sync::atomic::AtomicBool::new(false),
             in_flight: AtomicUsize::new(0),
             retired: AtomicBool::new(false),
@@ -254,7 +250,19 @@ impl PooledEntry {
 
     /// Mark this slot as used now, deferring its idle eviction.
     pub(crate) fn touch(&self) {
-        self.last_used.store(now_unix_secs(), Ordering::Relaxed);
+        *self.last_used.lock() = tokio::time::Instant::now();
+    }
+
+    /// How long since a client last used this slot, on the monotonic clock.
+    fn idle_age(&self) -> Duration {
+        tokio::time::Instant::now().saturating_duration_since(*self.last_used.lock())
+    }
+
+    /// The idle clock's current reading, for tests that assert internal work
+    /// leaves it alone (MIK-8202 P4b).
+    #[cfg(test)]
+    pub(crate) fn last_used_for_test(&self) -> tokio::time::Instant {
+        *self.last_used.lock()
     }
 }
 
@@ -523,7 +531,9 @@ impl Backend {
     /// protects the slot from being stopped until dropped. The only caller-facing
     /// way to write the idle clock.
     pub(super) fn begin_activity(&self, key: &PoolKey) -> crate::Result<ActivityGuard> {
-        self.last_used.store(now_unix_secs(), Ordering::Relaxed);
+        if let Ok(now) = crate::clock::unix_secs() {
+            self.last_used.store(now, Ordering::Relaxed);
+        }
         let entry = self.claim_pooled_entry(key)?;
         entry.touch();
         Ok(ActivityGuard::adopt_claimed(entry, true))
@@ -588,9 +598,9 @@ impl Backend {
         let Some(idle_for) = self.config.stop_when_idle_for else {
             return false; // never stop this backend
         };
-        // Sub-second deadlines would truncate to a 0 cutoff, making every slot
-        // eligible on every sweep including one used this same second.
-        let cutoff = idle_for.as_secs().max(1);
+        // A sub-second deadline never stops a fresh slot: without the floor a
+        // slot microseconds old would already read as idle (MIK-8202 P4b).
+        let cutoff = idle_for.max(Duration::from_secs(1));
         let entry = self.shared_entry();
 
         let taken = {
@@ -599,7 +609,7 @@ impl Backend {
             if entry.in_flight.load(Ordering::SeqCst) > 0 {
                 return false; // work in progress; retry next sweep
             }
-            if now_unix_secs().saturating_sub(entry.last_used.load(Ordering::Relaxed)) < cutoff {
+            if entry.idle_age() < cutoff {
                 return false; // used recently
             }
             let taken = guard.take();
@@ -667,7 +677,7 @@ impl Backend {
 
         tracing::info!(
             backend = %self.name,
-            idle_for_secs = cutoff,
+            idle_for_secs = cutoff.as_secs(),
             "Stopped idle backend; next request will restart it"
         );
         true

@@ -6,6 +6,13 @@
 //! ratchets. The fixture mirrors `webhooks/tests.rs`, whose helpers are
 //! private to that module.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::Arc;
 
 use tokio::sync::broadcast::{Receiver, error::TryRecvError};

@@ -549,3 +549,100 @@ fn mik_1528_two_distinct_files_have_distinct_identities() {
         rotation::path_id(&b).unwrap()
     );
 }
+
+/// A 4 KiB-segment config that also rotates a dated segment after 60 s.
+fn aged_cfg(path: &Path) -> Arc<TransparencyLogConfig> {
+    let mut c = (*cfg(path, 12, false)).clone();
+    c.rotation.max_segment_age_secs = 60;
+    Arc::new(c)
+}
+
+/// Every record on disk: none is dated 0, 1969 or the epoch.
+fn assert_nothing_dated_zero(path: &Path) {
+    for v in lines(path) {
+        assert_ne!(v["segment_opened_at"], 0, "{v}");
+        if let Some(t) = v["timestamp"].as_str() {
+            assert!(!t.starts_with("1970") && !t.starts_with("1969"), "{v}");
+        }
+    }
+}
+
+/// MIK-8202.AC.16 (R5, mutants M5a and M5b): on a clock that reads before
+/// 1970, recovery opens an undated segment (its open record's
+/// `segment_opened_at` is null on disk, never 0), a dark append past the size
+/// limit still rotates (size never depends on the clock), and once the clock
+/// reads again an undated segment is not age-rotated however far the clock
+/// runs. Mutant M5a: an undated segment age-rotates. Mutant M5b: size
+/// rotation is skipped while the clock is dark (`rotate_n` finds no rotation).
+#[test]
+fn a_log_opened_on_a_dark_clock_is_undated_and_still_rotates_by_size() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let dark = crate::clock::test_clock::before_epoch();
+    let l = TransparencyLogger::open(aged_cfg(&path)).unwrap();
+    let all = lines(&path);
+    let open = &all[0];
+    assert_eq!(event(open), Some(rotation::EV_OPENED), "{open}");
+    assert!(
+        open["segment_opened_at"].is_null(),
+        "undated, not 0: {open}"
+    );
+    assert_nothing_dated_zero(&path);
+
+    rotate_n(&l, &path, 1);
+    let all = lines(&path);
+    let open = &all[0];
+    assert_eq!(event(open), Some(rotation::EV_OPENED), "{open}");
+    assert!(
+        open["segment_opened_at"].is_null(),
+        "a segment opened by a dark rotation is undated: {open}"
+    );
+    assert_nothing_dated_zero(&path);
+    drop(dark);
+
+    l.set_clock_offset(1_000_000);
+    append(&l, 10_000);
+    assert_eq!(
+        list_segments(&path).unwrap().len(),
+        1,
+        "an undated segment is never age-rotated"
+    );
+}
+
+/// MIK-8202.AC.16 (R5 d): a reopened segment keeps what its open record says.
+/// A numeric `segment_opened_at` restores dated (it still age-rotates); an
+/// explicit null restores undated, and a reopen after the clock recovers
+/// leaves it undated, so it is not age-rotated (mutant M5a; it rotates by
+/// size only).
+#[test]
+fn a_reopened_segment_keeps_its_dated_or_undated_open_record() {
+    let dated = tempfile::tempdir().unwrap();
+    let path = log_path(&dated);
+    drop(TransparencyLogger::open(aged_cfg(&path)).unwrap());
+    assert!(lines(&path)[0]["segment_opened_at"].is_u64());
+    let l = TransparencyLogger::open(aged_cfg(&path)).unwrap();
+    append(&l, 0);
+    l.set_clock_offset(61);
+    append(&l, 1);
+    assert_eq!(list_segments(&path).unwrap().len(), 1, "dated: age-rotates");
+
+    let undated = tempfile::tempdir().unwrap();
+    let path = log_path(&undated);
+    let dark = crate::clock::test_clock::before_epoch();
+    drop(TransparencyLogger::open(aged_cfg(&path)).unwrap());
+    drop(dark);
+    let l = TransparencyLogger::open(aged_cfg(&path)).unwrap();
+    assert!(
+        lines(&path)[0]["segment_opened_at"].is_null(),
+        "the open record stays null"
+    );
+    append(&l, 0);
+    l.set_clock_offset(1_000_000);
+    append(&l, 1);
+    assert_eq!(
+        list_segments(&path).unwrap().len(),
+        0,
+        "an explicit null restores undated: no age rotation"
+    );
+    assert_nothing_dated_zero(&path);
+}

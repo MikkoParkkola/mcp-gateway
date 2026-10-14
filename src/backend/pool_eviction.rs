@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use super::super::Backend;
-use super::{PoolKey, PooledEntry, now_unix_secs};
+use super::{PoolKey, PooledEntry};
 use crate::transport::Transport;
 
 impl Backend {
@@ -146,8 +146,6 @@ impl Backend {
     /// [`PoolKey::Shared`] slot is never evicted. Returns the number of slots
     /// evicted, not closed: a close may still be running (MIK-6735 POOL.2).
     pub fn evict_idle_per_user_entries(&self, idle_ttl: Duration) -> usize {
-        let cutoff = idle_ttl.as_secs();
-
         // First pass: collect candidate keys without holding a guard across the
         // removals. Skip the shared slot outright.
         let candidates: Vec<PoolKey> = self
@@ -172,8 +170,7 @@ impl Backend {
                 // Evicting then closes the transport underneath a live request.
                 let idle = !matches!(k, PoolKey::Shared)
                     && entry.in_flight.load(Ordering::SeqCst) == 0
-                    && now_unix_secs().saturating_sub(entry.last_used.load(Ordering::Relaxed))
-                        >= cutoff;
+                    && entry.idle_age() >= idle_ttl;
                 idle && retire(entry)
             });
             if let Some((_, entry)) = removed {

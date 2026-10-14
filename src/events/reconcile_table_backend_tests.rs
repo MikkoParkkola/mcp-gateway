@@ -35,6 +35,13 @@
 //! - T27 a burst of 100 causes before the first pass costs 1 pass, and one
 //!   cause during it exactly 1 more. Needs the R1 pass counter.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::*;
 
 /// Every backend event kind for backend `x`.

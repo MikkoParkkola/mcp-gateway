@@ -230,7 +230,7 @@ async fn a_recovered_task_still_answers_the_owner_and_key_that_created_it() {
         BUDGET,
         restored.create(
             request(row.key, &operation, &representation),
-            &Task::create("write"),
+            &Task::create("write").expect("the test clock reads after 1970"),
             "fixture",
             move || slot.try_acquire_owned().ok(),
         ),

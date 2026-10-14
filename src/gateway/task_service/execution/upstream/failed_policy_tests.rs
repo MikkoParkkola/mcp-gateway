@@ -6,6 +6,13 @@
 //! two callbacks `tasks/get` builds — only the peer is a stub, because the
 //! property under test is what reaches disk, not how a peer is reached.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::Arc;
 use std::time::Duration;
 
