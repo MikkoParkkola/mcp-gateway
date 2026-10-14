@@ -74,10 +74,11 @@ impl MetaMcp {
     }
 
     /// The repeat's pre-pass: its accounts are judged live and
-    /// [`Self::judge_stored_accounts`] skips a `RepeatedCall`, so the
-    /// account fill (a custody read and, on a busy custody, a transient
-    /// `idp_refuse`) must not run for it. The catalogue refresh below it
-    /// still runs, as the repeat's visibility judgement reads it.
+    /// [`Self::judge_stored_accounts`] skips a `RepeatedCall`, so the account
+    /// fill still runs (one custody read, so an unbindable caller's permanent
+    /// refusal is kept) but with `AccountWrites::PermanentOnly`: a busy
+    /// custody writes no transient `idp_refuse`. The catalogue refresh below
+    /// it still runs, as the repeat's visibility judgement reads it.
     pub(super) async fn prepare_repeated_call(
         &self,
         stored: &CommittedTask,

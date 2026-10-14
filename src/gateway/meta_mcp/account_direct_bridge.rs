@@ -284,6 +284,9 @@ pub(super) fn operator_key() -> AccountKey {
 pub(crate) struct CapabilityAccount {
     custody: Custody,
     port: u16,
+    /// What the loopback capture peer received (#3892: a served call is
+    /// proved by the peer seeing it, not by an outer "completed").
+    captured: Arc<super::super::account_rest_fixture::Captured>,
     log: Arc<crate::security::TransparencyLogger>,
     external: bool,
     personal: bool,
@@ -298,10 +301,20 @@ impl CapabilityAccount {
     /// Alice's grant seeded; `external` makes `WORK` an external descriptor
     /// (no vault, so its view is unjudged).
     pub(crate) async fn start(external: bool) -> Self {
-        let (port, _captured) = super::super::account_rest_fixture::capture_endpoint().await;
+        Self::start_expiring(external, u64::MAX).await
+    }
+
+    /// Alice's grant seeded already expired, so every mint refreshes it with
+    /// the scripted provider before the release (#3892 R7).
+    pub(crate) async fn start_expired() -> Self {
+        Self::start_expiring(false, 1).await
+    }
+
+    async fn start_expiring(external: bool, expires_at: u64) -> Self {
+        let (port, captured) = super::super::account_rest_fixture::capture_endpoint().await;
         let custody = custody_with(&[(
             account_key("alice", WORK),
-            grant(ALICE_WORK_TOKEN, u64::MAX),
+            grant(ALICE_WORK_TOKEN, expires_at),
         )]);
         let dir = tempfile::tempdir().expect("a log directory");
         let log = crate::gateway::meta_mcp::grant_audit_fixture::logger(
@@ -311,6 +324,7 @@ impl CapabilityAccount {
         Self {
             custody,
             port,
+            captured,
             log,
             external,
             personal: false,
@@ -372,7 +386,10 @@ impl CapabilityAccount {
         let executor = Arc::new(
             crate::capability::CapabilityExecutor::new()
                 .with_account_strategies(meta.account_strategies())
-                .with_test_http_client(client),
+                .with_test_http_client(client)
+                // The meta dispatch opens no loopback egress, and the capture
+                // peer is loopback (#3892 healthy controls).
+                .with_test_loopback_egress(),
         );
         let backend = Arc::new(crate::capability::CapabilityBackend::new(
             CAPABILITY_SERVER,
@@ -401,6 +418,16 @@ impl CapabilityAccount {
     /// Make every custody read fail as busy, or recover (seat finding 3).
     pub(crate) fn fail_custody_for_test(&self, failing: bool) {
         self.custody.fail_reads(failing);
+    }
+
+    /// Provider refreshes custody has made since this fixture started.
+    pub(crate) fn refreshes(&self) -> usize {
+        self.custody.refreshes()
+    }
+
+    /// Requests the capture peer has received.
+    pub(crate) fn peer_requests(&self) -> usize {
+        self.captured.count()
     }
 
     /// Custody lookups since this fixture started.

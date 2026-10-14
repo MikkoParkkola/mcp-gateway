@@ -74,6 +74,26 @@ pub(crate) fn take_any_account_transient() -> Option<String> {
         .flatten()
 }
 
+/// Take any one sealed-transient resolution error this request holds (a
+/// busy custody at the route stage's mint, MIK-8428 Case B), consuming it:
+/// the task intake trigger beside [`take_any_account_transient`]. Any other
+/// carried error is left for its own dispatch.
+pub(crate) fn take_any_transient_resolution_error() -> Option<crate::Error> {
+    VISIBILITY_MEMO
+        .try_with(|memo| {
+            let mut held = memo.resolution_error.lock();
+            let key = held
+                .iter()
+                .find(|(_, error)| {
+                    crate::personal_accounts::refusal::transient_data(error).is_some()
+                })
+                .map(|(key, _)| key.clone())?;
+            held.remove(&key)
+        })
+        .ok()
+        .flatten()
+}
+
 /// Take the transient kept for `(server, tool)`, consuming it once.
 pub(crate) fn take_account_transient(server: &str, tool: &str) -> Option<String> {
     VISIBILITY_MEMO

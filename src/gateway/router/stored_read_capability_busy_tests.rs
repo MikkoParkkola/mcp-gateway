@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! #3892 red rows R1-R6: a busy managed custody on a REST capability
-//! account (and at a per-user mint) must answer and audit as the stored
-//! read already does. These rows are expected to fail until typed Busy
-//! is carried end to end; see the session report for the current source.
+//! #3892 rows: a busy managed custody on a REST capability account (and at
+//! a per-user mint) answers and audits as the stored read does. A healthy
+//! control proves a served call by the loopback capture peer receiving it
+//! and the answer carrying no tool error ([`assert_served`]), not by an
+//! outer "completed" alone.
 
 use std::sync::Arc;
 
@@ -41,7 +42,10 @@ struct CapabilityHarness {
 }
 
 async fn capability_harness(signed: bool) -> CapabilityHarness {
-    let account = CapabilityAccount::start(false).await;
+    capability_harness_over(CapabilityAccount::start(false).await, signed).await
+}
+
+async fn capability_harness_over(account: CapabilityAccount, signed: bool) -> CapabilityHarness {
     let (state, store) = super::super::tests::meta_fixture::test_router_app_state_with_meta(
         &AuthConfig::default(),
         None,
@@ -212,8 +216,22 @@ async fn settled_wire(harness: &CapabilityHarness, id: &str, row: &str) -> Value
     serde_json::to_value(committed.task.wire()).expect("JSON")
 }
 
+/// A served capability call (#3892): the loopback capture peer received a
+/// request since `before`, and the answer carries no tool error.
+fn assert_served(harness: &CapabilityHarness, before: usize, reply: &Value, row: &str) {
+    assert!(
+        harness.account.peer_requests() > before,
+        "{row}: the capture peer received no request: {reply}"
+    );
+    assert!(
+        !reply.to_string().contains("\"isError\":true"),
+        "{row}: the call was answered a tool error: {reply}"
+    );
+}
+
 /// A finished capability task, its stored result served once.
 async fn finished_capability_task(harness: &CapabilityHarness, key: &str) -> String {
+    let before = harness.account.peer_requests();
     let made = capability_tasked(harness, key).await;
     let id = task_id(&made, "capability setup");
     let settled = settled_wire(harness, &id, "capability setup").await;
@@ -227,6 +245,7 @@ async fn finished_capability_task(harness: &CapabilityHarness, key: &str) -> Str
         got.get("error").is_none() && got.pointer("/result/status") == Some(&json!("completed")),
         "premise: the stored result is served once: {got}"
     );
+    assert_served(harness, before, &got, "capability setup");
     id
 }
 
@@ -337,6 +356,7 @@ async fn r2_a_signed_capability_mint_busy_gives_its_nonce_back() {
     assert_retryable(&busy, "R2 busy");
 
     harness.account.fail_custody_for_test(false);
+    let peer = harness.account.peer_requests();
     let resent = signed_capability_invoke(&harness, "s3892-r2-n1").await;
     assert!(
         !refused_as_replay(&resent),
@@ -346,6 +366,7 @@ async fn r2_a_signed_capability_mint_busy_gives_its_nonce_back() {
         resent.get("error").is_none() && resent.get("result").is_some(),
         "R2: the same signed request is served after recovery: {resent}"
     );
+    assert_served(&harness, peer, &resent, "R2 recovery");
 
     let replay = signed_capability_invoke(&harness, "s3892-r2-n1").await;
     assert!(
@@ -457,6 +478,7 @@ async fn r4_a_busy_capability_task_is_refused_at_intake_without_holding_its_key(
 async fn r4_control_a_healthy_capability_task_reads_custody_at_intake_and_in_the_worker() {
     let harness = capability_harness(false).await;
     let reads = harness.account.resolves();
+    let peer = harness.account.peer_requests();
     let made = capability_tasked(&harness, "s3892-r4-healthy").await;
     let id = task_id(&made, "R4 control");
     let settled = settled_wire(&harness, &id, "R4 control").await;
@@ -475,6 +497,7 @@ async fn r4_control_a_healthy_capability_task_reads_custody_at_intake_and_in_the
         got.get("error").is_none() && got.pointer("/result/status") == Some(&json!("completed")),
         "R4 control: the completed task's output is served: {got}"
     );
+    assert_served(&harness, peer, &got, "R4 control");
 }
 
 /// R5: repeating the identical keyed task call does not account-judge the
@@ -562,19 +585,26 @@ async fn r6_a_worker_mint_busy_settles_retryable_but_still_holds_its_key() {
 /// refresh before it may already have refreshed or rotated the grant with
 /// the provider, an effect that spends the nonce witness, so the signed call
 /// answers the plain refusal (no retry data) and its re-send is refused as a
-/// replay. Mutant: the release site mapped back to the typed Busy.
+/// replay. The grant is seeded expired, so the refresh really runs with the
+/// provider before the release meets Busy. Mutant: the release site mapped
+/// back to the typed Busy.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn r7_a_release_busy_is_not_retryable_and_keeps_the_nonce_spent() {
-    let harness = capability_harness(true).await;
+    let harness = capability_harness_over(CapabilityAccount::start_expired().await, true).await;
     harness.account.fail_release_for_test();
+    let refreshed = harness.account.refreshes();
     let refused = signed_capability_invoke(&harness, "s3892-r7-n1").await;
     assert!(
         refused.get("error").is_some(),
         "R7 premise: a release-site busy refuses the call: {refused}"
     );
     assert!(
+        harness.account.refreshes() > refreshed,
+        "R7 premise: the expired grant was refreshed before the release: {refused}"
+    );
+    assert!(
         refused.pointer("/error/data/retryable").is_none(),
-        "R7: a release-site busy is answered retryable: {refused}"
+        "R7: a release-site busy must not be answered retryable: {refused}"
     );
 
     harness.account.fail_custody_for_test(false);
@@ -598,6 +628,7 @@ async fn r8_a_refresh_busy_is_retryable_and_gives_its_nonce_back() {
     assert_retryable(&busy, "R8 busy");
 
     harness.account.fail_custody_for_test(false);
+    let peer = harness.account.peer_requests();
     let resent = signed_capability_invoke(&harness, "s3892-r8-n1").await;
     assert!(
         !refused_as_replay(&resent),
@@ -607,6 +638,7 @@ async fn r8_a_refresh_busy_is_retryable_and_gives_its_nonce_back() {
         resent.get("error").is_none() && resent.get("result").is_some(),
         "R8: the same signed request is served after recovery: {resent}"
     );
+    assert_served(&harness, peer, &resent, "R8 recovery");
 }
 
 /// Gap (residual owned by MIK-8428; lead ruling on #3892): the direct

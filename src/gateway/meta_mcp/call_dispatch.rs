@@ -390,7 +390,14 @@ impl MetaMcp {
         // An unkeyed task-augmented `gateway_execute` or playbook gets it only
         // at dispatch, so it may answer retryable for a refused target; no task
         // is created, so nothing executes (MIK-8428 Case D, inferred, not run).
-        super::visible::take_any_account_transient()?;
+        // A view Busy is held as an account transient; a mint Busy at the
+        // route stage as a sealed-transient resolution error (#3892 gpt F1).
+        // Either one answers here, before any task or key exists.
+        if super::visible::take_any_account_transient().is_none()
+            && super::visible::take_any_transient_resolution_error().is_none()
+        {
+            return None;
+        }
         caller.signing.inspect(|signing| signing.want_refund());
         Some(error_response_preserving_status(
             id.clone(),

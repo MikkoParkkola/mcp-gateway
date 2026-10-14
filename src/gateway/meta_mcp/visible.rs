@@ -435,7 +435,7 @@ pub(crate) use account_memo::{
     account_binding, account_transient, has_resolution_error, record_account_binding,
     record_account_refusal, record_account_transient, record_resolution_error,
     take_account_refusal, take_account_transient, take_any_account_transient,
-    take_resolution_error,
+    take_any_transient_resolution_error, take_resolution_error,
 };
 
 /// The outcome recorded for `(server, account)` in the open request. Reads

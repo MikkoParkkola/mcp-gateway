@@ -609,6 +609,7 @@ mod tests {
             process_slots: DashMap::new(),
             mcp_children: Arc::default(),
             multi_user: std::sync::atomic::AtomicBool::new(false),
+            test_loopback_egress: false,
         }
     }
 

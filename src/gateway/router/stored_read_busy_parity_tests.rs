@@ -380,6 +380,49 @@ async fn g2_a_tasked_call_meeting_busy_at_intake_creates_no_task() {
     served(&fx, &id).await;
 }
 
+/// G2m (#3892, gpt F1): a task call whose view reads fine and whose mint at
+/// the route stage meets a busy custody is answered at intake as a view Busy
+/// is: the shared retryable error, no task, no held key, two custody reads
+/// (view + mint) and one transient `idp_refuse`; the same keyed call after
+/// recovery makes its task and is served.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn g2_a_tasked_call_meeting_a_mint_busy_creates_no_task() {
+    let fx = fixture().await;
+    // One further read allowed (the view); the mint's read fails busy.
+    fx.gateway.fail_custody_after_for_test(1);
+    let reads = fx.gateway.resolves();
+    let before = refusals(&fx);
+    let held = committed_tasks(&fx);
+    let busy = tasked_invoke(&fx, "s1-g2-mint").await;
+    assert_retryable(&busy, "G2m");
+    assert!(
+        busy.pointer("/result/taskId").is_none(),
+        "G2m: no task was handed back: {busy}"
+    );
+    assert_eq!(
+        committed_tasks(&fx),
+        held,
+        "G2m: the task store holds no task for the key"
+    );
+    assert_eq!(refusals(&fx) - before, 1, "G2m: one idp_refuse");
+    assert_eq!(
+        fx.gateway.resolves() - reads,
+        2,
+        "G2m: view + mint, nothing after intake"
+    );
+    fx.gateway.fail_custody_for_test(false);
+    fx.gateway.answer_next(json!({
+        "content": [{"type": "text", "text": MARKER}], "isError": false
+    }));
+    let resent = tasked_invoke(&fx, "s1-g2-mint").await;
+    let id = resent
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("G2m: the re-sent call makes its task: {resent}"))
+        .to_owned();
+    served(&fx, &id).await;
+}
+
 /// G2c: as G2, signed: after recovery the same signed request (same
 /// nonce, same key) is served, not refused as a replay.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
