@@ -239,11 +239,11 @@ src/gateway/server/support.rs	serve_tls	1	critical	a	serve_tls	The mTLS listener
 src/gateway/server/support.rs	start_refusal	1	critical	a,d	start_refusal	Every refusal Gateway::run asks before it binds, in order; reload restart advice asks the same
 src/gateway/server/stdio_tasks.rs	new	1	critical	c	TasksDropGuard::new	Binds the guard to the session's own executor and store, so its drop seals the workers that session started (MIK-7839.CANCEL.3)
 src/gateway/server/stdio_tasks.rs	drop	1	critical	c	TasksDropGuard::drop	Seals the executor so no worker takes another step, then stops store admission, when the session future is dropped (MIK-7839.CANCEL.3)
-src/gateway/task_service/execution.rs	cancel	1	critical	c	TaskExecutor::cancel	Cancel is a write scoped to the owner via the principal; signals the worker only after it commits
-src/gateway/task_service/execution.rs	cancel_lost_the_revision	1	critical	c	TaskExecutor::cancel_lost_the_revision	Retries cancel only after re-reading the task through the owner-scoped service.get
-src/gateway/task_service/execution.rs	transition_write	1	critical	c	TaskExecutor::transition_write	Hashes the request principal to an owner
-src/gateway/task_service/execution.rs	spawn_worker	1	critical	c	TaskExecutor::spawn_worker	Appends the open slot's grant decisions before any worker spawns; under FailClosed a failed append refuses the spawn (MIK-8204)
-src/gateway/task_service/execution.rs	install_recovery	1	standard	borderline	TaskExecutor::install_recovery	Installs the trusted upstream adapter that gates recovery queries
+src/gateway/task_service/execution/operations.rs	cancel	1	critical	c	TaskExecutor::cancel	Cancel is a write scoped to the owner via the principal; signals the worker only after it commits
+src/gateway/task_service/execution/operations.rs	cancel_lost_the_revision	1	critical	c	TaskExecutor::cancel_lost_the_revision	Retries cancel only after re-reading the task through the owner-scoped service.get
+src/gateway/task_service/execution/operations.rs	transition_write	1	critical	c	TaskExecutor::transition_write	Hashes the request principal to an owner
+src/gateway/task_service/execution/operations.rs	spawn_worker	1	critical	c	TaskExecutor::spawn_worker	Appends the open slot's grant decisions before any worker spawns; under FailClosed a failed append refuses the spawn (MIK-8204)
+src/gateway/task_service/execution/operations.rs	install_recovery	1	standard	borderline	TaskExecutor::install_recovery	Installs the trusted upstream adapter that gates recovery queries
 src/gateway/task_service/execution/context.rs	dispatch_context_retrying	1	standard	borderline	OwnedCallerContext::dispatch_context_retrying	signing: None keeps check_invocation_policy running; wrong value silently skips re-auth
 src/gateway/task_service/execution/context.rs	hold_caller_key	1	standard	borderline	OwnedCallerContext::hold_caller_key	Holds the caller key through a backend call; a miss lets an idle sweep reclaim the key the task writes under
 src/gateway/task_service/execution/input_round.rs	provide_input	1	critical	c	TaskExecutor::provide_input	Scopes task/update answers to the owner; foreign or absent task returns NotFound
@@ -789,9 +789,9 @@ src/gateway/router/well_known.rs	build_protected_resource_metadata	1	standard	bo
 src/gateway/router/well_known.rs	oauth_protected_resource_handler	1	critical	d	oauth_protected_resource_handler	Decides whether the protected-resource metadata is published: 404 with no authorization server, 503 when it cannot be built
 src/gateway/router/well_known.rs	resolve_resource_origin	1	standard	borderline	resolve_resource_origin	Wires the public_url sanitizer and the loopback bind fallback into the published resource identifier; a mistake would publish an unvalidated origin.
 src/gateway/server/start_checks.rs	new_evaluated	1	critical	d	Gateway::new_evaluated	The deployment constructor: refuses to start on a clock before 1970 before it builds the gateway
-src/gateway/task_service/execution.rs	commit_create	1	critical	d	TaskExecutor::commit_create	Admits a create only when a worker permit is free (the capacity closure handed to create_targeted) and binds it to the caller's admission request
-src/gateway/task_service/execution.rs	commit_transition	1	critical	c	TaskExecutor::commit_transition	Routes Settle and Cancel through principal hashing and only startup Recover to the digest write, which keeps request writes owner-scoped
-src/gateway/task_service/execution.rs	new	1	standard	borderline	TaskExecutor::new	Installs the worker semaphore whose permits decide task admission in commit_create
+src/gateway/task_service/execution/operations.rs	commit_create	1	critical	d	TaskExecutor::commit_create	Admits a create only when a worker permit is free (the capacity closure handed to create_targeted) and binds it to the caller's admission request
+src/gateway/task_service/execution/operations.rs	commit_transition	1	critical	c	TaskExecutor::commit_transition	Routes Settle and Cancel through principal hashing and only startup Recover to the digest write, which keeps request writes owner-scoped
+src/gateway/task_service/execution/operations.rs	new	1	standard	borderline	TaskExecutor::new	Installs the worker semaphore whose permits decide task admission in commit_create
 src/gateway/task_service/execution/context.rs	borrow	1	standard	borderline	OwnedAdmissionRequest::borrow	Builds the admission Request (principal, key, Mode::Task) that owner scoping and the per-principal quota key on
 src/gateway/task_service/execution/context.rs	continuation	1	standard	borderline	OwnedCallerContext::continuation	Builds the retry fields carrying the sealed requestState and the attestation token the funnel re-validates
 src/gateway/task_service/execution/context.rs	dispatch_context	1	standard	borderline	OwnedCallerContext::dispatch_context	Builds the worker's caller context (signing None keeps the policy recheck) via dispatch_context_retrying
