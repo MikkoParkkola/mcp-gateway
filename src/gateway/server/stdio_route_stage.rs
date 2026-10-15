@@ -60,15 +60,6 @@ impl Gateway {
         // scanned with them, before any step runs (MIK-8362).
         let request_targets = targets.len();
         targets.extend(meta_mcp.playbook_step_targets(tool_name, arguments));
-        // A killed capability server answers its defined and undefined
-        // capabilities alike, before the route authorize (as on `/mcp`).
-        if let Some(killed) = targets[..request_targets]
-            .iter()
-            .find_map(|target| meta_mcp.capability_server_killed(tool_name, &target.server))
-        {
-            let answer = error_response_preserving_status(id.clone(), &killed);
-            return (RouteStage::Answer(answer), witness);
-        }
         // Authorize every target before scanning any, so a refused later
         // target charges no earlier one's budget.
         if let Some(answer) = authorize_targets(

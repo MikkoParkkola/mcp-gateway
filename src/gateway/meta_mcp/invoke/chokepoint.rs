@@ -220,23 +220,6 @@ impl MetaMcp {
         }
     }
 
-    /// The kill switch's refusal of the capability server a `gateway_invoke`
-    /// or `gateway_execute` names, answered at the route stage before the
-    /// capability existence branch: it speaks about the server, not the tool,
-    /// so a defined and an undefined capability both meet it, as a hidden and
-    /// a missing backend name do (MIK-8361, H3). Only the kill switch: a
-    /// capability disabled for its error rate is one that exists. A bare
-    /// surfaced name keeps its path.
-    pub(crate) fn capability_server_killed(&self, tool_name: &str, server: &str) -> Option<Error> {
-        let names_server = matches!(tool_name, "gateway_invoke" | "gateway_execute");
-        let capability = self
-            .get_capabilities()
-            .is_some_and(|cap| cap.name == server);
-        (names_server && capability)
-            .then(|| self.kill_refusal(server))
-            .flatten()
-    }
-
     /// The route-stage request scan on this Meta-MCP's own firewall, for the
     /// transport that has no firewall of its own (stdio; route-check-parity
     /// P3, MIK-8149.REQFW.1): the content scan and the stateful controls

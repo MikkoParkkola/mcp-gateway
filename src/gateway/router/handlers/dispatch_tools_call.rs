@@ -183,21 +183,6 @@ pub(super) async fn tools_call(
         // name withheld from this caller is not a target (MIK-8340): the meta
         // layer answers it as a name that matches no tool.
         let checked = target.as_target();
-        // A killed capability server is answered for the defined and the
-        // undefined capability alike, as admission answers a backend's kill.
-        if index < request_targets
-            && let Some(killed) = state
-                .meta_mcp
-                .capability_server_killed(tool_name, checked.server)
-        {
-            return Err(build_error_response(
-                Some(id),
-                killed.to_rpc_code(),
-                killed.to_string(),
-                session_id,
-                StatusCode::BAD_REQUEST,
-            ));
-        }
         // A requested target the caller cannot see takes the missing name's
         // path (MIK-8361); a step's target keeps the strict authorize.
         let routed = if index < request_targets {
