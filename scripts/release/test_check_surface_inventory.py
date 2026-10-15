@@ -489,6 +489,51 @@ def test_surf5_a_keep_listed_item_passes() -> None:
 def test_surf5_the_crate_root_documents_no_export() -> None:
     assert inv.lib_documented() == [], inv.lib_documented()
 
+
+# py/redos (code scanning 531, 533, 573): a line of many attributes followed by
+# text that does not complete the match once took seconds per regex, because
+# every split of the attribute run was retried. The shared atomic ATTR_RUN
+# matches each attribute once. Shapes are codex's measured witnesses.
+ATTRS = "#[allow(dead_code)]" * 24
+
+
+def _bounded(what: str, run) -> None:
+    import time
+
+    started = time.perf_counter()
+    run()
+    took = time.perf_counter() - started
+    assert took < 0.25, f"{what} took {took:.3f}s on a pathological input"
+
+
+def test_redos_outer_attrs_is_linear_on_a_line_of_attributes() -> None:
+    text = ATTRS * 4 + "// gap\n"
+    _bounded("OUTER_ATTRS_RE", lambda: inv.OUTER_ATTRS_RE.search(text))
+
+
+def test_redos_lib_item_rejects_a_private_item_promptly() -> None:
+    text = ATTRS * 4 + "struct Private;"
+    _bounded("LIB_ITEM_RE", lambda: list(inv.LIB_ITEM_RE.finditer(text)))
+    assert list(inv.LIB_ITEM_RE.finditer(text)) == [], "a private item is not public surface"
+
+
+def test_redos_macro_export_is_linear_on_a_line_of_attributes() -> None:
+    text = "#[macro_export]\n" + "#[allow(unused_macros)]" * 96 + "// gap\nmacro_rules! sample { () => {} }"
+    _bounded("MACRO_EXPORT_RE", lambda: list(inv.MACRO_EXPORT_RE.finditer(text)))
+
+
+def test_redos_fix_keeps_what_the_attribute_run_captures() -> None:
+    same_line = '#[doc(hidden)] #[cfg(feature = "x")] pub fn f() {}'
+    m = inv.LIB_ITEM_RE.search(same_line)
+    assert m is not None and m.group(2) == "fn", same_line
+    assert m.group(1) == '#[doc(hidden)] #[cfg(feature = "x")] ', repr(m.group(1))
+    stacked = "#[doc(hidden)]\n#[cfg(test)]\npub mod m;"
+    m = inv.LIB_ITEM_RE.search(stacked)
+    assert m is not None and m.group(1) == "#[doc(hidden)]\n#[cfg(test)]\n", repr(m and m.group(1))
+    exported = "#[macro_export]\n#[doc(hidden)]\nmacro_rules! sample { () => {} }"
+    assert [m.group(1) for m in inv.MACRO_EXPORT_RE.finditer(exported)] == ["sample"]
+    assert inv.OUTER_ATTRS_RE.search("x\n#[derive(Debug)]\n#[repr(C)]\n").group(1) == "#[derive(Debug)]\n#[repr(C)]\n"
+
 if __name__ == "__main__":
     failed = 0
     for name, fn in sorted(globals().items()):
