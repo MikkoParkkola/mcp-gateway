@@ -7,7 +7,8 @@ use super::*;
 
 /// P8406 (gap pin, MIK-8406 PLANREPLAY.4): a plan-task repeat skips site 5,
 /// so a completed keyed `gateway_execute` task repeated on a live account is
-/// served its stored task with no account proof (no resolution). E9 still
+/// served its stored task with no account proof: it resolves only for the
+/// route stage's per-step checks (2, measured), never at site 5. E9 still
 /// runs before the plan carve-out, so a Lacked and Unavailable plan repeat
 /// answers retryable; only the proof is missing. This row turns red when
 /// MIK-8406 adds the proof, and the read matrix's gap row moves with it.
@@ -50,10 +51,12 @@ async fn p8406_a_plan_task_repeat_is_served_without_an_account_proof() {
         Some(id.as_str()),
         "P8406: the plan repeat is not the stored task: {again}"
     );
+    // The route stage's per-step checks resolve twice; a site-5 proof would
+    // add one per account.
     assert_eq!(
-        fx.gateway.resolves(),
-        resolved,
-        "P8406: the plan repeat proved its account (MIK-8406 closed?): {again}"
+        fx.gateway.resolves() - resolved,
+        2,
+        "P8406: the plan repeat's resolutions moved (MIK-8406 closed?): {again}"
     );
 }
 
