@@ -258,7 +258,7 @@ async fn l1_same_owner_adapter_dies_after_owner_resolution_without_session_mutat
     assert_eq!(
         world.state.multiplexer.get_session_facts(&id).as_ref(),
         Some(&before),
-        "VOID: pause is genuinely before native session effects"
+        "L1_PAUSE_BEFORE_EFFECTS: the admission resolve begins before any session effect"
     );
     // Native owner/admission and signed adapter were accepted at live time;
     // only this existing thread-local clock moves for the pending full resolve.
