@@ -64,3 +64,70 @@ pub(crate) fn take_deferred_replay(key: &DeferredReplayKey) -> Option<DeferredRe
         .ok()
         .flatten()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DeferredReplay, deferred_replay_key, record_deferred_replay, take_deferred_replay,
+    };
+    use crate::protocol::mrtr::RetryFields;
+    use crate::protocol::{JsonRpcResponse, RequestId};
+
+    fn entry() -> DeferredReplay {
+        DeferredReplay {
+            response: JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({})),
+            audit: None,
+            tool_name: "gateway_invoke".to_string(),
+            arguments: serde_json::json!({}),
+        }
+    }
+
+    fn keyed(key: &str) -> RetryFields {
+        RetryFields {
+            idempotency_key: Some(key.to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// L3k (L3's other key parts): a deferred entry is taken only by the key
+    /// that recorded it. Another server, another tool or another retry
+    /// discriminator (a continuation's state) never takes it, so a nested or
+    /// sibling invocation cannot surface it; the recording key takes it once.
+    #[tokio::test]
+    async fn l3k_only_the_recording_key_takes_a_deferred_entry() {
+        super::super::with_visibility_memo(async {
+            let plain = keyed("l3k");
+            let continued = RetryFields {
+                request_state: Some("state".to_string()),
+                ..keyed("l3k")
+            };
+            assert_ne!(
+                plain.key_discriminator(),
+                continued.key_discriminator(),
+                "premise: a continuation changes the discriminator"
+            );
+            let own = deferred_replay_key("alpha", "read", &plain).expect("a keyed call");
+            assert!(
+                record_deferred_replay(own.clone(), entry()),
+                "premise: recorded"
+            );
+            for (server, tool, retry, part) in [
+                ("beta", "read", &plain, "server"),
+                ("alpha", "write", &plain, "tool"),
+                ("alpha", "read", &continued, "discriminator"),
+            ] {
+                let other = deferred_replay_key(server, tool, retry).expect("a keyed call");
+                assert!(
+                    take_deferred_replay(&other).is_none(),
+                    "L3k: a key differing in its {part} took the entry"
+                );
+            }
+            assert!(
+                take_deferred_replay(&own).is_some(),
+                "L3k: the own key did not take it"
+            );
+            assert!(take_deferred_replay(&own).is_none(), "L3k: taken twice");
+        })
+        .await;
+    }
+}
