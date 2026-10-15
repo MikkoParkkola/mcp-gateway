@@ -182,15 +182,22 @@ impl MetaMcp {
     /// its record names; `Ok(None)` a target the caller may see.
     ///
     /// # Errors
-    /// `ToolNotFound` for a capability the caller may not reach.
+    /// `ToolNotFound` for a capability the caller may not reach, its routing
+    /// profile included.
     pub(crate) fn authorize_requested_target(
         &self,
         scope: InvokeScope<'_>,
         (server, tool): (&str, &str),
         arguments: &Value,
+        session_id: Option<&str>,
     ) -> Result<Option<Error>> {
         let Err(refusal) = self.authorize_route_target(scope, (server, tool), arguments) else {
-            return Ok(None);
+            // The route authorize reads no session, so no routing profile: a
+            // defined capability the profile excludes is refused here, as the
+            // undefined one is, not later by admission for its reason.
+            return self
+                .profile_withheld_capability((server, tool), session_id)
+                .map_or(Ok(None), Err);
         };
         match self.get_capabilities() {
             // Even an unwritable record answers so: the call dispatches

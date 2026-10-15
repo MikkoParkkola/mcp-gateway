@@ -78,7 +78,7 @@ async fn a_withheld_targets_route_code_is_noted_for_its_record() {
     let (answer, noted) = with_visibility_memo(async {
         let answer = super::authorize_targets(
             &meta,
-            scope,
+            (scope, "stdio-session"),
             (std::slice::from_ref(&target), 1),
             &RequestId::Number(1),
         );

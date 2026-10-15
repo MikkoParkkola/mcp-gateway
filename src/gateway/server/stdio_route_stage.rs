@@ -62,7 +62,12 @@ impl Gateway {
         targets.extend(meta_mcp.playbook_step_targets(tool_name, arguments));
         // Authorize every target before scanning any, so a refused later
         // target charges no earlier one's budget.
-        if let Some(answer) = authorize_targets(meta_mcp, scope, (&targets, request_targets), id) {
+        if let Some(answer) = authorize_targets(
+            meta_mcp,
+            (scope, session_id),
+            (&targets, request_targets),
+            id,
+        ) {
             return (RouteStage::Answer(answer), witness);
         }
         // The stateful controls key on the one client this process serves; an
@@ -162,7 +167,7 @@ impl Gateway {
 /// refusal is neutral, as the step is operator-defined (A3).
 fn authorize_targets(
     meta_mcp: &MetaMcp,
-    scope: crate::gateway::meta_mcp::InvokeScope<'_>,
+    (scope, session_id): (crate::gateway::meta_mcp::InvokeScope<'_>, &str),
     (targets, request_targets): (&[crate::gateway::authz::CallTarget<'_>], usize),
     id: &RequestId,
 ) -> Option<JsonRpcResponse> {
@@ -172,7 +177,7 @@ fn authorize_targets(
         let routed = if index < request_targets {
             // Its record names the route's own refusal code, as on `/mcp`.
             meta_mcp
-                .authorize_requested_target(scope, server_tool, arguments)
+                .authorize_requested_target(scope, server_tool, arguments, Some(session_id))
                 .map(|withheld| {
                     if let Some(withheld) = withheld {
                         crate::gateway::meta_mcp::visible::note_denial_code(

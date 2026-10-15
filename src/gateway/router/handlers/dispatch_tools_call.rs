@@ -190,6 +190,7 @@ pub(super) async fn tools_call(
                 invoke_scope,
                 (checked.server, checked.tool),
                 checked.arguments,
+                Some(session_id.as_str()),
             ) {
                 // Its record names the real reason; the answer is the
                 // missing name's, later (MIK-8361).

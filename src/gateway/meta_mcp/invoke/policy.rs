@@ -45,6 +45,9 @@ impl MetaMcp {
             api_key_name: None,
             trace_id: "",
             caller_key: None,
+        })
+        .map_err(|refusal| {
+            self.profile_refusal_as_undefined((server, tool), session_id, refusal)
         })?;
         // #2445: a withheld tool is refused here, ahead of every replay layer.
         let backend = self.backends.get(server);

@@ -153,6 +153,41 @@ impl MetaMcp {
         }
     }
 
+    /// `refusal`, unless the session's routing profile excludes a defined
+    /// capability: then the undefined capability's answer (MIK-8361), as
+    /// [`Self::profile_withheld_capability`] gives it. Any other refusal (kill
+    /// switch, a backend tool's profile refusal) is kept.
+    pub(super) fn profile_refusal_as_undefined(
+        &self,
+        named: (&str, &str),
+        session_id: Option<&str>,
+        refusal: Error,
+    ) -> Error {
+        self.profile_withheld_capability(named, session_id)
+            .unwrap_or(refusal)
+    }
+
+    /// `ToolNotFound` for a defined capability the session's routing profile
+    /// excludes, as the undefined twin is answered at the route stage before
+    /// any profile is read: the profile's refusal would confirm the capability
+    /// exists (MIK-8361). It writes nothing: a profile refusal leaves no
+    /// invocation record, before this mapping and after it. `None` for any
+    /// other target.
+    pub(super) fn profile_withheld_capability(
+        &self,
+        (server, tool): (&str, &str),
+        session_id: Option<&str>,
+    ) -> Option<Error> {
+        let defined = self
+            .get_capabilities()
+            .is_some_and(|cap| server == cap.name && cap.has_capability(tool));
+        self.active_profile(session_id)
+            .check(server, tool)
+            .err()
+            .filter(|_| defined)
+            .map(|_| Error::ToolNotFound(tool.to_string()))
+    }
+
     /// The refusal a defined capability gets from a rule that depends on it
     /// existing: the admin rule or the identity grant, re-read silently with
     /// no authorizer decision. `None` for an undefined capability, any other
