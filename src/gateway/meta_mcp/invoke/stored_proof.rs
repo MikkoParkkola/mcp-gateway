@@ -71,6 +71,15 @@ impl crate::gateway::meta_mcp::MetaMcp {
         (server, tool): (&str, &str),
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
     ) -> crate::Result<()> {
+        // A permanent refusal this request's repeat pre-pass already met is
+        // the live answer (#3892 Ub-repeat): resolving again would write a
+        // second refusal record for one call.
+        if let Some(account) = self.target_account(server, tool)
+            && let Some(refusal) =
+                crate::gateway::meta_mcp::visible::take_account_refusal(server, &account)
+        {
+            return Err(refusal);
+        }
         let backend = self.backends.get(server);
         let proof = CallerProof::new(caller.verified_identity, caller.provenance());
         self.resolve_dispatch(
