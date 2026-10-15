@@ -5,6 +5,58 @@
 
 use super::*;
 
+/// P8406 (gap pin, MIK-8406 PLANREPLAY.4): a plan-task repeat skips site 5,
+/// so a completed keyed `gateway_execute` task repeated on a live account is
+/// served its stored task with no account proof (no resolution). E9 still
+/// runs before the plan carve-out, so a Lacked and Unavailable plan repeat
+/// answers retryable; only the proof is missing. This row turns red when
+/// MIK-8406 adds the proof, and the read matrix's gap row moves with it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn p8406_a_plan_task_repeat_is_served_without_an_account_proof() {
+    let fx = fixture(false).await;
+    answer_marker(&fx);
+    let made = send(
+        &fx,
+        "tools/call",
+        "gateway_execute",
+        execute_params("p8406", true),
+    )
+    .await;
+    let id = made
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("premise: a task was made: {made}"))
+        .to_owned();
+    let done = wait_terminal(&fx, &id).await;
+    assert_eq!(
+        done.pointer("/result/status").and_then(Value::as_str),
+        Some("completed"),
+        "premise: {done}"
+    );
+    let resolved = fx.gateway.resolves();
+    let again = send(
+        &fx,
+        "tools/call",
+        "gateway_execute",
+        execute_params("p8406", true),
+    )
+    .await;
+    eprintln!(
+        "P8406 repeat ({} resolutions): {again}",
+        fx.gateway.resolves() - resolved
+    );
+    assert_eq!(
+        again.pointer("/result/taskId").and_then(Value::as_str),
+        Some(id.as_str()),
+        "P8406: the plan repeat is not the stored task: {again}"
+    );
+    assert_eq!(
+        fx.gateway.resolves(),
+        resolved,
+        "P8406: the plan repeat proved its account (MIK-8406 closed?): {again}"
+    );
+}
+
 /// T7 (twin guard): a revoked vault plan-task repeat answers as a missing
 /// name does. A task-augmented keyed `gateway_execute` completes; the grant
 /// is revoked; the same task call repeated answers -32601 for the step tool,

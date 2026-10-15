@@ -127,7 +127,9 @@ pub(crate) const fn expect(route: ReadRoute, stage: ReadStage) -> ReadExpect {
         (HttpGet | StdioGet | HttpFrame | RepeatedCall, AccountView | CallerView)
         | (RepeatedPlan, CallerView) => Stated(Expect::Applies),
         // A plan repeat skips site 5 and serves its stored task with no
-        // account proof (E2); MIK-8406 PLANREPLAY.4 owns closing it.
+        // account proof (E2; pinned by P8406). E9 still runs before that
+        // carve-out, so a Lacked and Unavailable plan repeat answers
+        // retryable. MIK-8406 PLANREPLAY.4 owns closing the proof.
         (RepeatedPlan, AccountView) => Stated(Expect::ExpectedGap(super::Ticket::Mik8406)),
         (StdioFrame, AccountView | CallerView) => NotApplicable(ReadNa::NoStdioSubscribers),
         (Update | Cancel, AccountView | CallerView) => NotApplicable(ReadNa::GatewayAuthoredAck),
@@ -190,7 +192,7 @@ const DRIVEN: &[(ReadRoute, ReadStage, &str)] = &[
     (
         ReadRoute::RepeatedPlan,
         ReadStage::AccountView,
-        "GAP MIK-8406 PLANREPLAY.4: no row; a plan repeat skips site 5 (call_dispatch.rs, E2)",
+        "GAP MIK-8406 PLANREPLAY.4: router::stored_replay_liveness_tests P8406 pins it (no proof)",
     ),
     (
         ReadRoute::RepeatedPlan,
