@@ -162,6 +162,11 @@ impl MetaMcp {
                 // refusal, which a replayed key's holder was already shown
                 // (SUB.4, ruling A).
                 Err(refusal) if self.step_is_hidden(caller, (server, tool), session) => {
+                    // The kill switch and a disabled capability speak about
+                    // the backend, not the name: they refuse the whole call
+                    // here, as a missing step's policy check does, rather
+                    // than letting earlier steps run (#3872 FIX 2).
+                    self.admit_backend_wide(server, tool)?;
                     let (_, hidden) = deferred.get_or_insert((refusal, Vec::new()));
                     hidden.push((server.to_owned(), tool.to_owned()));
                 }
