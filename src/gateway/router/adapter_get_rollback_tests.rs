@@ -245,7 +245,7 @@ async fn expect_update(frames: &mut BodyFrames, marker: &str) {
 
 /// MIK-8350 (seat HIGH on 8264fcb00): a frame that is not a judged hint (a
 /// `resources/updated`, sent with no judged backend) is held to the stream's
-/// own subject as it is written, as a listener's is. Once the held Open WebUI
+/// own subject as it is written, as a listener's is. Once the held adapter
 /// receipt has expired, the GET stream writes it nothing and closes. A
 /// control stream opened with a receipt minted at the same instant receives
 /// the same frame, so the broadcast itself is proven.

@@ -79,31 +79,17 @@ pub(crate) fn create_sse_response_with_view(
                     // G6: judged again as it is written, not only as it was
                     // queued, so a credential that died in between is written
                     // nothing.
-                    match credential_at_write(&multiplexer, &session, item.audience.as_audience()).await {
-                        Delivery::Deliver => {}
-                        Delivery::OutOfScope => {
+                    match write_gate(&multiplexer, &session, view.as_ref(), &item).await {
+                        Gate::Write => {}
+                        Gate::Skip => {
                             withhold(&item);
                             continue;
                         }
-                        Delivery::Dead => {
-                            crate::gateway::streaming::DeadReason::Bearer.count();
+                        Gate::Close => {
                             withhold(&item);
                             close_dead(&mut rx);
                             break;
                         }
-                    }
-                    // MIK-8350: a frame that is not a judged hint is held to
-                    // the stream's own subject as it is written, as a
-                    // listener's is: an expired adapter receipt or a CF
-                    // assertion that no longer verifies closes the stream.
-                    if item.judged.is_none()
-                        && let Some(view) = &view
-                        && let Some(reason) = subject_dead(&multiplexer, &session, view).await
-                    {
-                        reason.count();
-                        withhold(&item);
-                        close_dead(&mut rx);
-                        break;
                     }
                     // MIN.2: recorded and committed as it is written; an item
                     // whose record fails closed is withheld.
@@ -234,6 +220,41 @@ async fn credential_at_write(
         return Delivery::Deliver;
     };
     delivery(&authorizer, Some(&credential), audience).await
+}
+
+/// What the write loop does with a frame as it is written.
+enum Gate {
+    Write,
+    Skip,
+    Close,
+}
+
+/// The gates a frame passes as it is written: the held credential, and, for
+/// a frame that is not a judged hint, the stream's own subject, as a
+/// listener's is (MIK-8350): an expired adapter receipt or a CF assertion
+/// that no longer verifies closes the stream. A death is counted here.
+async fn write_gate(
+    multiplexer: &NotificationMultiplexer,
+    session: &super::ClientSession,
+    view: Option<&super::StreamView>,
+    item: &super::SessionFrame,
+) -> Gate {
+    match credential_at_write(multiplexer, session, item.audience.as_audience()).await {
+        Delivery::Deliver => {}
+        Delivery::OutOfScope => return Gate::Skip,
+        Delivery::Dead => {
+            crate::gateway::streaming::DeadReason::Bearer.count();
+            return Gate::Close;
+        }
+    }
+    if item.judged.is_none()
+        && let Some(view) = view
+        && let Some(reason) = subject_dead(multiplexer, session, view).await
+    {
+        reason.count();
+        return Gate::Close;
+    }
+    Gate::Write
 }
 
 /// Why `view`'s caller no longer resolves, for a frame that is not a judged
