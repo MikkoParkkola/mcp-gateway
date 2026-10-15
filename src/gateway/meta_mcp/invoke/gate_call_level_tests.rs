@@ -251,18 +251,15 @@ fn an_unnamed_invoke_target_is_not_withheld() {
     }
 }
 
-/// Under `input_schema_enforcement: Off` a name the held list does not hold
-/// is unproven (the held list never reports a lacked name), so it is
-/// forwarded, not the gate's: the route stage does not answer it as
-/// invisible (#3872 coverage, gate.rs; S6's stated residual).
-#[tokio::test]
-async fn under_off_a_lacked_name_is_not_invisible_at_the_route() {
+/// Whether the route stage answers `not_listed` as invisible on a warm
+/// shared backend listing only `read`, under `mode`.
+async fn lacked_name_invisible_under(mode: crate::config::InputSchemaEnforcement) -> bool {
     use crate::gateway::authz::AllowAll;
     let registry = Arc::new(crate::backend::BackendRegistry::new());
     let backend = Arc::new(crate::backend::Backend::new(
         "alpha",
         crate::config::BackendConfig {
-            input_schema_enforcement: crate::config::InputSchemaEnforcement::Off,
+            input_schema_enforcement: mode,
             ..crate::config::BackendConfig::default()
         },
         &crate::config::FailsafeConfig::default(),
@@ -276,10 +273,25 @@ async fn under_off_a_lacked_name_is_not_invisible_at_the_route() {
     assert!(registry.register(backend), "premise: alpha registers");
     let meta = MetaMcp::new(registry);
     let caller = ctx(&AllowAll);
+    meta.invisible_at_route(("alpha", "not_listed"), &caller, None)
+        .await
+}
+
+/// Under `input_schema_enforcement: Off` a name the held list does not hold
+/// is unproven (the held list never reports a lacked name), so it is
+/// forwarded, not the gate's: the route stage does not answer it as
+/// invisible (#3872 coverage, gate.rs; S6's stated residual). The control:
+/// under `Standard` the same lacked name is the gate's, so the mode is what
+/// decides, not an unread list.
+#[tokio::test]
+async fn under_off_a_lacked_name_is_not_invisible_at_the_route() {
+    use crate::config::InputSchemaEnforcement;
     assert!(
-        !meta
-            .invisible_at_route(("alpha", "not_listed"), &caller, None)
-            .await,
+        !lacked_name_invisible_under(InputSchemaEnforcement::Off).await,
         "under off a lacked name is forwarded, not invisible"
+    );
+    assert!(
+        lacked_name_invisible_under(InputSchemaEnforcement::Standard).await,
+        "control: under standard a lacked name is invisible at the route"
     );
 }
