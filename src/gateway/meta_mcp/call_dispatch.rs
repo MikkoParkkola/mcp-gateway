@@ -481,8 +481,7 @@ impl MetaMcp {
                     return refusal;
                 }
                 // E2: plan tasks are served as today with no account proof
-                // (P8406 pins it; the read matrix names the gap, MIK-8406). E9
-                // above still answers a Lacked and Unavailable plan repeat.
+                // (P8406 pins it; the read matrix names the gap, MIK-8406).
                 if matches!(
                     stored.task.tool(),
                     "gateway_execute" | "gateway_run_playbook"
