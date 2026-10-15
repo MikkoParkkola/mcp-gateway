@@ -184,7 +184,8 @@ const DRIVEN: &[(ReadRoute, ReadStage, &str)] = &[
     (
         ReadRoute::RepeatedCall,
         ReadStage::AccountView,
-        "router::stored_replay_liveness_tests R5, T4, T8, T9, T12 (site 5 and E9)",
+        "router::stored_replay_liveness_tests R5, T4, T8, T9, T12 (site 5 and E9); \
+         router::stored_read_capability_busy_tests R5 (busy repeat = live call)",
     ),
 ];
 

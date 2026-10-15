@@ -23,8 +23,8 @@ pub(super) enum AccountWrites {
     All,
     /// A repeated task call's fill (#3892 review finding 6): the outcome is
     /// still recorded, so an unbindable caller's permanent refusal is kept,
-    /// but a busy custody writes no `idp_refuse`: the repeat serves its
-    /// stored output and refused nothing.
+    /// but a busy custody writes no `idp_refuse` here: site 5's live
+    /// resolution answers it and writes the live call's one record (R5).
     PermanentOnly,
     /// Task intake for a capability account (MIK-8428): as `All`, and the
     /// transient is also carried in the request memo so the intake answers it.

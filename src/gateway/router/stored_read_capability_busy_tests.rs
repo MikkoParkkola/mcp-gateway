@@ -500,28 +500,43 @@ async fn r4_control_a_healthy_capability_task_reads_custody_at_intake_and_in_the
     assert_served(&harness, peer, &got, "R4 control");
 }
 
-/// R5: repeating the identical keyed task call does not account-judge the
-/// repeat as a fresh stored read. It retains today's successful repeat
-/// (today the repeat call itself returns the existing task handle), with
-/// no additional busy-custody refusal record.
+/// R5 (parity; MIK-8392 STORED.2 site 5 and E9, a reviewed departure from
+/// #3892's interim row that served the stored task): under a busy custody
+/// the repeated keyed task call answers as the live call does, the same
+/// sealed retryable error byte for byte (id and trace masked) with exactly
+/// the live call's one transient `idp_refuse`, and serves no stored output.
+/// The key stays usable: after recovery the same call serves the stored task.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn r5_a_repeated_capability_task_writes_no_busy_idp_refuse() {
+async fn r5_a_busy_repeated_capability_task_answers_as_the_live_call() {
     let harness = capability_harness(false).await;
     let id = finished_capability_task(&harness, "s3892-r5").await;
     harness.account.fail_custody_for_test(true);
-    let before = harness.account.idp_refusal_reasons_for_test().len();
 
+    let refusals = harness.account.idp_refusal_reasons_for_test().len();
+    let live = capability_live(&harness).await;
+    assert_retryable(&live, "R5 live");
+    assert_one_transient_refusal(&harness, refusals, "R5 live");
+
+    let refusals = harness.account.idp_refusal_reasons_for_test().len();
     let repeated = capability_tasked(&harness, "s3892-r5").await;
+    assert_retryable(&repeated, "R5 repeat");
     assert_eq!(
-        harness.account.idp_refusal_reasons_for_test().len() - before,
-        0,
-        "R5: the repeated call appended no idp_refuse"
+        error_masked(&repeated),
+        error_masked(&live),
+        "R5: the repeat is not the live answer: repeat {repeated} live {live}"
     );
-    assert!(repeated.get("error").is_none(), "R5: {repeated}");
+    assert_one_transient_refusal(&harness, refusals, "R5 repeat");
+    assert!(
+        repeated.get("result").is_none(),
+        "R5: the stored task was served while custody is busy: {repeated}"
+    );
+
+    harness.account.fail_custody_for_test(false);
+    let recovered = capability_tasked(&harness, "s3892-r5").await;
     assert_eq!(
-        repeated.pointer("/result/taskId"),
+        recovered.pointer("/result/taskId"),
         Some(&json!(id)),
-        "R5: the existing task is served to the repeat: {repeated}"
+        "R5: after recovery the same key serves the stored task: {recovered}"
     );
 }
 
