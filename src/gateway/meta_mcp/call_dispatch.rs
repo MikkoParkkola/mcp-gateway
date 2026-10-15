@@ -469,7 +469,7 @@ impl MetaMcp {
                 // now answers as the live call does (retryable), before the
                 // catalogue refusal; every other withholding is unchanged.
                 if let Some(answer) = self
-                    .unavailable_repeat_answer(&id, &stored, session_id, caller)
+                    .unavailable_repeat_answer(&id, &stored, (tool_name, session_id), caller)
                     .await
                 {
                     return answer;
@@ -525,11 +525,11 @@ impl MetaMcp {
     /// `tool_name` is the presented tool, for the live-shaped answer a
     /// carried fill failure takes (E4).
     ///
-    /// Targets walk in recorded order. Live is proven, and so is a carried
-    /// credential with no fill error (E4); anything else proves by a live
-    /// resolution, de-duplicated by account, and the first failed resolution
-    /// answers through the status-preserving error, keeping the connect
-    /// offer. No task is created, and the row keeps its slot: a refusal
+    /// Targets walk in recorded order. Each proves through the dispatch's own
+    /// resolution step (`prove_target_live`), de-duplicated by account: a
+    /// clean carried credential proves, a carried fill failure answers as the
+    /// failed dispatch (E4), and the first refusal answers through the
+    /// status-preserving error, keeping the connect offer. No task is created, and the row keeps its slot: a refusal
     /// drops only this request's clones. When every target is proven the
     /// stored answer is served, with no second catalogue check and no memo
     /// write. An empty slice serves as today: nothing was dispatched.
@@ -541,7 +541,6 @@ impl MetaMcp {
         held: super::sealed_hold::Held<crate::gateway::task_service::CommittedTask>,
         caller: &MetaMcpCallerContext<'_>,
     ) -> JsonRpcResponse {
-        use super::visible;
         use crate::gateway::task_service::execution::BeginOutcome;
 
         // (server, account) resolved already in this walk: an account
@@ -549,39 +548,6 @@ impl MetaMcp {
         let mut resolved = std::collections::HashSet::new();
         for target in targets {
             let (server, tool) = (target.server.as_str(), target.tool.as_str());
-            // E4 first: a carried fill failure is answered as the failed
-            // dispatch answers it, even where an outcome also reads Live
-            // (the dispatch consumes the carried resolution before anything
-            // else). A clean carried credential proves the target; either
-            // way nothing dispatches after this.
-            if let Some(carried) = visible::take_carried(server, tool) {
-                if let Some(error) = carried.fill_error {
-                    return match self
-                        .refused_fill_outcome((server, tool), error, caller)
-                        .await
-                    {
-                        Ok(value) => {
-                            let shape = if tool_name == "gateway_invoke"
-                                || self.surfaced_tools_map.unscoped(tool_name).is_none()
-                            {
-                                ResultShape::Wrapped
-                            } else {
-                                ResultShape::Native
-                            };
-                            response_security::shape_meta_result(
-                                id,
-                                tool_name,
-                                Ok(value),
-                                shape,
-                                caller.input_capabilities,
-                                (ChainSource::NotEligible, None),
-                            )
-                        }
-                        Err(error) => error_response_preserving_status(id, &error),
-                    };
-                }
-                continue;
-            }
             // A target that mints nothing per caller is exempt (U2); every
             // other one (a managed account, or a per-caller mint, E7) proves
             // only by a live resolution below. There is no shortcut for an
@@ -593,11 +559,39 @@ impl MetaMcp {
             if !resolved.insert((server.to_owned(), self.target_account(server, tool))) {
                 continue;
             }
-            if let Err(error) = self.prove_target_live((server, tool), caller).await {
-                return error_response_preserving_status(id, &error);
+            match self.prove_target_live((server, tool), caller).await {
+                Ok(None) => {}
+                Ok(Some(value)) => return self.shape_repeat_fill(id, tool_name, value, caller),
+                Err(error) => return error_response_preserving_status(id, &error),
             }
         }
         BeginOutcome::Existing(held).into_response(id)
+    }
+
+    /// A repeated task call's failed-fill answer (E4), shaped as the live
+    /// arm shapes the tool result for `tool_name`.
+    pub(super) fn shape_repeat_fill(
+        &self,
+        id: RequestId,
+        tool_name: &str,
+        value: Value,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> JsonRpcResponse {
+        let shape = if tool_name == "gateway_invoke"
+            || self.surfaced_tools_map.unscoped(tool_name).is_none()
+        {
+            ResultShape::Wrapped
+        } else {
+            ResultShape::Native
+        };
+        response_security::shape_meta_result(
+            id,
+            tool_name,
+            Ok(value),
+            shape,
+            caller.input_capabilities,
+            (ChainSource::NotEligible, None),
+        )
     }
 
     /// The dispatch tail below the confirmation gate, as the request thread

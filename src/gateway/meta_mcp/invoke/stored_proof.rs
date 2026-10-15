@@ -62,15 +62,19 @@ impl crate::gateway::meta_mcp::MetaMcp {
         )
     }
 
-    /// Prove `(server, tool)` live for `caller` by resolving what its
-    /// dispatch would resolve, and dropping the credential: a successful
-    /// resolution is the proof. A refusal answers as the live call's own
-    /// resolution refusal, offer included.
+    /// Prove `(server, tool)` live for `caller` through the dispatch's own
+    /// resolution step, `dispatch_resolution`: it consumes what the route
+    /// stage already met in this request (a busy custody, a failed
+    /// resolution, a carried credential or a carried failed fill) before it
+    /// resolves, so a repeat costs and records exactly what the live call
+    /// does (T12r). `Ok(None)` is proven, `Ok(Some(value))` is a carried
+    /// failed fill's tool answer (E4), and `Err` is the live refusal, connect
+    /// offer included. The credential is dropped.
     pub(crate) async fn prove_target_live(
         &self,
         (server, tool): (&str, &str),
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
-    ) -> crate::Result<()> {
+    ) -> crate::Result<Option<serde_json::Value>> {
         // A permanent refusal this request's repeat pre-pass already met is
         // the live answer (#3892 Ub-repeat): resolving again would write a
         // second refusal record for one call.
@@ -80,17 +84,16 @@ impl crate::gateway::meta_mcp::MetaMcp {
         {
             return Err(refusal);
         }
-        let backend = self.backends.get(server);
         let proof = CallerProof::new(caller.verified_identity, caller.provenance());
+        let mut witness = super::nonce_settle::Witnessed::take(caller);
         let proven = self
-            .resolve_dispatch(
+            .dispatch_resolution(
                 (server, tool),
-                backend.as_deref(),
-                proof,
-                caller.verified_identity,
+                (proof, caller.verified_identity),
+                self.hint_surface(caller),
+                &mut witness,
             )
-            .await
-            .map(|_| ());
+            .await;
         // A busy custody refused this call before its backend: ask for the
         // nonce back, as the live call's busy answer does (invoke.rs), so the
         // same signed repeat is judged on its merits after recovery (R5n).
@@ -99,7 +102,10 @@ impl crate::gateway::meta_mcp::MetaMcp {
         {
             super::nonce_settle::ask_refund(caller);
         }
-        proven
+        Ok(match proven? {
+            std::ops::ControlFlow::Continue(_) => None,
+            std::ops::ControlFlow::Break(answer) => Some(answer.into_parts().0),
+        })
     }
 
     /// E9 (MIK-8392): a repeated task call whose target is hidden ONLY because
@@ -117,7 +123,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
         &self,
         id: &crate::protocol::RequestId,
         stored: &crate::gateway::task_service::CommittedTask,
-        session: Option<&str>,
+        (tool_name, session): (&str, Option<&str>),
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
     ) -> Option<crate::protocol::JsonRpcResponse> {
         use crate::gateway::meta_mcp::visible::{self, AccountOutcome, Visibility, Withholding};
@@ -147,34 +153,21 @@ impl crate::gateway::meta_mcp::MetaMcp {
             {
                 continue;
             }
-            if let Err(error) = self.prove_target_live((server, tool), caller).await {
-                return Some(
-                    crate::gateway::meta_mcp::response_security::error_response_preserving_status(
-                        id.clone(),
-                        &error,
-                    ),
-                );
+            match self.prove_target_live((server, tool), caller).await {
+                Ok(None) => {}
+                Ok(Some(value)) => {
+                    return Some(self.shape_repeat_fill(id.clone(), tool_name, value, caller));
+                }
+                Err(error) => {
+                    return Some(
+                        crate::gateway::meta_mcp::response_security::error_response_preserving_status(
+                            id.clone(),
+                            &error,
+                        ),
+                    );
+                }
             }
         }
         None
-    }
-
-    /// The answer a failed dispatch gives for a carried fill failure (E4),
-    /// as `dispatch_resolution`'s Break arm answers it: the connect offer
-    /// when the failure is a marked refusal, else the refused-fill tool
-    /// result. `Ok` shapes as the live arm would; `Err` answers directly.
-    pub(crate) async fn refused_fill_outcome(
-        &self,
-        (server, tool): (&str, &str),
-        error: crate::Error,
-        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
-    ) -> crate::Result<serde_json::Value> {
-        if crate::personal_accounts::refusal::marked(&error).is_some() {
-            return self
-                .with_connect_offer(Err(error), caller.verified_identity)
-                .await;
-        }
-        let surface = self.hint_surface(caller);
-        Ok(self.account_refused_fill(server, tool, &error, (std::time::Instant::now(), surface)))
     }
 }
