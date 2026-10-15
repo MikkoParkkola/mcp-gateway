@@ -228,12 +228,8 @@ async fn c_a_withheld_capability_writes_the_undefined_ones_invocation_records() 
             })
             .await;
             call(&fx, Entry::Invoke, json!({})).await;
-            let records = std::fs::read_to_string(audit.path())
-                .unwrap_or_default()
-                .lines()
-                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-                .filter(|entry| entry.get("request_hash").is_some())
-                .count();
+            let records = invocation_records(&audit);
+            assert_the_log_records_a_dispatch(&fx, &audit, records).await;
             counts.push(records);
         }
         if counts[0] != counts[1] {
@@ -278,15 +274,36 @@ async fn a_profile_refused_capability_keeps_its_audit_trail() {
     })
     .await;
     call(&fx, Entry::Invoke, json!({})).await;
-    let records: Vec<Value> = std::fs::read_to_string(audit.path())
-        .unwrap_or_default()
+    let records = invocation_records(&audit);
+    assert_eq!(records, 0, "no invocation record, as before");
+    assert_the_log_records_a_dispatch(&fx, &audit, records).await;
+}
+
+/// The invocation records in `audit`. A log that cannot be read fails the
+/// row; it never reads as none.
+fn invocation_records(audit: &tempfile::NamedTempFile) -> usize {
+    std::fs::read_to_string(audit.path())
+        .expect("the audit log is readable")
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .filter(|entry| entry.get("request_hash").is_some())
-        .collect();
+        .count()
+}
+
+/// #3872 review (FIX 3), the positive control: in the same fixture, a
+/// visible backend tool that is dispatched writes at least one invocation
+/// record, so the counts above are measured on a log that records.
+async fn assert_the_log_records_a_dispatch(
+    fx: &Fx,
+    audit: &tempfile::NamedTempFile,
+    before: usize,
+) {
+    let visible = json!({"name": "gateway_invoke",
+        "arguments": {"server": "alpha", "tool": "read", "arguments": {}}});
+    send(fx, "/mcp", "k-std", "tools/call", visible, None).await;
     assert!(
-        records.is_empty(),
-        "no invocation record, as before: {records:#?}"
+        invocation_records(audit) > before,
+        "control: a dispatched visible call writes an invocation record"
     );
 }
 
