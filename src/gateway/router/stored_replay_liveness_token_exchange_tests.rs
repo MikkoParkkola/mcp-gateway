@@ -464,6 +464,88 @@ async fn t12_token_exchange_task_repeat_after_idp_kill_answers_as_live() {
     );
 }
 
+/// T12r (product seat finding 2): T12's setup, counting the identity
+/// propagation audit records (`idp_*`) each answer writes. The repeat's
+/// refusal is the live call's, so it writes exactly the records the live call
+/// writes: one failed resolution per call, never a second one at site 5.
+/// Current-thread: the forced clock is this thread's.
+#[tokio::test]
+async fn t12r_a_failed_task_repeat_writes_the_live_calls_idp_records() {
+    use std::sync::atomic::Ordering;
+
+    let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
+    let idp = r6m_token_exchange::LiveIdp::start(&key).await;
+    let alice = r6m_token_exchange::alice();
+    let (router, sends, dirs) = r6m_token_exchange::gateway(&key, idp.endpoint(), &alice).await;
+    let log = dirs.0.path().join("audit.jsonl");
+    let idp_records = || {
+        std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| line.contains("\"action\":\"idp_"))
+            .count()
+    };
+    let call = |key: &str, task: bool| {
+        let mut params = json!({"name": "gateway_invoke",
+            "arguments": {"server": r6m_token_exchange::TX, "tool": TOOL,
+                "arguments": {"folder": "inbox"}},
+            "_meta": meta(Some(key), task)});
+        if task {
+            params["task"] = json!({});
+        }
+        params
+    };
+    let made = r6m_token_exchange::send_as(&router, &alice, call("t12r", true)).await;
+    let id = made
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("premise: a task was made: {made}"))
+        .to_owned();
+    let bound = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let params = json!({"taskId": id, "_meta": meta(None, true)});
+        let got =
+            r6m_token_exchange::send_method_as(&router, &alice, ("tasks/get", &id), params).await;
+        let status = got.pointer("/result/status").and_then(Value::as_str);
+        if matches!(status, Some("completed" | "failed" | "cancelled")) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < bound,
+            "premise: the task settled: {got}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        sends.load(Ordering::SeqCst) >= 1,
+        "premise: the task dispatched"
+    );
+    idp.kill();
+    let now = crate::clock::unix_secs().expect("a test host clock reads after 1970");
+    let _clock = crate::clock::test_clock::at_secs(now + 7200);
+
+    let before = idp_records();
+    let live = r6m_token_exchange::send_as(&router, &alice, call("t12r-live", false)).await;
+    let live_records = idp_records() - before;
+    let before = idp_records();
+    let again = r6m_token_exchange::send_as(&router, &alice, call("t12r", true)).await;
+    let repeat_records = idp_records() - before;
+    eprintln!("T12r live ({live_records} idp records): {live}");
+    eprintln!("T12r repeat ({repeat_records} idp records): {again}");
+    assert!(
+        live.get("error").is_some(),
+        "premise: the live call is refused: {live}"
+    );
+    assert!(
+        live_records >= 1,
+        "premise: the live refusal writes an idp record"
+    );
+    assert_eq!(
+        repeat_records, live_records,
+        "T12r: the repeat wrote a different number of idp records than the live call"
+    );
+}
+
 /// S2b (mutant M28): the token-exchange backend's keyed replay with the
 /// `IdP` ALIVE. Admission replays it with its target, the replay defers (E7:
 /// a per-caller mint), resolution succeeds, and the lift serves the retained
