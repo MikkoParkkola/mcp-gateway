@@ -236,7 +236,7 @@ impl NotificationMultiplexer {
             #[cfg(test)]
             before_write_check: Arc::default(),
             #[cfg(test)]
-            before_get_resolve: Default::default(),
+            before_get_resolve: crate::test_pause::Slot::default(),
         }
     }
 

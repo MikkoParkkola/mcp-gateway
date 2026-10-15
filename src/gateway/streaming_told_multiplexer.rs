@@ -27,7 +27,7 @@ pub(crate) enum Admitted {
     /// No judge is installed: the stream opens with no view.
     Unjudged,
     /// The caller resolved: its view is baselined against this caller.
-    Live(ResolvedCaller),
+    Live(Box<ResolvedCaller>),
     /// A caller that presented nothing, on a public path: no view is live.
     Anonymous,
 }
@@ -94,6 +94,7 @@ impl NotificationMultiplexer {
     /// different records and never judge one another (D17e). Judged with the
     /// credential the session holds; a GET admits before it opens the session
     /// ([`Self::admit_view`], then [`Self::attach_admitted`]).
+    #[cfg(test)]
     pub(crate) async fn attach_view(
         &self,
         session_id: &str,
@@ -127,7 +128,7 @@ impl NotificationMultiplexer {
             return Ok(Admitted::Unjudged);
         };
         match judge.resolve(&authorizer, (credential, subject)).await {
-            Judged::Live(caller) => Ok(Admitted::Live(caller)),
+            Judged::Live(caller) => Ok(Admitted::Live(Box::new(caller))),
             Judged::Dead(reason) => match dead_at_attach(credential, reason, subject) {
                 AtAttach::Refuse => {
                     reason.count();
