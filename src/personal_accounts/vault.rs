@@ -505,9 +505,17 @@ impl VaultStrategy {
     pub(crate) async fn recheck(&self, lease: &CredentialLease) -> Result<(), MintError> {
         // Bound to this statement: the released token is never bound to a name
         // that outlives the check it exists for (CWE-226).
-        self.custody.release(lease).await.map_err(|error| {
-            mint_refusal("managed account credential is no longer releasable", &error)
-        })?;
+        self.custody
+            .release(lease)
+            .await
+            .map_err(|error| match &error {
+                // Audited as the recheck it is, not as the view read.
+                CustodyError::Busy => MintError::Busy(refusal("managed account recheck", &error)),
+                _ => MintError::Other(refusal(
+                    "managed account credential is no longer releasable",
+                    &error,
+                )),
+            })?;
         Ok(())
     }
 }
