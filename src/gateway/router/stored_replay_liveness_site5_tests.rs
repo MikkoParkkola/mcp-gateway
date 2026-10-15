@@ -231,11 +231,13 @@ async fn t8_unavailable_repeat_answers_as_the_live_call() {
 }
 
 /// T9 (E9 guard): the same outage, but the tool is ALSO withheld for a reason
-/// that is not its account (its description is blocked). E9 must not fire:
-/// the repeat answers exactly as the live call to that blocked tool does
-/// (byte-identical after normalising only `id`), never the outage's retryable
-/// answer. M37's leak variant (E9 applied to any withholding) must fail this
-/// row.
+/// that is not its account (its description is blocked). The repeat answers
+/// exactly as the live call to that blocked tool does, and both exactly as a
+/// missing name on the same backend does (byte-identical after normalising
+/// only `id`). Since MIK-8361 every name on the backend meets the outage
+/// first, so all three are its retryable answer: the blocked tool is not told
+/// apart from a missing one. M37's leak (E9 applied to any withholding) now
+/// answers that same outage, so it is equivalent on this row.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t9_unavailable_never_unhides_a_tool_hidden_for_another_reason() {
     let fx = fixture(false).await;
@@ -270,10 +272,13 @@ async fn t9_unavailable_never_unhides_a_tool_hidden_for_another_reason() {
         again_id, live_id,
         "T9: the blocked tool's repeat differs from its live call: {again} vs {live}"
     );
-    assert_ne!(
-        again.pointer("/error/code").and_then(Value::as_i64),
-        Some(-32603),
-        "T9: the outage answer leaked for a tool withheld for another reason: {again}"
+    let mut missing = invoke_params(Some("t9-missing"), false);
+    missing["arguments"]["tool"] = json!("no_such_tool_8392");
+    let mut missing = send(&fx, "tools/call", "gateway_invoke", missing).await;
+    missing["id"] = Value::Null;
+    assert_eq!(
+        again_id, missing,
+        "T9: the blocked tool's repeat differs from a missing name's call: {again}"
     );
     assert!(
         !again.to_string().contains(MARKER),
