@@ -116,15 +116,19 @@ pub(super) enum StoredChain {
     NotEligible,
 }
 
-/// Whether a replay meets the refusal of the steps `hidden` from its caller
-/// now: only where the stored run dispatched one of them. A record with no
-/// step list (written before the list) counts every step as dispatched, so
-/// it keeps the refusal (#3872 FIX 1, fail closed).
-pub(super) fn replay_meets_refusal(
-    dispatched: Option<&[(String, String)]>,
-    hidden: &[(String, String)],
-) -> bool {
-    dispatched.is_none_or(|ran| hidden.iter().any(|step| ran.contains(step)))
+/// The refusal a replay meets for the steps `withheld` from its caller now:
+/// the first, in plan order, that the stored run was served, so the answer
+/// never names a step that never ran (#3872 review B). A record with no step
+/// list (written before the list) counts every step as served, so it keeps
+/// the first refusal (#3872 FIX 1, fail closed). `None`: the stored answer.
+pub(super) fn refusal_to_meet(
+    served: Option<&[(String, String)]>,
+    withheld: super::plan::Withheld,
+) -> Option<crate::Error> {
+    withheld
+        .into_iter()
+        .find(|(step, _)| served.is_none_or(|ran| ran.contains(step)))
+        .map(|(_, refusal)| refusal)
 }
 
 /// The steps a stored execution was served, if its record lists them.

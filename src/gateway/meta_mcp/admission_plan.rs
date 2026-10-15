@@ -12,9 +12,9 @@ use crate::{Error, Result};
 
 use super::super::{MetaMcp, MetaMcpCallerContext};
 
-/// The first refusal of the plan steps the caller cannot see, and those
-/// steps as `(server, tool)`; `None` when every step is visible.
-pub(super) type Withheld = Option<(Error, Vec<(String, String)>)>;
+/// Each plan step the caller cannot see, as `(server, tool)`, with its
+/// refusal, in plan order; empty when every step is visible.
+pub(super) type Withheld = Vec<((String, String), Error)>;
 
 impl MetaMcp {
     /// The backend targets a `gateway_run_playbook` call will reach, one per
@@ -71,7 +71,7 @@ impl MetaMcp {
         session: Option<&str>,
     ) -> Result<(Option<PlaybookDefinition>, Withheld)> {
         if caller.retry.idempotency_key.is_none() {
-            return Ok((None, None));
+            return Ok((None, Vec::new()));
         }
         // Keyed plans are checked step by step below, before the handler's own
         // refusal runs; refuse first so enforce answers with the plan message.
@@ -104,9 +104,9 @@ impl MetaMcp {
                         caller,
                     )?;
                 }
-                Ok((Some(definition), None))
+                Ok((Some(definition), Vec::new()))
             }
-            _ => Ok((None, None)),
+            _ => Ok((None, Vec::new())),
         }
     }
 
@@ -132,7 +132,7 @@ impl MetaMcp {
         arguments: &Value,
         session: Option<&str>,
     ) -> Result<Withheld> {
-        let mut deferred: Withheld = None;
+        let mut deferred: Withheld = Vec::new();
         let chain = arguments.get("chain").and_then(Value::as_array);
         let steps = chain.map_or_else(|| std::slice::from_ref(arguments), Vec::as_slice);
         if steps.is_empty() {
@@ -167,8 +167,7 @@ impl MetaMcp {
                     // here, as a missing step's policy check does, rather
                     // than letting earlier steps run (#3872 FIX 2).
                     self.admit_backend_wide(server, tool)?;
-                    let (_, hidden) = deferred.get_or_insert((refusal, Vec::new()));
-                    hidden.push((server.to_owned(), tool.to_owned()));
+                    deferred.push(((server.to_owned(), tool.to_owned()), refusal));
                 }
                 Err(refusal) => return Err(refusal),
             }

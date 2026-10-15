@@ -254,11 +254,17 @@ fn a_keyed_chain_on_a_killed_backend_answers_a_withheld_step_as_a_missing_one() 
 /// #3872 review (FIX 1, condition 2): a sync result stored before the step
 /// list existed still decodes, with no list, and its replay keeps today's
 /// refusal of a now-hidden step (fail closed). A listed run meets the refusal
-/// only where it dispatched the step.
+/// of the first hidden step it was served, never one it was not (review B).
 #[test]
 fn a_stored_result_without_a_step_list_keeps_the_refusal() {
-    use super::stored::{dispatched_steps, replay_meets_refusal};
-    let hidden = vec![("beta".to_string(), "read".to_string())];
+    use super::stored::{dispatched_steps, refusal_to_meet};
+    let step = |tool: &str| ("beta".to_string(), tool.to_string());
+    let withheld = || {
+        vec![
+            (step("other"), crate::Error::json_rpc(-32003, "other")),
+            (step("read"), crate::Error::json_rpc(-32003, "read")),
+        ]
+    };
     let older = serde_json::to_vec(&json!({
         "response": {"jsonrpc": "2.0", "id": null, "result": {"retained": "yes"}},
         "chain": "not_eligible"
@@ -269,18 +275,23 @@ fn a_stored_result_without_a_step_list_keeps_the_refusal() {
         None,
         "an older record has no list"
     );
-    assert!(
-        replay_meets_refusal(dispatched_steps(&older).as_deref(), &hidden),
-        "an older record keeps the refusal"
+    let refused = |served: Option<&[(String, String)]>| {
+        refusal_to_meet(served, withheld()).map(|error| error.to_string())
+    };
+    assert_eq!(
+        refused(dispatched_steps(&older).as_deref()),
+        Some(crate::Error::json_rpc(-32003, "other").to_string()),
+        "an older record keeps the first refusal"
     );
-    let other = vec![("beta".to_string(), "other".to_string())];
-    assert!(
-        !replay_meets_refusal(Some(other.as_slice()), &hidden),
-        "a run that never dispatched the hidden step replays its answer"
+    assert_eq!(
+        refused(Some(&[step("write")])),
+        None,
+        "no hidden step ran: the stored answer"
     );
-    assert!(
-        replay_meets_refusal(Some(hidden.as_slice()), &hidden),
-        "a run that dispatched the hidden step meets its refusal"
+    assert_eq!(
+        refused(Some(&[step("read")])),
+        Some(crate::Error::json_rpc(-32003, "read").to_string()),
+        "the refusal of the hidden step that ran"
     );
 }
 

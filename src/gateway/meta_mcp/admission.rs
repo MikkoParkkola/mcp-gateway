@@ -536,8 +536,8 @@ impl MetaMcp {
             Ok(SyncAdmission::Replay(_, _, dispatched)) => Some(dispatched),
             _ => None,
         };
-        if let (Some(dispatched), Some((refusal, hidden))) = (ran, withheld)
-            && stored::replay_meets_refusal(dispatched.as_deref(), &hidden)
+        if let Some(dispatched) = ran
+            && let Some(refusal) = stored::refusal_to_meet(dispatched.as_deref(), withheld)
         {
             return Err(refusal);
         }
