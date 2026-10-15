@@ -322,6 +322,36 @@ async fn a5_a_keyed_mixed_chain_answers_as_one_with_a_missing_step() {
     );
 }
 
+/// #3872 review (FIX 1): A5's replay. The same keyed chain sent again
+/// replays the first run. A step hidden from the first call was answered as
+/// missing and never ran, so its replay is the stored answer, exactly as the
+/// missing twin's replay is; only a holder who could see the step at the
+/// first call meets its current refusal.
+#[tokio::test]
+async fn a5r_a_replayed_keyed_chain_answers_as_one_with_a_missing_step() {
+    let keyed = json!({"_meta": {crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "a5r"}});
+    let chain = json!({"chain": [
+        {"tool": format!("{SERVER}:{SIBLING}"), "arguments": {}},
+        {"tool": format!("{SERVER}:{TOOL}"), "arguments": {}}
+    ]});
+    let mut replays = Vec::new();
+    for side in [Side::Withheld, Side::Absent] {
+        let twin = twin(side, State::WARM).await;
+        twin.meta_modern("gateway_execute", chain.clone(), &keyed)
+            .await;
+        replays.push(
+            twin.meta_modern("gateway_execute", chain.clone(), &keyed)
+                .await,
+        );
+    }
+    let (w, a) = (&replays[0], &replays[1]);
+    assert_eq!(
+        (w.status, &w.body, w.calls),
+        (a.status, &a.body, a.calls),
+        "A5 replay: withheld vs missing"
+    );
+}
+
 /// H3 (codex review of #3872): on a killed backend a signed call with a
 /// malformed nonce is refused alike for the withheld name and the missing
 /// one (the kill switch is backend-wide, not existence-sensitive).
