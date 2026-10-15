@@ -54,6 +54,31 @@ async fn send_as(
     serde_json::from_slice(&bytes).unwrap_or(Value::Null)
 }
 
+/// A capability tool the provider does not define: the twin an unreachable
+/// capability answers as (MIK-8361).
+const UNDEFINED: &str = "no_such_capability";
+
+/// The same caller's live call of [`UNDEFINED`].
+async fn undefined_twin(router: &axum::Router, caller: &VerifiedIdentity) -> Value {
+    send_as(
+        router,
+        caller,
+        "tools/call",
+        "gateway_invoke",
+        json!({"name": "gateway_invoke",
+            "arguments": {"server": CAPABILITY_SERVER, "tool": UNDEFINED, "arguments": {}},
+            "_meta": modern_meta()}),
+    )
+    .await
+}
+
+/// [`error_masked`] with the capability's name and its twin's made one.
+fn named_as_twin(body: &Value) -> String {
+    error_masked(body)
+        .replace(CAPABILITY_TOOL, "<tool>")
+        .replace(UNDEFINED, "<tool>")
+}
+
 /// The error object with every per-call trace id (`gw-` and 36 UUID
 /// characters) replaced by one placeholder: two calls never share one (K2).
 fn error_masked(body: &Value) -> String {
@@ -153,10 +178,9 @@ async fn order_revoked_account_with_a_withdrawn_grant_answers_the_grant_denial()
             "_meta": modern_meta()}),
     )
     .await;
-    assert_eq!(
-        live.pointer("/error/code"),
-        Some(&json!(-32004)),
-        "premise: the live call is grant-denied, not absent: {live}"
+    assert!(
+        live.get("error").is_some(),
+        "premise: the live call is refused: {live}"
     );
     let stored = send_as(
         &router,
@@ -170,6 +194,12 @@ async fn order_revoked_account_with_a_withdrawn_grant_answers_the_grant_denial()
         error_masked(&stored),
         error_masked(&live),
         "order: the stored read answers what the live call answers"
+    );
+    let twin = undefined_twin(&router, &alice).await;
+    assert_eq!(
+        named_as_twin(&live),
+        named_as_twin(&twin),
+        "MIK-8361: the live call answers as the undefined capability"
     );
 }
 
@@ -335,10 +365,9 @@ async fn capability_grant_withdrawn_under_busy_custody_is_not_account_judged() {
             "_meta": modern_meta()}),
     )
     .await;
-    assert_eq!(
-        live.pointer("/error/code"),
-        Some(&json!(-32004)),
-        "premise: the live call is grant-denied: {live}"
+    assert!(
+        live.get("error").is_some(),
+        "premise: the live call is refused: {live}"
     );
     let reads = account.resolves();
     let before = account.idp_refusals_for_test();
@@ -364,5 +393,11 @@ async fn capability_grant_withdrawn_under_busy_custody_is_not_account_judged() {
         account.idp_refusals_for_test() - before,
         0,
         "capability: the pre-pass wrote an idp_refuse for a grant-refused target"
+    );
+    let twin = undefined_twin(&router, &alice).await;
+    assert_eq!(
+        named_as_twin(&live),
+        named_as_twin(&twin),
+        "MIK-8361: the live call answers as the undefined capability"
     );
 }

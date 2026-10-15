@@ -95,7 +95,28 @@ async fn t5_a_repeated_task_call_answers_absent_once_the_listing_withholds_the_t
     let sent = mock.calls();
     withhold_by_schema(&state);
     let repeated = post(&state, "key-a", task_invoke(3, "s1-t5", json!({ "q": 1 }))).await;
-    assert_absent(&state, &repeated, "T5").await;
+    // MIK-8361: a repeated gateway_invoke answers as the same call naming a
+    // tool the backend does not list (the invoke twin, not the surfaced
+    // name's -32601, which the stored-read rows here keep covering).
+    let mut absent = task_invoke(3, "s1-t5-twin", json!({ "q": 1 }));
+    absent["params"]["arguments"]["tool"] = json!("no_such_tool");
+    let twin = post(&state, "key-a", absent).await;
+    for answer in [&repeated, &twin] {
+        assert!(
+            !answer.to_string().contains("mock-backend-answered"),
+            "T5: the stored output was delivered: {answer}"
+        );
+        assert!(
+            answer.get("error").is_some_and(Value::is_object)
+                || answer.pointer("/result/isError") == Some(&json!(true)),
+            "T5: not a refusal: {answer}"
+        );
+    }
+    std::assert_eq!(
+        repeated.to_string().replace(TOOL, "<tool>"),
+        twin.to_string().replace("no_such_tool", "<tool>"),
+        "T5: the repeat answers as the gateway_invoke missing-name twin"
+    );
     std::assert_eq!(mock.calls(), sent, "T5: the repeat reached the backend");
 }
 
@@ -587,10 +608,9 @@ async fn t16_a_grant_withdrawn_after_the_task_ran_answers_as_the_live_call() {
         super::grant_decisions::personal_invoke(9),
     )
     .await;
-    std::assert_eq!(
-        live.pointer("/error/code"),
-        Some(&json!(-32004)),
-        "T16: the live call is grant-denied, not absent: {live}"
+    assert!(
+        live.get("error").is_some(),
+        "T16: premise: the live call is refused: {live}"
     );
     let after_live = decisions(&row.dir);
     std::assert_eq!(
@@ -619,6 +639,59 @@ async fn t16_a_grant_withdrawn_after_the_task_ran_answers_as_the_live_call() {
         after_stored[before + 1]["outcome"],
         json!("denied"),
         "T16: {after_stored:#?}"
+    );
+    // MIK-8361: the live call answers as an undefined capability does, for
+    // the same caller (made last, so it moves none of the counts above).
+    let mut undefined = super::grant_decisions::personal_invoke(10);
+    let personal = undefined["params"]["arguments"]["tool"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    undefined["params"]["arguments"]["tool"] = json!("no_such_capability");
+    let twin = post(&row.state, "key-a", undefined).await;
+    std::assert_eq!(
+        error_masked(&live).replace(&personal, "<tool>"),
+        error_masked(&twin).replace("no_such_capability", "<tool>"),
+        "T16: the live call answers as the undefined capability"
+    );
+}
+
+/// MIK-8361 under MIK-8392: only a refusal that depends on the capability
+/// existing (admin rule, identity grant) answers as the undefined capability.
+/// A kill switch on the capability server keeps its own answer on the stored
+/// read, byte for byte the live call's.
+#[tokio::test]
+async fn t16k_a_killed_capability_keeps_the_kill_switch_answer_on_the_stored_read() {
+    use crate::security::audit::AuditFailurePolicy;
+    let row =
+        super::grant_decisions::armed(true, false, AuditFailurePolicy::BestEffort, |m| m).await;
+    let created = post(
+        &row.state,
+        "key-a",
+        super::grant_decision_tasks::as_task(super::grant_decisions::personal_invoke(1), "s1-t16k"),
+    )
+    .await;
+    let id = task_id(&created);
+    let settled = poll_until_terminal(&row.state, "key-a", &id).await;
+    std::assert_eq!(status_of(&settled), "completed", "control: {settled}");
+    let call = super::grant_decisions::personal_invoke(9);
+    let server = call["params"]["arguments"]["server"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    row.state.meta_mcp.kill_switch().kill(&server);
+    let live = post(&row.state, "key-a", call).await;
+    assert!(
+        live.pointer("/error/message")
+            .and_then(Value::as_str)
+            .is_some_and(|m| m.contains("kill switch")),
+        "T16k: premise: the live call meets the kill switch: {live}"
+    );
+    let stored = get_task(&row.state, "key-a", &id).await;
+    std::assert_eq!(
+        error_masked(&stored),
+        error_masked(&live),
+        "T16k: the stored read keeps the kill switch's own answer"
     );
 }
 

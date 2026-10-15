@@ -30,6 +30,10 @@ enum Reason {
     Admin,
     /// It is personal and no grant names the caller.
     Grant,
+    /// The calling key's own scope denies it by name (`k-deny-cap`).
+    Scope,
+    /// The active routing profile denies it by name.
+    Profile,
 }
 
 /// [`CAP`]'s definition for `reason`. Its endpoint is never reached: every
@@ -42,6 +46,8 @@ fn definition(reason: Reason) -> String {
         Reason::Grant => {
             "  exposure: personal\n  read_only: true\n  identity_owner:\n    authority: api_key\n    subject: alice\n"
         }
+        // Reachable by definition: only the key or the profile excludes it.
+        Reason::Scope | Reason::Profile => "  exposure: public\n  read_only: true\n",
     };
     format!(
         "name: {CAP}\n\
@@ -81,6 +87,20 @@ async fn twin(reason: Reason, withheld: bool) -> Fx {
             crate::identity_grants::LocalIdentityGrantStore::from_grants(Vec::new()),
         );
         meta.set_capabilities(caps);
+        if matches!(reason, Reason::Profile) {
+            let mut profiles = std::collections::HashMap::new();
+            profiles.insert(
+                "restricted".to_string(),
+                crate::routing_profile::RoutingProfileConfig {
+                    description: "MIK-8361 capability profile twin".to_string(),
+                    deny_tools: Some(vec![CAP.to_string()]),
+                    ..Default::default()
+                },
+            );
+            let registry =
+                crate::routing_profile::ProfileRegistry::from_config(&profiles, "restricted");
+            return meta.with_profile_registry(registry);
+        }
         meta
     })
     .await;
@@ -102,6 +122,10 @@ enum Entry {
 }
 
 async fn call(fx: &Fx, entry: Entry, args: Value) -> (StatusCode, Value) {
+    call_as(fx, "k-std", entry, args).await
+}
+
+async fn call_as(fx: &Fx, key: &str, entry: Entry, args: Value) -> (StatusCode, Value) {
     let params = match entry {
         Entry::Invoke => json!({"name": "gateway_invoke",
             "arguments": {"server": CAPS, "tool": CAP, "arguments": args}}),
@@ -109,7 +133,7 @@ async fn call(fx: &Fx, entry: Entry, args: Value) -> (StatusCode, Value) {
             {"tool": format!("{CAPS}:{CAP}"), "arguments": args}
         ]}}),
     };
-    let (status, mut body) = send(fx, "/mcp", "k-std", "tools/call", params, None).await;
+    let (status, mut body) = send(fx, "/mcp", key, "tools/call", params, None).await;
     if let Some(obj) = body.as_object_mut() {
         obj.remove("id");
     }
@@ -141,6 +165,39 @@ async fn oracle2_capability_reasons_answer_as_the_undefined_name() {
     assert!(
         cells.is_empty(),
         "ORACLE.2 capability:\n{}",
+        cells.join("\n")
+    );
+}
+
+/// ORACLE.2, key scope and routing profile (lead, 2026-10-15): a defined
+/// capability the caller's own key scope, or the active profile, excludes by
+/// name answers byte for byte as the undefined capability under the same key.
+/// These refusals do not depend on the capability existing, so the gate does
+/// not map them to `ToolNotFound`; both twins meet the same refusal.
+#[tokio::test]
+async fn oracle2_capability_scope_and_profile_answer_as_the_undefined_name() {
+    let mut cells = Vec::new();
+    for (reason, key) in [(Reason::Scope, "k-deny-cap"), (Reason::Profile, "k-std")] {
+        for entry in [Entry::Invoke, Entry::Execute] {
+            let defined = call_as(&twin(reason, true).await, key, entry, json!({})).await;
+            let undefined = call_as(&twin(reason, false).await, key, entry, json!({})).await;
+            if defined.1.get("error").is_none() && defined.1.pointer("/result/isError").is_none() {
+                cells.push(format!(
+                    "{reason:?} {entry:?}: premise: not refused: {}",
+                    defined.1
+                ));
+            }
+            if defined != undefined {
+                cells.push(format!(
+                    "{reason:?} {entry:?}: defined {} {} vs undefined {} {}",
+                    defined.0, defined.1, undefined.0, undefined.1
+                ));
+            }
+        }
+    }
+    assert!(
+        cells.is_empty(),
+        "ORACLE.2 capability scope/profile:\n{}",
         cells.join("\n")
     );
 }
@@ -186,6 +243,50 @@ async fn c_a_withheld_capability_writes_one_invocation_record_as_the_undefined_o
     assert!(cells.is_empty(), "C:\n{}", cells.join("\n"));
 }
 
+/// MIK-8361, profile twin (condition 2): a defined capability the active
+/// profile excludes answers as the undefined one, and its audit trail is
+/// exactly what it was before the answer was mapped: the profile refusal
+/// (then a 400 from admission) wrote no invocation record, so none is written
+/// now. Measured on the unmapped code, 2026-10-15.
+#[tokio::test]
+async fn a_profile_refused_capability_keeps_its_audit_trail() {
+    let audit = tempfile::NamedTempFile::new().expect("tempfile");
+    let log = super::r2_identity_keys_tests::transparency_logger(&audit);
+    let caps = capabilities(Reason::Profile, true);
+    let fx = fixture_firewalled_built(Answer::Ok, move |meta| {
+        let mut meta = meta.with_identity_grants(
+            crate::identity_grants::LocalIdentityGrantStore::from_grants(Vec::new()),
+        );
+        meta.set_capabilities(caps);
+        meta.enable_transparency_log(log);
+        let mut profiles = std::collections::HashMap::new();
+        profiles.insert(
+            "restricted".to_string(),
+            crate::routing_profile::RoutingProfileConfig {
+                description: "MIK-8361 capability profile record".to_string(),
+                deny_tools: Some(vec![CAP.to_string()]),
+                ..Default::default()
+            },
+        );
+        meta.with_profile_registry(crate::routing_profile::ProfileRegistry::from_config(
+            &profiles,
+            "restricted",
+        ))
+    })
+    .await;
+    call(&fx, Entry::Invoke, json!({})).await;
+    let records: Vec<Value> = std::fs::read_to_string(audit.path())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| entry.get("request_hash").is_some())
+        .collect();
+    assert!(
+        records.is_empty(),
+        "no invocation record, as before: {records:#?}"
+    );
+}
+
 /// MIK-8361 review (gpt F4, disputed by the second seat): during an audit
 /// outage under fail-closed, a capability withheld by its grant answers as
 /// the undefined one does, so the grant decision's write cannot tell them
@@ -224,5 +325,54 @@ async fn f4_an_audit_outage_answers_a_withheld_capability_as_the_undefined_one()
     assert_eq!(
         answers[0], answers[1],
         "an audit outage tells the withheld capability from the undefined one"
+    );
+}
+
+/// Profile × capability, condition 1 (lead ruling 2026-10-15): the mapping
+/// is the defined capability's alone. A backend tool the profile excludes
+/// keeps the answer it had before (measured on the unmapped code,
+/// 2026-10-15): the absent-name answer the backend gate gives, as a tool
+/// result on `gateway_invoke` and as a failed chain step on `gateway_execute`.
+#[tokio::test]
+async fn a_profile_refused_backend_tool_keeps_its_answer() {
+    let fx = fixture_firewalled_built(Answer::Ok, |meta| {
+        let mut profiles = std::collections::HashMap::new();
+        profiles.insert(
+            "restricted".to_string(),
+            crate::routing_profile::RoutingProfileConfig {
+                description: "MIK-8361 backend profile row".to_string(),
+                deny_tools: Some(vec!["read".to_string()]),
+                ..Default::default()
+            },
+        );
+        meta.with_profile_registry(crate::routing_profile::ProfileRegistry::from_config(
+            &profiles,
+            "restricted",
+        ))
+    })
+    .await;
+    let absent = "the backend does not list a tool named `read`";
+    let invoke = json!({"name": "gateway_invoke",
+        "arguments": {"server": "alpha", "tool": "read", "arguments": {}}});
+    let (status, body) = send(&fx, "/mcp", "k-std", "tools/call", invoke, None).await;
+    let text = body["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert_eq!(status, StatusCode::OK, "invoke: {body}");
+    assert!(
+        body["result"]["isError"] == json!(true) && text.contains(absent),
+        "invoke keeps its answer: {body}"
+    );
+    let execute = json!({"name": "gateway_execute", "arguments": {"chain": [
+        {"tool": "alpha:read", "arguments": {}}
+    ]}});
+    let (status, body) = send(&fx, "/mcp", "k-std", "tools/call", execute, None).await;
+    assert_eq!(status, StatusCode::OK, "execute: {body}");
+    assert_eq!(
+        body["error"],
+        json!({"code": -32603, "message": format!(
+            "JSON-RPC error -32603: Chain step 0 (alpha:read) failed: {absent}"
+        )}),
+        "execute keeps its answer: {body}"
     );
 }
