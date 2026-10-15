@@ -290,3 +290,6 @@ async fn t5_live_basic_only_get_matches_the_wrong_bearer_twin() {
         );
     }
 }
+
+#[path = "audience_source_tests/get_admission.rs"]
+mod get_admission;

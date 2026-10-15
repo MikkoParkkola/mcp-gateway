@@ -11,7 +11,72 @@ use super::{
     is_tools_list_changed,
 };
 
+/// Immutable native GET facts: only digests, record fingerprints and counts.
+#[cfg(test)]
+pub(in crate::gateway) type GetSessionFacts = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    usize,
+    Vec<(String, u64, String, usize, bool)>,
+    tokio::time::Instant,
+);
+
 impl NotificationMultiplexer {
+    #[cfg(test)]
+    pub(in crate::gateway) fn get_session_facts(&self, id: &str) -> Option<GetSessionFacts> {
+        let sessions = self.sessions.read();
+        let session = sessions.get(id)?;
+        let mut records: Vec<_> = session
+            .records
+            .read()
+            .iter()
+            .map(|entry| {
+                let state = entry.record.state();
+                let sorted: std::collections::BTreeMap<_, _> = state.backends.iter().collect();
+                let fingerprint = crate::hashing::sha256_hex(
+                    format!(
+                        "{:?}",
+                        (state.baselined, state.stamp, &state.served, sorted)
+                    )
+                    .as_bytes(),
+                );
+                (
+                    entry.key.clone(),
+                    entry.record.epoch(),
+                    fingerprint,
+                    entry.active.len(),
+                    entry.opened,
+                )
+            })
+            .collect();
+        records.sort_by(|left, right| left.0.cmp(&right.0));
+        let credential = session
+            .credential
+            .read()
+            .as_ref()
+            .map(HeldCredential::digest);
+        let read_key = session
+            .read_key
+            .read()
+            .as_ref()
+            .map(|v| crate::hashing::sha256_hex(v.as_bytes()));
+        let last_event_id = session
+            .last_event_id
+            .read()
+            .as_ref()
+            .map(|v| crate::hashing::sha256_hex(v.as_bytes()));
+        let last_active = *session.last_active.read();
+        Some((
+            credential,
+            read_key,
+            last_event_id,
+            session.receiver_count(),
+            records,
+            last_active,
+        ))
+    }
+
     /// The view `session_id`'s stream opens with: its own subject's record on
     /// the session, with a baseline of what each backend shows its caller now,
     /// so the first change after attach is judged against what it saw

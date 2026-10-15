@@ -214,6 +214,8 @@ pub struct NotificationMultiplexer {
     /// frame is withheld at write and not at the decision.
     #[cfg(test)]
     pub(crate) before_write_check: Arc<crate::test_pause::Slot>,
+    #[cfg(test)]
+    pub(in crate::gateway) before_get_resolve: crate::test_pause::Slot,
 }
 
 impl NotificationMultiplexer {
@@ -233,6 +235,8 @@ impl NotificationMultiplexer {
             reads: std::sync::OnceLock::new(),
             #[cfg(test)]
             before_write_check: Arc::default(),
+            #[cfg(test)]
+            before_get_resolve: Default::default(),
         }
     }
 

@@ -157,6 +157,9 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
         return gateway_reply(refusal);
     }
 
+    #[cfg(test)]
+    state.multiplexer.before_get_resolve.pause().await;
+
     let existing_session_id = session_id_header(&headers).map(String::from);
 
     let last_event_id = headers
