@@ -63,6 +63,18 @@ async fn a_resume_after_a_mint_busy_resolves_its_pending_step_once() {
     let stop = execute(&fx, None).await;
     let handle = request_state_in(&stop)
         .unwrap_or_else(|| panic!("premise: the chain stops with a resume handle: {stop}"));
+    let sealed = fx
+        .state
+        .meta_mcp
+        .continuation()
+        .keyring()
+        .open(&handle, crate::protocol::continuation::now_unix_secs())
+        .expect("premise: the handle opens");
+    assert_eq!(
+        sealed.next_step,
+        Some(0),
+        "premise: it names the pending step"
+    );
 
     fx.gateway.fail_custody_after_for_test(1);
     let reads = fx.gateway.resolves();
@@ -72,5 +84,10 @@ async fn a_resume_after_a_mint_busy_resolves_its_pending_step_once() {
         (fx.gateway.resolves() - reads, refusals(&fx) - before),
         (2, 1),
         "SETTLE.10: (custody reads, idp_refuse) for the resumed step: {resumed}"
+    );
+    assert_eq!(
+        resumed.pointer("/error/data/retryable"),
+        Some(&json!(true)),
+        "SETTLE.10: the resume answers the step's carried Busy: {resumed}"
     );
 }
