@@ -18,16 +18,37 @@ use tracing::warn;
 use super::{NotificationMultiplexer, STREAMING_TARGET};
 use crate::gateway::auth::live::{Delivery, delivery};
 use crate::gateway::outbound::{OutboundFrame, StreamJudge, sse_data, sse_message};
+use crate::gateway::streaming::Decision;
+
+#[path = "streaming_sse/request_scoped.rs"]
+mod request_scoped;
+pub(crate) use request_scoped::{Unframed, request_scoped_event_stream};
 
 /// Create SSE response for GET /mcp
 ///
 /// Takes owned data to satisfy Rust 2024 lifetime capture rules for `impl Stream`.
-#[allow(clippy::needless_pass_by_value)] // owned values required for stream lifetime
 pub fn create_sse_response(
     multiplexer: Arc<NotificationMultiplexer>,
     session_id: String,
     last_event_id: Option<String>,
     keep_alive_interval: Duration,
+) -> Option<Sse<impl Stream<Item = std::result::Result<Event, Infallible>>>> {
+    create_sse_response_with_view(
+        multiplexer,
+        session_id,
+        (last_event_id, keep_alive_interval),
+        None,
+    )
+}
+
+/// [`create_sse_response`] for a stream that judges each view hint for its own
+/// view when it writes it (MIK-8350 D17d).
+#[allow(clippy::needless_pass_by_value)] // owned values required for stream lifetime
+pub(crate) fn create_sse_response_with_view(
+    multiplexer: Arc<NotificationMultiplexer>,
+    session_id: String,
+    (last_event_id, keep_alive_interval): (Option<String>, Duration),
+    view: Option<crate::gateway::streaming::StreamView>,
 ) -> Option<Sse<impl Stream<Item = std::result::Result<Event, Infallible>>>> {
     // Access session data
     let sessions = multiplexer.sessions.read();
@@ -48,23 +69,23 @@ pub fn create_sse_response(
     // Create the stream with owned data
     let stream = stream! {
         // Send initial connection event
-        yield Ok(Event::default()
-            .event("connected")
-            .data(json!({ "session_id": session_id_owned }).to_string()));
+        yield Ok(connected_event(&session_id_owned));
 
         loop {
             match rx.recv().await {
                 Ok(item) => {
+                    #[cfg(test)]
+                    multiplexer.before_write_check.pause().await;
                     // G6: judged again as it is written, not only as it was
                     // queued, so a credential that died in between is written
                     // nothing.
-                    match credential_at_write(&multiplexer, &session, item.audience.as_audience()).await {
-                        Delivery::Deliver => {}
-                        Delivery::OutOfScope => {
+                    match write_gate(&multiplexer, &session, view.as_ref(), &item).await {
+                        Gate::Write => {}
+                        Gate::Skip => {
                             withhold(&item);
                             continue;
                         }
-                        Delivery::Dead => {
+                        Gate::Close => {
                             withhold(&item);
                             close_dead(&mut rx);
                             break;
@@ -79,6 +100,33 @@ pub fn create_sse_response(
                             watch.report(false);
                         }
                         continue;
+                    }
+                    // MIK-8350 B2': what the listener was last told advances only
+                    // here, once the frame has passed every write gate.
+                    if let (Some(backend), Some(view)) = (&item.judged, &view) {
+                        let credential = session.credential.read().clone();
+                        let authorizer = multiplexer.authorizer.read().clone();
+                        let decision = match authorizer {
+                            Some(auth) => {
+                                view.decide(
+                                    &auth,
+                                    credential.as_ref(),
+                                    session.id.expose_secret(),
+                                    backend,
+                                )
+                                .await
+                            }
+                            None => Decision::Skip,
+                        };
+                        match decision {
+                            Decision::Write => {}
+                            Decision::Skip => continue,
+                            Decision::Close => {
+                                withhold(&item);
+                                close_dead(&mut rx);
+                                break;
+                            }
+                        }
                     }
                     if let Some(watch) = &item.watch {
                         watch.report(true);
@@ -110,9 +158,9 @@ pub fn create_sse_response(
                     break;
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                    // A frame like any other: a dead credential gets none.
-                    let audience = crate::gateway::auth::live::Audience::Any;
-                    if credential_at_write(&multiplexer, &session, audience).await == Delivery::Dead {
+                    // A frame like any other: a dead credential or a stream
+                    // subject that no longer resolves gets none (MIK-8350).
+                    if !lag_notice_allowed(&multiplexer, &session, view.as_ref()).await {
                         close_dead(&mut rx);
                         break;
                     }
@@ -123,9 +171,34 @@ pub fn create_sse_response(
                 }
             }
         }
+        drop(view);
     };
 
     Some(Sse::new(stream).keep_alive(KeepAlive::new().interval(keep_alive_interval).text("ping")))
+}
+
+/// The event a stream opens with, naming its session.
+fn connected_event(session_id: &str) -> Event {
+    Event::default()
+        .event("connected")
+        .data(json!({ "session_id": session_id }).to_string())
+}
+
+#[cfg(test)]
+impl NotificationMultiplexer {
+    /// Whether a stream would write `frame` to `session_id`'s caller, as the
+    /// real write loop's credential check decides it: for rows that read a bare
+    /// receiver of the queue.
+    pub(crate) async fn passes_write_gate(
+        &self,
+        session_id: &str,
+        frame: &super::SessionFrame,
+    ) -> bool {
+        let Some(session) = self.sessions.read().get(session_id).map(Arc::clone) else {
+            return false;
+        };
+        credential_at_write(self, &session, frame.audience.as_audience()).await == Delivery::Deliver
+    }
 }
 
 /// What writing a copy for `audience` to `session`'s stream should do now.
@@ -147,6 +220,88 @@ async fn credential_at_write(
         return Delivery::Deliver;
     };
     delivery(&authorizer, Some(&credential), audience).await
+}
+
+/// What the write loop does with a frame as it is written.
+enum Gate {
+    Write,
+    Skip,
+    Close,
+}
+
+/// The gates a frame passes as it is written: the held credential, and, for
+/// a frame that is not a judged hint, the stream's own subject, as a
+/// listener's is (MIK-8350): an expired adapter receipt or a CF assertion
+/// that no longer verifies closes the stream. A death is counted here.
+async fn write_gate(
+    multiplexer: &NotificationMultiplexer,
+    session: &super::ClientSession,
+    view: Option<&super::StreamView>,
+    item: &super::SessionFrame,
+) -> Gate {
+    match credential_at_write(multiplexer, session, item.audience.as_audience()).await {
+        Delivery::Deliver => {}
+        Delivery::OutOfScope => return Gate::Skip,
+        Delivery::Dead => {
+            crate::gateway::streaming::DeadReason::Bearer.count();
+            return Gate::Close;
+        }
+    }
+    if item.judged.is_none()
+        && let Some(view) = view
+        && let Some(reason) = subject_dead(multiplexer, session, view).await
+    {
+        reason.count();
+        return Gate::Close;
+    }
+    Gate::Write
+}
+
+/// Whether the `lagged` notice may be written: the gates a frame passes, for
+/// a notice that names no backend. The held credential is judged against any
+/// audience, and the stream's own subject as for every non-hint frame
+/// (MIK-8350). A subject death is counted here.
+async fn lag_notice_allowed(
+    multiplexer: &NotificationMultiplexer,
+    session: &super::ClientSession,
+    view: Option<&super::StreamView>,
+) -> bool {
+    let audience = crate::gateway::auth::live::Audience::Any;
+    if credential_at_write(multiplexer, session, audience).await == Delivery::Dead {
+        return false;
+    }
+    if let Some(view) = view
+        && let Some(reason) = subject_dead(multiplexer, session, view).await
+    {
+        reason.count();
+        return false;
+    }
+    true
+}
+
+/// Why `view`'s caller no longer resolves, for a frame that is not a judged
+/// hint, or `None` when the frame may be written: the judgement a listener
+/// makes for every non-tools delivery, with `dead_at_attach`'s carve-out for
+/// a caller that presented nothing on a public path (MIK-8350).
+async fn subject_dead(
+    multiplexer: &NotificationMultiplexer,
+    session: &super::ClientSession,
+    view: &super::StreamView,
+) -> Option<crate::gateway::streaming::DeadReason> {
+    use crate::gateway::streaming::{AtAttach, Judged, dead_at_attach};
+    let authorizer = multiplexer.authorizer.read().clone()?;
+    let credential = session.credential.read().clone();
+    match view
+        .judge
+        .resolve(&authorizer, (credential.as_ref(), view.subject.as_ref()))
+        .await
+    {
+        Judged::Live(_) => None,
+        Judged::Dead(reason) => match dead_at_attach(credential.as_ref(), reason, &view.subject) {
+            AtAttach::OpenAnonymous => None,
+            AtAttach::Refuse => Some(reason),
+        },
+    }
 }
 
 /// Report `item` withheld, so a request's waiter does not wait for it.
@@ -218,6 +373,24 @@ fn is_task_notification(notification: &Value) -> bool {
     notification.get("method").and_then(Value::as_str) == Some("notifications/tasks")
 }
 
+/// The written form of the attach hint, when the listener is owed it and the
+/// reader's judge lets it out.
+async fn attach_hint(
+    listener: &crate::gateway::subscription_registry::Listener,
+    filter: &crate::protocol::subscriptions::ListenRequest,
+    subscription: &crate::protocol::subscriptions::SubscriptionId,
+    judge: &StreamJudge,
+) -> Option<String> {
+    let hint = listener.attach_hint(filter).await?;
+    let recorded = judge
+        .record(judge.judge_document(subscription.tag(hint))?)
+        .await;
+    if recorded.is_withheld() {
+        return None;
+    }
+    sse_data(&recorded)
+}
+
 /// The response body of a `subscriptions/listen` request.
 ///
 /// An SSE stream that stays open, per the transport specification: the
@@ -240,7 +413,7 @@ pub(crate) fn subscription_stream(
     request_params: Option<Value>,
     task_frames: Option<std::sync::Arc<dyn TaskFrames>>,
 ) -> axum::response::Response {
-    use crate::gateway::subscription_registry::delivers;
+    use crate::gateway::subscription_registry::{Admit, delivers};
 
     let stream = stream! {
         // The acknowledgement rides the stream it opens, so a client has one
@@ -258,6 +431,12 @@ pub(crate) fn subscription_stream(
         };
         yield Ok::<_, Infallible>(Event::default().event("message").data(ack));
 
+        // MIK-8350 B10: one constant hint after the acknowledgement, so a
+        // client that attaches re-lists once whatever changed while it was away.
+        if let Some(data) = attach_hint(&listener, &filter, &subscription, &judge).await {
+            yield Ok(Event::default().event("message").data(data));
+        }
+
         let mut graceful = true;
         loop {
             match listener.recv().await {
@@ -268,11 +447,12 @@ pub(crate) fn subscription_stream(
                         continue;
                     }
                     // Re-validated at delivery, only for wanted items: a token
-                    // revoked or expired after the stream opened is not told.
-                    match listener.delivery(&published).await {
-                        Delivery::Deliver => {}
-                        Delivery::OutOfScope => continue,
-                        Delivery::Dead => {
+                    // revoked or expired after the stream opened is not told,
+                    // and a `tools/list_changed` is owed only to a listener
+                    // whose own view of that backend moved (MIK-8350).
+                    let owed = match listener.admit(&published).await {
+                        Admit::Skip => continue,
+                        Admit::Close => {
                             // Skipping would hold one of the listener slots for
                             // a stream that can never receive again. Not
                             // graceful: a dead credential receives no further
@@ -282,7 +462,8 @@ pub(crate) fn subscription_stream(
                             graceful = false;
                             break;
                         }
-                    }
+                        Admit::Send(owed) => owed,
+                    };
                     // A task notification is built for THIS reader at delivery
                     // (full state, re-authorized); every other kind is the
                     // published value, tagged.
@@ -351,6 +532,7 @@ pub(crate) fn subscription_stream(
                         crate::gateway::meta_mcp::sealed_hold::hand_off(holds);
                     }
                     yield Ok(Event::default().event("message").data(data));
+                    listener.commit_owed(owed);
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
                 Err(broadcast::error::RecvError::Lagged(missed)) => {
@@ -381,80 +563,12 @@ pub(crate) fn subscription_stream(
         {
             yield Ok(Event::default().event("message").data(end));
         }
+        drop(listener);
     };
 
     Sse::new(stream)
         .keep_alive(KeepAlive::new().interval(keep_alive_interval).text("ping"))
         .into_response()
-}
-
-/// Re-frame an already-built JSON-RPC response as an event stream carrying the
-/// notifications the backend raised during that same call, ahead of the result.
-///
-/// Deliberately NOT one of the two existing pipes: `subscription_stream` is
-/// forbidden request-scoped traffic (SUB.2a) and `create_sse_response` is the
-/// session-scoped standalone stream. This is the response body of ONE request.
-///
-/// The result frame is the bytes the JSON path already produced, so an SSE
-/// client and a JSON client see byte-identical results -- there is no second
-/// producer of the decorated result to drift from the first. `MIK-7272.SUB.2b`.
-pub(crate) async fn request_scoped_event_stream(
-    response: axum::response::Response,
-    notifications: Vec<OutboundFrame>,
-    judge: Arc<StreamJudge>,
-) -> axum::response::Response {
-    use axum::http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
-    use futures::StreamExt as _;
-
-    // `subscriptions/listen` already answered with a stream of its own, and a
-    // refusal that never reached the dispatch has no result to frame.
-    let is_json = response
-        .headers()
-        .get(CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.starts_with("application/json"));
-    if !is_json {
-        return response;
-    }
-
-    let (mut parts, body) = response.into_parts();
-    // MIK-8176: the answer's holds move into the stream and are handed off
-    // only as its event is yielded; a stream dropped first gives them back.
-    let carried = parts
-        .extensions
-        .remove::<crate::gateway::meta_mcp::sealed_hold::CarriedHolds>();
-    // Lazy, frame by frame: each notification is committed, and the answer's
-    // body read (which commits its reservation, MIK-7116.MIN.2 F3), only as
-    // the client reads this stream, never while it is being built.
-    let sse = stream! {
-        for frame in notifications {
-            if let Some(event) = sse_message(&judge.record(frame).await) {
-                yield Ok::<_, Infallible>(axum::body::Bytes::from(event));
-            }
-        }
-        if let Some(carried) = &carried {
-            crate::gateway::meta_mcp::sealed_hold::hand_off(carried);
-        }
-        yield Ok(axum::body::Bytes::from_static(b"event: message\ndata: "));
-        let mut result = body.into_data_stream();
-        while let Some(Ok(chunk)) = result.next().await {
-            yield Ok(chunk);
-        }
-        yield Ok(axum::body::Bytes::from_static(b"\n\n"));
-    };
-
-    parts.headers.insert(
-        CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("text/event-stream"),
-    );
-    parts.headers.insert(
-        CACHE_CONTROL,
-        axum::http::HeaderValue::from_static("no-cache"),
-    );
-    // The re-framed body is a different length; a stale one truncates it.
-    parts.headers.remove(CONTENT_LENGTH);
-
-    (parts, axum::body::Body::from_stream(sse)).into_response()
 }
 
 /// One SSE frame carrying `data`, in the `event: message` shape both arms use.
@@ -618,3 +732,7 @@ mod terminal_frame_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "streaming_sse_gate_tests.rs"]
+mod gate_tests;

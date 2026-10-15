@@ -404,12 +404,15 @@ impl Error {
     /// on an unredirected request. See its doc comment for why a redirected
     /// request is excluded. `BackendUnavailable` earns it by its construction
     /// invariant (raised only before the request is sent), which a scan test
-    /// holds to a reviewed list of files.
+    /// holds to a reviewed list of files. The gateway-sealed transient (a
+    /// busy custody, MIK-8428) earns it the same way, decided by its seal and
+    /// never its text; `Config` stays out, as it is also raised after a send.
     #[must_use]
     pub fn is_pre_dispatch(&self) -> bool {
-        matches!(
-            self,
-            Self::CircuitOpen { .. }
+        crate::personal_accounts::refusal::transient_data(self).is_some()
+            || matches!(
+                self,
+                Self::CircuitOpen { .. }
                 | Self::RateLimited(_)
                 | Self::IdentitySlotsExhausted { .. }
                 | Self::BackendNotFound(_)
@@ -422,7 +425,7 @@ impl Error {
                 | Self::AuthorizationCancelled { .. }
                 | Self::AuthorizationRequired { .. }
                 | Self::AuthorizationPending { .. }
-        )
+            )
     }
 
     /// The request may have left the gateway and no answer came back: the
@@ -540,6 +543,25 @@ mod rpc_code_tests {
         assert!(Error::BackendUnavailable("svc".to_string()).is_pre_dispatch());
         assert!(!Error::Transport("reset".to_string()).is_pre_dispatch());
         assert!(!Error::BackendTimeout("slow".to_string()).is_pre_dispatch());
+    }
+
+    /// MIK-8428 Case A: the gateway-sealed transient is pre-dispatch (it is
+    /// built only before a send); a look-alike with the same code, text and
+    /// data but no seal, as a backend could answer, is not. The seal decides,
+    /// never the text.
+    #[test]
+    fn only_the_sealed_transient_is_pre_dispatch() {
+        let sealed = crate::personal_accounts::refusal::transient_retry_error(None);
+        let Error::JsonRpc { code, message, .. } = &sealed else {
+            panic!("premise: the transient is a JSON-RPC error: {sealed}");
+        };
+        let look_alike = Error::JsonRpc {
+            code: *code,
+            message: message.clone(),
+            data: crate::personal_accounts::refusal::transient_data(&sealed),
+        };
+        assert!(sealed.is_pre_dispatch(), "{sealed}");
+        assert!(!look_alike.is_pre_dispatch(), "{look_alike}");
     }
 
     #[test]

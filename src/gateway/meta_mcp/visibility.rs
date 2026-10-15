@@ -225,6 +225,31 @@ impl MetaMcp {
             && scope.authorizer.admits_backend(server)
     }
 
+    /// One admitted backend's part of [`Self::admitted_counts`]: how many of its
+    /// tools this caller is shown, whether that listing is known at all, and
+    /// whether the list is cut short. The list and its cut flag are read
+    /// together inside the backend's snapshot, so a fill landing between cannot
+    /// tear them; `listing_known` is a separate read (MIK-8350 D12).
+    pub(crate) fn admitted_count_for(
+        &self,
+        backend: &crate::backend::Backend,
+        scope: InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) -> (usize, bool, bool) {
+        let view = self.listing_snapshot(backend, scope);
+        let known = view.is_some() && self.listing_known(backend, scope);
+        match view {
+            None => (0, known, false),
+            Some((tools, cut)) => {
+                let count = tools
+                    .iter()
+                    .filter(|t| self.shows_tool(&backend.name, t, scope, session_id))
+                    .count();
+                (count, known, cut)
+            }
+        }
+    }
+
     /// `(tool total, backend count)` over what this caller could invoke: the
     /// one source for the initialize preamble and the meta-tool descriptions.
     pub(crate) fn admitted_counts(
@@ -239,34 +264,18 @@ impl MetaMcp {
             .filter(|b| self.admits_backend(&b.name, scope, session_id))
             .collect();
         // MIK-8356: a per-user backend is counted from this caller's own slot,
-        // and is not known while that slot is cold.
-        let views: Vec<_> = backends
-            .iter()
-            .map(|b| self.listing_snapshot(b, scope))
-            .collect();
-        let known = backends
-            .iter()
-            .zip(&views)
-            .filter(|(b, view)| view.is_some() && self.listing_known(b, scope))
-            .count();
-        // A truncated drain is still "known" (enumerated), but its count is a
-        // lower bound, never exact (MIK 7570 PAGING.1 design D). List and flag
-        // are read under one guard so a fill landing between cannot tear them.
+        // and is not known while that slot is cold. A truncated drain is still
+        // "known" (enumerated), but its count is a lower bound, never exact
+        // (MIK 7570 PAGING.1 design D).
+        let mut known = 0;
         let mut truncated = false;
-        let admitted: usize = backends
-            .iter()
-            .zip(views)
-            .map(|(b, view)| {
-                let Some((tools, cut)) = view else {
-                    return 0;
-                };
-                truncated |= cut;
-                tools
-                    .iter()
-                    .filter(|t| self.shows_tool(&b.name, t, scope, session_id))
-                    .count()
-            })
-            .sum();
+        let mut admitted = 0;
+        for backend in &backends {
+            let (count, is_known, cut) = self.admitted_count_for(backend, scope, session_id);
+            admitted += count;
+            known += usize::from(is_known);
+            truncated |= cut;
+        }
         let mut total = if known == backends.len() && !truncated {
             ToolTotal::Exact(admitted)
         } else if known == 0 {

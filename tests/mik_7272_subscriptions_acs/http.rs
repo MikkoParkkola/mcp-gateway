@@ -21,188 +21,16 @@ use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-/// The gateway state, plus the directory its task store leases.
-///
-/// The store holds that directory for as long as the service lives, and the
-/// cases here keep listen streams open across several steps, so the caller
-/// binds the `TempDir` for the whole test rather than dropping it here.
-async fn state(modern: bool) -> (Arc<AppState>, tempfile::TempDir) {
-    let mut config = Config::default();
-    config.server.modern_protocol = modern;
-    let backends = Arc::new(BackendRegistry::new());
-    let multiplexer = Arc::new(NotificationMultiplexer::new(
-        Arc::clone(&backends),
-        config.streaming.clone(),
-    ));
-    let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
-    let agent_registry = Arc::new(AgentRegistry::new());
+#[path = "http/catalogue.rs"]
+mod catalogue;
+use catalogue::{
+    CatalogueMock, SseReader, marker_notification, register_empty_alpha, show_added_alpha,
+};
 
-    // One registry, shared between the state the router reads and the
-    // executor that publishes: these cases assert on what a listener sees,
-    // and two registries would strand every task notification.
-    let subscriptions = Arc::new(SubscriptionRegistry::new(64, auth_state(&config.auth)));
-    let store_dir = tempfile::tempdir().expect("a private task-store directory");
-    let (tasks, task_executor) = open_runtime(
-        &store_dir.path().join("tasks"),
-        config.tasks.max_workers,
-        StoreLimits::default(),
-        Arc::clone(&subscriptions),
-    )
-    .await
-    .expect("the fixture task store opens");
-
-    let state = Arc::new(AppState {
-        continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
-        session_lifecycle: None,
-        env: None,
-        meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
-        backends,
-        meta_mcp_enabled: true,
-        multiplexer,
-        proxy_manager,
-        streaming_config: config.streaming.clone(),
-        auth_config: Arc::new(ResolvedAuthConfig::from_config(&config.auth)),
-        key_server: None,
-        tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
-        mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
-        sanitize_input: false,
-        ssrf_protection: false,
-        trust_configured_backends: false,
-        inflight: Arc::new(tokio::sync::Semaphore::new(100)),
-        agent_auth: AgentAuthState::new(false, agent_registry),
-        gateway_key_pair: Arc::new(GatewayKeyPair::generate().expect("RSA key gen")),
-        capability_dirs: Vec::new(),
-        config_path: None,
-        #[cfg(feature = "firewall")]
-        firewall: None,
-        agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
-        control_plane_store: None,
-        control_plane_base: None,
-        live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new(config.clone())),
-        export_status: None,
-        transparency_log: None,
-        dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),
-        tasks,
-        task_executor,
-        subscriptions,
-    });
-    (state, store_dir)
-}
-
-async fn post(modern: bool, body: Value, headers: &[(&str, &str)]) -> (StatusCode, Value) {
-    let mut builder = Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("content-type", "application/json");
-    for (name, value) in headers {
-        builder = builder.header(*name, *value);
-    }
-    // `_store_dir` stays bound until this helper returns, which is after the
-    // response body has been read: the store's directory outlives the request.
-    let (app, _store_dir) = state(modern).await;
-    let response = create_router(app)
-        .oneshot(
-            builder
-                .body(Body::from(serde_json::to_vec(&body).expect("body")))
-                .expect("request"),
-        )
-        .await
-        .expect("router must answer");
-    let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("body must read");
-    (
-        status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-    )
-}
-
-fn modern_call(method: &str, params: Value) -> (Value, Vec<(&'static str, String)>) {
-    let mut full = params;
-    if let Some(object) = full.as_object_mut() {
-        object.insert(
-            "_meta".to_string(),
-            json!({
-                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                "io.modelcontextprotocol/clientCapabilities": {}
-            }),
-        );
-    }
-    (
-        json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": full }),
-        vec![
-            ("mcp-protocol-version", "2026-07-28".to_string()),
-            ("mcp-method", method.to_string()),
-        ],
-    )
-}
-
-async fn post_modern(method: &str, params: Value) -> (StatusCode, Value) {
-    let (body, owned) = modern_call(method, params);
-    let borrowed: Vec<(&str, &str)> = owned.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    post(true, body, &borrowed).await
-}
-
-/// Open a `subscriptions/listen` stream and hold it.
-///
-/// Reads the body FRAME BY FRAME. `to_bytes` waits for the end of the
-/// body, and the whole point of this response is that there is no end —
-/// a test written that way hangs rather than fails.
-async fn open_listen(
-    state: &Arc<AppState>,
-    params: Value,
-) -> (StatusCode, Option<String>, axum::body::BodyDataStream) {
-    // Built by the same helper every other modern call uses, so an
-    // envelope change cannot make these tests pass while real clients fail.
-    let (body, headers) = modern_call("subscriptions/listen", params);
-    let mut builder = Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("content-type", "application/json");
-    for (name, value) in &headers {
-        builder = builder.header(*name, value.as_str());
-    }
-    let response = create_router(Arc::clone(state))
-        .oneshot(
-            builder
-                .body(Body::from(serde_json::to_vec(&body).expect("body")))
-                .expect("request"),
-        )
-        .await
-        .expect("router must answer");
-
-    let status = response.status();
-    let content_type = response
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
-    (
-        status,
-        content_type,
-        response.into_body().into_data_stream(),
-    )
-}
-
-/// The next SSE payload, or `None` if none arrives in time.
-///
-/// Bounded on purpose: a stream that stays open cannot be drained, so
-/// "nothing arrived" has to be an answer the test can assert on.
-async fn next_data(stream: &mut axum::body::BodyDataStream) -> Option<Value> {
-    use futures::StreamExt;
-
-    let deadline = std::time::Duration::from_secs(2);
-    loop {
-        let chunk = tokio::time::timeout(deadline, stream.next()).await.ok()??;
-        let text = String::from_utf8(chunk.expect("chunk").to_vec()).expect("utf-8");
-        // Keep-alive comments carry no data line; skip them rather than
-        // failing, since their timing is not what these tests are about.
-        if let Some(line) = text.lines().find_map(|l| l.strip_prefix("data: ")) {
-            return Some(serde_json::from_str(line).expect("each event is JSON"));
-        }
-    }
-}
+#[path = "http/fixture.rs"]
+mod fixture;
+use fixture::{modern_call, post, post_modern};
+pub(super) use fixture::{next_data, open_listen, state};
 
 #[tokio::test]
 async fn ac_sub_1_the_gateway_serves_subscriptions_listen() {
@@ -249,42 +77,6 @@ async fn ac_sub_1_the_gateway_serves_subscriptions_listen() {
     );
 }
 
-/// MIK-7766: a listener that fell behind lost updates, so its stream closes
-/// without the success response that would call the subscription complete.
-#[tokio::test]
-async fn ac_sub_1_a_lagged_listener_is_closed_without_a_graceful_end() {
-    let (state, _store_dir) = state(true).await;
-    let (status, _, mut stream) = open_listen(
-        &state,
-        json!({ "notifications": { "toolsListChanged": true } }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    next_data(&mut stream)
-        .await
-        .expect("the ack opens the stream");
-    // More than the registry's channel holds, published while unread.
-    for _ in 0..300 {
-        state.announce_tools_changed("any").await;
-    }
-    assert_eq!(
-        next_data(&mut stream).await,
-        None,
-        "a lagged stream closes with no response"
-    );
-    assert!(
-        matches!(
-            tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                futures::StreamExt::next(&mut stream)
-            )
-            .await,
-            Ok(None)
-        ),
-        "the body ended, not merely went quiet"
-    );
-}
-
 /// MIK-7766: the honoured filter names only what the gateway delivers, and
 /// drops what it does not recognise.
 #[tokio::test]
@@ -316,6 +108,8 @@ async fn ac_sub_1_the_acknowledgement_names_the_honoured_filter() {
 #[tokio::test]
 async fn ac_sub_1_a_notification_reaches_a_listener_tagged_with_its_subscription() {
     let (state, _store_dir) = state(true).await;
+    let (mock, url) = CatalogueMock::start().await;
+    let backend = register_empty_alpha(&state, &url).await;
     let (status, _, mut stream) = open_listen(
         &state,
         json!({ "notifications": { "toolsListChanged": true } }),
@@ -323,16 +117,26 @@ async fn ac_sub_1_a_notification_reaches_a_listener_tagged_with_its_subscription
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let ack = next_data(&mut stream)
-        .await
-        .expect("the ack opens the stream");
+    let mut reader = SseReader::new(&mut stream);
+    let ack = reader.next_event("the ack").await;
     let subscription = ack["params"]["_meta"]["io.modelcontextprotocol/subscriptionId"].clone();
+    let hint = reader.next_event("the B10 attach hint").await;
+    assert_eq!(
+        hint["method"], "notifications/tools/list_changed",
+        "the attach hint is drained here, it is not the asserted event"
+    );
 
-    state.announce_tools_changed("any").await;
+    show_added_alpha(&backend, &mock).await;
+    state.announce_tools_changed("alpha").await;
+    state.subscriptions.publish(marker_notification());
 
-    let event = next_data(&mut stream)
-        .await
-        .expect("a subscribed notification must reach the open stream");
+    let preceding = reader.collect_until_marker().await;
+    assert_eq!(
+        preceding.len(),
+        1,
+        "exactly one real notification must precede the marker: {preceding:?}"
+    );
+    let event = &preceding[0];
     assert_eq!(event["method"], "notifications/tools/list_changed");
     assert_eq!(
         event["params"]["_meta"]["io.modelcontextprotocol/subscriptionId"], subscription,
@@ -340,6 +144,11 @@ async fn ac_sub_1_a_notification_reaches_a_listener_tagged_with_its_subscription
          which is how a client with two subscriptions tells them apart: \
          {event}"
     );
+
+    drop(reader);
+    drop(stream);
+    backend.stop().await.expect("VOID cleanup: backend stops");
+    mock.shutdown().await;
 }
 
 #[tokio::test]

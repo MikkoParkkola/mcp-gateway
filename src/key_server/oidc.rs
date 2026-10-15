@@ -151,6 +151,7 @@ pub struct VerifiedIdentity {
 // `checked` and `stable_actor_id` live in `oidc_identity.rs` (size ceiling).
 #[path = "oidc_identity.rs"]
 mod identity;
+pub(crate) use identity::VerifiedAssertion;
 
 /// The domain of `email` when it has exactly one `@` with a non-empty local
 /// part and domain; `None` otherwise. Callers compare the result with
@@ -242,6 +243,13 @@ impl OidcVerifier {
         }
     }
 
+    /// Drop every cached JWKS and discovery document, so the next verify
+    /// fetches the provider's current keys (a key rotation seen at once).
+    #[cfg(test)]
+    pub(crate) fn expire_jwks_for_test(&self) {
+        self.jwks_cache.clear_for_test();
+    }
+
     /// As [`Self::with_http_client`], with the cache and fallback lifetimes
     /// set, so a test can let one expire while the other stands.
     #[cfg(test)]
@@ -266,6 +274,12 @@ impl OidcVerifier {
         self.jwks_cache.discovery.get(issuer).map(|d| d.ttl)
     }
 
+    /// The lifetime of cached `JWKS`.
+    #[must_use]
+    pub(crate) fn jwks_ttl(&self) -> std::time::Duration {
+        self.jwks_cache.ttl
+    }
+
     /// Lapse the issuer's recorded discovery entry now, as if its lifetime
     /// had passed; tests use it instead of sleeping out a real window.
     #[cfg(test)]
@@ -286,6 +300,32 @@ impl OidcVerifier {
         token: &str,
         config: &KeyServerOidcConfig,
     ) -> Result<VerifiedIdentity, OidcError> {
+        self.verify_inner(token, config)
+            .await
+            .map(|(identity, _exp, _leeway)| identity)
+    }
+
+    /// As [`Self::verify`], and on success also the receipt binding the
+    /// caller's owned string — the exact bytes just verified — to the
+    /// window that verification judged.
+    ///
+    /// # Errors
+    ///
+    /// The same [`OidcError`] as [`Self::verify`].
+    pub(crate) async fn verify_checked(
+        &self,
+        token: String,
+        config: &KeyServerOidcConfig,
+    ) -> Result<(VerifiedIdentity, VerifiedAssertion), OidcError> {
+        let (identity, exp, leeway) = self.verify_inner(&token, config).await?;
+        Ok((identity, VerifiedAssertion::verified(token, exp, leeway)))
+    }
+
+    async fn verify_inner(
+        &self,
+        token: &str,
+        config: &KeyServerOidcConfig,
+    ) -> Result<(VerifiedIdentity, u64, u64), OidcError> {
         // Decode header without verification to extract issuer claim for provider lookup
         let header = jsonwebtoken::decode_header(token)?;
 
@@ -366,6 +406,7 @@ impl OidcVerifier {
         let token_data: TokenData<IdTokenClaims> =
             jsonwebtoken::decode(token, &decoding_key, &validation)?;
         let claims = token_data.claims;
+        let (verified_exp, verified_leeway) = (claims.exp, validation.leeway);
         let exp = crate::clock::JwtClaimTime::At(claims.exp);
         let nbf = crate::clock::JwtClaimTime::Absent;
         if crate::clock::jwt_window(exp, nbf, validation.leeway) == crate::clock::Validity::Expired
@@ -431,6 +472,7 @@ impl OidcVerifier {
             claims.groups.unwrap_or_default(),
         )
         .ok_or_else(identity::missing_subject)
+        .map(|identity| (identity, verified_exp, verified_leeway))
     }
 
     /// Find a decoding key by `kid`, refreshing the JWKS cache if not found.
@@ -639,3 +681,7 @@ mod tests;
 #[cfg(test)]
 #[path = "oidc_fallback_tests.rs"]
 mod fallback_tests;
+
+#[cfg(test)]
+#[path = "oidc_jwks_cooldown_tests.rs"]
+mod cooldown_tests;

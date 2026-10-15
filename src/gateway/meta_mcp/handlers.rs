@@ -249,6 +249,19 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
     ) -> JsonRpcResponse {
         self.shadow_tools_list_assembly(session_id, false);
+        self.served_tools_list(id, session_id, scope)
+    }
+
+    /// The `tools/list` result this caller is served, without the shadow
+    /// telemetry the serve path emits. The one builder behind the served list
+    /// and behind the per-listener fingerprint (MIK-8350 D5), so the two can
+    /// never disagree about what a caller is shown.
+    pub(crate) fn served_tools_list(
+        &self,
+        id: RequestId,
+        session_id: Option<&str>,
+        scope: InvokeScope<'_>,
+    ) -> JsonRpcResponse {
         let standing = CallerStanding::from(scope);
         let tools = self.meta_tools_for(standing, self.admitted_counts(scope, session_id));
         let mut tool_descriptors =
@@ -320,6 +333,20 @@ impl MetaMcp {
         self.handle_tools_list_for_session(id, session_id, scope)
     }
 
+    /// The two fixed Code Mode tools a URL-activated Code Mode serves. Still
+    /// filtered - a URL parameter must not widen what the operator exposed.
+    pub(crate) fn code_mode_url_list(
+        &self,
+        id: RequestId,
+        scope: InvokeScope<'_>,
+    ) -> JsonRpcResponse {
+        let mut tools = self.meta_tool_exposure.filter(build_code_mode_tools());
+        tools.retain(|tool| CallerStanding::from(scope).permits(&tool.name));
+        let tool_descriptors =
+            project_tool_descriptors_trust_cards("gateway:meta", "mcp-gateway", &tools);
+        JsonRpcResponse::success(id, tools_list_result_with_trust_cards(tool_descriptors))
+    }
+
     /// Variant of [`handle_tools_list_with_params`] that accepts a per-request
     /// Code Mode override from the URL query parameter `?codemode=search_and_execute`.
     ///
@@ -348,16 +375,7 @@ impl MetaMcp {
                     ..crate::protocol_revision_telemetry::ListFilters::default()
                 },
             );
-            // Still filtered - a URL parameter must not widen what the
-            // operator exposed.
-            let mut tools = self.meta_tool_exposure.filter(build_code_mode_tools());
-            tools.retain(|tool| CallerStanding::from(scope).permits(&tool.name));
-            let tool_descriptors =
-                project_tool_descriptors_trust_cards("gateway:meta", "mcp-gateway", &tools);
-            return JsonRpcResponse::success(
-                id,
-                tools_list_result_with_trust_cards(tool_descriptors),
-            );
+            return self.code_mode_url_list(id, scope);
         }
         // No override (or static config already handles it): follow normal path.
         self.handle_tools_list_with_params(id, params, session_id, scope)

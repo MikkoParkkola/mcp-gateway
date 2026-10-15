@@ -187,7 +187,11 @@ def leading_attrs(code: str, mask: str) -> tuple[str, int]:
 
 
 ITEM_RE = re.compile(r"(?:pub(?:\([^)]*\))?\s+)?(struct|enum)\s+([A-Z]\w*)(?:<[^>{(]*>)?\s*(?:where[^{]*)?([{(;])")
-OUTER_ATTRS_RE = re.compile(r"((?:#\[[^\n]*\]\s*)*)$")
+# A run of outer attributes. Atomic: an attribute, once matched, is never
+# re-split, so a line of many attributes followed by a non-match fails in
+# linear time rather than trying every split (py/redos).
+ATTR_RUN = r"(?>#\[[^\n]*\]\s*)*"
+OUTER_ATTRS_RE = re.compile(rf"({ATTR_RUN})$")
 
 
 def parse_items(path: Path) -> list[Item]:
@@ -719,8 +723,9 @@ def extract_routes() -> list[Entry]:
 # ── Surface: lib ─────────────────────────────────────────────────────────────
 
 
+MACRO_EXPORT_RE = re.compile(rf"^#\[macro_export(?:\([^)]*\))?\][^\n]*\n{ATTR_RUN}macro_rules!\s*(\w+)", re.M)
 LIB_ITEM_RE = re.compile(
-    r"^((?:#\[[^\n]*\]\s*)*)pub\s+(?:(?:const(?=\s+(?:async\s+|unsafe\s+|extern(?:\s+\"[^\"]*\")?\s+)*fn\b)|async|unsafe|extern(?:\s+\"[^\"]*\")?)\s+)*"
+    rf"^({ATTR_RUN})pub\s+(?:(?:const(?=\s+(?:async\s+|unsafe\s+|extern(?:\s+\"[^\"]*\")?\s+)*fn\b)|async|unsafe|extern(?:\s+\"[^\"]*\")?)\s+)*"
     r"(mod|use|fn|const\s+fn|const|static|struct|enum|trait|type|union|extern\s+crate)\s+([^;{(=<]+)",
     re.M,
 )
@@ -757,7 +762,7 @@ def extract_lib(path: Path | None = None) -> list[Entry]:
     out = []
     for f in files:
         fcode = code if f == path else prod_scan(f)[0]
-        for m in re.finditer(r"^#\[macro_export(?:\([^)]*\))?\][^\n]*\n(?:#\[[^\n]*\]\s*)*macro_rules!\s*(\w+)", fcode, re.M):
+        for m in MACRO_EXPORT_RE.finditer(fcode):
             out.append(Entry(f"mcp_gateway::{m.group(1)}!", rel(f), line_of(fcode, m.start()), "exported macro", is_hidden(m.group(0))))
     for m in LIB_ITEM_RE.finditer(code):
         kind, rest = m.group(2).split()[-1], " ".join(m.group(3).split())

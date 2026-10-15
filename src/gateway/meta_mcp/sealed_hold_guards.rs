@@ -323,7 +323,10 @@ const BOUNDARY_CELLS: &[(&str, &str)] = &[
         "gateway/router/backend_handlers/direct_audit.rs",
         "a_question_withheld_after_finalization_gives_its_slot_back",
     ),
-    ("gateway/router/handlers.rs", "slot_release_matrix"),
+    (
+        "gateway/router/handlers/meta_handler.rs",
+        "slot_release_matrix",
+    ),
     (
         "gateway/server/stdio_loop.rs",
         "a_delivered_stdio_question_keeps_its_slot",

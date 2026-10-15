@@ -7,12 +7,13 @@ use axum::response::IntoResponse;
 
 use super::super::AppState;
 use super::super::hardened_identity::hardened_identity_refusal;
-use super::super::identity::{caller_grant_subject, identity_refusal_response, subject_key};
+use super::super::identity::{
+    CallerAdmission, caller_grant_subject, identity_refusal_response, subject_key,
+};
 use crate::gateway::auth::live::held_credential;
 use crate::gateway::auth::{AuthenticatedClient, NamedApiKey};
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::gateway::session_id::SessionOwner;
-use crate::identity_grants::GrantSubject;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
 
@@ -49,13 +50,13 @@ pub(super) async fn request_session_owner(
     headers: &HeaderMap,
     extensions: &axum::http::Extensions,
     client: Option<&AuthenticatedClient>,
-) -> Result<(Option<GrantSubject>, SessionOwner), axum::response::Response> {
+) -> Result<(CallerAdmission, SessionOwner), axum::response::Response> {
     let cert = extensions.get::<CertIdentity>();
     // The peer is the direct TCP peer only.
     let peer = extensions
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         .map(|info| info.0);
-    let subject = caller_grant_subject(
+    let admission = caller_grant_subject(
         extensions.get::<VerifiedIdentity>(),
         headers,
         peer,
@@ -66,14 +67,14 @@ pub(super) async fn request_session_owner(
     )
     .await
     .map_err(|refusal| identity_refusal_response(refusal).into_response())?;
-    let key = subject_key(subject.as_ref(), cert);
+    let key = subject_key(admission.subject.as_ref(), cert);
     if let Some(refusal) =
         hardened_identity_refusal(state, key.as_deref(), extensions.get::<NamedApiKey>())
     {
         return Err(refusal.into_response());
     }
     let owner = owner_of(key, headers, client);
-    Ok((subject, owner))
+    Ok((admission, owner))
 }
 
 /// The owner a caller's session carries, one rule for `/mcp` and the direct
@@ -93,5 +94,166 @@ pub(in crate::gateway::router) fn owner_of(
             credential: held_credential(headers).map(|held| held.digest()),
         },
         None => session_owner(client),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::gateway::streaming::NotificationMultiplexer;
+
+    const SUBJECT_KEY: &str = "subject:8:corp-sso:5:alice";
+
+    fn headers(authorization: Option<&str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        if let Some(value) = authorization {
+            headers.insert(
+                axum::http::header::AUTHORIZATION,
+                value.parse().expect("premise: an authorization header"),
+            );
+        }
+        headers
+    }
+
+    fn subject_owner(headers: &HeaderMap) -> SessionOwner {
+        owner_of(Some(SUBJECT_KEY.to_string()), headers, None)
+    }
+
+    fn multiplexer() -> NotificationMultiplexer {
+        NotificationMultiplexer::new(
+            Arc::new(crate::backend::BackendRegistry::new()),
+            crate::config::StreamingConfig::default(),
+        )
+    }
+
+    /// Open `owner`'s session, then resume it as the same owner: one
+    /// session, under the opened id. The receiver is retained throughout.
+    fn same_owner_resumes(owner: &SessionOwner) {
+        let multiplexer = multiplexer();
+        let (id, _kept) = multiplexer.get_or_create_session_for(None, owner);
+        assert_eq!(
+            multiplexer.session_count(),
+            1,
+            "premise: opening mints one session"
+        );
+        let (resumed, _kept_again) = multiplexer.get_or_create_session_for(Some(&id), owner);
+        assert_eq!(
+            resumed, id,
+            "own T5: the same owner resumes its own session"
+        );
+        assert_eq!(
+            multiplexer.session_count(),
+            1,
+            "own T5: a same-owner resume mints no second session"
+        );
+    }
+
+    /// Open `first`'s session, present its id as `second`, then resume as
+    /// `first` again: the foreign owner gets a different session and the
+    /// original owner keeps its own. Fresh multiplexer per direction;
+    /// every receiver is retained.
+    fn different_owner_direction(first: &SessionOwner, second: &SessionOwner) {
+        let multiplexer = multiplexer();
+        let (id, _kept) = multiplexer.get_or_create_session_for(None, first);
+        assert_eq!(
+            multiplexer.session_count(),
+            1,
+            "premise: opening mints one session"
+        );
+        let (foreign, _kept_foreign) = multiplexer.get_or_create_session_for(Some(&id), second);
+        assert_ne!(
+            foreign, id,
+            "own T5: a different owner never resumes the presented session"
+        );
+        assert_eq!(
+            multiplexer.session_count(),
+            2,
+            "own T5: a different owner opens its own session beside the first"
+        );
+        let (resumed, _kept_again) = multiplexer.get_or_create_session_for(Some(&id), first);
+        assert_eq!(
+            resumed, id,
+            "dependent T5: the original owner still resumes its own session"
+        );
+        assert_eq!(
+            multiplexer.session_count(),
+            2,
+            "dependent T5: the original resume mints no third session"
+        );
+    }
+
+    /// C0 T5: a Basic-only caller owns its sessions under the no-part
+    /// digest — the same digest whatever the non-Bearer scheme or value —
+    /// where a caller presenting nothing carries no credential at all.
+    #[test]
+    fn t5_owner_basic_only_carries_the_no_part_digest() {
+        // Control: no headers, no credential half.
+        assert_eq!(
+            subject_owner(&headers(None)),
+            SessionOwner::Subject {
+                key: SUBJECT_KEY.to_string(),
+                credential: None,
+            },
+            "control: a caller presenting nothing carries no credential"
+        );
+
+        let basic_x = subject_owner(&headers(Some("Basic x")));
+        let SessionOwner::Subject { key, credential } = &basic_x else {
+            panic!("premise: a subject caller has a subject owner");
+        };
+        assert_eq!(
+            key.as_str(),
+            SUBJECT_KEY,
+            "control: the subject key is unchanged by the credential half"
+        );
+        assert!(
+            credential.is_some(),
+            "own T5: a Basic-only owner carries Some(digest)"
+        );
+        assert_eq!(
+            basic_x,
+            subject_owner(&headers(Some("Basic y"))),
+            "dependent T5: the Basic value never reaches the digest"
+        );
+        assert_eq!(
+            basic_x,
+            subject_owner(&headers(Some("Digest z"))),
+            "dependent T5: every non-Bearer scheme carries the one no-part digest"
+        );
+    }
+
+    /// C0 T5 positive control: the no-header owner resumes its own
+    /// session (passes before and after; an always-new session fails it).
+    #[test]
+    fn t5_same_owner_without_headers_resumes() {
+        same_owner_resumes(&subject_owner(&headers(None)));
+    }
+
+    /// C0 T5: the Basic-only owner likewise resumes its own session.
+    #[test]
+    fn t5_same_owner_basic_only_resumes() {
+        same_owner_resumes(&subject_owner(&headers(Some("Basic x"))));
+    }
+
+    /// C0 T5: a Basic-only owner is a different owner from the same
+    /// subject presenting nothing, so neither resumes the other's session.
+    #[test]
+    fn t5_basic_owner_does_not_resume_a_bare_session() {
+        different_owner_direction(
+            &subject_owner(&headers(None)),
+            &subject_owner(&headers(Some("Basic x"))),
+        );
+    }
+
+    /// C0 T5, the other direction: the bare owner does not resume the
+    /// Basic-only owner's session either.
+    #[test]
+    fn t5_bare_owner_does_not_resume_a_basic_session() {
+        different_owner_direction(
+            &subject_owner(&headers(Some("Basic x"))),
+            &subject_owner(&headers(None)),
+        );
     }
 }

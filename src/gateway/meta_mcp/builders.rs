@@ -530,6 +530,19 @@ impl MetaMcp {
         &self.caller_identity
     }
 
+    /// Replace the Access assertion verifier with `verifier` (one aimed at a
+    /// local JWKS server), after [`Self::with_caller_identity`] built the
+    /// production one.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_access_verifier_for_test(
+        mut self,
+        verifier: crate::key_server::OidcVerifier,
+    ) -> Self {
+        self.access_verifier = Some(Arc::new(verifier));
+        self
+    }
+
     /// The Access assertion verifier, present iff the mode is `cloudflare_access`.
     pub(crate) fn access_verifier(&self) -> Option<&crate::key_server::OidcVerifier> {
         self.access_verifier.as_deref()

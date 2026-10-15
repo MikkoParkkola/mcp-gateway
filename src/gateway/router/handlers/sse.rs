@@ -21,7 +21,7 @@ use crate::gateway::router::AppState;
 use crate::gateway::router::helpers::{
     attach_session_header, build_http_error_response, build_http_response,
 };
-use crate::gateway::streaming::create_sse_response;
+use crate::gateway::streaming::create_sse_response_with_view;
 use crate::mtls::CertIdentity;
 
 pub(super) use crate::protocol::modern_refusal::unsupported_version_error;
@@ -88,6 +88,34 @@ fn get_era_refusal(state: &AppState, headers: &HeaderMap) -> Option<axum::respon
     )
 }
 
+/// Why a GET cannot open a stream at all: streaming is off, or the client does
+/// not accept an event stream.
+fn stream_request_refusal(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Option<(StatusCode, axum::Json<serde_json::Value>)> {
+    if !state.streaming_config.enabled {
+        return Some(build_http_error_response(
+            None,
+            -32600,
+            "Streaming not enabled. Use POST to send JSON-RPC requests to /mcp",
+            StatusCode::METHOD_NOT_ALLOWED,
+        ));
+    }
+    let accept = headers
+        .get("accept")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    (!accept.contains("text/event-stream")).then(|| {
+        build_http_error_response(
+            None,
+            -32600,
+            "Must accept text/event-stream for SSE notifications",
+            StatusCode::NOT_ACCEPTABLE,
+        )
+    })
+}
+
 /// GET /mcp handler - SSE stream for server→client notifications
 /// Per MCP spec 2025-03-26, servers MAY return SSE stream or 405 Method Not Allowed.
 /// We implement the full streaming support.
@@ -95,6 +123,7 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
     State(state): State<Arc<AppState>>,
     client: Option<axum::Extension<AuthenticatedClient>>,
     headers: HeaderMap,
+    uri: axum::http::Uri,
     extensions: axum::http::Extensions,
 ) -> OutboundReply {
     let client = client.map(|axum::Extension(c)| c);
@@ -107,7 +136,7 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
     }
     // The owner the POST that minted the session used, so a subject resumes
     // its own stream and nobody else's.
-    let (subject, owner) =
+    let (admission, owner) =
         match request_session_owner(&state, &headers, &extensions, client.as_ref()).await {
             Ok(resolved) => resolved,
             Err(refusal) => return gateway_reply(refusal),
@@ -118,36 +147,34 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
         .judges_reads()
         .then(|| {
             crate::gateway::router::identity::caller_key(
-                subject.as_ref(),
+                admission.subject.as_ref(),
                 extensions.get::<CertIdentity>(),
                 client.as_ref(),
             )
         })
         .filter(|key| !key.is_empty());
-    // Check if streaming is enabled
-    if !state.streaming_config.enabled {
-        return gateway_reply(build_http_error_response(
-            None,
-            -32600,
-            "Streaming not enabled. Use POST to send JSON-RPC requests to /mcp",
-            StatusCode::METHOD_NOT_ALLOWED,
-        ));
+    if let Some(refusal) = stream_request_refusal(&state, &headers) {
+        return gateway_reply(refusal);
     }
 
-    // Check Accept header - must accept text/event-stream
-    let accept = headers
-        .get("accept")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    if !accept.contains("text/event-stream") {
-        return gateway_reply(build_http_error_response(
-            None,
-            -32600,
-            "Must accept text/event-stream for SSE notifications",
-            StatusCode::NOT_ACCEPTABLE,
-        ));
-    }
+    let held = crate::gateway::auth::live::held_credential(&headers);
+    // MIK-8350 L1: the request's own credential is judged before any session
+    // effect, so a refused GET has opened, resumed, rekeyed and bound nothing.
+    // Opening or resuming installs this same credential on the session.
+    let subject = Arc::new(super::super::view_judge::get_view_subject((
+        admission.subject,
+        admission.source,
+        &extensions,
+        uri.query(),
+    )));
+    let judge = super::super::view_judge::OwnedViewJudge::shared(&state);
+    let Ok(admitted) = state
+        .multiplexer
+        .admit_view(&subject, held.as_ref(), judge.as_ref())
+        .await
+    else {
+        return gateway_reply(super::super::view_judge::dead_attach_refusal());
+    };
 
     let existing_session_id = session_id_header(&headers).map(String::from);
 
@@ -156,7 +183,6 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
         .and_then(|v| v.to_str().ok())
         .map(String::from);
 
-    let held = crate::gateway::auth::live::held_credential(&headers);
     let opened = if crate::gateway::router::hardened_elicitation::is_hardened(&state) {
         // Hardened (row 10): a stream only resumes a session a declaring
         // `initialize` opened; it never opens one.
@@ -180,6 +206,12 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
     if let Some(key) = read_key {
         state.multiplexer.bind_session_reader(&session_id, key);
     }
+    // MIK-8350: what this stream's caller is shown, so the first change after
+    // attach is judged against it, baselined against the caller admitted above.
+    let view = state
+        .multiplexer
+        .attach_admitted(&session_id, subject, judge, admitted)
+        .await;
     // Read before the macro so its count is graded (MIK-7725).
     let session = opened.fp();
     info!(session_id = %session, "Client connected to SSE stream");
@@ -196,11 +228,11 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
     let keep_alive = state.streaming_config.keep_alive_interval;
 
     // Create SSE response with owned data
-    match create_sse_response(
+    match create_sse_response_with_view(
         multiplexer_for_stream,
         session_id.clone(),
-        last_event_id,
-        keep_alive,
+        (last_event_id, keep_alive),
+        view,
     ) {
         Some(sse) => {
             // Add session ID header to response
