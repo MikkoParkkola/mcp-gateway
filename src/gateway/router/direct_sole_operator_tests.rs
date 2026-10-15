@@ -334,11 +334,19 @@ async fn no_principal_caller_direct_call_is_the_same_for_a_withheld_name() {
         assert_eq!(missing.0, StatusCode::OK, "premise: {}", missing.1);
         assert!(missing.1.contains("-32601"), "premise: {}", missing.1);
         let withheld = raw_call(&fx, "run_command", bearer).await;
-        seen.push((bearer, withheld, missing, idp_refusals(&fx), fx.gateway.dispatched()));
+        seen.push((
+            bearer,
+            withheld,
+            missing,
+            idp_refusals(&fx),
+            fx.gateway.dispatched(),
+        ));
     }
     let wrong: Vec<_> = seen
         .iter()
-        .filter(|(_, withheld, missing, rows, sent)| withheld != missing || *rows != 0 || *sent != 0)
+        .filter(|(_, withheld, missing, rows, sent)| {
+            withheld != missing || *rows != 0 || *sent != 0
+        })
         .collect();
     assert!(
         wrong.is_empty(),
