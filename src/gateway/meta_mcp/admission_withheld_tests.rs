@@ -374,3 +374,97 @@ async fn a_replay_past_revocation_of_a_sent_step_keeps_its_refusal() {
     let answer = replay_after_revoking(None, "write").await;
     assert_sub4_refusal(answer, "sent step");
 }
+
+/// Denies each of `0`, with `DenyOne`'s refusal.
+struct DenyEach(&'static [&'static str]);
+
+impl ToolAuthorizer for DenyEach {
+    fn quota_principal(&self) -> Option<&crate::gateway::auth::QuotaPrincipal> {
+        None
+    }
+    fn decide<'a>(
+        &'a self,
+        target: crate::gateway::authz::ToolTarget<'a>,
+    ) -> crate::gateway::authz::Decision<'a> {
+        if self.0.contains(&target.tool) {
+            return crate::gateway::authz::Decision::of(Err(
+                crate::gateway::authz::AuthorizationError::forbidden(
+                    -32003,
+                    format!("denied by test authorizer: '{}'", target.tool),
+                ),
+            ));
+        }
+        crate::gateway::authz::Decision::of(Ok(()))
+    }
+    fn admits_backend(&self, _server: &str) -> bool {
+        true
+    }
+    fn transport(&self) -> crate::gateway::authz::Transport {
+        crate::gateway::authz::Transport::Test
+    }
+    fn caller_name(&self) -> Option<&str> {
+        None
+    }
+}
+
+/// A keyed chain `[first, beta:read]` admitted under `admitted`, whose run
+/// was served `read` only (`first` hidden or missing, never run), then
+/// replayed under `replayed`: the replay's refusal.
+fn replay_naming(
+    first: &str,
+    admitted: &(dyn ToolAuthorizer + Sync),
+    replayed: &(dyn ToolAuthorizer + Sync),
+) -> String {
+    let (registry, _calls) = counted_backend("beta");
+    let meta = MetaMcp::new(registry).with_code_mode(true);
+    let retry = RetryFields {
+        idempotency_key: Some("first-hidden".into()),
+        ..RetryFields::default()
+    };
+    let args = json!({"chain": [
+        {"tool": format!("beta:{first}"), "arguments": {}},
+        {"tool": "beta:read", "arguments": {}}
+    ]});
+    let admit = |caller: &MetaMcpCallerContext<'_>, id| {
+        meta.admit_meta_sync_for_test(
+            AdmissionOwner::for_test(caller.owner_principal()),
+            caller,
+            "gateway_execute",
+            &args,
+            Some("legacy:session"),
+            &RequestId::Number(id),
+        )
+    };
+    let Ok(super::SyncAdmission::Owned(owner)) = admit(&owned(&retry, admitted), 1) else {
+        panic!("premise: the first call owns the key");
+    };
+    owner.mark_dispatched();
+    owner.note_step(("beta", "read"));
+    owner.complete_secured(&crate::protocol::JsonRpcResponse::success(
+        RequestId::Number(1),
+        json!({"retained": "yes"}),
+    ));
+    match admit(&owned(&retry, replayed), 2) {
+        Err(error) => format!("{error:?}"),
+        Ok(_) => panic!("premise: the replay past the revocation is refused"),
+    }
+}
+
+/// #3872 review (round 3, B): a chain whose first step was hidden from the
+/// first call (never run) and whose second ran, replayed after the second is
+/// revoked, names the second step's refusal, as when the first step is
+/// missing; never the hidden step's.
+#[test]
+fn a_replay_names_the_refusal_of_the_step_that_ran() {
+    let withheld = replay_naming(
+        "other",
+        &DenyOne { tool: "other" },
+        &DenyEach(&["other", "read"]),
+    );
+    let missing = replay_naming("nope", &AllowAll, &DenyOne { tool: "read" });
+    assert!(
+        missing.contains("'read'"),
+        "premise: the missing twin names read: {missing}"
+    );
+    assert_eq!(withheld, missing, "the replay names the step that ran");
+}
