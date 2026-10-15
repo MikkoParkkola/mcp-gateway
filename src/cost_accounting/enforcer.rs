@@ -22,6 +22,7 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 
 use super::config::{AlertAction, CostGovernanceConfig};
+use super::persistence::EnforcerSaveSnapshot;
 use super::registry::CostRegistry;
 
 #[cfg(feature = "cost-governance")]
@@ -346,9 +347,9 @@ pub struct EnforcerSnapshot {
     pub key_daily: HashMap<String, f64>,
     /// Configured per-key daily limits.
     pub key_limits: HashMap<String, f64>,
-    /// Unix seconds read before the accumulators. A snapshot that straddles
-    /// UTC midnight then dates its spend to the earlier day, never the later.
-    pub taken_at: u64,
+    /// Unix seconds read before the accumulators, `None` on a dark clock
+    /// (MIK-8202 P4b); midnight-straddling spend dates to the earlier day.
+    pub taken_at: Option<u64>,
     /// Today's spend of unbudgeted tools past the per-tool map's cap (USD).
     #[serde(default)]
     pub tool_overflow_usd: f64,
@@ -605,7 +606,8 @@ impl BudgetEnforcer {
         let today = current_day().ok();
         let swept = self.swept_day.load(std::sync::atomic::Ordering::Relaxed);
         let new_day = today.is_some_and(|today| swept < today);
-        if new_day || super::tally::sweep_due(&self.next_sweep, super::persistence::now_secs()) {
+        let time_due = crate::clock::unix_secs();
+        if new_day || time_due.is_ok_and(|now| super::tally::sweep_due(&self.next_sweep, now)) {
             for (map, limits) in [
                 (&self.tool_daily, &budgets.per_tool),
                 (&self.key_daily, &budgets.per_key),
@@ -708,7 +710,7 @@ impl BudgetEnforcer {
     /// Snapshot current accumulator state for the UI endpoint.
     #[must_use]
     pub fn snapshot(&self) -> EnforcerSnapshot {
-        self.snapshot_at(super::persistence::now_secs())
+        self.snapshot_at(crate::clock::unix_secs().ok())
     }
 
     /// A snapshot to persist, stamped from the wall clock. On a clock before
@@ -716,11 +718,15 @@ impl BudgetEnforcer {
     /// earlier day on the next boot, which would throw the day's spend away.
     pub(crate) fn snapshot_for_save(
         &self,
-    ) -> Result<EnforcerSnapshot, crate::clock::ClockBeforeEpoch> {
-        crate::clock::unix_secs().map(|taken_at| self.snapshot_at(taken_at))
+    ) -> Result<EnforcerSaveSnapshot, crate::clock::ClockBeforeEpoch> {
+        let taken_at = crate::clock::unix_secs()?;
+        Ok(EnforcerSaveSnapshot::from_snapshot(
+            self.snapshot_at(Some(taken_at)),
+            taken_at,
+        ))
     }
 
-    fn snapshot_at(&self, taken_at: u64) -> EnforcerSnapshot {
+    fn snapshot_at(&self, taken_at: Option<u64>) -> EnforcerSnapshot {
         #[allow(clippy::cast_precision_loss)]
         let global_daily_usd = self.global_daily.current() as f64 / 1_000_000.0;
 

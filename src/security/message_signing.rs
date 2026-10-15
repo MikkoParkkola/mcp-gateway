@@ -9,8 +9,8 @@
 //! # Design
 //!
 //! - **Response signing**: every `gateway_invoke` response gains a `_signature` block
-//!   containing `alg`, `sig`, `nonce`, `ts`, and `key_id`. The MAC covers
-//!   `canonical_json(response_without_signature)`.
+//!   containing `alg`, `sig`, `nonce`, `ts`, and `key_id`. The MAC covers the
+//!   delivered JSON-RPC envelope (signing v2, `message_signing_v2.rs`).
 //! - **Nonce replay protection**: bounded nonce entries, per-principal counts,
 //!   and a monotonic expiry queue share one lock for registration and cleanup.
 //! - **Opt-in**: the whole subsystem is gated by `SecurityConfig::message_signing.enabled`.
@@ -29,7 +29,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use hmac::{Hmac, KeyInit, Mac};
 use parking_lot::Mutex;
@@ -37,7 +37,6 @@ use serde_json::{Value, json};
 use sha2::Sha256;
 use tracing::debug;
 
-use crate::hashing::canonical_json;
 use crate::{Error, Result};
 
 #[path = "message_signing_v2.rs"]
@@ -62,19 +61,6 @@ pub const EVICTION_INTERVAL: Duration = Duration::from_secs(60);
 ///
 /// Holds the active signing secret and an optional previous secret for
 /// zero-downtime rotation. Thread-safe: wrap in `Arc` for shared ownership.
-///
-/// # Example
-///
-/// ```
-/// use mcp_gateway::security::message_signing::MessageSigner;
-/// use serde_json::json;
-///
-/// let secret = b"a-secret-that-is-at-least-32-bytes-long!!";
-/// let signer = MessageSigner::new(secret.to_vec(), None, "v1".to_string());
-/// let response = json!({"content": [{"type": "text", "text": "hello"}]});
-/// let signed = signer.sign_response(response, Some("nonce-42"));
-/// assert!(signed.get("_signature").is_some());
-/// ```
 #[derive(Clone)]
 pub struct MessageSigner {
     secret: Vec<u8>,
@@ -112,31 +98,6 @@ impl MessageSigner {
             previous_secret,
             key_id,
         }
-    }
-
-    /// Sign `response`, injecting a `_signature` block.
-    ///
-    /// The MAC is computed over `canonical_json(response)` **before** the
-    /// `_signature` key is inserted, avoiding a circular dependency.
-    /// Any pre-existing `_signature` key is removed prior to MAC computation.
-    #[must_use]
-    pub fn sign_response(&self, mut response: Value, nonce: Option<&str>) -> Value {
-        // Remove any stale signature before computing the MAC.
-        if let Some(obj) = response.as_object_mut() {
-            obj.remove("_signature");
-        }
-
-        let canonical = canonical_json(&response);
-        let sig = compute_hmac_hex(&self.secret, canonical.as_bytes());
-        let ts = unix_timestamp_secs();
-
-        let signature_block = build_signature_block(&sig, nonce, ts, &self.key_id);
-
-        if let Some(obj) = response.as_object_mut() {
-            obj.insert("_signature".to_string(), signature_block);
-        }
-
-        response
     }
 }
 
@@ -494,13 +455,6 @@ fn compute_hmac_hex(secret: &[u8], message: &[u8]) -> String {
     let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
     mac.update(message);
     hex::encode(mac.finalize().into_bytes())
-}
-
-fn unix_timestamp_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
 }
 
 fn build_signature_block(sig: &str, nonce: Option<&str>, ts: u64, key_id: &str) -> Value {

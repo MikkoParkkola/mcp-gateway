@@ -90,7 +90,7 @@ fn stats_initial_state_is_closed_with_zero_trips() {
     let s = cb.stats();
     assert_eq!(s.state, CircuitState::Closed);
     assert_eq!(s.trips_count, 0);
-    assert_eq!(s.last_trip_ms, 0);
+    assert_eq!(s.last_trip_ms, None);
     assert_eq!(s.retry_after_ms, 0);
     assert_eq!(s.current_failures, 0);
     assert_eq!(s.failure_threshold, 3);
@@ -116,7 +116,7 @@ fn stats_trips_count_increments_on_each_open() {
 
     // THEN: trips_count == 1 and last_trip_ms is set
     assert_eq!(cb.stats().trips_count, 1);
-    assert_ne!(cb.stats().last_trip_ms, 0);
+    assert!(cb.stats().last_trip_ms.is_some());
 
     // Recover: zero timeout means can_proceed() immediately transitions to HalfOpen
     assert!(cb.can_proceed(), "zero timeout should allow HalfOpen probe");
@@ -219,7 +219,11 @@ fn circuit_breaker_error_open_state_includes_trips_and_retry() {
     let stats = CircuitBreakerStats {
         state: CircuitState::Open,
         trips_count: 2,
-        last_trip_ms: epoch_millis_now().saturating_sub(500),
+        last_trip_ms: Some(
+            crate::clock::unix_millis()
+                .unwrap_or_default()
+                .saturating_sub(500),
+        ),
         retry_after_ms: 29_500,
         current_failures: 3,
         failure_threshold: 3,
@@ -239,7 +243,7 @@ fn circuit_breaker_error_half_open_state_is_generic() {
     let stats = CircuitBreakerStats {
         state: CircuitState::HalfOpen,
         trips_count: 1,
-        last_trip_ms: epoch_millis_now(),
+        last_trip_ms: Some(crate::clock::unix_millis().unwrap_or_default()),
         retry_after_ms: 0,
         current_failures: 0,
         failure_threshold: 3,
@@ -261,7 +265,7 @@ fn circuit_breaker_error_closed_state_is_generic() {
     let stats = CircuitBreakerStats {
         state: CircuitState::Closed,
         trips_count: 0,
-        last_trip_ms: 0,
+        last_trip_ms: None,
         retry_after_ms: 0,
         current_failures: 0,
         failure_threshold: 3,

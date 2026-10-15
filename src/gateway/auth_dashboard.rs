@@ -80,14 +80,14 @@ impl SessionTimes {
 /// without it a session would rest on the monotonic clock alone, which stops
 /// while the host sleeps, so a suspend would outlive the idle limit.
 fn wall_unreadable(now: Now) -> bool {
-    now.wall.duration_since(std::time::UNIX_EPOCH).is_err()
+    !now.wall_readable()
 }
 
 /// Whether `now` is at or past the minting credential's expiry `cap`. A wall
 /// clock reading before 1970 cannot be placed against a real expiry, so the
 /// cap counts as reached (MIK-8202); the monotonic limits are unchanged.
 fn cap_reached(now: Now, cap: SystemTime) -> bool {
-    now.wall.duration_since(std::time::UNIX_EPOCH).is_err() || now.wall >= cap
+    !now.wall_readable() || now.wall >= cap
 }
 
 /// `true` when more than `limit` separates `since` from `now` on EITHER clock.
@@ -446,6 +446,13 @@ impl Now {
             mono: Instant::now(),
             wall: crate::clock::system_time_or_before_epoch(),
         }
+    }
+
+    /// Whether the wall reading is usable: at or after the epoch (MIK-8202
+    /// P4b). Judged through `crate::clock`, so no epoch comparison lives
+    /// outside the clock module.
+    pub(crate) fn wall_readable(&self) -> bool {
+        crate::clock::wall_readable(self.wall)
     }
 }
 

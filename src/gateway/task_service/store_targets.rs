@@ -536,8 +536,10 @@ impl TaskStore {
     /// this field.
     ///
     /// # Errors
-    /// `NotFound` for a foreign or absent row; `Capacity` when the descriptor
-    /// would exceed the record budget; a storage failure as itself.
+    /// `NotFound` for a foreign or absent row; `ClockUnreadable` when the
+    /// store clock reads before 1970 (the sender writes the claim undated
+    /// instead); `Capacity` when the descriptor would exceed the record
+    /// budget; a storage failure as itself.
     pub(crate) async fn claim_upstream_cancel(
         &self,
         owner: &str,
@@ -552,6 +554,28 @@ impl TaskStore {
         .await
         .map_err(|_| StoreError::Storage)?
     }
+
+    /// The same claim after [`StoreError::ClockUnreadable`]: the descriptor
+    /// still leaves the row, and the pending record is written undated
+    /// (MIK-8202 P4b).
+    ///
+    /// # Errors
+    /// The [`Self::claim_upstream_cancel`] errors, but never `ClockUnreadable`:
+    /// this write needs no time.
+    pub(crate) async fn claim_upstream_cancel_undated(
+        &self,
+        owner: &str,
+        id: &str,
+        offered: Option<UpstreamRecord>,
+    ) -> Result<CancelClaim, StoreError> {
+        let shared = Arc::clone(&self.0);
+        let (owner, id) = (owner.to_owned(), id.to_owned());
+        tokio::task::spawn_blocking(move || {
+            shared.claim_upstream_cancel_undated_blocking(&owner, &id, offered)
+        })
+        .await
+        .map_err(|_| StoreError::Storage)?
+    }
 }
 
 impl Shared {
@@ -560,6 +584,29 @@ impl Shared {
         owner: &str,
         id: &str,
         offered: Option<UpstreamRecord>,
+    ) -> Result<CancelClaim, StoreError> {
+        let now = self
+            .now()
+            .map_err(|_| StoreError::ClockUnreadable)?
+            .timestamp();
+        self.claim_upstream_cancel_inner_blocking(owner, id, offered, Some(now))
+    }
+
+    fn claim_upstream_cancel_undated_blocking(
+        &self,
+        owner: &str,
+        id: &str,
+        offered: Option<UpstreamRecord>,
+    ) -> Result<CancelClaim, StoreError> {
+        self.claim_upstream_cancel_inner_blocking(owner, id, offered, None)
+    }
+
+    fn claim_upstream_cancel_inner_blocking(
+        &self,
+        owner: &str,
+        id: &str,
+        offered: Option<UpstreamRecord>,
+        now: Option<i64>,
     ) -> Result<CancelClaim, StoreError> {
         let _order = self.order();
         let (task, mut record) = {
@@ -594,7 +641,6 @@ impl Shared {
         // provenance as targets before the descriptor leaves (the row is raised
         // past the version that reads targets). The winning descriptor, offered
         // or durable, is the one read.
-        let now = self.now().map_err(|_| StoreError::Unavailable)?.timestamp();
         super::pending_cancel::record_pending_claim(&task, &mut record, &descriptor, now);
         let bytes = serialize(&record)?;
         if bytes.len() > self.limits.record_bytes {

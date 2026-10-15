@@ -2,6 +2,13 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `gateway_search`, caller identity and dispatch through the meta tools.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::*;
 
 struct SearchTestTransport {

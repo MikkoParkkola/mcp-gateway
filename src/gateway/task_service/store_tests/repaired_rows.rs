@@ -174,7 +174,14 @@ async fn expiry_that_cannot_remove_the_record_keeps_everything() {
     std::fs::create_dir(&row).unwrap();
     let held = admission.snapshot();
 
-    let refused = store.expire(&id, 2, &admission).await;
+    let refused = store
+        .expire(
+            &id,
+            2,
+            &admission,
+            crate::gateway::task_service::store::CancelHold::Undated,
+        )
+        .await;
 
     assert_eq!(refused.unwrap_err(), StoreError::Storage);
     assert!(row.is_dir(), "the path was not touched");

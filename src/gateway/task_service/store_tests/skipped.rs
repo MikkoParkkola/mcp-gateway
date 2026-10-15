@@ -4,6 +4,13 @@
 //! A row that cannot be read is skipped in place, never moved or rewritten;
 //! the refusals that guard the trust boundary stay fatal.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -239,7 +246,10 @@ async fn expiry_never_reaches_a_skipped_row() {
     let later = chrono::Utc::now() + crate::duration_bound::delta!(days, 3650);
     assert!(
         store
-            .expired_candidates(later)
+            .expired_candidates(
+                later,
+                crate::gateway::task_service::store::CancelHold::Undated
+            )
             .iter()
             .all(|(id, _)| *id != skipped_id),
         "a skipped row must never be offered to expiry"

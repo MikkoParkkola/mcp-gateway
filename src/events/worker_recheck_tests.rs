@@ -3,6 +3,13 @@
 //! MIK-7907, MIK-7921: what an attempt re-reads after its waits, and how often
 //! it waits on a backend's catalogue.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;

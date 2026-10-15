@@ -34,46 +34,42 @@
 //! ```
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-
-// ── Time helpers ──────────────────────────────────────────────────────────────
-
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_secs()
-}
 
 // ── UsageEntry ────────────────────────────────────────────────────────────────
 
-/// Atomic counters for a single (user, tool) pair.
+/// Atomic counters for a single (user, tool) pair. The last-use time is
+/// `None` while the clock cannot date it (MIK-8202 P4b).
 #[derive(Debug)]
 struct UsageEntry {
     count: AtomicU64,
-    last_used_secs: AtomicU64,
+    last_used_secs: Mutex<Option<u64>>,
 }
 
 impl UsageEntry {
     fn new() -> Self {
         Self {
             count: AtomicU64::new(1),
-            last_used_secs: AtomicU64::new(now_secs()),
+            last_used_secs: Mutex::new(crate::clock::unix_secs().ok()),
         }
     }
 
+    /// The use still counts on a dark clock; only the time is left
+    /// unchanged (MIK-8202 P4b).
     fn increment(&self) {
         self.count.fetch_add(1, Ordering::Relaxed);
-        self.last_used_secs.store(now_secs(), Ordering::Relaxed);
+        if let Ok(now) = crate::clock::unix_secs() {
+            *self.last_used_secs.lock() = Some(now);
+        }
     }
 
-    fn snapshot(&self) -> (u64, u64) {
+    fn snapshot(&self) -> (u64, Option<u64>) {
         (
             self.count.load(Ordering::Relaxed),
-            self.last_used_secs.load(Ordering::Relaxed),
+            *self.last_used_secs.lock(),
         )
     }
 }
@@ -86,8 +82,9 @@ pub struct ToolProfile {
     pub user_id: String,
     /// Per-tool usage counters and timestamps.
     usage: DashMap<String, UsageEntry>,
-    /// Tracks when the profile was first created.
-    pub created_at: u64,
+    /// Tracks when the profile was first created, `None` when the clock
+    /// could not date it (MIK-8202 P4b).
+    pub created_at: Option<u64>,
 }
 
 impl ToolProfile {
@@ -95,7 +92,7 @@ impl ToolProfile {
         Self {
             user_id: user_id.to_string(),
             usage: DashMap::new(),
-            created_at: now_secs(),
+            created_at: crate::clock::unix_secs().ok(),
         }
     }
 
@@ -109,9 +106,11 @@ impl ToolProfile {
         }
     }
 
-    /// Return all (`tool_name`, count, `last_used_secs`) triples, sorted by count descending.
-    fn sorted_usage(&self) -> Vec<(String, u64, u64)> {
-        let mut entries: Vec<(String, u64, u64)> = self
+    /// Return all (`tool_name`, count, `last_used_secs`) triples, sorted by
+    /// count descending, then by recency; an undated entry never sorts as
+    /// the most recent (MIK-8202 P4b).
+    fn sorted_usage(&self) -> Vec<(String, u64, Option<u64>)> {
+        let mut entries: Vec<(String, u64, Option<u64>)> = self
             .usage
             .iter()
             .map(|kv| {
@@ -143,7 +142,7 @@ impl ToolProfile {
     pub fn last_active_secs(&self) -> Option<u64> {
         self.usage
             .iter()
-            .map(|kv| kv.value().last_used_secs.load(Ordering::Relaxed))
+            .filter_map(|kv| kv.value().snapshot().1)
             .max()
     }
 }
@@ -157,8 +156,9 @@ pub struct ToolSuggestion {
     pub tool_name: String,
     /// Number of times the user has called this tool.
     pub call_count: u64,
-    /// Unix timestamp (seconds) of the most recent call.
-    pub last_used_secs: u64,
+    /// Unix timestamp (seconds) of the most recent call, `None` when the
+    /// clock could not date it (MIK-8202 P4b).
+    pub last_used_secs: Option<u64>,
 }
 
 // ── ProfileRegistry ───────────────────────────────────────────────────────────
@@ -279,8 +279,9 @@ impl ProfileRegistry {
 pub struct ProfileSnapshot {
     /// User identifier.
     pub user_id: String,
-    /// Unix timestamp (seconds) when the profile was first created.
-    pub created_at: u64,
+    /// Unix timestamp (seconds) when the profile was first created, `None`
+    /// when the clock could not date it (MIK-8202 P4b).
+    pub created_at: Option<u64>,
     /// Total tool calls by this user.
     pub total_calls: u64,
     /// Unix timestamp (seconds) of the most recent call, if any.
@@ -300,3 +301,7 @@ pub mod persistence;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "clock_tests.rs"]
+mod clock_tests;

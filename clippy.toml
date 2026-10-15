@@ -13,4 +13,12 @@ disallowed-methods = [
     { path = "chrono::TimeDelta::minutes", reason = "panics out of range: delta!(minutes, n) for a constant, TimeDelta::try_minutes otherwise" },
     { path = "chrono::TimeDelta::seconds", reason = "panics out of range: delta!(seconds, n) for a constant, TimeDelta::try_seconds otherwise" },
     { path = "chrono::TimeDelta::milliseconds", reason = "panics out of range: delta!(milliseconds, n) for a constant, TimeDelta::try_milliseconds otherwise" },
+    # MIK-8202: the wall clock is read in one place, src/clock.rs, so a clock
+    # before 1970 is handled once (fail closed, write nothing, or skip). Test
+    # code reads the host clock under a test-scoped allow (AC.14).
+    { path = "std::time::SystemTime::now", reason = "read the wall clock through crate::clock (MIK-8202)" },
+    { path = "std::time::SystemTime::elapsed", reason = "read the wall clock through crate::clock (MIK-8202)" },
+    { path = "chrono::Utc::now", reason = "read the wall clock through crate::clock (MIK-8202)" },
+    { path = "chrono::Local::now", reason = "read the wall clock through crate::clock (MIK-8202)" },
+    { path = "jsonwebtoken::get_current_timestamp", reason = "read the wall clock through crate::clock (MIK-8202)" },
 ]

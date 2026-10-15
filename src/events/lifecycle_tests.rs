@@ -3,6 +3,13 @@
 //! T41 (SOURCE.3): a source plugs in through the trait alone. Crate-private
 //! by design (I4 build notes): no public registration surface exists.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::{Value, json};

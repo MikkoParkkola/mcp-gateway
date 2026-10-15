@@ -6,17 +6,16 @@
 #![allow(dead_code)]
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::create_router;
 use super::tests::{test_router_app_state_with_auth, test_router_app_state_with_auth_and_config};
 use crate::backend::Backend;
 use crate::config::{ApiKeyConfig, AuthConfig, BackendConfig};
 use crate::gateway::meta_mcp::MetaMcp;
-use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::transport::Transport;
 
 /// What a cell wants the shared `alpha` / `alpha-pt` backend to answer with,
@@ -112,104 +111,6 @@ pub(crate) enum Answer {
     /// (MIK-8323: a backend handed an envelope can return it to a later,
     /// fresh call).
     AskThenStore,
-}
-
-/// One `Transport` shared by `alpha` and `alpha-pt`, scripted with `Answer`
-/// and counting every `tools/call`. `tools/list` names the one tool the rows
-/// call, `read`, so the direct route's listing check (F13) admits it; a
-/// listing never counts as a call.
-struct CountingBackend {
-    calls: Arc<AtomicUsize>,
-    /// The params of every `tools/call`, in order (MIK-8078).
-    seen: Arc<std::sync::Mutex<Vec<Value>>>,
-    answer: Answer,
-    /// What `Answer::AskThenStore` keeps between calls.
-    kept: Arc<std::sync::Mutex<String>>,
-}
-
-#[async_trait::async_trait]
-impl Transport for CountingBackend {
-    async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
-        let id = RequestId::Number(1);
-        if method == "tools/list" {
-            return Ok(JsonRpcResponse::success(
-                id,
-                listing(self.answer, params.as_ref()),
-            ));
-        }
-        self.seen
-            .lock()
-            .unwrap()
-            .push(params.clone().unwrap_or(Value::Null));
-        let n = self.calls.fetch_add(1, Ordering::SeqCst);
-        if let Some(body) = answers::recording_answer(self.answer, n, params.as_ref(), &self.kept) {
-            return Ok(JsonRpcResponse::success(id, body));
-        }
-        if let Answer::StateOnlyRounds(at, text) = self.answer {
-            let round = |text: &str| {
-                json!({"resultType": "input_required", "requestState": format!("state-{n}"),
-                       "content": [{"type": "text", "text": text}]})
-            };
-            return Ok(JsonRpcResponse::success(
-                id,
-                match n.cmp(&at) {
-                    std::cmp::Ordering::Less => round("nothing to see"),
-                    std::cmp::Ordering::Equal => round(text),
-                    std::cmp::Ordering::Greater => {
-                        json!({"content": [{"type": "text", "text": "ok"}], "isError": false})
-                    }
-                },
-            ));
-        }
-        if matches!(
-            self.answer,
-            Answer::AskOnce
-                | Answer::AskNoState
-                | Answer::AskMalformed
-                | Answer::AskBig
-                | Answer::AskWith(_)
-                | Answer::AskBadMeta
-                | Answer::AskAndError
-                | Answer::AskSecond
-                | Answer::AskEdited(_)
-                | Answer::AskAlways
-        ) {
-            let asks_now = if matches!(self.answer, Answer::AskAlways) {
-                params
-                    .as_ref()
-                    .and_then(|p| p.get("requestState"))
-                    .is_none()
-            } else {
-                n == usize::from(matches!(self.answer, Answer::AskSecond))
-            };
-            return Ok(if asks_now {
-                let mut asked = JsonRpcResponse::success(id, question(self.answer));
-                if matches!(self.answer, Answer::AskAndError) {
-                    asked.error = Some(crate::protocol::JsonRpcError {
-                        code: -32000,
-                        message: "backend failed".to_string(),
-                        data: None,
-                    });
-                }
-                asked
-            } else {
-                JsonRpcResponse::success(
-                    id,
-                    json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
-                )
-            });
-        }
-        call_answer(self.answer, id)
-    }
-    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
-        Ok(())
-    }
-    fn is_connected(&self) -> bool {
-        true
-    }
-    async fn close(&self) -> crate::Result<()> {
-        Ok(())
-    }
 }
 
 /// A router wired for the direct-route guard cells: non-admin keys
@@ -315,6 +216,16 @@ pub(crate) async fn fixture_firewalled(answer: Answer) -> Fx {
     fixture_inner(answer, true, |meta| meta).await
 }
 
+/// [`fixture_firewalled`] with `build` arming the `MetaMcp` (MIK-8351:
+/// a key budget on the firewalled fixture, for the give-back rows).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_firewalled_built(
+    answer: Answer,
+    build: impl FnOnce(crate::gateway::meta_mcp::MetaMcp) -> crate::gateway::meta_mcp::MetaMcp,
+) -> Fx {
+    fixture_inner(answer, true, build).await
+}
+
 /// [`fixture_firewalled`] with both firewalls writing their audit rows to
 /// `audit` (MIK-8137 b1: the chokepoint's `dispatch` rows).
 #[cfg(feature = "firewall")]
@@ -386,13 +297,12 @@ pub(crate) use answers::envelope_in;
 mod quota;
 #[path = "direct_guards_fixture_requests.rs"]
 mod requests;
-use answers::{call_answer, listing, question};
-use egress::backend_transport;
 #[cfg(feature = "firewall")]
 pub(crate) use egress::fixture_hardened_signed_built_on;
+use egress::{CountingBackend, backend_transport};
 #[cfg(feature = "firewall")]
 pub(crate) use egress::{
-    fixture_audited_built_on, fixture_audited_on, fixture_firewalled_built, fixture_firewalled_on,
+    fixture_audited_built_on, fixture_audited_on, fixture_firewalled_on,
     fixture_hardened_signed_firewalled, fixture_inspecting_on, meta_firewall,
 };
 #[cfg(feature = "firewall")]

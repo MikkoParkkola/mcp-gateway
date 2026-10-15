@@ -23,6 +23,10 @@
 //! Every refusal row carries a positive control, because "refused" is also what
 //! a gateway that refuses EVERYTHING returns.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code reads the host clock (MIK-8202 AC.14)"
+)]
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 

@@ -6,6 +6,13 @@
 //! The Access cells sign ES256 assertions with a local [`GatewayKeyPair`] and
 //! serve its JWKS on a loopback port through the verifier's test HTTP seam.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};

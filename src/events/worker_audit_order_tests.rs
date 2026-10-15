@@ -3,6 +3,13 @@
 //! MIK-7944 `D6.EVENTS_MISC.2` and `.3`: an audit outage does not use up the
 //! retry budget, and a burial's receipt comes before its eviction's.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::Arc;
 use std::time::Duration;
 

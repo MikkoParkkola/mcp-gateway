@@ -50,6 +50,31 @@ fn interrupted_of(id: &str, task: &Task, record: &Record) -> Option<InterruptedT
     })
 }
 
+/// Whether retention may hold a cancelled row whose upstream cancel is unsent
+/// (MIK-8202 P4b, design r4 D.4 as ruled: undated records only).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::gateway::task_service) enum CancelHold {
+    /// Hold a row whose pending cancel was claimed on a dark clock and is
+    /// still undated: the first readable sweep sends it. A dated pending
+    /// cancel is not held; it expires at its TTL as before (MIK-8347).
+    Undated,
+    /// No upstream adapter is installed, so nothing could ever send the
+    /// cancel: hold nothing, and expire at the TTL as before.
+    Off,
+}
+
+/// The one hold rule, read at enumeration and again under the ordering lock
+/// at deletion, so a claim that lands between the two is never deleted.
+fn held_for_cancel(entry: &super::Entry, hold: CancelHold) -> bool {
+    hold == CancelHold::Undated
+        && entry.task.status() == TaskStatus::Cancelled
+        && entry
+            .record
+            .upstream_cancel_pending
+            .as_ref()
+            .is_some_and(|pending| pending.claimed_at.is_none())
+}
+
 /// The S1 store surface: restart enumeration and the conditional durable expiry
 /// that couples a record's deletion to its dedupe entry.
 impl TaskStore {
@@ -172,25 +197,50 @@ impl TaskStore {
     /// a pair that has since moved or gone is refused there rather than acted on
     /// from this view. Nothing here reads the directory: the committed image is
     /// the only enumeration this store has.
+    ///
+    /// A row [`held_for_cancel`] under `hold` is NOT a candidate: retention
+    /// holds it past its TTL (MIK-8202 P4b). The hold is reported once per
+    /// row, on this thread, never once per pass.
     pub(in crate::gateway::task_service) fn expired_candidates(
         &self,
         now: DateTime<Utc>,
+        hold: CancelHold,
     ) -> Vec<(String, u64)> {
         let state = self.0.state();
         if !state.ready {
             return Vec::new();
         }
-        state
-            .entries
-            .iter()
-            .filter(|(_, entry)| {
-                matches!(
-                    entry.task.status(),
-                    TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
-                ) && entry.task.retention_elapsed(now)
-            })
-            .map(|(id, entry)| (id.clone(), entry.record.revision))
-            .collect()
+        let mut out = Vec::new();
+        let mut kept = std::collections::HashSet::new();
+        for (id, entry) in &state.entries {
+            let terminal = matches!(
+                entry.task.status(),
+                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+            );
+            if !terminal || !entry.task.retention_elapsed(now) {
+                continue;
+            }
+            if held_for_cancel(entry, hold) {
+                kept.insert(id.clone());
+                continue;
+            }
+            out.push((id.clone(), entry.record.revision));
+        }
+        drop(state);
+        let mut state = self.0.state();
+        for id in &kept {
+            if state.cancel_hold_warned.insert(id.clone()) {
+                tracing::warn!(
+                    task_id = %id,
+                    "held past its ttl: its upstream cancel is unsent (clock before 1970)"
+                );
+                telemetry_metrics::counter!("mcp_task_cancel_held_past_ttl_total").increment(1);
+            }
+        }
+        // Rows no longer held (sent, given up, deleted) leave the set, so it
+        // never outlives the rows it names.
+        state.cancel_hold_warned.retain(|id| kept.contains(id));
+        out
     }
 
     /// Delete one terminal record and drop its dedupe entry TOGETHER, per §13.3.
@@ -204,11 +254,12 @@ impl TaskStore {
         id: &str,
         revision: u64,
         admission: &Arc<crate::idempotency::admission::ExecutionAdmission>,
+        hold: CancelHold,
     ) -> Result<(), StoreError> {
         let shared = Arc::clone(&self.0);
         let id = id.to_owned();
         let admission = Arc::clone(admission);
-        tokio::task::spawn_blocking(move || shared.expire_blocking(&id, revision, &admission))
+        tokio::task::spawn_blocking(move || shared.expire_blocking(&id, revision, &admission, hold))
             .await
             .map_err(|_| StoreError::Storage)?
     }
@@ -350,6 +401,7 @@ impl Shared {
         id: &str,
         revision: u64,
         admission: &Arc<crate::idempotency::admission::ExecutionAdmission>,
+        hold: CancelHold,
     ) -> Result<(), StoreError> {
         let _order = self.order();
         let identity = {
@@ -368,6 +420,12 @@ impl Shared {
                 TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
             ) {
                 return Err(StoreError::InvalidTransition);
+            }
+            // Re-checked under the ordering lock: a cancel claimed since the
+            // candidate snapshot keeps the revision, so only this check sees
+            // it. The row has moved on for expiry's purposes (MIK-8202 P4b).
+            if held_for_cancel(entry, hold) {
+                return Err(StoreError::RevisionConflict);
             }
             entry.record.admission.identity_digest.clone()
         };

@@ -2,6 +2,13 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Prompt and resource aggregation, and grant-scoped cache entries.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::*;
 
 /// How long the hung mock sleeps: past every bound below, so it never answers.

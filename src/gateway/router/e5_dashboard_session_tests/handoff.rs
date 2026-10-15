@@ -5,6 +5,13 @@
 //! the operator enters in a same-origin form on the public origin, which sets
 //! the session cookie there. The code never travels in a URL.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::*;
 
 const PUBLIC: &str = "https://gw.example";

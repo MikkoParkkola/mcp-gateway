@@ -200,6 +200,10 @@ fn parse_jsonl(content: &str, chain_id: &str) -> Vec<ChainCheckpoint> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )]
     use super::*;
     use chrono::Utc;
     use serde_json::{Value, json};
