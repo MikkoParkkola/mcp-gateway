@@ -645,7 +645,7 @@ impl super::MetaMcp {
         let skipped = context.origin == Origin::GatewayInvoke
             && self.withheld_invoke_target(arguments, session, caller);
         if context.origin == Origin::GatewayInvoke && !skipped {
-            self.check_signing_policy(arguments, session, caller)?;
+            self.check_visible_policy(arguments, session, caller)?;
         } else if skipped {
             self.check_call_level_policy(arguments, caller)?;
         }

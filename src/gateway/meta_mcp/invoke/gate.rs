@@ -108,14 +108,16 @@ impl MetaMcp {
         let server = crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "server")?;
         self.admit_backend_wide(server, tool)
     }
-    /// The invocation policy as signing runs it for a target it does not
-    /// skip, a capability the caller may not reach answered as the undefined
-    /// one is ([`Self::as_undefined_capability`], H2).
+    /// The invocation policy as the caller may see it: a capability the
+    /// caller may not reach answered as the undefined one is
+    /// ([`Self::as_undefined_capability`]). Signing runs it for a target it
+    /// does not skip (H2), and a stored read runs it so it answers what the
+    /// live call answers (MIK-8392 D-POLICY under MIK-8361).
     ///
     /// # Errors
     ///
     /// The policy's refusal, so mapped.
-    pub(crate) fn check_signing_policy(
+    pub(crate) fn check_visible_policy(
         &self,
         arguments: &Value,
         session: Option<&str>,
@@ -143,28 +145,37 @@ impl MetaMcp {
         ) else {
             return refusal;
         };
-        let defined = self
-            .get_capabilities()
-            .is_some_and(|cap| server == cap.name && cap.has_capability(tool));
-        if !defined {
-            return refusal;
-        }
-        let by_rule = self
-            .admin_capability_rule(server, tool, caller.is_admin)
-            .and_then(|()| {
-                self.identity_grant_rule(
-                    server,
-                    tool,
-                    caller.scope(),
-                    crate::gateway::authz::Emit::Silent,
-                )
-            });
-        match by_rule {
-            Err(rule) if rule.to_string() == refusal.to_string() => {
+        match self.capability_rule_refusal((server, tool), caller.scope(), caller.is_admin) {
+            Some(rule) if rule.to_string() == refusal.to_string() => {
                 Error::ToolNotFound(tool.to_string())
             }
             _ => refusal,
         }
+    }
+
+    /// The refusal a defined capability gets from a rule that depends on it
+    /// existing: the admin rule or the identity grant, re-read silently with
+    /// no authorizer decision. `None` for an undefined capability, any other
+    /// server, or a capability both rules admit. The gate and
+    /// [`Self::check_visible_policy`] both answer such a refusal as the
+    /// undefined capability, through this one predicate (MIK-8361).
+    fn capability_rule_refusal(
+        &self,
+        (server, tool): (&str, &str),
+        scope: crate::gateway::meta_mcp::visibility::InvokeScope<'_>,
+        is_admin: bool,
+    ) -> Option<Error> {
+        let defined = self
+            .get_capabilities()
+            .is_some_and(|cap| server == cap.name && cap.has_capability(tool));
+        if !defined {
+            return None;
+        }
+        self.admin_capability_rule(server, tool, is_admin)
+            .and_then(|()| {
+                self.identity_grant_rule(server, tool, scope, crate::gateway::authz::Emit::Silent)
+            })
+            .err()
     }
 
     /// What `backend`'s shared catalogue says about `tool`, filled once if
@@ -433,7 +444,11 @@ impl MetaMcp {
         {
             // A capability the caller may not reach answers as one that is
             // not defined: the same `ToolNotFound` the grant check gives it.
-            if !(refused && cap.has_capability(tool)) {
+            if !refused
+                || self
+                    .capability_rule_refusal((server, tool), scope, caller.is_admin)
+                    .is_none()
+            {
                 return None;
             }
             self.record_withheld(server, tool, Withholding::Refused, caller, session_id)
