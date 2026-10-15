@@ -30,6 +30,11 @@ pub(super) struct StoredDelivery {
         skip_serializing_if = "crate::gateway::gateway_writes::WriteRecord::is_empty"
     )]
     pub(super) writes: crate::gateway::gateway_writes::WriteRecord,
+    /// #3872 FIX 1: the steps the execution dispatched, so a replay meets a
+    /// now-withheld step's refusal only where the first run reached it.
+    /// Absent in older records: every step counts as dispatched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) dispatched: Option<Vec<(String, String)>>,
 }
 
 /// #2472: the first execution's invocation-record outcome and response hash,
@@ -112,6 +117,24 @@ pub(super) enum StoredChain {
 
 /// Decode a stored delivery; a bare response is a record from before the
 /// envelope and replays without a link.
+/// Whether a replay meets the refusal of the steps `hidden` from its caller
+/// now: only where the stored run dispatched one of them. A record with no
+/// step list (written before the list) counts every step as dispatched, so
+/// it keeps the refusal (#3872 FIX 1, fail closed).
+pub(super) fn replay_meets_refusal(
+    dispatched: Option<&[(String, String)]>,
+    hidden: &[(String, String)],
+) -> bool {
+    dispatched.is_none_or(|ran| hidden.iter().any(|step| ran.contains(step)))
+}
+
+/// The steps a stored execution dispatched, if its record lists them.
+pub(super) fn dispatched_steps(bytes: &[u8]) -> Option<Vec<(String, String)>> {
+    serde_json::from_slice::<StoredDelivery>(bytes)
+        .ok()
+        .and_then(|stored| stored.dispatched)
+}
+
 pub(super) fn stored_response(bytes: &[u8]) -> Option<(JsonRpcResponse, Option<ReplayAudit>)> {
     if let Ok(stored) = serde_json::from_slice::<StoredDelivery>(bytes) {
         crate::security::tenant_reads::note_restored(stored.read.as_ref());

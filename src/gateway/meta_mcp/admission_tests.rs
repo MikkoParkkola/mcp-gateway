@@ -138,7 +138,7 @@ fn admit(
 }
 
 fn assert_replay(result: Result<SyncAdmission>, id: i64) {
-    let Ok(SyncAdmission::Replay(response, _)) = result else {
+    let Ok(SyncAdmission::Replay(response, ..)) = result else {
         panic!("unchanged allowed operation must replay its retained secured result");
     };
     assert_eq!(response.id, Some(RequestId::Number(id)));
@@ -150,6 +150,13 @@ fn retained_operation(meta: &MetaMcp, caller: &MetaMcpCallerContext<'_>, tool: &
         panic!("initial allowed operation must own the real shared admission slot");
     };
     owner.mark_dispatched();
+    // The seeded run dispatched every chain step, as the invoke funnel notes
+    // them: a replay past a revocation meets the refusal (#3872 FIX 1).
+    for step in args["chain"].as_array().into_iter().flatten() {
+        if let Some(step) = step["tool"].as_str().and_then(|tool| tool.split_once(':')) {
+            owner.note_step(step);
+        }
+    }
     owner.complete_secured(&JsonRpcResponse::success(
         RequestId::Number(1),
         json!({"secret":SECRET}),
@@ -613,6 +620,7 @@ fn replay_facts_round_trip_and_older_records_decode() {
             audit: Some(ReplayAudit::new(outcome, Some("sha256:x".to_string()))),
             read: None,
             writes: crate::gateway::gateway_writes::WriteRecord::default(),
+            dispatched: None,
         };
         let bytes = serde_json::to_vec(&stored).unwrap();
         let (_, audit) = stored_response(&bytes).expect("decodes");
@@ -650,6 +658,7 @@ fn a_stored_delivery_with_any_write_record_still_decodes() {
         audit: Some(ReplayAudit::new(AuditOutcome::Ok, None)),
         read: None,
         writes: crate::gateway::gateway_writes::WriteRecord::default(),
+        dispatched: None,
     };
     for writes in [
         json!([{"layer": "value", "path": ["trace_id"], "digest": 17}]),
@@ -701,6 +710,7 @@ async fn a_replay_restores_the_stored_reading() {
         audit: None,
         read: Some(b.clone()),
         writes: crate::gateway::gateway_writes::WriteRecord::default(),
+        dispatched: None,
     };
     let bytes = serde_json::to_vec(&stored).unwrap();
     let (_, restored) = with_read_scope(std::sync::Arc::clone(&fw), async {

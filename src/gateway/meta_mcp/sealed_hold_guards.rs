@@ -46,7 +46,7 @@ const DECISION_ONLY: &[(&str, &str, &str, &str)] = &[
     (
         "meta_mcp/admission.rs",
         "admit_meta_sync_unrefunded",
-        r"matches!\(&admission, Ok\(SyncAdmission::Replay\(\.\.\)\)\)",
+        r"Ok\(SyncAdmission::Replay\(_, _, dispatched\)\) => Some\(dispatched\)",
         "classifies the admission only to keep a withheld step's refusal on a replay (MIK-8361 ruling A); the replay itself is returned unchanged to its caller, which delivers its holds; pinned by row C1-stdio-nested (c1_stdio_a_replayed_nested_question_keeps_its_slot), whose replay passes this match",
     ),
 ];

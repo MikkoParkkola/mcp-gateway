@@ -650,7 +650,7 @@ pub(super) async fn tools_call(
     );
     let (owned_execution, replay) = match admission {
         Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Owned(lease)) => (Some(lease), None),
-        Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Replay(response, audit)) => {
+        Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Replay(response, audit, _)) => {
             (None, Some((response, audit)))
         }
         Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Unprotected) => (None, None),

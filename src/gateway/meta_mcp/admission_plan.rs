@@ -12,6 +12,10 @@ use crate::{Error, Result};
 
 use super::super::{MetaMcp, MetaMcpCallerContext};
 
+/// The first refusal of the plan steps the caller cannot see, and those
+/// steps as `(server, tool)`; `None` when every step is visible.
+pub(super) type Withheld = Option<(Error, Vec<(String, String)>)>;
+
 impl MetaMcp {
     /// The backend targets a `gateway_run_playbook` call will reach, one per
     /// declared step, for the route stage to authorize and scan before any step
@@ -54,18 +58,18 @@ impl MetaMcp {
     /// Legacy unkeyed orchestration retains its existing per-step checks. A
     /// keyed retry must pass current checks before exposing any retained data.
     ///
-    /// The second value is the refusal of a code-mode step the caller cannot
-    /// see (MIK-8361 A5 ruling A): a fresh call does not give it, as its
-    /// per-step gate answers the step absent, exactly like a missing step; a
-    /// replay of a retained result does, unchanged, so none outlives a
-    /// revocation (SUB.4).
+    /// The second value is the refusal of the code-mode steps the caller
+    /// cannot see, with those steps (MIK-8361 A5 ruling A): a fresh call does
+    /// not give it, as its per-step gate answers the step absent, exactly like
+    /// a missing step; a replay of a retained result that dispatched one of
+    /// them does, unchanged, so none outlives a revocation (SUB.4).
     pub(super) fn authorize_execution_plan(
         &self,
         caller: &MetaMcpCallerContext<'_>,
         tool: &str,
         arguments: &Value,
         session: Option<&str>,
-    ) -> Result<(Option<PlaybookDefinition>, Option<Error>)> {
+    ) -> Result<(Option<PlaybookDefinition>, Withheld)> {
         if caller.retry.idempotency_key.is_none() {
             return Ok((None, None));
         }
@@ -127,8 +131,8 @@ impl MetaMcp {
         caller: &MetaMcpCallerContext<'_>,
         arguments: &Value,
         session: Option<&str>,
-    ) -> Result<Option<Error>> {
-        let mut deferred = None;
+    ) -> Result<Withheld> {
+        let mut deferred: Withheld = None;
         let chain = arguments.get("chain").and_then(Value::as_array);
         let steps = chain.map_or_else(|| std::slice::from_ref(arguments), Vec::as_slice);
         if steps.is_empty() {
@@ -158,7 +162,8 @@ impl MetaMcp {
                 // refusal, which a replayed key's holder was already shown
                 // (SUB.4, ruling A).
                 Err(refusal) if self.step_is_hidden(caller, (server, tool), session) => {
-                    deferred.get_or_insert(refusal);
+                    let (_, hidden) = deferred.get_or_insert((refusal, Vec::new()));
+                    hidden.push((server.to_owned(), tool.to_owned()));
                 }
                 Err(refusal) => return Err(refusal),
             }

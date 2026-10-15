@@ -486,7 +486,7 @@ impl MetaMcp {
         };
         // Dispatch: the witness goes with the send (the nonce stays spent).
         witness.spend();
-        nonce_settle::mark_dispatched(caller);
+        nonce_settle::mark_dispatched(caller, (server, tool));
         // Boxed: the dispatch future is the largest thing this frame ever
         // holds, and inlining it puts `invoke_tool_traced` over
         // `clippy::large_futures` at every call site.

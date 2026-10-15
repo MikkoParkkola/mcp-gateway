@@ -17,9 +17,10 @@ pub(crate) fn ask_refund(caller: &MetaMcpCallerContext<'_>) {
 /// Mark the execution lease and the signed execution dispatched, before the
 /// backend is reached: from here on neither the key nor the nonce is given
 /// back, as a replay would repeat what the backend did.
-pub(crate) fn mark_dispatched(caller: &MetaMcpCallerContext<'_>) {
+pub(crate) fn mark_dispatched(caller: &MetaMcpCallerContext<'_>, step: (&str, &str)) {
     if let Some(execution) = caller.execution {
         execution.mark_dispatched();
+        execution.note_step(step);
     }
     caller.signing.inspect(|signing| signing.mark_dispatched());
 }

@@ -108,6 +108,10 @@ fn a_replay_past_revocation_on_a_registered_backend_keeps_its_refusal() {
         panic!("premise: the first allowed call owns the key");
     };
     owner.mark_dispatched();
+    // The first run dispatched both steps (#3872 FIX 1: only a dispatched
+    // step's replay meets its refusal).
+    owner.note_step(("beta", "other"));
+    owner.note_step(("beta", "read"));
     owner.complete_secured(&crate::protocol::JsonRpcResponse::success(
         RequestId::Number(1),
         json!({"retained": "yes"}),
@@ -169,4 +173,37 @@ fn a_key_reused_with_a_withheld_step_answers_as_with_a_missing_one() {
     let withheld = reuse_with_another_step(&DenyOne { tool: "read" });
     let missing = reuse_with_another_step(&AllowAll);
     assert_eq!(withheld, missing, "key reuse: withheld vs missing step");
+}
+
+/// #3872 review (FIX 1, condition 2): a sync result stored before the step
+/// list existed still decodes, with no list, and its replay keeps today's
+/// refusal of a now-hidden step (fail closed). A listed run meets the refusal
+/// only where it dispatched the step.
+#[test]
+fn a_stored_result_without_a_step_list_keeps_the_refusal() {
+    use super::stored::{dispatched_steps, replay_meets_refusal};
+    let hidden = vec![("beta".to_string(), "read".to_string())];
+    let older = serde_json::to_vec(&json!({
+        "response": {"jsonrpc": "2.0", "id": null, "result": {"retained": "yes"}},
+        "chain": "not_eligible"
+    }))
+    .expect("serializes");
+    assert_eq!(
+        dispatched_steps(&older),
+        None,
+        "an older record has no list"
+    );
+    assert!(
+        replay_meets_refusal(dispatched_steps(&older).as_deref(), &hidden),
+        "an older record keeps the refusal"
+    );
+    let other = vec![("beta".to_string(), "other".to_string())];
+    assert!(
+        !replay_meets_refusal(Some(other.as_slice()), &hidden),
+        "a run that never dispatched the hidden step replays its answer"
+    );
+    assert!(
+        replay_meets_refusal(Some(hidden.as_slice()), &hidden),
+        "a run that dispatched the hidden step meets its refusal"
+    );
 }
