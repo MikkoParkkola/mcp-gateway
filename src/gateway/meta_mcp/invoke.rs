@@ -244,7 +244,7 @@ impl MetaMcp {
         };
         // The lift (MIK-8392 STORED.2): proven live, before key/spend/redeem/relay act.
         if let Some(replay) = self
-            .lift_deferred((server, tool), &mut witness, session_id, caller)
+            .lift_deferred((server, tool), &resolved, &mut witness, session_id, caller)
             .await
         {
             return Ok(TracedOutcome::Stored(replay));

@@ -29,6 +29,15 @@ pub(crate) enum SourcedOutcome {
     Stored(crate::protocol::JsonRpcResponse),
 }
 
+/// Whether `resolved` minted something that proves the caller's account:
+/// per-caller headers or an account credential. An optional
+/// (`required: false`) propagation backend's failed mint falls back to static
+/// credentials with neither (IDP.5). That fallback is not a proof: the stored
+/// output was produced under a per-user credential (MIK-8392 STORED.2 FIX 1).
+fn minted_proof(resolved: &super::ResolvedDispatch) -> bool {
+    !resolved.caller_credential.headers.is_empty() || resolved.account_credential.is_some()
+}
+
 impl crate::gateway::meta_mcp::MetaMcp {
     /// The lift (MIK-8392 STORED.2): the route stage deferred this
     /// invocation's retained result to a live dispatch, and resolution has
@@ -36,10 +45,15 @@ impl crate::gateway::meta_mcp::MetaMcp {
     /// dispatching. The entry is keyed by this invocation's own key and taken
     /// once, so a nested invocation never meets it (L3). A delivered call:
     /// the signing nonce stays spent and nothing is sent. `None` for an
-    /// unkeyed call or one with nothing deferred.
+    /// unkeyed call or one with nothing deferred, and for a resolution that
+    /// minted nothing (FIX 1): the entry is dropped and the call runs live
+    /// under static credentials. Its idempotency key is namespaced by the
+    /// unminted dispatch's principal, not the per-user binding the stored
+    /// result was written under, so the cache cannot serve it either.
     pub(super) async fn lift_deferred(
         &self,
         (server, tool): (&str, &str),
+        resolved: &super::ResolvedDispatch,
         witness: &mut super::nonce_settle::Witnessed<'_, '_>,
         session_id: Option<&str>,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
@@ -47,6 +61,9 @@ impl crate::gateway::meta_mcp::MetaMcp {
         use crate::gateway::meta_mcp::visible;
         let key = visible::deferred_replay_key(server, tool, caller.retry)?;
         let deferred = visible::take_deferred_replay(&key)?;
+        if !minted_proof(resolved) {
+            return None;
+        }
         witness.spend();
         super::nonce_settle::mark_dispatched(caller);
         Some(
@@ -103,6 +120,14 @@ impl crate::gateway::meta_mcp::MetaMcp {
             super::nonce_settle::ask_refund(caller);
         }
         Ok(match proven? {
+            // A task repeat has no live path (its row holds the key), so an
+            // unminted resolution fails closed (FIX 1).
+            std::ops::ControlFlow::Continue((_, resolved)) if !minted_proof(&resolved) => {
+                return Err(crate::Error::Config(format!(
+                    "identity propagation minted no credential for backend '{server}'; \
+                     a stored result is not served without one"
+                )));
+            }
             std::ops::ControlFlow::Continue(_) => None,
             std::ops::ControlFlow::Break(answer) => Some(answer.into_parts().0),
         })
