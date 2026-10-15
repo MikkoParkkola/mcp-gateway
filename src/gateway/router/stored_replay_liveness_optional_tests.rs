@@ -128,14 +128,23 @@ async fn s_unminted_a_retry_of_an_unminted_call_is_served_from_the_cache() {
 
 /// S-minted (control; mutant M-mint-none): on an optional backend whose mint
 /// succeeds, the retry is lifted from the stored result with one send in
-/// total. A proof that never holds (M-mint-none) refuses it.
+/// total. The idempotency cache is NOT armed here, so only the lift can serve
+/// it (armed, the cache under the same binding would serve it too). A proof
+/// that never holds (M-mint-none) refuses it.
 #[tokio::test]
 async fn s_minted_a_minted_optional_retry_is_lifted() {
     use std::sync::atomic::Ordering;
 
     let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
     let idp = r6m_token_exchange::LiveIdp::start(&key).await;
-    let (router, sends, _dirs) = optional_gateway(&idp, &key).await;
+    let (router, sends, _dirs) = r6m_token_exchange::gateway_with(
+        &key,
+        idp.endpoint(),
+        &r6m_token_exchange::alice(),
+        r6m_token_exchange::Requirement::Optional,
+        |meta| meta,
+    )
+    .await;
     let alice = r6m_token_exchange::alice();
     let first = r6m_token_exchange::send_as(&router, &alice, call("smint", false)).await;
     assert!(first.to_string().contains(MARKER), "premise: {first}");
