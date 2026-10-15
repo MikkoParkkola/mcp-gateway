@@ -469,7 +469,9 @@ fn replay_naming(
 /// #3872 review (round 3, B): a chain whose first step was hidden from the
 /// first call (never run) and whose second ran, replayed after the second is
 /// revoked, names the second step's refusal, as when the first step is
-/// missing; never the hidden step's.
+/// missing; never the hidden step's. Seeded, not live: a fresh run cannot
+/// reach this record, because a chain stops at its first failed step ("Chain
+/// step N failed"), so a hidden first step ends the run before the second.
 #[test]
 fn a_replay_names_the_refusal_of_the_step_that_ran() {
     let withheld = replay_naming(
@@ -483,4 +485,59 @@ fn a_replay_names_the_refusal_of_the_step_that_ran() {
         "premise: the missing twin names read: {missing}"
     );
     assert_eq!(withheld, missing, "the replay names the step that ran");
+}
+
+/// A keyed `gateway_execute` of `[beta:other, beta:{step}]`, `beta:read` in
+/// error-rate cooldown, judged by `authorizer`: admission's answer, rendered.
+fn keyed_chain_with_a_disabled_step(
+    authorizer: &(dyn ToolAuthorizer + Sync),
+    step: &str,
+) -> String {
+    let (registry, _calls) = counted_backend("beta");
+    let meta = MetaMcp::new(registry).with_code_mode(true);
+    let cfg = crate::kill_switch::CapabilityErrorBudgetConfig::default();
+    for _ in 0..(cfg.window_size * 2) {
+        meta.kill_switch()
+            .record_capability_failure("beta", "read", &cfg);
+    }
+    assert!(
+        meta.kill_switch().is_capability_disabled("beta", "read"),
+        "premise: read is in cooldown"
+    );
+    let retry = RetryFields {
+        idempotency_key: Some("cooldown".into()),
+        ..RetryFields::default()
+    };
+    let args = json!({"chain": [
+        {"tool": "beta:other", "arguments": {}},
+        {"tool": format!("beta:{step}"), "arguments": {}}
+    ]});
+    let caller = owned(&retry, authorizer);
+    match meta.admit_meta_sync_for_test(
+        AdmissionOwner::for_test(caller.owner_principal()),
+        &caller,
+        "gateway_execute",
+        &args,
+        Some("legacy:session"),
+        &RequestId::Number(1),
+    ) {
+        Ok(super::SyncAdmission::Owned(_)) => "admitted".to_string(),
+        Ok(_) => "another admission".to_string(),
+        Err(error) => format!("{error:?}"),
+    }
+}
+
+/// #3872 review (round 4, M2): keyed admission meets a hidden step in
+/// error-rate cooldown as it meets a missing step, never with the cooldown's
+/// refusal, which names the tool; only the server-wide kill switch refuses
+/// both (the killed-chain row).
+#[test]
+fn a_keyed_chain_with_a_disabled_hidden_step_answers_as_a_missing_one() {
+    let withheld = keyed_chain_with_a_disabled_step(&DenyOne { tool: "read" }, "read");
+    let missing = keyed_chain_with_a_disabled_step(&AllowAll, "no_such");
+    assert!(
+        !withheld.contains("temporarily disabled"),
+        "the cooldown named the hidden tool: {withheld}"
+    );
+    assert_eq!(withheld, missing, "cooldown: withheld vs missing step");
 }
