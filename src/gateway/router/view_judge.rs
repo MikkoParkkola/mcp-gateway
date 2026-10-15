@@ -238,6 +238,37 @@ pub(super) fn code_mode_requested(query: Option<&str>) -> bool {
     })
 }
 
+/// The subject a GET stream is judged under: the admission the request
+/// resolved, the way the intake resolves it for a POST.
+pub(super) fn get_view_subject(
+    (grant_subject, source, extensions, query): (
+        Option<crate::identity_grants::GrantSubject>,
+        HeldSource,
+        &axum::http::Extensions,
+        Option<&str>,
+    ),
+) -> ViewSubject {
+    ViewSubject {
+        grant_subject,
+        oauth_agent: extensions
+            .get::<crate::gateway::oauth::AgentIdentity>()
+            .cloned(),
+        cert: extensions.get::<crate::mtls::CertIdentity>().cloned(),
+        code_mode_url: code_mode_requested(query),
+        verified_identity: extensions
+            .get::<crate::key_server::oidc::VerifiedIdentity>()
+            .cloned(),
+        adapter: extensions
+            .get::<crate::gateway::openwebui_adapter::AdapterAssertion>()
+            .copied(),
+        cert_not_after: extensions
+            .get::<crate::mtls::identity::CertNotAfter>()
+            .map(|not_after| not_after.0),
+        identity_source: source,
+        cf_grace: Arc::default(),
+    }
+}
+
 impl AppState {
     /// What the caller of `session_id`, under `subject`, is shown now, to be
     /// recorded as told once the answer that shows it is delivered.
@@ -261,53 +292,6 @@ impl AppState {
     ) -> PendingRefresh {
         self.meta_mcp.revalidate_caller_slots(caller).await;
         self.begin_refresh(session_id, subject).await
-    }
-
-    /// A GET stream opened for `session_id` under `subject`: the view it
-    /// judges with, baselined so the first change after attach is judged
-    /// against what it saw.
-    pub(super) async fn attach_view(
-        self: &Arc<Self>,
-        session_id: &str,
-        subject: ViewSubject,
-    ) -> Result<Option<crate::gateway::streaming::StreamView>, DeadReason> {
-        self.multiplexer
-            .attach_view(session_id, subject, OwnedViewJudge::shared(self))
-            .await
-    }
-
-    /// [`Self::attach_view`] for a GET: the subject is the admission the
-    /// request resolved, the way the intake resolves it for a POST.
-    pub(super) async fn attach_get_view(
-        self: &Arc<Self>,
-        session_id: &str,
-        (grant_subject, source, extensions, query): (
-            Option<crate::identity_grants::GrantSubject>,
-            HeldSource,
-            &axum::http::Extensions,
-            Option<&str>,
-        ),
-    ) -> Result<Option<crate::gateway::streaming::StreamView>, DeadReason> {
-        let subject = ViewSubject {
-            grant_subject,
-            oauth_agent: extensions
-                .get::<crate::gateway::oauth::AgentIdentity>()
-                .cloned(),
-            cert: extensions.get::<crate::mtls::CertIdentity>().cloned(),
-            code_mode_url: code_mode_requested(query),
-            verified_identity: extensions
-                .get::<crate::key_server::oidc::VerifiedIdentity>()
-                .cloned(),
-            adapter: extensions
-                .get::<crate::gateway::openwebui_adapter::AdapterAssertion>()
-                .copied(),
-            cert_not_after: extensions
-                .get::<crate::mtls::identity::CertNotAfter>()
-                .map(|not_after| not_after.0),
-            identity_source: source,
-            cf_grace: Arc::default(),
-        };
-        self.attach_view(session_id, subject).await
     }
 
     /// `listener` judged by the view of the caller that opened it, under the

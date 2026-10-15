@@ -157,8 +157,26 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
         return gateway_reply(refusal);
     }
 
+    let held = crate::gateway::auth::live::held_credential(&headers);
+    // MIK-8350 L1: the request's own credential is judged before any session
+    // effect, so a refused GET has opened, resumed, rekeyed and bound nothing.
+    // Opening or resuming installs this same credential on the session.
+    let subject = Arc::new(super::super::view_judge::get_view_subject((
+        admission.subject,
+        admission.source,
+        &extensions,
+        uri.query(),
+    )));
+    let judge = super::super::view_judge::OwnedViewJudge::shared(&state);
     #[cfg(test)]
     state.multiplexer.before_get_resolve.pause().await;
+    let Ok(admitted) = state
+        .multiplexer
+        .admit_view(&subject, held.as_ref(), judge.as_ref())
+        .await
+    else {
+        return gateway_reply(super::super::view_judge::dead_attach_refusal());
+    };
 
     let existing_session_id = session_id_header(&headers).map(String::from);
 
@@ -167,7 +185,6 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
         .and_then(|v| v.to_str().ok())
         .map(String::from);
 
-    let held = crate::gateway::auth::live::held_credential(&headers);
     let opened = if crate::gateway::router::hardened_elicitation::is_hardened(&state) {
         // Hardened (row 10): a stream only resumes a session a declaring
         // `initialize` opened; it never opens one.
@@ -192,21 +209,11 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
         state.multiplexer.bind_session_reader(&session_id, key);
     }
     // MIK-8350: what this stream's caller is shown, so the first change after
-    // attach is judged against it.
-    let Ok(view) = state
-        .attach_get_view(
-            &session_id,
-            (
-                admission.subject,
-                admission.source,
-                &extensions,
-                uri.query(),
-            ),
-        )
-        .await
-    else {
-        return gateway_reply(super::super::view_judge::dead_attach_refusal());
-    };
+    // attach is judged against it, baselined against the caller admitted above.
+    let view = state
+        .multiplexer
+        .attach_admitted(&session_id, subject, judge, admitted)
+        .await;
     // Read before the macro so its count is graded (MIK-7725).
     let session = opened.fp();
     info!(session_id = %session, "Client connected to SSE stream");

@@ -6,8 +6,8 @@
 
 use super::{
     Arc, AtAttach, Audience, AuthState, ClientSession, CopyAudience, DeadReason, Delivery,
-    HeldCredential, Judged, NotificationMultiplexer, Peek, PendingRefresh, StreamView,
-    TaggedNotification, Value, ViewJudge, ViewSubject, dead_at_attach, delivery,
+    HeldCredential, Judged, NotificationMultiplexer, Peek, PendingRefresh, ResolvedCaller,
+    StreamView, TaggedNotification, Value, ViewJudge, ViewSubject, dead_at_attach, delivery,
     is_tools_list_changed,
 };
 
@@ -21,6 +21,16 @@ pub(in crate::gateway) type GetSessionFacts = (
     Vec<(String, u64, String, usize, bool)>,
     tokio::time::Instant,
 );
+
+/// A stream's admission, decided before any session effect (MIK-8350 L1).
+pub(crate) enum Admitted {
+    /// No judge is installed: the stream opens with no view.
+    Unjudged,
+    /// The caller resolved: its view is baselined against this caller.
+    Live(ResolvedCaller),
+    /// A caller that presented nothing, on a public path: no view is live.
+    Anonymous,
+}
 
 impl NotificationMultiplexer {
     #[cfg(test)]
@@ -81,46 +91,77 @@ impl NotificationMultiplexer {
     /// the session, with a baseline of what each backend shows its caller now,
     /// so the first change after attach is judged against what it saw
     /// (MIK-8350). Streams of one session with different subjects get
-    /// different records and never judge one another (D17e).
+    /// different records and never judge one another (D17e). Judged with the
+    /// credential the session holds; a GET admits before it opens the session
+    /// ([`Self::admit_view`], then [`Self::attach_admitted`]).
     pub(crate) async fn attach_view(
         &self,
         session_id: &str,
         subject: ViewSubject,
         judge: Arc<dyn ViewJudge>,
     ) -> Result<Option<StreamView>, DeadReason> {
-        let Some(authorizer) = self.authorizer.read().clone() else {
-            return Ok(None);
-        };
         let Some(session) = self.sessions.read().get(session_id).map(Arc::clone) else {
             return Ok(None);
         };
-        let subject = Arc::new(subject);
-        let record = session.record_for(&subject);
         let credential = session.credential.read().clone();
-        match judge
-            .resolve(&authorizer, (credential.as_ref(), &subject))
-            .await
-        {
-            Judged::Live(caller) => {
-                let (stamp, view) = record
-                    .read(async { judge.baseline(&caller, &subject, session_id) })
-                    .await;
-                record.state().baseline(stamp, view);
-            }
-            // A caller that does not resolve at attach gets no stream, unless
-            // it presented nothing at all: a public path admits it
-            // anonymously, and nothing is ever delivered to it.
-            Judged::Dead(reason) => match dead_at_attach(credential.as_ref(), reason, &subject) {
+        let admitted = self
+            .admit_view(&subject, credential.as_ref(), judge.as_ref())
+            .await?;
+        Ok(self
+            .attach_admitted(session_id, Arc::new(subject), judge, admitted)
+            .await)
+    }
+
+    /// Whether a stream for `subject`, holding `credential`, may open, judged
+    /// before any session effect (MIK-8350 L1): a GET that is refused here
+    /// has opened, resumed, rekeyed and bound nothing. A caller that does not
+    /// resolve gets no stream, unless it presented nothing at all: a public
+    /// path admits it anonymously, and nothing is ever delivered to it.
+    pub(crate) async fn admit_view(
+        &self,
+        subject: &ViewSubject,
+        credential: Option<&HeldCredential>,
+        judge: &dyn ViewJudge,
+    ) -> Result<Admitted, DeadReason> {
+        let Some(authorizer) = self.authorizer.read().clone() else {
+            return Ok(Admitted::Unjudged);
+        };
+        match judge.resolve(&authorizer, (credential, subject)).await {
+            Judged::Live(caller) => Ok(Admitted::Live(caller)),
+            Judged::Dead(reason) => match dead_at_attach(credential, reason, subject) {
                 AtAttach::Refuse => {
                     reason.count();
-                    return Err(reason);
+                    Err(reason)
                 }
-                AtAttach::OpenAnonymous => {}
+                AtAttach::OpenAnonymous => Ok(Admitted::Anonymous),
             },
+        }
+    }
+
+    /// The view of an admitted stream on `session_id`: its subject's record,
+    /// baselined against the caller its admission resolved. `None` when no
+    /// judge is installed or the session is gone.
+    pub(crate) async fn attach_admitted(
+        &self,
+        session_id: &str,
+        subject: Arc<ViewSubject>,
+        judge: Arc<dyn ViewJudge>,
+        admitted: Admitted,
+    ) -> Option<StreamView> {
+        if matches!(admitted, Admitted::Unjudged) {
+            return None;
+        }
+        let session = self.sessions.read().get(session_id).map(Arc::clone)?;
+        let record = session.record_for(&subject);
+        if let Admitted::Live(caller) = admitted {
+            let (stamp, view) = record
+                .read(async { judge.baseline(&caller, &subject, session_id) })
+                .await;
+            record.state().baseline(stamp, view);
         }
         let view = StreamView::new(subject, record, judge);
         session.register_view(&view);
-        Ok(Some(view))
+        Some(view)
     }
 
     /// Take `session_id`'s baseline for the default subject: for a session no
