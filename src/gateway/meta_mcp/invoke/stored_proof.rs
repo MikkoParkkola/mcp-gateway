@@ -82,14 +82,24 @@ impl crate::gateway::meta_mcp::MetaMcp {
         }
         let backend = self.backends.get(server);
         let proof = CallerProof::new(caller.verified_identity, caller.provenance());
-        self.resolve_dispatch(
-            (server, tool),
-            backend.as_deref(),
-            proof,
-            caller.verified_identity,
-        )
-        .await
-        .map(|_| ())
+        let proven = self
+            .resolve_dispatch(
+                (server, tool),
+                backend.as_deref(),
+                proof,
+                caller.verified_identity,
+            )
+            .await
+            .map(|_| ());
+        // A busy custody refused this call before its backend: ask for the
+        // nonce back, as the live call's busy answer does (invoke.rs), so the
+        // same signed repeat is judged on its merits after recovery (R5n).
+        if let Err(error) = &proven
+            && crate::personal_accounts::refusal::transient_data(error).is_some()
+        {
+            super::nonce_settle::ask_refund(caller);
+        }
+        proven
     }
 
     /// E9 (MIK-8392): a repeated task call whose target is hidden ONLY because
