@@ -74,18 +74,24 @@ pub(super) fn assert_refused(body: &Value, expect: &str) {
 
 /// MIK-8361: a new call naming a withheld `tool` answers as a name the
 /// backend does not list (a tool error carrying text A), creates no task and
-/// is never answered from a stored result.
+/// is never answered from a stored result. The whole result is compared, so
+/// an extra field (a task handle, a stored result) fails.
 pub(super) fn assert_absent(body: &Value, tool: &str) {
-    let text = body
-        .pointer("/result/content/0/text")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let inner = serde_json::to_string_pretty(&json!({
+        "content": [{"text": crate::backend::text_absent(tool), "type": "text"}],
+        "isError": true
+    }))
+    .expect("serializes");
+    let expected = json!({
+        "_meta": {"io.modelcontextprotocol/serverInfo":
+            {"name": "mcp-gateway", "version": env!("CARGO_PKG_VERSION")}},
+        "content": [{"text": inner, "type": "text"}],
+        "isError": true,
+        "resultType": "complete"
+    });
     assert!(
-        body.get("error").is_none()
-            && body.pointer("/result/isError") == Some(&json!(true))
-            && text.contains(&crate::backend::text_absent(tool))
-            && body.pointer("/result/taskId").is_none(),
-        "expected the absent-name answer for `{tool}` and no task, got {body}"
+        body.get("error").is_none() && body.get("result") == Some(&expected),
+        "expected exactly the absent-name answer for `{tool}`, got {body}"
     );
 }
 
