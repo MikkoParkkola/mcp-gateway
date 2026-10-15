@@ -32,6 +32,10 @@ enum Reason {
     Policy,
     /// Its input schema is structurally invalid (ORACLE.5).
     Schema,
+    /// Its description failed the poisoning check.
+    Descriptor,
+    /// The session's routing profile denies it.
+    Profile,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -111,10 +115,29 @@ async fn twin(side: Side, reason: Reason, surface_tool: bool) -> Twin {
             tool: tool.to_string(),
         })
         .collect::<Vec<_>>();
+    // A profile twin's profile denies the name on the withheld side and
+    // another name on the absent side, as the policy twin's policy does.
+    let profiled = match (reason, side) {
+        (Reason::Profile, Side::Withheld) => Some(TOOL),
+        (Reason::Profile, Side::Absent) => Some("other"),
+        _ => None,
+    };
     let fixture = Box::pin(fixture_on_with(
         (url, Arc::clone(&calls)),
         Some(policy),
-        |config| config.meta_mcp.surfaced_tools = surfaced,
+        |config| {
+            config.meta_mcp.surfaced_tools = surfaced;
+            if let Some(denied) = profiled {
+                config.routing_profiles.insert(
+                    "restricted".to_string(),
+                    crate::routing_profile::RoutingProfileConfig {
+                        deny_tools: Some(vec![denied.to_string()]),
+                        ..Default::default()
+                    },
+                );
+                config.default_routing_profile = "restricted".to_string();
+            }
+        },
     ))
     .await;
     let backend = fixture.meta.backends.get(BACKEND).expect("backend");
@@ -136,6 +159,10 @@ async fn twin(side: Side, reason: Reason, surface_tool: bool) -> Twin {
             reason != Reason::Schema,
             "premise: schema validity"
         );
+    }
+    // Blocked after the premise: blocking drops the cached entry.
+    if (reason, side) == (Reason::Descriptor, Side::Withheld) {
+        backend.block_tool_for_test(TOOL);
     }
     Twin { fixture, calls }
 }
@@ -161,7 +188,8 @@ impl Twin {
     }
 }
 
-/// ORACLE.2 / ORACLE.5 on stdio, policy and schema reasons: every entry,
+/// ORACLE.2 / ORACLE.5 on stdio, policy, schema, descriptor and profile
+/// reasons: every entry,
 /// clean and tripping; a schema-withheld tool is never sent. RED on
 /// base for the entries that name a backend; the surfaced name is MIK-8340's
 /// (green on base, mutant MS1).
@@ -170,7 +198,12 @@ async fn oracle2_stdio_policy_answers_as_the_missing_name() {
     let cmd = [";", " rm", " -rf", " / "].concat();
     let tripping = json!({ "cmd": cmd });
     let mut cells = Vec::new();
-    for reason in [Reason::Policy, Reason::Schema] {
+    for reason in [
+        Reason::Policy,
+        Reason::Schema,
+        Reason::Descriptor,
+        Reason::Profile,
+    ] {
         for entry in [Entry::Invoke, Entry::Execute, Entry::Surfaced] {
             for (label, args) in [("clean", json!({})), ("tripping", tripping.clone())] {
                 let surfaced = matches!(entry, Entry::Surfaced);
@@ -187,4 +220,70 @@ async fn oracle2_stdio_policy_answers_as_the_missing_name() {
         }
     }
     assert!(cells.is_empty(), "ORACLE.2 stdio:\n{}", cells.join("\n"));
+}
+
+/// A personal capability with no grant on the stdio twin, defined or not,
+/// called through `entry`.
+async fn capability_call(defined: bool, entry: Entry) -> Value {
+    const CAPS: &str = "caps";
+    const CAP: &str = "hook_or_day";
+    let twin = twin(Side::Absent, Reason::Policy, true).await;
+    let caps = Arc::new(crate::capability::CapabilityBackend::new(
+        CAPS,
+        Arc::new(crate::capability::CapabilityExecutor::new()),
+    ));
+    if defined {
+        let metadata = "  exposure: personal\n  read_only: true\n  identity_owner:\n    authority: api_key\n    subject: alice\n";
+        let definition = format!(
+            "name: {CAP}\ndescription: A fixture capability\nmetadata:\n{metadata}\
+             providers:\n  primary:\n    service: rest\n    config:\n      \
+             base_url: http://127.0.0.1:9\n      path: /x\n      method: POST\n"
+        );
+        let parsed = crate::capability::parse_capability(&definition).expect("parses");
+        caps.register_capability(parsed).expect("registers");
+    }
+    twin.fixture.meta.set_identity_grants(
+        crate::identity_grants::LocalIdentityGrantStore::from_grants(Vec::new()),
+    );
+    twin.fixture.meta.set_capabilities(caps);
+    let params = match entry {
+        Entry::Execute => json!({"name": "gateway_execute", "arguments": {"chain": [
+            {"tool": format!("{CAPS}:{CAP}"), "arguments": {}}
+        ]}}),
+        _ => json!({"name": "gateway_invoke", "arguments":
+            {"server": CAPS, "tool": CAP, "arguments": {}}}),
+    };
+    let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params});
+    let mut body = dispatch(&twin.fixture, request).await;
+    if let Some(obj) = body.as_object_mut() {
+        obj.remove("id");
+    }
+    body
+}
+
+/// ORACLE.2 on stdio for capabilities (#3872 test review, item 3): a personal
+/// capability with no grant answers byte for byte as the undefined
+/// capability, on `gateway_invoke` and `gateway_execute`. The admin rule has
+/// no stdio case: stdio's caller is admin, so an admin-only capability is
+/// visible to it and dispatched (measured: it reached the provider).
+#[tokio::test]
+async fn oracle2_stdio_capability_answers_as_the_undefined_one() {
+    let mut cells = Vec::new();
+    for entry in [Entry::Invoke, Entry::Execute] {
+        let defined = capability_call(true, entry).await;
+        let undefined = capability_call(false, entry).await;
+        if defined.get("error").is_none() && defined.pointer("/result/isError").is_none() {
+            cells.push(format!("{entry:?}: premise: not refused: {defined}"));
+        }
+        if defined != undefined {
+            cells.push(format!(
+                "{entry:?}: defined {defined} vs undefined {undefined}"
+            ));
+        }
+    }
+    assert!(
+        cells.is_empty(),
+        "ORACLE.2 stdio capability:\n{}",
+        cells.join("\n")
+    );
 }
