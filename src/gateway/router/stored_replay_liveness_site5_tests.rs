@@ -220,10 +220,12 @@ async fn t9_unavailable_never_unhides_a_tool_hidden_for_another_reason() {
     );
 }
 
-/// S1 (guard; mutant M14): a LIVE vault account's keyed replay is served
-/// the retained result at admission, with nothing sent and no more custody
-/// resolutions than the base path (2). Deferring a proven-live replay to the
-/// lift (M14) costs a third.
+/// S1 (guard): a LIVE vault account's keyed replay is deferred at admission
+/// and lifted after the dispatch's resolution proves the account live (E10:
+/// every per-caller replay defers, the former admission shortcut once guarded
+/// by M14 is deleted): the retained result is served with nothing sent and no
+/// more custody resolutions than the base path (2), as the lift reuses the
+/// route stage's resolution.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn s1_live_account_replay_is_served_without_a_second_resolution() {
     let fx = fixture(false).await;
