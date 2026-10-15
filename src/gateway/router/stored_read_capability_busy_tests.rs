@@ -734,3 +734,6 @@ async fn gap_caller_forward_drops_retry_data() {
         "gap: the forwarder now carries the retry data (update MIK-8428): {answer}"
     );
 }
+
+#[path = "stored_read_capability_busy_repeat_tests.rs"]
+mod repeat;
