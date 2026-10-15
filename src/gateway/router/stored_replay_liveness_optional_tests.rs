@@ -19,10 +19,56 @@ fn call(key: &str, task: bool) -> Value {
     params
 }
 
-/// S-opt (mutant M-mint): a keyed retry whose mint now fails on an optional
-/// backend is not lifted from the stored result: it takes the live path under
-/// static credentials (one more send). Counting the static fallback as a
-/// proof (M-mint) lifts the per-user stored output instead.
+/// The refusal an unminted proof answers with, at the lift and at site 5.
+const UNPROVEN: &str = "Configuration error: identity propagation minted no credential \
+                        for backend 'tx'; a stored result is not served without one";
+
+fn assert_unproven(row: &str, answer: &Value) {
+    assert_eq!(
+        answer.pointer("/error/code").and_then(Value::as_i64),
+        Some(-32603),
+        "{row}: not the unproven refusal: {answer}"
+    );
+    assert_eq!(
+        answer.pointer("/error/message").and_then(Value::as_str),
+        Some(UNPROVEN),
+        "{row}: not the unproven refusal: {answer}"
+    );
+}
+
+/// The optional-propagation router with the idempotency cache armed, as
+/// production arms it (`server/build_meta.rs`).
+async fn optional_gateway(
+    idp: &r6m_token_exchange::LiveIdp,
+    key: &Arc<crate::gateway::oauth::GatewayKeyPair>,
+) -> (
+    axum::Router,
+    Arc<std::sync::atomic::AtomicUsize>,
+    (tempfile::TempDir, tempfile::TempDir),
+) {
+    r6m_token_exchange::gateway_with(
+        key,
+        idp.endpoint(),
+        &r6m_token_exchange::alice(),
+        r6m_token_exchange::Requirement::Optional,
+        |mut meta| {
+            meta.enable_idempotency(
+                Arc::new(crate::idempotency::IdempotencyCache::new()),
+                std::time::Duration::from_secs(60),
+            );
+            meta
+        },
+    )
+    .await
+}
+
+/// S-opt (mutants M-mint, M-lift-open): a keyed retry whose mint now fails on
+/// an optional backend is neither lifted from the per-user stored result nor
+/// dispatched again under static credentials (at most once, FIX 1b): the
+/// idempotency lookup under the unminted principal misses, so it fails closed
+/// with site 5's refusal and nothing is sent. M-mint (the static fallback
+/// counts as a proof) lifts the stored output; M-lift-open (the dropped entry
+/// runs live) sends the call a second time.
 #[tokio::test]
 async fn s_opt_a_failed_optional_mint_is_not_a_proof_at_the_lift() {
     use std::sync::atomic::Ordering;
@@ -30,14 +76,7 @@ async fn s_opt_a_failed_optional_mint_is_not_a_proof_at_the_lift() {
     let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
     let idp = r6m_token_exchange::LiveIdp::start(&key).await;
     let alice = r6m_token_exchange::alice();
-    let (router, sends, _dirs) = r6m_token_exchange::gateway_with(
-        &key,
-        idp.endpoint(),
-        &alice,
-        r6m_token_exchange::Requirement::Optional,
-        |meta| meta,
-    )
-    .await;
+    let (router, sends, _dirs) = optional_gateway(&idp, &key).await;
     let first = r6m_token_exchange::send_as(&router, &alice, call("sopt", false)).await;
     assert!(
         first.to_string().contains(MARKER),
@@ -49,10 +88,66 @@ async fn s_opt_a_failed_optional_mint_is_not_a_proof_at_the_lift() {
     let _clock = crate::clock::test_clock::at_secs(now + 7200);
     let again = r6m_token_exchange::send_as(&router, &alice, call("sopt", false)).await;
     eprintln!("S-opt answer: {again}");
+    assert_unproven("S-opt", &again);
     assert_eq!(
         sends.load(Ordering::SeqCst),
-        2,
-        "S-opt: the per-user stored result was lifted without a mint: {again}"
+        1,
+        "S-opt: the unproven retry was sent again: {again}"
+    );
+}
+
+/// S-unminted (mutant M-lift-shut): when the first call was unminted too, its
+/// result was written under the same static principal, so the idempotency
+/// cache serves the retry: the stored result, one send in total. Refusing at
+/// the lift before the lookup (M-lift-shut) refuses this legitimate repeat.
+#[tokio::test]
+async fn s_unminted_a_retry_of_an_unminted_call_is_served_from_the_cache() {
+    use std::sync::atomic::Ordering;
+
+    let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
+    let idp = r6m_token_exchange::LiveIdp::start(&key).await;
+    let (router, sends, _dirs) = optional_gateway(&idp, &key).await;
+    idp.kill();
+    let alice = r6m_token_exchange::alice();
+    let first = r6m_token_exchange::send_as(&router, &alice, call("sun", false)).await;
+    assert!(
+        first.to_string().contains(MARKER),
+        "premise: dispatched under static credentials: {first}"
+    );
+    let again = r6m_token_exchange::send_as(&router, &alice, call("sun", false)).await;
+    assert!(
+        again.to_string().contains(MARKER) && again.get("error").is_none(),
+        "S-unminted: the cached unminted result was not served: {again}"
+    );
+    assert_eq!(
+        sends.load(Ordering::SeqCst),
+        1,
+        "S-unminted: the retry was sent again: {again}"
+    );
+}
+
+/// S-minted (control; mutant M-mint-none): on an optional backend whose mint
+/// succeeds, the retry is lifted from the stored result with one send in
+/// total. A proof that never holds (M-mint-none) refuses it.
+#[tokio::test]
+async fn s_minted_a_minted_optional_retry_is_lifted() {
+    use std::sync::atomic::Ordering;
+
+    let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
+    let idp = r6m_token_exchange::LiveIdp::start(&key).await;
+    let (router, sends, _dirs) = optional_gateway(&idp, &key).await;
+    let alice = r6m_token_exchange::alice();
+    let first = r6m_token_exchange::send_as(&router, &alice, call("smint", false)).await;
+    assert!(first.to_string().contains(MARKER), "premise: {first}");
+    let again = r6m_token_exchange::send_as(&router, &alice, call("smint", false)).await;
+    assert!(
+        again.to_string().contains(MARKER) && again.get("error").is_none(),
+        "S-minted: the minted retry was not served: {again}"
+    );
+    assert_eq!(
+        sends.load(Ordering::SeqCst),
+        1,
+        "S-minted: the minted retry was sent again: {again}"
     );
 }
 
@@ -105,10 +200,7 @@ async fn t_opt_a_failed_optional_mint_is_not_a_proof_at_site_five() {
         again.pointer("/result/taskId").is_none(),
         "T-opt: the stored task was served without a mint: {again}"
     );
-    assert!(
-        again.get("error").is_some(),
-        "T-opt: not a refusal: {again}"
-    );
+    assert_unproven("T-opt", &again);
     assert_eq!(
         sends.load(Ordering::SeqCst),
         sent,
