@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use super::super::Gateway;
 use super::super::warmstart::{WarmStartMode, WarmerGuard};
-use crate::config::Config;
+use crate::config::{Config, LiveEnv};
 use crate::gateway::meta_mcp::MetaMcp;
 
 /// Stdio startup's catalogue step for `config`, on the gateway and Meta-MCP
@@ -16,6 +16,11 @@ async fn startup(config: Config) -> (crate::Result<()>, Arc<MetaMcp>) {
     let gateway = Gateway::new(config)
         .await
         .expect("VOID: the gateway builds");
+    startup_on(gateway).await
+}
+
+/// [`startup`] on an already-built gateway.
+async fn startup_on(gateway: Gateway) -> (crate::Result<()>, Arc<MetaMcp>) {
     let built = gateway
         .build_meta_mcp()
         .await
@@ -60,19 +65,41 @@ async fn stdio_startup_serves_the_configured_playbooks() {
 /// Mutant: the install error ignored on stdio: startup succeeds.
 #[tokio::test(flavor = "current_thread")]
 async fn stdio_startup_refuses_a_managed_binding_with_no_custody() {
-    let yaml = "backends:\n  mail:\n    http_url: https://backend.fixture.test/mcp\n    enabled: true\n    \
+    // The accounts key resolves through an env file, as a deployment's does,
+    // so the gateway builds and only the stdio install can refuse.
+    let dir = tempfile::tempdir().expect("VOID: a temp dir");
+    let env_path = dir.path().join("accounts.env");
+    crate::gateway::test_helpers::write_owner_only(
+        &env_path,
+        "STDIO_STARTUP_KEY=UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=\n",
+    )
+    .expect("VOID: write the env file");
+    let yaml = format!(
+        "env_files:\n  - {}\n\
+         backends:\n  mail:\n    http_url: https://backend.fixture.test/mcp\n    enabled: true\n    \
          account: work\n\
          accounts:\n  schema_version: accounts.v1\n  enabled: true\n  deployment: single_process\n  \
-         instance_id: unit\n  store_dir: /unused/store\n  authority_dir: /unused/authority\n  \
-         current_key_id: primary\n  keys:\n    primary: env:UNUSED\n  descriptors:\n    \
+         instance_id: unit\n  store_dir: {}\n  authority_dir: {}\n  \
+         current_key_id: primary\n  keys:\n    primary: env:STDIO_STARTUP_KEY\n  descriptors:\n    \
          work:\n      mode: personal_managed\n      provider: fixture\n      \
          resource: https://api.fixture.test/\n      issuer: https://issuer.fixture.test\n      \
          authorization_endpoint: https://issuer.fixture.test/authorize\n      \
          token_endpoint: https://issuer.fixture.test/token\n      client_id: fixture-client\n      \
          redirect_uri: https://gateway.fixture.test/callback\n      \
-         scopes: [read]\n      send_resource_parameter: true\n";
-    let config: Config = serde_yaml::from_str(yaml).expect("VOID: the config parses");
-    let (outcome, _meta) = startup(config).await;
+         scopes: [read]\n      send_resource_parameter: true\n",
+        env_path.display(),
+        dir.path().join("store").display(),
+        dir.path().join("authority").display(),
+    );
+    let config_path = dir.path().join("config.yaml");
+    crate::gateway::test_helpers::write_owner_only(&config_path, yaml)
+        .expect("VOID: write the config");
+    let evaluated = Config::load_evaluated(Some(&config_path)).expect("VOID: the config evaluates");
+    let env = Arc::new(LiveEnv::new(evaluated.overlay, evaluated.env_paths));
+    let gateway = Gateway::new_with_env(evaluated.config, env, Some(config_path.clone()))
+        .await
+        .expect("VOID: the gateway builds with no custody started");
+    let (outcome, _meta) = startup_on(gateway).await;
     let error = outcome.expect_err("stdio must refuse a managed binding with no custody");
     let text = error.to_string();
     assert!(
