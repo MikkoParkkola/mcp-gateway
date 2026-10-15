@@ -8,6 +8,18 @@ use super::direct_caller::{Envelope, Rejection};
 use super::direct_dispatch::Scope;
 use super::direct_failure::DirectFailure;
 
+/// What the checks before the credential decided for a `tools/call`.
+pub(super) enum Guarded {
+    /// Nothing to answer: the call goes on to its credential.
+    Clear,
+    /// A name the caller cannot see, answered as a name the catalogue lacks.
+    Withheld(Rejection),
+    /// The same, for a caller with no view of this per-user backend: a
+    /// missing name meets the account's credential step, so the route runs
+    /// it for the withheld name too (MIK-8361 ruling B).
+    WithheldNoView(Rejection),
+}
+
 /// MIK-8361 ORACLE.3/.4: a `tools/call`'s authorize, request firewall and
 /// withheld gate, run before the caller's credential is resolved, so a call
 /// they refuse or answer resolves none. A withheld name is answered here as
@@ -15,9 +27,9 @@ use super::direct_failure::DirectFailure;
 pub(super) async fn guard_before_credential(
     scope: Scope<'_>,
     envelope: &Envelope,
-) -> Result<(), Rejection> {
+) -> Result<Guarded, Rejection> {
     if envelope.method != "tools/call" {
-        return Ok(());
+        return Ok(Guarded::Clear);
     }
     let caller = scope.caller;
     let client = caller.client.as_ref();
@@ -37,7 +49,7 @@ pub(super) async fn guard_before_credential(
         identity: caller.verified_identity.as_ref(),
         managed: None,
     };
-    super::guard_tool_call(
+    let withheld = super::guard_tool_call(
         scope.state,
         scope.name,
         auth,
@@ -45,6 +57,20 @@ pub(super) async fn guard_before_credential(
         (&scope.route.backend, &failed),
     )
     .await?;
+    if let Some(absent) = withheld {
+        let backend = &scope.route.backend;
+        let no_view = backend.keeps_per_user_catalogues()
+            && scope
+                .state
+                .meta_mcp
+                .caller_has_no_view(backend, caller.proof())
+                .await;
+        return Ok(if no_view {
+            Guarded::WithheldNoView(absent)
+        } else {
+            Guarded::Withheld(absent)
+        });
+    }
     // A caller with no principal on a required per-user backend can hold no
     // slot there: it lacks every tool, -32601 as on every other entry
     // (MIK-8356 R3.7), before any credential is resolved for it.
@@ -72,5 +98,5 @@ pub(super) async fn guard_before_credential(
             axum::http::StatusCode::OK,
         ));
     }
-    Ok(())
+    Ok(Guarded::Clear)
 }
