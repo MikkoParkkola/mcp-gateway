@@ -292,3 +292,63 @@ async fn a_get_stream_writes_no_unjudged_frame_once_its_adapter_receipt_expires(
          has expired: {leaked:?}"
     );
 }
+
+/// Queue `count` updates that no stream reads yet, so a queue smaller than
+/// `count` overflows.
+async fn overflow(state: &Arc<AppState>, count: usize) {
+    for index in 0..count {
+        let reached = state
+            .multiplexer
+            .broadcast_to_backend(&resource_update(&format!("flood-{index}")), "demo")
+            .await;
+        std::assert!(reached > 0, "VOID: flood update {index} reached none");
+    }
+}
+
+/// MIK-8350 (final-delta seat MEDIUM): the `lagged` notice a stream writes when
+/// its queue overflowed is a frame like any other, so it too is held to the
+/// stream's own subject. Once the held adapter receipt has expired, an
+/// overflowed GET stream writes no `lagged` notice and closes. A control stream
+/// with a fresh receipt, overflowed the same way, receives the notice, so the
+/// overflow itself is proven.
+/// Red before the fix: only the bearer is rechecked for the notice, so the
+/// expired receipt's stream is written `{"missed": n}`. Mutant: the notice's
+/// subject check removed.
+#[tokio::test(flavor = "current_thread")]
+async fn an_overflowed_get_stream_writes_no_lag_notice_once_its_adapter_receipt_expires() {
+    let (state, _store) = test_router_app_state_with_auth(&scoped_auth_config(false)).await;
+    let backend = http_backend_at("demo", "http://127.0.0.1:9/mcp");
+    backend.store_shared_tools_for_test(vec![tool("before")]);
+    std::assert!(
+        state.backends.register(Arc::clone(&backend)),
+        "VOID: demo backend must register"
+    );
+    let t0 = crate::clock::unix_secs().expect("clock after 1970");
+    let capture = crate::clock::test_clock::at_secs(t0);
+    let (mut held, _held_session) = open_get(&state, genuine_receipt(t0)).await;
+    drop(capture);
+
+    let later = t0 + 300;
+    let expired = crate::clock::test_clock::at_secs(later);
+    std::assert!(!fresh_verifies(t0), "VOID: the held receipt has expired");
+    let (mut control, _control_session) = open_get(&state, genuine_receipt(later)).await;
+    // One more than the stream queue holds (the default buffer is 100).
+    overflow(&state, 105).await;
+    match control.next().await {
+        Frame::Message(frame) => std::assert!(
+            frame.get("missed").is_some(),
+            "VOID: the overflowed control stream must report its lag first: {frame}"
+        ),
+        Frame::Eof => panic!("VOID: the control stream ended instead of reporting its lag"),
+    }
+    let leaked: Option<Value> = match held.next().await {
+        Frame::Eof => None,
+        Frame::Message(frame) => Some(frame),
+    };
+    drop(expired);
+    std::assert!(
+        leaked.is_none(),
+        "a lag notice was written to a GET stream whose adapter receipt has \
+         expired: {leaked:?}"
+    );
+}
