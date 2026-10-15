@@ -287,3 +287,32 @@ async fn oracle2_stdio_capability_answers_as_the_undefined_one() {
         cells.join("\n")
     );
 }
+
+/// #3872 review (FIX 1, condition 4) on stdio: a keyed chain `[note, read]`
+/// sent twice with the same key replays the first run. `read` hidden by the
+/// tool policy was answered as missing and never ran, so the replay is the
+/// stored answer, exactly as the missing twin's replay is; nothing is sent
+/// for `read`.
+#[tokio::test]
+async fn a5r_stdio_a_replayed_keyed_chain_answers_as_one_with_a_missing_step() {
+    let mut replays = Vec::new();
+    for side in [Side::Withheld, Side::Absent] {
+        let twin = twin(side, Reason::Policy, true).await;
+        let mut request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "gateway_execute", "arguments": {"chain": [
+            {"tool": format!("{BACKEND}:{SIBLING}"), "arguments": {}},
+            {"tool": format!("{BACKEND}:{TOOL}"), "arguments": {}}
+        ]}}});
+        request["params"]["_meta"][crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!("a5r");
+        dispatch(&twin.fixture, request.clone()).await;
+        let mut replay = dispatch(&twin.fixture, request).await;
+        if let Some(obj) = replay.as_object_mut() {
+            obj.remove("id");
+        }
+        replays.push((replay, twin.calls.load(Ordering::SeqCst)));
+    }
+    assert_eq!(
+        replays[0], replays[1],
+        "stdio A5 replay: withheld vs missing"
+    );
+}
