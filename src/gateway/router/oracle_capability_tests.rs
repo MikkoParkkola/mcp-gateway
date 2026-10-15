@@ -436,3 +436,45 @@ async fn a_profile_refused_backend_tool_keeps_its_answer() {
         "execute keeps its answer: {body}"
     );
 }
+
+/// Kill switch audit (measured 2026-10-15): on a killed capability server
+/// neither twin writes an invocation record, on either entry. Before the
+/// route-stage kill check the defined capability's `gateway_execute` wrote
+/// one (its chain step ran and failed on the kill switch); every other cell
+/// wrote none, then and now.
+#[tokio::test]
+async fn a_killed_capability_server_writes_no_invocation_record_for_either_twin() {
+    let mut cells = Vec::new();
+    for defines in [true, false] {
+        for entry in [Entry::Invoke, Entry::Execute] {
+            let audit = tempfile::NamedTempFile::new().expect("tempfile");
+            let log = super::r2_identity_keys_tests::transparency_logger(&audit);
+            let caps = capabilities(Reason::Scope, defines);
+            let fx = fixture_firewalled_built(Answer::Ok, move |meta| {
+                let mut meta = meta.with_identity_grants(
+                    crate::identity_grants::LocalIdentityGrantStore::from_grants(Vec::new()),
+                );
+                meta.set_capabilities(caps);
+                meta.enable_transparency_log(log);
+                meta
+            })
+            .await;
+            fx.state.meta_mcp.kill_switch().kill(CAPS);
+            call(&fx, entry, json!({})).await;
+            let records = std::fs::read_to_string(audit.path())
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter(|entry| entry.get("request_hash").is_some())
+                .count();
+            if records != 0 {
+                cells.push(format!("defines={defines} {entry:?}: {records} records"));
+            }
+        }
+    }
+    assert!(
+        cells.is_empty(),
+        "kill switch records:\n{}",
+        cells.join("\n")
+    );
+}
