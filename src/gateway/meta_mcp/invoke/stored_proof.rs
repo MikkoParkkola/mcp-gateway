@@ -65,7 +65,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
             return None;
         }
         witness.spend();
-        super::nonce_settle::mark_dispatched(caller);
+        super::nonce_settle::mark_dispatched(caller, (server, tool));
         Some(
             self.audit_replay(
                 &deferred.tool_name,

@@ -160,7 +160,7 @@ impl MetaMcp {
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
         if let Some(answer) = self.gated(args, (server, tool), caller, session_id).await {
-            return answer;
+            return answer.map(TracedOutcome::Live);
         }
 
         let mut arguments = parse_tool_arguments(args)?;
