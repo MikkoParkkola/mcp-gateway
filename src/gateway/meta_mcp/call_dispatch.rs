@@ -529,10 +529,18 @@ impl MetaMcp {
     /// resolution step (`prove_target_live`), de-duplicated by account: a
     /// clean carried credential proves, a carried fill failure answers as the
     /// failed dispatch (E4), and the first refusal answers through the
-    /// status-preserving error, keeping the connect offer. No task is created, and the row keeps its slot: a refusal
-    /// drops only this request's clones. When every target is proven the
-    /// stored answer is served, with no second catalogue check and no memo
-    /// write. An empty slice serves as today: nothing was dispatched.
+    /// status-preserving error, keeping the connect offer. No task is
+    /// created, and the row keeps its slot: a refusal drops only this
+    /// request's clones. When every target is proven the stored answer is
+    /// served, with no second catalogue check and no memo write. An empty
+    /// slice serves as today: nothing was dispatched.
+    ///
+    /// Named residuals: an HTTP request reaches E4 here only across a gap of
+    /// 10 s or more inside one request, since the cold view answers first
+    /// (T6); T6u seeds it directly (M11). The stdio busy task repeat runs
+    /// this same walk but has no stdio row. If custody recovers between E9's
+    /// proof and this walk, one account can be proven twice (no
+    /// deterministic row).
     pub(super) async fn defer_or_serve_existing(
         &self,
         id: RequestId,
