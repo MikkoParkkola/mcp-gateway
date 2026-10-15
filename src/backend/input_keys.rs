@@ -14,14 +14,24 @@ use super::{Backend, PoolKey};
 use crate::config::InputSchemaEnforcement;
 use crate::trust::closed_keys::count;
 
-/// A miss the check cannot judge: `closed` refuses with `text`, counted by
-/// `labels[0]`; `standard` forwards, counted by `labels[1]`.
+/// How the check reads the caller's catalogue (MIK-8361).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Lens {
+    /// As listed: a held tool's keys are judged, a miss follows the mode.
+    Catalogue,
+    /// The caller may not see the tool: it is judged as a name the list
+    /// lacks, and never forwarded, whatever the mode.
+    Withheld,
+}
+
+/// A miss the check cannot judge: `closed`, or a withheld name, refuses with
+/// `text`, counted by `labels[0]`; `standard` forwards, counted by `labels[1]`.
 fn miss(
-    mode: InputSchemaEnforcement,
+    (mode, lens): (InputSchemaEnforcement, Lens),
     labels: [&'static str; 2],
     text: impl FnOnce() -> String,
 ) -> Option<String> {
-    if mode == InputSchemaEnforcement::Closed {
+    if mode == InputSchemaEnforcement::Closed || lens == Lens::Withheld {
         count(labels[0]);
         Some(text())
     } else {
@@ -31,7 +41,7 @@ fn miss(
 }
 
 /// The schema could not be read (design §2 step 4, first column).
-fn unavailable(mode: InputSchemaEnforcement) -> Option<String> {
+fn unavailable(mode: (InputSchemaEnforcement, Lens)) -> Option<String> {
     miss(
         mode,
         ["input_schema_refused_unavailable", "input_schema_unknown"],
@@ -39,7 +49,89 @@ fn unavailable(mode: InputSchemaEnforcement) -> Option<String> {
     )
 }
 
+/// The answer to a name a list of `completeness` does not hold. A complete
+/// list proves absence in every mode that checks (MIK-8361, lead ruling r4:
+/// `standard` answers it too, instead of forwarding); a truncated or unknown
+/// one proves nothing, so `standard` forwards it unless it is withheld.
+fn absent_from(
+    tool: &str,
+    completeness: Completeness,
+    mode: (InputSchemaEnforcement, Lens),
+) -> Option<String> {
+    match completeness {
+        Completeness::Complete => {
+            count("input_schema_refused_absent");
+            Some(text_absent(tool))
+        }
+        Completeness::Truncated => miss(
+            mode,
+            [
+                "input_schema_refused_truncated",
+                "input_schema_truncated_forward",
+            ],
+            text_partial,
+        ),
+        Completeness::Unknown => unavailable(mode),
+    }
+}
+
 impl Backend {
+    /// Whether the argument-key check reads catalogue membership at all
+    /// (any mode but `off`). Under `off` a name the list lacks is forwarded
+    /// (MIK-8361 stated residual), so the gate never answers it.
+    pub(crate) fn checks_membership(&self) -> bool {
+        self.config.input_schema_enforcement != InputSchemaEnforcement::Off
+    }
+
+    /// What `binding`'s slot already holds about `tool`, with no fetch: the
+    /// MIK-8361 gate's view under `off`, where no call lists the catalogue.
+    /// A name the slot does not hold is `Unknown` (`off` forwards it).
+    pub(crate) fn held_verdict(
+        &self,
+        binding: Option<&str>,
+        tool: &str,
+    ) -> super::CatalogueVerdict {
+        use crate::capability::validator::input_schema_is_structurally_valid;
+        if self.blocked_tool_refusal(binding, tool).is_some() {
+            return super::CatalogueVerdict::Withholds;
+        }
+        match self.get_cached_tool_for(binding, tool) {
+            Some(held) if input_schema_is_structurally_valid(&held.input_schema) => {
+                super::CatalogueVerdict::Offers
+            }
+            Some(_) => super::CatalogueVerdict::Withholds,
+            None => super::CatalogueVerdict::Unknown,
+        }
+    }
+
+    /// Whether calls to this backend carry the caller's own credential; see
+    /// [`Self::gate_headers`].
+    pub(crate) fn propagates_caller_identity(&self) -> bool {
+        self.config.identity_propagation.is_some()
+    }
+
+    /// The headers the MIK-8361 gate checks this backend with, before any
+    /// credential exists. They are never sent: a non-empty set only selects
+    /// the check's A3 rule (a shared slot is not listed for a call carrying
+    /// the caller's credential), which is how this backend's real call,
+    /// carrying it, is judged. Empty for a backend that propagates nothing.
+    /// Only for a backend whose slot is shared: a per-user slot would be
+    /// fetched with them.
+    pub(crate) fn gate_headers(&self) -> &'static [(String, String)] {
+        static CALLER_CREDENTIALED: std::sync::LazyLock<[(String, String); 1]> =
+            std::sync::LazyLock::new(|| {
+                [(
+                    "x-mcp-gateway-caller-credentialed".to_string(),
+                    String::new(),
+                )]
+            });
+        if self.propagates_caller_identity() {
+            CALLER_CREDENTIALED.as_slice()
+        } else {
+            &[]
+        }
+    }
+
     /// The argument-key enforcement this backend was built with, so a row
     /// can prove a fixture's mode survived compilation (MIK-8356 C10).
     #[cfg(test)]
@@ -71,6 +163,8 @@ impl Backend {
     /// Returns a type-erased future: the fill underneath is deep, and naming
     /// its type in every caller's state machine pushed the stdio dispatch
     /// task past the trait solver's recursion limit (E0275 on Windows/Kani).
+    /// Production goes through [`Self::catalogue_refusal`] (MIK-8361).
+    #[cfg(test)]
     pub(crate) fn undeclared_key_refusal<'a>(
         &'a self,
         identity_key: Option<&'a str>,
@@ -82,10 +176,30 @@ impl Backend {
         // cached tool, even when the answer was already held (#613). The
         // held answer is decided here; only a miss or stale slot pays for the
         // fill, whose path below re-checks everything from the start.
-        if let Some(answer) = self.undeclared_key_refusal_held(identity_key, tool, arguments) {
+        self.catalogue_refusal((identity_key, headers), tool, arguments, Lens::Catalogue)
+    }
+
+    /// The F13 catalogue check (`undeclared_key_refusal`) through `lens`. Under
+    /// [`Lens::Withheld`] (MIK-8361) a name the caller may not see gets
+    /// exactly the answer a name its catalogue lacks gets, with the same fill,
+    /// texts and errors, except that it is never forwarded (never `None`).
+    ///
+    /// # Errors
+    ///
+    /// As `undeclared_key_refusal`: the slot's `CircuitOpen` or
+    /// `RateLimited`, and under `closed` the fill's transport error.
+    pub(crate) fn catalogue_refusal<'a>(
+        &'a self,
+        (identity_key, headers): (Option<&'a str>, &'a [(String, String)]),
+        tool: &'a str,
+        arguments: &'a Value,
+        lens: Lens,
+    ) -> std::pin::Pin<Box<dyn Future<Output = crate::Result<Option<String>>> + Send + 'a>> {
+        if let Some(answer) = self.undeclared_key_refusal_held(identity_key, tool, arguments, lens)
+        {
             return Box::pin(std::future::ready(answer));
         }
-        Box::pin(self.undeclared_key_refusal_inner(identity_key, headers, tool, arguments))
+        Box::pin(self.undeclared_key_refusal_inner((identity_key, headers), tool, arguments, lens))
     }
 
     /// The answer `undeclared_key_refusal_inner` reaches without a fetch.
@@ -97,18 +211,32 @@ impl Backend {
         identity_key: Option<&str>,
         tool: &str,
         arguments: &Value,
+        lens: Lens,
     ) -> Option<crate::Result<Option<String>>> {
-        if let Some(refusal) = self.blocked_tool_refusal(identity_key, tool) {
+        // A withheld name answers as a lacked one, never with its reason.
+        if lens == Lens::Catalogue
+            && let Some(refusal) = self.blocked_tool_refusal(identity_key, tool)
+        {
             return Some(Ok(Some(refusal)));
         }
         let mode = self.config.input_schema_enforcement;
         if mode == InputSchemaEnforcement::Off {
-            return Some(Ok(None));
+            // Off checks no membership; a withheld name is still not sent.
+            return Some(Ok((lens == Lens::Withheld).then(|| text_absent(tool))));
         }
         if !(self.has_cached_tools_for(identity_key) || self.stale_refresh_cooling(identity_key)) {
             return None;
         }
-        let (tools, _) = self.held_tools_for(identity_key)?;
+        let (tools, completeness) = self.held_tools_for(identity_key)?;
+        if lens == Lens::Withheld {
+            // A missing name is not in the held list, so on a stale slot it
+            // meets the cooled refresh below: a withheld one must too, not be
+            // answered from the stale list (H1).
+            if !self.has_cached_tools_for(identity_key) {
+                return None;
+            }
+            return Some(Ok(absent_from(tool, completeness, (mode, lens))));
+        }
         let found = tools.iter().find(|t| t.name == tool)?;
         Some(Ok(self.judge_keys(
             &found.input_schema,
@@ -120,25 +248,31 @@ impl Backend {
 
     async fn undeclared_key_refusal_inner(
         &self,
-        identity_key: Option<&str>,
-        headers: &[(String, String)],
+        (identity_key, headers): (Option<&str>, &[(String, String)]),
         tool: &str,
         arguments: &Value,
+        lens: Lens,
     ) -> crate::Result<Option<String>> {
         // Before the enforcement mode: a withheld tool is refused whatever
         // the argument-key setting, and for every caller (#1441).
-        if let Some(refusal) = self.blocked_tool_refusal(identity_key, tool) {
+        if lens == Lens::Catalogue
+            && let Some(refusal) = self.blocked_tool_refusal(identity_key, tool)
+        {
             return Ok(Some(refusal));
         }
         let mode = self.config.input_schema_enforcement;
         if mode == InputSchemaEnforcement::Off {
-            return Ok(None);
+            return Ok((lens == Lens::Withheld).then(|| text_absent(tool)));
         }
         // A4: a hit is judged from the cache while the slot is fresh; a stale
         // hit refreshes once, and falls back to the held schema (design E)
         // when it cannot: no list is allowed, the failsafe refuses it, the
         // refresh fails, or one failed within the cooldown.
-        let cached = self.get_cached_tool_for(identity_key, tool);
+        // A withheld name is judged as one the slot lacks: its entry is
+        // never read.
+        let cached = (lens == Lens::Catalogue)
+            .then(|| self.get_cached_tool_for(identity_key, tool))
+            .flatten();
         let held = |cached: &crate::protocol::Tool| {
             Ok(self.judge_keys(&cached.input_schema, tool, arguments, mode))
         };
@@ -152,7 +286,7 @@ impl Backend {
                 return held(cached);
             }
             count("input_schema_fetch_skipped_a3");
-            return Ok(unavailable(mode));
+            return Ok(unavailable((mode, lens)));
         }
         let fetched = self.tools_for_check(identity_key, headers, cached.is_some());
         let (tools, completeness) = match fetched.await {
@@ -185,7 +319,7 @@ impl Backend {
             {
                 return Err(e);
             }
-            Err(_) => return Ok(unavailable(mode)),
+            Err(_) => return Ok(unavailable((mode, lens))),
         };
         // A store voided by a newer list (a list replaced the slot mid-fill)
         // is judged wholly from that list and its completeness, presence and
@@ -199,28 +333,16 @@ impl Backend {
         // (F13 fetch-on-miss on a name no earlier listing showed, or a
         // stale-hit refresh that changed its description), and a withheld
         // name is refused for every caller (#1441).
+        if lens == Lens::Withheld {
+            return Ok(absent_from(tool, completeness, (mode, lens)));
+        }
         if let Some(refusal) = self.blocked_tool_refusal(identity_key, tool) {
             return Ok(Some(refusal));
         }
         if let Some(found) = tools.iter().find(|t| t.name == tool) {
             return Ok(self.judge_keys(&found.input_schema, tool, arguments, mode));
         }
-        Ok(match completeness {
-            Completeness::Complete => miss(
-                mode,
-                ["input_schema_refused_absent", "input_schema_absent_forward"],
-                || text_absent(tool),
-            ),
-            Completeness::Truncated => miss(
-                mode,
-                [
-                    "input_schema_refused_truncated",
-                    "input_schema_truncated_forward",
-                ],
-                text_partial,
-            ),
-            Completeness::Unknown => unavailable(mode),
-        })
+        Ok(absent_from(tool, completeness, (mode, lens)))
     }
 
     fn judge_keys(

@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::super::helpers::build_http_response;
 use super::BackendRejection;
 use super::direct_failure::DirectFailure;
-use crate::backend::CatalogueVerdict;
+use crate::backend::{CatalogueVerdict, Lens};
 use crate::gateway::meta_mcp::response_security::error_response_preserving_status;
 use crate::gateway::meta_mcp::visible::absent_name;
 use crate::protocol::{JsonRpcResponse, RequestId};
@@ -18,6 +18,13 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 /// The caller's slot binding and the headers it propagates upstream; a cold
 /// slot is listed with exactly these, so the list is fetched as the caller.
 pub(super) type CallerSlot<'a> = (Option<&'a str>, &'a [(String, String)]);
+
+/// The gateway's answer to a name the caller's catalogue lacks, on the
+/// direct route: -32601 under its preserved status (MIK-8356, MIK-8361).
+pub(super) fn absent_response(id: &RequestId, tool: &str) -> BackendRejection {
+    let response = error_response_preserving_status(id.clone(), &absent_name(tool));
+    build_http_response(&Egressed::gateway_own(response), StatusCode::OK)
+}
 
 /// The rejection for a `tools/call` R2 refuses, or `None` to proceed.
 ///
@@ -29,11 +36,16 @@ pub(super) type CallerSlot<'a> = (Option<&'a str>, &'a [(String, String)]);
 /// logged, a 401 on a managed credential refreshed once (A11-c). It gets no
 /// reservation: no `tools/call` left the gateway, so the dropped reservation
 /// releases.
+///
+/// Under [`Lens::Withheld`] (MIK-8361: the caller's policy hides the tool,
+/// judged before any credential) the call is answered exactly as a name the
+/// catalogue lacks, never forwarded, and with no credential: on a per-user
+/// backend at once (-32601, no fill), on a shared one from the shared slot.
 pub(super) async fn key_refusal(
     backend: &crate::backend::Backend,
     ((identity_key, headers), failed): (CallerSlot<'_>, &DirectFailure<'_>),
     params: &Value,
-    id: &RequestId,
+    (id, lens): (&RequestId, Lens),
 ) -> Option<BackendRejection> {
     let tool = params.get("name").and_then(Value::as_str).unwrap_or("");
     let arguments = params.get("arguments").unwrap_or(&Value::Null);
@@ -48,7 +60,11 @@ pub(super) async fn key_refusal(
     // MIK-8356: on a per-user backend, a tool this caller's own catalogue
     // withholds or lacks answers as an absent name (-32601), whatever the
     // argument-key mode; the argument keys are judged only after.
+    let absent = || absent_response(id, tool);
     if backend.keeps_per_user_catalogues() {
+        if lens == Lens::Withheld {
+            return Some(absent());
+        }
         let verdict = backend.catalogue_verdict(identity_key, headers, tool).await;
         // The check may have filled the caller's slot: index it, whatever the
         // verdict; an unfilled slot is never recorded (MIK-8356).
@@ -63,18 +79,30 @@ pub(super) async fn key_refusal(
             .meta_mcp
             .remember_caller_slot(backend, proof, identity_key);
         match verdict {
-            Ok(CatalogueVerdict::Withholds | CatalogueVerdict::Lacks) => {
-                let response = error_response_preserving_status(id.clone(), &absent_name(tool));
-                return Some(build_http_response(
-                    &Egressed::gateway_own(response),
-                    StatusCode::OK,
-                ));
-            }
+            Ok(CatalogueVerdict::Withholds | CatalogueVerdict::Lacks) => return Some(absent()),
             Ok(CatalogueVerdict::Offers | CatalogueVerdict::Unknown) => {}
             Err(e) => return Some(failed.clone().answer((None, None), e, &call).await),
         }
     }
-    let checked = backend.undeclared_key_refusal(identity_key, headers, tool, arguments);
+    // A shared catalogue's withheld entry (descriptor, schema) takes the
+    // lacked name's path too; a policy-withheld name is judged without the
+    // caller's credential, which is not resolved for it.
+    let (slot, lens) = match lens {
+        Lens::Withheld => ((None, backend.gate_headers()), Lens::Withheld),
+        Lens::Catalogue => {
+            // Under `off` no call lists the catalogue: judged from what is held.
+            let verdict = if backend.checks_membership() {
+                backend.catalogue_verdict(identity_key, headers, tool).await
+            } else {
+                Ok(backend.held_verdict(identity_key, tool))
+            };
+            match verdict {
+                Ok(CatalogueVerdict::Withholds) => ((identity_key, headers), Lens::Withheld),
+                _ => ((identity_key, headers), Lens::Catalogue),
+            }
+        }
+    };
+    let checked = backend.catalogue_refusal(slot, tool, arguments, lens);
     match checked.await {
         Ok(None) => None,
         Ok(Some(text)) => {

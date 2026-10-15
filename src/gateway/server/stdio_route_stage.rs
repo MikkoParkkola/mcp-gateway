@@ -28,6 +28,10 @@ pub(super) enum RouteStage {
     Proceed(Option<RetryFields>),
     /// Answer with this and admit nothing.
     Answer(JsonRpcResponse),
+    /// Every requested target is one this caller cannot see (MIK-8361):
+    /// dispatch it unadmitted, past X14 and the task gate, to the gate that
+    /// answers it as a missing name.
+    Absent,
 }
 
 impl Gateway {
@@ -58,25 +62,13 @@ impl Gateway {
         targets.extend(meta_mcp.playbook_step_targets(tool_name, arguments));
         // Authorize every target before scanning any, so a refused later
         // target charges no earlier one's budget.
-        for (index, target) in targets.iter().enumerate() {
-            let checked = target.as_target();
-            // The one route-stage authorize `/mcp` also runs. A surfaced name
-            // withheld from this caller is not a target (MIK-8340), so neither
-            // the firewall nor X14 can confirm it exists.
-            if let Err(error) = meta_mcp.authorize_route_target(
-                scope,
-                (checked.server, checked.tool),
-                checked.arguments,
-            ) {
-                // A step's target is operator-defined: its refusal is neutral (A3).
-                let error = if index < request_targets {
-                    error
-                } else {
-                    crate::gateway::meta_mcp::step_not_permitted()
-                };
-                let answer = error_response_preserving_status(id.clone(), &error);
-                return (RouteStage::Answer(answer), witness);
-            }
+        if let Some(answer) = authorize_targets(
+            meta_mcp,
+            (scope, session_id),
+            (&targets, request_targets),
+            id,
+        ) {
+            return (RouteStage::Answer(answer), witness);
         }
         // The stateful controls key on the one client this process serves; an
         // empty identity would refuse every call unscored.
@@ -108,6 +100,18 @@ impl Gateway {
         let witness = meta_mcp
             .caller_verdicts(&targets, tool_name, (caller, Some(session_id)), witness)
             .await;
+        // MIK-8361, as on `/mcp`: recorded, so the gate answers it absent.
+        let (invisible, witness) = meta_mcp
+            .invisible_call(
+                tool_name,
+                (&targets, request_targets),
+                caller,
+                (Some(session_id), witness),
+            )
+            .await;
+        if invisible {
+            return (RouteStage::Absent, witness);
+        }
         // X14 decides a task-augmented call, so it needs the session's task
         // store; without one the call is synchronous and X14 has nothing to say.
         let Some(tasks) = client.tasks else {
@@ -154,3 +158,46 @@ impl Gateway {
         (stage, witness)
     }
 }
+
+/// The one route-stage authorize `/mcp` also runs, over every target: the
+/// answer of the first it refuses. A surfaced name withheld from this caller
+/// is not a target (MIK-8340), so neither the firewall nor X14 can confirm it
+/// exists. A requested target the caller cannot see takes the missing name's
+/// path (MIK-8361); a step's target keeps the strict authorize, and its
+/// refusal is neutral, as the step is operator-defined (A3).
+fn authorize_targets(
+    meta_mcp: &MetaMcp,
+    (scope, session_id): (crate::gateway::meta_mcp::InvokeScope<'_>, &str),
+    (targets, request_targets): (&[crate::gateway::authz::CallTarget<'_>], usize),
+    id: &RequestId,
+) -> Option<JsonRpcResponse> {
+    targets.iter().enumerate().find_map(|(index, target)| {
+        let checked = target.as_target();
+        let (server_tool, arguments) = ((checked.server, checked.tool), checked.arguments);
+        let routed = if index < request_targets {
+            // Its record names the route's own refusal code, as on `/mcp`.
+            meta_mcp
+                .authorize_requested_target(scope, server_tool, arguments, Some(session_id))
+                .map(|withheld| {
+                    if let Some(withheld) = withheld {
+                        crate::gateway::meta_mcp::visible::note_denial_code(
+                            checked.server,
+                            checked.tool,
+                            withheld.to_rpc_code(),
+                        );
+                    }
+                })
+        } else {
+            meta_mcp
+                .authorize_route_target(scope, server_tool, arguments)
+                .map_err(|_| crate::gateway::meta_mcp::step_not_permitted())
+        };
+        routed
+            .err()
+            .map(|error| error_response_preserving_status(id.clone(), &error))
+    })
+}
+
+#[cfg(test)]
+#[path = "stdio_route_stage_tests.rs"]
+mod tests;

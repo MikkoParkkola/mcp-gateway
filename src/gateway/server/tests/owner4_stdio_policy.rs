@@ -95,10 +95,15 @@ struct Stdio {
     denying: Arc<ToolPolicy>,
     mtls: Arc<crate::mtls::MtlsPolicy>,
     calls: Calls,
-    _data_dir: tempfile::TempDir,
+    data_dir: tempfile::TempDir,
 }
 
 async fn stdio(signing: Signing) -> Stdio {
+    stdio_tuned(signing, |_, _| {}).await
+}
+
+/// [`stdio`] with `tune` adjusting the configuration, handed the data dir.
+async fn stdio_tuned(signing: Signing, tune: impl FnOnce(&mut Config, &std::path::Path)) -> Stdio {
     let (url, calls) = counting_backend().await;
     let mut config = Config::default();
     config.cache.enabled = false;
@@ -122,6 +127,7 @@ async fn stdio(signing: Signing) -> Stdio {
         },
     );
     let data_dir = tempfile::tempdir().expect("tempdir");
+    tune(&mut config, data_dir.path());
     let built = Gateway::new(config)
         .await
         .expect("the production constructor accepts this configuration")
@@ -139,7 +145,7 @@ async fn stdio(signing: Signing) -> Stdio {
         denying,
         mtls: built.mtls_policy,
         calls,
-        _data_dir: data_dir,
+        data_dir,
     }
 }
 
@@ -180,8 +186,20 @@ async fn dispatch(stdio: &Stdio, policy: &Arc<ToolPolicy>, request: Value) -> Va
     .expect("a request carrying an id must produce a response")
 }
 
+/// MIK-8361: a withheld target answers as an `isError` tool result, so the
+/// result's own flag is read as well as the inner envelope's.
 fn succeeded(response: &Value) -> bool {
-    response.get("error").is_none() && !response.to_string().contains("\\\"isError\\\":true")
+    response.get("error").is_none()
+        && response["result"]["isError"] != true
+        && !response.to_string().contains("\\\"isError\\\":true")
+}
+
+/// A refusal of the denied target: a JSON-RPC error, or (MIK-8361) the
+/// answer a name the backend does not list gets, text A.
+fn refused_target(response: &Value) -> bool {
+    let absent = crate::backend::text_absent(DENIED);
+    response.get("error").is_some()
+        || (response["result"]["isError"] == true && response.to_string().contains(&absent))
 }
 
 /// The denied target's retained result must not appear in a refusal.
@@ -208,7 +226,7 @@ async fn denial_precedes_replay(signing: Signing) {
 
     let replay = dispatch(&stdio, &stdio.denying, keyed("p2", DENIED, "owner-4-key")).await;
     assert!(
-        !succeeded(&replay),
+        !succeeded(&replay) && refused_target(&replay),
         "the denied target must be refused, not replayed: {replay}"
     );
     assert!(
@@ -252,20 +270,26 @@ async fn signing_does_not_skip_the_current_policy() {
 async fn a_denied_target_never_dispatches() {
     let stdio = stdio(Signing::Off).await;
     let refused = dispatch(&stdio, &stdio.denying, keyed("d1", DENIED, "owner-4-fresh")).await;
-    assert!(!succeeded(&refused), "{refused}");
+    // MIK-8361: answered as a name the backend does not list.
+    let absent = crate::backend::text_absent(DENIED);
+    assert!(
+        !succeeded(&refused) && refused.get("error").is_none(),
+        "{refused}"
+    );
+    assert!(refused.to_string().contains(&absent), "{refused}");
     assert_eq!(count(&stdio.calls, DENIED), 0);
 }
 
 /// MIK-7928: over stdio under `standard` a `gateway_invoke` nonce is judged
-/// after the invocation policy, as on `/mcp`. A denied call with a malformed
-/// nonce gets the policy refusal and counts no nonce rejection; an allowed one
-/// is refused `-32602` and counted once. Driven on a current-thread runtime
+/// after the invocation policy, as on `/mcp`. MIK-8361 amendment A1: a denied
+/// target is judged as a callable one, so with a malformed nonce both are
+/// refused `-32602` and counted once. Driven on a current-thread runtime
 /// inside the scoped recorder, so every metric the call emits is seen.
 #[cfg(feature = "metrics")]
 #[test]
 fn stdio_judges_an_invoke_nonce_after_policy() {
     use crate::security::message_signing::nonce_metrics_support::{
-        INVALID_REFUSAL, assert_no_rejections, assert_single_rejection, observe,
+        INVALID_REFUSAL, assert_single_rejection, observe,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -278,21 +302,19 @@ fn stdio_judges_an_invoke_nonce_after_policy() {
         observe(|| runtime.block_on(dispatch(&stdio, policy, request)))
     };
 
+    // MIK-8361 amendment A1 (supersedes MIK-7736's policy-first for a
+    // withheld target): the denied target's malformed nonce is judged as a
+    // name the caller may call, so its answer and its count are the allowed
+    // twin's below; the policy is never named.
     let (denied, events) = call(&stdio.denying, "n1", DENIED);
-    assert!(!succeeded(&denied), "{denied}");
-    assert_ne!(
-        denied["error"]["code"],
-        json!(-32602),
-        "policy answers first: {denied}"
+    assert_eq!(denied["error"]["code"], json!(-32602), "{denied}");
+    assert_eq!(
+        denied["error"]["message"],
+        json!(INVALID_REFUSAL),
+        "{denied}"
     );
-    assert!(!denied.to_string().contains(INVALID_REFUSAL), "{denied}");
-    assert!(
-        denied.to_string().contains(&format!(
-            "Tool '{DENIED}' on server '{BACKEND}' is blocked by security policy"
-        )),
-        "the policy's own refusal: {denied}"
-    );
-    assert_no_rejections(&events);
+    assert!(!denied.to_string().contains("policy"), "{denied}");
+    assert_single_rejection(&events, "invalid");
     assert_eq!(count(&stdio.calls, DENIED), 0);
 
     let (allowed, events) = call(&stdio.permitting, "n2", NEIGHBOUR);
@@ -306,9 +328,9 @@ fn stdio_judges_an_invoke_nonce_after_policy() {
     assert_eq!(count(&stdio.calls, NEIGHBOUR), 0);
 }
 
-/// MIK-7928, in every build: the policy answers a denied stdio invoke before
-/// its malformed nonce is judged, and an allowed one is refused `-32602`
-/// without reaching the backend. The counters are the row above (`metrics`).
+/// MIK-7928, in every build; MIK-8361 amendment A1: a denied stdio invoke's
+/// malformed nonce is judged as an allowed one's, `-32602`, neither reaching
+/// the backend nor naming the policy. The counters are the row above (`metrics`).
 #[test]
 fn stdio_answers_policy_before_a_malformed_invoke_nonce() {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -322,23 +344,14 @@ fn stdio_answers_policy_before_a_malformed_invoke_nonce() {
         runtime.block_on(dispatch(&stdio, policy, request))
     };
 
+    // MIK-8361 amendment A1: judged as the allowed twin below is.
     let denied = call(&stdio.denying, "n1", DENIED);
-    assert!(!succeeded(&denied), "{denied}");
-    assert_ne!(
-        denied["error"]["code"],
-        json!(-32602),
-        "policy answers first: {denied}"
-    );
-    assert!(
-        !denied.to_string().contains("Invalid signing nonce"),
+    assert_eq!(
+        (&denied["error"]["code"], &denied["error"]["message"]),
+        (&json!(-32602), &json!("Invalid signing nonce")),
         "{denied}"
     );
-    assert!(
-        denied.to_string().contains(&format!(
-            "Tool '{DENIED}' on server '{BACKEND}' is blocked by security policy"
-        )),
-        "the policy's own refusal: {denied}"
-    );
+    assert!(!denied.to_string().contains("policy"), "{denied}");
     assert_eq!(count(&stdio.calls, DENIED), 0);
 
     let allowed = call(&stdio.permitting, "n2", NEIGHBOUR);
@@ -348,4 +361,79 @@ fn stdio_answers_policy_before_a_malformed_invoke_nonce() {
         "{allowed}"
     );
     assert_eq!(count(&stdio.calls, NEIGHBOUR), 0);
+}
+
+/// Calls `tool` under the denying policy with `nonce`, then replays the nonce
+/// on the allowed neighbour: the first answer and the replay's.
+async fn spend_then_replay(stdio: &Stdio, tool: &str, nonce: &str) -> (Value, Value) {
+    let mut first = keyed(&format!("{nonce}-1"), tool, &format!("{nonce}-k1"));
+    first["params"]["arguments"]["nonce"] = json!(nonce);
+    let first = dispatch(stdio, &stdio.denying, first).await;
+    let mut again = keyed(&format!("{nonce}-2"), NEIGHBOUR, &format!("{nonce}-k2"));
+    again["params"]["arguments"]["nonce"] = json!(nonce);
+    (first, dispatch(stdio, &stdio.denying, again).await)
+}
+
+/// MIK-8361 amendment A2 (the replay channel): a signed call on a target the
+/// policy withholds settles its nonce exactly as a call on a name the backend
+/// does not list does (given back, MIK-8150), so presenting either nonce again
+/// is answered alike. Pinned: the route stage's refund is the parity.
+#[tokio::test]
+async fn a_withheld_target_spends_its_nonce_as_a_missing_name_does() {
+    let stdio = stdio(Signing::On).await;
+    let missing_tool = "record_nosuch";
+    let (hidden, hidden_replay) = spend_then_replay(&stdio, DENIED, "a2-hidden-0001").await;
+    let (missing, missing_replay) =
+        spend_then_replay(&stdio, missing_tool, "a2-missing-0001").await;
+    assert!(
+        missing
+            .to_string()
+            .contains(&crate::backend::text_absent(missing_tool)),
+        "premise: the twin is answered as a missing name: {missing}"
+    );
+    assert!(
+        hidden
+            .to_string()
+            .contains(&crate::backend::text_absent(DENIED)),
+        "the withheld target is answered as a missing name: {hidden}"
+    );
+    assert!(
+        !missing_replay.to_string().contains("replay"),
+        "premise: a missing name's nonce is given back: {missing_replay}"
+    );
+    assert_eq!(
+        hidden_replay.get("error"),
+        missing_replay.get("error"),
+        "the withheld call's nonce was not settled as a missing name's: {hidden_replay}"
+    );
+    assert_eq!(count(&stdio.calls, DENIED), 0);
+}
+
+/// MIK-8361 review F4 (stdio): a target the policy withholds writes its one
+/// invocation record as `denied` with the route's refusal code, as on `/mcp`,
+/// although the caller is answered as for a missing name. Before, the stdio
+/// route noted no code and the record was classed by the text-A result.
+#[tokio::test]
+async fn a_withheld_targets_record_keeps_the_routes_refusal_code() {
+    let stdio = stdio_tuned(Signing::Off, |config, dir| {
+        config.security.transparency_log.enabled = Some(true);
+        config.security.transparency_log.path = dir.join("audit.jsonl").display().to_string();
+    })
+    .await;
+    let refused = dispatch(&stdio, &stdio.denying, keyed("f4", DENIED, "owner-4-f4")).await;
+    assert!(
+        refused
+            .to_string()
+            .contains(&crate::backend::text_absent(DENIED)),
+        "premise: answered as a missing name: {refused}"
+    );
+    let records: Vec<Value> = std::fs::read_to_string(stdio.data_dir.path().join("audit.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|record| record.get("tool").is_some() && record.get("event").is_none())
+        .collect();
+    assert_eq!(records.len(), 1, "one invocation record: {records:?}");
+    assert_eq!(records[0]["outcome"], json!("denied"), "{records:?}");
+    assert!(records[0]["error_code"].is_i64(), "{records:?}");
 }

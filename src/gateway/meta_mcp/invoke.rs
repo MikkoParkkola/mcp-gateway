@@ -28,6 +28,7 @@ const INVOKE_TARGET: &str = module_path!();
 
 // The per-dispatch credential and its redacting `Debug`, kept out of this file's size baseline.
 mod caller_credential;
+mod gate;
 use caller_credential::{CallerCredential, HeldCredential};
 
 mod guarded;
@@ -95,9 +96,8 @@ mod projection;
 pub(crate) use caller_verdict::{CallerVerdict, TargetNaming};
 mod propagation;
 pub(crate) use propagation::ResolvedDispatch;
-pub(crate) mod worker_clock; // MIK-8202 AC12/AC13: the task worker's clock channel
-// MIK-8392 STORED.2: the lift, liveness proofs and the outcome types.
 mod stored_proof;
+pub(crate) mod worker_clock; // MIK-8202 AC12/AC13: the task worker's clock channel
 use bridge_dispatch::{BridgeDispatcher, run_input_bridge, undeclared_input_request};
 pub(super) use bridge_dispatch::{
     REQUIRED_CAPABILITIES_DATA_KEY, UNSUPPORTED_ELICITATION_MODE_DATA_KEY,
@@ -125,10 +125,9 @@ static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 impl MetaMcp {
     /// Inner implementation executed within a trace-ID scope.
     ///
-    /// Returns a [`TracedOutcome`]: every live success path must produce a
-    /// [`GuardedValue`], so the render guard cannot be bypassed at the
-    /// chokepoint (MIK-6690); the lift's already-shaped stored answer travels
-    /// beside it, never through it (MIK-8392 STORED.2 D8).
+    /// Returns a [`TracedOutcome`]: every live success path yields a sealed
+    /// [`GuardedValue`] (MIK-6690 render guard); the lift's already-shaped
+    /// stored answer travels beside it, never through it (MIK-8392 STORED.2 D8).
     #[allow(clippy::too_many_lines)] // Complex dispatch logic; splitting further harms readability
     async fn invoke_tool_traced(
         &self,
@@ -160,8 +159,9 @@ impl MetaMcp {
 
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
-
-        self.check_or_stamp(args, session_id, caller, (server, tool))?;
+        if let Some(answer) = self.gated(args, (server, tool), caller, session_id).await {
+            return answer;
+        }
 
         let mut arguments = parse_tool_arguments(args)?;
         // `_full` is a gateway directive (opt out of response projection), not
@@ -321,6 +321,7 @@ impl MetaMcp {
             client_claim.as_ref(),
             &mut idem_reservation,
         )? {
+            nonce_settle::note_served(caller, (server, tool));
             return Ok(TracedOutcome::Live(stored));
         }
 
@@ -391,6 +392,7 @@ impl MetaMcp {
                 &mut idem_reservation,
             )
         {
+            nonce_settle::note_served(caller, (server, tool));
             return Ok(TracedOutcome::Live(cached));
         }
 
@@ -498,7 +500,7 @@ impl MetaMcp {
         };
         // Dispatch: the witness goes with the send (the nonce stays spent).
         witness.spend();
-        nonce_settle::mark_dispatched(caller);
+        nonce_settle::mark_dispatched(caller, (server, tool));
         // Boxed: the dispatch future is the largest thing this frame ever
         // holds, and inlining it puts `invoke_tool_traced` over
         // `clippy::large_futures` at every call site.

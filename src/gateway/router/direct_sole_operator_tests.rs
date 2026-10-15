@@ -132,6 +132,21 @@ async fn refused(fx: &Fx, bearer: Option<&str>) -> String {
         .to_string()
 }
 
+/// MIK-8361 C5 (MIK-8356 R3.7): a caller with no principal on a required
+/// per-user backend lacks every tool, so the direct route answers it as a
+/// name the backend does not list, -32601, before any identity or custody
+/// step, with no request reaching the backend. Same answer for every name.
+async fn lacks_every_tool(fx: &Fx, bearer: Option<&str>) {
+    let (status, body) = post(fx, &tools_call(), bearer).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["error"]["code"], -32601, "{body}");
+    assert_eq!(
+        body["error"]["message"], "JSON-RPC error -32601: Unknown tool: read",
+        "{body}"
+    );
+    assert_eq!(fx.gateway.dispatched(), 0, "a refusal reached the backend");
+}
+
 /// D1, the fail-fast check. The single-user operator reaches custody, whose
 /// own refusal is that nothing is connected yet, not the identity refusal.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -149,11 +164,7 @@ async fn d1_single_user_operator_reaches_custody_on_the_direct_route() {
 async fn d2_multi_key_caller_is_still_refused_on_the_direct_route() {
     let keys = vec![key("key-a", "scoped-key-a"), key("key-b", "scoped-key-b")];
     let fx = fixture(auth(keys, &[]), &Binding::Connected).await;
-    let message = refused(&fx, Some("scoped-key-b")).await;
-    assert!(
-        message.contains(NO_IDENTITY) && !message.contains(NOT_CONNECTED),
-        "{message}"
-    );
+    lacks_every_tool(&fx, Some("scoped-key-b")).await;
 }
 
 /// D3. A caller that presented nothing on a public path is never the sole
@@ -162,11 +173,7 @@ async fn d2_multi_key_caller_is_still_refused_on_the_direct_route() {
 async fn d3_anonymous_public_path_caller_is_refused_on_the_direct_route() {
     let keys = vec![key("operator", OPERATOR_KEY)];
     let fx = fixture(auth(keys, &["/mcp"]), &Binding::Connected).await;
-    let message = refused(&fx, None).await;
-    assert!(
-        message.contains(NO_IDENTITY) && !message.contains(NOT_CONNECTED),
-        "{message}"
-    );
+    lacks_every_tool(&fx, None).await;
 }
 
 /// D6. With a connected grant the operator's call is dispatched under that
@@ -196,8 +203,7 @@ async fn d6_single_user_operator_is_served_the_grant_on_the_direct_route() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn d7_operator_without_identity_is_refused_on_a_non_account_backend() {
     let fx = fixture(sole_operator(), &Binding::Propagation).await;
-    let message = refused(&fx, Some(OPERATOR_KEY)).await;
-    assert!(message.contains(NO_IDENTITY), "{message}");
+    lacks_every_tool(&fx, Some(OPERATOR_KEY)).await;
 }
 
 /// Records which slot a notification was delivered on.

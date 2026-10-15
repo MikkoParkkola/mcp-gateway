@@ -58,10 +58,13 @@ async fn authz_12_refused_caller_is_not_served_a_cached_result() {
     let refused = meta
         .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&DenyAll))
         .await;
-    let refusal = refused.expect_err("a refused caller must not be served the cached payload");
+    // MIK-8361: the refusal answers as the absent name, never the cached
+    // payload (`ok`) and never by its reason.
+    let answer = refused.expect("a refused target answers as an absent name");
+    assert_absent_answer(&answer, "read");
     assert!(
-        matches!(refusal, crate::Error::Forbidden { .. }),
-        "and must be refused AS a denial, not fail for some other reason: {refusal:?}"
+        !answer.to_string().contains("\"ok\""),
+        "a refused caller must not be served the cached payload: {answer}"
     );
     assert_eq!(
         calls.load(Ordering::SeqCst),
@@ -74,10 +77,12 @@ async fn authz_12_refused_caller_is_not_served_a_cached_result() {
 ///
 /// Replay admission is `prepare_signing_invocation` (`signing.rs:169`), which
 /// registers the nonce only after policy, and only for a captured external
-/// `gateway_invoke`. `invoke_tool` with `caller.signing = None` never reaches
-/// the store, so a third call would succeed and this case would pass for the
-/// wrong reason. Each step captures from a raw envelope the way the adapters
-/// do.
+/// `gateway_invoke`. MIK-8361: a target the policy withholds is judged there
+/// as a missing name, so its nonce is registered and given back when the
+/// call settles, as a missing name's is. `invoke_tool` with `caller.signing =
+/// None` never reaches the store, so a third call would succeed and this case
+/// would pass for the wrong reason. Each step captures from a raw envelope the
+/// way the adapters do.
 #[tokio::test]
 async fn authz_20_refused_call_consumes_no_nonce() {
     const NONCE: &str = "nonce-used-once";
@@ -94,10 +99,29 @@ async fn authz_20_refused_call_consumes_no_nonce() {
         false,
     );
 
+    // MIK-8361 amendment A1: a denied target's nonce is judged as a missing
+    // name's is, so it is admitted; the gate answers the call as a missing
+    // name and asks for the nonce back, and the call's settlement returns it.
     let (mut denied_signing, denied_args) = captured_external_gateway_invoke(NONCE);
-    let refused =
-        meta.prepare_signing_invocation(&mut denied_signing, &denied_args, None, &ctx(&DenyAll));
-    assert!(refused.is_err(), "the call must be refused");
+    meta.prepare_signing_invocation(&mut denied_signing, &denied_args, None, &ctx(&DenyAll))
+        .expect("a denied target's nonce is judged as a missing name's");
+    // Admission keeps the call's refund witness (MIK-8353 3a); this row drives
+    // the invoke directly, so it keeps one as admission would.
+    denied_signing
+        .keep_witness(crate::gateway::meta_mcp::refund_witness::RefundWitness::at_capture());
+    let mut denied_caller = ctx(&DenyAll);
+    denied_caller.signing = Some(&denied_signing);
+    let refused = meta.invoke_tool(&denied_args, None, &denied_caller).await;
+    assert!(
+        refused
+            .as_ref()
+            .is_ok_and(|answer| answer["isError"] == json!(true)),
+        "the call must be refused, as a missing name: {refused:?}"
+    );
+    meta.settle_nonce_refund(
+        &denied_signing,
+        crate::gateway::meta_mcp::signing::nonce_principal(&denied_caller),
+    );
 
     // The same nonce must still be usable: the refusal happened before it was
     // registered. A new capture is a new request carrying that nonce, which
@@ -187,5 +211,81 @@ async fn authz_13a_surfaced_tool_allowed_reaches_the_backend() {
         calls.load(Ordering::SeqCst),
         1,
         "and must actually reach the backend"
+    );
+}
+
+/// MIK-8361 amendment A1 (seat finding, 2026-10-12): signing judges a denied
+/// target's attestation as it judges a missing name's. Under enforcement, a
+/// signed call carrying no attestation is refused alike whether the policy
+/// denies its target or allows it; skipping the policy for the denied one
+/// must not skip the attestation it shares with every call.
+#[tokio::test]
+async fn a1_signing_judges_a_denied_targets_attestation_as_any_names() {
+    use crate::attestation::{AttestationMode, AttestationValidator, BnautAttestationSigner};
+    let (registry, _calls) = counted_backend("alpha");
+    let validator = Arc::new(AttestationValidator::new(
+        BnautAttestationSigner::new(b"a1-key".to_vec(), "a1").with_audience("test-gateway"),
+    ));
+    let mut meta = MetaMcp::new(registry).with_attestation(validator, AttestationMode::Enforce);
+    meta.enable_message_signing(
+        crate::security::message_signing::MessageSigner::new(
+            b"a-test-secret-of-sufficient-length".to_vec(),
+            None,
+            "test-key".to_string(),
+        ),
+        Duration::from_secs(300),
+        false,
+    );
+    let judge = |nonce: &str, authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync)| {
+        let (mut signing, args) = captured_external_gateway_invoke(nonce);
+        meta.prepare_signing_invocation(&mut signing, &args, None, &ctx(authorizer))
+            .map_err(|error| error.to_string())
+    };
+    let allowed = judge("a1-allowed", &AllowAll);
+    let denied = judge("a1-denied", &DenyAll);
+    assert!(
+        allowed.is_err(),
+        "premise: enforcement refuses a call with no attestation: {allowed:?}"
+    );
+    assert_eq!(denied, allowed, "the denied target skipped its attestation");
+}
+
+/// MIK-8361 A1 (defence in depth): a target whose policy signing skipped is
+/// left unprepared, so the dispatch check runs its whole policy rather than
+/// stamping it. With no route verdict recorded to catch it, a prepared mark
+/// would let the denied target through on the stamp alone.
+#[tokio::test]
+async fn a1_a_skipped_target_is_not_prepared_so_dispatch_runs_its_policy() {
+    let (registry, _calls) = counted_backend("alpha");
+    let mut meta = MetaMcp::new(registry);
+    meta.enable_message_signing(
+        crate::security::message_signing::MessageSigner::new(
+            b"a-test-secret-of-sufficient-length".to_vec(),
+            None,
+            "test-key".to_string(),
+        ),
+        Duration::from_secs(300),
+        false,
+    );
+    let dispatch_check =
+        |nonce: &str, authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync)| {
+            let (mut signing, args) = captured_external_gateway_invoke(nonce);
+            meta.prepare_signing_invocation(&mut signing, &args, None, &ctx(authorizer))
+                .expect("signing admits the call");
+            let caller = MetaMcpCallerContext {
+                signing: Some(&signing),
+                ..ctx(authorizer)
+            };
+            meta.check_or_stamp(&args, None, &caller, ("alpha", "read"))
+                .map_err(|error| error.to_string())
+        };
+    assert_eq!(
+        dispatch_check("a1-prep-allowed", &AllowAll),
+        Ok(()),
+        "premise: a prepared allowed target is stamped"
+    );
+    assert!(
+        dispatch_check("a1-prep-denied", &DenyAll).is_err(),
+        "a skipped target was marked prepared: dispatch stamped it past its policy"
     );
 }

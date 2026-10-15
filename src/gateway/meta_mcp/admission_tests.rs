@@ -138,7 +138,7 @@ fn admit(
 }
 
 fn assert_replay(result: Result<SyncAdmission>, id: i64) {
-    let Ok(SyncAdmission::Replay(response, _, _)) = result else {
+    let Ok(SyncAdmission::Replay(response, ..)) = result else {
         panic!("unchanged allowed operation must replay its retained secured result");
     };
     assert_eq!(response.id, Some(RequestId::Number(id)));
@@ -150,6 +150,13 @@ fn retained_operation(meta: &MetaMcp, caller: &MetaMcpCallerContext<'_>, tool: &
         panic!("initial allowed operation must own the real shared admission slot");
     };
     owner.mark_dispatched();
+    // The seeded run dispatched every chain step, as the invoke funnel notes
+    // them: a replay past a revocation meets the refusal (#3872 FIX 1).
+    for step in args["chain"].as_array().into_iter().flatten() {
+        if let Some(step) = step["tool"].as_str().and_then(|tool| tool.split_once(':')) {
+            owner.note_step(step);
+        }
+    }
     owner.complete_secured(&JsonRpcResponse::success(
         RequestId::Number(1),
         json!({"secret":SECRET}),
@@ -223,6 +230,23 @@ fn refusal(result: Result<SyncAdmission>) -> Error {
     error
 }
 
+/// #3872 review (oracle 1): a code-mode key reused with other arguments is
+/// a mismatch, not a replay. Its holder never held the changed plan, so a
+/// step the caller can no longer see answers as a missing step does, with
+/// the key mismatch (409), never the step's refusal. Asserts that answer for
+/// that one request and says so; every other request keeps SUB.4's refusal.
+fn mismatch_of_a_hidden_step(tool: &str, request: &Value, changed: &Value, error: &Error) -> bool {
+    if tool != "gateway_execute" || request != changed {
+        return false;
+    }
+    assert_eq!(
+        error.to_string(),
+        Error::json_rpc(409, super::KEY_MISMATCH).to_string(),
+        "a reused key's hidden step answers as a missing one: {error}"
+    );
+    true
+}
+
 fn revoked_replay(
     is_modern: bool,
     tool: &str,
@@ -250,6 +274,10 @@ fn revoked_replay(
     for request in [args, changed_args] {
         policy.seen.lock().clear();
         let error = refusal(admit(&meta, &caller, tool, request, 3));
+        if mismatch_of_a_hidden_step(tool, request, changed_args, &error) {
+            policy.assert_saw(targets);
+            continue;
+        }
         assert!(
             matches!(
                 error,
@@ -397,77 +425,6 @@ fn sub4_preflight_preserves_legacy_unkeyed_per_step_authorization() {
             "new eager preflight must be keyed-only"
         );
     }
-}
-
-fn profile_replay(tool: &str, args: &Value, changed_args: &Value) {
-    use crate::routing_profile::{ProfileRegistry, RoutingProfileConfig};
-    let profiles = std::collections::HashMap::from([
-        (
-            "restricted".into(),
-            RoutingProfileConfig {
-                deny_tools: Some(vec![SECOND.1.into()]),
-                ..RoutingProfileConfig::default()
-            },
-        ),
-        ("open".into(), RoutingProfileConfig::default()),
-    ]);
-    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()))
-        .with_code_mode(tool == "gateway_execute")
-        .with_profile_registry(ProfileRegistry::from_config(&profiles, "open"));
-    if tool == "gateway_run_playbook" {
-        install_plan(&meta, original_plan());
-    }
-    let policy = MutablePolicy::new(SECOND);
-    let retry = RetryFields {
-        idempotency_key: Some("profile-bound-owner".into()),
-        ..RetryFields::default()
-    };
-    let mut caller = context(&policy, &retry);
-    caller.is_modern = false;
-    retained_operation(&meta, &caller, tool, args);
-    meta.session_profiles()
-        .set_profile("legacy:session", "restricted");
-    assert!(meta.active_profile(None).check(SECOND.0, SECOND.1).is_ok());
-    for request in [args, changed_args] {
-        let error = refusal(admit(&meta, &caller, tool, request, 3));
-        assert!(
-            matches!(&error, Error::Protocol(message)
-                if message.contains("routing profile") && message.contains(SECOND.1)),
-            "the current session profile must refuse before mismatch/replay: {error}"
-        );
-    }
-    meta.session_profiles()
-        .set_profile("legacy:session", "open");
-    assert_replay(admit(&meta, &caller, tool, args, 4), 4);
-}
-
-#[test]
-fn sub4_replay_current_profile_playbook() {
-    profile_replay(
-        "gateway_run_playbook",
-        &json!({"name":"protected-plan", "arguments":{"record":"original"}}),
-        &json!({"name":"protected-plan", "arguments":{"record":"changed"}}),
-    );
-}
-
-#[test]
-fn sub4_replay_current_profile_code_mode() {
-    profile_replay(
-        "gateway_execute",
-        &json!({"chain":[{"tool":format!("{}:{}",FIRST.0,FIRST.1)},
-            {"tool":format!("{}:{}",SECOND.0,SECOND.1),"arguments":{"record":"original"}}]}),
-        &json!({"chain":[{"tool":format!("{}:{}",FIRST.0,FIRST.1)},
-            {"tool":format!("{}:{}",SECOND.0,SECOND.1),"arguments":{"record":"changed"}}]}),
-    );
-}
-
-#[test]
-fn sub4_replay_current_profile_single_target() {
-    profile_replay(
-        "gateway_invoke",
-        &json!({"server":SECOND.0,"tool":SECOND.1,"arguments":{"record":"original"}}),
-        &json!({"server":SECOND.0,"tool":SECOND.1,"arguments":{"record":"changed"}}),
-    );
 }
 
 /// SUB4.REPLAY.PLAN.1: the definition fingerprinted at admission must also
@@ -663,6 +620,7 @@ fn replay_facts_round_trip_and_older_records_decode() {
             audit: Some(ReplayAudit::new(outcome, Some("sha256:x".to_string()))),
             read: None,
             writes: crate::gateway::gateway_writes::WriteRecord::default(),
+            dispatched: None,
         };
         let bytes = serde_json::to_vec(&stored).unwrap();
         let (_, audit) = stored_response(&bytes).expect("decodes");
@@ -700,6 +658,7 @@ fn a_stored_delivery_with_any_write_record_still_decodes() {
         audit: Some(ReplayAudit::new(AuditOutcome::Ok, None)),
         read: None,
         writes: crate::gateway::gateway_writes::WriteRecord::default(),
+        dispatched: None,
     };
     for writes in [
         json!([{"layer": "value", "path": ["trace_id"], "digest": 17}]),
@@ -751,6 +710,7 @@ async fn a_replay_restores_the_stored_reading() {
         audit: None,
         read: Some(b.clone()),
         writes: crate::gateway::gateway_writes::WriteRecord::default(),
+        dispatched: None,
     };
     let bytes = serde_json::to_vec(&stored).unwrap();
     let (_, restored) = with_read_scope(std::sync::Arc::clone(&fw), async {
@@ -798,3 +758,6 @@ fn a_withdrawn_dispatch_frees_the_key_unless_an_earlier_step_acted() {
         );
     }
 }
+
+#[path = "admission_profile_tests.rs"]
+mod profile;

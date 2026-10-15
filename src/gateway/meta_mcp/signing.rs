@@ -638,8 +638,16 @@ impl super::MetaMcp {
         if context.origin == Origin::Unsigned || !self.signing_enabled() {
             return Ok(());
         }
-        if context.origin == Origin::GatewayInvoke {
-            self.check_invocation_policy(arguments, session, caller)?;
+        // MIK-8361 amendment A1: a target the caller cannot see is judged here
+        // as a missing name is, so neither its reason nor the order of its
+        // nonce refusal tells the two apart. The route stage answers it
+        // absent; admission re-runs the policy before any replay.
+        let skipped = context.origin == Origin::GatewayInvoke
+            && self.withheld_invoke_target(arguments, session, caller);
+        if context.origin == Origin::GatewayInvoke && !skipped {
+            self.check_visible_policy(arguments, session, caller)?;
+        } else if skipped {
+            self.check_call_level_policy(arguments, caller)?;
         }
         // A raw nonce that never became a string is refused here, before the
         // store, so the store's own telemetry cannot see it. Counted at THIS
@@ -652,7 +660,10 @@ impl super::MetaMcp {
         // The same key the refund reads (`nonce_principal`), so the two
         // cannot drift apart.
         context.nonce_stamp = self.admit_signing_nonce_stamped(nonce, nonce_principal(caller))?;
-        if context.origin == Origin::GatewayInvoke {
+        // Only a target whose policy passed here is prepared: a skipped one
+        // stays unprepared, so admission and the grant stamp run the whole
+        // policy for it should it ever get past the gate.
+        if context.origin == Origin::GatewayInvoke && !skipped {
             context.prepared_target = Some((
                 extract_required_str(arguments, "server")?.to_owned(),
                 extract_required_str(arguments, "tool")?.to_owned(),

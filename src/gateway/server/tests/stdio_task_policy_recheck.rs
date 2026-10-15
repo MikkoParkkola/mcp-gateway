@@ -19,7 +19,8 @@ use crate::security::{ToolPolicy, ToolPolicyConfig};
 /// U5b: the worker re-checks the current tool policy at run time (the dispatch
 /// chokepoint; r2.1 H1). U5's denied tool is now refused at submit, so this
 /// row submits the task below the route stage, as a task admitted before a
-/// policy change arrives at its worker: it settles failed, never sent.
+/// policy change arrives at its worker: MIK-8361 settles it as a missing
+/// name's task, never sent.
 #[tokio::test]
 async fn a_stdio_task_worker_refuses_a_tool_the_current_policy_denies() {
     let denying = ToolPolicy::from_config(&ToolPolicyConfig {
@@ -72,19 +73,23 @@ async fn a_stdio_task_worker_refuses_a_tool_the_current_policy_denies() {
         .service
         .get(LOCAL_OPERATOR_PRINCIPAL, &id)
         .expect("the local operator owns its task");
+    // MIK-8361: the worker answers the denied tool as a name the backend
+    // does not list, as a missing name's task settles: completed with a
+    // tool-error result carrying text A, never the policy's reason.
     assert!(
         matches!(
             task.task.status(),
-            crate::protocol::tasks::TaskStatus::Failed
+            crate::protocol::tasks::TaskStatus::Completed
         ),
-        "the worker did not refuse the denied tool: {:?}",
+        "the worker did not settle the denied tool as a missing one: {:?}",
         task.task.status()
     );
-    // Failed by the policy itself, not by any other error.
     let stored = serde_json::to_value(task.task.wire()).expect("a task serializes");
+    let stored_text = stored.to_string();
     assert!(
-        stored.to_string().contains("blocked by security policy"),
-        "not refused by the tool policy: {stored}"
+        stored_text.contains(&crate::backend::text_absent(DENIED))
+            && !stored_text.contains("blocked by security policy"),
+        "not answered as a missing name: {stored}"
     );
     assert_eq!(
         fixture.rounds.load(Ordering::SeqCst),

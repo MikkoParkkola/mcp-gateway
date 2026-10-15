@@ -129,11 +129,10 @@ auth:
         result.is_err(),
         "a non-admin caller must not create an attacker-addressed webhook"
     );
+    // MIK-8361: refused as an undefined capability; the reason is the
+    // audit log's, never the caller's.
     let msg = result.unwrap_err().to_string();
-    assert!(
-        msg.to_lowercase().contains("admin"),
-        "the refusal must say why: {msg}"
-    );
+    assert_eq!(msg, "Tool not found: 'register_webhook'", "{msg}");
 
     // An admin caller reaches the capability. It fails at the network, which is
     // the point: the guard is what differs, not the outcome.
@@ -146,7 +145,8 @@ auth:
     let admin = meta.invoke_tool(&args, None, &admin_caller).await;
     let admin_msg = admin.map_or_else(|e| e.to_string(), |_| String::new());
     assert!(
-        !admin_msg.to_lowercase().contains("admin credential"),
+        !admin_msg.to_lowercase().contains("admin credential")
+            && !admin_msg.contains("Tool not found"),
         "an admin caller must not be refused by the guard: {admin_msg}"
     );
 }

@@ -9,9 +9,78 @@ use serde_json::Value;
 use crate::protocol::JsonRpcResponse;
 
 use super::super::MetaMcp;
-use super::{ReplayAudit, ReplayTarget};
+use crate::protocol::mrtr::RetryFields;
+
+use super::ReplayAudit;
+
+/// The single-call target a site-1 replay was admitted for (MIK-8392
+/// STORED.2): what the route stage judges for liveness and keys the deferral
+/// by. Owned: the admission outlives the arguments it names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ReplayTarget {
+    /// The backend server: the target branch's, or a continuation origin's.
+    pub(crate) server: String,
+    /// The presented tool: the target branch's, or the retry's own name.
+    pub(crate) tool: String,
+}
 
 impl MetaMcp {
+    /// MIK-8392 STORED.2 E8: a non-meta name with no target for this
+    /// caller (withheld, policy-refused or missing) is admitted
+    /// unprotected, before any idempotency lookup, so no key state is
+    /// consulted or revealed (else a revoked caller's keyed repeat leaks
+    /// its key and tool through a 409 fingerprint mismatch). The live path
+    /// then answers it exactly as it answers the same unkeyed call: a
+    /// missing name -32601, a policy refusal the authorizer's own error,
+    /// status and record. A name with no target is never dispatched, so
+    /// nothing runs unprotected. A continuation retry with an origin keeps
+    /// its path: a readable one proves via the origin target, and an
+    /// unreadable one is E1's continuation error. Unkeyed calls never
+    /// consult key state, a malformed retry is refused as malformed, and a
+    /// call with no principal keeps admission's own -32003.
+    pub(super) fn hidden_name_unprotected(
+        &self,
+        tool_name: &str,
+        retry: &RetryFields,
+        (verified_identity, owner_principal): (
+            Option<&crate::key_server::oidc::VerifiedIdentity>,
+            Option<&str>,
+        ),
+    ) -> bool {
+        retry.idempotency_key.is_some()
+            && !retry.is_malformed()
+            && !crate::gateway::meta_mcp_tool_defs::is_governed_meta_tool(tool_name)
+            && super::super::invoke::retry_origin_backend(&self.continuation, retry).is_none()
+            && (verified_identity.is_some()
+                || owner_principal.is_some_and(|principal| !principal.is_empty()))
+    }
+
+    /// The origin fallback (MIK-8392 STORED.2 D2): a continuation
+    /// retry names the backend tool it continues, which no
+    /// operator surfaced, so the plan branch takes the
+    /// authenticated origin the envelope names, read without
+    /// redeeming it. Only the two tools that redeem in place
+    /// never take it, as the retry router skips them too.
+    pub(super) fn replay_origin_target(
+        &self,
+        tool_name: &str,
+        retry: &RetryFields,
+    ) -> crate::Result<Option<ReplayTarget>> {
+        if matches!(tool_name, "gateway_invoke" | "gateway_execute") {
+            return Ok(None);
+        }
+        match super::super::invoke::retry_origin_backend(&self.continuation, retry) {
+            None => Ok(None),
+            Some(Ok(server)) => Ok(Some(ReplayTarget {
+                server,
+                tool: tool_name.to_owned(),
+            })),
+            // E1: an unreadable origin is never served stored; the
+            // continuation error is the live path's answer for it.
+            Some(Err(error)) => Err(error),
+        }
+    }
+
     /// Whether a site-1 retained result for `(server, tool)` defers to the
     /// live dispatch (MIK-8392 STORED.2): every target whose dispatch binds a
     /// per-caller credential (a managed account, or a per-caller mint with no

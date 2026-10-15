@@ -202,11 +202,9 @@ async fn x14_a_refusal_above_the_handoff_creates_no_task_and_leaves_the_key_free
     )
     .await;
 
-    assert!(
-        refused.get("error").is_some(),
-        "a credential scoped away from '{FORBIDDEN_BACKEND}' is refused, task or \
-         no task: {refused}"
-    );
+    // MIK-8361: a credential scoped away from '{FORBIDDEN_BACKEND}' is
+    // refused, task or no task, as a name the backend does not list.
+    super::stored_result_policy::assert_absent(&refused, TOOL);
     assert!(
         refused.pointer("/result/taskId").is_none(),
         "and it is refused rather than handed a handle. Today the arm at \

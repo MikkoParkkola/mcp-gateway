@@ -20,7 +20,9 @@ async fn authz_13b_gateway_invoke_denied() {
         .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&DenyAll))
         .await;
 
-    assert!(result.is_err(), "a denied gateway_invoke must be refused");
+    // MIK-8361: refused as the absent name, not by its reason.
+    let answer = result.expect("a denied gateway_invoke answers as an absent name");
+    assert_absent_answer(&answer, "read");
     assert_eq!(
         calls.load(Ordering::SeqCst),
         0,
@@ -59,7 +61,9 @@ async fn authz_13c_code_mode_single_denied() {
         )
         .await;
 
-    assert!(result.is_err(), "a denied code-mode call must be refused");
+    // MIK-8361: refused as the absent name, not by its reason.
+    let answer = result.expect("a denied code-mode call answers as an absent name");
+    assert_absent_answer(&answer, "read");
     assert_eq!(calls.load(Ordering::SeqCst), 0, "no backend call");
 }
 
@@ -76,15 +80,17 @@ async fn authz_13d_code_mode_chain_step_denied() {
         )
         .await;
 
+    // MIK-8361: the chain fails as it does when the step names a tool the
+    // backend does not list, and still says which step.
     let err = result.expect_err("a denied chain step must be refused");
+    let crate::Error::JsonRpc { code, message, .. } = &err else {
+        panic!("a denied step fails the chain as an absent name: {err:?}");
+    };
+    assert_eq!(*code, -32603, "{err:?}");
     assert!(
-        matches!(err, crate::Error::Forbidden { .. }),
-        "a chain must report a denial AS a denial, not flatten it into an \
-         internal error: {err:?}"
-    );
-    assert!(
-        err.to_string().contains("refused"),
-        "and must say which step: {err}"
+        message.contains("Chain step 0 (alpha:read) failed: ")
+            && message.contains(&crate::backend::text_absent("read")),
+        "and must say which step, as the absent name: {err}"
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0, "no backend call");
 }

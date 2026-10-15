@@ -320,15 +320,17 @@ fn webhook_invoke(id: i64) -> Value {
 }
 
 /// 2. A non-admin task submit of an admin capability answers the sync
-/// refusal (Forbidden) and creates no task.
+/// refusal and creates no task. MIK-8361: that refusal is the undefined
+/// capability's (-32001 `Tool not found`), not 403 Forbidden.
 #[tokio::test]
 async fn non_admin_webhook_submit_is_refused_like_the_sync_call() {
     let row = ungranted(|meta| meta).await;
     row.state.meta_mcp.set_capabilities(webhook_backend());
     let sync = post_full(&row.state, "key-a", webhook_invoke(1)).await;
+    std::assert_eq!(sync.0, StatusCode::OK, "the sync control: {}", sync.1);
     std::assert_eq!(
-        sync.0,
-        StatusCode::FORBIDDEN,
+        sync.1.pointer("/error/message").and_then(Value::as_str),
+        Some(format!("Tool not found: '{WEBHOOK}'").as_str()),
         "the sync control: {}",
         sync.1
     );

@@ -3,6 +3,12 @@
 //! The site-1 replays a request deferred to its live dispatch (MIK-8392
 //! STORED.2), kept in the request's visibility memo and taken once.
 
+/// The memo's deferred replays: a retained single-call result the route
+/// stage deferred to a live dispatch, keyed by the owning invocation. The
+/// lift consumes it once; an untaken entry ends with the request.
+pub(super) type Slot =
+    parking_lot::Mutex<std::collections::HashMap<DeferredReplayKey, DeferredReplay>>;
+
 /// Key of a deferred site-1 replay (MIK-8392 STORED.2): the owning
 /// invocation. The server and presented tool are the replay's target (the
 /// target-branch target, or a continuation retry's origin); the key and

@@ -14,13 +14,24 @@ pub(crate) fn ask_refund(caller: &MetaMcpCallerContext<'_>) {
     caller.signing.inspect(|signing| signing.want_refund());
 }
 
+/// Note `step` on the execution lease as served to this execution: sent, or
+/// answered from a stored or cached result. Retained data from it is in the
+/// stored response, so a replay past its revocation meets its refusal
+/// (#3872 review A).
+pub(crate) fn note_served(caller: &MetaMcpCallerContext<'_>, step: (&str, &str)) {
+    if let Some(execution) = caller.execution {
+        execution.note_step(step);
+    }
+}
+
 /// Mark the execution lease and the signed execution dispatched, before the
 /// backend is reached: from here on neither the key nor the nonce is given
 /// back, as a replay would repeat what the backend did.
-pub(crate) fn mark_dispatched(caller: &MetaMcpCallerContext<'_>) {
+pub(crate) fn mark_dispatched(caller: &MetaMcpCallerContext<'_>, step: (&str, &str)) {
     if let Some(execution) = caller.execution {
         execution.mark_dispatched();
     }
+    note_served(caller, step);
     caller.signing.inspect(|signing| signing.mark_dispatched());
 }
 

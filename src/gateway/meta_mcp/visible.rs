@@ -12,6 +12,9 @@ use crate::capability::validator::input_schema_is_structurally_valid;
 use crate::protocol::Tool;
 
 use super::{InvokeScope, MetaMcp};
+#[path = "visible_deferred.rs"]
+mod deferred;
+pub(crate) use deferred::*;
 
 /// Why a tool is withheld from a caller. Read only by the audit owner; every
 /// decision reader treats a withheld tool exactly as an absent one.
@@ -367,6 +370,8 @@ impl MetaMcp {
 pub(crate) struct VisibilityMemo {
     visibility: parking_lot::Mutex<std::collections::HashMap<(String, String), Visibility>>,
     carried_credential: parking_lot::Mutex<std::collections::HashMap<(String, String), Carried>>,
+    /// MIK-8361: the route stage's refusal code, for the call's one record.
+    denial_code: parking_lot::Mutex<std::collections::HashMap<(String, String), i32>>,
     judged: parking_lot::Mutex<Judged>,
     /// MIK-8392: each target account's liveness, filled once per request by
     /// the async pre-pass and only read after it. Never a [`Visibility`]: an
@@ -382,11 +387,7 @@ pub(crate) struct VisibilityMemo {
     /// the live call answers instead of "retry" forever.
     account_refusal:
         parking_lot::Mutex<std::collections::HashMap<(String, AccountKey), crate::Error>>,
-    /// MIK-8392 STORED.2 site 1: a retained single-call result the route
-    /// stage deferred to a live dispatch, keyed by the owning invocation.
-    /// The lift consumes it once; an untaken entry ends with the request.
-    deferred_replay:
-        parking_lot::Mutex<std::collections::HashMap<DeferredReplayKey, DeferredReplay>>,
+    deferred_replay: deferred::Slot,
     /// MIK-8392 Busy parity: a transient busy custody met by this request's
     /// mint-free view read, carried to the dispatch and consumed once there,
     /// so nothing in the request reads custody a second time.
@@ -614,12 +615,21 @@ pub(crate) fn take_carried(server: &str, tool: &str) -> Option<Carried> {
         .flatten()
 }
 
-#[path = "visible_deferred.rs"]
-mod deferred;
-pub(crate) use deferred::{
-    DeferredReplay, DeferredReplayKey, deferred_replay_key, record_deferred_replay,
-    take_deferred_replay,
-};
+/// MIK-8361: keep the route stage's refusal code for `(server, tool)`, so the
+/// answer's one record names it; dropped outside a request scope.
+pub(crate) fn note_denial_code(server: &str, tool: &str, code: i32) {
+    let key = (server.to_owned(), tool.to_owned());
+    let _ = VISIBILITY_MEMO.try_with(|memo| _ = memo.denial_code.lock().entry(key).or_insert(code));
+}
+
+/// The code [`note_denial_code`] kept for `(server, tool)`, if any.
+pub(crate) fn denial_code(server: &str, tool: &str) -> Option<i32> {
+    let key = (server.to_owned(), tool.to_owned());
+    VISIBILITY_MEMO
+        .try_with(|memo| memo.denial_code.lock().get(&key).copied())
+        .ok()
+        .flatten()
+}
 
 /// The answer already recorded for `(server, tool)` in the open request, if
 /// any.

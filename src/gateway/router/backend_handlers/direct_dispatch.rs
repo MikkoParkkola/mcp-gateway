@@ -107,7 +107,6 @@ async fn guard_and_sanitize(
         admitted.sanitized = super::apply_backend_tool_call_security(
             scope.state,
             scope.name,
-            admitted.auth,
             envelope.params.as_ref(),
             scope.id,
             &scope.route.backend,

@@ -170,6 +170,56 @@ impl MetaMcp {
         self.recheck_target(scope, (server, tool), arguments, Emit::Audit)
     }
 
+    /// [`Self::authorize_route_target`] for a target the request names
+    /// (MIK-8361). Every refusal here is one a listing also applies, so the
+    /// caller cannot see the target: it takes the missing name's path. On a
+    /// backend, a missing name passes this stage, so the withheld one does
+    /// too (its refusal record is written all the same) and the gate answers
+    /// it absent after the firewall. On the capability backend a missing
+    /// name is refused here as not found, so the withheld one is too.
+    ///
+    /// `Ok(Some(refusal))` is a withheld target that passes, with the refusal
+    /// its record names; `Ok(None)` a target the caller may see.
+    ///
+    /// # Errors
+    /// `ToolNotFound` for a capability the caller may not reach, its routing
+    /// profile included.
+    pub(crate) fn authorize_requested_target(
+        &self,
+        scope: InvokeScope<'_>,
+        (server, tool): (&str, &str),
+        arguments: &Value,
+        session_id: Option<&str>,
+    ) -> Result<Option<Error>> {
+        let Err(refusal) = self.authorize_route_target(scope, (server, tool), arguments) else {
+            // The route authorize reads no session, so no routing profile: a
+            // defined capability the profile excludes is refused here, as the
+            // undefined one is, not later by admission for its reason.
+            return self
+                .profile_withheld_capability((server, tool), session_id)
+                .map_or(Ok(None), Err);
+        };
+        match self.get_capabilities() {
+            // Even an unwritable record answers so: the call dispatches
+            // nothing (D3-a narrowed, lead ruling 2026-10-11).
+            Some(cap) if cap.name == server => Err(Error::ToolNotFound(tool.to_string())),
+            // No gate answers a backend that is not registered: its refusal
+            // stays the strict one, recorded fail-closed (MIK-8387 owns its
+            // parity).
+            _ if self.backends.get(server).is_none() => Err(refusal),
+            _ => {
+                // Recorded before every later reader (MIK-8356's caller
+                // verdict included), so a policy-refused target resolves no
+                // credential (R5.1) and the gate answers it absent.
+                let withheld = crate::gateway::meta_mcp::visible::Visibility::Withheld(
+                    crate::gateway::meta_mcp::visible::Withholding::Refused,
+                );
+                crate::gateway::meta_mcp::visible::record_visibility(server, tool, withheld);
+                Ok(Some(refusal))
+            }
+        }
+    }
+
     /// The route-stage request scan on this Meta-MCP's own firewall, for the
     /// transport that has no firewall of its own (stdio; route-check-parity
     /// P3, MIK-8149.REQFW.1): the content scan and the stateful controls

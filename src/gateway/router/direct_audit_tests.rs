@@ -564,7 +564,16 @@ async fn direct_authorizer_refusal_is_denied_record() {
     })
     .await;
     let (status, body) = post(&fx, "alpha", &tools_call("t"), &Caller::Key).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    // MIK-8361: the caller reads the absent name; the record keeps the denial.
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["result"]["isError"], true, "{body}");
+    assert_eq!(
+        body["result"]["content"][0]["text"],
+        crate::backend::text_absent("t"),
+        "{body}"
+    );
+    assert!(body.get("error").is_none(), "{body}");
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "never dispatched");
     let entry = only_invocation(&fx);
     assert_eq!(entry["outcome"], "denied", "{entry}");
     assert_eq!(entry["tool"], "t");

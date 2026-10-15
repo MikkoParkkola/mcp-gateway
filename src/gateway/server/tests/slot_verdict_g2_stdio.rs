@@ -444,45 +444,13 @@ async fn p1_stdio_withheld_task_call_gets_no_prompt_and_no_task() {
 }
 
 /// Whether a stdio answer is a refusal (a JSON-RPC error or an error result).
+#[cfg(feature = "firewall")]
 fn refused(answer: &Value) -> bool {
     answer.get("error").is_some() || answer.pointer("/result/isError") == Some(&json!(true))
 }
 
-/// F5(a), stdio (guard, kills M18): a `gateway_execute` chain whose second
-/// static target route authorize refuses (`run_command` is on the default
-/// tool-policy deny list), with the operator's slot cold, resolves no
-/// credential and asks the backend nothing (no `tools/list`, no call). A
-/// verdict taken ahead of authorize would fill and release for the first
-/// target before the second is refused.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn f5a_stdio_route_authorize_refusal_resolves_nothing() {
-    let stdio = operator_stdio();
-    let (releases, requests) = (stdio.gateway.releases(), stdio.gateway.requests().len());
-    let answer = stdio
-        .rpc(
-            1,
-            "tools/call",
-            json!({"name": "gateway_execute", "arguments": {"chain": [
-                {"tool": format!("{BACKEND}:{TOOL}"), "arguments": {"folder": "inbox"}},
-                {"tool": format!("{BACKEND}:run_command"), "arguments": {}}
-            ]}}),
-        )
-        .await;
-    assert!(
-        refused(&answer),
-        "premise: the chain was not refused: {answer}"
-    );
-    assert_eq!(
-        stdio.gateway.releases(),
-        releases,
-        "F5(a) stdio: a credential was resolved: {answer}"
-    );
-    assert_eq!(
-        stdio.gateway.requests().len(),
-        requests,
-        "F5(a) stdio: the backend was asked: {answer}"
-    );
-}
+#[path = "slot_verdict_g2_stdio_f5a.rs"]
+mod f5a;
 
 /// F5(b), stdio (guard, kills M17): a request the request firewall refuses (a
 /// path-traversal argument) resolves nothing and fills nothing for a surfaced

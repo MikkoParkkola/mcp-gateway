@@ -16,6 +16,7 @@ use super::effects::{Effect, meta_tool_effect};
 mod plan;
 #[path = "admission_replay.rs"]
 mod replay;
+pub(crate) use replay::ReplayTarget;
 #[path = "admission_stored.rs"]
 mod stored;
 pub(crate) use stored::ReplayAudit;
@@ -30,6 +31,9 @@ pub(crate) struct SyncLease {
     playbook: Option<crate::playbook::PlaybookDefinition>,
     /// The invocation record's facts about this execution, kept for a replay.
     audit: Mutex<Option<ReplayAudit>>,
+    /// The steps this execution was served (sent, or answered from a stored
+    /// or cached result), kept for a replay (#3872 FIX 1).
+    steps: Mutex<Vec<(String, String)>>,
 }
 
 impl SyncLease {
@@ -42,6 +46,14 @@ impl SyncLease {
     /// it is recorded the same way. The last invocation under the lease wins.
     pub(crate) fn note_audit(&self, audit: ReplayAudit) {
         *self.audit.lock() = Some(audit);
+    }
+
+    /// Note the step `(server, tool)` this execution was served, once.
+    pub(crate) fn note_step(&self, (server, tool): (&str, &str)) {
+        let mut steps = self.steps.lock();
+        if !steps.iter().any(|(s, t)| s == server && t == tool) {
+            steps.push((server.to_owned(), tool.to_owned()));
+        }
     }
 
     pub(crate) fn mark_dispatched(&self) {
@@ -94,6 +106,7 @@ impl SyncLease {
     ) {
         let (lease, dispatches) = self.state.into_inner();
         let audit = self.audit.into_inner();
+        let steps = self.steps.into_inner();
         if dispatches == 0
             || response.result.as_ref().is_some_and(|result| {
                 crate::protocol::mrtr::InputRequired::claims_input_required(result)
@@ -128,6 +141,7 @@ impl SyncLease {
             audit,
             read,
             writes,
+            dispatched: Some(steps),
         };
         lease.complete_secured(&serde_json::to_value(stored).unwrap_or(Value::Null));
     }
@@ -150,23 +164,25 @@ pub(crate) enum SyncAdmission {
     Unprotected,
     Owned(SyncLease),
     /// A completed execution's secured response, its record facts, and the
-    /// single-call target it was admitted for (MIK-8392 STORED.2): the
+    /// single-call target it was admitted for (MIK-8392 STORED.2: the
     /// target-branch target, else a continuation retry's origin, else `None`
-    /// for a plan, which is served as today. Never an audit input: it steers
-    /// the route-stage deferral only.
-    Replay(JsonRpcResponse, Option<ReplayAudit>, Option<ReplayTarget>),
+    /// for a plan, which is served as today; it steers the route-stage
+    /// deferral only), and the steps it dispatched (`None` in a record that
+    /// predates the list, MIK-8361).
+    Replay(
+        JsonRpcResponse,
+        Option<ReplayAudit>,
+        Option<ReplayTarget>,
+        Option<Vec<(String, String)>>,
+    ),
 }
 
-/// The single-call target a site-1 replay was admitted for (MIK-8392
-/// STORED.2): what the route stage judges for liveness and keys the deferral
-/// by. Owned: the admission outlives the arguments it names.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ReplayTarget {
-    /// The backend server: the target branch's, or a continuation origin's.
-    pub(crate) server: String,
-    /// The presented tool: the target branch's, or the retry's own name.
-    pub(crate) tool: String,
-}
+/// The refusal of a key reused for another execution or representation. It
+/// is also how admission tells a reused key from a key in flight for a
+/// withheld step (MIK-8361 ruling A); `admission_tests::
+/// sub4_replay_current_policy_code_mode_revocation` fails if a reworded
+/// mismatch stops matching it.
+const KEY_MISMATCH: &str = "Idempotency key belongs to another execution or representation";
 
 /// The gateway's own directives inside a tool's arguments: read and removed
 /// here, so the sanitize step refuses a dirty key that cleans to one
@@ -335,6 +351,7 @@ impl MetaMcp {
                 state: Mutex::new((lease, 0)),
                 playbook: None,
                 audit: Mutex::new(None),
+                steps: Mutex::new(Vec::new()),
             })),
             Ok(Admission::Replay(bytes)) => {
                 // Read before the store is decoded: an unreadable origin
@@ -345,7 +362,12 @@ impl MetaMcp {
                     Error::json_rpc(409, "Secured execution result is unavailable")
                 })?;
                 response.id = Some(request_id.clone());
-                Ok(SyncAdmission::Replay(response, audit, single_target))
+                Ok(SyncAdmission::Replay(
+                    response,
+                    audit,
+                    single_target,
+                    stored::dispatched_steps(&bytes),
+                ))
             }
             Ok(Admission::InFlight) => {
                 Err(Error::json_rpc(409, "Execution is already in progress"))
@@ -358,10 +380,7 @@ impl MetaMcp {
                 409,
                 crate::idempotency::admission::SEALED_MESSAGE,
             )),
-            Err(Refusal::Mismatch) => Err(Error::json_rpc(
-                409,
-                "Idempotency key belongs to another execution or representation",
-            )),
+            Err(Refusal::Mismatch) => Err(Error::json_rpc(409, KEY_MISMATCH)),
             Err(Refusal::InvalidIdentity | Refusal::MetadataTooLarge) => Err(Error::json_rpc(
                 -32602,
                 "Invalid execution admission metadata",
@@ -455,6 +474,8 @@ impl MetaMcp {
                 .check_target_policy(caller, tool_name, arguments, session)?
                 .is_none()
             {
+                // A withheld step is the task worker's gate's, as a missing
+                // step is; a repeat re-checks its stored targets (ruling A).
                 self.authorize_execution_plan(caller, tool_name, arguments, session)?;
             }
             return Ok(SyncAdmission::Unprotected);
@@ -501,31 +522,14 @@ impl MetaMcp {
         // These compiled discovery/reporting tools do not execute external work.
         // Backend annotations and operator target strings cannot add built-ins.
         let read_only = meta_tool_effect(tool_name) == Effect::ReadOnly;
-        // MIK-8392 STORED.2 E8: a non-meta name with no target for this
-        // caller (withheld, policy-refused or missing) is admitted
-        // unprotected, before any idempotency lookup, so no key state is
-        // consulted or revealed (else a revoked caller's keyed repeat leaks
-        // its key and tool through a 409 fingerprint mismatch). The live path
-        // then answers it exactly as it answers the same unkeyed call: a
-        // missing name -32601, a policy refusal the authorizer's own error,
-        // status and record. A name with no target is never dispatched, so
-        // nothing runs unprotected. A continuation retry with an origin keeps
-        // its path: a readable one proves via the origin target, and an
-        // unreadable one is E1's continuation error. Unkeyed calls never
-        // consult key state, a malformed retry is refused as malformed, and a
-        // call with no principal keeps admission's own -32003.
-        if retry.idempotency_key.is_some()
-            && !retry.is_malformed()
-            && !crate::gateway::meta_mcp_tool_defs::is_governed_meta_tool(tool_name)
-            && super::invoke::retry_origin_backend(&self.continuation, retry).is_none()
-            && (verified_identity.is_some()
-                || owner_principal.is_some_and(|principal| !principal.is_empty()))
-        {
+        // MIK-8392 STORED.2 E8: see `hidden_name_unprotected`.
+        if self.hidden_name_unprotected(tool_name, retry, (verified_identity, owner_principal)) {
             return Ok(SyncAdmission::Unprotected);
         }
         // A retained result is still protected by today's authorization. Plan
         // loading and every target check precede lookup, including mismatches.
-        let playbook = self.authorize_execution_plan(caller, tool_name, arguments, session)?;
+        let (playbook, withheld) =
+            self.authorize_execution_plan(caller, tool_name, arguments, session)?;
         let mut operation = json!({"kind": "gateway", "tool": tool_name,
             "arguments": operation_arguments(arguments, OPERATION_DEFINING_META),
             "retry": retry.key_discriminator()});
@@ -535,7 +539,7 @@ impl MetaMcp {
             // Keep the bounded admission envelope independent of plan size.
             operation["playbook"] = json!(crate::hashing::canonical_json_sha256(&value));
         }
-        let mut admission = self.admit_operation(
+        let admission = self.admit_operation(
             caller.is_modern,
             verified_identity,
             owner_principal,
@@ -548,28 +552,27 @@ impl MetaMcp {
             read_only,
             ("gateway", tool_name),
             id,
-            || {
-                // The origin fallback (MIK-8392 STORED.2 D2): a continuation
-                // retry names the backend tool it continues, which no
-                // operator surfaced, so the plan branch takes the
-                // authenticated origin the envelope names, read without
-                // redeeming it. Only the two tools that redeem in place
-                // never take it, as the retry router skips them too.
-                if matches!(tool_name, "gateway_invoke" | "gateway_execute") {
-                    return Ok(None);
-                }
-                match super::invoke::retry_origin_backend(&self.continuation, retry) {
-                    None => Ok(None),
-                    Some(Ok(server)) => Ok(Some(ReplayTarget {
-                        server,
-                        tool: tool_name.to_owned(),
-                    })),
-                    // E1: an unreadable origin is never served stored; the
-                    // continuation error is the live path's answer for it.
-                    Some(Err(error)) => Err(error),
-                }
-            },
-        )?;
+            || self.replay_origin_target(tool_name, retry),
+        );
+        // A replay meets a withheld step's current refusal only where the
+        // first run dispatched that step, as SUB.4 pins it: its holder held
+        // access then. A step the first run answered as missing never ran, so
+        // its replay is the stored answer, as a missing step's is; a record
+        // with no step list counts every step as run (#3872 FIX 1). A key
+        // reused with other arguments is a mismatch, not a replay: the
+        // mismatch a missing step gets. A fresh call goes on to the step's
+        // gate, and any other admission answer is the one a missing step
+        // gets, never the step's reason (ruling A).
+        let ran = match &admission {
+            Ok(SyncAdmission::Replay(_, _, _, dispatched)) => Some(dispatched),
+            _ => None,
+        };
+        if let Some(dispatched) = ran
+            && let Some(refusal) = stored::refusal_to_meet(dispatched.as_deref(), withheld)
+        {
+            return Err(refusal);
+        }
+        let mut admission = admission?;
         if let SyncAdmission::Owned(lease) = &mut admission {
             lease.playbook = playbook;
         }
@@ -766,6 +769,10 @@ mod tests;
 #[cfg(test)]
 #[path = "admission_round_tests.rs"]
 mod round_tests;
+
+#[cfg(test)]
+#[path = "admission_withheld_tests.rs"]
+mod withheld_tests;
 
 /// The policy envelope for a backend tool called by its own name.
 ///

@@ -149,12 +149,28 @@ impl MetaMcp {
         self.active_profile(call.session_id)
             .check(server, tool)
             .map_err(Error::Protocol)?;
+        self.admit_backend_wide(server)?;
+        self.admit_enabled_capability(server, tool)
+    }
+
+    /// The refusal of [`Self::admit_target`] that says nothing about whether
+    /// the caller may see the tool: the operator kill switch, which speaks
+    /// about the server. The MIK-8361 gate answers it for a withheld and a
+    /// missing name alike, before any fill.
+    pub(crate) fn admit_backend_wide(&self, server: &str) -> Result<()> {
         if self.kill_switch.is_killed(server) {
             return Err(Error::json_rpc(
                 -32000,
                 format!("Server '{server}' is currently disabled by operator kill switch"),
             ));
         }
+        Ok(())
+    }
+
+    /// A capability disabled for its error rate. Its refusal names the tool,
+    /// so it is met only at dispatch, by a caller who can see the tool; a
+    /// caller who cannot gets the missing name's answer (#3872 review C).
+    fn admit_enabled_capability(&self, server: &str, tool: &str) -> Result<()> {
         let cooldown = self.capability_budget_config.read().cooldown;
         if self
             .kill_switch

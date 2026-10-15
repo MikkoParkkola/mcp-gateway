@@ -148,7 +148,14 @@ async fn grant_denial_writes_decision_record() {
     );
 
     let answer = call(&meta, &api_key("alice"), "gateway_invoke", invoke_args()).await;
-    assert_eq!(error_code(&answer), Some(-32004), "{answer}");
+    // MIK-8361: the client reads an undefined capability (-32001); the
+    // decision record below still carries the denial and its reason.
+    assert_eq!(error_code(&answer), Some(-32001), "{answer}");
+    assert_eq!(
+        answer.pointer("/error/message").and_then(Value::as_str),
+        Some(format!("Tool not found: '{PERSONAL}'").as_str()),
+        "{answer}"
+    );
 
     let invocation = only(invocations(&dir), "invocation record");
     let record = only(decisions(&dir), "decision record");
@@ -168,11 +175,8 @@ async fn grant_denial_writes_decision_record() {
         "{record}"
     );
     assert_eq!(record["who"]["authority"], json!("api_key"), "{record}");
-    // Control for the empty-flush row below: a slot holding a note flushes.
-    assert!(
-        super::grant_audit::grant_bookkeeping_for_test().flushes_spawned >= 1,
-        "a slot holding a decision note spawns its flush"
-    );
+    // MIK-8361: this call is withheld, so its note is written best-effort on
+    // its own task, not by a slot flush; the flush control is T2's.
 }
 
 /// T2. A matching grant is one `ok` record naming the grant.
@@ -196,6 +200,11 @@ async fn grant_match_writes_allow_record() {
     assert_eq!(record["grant_id"], json!("g1"), "{record}");
     assert_eq!(trace_of(&record), trace_of(&invocation), "{record}");
     assert!(trace_of(&record).is_some(), "{record}");
+    // Control for the empty-flush row below: a slot holding a note flushes.
+    assert!(
+        super::grant_audit::grant_bookkeeping_for_test().flushes_spawned >= 1,
+        "a slot holding a decision note spawns its flush"
+    );
 }
 
 /// T3 (control). Public and shared capabilities are not grant decisions.
@@ -349,7 +358,11 @@ async fn no_logger_changes_nothing() {
         .invoke_tool(&invoke_args(), Some("d3a-session"), &context(&who))
         .await
         .expect_err("an ungranted call is refused");
-    assert_eq!(refusal.to_rpc_code(), -32004, "{refusal}");
+    // MIK-8361: as an undefined capability, not by the grant rule.
+    assert!(
+        matches!(&refusal, crate::Error::ToolNotFound(tool) if tool == PERSONAL),
+        "{refusal}"
+    );
 
     assert_eq!(
         super::grant_audit::grant_bookkeeping_for_test(),

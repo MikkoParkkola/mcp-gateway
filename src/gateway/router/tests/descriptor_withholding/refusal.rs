@@ -30,8 +30,12 @@ fn assert_withheld(e: &super::Env, direct: &Value, meta: &Value) {
         "the backend received the poisoned call: {:?}",
         e.calls()
     );
-    assert!(direct.to_string().contains("withheld"), "direct: {direct}");
-    assert!(meta.to_string().contains("withheld"), "meta: {meta}");
+    // MIK-8361: refused as a name the backend does not list (text A), on
+    // both routes, never by its reason.
+    let absent = crate::backend::text_absent(POISONED);
+    assert!(direct.to_string().contains(&absent), "direct: {direct}");
+    assert!(meta.to_string().contains(&absent), "meta: {meta}");
+    assert!(!direct.to_string().contains("withheld"), "direct: {direct}");
 }
 
 /// T2: a listed poisoned tool is refused by name on both routes and the

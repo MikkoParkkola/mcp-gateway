@@ -277,9 +277,11 @@ async fn a_denied_backend_refusal_names_none_of_its_tools() {
         Ok(value) => value.to_string(),
         Err(err) => err.to_string(),
     };
+    // MIK-8361: a profile-denied backend answers as the absent name, with
+    // no reason; the leak check below is what this row pins.
     assert!(
-        body.contains("routing profile"),
-        "premise: the backend filter must be what answered: {body}"
+        body.contains(&crate::backend::text_absent(NEAR_ALLOWED)),
+        "premise: the denied backend must answer as the absent name: {body}"
     );
     assert!(
         !body.contains(ALLOWED) && !body.contains(DENIED),

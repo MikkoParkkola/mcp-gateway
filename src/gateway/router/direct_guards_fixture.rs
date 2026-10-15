@@ -479,6 +479,18 @@ fn fixture_auth() -> AuthConfig {
                 denied_tools: Some(vec!["read".to_string(), "gateway_invok".to_string()]),
                 ..key("k-deny")
             },
+            ApiKeyConfig {
+                // MIK-8361's absent twin: a policy like `k-deny`'s that does
+                // not name `read`, so only the catalogue decides.
+                denied_tools: Some(vec!["other".to_string()]),
+                ..key("k-deny-x")
+            },
+            ApiKeyConfig {
+                // MIK-8361 capability scope twin: this key's own scope denies
+                // the capability rows' `hook_or_day` by name.
+                denied_tools: Some(vec!["hook_or_day".to_string()]),
+                ..key("k-deny-cap")
+            },
         ],
         ..Default::default()
     };
