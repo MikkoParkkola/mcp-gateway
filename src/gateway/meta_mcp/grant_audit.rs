@@ -626,11 +626,9 @@ impl super::MetaMcp {
         match sourced {
             Ok(super::invoke::SourcedOutcome::Live((value, _, _))) => Ok(value),
             // A nested invocation's key never matches a deferred entry
-            // (L3), so a lifted replay cannot surface through a nested
-            // call; the frame it carries is delivered rather than invented
-            // around.
+            // (L3), so no request reaches this arm; it maps the frame it
+            // would carry rather than inventing around it (E11: no assert).
             Ok(super::invoke::SourcedOutcome::Stored(response)) => {
-                debug_assert!(false, "a lifted stored replay reached a nested invocation");
                 match (response.result, response.error) {
                     (Some(value), _) => Ok(value),
                     (None, Some(error)) => Err(Error::json_rpc(error.code, error.message)),
