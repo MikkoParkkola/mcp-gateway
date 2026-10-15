@@ -169,11 +169,12 @@ async fn t8t_a_truncated_slot_without_the_tool_still_delivers() {
     assert!(read.to_string().contains(OUTPUT), "T8t: {read}");
 }
 
-/// T6 (MIK-8392 STORED.2 E4): a repeated task call whose catalogue fill
-/// fails. Alpha's slot holds a stale, truncated list without the tool, and
-/// alpha's upstream refuses the refetch. The repeat's pre-pass (#3892)
-/// refreshes first, so the failed refresh answers retryable before site 5:
-/// no stored output, nothing sent.
+/// T6 (MIK-8392 STORED.2 E4; mutant M-cold): a repeated task call whose
+/// catalogue fill fails. Alpha's slot holds a stale, truncated list without
+/// the tool, and alpha's upstream refuses the refetch, so alpha's view reads
+/// cold and the stored-repeat judgement answers retryable before site 5: no
+/// stored output, nothing sent. Without that cold answer (M-cold) site 5's E4
+/// answers the carried fill error instead, still with no stored output.
 #[tokio::test]
 async fn t6_a_repeat_whose_fill_failed_answers_as_the_failed_dispatch() {
     let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await;
@@ -210,9 +211,7 @@ async fn t6_a_repeat_whose_fill_failed_answers_as_the_failed_dispatch() {
         "T6: stored output served: {again}"
     );
     assert_eq!(upstream.calls(), 0, "T6: the call was sent: {again}");
-    // Since #3892 the repeat's pre-pass refreshes the stale catalogue first:
-    // the failed refresh leaves the view cold, so the repeat answers
-    // retryable before site 5 meets the carried fill error.
+    // The cold view answers first; site 5's E4 is the layer behind it.
     assert_eq!(
         again.pointer("/error/data/retryable"),
         Some(&serde_json::json!(true)),
