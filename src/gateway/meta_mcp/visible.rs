@@ -367,6 +367,8 @@ impl MetaMcp {
 pub(crate) struct VisibilityMemo {
     visibility: parking_lot::Mutex<std::collections::HashMap<(String, String), Visibility>>,
     carried_credential: parking_lot::Mutex<std::collections::HashMap<(String, String), Carried>>,
+    /// MIK-8361: the route stage's refusal code, for the call's one record.
+    denial_code: parking_lot::Mutex<std::collections::HashMap<(String, String), i32>>,
     judged: parking_lot::Mutex<Judged>,
     /// MIK-8392: each target account's liveness, filled once per request by
     /// the async pre-pass and only read after it. Never a [`Visibility`]: an
@@ -605,6 +607,22 @@ pub(crate) fn take_carried(server: &str, tool: &str) -> Option<Carried> {
     let key = (server.to_owned(), tool.to_owned());
     VISIBILITY_MEMO
         .try_with(|memo| memo.carried_credential.lock().remove(&key))
+        .ok()
+        .flatten()
+}
+
+/// MIK-8361: keep the route stage's refusal code for `(server, tool)`, so the
+/// answer's one record names it; dropped outside a request scope.
+pub(crate) fn note_denial_code(server: &str, tool: &str, code: i32) {
+    let key = (server.to_owned(), tool.to_owned());
+    let _ = VISIBILITY_MEMO.try_with(|memo| _ = memo.denial_code.lock().entry(key).or_insert(code));
+}
+
+/// The code [`note_denial_code`] kept for `(server, tool)`, if any.
+pub(crate) fn denial_code(server: &str, tool: &str) -> Option<i32> {
+    let key = (server.to_owned(), tool.to_owned());
+    VISIBILITY_MEMO
+        .try_with(|memo| memo.denial_code.lock().get(&key).copied())
         .ok()
         .flatten()
 }

@@ -22,6 +22,10 @@ use serde_json::{Value, json};
 const BACKEND: &str = "tidebook";
 const DOWN: &str = "downbook";
 const MARKER: &str = "tidebook-answered";
+/// Denied by the fixture's `tool_policy`; listed by the backend.
+const DENIED_TOOL: &str = "tide_secret";
+/// Not offered by the backend: the twin a denied tool must answer as (MIK-8361).
+const ABSENT_TOOL: &str = "tide_nothing";
 const READY_BOUND: Duration = Duration::from_secs(60);
 const SEARCH_BOUND: Duration = Duration::from_secs(30);
 const REQUEST_BOUND: Duration = Duration::from_secs(30);
@@ -362,6 +366,11 @@ async fn assert_error_answers(mcp: &mut Session) {
     assert_eq!(down["recovery"]["retry"], true, "{down}");
 }
 
+/// A JSON-RPC error or a tool result flagged as an error.
+fn is_refusal(answer: &Value) -> bool {
+    answer.get("error").is_some_and(Value::is_object) || answer["result"]["isError"] == true
+}
+
 async fn assert_invoke_matches_execute(mcp: &mut Session) {
     // Existing clients that call gateway_invoke by name keep working, and pass
     // the same grant check as gateway_execute: a policy-denied tool is
@@ -374,29 +383,38 @@ async fn assert_invoke_matches_execute(mcp: &mut Session) {
         .await,
     );
     assert_eq!(text_of(&invoked), MARKER, "{invoked}");
-    let denied_execute = mcp
-        .call(
-            "gateway_execute",
-            json!({ "tool": "tidebook:tide_secret", "arguments": {} }),
-        )
-        .await;
-    let denied_invoke = mcp
-        .call(
-            "gateway_invoke",
-            json!({ "server": BACKEND, "tool": "tide_secret", "arguments": {} }),
-        )
-        .await;
-    assert!(
-        denied_execute["error"]["message"]
-            .as_str()
-            .is_some_and(|m| m.contains("blocked by security policy")),
-        "{denied_execute}"
-    );
-    assert_eq!(denied_execute["_httpStatus"], 403, "{denied_execute}");
-    assert_eq!(denied_execute["error"]["code"], -32600, "{denied_execute}");
-    assert_eq!(denied_invoke["_httpStatus"], 403, "{denied_invoke}");
+    // MIK-8361: a policy-denied tool answers as a tool that does not exist,
+    // byte for byte, on each path (only the echoed name and the request id
+    // differ), so the refusal does not tell the caller the tool is there.
+    let execute = |tool: &str| json!({ "tool": format!("{BACKEND}:{tool}"), "arguments": {} });
+    let invoke = |tool: &str| json!({ "server": BACKEND, "tool": tool, "arguments": {} });
+    let normalised = |answer: &Value| {
+        let mut answer = answer.clone();
+        answer["id"] = Value::Null;
+        answer.to_string().replace(ABSENT_TOOL, DENIED_TOOL)
+    };
+    let mut denied = Vec::new();
+    for (meta, args) in [
+        ("gateway_execute", &execute as &dyn Fn(&str) -> Value),
+        ("gateway_invoke", &invoke as &dyn Fn(&str) -> Value),
+    ] {
+        let refused = mcp.call(meta, args(DENIED_TOOL)).await;
+        let absent = mcp.call(meta, args(ABSENT_TOOL)).await;
+        // Equal answers prove nothing if both succeeded: each is a refusal.
+        for answer in [&refused, &absent] {
+            assert!(is_refusal(answer), "{meta}: not a refusal: {answer}");
+        }
+        assert_eq!(
+            normalised(&refused),
+            normalised(&absent),
+            "{meta}: a denied tool answers as a missing one"
+        );
+        denied.push(refused);
+    }
+    // Both paths give the same answer for the denied tool (id aside).
     assert_eq!(
-        denied_invoke["error"], denied_execute["error"],
-        "{denied_invoke}"
+        normalised(&denied[0]),
+        normalised(&denied[1]),
+        "gateway_invoke and gateway_execute refuse a denied tool alike"
     );
 }

@@ -7,7 +7,8 @@
 use super::super::*;
 use super::input_round::{STATE_1, answer, ask, done, parked, update, wait_input_required};
 use super::stored_result_policy::{
-    assert_answers_as_absent, assert_refused, code_mode_call, strip_targets, withhold,
+    assert_absent, assert_answers_as_absent, assert_refused, code_mode_call, strip_targets,
+    withhold,
 };
 use super::support::*;
 
@@ -173,10 +174,8 @@ async fn a_repeat_of_a_parked_call_is_refused_once_its_tool_is_withheld() {
     withhold(&state, TOOL);
     let repeat = post(&state, "key-a", super::input_round::create(2, "x2466-g1")).await;
 
-    // A repeat is a live tools/call: the live path's admission refuses a
-    // descriptor-blocked tool first (-32600, "withheld"), before any stored
-    // read is judged (MIK-8392 site-5 split: a repeat keeps the live answer).
-    assert_refused(&repeat, "withheld");
+    // MIK-8361: answered as a name the backend does not list, not by reason.
+    assert_absent(&repeat, TOOL);
     assert_no_question(&repeat);
     std::assert_eq!(mock.calls(), 1, "no second dispatch: {:?}", mock.seen());
 }

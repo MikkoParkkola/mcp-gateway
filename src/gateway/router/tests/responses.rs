@@ -563,16 +563,30 @@ async fn backend_handler_tools_call_enforces_api_key_tool_scope() {
 
     let response = router.oneshot(request).await.unwrap();
 
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    // MIK-8361: a tool the key's allowlist denies answers as a name the
+    // backend does not list, not by the allowlist, and is never sent. This
+    // backend's list cannot be read, so that answer is F13's unread-list
+    // text; a missing name the key may call is forwarded there instead (the
+    // stated Standard-mode residual, S3b), so no twin compare holds here.
+    assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"]["code"], -32600);
+    assert!(json.get("error").is_none(), "{json}");
+    assert_eq!(json["result"]["isError"], true, "{json}");
+    let text = json["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
     assert!(
-        json["error"]["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("allowlist"))
+        text.contains("could not read this tool's input schema") && !text.contains("allowlist"),
+        "{json}"
     );
-    assert!(transport.request_methods.lock().unwrap().is_empty());
+    assert!(
+        !transport
+            .request_methods
+            .lock()
+            .unwrap()
+            .contains(&"tools/call".to_string())
+    );
 }
 
 #[tokio::test]

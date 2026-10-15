@@ -185,22 +185,29 @@ async fn audited_call_judged(
     let mut call = None;
     let mut reads = DirectReads::default();
     let guard = super::super::helpers::read_guard(&state);
-    let inner = Box::pin(crate::gateway::outbound::read_scoped(
-        guard.clone(),
-        super::backend_handler_inner(
-            Arc::clone(&state),
-            name.clone(),
-            request,
-            &mut call,
-            &mut reads,
-        ),
-    ));
-    let ((answer, hidden), notes) =
-        crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(inner).await;
-    let (status, Json(body)) = match call {
-        Some(call) => record(&state, &name, call, answer, notes).await,
-        None => answer,
-    };
+    // One memo spans the guard and the record, so a withheld call's one
+    // record names its refusal (MIK-8361).
+    let ((status, Json(body)), hidden) =
+        crate::gateway::meta_mcp::visible::with_visibility_memo(async {
+            let inner = Box::pin(crate::gateway::outbound::read_scoped(
+                guard.clone(),
+                super::backend_handler_inner(
+                    Arc::clone(&state),
+                    name.clone(),
+                    request,
+                    &mut call,
+                    &mut reads,
+                ),
+            ));
+            let ((answer, hidden), notes) =
+                crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(inner).await;
+            let answer = match call.take() {
+                Some(call) => record(&state, &name, call, answer, notes).await,
+                None => answer,
+            };
+            (answer, hidden)
+        })
+        .await;
     if status == StatusCode::ACCEPTED {
         // An accepted notification: the gateway's own placeholder, sent
         // with no body (MIK-7759), carries nothing to judge.
@@ -280,7 +287,13 @@ pub(super) async fn record(
     notes: DispatchNotes,
 ) -> Answer {
     let (status, Json(body)) = &answer;
-    let outcome = direct_outcome(*status, body);
+    // MIK-8361: a withheld call's one record is `denied` with its refusal's
+    // code, whatever it answered the caller (the missing name's answer).
+    let outcome = call
+        .tool
+        .as_deref()
+        .and_then(|tool| crate::gateway::meta_mcp::visible::denial_code(server, tool))
+        .map_or_else(|| direct_outcome(*status, body), AuditOutcome::Denied);
     // D4: counted before the log check, so auth off still counts.
     let firewall = body
         .get("error")

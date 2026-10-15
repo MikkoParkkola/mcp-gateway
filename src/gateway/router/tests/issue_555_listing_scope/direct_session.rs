@@ -117,9 +117,11 @@ async fn a_direct_call_keeps_its_own_session() {
         "params": { "name": "alpha_read", "arguments": {} }
     });
     let (_, answer) = post(&f.router, "/mcp/alpha", "u1", Some(&session), &call).await;
-    let message = answer["error"]["message"].as_str().unwrap_or_default();
+    // MIK-8361: the owner's profile withholds `alpha_read`, which answers as
+    // a name the backend does not list, not by the profile's name.
     assert!(
-        message.contains("'locked' routing profile"),
+        answer["result"]["isError"] == true
+            && answer["result"]["content"][0]["text"] == crate::backend::text_absent("alpha_read"),
         "the owner's own profile was not applied: {answer}"
     );
 }

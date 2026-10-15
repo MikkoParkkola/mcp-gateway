@@ -632,6 +632,16 @@ impl Gateway {
                     caller.retry = &granted;
                 }
                 RouteStage::Proceed(None) => {}
+                // Nothing was admitted: the nonce goes back with the witness.
+                RouteStage::Absent => {
+                    if let Some(witness) = witness {
+                        meta_mcp.release_witnessed_nonce(&caller, witness);
+                    }
+                    let session = Some(session_id);
+                    let answer =
+                        meta_mcp.handle_tools_call_ref(id, &tool_name, arguments, session, caller);
+                    break 'tool_call Box::pin(answer).await;
+                }
             }
             if wants_task && let Some(tasks) = client.tasks {
                 match stdio_tasks::task_intent(
@@ -659,7 +669,11 @@ impl Gateway {
             execution = match admission {
                 Ok(super::super::meta_mcp::admission::SyncAdmission::Unprotected) => None,
                 Ok(super::super::meta_mcp::admission::SyncAdmission::Owned(lease)) => Some(lease),
-                Ok(super::super::meta_mcp::admission::SyncAdmission::Replay(response, audit)) => {
+                Ok(super::super::meta_mcp::admission::SyncAdmission::Replay(
+                    response,
+                    audit,
+                    _,
+                )) => {
                     // #2480: a replay is a delivered call, recorded as its first run was.
                     let (args, session) = (arguments.as_ref(), Some(session_id));
                     break 'tool_call meta_mcp

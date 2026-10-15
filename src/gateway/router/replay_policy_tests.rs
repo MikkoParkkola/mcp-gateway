@@ -217,6 +217,12 @@ async fn post(fx: &Fixture, uri: &str, body: &Value) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
+/// MIK-8361: the answer a withheld `t` gets, the same as a name the backend
+/// does not list (text A). Matched in the raw body, whatever its framing.
+fn absent_t() -> String {
+    crate::backend::text_absent("t")
+}
+
 fn call(id: u32, name: &str, arguments: &Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
            "params": {"name": name, "arguments": arguments,
@@ -238,7 +244,7 @@ async fn replay_after_block_is_refused(uri: &str, name: &str, arguments: &Value,
     fx.withhold_t();
     let second = post(&fx, uri, &call(2, name, arguments)).await;
     assert!(
-        second.contains("withheld") && !second.contains("done"),
+        second.contains(&absent_t()) && !second.contains("done"),
         "a tool withheld after the first call must be refused, not answered \
          from the idempotency cache: {second}"
     );
@@ -305,7 +311,7 @@ async fn meta_layer_cell(answer: Answer) {
     fx.withhold_t();
     let second = serde_json::to_string(&invoke(2).await).unwrap();
     assert!(
-        second.contains("withheld") && !second.contains("done"),
+        second.contains(&absent_t()) && !second.contains("done"),
         "refused, not replayed: {second}"
     );
     assert_eq!(fx.deliveries(), 1, "{second}");
@@ -328,7 +334,7 @@ async fn direct_replay_without_a_block_is_still_deduplicated() {
 /// R2s. Meta route over HTTP, a stored JSON-RPC error: the response firewall
 /// refused the first result after dispatch, and that refusal is what the
 /// admission lease retains. After the block, the re-issue is refused as
-/// withheld, not answered with the stored error.
+/// withheld (MIK-8361: as an absent name), not answered with the stored error.
 #[cfg(feature = "firewall")]
 #[tokio::test]
 async fn meta_stored_error_replay_after_block_is_refused() {
@@ -354,7 +360,7 @@ async fn meta_stored_error_replay_after_block_is_refused() {
     fx.withhold_t();
     let second = post(&fx, "/mcp", &call(2, "gateway_invoke", &invoke)).await;
     assert!(
-        second.contains("withheld") && !second.contains("firewall"),
+        second.contains(&absent_t()) && !second.contains("firewall"),
         "refused, not answered with the stored error: {second}"
     );
     assert_eq!(fx.deliveries(), 1, "{second}");
@@ -390,7 +396,7 @@ async fn passthrough_replay_after_block_is_refused() {
     fx.withhold_t();
     let second = post(&fx, "/mcp/alpha", &call(2, "t", &json!({}))).await;
     assert!(
-        second.contains("withheld") && !second.contains("done"),
+        second.contains(&absent_t()) && !second.contains("done"),
         "refused, not replayed: {second}"
     );
     assert_eq!(fx.deliveries(), 1, "{second}");

@@ -131,5 +131,6 @@ async fn the_documented_read_grant_does_not_allow_a_mutating_capability() {
     let refusal = dispatch_doc_example("read", false)
         .await
         .expect_err("a read grant must not reach a mutating capability");
-    assert!(refusal.contains("Identity grant denied"), "{refusal}");
+    // MIK-8361: refused as an undefined capability, never by the grant rule.
+    assert_eq!(refusal, "Tool not found: 'calendar_read_day'", "{refusal}");
 }

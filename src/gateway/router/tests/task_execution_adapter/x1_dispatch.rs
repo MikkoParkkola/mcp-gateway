@@ -83,10 +83,8 @@ async fn fixture_control_a_refused_call_reaches_nothing() {
     )
     .await;
 
-    assert!(
-        body.get("error").is_some(),
-        "a credential scoped away from '{FORBIDDEN_BACKEND}' must be refused: {body}"
-    );
+    // MIK-8361: refused as a name the backend does not list.
+    super::stored_result_policy::assert_absent(&body, TOOL);
     std::assert_eq!(
         forbidden.calls(),
         0,

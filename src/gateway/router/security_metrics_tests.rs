@@ -344,8 +344,8 @@ async fn metric_labels_carry_no_caller_data() {
     }
 }
 
-/// A scope refusal on `POST /mcp` is answered by the router before the meta
-/// layer runs; it is still one `meta` denial.
+/// A scope refusal on `POST /mcp`: MIK-8361 answers it as a missing step,
+/// and it is still one `meta` denial.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn http_meta_scope_refusal_counted_once() {
     let fx = fixture(Setup {
@@ -366,7 +366,9 @@ async fn http_meta_scope_refusal_counted_once() {
             .unwrap();
         fx.router.clone().oneshot(request).await.unwrap().status()
     });
-    assert_eq!(status, StatusCode::FORBIDDEN, "{text}");
+    // MIK-8361: the withheld step answers as a missing step (200); its
+    // denial is still counted once, on the meta route.
+    assert_eq!(status, StatusCode::OK, "{text}");
     assert_eq!(sum_where(&text, DENY, r#"route="meta""#), 1, "{text}");
     assert_eq!(sum_where(&text, DENY, ""), 1, "{text}");
 }

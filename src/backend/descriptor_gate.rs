@@ -388,6 +388,18 @@ impl Backend {
         !blocked.is_empty() && blocked.contains_key(&name_key(tool))
     }
 
+    /// Withhold `tool` as a listing with a failed description would (test
+    /// support for rows whose fixture serves no description).
+    #[cfg(all(test, feature = "firewall"))]
+    pub(crate) fn block_descriptor_for_test(&self, tool: &str) {
+        self.descriptor_gate
+            .blocked
+            .write()
+            .entry(name_key(tool))
+            .or_default()
+            .insert("test".to_string());
+    }
+
     /// Bytes held in the gate's keys (test support for the memory bound).
     #[cfg(test)]
     pub(crate) fn descriptor_gate_key_bytes(&self) -> usize {

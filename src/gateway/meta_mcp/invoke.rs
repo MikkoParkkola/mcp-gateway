@@ -28,6 +28,7 @@ const INVOKE_TARGET: &str = module_path!();
 
 // The per-dispatch credential and its redacting `Debug`, kept out of this file's size baseline.
 mod caller_credential;
+mod gate;
 use caller_credential::{CallerCredential, HeldCredential};
 
 mod guarded;
@@ -154,8 +155,9 @@ impl MetaMcp {
 
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
-
-        self.check_or_stamp(args, session_id, caller, (server, tool))?;
+        if let Some(answer) = self.gated(args, (server, tool), caller, session_id).await {
+            return answer;
+        }
 
         let mut arguments = parse_tool_arguments(args)?;
         // `_full` is a gateway directive (opt out of response projection), not
@@ -307,6 +309,7 @@ impl MetaMcp {
             client_claim.as_ref(),
             &mut idem_reservation,
         )? {
+            nonce_settle::note_served(caller, (server, tool));
             return Ok(stored);
         }
 
@@ -377,6 +380,7 @@ impl MetaMcp {
                 &mut idem_reservation,
             )
         {
+            nonce_settle::note_served(caller, (server, tool));
             return Ok(cached);
         }
 
@@ -484,7 +488,7 @@ impl MetaMcp {
         };
         // Dispatch: the witness goes with the send (the nonce stays spent).
         witness.spend();
-        nonce_settle::mark_dispatched(caller);
+        nonce_settle::mark_dispatched(caller, (server, tool));
         // Boxed: the dispatch future is the largest thing this frame ever
         // holds, and inlining it puts `invoke_tool_traced` over
         // `clippy::large_futures` at every call site.

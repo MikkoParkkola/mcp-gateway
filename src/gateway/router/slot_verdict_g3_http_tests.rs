@@ -47,6 +47,7 @@ impl Gateway {
     }
 
     /// Every backend request either upstream has seen, `tools/list` included.
+    #[cfg(feature = "firewall")]
     pub(super) fn requests(&self) -> usize {
         self.dispatched() + self.caller.lists() + self.shared.lists()
     }
@@ -294,45 +295,68 @@ async fn g3_p5_withheld_answer_touches_no_response_targets() {
     );
 }
 
+#[cfg(feature = "firewall")]
 fn refused(answer: &(StatusCode, Value)) -> bool {
     !answer.0.is_success() || answer.1.get("error").is_some()
 }
 
-/// F5(a): a `gateway_execute` chain whose second static target is refused by
-/// route authorize (`run_command` is on the default tool-policy deny list)
-/// resolves nothing for the first, per-user target: no mint, no `tools/list`,
-/// no call. A verdict taken ahead of authorize would fill and mint for the
-/// first target before the second is refused. Guard: kills M18.
+/// `body` with every occurrence of `tool` replaced by a placeholder, and how
+/// many there were: the twin bodies are compared byte for byte with only the
+/// tool name factored out (MIK-8361, lead ruling on F5(a)).
+fn normalised(body: &str, tool: &str) -> (String, usize) {
+    (body.replace(tool, "<tool>"), body.matches(tool).count())
+}
+
+/// F5(a) (MIK-8361 lead ruling 2026-10-12, per-user class; guard, kills
+/// M18): a step route authorize refuses (`run_command`, on the default deny
+/// list) resolves no credential and sends nothing of its own. `[note,
+/// run_command]` is measured against `[note]` alone: the same mints and sends,
+/// so `run_command`'s share is zero. The caller sees the status and body the
+/// twin `[note, nosuch]` gets (tool name factored out). Labelled residual
+/// (design A4): on this per-user backend the twin's caller-slot fill mints and
+/// lists where the withheld name does neither, which the caller cannot see.
 #[tokio::test]
 async fn g3_f5a_route_authorize_refusal_resolves_nothing() {
-    let gw = gateway(
-        CallerSlot::Valid,
-        &valid(),
-        Warmth::Cold,
-        Surfaced::No,
-        |_| {},
-    )
-    .await;
-    let (mints, requests) = (gw.mints(), gw.requests());
-    let body = json!({"jsonrpc": "2.0", "id": 11, "method": "tools/call",
-    "params": {"name": "gateway_execute", "arguments": {"chain": [
-        {"tool": format!("{BACKEND}:note"), "arguments": {"q": "x"}},
-        {"tool": format!("{BACKEND}:run_command"), "arguments": {}}
-    ]}}});
-    let answer = post_as_alpha(&gw.router, "/mcp", &body).await;
+    async fn chain(second: Option<&str>) -> ((StatusCode, Value), usize, usize) {
+        let gw = gateway(
+            CallerSlot::Valid,
+            &valid(),
+            Warmth::Cold,
+            Surfaced::No,
+            |_| {},
+        )
+        .await;
+        let mut steps = vec![json!({"tool": format!("{BACKEND}:note"), "arguments": {"q": "x"}})];
+        if let Some(second) = second {
+            steps.push(json!({"tool": format!("{BACKEND}:{second}"), "arguments": {}}));
+        }
+        let body = json!({"jsonrpc": "2.0", "id": 11, "method": "tools/call",
+        "params": {"name": "gateway_execute", "arguments": {"chain": steps}}});
+        let answer = post_as_alpha(&gw.router, "/mcp", &body).await;
+        (answer, gw.mints(), gw.dispatched())
+    }
+    let (hidden, mints, sent) = chain(Some("run_command")).await;
+    let (missing, _, _) = chain(Some("nosuch")).await;
+    let (alone, alone_mints, alone_sent) = chain(None).await;
     assert!(
-        refused(&answer),
-        "premise: the chain was not refused: {answer:?}"
+        alone_mints >= 1 && alone_sent >= 1,
+        "premise: the visible step alone mints and sends: {alone:?}"
+    );
+    let (hidden_body, named) = normalised(&hidden.1.to_string(), "run_command");
+    let (missing_body, twin_named) = normalised(&missing.1.to_string(), "nosuch");
+    assert_eq!(
+        named, twin_named,
+        "premise: each answer names its own step as often: {hidden:?} / {missing:?}"
     );
     assert_eq!(
-        gw.mints(),
-        mints,
-        "F5(a): a credential was resolved: {answer:?}"
+        (hidden.0, hidden_body),
+        (missing.0, missing_body),
+        "F5(a): the hidden step's answer differs from a missing step's"
     );
     assert_eq!(
-        gw.requests(),
-        requests,
-        "F5(a): the backend was asked: {answer:?}"
+        (mints, sent),
+        (alone_mints, alone_sent),
+        "F5(a): run_command minted or sent beyond the visible step: {hidden:?}"
     );
 }
 

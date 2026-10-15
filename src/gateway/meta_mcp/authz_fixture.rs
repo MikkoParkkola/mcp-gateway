@@ -23,6 +23,8 @@ use crate::transport::Transport;
 struct CountingTransport {
     calls: Arc<AtomicUsize>,
     result: Value,
+    /// `tools/list`'s answer, when the backend lists its catalogue.
+    tools: Option<Value>,
 }
 
 #[async_trait::async_trait]
@@ -32,6 +34,12 @@ impl Transport for CountingTransport {
         method: &str,
         _params: Option<Value>,
     ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        if let (Some(tools), "tools/list") = (&self.tools, method) {
+            return Ok(crate::protocol::JsonRpcResponse::success_serialized(
+                RequestId::Number(1),
+                json!({ "tools": tools }),
+            ));
+        }
         assert_eq!(method, "tools/call");
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(crate::protocol::JsonRpcResponse::success_serialized(
@@ -65,9 +73,37 @@ pub(in crate::gateway::meta_mcp) fn counted_backend(
     backend.set_transport_for_test(Arc::new(CountingTransport {
         calls: Arc::clone(&calls),
         result: json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+        tools: None,
     }));
     // MIK-8393: only a declared read is cached; this fixture's subject is
     // the cache's keying, so `read` is declared read-only here.
+    backend.set_read_only_declared_for_test(&["read"]);
+    let _ = registry.register(backend);
+    (registry, calls)
+}
+
+/// [`counted_backend`] whose catalogue is checked (`standard`): its
+/// `tools/list` offers `read`, so a cold judgement fills it.
+pub(in crate::gateway::meta_mcp) fn counted_listing_backend(
+    name: &str,
+) -> (Arc<BackendRegistry>, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let registry = Arc::new(BackendRegistry::new());
+    let config = BackendConfig {
+        input_schema_enforcement: crate::config::InputSchemaEnforcement::Standard,
+        ..BackendConfig::r2_off()
+    };
+    let backend = Arc::new(Backend::new(
+        name,
+        config,
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    backend.set_transport_for_test(Arc::new(CountingTransport {
+        calls: Arc::clone(&calls),
+        result: json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+        tools: Some(json!([{"name": "read", "inputSchema": {"type": "object"}}])),
+    }));
     backend.set_read_only_declared_for_test(&["read"]);
     let _ = registry.register(backend);
     (registry, calls)

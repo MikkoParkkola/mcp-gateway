@@ -194,6 +194,14 @@ impl MetaMcp {
                 caller.principal_source(None),
             ));
         };
+        // A step the caller can no longer see is refused as the name it
+        // cannot see, never by its reason, and before its fingerprint can
+        // resolve a credential for it (MIK-8361 A5 ruling A; ORACLE.3).
+        if self.tool_visible_to(server, tool, caller.scope(), session_id)
+            != crate::gateway::meta_mcp::visible::Visibility::Visible
+        {
+            return Err(crate::gateway::meta_mcp::visible::absent_name(tool));
+        }
         self.check_invocation_policy(
             &json!({ "server": server, "tool": tool, "arguments": arguments }),
             session_id,

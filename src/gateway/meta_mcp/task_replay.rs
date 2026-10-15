@@ -602,7 +602,7 @@ impl MetaMcp {
                     &json!({}),
                     attestation,
                 );
-                self.check_invocation_policy(&args, session, caller)?;
+                self.check_visible_policy(&args, session, caller)?;
             }
             Ok(())
         })

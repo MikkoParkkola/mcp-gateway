@@ -121,6 +121,7 @@ mod task_replay;
 pub(crate) mod upstream;
 mod visibility;
 pub(crate) mod visible;
+pub(crate) mod withheld_gate;
 
 pub use visibility::InvokeScope;
 
@@ -640,6 +641,8 @@ mod grant_slot_wrap_tests;
 mod grant_withheld_parity_tests;
 #[cfg(test)]
 mod guide_alloc_tests;
+#[cfg(test)]
+mod oracle_audit_tests;
 #[cfg(test)]
 #[path = "policy_epoch_tests.rs"]
 mod policy_epoch_tests;

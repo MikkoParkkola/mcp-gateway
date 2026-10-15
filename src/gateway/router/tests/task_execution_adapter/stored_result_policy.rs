@@ -72,6 +72,45 @@ pub(super) fn assert_refused(body: &Value, expect: &str) {
     );
 }
 
+/// MIK-8361: a new call naming a withheld `tool` answers as a name the
+/// backend does not list (a tool error carrying text A), creates no task and
+/// is never answered from a stored result. The whole result is compared, so
+/// an extra field (a task handle, a stored result) fails.
+pub(super) fn assert_absent(body: &Value, tool: &str) {
+    let inner = serde_json::to_string_pretty(&json!({
+        "content": [{"text": crate::backend::text_absent(tool), "type": "text"}],
+        "isError": true
+    }))
+    .expect("serializes");
+    let expected = json!({
+        "_meta": {"io.modelcontextprotocol/serverInfo":
+            {"name": "mcp-gateway", "version": env!("CARGO_PKG_VERSION")}},
+        "content": [{"text": inner, "type": "text"}],
+        "isError": true,
+        "resultType": "complete"
+    });
+    assert!(
+        body.get("error").is_none() && body.get("result") == Some(&expected),
+        "expected exactly the absent-name answer for `{tool}`, got {body}"
+    );
+}
+
+/// MIK-8361: a code-mode chain whose step names a withheld `tool` fails as
+/// when the step names a tool the backend does not list (-32603), no result.
+fn assert_absent_step(body: &Value, tool: &str) {
+    let message = body
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        body.pointer("/error/code") == Some(&json!(-32603))
+            && message.contains(&format!("Chain step 0 ({BACKEND}:{tool}) failed: "))
+            && message.contains(&crate::backend::text_absent(tool))
+            && body.get("result").is_none(),
+        "expected the chain to fail on the absent name `{tool}`, got {body}"
+    );
+}
+
 /// The gateway's own answer to a name that matches no tool, on this route:
 /// a live `tools/call` of the mock's tool name, which nothing surfaces.
 pub(super) async fn absent_twin(state: &Arc<AppState>) -> Value {
@@ -197,10 +236,7 @@ async fn a_repeat_of_a_finished_invoke_task_is_refused_when_its_stored_target_is
         task_invoke(4, "b-repeat", json!({ "q": 1 })),
     )
     .await;
-    // A repeat is a live tools/call: the live path's admission refuses a
-    // descriptor-blocked tool first (-32600, "withheld"), before any stored
-    // read is judged (MIK-8392 site-5 split: a repeat keeps the live answer).
-    assert_refused(&repeat, "withheld");
+    assert_absent(&repeat, TOOL);
     assert_ne!(repeat.pointer("/result/taskId"), Some(&json!(id)));
 }
 
@@ -293,10 +329,7 @@ async fn a_finished_code_mode_task_is_refused_on_get_and_on_repeat_once_its_tool
     withhold(&state, TOOL);
     assert_answers_as_absent(&state, &get_task(&state, "key-a", &id).await).await;
     let repeat = post(&state, "key-a", code_mode_call(7, "b-code")).await;
-    // A repeat is a live tools/call: the live path's admission refuses a
-    // descriptor-blocked tool first (-32600, "withheld"), before any stored
-    // read is judged (MIK-8392 site-5 split: a repeat keeps the live answer).
-    assert_refused(&repeat, "withheld");
+    assert_absent_step(&repeat, TOOL);
     std::assert_eq!(mock.calls(), 1, "no second dispatch: {:?}", mock.seen());
 }
 

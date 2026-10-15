@@ -459,3 +459,53 @@ async fn a3_t16_a_version_rejection_is_replayed_from_the_cooldown() {
     }
     assert_eq!(lister.lists(), 1, "the second call listed again");
 }
+
+/// H1 (MIK-8361 ORACLE.2, codex review of #3872): with the shared slot stale
+/// and its refresh cooling after a transport failure, a withheld listed name
+/// and a missing name are answered alike under `closed`. The withheld name
+/// must not be answered from the stale list while the missing one meets the
+/// failed fill.
+#[tokio::test]
+async fn h1_a_cooling_stale_slot_answers_withheld_and_missing_alike() {
+    use crate::backend::Lens;
+    let lister = Lister::new(Mode::Serve);
+    // A zero TTL: the slot is stale from its first fill (`elapsed() < ttl`
+    // never holds), so no wall-clock wait is needed.
+    let backend = Arc::new(Backend::new(
+        "f13",
+        BackendConfig::default(),
+        &no_breaker(),
+        Duration::ZERO,
+    ));
+    backend.set_transport_for_test(Arc::clone(&lister) as Arc<dyn crate::transport::Transport>);
+    let _ = check(&backend, "edit", &json!({"edits": []})).await;
+    lister.set(Mode::Down);
+    // A stale hit whose refresh fails starts the cooldown (A4-T2's premise).
+    let _ = check(&backend, "edit", &json!({"edits": []})).await;
+    let lists = lister.lists();
+    let answer = |tool: &'static str, lens: Lens| {
+        let backend = Arc::clone(&backend);
+        async move {
+            let answered = backend
+                .catalogue_refusal((None, &[]), tool, &json!({}), lens)
+                .await;
+            format!("{answered:?}").replace(tool, "<tool>")
+        }
+    };
+    let withheld = answer("edit", Lens::Withheld).await;
+    let missing = answer("not_listed", Lens::Catalogue).await;
+    // Anchored: both forwarded (`Ok(None)`) would be equal too.
+    assert!(
+        missing.contains("TransportConnect(\"list down\")"),
+        "the shared answer is the failed refill's: {missing}"
+    );
+    assert_eq!(
+        withheld, missing,
+        "a withheld name and a missing one answer alike on a cooling stale slot"
+    );
+    assert_eq!(
+        lister.lists(),
+        lists,
+        "no list went out inside the cooldown"
+    );
+}

@@ -28,6 +28,9 @@ pub(crate) struct SyncLease {
     playbook: Option<crate::playbook::PlaybookDefinition>,
     /// The invocation record's facts about this execution, kept for a replay.
     audit: Mutex<Option<ReplayAudit>>,
+    /// The steps this execution was served (sent, or answered from a stored
+    /// or cached result), kept for a replay (#3872 FIX 1).
+    steps: Mutex<Vec<(String, String)>>,
 }
 
 impl SyncLease {
@@ -40,6 +43,14 @@ impl SyncLease {
     /// it is recorded the same way. The last invocation under the lease wins.
     pub(crate) fn note_audit(&self, audit: ReplayAudit) {
         *self.audit.lock() = Some(audit);
+    }
+
+    /// Note the step `(server, tool)` this execution was served, once.
+    pub(crate) fn note_step(&self, (server, tool): (&str, &str)) {
+        let mut steps = self.steps.lock();
+        if !steps.iter().any(|(s, t)| s == server && t == tool) {
+            steps.push((server.to_owned(), tool.to_owned()));
+        }
     }
 
     pub(crate) fn mark_dispatched(&self) {
@@ -92,6 +103,7 @@ impl SyncLease {
     ) {
         let (lease, dispatches) = self.state.into_inner();
         let audit = self.audit.into_inner();
+        let steps = self.steps.into_inner();
         if dispatches == 0
             || response.result.as_ref().is_some_and(|result| {
                 crate::protocol::mrtr::InputRequired::claims_input_required(result)
@@ -126,6 +138,7 @@ impl SyncLease {
             audit,
             read,
             writes,
+            dispatched: Some(steps),
         };
         lease.complete_secured(&serde_json::to_value(stored).unwrap_or(Value::Null));
     }
@@ -147,9 +160,21 @@ pub(crate) fn take_last_operation() -> Option<Value> {
 pub(crate) enum SyncAdmission {
     Unprotected,
     Owned(SyncLease),
-    /// A completed execution's secured response, and its record facts.
-    Replay(JsonRpcResponse, Option<ReplayAudit>),
+    /// A completed execution's secured response, its record facts, and the
+    /// steps it dispatched (`None` in a record that predates the list).
+    Replay(
+        JsonRpcResponse,
+        Option<ReplayAudit>,
+        Option<Vec<(String, String)>>,
+    ),
 }
+
+/// The refusal of a key reused for another execution or representation. It
+/// is also how admission tells a reused key from a key in flight for a
+/// withheld step (MIK-8361 ruling A); `admission_tests::
+/// sub4_replay_current_policy_code_mode_revocation` fails if a reworded
+/// mismatch stops matching it.
+const KEY_MISMATCH: &str = "Idempotency key belongs to another execution or representation";
 
 /// The gateway's own directives inside a tool's arguments: read and removed
 /// here, so the sanitize step refuses a dirty key that cleans to one
@@ -305,13 +330,18 @@ impl MetaMcp {
                 state: Mutex::new((lease, 0)),
                 playbook: None,
                 audit: Mutex::new(None),
+                steps: Mutex::new(Vec::new()),
             })),
             Ok(Admission::Replay(bytes)) => {
                 let (mut response, audit) = stored_response(&bytes).ok_or_else(|| {
                     Error::json_rpc(409, "Secured execution result is unavailable")
                 })?;
                 response.id = Some(request_id.clone());
-                Ok(SyncAdmission::Replay(response, audit))
+                Ok(SyncAdmission::Replay(
+                    response,
+                    audit,
+                    stored::dispatched_steps(&bytes),
+                ))
             }
             Ok(Admission::InFlight) => {
                 Err(Error::json_rpc(409, "Execution is already in progress"))
@@ -324,10 +354,7 @@ impl MetaMcp {
                 409,
                 crate::idempotency::admission::SEALED_MESSAGE,
             )),
-            Err(Refusal::Mismatch) => Err(Error::json_rpc(
-                409,
-                "Idempotency key belongs to another execution or representation",
-            )),
+            Err(Refusal::Mismatch) => Err(Error::json_rpc(409, KEY_MISMATCH)),
             Err(Refusal::InvalidIdentity | Refusal::MetadataTooLarge) => Err(Error::json_rpc(
                 -32602,
                 "Invalid execution admission metadata",
@@ -421,6 +448,8 @@ impl MetaMcp {
                 .check_target_policy(caller, tool_name, arguments, session)?
                 .is_none()
             {
+                // A withheld step is the task worker's gate's, as a missing
+                // step is; a repeat re-checks its stored targets (ruling A).
                 self.authorize_execution_plan(caller, tool_name, arguments, session)?;
             }
             return Ok(SyncAdmission::Unprotected);
@@ -469,7 +498,8 @@ impl MetaMcp {
         let read_only = meta_tool_effect(tool_name) == Effect::ReadOnly;
         // A retained result is still protected by today's authorization. Plan
         // loading and every target check precede lookup, including mismatches.
-        let playbook = self.authorize_execution_plan(caller, tool_name, arguments, session)?;
+        let (playbook, withheld) =
+            self.authorize_execution_plan(caller, tool_name, arguments, session)?;
         let mut operation = json!({"kind": "gateway", "tool": tool_name,
             "arguments": operation_arguments(arguments, OPERATION_DEFINING_META),
             "retry": retry.key_discriminator()});
@@ -479,7 +509,7 @@ impl MetaMcp {
             // Keep the bounded admission envelope independent of plan size.
             operation["playbook"] = json!(crate::hashing::canonical_json_sha256(&value));
         }
-        let mut admission = self.admit_operation(
+        let admission = self.admit_operation(
             caller.is_modern,
             verified_identity,
             owner_principal,
@@ -492,7 +522,26 @@ impl MetaMcp {
             read_only,
             ("gateway", tool_name),
             id,
-        )?;
+        );
+        // A replay meets a withheld step's current refusal only where the
+        // first run dispatched that step, as SUB.4 pins it: its holder held
+        // access then. A step the first run answered as missing never ran, so
+        // its replay is the stored answer, as a missing step's is; a record
+        // with no step list counts every step as run (#3872 FIX 1). A key
+        // reused with other arguments is a mismatch, not a replay: the
+        // mismatch a missing step gets. A fresh call goes on to the step's
+        // gate, and any other admission answer is the one a missing step
+        // gets, never the step's reason (ruling A).
+        let ran = match &admission {
+            Ok(SyncAdmission::Replay(_, _, dispatched)) => Some(dispatched),
+            _ => None,
+        };
+        if let Some(dispatched) = ran
+            && let Some(refusal) = stored::refusal_to_meet(dispatched.as_deref(), withheld)
+        {
+            return Err(refusal);
+        }
+        let mut admission = admission?;
         if let SyncAdmission::Owned(lease) = &mut admission {
             lease.playbook = playbook;
         }
@@ -689,6 +738,10 @@ mod tests;
 #[cfg(test)]
 #[path = "admission_round_tests.rs"]
 mod round_tests;
+
+#[cfg(test)]
+#[path = "admission_withheld_tests.rs"]
+mod withheld_tests;
 
 /// The policy envelope for a backend tool called by its own name.
 ///

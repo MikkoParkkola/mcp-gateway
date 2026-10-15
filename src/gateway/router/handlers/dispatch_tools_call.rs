@@ -183,11 +183,46 @@ pub(super) async fn tools_call(
         // name withheld from this caller is not a target (MIK-8340): the meta
         // layer answers it as a name that matches no tool.
         let checked = target.as_target();
-        let routed = state.meta_mcp.authorize_route_target(
-            invoke_scope,
-            (checked.server, checked.tool),
-            checked.arguments,
-        );
+        // A requested target the caller cannot see takes the missing name's
+        // path (MIK-8361); a step's target keeps the strict authorize.
+        let routed = if index < request_targets {
+            match state.meta_mcp.authorize_requested_target(
+                invoke_scope,
+                (checked.server, checked.tool),
+                checked.arguments,
+                Some(session_id.as_str()),
+            ) {
+                // Its record names the real reason; the answer is the
+                // missing name's, later (MIK-8361).
+                Ok(Some(withheld)) => {
+                    let code = match &withheld {
+                        crate::Error::Forbidden { code, .. } => *code,
+                        other => other.to_rpc_code(),
+                    };
+                    // One record per call: an invoked target's answer writes
+                    // it, as a missing target's does; a surfaced name's
+                    // missing twin writes none, so the route records it.
+                    if state.meta_mcp.exposes_meta_tool(tool_name) {
+                        crate::gateway::meta_mcp::visible::note_denial_code(
+                            checked.server,
+                            checked.tool,
+                            code,
+                        );
+                    } else {
+                        refused.note_withheld(state, checked, code).await;
+                    }
+                    Ok(())
+                }
+                Ok(None) => Ok(()),
+                Err(refusal) => Err(refusal),
+            }
+        } else {
+            state.meta_mcp.authorize_route_target(
+                invoke_scope,
+                (checked.server, checked.tool),
+                checked.arguments,
+            )
+        };
         // A step's target is operator-defined: any refusal of it is neutral (A3).
         if index >= request_targets && routed.is_err() {
             return Err(refused
@@ -403,6 +438,44 @@ pub(super) async fn tools_call(
         tool_name,
         std::mem::take(response_targets),
     );
+    // MIK-8361: a call every requested target of which this caller cannot
+    // see is answered by the gate as a missing name is, before X14, the task
+    // gate, signing and admission act on it. The judgement is recorded, so
+    // the gate answers it absent whatever the catalogue does next.
+    let (invisible, witness) = state
+        .meta_mcp
+        .invisible_call(
+            tool_name,
+            (&backend_targets, request_targets),
+            &caller,
+            (Some(session_id.as_str()), witness),
+        )
+        .await;
+    // The gate has judged; the window a catalogue change must not reach
+    // (MIK-8361, one judgement per request).
+    #[cfg(test)]
+    crate::gateway::meta_mcp::withheld_gate::seams::gate_done();
+    if invisible {
+        // A backend-wide refusal (kill switch) is answered as admission
+        // answers it for a missing name: the same 400.
+        if let Some(refusal) = backend_targets
+            .iter()
+            .find_map(|target| state.meta_mcp.admit_backend_wide(&target.server).err())
+        {
+            return Err(build_error_response(
+                Some(id),
+                refusal.to_rpc_code(),
+                refusal.to_string(),
+                session_id,
+                StatusCode::BAD_REQUEST,
+            ));
+        }
+        let session = Some(session_id.as_str());
+        let answer = state
+            .meta_mcp
+            .handle_tools_call_ref(id, tool_name, arguments, session, caller);
+        return Ok(Box::pin(answer).await);
+    }
 
     // The modern destructive gate (X14). Every authorization, admin and
     // firewall check above has already run, and nothing below has yet
@@ -575,7 +648,7 @@ pub(super) async fn tools_call(
     );
     let (owned_execution, replay) = match admission {
         Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Owned(lease)) => (Some(lease), None),
-        Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Replay(response, audit)) => {
+        Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Replay(response, audit, _)) => {
             (None, Some((response, audit)))
         }
         Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Unprotected) => (None, None),

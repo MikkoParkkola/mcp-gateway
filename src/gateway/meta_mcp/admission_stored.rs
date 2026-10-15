@@ -30,6 +30,12 @@ pub(super) struct StoredDelivery {
         skip_serializing_if = "crate::gateway::gateway_writes::WriteRecord::is_empty"
     )]
     pub(super) writes: crate::gateway::gateway_writes::WriteRecord,
+    /// #3872 FIX 1: the steps the execution was served, sent or answered from
+    /// a stored or cached result, so a replay meets a now-withheld step's
+    /// refusal only where the first run reached it. Absent in older records:
+    /// every step counts as served.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) dispatched: Option<Vec<(String, String)>>,
 }
 
 /// #2472: the first execution's invocation-record outcome and response hash,
@@ -108,6 +114,28 @@ pub(super) enum StoredChain {
     ChainedBackend,
     #[default]
     NotEligible,
+}
+
+/// The refusal a replay meets for the steps `withheld` from its caller now:
+/// the first, in plan order, that the stored run was served, so the answer
+/// never names a step that never ran (#3872 review B). A record with no step
+/// list (written before the list) counts every step as served, so it keeps
+/// the first refusal (#3872 FIX 1, fail closed). `None`: the stored answer.
+pub(super) fn refusal_to_meet(
+    served: Option<&[(String, String)]>,
+    withheld: super::plan::Withheld,
+) -> Option<crate::Error> {
+    withheld
+        .into_iter()
+        .find(|(step, _)| served.is_none_or(|ran| ran.contains(step)))
+        .map(|(_, refusal)| refusal)
+}
+
+/// The steps a stored execution was served, if its record lists them.
+pub(super) fn dispatched_steps(bytes: &[u8]) -> Option<Vec<(String, String)>> {
+    serde_json::from_slice::<StoredDelivery>(bytes)
+        .ok()
+        .and_then(|stored| stored.dispatched)
 }
 
 /// Decode a stored delivery; a bare response is a record from before the

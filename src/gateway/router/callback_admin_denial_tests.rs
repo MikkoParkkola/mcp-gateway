@@ -62,8 +62,9 @@ async fn register_webhook(state: &Arc<super::AppState>, key: &str) -> (StatusCod
     (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
 }
 
-/// CB-T2. The standard key is refused 403/-32600; the admin key, same call,
-/// is not refused (it fails later, at the network).
+/// CB-T2. The standard key is refused; MIK-8361: as an undefined capability
+/// (-32001 `Tool not found`), whose HTTP status is not 403. The admin key,
+/// same call, is not refused (it fails later, at the network).
 #[tokio::test]
 async fn non_admin_callback_registration_is_http_403() {
     let auth = AuthConfig {
@@ -78,8 +79,13 @@ async fn non_admin_callback_registration_is_http_403() {
         .set_capabilities(callback_capability(caps.path()).await);
 
     let (status, body) = register_webhook(&state, STANDARD_KEY).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    assert_eq!(body["error"]["code"], json!(-32600), "{body}");
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["error"]["code"], json!(-32001), "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        json!("Tool not found: 'register_webhook'"),
+        "{body}"
+    );
 
     let (status, body) = register_webhook(&state, ADMIN_KEY).await;
     assert_ne!(
@@ -90,7 +96,7 @@ async fn non_admin_callback_registration_is_http_403() {
     assert!(
         !body["error"]["message"]
             .as_str()
-            .is_some_and(|m| m.contains("admin credential")),
+            .is_some_and(|m| m.contains("admin credential") || m.contains("Tool not found")),
         "the admin-capability rule must not refuse an admin: {body}"
     );
 }

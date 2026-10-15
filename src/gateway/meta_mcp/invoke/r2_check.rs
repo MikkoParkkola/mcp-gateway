@@ -49,6 +49,29 @@ impl MetaMcp {
         headers: &[(String, String)],
         (scope, session_id): (super::super::InvokeScope<'_>, Option<&str>),
     ) -> Result<Option<Value>> {
+        self.undeclared_key_refusal_through(
+            (server, backend),
+            tool,
+            arguments,
+            (identity_key, headers),
+            (scope, session_id),
+            crate::backend::Lens::Catalogue,
+        )
+        .await
+    }
+
+    /// [`Self::undeclared_key_refusal`] through `lens`: the MIK-8361 gate
+    /// asks it, under [`crate::backend::Lens::Withheld`], for the answer a
+    /// name the caller may not see gets, which is the lacked name's.
+    pub(super) async fn undeclared_key_refusal_through(
+        &self,
+        (server, backend): (&str, Option<&std::sync::Arc<crate::backend::Backend>>),
+        tool: &str,
+        arguments: &Value,
+        (identity_key, headers): (Option<&str>, &[(String, String)]),
+        (scope, session_id): (super::super::InvokeScope<'_>, Option<&str>),
+        lens: crate::backend::Lens,
+    ) -> Result<Option<Value>> {
         if self
             .get_capabilities()
             .is_some_and(|cap| server == cap.name && cap.has_capability(tool))
@@ -59,7 +82,7 @@ impl MetaMcp {
             return Ok(None);
         };
         let text = backend
-            .undeclared_key_refusal(identity_key, headers, tool, arguments)
+            .catalogue_refusal((identity_key, headers), tool, arguments, lens)
             .await;
         // An F13 fill stores this caller's catalogue: index its slot
         // (MIK-8356 R3.5). A slot left unfilled is not recorded.

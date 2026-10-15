@@ -54,6 +54,51 @@ async fn send_as(
     serde_json::from_slice(&bytes).unwrap_or(Value::Null)
 }
 
+/// A capability tool the provider does not define: the twin an unreachable
+/// capability answers as (MIK-8361).
+const UNDEFINED: &str = "no_such_capability";
+
+/// The same caller's live call of [`UNDEFINED`].
+async fn undefined_twin(router: &axum::Router, caller: &VerifiedIdentity) -> Value {
+    send_as(
+        router,
+        caller,
+        "tools/call",
+        "gateway_invoke",
+        json!({"name": "gateway_invoke",
+            "arguments": {"server": CAPABILITY_SERVER, "tool": UNDEFINED, "arguments": {}},
+            "_meta": modern_meta()}),
+    )
+    .await
+}
+
+/// [`error_masked`] with the capability's name and its twin's made one.
+fn named_as_twin(body: &Value) -> String {
+    error_masked(body)
+        .replace(CAPABILITY_TOOL, "<tool>")
+        .replace(UNDEFINED, "<tool>")
+}
+
+/// MIK-8361: the live call answers byte for byte as the undefined
+/// capability's twin, and that answer is Tool not found (-32001).
+async fn assert_answers_as_undefined(
+    router: &axum::Router,
+    caller: &VerifiedIdentity,
+    live: &Value,
+) {
+    let twin = undefined_twin(router, caller).await;
+    assert_eq!(
+        named_as_twin(live),
+        named_as_twin(&twin),
+        "MIK-8361: the live call answers as the undefined capability"
+    );
+    assert_eq!(
+        live["error"]["code"],
+        json!(-32001),
+        "the answer is Tool not found: {live}"
+    );
+}
+
 /// The error object with every per-call trace id (`gw-` and 36 UUID
 /// characters) replaced by one placeholder: two calls never share one (K2).
 fn error_masked(body: &Value) -> String {
@@ -86,9 +131,9 @@ fn error_masked(body: &Value) -> String {
 /// verdicts (`dispatch_tools_call.rs:393`), and the dispatch policy
 /// (`meta_mcp/invoke.rs:158`) runs before its resolution (`invoke.rs:217`).
 /// The stored read runs `authorize_stored` before accounts too, so both answer
-/// the grant denial (-32004), never -32601.
+/// as the undefined capability (-32001 Tool not found, MIK-8361), never -32601.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn order_revoked_account_with_a_withdrawn_grant_answers_the_grant_denial() {
+async fn order_revoked_account_with_a_withdrawn_grant_answers_as_undefined() {
     let account = CapabilityAccount::start_personal().await;
     let (state, _store) = super::tests::meta_fixture::test_router_app_state_with_meta(
         &AuthConfig::default(),
@@ -153,10 +198,9 @@ async fn order_revoked_account_with_a_withdrawn_grant_answers_the_grant_denial()
             "_meta": modern_meta()}),
     )
     .await;
-    assert_eq!(
-        live.pointer("/error/code"),
-        Some(&json!(-32004)),
-        "premise: the live call is grant-denied, not absent: {live}"
+    assert!(
+        live.get("error").is_some(),
+        "premise: the live call is refused: {live}"
     );
     let stored = send_as(
         &router,
@@ -171,6 +215,7 @@ async fn order_revoked_account_with_a_withdrawn_grant_answers_the_grant_denial()
         error_masked(&live),
         "order: the stored read answers what the live call answers"
     );
+    assert_answers_as_undefined(&router, &alice, &live).await;
 }
 
 /// Order twin: an unbindable caller (empty subject, as Ub) plus a descriptor
@@ -267,7 +312,8 @@ async fn order_unbindable_caller_with_a_withheld_tool_answers_absence() {
 /// target with no registry backend: alice's Personal capability after
 /// her identity grant is withdrawn and her managed custody is busy.
 /// The stored pre-pass must not judge the account at all — no custody
-/// read, no `idp_refuse` — and the read answers the live grant denial.
+/// read, no `idp_refuse` — and the read answers what the live call answers:
+/// the undefined capability's -32001 (MIK-8361).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn capability_grant_withdrawn_under_busy_custody_is_not_account_judged() {
     let account = CapabilityAccount::start_personal().await;
@@ -335,10 +381,9 @@ async fn capability_grant_withdrawn_under_busy_custody_is_not_account_judged() {
             "_meta": modern_meta()}),
     )
     .await;
-    assert_eq!(
-        live.pointer("/error/code"),
-        Some(&json!(-32004)),
-        "premise: the live call is grant-denied: {live}"
+    assert!(
+        live.get("error").is_some(),
+        "premise: the live call is refused: {live}"
     );
     let reads = account.resolves();
     let before = account.idp_refusals_for_test();
@@ -353,7 +398,7 @@ async fn capability_grant_withdrawn_under_busy_custody_is_not_account_judged() {
     assert_eq!(
         error_masked(&stored),
         error_masked(&live),
-        "capability: the stored read answers the live grant denial: {stored}"
+        "capability: the stored read answers what the live call answers: {stored}"
     );
     assert_eq!(
         account.resolves() - reads,
@@ -365,4 +410,5 @@ async fn capability_grant_withdrawn_under_busy_custody_is_not_account_judged() {
         0,
         "capability: the pre-pass wrote an idp_refuse for a grant-refused target"
     );
+    assert_answers_as_undefined(&router, &alice, &live).await;
 }

@@ -163,9 +163,16 @@ async fn signed_call_writes_one_record_with_invocation_trace() {
 async fn admission_refusal_writes_one_denied_record() {
     let row = armed(false, false, AuditFailurePolicy::BestEffort, |meta| meta).await;
     let answer = post(&row.state, "key-a", personal_invoke(1)).await;
+    // MIK-8361: the caller reads an undefined capability (-32001); the
+    // decision record still carries the denial.
     std::assert_eq!(
         answer.pointer("/error/code").and_then(Value::as_i64),
-        Some(-32004),
+        Some(-32001),
+        "{answer}"
+    );
+    std::assert_eq!(
+        answer.pointer("/error/message").and_then(Value::as_str),
+        Some(format!("Tool not found: '{PERSONAL}'").as_str()),
         "{answer}"
     );
     let record = only(decisions(&row.dir), "decision record");
