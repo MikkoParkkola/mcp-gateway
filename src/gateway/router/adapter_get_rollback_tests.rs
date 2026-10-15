@@ -218,3 +218,77 @@ async fn a_get_stream_closes_when_its_held_adapter_issuance_moves_into_the_futur
          the future, yet it carried a further frame: {leaked:?}"
     );
 }
+
+fn resource_update(marker: &str) -> TaggedNotification {
+    TaggedNotification {
+        source: "demo".to_string(),
+        event_type: "message".to_string(),
+        data: json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/resources/updated",
+            "params": {"uri": marker}
+        }),
+        event_id: None,
+    }
+}
+
+async fn expect_update(frames: &mut BodyFrames, marker: &str) {
+    match frames.next().await {
+        Frame::Message(frame) => std::assert_eq!(
+            frame["params"]["uri"],
+            json!(marker),
+            "VOID: the {marker} update must arrive: {frame}"
+        ),
+        Frame::Eof => panic!("VOID: stream ended before the {marker} update"),
+    }
+}
+
+/// MIK-8350 (seat HIGH on 8264fcb00): a frame that is not a judged hint (a
+/// `resources/updated`, sent with no judged backend) is held to the stream's
+/// own subject as it is written, as a listener's is. Once the held Open WebUI
+/// receipt has expired, the GET stream writes it nothing and closes. A
+/// control stream opened with a receipt minted at the same instant receives
+/// the same frame, so the broadcast itself is proven.
+/// Red before the fix: only the bearer is rechecked, so the expired receipt's
+/// stream is written the update. Mutant: the non-hint subject check removed.
+#[tokio::test(flavor = "current_thread")]
+async fn a_get_stream_writes_no_unjudged_frame_once_its_adapter_receipt_expires() {
+    let (state, _store) = test_router_app_state_with_auth(&scoped_auth_config(false)).await;
+    let backend = http_backend_at("demo", "http://127.0.0.1:9/mcp");
+    backend.store_shared_tools_for_test(vec![tool("before")]);
+    std::assert!(
+        state.backends.register(Arc::clone(&backend)),
+        "VOID: demo backend must register"
+    );
+    let t0 = crate::clock::unix_secs().expect("clock after 1970");
+    let capture = crate::clock::test_clock::at_secs(t0);
+    let (mut held, _held_session) = open_get(&state, genuine_receipt(t0)).await;
+    let reached = state
+        .multiplexer
+        .broadcast_to_backend(&resource_update("healthy"), "demo")
+        .await;
+    std::assert!(reached > 0, "VOID: healthy update reached none");
+    expect_update(&mut held, "healthy").await;
+    drop(capture);
+
+    let later = t0 + 300;
+    let expired = crate::clock::test_clock::at_secs(later);
+    std::assert!(!fresh_verifies(t0), "VOID: the held receipt has expired");
+    let (mut control, _control_session) = open_get(&state, genuine_receipt(later)).await;
+    let reached = state
+        .multiplexer
+        .broadcast_to_backend(&resource_update("after-expiry"), "demo")
+        .await;
+    std::assert!(reached > 0, "VOID: post-expiry update reached none");
+    expect_update(&mut control, "after-expiry").await;
+    let leaked: Option<Value> = match held.next().await {
+        Frame::Eof => None,
+        Frame::Message(frame) => Some(frame),
+    };
+    drop(expired);
+    std::assert!(
+        leaked.is_none(),
+        "an unjudged frame was written to a GET stream whose adapter receipt \
+         has expired: {leaked:?}"
+    );
+}
