@@ -158,9 +158,9 @@ pub(crate) fn create_sse_response_with_view(
                     break;
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                    // A frame like any other: a dead credential gets none.
-                    let audience = crate::gateway::auth::live::Audience::Any;
-                    if credential_at_write(&multiplexer, &session, audience).await == Delivery::Dead {
+                    // A frame like any other: a dead credential or a stream
+                    // subject that no longer resolves gets none (MIK-8350).
+                    if !lag_notice_allowed(&multiplexer, &session, view.as_ref()).await {
                         close_dead(&mut rx);
                         break;
                     }
@@ -255,6 +255,28 @@ async fn write_gate(
         return Gate::Close;
     }
     Gate::Write
+}
+
+/// Whether the `lagged` notice may be written: the gates a frame passes, for
+/// a notice that names no backend. The held credential is judged against any
+/// audience, and the stream's own subject as for every non-hint frame
+/// (MIK-8350). A subject death is counted here.
+async fn lag_notice_allowed(
+    multiplexer: &NotificationMultiplexer,
+    session: &super::ClientSession,
+    view: Option<&super::StreamView>,
+) -> bool {
+    let audience = crate::gateway::auth::live::Audience::Any;
+    if credential_at_write(multiplexer, session, audience).await == Delivery::Dead {
+        return false;
+    }
+    if let Some(view) = view
+        && let Some(reason) = subject_dead(multiplexer, session, view).await
+    {
+        reason.count();
+        return false;
+    }
+    true
 }
 
 /// Why `view`'s caller no longer resolves, for a frame that is not a judged
