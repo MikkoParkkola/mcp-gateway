@@ -122,10 +122,11 @@ async fn completed_task(fx: &Fx, key: &str) -> String {
 /// this row.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t8_unavailable_repeat_answers_as_the_live_call() {
-    let fx = fixture(false).await;
+    let fx = fixture_with(false, true).await;
     completed_task(&fx, "t8").await;
     let sent = fx.gateway.tool_calls().len();
     fx.gateway.fail_custody_for_test(true);
+    let refusals = idp_refusals(&fx);
     let again = send(
         &fx,
         "tools/call",
@@ -133,6 +134,8 @@ async fn t8_unavailable_repeat_answers_as_the_live_call() {
         invoke_params(Some("t8"), true),
     )
     .await;
+    let repeat_refusals = idp_refusals(&fx) - refusals;
+    let refusals = idp_refusals(&fx);
     let live = send(
         &fx,
         "tools/call",
@@ -140,6 +143,15 @@ async fn t8_unavailable_repeat_answers_as_the_live_call() {
         invoke_params(Some("t8-live"), false),
     )
     .await;
+    let live_refusals = idp_refusals(&fx) - refusals;
+    assert_eq!(
+        live_refusals, 1,
+        "premise: the live call writes one idp_refuse"
+    );
+    assert_eq!(
+        repeat_refusals, 1,
+        "T8: the repeat writes exactly one idp_refuse"
+    );
     eprintln!("T8 repeat: {again}");
     eprintln!("T8 live: {live}");
     assert!(
@@ -275,7 +287,7 @@ async fn s1_live_account_replay_is_served_without_a_second_resolution() {
 /// it were live (M16) must fail this row.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn s4_outage_replay_answers_as_the_live_call() {
-    let fx = fixture(false).await;
+    let fx = fixture_with(false, true).await;
     answer_marker(&fx);
     let first = send(
         &fx,
@@ -290,6 +302,7 @@ async fn s4_outage_replay_answers_as_the_live_call() {
     );
     let sent = fx.gateway.tool_calls().len();
     fx.gateway.fail_custody_for_test(true);
+    let refusals = idp_refusals(&fx);
     let again = send(
         &fx,
         "tools/call",
@@ -297,6 +310,11 @@ async fn s4_outage_replay_answers_as_the_live_call() {
         invoke_params(Some("s4"), false),
     )
     .await;
+    assert_eq!(
+        idp_refusals(&fx) - refusals,
+        1,
+        "S4: the deferred replay writes exactly one idp_refuse"
+    );
     let live = send(
         &fx,
         "tools/call",

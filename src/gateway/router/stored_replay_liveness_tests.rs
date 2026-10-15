@@ -53,6 +53,16 @@ async fn fixture(surfaced: bool) -> Fx {
     fixture_with(surfaced, false).await
 }
 
+/// The `idp_refuse` records in an audited fixture's transparency log.
+fn idp_refusals(fx: &Fx) -> usize {
+    let dir = fx._audit.as_ref().expect("an audited fixture");
+    std::fs::read_to_string(dir.path().join("audit.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains("\"action\":\"idp_refuse\""))
+        .count()
+}
+
 /// [`fixture`] with an identity-propagation transparency log, which the
 /// direct route requires before it mints (G1).
 async fn fixture_with(surfaced: bool, audited: bool) -> Fx {
