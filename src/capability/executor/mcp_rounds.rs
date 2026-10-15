@@ -100,4 +100,15 @@ mod tests {
             assert!(after_dispatch(refusal, false).is_pre_dispatch());
         }
     }
+
+    /// MIK-8428 Case A: a later round's account recheck meets a busy custody
+    /// (the sealed transient) after an earlier round reached the backend. It
+    /// settles uncertain, never as unsent; with no earlier round it is unsent.
+    #[test]
+    fn a_recheck_busy_after_a_dispatched_round_settles_uncertain() {
+        let busy = crate::personal_accounts::refusal::transient_retry_error;
+        assert!(after_dispatch(busy(None), false).is_pre_dispatch());
+        let mapped = after_dispatch(busy(None), true);
+        assert!(matches!(mapped, Error::Transport(_)), "{mapped}");
+    }
 }

@@ -542,6 +542,25 @@ mod rpc_code_tests {
         assert!(!Error::BackendTimeout("slow".to_string()).is_pre_dispatch());
     }
 
+    /// MIK-8428 Case A: the gateway-sealed transient is pre-dispatch (it is
+    /// built only before a send); a look-alike with the same code, text and
+    /// data but no seal, as a backend could answer, is not. The seal decides,
+    /// never the text.
+    #[test]
+    fn only_the_sealed_transient_is_pre_dispatch() {
+        let sealed = crate::personal_accounts::refusal::transient_retry_error(None);
+        let Error::JsonRpc { code, message, .. } = &sealed else {
+            panic!("premise: the transient is a JSON-RPC error: {sealed}");
+        };
+        let look_alike = Error::JsonRpc {
+            code: *code,
+            message: message.clone(),
+            data: crate::personal_accounts::refusal::transient_data(&sealed),
+        };
+        assert!(sealed.is_pre_dispatch(), "{sealed}");
+        assert!(!look_alike.is_pre_dispatch(), "{look_alike}");
+    }
+
     #[test]
     fn a_permanent_transport_failure_reports_as_a_backend_error() {
         // Omitting the variant here reported a missing backend command as an
