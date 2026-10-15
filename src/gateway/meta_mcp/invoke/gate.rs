@@ -479,11 +479,8 @@ impl MetaMcp {
         {
             // A capability the caller may not reach answers as one that is
             // not defined: the same `ToolNotFound` the grant check gives it.
-            if !refused
-                || self
-                    .capability_rule_refusal((server, tool), scope, caller.is_admin)
-                    .is_none()
-            {
+            let by_rule = self.capability_rule_refusal((server, tool), scope, caller.is_admin);
+            if !refused || by_rule.is_none() {
                 return None;
             }
             self.record_withheld(server, tool, Withholding::Refused, caller, session_id)
