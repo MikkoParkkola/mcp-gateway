@@ -57,6 +57,7 @@ mod stdio_route_stage;
 pub(crate) mod stdio_seams;
 mod stdio_shutdown;
 mod stdio_single;
+mod stdio_startup;
 mod stdio_tasks;
 mod stdio_writer;
 mod task_runtime;

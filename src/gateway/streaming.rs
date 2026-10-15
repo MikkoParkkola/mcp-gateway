@@ -21,20 +21,30 @@ use parking_lot::RwLock;
 use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::broadcast;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, trace};
 use uuid::Uuid;
 
 use crate::Result;
 use crate::backend::BackendRegistry;
 use crate::config::StreamingConfig;
 use crate::gateway::auth::AuthState;
-use crate::gateway::auth::live::{Audience, Delivery, HeldCredential, delivery};
+use crate::gateway::auth::live::HeldCredential;
 use crate::gateway::session_id::{SessionId, SessionOwner, session_fp};
 use crate::gateway::session_lifecycle::{SessionLifecycle, now_unix};
 
+#[path = "streaming_session.rs"]
+mod session;
+use session::ClientSession;
 #[path = "streaming_copy.rs"]
 mod copy;
 use copy::{CopyAudience, Unsent};
+#[path = "streaming_told.rs"]
+mod told;
+pub(crate) use told::{
+    AtAttach, DeadReason, Decision, HeldSource, Judged, LiveCtx, Owed, Peek, PendingRefresh,
+    ResolvedCaller, StreamView, ToldState, ViewDigest, ViewJudge, ViewRecord, ViewSubject,
+    dead_at_attach,
+};
 
 /// A tagged notification event from a backend
 #[derive(Debug, Clone, Serialize)]
@@ -65,6 +75,9 @@ pub struct SessionFrame {
     watch: Option<Arc<DeliveryWatch>>,
     /// Who the copy is for, judged again when the stream writes it (G6).
     audience: CopyAudience,
+    /// A `tools/list_changed` hint each stream judges again for its own view
+    /// when it writes it (MIK-8350 D17d).
+    judged: Option<Arc<str>>,
 }
 
 /// How a server-to-client request's queued copies fared on their streams
@@ -157,73 +170,6 @@ impl SessionFrame {
     }
 }
 
-/// Client session state
-#[derive(Debug)]
-struct ClientSession {
-    /// Session ID; prints as its fingerprint.
-    id: SessionId,
-    /// Notification sender, opened by the first subscribe and by nothing else:
-    /// a send, fan-out included, to an unopened sender is refused as a send
-    /// with no receiver is. A POST-only session therefore never allocates the
-    /// channel or its buffer (NFR.WORKLOAD.1). The session is in the store
-    /// before this is set; every reader treats an unset sender as one with
-    /// no receiver, and `OnceLock` gives concurrent subscribers one channel
-    /// (MIK-7853.RACE.1).
-    tx: OnceLock<broadcast::Sender<SessionFrame>>,
-    /// Capacity the sender opens with.
-    capacity: usize,
-    /// The `caller_key` this session's stream writes to, bound when the
-    /// stream opens (MIK-7116.MIN.2); every queued copy is judged for it.
-    read_key: RwLock<Option<String>>,
-    /// Last event ID received (for resumability)
-    last_event_id: RwLock<Option<String>>,
-    /// Subscribed backends
-    subscribed_backends: RwLock<Vec<String>>,
-    /// Timestamp of session creation (for TTL-based reaping)
-    /// Last time a request resumed this session. The reaper goes by this, not
-    /// by creation: a session that only POSTs holds no stream, so age alone
-    /// would reap it mid-use and the next request would start a fresh one.
-    last_active: RwLock<Instant>,
-    /// The identity that created this session.
-    ///
-    /// A session id arrives in a header the caller controls, so without this a
-    /// per-session check compares one caller-supplied value against another. A
-    /// caller presenting an id it does not own gets a session of its own rather
-    /// than the owner's, which keeps resumption working for the owner and
-    /// leaks nothing to anyone else.
-    owner: SessionOwner,
-    /// The credential the session was opened with, re-validated at every
-    /// scoped delivery. Never a resolved client: a snapshot would outlive a
-    /// revoked or expired token.
-    // ci-allow-secret-debug: HeldCredential's own Debug prints only <redacted>
-    credential: RwLock<Option<HeldCredential>>,
-}
-
-impl ClientSession {
-    /// The sender, opened now if nothing has needed it yet.
-    fn sender(&self) -> &broadcast::Sender<SessionFrame> {
-        self.tx.get_or_init(|| broadcast::channel(self.capacity).0)
-    }
-
-    fn subscribe(&self) -> broadcast::Receiver<SessionFrame> {
-        self.sender().subscribe()
-    }
-
-    fn receiver_count(&self) -> usize {
-        self.tx.get().map_or(0, broadcast::Sender::receiver_count)
-    }
-
-    /// Send as `broadcast::Sender::send` does; an unopened sender has no
-    /// receiver, so it refuses exactly as an open one with none would. The
-    /// refused frame is dropped, not returned: no caller reads it.
-    fn send(&self, notification: SessionFrame) -> std::result::Result<usize, Unsent> {
-        match self.tx.get() {
-            Some(tx) => tx.send(notification).map_err(|_| Unsent),
-            None => Err(Unsent),
-        }
-    }
-}
-
 /// Notification Multiplexer
 ///
 /// Routes notifications from multiple streaming backends to connected clients.
@@ -263,6 +209,13 @@ pub struct NotificationMultiplexer {
     /// The cross-tenant read judge of every session stream (MIK-7116.MIN.2);
     /// unset when the verdict is off, which is the plain fast path.
     reads: std::sync::OnceLock<crate::gateway::outbound::SessionJudge>,
+    /// Test pause between a frame leaving the session queue and the write-time
+    /// credential check (MIK-8350): a row revokes the credential there, so the
+    /// frame is withheld at write and not at the decision.
+    #[cfg(test)]
+    pub(crate) before_write_check: Arc<crate::test_pause::Slot>,
+    #[cfg(test)]
+    pub(in crate::gateway) before_get_resolve: crate::test_pause::Slot,
 }
 
 impl NotificationMultiplexer {
@@ -280,6 +233,10 @@ impl NotificationMultiplexer {
             event_counter: std::sync::atomic::AtomicU64::new(1),
             authorizer: RwLock::new(None),
             reads: std::sync::OnceLock::new(),
+            #[cfg(test)]
+            before_write_check: Arc::default(),
+            #[cfg(test)]
+            before_get_resolve: crate::test_pause::Slot::default(),
         }
     }
 
@@ -310,6 +267,7 @@ impl NotificationMultiplexer {
         hidden: Option<&crate::security::tenant_reads::ReadAttribution>,
         watch: Option<Arc<DeliveryWatch>>,
         audience: CopyAudience,
+        judged: Option<Arc<str>>,
     ) -> std::result::Result<usize, Unsent> {
         // No open stream: nothing to deliver, so nothing to judge, and nothing
         // is sent either, so a stream that subscribes meanwhile cannot get an
@@ -331,6 +289,7 @@ impl NotificationMultiplexer {
             mark,
             watch: watch.clone(),
             audience,
+            judged,
         })?;
         if let Some(watch) = watch {
             watch.sent(copies);
@@ -495,6 +454,7 @@ impl NotificationMultiplexer {
             last_active: RwLock::new(Instant::now()),
             owner,
             credential: RwLock::new(None),
+            records: RwLock::new(Vec::new()),
         });
         sessions.insert(id, Arc::clone(&session));
         session
@@ -535,7 +495,7 @@ impl NotificationMultiplexer {
         credential: Option<HeldCredential>,
     ) -> Arc<ClientSession> {
         let session = self.open_session_for(session_id, owner);
-        *session.credential.write() = credential;
+        session.replace_credential(credential);
         session
     }
 
@@ -601,7 +561,7 @@ impl NotificationMultiplexer {
         }
         let sessions = self.sessions.read();
         if let Some(session) = sessions.get(session_id) {
-            match self.enqueue(session, notification, None, None, CopyAudience::Any) {
+            match self.enqueue(session, notification, None, None, CopyAudience::Any, None) {
                 Ok(_) => true,
                 Err(e) => {
                     debug!(session_id = %session_fp(session_id), error = %e, "Failed to send notification");
@@ -637,6 +597,7 @@ impl NotificationMultiplexer {
             None,
             Some(Arc::clone(&watch)),
             CopyAudience::Any,
+            None,
         )
         .ok()
         .map(|_| watch)
@@ -647,60 +608,14 @@ impl NotificationMultiplexer {
     pub fn broadcast(&self, notification: TaggedNotification) {
         let sessions = self.sessions.read();
         for session in sessions.values() {
-            let _ = self.enqueue(session, notification.clone(), None, None, CopyAudience::Any);
-        }
-    }
-
-    /// Generate a unique event ID
-    pub fn next_event_id(&self) -> String {
-        let id = self
-            .event_counter
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        format!("evt-{id}")
-    }
-
-    /// Subscribe a session to a backend's notifications
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the backend is not found in the registry.
-    #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)] // async for future streaming implementation
-    pub async fn subscribe_backend(&self, session_id: &str, backend_name: &str) -> Result<()> {
-        // Verify backend exists
-        let _backend = self
-            .backends
-            .get(backend_name)
-            .ok_or_else(|| crate::Error::BackendNotFound(backend_name.to_string()))?;
-
-        // Record subscription
-        {
-            let sessions = self.sessions.read();
-            if let Some(session) = sessions.get(session_id) {
-                let mut subs = session.subscribed_backends.write();
-                if !subs.contains(&backend_name.to_string()) {
-                    subs.push(backend_name.to_string());
-                }
-            }
-        }
-
-        // If backend supports streaming, start forwarding notifications
-        // For now, we'll handle this via the invoke path
-        debug!(session_id = %session_fp(session_id), backend = %backend_name, "Subscribed to backend notifications");
-
-        Ok(())
-    }
-
-    /// Auto-subscribe a session to configured backends
-    pub async fn auto_subscribe(&self, session_id: &str) {
-        for backend_name in &self.config.auto_subscribe {
-            if let Err(e) = self.subscribe_backend(session_id, backend_name).await {
-                warn!(
-                    session_id = %session_fp(session_id),
-                    backend = %backend_name,
-                    error = %e,
-                    "Failed to auto-subscribe to backend"
-                );
-            }
+            let _ = self.enqueue(
+                session,
+                notification.clone(),
+                None,
+                None,
+                CopyAudience::Any,
+                None,
+            );
         }
     }
 }
@@ -713,12 +628,13 @@ const STREAMING_TARGET: &str = module_path!();
 mod fanout;
 #[path = "streaming_sse.rs"]
 mod sse;
+pub(crate) use sse::create_sse_response_with_view;
 pub use sse::{TaskFrame, TaskFrameDelivery, TaskFrames, create_sse_response};
 pub(crate) use sse::{first_event_wins_stream, subscription_stream};
 // Kept at the crate-visible path it had before the move; only the tests
 // and the `sse` module call it today.
 #[allow(unused_imports)]
-pub(crate) use sse::request_scoped_event_stream;
+pub(crate) use sse::{Unframed, request_scoped_event_stream};
 // Names the test modules reach through `use super::*`, which the code moved
 // into `sse` no longer needs here.
 #[cfg(test)]
@@ -741,3 +657,12 @@ mod ownership;
 #[cfg(test)]
 #[path = "streaming_request_scoped_tests.rs"]
 mod request_scoped_stream_tests;
+#[cfg(test)]
+#[path = "streaming_told_cf_grace_tests.rs"]
+mod told_cf_grace_tests;
+#[cfg(test)]
+#[path = "streaming_told_exemption_tests.rs"]
+mod told_exemption_tests;
+#[cfg(test)]
+#[path = "streaming_unframed_tests.rs"]
+mod unframed_tests;

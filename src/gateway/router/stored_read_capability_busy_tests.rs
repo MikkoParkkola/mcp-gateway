@@ -735,5 +735,7 @@ async fn gap_caller_forward_drops_retry_data() {
     );
 }
 
+#[path = "capability_recheck_busy_tests.rs"]
+mod recheck_busy;
 #[path = "stored_read_capability_busy_repeat_tests.rs"]
 mod repeat;

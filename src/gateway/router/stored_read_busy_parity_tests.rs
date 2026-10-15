@@ -674,3 +674,9 @@ async fn g2_a_single_tool_execute_tasked_call_meeting_busy_creates_no_task() {
         .to_owned();
     served(&fx, &id).await;
 }
+
+#[path = "busy_intake_policy_tests.rs"]
+mod intake_policy;
+
+#[path = "busy_resume_tests.rs"]
+mod resume;

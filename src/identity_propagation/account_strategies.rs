@@ -679,7 +679,14 @@ impl AccountStrategyRegistry {
         if let Some((lease, current)) = custody
             && let Err(error) = lease.recheck(current).await
         {
-            return refuse(&format!("durable custody refused its lease: {error}"));
+            // Nothing is sent before it: a busy custody frees the key (MIK-8428).
+            let crate::personal_accounts::MintError::Busy(error) = error else {
+                let error = error.into_error();
+                return refuse(&format!("durable custody refused its lease: {error}"));
+            };
+            let logger = self.audit.read().clone();
+            let busy = self.transient_mint_refusal(logger.as_ref(), descriptor_id, caller, &error);
+            return Err(busy.await);
         }
         Ok(())
     }

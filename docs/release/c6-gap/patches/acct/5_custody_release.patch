@@ -1,16 +1,22 @@
 diff --git a/src/personal_accounts/vault.rs b/src/personal_accounts/vault.rs
-index 09e9695e1..a720022a2 100644
+index 148610746..886016eeb 100644
 --- a/src/personal_accounts/vault.rs
 +++ b/src/personal_accounts/vault.rs
-@@ -367,9 +367,9 @@ impl VaultStrategy {
-     pub(crate) async fn recheck(&self, lease: &CredentialLease) -> Result<(), PropagationError> {
+@@ -505,7 +505,7 @@ impl VaultStrategy {
+     pub(crate) async fn recheck(&self, lease: &CredentialLease) -> Result<(), MintError> {
          // Bound to this statement: the released token is never bound to a name
          // that outlives the check it exists for (CWE-226).
--        self.custody.release(lease).await.map_err(|error| {
-+        let _ = self.custody.release(lease).await.map_err(|error| {
-             refusal("managed account credential is no longer releasable", &error)
--        })?;
-+        });
+-        self.custody
++        let _ = self.custody
+             .release(lease)
+             .await
+             .map_err(|error| match &error {
+@@ -515,7 +515,7 @@ impl VaultStrategy {
+                     "managed account credential is no longer releasable",
+                     &error,
+                 )),
+-            })?;
++            });
          Ok(())
      }
  }

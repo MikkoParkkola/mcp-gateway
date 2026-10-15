@@ -72,3 +72,38 @@ fn the_offer_seal_exists_and_a_sealed_offer_forwards_on_every_platform() {
     let offer = super::offer_error(-32001, "m".into(), envelope.clone());
     assert_eq!(super::offer_data(&offer), Some(envelope));
 }
+
+/// MIK-8428: one seal covers three gateway-built errors, and only the
+/// transient may free an idempotency key. The upstream-401 rejection mark is
+/// built AFTER a send (`ManagedLease::after_upstream_401`) and a connect offer
+/// is a refusal, so `is_pre_dispatch` must read neither as unsent, whatever
+/// keys either one carries next to the seal.
+#[test]
+fn only_the_transient_of_the_sealed_errors_is_pre_dispatch() {
+    use serde_json::json;
+    for outcome in [
+        RejectionOutcome::Rotated,
+        RejectionOutcome::Stale,
+        RejectionOutcome::Unavailable,
+        RejectionOutcome::AlreadyForced,
+    ] {
+        let marked = mark_rejection(outcome, &refused());
+        assert!(
+            upstream_rejection(&marked).is_some(),
+            "premise: {outcome:?}"
+        );
+        assert!(!marked.is_pre_dispatch(), "{outcome:?}: {marked}");
+    }
+    let offer = super::offer_error(
+        -32003,
+        "connect your account".into(),
+        json!({"schema_version": "accounts.v1", "account_id": "work",
+            "error": {"code": "ACCOUNT_NOT_CONNECTED"}, "retry_after": 5}),
+    );
+    assert!(
+        super::offer_data(&offer).is_some(),
+        "premise: a sealed offer"
+    );
+    assert!(!offer.is_pre_dispatch(), "{offer}");
+    assert!(super::transient_retry_error(None).is_pre_dispatch());
+}

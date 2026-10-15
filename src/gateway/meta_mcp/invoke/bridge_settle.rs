@@ -67,3 +67,29 @@ pub(super) fn refuse_if_killed(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::classify_bridged_dispatch_error;
+    use crate::gateway::input_bridge::BridgeError;
+
+    /// MIK-8428 Case A: a bridged round whose account recheck met a busy
+    /// custody (the sealed transient) ran nothing, so it is not admitted and
+    /// frees the key; an unsealed look-alike may have acted.
+    #[test]
+    fn a_recheck_busy_is_not_admitted_and_its_look_alike_may_have_acted() {
+        let sealed = crate::personal_accounts::refusal::transient_retry_error(None);
+        let look_alike = crate::Error::JsonRpc {
+            code: -32603,
+            message: "temporarily unavailable, retry".to_owned(),
+            data: crate::personal_accounts::refusal::transient_data(&sealed),
+        };
+        let busy = classify_bridged_dispatch_error(&sealed);
+        assert!(matches!(busy, BridgeError::NotAdmitted { .. }), "sealed");
+        let other = classify_bridged_dispatch_error(&look_alike);
+        assert!(
+            matches!(other, BridgeError::BackendFailed { .. }),
+            "look-alike"
+        );
+    }
+}

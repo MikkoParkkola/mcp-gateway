@@ -400,6 +400,8 @@ pub(crate) struct CapabilityAccount {
     external: bool,
     personal: bool,
     log_dir: tempfile::TempDir,
+    /// Test-only (MIK-8428 Case A): see [`ReleaseBudget`].
+    release_budget: Arc<Mutex<Option<usize>>>,
 }
 
 /// The capability server and tool [`CapabilityAccount`] serves.
@@ -410,17 +412,25 @@ impl CapabilityAccount {
     /// Alice's grant seeded; `external` makes `WORK` an external descriptor
     /// (no vault, so its view is unjudged).
     pub(crate) async fn start(external: bool) -> Self {
-        Self::start_expiring(external, u64::MAX).await
+        Self::start_expiring(external, u64::MAX, &[]).await
+    }
+
+    /// As [`Self::start`] (managed), with the capture peer answering its
+    /// first requests with `statuses` (MIK-8428 SETTLE.4: an error after the
+    /// send).
+    pub(crate) async fn start_answering(statuses: &[u16]) -> Self {
+        Self::start_expiring(false, u64::MAX, statuses).await
     }
 
     /// Alice's grant seeded already expired, so every mint refreshes it with
     /// the scripted provider before the release (#3892 R7).
     pub(crate) async fn start_expired() -> Self {
-        Self::start_expiring(false, 1).await
+        Self::start_expiring(false, 1, &[]).await
     }
 
-    async fn start_expiring(external: bool, expires_at: u64) -> Self {
-        let (port, captured) = super::super::account_rest_fixture::capture_endpoint().await;
+    async fn start_expiring(external: bool, expires_at: u64, statuses: &[u16]) -> Self {
+        let (port, captured) =
+            super::super::account_rest_fixture::capture_endpoint_answering(statuses).await;
         let custody = custody_with(&[(
             account_key("alice", WORK),
             grant(ALICE_WORK_TOKEN, expires_at),
@@ -438,6 +448,7 @@ impl CapabilityAccount {
             external,
             personal: false,
             log_dir: dir,
+            release_budget: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -480,9 +491,13 @@ impl CapabilityAccount {
             managed(WORK)
         };
         let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
+        let custody: Arc<dyn AccountCustody> = Arc::new(ReleaseBudget {
+            inner: self.custody.installed(),
+            allowed: Arc::clone(&self.release_budget),
+        });
         install_account_strategies(
             &rest_config(&[(WORK, descriptor)]),
-            Some(&self.custody.installed()),
+            Some(&custody),
             &key,
             &meta,
             ServeMode::Http,
@@ -525,8 +540,21 @@ impl CapabilityAccount {
     }
 
     /// Make every custody read fail as busy, or recover (seat finding 3).
+    /// Either way the release budget is lifted.
     pub(crate) fn fail_custody_for_test(&self, failing: bool) {
         self.custody.fail_reads(failing);
+        *self.release_budget.lock() = None;
+    }
+
+    /// Let `allowed` further custody releases pass, then answer every later
+    /// one `Busy` (MIK-8428 Case A): see [`ReleaseBudget`].
+    pub(crate) fn fail_releases_after_for_test(&self, allowed: usize) {
+        *self.release_budget.lock() = Some(allowed);
+    }
+
+    /// Custody releases that passed the real lease check.
+    pub(crate) fn releases(&self) -> usize {
+        self.custody.releases()
     }
 
     /// Provider refreshes custody has made since this fixture started.
@@ -617,4 +645,47 @@ fn personal_capability(
         INBOUND_ISSUER,
     ))
     .expect("fixture personal capability must parse")
+}
+
+/// Test-only (MIK-8428 Case A): lets `allowed` custody releases pass, then
+/// answers every later release `Busy`. A capability call releases its lease
+/// once at the mint and again at each of three rechecks before the send, so
+/// `allowed = 1..=3` puts the `Busy` on one recheck, with nothing sent.
+struct ReleaseBudget {
+    inner: Arc<dyn AccountCustody>,
+    allowed: Arc<Mutex<Option<usize>>>,
+}
+
+#[async_trait::async_trait]
+impl AccountCustody for ReleaseBudget {
+    async fn resolve(&self, account: &AccountKey) -> Result<CredentialLease, CustodyError> {
+        self.inner.resolve(account).await
+    }
+
+    async fn refresh_if_expired(
+        &self,
+        account: &AccountKey,
+    ) -> Result<CredentialLease, CustodyError> {
+        self.inner.refresh_if_expired(account).await
+    }
+
+    async fn release(&self, lease: &CredentialLease) -> Result<ReleasedCredentials, CustodyError> {
+        {
+            let mut budget = self.allowed.lock();
+            if let Some(left) = budget.as_mut() {
+                if *left == 0 {
+                    return Err(CustodyError::Busy);
+                }
+                *left -= 1;
+            }
+        }
+        self.inner.release(lease).await
+    }
+
+    async fn refresh_after_rejection(
+        &self,
+        lease: &CredentialLease,
+    ) -> Result<crate::personal_accounts::RejectionOutcome, CustodyError> {
+        self.inner.refresh_after_rejection(lease).await
+    }
 }

@@ -500,13 +500,22 @@ impl VaultStrategy {
     ///
     /// # Errors
     ///
-    /// [`PropagationError::Refuse`] naming the custody refusal.
-    pub(crate) async fn recheck(&self, lease: &CredentialLease) -> Result<(), PropagationError> {
+    /// [`PropagationError::Refuse`] naming the custody refusal, a busy custody
+    /// kept typed: nothing is sent before this recheck (MIK-8428 Case A).
+    pub(crate) async fn recheck(&self, lease: &CredentialLease) -> Result<(), MintError> {
         // Bound to this statement: the released token is never bound to a name
         // that outlives the check it exists for (CWE-226).
-        self.custody.release(lease).await.map_err(|error| {
-            refusal("managed account credential is no longer releasable", &error)
-        })?;
+        self.custody
+            .release(lease)
+            .await
+            .map_err(|error| match &error {
+                // Audited as the recheck it is, not as the view read.
+                CustodyError::Busy => MintError::Busy(refusal("managed account recheck", &error)),
+                _ => MintError::Other(refusal(
+                    "managed account credential is no longer releasable",
+                    &error,
+                )),
+            })?;
         Ok(())
     }
 }
@@ -531,15 +540,12 @@ impl ManagedLease {
     /// The real custody release for this lease, refused unless `installed` is
     /// still the very vault that released it: a descriptor re-installed
     /// against different custody cannot be rechecked with the previous one.
-    pub(crate) async fn recheck(
-        &self,
-        installed: &Arc<VaultStrategy>,
-    ) -> Result<(), PropagationError> {
+    pub(crate) async fn recheck(&self, installed: &Arc<VaultStrategy>) -> Result<(), MintError> {
         if !self.minted_by(installed) {
-            return Err(PropagationError::Refuse(
+            return Err(MintError::Other(PropagationError::Refuse(
                 "the managed custody backing it was replaced after the credential was minted"
                     .to_string(),
-            ));
+            )));
         }
         self.strategy.recheck(&self.lease).await
     }

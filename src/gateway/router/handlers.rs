@@ -30,11 +30,13 @@ mod dispatch_intake;
 mod dispatch_tools_call;
 mod events;
 mod health;
+mod meta_handler;
 #[cfg(feature = "metrics")]
 mod metrics_scrape;
 mod modern_response;
 mod owner;
 pub(super) mod request_checks;
+mod request_facts;
 mod session_end;
 mod sse;
 mod tasks;
@@ -47,136 +49,17 @@ pub(super) use metrics_scrape::metrics_handler;
 pub(crate) use modern_response::shape_modern_response;
 pub(super) use owner::owner_of;
 // The direct route admits its execution lease under the same owner (MIK-8154).
+pub(super) use meta_handler::meta_mcp_handler;
 #[cfg(test)]
 use owner::session_owner;
+pub(super) use request_facts::TASKS_EXTENSION;
+use request_facts::{
+    catalogue_caller, listened_task_ids, reaches_tasks_extension, session_id_header,
+};
 pub(super) use session_end::{mcp_delete_handler, sse_deprecated_handler};
 pub(super) use sse::mcp_sse_handler;
 use sse::unsupported_version_error;
 pub(super) use tasks::route_owners;
-
-/// The caller's `Mcp-Session-Id`, one rule for every session route: missing,
-/// non-UTF-8, empty and whitespace-only values are all "no session" (F9).
-fn session_id_header(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get("mcp-session-id")
-        .and_then(|v| v.to_str().ok())
-        .filter(|id| !id.trim().is_empty())
-}
-
-/// The extension a task-augmented request must declare.
-pub(super) const TASKS_EXTENSION: &str = "io.modelcontextprotocol/tasks";
-
-/// Whether this request reaches the tasks extension AT ALL.
-///
-/// Deliberately not a method-family test: `subscriptions/listen` is not a
-/// `tasks/*` method and reaches the extension the moment it names a task, so a
-/// gate keyed on the prefix refuses the wrong set.
-///
-/// NOTHING TIES THIS LIST TO THE DISPATCHER. A method added below without an arm
-/// here reaches the task store unguarded, and no test goes red: the arms and the
-/// dispatcher agree today only because a person kept them in step. The residual
-/// is recorded here rather than in a review document because here is where the
-/// next method gets added -- ADD THE ARM IN THE SAME EDIT.
-fn reaches_tasks_extension(method: &str, params: Option<&Value>) -> bool {
-    match method {
-        "tools/call" => params.is_some_and(|p| p.get("task").is_some()),
-        "tasks/get" | "tasks/update" | "tasks/cancel" => true,
-        "subscriptions/listen" => {
-            params.is_some_and(crate::protocol::subscriptions::names_task_ids)
-        }
-        _ => false,
-    }
-}
-
-/// The task ids a `subscriptions/listen` names, if it names any, in either
-/// placement.
-fn listened_task_ids(params: Option<&Value>) -> Vec<String> {
-    params
-        .map(crate::protocol::subscriptions::named_task_ids)
-        .unwrap_or_default()
-}
-
-/// Meta-MCP handler (POST /mcp).
-///
-/// `Accept` ALONE decides the body shape (S-01): a stream carrying only the
-/// result frame is a conforming answer, so branching on whether the backend
-/// happened to raise a notification would give one `Accept` two body types.
-///
-/// The dispatch runs inside a notification sink, and the sink IS the request
-/// scoping (S-03): two concurrent POSTs are two tasks, so a backend
-/// notification can only ever be appended to the call that provoked it.
-/// `MIK-7272.SUB.2b`.
-pub(super) async fn meta_mcp_handler(
-    state: State<Arc<AppState>>,
-    http_request: axum::http::Request<axum::body::Body>,
-) -> OutboundReply {
-    let offers_event_stream = http_request
-        .headers()
-        .get(axum::http::header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|accept| accept.contains("text/event-stream"));
-
-    // D3-a: one grant-decision slot spans signing, admission and dispatch.
-    let logger = state.meta_mcp.transparency_logger.clone();
-    // MIN.2: the dispatch notes what its inner calls read before transforms,
-    // so the answer's judge sees tenants the delivered value no longer shows.
-    let guard = super::helpers::read_guard(&state);
-    let audit = offers_event_stream.then(|| state.meta_mcp.rejection_audit());
-    let guard_for_scope = guard.clone();
-    // MIK-8161: a backend's mid-call notifications meet the egress scan too.
-    let screen = Some(state.meta_mcp.notification_screen("http", ""));
-    // MIK-8176: the slots this request's mints take are owned here, outside
-    // the grant-audit replacer, and by the dispatch future itself, so a
-    // stream that polls it after this handler returns still has its scope.
-    // MIK-8176: every answer is handed off where its bytes leave (the JSON
-    // reply, or the stream's answer event), so unsent slots are given back.
-    let dispatch = crate::gateway::meta_mcp::sealed_hold::scoped(
-        crate::gateway::meta_mcp::grant_audit::slot_http(
-            logger.clone(),
-            // COLLUDE.1: one relay-receipt collector spans dispatch and finalize.
-            Box::pin(async move {
-                crate::gateway::outbound::read_scoped(
-                    guard_for_scope,
-                    Box::pin(crate::gateway::meta_mcp::invoke::relay::collecting_http(
-                        Arc::clone(&state.meta_mcp),
-                        // One visibility judgement per request (MIK-8340),
-                        // from intake's sanitize exemption (MIK-8154 D1) to
-                        // the dispatch: the scope rides this future, so a
-                        // notification-first stream polling it after the
-                        // handler returns still reads the same answers.
-                        // Boxed first: the memo then wraps a pointer, so no
-                        // frame polled through the dispatch holds a copy of it.
-                        crate::gateway::meta_mcp::visible::with_visibility_memo(Box::pin(
-                            meta_mcp_dispatch(state, http_request),
-                        )),
-                    )),
-                )
-                .await
-                .0
-            }),
-        ),
-    );
-
-    if let Some(audit) = audit {
-        // Scope rather than collect: the client offered a stream, so the first
-        // notification decides the body shape instead of waiting for dispatch.
-        // Each notification is judged for this caller as it is queued.
-        let judge = Arc::new(crate::gateway::outbound::StreamJudge::new(
-            guard, audit, logger,
-        ));
-        let (scoped, rx) =
-            crate::transport::notification_sink::scope_judged(screen, dispatch, Arc::clone(&judge));
-        stream_reply(crate::gateway::streaming::first_event_wins_stream(scoped, rx, judge).await)
-    } else {
-        // Still scoped, and still drained alongside: `publish` sheds on a full
-        // sink, and a client that did not offer a stream must not make a
-        // backend's notifications count against that depth.
-        let (response, _notifications) =
-            crate::transport::notification_sink::collect(screen, dispatch).await;
-        // The answer's read record, written after every late replacer.
-        judged_reply(response, logger.as_ref()).await
-    }
-}
 
 #[allow(clippy::too_many_lines)]
 async fn meta_mcp_dispatch(
@@ -268,9 +151,9 @@ async fn meta_mcp_dispatch(
     ) {
         return build_error_response(Some(id), e.code, e.message, session_id, e.status);
     }
+    let mut pending_view = crate::gateway::streaming::PendingRefresh::default();
     let mut response = match method.as_str() {
         "subscriptions/listen" => {
-            use crate::gateway::subscription_registry::ListenRefusal;
             // The single long-lived stream that replaces the GET endpoint.
             //
             // Returns EARLY with an SSE body rather than falling through to the
@@ -300,29 +183,11 @@ async fn meta_mcp_dispatch(
             // a permit is taken: nothing could ever be delivered to its stream,
             // so admitting it would only hold one of the slots.
             let listener = match state
-                .subscriptions
-                .subscribe_as(crate::gateway::auth::live::held_credential(headers))
+                .admit_listener(headers, intake.view_subject(), (id.clone(), session_id))
                 .await
             {
                 Ok(listener) => listener,
-                Err(ListenRefusal::Unauthenticated) => {
-                    return build_error_response(
-                        Some(id),
-                        -32001,
-                        "subscriptions/listen requires a credential that authenticates",
-                        session_id,
-                        StatusCode::UNAUTHORIZED,
-                    );
-                }
-                Err(ListenRefusal::Full) => {
-                    return build_error_response(
-                        Some(id),
-                        -32003,
-                        "too many open subscriptions",
-                        session_id,
-                        StatusCode::SERVICE_UNAVAILABLE,
-                    );
-                }
+                Err(refusal) => return *refusal,
             };
 
             // The request's own id, never minted: the specification defines the
@@ -448,9 +313,8 @@ async fn meta_mcp_dispatch(
             );
             // MIK-8356: a rotated or revoked managed grant's slot is never this
             // caller's listing view; one recheck for every listing path.
-            state
-                .meta_mcp
-                .revalidate_caller_slots(invoke_scope.caller)
+            pending_view = state
+                .begin_listing(session_id, &intake.view_subject(), invoke_scope.caller)
                 .await;
             state.meta_mcp.handle_tools_list_with_url_override(
                 id,
@@ -498,7 +362,14 @@ async fn meta_mcp_dispatch(
                 None => Some(call.await),
             };
             match called {
-                Some(Ok(response)) => response,
+                Some(Ok(response)) => {
+                    let subject = intake.view_subject();
+                    let (response, pending) = state
+                        .after_call((session_id, &subject), params, response)
+                        .await;
+                    pending_view = pending;
+                    response
+                }
                 Some(Err(response)) => return response,
                 None => {
                     // Not counted against the client: the cancel was its
@@ -711,6 +582,7 @@ async fn meta_mcp_dispatch(
     let response = frame
         .response()
         .expect("an answer frame stays an answer through its replacements");
+    pending_view.settle(response.error.is_none());
     // MIK-7887.RECEIPT.4: the receipt describes this, the delivered answer.
     {
         use crate::gateway::meta_mcp::invoke::relay::AnswerShape;
@@ -801,22 +673,3 @@ mod session_tests;
 #[cfg(test)]
 #[path = "handlers_session_subject_tests.rs"]
 mod session_subject_tests;
-
-/// The caller a `prompts/get` or `resources/read` runs for, keyed as the same
-/// caller's `tools/call` is: the key the grant, certificate or API key names,
-/// else the unkeyed session bucket.
-fn catalogue_caller(
-    grant_subject: Option<&crate::identity_grants::GrantSubject>,
-    cert_identity: Option<&CertIdentity>,
-    client: Option<&AuthenticatedClient>,
-    session_id: &str,
-) -> CatalogueCaller {
-    let key = super::identity::caller_key(grant_subject, cert_identity, client);
-    let keyed = !key.is_empty();
-    CatalogueCaller {
-        key: if keyed { key } else { session_id.to_owned() },
-        keyed,
-        name: client.map_or_else(|| "anonymous".to_owned(), |c| c.name.clone()),
-        session: session_id.to_owned(),
-    }
-}

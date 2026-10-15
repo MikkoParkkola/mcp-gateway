@@ -18,6 +18,12 @@ use super::{
 pub(crate) struct HeldCredential {
     session: Option<String>,
     bearer: Option<String>,
+    /// Whether the request carried any `Authorization` header, parsed as a
+    /// bearer or not. The middleware lets a presented `Authorization` header
+    /// decide alone, so a header that is not a bearer leaves the dashboard
+    /// session unable to stand in for it (MIK-8350 D-ORDER-2). Not part of the
+    /// ownership digest: ownership stays keyed on the bearer and session.
+    authorization_present: bool,
 }
 
 impl std::fmt::Debug for HeldCredential {
@@ -48,11 +54,19 @@ impl HeldCredential {
 }
 
 /// The session cookie and bearer credential `headers` present, held for later
-/// re-validation; `None` when they present neither.
+/// re-validation; `None` when they present neither. Any `Authorization`
+/// header is held, even an unsupported scheme such as Basic or Digest with
+/// neither a session nor a supported credential; supported credentials are
+/// held exactly as before, and no header at all still holds nothing.
 pub(crate) fn held_credential(headers: &axum::http::HeaderMap) -> Option<HeldCredential> {
     let session = session_cookie_value(headers);
     let bearer = super::presented_credential(headers);
-    (session.is_some() || bearer.is_some()).then_some(HeldCredential { session, bearer })
+    let authorization_present = headers.contains_key(axum::http::header::AUTHORIZATION);
+    (session.is_some() || bearer.is_some() || authorization_present).then_some(HeldCredential {
+        session,
+        bearer,
+        authorization_present,
+    })
 }
 
 /// The client `credential` authenticates as right now.
@@ -73,42 +87,76 @@ pub(crate) async fn current_client(
     state: &AuthState,
     credential: Option<&HeldCredential>,
 ) -> Option<AuthenticatedClient> {
+    current_caller(state, credential)
+        .await
+        .map(|caller| caller.client)
+}
+
+/// [`current_client`], and the verified identity the key server resolved for a
+/// key-server bearer (`None` for every other credential): the same pair a POST
+/// of that credential is judged under (MIK-8350 D11). A held bearer decides
+/// alone, as at admission: the dashboard session counts only when no
+/// `Authorization` header was presented at all.
+pub(crate) async fn current_caller(
+    state: &AuthState,
+    credential: Option<&HeldCredential>,
+) -> Option<CurrentCaller> {
     // Dead here, in either gateway mode, unless the held bearer is a valid
     // agent token: ingress refused every other request already.
-    let mut agent_validated = false;
+    let mut agent = None;
     if state.agent_auth.enabled {
         let token = credential.and_then(|held| held.bearer.as_deref())?;
-        crate::gateway::oauth::validate_agent_token(token, &state.agent_auth.registry).ok()?;
-        agent_validated = true;
+        agent = Some(
+            crate::gateway::oauth::validate_agent_token(token, &state.agent_auth.registry).ok()?,
+        );
     }
+    let found = |client, identity| CurrentCaller {
+        client,
+        identity,
+        agent: agent.clone(),
+    };
     if !state.auth_config.enabled {
-        return Some(anonymous_client());
+        return Some(found(anonymous_client(), None));
     }
     let credential = credential?;
-    // A delivery is not operator activity: checked, never extended, or server
-    // push alone would keep an unattended session alive (E5).
-    if let Some(handle) = &credential.session
-        && state.dashboard_bootstrap.check_session(
+    // A presented `Authorization` header decides the request alone (the
+    // middleware's rule): a live cookie beside it neither overrides it nor
+    // stands in for it when it is wrong. The session counts only with none.
+    let Some(token) = credential.bearer.as_deref() else {
+        if credential.authorization_present {
+            return None;
+        }
+        // A delivery is not operator activity: checked, never extended, or
+        // server push alone would keep an unattended session alive (E5).
+        let handle = credential.session.as_ref()?;
+        return (state.dashboard_bootstrap.check_session(
             handle,
             Now::read(),
             &session_limits(state),
             Touch::No,
-        ) == SessionCheck::Valid
-    {
-        return Some(dashboard_client());
-    }
-    let token = credential.bearer.as_deref()?;
+        ) == SessionCheck::Valid)
+            .then(|| found(dashboard_client(), None));
+    };
     if let Some((client, _)) = state.auth_config.validate_token_with_origin(token) {
-        return Some(client);
+        return Some(found(client, None));
     }
     match key_server_credential(state, token).await {
-        KsCredential::Credential(found) => return Some(found.0),
+        KsCredential::Credential(held) => return Some(found(held.0, Some(held.1.identity))),
         // A recognised credential that names no one is dead, never the
         // anonymous client (MIK-8286).
         KsCredential::Refused => return None,
         KsCredential::NotOurs => {}
     }
-    agent_validated.then(super::public_client)
+    agent.is_some().then(|| found(super::public_client(), None))
+}
+
+/// The caller a held credential resolves to right now (MIK-8350): its client,
+/// the verified identity the key server resolved for it, and the agent token
+/// it validated as, when agent authentication is on.
+pub(crate) struct CurrentCaller {
+    pub(crate) client: AuthenticatedClient,
+    pub(crate) identity: Option<crate::key_server::oidc::VerifiedIdentity>,
+    pub(crate) agent: Option<crate::gateway::oauth::ValidatedToken>,
 }
 
 /// Who a notification is for: callers who may access one backend, or every
@@ -421,6 +469,92 @@ mod tests {
         assert_eq!(
             delivery(&state, credential.as_ref(), Audience::Backend("beta")).await,
             Delivery::OutOfScope
+        );
+    }
+
+    /// G-DIGEST (MIK-8350): session ownership keys on what was presented, not
+    /// on whether an `Authorization` header of another scheme rode along.
+    #[test]
+    fn g_digest_the_ownership_digest_ignores_the_authorization_flag() {
+        let cookie = format!("{}=handle", crate::gateway::auth::SESSION_COOKIE);
+        let mut plain = axum::http::HeaderMap::new();
+        plain.insert(
+            axum::http::header::COOKIE,
+            cookie.parse().expect("a cookie"),
+        );
+        let mut other_scheme = plain.clone();
+        other_scheme.insert(
+            axum::http::header::AUTHORIZATION,
+            "Basic abc".parse().expect("a header"),
+        );
+        let (plain, other) = (
+            held_credential(&plain).expect("a session"),
+            held_credential(&other_scheme).expect("a session"),
+        );
+        assert_ne!(plain.authorization_present, other.authorization_present);
+        assert_eq!(plain.digest(), other.digest());
+    }
+
+    /// C0 T5: an `Authorization` header of a non-Bearer scheme, with no
+    /// session cookie, is still a presented credential: it must be held
+    /// (so it decides the request alone, as the middleware had it), with
+    /// the flag-free no-part digest G-DIGEST pins.
+    #[tokio::test]
+    async fn t5_basic_only_authorization_is_held() {
+        // Controls: no headers hold nothing; a cookie alone holds.
+        assert!(
+            held_credential(&axum::http::HeaderMap::new()).is_none(),
+            "control: no headers present no credential"
+        );
+        let cookie = format!("{}=handle", crate::gateway::auth::SESSION_COOKIE);
+        let mut cookie_only = axum::http::HeaderMap::new();
+        cookie_only.insert(
+            axum::http::header::COOKIE,
+            cookie.parse().expect("premise: a cookie header"),
+        );
+        assert!(
+            held_credential(&cookie_only).is_some(),
+            "control: a session cookie alone is held"
+        );
+
+        let mut basic_only = axum::http::HeaderMap::new();
+        basic_only.insert(
+            axum::http::header::AUTHORIZATION,
+            "Basic abc"
+                .parse()
+                .expect("premise: an authorization header"),
+        );
+        let held = held_credential(&basic_only);
+        assert!(
+            held.is_some(),
+            "own T5: a Basic-only Authorization header must be held"
+        );
+        let held = held.expect("own T5: the held Basic-only credential");
+        assert!(
+            held.authorization_present,
+            "dependent T5: the held credential records the Authorization header"
+        );
+        assert!(
+            held.session.is_none() && held.bearer.is_none(),
+            "dependent T5: a Basic-only credential holds neither part"
+        );
+        assert_eq!(
+            held.digest(),
+            HeldCredential {
+                session: None,
+                bearer: None,
+                authorization_present: false,
+            }
+            .digest(),
+            "dependent T5: the ownership digest stays the flag-free no-part digest"
+        );
+        let key_server = Arc::new(crate::key_server::KeyServer::new(
+            crate::config::KeyServerConfig::default(),
+        ));
+        let state = authorizer(key_server);
+        assert!(
+            current_caller(&state, Some(&held)).await.is_none(),
+            "dependent T5: a Basic-only credential resolves no caller under authentication"
         );
     }
 }
