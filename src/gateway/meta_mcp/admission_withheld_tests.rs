@@ -126,10 +126,20 @@ fn a_replay_past_revocation_on_a_registered_backend_keeps_its_refusal() {
 }
 
 /// A keyed `gateway_execute` of `[beta:other]` admitted and completed, then
-/// the same key reused with `[beta:other, beta:read]` judged by `authorizer`:
+/// the same key reused with `[beta:other, beta:read]` judged by `authorizer`,
+/// with `blocked` (if any) withheld by its description before the reuse:
 /// the reuse's answer (a key mismatch: other arguments under a used key).
-fn reuse_with_another_step(authorizer: &(dyn ToolAuthorizer + Sync)) -> String {
+fn reuse_with_another_step(
+    authorizer: &(dyn ToolAuthorizer + Sync),
+    blocked: Option<&str>,
+) -> String {
     let (registry, _calls) = counted_backend("beta");
+    if let Some(tool) = blocked {
+        registry
+            .get("beta")
+            .expect("the beta backend")
+            .block_tool_for_test(tool);
+    }
     let meta = MetaMcp::new(registry).with_code_mode(true);
     let retry = RetryFields {
         idempotency_key: Some("reused".into()),
@@ -170,9 +180,21 @@ fn reuse_with_another_step(authorizer: &(dyn ToolAuthorizer + Sync)) -> String {
 /// never its own refusal; otherwise any caller could probe names with keys.
 #[test]
 fn a_key_reused_with_a_withheld_step_answers_as_with_a_missing_one() {
-    let withheld = reuse_with_another_step(&DenyOne { tool: "read" });
-    let missing = reuse_with_another_step(&AllowAll);
+    let withheld = reuse_with_another_step(&DenyOne { tool: "read" }, None);
+    let missing = reuse_with_another_step(&AllowAll, None);
     assert_eq!(withheld, missing, "key reuse: withheld vs missing step");
+}
+
+/// The same for a step withheld by its description, a catalogue reason, not
+/// the policy (#3872 review, low): the reuse answers as with a missing step.
+#[test]
+fn a_key_reused_with_a_descriptor_withheld_step_answers_as_with_a_missing_one() {
+    let withheld = reuse_with_another_step(&AllowAll, Some("read"));
+    let missing = reuse_with_another_step(&AllowAll, None);
+    assert_eq!(
+        withheld, missing,
+        "key reuse: descriptor-withheld vs missing"
+    );
 }
 
 /// A keyed `gateway_execute` of `[alpha:other, beta:read]` with `beta`
