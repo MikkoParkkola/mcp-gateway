@@ -28,7 +28,8 @@ pub(crate) struct SyncLease {
     playbook: Option<crate::playbook::PlaybookDefinition>,
     /// The invocation record's facts about this execution, kept for a replay.
     audit: Mutex<Option<ReplayAudit>>,
-    /// The steps this execution dispatched, kept for a replay (#3872 FIX 1).
+    /// The steps this execution was served (sent, or answered from a stored
+    /// or cached result), kept for a replay (#3872 FIX 1).
     steps: Mutex<Vec<(String, String)>>,
 }
 
@@ -44,7 +45,7 @@ impl SyncLease {
         *self.audit.lock() = Some(audit);
     }
 
-    /// Note the step `(server, tool)` this execution dispatched, once.
+    /// Note the step `(server, tool)` this execution was served, once.
     pub(crate) fn note_step(&self, (server, tool): (&str, &str)) {
         let mut steps = self.steps.lock();
         if !steps.iter().any(|(s, t)| s == server && t == tool) {

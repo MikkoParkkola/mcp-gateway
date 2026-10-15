@@ -285,12 +285,11 @@ fn a_stored_result_without_a_step_list_keeps_the_refusal() {
 }
 
 /// #3872 review (round 3, A), live, not seeded: a keyed chain `[read, write]`
-/// whose `read` is answered from the response cache, then replayed after
-/// `read` is revoked, meets `read`'s refusal. The cached answer is retained
-/// data the holder read under the key, as a dispatched one is: SUB.4 refuses
-/// its replay past a revocation.
-#[tokio::test]
-async fn a_replay_past_revocation_of_a_cached_step_keeps_its_refusal() {
+/// runs under its lease (with `read` answered from the response cache when
+/// `cached`), completes, and is replayed with `revoked` denied. The replay's
+/// answer: SUB.4's refusal, as the step's retained data is in the stored
+/// response whether it was sent or served from the cache.
+async fn replay_after_revoking(cached: Option<&str>, revoked: &'static str) -> crate::Result<()> {
     let (registry, calls) = counted_backend("beta");
     let meta = MetaMcp::with_features(
         registry,
@@ -302,17 +301,15 @@ async fn a_replay_past_revocation_of_a_cached_step_keeps_its_refusal() {
     .with_code_mode(true);
     let session = Some("legacy:session");
     let unkeyed = RetryFields::default();
-    let read = json!({"server": "beta", "tool": "read", "arguments": {}});
-    meta.invoke_tool(&read, session, &owned(&unkeyed, &AllowAll))
-        .await
-        .expect("warms the cache");
-    assert_eq!(
-        calls.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "premise: one read"
-    );
+    if let Some(tool) = cached {
+        let warm = json!({"server": "beta", "tool": tool, "arguments": {}});
+        meta.invoke_tool(&warm, session, &owned(&unkeyed, &AllowAll))
+            .await
+            .expect("warms the cache");
+    }
+    let before = calls.load(std::sync::atomic::Ordering::SeqCst);
     let retry = RetryFields {
-        idempotency_key: Some("cached-step".into()),
+        idempotency_key: Some("live-replay".into()),
         ..RetryFields::default()
     };
     let args = json!({"chain": [
@@ -338,19 +335,42 @@ async fn a_replay_past_revocation_of_a_cached_step_keeps_its_refusal() {
         .code_mode_execute(&args, session, &allowed)
         .await
         .expect("the chain runs");
+    let sent = calls.load(std::sync::atomic::Ordering::SeqCst) - before;
     assert_eq!(
-        calls.load(std::sync::atomic::Ordering::SeqCst),
-        2,
-        "premise: read was a cache hit, only write was sent"
+        sent,
+        2 - usize::from(cached.is_some()),
+        "premise: steps sent"
     );
     lease.complete_secured(&crate::protocol::JsonRpcResponse::success(
         RequestId::Number(1),
         ran,
     ));
-    let denied = DenyOne { tool: "read" };
+    let denied = DenyOne { tool: revoked };
     match admit(&owned(&retry, &denied), 2) {
-        Err(crate::Error::Forbidden { code, .. }) => assert_eq!(code, -32003),
-        Err(other) => panic!("the replay lost SUB.4's answer: {other}"),
-        Ok(_) => panic!("a retained result was served past the revocation"),
+        Err(error) => Err(error),
+        Ok(_) => Ok(()),
     }
+}
+
+fn assert_sub4_refusal(answer: crate::Result<()>, row: &str) {
+    match answer {
+        Err(crate::Error::Forbidden { code, .. }) => assert_eq!(code, -32003, "{row}"),
+        Err(other) => panic!("{row}: the replay lost SUB.4's answer: {other}"),
+        Ok(()) => panic!("{row}: a retained result was served past the revocation"),
+    }
+}
+
+/// A step answered from the response cache, then revoked: its replay refuses.
+#[tokio::test]
+async fn a_replay_past_revocation_of_a_cached_step_keeps_its_refusal() {
+    let answer = replay_after_revoking(Some("read"), "read").await;
+    assert_sub4_refusal(answer, "cached step");
+}
+
+/// A step the run sent, then revoked: its replay refuses (live, so the
+/// dispatch path's own note is what proves it ran).
+#[tokio::test]
+async fn a_replay_past_revocation_of_a_sent_step_keeps_its_refusal() {
+    let answer = replay_after_revoking(None, "write").await;
+    assert_sub4_refusal(answer, "sent step");
 }

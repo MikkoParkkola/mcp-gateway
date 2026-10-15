@@ -309,6 +309,7 @@ impl MetaMcp {
             client_claim.as_ref(),
             &mut idem_reservation,
         )? {
+            nonce_settle::note_served(caller, (server, tool));
             return Ok(stored);
         }
 
@@ -379,6 +380,7 @@ impl MetaMcp {
                 &mut idem_reservation,
             )
         {
+            nonce_settle::note_served(caller, (server, tool));
             return Ok(cached);
         }
 
