@@ -220,18 +220,9 @@ async fn guard_tool_call(
     let lens = crate::backend::Lens::Withheld;
     let answered = key_check::key_refusal(backend, ((None, &[]), failed), params, (id, lens));
     // A withheld name is always answered; were it not, it is still never sent.
-    Err(answered.await.unwrap_or_else(|| {
-        let absent = crate::gateway::meta_mcp::visible::absent_name(tool_name);
-        let response =
-            crate::gateway::meta_mcp::response_security::error_response_preserving_status(
-                id.clone(),
-                &absent,
-            );
-        super::helpers::build_http_response(
-            &crate::gateway::meta_mcp::invoke::egress::Egressed::gateway_own(response),
-            StatusCode::OK,
-        )
-    }))
+    Err(answered
+        .await
+        .unwrap_or(key_check::absent_response(id, tool_name)))
 }
 
 /// What a direct-route call's token must grant (MIK-7570.ATTEST.1 part 3).

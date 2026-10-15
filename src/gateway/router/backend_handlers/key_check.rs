@@ -19,6 +19,13 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 /// slot is listed with exactly these, so the list is fetched as the caller.
 pub(super) type CallerSlot<'a> = (Option<&'a str>, &'a [(String, String)]);
 
+/// The gateway's answer to a name the caller's catalogue lacks, on the
+/// direct route: -32601 under its preserved status (MIK-8356, MIK-8361).
+pub(super) fn absent_response(id: &RequestId, tool: &str) -> BackendRejection {
+    let response = error_response_preserving_status(id.clone(), &absent_name(tool));
+    build_http_response(&Egressed::gateway_own(response), StatusCode::OK)
+}
+
 /// The rejection for a `tools/call` R2 refuses, or `None` to proceed.
 ///
 /// A refusal is a tool result, not a 403, so a model can correct the call;
@@ -53,10 +60,7 @@ pub(super) async fn key_refusal(
     // MIK-8356: on a per-user backend, a tool this caller's own catalogue
     // withholds or lacks answers as an absent name (-32601), whatever the
     // argument-key mode; the argument keys are judged only after.
-    let absent = || {
-        let response = error_response_preserving_status(id.clone(), &absent_name(tool));
-        build_http_response(&Egressed::gateway_own(response), StatusCode::OK)
-    };
+    let absent = || absent_response(id, tool);
     if backend.keeps_per_user_catalogues() {
         if lens == Lens::Withheld {
             return Some(absent());
