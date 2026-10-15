@@ -481,8 +481,9 @@ impl MetaMcp {
                 {
                     return refusal;
                 }
-                // E2: plan tasks are served as today (MIK-8406 owns them);
-                // T7 pins this gap.
+                // E2: plan tasks are served as today with no account proof:
+                // the read matrix names this gap (RepeatedPlan x AccountView,
+                // MIK-8406). T7 pins only the catalogue refusal before it.
                 if matches!(
                     stored.task.tool(),
                     "gateway_execute" | "gateway_run_playbook"
