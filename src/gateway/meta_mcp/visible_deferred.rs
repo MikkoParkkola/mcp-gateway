@@ -45,10 +45,15 @@ pub(crate) fn deferred_replay_key(
     })
 }
 
-/// Record `entry` for `key` in the open request's memo. Outside a memo it is
-/// dropped, and the dispatch serves live.
-pub(crate) fn record_deferred_replay(key: DeferredReplayKey, entry: DeferredReplay) {
-    let _ = super::VISIBILITY_MEMO.try_with(|memo| memo.deferred_replay.lock().insert(key, entry));
+/// Record `entry` for `key` in the open request's memo. `false` outside a
+/// memo: nothing was recorded, so no lift can serve it, and the caller must
+/// not proceed as though it were deferred.
+pub(crate) fn record_deferred_replay(key: DeferredReplayKey, entry: DeferredReplay) -> bool {
+    super::VISIBILITY_MEMO
+        .try_with(|memo| {
+            memo.deferred_replay.lock().insert(key, entry);
+        })
+        .is_ok()
 }
 
 /// Take the entry recorded for `key`, consuming it: a second take returns

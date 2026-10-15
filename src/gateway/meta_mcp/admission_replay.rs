@@ -67,7 +67,8 @@ impl MetaMcp {
         if !self.stored_replay_defers(&target.server, &target.tool) {
             return Some((response, audit));
         }
-        super::super::visible::record_deferred_replay(
+        let id = response.id.clone();
+        let recorded = super::super::visible::record_deferred_replay(
             key,
             super::super::visible::DeferredReplay {
                 response,
@@ -76,6 +77,19 @@ impl MetaMcp {
                 arguments: arguments.clone(),
             },
         );
+        // Fail closed: with no request memo nothing was deferred, and
+        // proceeding Unprotected would run a completed call again. Every
+        // caller runs inside a memo, so this is a guard, not a path.
+        if !recorded {
+            return Some((
+                JsonRpcResponse::error(id, -32603, "stored replay could not be deferred"),
+                None,
+            ));
+        }
         None
     }
 }
+
+#[cfg(test)]
+#[path = "admission_replay_tests.rs"]
+mod tests;
