@@ -386,7 +386,18 @@ async fn r3b_expired_continuation_after_revocation_is_never_served_stored() {
     fx.gateway.revoke_operator_grant().await;
     let _clock = crate::clock::test_clock::at_secs(later());
     let again = send(&fx, "tools/call", TOOL, retry).await;
+    eprintln!("R3b answer: {again}");
     assert_refused_unsent(&fx, "R3b", &again, sent);
+    assert_eq!(
+        again.pointer("/error/code"),
+        Some(&json!(-32602)),
+        "R3b: not the continuation's invalid-params error: {again}"
+    );
+    assert_eq!(
+        again.pointer("/error/message"),
+        Some(&json!("JSON-RPC error -32602: continuation rejected")),
+        "R3b: not the continuation's message: {again}"
+    );
 }
 
 /// R3c (E1, the accepted behaviour change): a LIVE account replaying with an
@@ -404,7 +415,18 @@ async fn r3c_expired_continuation_while_live_answers_the_continuation_error() {
     let sent = fx.gateway.tool_calls().len();
     let _clock = crate::clock::test_clock::at_secs(later());
     let again = send(&fx, "tools/call", TOOL, retry).await;
+    eprintln!("R3c answer: {again}");
     assert_refused_unsent(&fx, "R3c", &again, sent);
+    assert_eq!(
+        again.pointer("/error/code"),
+        Some(&json!(-32602)),
+        "R3c: not the continuation's invalid-params error: {again}"
+    );
+    assert_eq!(
+        again.pointer("/error/message"),
+        Some(&json!("JSON-RPC error -32602: continuation rejected")),
+        "R3c: not the continuation's message: {again}"
+    );
 }
 
 /// Polls `tasks/get` (up to 10 s) until the task is terminal.
