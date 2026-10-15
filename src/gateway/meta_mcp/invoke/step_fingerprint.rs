@@ -30,8 +30,9 @@ impl MetaMcp {
                 caller.principal_source(binding.as_deref()),
             ));
         }
-        // So is a resolution ERROR it carried (a mint-time Busy): answered
-        // here, once, with no second mint or audit (MIK-8428 Case E).
+        // So is any resolution ERROR it carried (a mint-time Busy among
+        // them): request-local, taken once, after the step's policy check,
+        // and answered here with no second mint or audit (MIK-8428 Case E).
         if let Some(error) = super::super::visible::take_resolution_error(server, tool) {
             return Err(error);
         }
