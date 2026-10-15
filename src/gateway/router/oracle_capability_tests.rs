@@ -287,6 +287,66 @@ async fn a_profile_refused_capability_keeps_its_audit_trail() {
     );
 }
 
+/// The cells where the defined and the undefined capability of `reason`
+/// answer apart, or where their shared answer does not contain `expect`,
+/// on both entries, with the capability server killed or not.
+async fn kill_twin_cells(reason: Reason, killed: bool, expect: &str) -> Vec<String> {
+    let mut cells = Vec::new();
+    for entry in [Entry::Invoke, Entry::Execute] {
+        let (defined, undefined) = (twin(reason, true).await, twin(reason, false).await);
+        if killed {
+            defined.state.meta_mcp.kill_switch().kill(CAPS);
+            undefined.state.meta_mcp.kill_switch().kill(CAPS);
+        }
+        let (d, u) = (
+            call(&defined, entry, json!({})).await,
+            call(&undefined, entry, json!({})).await,
+        );
+        if d != u || !d.1.to_string().contains(expect) {
+            cells.push(format!(
+                "{reason:?} {entry:?} killed={killed}: defined {} {} vs undefined {} {}",
+                d.0, d.1, u.0, u.1
+            ));
+        }
+    }
+    cells
+}
+
+const KILLED: &str = "currently disabled by operator kill switch";
+
+/// Kill switch, entitled caller (lead ruling 2026-10-15): the kill switch
+/// speaks about the server the call names, not the tool, so the defined and
+/// the undefined capability under the same key both meet it, as a hidden and
+/// a missing backend name do (H3). Answered at the route stage, before the
+/// capability existence branch.
+#[tokio::test]
+async fn a_killed_capability_server_answers_entitled_twins_alike() {
+    let cells = kill_twin_cells(Reason::Scope, true, KILLED).await;
+    assert!(
+        cells.is_empty(),
+        "kill switch, entitled:\n{}",
+        cells.join("\n")
+    );
+}
+
+/// Kill switch, caller not entitled (lead ruling 2026-10-15): the invariant
+/// is twin equality at every entitlement level. Killed, the hidden and the
+/// undefined capability both answer the kill switch; not killed, both answer
+/// not found.
+#[tokio::test]
+async fn a_killed_capability_server_answers_unentitled_twins_alike() {
+    let mut cells = Vec::new();
+    for reason in [Reason::Admin, Reason::Grant] {
+        cells.extend(kill_twin_cells(reason, true, KILLED).await);
+        cells.extend(kill_twin_cells(reason, false, "Tool not found").await);
+    }
+    assert!(
+        cells.is_empty(),
+        "kill switch, unentitled:\n{}",
+        cells.join("\n")
+    );
+}
+
 /// MIK-8361 review (gpt F4, disputed by the second seat): during an audit
 /// outage under fail-closed, a capability withheld by its grant answers as
 /// the undefined one does, so the grant decision's write cannot tell them
