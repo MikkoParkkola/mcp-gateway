@@ -39,8 +39,9 @@ fn stored(task: &Task) -> Held<CommittedTask> {
 async fn t3_an_empty_target_slice_serves_the_stored_task() {
     let (registry, calls) = counted_backend("alpha");
     let meta = MetaMcp::new(registry);
-    let mut task = Task::create("gateway_invoke");
-    task.complete(serde_json::json!({"content": [{"type": "text", "text": "t3-stored"}]}));
+    let mut task = Task::create("gateway_invoke").expect("the test clock reads after 1970");
+    task.complete(&serde_json::json!({"content": [{"type": "text", "text": "t3-stored"}]}))
+        .expect("a live task takes its outcome");
     let id = RequestId::Number(3);
     let served = meta
         .defer_or_serve_existing(
