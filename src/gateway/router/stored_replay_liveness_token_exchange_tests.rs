@@ -649,12 +649,13 @@ async fn l0_the_lift_answers_before_an_armed_idempotency_cache() {
     drop(idp);
 }
 
-/// L5 (mutant M4): a lifted replay keeps its signing nonce spent. Alice's
-/// signed call under nonce `n1` dispatches; its keyed repeat, signed under a
-/// fresh `n2` (the nonce is not part of the fingerprint), is lifted with no
-/// second send; a fresh-key call re-using `n2` is then refused as a replay
-/// and never sent, while `n3` is served (control). A lift that hands its
-/// nonce back (M4) lets the re-used `n2` through.
+/// L5: a lifted replay keeps its signing nonce spent. Alice's signed call
+/// under nonce `n1` dispatches; its keyed repeat, signed under a fresh `n2`
+/// (the nonce is not part of the fingerprint), is lifted with no second send;
+/// a fresh-key call re-using `n2` is then refused as a replay and never sent,
+/// while `n3` is served (control). M4 (the lift drops its spend and dispatch
+/// mark) is equivalent, not killed: no refund is ever requested before a
+/// lift, so the nonce stays spent either way (argument in the PR body).
 #[tokio::test]
 async fn l5_a_lifted_replay_keeps_its_nonce_spent() {
     let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
