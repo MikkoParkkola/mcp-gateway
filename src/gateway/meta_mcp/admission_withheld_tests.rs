@@ -120,3 +120,53 @@ fn a_replay_past_revocation_on_a_registered_backend_keeps_its_refusal() {
         Ok(_) => panic!("a retained result was served past the revocation"),
     }
 }
+
+/// A keyed `gateway_execute` of `[beta:other]` admitted and completed, then
+/// the same key reused with `[beta:other, beta:read]` judged by `authorizer`:
+/// the reuse's answer (a key mismatch: other arguments under a used key).
+fn reuse_with_another_step(authorizer: &(dyn ToolAuthorizer + Sync)) -> String {
+    let (registry, _calls) = counted_backend("beta");
+    let meta = MetaMcp::new(registry).with_code_mode(true);
+    let retry = RetryFields {
+        idempotency_key: Some("reused".into()),
+        ..RetryFields::default()
+    };
+    let admit = |caller: &MetaMcpCallerContext<'_>, args: &serde_json::Value, id| {
+        meta.admit_meta_sync_for_test(
+            AdmissionOwner::for_test(caller.owner_principal()),
+            caller,
+            "gateway_execute",
+            args,
+            Some("legacy:session"),
+            &RequestId::Number(id),
+        )
+    };
+    let first = json!({"chain": [{"tool": "beta:other", "arguments": {}}]});
+    let Ok(super::SyncAdmission::Owned(owner)) = admit(&owned(&retry, &AllowAll), &first, 1) else {
+        panic!("premise: the first call owns the key");
+    };
+    owner.mark_dispatched();
+    owner.complete_secured(&crate::protocol::JsonRpcResponse::success(
+        RequestId::Number(1),
+        json!({"retained": "yes"}),
+    ));
+    let second = json!({"chain": [
+        {"tool": "beta:other", "arguments": {}},
+        {"tool": "beta:read", "arguments": {}}
+    ]});
+    match admit(&owned(&retry, authorizer), &second, 2) {
+        Err(error) => format!("{error:?}"),
+        Ok(_) => panic!("premise: a used key with other arguments is refused"),
+    }
+}
+
+/// #3872 product review (oracle 1): a used key reused with other arguments is
+/// a mismatch, not a replay. Its holder never held the new step, so a step
+/// the caller cannot see answers as a missing one does (the key mismatch),
+/// never its own refusal; otherwise any caller could probe names with keys.
+#[test]
+fn a_key_reused_with_a_withheld_step_answers_as_with_a_missing_one() {
+    let withheld = reuse_with_another_step(&DenyOne { tool: "read" });
+    let missing = reuse_with_another_step(&AllowAll);
+    assert_eq!(withheld, missing, "key reuse: withheld vs missing step");
+}
