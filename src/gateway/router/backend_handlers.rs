@@ -199,12 +199,12 @@ async fn guard_tool_call(
         }
     }
 
-    // Backend-wide refusals (kill switch, a disabled capability) say nothing
-    // about the name: answered alike for every name, before any fill (K2).
+    // The kill switch says nothing about the name (a capability disabled
+    // for its error rate is met at dispatch, by a caller who can see it): answered alike for every name, before any fill (K2).
     // A per-user backend keeps MIK-8356's order: the caller's own catalogue
     // decides first, with no fill for a withheld name anyway.
     if !backend.keeps_per_user_catalogues()
-        && let Err(e) = state.meta_mcp.admit_backend_wide(backend_name, tool_name)
+        && let Err(e) = state.meta_mcp.admit_backend_wide(backend_name)
     {
         return Err(super::helpers::build_http_response(
             &crate::gateway::meta_mcp::invoke::egress::Egressed::gateway_own(refusal(

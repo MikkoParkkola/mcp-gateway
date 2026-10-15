@@ -102,11 +102,12 @@ impl MetaMcp {
             caller.agent_id.map(crate::security::ProvenAgentId::as_str),
             "gateway_invoke",
         )?;
-        // The kill switch and a disabled capability say nothing about the
-        // name: a missing name meets them in the policy, right after the
-        // attestation, so a skipped one meets them here (H3).
+        // The kill switch says nothing about the name: a missing name meets
+        // it in the policy, right after the attestation, so a skipped one
+        // meets it here (H3). A disabled capability names the tool and is
+        // not met for a name the caller cannot see (#3872 review C).
         let server = crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "server")?;
-        self.admit_backend_wide(server, tool)
+        self.admit_backend_wide(server)
     }
     /// The invocation policy as the caller may see it: a capability the
     /// caller may not reach answered as the undefined one is
@@ -345,7 +346,7 @@ impl MetaMcp {
                 Visibility::Withheld(reason) => reason,
                 Visibility::Visible => return false,
             }
-        } else if self.admit_backend_wide(server, tool).is_err() {
+        } else if self.admit_backend_wide(server).is_err() {
             return false;
         } else {
             match self
@@ -486,7 +487,7 @@ impl MetaMcp {
         let backend = self.backends.get(server)?;
         // Not existence-sensitive: answered alike for every name, before any
         // fill (K2).
-        if let Err(refusal) = self.admit_backend_wide(server, tool) {
+        if let Err(refusal) = self.admit_backend_wide(server) {
             return Some(Err(refusal));
         }
         if backend.keeps_per_user_catalogues() {
