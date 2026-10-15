@@ -352,10 +352,9 @@ impl MetaMcp {
                 .shared_verdict(&backend, tool, backend.gate_headers())
                 .await
             {
-                // Under `off` a lacked name is forwarded: not the gate's.
-                Shared::Withheld(Withholding::Lacked) if !backend.checks_membership() => {
-                    return false;
-                }
+                // Under `off` the held list never reports a lacked name (it
+                // is unproven, so forwarded): `Lacked` comes only from a
+                // checked membership, which the gate answers.
                 Shared::Withheld(reason) => reason,
                 Shared::Offered | Shared::Unproven => return false,
             }

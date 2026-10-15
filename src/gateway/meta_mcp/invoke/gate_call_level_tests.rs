@@ -251,7 +251,8 @@ fn an_unnamed_invoke_target_is_not_withheld() {
     }
 }
 
-/// Under `input_schema_enforcement: Off` a name the held list lacks is
+/// Under `input_schema_enforcement: Off` a name the held list does not hold
+/// is unproven (the held list never reports a lacked name), so it is
 /// forwarded, not the gate's: the route stage does not answer it as
 /// invisible (#3872 coverage, gate.rs; S6's stated residual).
 #[tokio::test]
