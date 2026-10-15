@@ -175,6 +175,60 @@ fn a_key_reused_with_a_withheld_step_answers_as_with_a_missing_one() {
     assert_eq!(withheld, missing, "key reuse: withheld vs missing step");
 }
 
+/// A keyed `gateway_execute` of `[alpha:other, beta:read]` with `beta`
+/// killed, judged by `authorizer`: admission's answer (an owned key, or the
+/// refusal), rendered.
+fn keyed_chain_on_a_killed_backend(authorizer: &(dyn ToolAuthorizer + Sync)) -> String {
+    let (registry, _calls) = counted_backend("beta");
+    let (alpha, _) = counted_backend("alpha");
+    assert!(
+        registry.register(alpha.get("alpha").expect("the alpha backend")),
+        "premise: alpha registers"
+    );
+    let meta = MetaMcp::new(registry).with_code_mode(true);
+    meta.kill_switch().kill("beta");
+    let retry = RetryFields {
+        idempotency_key: Some("killed".into()),
+        ..RetryFields::default()
+    };
+    let args = json!({"chain": [
+        {"tool": "alpha:other", "arguments": {}},
+        {"tool": "beta:read", "arguments": {}}
+    ]});
+    let caller = owned(&retry, authorizer);
+    match meta.admit_meta_sync_for_test(
+        AdmissionOwner::for_test(caller.owner_principal()),
+        &caller,
+        "gateway_execute",
+        &args,
+        Some("legacy:session"),
+        &RequestId::Number(1),
+    ) {
+        Ok(super::SyncAdmission::Owned(_)) => "admitted".to_string(),
+        Ok(_) => "another admission".to_string(),
+        Err(error) => format!("{error:?}"),
+    }
+}
+
+/// #3872 review (FIX 2): the kill switch speaks about the backend, not the
+/// name. A keyed chain whose step names a killed backend is refused whole at
+/// admission (0 sends) for a missing name; a step the caller may not see on
+/// that backend is refused the same way, never deferred so that the earlier
+/// step runs and the chain fails part-way.
+#[test]
+fn a_keyed_chain_on_a_killed_backend_answers_a_withheld_step_as_a_missing_one() {
+    let withheld = keyed_chain_on_a_killed_backend(&DenyOne { tool: "read" });
+    let missing = keyed_chain_on_a_killed_backend(&AllowAll);
+    assert!(
+        missing.contains("kill switch"),
+        "premise: the missing step's chain is refused by the kill switch: {missing}"
+    );
+    assert_eq!(
+        withheld, missing,
+        "killed backend: withheld vs missing step"
+    );
+}
+
 /// #3872 review (FIX 1, condition 2): a sync result stored before the step
 /// list existed still decodes, with no list, and its replay keeps today's
 /// refusal of a now-hidden step (fail closed). A listed run meets the refusal
