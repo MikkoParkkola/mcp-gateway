@@ -171,3 +171,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
         None
     }
 }
+
+#[cfg(test)]
+#[path = "stored_proof_tests.rs"]
+mod tests;
