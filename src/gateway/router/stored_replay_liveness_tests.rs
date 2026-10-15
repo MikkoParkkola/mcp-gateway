@@ -734,6 +734,59 @@ async fn s6_retained_gateway_execute_is_served_not_rerun() {
     );
 }
 
+/// P8406u (E9 on a plan): a plan task records its step targets, so with
+/// custody failing a repeated keyed `gateway_execute` task answers E9's
+/// retryable `-32603` before the plan carve-out serves the stored task: no
+/// stored output, no task id, no step re-run. Moving the carve-out above E9
+/// (M-plan-e9) serves the stored task instead.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn p8406u_an_unavailable_plan_repeat_answers_retryable() {
+    let fx = fixture_with(false, true).await;
+    answer_marker(&fx);
+    let made = send(
+        &fx,
+        "tools/call",
+        "gateway_execute",
+        execute_params("p8406u", true),
+    )
+    .await;
+    let id = made
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("premise: a task was made: {made}"))
+        .to_owned();
+    let done = wait_terminal(&fx, &id).await;
+    assert_eq!(
+        done.pointer("/result/status").and_then(Value::as_str),
+        Some("completed"),
+        "premise: {done}"
+    );
+    let sent = fx.gateway.tool_calls().len();
+    fx.gateway.fail_custody_for_test(true);
+    let again = send(
+        &fx,
+        "tools/call",
+        "gateway_execute",
+        execute_params("p8406u", true),
+    )
+    .await;
+    eprintln!("P8406u repeat: {again}");
+    assert_eq!(
+        again.pointer("/error/code").and_then(Value::as_i64),
+        Some(-32603),
+        "P8406u: the unavailable plan repeat is not retryable: {again}"
+    );
+    assert!(
+        again.pointer("/result/taskId").is_none() && !again.to_string().contains(MARKER),
+        "P8406u: the stored plan task was served: {again}"
+    );
+    assert_eq!(
+        fx.gateway.tool_calls().len(),
+        sent,
+        "P8406u: a step was re-run: {again}"
+    );
+}
+
 #[path = "stored_replay_liveness_site5_tests.rs"]
 mod site5;
 #[path = "stored_replay_liveness_token_exchange_tests.rs"]
