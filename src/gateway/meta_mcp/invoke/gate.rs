@@ -108,6 +108,65 @@ impl MetaMcp {
         let server = crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "server")?;
         self.admit_backend_wide(server, tool)
     }
+    /// The invocation policy as signing runs it for a target it does not
+    /// skip, a capability the caller may not reach answered as the undefined
+    /// one is ([`Self::as_undefined_capability`], H2).
+    ///
+    /// # Errors
+    ///
+    /// The policy's refusal, so mapped.
+    pub(crate) fn check_signing_policy(
+        &self,
+        arguments: &Value,
+        session: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> Result<()> {
+        self.check_invocation_policy(arguments, session, caller)
+            .map_err(|refusal| self.as_undefined_capability(arguments, caller, refusal))
+    }
+
+    /// The policy's refusal of a capability the caller may not reach (admin
+    /// rule, identity grant), as the undefined twin is answered: it meets the
+    /// same authorizer, then the grant check's `ToolNotFound`. The two rules
+    /// are re-read silently, with no second authorizer decision; a refusal
+    /// they did not give (the authorizer's, a later step's) is the undefined
+    /// twin's too and is kept.
+    fn as_undefined_capability(
+        &self,
+        arguments: &Value,
+        caller: &MetaMcpCallerContext<'_>,
+        refusal: Error,
+    ) -> Error {
+        let (Ok(server), Ok(tool)) = (
+            crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "server"),
+            crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "tool"),
+        ) else {
+            return refusal;
+        };
+        let defined = self
+            .get_capabilities()
+            .is_some_and(|cap| server == cap.name && cap.has_capability(tool));
+        if !defined {
+            return refusal;
+        }
+        let by_rule = self
+            .admin_capability_rule(server, tool, caller.is_admin)
+            .and_then(|()| {
+                self.identity_grant_rule(
+                    server,
+                    tool,
+                    caller.scope(),
+                    crate::gateway::authz::Emit::Silent,
+                )
+            });
+        match by_rule {
+            Err(rule) if rule.to_string() == refusal.to_string() => {
+                Error::ToolNotFound(tool.to_string())
+            }
+            _ => refusal,
+        }
+    }
+
     /// What `backend`'s shared catalogue says about `tool`, filled once if
     /// cold (F13's single-flight fill, the gateway's own login).
     async fn shared_verdict(

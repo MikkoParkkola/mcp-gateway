@@ -102,6 +102,89 @@ fn an_empty_hidden_name_is_refused_as_the_policy_refuses_it() {
     );
 }
 
+/// H2 (MIK-8361 ORACLE.2 grant/admin x stdio, codex review): signing runs
+/// before the stdio route stage, so a signed `gateway_invoke` of a capability
+/// the caller may not reach (admin-only for a non-admin; personal with no
+/// grant) must be judged as the undefined capability is, not refused for its
+/// reason. Same caller, same valid fresh nonce, same arguments.
+#[tokio::test]
+async fn h2_signing_judges_an_unreachable_capability_as_the_undefined_one() {
+    use crate::capability::{CapabilityBackend, CapabilityExecutor};
+    use crate::gateway::authz::AllowAll;
+    use crate::gateway::meta_mcp::signing::{NONCE_META, SigningInvocationContext, SigningScope};
+    const CAPS: &str = "caps";
+    const CAP: &str = "hook_or_day";
+    let definition = |personal: bool| {
+        let metadata = if personal {
+            "  exposure: personal\n  read_only: true\n  identity_owner:\n    authority: api_key\n    subject: alice\n"
+        } else {
+            "  exposure: public\n  read_only: false\n  registers_external_callback: true\n"
+        };
+        format!(
+            "name: {CAP}\ndescription: A fixture capability\nmetadata:\n{metadata}\
+             providers:\n  primary:\n    service: rest\n    config:\n      \
+             base_url: http://127.0.0.1:9\n      path: /x\n      method: POST\n"
+        )
+    };
+    let judged = |defined: Option<bool>| {
+        let caps = Arc::new(CapabilityBackend::new(
+            CAPS,
+            Arc::new(CapabilityExecutor::new()),
+        ));
+        if let Some(personal) = defined {
+            let parsed = crate::capability::parse_capability(&definition(personal))
+                .expect("the fixture capability parses");
+            caps.register_capability(parsed)
+                .expect("the fixture capability registers");
+        }
+        let (registry, _) = counted_backend("alpha");
+        let mut meta = MetaMcp::new(registry).with_identity_grants(
+            crate::identity_grants::LocalIdentityGrantStore::from_grants(Vec::new()),
+        );
+        meta.set_capabilities(caps);
+        meta.enable_message_signing(
+            crate::security::message_signing::MessageSigner::new(
+                b"h2-capability-key-0123456789abcde".to_vec(),
+                None,
+                "k1".into(),
+            ),
+            std::time::Duration::from_secs(300),
+            true,
+        );
+        let caller = ctx(&AllowAll);
+        let arguments = json!({"server": CAPS, "tool": CAP, "arguments": {}});
+        let mut request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "gateway_invoke", "arguments": arguments,
+                       "_meta": {(NONCE_META): "h2-fresh-nonce"}}});
+        let mut signing =
+            SigningInvocationContext::capture_scoped(&mut request, SigningScope::EveryToolCall);
+        let arguments = request["params"]["arguments"].clone();
+        let answer = meta.prepare_signing_for_call(
+            &mut signing,
+            "gateway_invoke",
+            &arguments,
+            None,
+            &caller,
+        );
+        format!("{answer:?} admitted={}", !signing.awaits_admission())
+    };
+    let undefined = judged(None);
+    let mut cells = Vec::new();
+    for (label, personal) in [("admin-only", false), ("personal, no grant", true)] {
+        let defined = judged(Some(personal));
+        if defined != undefined {
+            cells.push(format!(
+                "{label}: defined {defined} vs undefined {undefined}"
+            ));
+        }
+    }
+    assert!(
+        cells.is_empty(),
+        "H2 capability signing:\n{}",
+        cells.join("\n")
+    );
+}
+
 /// H3 (MIK-8361 ORACLE.2 K2, codex review): on a killed backend a signed call
 /// with a malformed nonce must be refused alike for a hidden tool and a
 /// missing one. Signing runs before the stdio route stage, so its order is
