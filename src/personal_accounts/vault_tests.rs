@@ -608,7 +608,8 @@ fn a_held_lease_rechecks_only_against_the_vault_that_released_it() {
         let refused = held
             .recheck(&reinstalled)
             .await
-            .expect_err("a different vault instance must not recheck this lease");
+            .expect_err("a different vault instance must not recheck this lease")
+            .into_error();
         assert!(
             refused
                 .to_string()

@@ -404,12 +404,15 @@ impl Error {
     /// on an unredirected request. See its doc comment for why a redirected
     /// request is excluded. `BackendUnavailable` earns it by its construction
     /// invariant (raised only before the request is sent), which a scan test
-    /// holds to a reviewed list of files.
+    /// holds to a reviewed list of files. The gateway-sealed transient (a
+    /// busy custody, MIK-8428) earns it the same way, decided by its seal and
+    /// never its text; `Config` stays out, as it is also raised after a send.
     #[must_use]
     pub fn is_pre_dispatch(&self) -> bool {
-        matches!(
-            self,
-            Self::CircuitOpen { .. }
+        crate::personal_accounts::refusal::transient_data(self).is_some()
+            || matches!(
+                self,
+                Self::CircuitOpen { .. }
                 | Self::RateLimited(_)
                 | Self::IdentitySlotsExhausted { .. }
                 | Self::BackendNotFound(_)
@@ -422,7 +425,7 @@ impl Error {
                 | Self::AuthorizationCancelled { .. }
                 | Self::AuthorizationRequired { .. }
                 | Self::AuthorizationPending { .. }
-        )
+            )
     }
 
     /// The request may have left the gateway and no answer came back: the

@@ -147,6 +147,19 @@ pub(crate) fn mark_rejection(outcome: super::RejectionOutcome, refused: &Error) 
 /// and `retry_after_ms` only while a lease runs. Sealed like an offer, so
 /// only a gateway-built one is forwarded as such; a live call and a stored
 /// read both build through here and therefore answer byte-equal errors.
+///
+/// PRE-SEND SITES ONLY (MIK-8428): `Error::is_pre_dispatch` reads the seal,
+/// so this answer frees an idempotency key. Build it only where nothing has
+/// reached the backend yet. Today's sites, each pre-send, held to this list
+/// by `error_pre_send_scan_tests`:
+/// - a mint's resolve or refresh admission, via `transient_mint_refusal`
+///   (capability `resolve`; the per-user mint in `invoke/propagation.rs`);
+/// - the lease recheck in `revalidate`, from its three callers before the
+///   send: `CapabilityBackend`, the executor's `prepare_account_context`
+///   (before the cache read) and `inject_auth` (before the wire);
+/// - the caller verdict's view Busy (`invoke/caller_verdict.rs`);
+/// - the task intake answer (`call_dispatch.rs`): no task, nothing sent;
+/// - a stored task read (`task_replay.rs`): no dispatch at all.
 pub(crate) fn transient_retry_error(after: Option<std::time::Duration>) -> Error {
     let mut data = json!({ "retryable": true });
     if let Some(after) = after {
