@@ -361,10 +361,7 @@ impl MetaMcp {
             }
         };
         // First judgement wins: an earlier one in this request stands.
-        matches!(
-            record_visibility(server, tool, Visibility::Withheld(reason)),
-            Visibility::Withheld(_)
-        )
+        record_visibility(server, tool, Visibility::Withheld(reason)) != Visibility::Visible
     }
 
     /// MIK-8361: a name this caller cannot see is answered as missing, before

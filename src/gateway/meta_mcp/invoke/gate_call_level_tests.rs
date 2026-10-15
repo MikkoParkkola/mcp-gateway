@@ -234,3 +234,51 @@ async fn h3_a_killed_backend_refuses_a_malformed_nonce_alike_for_hidden_and_miss
         "a hidden tool and a missing one are refused alike on a killed backend"
     );
 }
+
+/// A call whose arguments name no server or no tool is no withheld target:
+/// signing's skip is for a named target only (#3872 coverage, gate.rs).
+#[test]
+fn an_unnamed_invoke_target_is_not_withheld() {
+    use crate::gateway::authz::AllowAll;
+    let (registry, _) = counted_backend("alpha");
+    let meta = MetaMcp::new(registry);
+    let caller = ctx(&AllowAll);
+    for arguments in [json!({"server": "alpha"}), json!({"tool": "read"})] {
+        assert!(
+            !meta.withheld_invoke_target(&arguments, None, &caller),
+            "an unnamed target is not withheld: {arguments}"
+        );
+    }
+}
+
+/// Under `input_schema_enforcement: Off` a name the held list lacks is
+/// forwarded, not the gate's: the route stage does not answer it as
+/// invisible (#3872 coverage, gate.rs; S6's stated residual).
+#[tokio::test]
+async fn under_off_a_lacked_name_is_not_invisible_at_the_route() {
+    use crate::gateway::authz::AllowAll;
+    let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let backend = Arc::new(crate::backend::Backend::new(
+        "alpha",
+        crate::config::BackendConfig {
+            input_schema_enforcement: crate::config::InputSchemaEnforcement::Off,
+            ..crate::config::BackendConfig::default()
+        },
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(300),
+    ));
+    let tool: crate::protocol::Tool = serde_json::from_value(json!({
+        "name": "read", "inputSchema": {"type": "object"}
+    }))
+    .expect("a tool");
+    backend.store_shared_tools_for_test(vec![tool]);
+    assert!(registry.register(backend), "premise: alpha registers");
+    let meta = MetaMcp::new(registry);
+    let caller = ctx(&AllowAll);
+    assert!(
+        !meta
+            .invisible_at_route(("alpha", "not_listed"), &caller, None)
+            .await,
+        "under off a lacked name is forwarded, not invisible"
+    );
+}
