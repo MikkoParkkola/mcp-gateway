@@ -126,12 +126,13 @@ fn a_replay_past_revocation_on_a_registered_backend_keeps_its_refusal() {
 }
 
 /// A keyed `gateway_execute` of `[beta:other]` admitted and completed, then
-/// the same key reused with `[beta:other, beta:read]` judged by `authorizer`,
+/// the same key reused with `[beta:other, beta:{step}]` judged by `authorizer`,
 /// with `blocked` (if any) withheld by its description before the reuse:
 /// the reuse's answer (a key mismatch: other arguments under a used key).
 fn reuse_with_another_step(
     authorizer: &(dyn ToolAuthorizer + Sync),
     blocked: Option<&str>,
+    step: &str,
 ) -> String {
     let (registry, _calls) = counted_backend("beta");
     if let Some(tool) = blocked {
@@ -166,7 +167,7 @@ fn reuse_with_another_step(
     ));
     let second = json!({"chain": [
         {"tool": "beta:other", "arguments": {}},
-        {"tool": "beta:read", "arguments": {}}
+        {"tool": format!("beta:{step}"), "arguments": {}}
     ]});
     match admit(&owned(&retry, authorizer), &second, 2) {
         Err(error) => format!("{error:?}"),
@@ -180,8 +181,8 @@ fn reuse_with_another_step(
 /// never its own refusal; otherwise any caller could probe names with keys.
 #[test]
 fn a_key_reused_with_a_withheld_step_answers_as_with_a_missing_one() {
-    let withheld = reuse_with_another_step(&DenyOne { tool: "read" }, None);
-    let missing = reuse_with_another_step(&AllowAll, None);
+    let withheld = reuse_with_another_step(&DenyOne { tool: "read" }, None, "read");
+    let missing = reuse_with_another_step(&AllowAll, None, "no_such");
     assert_eq!(withheld, missing, "key reuse: withheld vs missing step");
 }
 
@@ -189,18 +190,18 @@ fn a_key_reused_with_a_withheld_step_answers_as_with_a_missing_one() {
 /// the policy (#3872 review, low): the reuse answers as with a missing step.
 #[test]
 fn a_key_reused_with_a_descriptor_withheld_step_answers_as_with_a_missing_one() {
-    let withheld = reuse_with_another_step(&AllowAll, Some("read"));
-    let missing = reuse_with_another_step(&AllowAll, None);
+    let withheld = reuse_with_another_step(&AllowAll, Some("read"), "read");
+    let missing = reuse_with_another_step(&AllowAll, None, "no_such");
     assert_eq!(
         withheld, missing,
         "key reuse: descriptor-withheld vs missing"
     );
 }
 
-/// A keyed `gateway_execute` of `[alpha:other, beta:read]` with `beta`
+/// A keyed `gateway_execute` of `[alpha:other, beta:{step}]` with `beta`
 /// killed, judged by `authorizer`: admission's answer (an owned key, or the
 /// refusal), rendered.
-fn keyed_chain_on_a_killed_backend(authorizer: &(dyn ToolAuthorizer + Sync)) -> String {
+fn keyed_chain_on_a_killed_backend(authorizer: &(dyn ToolAuthorizer + Sync), step: &str) -> String {
     let (registry, _calls) = counted_backend("beta");
     let (alpha, _) = counted_backend("alpha");
     assert!(
@@ -215,7 +216,7 @@ fn keyed_chain_on_a_killed_backend(authorizer: &(dyn ToolAuthorizer + Sync)) -> 
     };
     let args = json!({"chain": [
         {"tool": "alpha:other", "arguments": {}},
-        {"tool": "beta:read", "arguments": {}}
+        {"tool": format!("beta:{step}"), "arguments": {}}
     ]});
     let caller = owned(&retry, authorizer);
     match meta.admit_meta_sync_for_test(
@@ -239,8 +240,8 @@ fn keyed_chain_on_a_killed_backend(authorizer: &(dyn ToolAuthorizer + Sync)) -> 
 /// step runs and the chain fails part-way.
 #[test]
 fn a_keyed_chain_on_a_killed_backend_answers_a_withheld_step_as_a_missing_one() {
-    let withheld = keyed_chain_on_a_killed_backend(&DenyOne { tool: "read" });
-    let missing = keyed_chain_on_a_killed_backend(&AllowAll);
+    let withheld = keyed_chain_on_a_killed_backend(&DenyOne { tool: "read" }, "read");
+    let missing = keyed_chain_on_a_killed_backend(&AllowAll, "no_such");
     assert!(
         missing.contains("kill switch"),
         "premise: the missing step's chain is refused by the kill switch: {missing}"
@@ -270,6 +271,10 @@ fn a_stored_result_without_a_step_list_keeps_the_refusal() {
         "chain": "not_eligible"
     }))
     .expect("serializes");
+    assert!(
+        super::stored::stored_response(&older).is_some(),
+        "an older record still decodes"
+    );
     assert_eq!(
         dispatched_steps(&older),
         None,
