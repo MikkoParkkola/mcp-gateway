@@ -168,8 +168,6 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
         uri.query(),
     )));
     let judge = super::super::view_judge::OwnedViewJudge::shared(&state);
-    #[cfg(test)]
-    state.multiplexer.before_get_resolve.pause().await;
     let Ok(admitted) = state
         .multiplexer
         .admit_view(&subject, held.as_ref(), judge.as_ref())

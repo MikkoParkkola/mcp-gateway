@@ -111,8 +111,8 @@ async fn closing_a_cf_stream_cancels_an_inflight_jwks_verification() {
             broadcast.abort();
             let _ = broadcast.await;
             panic!(
-                "VOID: in-flight JWKS verification did not terminate after stream \
-                 close on current production (baseline, never RED): {elapsed}"
+                "RED: an in-flight JWKS verification kept running after its stream \
+                 closed; it must end with the stream: {elapsed}"
             )
         }
     };

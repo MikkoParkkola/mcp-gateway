@@ -258,12 +258,18 @@ impl Listener {
                 .await
             {
                 crate::gateway::streaming::Judged::Live(_) => Admit::Send(None),
-                crate::gateway::streaming::Judged::Dead(
-                    crate::gateway::streaming::DeadReason::Bearer,
-                ) if self.credential.is_none() => Admit::Send(None),
                 crate::gateway::streaming::Judged::Dead(reason) => {
-                    reason.count();
-                    Admit::Close
+                    match crate::gateway::streaming::dead_at_attach(
+                        self.credential.as_ref(),
+                        reason,
+                        &view.subject,
+                    ) {
+                        crate::gateway::streaming::AtAttach::OpenAnonymous => Admit::Send(None),
+                        crate::gateway::streaming::AtAttach::Refuse => {
+                            reason.count();
+                            Admit::Close
+                        }
+                    }
                 }
             };
         };

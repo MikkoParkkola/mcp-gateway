@@ -92,6 +92,19 @@ pub(crate) fn create_sse_response_with_view(
                             break;
                         }
                     }
+                    // MIK-8350: a frame that is not a judged hint is held to
+                    // the stream's own subject as it is written, as a
+                    // listener's is: an expired adapter receipt or a CF
+                    // assertion that no longer verifies closes the stream.
+                    if item.judged.is_none()
+                        && let Some(view) = &view
+                        && let Some(reason) = subject_dead(&multiplexer, &session, view).await
+                    {
+                        reason.count();
+                        withhold(&item);
+                        close_dead(&mut rx);
+                        break;
+                    }
                     // MIN.2: recorded and committed as it is written; an item
                     // whose record fails closed is withheld.
                     if let Some(mark) = &item.mark
@@ -221,6 +234,31 @@ async fn credential_at_write(
         return Delivery::Deliver;
     };
     delivery(&authorizer, Some(&credential), audience).await
+}
+
+/// Why `view`'s caller no longer resolves, for a frame that is not a judged
+/// hint, or `None` when the frame may be written: the judgement a listener
+/// makes for every non-tools delivery, with `dead_at_attach`'s carve-out for
+/// a caller that presented nothing on a public path (MIK-8350).
+async fn subject_dead(
+    multiplexer: &NotificationMultiplexer,
+    session: &super::ClientSession,
+    view: &super::StreamView,
+) -> Option<crate::gateway::streaming::DeadReason> {
+    use crate::gateway::streaming::{AtAttach, Judged, dead_at_attach};
+    let authorizer = multiplexer.authorizer.read().clone()?;
+    let credential = session.credential.read().clone();
+    match view
+        .judge
+        .resolve(&authorizer, (credential.as_ref(), view.subject.as_ref()))
+        .await
+    {
+        Judged::Live(_) => None,
+        Judged::Dead(reason) => match dead_at_attach(credential.as_ref(), reason, &view.subject) {
+            AtAttach::OpenAnonymous => None,
+            AtAttach::Refuse => Some(reason),
+        },
+    }
 }
 
 /// Report `item` withheld, so a request's waiter does not wait for it.

@@ -127,6 +127,10 @@ impl NotificationMultiplexer {
         let Some(authorizer) = self.authorizer.read().clone() else {
             return Ok(Admitted::Unjudged);
         };
+        // Inside the admission: a GET cancelled here, with its resolve begun,
+        // must leave no session effect.
+        #[cfg(test)]
+        self.before_get_resolve.pause().await;
         match judge.resolve(&authorizer, (credential, subject)).await {
             Judged::Live(caller) => Ok(Admitted::Live(Box::new(caller))),
             Judged::Dead(reason) => match dead_at_attach(credential, reason, subject) {
