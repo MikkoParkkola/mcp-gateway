@@ -157,11 +157,8 @@ impl MetaMcp {
     /// capability. The MIK-8361 gate answers them for a withheld and a
     /// missing name alike, before any fill.
     pub(crate) fn admit_backend_wide(&self, server: &str, tool: &str) -> Result<()> {
-        if self.kill_switch.is_killed(server) {
-            return Err(Error::json_rpc(
-                -32000,
-                format!("Server '{server}' is currently disabled by operator kill switch"),
-            ));
+        if let Some(killed) = self.kill_refusal(server) {
+            return Err(killed);
         }
         let cooldown = self.capability_budget_config.read().cooldown;
         if self
@@ -178,6 +175,16 @@ impl MetaMcp {
             ));
         }
         Ok(())
+    }
+
+    /// The operator kill switch's refusal of `server`, if it is killed.
+    pub(super) fn kill_refusal(&self, server: &str) -> Option<Error> {
+        self.kill_switch.is_killed(server).then(|| {
+            Error::json_rpc(
+                -32000,
+                format!("Server '{server}' is currently disabled by operator kill switch"),
+            )
+        })
     }
 
     /// S2 spend: budget admission immediately before an actual dispatch.
