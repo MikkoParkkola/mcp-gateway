@@ -75,6 +75,11 @@ pub struct CapabilityExecutor {
     /// counts as a live backend. Surfaced via the capability backend in
     /// `/health` (MIK-5080).
     pub(super) health: crate::failsafe::HealthTracker,
+    /// TEST SEAM (#3892): run every call with isolated loopback egress, so a
+    /// meta-route fixture can reach its loopback capture peer (the meta
+    /// dispatch builds its context with `allow_loopback_egress: false`).
+    #[cfg(test)]
+    pub(super) test_loopback_egress: bool,
     /// The environment a credential name resolves against.
     ///
     /// Capability credentials resolve lazily, per call, so this is the reader
@@ -128,6 +133,8 @@ impl CapabilityExecutor {
             process_slots: DashMap::new(),
             mcp_children: Arc::default(),
             multi_user: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            test_loopback_egress: false,
         }
     }
 
@@ -234,6 +241,18 @@ impl CapabilityExecutor {
         self
     }
 
+    /// TEST SEAM (#3892): every call this executor makes opens loopback
+    /// egress exactly as an isolated-runtime context does
+    /// ([`CapabilityExecutionContext::with_isolated_loopback_egress`]), so a
+    /// meta-route test reaches its loopback peer. `cfg(test)` only; no
+    /// production default changes.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_test_loopback_egress(mut self) -> Self {
+        self.test_loopback_egress = true;
+        self
+    }
+
     /// The account catalogue this executor validates and resolves against.
     pub(crate) fn account_strategies(
         &self,
@@ -275,6 +294,8 @@ impl CapabilityExecutor {
             process_slots: DashMap::new(),
             mcp_children: Arc::default(),
             multi_user: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            test_loopback_egress: false,
         }
     }
 
@@ -349,6 +370,12 @@ impl CapabilityExecutor {
         // before a lookup, so a request that may not have this account can
         // neither be served from cache nor reach the wire.
         let context = self.prepare_account_context(capability, context).await?;
+        #[cfg(test)]
+        let context = if self.test_loopback_egress {
+            context.with_isolated_loopback_egress()
+        } else {
+            context
+        };
 
         if let Some(process) = process::spawned_process(capability) {
             process::admit(&self.process_policy, capability, process)?;

@@ -31,7 +31,10 @@ pub(crate) enum CallerSlot {
     /// A stored read claimed the attempt to re-establish this caller's cold
     /// view (MIK-8392 B'): a lease, so one reader resolves per window. A
     /// failed or abandoned attempt only delays the next one until `until`;
-    /// a success, or any fill of the caller's own slot, replaces it.
+    /// a success, or any fill of the caller's own slot, replaces it. An
+    /// expired lease nobody reads again stays until the caller's slot is
+    /// next claimed, filled or recorded, which replaces it: at most one
+    /// entry per caller principal per backend.
     ColdTried {
         until: tokio::time::Instant,
         /// Which claim this is: only its own winner may publish over it.
@@ -274,6 +277,21 @@ impl Backend {
         };
         let (_, entry) = self.pool.remove(&key).expect("a pooled per-user slot");
         entry.retired.store(true, Ordering::SeqCst);
+    }
+
+    /// Remove per-user slot `binding`'s pooled entry WITHOUT retiring it or
+    /// touching the index, handing the entry back so the caller holds it
+    /// (MIK-8392 F3): the index entry stays live (its `Weak` still
+    /// upgrades, unretired) while a pool lookup by binding finds nothing,
+    /// as a slot evicted between the listing view and the catalogue read
+    /// leaves it. The caller must hold the returned entry for the index to
+    /// keep reading as held.
+    #[cfg(test)]
+    pub(crate) fn unpool_per_user_slot_for_test(&self, binding: &str) -> Option<Arc<PooledEntry>> {
+        let key = PoolKey::PerUser {
+            binding: binding.to_string(),
+        };
+        self.pool.remove(&key).map(|(_, entry)| entry)
     }
 
     /// Every binding the index currently points at (test plan I2e).

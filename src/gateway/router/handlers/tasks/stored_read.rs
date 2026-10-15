@@ -11,22 +11,11 @@ use serde_json::Value;
 use super::RecoveryCaller;
 use crate::gateway::router::AppState;
 
-/// The caller a stored read is judged as, built as [`with_policy_caller`](super::with_policy_caller)
-/// builds its context: the verified identity, and the credential's provenance.
-pub(super) fn stored_read_caller<'a>(
-    caller: &RecoveryCaller<'a>,
-) -> crate::identity_propagation::CallerProof<'a> {
-    crate::identity_propagation::CallerProof::new(
-        caller.verified_identity,
-        crate::identity_propagation::CallerProvenance::classify(
-            caller.client.map(|client| client.principal.as_str()),
-        ),
-    )
-}
-
 /// Fill the request's account outcomes for the named task's recorded
 /// targets (MIK-8392). An owner-scoped read: a task this caller does not own,
-/// or that is absent, is left to the route's own answer.
+/// or that is absent, is left to the route's own answer. Runs under the
+/// request's live policy caller, so a cold claim already refused is skipped
+/// before it resolves (F4).
 pub(super) async fn prepare_stored_read(
     state: &Arc<AppState>,
     owner: &str,
@@ -37,9 +26,34 @@ pub(super) async fn prepare_stored_read(
         return;
     };
     if let Ok(stored) = state.tasks.get(owner, task_id) {
-        state
-            .meta_mcp
-            .prepare_stored_read(&stored, stored_read_caller(caller))
-            .await;
+        super::prepare_stored_read_with_policy(state, &stored, caller).await;
     }
+}
+
+/// The stored-read pre-pass under THIS request's live policy caller
+/// (MIK-8392 F4): the context [`super::policy_context`] builds, held across
+/// the pre-pass's await so a cold claim already refused without the
+/// caller's catalogue is skipped before it resolves.
+pub(super) async fn prepare_stored_read_with_policy(
+    state: &Arc<AppState>,
+    stored: &crate::gateway::task_service::CommittedTask,
+    caller: &RecoveryCaller<'_>,
+) {
+    let router_authorizer = crate::gateway::router::OwnedRouterAuthorizer::capture(
+        caller.client,
+        caller.oauth_agent_identity,
+        caller.cert_identity,
+    );
+    let borrowed = router_authorizer.borrow(state);
+    let authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync) = &borrowed;
+    let caller_key = crate::gateway::router::identity::caller_key(
+        caller.grant_subject.as_ref(),
+        caller.cert_identity,
+        caller.client,
+    );
+    let policy_caller = super::policy_context(caller, authorizer, &caller_key);
+    state
+        .meta_mcp
+        .prepare_stored_read(stored, policy_caller.scope(), caller.session_id)
+        .await;
 }

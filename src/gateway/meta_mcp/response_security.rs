@@ -690,7 +690,13 @@ pub(crate) fn error_response_preserving_status(
         if let (true, crate::Error::JsonRpc { message, .. }) = (is_offer, error) {
             rpc_error.message.clone_from(message);
         }
-        rpc_error.data = offer.or(rpc_error.data.take());
+        // A sealed transient answer likewise goes out with its own text and
+        // its retryable data (MIK-8392 Busy parity), never a backend's.
+        let transient = crate::personal_accounts::refusal::transient_data(error);
+        if let (true, crate::Error::JsonRpc { message, .. }) = (transient.is_some(), error) {
+            rpc_error.message.clone_from(message);
+        }
+        rpc_error.data = transient.or(offer).or(rpc_error.data.take());
     }
     response
 }

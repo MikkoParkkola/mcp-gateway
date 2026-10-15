@@ -350,7 +350,18 @@ fn with_policy_caller<R>(
         caller.cert_identity,
         caller.client,
     );
-    let policy_caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+    check(&policy_context(caller, authorizer, &caller_key))
+}
+
+/// The policy caller [`with_policy_caller`] checks under, built once for it
+/// and for the stored-read pre-pass (MIK-8392 F4), which holds it across an
+/// await, so the two can never build different callers.
+fn policy_context<'a>(
+    caller: &'a RecoveryCaller<'_>,
+    authorizer: &'a (dyn crate::gateway::authz::ToolAuthorizer + Sync),
+    caller_key: &'a str,
+) -> crate::gateway::meta_mcp::MetaMcpCallerContext<'a> {
+    crate::gateway::meta_mcp::MetaMcpCallerContext {
         is_modern: true,
         // This context checks authorization only; it never accesses a cache.
         protocol_revision: None,
@@ -365,7 +376,7 @@ fn with_policy_caller<R>(
         agent_declared: None,
         grant_subject: caller.grant_subject.clone(),
         stdio_nonce: None,
-        caller_key: Some(caller_key.as_str()).filter(|key| !key.is_empty()),
+        caller_key: Some(caller_key).filter(|key| !key.is_empty()),
         verified_identity: caller.verified_identity,
         is_admin: caller.is_admin,
         surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
@@ -375,8 +386,7 @@ fn with_policy_caller<R>(
         task: None,
         era: crate::protocol::meta::Era::Modern,
         channel: &crate::gateway::input_bridge::NoClientChannel,
-    };
-    check(&policy_caller)
+    }
 }
 
 pub(super) async fn tasks_get(
@@ -608,7 +618,7 @@ pub(super) async fn tasks_cancel(
 }
 
 mod stored_read;
-use stored_read::{prepare_stored_read, stored_read_caller};
+use stored_read::{prepare_stored_read, prepare_stored_read_with_policy};
 #[cfg(test)]
 mod agent_owner_tests;
 #[cfg(test)]
@@ -738,10 +748,7 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
         });
         let mut pending = crate::gateway::meta_mcp::visible::with_visibility_memo(async {
             if let Some(Some(task)) = prepared.as_ref() {
-                self.state
-                    .meta_mcp
-                    .prepare_stored_read(task, stored_read_caller(&live))
-                    .await;
+                prepare_stored_read_with_policy(&self.state, task, &live).await;
             }
             self.state
                 .meta_mcp

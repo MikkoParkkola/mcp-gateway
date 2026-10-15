@@ -310,6 +310,26 @@ impl MetaMcp {
         if let Some(refusal) = self.refuse_unadmitted(&id, &caller) {
             return refusal;
         }
+        // A capability account has no route-stage verdict, so its busy
+        // custody is judged here for a task call (MIK-8428): after
+        // admission/policy, before the transient answer below and before
+        // any task or key. Sync calls skip it and gain no extra read. A
+        // repeat of a key that already owns a task skips it too: it
+        // serves stored output and must not be account-judged at intake
+        // (`already_admitted` is read-only; `begin_task` re-decides).
+        let repeated = caller.task.as_ref().is_some_and(|intent| {
+            intent
+                .executor
+                .service
+                .already_admitted(intent.request.borrow())
+        });
+        if caller.task.is_some() && !repeated {
+            self.judge_capability_accounts_for_task(tool_name, &arguments, &caller, session_id)
+                .await;
+        }
+        if let Some(answer) = Self::task_intake_transient(&caller, &id) {
+            return answer;
+        }
         if let Some(intent) = caller.task.take() {
             // A `require` backend's answer must be a checked chain (inc3 R2).
             if let Err(error) =
@@ -342,6 +362,52 @@ impl MetaMcp {
             confirmed_in_band,
         )
         .await
+    }
+
+    /// A task-augmented call whose intake verdict met a busy custody
+    /// (MIK-8392 G2): the transient lives only in this request's memo,
+    /// which the task worker never gets, so answer it here, before any
+    /// task exists — the shared transient answer, refund asked as the
+    /// sync path asks it, settled when this call returns. `None` when the
+    /// call is not task-augmented or its verdict recorded no transient.
+    ///
+    /// Any transient held here is this call's own, so no target parsing
+    /// is needed to own it. `with_visibility_memo` opens a fresh memo
+    /// unless the future already runs inside this request's one
+    /// (visible.rs:623-630). On HTTP that scope wraps one POST's
+    /// dispatch (router/handlers.rs:149-151). A stdio batch loop does not
+    /// open a batch memo (server/stdio_loop.rs:460-485); each item goes
+    /// through `dispatch_single_staged`, which opens its own
+    /// (server/stdio_single.rs:334-338), awaited before the next item
+    /// (server/stdio_notify.rs:100-144). Chain and playbook steps and
+    /// nested relay rounds run inside this one `tools/call`, so their
+    /// transient is this call's by definition.
+    fn task_intake_transient(
+        caller: &MetaMcpCallerContext<'_>,
+        id: &RequestId,
+    ) -> Option<JsonRpcResponse> {
+        caller.task.as_ref()?;
+        // No policy check here: the invocation policy already ran before
+        // intake for a `gateway_invoke` (signing.rs:642 when signed,
+        // admission.rs:391 otherwise), for a surfaced name, signed or not
+        // (admission.rs:368-391; signing prepares only `gateway_invoke`), and
+        // for a keyed `gateway_execute` or playbook plan (admission_plan.rs:63-131).
+        // An unkeyed task-augmented `gateway_execute` or playbook gets it only
+        // at dispatch, so it may answer retryable for a refused target; no task
+        // is created, so nothing executes (MIK-8428 Case D, inferred, not run).
+        // A view Busy is held as an account transient; a mint Busy at the
+        // route stage as a sealed-transient resolution error (#3892 gpt F1).
+        // Either one answers here, before any task or key exists.
+        if super::visible::take_any_account_transient().is_none()
+            && super::visible::take_any_transient_resolution_error().is_none()
+        {
+            return None;
+        }
+        caller.signing.inspect(|signing| signing.want_refund());
+        Some(error_response_preserving_status(
+            id.clone(),
+            &crate::personal_accounts::refusal::transient_retry_error(None),
+        ))
     }
 
     pub(super) async fn begin_task(
@@ -386,6 +452,19 @@ impl MetaMcp {
                 } else {
                     caller.retry.attestation.as_deref()
                 };
+                // MIK-8392: the repeat runs the stored-read pre-pass too, so
+                // a catalogue past its TTL is refreshed before it is judged
+                // (otherwise it would answer retryable until other traffic
+                // refreshed it) — but not its account fill: a repeat's
+                // accounts are judged live, and the fill would read custody
+                // and audit a busy custody for a call that serves stored
+                // output (`prepare_repeated_call`).
+                // Boxed as a trait object: its future (credential resolution,
+                // fills) must not become part of this dispatch's own
+                // recursive future type (the Send check overflows).
+                let prepare: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> =
+                    Box::pin(self.prepare_repeated_call(&stored, caller.scope(), session_id));
+                prepare.await;
                 // E9: a target hidden only because its account cannot be read
                 // now answers as the live call does (retryable), before the
                 // catalogue refusal; every other withholding is unchanged.

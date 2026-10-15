@@ -170,8 +170,6 @@ impl MetaMcp {
         idp_cfg: &crate::identity_propagation::IdentityPropagationConfig,
         caller: CallerProof<'_>,
     ) -> Result<CallerCredential> {
-        use crate::identity_propagation::BackendDescriptor;
-
         // Audit context (MIK-6740, IDP4): every mint and every fail-closed
         // refusal on THIS route is recorded, identically to the direct backend
         // route. Only subject/backend/audience/reason reach the log — never the
@@ -247,12 +245,7 @@ impl MetaMcp {
             return refuse("no identity-propagation strategy is configured".to_string()).await;
         };
 
-        let descriptor = BackendDescriptor {
-            id: server.to_string(),
-            audience: idp_cfg.audience.clone(),
-            token_exchange_endpoint: idp_cfg.token_exchange_endpoint.clone(),
-            token_exchange_scope: idp_cfg.token_exchange_scope.clone(),
-        };
+        let descriptor = account_mint::descriptor_for(server, idp_cfg);
         // A11-e′: a managed descriptor mints through its typed vault, the SAME
         // instance as `strategy` (`account_strategies.rs` `InstalledAccount`),
         // whose `propagate` is `prepare` minus the lease. Keeping the lease is
@@ -267,16 +260,9 @@ impl MetaMcp {
         let outcome = async {
             match minted {
                 Ok((cred, managed)) => {
-                    // Validate every header parses BEFORE dispatch, so an invalid
-                    // minted credential fails closed rather than silently letting the
-                    // static Authorization through (MIK-6734 review carry-forward).
-                    for (k, v) in &cred.headers {
-                        if k.parse::<reqwest::header::HeaderName>().is_err()
-                            || v.parse::<reqwest::header::HeaderValue>().is_err()
-                        {
-                            return refuse(format!("minted credential header '{k}' is invalid"))
-                                .await;
-                        }
+                    // Every header must parse BEFORE dispatch.
+                    if let Some(k) = account_mint::invalid_header(&cred.headers) {
+                        return refuse(format!("minted credential header '{k}' is invalid")).await;
                     }
                     // cache_binding distinguishes user AND audience (collision-safe),
                     // so per-user results cache in isolation instead of being dropped
@@ -298,12 +284,27 @@ impl MetaMcp {
                         attempted: false,
                     })
                 }
-                Err(e) => refuse(format!("credential minting failed: {e}"))
-                    .await
-                    .map_err(|refused| {
-                        let account_id = backend.and_then(|b| b.account_descriptor_id());
-                        crate::personal_accounts::refusal::mark(refused, &e, account_id)
-                    }),
+                // A busy custody at the mint released nothing (MIK-8428):
+                // the one transient record and sealed retryable answer
+                // replace this site's refusal record and `Config` fold.
+                Err(error) => {
+                    if let crate::personal_accounts::MintError::Busy(busy) = &error
+                        && let Some(descriptor_id) = descriptor_id.as_deref()
+                    {
+                        Err(self
+                            .account_strategies
+                            .transient_mint_refusal(audit_logger, descriptor_id, caller, busy)
+                            .await)
+                    } else {
+                        let error = error.into_error();
+                        refuse(format!("credential minting failed: {error}"))
+                            .await
+                            .map_err(|refused| {
+                                let account_id = backend.and_then(|b| b.account_descriptor_id());
+                                crate::personal_accounts::refusal::mark(refused, &error, account_id)
+                            })
+                    }
+                }
             }
         }
         .await;

@@ -95,7 +95,7 @@ fn a_custody_refusal_reconnecting_cannot_fix_leaves_the_401_as_it_was() {
                 false,
             ));
             let (_credential, held) = vault
-                .prepare_held(Principal::Verified(&alice), &backend())
+                .prepare_held_classified(Principal::Verified(&alice), &backend())
                 .await
                 .expect("the seeded grant leases");
             let refused = crate::Error::Config("backend answered 401".into());

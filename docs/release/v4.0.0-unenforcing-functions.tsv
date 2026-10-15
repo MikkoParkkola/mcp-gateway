@@ -41,8 +41,8 @@ src/transport/http/listen.rs	unsolicited	1	Opens the legacy notification stream 
 src/oauth/client/mod.rs	fmt	1	Redacting Debug for TokenResponse; hides tokens from logs but makes no allow/deny decision.
 src/oauth/client/mod.rs	fmt	2	Redacting Debug for ClientRegistrationResponse; hides the client secret but decides nothing.
 src/oauth/client/mod.rs	fmt	3	Redacting Debug for OAuthClientConfig; hides the client secret but decides nothing.
-src/oauth/client/mod.rs	backend_name	1	Accessor returning the backend name for logs and errors.
-src/oauth/client/mod.rs	needs_proactive_refresh	1	Timing heuristic: remaining lifetime under the refresh buffer; decides when to refresh, not whether access is allowed.
+src/oauth/client/token_access.rs	backend_name	1	Accessor returning the backend name for logs and errors.
+src/oauth/client/token_access.rs	needs_proactive_refresh	1	Timing heuristic: remaining lifetime under the refresh buffer; decides when to refresh, not whether access is allowed.
 src/oauth/client/mod.rs	generate_client_id	1	Random public client_id fallback when DCR is unavailable; the id is not a secret and gates nothing.
 src/oauth/client/renewal.rs	spawn_refresh_task	1	Spawns refresh_loop with a fixed 60 s period; plumbing.
 src/oauth/login_gate.rs	outcome	1	Accessor for the cohort's recorded login outcome; login sharing, not access control.
@@ -55,11 +55,11 @@ src/oauth/login_gate.rs	cohort	1	Accessor returning the current cohort a caller 
 src/oauth/login_gate.rs	pending_in	1	Reports whether a cohort's login is in flight, used only to classify a deadline error.
 src/oauth/login_gate.rs	end	2	LoginGate::end maps the lead's error to an outcome and calls release; records, decides nothing.
 src/oauth/login_gate.rs	release	1	Clears the attempt, sets the cohort outcome and notifies joiners; lifecycle bookkeeping.
-src/oauth/login_gate.rs	scope	1	Provenance::scope captures the cohort in a task-local for deadline error classification.
-src/oauth/login_gate.rs	mark_started	1	Sets a provenance flag used only to classify a deadline error.
-src/oauth/login_gate.rs	mark_dispatched	1	Sets a provenance flag used only to classify a deadline error.
-src/oauth/login_gate.rs	mark_waited	1	Sets a provenance flag used only to classify a deadline error.
-src/oauth/login_gate.rs	expired	1	Chooses AuthorizationPending or the given error for an expired deadline; error classification that admits nothing.
+src/oauth/login_gate/scopes.rs	scope	1	Provenance::scope captures the cohort in a task-local for deadline error classification.
+src/oauth/login_gate/scopes.rs	mark_started	1	Sets a provenance flag used only to classify a deadline error.
+src/oauth/login_gate/scopes.rs	mark_dispatched	1	Sets a provenance flag used only to classify a deadline error.
+src/oauth/login_gate/scopes.rs	mark_waited	1	Sets a provenance flag used only to classify a deadline error.
+src/oauth/login_gate/scopes.rs	expired	1	Chooses AuthorizationPending or the given error for an expired deadline; error classification that admits nothing.
 src/personal_accounts/journey/ids.rs	draw	1	Draws two random journey id candidates; ids are lookup keys, owner is checked separately.
 src/personal_accounts/journey/ids.rs	fresh_id	1	Random 32-hex journey id (or a forced one under test); generation only.
 src/personal_accounts/journey/mod.rs	fmt	1	Debug for JourneyRecord printing only status and reason; redaction, no decision.
@@ -84,8 +84,8 @@ src/gateway/server/tools_changed/views.rs	revoked	1	Per-user change hint: announ
 src/gateway/server/tools_changed/views.rs	any_shown	1	Per-user change hint: whether removing the backend changes any view
 src/gateway/server/tools_changed/views.rs	baseline	1	Per-user change hint: picks what a first fill is compared with
 src/gateway/server/tools_changed/views.rs	bury	1	Per-user change hint: keeps an evicted view's fingerprint, capped
-src/oauth/login_gate.rs	fill_scope	1	Runs a shared fill under its dispatch mark; affects only which timeout error a joiner reports (MIK-8046).
-src/oauth/login_gate.rs	joined	1	Records which shared fill a deadline scope waits on; affects only which timeout error it reports (MIK-8046).
+src/oauth/login_gate/scopes.rs	fill_scope	1	Runs a shared fill under its dispatch mark; affects only which timeout error a joiner reports (MIK-8046).
+src/oauth/login_gate/scopes.rs	joined	1	Records which shared fill a deadline scope waits on; affects only which timeout error it reports (MIK-8046).
 src/gateway/server/stdio_tasks.rs	stop_on_drop	1	Session lifecycle (MIK-7839.CANCEL.3): builds the guard that stops task workers when the session future is dropped
 src/gateway/task_service/service.rs	stop_serving	1	Store lifecycle (MIK-7839.CANCEL.3): forwards the admission cutoff to the store
 src/gateway/task_service/store.rs	stop_serving	1	Store lifecycle (MIK-7839.CANCEL.3): clears ready so later mutations answer Unavailable; ownership checks are elsewhere
@@ -147,22 +147,22 @@ src/gateway/server/stdio_single.rs	run_stdio	1	Starts stdio mode on the process 
 src/gateway/server/stdio_single.rs	stdio_take_merged_client_meta	1	Moves the client _meta into the call arguments; makes no access decision
 src/gateway/task_service/store_input.rs	now	2	TaskStore::now delegates to Shared::now, which carries the decision
 src/gateway/server/stdio_writer.rs	stdout_queue	1	Queue construction (MIK-8176): creates the stdout writer's bounded queue and, in test builds only, reports the stdio session's Meta-MCP to a test seam; it decides nothing
-src/gateway/task_service/execution.rs	begin	1	Takes the handoff for a fresh id and spawns commit_and_run; admission and dispatch gating happen in the worker
-src/gateway/task_service/execution.rs	cancel_remaining	1	Cancels running workers at shutdown and waits a bound for them to end
-src/gateway/task_service/execution.rs	cancel_signal	1	Forwards a cancel signal to the handoff registry
+src/gateway/task_service/execution/operations.rs	begin	1	Takes the handoff for a fresh id and spawns commit_and_run; admission and dispatch gating happen in the worker
+src/gateway/task_service/execution/operations.rs	cancel_remaining	1	Cancels running workers at shutdown and waits a bound for them to end
+src/gateway/task_service/execution/operations.rs	cancel_signal	1	Forwards a cancel signal to the handoff registry
 src/gateway/task_service/execution.rs	commit_to_service	1	Maps a CommitFailure to a ServiceError
-src/gateway/task_service/execution.rs	drain	1	Shutdown join of handoffs and worker permits under a timeout
-src/gateway/task_service/execution.rs	fail_marker	1	Test seam: asks the observer to inject a marker failure
-src/gateway/task_service/execution.rs	fail_state_upgrade	1	Test seam: asks the observer to inject a host-upgrade failure
+src/gateway/task_service/execution/operations.rs	drain	1	Shutdown join of handoffs and worker permits under a timeout
+src/gateway/task_service/execution/operations.rs	fail_marker	1	Test seam: asks the observer to inject a marker failure
+src/gateway/task_service/execution/operations.rs	fail_state_upgrade	1	Test seam: asks the observer to inject a host-upgrade failure
 src/gateway/task_service/execution.rs	into_response	1	Maps a BeginOutcome to its JSON-RPC response; the refusals it renders were decided by admission
 src/gateway/task_service/execution.rs	is_terminal	1	Status predicate for the three terminal states
-src/gateway/task_service/execution.rs	notify_observer	1	Test seam: tells the commit observer a stage was reached
-src/gateway/task_service/execution.rs	observe_commits	1	Test/debug seam installing a commit observer
-src/gateway/task_service/execution.rs	on_publication	1	Installs the write-once publication callback for the events source
-src/gateway/task_service/execution.rs	published	1	Publishes a committed transition to the hook, log and subscribers
-src/gateway/task_service/execution.rs	recovery	1	Getter for the installed recovery adapter
-src/gateway/task_service/execution.rs	reread_sealed	1	Drives TaskService::reread_sealed_deferring each sweep and publishes rows it settled; the seal ordering is decided there
-src/gateway/task_service/execution.rs	seal	1	Cancels the shutdown token so later workers never start; lifecycle, not a security refusal
+src/gateway/task_service/execution/operations.rs	notify_observer	1	Test seam: tells the commit observer a stage was reached
+src/gateway/task_service/execution/operations.rs	observe_commits	1	Test/debug seam installing a commit observer
+src/gateway/task_service/execution/operations.rs	on_publication	1	Installs the write-once publication callback for the events source
+src/gateway/task_service/execution/operations.rs	published	1	Publishes a committed transition to the hook, log and subscribers
+src/gateway/task_service/execution/operations.rs	recovery	1	Getter for the installed recovery adapter
+src/gateway/task_service/execution/operations.rs	reread_sealed	1	Drives TaskService::reread_sealed_deferring each sweep and publishes rows it settled; the seal ordering is decided there
+src/gateway/task_service/execution/operations.rs	seal	1	Cancels the shutdown token so later workers never start; lifecycle, not a security refusal
 src/gateway/task_service/execution/context.rs	authorizer	1	Getter for the captured router authorizer
 src/gateway/task_service/execution/context.rs	dispatch_log	1	Getter for the dispatch log
 src/gateway/task_service/execution/context.rs	host	1	Getter for the task host
@@ -247,5 +247,5 @@ src/gateway/task_service/store_targets.rs	add_targets	1	Async hop to add_targets
 src/gateway/task_service/store_targets.rs	settle_bounded_by	1	Async hop to settle_bounded_blocking, where ownership and revision are checked
 src/gateway/task_service/store_unix.rs	sync_dir	1	fsync of the store directory
 src/gateway/task_service/store_unix.rs	sync_file	1	fsync of a record file
-src/gateway/task_service/execution.rs	spawn_now	1	Spawns an already-admitted worker under the shutdown token; the audit-write decision is spawn_worker's
+src/gateway/task_service/execution/operations.rs	spawn_now	1	Spawns an already-admitted worker under the shutdown token; the audit-write decision is spawn_worker's
 src/personal_accounts/config.rs	default_schema_version	1	Serde default for an omitted accounts.schema_version (MIK-8044 P2c3a); returns the literal accounts.v1 only, and the schema check itself is validate_* (config.rs:136/437/532)

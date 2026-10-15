@@ -146,8 +146,12 @@ impl MetaMcp {
     /// the listing's: a descriptor block, a slot or account with no view, an
     /// entry withheld by [`Self::visible_tool`], or a catalogue that is
     /// populated, complete and lacks the tool, read from one snapshot. A
-    /// truncated or never-populated catalogue proves nothing about the tool,
-    /// so it is judged on the other reasons only.
+    /// truncated catalogue proves nothing about the tool, so it is judged
+    /// on the other reasons only, as is a never-populated SHARED catalogue
+    /// (T9c). A caller slot that is gone, replaced or not populated is
+    /// retryable, never judged as never-populated (F3); a cleared cache
+    /// (ever populated, no cached value) is retryable on every view, never
+    /// complete-and-empty (F5).
     pub(crate) fn stored_target_view(
         &self,
         server: &str,
@@ -161,15 +165,56 @@ impl MetaMcp {
         let Some(backend) = self.backends.get(server) else {
             return Some(self.judge_name(server, tool, scope, session_id));
         };
-        let binding = match self.listing_view(&backend, scope) {
-            super::listing_view::ListingView::NoView => {
-                return Some(Visibility::Withheld(Withholding::Lacked));
+        // A Passthrough backend is never indexed (`remember_caller_slot` skips
+        // it), so its listing view is permanently Cold and no read could ever
+        // warm it. The live path carries no per-caller binding for such a call,
+        // so its verdict reads the shared slot; the stored read judges the
+        // shared catalogue too, served when it offers the tool and -32601 when
+        // it lacks it, never "retry" forever (MIK-8392).
+        let passthrough = backend.identity_propagation_config().is_some_and(|idp| {
+            matches!(
+                idp.strategy,
+                crate::identity_propagation::PropagationStrategyKind::Passthrough
+            )
+        });
+        let binding = if passthrough {
+            None
+        } else {
+            match self.listing_view(&backend, scope) {
+                super::listing_view::ListingView::NoView => {
+                    return Some(Visibility::Withheld(Withholding::Lacked));
+                }
+                super::listing_view::ListingView::Cold => return None,
+                super::listing_view::ListingView::Shared => None,
+                super::listing_view::ListingView::Caller(binding) => Some(binding),
             }
-            super::listing_view::ListingView::Cold => return None,
-            super::listing_view::ListingView::Shared => None,
-            super::listing_view::ListingView::Caller(binding) => Some(binding),
         };
-        let (tools, truncated, populated) = backend.cached_tools_view(binding.as_deref());
+        let (cached, truncated, populated, fresh) = backend.cached_tools_view(binding.as_deref());
+        let Some(tools) = cached else {
+            // No cached value. Cleared (ever populated) is retryable on
+            // every view, never complete-and-empty and never served (F5).
+            if populated {
+                return None;
+            }
+            // Never populated. A Caller view reads only the pooled entry
+            // that is still there and populated: gone, replaced or never
+            // filled is retryable, never judged on the other reasons (F3),
+            // so an eviction racing this read cannot serve a target the
+            // caller's own catalogue had withheld.
+            if binding.is_some() {
+                return None;
+            }
+            return Some(self.invokable(server, tool, scope, session_id));
+        };
+        // A held catalogue past its TTL is stale, by the same rule the live
+        // fill uses (F2). The pre-pass refreshes it — per-user through the
+        // cold claim, shared through the shared fill — so still stale here
+        // means the refresh failed or raced: retryable, never judged stale.
+        // Fresh judges, including a withdrawn shared tool within its TTL
+        // (the documented residual).
+        if !fresh {
+            return None;
+        }
         Some(match tools.iter().find(|entry| entry.name == tool) {
             Some(entry) => self.visible_tool(server, entry, scope, session_id),
             None if populated && !truncated => Visibility::Withheld(Withholding::Lacked),
@@ -339,9 +384,17 @@ pub(crate) struct VisibilityMemo {
         parking_lot::Mutex<std::collections::HashMap<(String, AccountKey), crate::Error>>,
     /// MIK-8392 STORED.2 site 1: a retained single-call result the route
     /// stage deferred to a live dispatch, keyed by the owning invocation.
-    /// The lift consumes it once; anything left at a send arm is a bug.
+    /// The lift consumes it once; an untaken entry ends with the request.
     deferred_replay:
         parking_lot::Mutex<std::collections::HashMap<DeferredReplayKey, DeferredReplay>>,
+    /// MIK-8392 Busy parity: a transient busy custody met by this request's
+    /// mint-free view read, carried to the dispatch and consumed once there,
+    /// so nothing in the request reads custody a second time.
+    account_transient: parking_lot::Mutex<std::collections::HashMap<(String, String), String>>,
+    /// The route verdict's resolution error for a target (MIK-8392 G1a),
+    /// carried to that target's dispatch so it answers without resolving
+    /// (and auditing) a second time in one request.
+    resolution_error: parking_lot::Mutex<std::collections::HashMap<(String, String), crate::Error>>,
 }
 
 /// The account a target's dispatch would use (MIK-8392): a managed
@@ -362,9 +415,12 @@ pub(crate) enum AccountOutcome {
     /// descriptor): visibility is judged on the catalogue only (stated
     /// residual).
     Unjudged,
-    /// Custody could not be read (busy, shutting down, store failure): not a
+    /// Custody could not be read (shutting down, store failure): not a
     /// finding about the grant, so a reader answers retryable.
     Unavailable,
+    /// Custody is at its in-flight bound (MIK-8392 Busy parity): transient,
+    /// audited once as such, and answered exactly as a live call answers it.
+    Transient,
 }
 
 /// Record `outcome` for `(server, account)` in the open request's memo unless
@@ -378,49 +434,14 @@ pub(crate) fn record_account_outcome(server: &str, account: &AccountKey, outcome
     });
 }
 
-/// Keep the binding the pre-pass's view read gave `(server, account)`.
-pub(crate) fn record_account_binding(server: &str, account: &AccountKey, binding: &str) {
-    let _ = VISIBILITY_MEMO.try_with(|memo| {
-        memo.account_binding
-            .lock()
-            .insert((server.to_owned(), account.clone()), binding.to_owned());
-    });
-}
-
-/// The binding the pre-pass's view read gave `(server, account)`, if any.
-pub(crate) fn account_binding(server: &str, account: &AccountKey) -> Option<String> {
-    VISIBILITY_MEMO
-        .try_with(|memo| {
-            memo.account_binding
-                .lock()
-                .get(&(server.to_owned(), account.clone()))
-                .cloned()
-        })
-        .ok()
-        .flatten()
-}
-
-/// Keep the live call's refusal for `(server, account)` in the open request;
-/// outside one it is dropped.
-pub(crate) fn record_account_refusal(server: &str, account: &AccountKey, refusal: crate::Error) {
-    let _ = VISIBILITY_MEMO.try_with(|memo| {
-        memo.account_refusal
-            .lock()
-            .insert((server.to_owned(), account.clone()), refusal);
-    });
-}
-
-/// Take the refusal kept for `(server, account)`, if any.
-pub(crate) fn take_account_refusal(server: &str, account: &AccountKey) -> Option<crate::Error> {
-    VISIBILITY_MEMO
-        .try_with(|memo| {
-            memo.account_refusal
-                .lock()
-                .remove(&(server.to_owned(), account.clone()))
-        })
-        .ok()
-        .flatten()
-}
+#[path = "visible_account_memo.rs"]
+mod account_memo;
+pub(crate) use account_memo::{
+    account_binding, account_transient, has_resolution_error, record_account_binding,
+    record_account_refusal, record_account_transient, record_resolution_error,
+    take_account_refusal, take_account_transient, take_any_account_transient,
+    take_any_transient_resolution_error, take_resolution_error,
+};
 
 /// The outcome recorded for `(server, account)` in the open request. Reads
 /// the memo only: outside an open memo, or before the pre-pass ran, it is

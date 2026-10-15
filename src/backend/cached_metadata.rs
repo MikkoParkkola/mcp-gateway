@@ -191,6 +191,33 @@ impl<T> CachedMetadata<T> {
         self.state.read().ever_populated
     }
 
+    /// Move the timestamp back by `secs`, as if the list were listed that
+    /// long ago (MIK-8392 F2): the value stays, freshness lapses past the
+    /// TTL. A slot holding no value is left alone.
+    #[cfg(test)]
+    pub(crate) fn age_for_test(&self, secs: u64) {
+        let mut state = self.state.write();
+        if state.value.is_some() {
+            // `None` on overflow (a system booted moments ago) reads stale
+            // all the same: freshness needs a timestamp.
+            state.cached_at =
+                std::time::Instant::now().checked_sub(std::time::Duration::from_secs(secs));
+        }
+    }
+
+    /// [`Self::with_cached_and_populated`] plus whether the value is fresh
+    /// for `ttl`, all under the same read guard (MIK-8392): a reader judging
+    /// a snapshot never pairs it with another snapshot's freshness.
+    pub(crate) fn with_cached_populated_fresh<R>(
+        &self,
+        ttl: Duration,
+        map: impl FnOnce(Option<&Arc<T>>, bool, bool) -> R,
+    ) -> R {
+        let state = self.state.read();
+        let fresh = Self::fresh_value(&state, ttl).is_some();
+        map(state.value.as_ref(), state.ever_populated, fresh)
+    }
+
     /// One guard: read separately, a fetch landing between them publishes a lie.
     pub(crate) fn with_cached_and_populated<R>(
         &self,

@@ -83,10 +83,18 @@ async fn o3_two_fills_in_one_request_read_custody_once() {
         .expect("a managed account");
     in_request(async {
         let before = gateway.resolves();
-        meta.fill_account_outcomes(&[(BACKEND, TOOL)], operator())
-            .await;
-        meta.fill_account_outcomes(&[(BACKEND, TOOL), (BACKEND, TOOL)], operator())
-            .await;
+        meta.fill_account_outcomes(
+            &[(BACKEND, TOOL)],
+            operator(),
+            crate::gateway::meta_mcp::account_outcome::AccountWrites::All,
+        )
+        .await;
+        meta.fill_account_outcomes(
+            &[(BACKEND, TOOL), (BACKEND, TOOL)],
+            operator(),
+            crate::gateway::meta_mcp::account_outcome::AccountWrites::All,
+        )
+        .await;
         assert_eq!(gateway.resolves() - before, 1, "O3: one custody read");
         assert_eq!(
             visible::account_outcome(BACKEND, &account),
@@ -116,7 +124,9 @@ async fn o5_an_external_account_is_unjudged_with_no_custody_read() {
     let custody = custody_with(&[]);
     let (_meta, registry) =
         installed_gateway(&[("partner", external("partner"))], &custody.installed());
-    let view = registry.view_binding_checked("partner", operator()).await;
+    let view = registry
+        .view_binding_classified("partner", operator())
+        .await;
     assert!(
         view.is_none(),
         "O5: an external account is unjudged: {view:?}"
@@ -135,8 +145,12 @@ async fn e5a_a_clean_carried_resolution_is_reused_as_live() {
     in_request(async {
         carry(&meta, None).await;
         let before = gateway.resolves();
-        meta.fill_account_outcomes(&[(BACKEND, TOOL)], operator())
-            .await;
+        meta.fill_account_outcomes(
+            &[(BACKEND, TOOL)],
+            operator(),
+            crate::gateway::meta_mcp::account_outcome::AccountWrites::All,
+        )
+        .await;
         assert_eq!(gateway.resolves() - before, 0, "E5a: no second read");
         assert_eq!(
             visible::account_outcome(BACKEND, &account),
@@ -157,8 +171,12 @@ async fn e5b_a_carried_resolution_whose_fill_failed_is_read_again() {
     in_request(async {
         carry(&meta, Some(crate::Error::json_rpc(-32603, "fill failed"))).await;
         let before = gateway.resolves();
-        meta.fill_account_outcomes(&[(BACKEND, TOOL)], operator())
-            .await;
+        meta.fill_account_outcomes(
+            &[(BACKEND, TOOL)],
+            operator(),
+            crate::gateway::meta_mcp::account_outcome::AccountWrites::All,
+        )
+        .await;
         assert_eq!(
             gateway.resolves() - before,
             1,

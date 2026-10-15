@@ -478,7 +478,13 @@ impl AccountStrategyRegistry {
         let minted = Self::mint(installed.as_ref(), principal, &backend).await;
         let (credential, managed) = match minted {
             Ok(minted) => minted,
-            Err(error) => {
+            // A busy custody at the mint (MIK-8428): see `transient_mint_refusal`.
+            Err(crate::personal_accounts::MintError::Busy(error)) => {
+                return Err(self
+                    .transient_mint_refusal(logger.as_ref(), descriptor_id, caller, &error)
+                    .await);
+            }
+            Err(crate::personal_accounts::MintError::Other(error)) => {
                 let reason = error.to_string();
                 Self::audit_refusal(
                     logger.as_ref(),
@@ -687,11 +693,13 @@ impl AccountStrategyRegistry {
         installed: &InstalledAccount,
         principal: Principal<'_>,
         backend: &BackendDescriptor,
-    ) -> std::result::Result<(super::PropagatedCredential, Option<ManagedLease>), PropagationError>
-    {
+    ) -> std::result::Result<
+        (super::PropagatedCredential, Option<ManagedLease>),
+        crate::personal_accounts::MintError,
+    > {
         match &installed.minter {
             Minter::Managed(vault) => vault
-                .prepare_held(principal, backend)
+                .prepare_held_classified(principal, backend)
                 .await
                 .map(|(credential, managed)| (credential, Some(managed))),
             // An external strategy exchanges the CALLER'S OWN token, so it has
@@ -704,10 +712,12 @@ impl AccountStrategyRegistry {
                 Some(identity) => strategy
                     .propagate(identity, backend)
                     .await
-                    .map(|credential| (credential, None)),
+                    .map(|credential| (credential, None))
+                    .map_err(crate::personal_accounts::MintError::Other),
                 None => Err(PropagationError::Refuse(
                     "an external account descriptor mints only for a verified caller".to_string(),
-                )),
+                )
+                .into()),
             },
         }
     }
@@ -746,27 +756,6 @@ impl AccountStrategyRegistry {
         Self::principal(installed.as_ref(), caller).is_some_and(|principal| !vault.binds(principal))
     }
 
-    /// The caller's current view of descriptor `descriptor_id`, read without
-    /// refreshing or minting (MIK-8392): `None` when the descriptor has no
-    /// managed custody to read (an external or token-exchange account, or
-    /// none installed), so no mint-free judgement exists; otherwise the
-    /// binding, or why there is none. A caller with no principal for it has
-    /// no view, reported as not connected.
-    pub(crate) async fn view_binding_checked(
-        &self,
-        descriptor_id: &str,
-        caller: CallerProof<'_>,
-    ) -> Option<std::result::Result<String, PropagationError>> {
-        let installed = self.installed(descriptor_id)?;
-        let vault = installed.minter.managed()?;
-        let Some(principal) = Self::principal(installed.as_ref(), caller) else {
-            return Some(Err(PropagationError::AccountNotConnected(
-                "the request carries no principal for this account".to_owned(),
-            )));
-        };
-        Some(vault.view_binding_checked(principal).await)
-    }
-
     /// Record a refusal. The request is already being refused, so an audit-write
     /// failure does not change the outcome — but it must not be dropped
     /// silently.
@@ -795,6 +784,9 @@ impl AccountStrategyRegistry {
         }
     }
 }
+
+#[path = "account_strategies_view.rs"]
+mod view;
 
 #[cfg(test)]
 #[path = "account_strategies_tests.rs"]

@@ -621,3 +621,6 @@ async fn t16_a_grant_withdrawn_after_the_task_ran_answers_as_the_live_call() {
         "T16: {after_stored:#?}"
     );
 }
+
+#[path = "stored_read_access_findings.rs"]
+mod findings;

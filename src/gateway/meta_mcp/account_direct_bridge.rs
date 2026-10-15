@@ -318,6 +318,11 @@ impl DirectAccountGateway {
         self.custody.fail_reads(failing);
     }
 
+    /// Allow `allowed` further custody reads, then fail busy (G1a).
+    pub(crate) fn fail_custody_after_for_test(&self, allowed: usize) {
+        self.custody.fail_after(allowed);
+    }
+
     /// Credential releases custody made: one per `prepare` (MIK-8356 F5: a
     /// refused call resolves nothing).
     pub(crate) fn releases(&self) -> usize {
@@ -388,9 +393,13 @@ fn operator_token(id: &str) -> &'static str {
 pub(crate) struct CapabilityAccount {
     custody: Custody,
     port: u16,
+    /// What the loopback capture peer received (#3892: a served call is
+    /// proved by the peer seeing it, not by an outer "completed").
+    captured: Arc<super::super::account_rest_fixture::Captured>,
     log: Arc<crate::security::TransparencyLogger>,
     external: bool,
-    _log_dir: tempfile::TempDir,
+    personal: bool,
+    log_dir: tempfile::TempDir,
 }
 
 /// The capability server and tool [`CapabilityAccount`] serves.
@@ -401,10 +410,20 @@ impl CapabilityAccount {
     /// Alice's grant seeded; `external` makes `WORK` an external descriptor
     /// (no vault, so its view is unjudged).
     pub(crate) async fn start(external: bool) -> Self {
-        let (port, _captured) = super::super::account_rest_fixture::capture_endpoint().await;
+        Self::start_expiring(external, u64::MAX).await
+    }
+
+    /// Alice's grant seeded already expired, so every mint refreshes it with
+    /// the scripted provider before the release (#3892 R7).
+    pub(crate) async fn start_expired() -> Self {
+        Self::start_expiring(false, 1).await
+    }
+
+    async fn start_expiring(external: bool, expires_at: u64) -> Self {
+        let (port, captured) = super::super::account_rest_fixture::capture_endpoint().await;
         let custody = custody_with(&[(
             account_key("alice", WORK),
-            grant(ALICE_WORK_TOKEN, u64::MAX),
+            grant(ALICE_WORK_TOKEN, expires_at),
         )]);
         let dir = tempfile::tempdir().expect("a log directory");
         let log = crate::gateway::meta_mcp::grant_audit_fixture::logger(
@@ -414,15 +433,41 @@ impl CapabilityAccount {
         Self {
             custody,
             port,
+            captured,
             log,
             external,
-            _log_dir: dir,
+            personal: false,
+            log_dir: dir,
         }
+    }
+
+    /// As [`Self::start`] (managed), but the capability is Personal owned by
+    /// alice, so identity grants decide it (the order twin that withdraws the
+    /// grant as well as revoking the account).
+    pub(crate) async fn start_personal() -> Self {
+        let mut account = Self::start(false).await;
+        account.personal = true;
+        account
     }
 
     /// The caller the grant belongs to.
     pub(crate) fn alice() -> VerifiedIdentity {
         identity("alice")
+    }
+
+    /// The identity grant that lets alice reach the personal capability.
+    pub(crate) fn alice_grant() -> crate::identity_grants::IdentityGrant {
+        serde_json::from_value(serde_json::json!({
+            "grant_id": "g-alice",
+            "subject": { "authority": INBOUND_ISSUER, "subject": "alice" },
+            "agent": "any",
+            "capability": super::super::account_rest_fixture::TOOL,
+            "scope": "read",
+            "owner": { "authority": INBOUND_ISSUER, "subject": "alice" },
+            "provenance": "local-operator",
+            "reason": "order-twin fixture grant"
+        }))
+        .expect("the fixture grant deserialises")
     }
 
     /// Install the account and the capability on `meta`.
@@ -450,21 +495,83 @@ impl CapabilityAccount {
         let executor = Arc::new(
             crate::capability::CapabilityExecutor::new()
                 .with_account_strategies(meta.account_strategies())
-                .with_test_http_client(client),
+                .with_test_http_client(client)
+                // The meta dispatch opens no loopback egress, and the capture
+                // peer is loopback (#3892 healthy controls).
+                .with_test_loopback_egress(),
         );
         let backend = Arc::new(crate::capability::CapabilityBackend::new(
             CAPABILITY_SERVER,
             executor,
         ));
-        backend
-            .register_capability(capability(
+        let definition = if self.personal {
+            personal_capability(
+                &format!("http://127.0.0.1:{}", self.port),
+                "oauth:google",
+                WORK,
+            )
+        } else {
+            capability(
                 &format!("http://127.0.0.1:{}", self.port),
                 "oauth:google",
                 Some(WORK),
-            ))
+            )
+        };
+        backend
+            .register_capability(definition)
             .expect("the capability registers");
         meta.set_capabilities(backend);
         meta
+    }
+
+    /// Make every custody read fail as busy, or recover (seat finding 3).
+    pub(crate) fn fail_custody_for_test(&self, failing: bool) {
+        self.custody.fail_reads(failing);
+    }
+
+    /// Provider refreshes custody has made since this fixture started.
+    pub(crate) fn refreshes(&self) -> usize {
+        self.custody.refreshes()
+    }
+
+    /// Requests the capture peer has received.
+    pub(crate) fn peer_requests(&self) -> usize {
+        self.captured.count()
+    }
+
+    /// Custody lookups since this fixture started.
+    pub(crate) fn resolves(&self) -> usize {
+        self.custody.resolves()
+    }
+
+    /// Allow `allowed` further custody reads, then fail busy
+    /// (#3892 R6 test seam: intake view fine, worker mint busy).
+    pub(crate) fn fail_custody_after_for_test(&self, allowed: usize) {
+        self.custody.fail_after(allowed);
+    }
+
+    /// Make only the mint's refresh step answer `Busy` (#3892 R8).
+    pub(crate) fn fail_refresh_for_test(&self) {
+        self.custody.busy_at(super::BusyStep::Refresh);
+    }
+
+    /// Make only the mint's release step answer `Busy` (#3892 R7).
+    pub(crate) fn fail_release_for_test(&self) {
+        self.custody.busy_at(super::BusyStep::Release);
+    }
+
+    /// The `idp_refuse` records in this fixture's transparency log.
+    pub(crate) fn idp_refusals_for_test(&self) -> usize {
+        self.idp_refusal_reasons_for_test().len()
+    }
+
+    /// The reasons of those records, in order (#3892 R1).
+    pub(crate) fn idp_refusal_reasons_for_test(&self) -> Vec<String> {
+        crate::gateway::meta_mcp::grant_audit_fixture::entries(&self.log_dir)
+            .iter()
+            .filter(|entry| entry["action"] == "idp_refuse")
+            .map(|entry| entry["reason"].as_str().unwrap_or_default().to_owned())
+            .collect()
     }
 
     /// Revoke alice's grant through live custody.
@@ -475,4 +582,39 @@ impl CapabilityAccount {
             .await
             .expect("the seeded grant revokes");
     }
+}
+
+/// The same account-bound REST capability as
+/// [`account_rest_fixture::capability`](super::super::account_rest_fixture::capability),
+/// but Personal owned by alice, so identity grants decide it.
+fn personal_capability(
+    base_url: &str,
+    key: &str,
+    account: &str,
+) -> crate::capability::CapabilityDefinition {
+    crate::capability::parse_capability(&format!(
+        "name: {}\n\
+         description: Read one folder through a personal account\n\
+         metadata:\n\
+         \x20 exposure: personal\n\
+         \x20 read_only: true\n\
+         \x20 identity_owner:\n\
+         \x20   authority: {}\n\
+         \x20   subject: alice\n\
+         auth:\n\
+         \x20 required: true\n\
+         \x20 type: bearer\n\
+         \x20 key: {key}\n\
+         \x20 account: {account}\n\
+         providers:\n\
+         \x20 primary:\n\
+         \x20   service: rest\n\
+         \x20   config:\n\
+         \x20     base_url: {base_url}\n\
+         \x20     path: /read\n\
+         \x20     method: GET\n",
+        super::super::account_rest_fixture::TOOL,
+        INBOUND_ISSUER,
+    ))
+    .expect("fixture personal capability must parse")
 }

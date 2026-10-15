@@ -498,3 +498,61 @@ fn a_refund_is_due_only_with_the_witness() {
         "a taken witness no longer covers the refund"
     );
 }
+
+/// R0 (MIK-8392 Busy parity control): a kept witness, a refund asked, and
+/// no dispatch: the refund is due.
+#[test]
+fn r0_a_kept_witness_asked_and_undispatched_is_due() {
+    let (context, _) = captured("gateway_invoke", &json!({}), "r0-nonce");
+    context.keep_witness(RefundWitness::at_capture());
+    context.want_refund();
+    assert!(context.refund_due(), "R0: the control refund was not due");
+}
+
+/// R1 (MIK-8392): dispatched with the witness kept — the state today's
+/// send cannot leave (it spends the witness first), built directly so
+/// the `!dispatched` clause of `refund_due` is pinned on its own.
+#[test]
+fn r1_a_dispatched_call_with_its_witness_kept_is_not_due() {
+    let (context, _) = captured("gateway_invoke", &json!({}), "r1-nonce");
+    context.keep_witness(RefundWitness::at_capture());
+    context.mark_dispatched();
+    context.want_refund();
+    assert!(
+        !context.refund_due(),
+        "R1: a dispatched call's refund was due"
+    );
+}
+
+/// R2 (MIK-8392): the witness taken and spent, as the send spends it, with
+/// no dispatch marked: no refund is due on the witness clause alone.
+#[test]
+fn r2_a_spent_witness_undispatched_is_not_due() {
+    let (context, _) = captured("gateway_invoke", &json!({}), "r2-nonce");
+    context.keep_witness(RefundWitness::at_capture());
+    let taken = context
+        .take_witness()
+        .expect("premise: the kept witness is taken");
+    taken.spend();
+    context.want_refund();
+    assert!(
+        !context.refund_due(),
+        "R2: a spent witness still covered the refund"
+    );
+}
+
+/// R3 (MIK-8392): the real send order in `invoke_tool_traced` — take the
+/// witness, spend it, then mark dispatched: no refund is due, under
+/// either guard.
+#[test]
+fn r3_the_send_order_spent_then_dispatched_is_not_due() {
+    let (context, _) = captured("gateway_invoke", &json!({}), "r3-nonce");
+    context.keep_witness(RefundWitness::at_capture());
+    let taken = context
+        .take_witness()
+        .expect("premise: the kept witness is taken");
+    taken.spend();
+    context.mark_dispatched();
+    context.want_refund();
+    assert!(!context.refund_due(), "R3: the send-order refund was due");
+}

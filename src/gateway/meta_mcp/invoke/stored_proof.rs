@@ -108,7 +108,14 @@ impl crate::gateway::meta_mcp::MetaMcp {
             .map(|target| (target.server.as_str(), target.tool.as_str()))
             .collect();
         let proof = CallerProof::new(caller.verified_identity, caller.provenance());
-        self.fill_account_outcomes(&targets, proof).await;
+        // A repeat's fill (#3892): outcomes recorded, a busy custody writes
+        // no transient `idp_refuse` (R5).
+        self.fill_account_outcomes(
+            &targets,
+            proof,
+            crate::gateway::meta_mcp::account_outcome::AccountWrites::PermanentOnly,
+        )
+        .await;
         for &(server, tool) in &targets {
             let Some(account) = self.target_account(server, tool) else {
                 continue;

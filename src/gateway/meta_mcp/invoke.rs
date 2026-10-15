@@ -230,15 +230,19 @@ impl MetaMcp {
             .await
         {
             Ok(std::ops::ControlFlow::Continue(resolution)) => resolution,
-            // The account did not prove live: the live refusal goes out. A
-            // deferred entry for this invocation is never served: only this
-            // invocation's key can take it, and the memo ends with the
-            // request (E11).
+            // Not proven live: the live refusal goes out; nothing deferred is served (E11).
             Ok(std::ops::ControlFlow::Break(answer)) => return Ok(TracedOutcome::Live(answer)),
-            Err(error) => return Err(error),
+            Err(error) => {
+                // A busy custody refused this call before its backend, with
+                // its witness kept: ask for the nonce back, settled when
+                // the call returns (MIK-8392 Busy parity).
+                if crate::personal_accounts::refusal::transient_data(&error).is_some() {
+                    nonce_settle::ask_refund(caller);
+                }
+                return Err(error);
+            }
         };
-        // The lift (MIK-8392 STORED.2), right after resolution proved the
-        // account live and before the key, spend, redeem or relay can act.
+        // The lift (MIK-8392 STORED.2): proven live, before key/spend/redeem/relay act.
         if let Some(replay) = self
             .lift_deferred((server, tool), &mut witness, session_id, caller)
             .await

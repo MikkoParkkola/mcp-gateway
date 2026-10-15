@@ -159,7 +159,7 @@ const DRIVEN: &[(ReadRoute, ReadStage, &str)] = &[
         ReadRoute::StdioGet,
         ReadStage::AccountView,
         "UNDRIVEN: no stdio per-user account fixture; stdio tasks/get runs the same \
-         prepare_stored_read and judge_stored_targets as HttpGet",
+         prepare_stored_read, judge_stored_visibility and judge_stored_accounts as HttpGet",
     ),
     (
         ReadRoute::StdioGet,

@@ -85,6 +85,7 @@ pub(crate) enum Na {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Ticket {
     Mik8353,
+    Mik8392,
 }
 
 /// What a (method, route, stage) row asserts.

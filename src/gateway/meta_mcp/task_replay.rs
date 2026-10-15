@@ -60,15 +60,46 @@ impl MetaMcp {
 
     /// Fill this request's account outcomes for `stored`'s targets, the
     /// async half of a stored read (MIK-8392): every read entry awaits this
-    /// inside the request's memo, then judges synchronously.
+    /// inside the request's memo, then judges synchronously. `scope` is this
+    /// request's live policy caller, so a cold claim already refused without
+    /// the caller's catalogue is skipped before it resolves (F4).
     pub(crate) async fn prepare_stored_read(
         &self,
         stored: &CommittedTask,
-        caller: crate::identity_propagation::CallerProof<'_>,
+        scope: super::visibility::InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) {
+        self.prepare_stored_read_kind(stored, scope, session_id, StoredRead::Read)
+            .await;
+    }
+
+    /// The repeat's pre-pass: its accounts are judged live and
+    /// [`Self::judge_stored_accounts`] skips a `RepeatedCall`, so the account
+    /// fill still runs (one custody read, so an unbindable caller's permanent
+    /// refusal is kept) but with `AccountWrites::PermanentOnly`: a busy
+    /// custody writes no transient `idp_refuse`. The catalogue refresh below
+    /// it still runs, as the repeat's visibility judgement reads it.
+    pub(super) async fn prepare_repeated_call(
+        &self,
+        stored: &CommittedTask,
+        scope: super::visibility::InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) {
+        self.prepare_stored_read_kind(stored, scope, session_id, StoredRead::RepeatedCall)
+            .await;
+    }
+
+    async fn prepare_stored_read_kind(
+        &self,
+        stored: &CommittedTask,
+        scope: super::visibility::InvokeScope<'_>,
+        session_id: Option<&str>,
+        read: StoredRead,
     ) {
         if !stored.serves_backend_output() {
             return;
         }
+        let caller = scope.caller;
         let targets: Vec<(&str, &str)> = stored
             .targets
             .iter()
@@ -85,10 +116,32 @@ impl MetaMcp {
                 })
             })
             .collect();
-        self.fill_account_outcomes(&targets, caller).await;
+        // A target policy already refuses without any catalogue is never
+        // account-judged (MIK-8392 seat finding 1): no custody read and no
+        // audit write for it, as the live Step 0 does neither. Its answer
+        // comes from the policy layers in `refuse_stored`, before accounts.
+        // A repeat still fills (so an unbindable caller's permanent refusal
+        // below is kept, Ub-repeat) but writes no busy `idp_refuse`: it
+        // serves its stored output (#3892 review finding 6, R5).
+        let writes = if read == StoredRead::RepeatedCall {
+            super::account_outcome::AccountWrites::PermanentOnly
+        } else {
+            super::account_outcome::AccountWrites::All
+        };
+        let judged: Vec<(&str, &str)> = targets
+            .iter()
+            .copied()
+            .filter(|&(server, tool)| {
+                !self.target_refused_without_catalogue((server, tool), scope, session_id)
+            })
+            .collect();
+        self.fill_account_outcomes(&judged, caller, writes).await;
         for &(server, tool) in &targets {
             self.keep_permanent_refusal(server, tool, caller).await;
-            self.settle_caller_view(server, tool, caller).await;
+            self.settle_caller_view(server, tool, scope, session_id)
+                .await;
+            self.settle_shared_view((server, tool), scope, session_id)
+                .await;
         }
     }
 
@@ -124,12 +177,25 @@ impl MetaMcp {
         &self,
         server: &str,
         tool: &str,
-        caller: crate::identity_propagation::CallerProof<'_>,
+        scope: super::visibility::InvokeScope<'_>,
+        session_id: Option<&str>,
     ) {
+        let caller = scope.caller;
         let Some(backend) = self.backends.get(server) else {
             return;
         };
         if !backend.keeps_per_user_catalogues() {
+            return;
+        }
+        // A Passthrough view can never warm (`remember_caller_slot` skips it)
+        // and the stored read judges the shared catalogue for it: nothing to
+        // claim or publish here.
+        if backend.identity_propagation_config().is_some_and(|idp| {
+            matches!(
+                idp.strategy,
+                crate::identity_propagation::PropagationStrategyKind::Passthrough
+            )
+        }) {
             return;
         }
         let Some(principal) = self.principal_for(&backend, caller) else {
@@ -145,12 +211,22 @@ impl MetaMcp {
                 .target_account(server, tool)
                 .and_then(|account| visible::account_binding(server, &account));
             if current.is_none_or(|current| current == held.binding()) {
-                backend.touch_caller_slot(held.binding());
-                return;
+                // MIK-8392 F2: a held catalogue past its TTL is stale, by
+                // the same rule the live fill uses. Treat the view as cold:
+                // forget, claim the lease and refresh through `warm_cold_view`
+                // (one resolution per lease window), retryable meanwhile,
+                // exactly as a cold view. A fresh catalogue touches and
+                // stays warm: no extra resolution (C1, K1).
+                if backend.has_cached_tools_for(Some(held.binding())) {
+                    backend.touch_caller_slot(held.binding());
+                    return;
+                }
+                backend.forget_caller_held(&id, &held);
+            } else {
+                #[cfg(test)]
+                backend.after_warm_capture.pause().await;
+                backend.forget_caller_held(&id, &held);
             }
-            #[cfg(test)]
-            backend.after_warm_capture.pause().await;
-            backend.forget_caller_held(&id, &held);
         }
         let account = self
             .target_account(server, tool)
@@ -165,12 +241,114 @@ impl MetaMcp {
         ) {
             return;
         }
+        if self.refused_without_catalogue(&backend, (server, tool), scope, session_id) {
+            return;
+        }
         if let crate::backend::ColdClaim::Won(generation) =
             backend.claim_cold_view(&id, COLD_RETRY_BACKOFF, account_live)
         {
             self.warm_cold_view((server, tool), &backend, caller, generation)
                 .await;
         }
+    }
+
+    /// The shared half of a stored read (MIK-8392 F2): a shared catalogue
+    /// past its TTL is refreshed through the live call's catalogue fill,
+    /// under the gateway's credentials and no caller credential, before the
+    /// read judges it — so a stored read can serve a withdrawn shared tool
+    /// for at most one TTL. Only a stale HELD list refreshes: a
+    /// never-populated shared catalogue keeps T9c (judged on the other
+    /// reasons, no fill), and a cleared one keeps F5 (retryable, no fill).
+    /// A failed refresh leaves the list stale, and the sync judgement
+    /// answers retryable.
+    async fn settle_shared_view(
+        &self,
+        (server, tool): (&str, &str),
+        scope: super::visibility::InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) {
+        let Some(backend) = self.backends.get(server) else {
+            return;
+        };
+        // Only backends whose stored read judges the shared catalogue:
+        // those without per-user catalogues, plus Passthrough, which is
+        // never indexed and judges shared (P1).
+        let passthrough = backend.identity_propagation_config().is_some_and(|idp| {
+            matches!(
+                idp.strategy,
+                crate::identity_propagation::PropagationStrategyKind::Passthrough
+            )
+        });
+        if backend.keeps_per_user_catalogues() && !passthrough {
+            return;
+        }
+        let (cached, _, _, fresh) = backend.cached_tools_view(None);
+        if cached.is_none() || fresh {
+            return;
+        }
+        // The same F4 guard as a cold claim: a read already refused without
+        // the catalogue causes no gateway-credentialed listing.
+        if self.refused_without_catalogue(&backend, (server, tool), scope, session_id) {
+            return;
+        }
+        let _ = backend.tools_for_check(None, &[], true).await;
+    }
+
+    /// [`Self::refused_without_catalogue`] for any stored target, a
+    /// capability-provider one with no registry backend included (seat
+    /// finding 3): only the descriptor block needs the backend itself;
+    /// `may_invoke` and dispatch admission decide from the name alone.
+    fn target_refused_without_catalogue(
+        &self,
+        (server, tool): (&str, &str),
+        scope: super::visibility::InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) -> bool {
+        if let Some(backend) = self.backends.get(server) {
+            self.refused_without_catalogue(&backend, (server, tool), scope, session_id)
+        } else {
+            if self.may_invoke(server, tool, scope, session_id).is_err() {
+                return true;
+            }
+            let call = super::invoke::dispatch_guards::BackendCall {
+                server,
+                tool,
+                session_id,
+                api_key_name: scope.api_key_name,
+                trace_id: "",
+                caller_key: None,
+            };
+            self.admit_target(&call).is_err()
+        }
+    }
+
+    /// MIK-8392 F4: whether `server`'s `tool` is refused for this caller
+    /// without reading any catalogue: descriptor-blocked, refused by the
+    /// invocation policy (the silent check the name judgement uses), or by
+    /// the dispatch admission (the kill switch). A read so refused triggers
+    /// no credential resolution and no backend listing; the sync judgement
+    /// still answers it, with its audit record.
+    fn refused_without_catalogue(
+        &self,
+        backend: &crate::backend::Backend,
+        (server, tool): (&str, &str),
+        scope: super::visibility::InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) -> bool {
+        if backend.is_blocked_tool(tool)
+            || self.may_invoke(server, tool, scope, session_id).is_err()
+        {
+            return true;
+        }
+        let call = super::invoke::dispatch_guards::BackendCall {
+            server,
+            tool,
+            session_id,
+            api_key_name: scope.api_key_name,
+            trace_id: "",
+            caller_key: None,
+        };
+        self.admit_target(&call).is_err()
     }
 
     /// A stored read found no account outcome for `server`'s target: every
@@ -185,10 +363,7 @@ impl MetaMcp {
         }
         #[cfg(not(test))]
         let _ = backends;
-        #[cfg(all(not(test), debug_assertions))]
-        panic!("stored read of {server} without the account pre-pass");
-        #[cfg(not(any(test, debug_assertions)))]
-        let _ = server;
+        tracing::error!(server, "stored read without the account pre-pass");
     }
 
     /// What is left of `caller`'s running cold lease on `server`, if one runs.
@@ -219,61 +394,70 @@ impl MetaMcp {
         }
         // Visibility first, as on the live path: a Descriptor, Schema or Lacked
         // target answers as absent even where policy would also refuse
-        // (MIK-8392 T12). A Refused target falls through to the policy check.
-        let refused = match self.judge_stored_targets(stored, session, caller, read) {
-            Err(StoredWithheld::Retry(after)) => return Some(retry_later(id, after)),
-            Err(StoredWithheld::Refused(error)) => Some(error),
-            Ok(()) => self
-                .authorize_stored(stored, attestation, session, caller)
-                .err(),
+        // (MIK-8392 T12). A Refused target falls through to the policy check;
+        // a cold one defers its retry until after policy and accounts, as the
+        // live path fills a cold slot only after route policy.
+        let (cold, caller_catalogue) = match self.judge_stored_visibility(stored, session, caller) {
+            Err(error) => return Some(error_response_preserving_status(id.clone(), &error)),
+            Ok(judged) => judged,
         };
+        // Policy before accounts, as on the live path: route authorize before
+        // caller verdicts, and the dispatch policy before its resolution.
+        if let Err(error) = self.authorize_stored(stored, attestation, session, caller) {
+            return Some(error_response_preserving_status(id.clone(), &error));
+        }
+        // MIK-8392 F1: a removed backend answers as the live call does
+        // (`BackendNotFound`, the invoke path's answer for an unknown
+        // server), after policy, as the live call refuses on policy before
+        // it dispatches.
+        if let Some(error) = self.unknown_server_refusal(stored) {
+            return Some(error_response_preserving_status(id.clone(), &error));
+        }
+        if let Err(withheld) = self.judge_stored_accounts(stored, read) {
+            return Some(match withheld {
+                StoredWithheld::Retry(after) => retry_later(id, after),
+                StoredWithheld::Refused(error) => {
+                    error_response_preserving_status(id.clone(), &error)
+                }
+            });
+        }
+        // The caller's own catalogue is judged after its account, as the
+        // live caller verdict resolves the credential before it reads the
+        // caller's slot (MIK-8392 Ub).
+        if let Some(error) = caller_catalogue {
+            return Some(error_response_preserving_status(id.clone(), &error));
+        }
+        if let Some(after) = cold {
+            return Some(retry_later(id, after));
+        }
         // COLLUDE.1 §13.3: a stored result or pending prompt delivered again
         // renews the reader's receipt; the delivery owner commits it.
-        if refused.is_none() {
-            self.stage_stored_receipt(caller.relay_caller(session), caller.api_key_name, stored);
-        }
-        refused.map(|error| error_response_preserving_status(id.clone(), &error))
+        self.stage_stored_receipt(caller.relay_caller(session), caller.api_key_name, stored);
+        None
     }
 
-    /// Each recorded target against this caller's current view (MIK-8392):
-    /// its account (task reads only) as the pre-pass recorded it, then its
-    /// catalogue through the one judgement [`MetaMcp::stored_target_view`],
-    /// refused through the one guard [`visible::absent_if_withheld`], except
-    /// a Refused view, which falls through to [`Self::authorize_stored`].
-    fn judge_stored_targets(
+    /// Each recorded target against this caller's current catalogue (MIK-8392):
+    /// through the one judgement [`MetaMcp::stored_target_view`], refused
+    /// through the one guard [`visible::absent_if_withheld`], except a Refused
+    /// view, which falls through to [`Self::authorize_stored`]. A cold view
+    /// defers its retry until after policy and accounts; the first cold lease,
+    /// if any, is returned for the caller to answer then.
+    fn judge_stored_visibility(
         &self,
         stored: &CommittedTask,
         session: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
-        read: StoredRead,
-    ) -> std::result::Result<(), StoredWithheld> {
+    ) -> std::result::Result<StoredVisibility, Error> {
         let scope = caller.scope();
+        let mut cold: Option<Option<std::time::Duration>> = None;
+        let mut caller_catalogue: Option<Error> = None;
         for target in &stored.targets {
             let (server, tool) = (target.server.as_str(), target.tool.as_str());
-            if read == StoredRead::Read
-                && let Some(account) = self.target_account(server, tool)
-            {
-                let outcome = visible::account_outcome(server, &account);
-                if outcome.is_none() {
-                    Self::unfilled_outcome_read(&self.backends, server);
-                }
-                match outcome {
-                    // Unfilled: the pre-pass never ran for it. Fail closed,
-                    // and retryable: nothing about the grant was learned.
-                    None | Some(AccountOutcome::Unavailable) => {
-                        return Err(visible::take_account_refusal(server, &account)
-                            .map_or(StoredWithheld::Retry(None), StoredWithheld::Refused));
-                    }
-                    Some(AccountOutcome::NoView) => {
-                        return Err(StoredWithheld::Refused(visible::absent_name(tool)));
-                    }
-                    Some(AccountOutcome::Live | AccountOutcome::Unjudged) => {}
-                }
-            }
             let Some(judged) = self.stored_target_view(server, tool, scope, session) else {
-                return Err(StoredWithheld::Retry(
-                    self.cold_lease_remaining(server, caller),
-                ));
+                if cold.is_none() {
+                    cold = Some(self.cold_lease_remaining(server, caller));
+                }
+                continue;
             };
             // A Refused view is policy, not visibility: it falls through to
             // `authorize_stored`, so the read refuses as the live call does
@@ -281,7 +465,91 @@ impl MetaMcp {
             if judged == visible::Visibility::Withheld(visible::Withholding::Refused) {
                 continue;
             }
-            visible::absent_if_withheld(Some(judged), tool).map_err(StoredWithheld::Refused)?;
+            // A per-user backend's Lacked or Schema verdict is the caller's
+            // own catalogue's: the live caller verdict reads it only after
+            // the account resolves, so it is answered after the account
+            // judgement. A descriptor block, or a shared catalogue's verdict,
+            // is answered now, before policy (T12).
+            let own_catalogue = self.keeps_per_user_catalogues(server)
+                && matches!(
+                    judged,
+                    visible::Visibility::Withheld(
+                        visible::Withholding::Lacked | visible::Withholding::Schema
+                    )
+                );
+            if own_catalogue {
+                if caller_catalogue.is_none() {
+                    caller_catalogue = visible::absent_if_withheld(Some(judged), tool).err();
+                }
+                continue;
+            }
+            visible::absent_if_withheld(Some(judged), tool)?;
+        }
+        Ok((cold, caller_catalogue))
+    }
+
+    /// The live call's answer for a target whose server is neither a
+    /// registered backend nor the capability provider offering that tool:
+    /// `BackendNotFound` (MIK-8392 F1), the invoke path's answer for an
+    /// unknown server (`dispatch.rs` answers it when no backend was
+    /// captured). A capability tool still judges through the catalogue and
+    /// policy path; a personal-account backend that was removed answers
+    /// here too, as its live call does.
+    fn unknown_server_refusal(&self, stored: &CommittedTask) -> Option<Error> {
+        for target in &stored.targets {
+            let (server, tool) = (target.server.as_str(), target.tool.as_str());
+            if self.backends.get(server).is_some() {
+                continue;
+            }
+            let offered = self
+                .get_capabilities()
+                .is_some_and(|cap| cap.name == server && cap.get(tool).is_some());
+            if !offered {
+                return Some(Error::BackendNotFound(server.to_string()));
+            }
+        }
+        None
+    }
+
+    /// Each recorded target's account (task reads only) as the pre-pass
+    /// recorded it (MIK-8392). Runs after [`Self::authorize_stored`], as the
+    /// live path refuses on policy before the account/caller verdict: route
+    /// authorize before caller verdicts, and the dispatch policy before its
+    /// resolution.
+    fn judge_stored_accounts(
+        &self,
+        stored: &CommittedTask,
+        read: StoredRead,
+    ) -> std::result::Result<(), StoredWithheld> {
+        if read != StoredRead::Read {
+            return Ok(());
+        }
+        for target in &stored.targets {
+            let (server, tool) = (target.server.as_str(), target.tool.as_str());
+            let Some(account) = self.target_account(server, tool) else {
+                continue;
+            };
+            let outcome = visible::account_outcome(server, &account);
+            if outcome.is_none() {
+                Self::unfilled_outcome_read(&self.backends, server);
+            }
+            match outcome {
+                // Unfilled: the pre-pass never ran for it. Fail closed,
+                // and retryable: nothing about the grant was learned.
+                None | Some(AccountOutcome::Unavailable) => {
+                    return Err(visible::take_account_refusal(server, &account)
+                        .map_or(StoredWithheld::Retry(None), StoredWithheld::Refused));
+                }
+                // A busy custody: the same retryable answer the live call
+                // gives (MIK-8392 Busy parity), never a permanent refusal.
+                Some(AccountOutcome::Transient) => {
+                    return Err(StoredWithheld::Retry(None));
+                }
+                Some(AccountOutcome::NoView) => {
+                    return Err(StoredWithheld::Refused(visible::absent_name(tool)));
+                }
+                Some(AccountOutcome::Live | AccountOutcome::Unjudged) => {}
+            }
         }
         Ok(())
     }
@@ -435,6 +703,11 @@ enum StoredRead {
     RepeatedCall,
 }
 
+/// A stored read's visibility verdict that is answered later: the first cold
+/// view's remaining lease (retry), and the first refusal by the caller's own
+/// per-user catalogue (answered after the account judgement).
+type StoredVisibility = (Option<Option<std::time::Duration>>, Option<Error>);
+
 /// Why a stored delivery does not go out.
 enum StoredWithheld {
     /// Its target is withheld from this caller: the absent answer.
@@ -444,18 +717,17 @@ enum StoredWithheld {
     Retry(Option<std::time::Duration>),
 }
 
-/// The retryable answer (MIK-8392 s1-d1): -32603 with a `retryable` data
-/// member, built here because the shared error converter keeps only listed
-/// data keys. It carries no output.
+/// The retryable answer (MIK-8392 s1-d1, Busy parity): built through the
+/// one sealed transient builder the live call also uses, converted the
+/// same way, so the two error objects are byte-equal apart from the id.
+/// It carries no output.
 fn retry_later(id: &RequestId, after: Option<std::time::Duration>) -> JsonRpcResponse {
-    let mut data = json!({ "retryable": true });
-    if let Some(after) = after {
-        data["retry_after_ms"] = json!(u64::try_from(after.as_millis()).unwrap_or(u64::MAX));
-    }
-    JsonRpcResponse::error_with_data(
-        Some(id.clone()),
-        -32603,
-        "task result temporarily unavailable, retry",
-        data,
+    error_response_preserving_status(
+        id.clone(),
+        &crate::personal_accounts::refusal::transient_retry_error(after),
     )
 }
+
+#[cfg(test)]
+#[path = "stored_read_prepass_tests.rs"]
+mod prepass_tests;
