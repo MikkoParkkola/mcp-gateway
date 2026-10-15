@@ -51,7 +51,7 @@ fn sole_operator() -> AuthConfig {
 struct Fx {
     router: axum::Router,
     gateway: DirectAccountGateway,
-    _dirs: (tempfile::TempDir, tempfile::TempDir),
+    dirs: (tempfile::TempDir, tempfile::TempDir),
 }
 
 /// The router over the sole operator's managed backend, [`TOOL`] surfaced,
@@ -102,7 +102,7 @@ async fn fixture_with(binding: &Binding) -> Fx {
     Fx {
         router: create_router(state),
         gateway,
-        _dirs: (audit, store),
+        dirs: (audit, store),
     }
 }
 
@@ -460,9 +460,29 @@ async fn no_grant_operator_invoke_offer_is_the_same_for_a_withheld_name() {
     );
 }
 
-/// A direct `tools/call` of `tool` on `/mcp/{BACKEND}` as the sole operator:
-/// the HTTP status and the body.
-async fn direct_named(fx: &Fx, tool: &str) -> (axum::http::StatusCode, Value) {
+/// What one direct `tools/call` of `tool` on `/mcp/{BACKEND}` as the sole
+/// operator left behind: the HTTP status, the body bytes with the tool name
+/// factored out, and the `idp_refuse` rows and custody reads it added.
+#[derive(Debug, PartialEq)]
+struct DirectCall {
+    status: axum::http::StatusCode,
+    body: String,
+    idp_refusals: usize,
+    resolves: usize,
+}
+
+/// The `idp_refuse` rows the transparency log holds for [`BACKEND`].
+fn idp_refusals(fx: &Fx) -> usize {
+    let path = fx.dirs.0.path().join("audit.jsonl");
+    let raw = std::fs::read_to_string(path).unwrap_or_default();
+    raw.lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
+        .filter(|entry| entry["action"] == "idp_refuse" && entry["backend"] == BACKEND)
+        .count()
+}
+
+async fn direct_named(fx: &Fx, tool: &str) -> DirectCall {
+    let (rows, reads) = (idp_refusals(fx), fx.gateway.resolves());
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": tool, "arguments": {"folder": "inbox"}}});
     let request = axum::http::Request::builder()
@@ -475,31 +495,35 @@ async fn direct_named(fx: &Fx, tool: &str) -> (axum::http::StatusCode, Value) {
     let response = fx.router.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    (
+    DirectCall {
         status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-    )
+        body: String::from_utf8_lossy(&bytes).replace(tool, "<tool>"),
+        idp_refusals: idp_refusals(fx) - rows,
+        resolves: fx.gateway.resolves() - reads,
+    }
 }
 
 /// #3872 product review (oracle 2): ruling B on the direct route. A caller
 /// with no view of a managed backend gets, for a name the policy withholds,
-/// exactly the answer a missing name gets (the account's connect offer),
-/// status and body, the tool name factored out; nothing reaches the backend.
+/// exactly the answer a missing name gets (the account's connect offer):
+/// status and body bytes with the tool name factored out and the same
+/// `idp_refuse` rows. Nothing reaches the backend. The withheld name may
+/// read custody once more (the no-view check before the credential step),
+/// which the caller cannot observe: residual MIK-8361.GAP.13.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn no_grant_operator_direct_call_is_the_same_for_a_withheld_name() {
     let fx = fixture_with(&Binding::Unconnected).await;
     let withheld = direct_named(&fx, "run_command").await;
     let missing = direct_named(&fx, "no_such_tool").await;
+    assert!(missing.idp_refusals > 0, "premise: {missing:?}");
     assert_eq!(
-        (
-            withheld.0,
-            withheld.1.to_string().replace("run_command", "<tool>")
-        ),
-        (
-            missing.0,
-            missing.1.to_string().replace("no_such_tool", "<tool>")
-        ),
+        (withheld.status, &withheld.body, withheld.idp_refusals),
+        (missing.status, &missing.body, missing.idp_refusals),
         "direct route: the withheld name's answer differs from the missing name's"
+    );
+    assert!(
+        (missing.resolves..=missing.resolves + 1).contains(&withheld.resolves),
+        "custody reads: withheld {withheld:?}, missing {missing:?}"
     );
     assert_eq!(
         fx.gateway.tool_calls().len(),
