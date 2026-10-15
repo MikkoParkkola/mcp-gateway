@@ -321,3 +321,28 @@ async fn a5_a_keyed_mixed_chain_answers_as_one_with_a_missing_step() {
         "A5 keyed mixed chain: withheld vs missing"
     );
 }
+
+/// H3 (codex review of #3872): on a killed backend a signed call with a
+/// malformed nonce is refused alike for the withheld name and the missing
+/// one (the kill switch is backend-wide, not existence-sensitive).
+#[tokio::test]
+async fn h3_a_killed_backend_refuses_a_malformed_nonce_alike() {
+    use crate::gateway::meta_mcp::signing::NONCE_META;
+    let state = State {
+        signed: true,
+        ..State::WARM
+    };
+    let malformed = json!({"_meta": {NONCE_META: 42}});
+    let withheld = twin(Side::Withheld, state).await;
+    let absent = twin(Side::Absent, state).await;
+    withheld.fx.state.meta_mcp.kill_switch().kill(SERVER);
+    absent.fx.state.meta_mcp.kill_switch().kill(SERVER);
+    let (w, a) = (
+        withheld.invoke_modern(TOOL, json!({}), &malformed).await,
+        absent.invoke_modern(TOOL, json!({}), &malformed).await,
+    );
+    let cells: Vec<String> = mismatch("H3 killed, malformed nonce", &w, &a)
+        .into_iter()
+        .collect();
+    assert_cells("H3", &cells);
+}

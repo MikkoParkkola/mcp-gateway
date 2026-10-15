@@ -101,10 +101,13 @@ impl MetaMcp {
             arguments,
             caller.agent_id.map(crate::security::ProvenAgentId::as_str),
             "gateway_invoke",
-        )
+        )?;
+        // The kill switch and a disabled capability say nothing about the
+        // name: a missing name meets them in the policy, right after the
+        // attestation, so a skipped one meets them here (H3).
+        let server = crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "server")?;
+        self.admit_backend_wide(server, tool)
     }
-
-    /// What `backend`'s shared catalogue says about `tool`, filled once if
     /// cold (F13's single-flight fill, the gateway's own login).
     async fn shared_verdict(
         &self,

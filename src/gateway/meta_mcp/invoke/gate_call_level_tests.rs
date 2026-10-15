@@ -101,3 +101,53 @@ fn an_empty_hidden_name_is_refused_as_the_policy_refuses_it() {
         "the same refusal as the policy this call skipped"
     );
 }
+
+/// H3 (MIK-8361 ORACLE.2 K2, codex review): on a killed backend a signed call
+/// with a malformed nonce must be refused alike for a hidden tool and a
+/// missing one. Signing runs before the stdio route stage, so its order is
+/// the answer stdio gives: the kill switch is backend-wide, not
+/// existence-sensitive, and a missing name meets it before the nonce.
+#[tokio::test]
+async fn h3_a_killed_backend_refuses_a_malformed_nonce_alike_for_hidden_and_missing() {
+    use crate::gateway::meta_mcp::signing::{NONCE_META, SigningInvocationContext, SigningScope};
+    let refusal = |tool: &str, deny: &[&str]| {
+        let (registry, _) = counted_backend("alpha");
+        let mut meta = MetaMcp::new(registry);
+        meta.enable_message_signing(
+            crate::security::message_signing::MessageSigner::new(
+                b"h3-kill-order-key-0123456789abcde".to_vec(),
+                None,
+                "k1".into(),
+            ),
+            std::time::Duration::from_secs(300),
+            true,
+        );
+        meta.kill_switch().kill("alpha");
+        let policy = crate::security::ToolPolicy::from_config(&crate::security::ToolPolicyConfig {
+            deny: deny.iter().map(|t| (*t).to_owned()).collect(),
+            use_default_deny: false,
+            ..crate::security::ToolPolicyConfig::default()
+        });
+        let authorizer = ToolPolicyAuthorizer {
+            tool_policy: &policy,
+        };
+        let caller = ctx(&authorizer);
+        let arguments = json!({"server": "alpha", "tool": tool, "arguments": {}});
+        let mut request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "gateway_invoke", "arguments": arguments,
+                       "_meta": {(NONCE_META): 42}}});
+        let mut signing =
+            SigningInvocationContext::capture_scoped(&mut request, SigningScope::InvokeOnly);
+        let arguments = request["params"]["arguments"].clone();
+        let refused = meta
+            .prepare_signing_for_call(&mut signing, "gateway_invoke", &arguments, None, &caller)
+            .expect_err("a killed backend's signed call is refused");
+        format!("{refused:?}").replace(tool, "<tool>")
+    };
+    let hidden = refusal("read", &["read"]);
+    let missing = refusal("not_listed", &[]);
+    assert_eq!(
+        hidden, missing,
+        "a hidden tool and a missing one are refused alike on a killed backend"
+    );
+}
