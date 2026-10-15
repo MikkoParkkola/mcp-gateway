@@ -494,6 +494,11 @@ async fn h1_a_cooling_stale_slot_answers_withheld_and_missing_alike() {
     };
     let withheld = answer("edit", Lens::Withheld).await;
     let missing = answer("not_listed", Lens::Catalogue).await;
+    // Anchored: both forwarded (`Ok(None)`) would be equal too.
+    assert!(
+        missing.contains("TransportConnect(\"list down\")"),
+        "the shared answer is the failed refill's: {missing}"
+    );
     assert_eq!(
         withheld, missing,
         "a withheld name and a missing one answer alike on a cooling stale slot"
