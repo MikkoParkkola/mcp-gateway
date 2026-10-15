@@ -1,9 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8428 Case D: an UNKEYED task-augmented `gateway_execute` gets the
-//! invocation policy only at dispatch, so a target the policy refuses, under
-//! a busy custody, must still answer its refusal at intake (as the same call
-//! made synchronously does), never "retry", and create no task.
+//! MIK-8428 Case D, not reproduced: the case inferred that an UNKEYED
+//! task-augmented `gateway_execute` reaches the intake's busy answer before
+//! its policy and is told to retry a refused target. No such call reaches
+//! intake: task creation without an idempotency key is refused -32602 first
+//! (`router/handlers/tasks.rs`, `server/stdio_tasks.rs`), and a keyed plan meets
+//! the policy at admission. The pin keeps it that way. Case C's pin is here
+//! too: one request's same-target calls share their policy refusal.
 
 use serde_json::{Value, json};
 
@@ -21,34 +24,26 @@ async fn unkeyed_execute(fx: &Fx, task: Option<Value>) -> Value {
     send(fx, "tools/call", "gateway_execute", params).await
 }
 
-/// The answer without its JSON-RPC `id`.
-fn without_id(mut answer: Value) -> Value {
-    if let Some(object) = answer.as_object_mut() {
-        object.remove("id");
-    }
-    answer
-}
-
-/// SETTLE.9. Primary: the task-augmented call answers byte-equal to the
-/// synchronous one (the policy refusal), and the task store gains nothing.
+/// Case D pin: under a busy custody and the kill switch, an unkeyed
+/// task-augmented call is refused for its missing key, is never told to
+/// retry, and creates no task.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_unkeyed_tasked_execute_of_a_killed_target_answers_its_refusal_under_busy() {
+async fn an_unkeyed_tasked_execute_under_busy_is_refused_and_never_told_to_retry() {
     let fx = fixture().await;
     fx.state.meta_mcp.kill_switch().kill(BACKEND);
     fx.gateway.fail_custody_for_test(true);
-    let sync = unkeyed_execute(&fx, None).await;
     let held = committed_tasks(&fx);
     let tasked = unkeyed_execute(&fx, Some(json!({}))).await;
     assert_eq!(
-        without_id(tasked.clone()),
-        without_id(sync.clone()),
-        "SETTLE.9: the tasked call answers the synchronous call's refusal"
+        tasked.pointer("/error/code"),
+        Some(&json!(-32602)),
+        "{tasked}"
     );
-    assert_eq!(
-        committed_tasks(&fx),
-        held,
-        "SETTLE.9: no task for a refused target: {tasked}"
+    assert!(
+        tasked.pointer("/error/data/retryable").is_none(),
+        "Case D: never told to retry: {tasked}"
     );
+    assert_eq!(committed_tasks(&fx), held, "Case D: no task: {tasked}");
 }
 
 /// Case C pin: the checks that refuse a call before its resolution (here
@@ -68,5 +63,10 @@ async fn a_second_call_to_a_refused_target_in_one_request_is_not_admitted() {
             "_meta": modern_meta()}),
     )
     .await;
-    assert_eq!(fx.gateway.dispatched(), 0, "Case C: {chain}");
+    // `tool_calls`, not `dispatched`: the latter also counts the caller
+    // verdict's `tools/list` catalogue fill, which runs before the policy.
+    assert!(
+        fx.gateway.tool_calls().is_empty(),
+        "Case C: neither call reached the backend: {chain}"
+    );
 }
