@@ -57,13 +57,23 @@ pub(super) async fn guard_before_credential(
         (&scope.route.backend, &failed),
     )
     .await?;
-    if let Some(absent) = withheld {
-        let backend = &scope.route.backend;
+    let backend = &scope.route.backend;
+    let no_principal = backend.keeps_per_user_catalogues()
+        && scope
+            .state
+            .meta_mcp
+            .lacks_principal_on_required(backend, caller.proof());
+    // A withheld name from a caller with no principal falls through to the
+    // missing name's answer below, built by the same code: it never meets
+    // the credential step a no-view caller's withheld name meets.
+    if let Some(absent) = withheld
+        && !no_principal
+    {
         let no_view = backend.keeps_per_user_catalogues()
             && scope
                 .state
                 .meta_mcp
-                .caller_has_no_view(backend, caller.proof())
+                .caller_lacks_view(backend, caller.proof())
                 .await;
         return Ok(if no_view {
             Guarded::WithheldNoView(absent)
@@ -74,13 +84,7 @@ pub(super) async fn guard_before_credential(
     // A caller with no principal on a required per-user backend can hold no
     // slot there: it lacks every tool, -32601 as on every other entry
     // (MIK-8356 R3.7), before any credential is resolved for it.
-    let backend = &scope.route.backend;
-    if backend.keeps_per_user_catalogues()
-        && scope
-            .state
-            .meta_mcp
-            .lacks_principal_on_required(backend, caller.proof())
-    {
+    if no_principal {
         let tool = envelope
             .params
             .as_ref()

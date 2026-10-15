@@ -100,7 +100,7 @@ impl MetaMcp {
     /// no audit row, and reads the grant without refreshing or minting.
     /// The one crate-visible entry to the predicate (approved visibility
     /// change, 2026-10-15).
-    pub(crate) async fn caller_has_no_view(
+    pub(crate) async fn caller_lacks_view(
         &self,
         backend: &Backend,
         caller: CallerProof<'_>,
