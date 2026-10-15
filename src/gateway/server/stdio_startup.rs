@@ -121,3 +121,7 @@ fn key_error(error: String) -> crate::Error {
         "stdio account signing key generation failed: {error}"
     ))
 }
+
+#[cfg(test)]
+#[path = "stdio_startup_tests.rs"]
+mod stdio_startup_tests;
