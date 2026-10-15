@@ -13,7 +13,7 @@ use serde_json::json;
 use super::direct_guards_fixture::{Fx, send};
 use super::oracle_parity_fixture::{
     Answered, Entry, Reason, SERVER, SIBLING, STATE_ENTRIES, Side, State, TOOL, Twin, assert_cells,
-    mismatch, twin, untraced,
+    mismatch, twin, twin_surfacing, untraced,
 };
 
 /// E1: a visible step followed by a withheld one. The first step dispatches;
@@ -386,7 +386,12 @@ async fn h3_a_killed_backend_refuses_a_malformed_nonce_alike() {
 async fn c_a_disabled_hidden_tool_answers_as_the_missing_name() {
     let cfg = crate::kill_switch::CapabilityErrorBudgetConfig::default();
     let mut cells = Vec::new();
-    for entry in [Entry::Invoke, Entry::Execute, Entry::Direct] {
+    for entry in [
+        Entry::Invoke,
+        Entry::Execute,
+        Entry::Surfaced,
+        Entry::Direct,
+    ] {
         let withheld = twin(Side::Withheld, State::WARM).await;
         for _ in 0..(cfg.window_size * 2) {
             withheld
@@ -405,7 +410,9 @@ async fn c_a_disabled_hidden_tool_answers_as_the_missing_name() {
                 .is_capability_disabled(SERVER, TOOL),
             "premise: the hidden tool is in cooldown"
         );
-        let absent = twin(Side::Absent, State::WARM).await;
+        // A surfaced name's missing twin maps the name to no backend.
+        let surfaced = matches!(entry, Entry::Surfaced);
+        let absent = twin_surfacing(Side::Absent, State::WARM, !surfaced).await;
         let w = withheld.call(entry, json!({})).await;
         let a = absent.call(entry, json!({})).await;
         cells.extend(mismatch(&format!("C {entry:?}"), &w, &a));
