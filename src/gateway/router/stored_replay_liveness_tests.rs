@@ -734,11 +734,11 @@ async fn s6_retained_gateway_execute_is_served_not_rerun() {
     );
 }
 
-/// P8406u (E9 on a plan): a plan task records its step targets, so with
-/// custody failing a repeated keyed `gateway_execute` task answers E9's
-/// retryable `-32603` before the plan carve-out serves the stored task: no
-/// stored output, no task id, no step re-run. Moving the carve-out above E9
-/// (M-plan-e9) serves the stored task instead.
+/// P8406u (outage on a plan repeat): with custody failing, a repeated keyed
+/// `gateway_execute` task answers retryable `-32603` before the plan
+/// carve-out can serve the stored task: no stored output, no task id, no
+/// step re-run. Since MIK-8361 the step meets the outage before site 5, so
+/// skipping E9 for plans (M-plan-e9) answers the same: equivalent here.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn p8406u_an_unavailable_plan_repeat_answers_retryable() {
     let fx = fixture_with(false, true).await;
