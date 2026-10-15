@@ -125,9 +125,8 @@ static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 impl MetaMcp {
     /// Inner implementation executed within a trace-ID scope.
     ///
-    /// Returns a [`TracedOutcome`]: every live success path yields a sealed
-    /// [`GuardedValue`] (MIK-6690 render guard); the lift's already-shaped
-    /// stored answer travels beside it, never through it (MIK-8392 STORED.2 D8).
+    /// Returns a [`TracedOutcome`]: a sealed [`GuardedValue`] on every live path
+    /// (MIK-6690), or beside it the lift's shaped stored answer (MIK-8392 D8).
     #[allow(clippy::too_many_lines)] // Complex dispatch logic; splitting further harms readability
     async fn invoke_tool_traced(
         &self,
@@ -230,7 +229,6 @@ impl MetaMcp {
             .await
         {
             Ok(std::ops::ControlFlow::Continue(resolution)) => resolution,
-            // Not proven live: the live refusal goes out; nothing deferred is served (E11).
             Ok(std::ops::ControlFlow::Break(answer)) => return Ok(TracedOutcome::Live(answer)),
             Err(error) => {
                 // A busy custody refused this call before its backend, with
@@ -243,12 +241,13 @@ impl MetaMcp {
             }
         };
         // The lift (MIK-8392 STORED.2): proven live, before key/spend/redeem/relay act.
-        if let Some(replay) = self
+        let unproven = match self
             .lift_deferred((server, tool), &resolved, &mut witness, session_id, caller)
             .await
         {
-            return Ok(TracedOutcome::Stored(replay));
-        }
+            std::ops::ControlFlow::Break(replay) => return Ok(TracedOutcome::Stored(replay)),
+            std::ops::ControlFlow::Continue(unproven) => unproven,
+        };
         let target = (server, backend.as_ref().map(|backend| backend.instance()));
         let propagation::ResolvedDispatch {
             caller_credential,
@@ -324,6 +323,7 @@ impl MetaMcp {
             nonce_settle::note_served(caller, (server, tool));
             return Ok(TracedOutcome::Live(stored));
         }
+        stored_proof::refuse_unproven(unproven, server)?; // FIX 1b: at most once
 
         // Defense in depth on an already-classified value: the exact set both
         // layers accept, so a value that is not a revision this build serves —

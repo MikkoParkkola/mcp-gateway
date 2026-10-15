@@ -29,13 +29,37 @@ pub(crate) enum SourcedOutcome {
     Stored(crate::protocol::JsonRpcResponse),
 }
 
-/// Whether `resolved` minted something that proves the caller's account:
-/// per-caller headers or an account credential. An optional
-/// (`required: false`) propagation backend's failed mint falls back to static
-/// credentials with neither (IDP.5). That fallback is not a proof: the stored
-/// output was produced under a per-user credential (MIK-8392 STORED.2 FIX 1).
+/// Whether `resolved` minted something that proves the caller's account: a
+/// dispatch binding, from a propagation mint or an account credential. It is
+/// the discriminator the response and retry caches namespace on, so "proven"
+/// and "keyed per user" never disagree. An optional (`required: false`)
+/// propagation backend's failed mint falls back to static credentials with no
+/// binding (IDP.5). That fallback is not a proof: the stored output was
+/// produced under a per-user credential (MIK-8392 STORED.2 FIX 1).
 fn minted_proof(resolved: &super::ResolvedDispatch) -> bool {
-    !resolved.caller_credential.headers.is_empty() || resolved.account_credential.is_some()
+    resolved.binding.is_some()
+}
+
+/// The refusal an unminted proof answers with, at site 5 and at the lift: a
+/// retryable `-32603`, nothing sent.
+fn unminted_refusal(server: &str) -> crate::Error {
+    crate::Error::Config(format!(
+        "identity propagation minted no credential for backend '{server}'; \
+         a stored result is not served without one"
+    ))
+}
+
+/// A deferred entry the lift dropped because resolution minted nothing
+/// (FIX 1b). The call may still be answered by the idempotency cache, when
+/// the first run was unminted too and wrote its result under the same static
+/// principal; otherwise it must not dispatch, or a keyed retry of a write
+/// would run it a second time under static credentials (at most once).
+pub(super) struct UnprovenReplay;
+
+/// Refuse a call whose deferred entry was dropped unproven, once the
+/// idempotency lookup has missed (FIX 1b); `Ok` for any other call.
+pub(super) fn refuse_unproven(dropped: Option<UnprovenReplay>, server: &str) -> crate::Result<()> {
+    dropped.map_or(Ok(()), |UnprovenReplay| Err(unminted_refusal(server)))
 }
 
 impl crate::gateway::meta_mcp::MetaMcp {
@@ -44,12 +68,11 @@ impl crate::gateway::meta_mcp::MetaMcp {
     /// just proven the account live, so the stored answer is served without
     /// dispatching. The entry is keyed by this invocation's own key and taken
     /// once, so a nested invocation never meets it (L3). A delivered call:
-    /// the signing nonce stays spent and nothing is sent. `None` for an
-    /// unkeyed call or one with nothing deferred, and for a resolution that
-    /// minted nothing (FIX 1): the entry is dropped and the call runs live
-    /// under static credentials. Its idempotency key is namespaced by the
-    /// unminted dispatch's principal, not the per-user binding the stored
-    /// result was written under, so the cache cannot serve it either.
+    /// the signing nonce stays spent and nothing is sent (`Break`).
+    /// `Continue(None)` for an unkeyed call or one with nothing deferred.
+    /// For a resolution that minted nothing (FIX 1b) the entry is dropped,
+    /// never served, and `Continue(Some(_))` makes the caller fail closed
+    /// unless its idempotency lookup, keyed by the unminted principal, hits.
     pub(super) async fn lift_deferred(
         &self,
         (server, tool): (&str, &str),
@@ -57,16 +80,20 @@ impl crate::gateway::meta_mcp::MetaMcp {
         witness: &mut super::nonce_settle::Witnessed<'_, '_>,
         session_id: Option<&str>,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
-    ) -> Option<crate::protocol::JsonRpcResponse> {
+    ) -> std::ops::ControlFlow<crate::protocol::JsonRpcResponse, Option<UnprovenReplay>> {
         use crate::gateway::meta_mcp::visible;
-        let key = visible::deferred_replay_key(server, tool, caller.retry)?;
-        let deferred = visible::take_deferred_replay(&key)?;
+        use std::ops::ControlFlow::{Break, Continue};
+        let Some(deferred) = visible::deferred_replay_key(server, tool, caller.retry)
+            .and_then(|key| visible::take_deferred_replay(&key))
+        else {
+            return Continue(None);
+        };
         if !minted_proof(resolved) {
-            return None;
+            return Continue(Some(UnprovenReplay));
         }
         witness.spend();
         super::nonce_settle::mark_dispatched(caller, (server, tool));
-        Some(
+        Break(
             self.audit_replay(
                 &deferred.tool_name,
                 &deferred.arguments,
@@ -123,10 +150,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
             // A task repeat has no live path (its row holds the key), so an
             // unminted resolution fails closed (FIX 1).
             std::ops::ControlFlow::Continue((_, resolved)) if !minted_proof(&resolved) => {
-                return Err(crate::Error::Config(format!(
-                    "identity propagation minted no credential for backend '{server}'; \
-                     a stored result is not served without one"
-                )));
+                return Err(unminted_refusal(server));
             }
             std::ops::ControlFlow::Continue(_) => None,
             std::ops::ControlFlow::Break(answer) => Some(answer.into_parts().0),
