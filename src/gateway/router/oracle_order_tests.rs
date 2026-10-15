@@ -376,3 +376,39 @@ async fn h3_a_killed_backend_refuses_a_malformed_nonce_alike() {
         .collect();
     assert_cells("H3", &cells);
 }
+
+/// #3872 review (round 3, C): a capability disabled for its error rate names
+/// the tool ("Capability 'read' on server 'alpha' is temporarily disabled"),
+/// so it is no backend-wide refusal. A caller who cannot see `read` gets the
+/// missing name's answer even while other callers' errors keep it in
+/// cooldown, on every entry; only the server-wide kill switch is shared.
+#[tokio::test]
+async fn c_a_disabled_hidden_tool_answers_as_the_missing_name() {
+    let cfg = crate::kill_switch::CapabilityErrorBudgetConfig::default();
+    let mut cells = Vec::new();
+    for entry in [Entry::Invoke, Entry::Execute, Entry::Direct] {
+        let withheld = twin(Side::Withheld, State::WARM).await;
+        for _ in 0..(cfg.window_size * 2) {
+            withheld
+                .fx
+                .state
+                .meta_mcp
+                .kill_switch()
+                .record_capability_failure(SERVER, TOOL, &cfg);
+        }
+        assert!(
+            withheld
+                .fx
+                .state
+                .meta_mcp
+                .kill_switch()
+                .is_capability_disabled(SERVER, TOOL),
+            "premise: the hidden tool is in cooldown"
+        );
+        let absent = twin(Side::Absent, State::WARM).await;
+        let w = withheld.call(entry, json!({})).await;
+        let a = absent.call(entry, json!({})).await;
+        cells.extend(mismatch(&format!("C {entry:?}"), &w, &a));
+    }
+    assert_cells("C disabled hidden tool", &cells);
+}
