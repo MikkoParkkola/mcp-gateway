@@ -124,6 +124,9 @@ impl MetaMcp {
                 // error is what stops the retry re-running a side effect that
                 // may already have committed (ADR-012 consequence 1).
                 GuardOutcome::CachedError(error) => {
+                    // A stored failure is served too: a replay past its
+                    // revocation meets its refusal (#3872 review, round 4).
+                    super::nonce_settle::note_served(caller, (server, tool));
                     audit::note_cached_failure(&error);
                     // A refusal keeps its provenance across the replay as well
                     // as across the bridge boundary. Served as a generic error
