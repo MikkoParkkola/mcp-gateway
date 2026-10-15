@@ -169,14 +169,14 @@ async fn t8t_a_truncated_slot_without_the_tool_still_delivers() {
     assert!(read.to_string().contains(OUTPUT), "T8t: {read}");
 }
 
-/// T6 (MIK-8392 STORED.2 E4; mutant M-cold): a repeated task call whose
-/// catalogue fill fails. Alpha's slot holds a stale, truncated list without
-/// the tool, and alpha's upstream refuses the refetch, so alpha's view reads
-/// cold and the stored-repeat judgement answers retryable before site 5: no
-/// stored output, nothing sent. Without that cold answer (M-cold) site 5's E4
-/// answers the carried fill error instead, still with no stored output.
+/// T6 (mutant M-cold; not an E4 row): a repeated task call whose catalogue
+/// fill fails. Alpha's slot holds a stale, truncated list without the tool,
+/// and alpha's upstream refuses the refetch, so alpha's view reads cold and
+/// the stored-repeat judgement answers retryable before site 5: no stored
+/// output, nothing sent. E4 itself (a carried failed fill at site 5) is
+/// pinned by the seeded unit row `invoke::stored_proof::tests` T6u.
 #[tokio::test]
-async fn t6_a_repeat_whose_fill_failed_answers_as_the_failed_dispatch() {
+async fn t6_a_repeat_whose_fill_failed_answers_retry_before_site_five() {
     let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await;
     let key = "s2-t6";
     let _ = finished(&gw, key).await;
