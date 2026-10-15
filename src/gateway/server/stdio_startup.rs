@@ -27,11 +27,7 @@ impl Gateway {
         // Account strategies must exist before stdio can admit a request, just
         // as they do before the HTTP listener starts serving.
         if self.config.accounts.is_some() {
-            let gateway_key_pair = Arc::new(GatewayKeyPair::generate().map_err(|error| {
-                crate::Error::Config(format!(
-                    "stdio account signing key generation failed: {error}"
-                ))
-            })?);
+            let gateway_key_pair = Arc::new(GatewayKeyPair::generate().map_err(key_error)?);
             let account_custody = self.custody.as_ref().map(|custody| {
                 Arc::clone(custody) as Arc<dyn crate::personal_accounts::AccountCustody>
             });
@@ -61,7 +57,8 @@ impl Gateway {
             for dir in &self.config.capabilities.directories {
                 match cap_backend.load_from_directory_reporting(dir).await {
                     Ok(report) => {
-                        debug!(target: PARENT_TARGET, directory = %dir, count = report.admitted, "Loaded capabilities (stdio)");
+                        let admitted = report.admitted;
+                        debug!(target: PARENT_TARGET, directory = %dir, count = admitted, "Loaded capabilities (stdio)");
                         refused.extend(report.rejected);
                     }
                     Err(error) => {
@@ -115,4 +112,12 @@ impl Gateway {
 
         Ok(())
     }
+}
+
+/// The startup error when the account signing key cannot be generated: a
+/// failure of the system's random source, which no test can provoke.
+fn key_error(error: String) -> crate::Error {
+    crate::Error::Config(format!(
+        "stdio account signing key generation failed: {error}"
+    ))
 }
