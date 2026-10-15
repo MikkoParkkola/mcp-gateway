@@ -719,3 +719,6 @@ async fn gap_caller_forward_drops_retry_data() {
         "gap: the forwarder now carries the retry data (update MIK-8428): {answer}"
     );
 }
+
+#[path = "capability_recheck_busy_tests.rs"]
+mod recheck_busy;

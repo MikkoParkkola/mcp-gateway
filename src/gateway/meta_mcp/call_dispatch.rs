@@ -387,9 +387,8 @@ impl MetaMcp {
         // admission.rs:391 otherwise), for a surfaced name, signed or not
         // (admission.rs:368-391; signing prepares only `gateway_invoke`), and
         // for a keyed `gateway_execute` or playbook plan (admission_plan.rs:63-131).
-        // An unkeyed task-augmented `gateway_execute` or playbook gets it only
-        // at dispatch, so it may answer retryable for a refused target; no task
-        // is created, so nothing executes (MIK-8428 Case D, inferred, not run).
+        // An unkeyed task call never gets here: task creation without an
+        // idempotency key is refused first (MIK-8428 Case D, not reproduced).
         // A view Busy is held as an account transient; a mint Busy at the
         // route stage as a sealed-transient resolution error (#3892 gpt F1).
         // Either one answers here, before any task or key exists.

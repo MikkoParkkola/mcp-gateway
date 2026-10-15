@@ -100,4 +100,17 @@ mod tests {
             assert!(after_dispatch(refusal, false).is_pre_dispatch());
         }
     }
+
+    /// MIK-8428 Case A: the sealed transient (a busy custody) is pre-dispatch,
+    /// so this mapping applies to it as to every pre-dispatch refusal: after
+    /// an earlier round reached the backend it settles uncertain, never as
+    /// unsent; with no earlier round it stays unsent. No account recheck runs
+    /// between MCP-process rounds today; this pins the mapping if one does.
+    #[test]
+    fn a_recheck_busy_after_a_dispatched_round_settles_uncertain() {
+        let busy = crate::personal_accounts::refusal::transient_retry_error;
+        assert!(after_dispatch(busy(None), false).is_pre_dispatch());
+        let mapped = after_dispatch(busy(None), true);
+        assert!(matches!(mapped, Error::Transport(_)), "{mapped}");
+    }
 }

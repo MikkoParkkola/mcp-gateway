@@ -13,7 +13,7 @@
 //! from constructions by shape. Someone set on evading it can; review is the
 //! control for that.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// Files (relative to `src/`) allowed to construct `BackendUnavailable`, each
@@ -156,14 +156,19 @@ fn strip_test_items(src: &str) -> String {
 /// followed by `=>` or `|`, or one preceded by `|`. The enum's own
 /// `BackendUnavailable(String)` declaration is not one either.
 fn constructions(src: &str) -> usize {
-    const NAME: &str = "BackendUnavailable";
+    constructions_of(src, "BackendUnavailable")
+}
+
+/// [`constructions`] for any `NAME`: a variant, or a function whose result
+/// `is_pre_dispatch` trusts.
+fn constructions_of(src: &str, name: &str) -> usize {
     let clean = strip_test_items(&sanitize(src));
     let b = clean.as_bytes();
     let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
     let next_non_ws = |from: usize| b[from..].iter().position(|c| !c.is_ascii_whitespace());
     let mut count = 0;
-    for (at, _) in clean.match_indices(NAME) {
-        let end = at + NAME.len();
+    for (at, _) in clean.match_indices(name) {
+        let end = at + name.len();
         if (at > 0 && ident(b[at - 1])) || b.get(end).copied().is_some_and(ident) {
             continue;
         }
@@ -209,14 +214,19 @@ fn constructions(src: &str) -> usize {
     count
 }
 
-#[test]
-fn backend_unavailable_is_constructed_only_at_reviewed_pre_send_sites() {
+/// The non-test files under `src/` that construct `name`.
+fn files_constructing(name: &str) -> BTreeSet<String> {
+    construction_counts(name).into_keys().collect()
+}
+
+/// How many times each non-test file under `src/` constructs `name`.
+fn construction_counts(name: &str) -> BTreeMap<String, usize> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut found = BTreeSet::new();
+    let mut found = BTreeMap::new();
     for entry in walkdir::WalkDir::new(&root) {
         let entry = entry.expect("src is readable");
         let path = entry.path();
-        let name = path
+        let file = path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or_default();
@@ -230,16 +240,23 @@ fn backend_unavailable_is_constructed_only_at_reviewed_pre_send_sites() {
                 dir.components()
                     .any(|c| c.as_os_str().to_str().is_some_and(|s| s.ends_with("tests")))
             });
-        let test_only = name.ends_with("tests.rs") || name.ends_with("_test.rs") || in_test_dir;
+        let test_only = file.ends_with("tests.rs") || file.ends_with("_test.rs") || in_test_dir;
         if test_only || path.extension().is_none_or(|e| e != "rs") {
             continue;
         }
         let src = std::fs::read_to_string(path).expect("readable source");
-        if constructions(&src) > 0 {
+        let count = constructions_of(&src, name);
+        if count > 0 {
             let rel = path.strip_prefix(&root).expect("under src");
-            found.insert(rel.to_string_lossy().replace('\\', "/"));
+            found.insert(rel.to_string_lossy().replace('\\', "/"), count);
         }
     }
+    found
+}
+
+#[test]
+fn backend_unavailable_is_constructed_only_at_reviewed_pre_send_sites() {
+    let found = files_constructing("BackendUnavailable");
     let allowed: BTreeSet<String> = PRE_SEND_SITES.iter().map(|s| (*s).to_string()).collect();
     let unreviewed: Vec<_> = found.difference(&allowed).collect();
     let stale: Vec<_> = allowed.difference(&found).collect();
@@ -276,5 +293,46 @@ mod tests { fn t() { let _ = Error::BackendUnavailable("test".into()); } }
     assert_eq!(
         constructions("use crate::Error::BackendUnavailable as Down;"),
         1
+    );
+}
+
+/// Call sites (per file, relative to `src/`) allowed to build the sealed
+/// transient, each only before anything reaches the backend (MIK-8428):
+/// `is_pre_dispatch` reads its seal, so it frees an idempotency key. Counted
+/// per file, so a new call in a listed file fails the scan too. A builder's
+/// own definition counts as one.
+const TRANSIENT_SITES: &[(&str, usize)] = &[
+    // `transient_retry_error`'s definition.
+    ("personal_accounts/refusal.rs", 1),
+    // `transient_mint_refusal`'s definition and its one build.
+    ("identity_propagation/account_strategies_view.rs", 2),
+    // A capability mint's resolve or refresh admission (`resolve`), and the
+    // lease recheck before the send (`revalidate`, from three callers).
+    ("identity_propagation/account_strategies.rs", 2),
+    // A per-user mint's admission, before the dispatch.
+    ("gateway/meta_mcp/invoke/propagation.rs", 1),
+    // The task intake answer: no task, nothing dispatched.
+    ("gateway/meta_mcp/call_dispatch.rs", 1),
+    // The caller verdict's view Busy, answered before the backend.
+    ("gateway/meta_mcp/invoke/caller_verdict.rs", 1),
+    // A stored task read: no dispatch at all.
+    ("gateway/meta_mcp/task_replay.rs", 1),
+];
+
+#[test]
+fn the_sealed_transient_is_built_only_at_reviewed_pre_send_sites() {
+    let mut found = construction_counts("transient_retry_error");
+    for (file, count) in construction_counts("transient_mint_refusal") {
+        *found.entry(file).or_default() += count;
+    }
+    let allowed: BTreeMap<String, usize> = TRANSIENT_SITES
+        .iter()
+        .map(|(file, count)| ((*file).to_string(), *count))
+        .collect();
+    assert_eq!(
+        found, allowed,
+        "the sealed transient frees an idempotency key, so it may be built only \
+         before anything reaches the backend: review every new or removed call \
+         site (left: found, right: reviewed)"
     );
 }
