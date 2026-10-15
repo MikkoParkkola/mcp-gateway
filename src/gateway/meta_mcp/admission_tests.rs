@@ -223,6 +223,23 @@ fn refusal(result: Result<SyncAdmission>) -> Error {
     error
 }
 
+/// #3872 review (oracle 1): a code-mode key reused with other arguments is
+/// a mismatch, not a replay. Its holder never held the changed plan, so a
+/// step the caller can no longer see answers as a missing step does, with
+/// the key mismatch (409), never the step's refusal. Asserts that answer for
+/// that one request and says so; every other request keeps SUB.4's refusal.
+fn mismatch_of_a_hidden_step(tool: &str, request: &Value, changed: &Value, error: &Error) -> bool {
+    if tool != "gateway_execute" || request != changed {
+        return false;
+    }
+    assert_eq!(
+        error.to_string(),
+        Error::json_rpc(409, super::KEY_MISMATCH).to_string(),
+        "a reused key's hidden step answers as a missing one: {error}"
+    );
+    true
+}
+
 fn revoked_replay(
     is_modern: bool,
     tool: &str,
@@ -250,6 +267,10 @@ fn revoked_replay(
     for request in [args, changed_args] {
         policy.seen.lock().clear();
         let error = refusal(admit(&meta, &caller, tool, request, 3));
+        if mismatch_of_a_hidden_step(tool, request, changed_args, &error) {
+            policy.assert_saw(targets);
+            continue;
+        }
         assert!(
             matches!(
                 error,
@@ -430,6 +451,17 @@ fn profile_replay(tool: &str, args: &Value, changed_args: &Value) {
     assert!(meta.active_profile(None).check(SECOND.0, SECOND.1).is_ok());
     for request in [args, changed_args] {
         let error = refusal(admit(&meta, &caller, tool, request, 3));
+        // The representation names the session's active profile, so after the
+        // switch even the unchanged plan is a mismatch, not a replay: in code
+        // mode both requests answer as a missing step does (#3872 oracle 1).
+        let any_request = if tool == "gateway_execute" {
+            request
+        } else {
+            changed_args
+        };
+        if mismatch_of_a_hidden_step(tool, request, any_request, &error) {
+            continue;
+        }
         assert!(
             matches!(&error, Error::Protocol(message)
                 if message.contains("routing profile") && message.contains(SECOND.1)),

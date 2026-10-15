@@ -500,17 +500,15 @@ impl MetaMcp {
             ("gateway", tool_name),
             id,
         );
-        // A key this caller already used (a replay, or a reuse with other
-        // arguments) meets a withheld step's current refusal, as SUB.4 pins
-        // it: its holder held access before. A fresh call goes on to the
-        // step's gate, and any other admission answer (a key in flight) is
-        // the one a missing step gets, never the step's reason (ruling A).
-        let used_key = match &admission {
-            Ok(SyncAdmission::Replay(..)) => true,
-            Err(error) => error.to_string().ends_with(KEY_MISMATCH),
-            Ok(_) => false,
-        };
-        if let (true, Some(refusal)) = (used_key, withheld_step) {
+        // A replay of this caller's key meets a withheld step's current
+        // refusal, as SUB.4 pins it: its holder held access before. A key
+        // reused with other arguments is a mismatch, not a replay: its holder
+        // never held the new step, so it gets the mismatch a missing step
+        // gets (#3872 review). A fresh call goes on to the step's gate, and
+        // any other admission answer is the one a missing step gets, never
+        // the step's reason (ruling A).
+        let replayed = matches!(&admission, Ok(SyncAdmission::Replay(..)));
+        if let (true, Some(refusal)) = (replayed, withheld_step) {
             return Err(refusal);
         }
         let mut admission = admission?;
