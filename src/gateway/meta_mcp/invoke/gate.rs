@@ -108,6 +108,7 @@ impl MetaMcp {
         let server = crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "server")?;
         self.admit_backend_wide(server, tool)
     }
+    /// What `backend`'s shared catalogue says about `tool`, filled once if
     /// cold (F13's single-flight fill, the gateway's own login).
     async fn shared_verdict(
         &self,
