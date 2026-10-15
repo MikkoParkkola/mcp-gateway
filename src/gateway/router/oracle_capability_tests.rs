@@ -314,31 +314,54 @@ async fn kill_twin_cells(reason: Reason, killed: bool, expect: &str) -> Vec<Stri
 
 const KILLED: &str = "currently disabled by operator kill switch";
 
-/// Kill switch, entitled caller (lead ruling 2026-10-15): the kill switch
-/// speaks about the server the call names, not the tool, so the defined and
-/// the undefined capability under the same key both meet it, as a hidden and
-/// a missing backend name do (H3). Answered at the route stage, before the
-/// capability existence branch.
+/// Kill switch, entitled caller: a documentation row, not an oracle (lead
+/// ruling 2026-10-15). A caller the definition admits already knows the
+/// capability exists, so the defined name meeting the kill switch while the
+/// undefined one answers not found reveals nothing; backends differ the same
+/// way. Making them match would move the answer and drop an audit record
+/// for no gain. Pins today's answers, so a change to either is deliberate.
 #[tokio::test]
-async fn a_killed_capability_server_answers_entitled_twins_alike() {
-    let cells = kill_twin_cells(Reason::Scope, true, KILLED).await;
-    assert!(
-        cells.is_empty(),
-        "kill switch, entitled:\n{}",
-        cells.join("\n")
-    );
+async fn a_killed_capability_server_answers_an_entitled_caller_as_today() {
+    for entry in [Entry::Invoke, Entry::Execute] {
+        let (defined, undefined) = (
+            twin(Reason::Scope, true).await,
+            twin(Reason::Scope, false).await,
+        );
+        defined.state.meta_mcp.kill_switch().kill(CAPS);
+        undefined.state.meta_mcp.kill_switch().kill(CAPS);
+        let (d, u) = (
+            call(&defined, entry, json!({})).await,
+            call(&undefined, entry, json!({})).await,
+        );
+        assert!(
+            d.1.to_string().contains(KILLED),
+            "{entry:?}: the defined capability meets the kill switch: {} {}",
+            d.0,
+            d.1
+        );
+        assert_eq!(
+            u,
+            (
+                StatusCode::OK,
+                json!({"error": {"code": -32001, "message": format!("Tool not found: '{CAP}'")},
+                    "jsonrpc": "2.0"})
+            ),
+            "{entry:?}: the undefined capability answers not found"
+        );
+    }
 }
 
-/// Kill switch, caller not entitled (lead ruling 2026-10-15): the invariant
-/// is twin equality at every entitlement level. Killed, the hidden and the
-/// undefined capability both answer the kill switch; not killed, both answer
-/// not found.
+/// Kill switch, caller not entitled: the oracle. The admin rule or the
+/// grant refuses the defined name before the kill check and answers it as
+/// the undefined one, so a caller who may not reach the capability cannot
+/// tell the two apart, the server killed or not.
 #[tokio::test]
 async fn a_killed_capability_server_answers_unentitled_twins_alike() {
     let mut cells = Vec::new();
     for reason in [Reason::Admin, Reason::Grant] {
-        cells.extend(kill_twin_cells(reason, true, KILLED).await);
-        cells.extend(kill_twin_cells(reason, false, "Tool not found").await);
+        for killed in [true, false] {
+            cells.extend(kill_twin_cells(reason, killed, "Tool not found").await);
+        }
     }
     assert!(
         cells.is_empty(),
