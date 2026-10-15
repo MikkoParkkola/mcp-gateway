@@ -332,8 +332,9 @@ async fn an_overflowed_get_stream_writes_no_lag_notice_once_its_adapter_receipt_
     let expired = crate::clock::test_clock::at_secs(later);
     std::assert!(!fresh_verifies(t0), "VOID: the held receipt has expired");
     let (mut control, _control_session) = open_get(&state, genuine_receipt(later)).await;
-    // One more than the stream queue holds (the default buffer is 100).
-    overflow(&state, 105).await;
+    // Well past the stream queue: the default buffer is 100, and the broadcast
+    // channel rounds its capacity up to a power of two (128).
+    overflow(&state, 300).await;
     match control.next().await {
         Frame::Message(frame) => std::assert!(
             frame.get("missed").is_some(),
