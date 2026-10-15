@@ -127,6 +127,8 @@ mod slot_release_tasks;
 #[cfg(feature = "firewall")]
 mod stored_gateway_writes;
 mod stored_result_policy;
+// MIK-8392.STORED.1: stored task reads judge the caller's current view.
+mod stored_read_access;
 /// MIK-7974: a task keeps its request's meta-tool surface for its hints.
 mod surface_hints;
 #[cfg(feature = "metrics")]

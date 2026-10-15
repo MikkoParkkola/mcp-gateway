@@ -56,6 +56,11 @@ use crate::protocol::subscriptions::{ListenRequest, NotificationKind};
 #[path = "notifications_helpers.rs"]
 mod helpers;
 
+// MIK-8392.STORED.1 T3: a stored frame judges the caller's current view. A
+// child for the same reason as `helpers`.
+#[path = "stored_read_frames.rs"]
+mod stored_read_frames;
+
 // A5c: `subscriptions/listen` scoped per caller. A child for the same reason
 // as `helpers`, and so it reads the same stream reader.
 #[path = "listen_scope.rs"]

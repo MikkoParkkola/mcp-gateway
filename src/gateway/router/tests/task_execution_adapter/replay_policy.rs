@@ -37,6 +37,9 @@ async fn a_repeat_after_the_tool_is_withheld_is_refused_not_answered_from_the_ta
 
     withhold(&state);
     let repeat = post(&state, "key-a", call(2451)).await;
+    // A repeat is a live tools/call: the live path's admission refuses a
+    // descriptor-blocked tool first (-32600, "withheld"), before any stored
+    // read is judged (MIK-8392 site-5 split: a repeat keeps the live answer).
     let text = repeat.to_string();
     assert!(
         text.contains("withheld")

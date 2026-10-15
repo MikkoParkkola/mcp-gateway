@@ -294,6 +294,23 @@ impl TaskService {
         }
     }
 
+    /// Whether this exact request already owns an admitted task, asked of
+    /// the admission authority read-only (`already_admitted` writes
+    /// nothing): a repeat is told apart from a fresh task call before
+    /// `begin`, without that question becoming an admission. `begin`
+    /// remains the authority and re-decides.
+    ///
+    /// The peek can race a concurrent create, and both outcomes are benign
+    /// (MIK-8428): it says new but `begin` would find the task Existing, and
+    /// the call was answered the busy retry at intake instead (harmless, the
+    /// client retries and is then served); or it says existing but the row
+    /// expires before `begin`, so the call proceeds as new without the intake
+    /// judgement and the worker meets the busy custody (the Case A residual).
+    /// One caller: `call_dispatch` (`meta_mcp`) before its task intake.
+    pub(in crate::gateway) fn already_admitted(&self, request: Request<'_>) -> bool {
+        self.admission.already_admitted(request)
+    }
+
     pub(crate) fn get(&self, principal: &str, id: &str) -> Result<CommittedTask, ServiceError> {
         self.store
             .get(self.owner(principal)?.as_digest(), id)

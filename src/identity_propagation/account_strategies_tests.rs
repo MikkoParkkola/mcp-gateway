@@ -332,7 +332,12 @@ async fn an_external_mint_needs_a_verified_caller() {
     };
     let refused =
         AccountStrategyRegistry::mint(&installed, Principal::SoleOperator, &backend).await;
-    assert!(matches!(refused, Err(PropagationError::Refuse(_))));
+    assert!(matches!(
+        refused,
+        Err(crate::personal_accounts::MintError::Other(
+            PropagationError::Refuse(_)
+        ))
+    ));
 
     // Positive control: a verified caller gets the strategy's credential and
     // no managed lease, so the refusal above is the identity rule, not a

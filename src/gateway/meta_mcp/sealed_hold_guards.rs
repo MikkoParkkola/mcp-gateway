@@ -326,7 +326,7 @@ const BOUNDARY_CELLS: &[(&str, &str)] = &[
         "a_delivered_stdio_question_keeps_its_slot",
     ),
     (
-        "gateway/task_service/execution.rs",
+        "gateway/task_service/execution/operations.rs",
         "slot_release_matrix_tasks",
     ),
 ];

@@ -88,6 +88,14 @@ impl Backend {
             failsafe_config: failsafe_config.clone(),
             #[cfg(test)]
             after_reprobe_lookup: crate::test_pause::Slot::default(),
+            #[cfg(test)]
+            cold_winner: crate::test_pause::Slot::default(),
+            #[cfg(test)]
+            after_warm_capture: crate::test_pause::Slot::default(),
+            #[cfg(test)]
+            skip_account_prepass: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            unfilled_outcome_reads: std::sync::atomic::AtomicUsize::new(0),
             unserved_consecutive: AtomicU64::new(0),
             unserved_total: AtomicU64::new(0),
             probe_in_flight: std::sync::atomic::AtomicBool::new(false),

@@ -70,7 +70,7 @@ use crate::personal_accounts::identity::AccountDescriptor as AccountKeyDescripto
 use crate::personal_accounts::{
     AccountCustody, AccountKey, GrantRecord, PersonalAccountStore, StoreConfig,
 };
-use crate::personal_accounts::{ConsentExpectation, CustodyHandle, GrantVersion};
+use crate::personal_accounts::{ConsentExpectation, CustodyError, CustodyHandle, GrantVersion};
 use crate::personal_accounts::{
     CredentialLease, CredentialReleaseObserver, ProviderRefreshError, RefreshProvider,
     ReleasedCredentials, TokenRefresh,
@@ -407,6 +407,15 @@ pub(super) struct Custody {
     pub(super) handle: Arc<CustodyHandle<ScriptedProvider, Arc<RecordingObserver>>>,
     refresh_calls: Arc<AtomicUsize>,
     observer: Arc<RecordingObserver>,
+    /// Custody reads (`resolve`) through [`Self::installed`] (MIK-8392 O3).
+    resolves: Arc<AtomicUsize>,
+    /// While set, every `resolve` answers `Busy` (MIK-8392 U1, C6).
+    failing: Arc<std::sync::atomic::AtomicBool>,
+    /// Test-only (MIK-8392 G1a): after this many more allowed `resolve`s,
+    /// every further one answers `Busy`; `None` never fails on the count.
+    fail_after: Arc<Mutex<Option<usize>>>,
+    /// Test-only (#3892 R7/R8): the later mint step that answers `Busy`.
+    busy_step: Arc<Mutex<Option<BusyStep>>>,
     /// Kept alive: dropping it removes the store directory under the locks.
     _root: tempfile::TempDir,
 }
@@ -424,8 +433,98 @@ impl Custody {
     /// The production custody, type-erased exactly as the real gateway caller
     /// erases its own `GatewayCustody` before installing. The SAME handle — no
     /// second store, service or authorization path.
+    /// Every call is delegated unchanged; `resolve` is counted on the way.
     pub(super) fn installed(&self) -> Arc<dyn AccountCustody> {
-        Arc::clone(&self.handle) as Arc<dyn AccountCustody>
+        Arc::new(CountedResolves {
+            inner: Arc::clone(&self.handle) as Arc<dyn AccountCustody>,
+            resolves: Arc::clone(&self.resolves),
+            failing: Arc::clone(&self.failing),
+            fail_after: Arc::clone(&self.fail_after),
+            busy_step: Arc::clone(&self.busy_step),
+        })
+    }
+
+    /// Make every custody read fail as busy, or recover.
+    pub(super) fn fail_reads(&self, failing: bool) {
+        self.failing.store(failing, Ordering::SeqCst);
+        *self.fail_after.lock() = None;
+        *self.busy_step.lock() = None;
+    }
+
+    /// Make only `step` of every mint answer `Busy`, as its admission would.
+    pub(super) fn busy_at(&self, step: BusyStep) {
+        *self.busy_step.lock() = Some(step);
+    }
+
+    /// Allow `allowed` further custody reads; every read after that fails
+    /// busy until [`Self::fail_reads`] recovers.
+    pub(super) fn fail_after(&self, allowed: usize) {
+        *self.fail_after.lock() = Some(allowed);
+    }
+
+    /// Custody reads made through [`Self::installed`].
+    pub(super) fn resolves(&self) -> usize {
+        self.resolves.load(Ordering::SeqCst)
+    }
+}
+
+/// A mint step after `resolve` that a test can make busy (#3892 R7/R8).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum BusyStep {
+    Refresh,
+    Release,
+}
+
+/// The installed custody, counting reads and adding nothing else.
+struct CountedResolves {
+    inner: Arc<dyn AccountCustody>,
+    resolves: Arc<AtomicUsize>,
+    failing: Arc<std::sync::atomic::AtomicBool>,
+    fail_after: Arc<Mutex<Option<usize>>>,
+    busy_step: Arc<Mutex<Option<BusyStep>>>,
+}
+
+#[async_trait::async_trait]
+impl AccountCustody for CountedResolves {
+    async fn resolve(&self, account: &AccountKey) -> Result<CredentialLease, CustodyError> {
+        self.resolves.fetch_add(1, Ordering::SeqCst);
+        if self.failing.load(Ordering::SeqCst) {
+            return Err(CustodyError::Busy);
+        }
+        {
+            let mut budget = self.fail_after.lock();
+            if let Some(remaining) = budget.as_mut() {
+                if *remaining == 0 {
+                    return Err(CustodyError::Busy);
+                }
+                *remaining -= 1;
+            }
+        }
+        self.inner.resolve(account).await
+    }
+
+    async fn refresh_if_expired(
+        &self,
+        account: &AccountKey,
+    ) -> Result<CredentialLease, CustodyError> {
+        if *self.busy_step.lock() == Some(BusyStep::Refresh) {
+            return Err(CustodyError::Busy);
+        }
+        self.inner.refresh_if_expired(account).await
+    }
+
+    async fn release(&self, lease: &CredentialLease) -> Result<ReleasedCredentials, CustodyError> {
+        if *self.busy_step.lock() == Some(BusyStep::Release) {
+            return Err(CustodyError::Busy);
+        }
+        self.inner.release(lease).await
+    }
+
+    async fn refresh_after_rejection(
+        &self,
+        lease: &CredentialLease,
+    ) -> Result<crate::personal_accounts::RejectionOutcome, CustodyError> {
+        self.inner.refresh_after_rejection(lease).await
     }
 }
 
@@ -474,6 +573,10 @@ pub(super) fn custody_with_steps(
         handle: Arc::new(handle),
         refresh_calls,
         observer,
+        resolves: Arc::new(AtomicUsize::new(0)),
+        failing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        fail_after: Arc::new(Mutex::new(None)),
+        busy_step: Arc::new(Mutex::new(None)),
         _root: root,
     }
 }
