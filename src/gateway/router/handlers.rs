@@ -647,7 +647,9 @@ async fn meta_mcp_dispatch(
                 session_id: Some(session_id.as_str()),
             };
             if method == "tasks/get" {
-                tasks::tasks_get(&state, owner, id.clone(), params, &caller).await
+                // Boxed: the stored-read pre-pass (MIK-8392 / #3892) grew this
+                // future past the large-future cap, as stdio `tasks/get` is.
+                Box::pin(tasks::tasks_get(&state, owner, id.clone(), params, &caller)).await
             } else {
                 let update = (params, surface_request);
                 tasks::tasks_update(&state, owner, id.clone(), update, &caller).await

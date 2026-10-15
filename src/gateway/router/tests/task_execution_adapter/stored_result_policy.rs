@@ -105,6 +105,39 @@ fn assert_absent_step(body: &Value, tool: &str) {
     );
 }
 
+/// The gateway's own answer to a name that matches no tool, on this route:
+/// a live `tools/call` of the mock's tool name, which nothing surfaces.
+pub(super) async fn absent_twin(state: &Arc<AppState>) -> Value {
+    let twin = post(
+        state,
+        "key-a",
+        modern(
+            77,
+            "tools/call",
+            json!({ "name": TOOL, "arguments": {} }),
+            true,
+        ),
+    )
+    .await;
+    twin.get("error")
+        .cloned()
+        .unwrap_or_else(|| panic!("premise: an absent name is refused: {twin}"))
+}
+
+/// MIK-8392: a blocked stored read answers exactly as an absent name does,
+/// byte for byte, and carries no result (lead rule, 2026-10-12).
+pub(super) async fn assert_answers_as_absent(state: &Arc<AppState>, body: &Value) {
+    assert!(
+        body.get("result").is_none(),
+        "no result on a blocked read: {body}"
+    );
+    std::assert_eq!(
+        body.get("error"),
+        Some(&absent_twin(state).await),
+        "a blocked stored read answers exactly as an absent name: {body}"
+    );
+}
+
 pub(super) fn strip_targets(state: &Arc<AppState>, id: &str) {
     state.task_executor.service.store.strip_targets_for_test(id);
 }
@@ -130,7 +163,7 @@ async fn a_finished_invoke_task_is_refused_once_its_tool_is_withheld() {
     let (state, _store) = state_with(&mock).await;
     let id = finished_invoke(&state, "b-invoke").await;
     withhold(&state, TOOL);
-    assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
+    assert_answers_as_absent(&state, &get_task(&state, "key-a", &id).await).await;
 }
 
 #[tokio::test]
@@ -148,7 +181,7 @@ async fn a_finished_playbook_task_is_refused_once_a_step_tool_is_withheld() {
     install_playbook(&state, TOOL);
     let id = finished_playbook(&state, "b-playbook").await;
     withhold(&state, TOOL);
-    assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
+    assert_answers_as_absent(&state, &get_task(&state, "key-a", &id).await).await;
 }
 
 #[tokio::test]
@@ -175,14 +208,14 @@ async fn a_repeat_is_refused_when_the_executed_step_is_blocked_though_the_new_de
     withhold(&state, TOOL);
 
     let repeat = post(&state, "key-a", playbook_call(3, "b-replaced")).await;
-    assert_refused(&repeat, "withheld");
+    assert_answers_as_absent(&state, &repeat).await;
     std::assert_eq!(
         mock.calls(),
         1,
         "nothing dispatched again: {:?}",
         mock.seen()
     );
-    assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
+    assert_answers_as_absent(&state, &get_task(&state, "key-a", &id).await).await;
 }
 
 #[tokio::test]
@@ -242,7 +275,7 @@ async fn a_legacy_row_with_a_descriptor_is_checked_against_its_call() {
     store.set_upstream_for_test(&id, (BACKEND, TOOL));
     assert_carries_the_backend_result(&get_task(&state, "key-a", &id).await);
     withhold(&state, TOOL);
-    assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
+    assert_answers_as_absent(&state, &get_task(&state, "key-a", &id).await).await;
 }
 
 pub(super) fn code_mode_call(id: i64, key: &str) -> Value {
@@ -288,7 +321,7 @@ async fn a_finished_code_mode_task_is_refused_on_get_and_on_repeat_once_its_tool
     let (state, _store) = state_with(&mock).await;
     let id = finished_code_mode(&state, "b-code").await;
     withhold(&state, TOOL);
-    assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
+    assert_answers_as_absent(&state, &get_task(&state, "key-a", &id).await).await;
     let repeat = post(&state, "key-a", code_mode_call(7, "b-code")).await;
     assert_absent_step(&repeat, TOOL);
     std::assert_eq!(mock.calls(), 1, "no second dispatch: {:?}", mock.seen());
@@ -341,7 +374,7 @@ async fn a_plan_step_refused_before_dispatch_is_recorded_and_reauthorized() {
         tool: TOOL.to_owned(),
     };
     std::assert_eq!(recorded, vec![step], "the dispatched step is stored");
-    assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
+    assert_answers_as_absent(&state, &get_task(&state, "key-a", &id).await).await;
     std::assert_eq!(mock.calls(), 0, "the step never reached the backend");
 }
 
@@ -362,7 +395,7 @@ async fn a_plan_step_that_fails_at_the_backend_is_recorded_and_reauthorized() {
     std::assert_eq!(mock.calls(), 1, "the step reached the backend");
     poll_until_terminal(&state, "key-a", &id).await;
     withhold(&state, TOOL);
-    assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
+    assert_answers_as_absent(&state, &get_task(&state, "key-a", &id).await).await;
 }
 
 /// `MIK-7651.GH2470.2`: a plan step the backend answered, refused by the
@@ -397,7 +430,7 @@ async fn a_plan_step_refused_after_dispatch_is_recorded_and_reauthorized() {
         "the dispatched step is stored"
     );
     withhold(&state, TOOL);
-    assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
+    assert_answers_as_absent(&state, &get_task(&state, "key-a", &id).await).await;
 }
 
 /// The fixture's task runtime, reopened with a small per-record byte budget.

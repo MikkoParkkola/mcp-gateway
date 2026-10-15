@@ -223,10 +223,19 @@ impl MetaMcp {
                 surface,
                 &mut witness,
             )
-            .await?
+            .await
         {
-            std::ops::ControlFlow::Continue(resolution) => resolution,
-            std::ops::ControlFlow::Break(answer) => return Ok(answer),
+            Ok(std::ops::ControlFlow::Continue(resolution)) => resolution,
+            Ok(std::ops::ControlFlow::Break(answer)) => return Ok(answer),
+            Err(error) => {
+                // A busy custody refused this call before its backend, with
+                // its witness kept: ask for the nonce back, settled when
+                // the call returns (MIK-8392 Busy parity).
+                if crate::personal_accounts::refusal::transient_data(&error).is_some() {
+                    nonce_settle::ask_refund(caller);
+                }
+                return Err(error);
+            }
         };
         let target = (server, backend.as_ref().map(|backend| backend.instance()));
         let propagation::ResolvedDispatch {

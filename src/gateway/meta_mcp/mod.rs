@@ -848,6 +848,8 @@ mod task_notify_tests;
 #[cfg(test)]
 mod withheld_catalogue_tests;
 
+/// MIK-8392: each target account's liveness, judged without a mint.
+mod account_outcome;
 mod listing_view;
 mod session_end;
 
