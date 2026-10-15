@@ -79,6 +79,26 @@ fn named_as_twin(body: &Value) -> String {
         .replace(UNDEFINED, "<tool>")
 }
 
+/// MIK-8361: the live call answers byte for byte as the undefined
+/// capability's twin, and that answer is Tool not found (-32001).
+async fn assert_answers_as_undefined(
+    router: &axum::Router,
+    caller: &VerifiedIdentity,
+    live: &Value,
+) {
+    let twin = undefined_twin(router, caller).await;
+    assert_eq!(
+        named_as_twin(live),
+        named_as_twin(&twin),
+        "MIK-8361: the live call answers as the undefined capability"
+    );
+    assert_eq!(
+        live["error"]["code"],
+        json!(-32001),
+        "the answer is Tool not found: {live}"
+    );
+}
+
 /// The error object with every per-call trace id (`gw-` and 36 UUID
 /// characters) replaced by one placeholder: two calls never share one (K2).
 fn error_masked(body: &Value) -> String {
@@ -195,17 +215,7 @@ async fn order_revoked_account_with_a_withdrawn_grant_answers_as_undefined() {
         error_masked(&live),
         "order: the stored read answers what the live call answers"
     );
-    let twin = undefined_twin(&router, &alice).await;
-    assert_eq!(
-        named_as_twin(&live),
-        named_as_twin(&twin),
-        "MIK-8361: the live call answers as the undefined capability"
-    );
-    assert_eq!(
-        live["error"]["code"],
-        json!(-32001),
-        "the answer is Tool not found: {live}"
-    );
+    assert_answers_as_undefined(&router, &alice, &live).await;
 }
 
 /// Order twin: an unbindable caller (empty subject, as Ub) plus a descriptor
@@ -400,15 +410,5 @@ async fn capability_grant_withdrawn_under_busy_custody_is_not_account_judged() {
         0,
         "capability: the pre-pass wrote an idp_refuse for a grant-refused target"
     );
-    let twin = undefined_twin(&router, &alice).await;
-    assert_eq!(
-        named_as_twin(&live),
-        named_as_twin(&twin),
-        "MIK-8361: the live call answers as the undefined capability"
-    );
-    assert_eq!(
-        live["error"]["code"],
-        json!(-32001),
-        "the answer is Tool not found: {live}"
-    );
+    assert_answers_as_undefined(&router, &alice, &live).await;
 }
