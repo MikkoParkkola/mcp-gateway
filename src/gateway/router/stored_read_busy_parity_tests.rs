@@ -452,6 +452,45 @@ async fn g2c_a_signed_tasked_call_meeting_busy_gives_its_nonce_back() {
     served(&fx, &id).await;
 }
 
+/// G2m signed twin (#3892 gpt round 2 improvement): the route-stage mint
+/// Busy answered at intake keeps the call's refund witness, so after
+/// recovery the same signed request (same nonce, same key) makes its task
+/// and is served, not refused as a replay. Mutant: the intake's mint-Busy
+/// check dropped (the task is then made at once).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn g2m_a_signed_tasked_call_meeting_a_mint_busy_gives_its_nonce_back() {
+    let fx = signed_fixture().await;
+    // One further read allowed (the view); the mint's read fails busy.
+    fx.gateway.fail_custody_after_for_test(1);
+    let held = committed_tasks(&fx);
+    let busy = signed_task_invoke(&fx, "g2m-n1", "s1-g2m-signed").await;
+    assert_retryable(&busy, "G2m signed busy");
+    assert!(
+        busy.pointer("/result/taskId").is_none(),
+        "G2m signed: no task was handed back: {busy}"
+    );
+    assert_eq!(
+        committed_tasks(&fx),
+        held,
+        "G2m signed: the task store holds no task for the key"
+    );
+    fx.gateway.fail_custody_for_test(false);
+    fx.gateway.answer_next(json!({
+        "content": [{"type": "text", "text": MARKER}], "isError": false
+    }));
+    let resent = signed_task_invoke(&fx, "g2m-n1", "s1-g2m-signed").await;
+    assert!(
+        !refused_as_replay(&resent),
+        "G2m signed: the nonce was kept spent after an intake mint busy: {resent}"
+    );
+    let id = resent
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("G2m signed: the re-sent call makes its task: {resent}"))
+        .to_owned();
+    served(&fx, &id).await;
+}
+
 /// A `gateway_invoke` of the plain backend's `echo`.
 async fn plain_invoke(fx: &Fx, key: &str) -> Value {
     let mut meta = modern_meta();
