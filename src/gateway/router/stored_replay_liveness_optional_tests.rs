@@ -88,12 +88,14 @@ async fn s_opt_a_failed_optional_mint_is_not_a_proof_at_the_lift() {
     let _clock = crate::clock::test_clock::at_secs(now + 7200);
     let again = r6m_token_exchange::send_as(&router, &alice, call("sopt", false)).await;
     eprintln!("S-opt answer: {again}");
-    assert_unproven("S-opt", &again);
+    // The send count first, so M-lift-open dies here and M-mint (sends 1,
+    // the stored output served) at the exact refusal below.
     assert_eq!(
         sends.load(Ordering::SeqCst),
         1,
         "S-opt: the unproven retry was sent again: {again}"
     );
+    assert_unproven("S-opt", &again);
 }
 
 /// S-unminted (mutant M-lift-shut): when the first call was unminted too, its
