@@ -36,8 +36,9 @@ enum Reason {
     Profile,
 }
 
-/// [`CAP`]'s definition for `reason`. Its endpoint is never reached: every
-/// row asserts the withheld call is not sent.
+/// [`CAP`]'s definition for `reason`. Its endpoint is a closed local port: a
+/// withheld call that were sent would answer a transport error, never the
+/// undefined twin's `ToolNotFound`, so every twin row fails on a send.
 fn definition(reason: Reason) -> String {
     let metadata = match reason {
         Reason::Admin => {
@@ -172,8 +173,10 @@ async fn oracle2_capability_reasons_answer_as_the_undefined_name() {
 /// ORACLE.2, key scope and routing profile (lead, 2026-10-15): a defined
 /// capability the caller's own key scope, or the active profile, excludes by
 /// name answers byte for byte as the undefined capability under the same key.
-/// These refusals do not depend on the capability existing, so the gate does
-/// not map them to `ToolNotFound`; both twins meet the same refusal.
+/// Both are answered at the route stage, as the undefined capability is: a
+/// key-scope refusal by the route authorize (any route refusal of a
+/// capability answers `ToolNotFound`), a profile refusal by
+/// `profile_withheld_capability`.
 #[tokio::test]
 async fn oracle2_capability_scope_and_profile_answer_as_the_undefined_name() {
     let mut cells = Vec::new();
@@ -207,7 +210,7 @@ async fn oracle2_capability_scope_and_profile_answer_as_the_undefined_name() {
 /// none, as a `ToolNotFound` result is not an invocation record; its refusal
 /// stays in the grant decision record. Pins the parity both ways.
 #[tokio::test]
-async fn c_a_withheld_capability_writes_one_invocation_record_as_the_undefined_one() {
+async fn c_a_withheld_capability_writes_the_undefined_ones_invocation_records() {
     let mut cells = Vec::new();
     for reason in [Reason::Admin, Reason::Grant] {
         let mut counts = Vec::new();
