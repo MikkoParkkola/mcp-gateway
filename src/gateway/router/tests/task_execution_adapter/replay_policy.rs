@@ -40,6 +40,22 @@ async fn a_repeat_after_the_tool_is_withheld_is_refused_not_answered_from_the_ta
     // MIK-8361: refused as a name the backend does not list, never answered
     // with the stored task (no task handle, no stored result).
     super::stored_result_policy::assert_absent(&repeat, TOOL);
+    // #3872 review (FIX 4): byte for byte the answer a live call naming a
+    // tool the backend does not list gets, under its own key.
+    let mut missing = task_invoke(2452, "x2450-missing", json!({ "q": "same" }));
+    missing["params"]["arguments"]["tool"] = json!("no_such_tool");
+    let mut twin = post(&state, "key-a", missing).await;
+    let mut answered = repeat.clone();
+    for body in [&mut twin, &mut answered] {
+        if let Some(obj) = body.as_object_mut() {
+            obj.remove("id");
+        }
+    }
+    std::assert_eq!(
+        answered.to_string().replace(TOOL, "<tool>"),
+        twin.to_string().replace("no_such_tool", "<tool>"),
+        "the repeat answers as a live missing-name call"
+    );
     assert!(
         !repeat.to_string().contains(&id),
         "a repeat after the tool was withheld must not be answered with the \
