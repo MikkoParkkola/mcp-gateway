@@ -114,7 +114,7 @@ async fn stdio_startup_refuses_a_managed_binding_with_no_custody() {
 /// Mutant: another variant, or the source's message dropped.
 #[test]
 fn a_failed_signing_key_is_a_named_config_error() {
-    let error = super::key_error("the system random source is unavailable".to_string());
+    let error = super::key_error("the system random source is unavailable");
     match error {
         crate::Error::Config(message) => assert_eq!(
             message,
