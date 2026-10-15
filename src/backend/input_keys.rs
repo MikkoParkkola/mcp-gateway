@@ -229,6 +229,12 @@ impl Backend {
         }
         let (tools, completeness) = self.held_tools_for(identity_key)?;
         if lens == Lens::Withheld {
+            // A missing name is not in the held list, so on a stale slot it
+            // meets the cooled refresh below: a withheld one must too, not be
+            // answered from the stale list (H1).
+            if !self.has_cached_tools_for(identity_key) {
+                return None;
+            }
             return Some(Ok(absent_from(tool, completeness, (mode, lens))));
         }
         let found = tools.iter().find(|t| t.name == tool)?;
