@@ -459,3 +459,51 @@ async fn no_grant_operator_invoke_offer_is_the_same_for_a_withheld_name() {
         "a no-grant call reached the backend"
     );
 }
+
+/// A direct `tools/call` of `tool` on `/mcp/{BACKEND}` as the sole operator:
+/// the HTTP status and the body.
+async fn direct_named(fx: &Fx, tool: &str) -> (axum::http::StatusCode, Value) {
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": tool, "arguments": {"folder": "inbox"}}});
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri(format!("/mcp/{BACKEND}"))
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {OPERATOR_KEY}"))
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = fx.router.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// #3872 product review (oracle 2): ruling B on the direct route. A caller
+/// with no view of a managed backend gets, for a name the policy withholds,
+/// exactly the answer a missing name gets (the account's connect offer),
+/// status and body, the tool name factored out; nothing reaches the backend.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn no_grant_operator_direct_call_is_the_same_for_a_withheld_name() {
+    let fx = fixture_with(&Binding::Unconnected).await;
+    let withheld = direct_named(&fx, "run_command").await;
+    let missing = direct_named(&fx, "no_such_tool").await;
+    assert_eq!(
+        (
+            withheld.0,
+            withheld.1.to_string().replace("run_command", "<tool>")
+        ),
+        (
+            missing.0,
+            missing.1.to_string().replace("no_such_tool", "<tool>")
+        ),
+        "direct route: the withheld name's answer differs from the missing name's"
+    );
+    assert_eq!(
+        fx.gateway.tool_calls().len(),
+        0,
+        "a no-grant call reached the backend"
+    );
+}
