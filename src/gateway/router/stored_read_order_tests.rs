@@ -111,9 +111,9 @@ fn error_masked(body: &Value) -> String {
 /// verdicts (`dispatch_tools_call.rs:393`), and the dispatch policy
 /// (`meta_mcp/invoke.rs:158`) runs before its resolution (`invoke.rs:217`).
 /// The stored read runs `authorize_stored` before accounts too, so both answer
-/// the grant denial (-32004), never -32601.
+/// as the undefined capability (-32001 Tool not found, MIK-8361), never -32601.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn order_revoked_account_with_a_withdrawn_grant_answers_the_grant_denial() {
+async fn order_revoked_account_with_a_withdrawn_grant_answers_as_undefined() {
     let account = CapabilityAccount::start_personal().await;
     let (state, _store) = super::tests::meta_fixture::test_router_app_state_with_meta(
         &AuthConfig::default(),
@@ -200,6 +200,11 @@ async fn order_revoked_account_with_a_withdrawn_grant_answers_the_grant_denial()
         named_as_twin(&live),
         named_as_twin(&twin),
         "MIK-8361: the live call answers as the undefined capability"
+    );
+    assert_eq!(
+        live["error"]["code"],
+        json!(-32001),
+        "the answer is Tool not found: {live}"
     );
 }
 
@@ -297,7 +302,8 @@ async fn order_unbindable_caller_with_a_withheld_tool_answers_absence() {
 /// target with no registry backend: alice's Personal capability after
 /// her identity grant is withdrawn and her managed custody is busy.
 /// The stored pre-pass must not judge the account at all — no custody
-/// read, no `idp_refuse` — and the read answers the live grant denial.
+/// read, no `idp_refuse` — and the read answers what the live call answers:
+/// the undefined capability's -32001 (MIK-8361).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn capability_grant_withdrawn_under_busy_custody_is_not_account_judged() {
     let account = CapabilityAccount::start_personal().await;
@@ -382,7 +388,7 @@ async fn capability_grant_withdrawn_under_busy_custody_is_not_account_judged() {
     assert_eq!(
         error_masked(&stored),
         error_masked(&live),
-        "capability: the stored read answers the live grant denial: {stored}"
+        "capability: the stored read answers what the live call answers: {stored}"
     );
     assert_eq!(
         account.resolves() - reads,
@@ -399,5 +405,10 @@ async fn capability_grant_withdrawn_under_busy_custody_is_not_account_judged() {
         named_as_twin(&live),
         named_as_twin(&twin),
         "MIK-8361: the live call answers as the undefined capability"
+    );
+    assert_eq!(
+        live["error"]["code"],
+        json!(-32001),
+        "the answer is Tool not found: {live}"
     );
 }
