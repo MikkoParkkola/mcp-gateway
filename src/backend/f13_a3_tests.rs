@@ -469,9 +469,16 @@ async fn a3_t16_a_version_rejection_is_replayed_from_the_cooldown() {
 async fn h1_a_cooling_stale_slot_answers_withheld_and_missing_alike() {
     use crate::backend::Lens;
     let lister = Lister::new(Mode::Serve);
-    let backend = short_ttl(&lister);
+    // A zero TTL: the slot is stale from its first fill (`elapsed() < ttl`
+    // never holds), so no wall-clock wait is needed.
+    let backend = Arc::new(Backend::new(
+        "f13",
+        BackendConfig::default(),
+        &no_breaker(),
+        Duration::ZERO,
+    ));
+    backend.set_transport_for_test(Arc::clone(&lister) as Arc<dyn crate::transport::Transport>);
     let _ = check(&backend, "edit", &json!({"edits": []})).await;
-    tokio::time::sleep(Duration::from_millis(80)).await;
     lister.set(Mode::Down);
     // A stale hit whose refresh fails starts the cooldown (A4-T2's premise).
     let _ = check(&backend, "edit", &json!({"edits": []})).await;
