@@ -732,3 +732,7 @@ mod terminal_frame_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "streaming_sse_gate_tests.rs"]
+mod gate_tests;
