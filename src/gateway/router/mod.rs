@@ -29,6 +29,7 @@ use crate::security::ToolPolicy;
 use crate::security::firewall::Firewall;
 
 mod accounts;
+mod app_state_announce;
 use crate::personal_accounts::AccountHandles;
 pub(crate) use accounts::{ConnectOffers, account_handles_of};
 pub(crate) use handlers::shape_modern_response;
@@ -52,6 +53,7 @@ mod meta_refusal_audit;
 pub(crate) use identity::grant_subject_from_verified_identity;
 pub(crate) mod helpers;
 mod origin_guard;
+mod view_judge;
 mod watch_poll;
 pub(crate) use watch_poll::GatewayWatchHost;
 
@@ -67,6 +69,8 @@ mod well_known;
 // Direct-route guard chain (design doc 2026-09-27-direct-route-guards.md §2.2).
 mod direct_guards;
 
+#[cfg(test)]
+mod adapter_get_rollback_tests;
 #[cfg(test)]
 mod audit_degraded_tests;
 #[cfg(test)]
@@ -366,53 +370,6 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     create_router_with(state, None)
 }
 
-/// Create the router, folding in routes a caller assembles separately.
-///
-/// Extra routes are merged **here**, before the origin gate is applied, rather
-/// than by the caller afterwards. A layer only covers what is already merged,
-/// so a route merged onto the finished router silently skips the gate. That has
-/// happened twice: first for the routes merged below, then for the webhook
-/// routes merged at the call site. Taking them as a parameter removes the
-/// ordering discipline that failed both times.
-#[allow(clippy::needless_pass_by_value)] // Arc<T> is idiomatically passed by value
-impl AppState {
-    /// Announce that the set of available tools has changed.
-    ///
-    /// Two audiences, one event: sessions attached to the pre-2026 GET stream,
-    /// and listeners on `subscriptions/listen`. Kept in one function because
-    /// telling only one of them is the failure mode — the capability is
-    /// advertised as `listChanged: true` to both.
-    ///
-    /// Both audiences are scoped to callers who may access `backend` now.
-    pub async fn announce_tools_changed(&self, backend: &str) {
-        self.proxy_manager
-            .broadcast_tools_list_changed(backend)
-            .await;
-        self.subscriptions.publish_for_backend(
-            crate::gateway::subscription_registry::tools_list_changed(),
-            backend,
-        );
-        self.meta_mcp.events_tools_changed(backend);
-    }
-
-    /// Announce that some caller's own view of `backend` changed (`MIK-8148`).
-    ///
-    /// The same two audiences as [`Self::announce_tools_changed`], scoped the
-    /// same way, and never wider. The notice carries no tool and no caller:
-    /// a listener learns only that some view of `backend` changed, and when,
-    /// and its relist returns its own view. The webhook hub is not told: it
-    /// reports the backend's shared tools to external subscribers.
-    pub async fn announce_backend_view_changed(&self, backend: &str) {
-        self.proxy_manager
-            .broadcast_tools_list_changed(backend)
-            .await;
-        self.subscriptions.publish_for_backend(
-            crate::gateway::subscription_registry::tools_list_changed(),
-            backend,
-        );
-    }
-}
-
 /// `/livez`; the invariant is stated at the route table.
 async fn probe_ok() -> &'static str {
     "ok"
@@ -535,6 +492,7 @@ fn unauthenticated_routes() -> Router<Arc<AppState>> {
 /// the same process read history the answers are judged against.
 fn bind_multiplexer(state: &AppState, auth_state: &AuthState) {
     state.multiplexer.set_authorizer(auth_state.clone());
+
     if let Some(judge) = crate::gateway::outbound::SessionJudge::new(
         helpers::read_guard(state),
         state.meta_mcp.rejection_audit(),

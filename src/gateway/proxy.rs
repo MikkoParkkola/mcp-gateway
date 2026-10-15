@@ -477,6 +477,17 @@ impl ProxyManager {
     /// Sent as a `message` event, so the GET stream carries the bare JSON-RPC
     /// notification an MCP client reads, not the gateway's envelope (F24).
     pub async fn broadcast_tools_list_changed(&self, backend: &str) {
+        self.broadcast_tools_list_changed_judged(backend, None)
+            .await;
+    }
+
+    /// [`Self::broadcast_tools_list_changed`], told only to the sessions whose
+    /// own view of `backend` moved when a `judge` is given (MIK-8350).
+    pub(crate) async fn broadcast_tools_list_changed_judged(
+        &self,
+        backend: &str,
+        judge: Option<&dyn crate::gateway::streaming::ViewJudge>,
+    ) {
         let notification = TaggedNotification {
             source: "gateway".to_string(),
             event_type: "message".to_string(),
@@ -484,13 +495,23 @@ impl ProxyManager {
                 "jsonrpc": "2.0",
                 "method": "notifications/tools/list_changed"
             }),
-            event_id: Some(self.multiplexer.next_event_id()),
+            // No id: the hint is constant, and one that took a number from
+            // the shared counter would leave other listeners a gap (MIK-8350).
+            event_id: None,
         };
 
-        let reached = self
-            .multiplexer
-            .broadcast_to_backend(&notification, backend)
-            .await;
+        let reached = match judge {
+            Some(judge) => {
+                self.multiplexer
+                    .broadcast_to_backend_judged(&notification, backend, judge)
+                    .await
+            }
+            None => {
+                self.multiplexer
+                    .broadcast_to_backend(&notification, backend)
+                    .await
+            }
+        };
         debug!(backend, reached, "Sent notifications/tools/list_changed");
     }
 

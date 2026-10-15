@@ -62,7 +62,7 @@ impl NotificationMultiplexer {
         let session = sessions
             .get(session_id?)
             .filter(|session| session.owner == *owner)?;
-        *session.credential.write() = credential;
+        session.replace_credential(credential);
         *session.last_active.write() = tokio::time::Instant::now();
         Some(Arc::clone(session))
     }

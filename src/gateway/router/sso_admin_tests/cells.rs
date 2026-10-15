@@ -175,6 +175,7 @@ async fn header_identity_is_never_admin() {
     )
     .await
     .expect("the trusted proxy's header is honoured")
+    .subject
     .expect("it names a subject");
     assert_eq!(
         (subject.authority.as_str(), subject.subject.as_str()),

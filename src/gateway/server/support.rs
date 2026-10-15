@@ -206,8 +206,14 @@ where
 
         Box::pin(async move {
             let (stream, service) = acceptor.accept(stream, service).await?;
-            let identity = client_identity_from_peer_chain(stream.get_ref().1.peer_certificates())?;
-            let service = PeerCertIdentityLayer::new(identity).layer(service);
+            let peer_certs = stream.get_ref().1.peer_certificates();
+            let identity = client_identity_from_peer_chain(peer_certs)?;
+            let not_after = peer_certs
+                .and_then(|certs| certs.first())
+                .and_then(|leaf| crate::mtls::identity::CertNotAfter::from_der(leaf.as_ref()));
+            let service = PeerCertIdentityLayer::new(identity)
+                .with_not_after(not_after)
+                .layer(service);
 
             Ok((stream, service))
         })
@@ -229,11 +235,21 @@ fn client_identity_from_peer_chain(
 #[derive(Debug, Clone)]
 struct PeerCertIdentityLayer {
     identity: Option<CertIdentity>,
+    not_after: Option<crate::mtls::identity::CertNotAfter>,
 }
 
 impl PeerCertIdentityLayer {
     fn new(identity: Option<CertIdentity>) -> Self {
-        Self { identity }
+        Self {
+            identity,
+            not_after: None,
+        }
+    }
+
+    /// The certificate's `notAfter`, inserted beside the identity.
+    fn with_not_after(mut self, not_after: Option<crate::mtls::identity::CertNotAfter>) -> Self {
+        self.not_after = not_after;
+        self
     }
 }
 
@@ -244,6 +260,7 @@ impl<S> Layer<S> for PeerCertIdentityLayer {
         PeerCertIdentityService {
             inner,
             identity: self.identity.clone(),
+            not_after: self.not_after,
         }
     }
 }
@@ -263,6 +280,7 @@ fn names_nobody(identity: Option<&CertIdentity>) -> bool {
 struct PeerCertIdentityService<S> {
     inner: S,
     identity: Option<CertIdentity>,
+    not_after: Option<crate::mtls::identity::CertNotAfter>,
 }
 
 impl<S, B> Service<axum::http::Request<B>> for PeerCertIdentityService<S>
@@ -294,6 +312,9 @@ where
         }
         if let Some(identity) = self.identity.clone() {
             request.extensions_mut().insert(identity);
+        }
+        if let Some(not_after) = self.not_after {
+            request.extensions_mut().insert(not_after);
         }
 
         futures::future::Either::Left(self.inner.call(request))

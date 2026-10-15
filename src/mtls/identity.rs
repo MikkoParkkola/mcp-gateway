@@ -101,6 +101,24 @@ impl CertIdentity {
     }
 }
 
+/// A client certificate's `notAfter`, in unix seconds, kept beside its
+/// [`CertIdentity`] as a request extension so the identity struct itself (a
+/// public type) is unchanged (MIK-8350 D16; checked per decision by
+/// MIK-8377).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CertNotAfter(pub(crate) u64);
+
+impl CertNotAfter {
+    /// The `notAfter` of the DER-encoded certificate; `None` when it cannot
+    /// be parsed or precedes the epoch.
+    pub(crate) fn from_der(der: &[u8]) -> Option<Self> {
+        let (_, cert) = X509Certificate::from_der(der).ok()?;
+        u64::try_from(cert.validity().not_after.timestamp())
+            .ok()
+            .map(Self)
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Extraction helpers
 // ─────────────────────────────────────────────────────────────────────────────
