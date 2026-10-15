@@ -397,11 +397,15 @@ pub(super) async fn tasks_get(
     caller: &RecoveryCaller<'_>,
 ) -> JsonRpcResponse {
     // MIK-8392: one request memo, filled by the async pre-pass, then read by
-    // the synchronous delivery check inside the route.
-    crate::gateway::meta_mcp::visible::with_visibility_memo(async {
-        prepare_stored_read(state, owner, params, caller).await;
-        tasks_get_judged(state, owner, id, params, caller).await
-    })
+    // the synchronous delivery check inside the route. Boxed: the memo it
+    // carries (MIK-8392 STORED.2 deferred replays included) would otherwise
+    // make this future large.
+    Box::pin(crate::gateway::meta_mcp::visible::with_visibility_memo(
+        async {
+            prepare_stored_read(state, owner, params, caller).await;
+            tasks_get_judged(state, owner, id, params, caller).await
+        },
+    ))
     .await
 }
 
