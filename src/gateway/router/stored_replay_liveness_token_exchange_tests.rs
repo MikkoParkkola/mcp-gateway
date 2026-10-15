@@ -144,6 +144,29 @@ mod r6m_token_exchange {
         Arc<AtomicUsize>,
         (tempfile::TempDir, tempfile::TempDir),
     ) {
+        gateway_with(key, endpoint, alice, Requirement::Required, arm).await
+    }
+
+    /// Whether [`TX`]'s identity propagation is `required`.
+    #[derive(Clone, Copy)]
+    pub(super) enum Requirement {
+        Required,
+        /// A failed mint falls back to static credentials (IDP.5).
+        Optional,
+    }
+
+    /// [`gateway_armed`] with the propagation requirement chosen.
+    pub(super) async fn gateway_with(
+        key: &Arc<crate::gateway::oauth::GatewayKeyPair>,
+        endpoint: String,
+        alice: &crate::key_server::oidc::VerifiedIdentity,
+        requirement: Requirement,
+        arm: impl FnOnce(crate::gateway::meta_mcp::MetaMcp) -> crate::gateway::meta_mcp::MetaMcp,
+    ) -> (
+        axum::Router,
+        Arc<AtomicUsize>,
+        (tempfile::TempDir, tempfile::TempDir),
+    ) {
         use crate::config::{BackendConfig, TransportConfig};
         use crate::identity_propagation::{
             IdentityPropagationConfig, PropagationStrategyKind, SessionMode, TokenExchangeStrategy,
@@ -162,7 +185,7 @@ mod r6m_token_exchange {
                 identity_propagation: Some(IdentityPropagationConfig {
                     strategy: PropagationStrategyKind::TokenExchange,
                     audience: AUDIENCE.to_string(),
-                    required: true,
+                    required: matches!(requirement, Requirement::Required),
                     session_mode: SessionMode::Stateless,
                     token_exchange_endpoint: Some(endpoint.clone()),
                     token_exchange_scope: Some(SCOPE.to_string()),
@@ -773,3 +796,6 @@ async fn l4_a_lifted_replay_records_the_first_execution_s_hashes() {
     }
     drop(idp);
 }
+
+#[path = "stored_replay_liveness_optional_tests.rs"]
+mod optional;
