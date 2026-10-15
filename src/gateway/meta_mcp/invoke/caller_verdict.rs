@@ -30,6 +30,10 @@ pub(crate) enum CallerVerdict {
     /// carried; the dispatch's own check answers the failure as a failed
     /// dispatch (backend unavailable, with managed-401 recovery).
     Unavailable,
+    /// The mint-free view read met a busy custody (MIK-8392 Busy parity):
+    /// the busy is carried in the request memo and the dispatch answers
+    /// the one retryable transient answer, with no second custody read.
+    Transient,
 }
 
 /// How a call named its per-user target. It decides what a caller with no
@@ -67,6 +71,63 @@ pub(super) enum SlotJudgement {
 }
 
 impl MetaMcp {
+    /// Re-establish `caller`'s cold per-user view of `server` for a stored
+    /// read that won the claim `generation` (MIK-8392 B', d1): resolve the
+    /// caller's credential, fill the caller's own slot through the fill that
+    /// reports its real failure (never the stale-cache fallback), and only
+    /// then publish the slot, and only over this claim's own lease. One
+    /// resolution per claimed attempt; a failure leaves the lease to expire.
+    pub(in crate::gateway::meta_mcp) async fn warm_cold_view(
+        &self,
+        (server, tool): (&str, &str),
+        backend: &Backend,
+        caller: CallerProof<'_>,
+        generation: u64,
+    ) {
+        #[cfg(test)]
+        backend.cold_winner.pause().await;
+        let Ok(resolved) = self
+            .resolve_dispatch((server, tool), Some(backend), caller, caller.verified())
+            .await
+        else {
+            return;
+        };
+        let Some(binding) = resolved.binding.as_deref() else {
+            return;
+        };
+        if backend
+            .tools_for_check(Some(binding), &resolved.caller_credential.headers, false)
+            .await
+            .is_err()
+        {
+            return;
+        }
+        if let Some(principal) = self.principal_for(backend, caller) {
+            backend.publish_cold_view(&principal.stable_actor_id(), generation, binding);
+        }
+    }
+
+    /// The live call's own refusal for `caller` on `(server, tool)`: the
+    /// error `resolve_dispatch` answers, or `None` when it resolves. A stored
+    /// read uses it for a refusal that never changes (MIK-8392, lead ruling
+    /// 2026-10-12), so it answers exactly what the live call answers. It runs
+    /// what a live call runs, including the refusal's audit record.
+    pub(in crate::gateway::meta_mcp) async fn live_refusal(
+        &self,
+        (server, tool): (&str, &str),
+        caller: CallerProof<'_>,
+    ) -> Option<crate::Error> {
+        let backend = self.backends.get(server);
+        self.resolve_dispatch(
+            (server, tool),
+            backend.as_deref(),
+            caller,
+            caller.verified(),
+        )
+        .await
+        .err()
+    }
+
     /// The caller verdict for `(server, tool)`, taken right after route
     /// authorize and the firewall (R5.1). Idempotent within a request: a
     /// recorded answer is returned as is.
@@ -74,9 +135,12 @@ impl MetaMcp {
     /// `witness` is the call's refund witness (MIK-8353). It comes back only
     /// from an arm that contacted nothing: a memo hit, Step 0, no principal, or
     /// no view (each reads in-process state or the vault's stored grant, with
-    /// no provider call and no durable write). A resolution (which may mint,
-    /// refresh or lease), a catalogue fill or a 401 refresh spends it, so a
-    /// later refusal keeps the nonce spent.
+    /// no provider call and no durable write). A busy custody comes back too:
+    /// a call refused before its backend was reached gives its nonce back
+    /// (`invoke/nonce_settle.rs:27-31`), and an `idp_refuse` audit append is
+    /// not an effect a replay would repeat, so it does not spend the witness.
+    /// A resolution (which may mint, refresh or lease), a catalogue fill or a
+    /// 401 refresh spends it, so a later refusal keeps the nonce spent.
     ///
     /// # Errors
     ///
@@ -122,7 +186,53 @@ impl MetaMcp {
         // reader after this answers as absent; a dispatch naming the backend
         // proceeds to that account's connect offer, the same for every tool
         // name (MIK-6745 section 9.2, predicate D).
-        if self.has_no_view_for(&backend, proof).await {
+        // The route verdict's acting resolution already failed for this
+        // target in this request (MIK-8392 G1a twin): a memo hit. The
+        // dispatch answers the carried error; resolving here would read
+        // custody and audit a second time.
+        if visible::has_resolution_error(server, tool) {
+            return Ok((CallerVerdict::Proceed, witness));
+        }
+        // A busy custody already met in this request (the route stage's
+        // verdict, read again on a surfaced route): no second custody read
+        // and no second audit record (MIK-8392 Busy parity).
+        if visible::account_transient(server, tool).is_some() {
+            return Ok((CallerVerdict::Transient, witness));
+        }
+        let no_view = match self.has_no_view_for_classified(&backend, proof).await {
+            Ok(no_view) => no_view,
+            Err(error) => {
+                // A busy custody is not "no view": no marker is recorded,
+                // nothing proceeds to the acting resolution. The witness
+                // is kept, as on the no-view arm: this call reaches no
+                // backend and its answer is retryable, so its nonce is
+                // given back (`invoke/nonce_settle.rs:27-31`); the
+                // `idp_refuse` append below is not an effect a replay
+                // would repeat. The busy is carried request-local and
+                // consumed once at the dispatch.
+                let reason = error.to_string();
+                visible::record_account_transient(server, tool, reason.clone());
+                if let Some(account) = self.target_account(server, tool) {
+                    visible::record_account_outcome(
+                        server,
+                        &account,
+                        visible::AccountOutcome::Transient,
+                    );
+                }
+                if let Some(descriptor) = backend.account_descriptor_id() {
+                    self.account_strategies
+                        .audit_transient_refusal(
+                            self.transparency_logger.as_ref(),
+                            descriptor,
+                            proof,
+                            &reason,
+                        )
+                        .await;
+                }
+                return Ok((CallerVerdict::Transient, witness));
+            }
+        };
+        if no_view {
             if let Some(principal) = self.principal_for(&backend, proof) {
                 backend.record_no_view(&principal.stable_actor_id());
             }
@@ -141,21 +251,43 @@ impl MetaMcp {
         }
         // Everything below may act: the resolution may mint, refresh or lease
         // the caller's credential, and the judgement fills the catalogue.
-        if let Some(witness) = witness {
-            witness.spend();
-        }
+        // The witness is spent once the outcome is known, below: a sealed
+        // transient (a busy custody at the view or the mint) released
+        // nothing, so it alone returns the witness unspent for the nonce
+        // refund (`nonce_settle.rs:27-31`); spending is only consuming the
+        // token, so deferring it past the acting half changes nothing else.
         // Boxed: the acting half's state (resolution, fill, refresh) would
         // otherwise sit inline in every dispatch future that awaits a verdict,
         // refusals included (MIK-8400's allocation caps). It is allocated only
         // when a per-user call gets this far.
-        Box::pin(self.caller_verdict_acting(
+        match Box::pin(self.caller_verdict_acting(
             (server, tool),
             backend,
             proof,
             caller.verified_identity,
         ))
         .await
-        .map(|verdict| (verdict, None))
+        {
+            Ok(verdict) => {
+                if let Some(witness) = witness {
+                    witness.spend();
+                }
+                Ok((verdict, None))
+            }
+            // A sealed transient resolution error (MIK-8428 mint Busy):
+            // carried to the dispatch here, witness unspent, so the call
+            // is answered once and its nonce refunded like a view Busy.
+            Err(error) if crate::personal_accounts::refusal::transient_data(&error).is_some() => {
+                visible::record_resolution_error(server, tool, error);
+                Ok((CallerVerdict::Proceed, witness))
+            }
+            Err(error) => {
+                if let Some(witness) = witness {
+                    witness.spend();
+                }
+                Err(error)
+            }
+        }
     }
 
     /// The caller verdict for each of one request's `targets`, in order, as
@@ -171,13 +303,23 @@ impl MetaMcp {
     ) -> Option<RefundWitness> {
         for target in targets {
             let target = target.as_target();
-            let target = (target.server, target.tool);
-            let naming = TargetNaming::of(self, tool_name, target);
-            witness = self
-                .caller_verdict(target, caller, session_id, naming, witness)
+            let (server, tool) = (target.server, target.tool);
+            let naming = TargetNaming::of(self, tool_name, (server, tool));
+            witness = match self
+                .caller_verdict((server, tool), caller, session_id, naming, witness)
                 .await
-                .ok()
-                .and_then(|(_, witness)| witness);
+            {
+                Ok((_, witness)) => witness,
+                Err(error) => {
+                    // The acting resolution failed (MIK-8392 G1a): carry
+                    // its error to the dispatch so it answers without
+                    // resolving (and auditing) again in this request.
+                    // The witness stays spent, as the verdict spent it:
+                    // the resolution may have minted.
+                    visible::record_resolution_error(server, tool, error);
+                    None
+                }
+            };
         }
         witness
     }
@@ -205,6 +347,29 @@ impl MetaMcp {
         >,
     > {
         use std::ops::ControlFlow::{Break, Continue};
+        // The verdict's busy custody, consumed once: the one retryable
+        // transient answer, with no acting resolution and no mint — and
+        // no second custody read in this request (MIK-8392 Busy parity).
+        // The witness is kept: nothing reached the backend, so the nonce
+        // is given back (`nonce_settle.rs:27-31`); the invoke asks for the
+        // refund as it returns this error.
+        if visible::take_account_transient(server, tool).is_some() {
+            return Err(crate::personal_accounts::refusal::transient_retry_error(
+                None,
+            ));
+        }
+        // The verdict's acting resolution already failed in this request
+        // (MIK-8392 G1a): answer its error, consumed once, without
+        // resolving a second time. The witness is spent, as on the fresh
+        // resolution's failure: that resolution may have minted. A sealed
+        // transient is the one exception (MIK-8428): its mint-time Busy
+        // released nothing, so the witness stays for the nonce refund.
+        if let Some(error) = visible::take_resolution_error(server, tool) {
+            if crate::personal_accounts::refusal::transient_data(&error).is_none() {
+                witness.spend();
+            }
+            return Err(error);
+        }
         match visible::take_carried(server, tool) {
             // The verdict's fill failed: answered as a failed dispatch is,
             // with nothing filled or sent again (F13, A11-c).
@@ -242,11 +407,20 @@ impl MetaMcp {
                         verified_identity,
                     )
                     .await;
-                if resolved.is_err() {
-                    // A failed resolution may have minted or refreshed before it failed.
-                    witness.spend();
-                }
-                Ok(Continue((backend, resolved?)))
+                // A failed resolution may have minted or refreshed before
+                // it failed, so it spends the witness — except a sealed
+                // transient (MIK-8428), whose busy custody released
+                // nothing: the witness stays for the nonce refund.
+                let resolved = match resolved {
+                    Ok(resolved) => resolved,
+                    Err(error) => {
+                        if crate::personal_accounts::refusal::transient_data(&error).is_none() {
+                            witness.spend();
+                        }
+                        return Err(error);
+                    }
+                };
+                Ok(Continue((backend, resolved)))
             }
         }
     }
@@ -346,3 +520,7 @@ impl MetaMcp {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "caller_verdict_outcome_tests.rs"]
+mod outcome_tests;

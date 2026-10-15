@@ -598,7 +598,7 @@ fn a_held_lease_rechecks_only_against_the_vault_that_released_it() {
         ));
 
         let (_credential, held) = released
-            .prepare_held(Principal::Verified(&alice), &backend())
+            .prepare_held_classified(Principal::Verified(&alice), &backend())
             .await
             .expect("alice's grant leases");
 

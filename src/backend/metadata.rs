@@ -18,6 +18,9 @@ use super::fill_check::{
 };
 use super::list_drain::drain_list_pages;
 use super::pool::PoolKey;
+
+#[path = "metadata_stored_view.rs"]
+mod stored_view;
 use crate::Error;
 use crate::Result;
 use crate::oauth::login_gate::{Provenance, fill_scope};

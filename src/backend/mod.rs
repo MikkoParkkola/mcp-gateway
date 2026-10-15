@@ -26,6 +26,7 @@ const CACHE_LIST_DRAIN_BUDGET: Duration = Duration::from_secs(120);
 mod annotations;
 mod cached_metadata;
 mod caller_slots;
+pub(crate) use caller_slots::ColdClaim;
 mod catalogue_verdict;
 mod descriptor_gate;
 mod era;
@@ -117,6 +118,22 @@ pub struct Backend {
     /// the era, so a removal can land inside that window (MIK-7643).
     #[cfg(test)]
     after_reprobe_lookup: crate::test_pause::Slot,
+    /// Test-only: a stored read that won a cold claim pauses before it
+    /// resolves (MIK-8392 C3, C4, L1, L1b).
+    #[cfg(test)]
+    pub(crate) cold_winner: crate::test_pause::Slot,
+    /// Test-only: a warm stored read pauses after it captured its Held entry
+    /// and before its mismatch forget (MIK-8392 L2).
+    #[cfg(test)]
+    pub(crate) after_warm_capture: crate::test_pause::Slot,
+    /// Test-only (MIK-8392 N0): a stored read skips the account pre-pass for
+    /// this backend's targets.
+    #[cfg(test)]
+    pub(crate) skip_account_prepass: std::sync::atomic::AtomicBool,
+    /// Test-only (MIK-8392 N0): stored reads that found no account outcome
+    /// recorded for this backend's target (the pre-pass never ran).
+    #[cfg(test)]
+    pub(crate) unfilled_outcome_reads: std::sync::atomic::AtomicUsize,
     /// Consecutive health-probe answers this peer declined to serve
     /// (MIK-7217, OUTBOUND.2).
     ///

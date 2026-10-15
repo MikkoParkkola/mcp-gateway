@@ -21,20 +21,50 @@ pub(super) async fn mint_held(
         crate::identity_propagation::PropagatedCredential,
         Option<crate::personal_accounts::ManagedLease>,
     ),
-    crate::identity_propagation::PropagationError,
+    crate::personal_accounts::MintError,
 > {
     match (managed_vault, principal.verified()) {
         (Some(vault), _) => vault
-            .prepare_held(principal, descriptor)
+            .prepare_held_classified(principal, descriptor)
             .await
             .map(|(cred, managed)| (cred, Some(managed))),
         (None, Some(identity)) => strategy
             .propagate(identity, descriptor)
             .await
-            .map(|cred| (cred, None)),
+            .map(|cred| (cred, None))
+            .map_err(crate::personal_accounts::MintError::Other),
         // Only a managed vault serves a non-verified principal.
-        (None, None) => Err(crate::identity_propagation::PropagationError::Refuse(
-            "only a managed account mints for a caller without a verified identity".into(),
+        (None, None) => Err(crate::personal_accounts::MintError::Other(
+            crate::identity_propagation::PropagationError::Refuse(
+                "only a managed account mints for a caller without a verified identity".into(),
+            ),
         )),
     }
+}
+
+/// What `server` mints against: the backend id, and the audience and token
+/// exchange its identity-propagation config names.
+pub(super) fn descriptor_for(
+    server: &str,
+    idp_cfg: &crate::identity_propagation::IdentityPropagationConfig,
+) -> crate::identity_propagation::BackendDescriptor {
+    crate::identity_propagation::BackendDescriptor {
+        id: server.to_string(),
+        audience: idp_cfg.audience.clone(),
+        token_exchange_endpoint: idp_cfg.token_exchange_endpoint.clone(),
+        token_exchange_scope: idp_cfg.token_exchange_scope.clone(),
+    }
+}
+
+/// The first minted header whose name or value cannot go on the wire, so an
+/// invalid minted credential fails closed rather than letting the static
+/// Authorization through (MIK-6734 review carry-forward).
+pub(super) fn invalid_header(headers: &[(String, String)]) -> Option<&str> {
+    headers
+        .iter()
+        .find(|(name, value)| {
+            name.parse::<reqwest::header::HeaderName>().is_err()
+                || value.parse::<reqwest::header::HeaderValue>().is_err()
+        })
+        .map(|(name, _)| name.as_str())
 }

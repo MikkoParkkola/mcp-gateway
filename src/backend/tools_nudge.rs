@@ -195,6 +195,57 @@ impl super::Backend {
             .replace(tools, || ());
     }
 
+    /// Set per-user slot `binding`'s last use `secs` into the past, as that
+    /// much idle time would (MIK-8392 K1: eviction reads the monotonic idle
+    /// clock). A boot too recent to go back that far is clamped to now.
+    #[cfg(test)]
+    pub(crate) fn age_per_user_slot_for_test(&self, binding: &str, secs: u64) {
+        let key = super::PoolKey::PerUser {
+            binding: binding.to_string(),
+        };
+        let now = tokio::time::Instant::now();
+        *self
+            .pooled_entry(&key)
+            .expect("a per-user slot is admitted")
+            .last_used
+            .lock() = now
+            .checked_sub(std::time::Duration::from_secs(secs))
+            .unwrap_or(now);
+    }
+
+    /// Move `binding`'s (`None`: shared) catalogue timestamp back by `secs`,
+    /// as if it were listed that long ago (MIK-8392 F2): the value stays,
+    /// freshness lapses past the TTL. A missing slot is left alone.
+    #[cfg(test)]
+    pub(crate) fn age_tools_cache_for_test(&self, binding: Option<&str>, secs: u64) {
+        let key = match binding {
+            Some(binding) => super::PoolKey::PerUser {
+                binding: binding.to_string(),
+            },
+            None => super::PoolKey::Shared,
+        };
+        if let Some(slot) = self.pool.get(&key) {
+            slot.value().tools_cache.age_for_test(secs);
+        }
+    }
+
+    /// Whether per-user slot `binding` is in the pool (MIK-8392 K1).
+    #[cfg(test)]
+    pub(crate) fn holds_per_user_slot_for_test(&self, binding: &str) -> bool {
+        self.pool.contains_key(&super::PoolKey::PerUser {
+            binding: binding.to_string(),
+        })
+    }
+
+    /// Forget every caller-slot index entry, leaving the pooled slots in
+    /// place (MIK-8392 C1): a caller's view reads cold, while a fixture's
+    /// scripted per-user transport, which a real eviction would drop and a
+    /// real gateway would reconnect from config, stays reachable.
+    #[cfg(test)]
+    pub(crate) fn forget_caller_slots_for_test(&self) {
+        self.caller_slots.clear();
+    }
+
     /// Withhold tool `name` from every slot's served view, as a descriptor
     /// verdict does.
     #[cfg(test)]
@@ -208,6 +259,15 @@ impl super::Backend {
     #[cfg(test)]
     pub(crate) fn store_shared_tools_for_test(&self, tools: Vec<Tool>) {
         self.shared_entry().tools_cache.replace(tools, || ());
+    }
+
+    /// Mark the shared slot's held list as a truncated drain, as a paging fill
+    /// past its budget leaves it (MIK-8392 T9 control).
+    #[cfg(test)]
+    pub(crate) fn mark_shared_truncated_for_test(&self) {
+        self.shared_entry()
+            .tools_truncated
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Prefill the shared slot as an accepted fill of `tools` would: the same

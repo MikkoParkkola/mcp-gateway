@@ -453,8 +453,8 @@ pub(crate) use service::CredentialLease;
 pub(crate) use service::RejectionOutcome;
 #[cfg(test)]
 pub(crate) use service::{
-    ConsentExpectation, CredentialReleaseObserver, ProviderRefreshError, RefreshProvider,
-    ReleasedCredentials, TokenRefresh,
+    AccountServiceError, ConsentExpectation, CredentialReleaseObserver, ProviderRefreshError,
+    RefreshProvider, ReleasedCredentials, TokenRefresh,
 };
 #[cfg(test)]
 pub(crate) use storage::journey::JourneyReason;
@@ -480,7 +480,7 @@ pub use offline_migration::{
     MigratedCredential, OfflineMigrationError, migrate_legacy_credential_offline,
 };
 pub(crate) use revoke::{AccountRevocation, ProviderOutcome};
-pub(crate) use vault::{AccountCustody, ManagedLease, VaultStrategy};
+pub(crate) use vault::{AccountCustody, ManagedLease, MintError, VaultStrategy, ViewBinding};
 
 /// The one refresh provider a gateway runs: the real policy over the real
 /// transport, the system clock, and the gateway's own environment overlay.

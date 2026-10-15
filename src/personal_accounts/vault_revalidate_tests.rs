@@ -201,3 +201,90 @@ fn a_revoke_after_the_mint_refuses_the_credential_at_the_durable_recheck() {
         );
     });
 }
+
+/// The registry's fail-closed early exits (MIK-8392 coverage rows).
+/// Mutants: `unbindable` answering true for an uninstalled or an external
+/// descriptor (a permanent refusal for a caller nothing judged), and
+/// `view_binding_classified` answering `None` (unjudged, so a stored read
+/// would skip the account) for a managed descriptor whose caller has no
+/// principal. Each exit is checked beside a control that takes the other
+/// branch, so the row pins the exit and not a registry that answers one
+/// way for everyone.
+#[test]
+fn the_registry_view_reads_fail_closed_at_each_early_exit() {
+    use crate::personal_accounts::ViewBinding;
+    let tmp = tempfile::TempDir::new().expect("root");
+    let alice = identity();
+    seed(
+        tmp.path(),
+        &[(
+            key_for(Principal::Verified(&alice)),
+            unexpired_grant(ALICE_TOKEN),
+        )],
+    );
+
+    block_on(async {
+        let handle = CustodyHandle::start(
+            store_config(tmp.path()),
+            CountingProvider {
+                calls: Arc::new(AtomicUsize::new(0)),
+            },
+            SilentObserver,
+            4,
+        )
+        .expect("custody starts against a seeded store");
+        let custody: Arc<dyn AccountCustody> = Arc::new(handle);
+        let registry = AccountStrategyRegistry::default();
+        assert!(
+            !registry.unbindable(DESCRIPTOR_ID, CallerProof::Verified(&alice)),
+            "an uninstalled descriptor is not a permanent refusal"
+        );
+
+        registry.declare(DESCRIPTOR_ID, "google", DescriptorMode::PersonalManaged);
+        registry.install(
+            installed(Minter::Managed(Arc::new(VaultStrategy::new(
+                custody,
+                descriptor(),
+                seeded_revision(),
+                false,
+            )))),
+            DescriptorMode::PersonalManaged,
+        );
+        let anonymous = registry
+            .view_binding_classified(DESCRIPTOR_ID, CallerProof::Anonymous)
+            .await;
+        assert!(
+            matches!(
+                anonymous,
+                Some(ViewBinding::NoView(PropagationError::AccountNotConnected(
+                    _
+                )))
+            ),
+            "a caller with no principal has no view, not an unjudged one: {anonymous:?}"
+        );
+        let verified = registry
+            .view_binding_classified(DESCRIPTOR_ID, CallerProof::Verified(&alice))
+            .await;
+        assert!(
+            matches!(verified, Some(ViewBinding::Bound(_))),
+            "control: alice's grant is a view: {verified:?}"
+        );
+
+        registry.declare(DESCRIPTOR_ID, "google", DescriptorMode::External);
+        registry.install(
+            installed(Minter::External(Arc::new(External))),
+            DescriptorMode::External,
+        );
+        assert!(
+            !registry.unbindable(DESCRIPTOR_ID, CallerProof::Verified(&alice)),
+            "an external descriptor is not a permanent refusal"
+        );
+        assert!(
+            registry
+                .view_binding_classified(DESCRIPTOR_ID, CallerProof::Verified(&alice))
+                .await
+                .is_none(),
+            "control: an external descriptor has no mint-free view"
+        );
+    });
+}

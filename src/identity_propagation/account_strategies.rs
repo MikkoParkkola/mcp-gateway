@@ -478,7 +478,13 @@ impl AccountStrategyRegistry {
         let minted = Self::mint(installed.as_ref(), principal, &backend).await;
         let (credential, managed) = match minted {
             Ok(minted) => minted,
-            Err(error) => {
+            // A busy custody at the mint (MIK-8428): see `transient_mint_refusal`.
+            Err(crate::personal_accounts::MintError::Busy(error)) => {
+                return Err(self
+                    .transient_mint_refusal(logger.as_ref(), descriptor_id, caller, &error)
+                    .await);
+            }
+            Err(crate::personal_accounts::MintError::Other(error)) => {
                 let reason = error.to_string();
                 Self::audit_refusal(
                     logger.as_ref(),
@@ -687,11 +693,13 @@ impl AccountStrategyRegistry {
         installed: &InstalledAccount,
         principal: Principal<'_>,
         backend: &BackendDescriptor,
-    ) -> std::result::Result<(super::PropagatedCredential, Option<ManagedLease>), PropagationError>
-    {
+    ) -> std::result::Result<
+        (super::PropagatedCredential, Option<ManagedLease>),
+        crate::personal_accounts::MintError,
+    > {
         match &installed.minter {
             Minter::Managed(vault) => vault
-                .prepare_held(principal, backend)
+                .prepare_held_classified(principal, backend)
                 .await
                 .map(|(credential, managed)| (credential, Some(managed))),
             // An external strategy exchanges the CALLER'S OWN token, so it has
@@ -704,10 +712,12 @@ impl AccountStrategyRegistry {
                 Some(identity) => strategy
                     .propagate(identity, backend)
                     .await
-                    .map(|credential| (credential, None)),
+                    .map(|credential| (credential, None))
+                    .map_err(crate::personal_accounts::MintError::Other),
                 None => Err(PropagationError::Refuse(
                     "an external account descriptor mints only for a verified caller".to_string(),
-                )),
+                )
+                .into()),
             },
         }
     }
@@ -730,6 +740,20 @@ impl AccountStrategyRegistry {
             // descriptor has always needed a verified caller and still does.
             Minter::External(_) => caller.verified().map(Principal::Verified),
         }
+    }
+
+    /// Whether `caller` has a principal for managed descriptor
+    /// `descriptor_id` that can never bind an account key (MIK-8392): a
+    /// permanent refusal, not a transient one. False for anything else,
+    /// including an external descriptor or no principal at all.
+    pub(crate) fn unbindable(&self, descriptor_id: &str, caller: CallerProof<'_>) -> bool {
+        let Some(installed) = self.installed(descriptor_id) else {
+            return false;
+        };
+        let Some(vault) = installed.minter.managed() else {
+            return false;
+        };
+        Self::principal(installed.as_ref(), caller).is_some_and(|principal| !vault.binds(principal))
     }
 
     /// Record a refusal. The request is already being refused, so an audit-write
@@ -760,6 +784,9 @@ impl AccountStrategyRegistry {
         }
     }
 }
+
+#[path = "account_strategies_view.rs"]
+mod view;
 
 #[cfg(test)]
 #[path = "account_strategies_tests.rs"]
