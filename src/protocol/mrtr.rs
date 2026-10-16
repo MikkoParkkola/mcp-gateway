@@ -63,7 +63,9 @@ fn idempotency_key_of(params: &Value) -> KeyField<'_> {
 /// answers (MIK-8382 intake): method `tools/call`, an `id` member (without
 /// one it is a notification), object `params`, and a key member, valid or
 /// malformed (a caller who sent a key asked for keyed handling). Reads only
-/// protocol fields that sanitizing never changes.
+/// protocol fields that sanitizing never changes. Test-only until the intake
+/// check that calls it lands (MIK-8382 stage 2 drops the `cfg`).
+#[cfg(test)]
 #[must_use]
 fn intake_requires_principal(request: &Value) -> bool {
     request.get("method").and_then(Value::as_str) == Some("tools/call")

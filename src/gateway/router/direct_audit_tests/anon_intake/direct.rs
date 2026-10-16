@@ -22,8 +22,8 @@ async fn b1_keyed_no_principal_does_no_backend_work() {
         .await;
         let (status, body) = post(&fx, "alpha", &keyed("t"), &Caller::Anonymous).await;
         assert_eq!(
-            message(&body),
-            NO_PRINCIPAL,
+            refusal(&body),
+            (Some(-32003), NO_PRINCIPAL),
             "b1 list_fail={list_fail}: {body}"
         );
         assert_eq!(status, StatusCode::BAD_REQUEST, "b1 list_fail={list_fail}");
@@ -52,28 +52,34 @@ async fn b2_keyed_no_principal_is_name_independent() {
     let answers = [
         (
             "existing tool",
-            post_to_raw(&fx, "/mcp/alpha", &keyed("t"), &Caller::Anonymous).await,
+            post_raw(&fx, "/mcp/alpha", &keyed("t"), &Caller::Anonymous).await,
         ),
         (
             "missing tool",
-            post_to_raw(&fx, "/mcp/alpha", &keyed("nope"), &Caller::Anonymous).await,
+            post_raw(&fx, "/mcp/alpha", &keyed("nope"), &Caller::Anonymous).await,
         ),
         (
             "failing backend",
-            post_to_raw(&failing, "/mcp/alpha", &keyed("t"), &Caller::Anonymous).await,
+            post_raw(&failing, "/mcp/alpha", &keyed("t"), &Caller::Anonymous).await,
         ),
         (
             "missing backend",
-            post_to_raw(&fx, "/mcp/nope", &keyed("t"), &Caller::Anonymous).await,
+            post_raw(&fx, "/mcp/nope", &keyed("t"), &Caller::Anonymous).await,
         ),
     ];
-    let (_, (_, first)) = &answers[0];
-    for (case, (status, bytes)) in &answers {
-        assert_eq!(*status, StatusCode::BAD_REQUEST, "b2 {case}: {bytes:?}");
-        assert_eq!(bytes, first, "b2 {case} differs from the existing tool");
+    // Status, every header and the body (no session on this route).
+    let first = compared(&answers[0].1, None);
+    for (case, raw) in &answers {
+        assert_eq!(raw.0, StatusCode::BAD_REQUEST, "b2 {case}: {:?}", raw.2);
+        assert_eq!(
+            compared(raw, None),
+            first,
+            "b2 {case} differs from the existing tool: {raw:?}"
+        );
     }
-    let body: Value = serde_json::from_slice(first).expect("JSON");
-    assert_eq!(message(&body), NO_PRINCIPAL, "b2: {body}");
+    let body: Value = serde_json::from_slice(&answers[0].1.2).expect("JSON");
+    assert_eq!(refusal(&body), (Some(-32003), NO_PRINCIPAL), "b2: {body}");
+    assert_eq!(body.get("id"), Some(&json!(5)), "b2: {body}");
 }
 
 /// B4: a malformed key (empty, or not a string) from a caller with no
@@ -88,7 +94,11 @@ async fn b4_malformed_key_without_principal_is_refused_at_intake() {
             &json!({(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): key}),
         );
         let (status, answer) = post(&fx, "alpha", &body, &Caller::Anonymous).await;
-        assert_eq!(message(&answer), NO_PRINCIPAL, "b4 {key}: {answer}");
+        assert_eq!(
+            refusal(&answer),
+            (Some(-32003), NO_PRINCIPAL),
+            "b4 {key}: {answer}"
+        );
         assert_eq!(status, StatusCode::BAD_REQUEST, "b4 {key}");
         assert_eq!(fx.lists.load(Ordering::SeqCst), 0, "b4 {key}: listed");
     }
@@ -105,11 +115,25 @@ async fn b4_malformed_key_without_principal_is_refused_at_intake() {
 #[tokio::test]
 async fn b3_sanitize_cannot_tell_backends_apart() {
     let fx = fixture(sanitizing()).await;
-    let passthrough = post_to_raw(&fx, "/mcp/beta", &keyed_nul("t"), &Caller::Anonymous).await;
-    let missing = post_to_raw(&fx, "/mcp/nope", &keyed_nul("t"), &Caller::Anonymous).await;
+    let passthrough = post_raw(&fx, "/mcp/beta", &keyed_nul("t"), &Caller::Anonymous).await;
+    let missing = post_raw(&fx, "/mcp/nope", &keyed_nul("t"), &Caller::Anonymous).await;
+    // The reference twin is itself the intake refusal, so two equal wrong
+    // answers cannot pass.
+    let reference: Value = serde_json::from_slice(&passthrough.2).unwrap_or(Value::Null);
     assert_eq!(
-        passthrough, missing,
-        "b3: passthrough vs missing backend differ"
+        passthrough.0,
+        StatusCode::BAD_REQUEST,
+        "b3 passthrough: {reference}"
+    );
+    assert_eq!(
+        (refusal(&reference), reference.get("id")),
+        ((Some(-32003), NO_PRINCIPAL), Some(&json!(5))),
+        "b3 passthrough: {reference}"
+    );
+    assert_eq!(
+        compared(&missing, None),
+        compared(&passthrough, None),
+        "b3: passthrough vs missing backend differ: {passthrough:?} vs {missing:?}"
     );
     let (_, body) = post(&fx, "alpha", &keyed_nul("t"), &Caller::Oidc).await;
     assert!(
@@ -163,7 +187,7 @@ async fn b8_intake_answers_before_later_refusals() {
     let mut wrong = Vec::new();
     for (case, body) in cases {
         let (status, answer) = post(&fx, "alpha", &body, &Caller::Anonymous).await;
-        if message(&answer) != NO_PRINCIPAL || status != StatusCode::BAD_REQUEST {
+        if refusal(&answer) != (Some(-32003), NO_PRINCIPAL) || status != StatusCode::BAD_REQUEST {
             wrong.push(format!("{case}: {status} {answer}"));
         }
     }
@@ -226,33 +250,22 @@ async fn b8d_direct_refusals_answer_after_intake() {
     let mut wrong = Vec::new();
     for (case, body, headers) in cases {
         let (status, answer) = post_with_headers(&fx, &body, &headers).await;
-        if message(&answer) != NO_PRINCIPAL || status != StatusCode::BAD_REQUEST {
+        if refusal(&answer) != (Some(-32003), NO_PRINCIPAL) || status != StatusCode::BAD_REQUEST {
             wrong.push(format!("{case}: {status} {answer}"));
         }
     }
     // The kill switch (`DirectRouteGuards::run`): a disabled backend.
     fx.state.meta_mcp.kill_switch().kill("alpha");
     let (status, answer) = post_with_headers(&fx, &keyed_body(None), &[]).await;
-    if message(&answer) != NO_PRINCIPAL || status != StatusCode::BAD_REQUEST {
+    if refusal(&answer) != (Some(-32003), NO_PRINCIPAL) || status != StatusCode::BAD_REQUEST {
         wrong.push(format!("d kill switch: {status} {answer}"));
-    }
-    // Hardened: a legacy call that declares no elicitation (403, id None).
-    let hardened = fixture(Setup {
-        extras: &[Extra::Hardened],
-        ..idempotent()
-    })
-    .await;
-    let (status, answer) = post_with_headers(&hardened, &keyed_body(None), &[]).await;
-    if message(&answer) != NO_PRINCIPAL || status != StatusCode::BAD_REQUEST {
-        wrong.push(format!("d hardened: {status} {answer}"));
     }
     assert!(
         wrong.is_empty(),
         "b8d answered before intake:\n{}",
         wrong.join("\n")
     );
-    let calls = fx.calls.load(Ordering::SeqCst) + hardened.calls.load(Ordering::SeqCst);
-    assert_eq!(calls, 0, "b8d: dispatched");
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "b8d: dispatched");
 }
 
 /// B8e: the direct preflight's refusals answer after the intake check for a
@@ -262,7 +275,7 @@ async fn b8d_direct_refusals_answer_after_intake() {
 /// chain nonce (its parse error is dropped, never answered) and the chain
 /// challenge (it fails only on non-object params or `_meta`, which a keyed
 /// call cannot have). The signing nonce is hardened-only, where the hardened
-/// refusal (B8d) answers first.
+/// identity refusal (control B10) answers first.
 #[tokio::test]
 async fn b8e_preflight_refusals_answer_after_intake() {
     let with = |field: &str, value: Value| {
@@ -279,7 +292,7 @@ async fn b8e_preflight_refusals_answer_after_intake() {
     let mut wrong = Vec::new();
     for (case, body) in cases {
         let (status, answer) = post_with_headers(&fx, &body, &[]).await;
-        if message(&answer) != NO_PRINCIPAL || status != StatusCode::BAD_REQUEST {
+        if refusal(&answer) != (Some(-32003), NO_PRINCIPAL) || status != StatusCode::BAD_REQUEST {
             wrong.push(format!("{case}: {status} {answer}"));
         }
     }
@@ -289,7 +302,7 @@ async fn b8e_preflight_refusals_answer_after_intake() {
     })
     .await;
     let (status, answer) = post_with_headers(&attested, &keyed_body(None), &[]).await;
-    if message(&answer) != NO_PRINCIPAL || status != StatusCode::BAD_REQUEST {
+    if refusal(&answer) != (Some(-32003), NO_PRINCIPAL) || status != StatusCode::BAD_REQUEST {
         wrong.push(format!("e attestation: {status} {answer}"));
     }
     assert!(
@@ -313,7 +326,11 @@ async fn b8f_propagation_refusal_answers_after_intake() {
     })
     .await;
     let (status, answer) = post_with_headers(&fx, &keyed_body(None), &[]).await;
-    assert_eq!(message(&answer), NO_PRINCIPAL, "b8f: {status} {answer}");
+    assert_eq!(
+        refusal(&answer),
+        (Some(-32003), NO_PRINCIPAL),
+        "b8f: {status} {answer}"
+    );
     assert_eq!(status, StatusCode::BAD_REQUEST, "b8f: {answer}");
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "b8f: dispatched");
     assert_eq!(mint_rows(&fx), 0, "b8f: identity minted");

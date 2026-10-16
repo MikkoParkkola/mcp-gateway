@@ -36,7 +36,11 @@ fn lacked_warns(log: &str) -> usize {
 /// A no-principal caller's `tools/list` on the direct route, or a
 /// `gateway_list_tools` / `gateway_search_tools` on `/mcp`: listings only.
 async fn list_unidentified(gw: &Gateway, uri: &str, params: Value) -> StatusCode {
-    let method = if uri == "/mcp" { "tools/call" } else { "tools/list" };
+    let method = if uri == "/mcp" {
+        "tools/call"
+    } else {
+        "tools/list"
+    };
     let body = json!({"jsonrpc": "2.0", "id": 9, "method": method, "params": params});
     let request = axum::http::Request::builder()
         .method("POST")
@@ -73,7 +77,9 @@ fn e1_case_b_refusal_answers_absent_and_warns_once() {
         });
         let twin = rt.block_on(call(&missing, entry, json!({"q": "x"})));
         if answer != twin || answer.1.pointer("/error/code") != Some(&json!(-32601)) {
-            cells.push(format!("E1 {entry:?}: answered {answer:?}, missing twin {twin:?}"));
+            cells.push(format!(
+                "E1 {entry:?}: answered {answer:?}, missing twin {twin:?}"
+            ));
         }
         if lacked_warns(&log) != 1 {
             cells.push(format!(
@@ -129,7 +135,11 @@ fn e2_no_warn_without_a_refused_call() {
         [StatusCode::FORBIDDEN, StatusCode::OK, StatusCode::OK],
         "E2 premise: a listing answered differently"
     );
-    assert_eq!(lacked_warns(&log), 0, "E2: a WARN without a refusal:\n{log}");
+    assert_eq!(
+        lacked_warns(&log),
+        0,
+        "E2: a WARN without a refusal:\n{log}"
+    );
     assert_eq!(listed.dispatched(), 0, "E2: a listing dispatched");
 }
 

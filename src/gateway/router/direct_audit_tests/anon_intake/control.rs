@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8382 CONTROL rows: answers the intake check must leave as they are
-//! (B5-B7, B9, B9b, C5). Green before and after the fix.
+//! (B5-B7, B9, B9b, B10, C5). Green before and after the fix.
 
 use super::*;
 
@@ -101,10 +101,14 @@ async fn c5_trusted_proxy_subject_is_a_principal() {
         .body(axum::body::Body::from(keyed("t")))
         .expect("a static request builds");
     request.extensions_mut().insert(axum::extract::ConnectInfo(
-        "10.0.0.5:4000".parse::<std::net::SocketAddr>()
+        "10.0.0.5:4000"
+            .parse::<std::net::SocketAddr>()
             .expect("a literal socket address parses"),
     ));
-    let response = fx.router.clone().oneshot(request)
+    let response = fx
+        .router
+        .clone()
+        .oneshot(request)
         .await
         .expect("the router is infallible");
     let status = response.status();
@@ -153,11 +157,40 @@ async fn b9b_sanitize_off_runs_no_protocol_field_validation() {
         "params": {"name": "t", "arguments": {},
             "_meta": {(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): KEY}}});
     let (_, answer) = post(&fx, "alpha", &body.to_string(), &Caller::Anonymous).await;
-    // The validation answer's shape (B9): -32600 with a null id.
+    // Validation answers -32600 (B9); with sanitizing off nothing may.
     assert_ne!(
-        (answer.pointer("/error/code"), answer.get("id")),
-        (Some(&json!(-32600)), Some(&Value::Null)),
+        answer.pointer("/error/code"),
+        Some(&json!(-32600)),
         "b9b: validation answered with sanitizing off: {answer}"
     );
-    assert_ne!(message(&answer), NO_PRINCIPAL, "b9b: not a tools/call: {answer}");
+    assert_ne!(
+        message(&answer),
+        NO_PRINCIPAL,
+        "b9b: not a tools/call: {answer}"
+    );
+}
+
+/// B10 CONTROL (design d2 §3.8 "not flips, kept first": `resolve_caller` /
+/// hardened identity): under hardened, a keyed no-principal legacy direct
+/// call meets the hardened identity refusal in `resolve_caller`
+/// (`direct_caller.rs`, `hardened_identity_refusal`) before `read_envelope`,
+/// where the intake check goes: 403, -32600, null id. The `direct_refusal`
+/// hardened arm (§3.8's flip) sits behind it and no no-principal caller
+/// reaches it.
+#[tokio::test]
+async fn b10_hardened_identity_refusal_stays_first() {
+    let hardened = fixture(Setup {
+        extras: &[Extra::Hardened],
+        ..idempotent()
+    })
+    .await;
+    let (status, answer) = post_with_headers(&hardened, &keyed_body(None), &[]).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "b10: {answer}");
+    assert_eq!(
+        refusal(&answer),
+        (Some(-32600), HARDENED_IDENTITY),
+        "b10: {answer}"
+    );
+    assert_eq!(answer.get("id"), Some(&Value::Null), "b10: {answer}");
+    assert_eq!(hardened.calls.load(Ordering::SeqCst), 0, "b10: dispatched");
 }

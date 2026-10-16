@@ -6,19 +6,9 @@
 //! them.
 
 use super::{
-    Caller, Fixture, KEY, NO_PRINCIPAL, Ordering, StatusCode, Value, fixture, idempotent, json,
-    keyed_invoke, poisoned_listing,
+    Caller, KEY, NO_PRINCIPAL, Ordering, Raw, StatusCode, Value, compared, fixture, idempotent,
+    json, keyed_invoke, poisoned_listing, post_raw, refusal, register_dead,
 };
-use crate::backend::Backend;
-use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
-use axum::body::to_bytes;
-use axum::http::HeaderMap;
-use std::sync::Arc;
-use std::time::Duration;
-use tower::ServiceExt;
-
-/// One answer as sent: status, headers, raw body.
-type Raw = (StatusCode, HeaderMap, axum::body::Bytes);
 
 /// The probe call: a keyed `tools/call` of `t`, id 7.
 fn probe_call() -> String {
@@ -28,53 +18,11 @@ fn probe_call() -> String {
     .to_string()
 }
 
-/// POST `body` to `uri` with no credential and no identity, carrying the
-/// fixture's session header when `caller` is [`Caller::Session`].
-async fn post_raw(fx: &Fixture, uri: &str, body: &str, caller: &Caller) -> Raw {
-    let mut builder = axum::http::Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header("content-type", "application/json");
-    if matches!(caller, Caller::Session) {
-        builder = builder.header("mcp-session-id", "sess-d2");
-    }
-    let request = builder
-        .body(axum::body::Body::from(body.to_string()))
-        .expect("a static request builds");
-    let response = fx
-        .router
-        .clone()
-        .oneshot(request)
-        .await
-        .expect("the router is infallible");
-    let status = response.status();
-    let headers = response.headers().clone();
-    let bytes = to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("an in-memory body reads");
-    (status, headers, bytes)
-}
-
 fn show(case: &str, (status, headers, bytes): &Raw) -> String {
     format!(
         "{case}: {status} headers={headers:?} body={}",
         String::from_utf8_lossy(bytes)
     )
-}
-
-/// What a byte-identity row compares: status, sorted headers, body.
-type Compared = (StatusCode, Vec<(String, Vec<u8>)>, Vec<u8>);
-
-/// The parts of an answer a byte-identity row compares, minus `drop_header`.
-fn compared(raw: &Raw, drop_header: Option<&str>) -> Compared {
-    let mut headers: Vec<(String, Vec<u8>)> = raw
-        .1
-        .iter()
-        .filter(|(name, _)| Some(name.as_str()) != drop_header)
-        .map(|(name, value)| (name.as_str().to_owned(), value.as_bytes().to_vec()))
-        .collect();
-    headers.sort();
-    (raw.0, headers, raw.2.to_vec())
 }
 
 /// Every failed check over `answers` (all must equal the first, be HTTP 400
@@ -90,9 +38,7 @@ fn failures(answers: &[(&str, Raw)], drop_header: Option<&str>, id: i64) -> Vec<
             wrong.push(format!("{case}: status {}", raw.0));
         }
         let body: Value = serde_json::from_slice(&raw.2).unwrap_or(Value::Null);
-        if body.pointer("/error/message").and_then(Value::as_str) != Some(NO_PRINCIPAL)
-            || body.get("id") != Some(&json!(id))
-        {
+        if refusal(&body) != (Some(-32003), NO_PRINCIPAL) || body.get("id") != Some(&json!(id)) {
             wrong.push(format!("{case}: not the intake refusal with id {id}"));
         }
     }
@@ -110,29 +56,7 @@ fn failures(answers: &[(&str, Raw)], drop_header: Option<&str>, id: i64) -> Vec<
 #[tokio::test]
 async fn p0_three_way_probe() {
     let fx = fixture(idempotent()).await;
-    // Bound for the whole test and never listening (MIK-7984).
-    let closed = tokio::net::TcpSocket::new_v4().expect("socket");
-    closed
-        .bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
-        .expect("bind without listening");
-    let address = closed.local_addr().expect("local addr");
-    let dead = BackendConfig {
-        transport: TransportConfig::Http {
-            http_url: format!("http://{address}/mcp"),
-            streamable_http: Some(true),
-            protocol_version: None,
-        },
-        ..BackendConfig::default()
-    };
-    assert!(
-        fx.state.backends.register(Arc::new(Backend::new(
-            "dead",
-            dead,
-            &FailsafeConfig::default(),
-            Duration::from_secs(60),
-        ))),
-        "p0 premise: `dead` registers"
-    );
+    let _closed = register_dead(&fx);
     assert!(
         fx.state.backends.get("nope").is_none(),
         "p0 premise: `nope` is not registered"
@@ -158,7 +82,9 @@ async fn p0_three_way_probe() {
     );
     let mut wrong = failures(&answers, None, 7);
     if lists + calls != 0 {
-        wrong.push(format!("a counting: tools/list {lists}, tools/call {calls}"));
+        wrong.push(format!(
+            "a counting: tools/list {lists}, tools/call {calls}"
+        ));
     }
     let shown: Vec<String> = answers.iter().map(|(case, raw)| show(case, raw)).collect();
     assert!(
@@ -169,18 +95,27 @@ async fn p0_three_way_probe() {
     );
 }
 
-/// P0 /mcp twin: a keyed no-principal `gateway_invoke` of a policy-withheld
-/// target (`alpha/blocked`, the C1b descriptor) against an existing one
-/// (`alpha/t`). Identical (status, headers except `Mcp-Session-Id`, body),
-/// -32003 / 400 / id 5 and no backend request: ORDER.3 and C1b hold already.
+/// P0 /mcp twin: a keyed no-principal `gateway_invoke` of an existing target
+/// (`alpha/t`, listed), a policy-withheld one (`alpha/blocked`, the C1b
+/// descriptor), a present backend never listed (`beta/t`, cold), an
+/// unreachable backend (`dead/t`) and an absent one (`nope/t`). Identical
+/// (status, headers except `Mcp-Session-Id`, body), -32003 / 400 / id 5 and
+/// no request to `alpha` or `beta`: ORDER.3 and C1b hold already.
 /// The /mcp intake ships either way; this classifies rows only.
 #[tokio::test]
 async fn p0_mcp_probe() {
     let fx = fixture(idempotent()).await;
     let alpha = fx.state.backends.get("alpha").expect("alpha");
     alpha.remember_listed_tools(None, false, &poisoned_listing());
-    assert!(alpha.is_blocked_tool("blocked"), "p0 mcp premise: not blocked");
-    assert!(!alpha.is_blocked_tool("t"), "p0 mcp premise: `t` is blocked");
+    assert!(
+        alpha.is_blocked_tool("blocked"),
+        "p0 mcp premise: not blocked"
+    );
+    assert!(
+        !alpha.is_blocked_tool("t"),
+        "p0 mcp premise: `t` is blocked"
+    );
+    let _closed = register_dead(&fx);
     let answers = [
         (
             "existing",
@@ -188,7 +123,25 @@ async fn p0_mcp_probe() {
         ),
         (
             "withheld",
-            post_raw(&fx, "/mcp", &keyed_invoke("alpha", "blocked"), &Caller::Session).await,
+            post_raw(
+                &fx,
+                "/mcp",
+                &keyed_invoke("alpha", "blocked"),
+                &Caller::Session,
+            )
+            .await,
+        ),
+        (
+            "cold present",
+            post_raw(&fx, "/mcp", &keyed_invoke("beta", "t"), &Caller::Session).await,
+        ),
+        (
+            "unreachable",
+            post_raw(&fx, "/mcp", &keyed_invoke("dead", "t"), &Caller::Session).await,
+        ),
+        (
+            "absent",
+            post_raw(&fx, "/mcp", &keyed_invoke("nope", "t"), &Caller::Session).await,
         ),
     ];
     let (lists, calls) = (

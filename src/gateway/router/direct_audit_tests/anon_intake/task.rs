@@ -29,7 +29,11 @@ async fn d2_auth_off_anonymous_keyed_task_is_refused() {
         answer.pointer("/result/taskId").is_none(),
         "d2: a task was created: {answer}"
     );
-    assert_eq!(message(&answer), NO_PRINCIPAL, "d2: {answer}");
+    assert_eq!(
+        refusal(&answer),
+        (Some(-32003), NO_PRINCIPAL),
+        "d2: {answer}"
+    );
     assert_eq!(status, StatusCode::BAD_REQUEST, "d2: {answer}");
 }
 
@@ -49,6 +53,10 @@ async fn d6_set_profile_answers_intake_first() {
     }}})
     .to_string();
     let (status, answer) = post_to(&fx, "/mcp", &body, &Caller::Modern).await;
-    assert_eq!(message(&answer), NO_PRINCIPAL, "d6: {answer}");
+    assert_eq!(
+        refusal(&answer),
+        (Some(-32003), NO_PRINCIPAL),
+        "d6: {answer}"
+    );
     assert_eq!(status, StatusCode::BAD_REQUEST, "d6: {answer}");
 }

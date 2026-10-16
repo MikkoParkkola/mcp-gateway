@@ -25,11 +25,20 @@ async fn assert_one_attributed_record(route: &str) {
         let hashed = params_of(&invoke)["arguments"].clone();
         ("/mcp", invoke, hashed, Caller::Session)
     } else {
-        ("/mcp/alpha", keyed("t"), params_of(&keyed("t")), Caller::Anonymous)
+        (
+            "/mcp/alpha",
+            keyed("t"),
+            params_of(&keyed("t")),
+            Caller::Anonymous,
+        )
     };
     let fx = fixture(idempotent()).await;
     let (status, answer) = post_to(&fx, uri, &body, &caller).await;
-    assert_eq!(message(&answer), NO_PRINCIPAL, "{route}: {answer}");
+    assert_eq!(
+        refusal(&answer),
+        (Some(-32003), NO_PRINCIPAL),
+        "{route}: {answer}"
+    );
     assert_eq!(status, StatusCode::BAD_REQUEST, "{route}: {answer}");
     let entry = only_invocation(&fx);
     assert_eq!(entry["route"], route, "{route}: {entry}");
