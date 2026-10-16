@@ -68,7 +68,12 @@ async fn optional_gateway(
 /// idempotency lookup under the unminted principal misses, so it fails closed
 /// with site 5's refusal and nothing is sent. M-mint (the static fallback
 /// counts as a proof) lifts the stored output; M-lift-open (the dropped entry
-/// runs live) sends the call a second time.
+/// runs live) sends the call a second time. The refusal comes after the key
+/// was reserved, so the row then shows the key is not stranded: a second
+/// unminted retry gets the same refusal (not an in-flight answer), and once
+/// the `IdP` is back the same key is served the stored result, still one
+/// send (at most once). This row is unsigned, so it does not exercise nonce
+/// settlement; S-opt-signed does.
 #[tokio::test]
 async fn s_opt_a_failed_optional_mint_is_not_a_proof_at_the_lift() {
     use std::sync::atomic::Ordering;
@@ -83,6 +88,8 @@ async fn s_opt_a_failed_optional_mint_is_not_a_proof_at_the_lift() {
         "premise: dispatched: {first}"
     );
     assert_eq!(sends.load(Ordering::SeqCst), 1, "premise: one send");
+    let (addr, exchanges) = (idp.addr(), idp.exchanges());
+    let minted = exchanges.load(Ordering::SeqCst);
     idp.kill();
     let now = crate::clock::unix_secs().expect("a test host clock reads after 1970");
     let _clock = crate::clock::test_clock::at_secs(now + 7200);
@@ -96,12 +103,99 @@ async fn s_opt_a_failed_optional_mint_is_not_a_proof_at_the_lift() {
         "S-opt: the unproven retry was sent again: {again}"
     );
     assert_unproven("S-opt", &again);
+    assert_eq!(
+        exchanges.load(Ordering::SeqCst),
+        minted,
+        "premise: the retry's mint never reached the dead IdP"
+    );
+    let repeat = r6m_token_exchange::send_as(&router, &alice, call("sopt", false)).await;
+    assert_unproven("S-opt repeat (the reservation was released)", &repeat);
+    let _idp = r6m_token_exchange::LiveIdp::restart(&key, addr).await;
+    let recovered = r6m_token_exchange::send_as(&router, &alice, call("sopt", false)).await;
+    eprintln!("S-opt recovered: {recovered}");
+    assert!(
+        recovered.to_string().contains(MARKER) && recovered.get("error").is_none(),
+        "S-opt: after recovery the same key was not served: {recovered}"
+    );
+    assert_eq!(
+        sends.load(Ordering::SeqCst),
+        1,
+        "S-opt: the recovered retry was sent again, not served: {recovered}"
+    );
+}
+
+/// S-opt-signed: S-opt with message signing. The unproven refusal keeps its
+/// nonce spent, as site 5's does: re-sending the refused nonce after the
+/// `IdP` recovers is refused as a replay and never sent, and the client
+/// re-signs under a fresh nonce to be served the stored result (one send).
+#[tokio::test]
+async fn s_opt_signed_the_refused_nonce_stays_spent() {
+    use std::sync::atomic::Ordering;
+
+    let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
+    let idp = r6m_token_exchange::LiveIdp::start(&key).await;
+    let alice = r6m_token_exchange::alice();
+    let (router, sends, _dirs) = r6m_token_exchange::gateway_with(
+        &key,
+        idp.endpoint(),
+        &alice,
+        r6m_token_exchange::Requirement::Optional,
+        |mut meta| {
+            meta.enable_idempotency(
+                Arc::new(crate::idempotency::IdempotencyCache::new()),
+                std::time::Duration::from_secs(60),
+            );
+            meta.enable_message_signing(
+                crate::security::message_signing::MessageSigner::new(
+                    b"sopt-signing-key-0123456789abcdef-s".to_vec(),
+                    None,
+                    "sopt".into(),
+                ),
+                std::time::Duration::from_secs(300),
+                true,
+            );
+            meta
+        },
+    )
+    .await;
+    let signed = |nonce: &str| {
+        let mut params = call("sopt-s", false);
+        params["arguments"]["nonce"] = json!(nonce);
+        params
+    };
+    let first = r6m_token_exchange::send_as(&router, &alice, signed("n1")).await;
+    assert!(first.to_string().contains(MARKER), "premise: {first}");
+    let addr = idp.addr();
+    idp.kill();
+    let now = crate::clock::unix_secs().expect("a test host clock reads after 1970");
+    let _clock = crate::clock::test_clock::at_secs(now + 7200);
+    let refused = r6m_token_exchange::send_as(&router, &alice, signed("n2")).await;
+    assert_unproven("S-opt-signed", &refused);
+    let _idp = r6m_token_exchange::LiveIdp::restart(&key, addr).await;
+    let reused = r6m_token_exchange::send_as(&router, &alice, signed("n2")).await;
+    eprintln!("S-opt-signed reused nonce: {reused}");
+    assert!(
+        reused.get("error").is_some() && !reused.to_string().contains(MARKER),
+        "S-opt-signed: the refused nonce was accepted again: {reused}"
+    );
+    let fresh = r6m_token_exchange::send_as(&router, &alice, signed("n3")).await;
+    assert!(
+        fresh.to_string().contains(MARKER) && fresh.get("error").is_none(),
+        "S-opt-signed: a re-signed retry was not served: {fresh}"
+    );
+    assert_eq!(
+        sends.load(Ordering::SeqCst),
+        1,
+        "S-opt-signed: a retry was sent again: {fresh}"
+    );
 }
 
 /// S-unminted (mutant M-lift-shut): when the first call was unminted too, its
 /// result was written under the same static principal, so the idempotency
 /// cache serves the retry: the stored result, one send in total. Refusing at
 /// the lift before the lookup (M-lift-shut) refuses this legitimate repeat.
+/// The `IdP` sees no exchange at all, so neither run minted and the retry
+/// really reaches `refuse_unproven`'s lookup.
 #[tokio::test]
 async fn s_unminted_a_retry_of_an_unminted_call_is_served_from_the_cache() {
     use std::sync::atomic::Ordering;
@@ -109,6 +203,7 @@ async fn s_unminted_a_retry_of_an_unminted_call_is_served_from_the_cache() {
     let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
     let idp = r6m_token_exchange::LiveIdp::start(&key).await;
     let (router, sends, _dirs) = optional_gateway(&idp, &key).await;
+    let exchanges = idp.exchanges();
     idp.kill();
     let alice = r6m_token_exchange::alice();
     let first = r6m_token_exchange::send_as(&router, &alice, call("sun", false)).await;
@@ -125,6 +220,11 @@ async fn s_unminted_a_retry_of_an_unminted_call_is_served_from_the_cache() {
         sends.load(Ordering::SeqCst),
         1,
         "S-unminted: the retry was sent again: {again}"
+    );
+    assert_eq!(
+        exchanges.load(Ordering::SeqCst),
+        0,
+        "premise: neither run minted"
     );
 }
 
