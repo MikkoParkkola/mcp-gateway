@@ -169,8 +169,8 @@ async fn s_opt_signed_the_refused_nonce_stays_spent() {
     idp.kill();
     let now = crate::clock::unix_secs().expect("a test host clock reads after 1970");
     let _clock = crate::clock::test_clock::at_secs(now + 7200);
-    let refused = r6m_token_exchange::send_as(&router, &alice, signed("n2")).await;
-    assert_unproven("S-opt-signed", &refused);
+    let unproven = r6m_token_exchange::send_as(&router, &alice, signed("n2")).await;
+    assert_unproven("S-opt-signed", &unproven);
     let _idp = r6m_token_exchange::LiveIdp::restart(&key, addr).await;
     let reused = r6m_token_exchange::send_as(&router, &alice, signed("n2")).await;
     eprintln!("S-opt-signed reused nonce: {reused}");
