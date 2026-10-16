@@ -369,7 +369,7 @@ none here. Full statements in RFC-0061 §Unknowns.
 
 | ID | Question | Resolved by | Blocks |
 |---|---|---|---|
-| U1 | Which revisions do our clients actually speak? | One week of NFR.OBS.1 telemetry | Only the compatibility window — **not this release** |
+| U1 | Which revisions do our clients actually speak? | One week of NFR.OBS.1 telemetry. *Superseded 2026-10-16: the window was not measured (MIK-7218 Canceled); 4.0.0 keeps all five revisions it accepts by operator ruling C7, and the measurement moves to MIK-8442.* | Only the compatibility window — **not this release** |
 | U6 | Does the wire behaviour match the specification's type surface, across every revision in the window? | The conformance matrix, which is this release's test plan | Release acceptance |
 | U7 | What else is keyed by session? | **Resolved 2026-08-29**: 32 files, tabulated in RFC-0061 | — |
 | U8 | Can all four client×backend era pairs be constructed for test? | Two runs, both directions, one eliciting | MIK-7212 design; **run first, it is the cheapest** |
