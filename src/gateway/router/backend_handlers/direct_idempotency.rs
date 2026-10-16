@@ -158,10 +158,13 @@ pub(super) fn execution_lease(
 /// A 7b replay to a caller stage 5 attached no per-caller credential for is
 /// refused as `/mcp` refuses it (MIK-8434): the stored output was produced
 /// under the owner's per-user credential, and running the call again under
-/// the static one would send a write twice. A 7a hit is keyed on the same
-/// principal it was stored under, so it is served. The refusal comes after
-/// nonce admission, and an admitted nonce is given back only by
-/// `release_nonce`, so the refused nonce stays spent.
+/// the static one would send a write twice. The 7b execution-store key is
+/// the owner and the operation, and deliberately not the per-caller binding,
+/// which is why an unminted retry reaches the owner's entry at all; a retry
+/// under a different forwarded credential reaching it too is MIK-8440. A 7a
+/// hit is keyed on the same principal it was stored under, so it is served.
+/// The refusal comes after nonce admission, and an admitted nonce is given
+/// back only by `release_nonce`, so the refused nonce stays spent.
 pub(super) fn deliver_replay(
     scope: Scope<'_>,
     (envelope, preflight, propagation): (&Envelope, &Preflight, &Propagation),
