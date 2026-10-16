@@ -283,6 +283,26 @@ pub(crate) enum DeadReason {
     /// The Cloudflare Access assertion the stream was admitted under no longer
     /// verifies (a rotated or revoked key, or no verifier to ask).
     Cf,
+    /// The agent the bearer validates as is not the one the stream attached
+    /// with, or one appeared or disappeared.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "constructed by MIK-8377's live() clauses")
+    )]
+    Agent,
+    /// The client certificate is past its `notAfter`, or the clock cannot be
+    /// read.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "constructed by MIK-8377's live() clauses")
+    )]
+    Cert,
+    /// The trusted proxy the stream was admitted from is no longer trusted.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "constructed by MIK-8377's live() clauses")
+    )]
+    Proxy,
 }
 
 impl DeadReason {
@@ -301,6 +321,9 @@ impl DeadReason {
             Self::Bearer => "bearer",
             Self::Adapter => "adapter",
             Self::Cf => "cf",
+            Self::Agent => "agent",
+            Self::Cert => "cert",
+            Self::Proxy => "proxy",
         }
     }
 }
