@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8433 R-MCP (design §3.1, §4): on `/mcp`, signing runs after the route
-//! stage. A per-user tool in error-rate cooldown, called signed by a caller
-//! with a view whose nonce an earlier call already spent: where the caller
-//! verdict recorded `Visible` (Offers) the cooldown is answered before the
-//! nonce, unchanged; where it recorded nothing (Unknown, failed fill) the
-//! nonce is judged first, so the replay is refused as a replay. A fresh nonce
-//! in those arms is still refused for the cooldown. Split out of
-//! `slot_verdict_witness_tests.rs`; it uses the parent's fixture.
+//! MIK-8433 R-MCP (design §3.1, §4), re-pinned for MIK-8439 (design §3.4,
+//! §5): on `/mcp`, signing runs after the route stage. A per-user tool in
+//! error-rate cooldown, called signed by a caller with a view whose nonce an
+//! earlier call already spent: in every arm the nonce is judged first, so the
+//! replay is refused as a replay, and a fresh nonce meets what the dispatch
+//! answers first (the cooldown, or the failed fill). R-MCP (s) pins a shared
+//! backend, whose policy still answers the cooldown before the nonce. Split
+//! out of `slot_verdict_witness_tests.rs`; it uses the parent's fixture.
 
 use super::*;
 use crate::gateway::router::slot_verdict_http_tests::post_as_alpha;
@@ -77,26 +77,36 @@ async fn arm(gw: &Gateway, row: &str) -> (Value, Value, usize) {
 
 const COOLDOWN: &str = "temporarily disabled";
 
-/// R-MCP (a), Offers (green, kills M3 and M6): the verdict recorded
-/// `Visible`, so signing runs the policy first: the replay and a fresh-nonce
-/// call both get the cooldown, unprefixed, before the nonce. Nothing sent.
+/// R-MCP (a), Offers (kills M3): the verdict recorded `Visible`, and on a
+/// per-user backend the policy no longer reads the cooldown (MIK-8439): the
+/// replay is refused as a replay, before the cooldown is read, and a
+/// fresh-nonce call meets the cooldown at dispatch, in the dispatch's
+/// rendering. Nothing sent. Before MIK-8439 both answered the cooldown,
+/// unprefixed, before the nonce; that order now holds for a shared backend
+/// only (R-MCP (s)).
 #[tokio::test]
-async fn r_mcp_a_offers_answers_the_cooldown_before_the_nonce() {
+async fn r_mcp_a_offers_judges_the_nonce_then_meets_the_cooldown_at_dispatch() {
     let gw = signed(Warmth::Warm, CLOSED).await;
     let (replay, fresh, sent) = arm(&gw, "rmcp-a").await;
-    let cooldown = format!(
-        "Capability '{TOOL}' on server '{BACKEND}' is temporarily disabled due to a high \
-         error rate. It will auto-recover after the cooldown period. Use \
-         gateway_list_disabled_capabilities to see all disabled capabilities."
+    assert!(
+        message(&replay).contains(REPLAY) && !replay.to_string().contains(COOLDOWN),
+        "R-MCP (a) replay: not judged as a replay first: {replay}"
     );
-    for (call, answer) in [("replay", &replay), ("fresh nonce", &fresh)] {
-        assert_eq!(
-            answer.pointer("/error/code"),
-            Some(&json!(-32000)),
-            "R-MCP (a) {call}: {answer}"
-        );
-        assert_eq!(message(answer), cooldown, "R-MCP (a) {call}: {answer}");
-    }
+    assert_eq!(
+        fresh.pointer("/error/code"),
+        Some(&json!(-32000)),
+        "R-MCP (a) fresh nonce: {fresh}"
+    );
+    assert_eq!(
+        message(&fresh),
+        format!(
+            "JSON-RPC error -32000: {}",
+            crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::cooldown_refusal(
+                BACKEND, TOOL
+            )
+        ),
+        "R-MCP (a) fresh nonce: {fresh}"
+    );
     assert_eq!(sent, 0, "R-MCP (a): sent");
 }
 
