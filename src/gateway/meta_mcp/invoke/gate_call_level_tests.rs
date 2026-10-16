@@ -419,6 +419,13 @@ async fn u4_the_withheld_predicate_ignores_the_cooldown() {
         "U4: a per-user target not in cooldown was not withheld"
     );
 
+    // Armed under the default (long) cooldown, then the period set to zero:
+    // the entry stays disabled to `is_capability_disabled`, which never
+    // recovers, while `is_capability_disabled_with_cooldown` with the zero
+    // period would recover it on the spot. So a predicate that read the
+    // cooldown (the d1 form) both changes the answer and clears the entry.
+    // Arming under zero would not work: each recorded failure re-checks
+    // with that period and recovers at once (kill_switch/mod.rs:73).
     cool(&fx.meta, BACKEND, TOOL);
     fx.meta.capability_budget_config.write().cooldown = std::time::Duration::ZERO;
     let elapsed = with_visibility_memo(async {

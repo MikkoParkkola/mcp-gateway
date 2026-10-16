@@ -20,9 +20,8 @@ fn dispatch_cooldown_text() -> String {
 }
 
 /// The sole operator's stdio gateway, signing on (nonce required) when
-/// `signed`, its slot `[TOOL with schema, SIBLING]`, and [`TOOL`] pushed into
-/// error-rate cooldown as other callers' failures would.
-fn cooling(signed: bool, schema: &Value) -> Stdio {
+/// `signed`, its slot `[TOOL with schema, SIBLING]`.
+fn operator(signed: bool, schema: &Value) -> Stdio {
     let stdio = operator_stdio_armed(|meta| {
         if signed {
             meta.enable_message_signing(
@@ -41,6 +40,13 @@ fn cooling(signed: bool, schema: &Value) -> Stdio {
         &DirectAccountGateway::operator_binding(),
         vec![tool(TOOL, schema), tool(SIBLING, &valid())],
     );
+    stdio
+}
+
+/// [`operator`] with [`TOOL`] pushed into error-rate cooldown, as other
+/// callers' failures would.
+fn cooling(signed: bool, schema: &Value) -> Stdio {
+    let stdio = operator(signed, schema);
     let kill_switch = stdio.meta.kill_switch();
     let cfg = crate::kill_switch::CapabilityErrorBudgetConfig::default();
     for _ in 0..=cfg.window_size.max(cfg.min_samples) {
@@ -80,7 +86,11 @@ fn normalised(answer: &Value) -> String {
 }
 
 /// One twin: a fresh-nonce call of `name`, then the same call reusing that
-/// nonce. Both answers, and the `tools/call` sends the two added.
+/// nonce. Both answers, and the `tools/call` sends the two added. Each twin
+/// gets its own fixture: on one gateway the first twin's nonce, slot fill
+/// and caller-slot index would be state the second meets and the first did
+/// not. Separate fixtures with the same nonce string keep the two requests
+/// byte-equal but for the tool name.
 async fn twin(name: &str) -> (Value, Value, usize) {
     let stdio = cooling(true, &json!({"type": "array"}));
     let before = stdio.gateway.tool_calls().len();
@@ -151,6 +161,14 @@ async fn stdio_signed_cooldown_visible_tool_refused_with_dispatch_text() {
         Some(dispatch_cooldown_text().as_str()),
         "STDIO.3: {answer}"
     );
+    // The refusal now comes after the nonce, which stays spent (upgrading.d).
+    let reuse = stdio
+        .rpc(2, "tools/call", invoke(TOOL, Some("cooldown-visible-n1")))
+        .await;
+    assert!(
+        reuse.to_string().contains("Nonce replay detected"),
+        "STDIO.3: the cooldown refusal gave its nonce back: {reuse}"
+    );
     assert_eq!(stdio.gateway.tool_calls().len(), before, "STDIO.3: sent");
 }
 
@@ -175,5 +193,71 @@ async fn stdio_unsigned_cooldown_visible_tool_refused_with_dispatch_text() {
         stdio.gateway.tool_calls().len(),
         before,
         "unsigned control: sent"
+    );
+}
+
+impl Stdio {
+    /// One stdio `tools/call` with `params` under `policy` (the parent's
+    /// `rpc` serves the default policy).
+    async fn call_under(&self, policy: crate::security::ToolPolicy, params: Value) -> Value {
+        let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params});
+        Gateway::dispatch_single_for_client(
+            &self.meta,
+            &Arc::new(policy),
+            &Arc::new(crate::mtls::MtlsPolicy::from_config(
+                &crate::mtls::MtlsConfig::default(),
+            )),
+            request,
+            StdioClient {
+                session_id: STDIO_SESSION_ID,
+                channel: &crate::gateway::input_bridge::NoClientChannel,
+                handshake_capabilities: Declared::NONE,
+                tasks: None,
+                serving: crate::gateway::server::stdio_single::ModernServing::Enabled,
+                discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
+                sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
+            },
+        )
+        .await
+        .expect("a request is answered")
+    }
+}
+
+/// A policy refusal other than the cooldown is still met on signed stdio now
+/// that signing leaves an unjudged per-user target to the route stage
+/// (gate.rs, MIK-8433): the slot offers [`TOOL`], the tool policy denies it,
+/// and the signed call is refused and sends nothing. The control: the same
+/// call under the default policy dispatches.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stdio_signed_policy_denied_offered_tool_is_still_refused() {
+    let allowed = operator(true, &valid());
+    let answer = allowed
+        .call_under(
+            crate::security::ToolPolicy::default(),
+            invoke(TOOL, Some("policy-control-n1")),
+        )
+        .await;
+    assert_eq!(
+        allowed.gateway.tool_calls().len(),
+        1,
+        "premise: the offered tool dispatches under the default policy: {answer}"
+    );
+    let denied = operator(true, &valid());
+    let deny = crate::security::ToolPolicy::from_config(&crate::security::ToolPolicyConfig {
+        deny: vec![TOOL.to_owned()],
+        use_default_deny: false,
+        ..crate::security::ToolPolicyConfig::default()
+    });
+    let answer = denied
+        .call_under(deny, invoke(TOOL, Some("policy-denied-n1")))
+        .await;
+    assert!(
+        answer.get("error").is_some() || answer.pointer("/result/isError") == Some(&json!(true)),
+        "a policy-denied offered tool was not refused: {answer}"
+    );
+    assert_eq!(
+        denied.gateway.tool_calls().len(),
+        0,
+        "a policy-denied offered tool was sent: {answer}"
     );
 }
