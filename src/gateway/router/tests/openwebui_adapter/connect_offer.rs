@@ -119,13 +119,30 @@ accounts:
 
 struct Gateway {
     router: axum::Router,
-    _fixture: RevokeFixture,
+    fixture: RevokeFixture,
+    /// `tools/call` requests that reached a seeded caller's per-user slot.
+    sends: Arc<std::sync::atomic::AtomicUsize>,
+    /// The served Meta-MCP, for its plan executor entries (MIK-8406).
+    meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
     _dir: tempfile::TempDir,
 }
 
 /// The production compile, backend construction and strategy install, with
 /// the fixture's custody behind both the strategy and the journey handles.
 async fn gateway(shape: Shape) -> Gateway {
+    gateway_seeded(shape, &[]).await
+}
+
+/// [`gateway`] with `seeds` in custody before it starts (MIK-8406: a bridged
+/// caller connected, then revoked).
+async fn gateway_seeded(
+    shape: Shape,
+    seeds: &[(
+        crate::personal_accounts::AccountKey,
+        crate::personal_accounts::GrantRecord,
+        crate::personal_accounts::revoke_fixture::Seed,
+    )],
+) -> Gateway {
     let dir = tempfile::tempdir().unwrap();
     let env = dir.path().join("adapter.env");
     crate::gateway::test_helpers::write_owner_only(
@@ -137,9 +154,24 @@ async fn gateway(shape: Shape) -> Gateway {
     let auth = Arc::new(ResolvedAuthConfig::from_config(&config.auth));
     let (mut state, _store) =
         test_router_app_state_with(StreamingConfig::default(), config.clone()).await;
-    Arc::get_mut(&mut state).unwrap().auth_config = auth;
+    // A per-user mint needs a durable audit record; a seeded grant mints.
+    let log = crate::security::transparency_log::TransparencyLogConfig {
+        enabled: true,
+        path: dir.path().join("audit.ndjson").display().to_string(),
+        key_id: "fixture".into(),
+        ..crate::security::transparency_log::TransparencyLogConfig::default()
+    };
+    let logger = Arc::new(crate::security::TransparencyLogger::open(Arc::new(log)).unwrap());
+    {
+        let state = Arc::get_mut(&mut state).unwrap();
+        state.auth_config = auth;
+        Arc::get_mut(&mut state.meta_mcp)
+            .expect("the Meta-MCP is unshared")
+            .enable_transparency_log(Arc::clone(&logger));
+        state.transparency_log = Some(logger);
+    }
     let fixture =
-        RevokeFixture::start(ACCOUNT, RESOURCE, &[], RevocationEndpoint::Configured).await;
+        RevokeFixture::start(ACCOUNT, RESOURCE, seeds, RevocationEndpoint::Configured).await;
     let bound = crate::config::account_bindings::compile(&config).expect("binding compiles");
     let effective = bound[BACKEND].effective(&config.backends[BACKEND]);
     let backend = crate::backend::Backend::new(
@@ -150,6 +182,29 @@ async fn gateway(shape: Shape) -> Gateway {
     );
     // No network: a catalogue fetch that follows resolution reaches this stub.
     backend.set_transport_for_test(Arc::new(Silent));
+    // A seeded caller dispatches on its own per-user slot, which answers
+    // [`SLOT_MARKER`] and counts what reaches it.
+    let slot_sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    for (key, record, _) in seeds {
+        // The vault's `cache_binding` format, from the seeded record's own
+        // revision (`account_binding` assumes the all-zero one).
+        let digest = key.digest().expect("the seeded key binds");
+        let binding = format!(
+            "acct:v1:{digest}:{}:{}:{}:{}:{}:{}",
+            record.generation.len(),
+            record.generation,
+            record.authorization_epoch,
+            record.token_revision,
+            record.descriptor_revision.len(),
+            record.descriptor_revision,
+        );
+        backend.set_pooled_transport_for_test(
+            &crate::backend::PoolKey::PerUser { binding },
+            Arc::new(Slot {
+                sends: Arc::clone(&slot_sends),
+            }),
+        );
+    }
     assert!(state.backends.register(Arc::new(backend)));
     crate::gateway::server::account_bindings::install_account_strategies(
         &config,
@@ -160,10 +215,13 @@ async fn gateway(shape: Shape) -> Gateway {
     )
     .expect("the production installer accepts the binding");
     install_capability(&state.meta_mcp);
+    let meta = Arc::clone(&state.meta_mcp);
     let router = create_router_with_accounts(state, None, Some(fixture.handles()));
     Gateway {
         router,
-        _fixture: fixture,
+        fixture,
+        sends: slot_sends,
+        meta,
         _dir: dir,
     }
 }
@@ -241,6 +299,64 @@ impl crate::transport::Transport for Silent {
     ) -> crate::Result<crate::protocol::JsonRpcResponse> {
         let id = crate::protocol::RequestId::Number(1);
         Ok(crate::protocol::JsonRpcResponse::success(id, json!({})))
+    }
+
+    async fn request_with_headers(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        _extra_headers: &[(String, String)],
+        _identity_key: Option<&str>,
+        _resend: crate::transport::ResendPermission,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        self.request(method, params).await
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// What a seeded caller's per-user slot answers every `tools/call` with.
+const SLOT_MARKER: &str = "slot-output-8406";
+
+/// A seeded caller's per-user slot: [`Silent`], except that it lists
+/// `list_files` and a `tools/call` is counted and answered with
+/// [`SLOT_MARKER`].
+struct Slot {
+    sends: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for Slot {
+    async fn request(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        let id = crate::protocol::RequestId::Number(1);
+        if method == "tools/list" {
+            return Ok(crate::protocol::JsonRpcResponse::success(
+                id,
+                json!({"tools": [{"name": "list_files", "inputSchema": {"type": "object"}}]}),
+            ));
+        }
+        if method != "tools/call" {
+            return Silent.request(method, params).await;
+        }
+        self.sends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(crate::protocol::JsonRpcResponse::success(
+            id,
+            json!({"content": [{"type": "text", "text": SLOT_MARKER}]}),
+        ))
     }
 
     async fn request_with_headers(
@@ -503,3 +619,6 @@ async fn t_bc1_no_catalogue_method_mints_or_discloses_an_offer() {
     let meta = invoke(&gw, Caller::Bridged, "dave").await;
     offered(&meta, "account_not_connected");
 }
+
+#[path = "connect_offer_plan.rs"]
+mod plan;
