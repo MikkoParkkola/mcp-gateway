@@ -259,3 +259,73 @@ async fn p9k_mixed_task_chain_judges_every_recorded_target() {
         "P9k-mixed: the replay entered the plan executor"
     );
 }
+
+/// P9-legacy (task half, GUARD; mutant mLegacyServe): a plan task row
+/// written before targets were recorded (`strip_targets_for_test`: no
+/// targets, version 3) is refused at its repeat, fail closed, before any
+/// account walk: -32003 "stored task result has no recorded provenance"
+/// (MIK-7686), with no task, nothing sent and no plan executor entered. An
+/// empty list read as recorded (mLegacyServe) walks nothing and serves it.
+#[tokio::test]
+async fn p9_legacy_a_plan_row_with_no_recorded_targets_is_refused() {
+    let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
+    let idp = r6m_token_exchange::LiveIdp::start(&key).await;
+    let alice = r6m_token_exchange::alice();
+    let (router, sends, _dirs, served) =
+        r6m_token_exchange::gateway_with_meta(&key, idp.endpoint(), &alice).await;
+    let call = ("tools/call", "gateway_execute");
+    let made =
+        r6m_token_exchange::send_method_as(&router, &alice, call, execute("p9-legacy", true)).await;
+    let id = made
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("premise: a task was made: {made}"))
+        .to_owned();
+    let bound = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let params = json!({"taskId": id, "_meta": meta(None, true)});
+        let got =
+            r6m_token_exchange::send_method_as(&router, &alice, ("tasks/get", &id), params).await;
+        let status = got.pointer("/result/status").and_then(Value::as_str);
+        if status == Some("completed") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < bound && !matches!(status, Some("failed" | "cancelled")),
+            "premise: the task completed: {got}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    served
+        .task_executor
+        .service
+        .store
+        .strip_targets_for_test(&id);
+    let sent = sends.load(Ordering::SeqCst);
+    let entered = crate::gateway::meta_mcp::plan_entries::count(&served.meta_mcp);
+    let again =
+        r6m_token_exchange::send_method_as(&router, &alice, call, execute("p9-legacy", true)).await;
+    assert_eq!(
+        again.pointer("/error/code"),
+        Some(&json!(-32003)),
+        "P9-legacy: the legacy plan row was not refused: {again}"
+    );
+    assert!(
+        again
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.contains("no recorded provenance")),
+        "P9-legacy: not the provenance refusal: {again}"
+    );
+    assert_eq!(
+        sends.load(Ordering::SeqCst) - sent,
+        0,
+        "P9-legacy: the repeat reached the backend"
+    );
+    assert_eq!(
+        crate::gateway::meta_mcp::plan_entries::count(&served.meta_mcp) - entered,
+        0,
+        "P9-legacy: the repeat entered the plan executor"
+    );
+    drop(idp);
+}
