@@ -81,6 +81,7 @@ mod chain_interim;
 #[cfg(test)]
 mod chain_interim_tests;
 mod confirmation;
+mod warn_limit;
 // Read only by the `firewall` collusion rows.
 #[cfg(all(test, feature = "cost-governance", feature = "firewall"))]
 mod cost_test_support;
@@ -194,6 +195,8 @@ pub struct MetaMcp {
     pub(super) idempotency_config: RwLock<crate::config::IdempotencyConfig>,
     /// `server.idempotency_key` and the un-keyed admission warn limit (F10).
     pub(super) unkeyed: admission::UnkeyedPolicy,
+    /// The case-B WARN limit, per (backend, caller key) (MIK-8382 UNIFY.1b).
+    pub(super) lacked_warned: parking_lot::Mutex<warn_limit::WarnedAt>,
     /// Continuation keys, spent-ledger and held legacy exchanges.
     ///
     /// Here rather than on `AppState` because of lifetime: this struct is built

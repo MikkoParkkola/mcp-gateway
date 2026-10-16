@@ -136,6 +136,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
                 (proof, caller.verified_identity),
                 self.hint_surface(caller),
                 &mut witness,
+                caller.caller_key,
             )
             .await;
         // A busy custody refused this call before its backend: ask for the

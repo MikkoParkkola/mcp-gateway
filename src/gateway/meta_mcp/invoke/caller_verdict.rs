@@ -176,6 +176,7 @@ impl MetaMcp {
         // No principal on a required backend: no slot can hold this caller's
         // catalogue, so it lacks the tool, answered before any resolution.
         if self.lacks_principal_on_required(&backend, proof) {
+            self.warn_lacked_principal(server, caller.caller_key);
             visible::record_visibility(server, tool, Visibility::Withheld(Withholding::Lacked));
             return Ok((CallerVerdict::Absent, witness));
         }
@@ -340,6 +341,7 @@ impl MetaMcp {
         ),
         surface: crate::gateway::recovery::MetaSurface,
         witness: &mut super::nonce_settle::Witnessed<'_, '_>,
+        caller_key: Option<&str>,
     ) -> crate::Result<
         std::ops::ControlFlow<
             super::GuardedValue,
@@ -397,6 +399,7 @@ impl MetaMcp {
                     .as_deref()
                     .is_some_and(|b| self.lacks_principal_on_required(b, caller_proof))
                 {
+                    self.warn_lacked_principal(server, caller_key);
                     return Err(visible::absent_name(tool));
                 }
                 let resolved = self

@@ -225,6 +225,7 @@ impl MetaMcp {
                 (caller_proof, verified_identity),
                 surface,
                 &mut witness,
+                caller.caller_key,
             )
             .await
         {

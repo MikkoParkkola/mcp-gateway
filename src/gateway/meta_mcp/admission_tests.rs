@@ -12,6 +12,7 @@ use super::*;
 use crate::backend::BackendRegistry;
 use crate::gateway::authz::{AuthorizationError, ToolAuthorizer, ToolTarget, Transport};
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
+use crate::gateway::meta_mcp::warn_limit::{WARN_CAP, WARN_INTERVAL, WarnedAt, first_warn};
 use crate::protocol::mrtr::RetryFields;
 
 const SECRET: &str = "only-the-currently-authorized-caller-may-read-this";
@@ -545,7 +546,7 @@ fn stdio_principal_admits_a_keyed_mutation_and_anonymous_http_still_cannot() {
 
 /// Live keys stamped one millisecond apart from `base`, filling the warn cap.
 fn warn_map_at_cap(base: std::time::Instant) -> WarnedAt {
-    (0..UNKEYED_WARN_CAP)
+    (0..WARN_CAP)
         .map(|i| {
             let at = base + std::time::Duration::from_millis(u64::try_from(i).expect("small"));
             (("s".to_owned(), format!("t{i}")), at)
@@ -562,7 +563,7 @@ fn first_warn_at_a_live_cap_evicts_only_the_oldest() {
 
     assert!(first_warn(&mut warned, "s", "new", now));
 
-    assert_eq!(warned.len(), UNKEYED_WARN_CAP);
+    assert_eq!(warned.len(), WARN_CAP);
     assert!(!warned.contains_key(&("s".to_owned(), "t0".to_owned())));
     assert!(warned.contains_key(&("s".to_owned(), "t1".to_owned())));
     assert!(warned.contains_key(&("s".to_owned(), "new".to_owned())));
@@ -575,7 +576,7 @@ fn first_warn_at_a_cap_evicts_expired_entries_before_live_ones() {
     let base = std::time::Instant::now();
     let mut warned = warn_map_at_cap(base);
     // t0 and t1 are the two oldest; restamp everything else as live at `now`.
-    let now = base + UNKEYED_WARN_INTERVAL + std::time::Duration::from_secs(1);
+    let now = base + WARN_INTERVAL + std::time::Duration::from_secs(1);
     for (key, at) in &mut warned {
         if key.1 != "t0" && key.1 != "t1" {
             *at = now;
@@ -584,7 +585,7 @@ fn first_warn_at_a_cap_evicts_expired_entries_before_live_ones() {
 
     assert!(first_warn(&mut warned, "s", "new", now));
 
-    assert_eq!(warned.len(), UNKEYED_WARN_CAP - 1, "both expired went");
+    assert_eq!(warned.len(), WARN_CAP - 1, "both expired went");
     assert!(!warned.contains_key(&("s".to_owned(), "t0".to_owned())));
     assert!(!warned.contains_key(&("s".to_owned(), "t1".to_owned())));
     assert!(warned.contains_key(&("s".to_owned(), "t2".to_owned())));
