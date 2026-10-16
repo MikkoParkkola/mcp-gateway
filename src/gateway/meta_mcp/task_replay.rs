@@ -394,9 +394,11 @@ impl MetaMcp {
             return None;
         }
         // MIK-8387 S7: a stored target whose backend is absent for a scoped
-        // key answers the backend miss, the same for all three cells. An
-        // out-of-scope one first writes the scope refusal the stored policy
-        // check writes (an audit line only, no log record).
+        // key answers as the live call does, the same for all three cells:
+        // -32001 carrying the live call's own text (MIK-8392 F1 ruling), which
+        // for an absent backend is the catalogue's miss text. An out-of-scope
+        // one first writes the scope refusal the stored policy check writes
+        // (an audit line only, no log record).
         let scoped = self.scoped(caller.scope().authorizer.backend_grant());
         for target in &stored.targets {
             let Some(absence) = scoped.absence(&target.server) else {
@@ -406,8 +408,8 @@ impl MetaMcp {
                 let args = json!({"server": target.server, "tool": target.tool, "arguments": {}});
                 let _ = self.check_visible_policy(&args, session, caller);
             }
-            let missing = Error::BackendNotFound(target.server.clone());
-            return Some(error_response_preserving_status(id.clone(), &missing));
+            let missing = crate::backend::text_absent(&target.tool);
+            return Some(JsonRpcResponse::error(Some(id.clone()), -32001, missing));
         }
         // Visibility first, as on the live path: a Descriptor, Schema or Lacked
         // target answers as absent even where policy would also refuse
