@@ -121,10 +121,13 @@ fn e2_no_warn_without_a_refused_call() {
             ]
         })
     });
+    // As each listing answers at the base: the direct `tools/list` of a
+    // no-principal caller is refused by identity propagation (403), the
+    // meta listings answer 200. None of them is a refused call.
     assert_eq!(
         statuses,
-        [StatusCode::OK; 3],
-        "E2 premise: a listing did not answer"
+        [StatusCode::FORBIDDEN, StatusCode::OK, StatusCode::OK],
+        "E2 premise: a listing answered differently"
     );
     assert_eq!(lacked_warns(&log), 0, "E2: a WARN without a refusal:\n{log}");
     assert_eq!(listed.dispatched(), 0, "E2: a listing dispatched");
