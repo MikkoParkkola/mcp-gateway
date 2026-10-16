@@ -13,6 +13,7 @@ mod audit;
 mod control;
 mod direct;
 mod mcp_precedence;
+mod principals;
 mod probe;
 mod task;
 

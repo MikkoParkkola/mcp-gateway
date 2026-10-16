@@ -1,10 +1,20 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8382 UNIFY.1b (design d2 §3.7, rows E1-E3): a caller with no
+//! MIK-8382 UNIFY.1b (design d2 §3.7, rows E1-E4): a caller with no
 //! principal on a required per-user backend keeps the missing name's answer
 //! (-32601), and the server logs one WARN naming the backend and the missing
 //! execution principal, limited per (backend, caller key). Listings and
 //! names the caller merely lacks log nothing.
+//!
+//! Gaps, not driven here (MIK-8382 stage 1): E5 (the dispatch funnel,
+//! `caller_verdict.rs` `dispatch_resolution`, via a playbook step from two
+//! keyed callers) and E5b (the funnel via the stored-replay proof,
+//! `prove_target_live`). No fixture reaches the funnel with a caller that
+//! has no principal on a required backend: an auth-off anonymous caller keys
+//! to the one shared "anonymous" bucket, and a stored read needs an owner
+//! whose submit was admitted on that backend. Mutants they would kill:
+//! deleting the WARN call at the funnel, and passing `None` for the caller
+//! key into `dispatch_resolution`. E4 below carries the per-key limiter.
 //!
 //! A WARN is matched by content, not wording: a WARN line naming [`BACKEND`]
 //! and "execution principal". Each row builds its gateways outside the
@@ -164,4 +174,96 @@ fn e3_one_warn_per_caller_within_the_window() {
         });
     });
     assert_eq!(lacked_warns(&log), 1, "E3: want one WARN:\n{log}");
+}
+
+/// Auth on with two API keys, each a credential principal for admission but
+/// no identity to propagate: on the required per-user backend each is a
+/// no-principal caller (case B) with its own caller key.
+fn two_keys() -> crate::config::AuthConfig {
+    let key = |name: &str, secret: &str| crate::config::ApiKeyConfig {
+        key: None,
+        key_sha256: Some(crate::config::api_key_digest_spec(secret.as_bytes())),
+        expires_at: None,
+        name: name.to_string(),
+        rate_limit: 0,
+        backends: vec!["*".to_string()],
+        allowed_tools: None,
+        denied_tools: None,
+        admin: false,
+        kind: crate::config::ApiKeyKind::Shared,
+    };
+    crate::config::AuthConfig {
+        enabled: true,
+        api_keys: vec![key("k1-client", "k1"), key("k2-client", "k2")],
+        ..crate::config::AuthConfig::default()
+    }
+}
+
+/// `bearer`'s call of [`TOOL`] on `entry`, the body's id removed.
+async fn call_bearer(gw: &Gateway, entry: Entry, bearer: &str) -> (StatusCode, Value) {
+    let (uri, params) = match entry {
+        Entry::Invoke => (
+            "/mcp".to_string(),
+            json!({"name": "gateway_invoke",
+                "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"q": "x"}}}),
+        ),
+        Entry::Direct => (
+            format!("/mcp/{BACKEND}"),
+            json!({"name": TOOL, "arguments": {"q": "x"}}),
+        ),
+    };
+    let body = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params});
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {bearer}"))
+        .body(axum::body::Body::from(body.to_string()))
+        .expect("a static request builds");
+    let response = gw
+        .router
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("the router is infallible");
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("an in-memory body reads");
+    let mut value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    if let Some(object) = value.as_object_mut() {
+        object.remove("id");
+    }
+    (status, value)
+}
+
+/// E4 (and E5's limiter half): two callers with distinct caller keys
+/// (`k1`, `k2`), each refused on the required backend, log one WARN each;
+/// `k1` again within the window logs none. RED at base: nothing is logged.
+#[test]
+fn e4_one_warn_per_caller_key() {
+    let rt = runtime();
+    let gw = rt.block_on(super::gateway_authed(
+        &two_keys(),
+        CallerSlot::Valid,
+        Warmth::Warm,
+        "other",
+    ));
+    let (answers, log) = crate::test_log_capture::capture_warnings(|| {
+        rt.block_on(async {
+            let mut answers = Vec::new();
+            for bearer in ["k1", "k2", "k1"] {
+                answers.push((bearer, call_bearer(&gw, Entry::Invoke, bearer).await));
+            }
+            answers
+        })
+    });
+    for (bearer, (status, answer)) in &answers {
+        assert_eq!(
+            (*status, answer.pointer("/error/code")),
+            (StatusCode::OK, Some(&json!(-32601))),
+            "E4 premise {bearer}: not the absent answer: {answer}"
+        );
+    }
+    assert_eq!(lacked_warns(&log), 2, "E4: want one WARN per key:\n{log}");
 }

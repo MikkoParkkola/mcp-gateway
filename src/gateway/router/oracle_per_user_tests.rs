@@ -61,11 +61,33 @@ async fn gateway_shared(
     denied: &str,
     firewalled: bool,
 ) -> Gateway {
+    let state =
+        direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
+    gateway_on(state, (slot, shared, warmth), denied, firewalled)
+}
+
+/// [`gateway`] behind `auth` (MIK-8382 E4: API-key callers).
+async fn gateway_authed(
+    auth: &crate::config::AuthConfig,
+    slot: CallerSlot,
+    warmth: Warmth,
+    denied: &str,
+) -> Gateway {
+    let state = super::tests::test_router_app_state_with_auth(auth).await;
+    gateway_on(state, (slot, &valid(), warmth), denied, false)
+}
+
+/// The per-user fixture over `state`: alpha's slot, the shared schema and the
+/// warmth, the active profile denying `denied`, the firewall when asked.
+fn gateway_on(
+    (mut state, store): (Arc<super::AppState>, tempfile::TempDir),
+    (slot, shared, warmth): (CallerSlot, &Value, Warmth),
+    denied: &str,
+    firewalled: bool,
+) -> Gateway {
     let (backend, caller, shared) =
         per_user_backend(slot, shared, warmth, InputSchemaEnforcement::Closed);
     let kept = Arc::clone(&backend);
-    let (mut state, store) =
-        direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     assert!(state_mut.backends.register(backend), "fixture registration");
     let audit = [
