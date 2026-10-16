@@ -102,7 +102,6 @@ pub(crate) enum Na {
 pub(crate) enum Ticket {
     Mik8353,
     Mik8406,
-    Mik8382,
 }
 
 /// What a (method, route, stage) row asserts.
@@ -221,15 +220,14 @@ fn the_table_answers_every_route_and_stage() {
             }
         }
     }
-    // Today's gaps: R4a nonce give-back (D2), and the four MIK-8382 opens
-    // (the keyed-principal intake check on R1, R2, R3 and R4a), which its fix
-    // closes. MIK-8353 3b closed R1 nonce (relay). P3 closed R5 route
+    // Today's gap: R4a nonce give-back (D2). MIK-8382 closed the four
+    // keyed-principal intake cells it opened. MIK-8353 3b closed R1 nonce (relay). P3 closed R5 route
     // firewall, sanitize and X14; MIK-8315 closed authorize (D3); MIK-8150
     // closed R2 and R5 nonce give-back (admission); MIK-8351 closed R3
     // rescan; MIK-8159 closed R2's chain link; MIK-8154 closed R3 lease and
     // R3 sanitize.
     assert_eq!(
-        gaps, 5,
+        gaps, 1,
         "the gap count moved: update the table and this pin"
     );
 }

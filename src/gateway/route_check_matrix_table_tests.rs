@@ -95,12 +95,12 @@ pub(crate) const fn expect(method: MethodKind, route: Route, stage: Stage) -> Ex
                 Invoke | Surfaced | Direct | TaskWorker | Stdio => Applies,
                 TaskSubmit => NotApplicable(Na::NoBackendSend),
             },
-            // MIK-8382 (design r2 R2-8): /mcp and /mcp/{name} gain an intake
-            // check; today a later check answers first. A worker runs under
-            // the owner its submit admitted; stdio's owner is the local
-            // operator (`stdio_dispatch.rs` `local_operator()`).
+            // MIK-8382 (design d2): /mcp and /mcp/{name} refuse a keyed call
+            // with no execution principal at intake, before a later check. A
+            // worker runs under the owner its submit admitted; stdio's owner
+            // is the local operator (`stdio_dispatch.rs` `local_operator()`).
             Stage::KeyedPrincipal => match route {
-                Invoke | Surfaced | Direct | TaskSubmit => ExpectedGap(Ticket::Mik8382),
+                Invoke | Surfaced | Direct | TaskSubmit => Applies,
                 TaskWorker => NotApplicable(Na::DecidedAtSubmit),
                 Stdio => NotApplicable(Na::AlwaysLocalOperator),
             },
