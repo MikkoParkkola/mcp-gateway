@@ -87,9 +87,83 @@ async fn p4_stdio_keyed_playbook_replay_after_revocation_is_refused() {
         sent,
         "P4: the replay reached the backend: {again}"
     );
+    // mProceed is killed only by this entries assert: a fall-through to the
+    // live run refuses the same way and sends nothing. Keep it.
     assert_eq!(
         crate::gateway::meta_mcp::plan_entries::count(&meta),
         entered,
         "P4: the replay entered the plan executor: {again}"
+    );
+}
+
+/// P4u (stdio, RED at 1577d7ff6; kills mSyncStdio and mStdioRender): a
+/// keyed playbook runs; custody then fails (the account `Unavailable`); the
+/// same call is answered exactly as the live twin (a fresh key) answers,
+/// `error.data` kept (measured: -32603 with `{"retryable": true}`), with
+/// nothing sent and no plan executor entered. Rendering the refusal through
+/// `JsonRpcResponse::error` (mStdioRender) drops the data.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn p4u_stdio_unavailable_replay_answers_the_live_twin_with_its_data() {
+    let mut gateway =
+        DirectAccountGateway::new_in(ServeMode::Stdio, AuthConfig::default(), &Binding::Connected);
+    let meta = gateway.take_meta();
+    let mut engine = crate::playbook::PlaybookEngine::new();
+    engine.register(two_reads());
+    meta.set_playbook_engine(engine);
+    let tool: crate::protocol::Tool = serde_json::from_value(json!({
+        "name": "read", "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}}
+    }))
+    .expect("a tool");
+    if let Some(backend) = gateway.backends().get(BACKEND) {
+        backend.store_shared_tools_for_test(vec![tool]);
+    }
+    let meta = Arc::new(meta);
+    let policy = Arc::new(crate::security::ToolPolicy::default());
+    let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
+        &crate::mtls::MtlsConfig::default(),
+    ));
+    let session = super::super::STDIO_SESSION_ID;
+    for _ in 0..2 {
+        gateway
+            .answer_next(json!({"content": [{"type": "text", "text": MARKER}], "isError": false}));
+    }
+    let first = Gateway::dispatch_single(&meta, &policy, &mtls, &keyed_playbook("p4u"), session)
+        .await
+        .expect("a response");
+    assert!(
+        first.to_string().contains(MARKER),
+        "premise: the plan ran: {first}"
+    );
+    let sent = gateway.tool_calls().len();
+    let entered = crate::gateway::meta_mcp::plan_entries::count(&meta);
+    gateway.fail_custody_for_test(true);
+    let mut again =
+        Gateway::dispatch_single(&meta, &policy, &mtls, &keyed_playbook("p4u"), session)
+            .await
+            .expect("a response");
+    let replay_sends = gateway.tool_calls().len() - sent;
+    // mProceed is killed only by this entries count: a fall-through to the
+    // live run refuses the same way and sends nothing. Keep it.
+    let replay_entries = crate::gateway::meta_mcp::plan_entries::count(&meta) - entered;
+    let mut live =
+        Gateway::dispatch_single(&meta, &policy, &mtls, &keyed_playbook("p4u-live"), session)
+            .await
+            .expect("a response");
+    assert_eq!(
+        live.pointer("/error/data/retryable"),
+        Some(&json!(true)),
+        "premise: the live twin carries its data: {live}"
+    );
+    assert!(
+        !again.to_string().contains(MARKER),
+        "P4u: the stored plan output was served: {again}"
+    );
+    again["id"] = Value::Null;
+    live["id"] = Value::Null;
+    assert_eq!(again, live, "P4u: the replay is not the live twin's answer");
+    assert_eq!(replay_sends, 0, "P4u: the replay reached the backend");
+    assert_eq!(
+        replay_entries, 0,
+        "P4u: the replay entered the plan executor"
     );
 }

@@ -168,7 +168,7 @@ async fn send(fx: &Fx, name: &str, params: Value) -> Value {
         .unwrap();
     let response = fx.router.clone().oneshot(request).await.unwrap();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    serde_json::from_slice(&bytes).expect("a JSON-RPC body")
 }
 
 /// The three plan shapes the rows replay.
@@ -246,6 +246,8 @@ async fn refused_after_revoke(row: &str, plan: Plan) {
         sent,
         "{row}: the replay reached the backend: {again}"
     );
+    // mProceed is killed only by this entries assert: a fall-through to the
+    // live run refuses the same way and sends nothing. Keep it.
     assert_eq!(
         plan_entries(&fx),
         entered,
@@ -256,9 +258,12 @@ async fn refused_after_revoke(row: &str, plan: Plan) {
     // unproven step (CR-1), which is this answer.
     let (name, params) = Plan::Single.params(&format!("{row}-live"));
     let mut live = send(&fx, name, params).await;
-    assert!(
-        live.get("error").is_some(),
-        "premise: the live twin is refused: {live}"
+    // Measured (M1): the sole operator's live twin is the unmarked
+    // resolution error, never an offer (no bridged caller).
+    assert_eq!(
+        live.pointer("/error/code"),
+        Some(&json!(-32603)),
+        "premise: the live twin is the resolution error: {live}"
     );
     let mut again = again;
     again["id"] = Value::Null;
@@ -357,6 +362,7 @@ async fn p8_control_unrun_conditional_step_revoked_does_not_block() {
         "premise: the branch was not taken"
     );
     let sent = fx.gateway.tool_calls_to(BACKEND);
+    let entered = plan_entries(&fx);
     fx.gateway.revoke_operator_grant_on(PERSONAL_BACKEND).await;
     let again = send(
         &fx,
@@ -372,5 +378,10 @@ async fn p8_control_unrun_conditional_step_revoked_does_not_block() {
         fx.gateway.tool_calls_to(BACKEND),
         sent,
         "P8: the replay was sent: {again}"
+    );
+    assert_eq!(
+        plan_entries(&fx),
+        entered,
+        "P8: the replay entered the plan executor: {again}"
     );
 }

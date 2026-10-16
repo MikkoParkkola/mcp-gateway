@@ -427,9 +427,9 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &super::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
+        self.refuse_unattested_plan()?;
         #[cfg(test)]
         super::plan_entries::note(self);
-        self.refuse_unattested_plan()?;
         // Chain mode: sequential execution
         if let Some(chain) = args.get("chain").and_then(Value::as_array) {
             return self.execute_chain(chain.clone(), session_id, caller).await;

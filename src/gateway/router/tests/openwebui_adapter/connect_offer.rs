@@ -167,10 +167,14 @@ async fn gateway_seeded(
     {
         let state = Arc::get_mut(&mut state).unwrap();
         state.auth_config = auth;
-        Arc::get_mut(&mut state.meta_mcp)
-            .expect("the Meta-MCP is unshared")
-            .enable_transparency_log(Arc::clone(&logger));
-        state.transparency_log = Some(logger);
+        // Only a seeded gateway mints; the unseeded rows keep their audit
+        // configuration as it was.
+        if !seeds.is_empty() {
+            Arc::get_mut(&mut state.meta_mcp)
+                .expect("the Meta-MCP is unshared")
+                .enable_transparency_log(Arc::clone(&logger));
+            state.transparency_log = Some(logger);
+        }
     }
     let fixture =
         RevokeFixture::start(ACCOUNT, RESOURCE, seeds, RevocationEndpoint::Configured).await;

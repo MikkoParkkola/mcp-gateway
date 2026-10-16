@@ -66,12 +66,17 @@ async fn p11_unjudged_plan_replay_answers_the_live_resolution_error() {
     let _clock = outlive_the_token(idp);
     let again =
         r6m_token_exchange::send_method_as(&router, &alice, call, execute("p11", false)).await;
+    // mProceed is killed only by this entries assert: a fall-through to the
+    // live run refuses the same way and sends nothing. Keep it.
     let replay_entries = crate::gateway::meta_mcp::plan_entries::count(&meta_mcp) - entered;
+    let replay_sends = sends.load(Ordering::SeqCst) - sent;
     let live =
         r6m_token_exchange::send_method_as(&router, &alice, call, execute("p11-live", false)).await;
-    assert!(
-        live.get("error").is_some(),
-        "premise: the live call is refused: {live}"
+    // The live twin's code, measured: the resolution error.
+    assert_eq!(
+        live.pointer("/error/code"),
+        Some(&json!(-32603)),
+        "premise: the live call is refused with the resolution error: {live}"
     );
     assert!(
         !again.to_string().contains(MARKER),
@@ -82,11 +87,7 @@ async fn p11_unjudged_plan_replay_answers_the_live_resolution_error() {
         id_masked(&live),
         "P11: the replay differs from the live call"
     );
-    assert_eq!(
-        sends.load(Ordering::SeqCst),
-        sent,
-        "P11: the replay reached the backend"
-    );
+    assert_eq!(replay_sends, 0, "P11: the replay reached the backend");
     assert_eq!(
         replay_entries, 0,
         "P11: the replay entered the plan executor"
@@ -135,12 +136,17 @@ async fn p9p_unjudged_plan_task_repeat_answers_the_live_resolution_error() {
     let _clock = outlive_the_token(idp);
     let again =
         r6m_token_exchange::send_method_as(&router, &alice, call, execute("p9p", true)).await;
+    // mProceed is killed only by this entries assert: a fall-through to the
+    // live run refuses the same way and sends nothing. Keep it.
     let replay_entries = crate::gateway::meta_mcp::plan_entries::count(&meta_mcp) - entered;
+    let replay_sends = sends.load(Ordering::SeqCst) - sent;
     let live =
         r6m_token_exchange::send_method_as(&router, &alice, call, execute("p9p-live", false)).await;
-    assert!(
-        live.get("error").is_some(),
-        "premise: the live call is refused: {live}"
+    // The live twin's code, measured: the resolution error.
+    assert_eq!(
+        live.pointer("/error/code"),
+        Some(&json!(-32603)),
+        "premise: the live call is refused with the resolution error: {live}"
     );
     assert!(
         again.pointer("/result/taskId").is_none(),
@@ -151,13 +157,84 @@ async fn p9p_unjudged_plan_task_repeat_answers_the_live_resolution_error() {
         id_masked(&live),
         "P9p: the repeat differs from the live call"
     );
-    assert_eq!(
-        sends.load(Ordering::SeqCst),
-        sent,
-        "P9p: the repeat reached the backend"
-    );
+    assert_eq!(replay_sends, 0, "P9p: the repeat reached the backend");
     assert_eq!(
         replay_entries, 0,
         "P9p: the replay entered the plan executor"
+    );
+}
+
+/// P9k-mixed (task half, RED at 1577d7ff6; kills mFirst): a task-augmented
+/// keyed chain `[plain:read, tx:read]` completes, recording both targets in
+/// order. The `IdP` dies and the TTL passes; the repeat answers the first
+/// unproven step's live resolution error (CR-1: the single form's live twin
+/// on [`r6m_token_exchange::TX`]), with nothing sent and no executor entered.
+/// A walk over `stored.targets.first()` alone (mFirst) sees only the plain
+/// target, which mints nothing per caller, and serves the stored task.
+#[tokio::test]
+async fn p9k_mixed_task_chain_judges_every_recorded_target() {
+    let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
+    let idp = r6m_token_exchange::LiveIdp::start(&key).await;
+    let alice = r6m_token_exchange::alice();
+    let (router, sends, _dirs, meta_mcp) =
+        r6m_token_exchange::gateway_with_meta(&key, idp.endpoint(), &alice).await;
+    let call = ("tools/call", "gateway_execute");
+    let step = |server: &str| json!({"tool": format!("{server}:{TOOL}"), "arguments": {"folder": "inbox"}});
+    let mut chain = json!({"name": "gateway_execute",
+        "arguments": {"chain": [step(r6m_token_exchange::PLAIN), step(r6m_token_exchange::TX)]},
+        "_meta": meta(Some("p9k-mixed"), true)});
+    chain["task"] = json!({});
+    let made = r6m_token_exchange::send_method_as(&router, &alice, call, chain.clone()).await;
+    let id = made
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("premise: a task was made: {made}"))
+        .to_owned();
+    let bound = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let params = json!({"taskId": id, "_meta": meta(None, true)});
+        let got =
+            r6m_token_exchange::send_method_as(&router, &alice, ("tasks/get", &id), params).await;
+        let status = got.pointer("/result/status").and_then(Value::as_str);
+        if status == Some("completed") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < bound && !matches!(status, Some("failed" | "cancelled")),
+            "premise: the task completed: {got}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let sent = sends.load(Ordering::SeqCst);
+    assert_eq!(sent, 2, "premise: both steps were sent");
+    let entered = crate::gateway::meta_mcp::plan_entries::count(&meta_mcp);
+    let _clock = outlive_the_token(idp);
+    let again = r6m_token_exchange::send_method_as(&router, &alice, call, chain).await;
+    // mProceed is killed only by this entries assert: a fall-through to the
+    // live run refuses the same way and sends nothing. Keep it.
+    let replay_entries = crate::gateway::meta_mcp::plan_entries::count(&meta_mcp) - entered;
+    let replay_sends = sends.load(Ordering::SeqCst) - sent;
+    let live =
+        r6m_token_exchange::send_method_as(&router, &alice, call, execute("p9k-mixed-live", false))
+            .await;
+    // The live twin's code, measured: the resolution error.
+    assert_eq!(
+        live.pointer("/error/code"),
+        Some(&json!(-32603)),
+        "premise: the live call is refused with the resolution error: {live}"
+    );
+    assert!(
+        again.pointer("/result/taskId").is_none(),
+        "P9k-mixed: the repeat answered a task (stored or new): {again}"
+    );
+    assert_eq!(
+        id_masked(&again),
+        id_masked(&live),
+        "P9k-mixed: the repeat is not the first unproven step's live answer"
+    );
+    assert_eq!(replay_sends, 0, "P9k-mixed: the repeat reached a backend");
+    assert_eq!(
+        replay_entries, 0,
+        "P9k-mixed: the replay entered the plan executor"
     );
 }

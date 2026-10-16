@@ -221,6 +221,11 @@ async fn replay_after_revoke(
     } else {
         keyed(name, arguments, Some(key))
     };
+    // Every step of the form dispatches on the first run: one for a single
+    // call, one per chain entry, two for the two-read playbooks.
+    let steps = arguments["chain"]
+        .as_array()
+        .map_or(if name == "gateway_run_playbook" { 2 } else { 1 }, Vec::len);
     let first = send(gw, &body).await;
     if task {
         let id = first
@@ -231,13 +236,14 @@ async fn replay_after_revoke(
         completed(gw, &id).await;
     } else {
         assert!(
-            first.to_string().contains(SLOT_MARKER),
-            "premise: the plan dispatched: {first}"
+            first.to_string().contains(SLOT_MARKER) && first["result"]["isError"] != true,
+            "premise: the plan completed: {first}"
         );
     }
-    assert!(
-        gw.sends.load(Ordering::SeqCst) >= 1,
-        "premise: a step reached the slot"
+    assert_eq!(
+        gw.sends.load(Ordering::SeqCst),
+        steps,
+        "premise: every step reached the slot once"
     );
     revoke(gw).await;
     let (sent, entered) = (
@@ -282,6 +288,8 @@ fn assert_live_offer(row: &str, replayed: &Replayed) {
         "{row}: the repeat is not the live twin's offer"
     );
     assert_eq!(*sends, 0, "{row}: the repeat reached the backend");
+    // mProceed is killed only by this entries assert: a fall-through to the
+    // live run refuses the same way and sends nothing. Keep it.
     assert_eq!(*entries, 0, "{row}: the repeat entered the plan executor");
 }
 
