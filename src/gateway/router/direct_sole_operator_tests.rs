@@ -281,3 +281,98 @@ async fn d5_direct_refusal_audit_names_the_sole_operator() {
         "every refusal record must name the sole operator: {subjects:?}"
     );
 }
+
+/// The raw answer to a direct `tools/call` of `tool` from `bearer`: the
+/// status and the body bytes with the tool name factored out.
+async fn raw_call(fx: &Fx, tool: &str, bearer: Option<&str>) -> (StatusCode, String) {
+    let body = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+                      "params": {"name": tool, "arguments": {"folder": "inbox"}}});
+    let mut builder = axum::http::Request::builder()
+        .method("POST")
+        .uri(format!("/mcp/{BACKEND}"))
+        .header("content-type", "application/json");
+    if let Some(secret) = bearer {
+        builder = builder.header("authorization", format!("Bearer {secret}"));
+    }
+    let request = builder
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = fx.router.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&bytes).replace(tool, "<tool>");
+    (status, text)
+}
+
+/// The `idp_refuse` rows the transparency log holds for [`BACKEND`].
+fn idp_refusals(fx: &Fx) -> usize {
+    let raw = std::fs::read_to_string(&fx.log_path).unwrap_or_default();
+    raw.lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
+        .filter(|entry| entry["action"] == "idp_refuse" && entry["backend"] == BACKEND)
+        .count()
+}
+
+/// The outcome on the direct audit record a call of `tool` on [`BACKEND`] left.
+fn direct_outcome(fx: &Fx, tool: &str) -> Value {
+    let raw = std::fs::read_to_string(&fx.log_path).unwrap_or_default();
+    raw.lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
+        .filter(|entry| entry["route"] == "direct" && entry["tool"] == tool)
+        .map(|entry| entry["outcome"].clone())
+        .next_back()
+        .unwrap_or(Value::Null)
+}
+
+/// MIK-8361 oracle 2, no principal: a caller with no principal on a required
+/// per-user backend (a second key, or an anonymous public-path caller) gets,
+/// for a name the policy withholds (`run_command`), the answer a missing
+/// name gets: the same status and body bytes, the tool name factored out,
+/// no `idp_refuse` row on either side and nothing dispatched.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn no_principal_caller_direct_call_is_the_same_for_a_withheld_name() {
+    let second = vec![key("key-a", "scoped-key-a"), key("key-b", "scoped-key-b")];
+    let anonymous = vec![key("operator", OPERATOR_KEY)];
+    let cases = [
+        (auth(second, &[]), Some("scoped-key-b")),
+        (auth(anonymous, &["/mcp"]), None),
+    ];
+    // Every case is judged before the assert, so a red run shows them all.
+    let mut seen = Vec::new();
+    for (config, bearer) in cases {
+        let fx = fixture(config, &Binding::Connected).await;
+        let missing = raw_call(&fx, "no_such_tool", bearer).await;
+        assert_eq!(missing.0, StatusCode::OK, "premise: {}", missing.1);
+        assert!(missing.1.contains("-32601"), "premise: {}", missing.1);
+        let withheld = raw_call(&fx, "run_command", bearer).await;
+        // Premise: the policy withholds `run_command` here, so the equal
+        // answers are the no-principal rule's doing, not a second missing name.
+        assert_eq!(
+            direct_outcome(&fx, "run_command"),
+            "denied",
+            "premise: withheld"
+        );
+        let missing_outcome = direct_outcome(&fx, "no_such_tool");
+        assert!(
+            !missing_outcome.is_null() && missing_outcome != "denied",
+            "premise: missing {missing_outcome}"
+        );
+        seen.push((
+            bearer,
+            withheld,
+            missing,
+            idp_refusals(&fx),
+            fx.gateway.dispatched(),
+        ));
+    }
+    let wrong: Vec<_> = seen
+        .iter()
+        .filter(|(_, withheld, missing, rows, sent)| {
+            withheld != missing || *rows != 0 || *sent != 0
+        })
+        .collect();
+    assert!(
+        wrong.is_empty(),
+        "(caller, withheld, missing, idp_refuse rows, dispatched) differ: {wrong:#?}"
+    );
+}

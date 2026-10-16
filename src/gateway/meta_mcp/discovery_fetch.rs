@@ -94,6 +94,20 @@ impl MetaMcp {
             .unwrap_or(true)
     }
 
+    /// [`Self::has_no_view_for`] for the direct route's withheld gate
+    /// (MIK-8361 ruling B): whether `caller` has no view of `backend`.
+    /// Side-effect-free: it records no no-view marker, no account outcome and
+    /// no audit row, and reads the grant without refreshing or minting.
+    /// The one crate-visible entry to the predicate (approved visibility
+    /// change, 2026-10-15).
+    pub(crate) async fn caller_lacks_view(
+        &self,
+        backend: &Backend,
+        caller: CallerProof<'_>,
+    ) -> bool {
+        self.has_no_view_for(backend, caller).await
+    }
+
     /// [`Self::has_no_view_for`] with a busy custody kept distinct for the
     /// caller verdict (MIK-8392 Busy parity): `Err` is the transient, never
     /// a finding of no view.

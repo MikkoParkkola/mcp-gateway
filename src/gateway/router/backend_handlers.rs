@@ -119,7 +119,7 @@ async fn guard_tool_call(
     auth: BackendAuthContext<'_>,
     (params, id, session_id): (Option<&Value>, &RequestId, Option<&str>),
     (backend, failed): (&crate::backend::Backend, &DirectFailure<'_>),
-) -> Result<(), BackendRejection> {
+) -> Result<Option<BackendRejection>, BackendRejection> {
     let named = params.and_then(|params| Some((params, params.get("name")?.as_str()?)));
     let Some((params, tool_name)) = named.filter(|(_, tool)| !tool.is_empty()) else {
         return Err(unnamed_call(id));
@@ -217,14 +217,17 @@ async fn guard_tool_call(
         ));
     }
     if !withheld {
-        return Ok(());
+        return Ok(None);
     }
     let lens = crate::backend::Lens::Withheld;
     let answered = key_check::key_refusal(backend, ((None, &[]), failed), params, (id, lens));
-    // A withheld name is always answered; were it not, it is still never sent.
-    Err(answered
-        .await
-        .unwrap_or(key_check::absent_response(id, tool_name)))
+    // A withheld name is always answered (`Some`); were it not, it is still
+    // never sent.
+    Ok(Some(
+        answered
+            .await
+            .unwrap_or(key_check::absent_response(id, tool_name)),
+    ))
 }
 
 /// What a direct-route call's token must grant (MIK-7570.ATTEST.1 part 3).
@@ -504,8 +507,26 @@ async fn backend_handler_inner(
     };
     // Authorize, the firewall and the withheld gate need no credential:
     // a call they refuse or answer resolves none (MIK-8361 ORACLE.4).
-    if let Err(response) = direct_gate::guard_before_credential(scope, &envelope).await {
-        return response;
+    match direct_gate::guard_before_credential(scope, &envelope).await {
+        Ok(direct_gate::Guarded::Clear) => {}
+        Ok(direct_gate::Guarded::Withheld(absent)) => return absent,
+        // Ruling B (MIK-8361 A5) on the direct route: a caller with no view of
+        // this per-user backend cannot tell names apart, so a withheld name
+        // meets the credential step a missing name meets. Its refusal (the
+        // account's connect answer) is the answer; if a view appeared
+        // meanwhile, the withheld name keeps its absent answer. It is never
+        // dispatched either way.
+        Ok(direct_gate::Guarded::WithheldNoView(absent)) => {
+            return match direct_preflight::propagate_identity(
+                state, &name, &caller, &route, &preflight, &id,
+            )
+            .await
+            {
+                Err(offer) => offer,
+                Ok(_) => absent,
+            };
+        }
+        Err(response) => return response,
     }
     let propagation =
         match direct_preflight::propagate_identity(state, &name, &caller, &route, &preflight, &id)
