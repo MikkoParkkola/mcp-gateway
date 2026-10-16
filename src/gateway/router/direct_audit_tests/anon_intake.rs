@@ -10,6 +10,7 @@
 use super::*;
 
 mod mcp_precedence;
+mod probe;
 
 /// A precedence case: label, request body, headers.
 type Case = (&'static str, Value, Vec<(&'static str, &'static str)>);
