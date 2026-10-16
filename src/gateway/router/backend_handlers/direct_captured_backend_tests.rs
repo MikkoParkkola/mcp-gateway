@@ -314,4 +314,9 @@ async fn an_unminted_a2a_key_holder_is_bound_but_not_proven() {
         Some(crate::hashing::sha256_hex(b"a2a-client:alice-digest").as_str()),
         "premise: the A2A override bound the key holder"
     );
+    assert!(
+        propagation.headers.is_empty() && !propagation.attempted,
+        "premise: the static fallback, not a mint: {:?}",
+        propagation.headers
+    );
 }

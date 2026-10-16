@@ -216,11 +216,17 @@ async fn d_opt_signed_the_refused_direct_nonce_stays_spent() {
     eprintln!("D-opt-signed answer: {unproven}");
     assert_unproven("D-opt-signed", &unproven);
     let _idp = r6m_token_exchange::LiveIdp::restart(&key, addr).await;
-    let (_, reused) = signed("n2").await;
-    eprintln!("D-opt-signed reused nonce: {reused}");
-    assert!(
-        reused.get("error").is_some() && !reused.to_string().contains(MARKER),
-        "D-opt-signed: the refused nonce was accepted again: {reused}"
+    let (status, reused) = signed("n2").await;
+    eprintln!("D-opt-signed reused nonce ({status}): {reused}");
+    // The signer's replay refusal, as the direct route answers it at nonce
+    // admission (`admit_signing_nonce`), never any other error.
+    assert_eq!(
+        (status, reused.get("error")),
+        (
+            axum::http::StatusCode::BAD_REQUEST,
+            Some(&json!({"code": -32001, "message": "Nonce replay detected"}))
+        ),
+        "D-opt-signed: the refused nonce was not refused as a replay: {reused}"
     );
     assert_served("D-opt-signed fresh nonce", &signed("n3").await);
     assert_eq!(
