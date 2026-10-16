@@ -190,6 +190,8 @@ async fn cross_subject_session_refused() {
 
 #[tokio::test]
 async fn cross_subject_delete_refused() {
+    // Still a hand-inserted agent identity: a DELETE opens no stream, so no
+    // stream judges this identity (MIK-8377's per-decision check never runs).
     let (state, _store) = test_router_app_state_with_auth(&two_keys()).await;
     let a = mint(&state, A_ON_ONE).await;
     let (status, _) = send(&state, request(B_ON_ONE, "DELETE", Some(&a))).await;
@@ -244,12 +246,14 @@ async fn a_subject_without_a_credential_owns_its_session() {
     }
     // A caller that presents nothing cannot exist past agent auth: it is
     // refused before any session is looked up.
-    let (status, _) = send(&state, request(caller(None, None), "GET", Some(&a))).await;
-    assert_eq!(
-        status,
-        StatusCode::UNAUTHORIZED,
-        "a caller with no bearer is refused under agent auth"
-    );
+    for method in ["POST", "GET"] {
+        let (status, _) = send(&state, request(caller(None, None), method, Some(&a))).await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "a caller with no bearer is refused under agent auth on {method}"
+        );
+    }
     assert!(
         resumes(&state, own, "GET", &a).await,
         "the subject lost its own session"
@@ -261,23 +265,26 @@ fn real_agent_token(registry: &crate::gateway::oauth::AgentRegistry, client_id: 
     agent_token(registry, client_id, 0)
 }
 
-/// As [`real_agent_token`], the `n`th of that agent's tokens: `n` is a claim
-/// of its own, so one agent's tokens differ.
+/// As [`real_agent_token`], the `n`th of that agent's tokens: `n` is its
+/// `jti`, so one agent's tokens differ.
 fn agent_token(registry: &crate::gateway::oauth::AgentRegistry, client_id: &str, n: u32) -> String {
     let secret = format!("{client_id}-session-owner-secret-0123456789");
-    registry.register(crate::gateway::oauth::AgentDefinition {
-        client_id: client_id.to_string(),
-        name: "one display name for every agent".to_string(),
-        hs256_secret: Some(secret.clone()),
-        rs256_public_key: None,
-        scopes: vec![],
-        issuer: None,
-        audience: Some("session-owner".to_string()),
-    });
+    // Registered once per agent; a further token of it only signs again.
+    if registry.get(client_id).is_none() {
+        registry.register(crate::gateway::oauth::AgentDefinition {
+            client_id: client_id.to_string(),
+            name: "one display name for every agent".to_string(),
+            hs256_secret: Some(secret.clone()),
+            rs256_public_key: None,
+            scopes: vec![],
+            issuer: None,
+            audience: Some("session-owner".to_string()),
+        });
+    }
     let now = chrono::Utc::now().timestamp();
     jsonwebtoken::encode(
         &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
-        &json!({ "sub": client_id, "exp": now + 3600, "iat": now, "aud": "session-owner", "n": n }),
+        &json!({ "sub": client_id, "exp": now + 3600, "iat": now, "aud": "session-owner", "jti": n.to_string() }),
         &jsonwebtoken::EncodingKey::from_secret(secret.as_bytes()),
     )
     .expect("sign agent token")
@@ -497,5 +504,109 @@ async fn a_session_older_than_the_ttl_that_stays_active_keeps_its_profile() {
             .session_profiles()
             .get_profile_name(&live, "default"),
         "strict"
+    );
+}
+
+/// The trusted proxy the proxied rows' requests arrive from.
+const PROXY: std::net::SocketAddr = std::net::SocketAddr::new(
+    std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 7)),
+    40_000,
+);
+
+/// A router in `trusted_proxy` mode trusting [`PROXY`], under `auth`, with
+/// agent auth off: the subject is a proxy-named identity, admitted apart from
+/// the bearer, so these rows vary the subject while the credential bytes stay
+/// equal, and can present no credential at all (MIK-8377).
+async fn proxied(auth: &AuthConfig) -> (Arc<AppState>, tempfile::TempDir) {
+    let identity = crate::security::caller_identity::CallerIdentityConfig {
+        mode: crate::security::caller_identity::CallerIdentityMode::TrustedProxy,
+        trusted_proxies: vec![PROXY.ip()],
+        authority: "corp-sso".to_string(),
+        ..Default::default()
+    };
+    crate::gateway::router::tests::meta_fixture::test_router_app_state_with_meta(
+        auth,
+        None,
+        move |meta| meta.with_caller_identity(identity),
+    )
+    .await
+}
+
+/// A request arriving from [`PROXY`], naming `subject` when given, with
+/// `bearer` when given.
+fn via_proxy(
+    (subject, bearer): (Option<&str>, Option<&str>),
+    method: &str,
+    session: Option<&str>,
+) -> Request<Body> {
+    let mut request = request(caller(None, bearer), method, session);
+    request
+        .extensions_mut()
+        .insert(axum::extract::ConnectInfo(PROXY));
+    if let Some(subject) = subject {
+        request.headers_mut().insert(
+            "x-gateway-identity-subject",
+            subject.parse().expect("a header value"),
+        );
+    }
+    request
+}
+
+/// As [`mint`], arriving from [`PROXY`].
+async fn mint_via_proxy(state: &Arc<AppState>, who: (Option<&str>, Option<&str>)) -> String {
+    let (status, id) = send(state, via_proxy(who, "POST", None)).await;
+    assert_eq!(status, StatusCode::OK, "the minting POST was refused");
+    id.expect("a legacy POST is given a session")
+}
+
+/// As [`resumes`], arriving from [`PROXY`].
+async fn resumes_via_proxy(
+    state: &Arc<AppState>,
+    who: (Option<&str>, Option<&str>),
+    method: &str,
+    id: &str,
+) -> bool {
+    let (status, got) = send(state, via_proxy(who, method, Some(id))).await;
+    assert_eq!(status, StatusCode::OK, "{method} was refused outright");
+    got.as_deref() == Some(id)
+}
+
+/// `cross_subject_session_refused` with the bearer bytes held equal: two
+/// proxy-named subjects present the very same key, so only the subject can
+/// keep them apart.
+#[tokio::test]
+async fn proxied_subjects_on_one_bearer_are_refused_each_others_session() {
+    let (state, _store) = proxied(&two_keys()).await;
+    let a = mint_via_proxy(&state, (Some("alice"), Some(KEY_ONE))).await;
+    for method in ["POST", "GET"] {
+        assert!(
+            !resumes_via_proxy(&state, (Some("bob"), Some(KEY_ONE)), method, &a).await,
+            "subject B resumed subject A's session on {method} through their shared key"
+        );
+    }
+    assert!(
+        resumes_via_proxy(&state, (Some("alice"), Some(KEY_ONE)), "POST", &a).await,
+        "B's attempts must not have displaced A's session"
+    );
+}
+
+/// `a_subject_without_a_credential_owns_its_session` through a subject that
+/// needs no credential: auth off, the subject named by the trusted proxy, and
+/// no bearer at all, so the session owner holds no credential.
+#[tokio::test]
+async fn a_proxied_subject_without_a_credential_owns_its_session() {
+    let (state, _store) = proxied(&AuthConfig::default()).await;
+    let a = mint_via_proxy(&state, (Some("alice"), None)).await;
+    for other in [(Some("bob"), None), (None, None)] {
+        for method in ["POST", "GET"] {
+            assert!(
+                !resumes_via_proxy(&state, other, method, &a).await,
+                "another caller resumed a subject's session on {method}"
+            );
+        }
+    }
+    assert!(
+        resumes_via_proxy(&state, (Some("alice"), None), "GET", &a).await,
+        "the subject lost its own session"
     );
 }
