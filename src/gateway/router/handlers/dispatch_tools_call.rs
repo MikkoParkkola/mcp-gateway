@@ -442,6 +442,8 @@ pub(super) async fn tools_call(
     // see is answered by the gate as a missing name is, before X14, the task
     // gate, signing and admission act on it. The judgement is recorded, so
     // the gate answers it absent whatever the catalogue does next.
+    #[cfg(test)]
+    crate::gateway::meta_mcp::withheld_gate::seams::gate_start();
     let (invisible, witness) = state
         .meta_mcp
         .invisible_call(

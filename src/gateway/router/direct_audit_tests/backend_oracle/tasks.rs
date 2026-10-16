@@ -1,0 +1,200 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! MIK-8387 W1 and R2b: task calls (`task` param) on `/mcp` as the scoped key.
+
+use super::*;
+
+/// Modern `_meta` declaring the tasks extension.
+fn tasks_meta() -> Value {
+    json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+           "io.modelcontextprotocol/clientCapabilities": {
+               "extensions": {"io.modelcontextprotocol/tasks": {}}}})
+}
+
+/// POST `method` with `params` as key `k` on the 2026-07-28 revision; `name`
+/// is the `mcp-name` header.
+async fn send(fx: &Fixture, method: &str, name: &str, params: Value) -> Value {
+    let body = json!({"jsonrpc": "2.0", "id": 7, "method": method, "params": params});
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("authorization", "Bearer k")
+        .header("mcp-method", method)
+        .header("mcp-name", name)
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = fx.router.clone().oneshot(request).await.unwrap();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    sse_or_json(&bytes)
+}
+
+/// A task call of `gateway_execute` `[alpha:t, X:t]`.
+async fn submit_mixed_chain(fx: &Fixture, server: &str) -> Value {
+    let chain = json!([{"tool": "alpha:t", "arguments": {}},
+                       {"tool": format!("{server}:t"), "arguments": {}}]);
+    send(
+        fx,
+        "tools/call",
+        "gateway_execute",
+        json!({"name": "gateway_execute", "arguments": {"chain": chain},
+               "task": {}, "_meta": keyed_tasks_meta(server)}),
+    )
+    .await
+}
+
+/// [`tasks_meta`] with an idempotency key, which task creation requires.
+fn keyed_tasks_meta(server: &str) -> Value {
+    let mut meta = tasks_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(format!("k-8387-w1-{server}"));
+    meta
+}
+
+/// Wait until the worker has written `server`'s step record, then read the
+/// task as its caller does (`tasks/get`). A read of a task whose stored
+/// target is unregistered is answered by the stored-read layer, so the read
+/// itself, error or not, is the cell's outcome.
+async fn settled(fx: &Fixture, id: &str, server: &str) -> Value {
+    let bound = std::time::Instant::now() + Duration::from_secs(10);
+    while step_record(fx, server).is_empty() {
+        assert!(
+            std::time::Instant::now() < bound,
+            "premise: the worker reaches `{server}`'s step: {:?}",
+            invocations(fx)
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    send(
+        fx,
+        "tasks/get",
+        id,
+        json!({"taskId": id, "_meta": tasks_meta()}),
+    )
+    .await
+}
+
+/// The worker's record for `server`'s step, once the task has settled.
+fn step_record(fx: &Fixture, server: &str) -> Vec<Value> {
+    invocations(fx)
+        .into_iter()
+        .filter(|entry| entry["server"] == server)
+        .collect()
+}
+
+/// Each cell's outcome, name and task id masked: the settled task, or the
+/// submit's own answer when intake refused to make one; with the fixture
+/// and whether a task was made.
+async fn worker_cells() -> Vec<(&'static str, (String, Fixture, bool))> {
+    let mut cells = Vec::new();
+    for name in [GHOST, WITHHELD, NOSUCH] {
+        let fx = scoped_fixture(MetaMode::CodeMode).await;
+        let made = submit_mixed_chain(&fx, name).await;
+        let id = made
+            .pointer("/result/task/taskId")
+            .or_else(|| made.pointer("/result/taskId"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let (outcome, worked) = match id {
+            Some(id) => (
+                settled(&fx, &id, name)
+                    .await
+                    .to_string()
+                    .replace(&id, "<task>"),
+                true,
+            ),
+            None => (json!({"intake": made}).to_string(), false),
+        };
+        let outcome = masked(&outcome, name);
+        cells.push((name, (outcome, fx, worked)));
+    }
+    cells
+}
+
+/// W1 (d5, GPT F2; §2a cell 13), record half: the worker has no route-stage
+/// memo, so the step's own record must keep its reason: `beta` and `nosuch`
+/// `denied -32003`, and `ghost` not `denied`. Green at the tip through
+/// `may_invoke`'s note (gate.rs:472) for every cell whose task is made; at
+/// the tip intake refuses `nosuch`'s task (the O1 split), so that cell is
+/// checked by the answer half until S1 lets it through.
+#[tokio::test]
+async fn w1_a_worker_step_record_keeps_the_scope_refusal() {
+    for (name, (outcome, fx, worked)) in worker_cells().await {
+        if !worked {
+            continue;
+        }
+        let records = step_record(&fx, name);
+        assert_eq!(records.len(), 1, "W1 {name}: {records:?} (task: {outcome})");
+        if name == GHOST {
+            assert_ne!(records[0]["outcome"], "denied", "W1 {name}: {records:?}");
+        } else {
+            assert_eq!(records[0]["outcome"], "denied", "W1 {name}: {records:?}");
+            assert_eq!(records[0]["error_code"], -32003, "W1 {name}: {records:?}");
+        }
+        assert_eq!(
+            fx.calls.load(Ordering::SeqCst),
+            1,
+            "W1 {name}: only alpha ran"
+        );
+    }
+}
+
+/// R2 at T0 (found by the W1 rows): a mixed-chain task whose second step is
+/// absent is accepted at intake, so its caller can read it back. The read
+/// is answered by the stored-read layer (S7): at the tip `beta`'s task
+/// answers -32003 naming `beta` (`authorize_stored`), `ghost`'s answers
+/// -32001, and intake refuses `nosuch`'s task. The worker's own answer is
+/// not observable through `tasks/get` once S7 refuses the read; W1's record
+/// half pins the worker. Every cell's task must be made and read alike.
+#[tokio::test]
+async fn r2_t0_a_stored_read_of_an_unreachable_step_answers_as_an_absent_one() {
+    let answers: Vec<(&str, String)> = worker_cells()
+        .await
+        .into_iter()
+        .map(|(name, (outcome, _, _))| (name, outcome))
+        .collect();
+    assert_cells_equal("R2 (T0)", &answers);
+}
+
+/// R2b (Kimi): a task call to an absent target stores no task in any cell,
+/// and neither does a repeat of the same call. (The submit's own answer is
+/// O1's split; this row pins only that nothing is stored.)
+#[tokio::test]
+async fn r2b_a_refused_task_call_stores_no_task_in_any_cell() {
+    // Control: the same keyed task call to the key's own backend stores one.
+    let fx = scoped_fixture(MetaMode::Plain).await;
+    let control = send(
+        &fx,
+        "tools/call",
+        "gateway_invoke",
+        json!({"name": "gateway_invoke",
+               "arguments": {"server": "alpha", "tool": "t", "arguments": {}},
+               "task": {}, "_meta": keyed_tasks_meta("alpha")}),
+    )
+    .await;
+    assert!(
+        control
+            .pointer("/result/task/taskId")
+            .or_else(|| control.pointer("/result/taskId"))
+            .is_some(),
+        "R2b control: no task stored for alpha: {control}"
+    );
+    let mut stored = Vec::new();
+    for name in [GHOST, WITHHELD, NOSUCH] {
+        let fx = scoped_fixture(MetaMode::Plain).await;
+        let params = json!({"name": "gateway_invoke",
+                            "arguments": {"server": name, "tool": "t", "arguments": {}},
+                            "task": {}, "_meta": keyed_tasks_meta(name)});
+        for attempt in ["submit", "repeat"] {
+            let made = send(&fx, "tools/call", "gateway_invoke", params.clone()).await;
+            let id = made
+                .pointer("/result/task/taskId")
+                .or_else(|| made.pointer("/result/taskId"));
+            if id.is_some() {
+                stored.push((name, attempt, made));
+            }
+        }
+    }
+    assert!(stored.is_empty(), "R2b: tasks were stored: {stored:?}");
+}

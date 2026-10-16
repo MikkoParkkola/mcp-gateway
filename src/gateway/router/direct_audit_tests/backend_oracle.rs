@@ -8,6 +8,13 @@
 
 use super::*;
 
+mod cells;
+mod keyed;
+#[cfg(feature = "firewall")]
+mod reload;
+mod resume;
+mod tasks;
+
 /// In the key's scope, never registered.
 const GHOST: &str = "ghost";
 /// Registered, outside the key's scope.
@@ -40,6 +47,9 @@ enum Route {
     Invoke,
     /// `/mcp`, `gateway_execute` with a one-step chain.
     Execute,
+    /// `/mcp`, `gateway_execute` with a single `{tool}`: delegated straight
+    /// to `invoke_tool` (search.rs:460), never through `step_failure`.
+    ExecuteSingle,
     /// `/mcp/{server}`, `tools/call`.
     Direct,
     /// `/mcp/{server}`, another method (MIK-8387 r2 F4): the envelope's scope
@@ -54,24 +64,41 @@ enum Route {
 /// Call `server`'s tool `t` on `route` as the scoped key: the HTTP status and
 /// the body, with `server` replaced by [`NAME`] wherever it appears.
 async fn answer(fx: &Fixture, route: Route, server: &str) -> (StatusCode, String) {
+    answer_with(fx, route, server, &json!({})).await
+}
+
+/// [`answer`], with `arguments` as the tool's arguments.
+async fn answer_with(
+    fx: &Fixture,
+    route: Route,
+    server: &str,
+    arguments: &Value,
+) -> (StatusCode, String) {
     let (uri, body) = match route {
         Route::Invoke => (
             "/mcp".to_string(),
             json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
                    "params": {"name": "gateway_invoke",
-                              "arguments": {"server": server, "tool": "t", "arguments": {}}}}),
+                              "arguments": {"server": server, "tool": "t", "arguments": arguments}}}),
         ),
         Route::Execute => (
             "/mcp".to_string(),
             json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
                    "params": {"name": "gateway_execute",
                               "arguments": {"chain": [{"tool": format!("{server}:t"),
-                                                       "arguments": {}}]}}}),
+                                                       "arguments": arguments}]}}}),
+        ),
+        Route::ExecuteSingle => (
+            "/mcp".to_string(),
+            json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+                   "params": {"name": "gateway_execute",
+                              "arguments": {"tool": format!("{server}:t"),
+                                            "arguments": arguments}}}),
         ),
         Route::Direct => (
             format!("/mcp/{server}"),
             json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
-                   "params": {"name": "t", "arguments": {}}}),
+                   "params": {"name": "t", "arguments": arguments}}),
         ),
         Route::DirectMethod(method) => (
             format!("/mcp/{server}"),
@@ -90,7 +117,7 @@ async fn answer(fx: &Fixture, route: Route, server: &str) -> (StatusCode, String
         ),
     };
     let (status, value) = post_to(fx, &uri, &body.to_string(), &Caller::Key).await;
-    (status, mask_trace_ids(&value.to_string().replace(server, NAME)))
+    (status, masked(&value.to_string(), server))
 }
 
 /// The params a direct `method` row sends.
@@ -98,8 +125,27 @@ fn direct_params(method: &str) -> Value {
     match method {
         "prompts/get" => json!({"name": "p"}),
         "resources/read" => json!({"uri": "file:///r"}),
+        "tasks/get" => json!({"taskId": "task-8387"}),
         _ => json!({}),
     }
+}
+
+/// `text` with the gateway's version, then `server`, then every trace id
+/// masked. The version first: `4.0.0-beta.3` holds the name `beta`.
+fn masked(text: &str, server: &str) -> String {
+    let text = text.replace(env!("CARGO_PKG_VERSION"), "<version>");
+    mask_trace_ids(&text.replace(server, NAME))
+}
+
+/// A modern `/mcp` answer as JSON: the `data:` line of a one-event stream
+/// (the client offered `text/event-stream`), or the body itself.
+fn sse_or_json(bytes: &[u8]) -> Value {
+    let text = String::from_utf8_lossy(bytes);
+    let json = text
+        .lines()
+        .find_map(|line| line.strip_prefix("data: "))
+        .unwrap_or(&text);
+    serde_json::from_str(json).unwrap_or(Value::Null)
 }
 
 /// Replace every per-call trace id (`gw-` and a 36-character UUID) with one
@@ -127,12 +173,56 @@ fn mask_trace_ids(text: &str) -> String {
     out
 }
 
+/// The one answer every absent name gets on `route`, with the name replaced
+/// by [`NAME`] (design d6, lead ruling on step 1b): on `/mcp` it is the answer
+/// a registered backend outside the scope (`beta`) gets at 1577d7ff6, so the
+/// fix makes `ghost` and `nosuch` answer as `beta` does; on the direct route
+/// and `prompts/get` it is today's backend miss. `None`: a guard row, no pin.
+fn pinned(route: Route) -> Option<(StatusCode, String)> {
+    let absent = crate::backend::text_absent("t");
+    let wrapped = json!({"id": 7, "jsonrpc": "2.0", "result": {"content": [{
+        "text": serde_json::to_string_pretty(
+            &json!({"content": [{"text": absent, "type": "text"}], "isError": true}),
+        ).expect("JSON"),
+        "type": "text"}], "isError": true}});
+    let miss = |id: Value| {
+        json!({"error": {"code": -32001, "message": format!("Backend not found: {NAME}")},
+               "id": id, "jsonrpc": "2.0"})
+        .to_string()
+    };
+    Some(match route {
+        Route::Invoke | Route::ExecuteSingle => (StatusCode::OK, wrapped.to_string()),
+        Route::Execute => (
+            StatusCode::OK,
+            json!({"error": {"code": -32603, "message": format!(
+                       "JSON-RPC error -32603: Chain step 0 ({NAME}:t) failed: {absent}")},
+                   "id": 7, "jsonrpc": "2.0"})
+            .to_string(),
+        ),
+        Route::Direct | Route::DirectMethod(_) => (StatusCode::NOT_FOUND, miss(Value::Null)),
+        Route::MetaPrompt => (StatusCode::OK, miss(json!(7))),
+        Route::MetaList => return None,
+    })
+}
+
 /// The three answers on `route` must be one answer. The control first: the
 /// key's own registered backend is served, so three equal refusals cannot
 /// come from a route that refuses everything.
 async fn assert_one_answer(meta_mode: fn() -> MetaMode, route: Route) {
-    let control_fx = scoped_fixture(meta_mode()).await;
-    let (status, control) = answer(&control_fx, route, "alpha").await;
+    assert_one_answer_in(route, || scoped_fixture(meta_mode()), &json!({})).await;
+}
+
+/// [`assert_one_answer`] over fixtures `make` builds, calling with
+/// `arguments`: one fixture per name, so no state from one call reaches the
+/// next; then the pinned answer, so three cells that agree on a wrong
+/// answer cannot pass.
+async fn assert_one_answer_in<F, Fut>(route: Route, make: F, arguments: &Value)
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Fixture>,
+{
+    let control_fx = make().await;
+    let (status, control) = answer_with(&control_fx, route, "alpha", arguments).await;
     assert_eq!(status, StatusCode::OK, "control on {route:?}: {control}");
     assert!(
         !control.contains("\"error\"") && !control.contains("\"isError\":true"),
@@ -140,15 +230,30 @@ async fn assert_one_answer(meta_mode: fn() -> MetaMode, route: Route) {
     );
     let mut answers = Vec::new();
     for name in [GHOST, WITHHELD, NOSUCH] {
-        // A fresh fixture per name: no state from one call reaches the next.
-        let fx = scoped_fixture(meta_mode()).await;
-        answers.push((name, answer(&fx, route, name).await));
+        let fx = make().await;
+        answers.push((name, answer_with(&fx, route, name, arguments).await));
+        assert_eq!(
+            fx.calls.load(Ordering::SeqCst),
+            0,
+            "{route:?}: `{name}` was dispatched"
+        );
     }
+    assert_cells_equal(&format!("{route:?}"), &answers);
+    if let Some(pin) = pinned(route) {
+        assert_eq!(
+            answers[0].1, pin,
+            "{route:?}: the cells agree on an unpinned answer"
+        );
+    }
+}
+
+/// Every cell's answer equals the first's.
+fn assert_cells_equal<T: PartialEq + std::fmt::Debug>(row: &str, answers: &[(&str, T)]) {
     let (_, first) = &answers[0];
     for (name, other) in &answers[1..] {
         assert_eq!(
             other, first,
-            "{route:?}: `{name}` answers differently from `{GHOST}` (in scope, unregistered), \
+            "{row}: `{name}` answers differently from `{GHOST}` (in scope, unregistered), \
              so a scoped key can tell which backends exist: {answers:?}"
         );
     }
@@ -227,34 +332,72 @@ async fn p1_meta_prompt_answers_an_unreachable_backend_as_an_absent_one() {
     assert_one_answer(|| MetaMode::Plain, Route::MetaPrompt).await;
 }
 
-/// MIK-8387 D2: a key with `backends: []` reaches nothing, so every name gets
-/// the one grant message, which names no backend and keeps its upgrade
-/// pointer. Guards that the change leaves it alone.
+/// The ticket that owns the empty-grant split (lead ruling on MIK-8387 stop 2).
+const EMPTY_GRANT_TICKET: &str = "MIK-8441";
+
+/// The answers an empty-grant key (`backends: []`) gets on `route` for
+/// `alpha` (registered), `beta` (registered) and `nosuch` (unregistered).
+async fn empty_grant_answers(route: Route) -> Vec<(&'static str, (StatusCode, String))> {
+    let mut answers = Vec::new();
+    for name in ["alpha", WITHHELD, NOSUCH] {
+        let mut auth = key_for_alpha(None);
+        auth.api_keys[0].backends = Vec::new();
+        // No backend name inside the key's name: the answer replaces it.
+        auth.api_keys[0].name = "grant-client".to_string();
+        let fx = fixture(Setup {
+            auth: Some(auth),
+            ..Setup::default()
+        })
+        .await;
+        answers.push((name, answer(&fx, route, name).await));
+    }
+    answers
+}
+
+/// KNOWN-RED PREMISE (MIK-8387 stop 2; owned by [`EMPTY_GRANT_TICKET`], out of
+/// PR-A's scope). On `/mcp` an empty grant answers a registered name with the
+/// absent-tool text and an unregistered one with the grant message: the same
+/// oracle on a documented message (UPGRADING-4.0 section 32). This row pins
+/// today's split, so the fix for that ticket flips it on purpose; it must
+/// then be rewritten to assert one answer.
 #[tokio::test]
-async fn e1_an_empty_grant_answers_every_name_alike_with_its_grant_message() {
-    for route in [Route::Invoke, Route::Direct] {
-        let mut answers = Vec::new();
-        for name in ["alpha", WITHHELD, NOSUCH] {
-            let mut auth = key_for_alpha(None);
-            auth.api_keys[0].backends = Vec::new();
-            // No backend name inside the key's name: the answer replaces it.
-            auth.api_keys[0].name = "grant-client".to_string();
-            let fx = fixture(Setup {
-                auth: Some(auth),
-                ..Setup::default()
-            })
-            .await;
-            answers.push(answer(&fx, route, name).await);
-        }
-        assert!(
-            answers[0].1.contains("has no backends granted"),
-            "{route:?}: the empty-grant message is gone: {answers:?}"
+async fn e1_known_red_premise_mik_8441_an_empty_grant_splits_registered_names_on_mcp() {
+    let answers = empty_grant_answers(Route::Invoke).await;
+    let absent = crate::backend::text_absent("t");
+    for (name, (status, body)) in &answers[..2] {
+        assert_eq!(
+            *status,
+            StatusCode::OK,
+            "{EMPTY_GRANT_TICKET} {name}: {body}"
         );
         assert!(
-            answers.iter().all(|a| a == &answers[0]),
-            "{route:?}: an empty grant answers names differently: {answers:?}"
+            body.contains(&absent),
+            "{EMPTY_GRANT_TICKET} premise moved, {name}: {answers:?}"
         );
     }
+    let (status, body) = &answers[2].1;
+    assert_eq!(
+        *status,
+        StatusCode::FORBIDDEN,
+        "{EMPTY_GRANT_TICKET}: {answers:?}"
+    );
+    assert!(
+        body.contains("has no backends granted"),
+        "{EMPTY_GRANT_TICKET} premise moved: {answers:?}"
+    );
+}
+
+/// MIK-8387 D2, direct route: a key with `backends: []` reaches nothing, so
+/// every name gets the one grant message, which names no backend and keeps
+/// its upgrade pointer. Guards that PR-A leaves the envelope branch alone.
+#[tokio::test]
+async fn e1_an_empty_grant_answers_every_direct_name_alike_with_its_grant_message() {
+    let answers = empty_grant_answers(Route::Direct).await;
+    assert!(
+        answers[0].1.1.contains("has no backends granted"),
+        "the empty-grant message is gone: {answers:?}"
+    );
+    assert_cells_equal("Direct, empty grant", &answers);
 }
 
 /// MIK-8387 D7 regression guard: `gateway_list_tools` already answers a
