@@ -68,7 +68,10 @@ async fn direct_intake_refusal_is_one_attributed_record() {
 /// recorded as the direct route records it. At the base admission's -32003
 /// on `/mcp` writes no invocation record at all; the `/mcp` intake refusal
 /// must write one, as the router's other `/mcp` refusals do (#2420,
-/// `meta_refusal`).
+/// `meta_refusal`). Its field values are a lead ruling, not an observation:
+/// `invalid` with an anonymous caller, for parity with the direct record (the
+/// same event on two routes); `denied` stays for authorization decisions on a
+/// known caller.
 #[tokio::test]
 async fn mcp_intake_refusal_is_one_attributed_record() {
     assert_one_attributed_record("meta").await;
