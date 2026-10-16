@@ -393,6 +393,22 @@ impl MetaMcp {
         if !stored.serves_backend_output() {
             return None;
         }
+        // MIK-8387 S7: a stored target whose backend is absent for a scoped
+        // key answers the backend miss, the same for all three cells. An
+        // out-of-scope one first writes the scope refusal the stored policy
+        // check writes (an audit line only, no log record).
+        let scoped = self.scoped(caller.scope().authorizer.backend_grant());
+        for target in &stored.targets {
+            let Some(absence) = scoped.absence(&target.server) else {
+                continue;
+            };
+            if absence == super::scoped_backends::Absence::OutOfScope {
+                let args = json!({"server": target.server, "tool": target.tool, "arguments": {}});
+                let _ = self.check_visible_policy(&args, session, caller);
+            }
+            let missing = Error::BackendNotFound(target.server.clone());
+            return Some(error_response_preserving_status(id.clone(), &missing));
+        }
         // Visibility first, as on the live path: a Descriptor, Schema or Lacked
         // target answers as absent even where policy would also refuse
         // (MIK-8392 T12). A Refused target falls through to the policy check;
