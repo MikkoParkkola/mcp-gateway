@@ -176,7 +176,11 @@ async fn completed(gw: &Gateway, id: &str) {
             "io.modelcontextprotocol/clientCapabilities":
                 {"extensions": {"io.modelcontextprotocol/tasks": {}}},
         });
-        let got = send(gw, &call("tasks/get", &json!({"taskId": id, "_meta": meta}))).await;
+        let got = send(
+            gw,
+            &call("tasks/get", &json!({"taskId": id, "_meta": meta})),
+        )
+        .await;
         let status = got.pointer("/result/status").and_then(Value::as_str);
         if status == Some("completed") {
             return;
@@ -352,11 +356,45 @@ async fn p6b_pb_continue_sync_replay_answers_the_first_unproven_offer() {
     assert_live_offer("P6b-pb continue", &replayed);
 }
 
-/// P9l (ii) / P9o (task, RED): a task-augmented keyed `gateway_execute`
-/// single, revoked after it completed, answers the live twin's offer with
-/// data, with no stored or new task. Kills mCarve and mOfferLive.
+/// CR-2 (task half, lead ruling): a revoked vault target's task repeat
+/// answers STORED.1's withheld frame, not the live offer, because
+/// `refuse_stored_repeat` runs before the walk (call_dispatch.rs:478-482).
+/// The frame is pinned, not compared with a live twin. Measured for this
+/// bridged caller, no live call yields it: a fresh task call becomes a
+/// working task; a plain call answers the offer on [`BACKEND`], -32001 "Tool
+/// not found" on the capability server, and an `isError` result on an
+/// account-free MCP backend. `refuse_stored_repeat` is its only producer,
+/// and T7 (M36) proves the same frame equals a missing name for the sole
+/// operator, so the pin is that rule, not an invention: the code, the
+/// caller's own step tool and nothing else (no `data`, no account, offer or
+/// hint). Also: no stored output, no task, nothing sent, no plan executor
+/// entered.
+fn assert_withheld_frame(row: &str, replayed: &Replayed) {
+    let Replayed {
+        again,
+        sends,
+        entries,
+        ..
+    } = replayed;
+    assert!(
+        !again.to_string().contains(SLOT_MARKER) && again.pointer("/result/taskId").is_none(),
+        "{row}: the stored task or a new one was answered: {again}"
+    );
+    assert_eq!(
+        id_masked(again),
+        json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32601,
+            "message": "JSON-RPC error -32601: Unknown tool: list_files"}}),
+        "{row}: not STORED.1's withheld frame"
+    );
+    assert_eq!(*sends, 0, "{row}: the repeat reached the backend");
+    assert_eq!(*entries, 0, "{row}: the repeat entered the plan executor");
+}
+
+/// P9l (ii) / P9o (task, GUARD under CR-2): a task-augmented keyed
+/// `gateway_execute` single, revoked after it completed, answers STORED.1's
+/// withheld frame; the live twin's offer is the premise CR-2 departs from.
 #[tokio::test]
-async fn p9l_task_single_repeat_answers_the_live_offer() {
+async fn p9l_task_single_repeat_answers_the_withheld_frame() {
     let gw = Box::pin(connected()).await;
     let one = single();
     let replayed = replay_after_revoke(
@@ -367,13 +405,12 @@ async fn p9l_task_single_repeat_answers_the_live_offer() {
         ("gateway_execute", &one),
     )
     .await;
-    assert_live_offer("P9l (ii)", &replayed);
+    assert_withheld_frame("P9l (ii)", &replayed);
 }
 
-/// P9k (ii) (task, RED; CR-1): a task-augmented keyed chain answers the
-/// first unproven step's offer. Kills mCarve.
+/// P9k (ii) (task, GUARD under CR-2): the same for a chain of two reads.
 #[tokio::test]
-async fn p9k_task_chain_repeat_answers_the_first_unproven_offer() {
+async fn p9k_task_chain_repeat_answers_the_withheld_frame() {
     let gw = Box::pin(connected()).await;
     let replayed = replay_after_revoke(
         &gw,
@@ -383,13 +420,12 @@ async fn p9k_task_chain_repeat_answers_the_first_unproven_offer() {
         ("gateway_execute", &single()),
     )
     .await;
-    assert_live_offer("P9k (ii)", &replayed);
+    assert_withheld_frame("P9k (ii)", &replayed);
 }
 
-/// P9q abort (task, RED): a task-augmented keyed abort playbook answers its
-/// live twin's offer. Kills mCarve for the playbook name.
+/// P9q abort (task, GUARD under CR-2): the same for an abort playbook.
 #[tokio::test]
-async fn p9q_task_abort_playbook_repeat_answers_the_live_offer() {
+async fn p9q_task_abort_playbook_repeat_answers_the_withheld_frame() {
     let gw = Box::pin(connected()).await;
     register_playbooks(&gw);
     let pb = playbook("reads_abort");
@@ -401,13 +437,12 @@ async fn p9q_task_abort_playbook_repeat_answers_the_live_offer() {
         ("gateway_run_playbook", &pb),
     )
     .await;
-    assert_live_offer("P9q abort", &replayed);
+    assert_withheld_frame("P9q abort", &replayed);
 }
 
-/// P9q continue (task, RED; CR-1): a task-augmented keyed continue playbook
-/// answers the first unproven step's offer.
+/// P9q continue (task, GUARD under CR-2): the same for a continue playbook.
 #[tokio::test]
-async fn p9q_task_continue_playbook_repeat_answers_the_first_unproven_offer() {
+async fn p9q_task_continue_playbook_repeat_answers_the_withheld_frame() {
     let gw = Box::pin(connected()).await;
     register_playbooks(&gw);
     let replayed = replay_after_revoke(
@@ -418,5 +453,5 @@ async fn p9q_task_continue_playbook_repeat_answers_the_first_unproven_offer() {
         ("gateway_execute", &single()),
     )
     .await;
-    assert_live_offer("P9q continue", &replayed);
+    assert_withheld_frame("P9q continue", &replayed);
 }

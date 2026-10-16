@@ -3,8 +3,9 @@
 //! MIK-8406: a keyed plan's retained result is served only when every account
 //! the plan uses is proven live in the request (design d1, test plan t0). The
 //! vault rows P1, P2 and P3 are red at 1577d7ff6: STORED.1 does not refuse a
-//! revoked vault plan replay, the stored output is served. P5 and P8 are
-//! controls. The fixture is MIK-8392 STORED.2's shape: the sole operator over
+//! revoked vault plan replay, the stored output is served. The sole
+//! operator's live twin is the unmarked resolution error (-32603), never an
+//! offer (no bridged caller). P5 and P8 are controls. The fixture is MIK-8392 STORED.2's shape: the sole operator over
 //! the managed-account backend, connected, then revoked.
 
 use std::sync::Arc;
@@ -249,6 +250,22 @@ async fn refused_after_revoke(row: &str, plan: Plan) {
         plan_entries(&fx),
         entered,
         "{row}: the replay entered the plan executor: {again}"
+    );
+    // The live twin, sent last so the counts above are the replay's own: the
+    // single form under a fresh key. A chain or playbook answers as its first
+    // unproven step (CR-1), which is this answer.
+    let (name, params) = Plan::Single.params(&format!("{row}-live"));
+    let mut live = send(&fx, name, params).await;
+    assert!(
+        live.get("error").is_some(),
+        "premise: the live twin is refused: {live}"
+    );
+    let mut again = again;
+    again["id"] = Value::Null;
+    live["id"] = Value::Null;
+    assert_eq!(
+        again, live,
+        "{row}: the replay is not the live twin's answer"
     );
 }
 
