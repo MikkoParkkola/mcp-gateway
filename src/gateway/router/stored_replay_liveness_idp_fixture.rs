@@ -237,8 +237,6 @@ pub(super) async fn gateway_shaped(
     use crate::identity_propagation::{
         IdentityPropagationConfig, PropagationStrategyKind, SessionMode, TokenExchangeStrategy,
     };
-    const AUDIENCE: &str = "https://tx.internal";
-    const SCOPE: &str = "backends:tx tools:read";
     let sends = Arc::new(AtomicUsize::new(0));
     let exchanges = strategy == PropagationStrategyKind::TokenExchange;
     let backend = Arc::new(crate::backend::Backend::new(
@@ -262,34 +260,7 @@ pub(super) async fn gateway_shaped(
         &crate::config::FailsafeConfig::default(),
         std::time::Duration::from_secs(60),
     ));
-    let counting: Arc<dyn crate::transport::Transport> = Arc::new(Counting {
-        sends: Arc::clone(&sends),
-    });
-    backend.set_transport_for_test(Arc::clone(&counting));
-    // The per-user slot token exchange dispatches on, keyed as its
-    // `exchange_cache_key` builds it: `cache_binding(subject, audience)`
-    // widened by the length-prefixed endpoint and scope.
-    let subject = alice.stable_actor_id();
-    let binding = format!(
-        "idp:{}:{}:{}:{}:{}:{}:{}:{}",
-        subject.len(),
-        subject,
-        AUDIENCE.len(),
-        AUDIENCE,
-        endpoint.len(),
-        endpoint,
-        SCOPE.len(),
-        SCOPE,
-    );
-    backend.set_pooled_transport_for_test(
-        &crate::backend::PoolKey::PerUser { binding },
-        Arc::clone(&counting),
-    );
-    // A forwarded passthrough credential dispatches on the slot its digest
-    // binds, charged to the caller (`charged_binding`).
-    let digest = crate::hashing::sha256_hex(PASSTHROUGH_CREDENTIAL.as_bytes());
-    let binding = crate::backend::passthrough_binding(&subject, &digest);
-    backend.set_pooled_transport_for_test(&crate::backend::PoolKey::PerUser { binding }, counting);
+    install_counting(&backend, alice, &endpoint, &sends);
     let tool: crate::protocol::Tool = serde_json::from_value(json!({
         "name": super::TOOL,
         "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}}
@@ -339,6 +310,50 @@ pub(super) async fn gateway_shaped(
         sends,
         (log_dir, store),
     )
+}
+
+/// [`TX`]'s exchange audience and scope.
+const AUDIENCE: &str = "https://tx.internal";
+const SCOPE: &str = "backends:tx tools:read";
+
+/// Serve every slot `alice` can dispatch on with a [`Counting`] transport
+/// that counts into `sends`: the shared one, the per-user slot a token
+/// exchange mints under, and the slot a forwarded passthrough credential
+/// binds.
+fn install_counting(
+    backend: &crate::backend::Backend,
+    alice: &crate::key_server::oidc::VerifiedIdentity,
+    endpoint: &str,
+    sends: &Arc<AtomicUsize>,
+) {
+    let counting: Arc<dyn crate::transport::Transport> = Arc::new(Counting {
+        sends: Arc::clone(sends),
+    });
+    backend.set_transport_for_test(Arc::clone(&counting));
+    // The per-user slot token exchange dispatches on, keyed as its
+    // `exchange_cache_key` builds it: `cache_binding(subject, audience)`
+    // widened by the length-prefixed endpoint and scope.
+    let subject = alice.stable_actor_id();
+    let binding = format!(
+        "idp:{}:{}:{}:{}:{}:{}:{}:{}",
+        subject.len(),
+        subject,
+        AUDIENCE.len(),
+        AUDIENCE,
+        endpoint.len(),
+        endpoint,
+        SCOPE.len(),
+        SCOPE,
+    );
+    backend.set_pooled_transport_for_test(
+        &crate::backend::PoolKey::PerUser { binding },
+        Arc::clone(&counting),
+    );
+    // A forwarded passthrough credential dispatches on the slot its digest
+    // binds, charged to the caller (`charged_binding`).
+    let digest = crate::hashing::sha256_hex(PASSTHROUGH_CREDENTIAL.as_bytes());
+    let binding = crate::backend::passthrough_binding(&subject, &digest);
+    backend.set_pooled_transport_for_test(&crate::backend::PoolKey::PerUser { binding }, counting);
 }
 
 /// A `tools/call` as `alice`, whose verified identity rides the request.
