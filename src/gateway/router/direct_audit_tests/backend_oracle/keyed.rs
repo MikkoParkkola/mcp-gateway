@@ -51,10 +51,13 @@ fn core(answer: &(StatusCode, String)) -> Value {
     value
 }
 
-/// The pinned miss of a single-target call: `beta`'s answer at the tip.
+/// The pinned miss of a single-target call: `beta`'s modern answer at the
+/// tip, which is the legacy pin plus the revision's `resultType`.
 fn single_miss() -> Value {
     let (_, pin) = pinned(Route::Invoke).expect("invoke is pinned");
-    serde_json::from_str(&pin).expect("pin is JSON")
+    let mut pin: Value = serde_json::from_str(&pin).expect("pin is JSON");
+    pin["result"]["resultType"] = json!("complete");
+    pin
 }
 
 /// The pinned miss of a mixed chain's second step: `beta`'s answer at the tip.
@@ -183,7 +186,7 @@ async fn i2a_a_keyed_mixed_chain_replay_after_removal_answers_the_backend_miss()
         "I2(a): stored output replayed"
     );
     assert_eq!(status, StatusCode::BAD_REQUEST, "I2(a): {body}");
-    let answer: Value = serde_json::from_str(&body).expect("JSON");
+    let answer = sse_or_json(body.as_bytes());
     assert_eq!(answer["error"]["code"], -32001, "I2(a): {body}");
     assert_eq!(
         answer["error"]["message"],
