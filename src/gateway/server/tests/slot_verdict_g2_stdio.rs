@@ -764,3 +764,6 @@ async fn w2_stdio_a_verdict_release_then_an_admission_refusal_keeps_the_nonce() 
         "the nonce was given back after the verdict released a credential: {resent}"
     );
 }
+
+#[path = "slot_verdict_g2_stdio_cooldown.rs"]
+mod cooldown;

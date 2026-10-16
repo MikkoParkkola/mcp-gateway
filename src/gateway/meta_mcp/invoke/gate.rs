@@ -33,9 +33,12 @@ enum Shared {
 
 impl MetaMcp {
     /// Whether a `gateway_invoke` target on a registered backend is one the
-    /// gate answers as absent: refused by the caller's invocation rules, or
-    /// withheld by its descriptor or schema. An unregistered backend is not
-    /// (MIK-8387). Signing skips the policy for it (amendment A1).
+    /// gate answers as absent: refused by the caller's invocation rules,
+    /// withheld by its descriptor or schema, or on a per-user backend whose
+    /// caller slot this request has not judged visible (MIK-8433). An
+    /// unregistered backend is not (MIK-8387). Signing skips the policy for
+    /// it (amendment A1), so a refusal that names the tool, such as the
+    /// error-rate cooldown, is met only once the route stage has judged it.
     pub(crate) fn withheld_invoke_target(
         &self,
         arguments: &Value,
@@ -52,6 +55,12 @@ impl MetaMcp {
             self.may_invoke(server, tool, caller.scope(), session)
                 .is_err()
                 || backend.blocked_tool_refusal(None, tool).is_some()
+                // Signing cannot read a per-user caller's slot before the
+                // route stage judges it (stdio). Until the request holds a
+                // visible verdict, the target is the route stage's, as a
+                // missing name is. No cooldown read: the dispatch meets it.
+                || (backend.keeps_per_user_catalogues()
+                    && recorded_visibility(server, tool) != Some(Visibility::Visible))
         })
     }
 
