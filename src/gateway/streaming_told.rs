@@ -164,7 +164,6 @@ pub(crate) struct ViewSubject {
     pub(crate) adapter: Option<crate::gateway::openwebui_adapter::AdapterAssertion>,
     /// The certificate's `notAfter`, in unix seconds. Captured here and
     /// checked per decision by MIK-8377.
-    #[expect(dead_code, reason = "read by MIK-8377's live() clause")]
     pub(crate) cert_not_after: Option<u64>,
     /// The header identity this stream was admitted under, when one was:
     /// the verified Cloudflare assertion (re-verified per decision by
@@ -194,7 +193,10 @@ impl ViewSubject {
                 self.grant_subject
                     .as_ref()
                     .map(|g| (g.authority.as_str(), g.subject.as_str())),
-                self.oauth_agent,
+                // The agent's identity only: its scopes are judged live at
+                // every decision, so a scope change must not mint a new view
+                // a same-session listing would miss (MIK-8377).
+                self.oauth_agent.as_ref().map(|a| a.client_id.as_str()),
                 self.cert,
                 self.code_mode_url,
                 self.verified_identity
@@ -206,13 +208,39 @@ impl ViewSubject {
     }
 
     /// Whether the identity the stream was admitted under is still good, or
-    /// why not. The adapter assertion's window is judged here; MIK-8377 adds
-    /// its clauses, which need the live handles in [`LiveCtx`].
-    pub(crate) fn live(&self, _ctx: &LiveCtx<'_>) -> Result<(), DeadReason> {
-        match &self.adapter {
-            Some(adapter) if !adapter.live() => Err(DeadReason::Adapter),
-            _ => Ok(()),
+    /// why not: the adapter assertion's window (MIK-8350), then the agent,
+    /// the certificate and the trusted proxy (MIK-8377). A failed clause ends
+    /// the stream; nothing here re-judges it with less identity.
+    pub(crate) fn live(&self, ctx: &LiveCtx<'_>) -> Result<(), DeadReason> {
+        if let Some(adapter) = &self.adapter
+            && !adapter.live()
+        {
+            return Err(DeadReason::Adapter);
         }
+        // The bearer must validate as the agent the stream attached as, and an
+        // agent-less stream never adopts one: the digest reads the live
+        // agent's scopes, so a swap would judge one agent's view as another's.
+        match (&self.oauth_agent, ctx.agent) {
+            (None, None) => {}
+            (Some(attached), Some(live)) if attached.client_id == live.claims.sub => {}
+            _ => return Err(DeadReason::Agent),
+        }
+        // Valid through `notAfter` itself, as the handshake verifier holds
+        // (rustls-webpki refuses only `time > not_after`). An unreadable clock
+        // cannot show it valid.
+        if let Some(not_after) = self.cert_not_after
+            && !crate::clock::unix_secs().is_ok_and(|now| now <= not_after)
+        {
+            return Err(DeadReason::Cert);
+        }
+        // Restart-only, so defence in depth; the bearer half is the credential
+        // check that runs before this.
+        if let HeldSource::TrustedProxy { peer } = &self.identity_source
+            && !ctx.caller_identity.trusts_peer(*peer)
+        {
+            return Err(DeadReason::Proxy);
+        }
+        Ok(())
     }
 }
 
@@ -221,9 +249,7 @@ impl ViewSubject {
 /// re-verified with, read from the current state, never captured at attach.
 #[derive(Clone, Copy)]
 pub(crate) struct LiveCtx<'a> {
-    #[expect(dead_code, reason = "read by MIK-8377's live() clauses")]
     pub(crate) agent: Option<&'a crate::gateway::oauth::ValidatedToken>,
-    #[expect(dead_code, reason = "read by MIK-8377's live() clauses")]
     pub(crate) caller_identity: &'a crate::security::caller_identity::CallerIdentityConfig,
     pub(crate) cf_verifier: Option<&'a crate::key_server::OidcVerifier>,
 }
@@ -285,23 +311,11 @@ pub(crate) enum DeadReason {
     Cf,
     /// The agent the bearer validates as is not the one the stream attached
     /// with, or one appeared or disappeared.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "constructed by MIK-8377's live() clauses")
-    )]
     Agent,
     /// The client certificate is past its `notAfter`, or the clock cannot be
     /// read.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "constructed by MIK-8377's live() clauses")
-    )]
     Cert,
     /// The trusted proxy the stream was admitted from is no longer trusted.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "constructed by MIK-8377's live() clauses")
-    )]
     Proxy,
 }
 
@@ -333,6 +347,10 @@ impl DeadReason {
 pub(crate) struct ResolvedCaller {
     pub(crate) client: crate::gateway::auth::AuthenticatedClient,
     pub(crate) identity: Option<crate::key_server::oidc::VerifiedIdentity>,
+    /// The agent the credential validates as now, with its current registry
+    /// scopes: the digest judges the view under it, not the attach-time
+    /// snapshot (MIK-8377).
+    pub(crate) agent: Option<crate::gateway::oauth::AgentIdentity>,
 }
 
 /// Decides what a stream's caller is shown, for the per-stream

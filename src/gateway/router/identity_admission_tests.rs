@@ -175,7 +175,7 @@ async fn assert_proxy_peer_controls(config: &CallerIdentityConfig, peer: SocketA
         "premise: the admitted control holds no assertion"
     );
     assert!(
-        matches!(admission.source, HeldSource::TrustedProxy { _peer: p } if p == peer),
+        matches!(admission.source, HeldSource::TrustedProxy { peer: p } if p == peer),
         "premise: the admitted control captures its peer"
     );
     assert!(
@@ -302,7 +302,7 @@ async fn admitted_proxy_peer_is_retained_as_held_source() {
         "setup-validity: the admitted subject is corp-sso/alice"
     );
     assert!(
-        matches!(admission.source, HeldSource::TrustedProxy { _peer: p } if p == admitted_peer),
+        matches!(admission.source, HeldSource::TrustedProxy { peer: p } if p == admitted_peer),
         "own peer-retention main: the admitted peer is retained as the held source"
     );
 }

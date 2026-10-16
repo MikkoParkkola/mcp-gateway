@@ -39,6 +39,7 @@ async fn an_empty_registry_baseline_still_carries_the_served_digest() {
     let caller = ResolvedCaller {
         client: crate::gateway::auth::anonymous_client(),
         identity: None,
+        agent: None,
     };
     let baseline = judge.baseline(&caller, &ViewSubject::default(), "");
     let carried = baseline

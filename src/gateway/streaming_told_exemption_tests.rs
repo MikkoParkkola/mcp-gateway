@@ -63,6 +63,7 @@ impl ViewJudge for Fake {
             Judged::Live(ResolvedCaller {
                 client: crate::gateway::auth::anonymous_client(),
                 identity: None,
+                agent: None,
             })
         })
     }

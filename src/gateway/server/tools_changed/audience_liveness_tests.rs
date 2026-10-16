@@ -495,7 +495,7 @@ fn r_agent_control_the_same_agent_is_live() {
 fn r_proxy_2_peer_a_stream_from_an_untrusted_proxy_is_dead() {
     let peer: std::net::SocketAddr = "10.0.0.9:443".parse().expect("an address");
     let subject = ViewSubject {
-        identity_source: HeldSource::TrustedProxy { _peer: peer },
+        identity_source: HeldSource::TrustedProxy { peer },
         ..ViewSubject::default()
     };
     assert_eq!(
@@ -542,7 +542,7 @@ fn r_metric_agent_and_proxy_deaths_are_counted_under_their_labels() {
         .count();
         let peer: std::net::SocketAddr = "10.0.0.9:443".parse().expect("an address");
         let proxied = ViewSubject {
-            identity_source: HeldSource::TrustedProxy { _peer: peer },
+            identity_source: HeldSource::TrustedProxy { peer },
             ..ViewSubject::default()
         };
         judged(&proxied, None, &CallerIdentityConfig::default())

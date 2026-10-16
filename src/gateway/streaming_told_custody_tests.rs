@@ -128,6 +128,7 @@ impl ViewJudge for CfJudge {
             Judged::Live(ResolvedCaller {
                 client: found.client,
                 identity: found.identity,
+                agent: None,
             })
         })
     }
