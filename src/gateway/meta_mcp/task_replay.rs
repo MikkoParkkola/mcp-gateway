@@ -121,8 +121,9 @@ impl MetaMcp {
         // audit write for it, as the live Step 0 does neither. Its answer
         // comes from the policy layers in `refuse_stored`, before accounts.
         // A repeat still fills (so an unbindable caller's permanent refusal
-        // below is kept, Ub-repeat) but writes no busy `idp_refuse`: it
-        // serves its stored output (#3892 review finding 6, R5).
+        // below is kept, Ub-repeat) but writes no busy `idp_refuse` here: a
+        // busy account is answered by site 5's live resolution, which writes
+        // the live call's one record (MIK-8392 STORED.2, R5).
         let writes = if read == StoredRead::RepeatedCall {
             super::account_outcome::AccountWrites::PermanentOnly
         } else {

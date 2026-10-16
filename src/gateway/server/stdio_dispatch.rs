@@ -672,13 +672,30 @@ impl Gateway {
                 Ok(super::super::meta_mcp::admission::SyncAdmission::Replay(
                     response,
                     audit,
+                    target,
                     _,
                 )) => {
-                    // #2480: a replay is a delivered call, recorded as its first run was.
-                    let (args, session) = (arguments.as_ref(), Some(session_id));
-                    break 'tool_call meta_mcp
-                        .audit_replay(&tool_name, args, session, &caller, response, audit)
-                        .await;
+                    // STORED.2 site 1: a retained single-call result is
+                    // served only on proven liveness; otherwise the call
+                    // proceeds as Unprotected and the lift serves it after a
+                    // live proof.
+                    match meta_mcp.defer_or_serve_replay(
+                        &tool_name,
+                        arguments.as_ref(),
+                        &caller,
+                        target,
+                        response,
+                        audit,
+                    ) {
+                        Some((response, audit)) => {
+                            // #2480: a replay is a delivered call, recorded as its first run was.
+                            let (args, session) = (arguments.as_ref(), Some(session_id));
+                            break 'tool_call meta_mcp
+                                .audit_replay(&tool_name, args, session, &caller, response, audit)
+                                .await;
+                        }
+                        None => None,
+                    }
                 }
                 Err(error) => {
                     break 'tool_call JsonRpcResponse::error(

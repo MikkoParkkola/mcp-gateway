@@ -96,6 +96,7 @@ mod projection;
 pub(crate) use caller_verdict::{CallerVerdict, TargetNaming};
 mod propagation;
 pub(crate) use propagation::ResolvedDispatch;
+mod stored_proof;
 pub(crate) mod worker_clock; // MIK-8202 AC12/AC13: the task worker's clock channel
 use bridge_dispatch::{BridgeDispatcher, run_input_bridge, undeclared_input_request};
 pub(super) use bridge_dispatch::{
@@ -113,6 +114,8 @@ use projection::{
     apply_capability_projection, call_capability_tool_with_identity, emit_projection_ab_event,
     extract_client_claim, json_is_populated,
 };
+pub(crate) use stored_proof::SourcedOutcome;
+use stored_proof::TracedOutcome;
 
 /// Monotonically increasing request counter for load-balanced cache key slot selection.
 ///
@@ -122,8 +125,8 @@ static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 impl MetaMcp {
     /// Inner implementation executed within a trace-ID scope.
     ///
-    /// Returns a [`GuardedValue`]: every success path must produce one, so the
-    /// render guard cannot be bypassed at the chokepoint (MIK-6690).
+    /// Returns a [`TracedOutcome`]: a sealed [`GuardedValue`] on every live path
+    /// (MIK-6690), or beside it the lift's shaped stored answer (MIK-8392 D8).
     #[allow(clippy::too_many_lines)] // Complex dispatch logic; splitting further harms readability
     async fn invoke_tool_traced(
         &self,
@@ -131,7 +134,7 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
         trace_id: &str,
-    ) -> Result<GuardedValue> {
+    ) -> Result<TracedOutcome> {
         // Unpacked once, here, so the context travels whole across the call
         // boundary for the same reason `invoke_tool` takes it whole: no call
         // site can pass an authorizer without the identity it authorizes.
@@ -156,7 +159,7 @@ impl MetaMcp {
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
         if let Some(answer) = self.gated(args, (server, tool), caller, session_id).await {
-            return answer;
+            return answer.map(TracedOutcome::Live);
         }
 
         let mut arguments = parse_tool_arguments(args)?;
@@ -226,7 +229,7 @@ impl MetaMcp {
             .await
         {
             Ok(std::ops::ControlFlow::Continue(resolution)) => resolution,
-            Ok(std::ops::ControlFlow::Break(answer)) => return Ok(answer),
+            Ok(std::ops::ControlFlow::Break(answer)) => return Ok(TracedOutcome::Live(answer)),
             Err(error) => {
                 // A busy custody refused this call before its backend, with
                 // its witness kept: ask for the nonce back, settled when
@@ -236,6 +239,14 @@ impl MetaMcp {
                 }
                 return Err(error);
             }
+        };
+        // The lift (MIK-8392 STORED.2): proven live, before key/spend/redeem/relay act.
+        let unproven = match self
+            .lift_deferred((server, tool), &resolved, &mut witness, session_id, caller)
+            .await
+        {
+            std::ops::ControlFlow::Break(replay) => return Ok(TracedOutcome::Stored(replay)),
+            std::ops::ControlFlow::Continue(unproven) => unproven,
         };
         let target = (server, backend.as_ref().map(|backend| backend.instance()));
         let propagation::ResolvedDispatch {
@@ -310,8 +321,9 @@ impl MetaMcp {
             &mut idem_reservation,
         )? {
             nonce_settle::note_served(caller, (server, tool));
-            return Ok(stored);
+            return Ok(TracedOutcome::Live(stored));
         }
+        stored_proof::refuse_unproven(unproven, server)?; // FIX 1b: at most once
 
         // Defense in depth on an already-classified value: the exact set both
         // layers accept, so a value that is not a revision this build serves —
@@ -343,7 +355,7 @@ impl MetaMcp {
         // the check's fill spent.
         witness.carry(rw::schema_effect(fills() != fills_before));
         if let Some(refusal) = checked? {
-            return Ok(refusal);
+            return Ok(TracedOutcome::Live(refusal));
         }
 
         // Counted only for a call the cache would otherwise have served, so an
@@ -381,7 +393,7 @@ impl MetaMcp {
             )
         {
             nonce_settle::note_served(caller, (server, tool));
-            return Ok(cached);
+            return Ok(TracedOutcome::Live(cached));
         }
 
         if let Some(ref stats) = self.stats {
@@ -630,7 +642,7 @@ impl MetaMcp {
             )
             .await?
         {
-            return Ok(answer);
+            return Ok(TracedOutcome::Live(answer));
         }
 
         // MRTR.2: the backend's own `requestState` never reaches the client.
@@ -792,11 +804,11 @@ impl MetaMcp {
         // since then add only gateway-authored metadata. Seal at the delivery
         // boundary so the return type proves the guard ran.
         let sealed = GuardedValue::sealed_by_guard(final_result);
-        Ok(if answered {
+        Ok(TracedOutcome::Live(if answered {
             sealed.backend(upstream)
         } else {
             sealed
-        })
+        }))
     }
 }
 

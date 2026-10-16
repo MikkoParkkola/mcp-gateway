@@ -60,6 +60,7 @@ fn raw_gateway(idp: IdentityPropagationConfig) -> (MetaMcp, Arc<Dispatches>) {
     ));
     backend.set_transport_for_test(Arc::new(CapturingTransport {
         dispatches: Arc::clone(&dispatches),
+        server: RAW_BACKEND.to_string(),
     }) as Arc<dyn crate::transport::Transport>);
     assert!(registry.register(backend), "fixture registry must accept");
 

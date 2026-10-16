@@ -14,6 +14,9 @@ use super::effects::{Effect, meta_tool_effect};
 
 #[path = "admission_plan.rs"]
 mod plan;
+#[path = "admission_replay.rs"]
+mod replay;
+pub(crate) use replay::ReplayTarget;
 #[path = "admission_stored.rs"]
 mod stored;
 pub(crate) use stored::ReplayAudit;
@@ -161,10 +164,15 @@ pub(crate) enum SyncAdmission {
     Unprotected,
     Owned(SyncLease),
     /// A completed execution's secured response, its record facts, and the
-    /// steps it dispatched (`None` in a record that predates the list).
+    /// single-call target it was admitted for (MIK-8392 STORED.2: the
+    /// target-branch target, else a continuation retry's origin, else `None`
+    /// for a plan, which is served as today; it steers the route-stage
+    /// deferral only), and the steps it dispatched (`None` in a record that
+    /// predates the list, MIK-8361).
     Replay(
         JsonRpcResponse,
         Option<ReplayAudit>,
+        Option<ReplayTarget>,
         Option<Vec<(String, String)>>,
     ),
 }
@@ -250,6 +258,12 @@ impl MetaMcp {
             self.read_only_target(server, tool),
             (server, tool),
             request_id,
+            || {
+                Ok(Some(ReplayTarget {
+                    server: server.to_owned(),
+                    tool: tool.to_owned(),
+                }))
+            },
         )
     }
 
@@ -272,6 +286,13 @@ impl MetaMcp {
         // (backend, tool) for the un-keyed warn only; never an identity.
         target: (&str, &str),
         request_id: &RequestId,
+        // The replay's single-call target, read only when the store yields
+        // one (MIK-8392 STORED.2). A thunk for the same reason as the two
+        // above: the plan branch reads a continuation origin through it, and
+        // anything but a replay must not pay for that read, let alone answer
+        // it. An error fails the admission, so an unreadable origin is never
+        // served stored (E1).
+        replay_target: impl FnOnce() -> Result<Option<ReplayTarget>>,
     ) -> Result<SyncAdmission> {
         if retry.is_malformed() {
             return Err(Error::json_rpc(
@@ -333,6 +354,10 @@ impl MetaMcp {
                 steps: Mutex::new(Vec::new()),
             })),
             Ok(Admission::Replay(bytes)) => {
+                // Read before the store is decoded: an unreadable origin
+                // fails the admission without touching the retained bytes it
+                // must never serve (E1).
+                let single_target = replay_target()?;
                 let (mut response, audit) = stored_response(&bytes).ok_or_else(|| {
                     Error::json_rpc(409, "Secured execution result is unavailable")
                 })?;
@@ -340,6 +365,7 @@ impl MetaMcp {
                 Ok(SyncAdmission::Replay(
                     response,
                     audit,
+                    single_target,
                     stored::dispatched_steps(&bytes),
                 ))
             }
@@ -496,6 +522,10 @@ impl MetaMcp {
         // These compiled discovery/reporting tools do not execute external work.
         // Backend annotations and operator target strings cannot add built-ins.
         let read_only = meta_tool_effect(tool_name) == Effect::ReadOnly;
+        // MIK-8392 STORED.2 E8: see `hidden_name_unprotected`.
+        if self.hidden_name_unprotected(tool_name, retry, (verified_identity, owner_principal)) {
+            return Ok(SyncAdmission::Unprotected);
+        }
         // A retained result is still protected by today's authorization. Plan
         // loading and every target check precede lookup, including mismatches.
         let (playbook, withheld) =
@@ -522,6 +552,7 @@ impl MetaMcp {
             read_only,
             ("gateway", tool_name),
             id,
+            || self.replay_origin_target(tool_name, retry),
         );
         // A replay meets a withheld step's current refusal only where the
         // first run dispatched that step, as SUB.4 pins it: its holder held
@@ -533,7 +564,7 @@ impl MetaMcp {
         // gate, and any other admission answer is the one a missing step
         // gets, never the step's reason (ruling A).
         let ran = match &admission {
-            Ok(SyncAdmission::Replay(_, _, dispatched)) => Some(dispatched),
+            Ok(SyncAdmission::Replay(_, _, _, dispatched)) => Some(dispatched),
             _ => None,
         };
         if let Some(dispatched) = ran

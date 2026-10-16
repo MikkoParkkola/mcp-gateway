@@ -12,6 +12,9 @@ use crate::capability::validator::input_schema_is_structurally_valid;
 use crate::protocol::Tool;
 
 use super::{InvokeScope, MetaMcp};
+#[path = "visible_deferred.rs"]
+mod deferred;
+pub(crate) use deferred::*;
 
 /// Why a tool is withheld from a caller. Read only by the audit owner; every
 /// decision reader treats a withheld tool exactly as an absent one.
@@ -384,6 +387,7 @@ pub(crate) struct VisibilityMemo {
     /// the live call answers instead of "retry" forever.
     account_refusal:
         parking_lot::Mutex<std::collections::HashMap<(String, AccountKey), crate::Error>>,
+    deferred_replay: deferred::Slot,
     /// MIK-8392 Busy parity: a transient busy custody met by this request's
     /// mint-free view read, carried to the dispatch and consumed once there,
     /// so nothing in the request reads custody a second time.

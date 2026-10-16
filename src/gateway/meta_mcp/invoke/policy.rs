@@ -225,13 +225,14 @@ impl MetaMcp {
     }
 
     /// [`Self::invoke_tool`] plus the result's chain eligibility (A3) and its
-    /// upstream chain outcome (inc3 D4).
+    /// upstream chain outcome (inc3 D4), or the lift's already-shaped stored
+    /// answer, delivered unchanged (MIK-8392 STORED.2 D8).
     pub(in crate::gateway::meta_mcp) async fn invoke_tool_sourced(
         &self,
         args: &Value,
         session_id: Option<&str>,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
-    ) -> Result<super::super::response_security::Sourced> {
+    ) -> Result<super::SourcedOutcome> {
         // D1-f: a degraded audit log refuses before dispatch, after one probe.
         if let Some(log) = &self.transparency_logger {
             log.admit().await?;
@@ -252,6 +253,16 @@ impl MetaMcp {
                 audit::with_dispatch_scope(traced),
             )
             .await;
+            // The lift's already-shaped answer skips the live path below:
+            // `audit_replay` recorded it, exactly once, and the stored frame
+            // is delivered as is, never re-wrapped (D8).
+            let result = match result {
+                Ok(super::TracedOutcome::Stored(response)) => {
+                    return Ok(super::SourcedOutcome::Stored(response));
+                }
+                Ok(super::TracedOutcome::Live(guarded)) => Ok(guarded),
+                Err(error) => Err(error),
+            };
             let responded = notes.responded();
             // Single delivery boundary: unwrap the guard-sealed result.
             let (result, source, upstream) = match result.map(GuardedValue::into_parts) {
@@ -267,7 +278,7 @@ impl MetaMcp {
             if audited.is_ok() {
                 self.note_delivered_reading(args, reading, responded);
             }
-            audited.map(|value| (value, source, upstream))
+            audited.map(|value| super::SourcedOutcome::Live((value, source, upstream)))
         });
         crate::gateway::meta_mcp::visible::with_visibility_memo(traced).await
     }

@@ -16,6 +16,23 @@ pub(crate) const BACKEND: &str = "work-mail";
 /// The access token of the sole operator's seeded grant.
 pub(crate) const OPERATOR_TOKEN: &str = ALICE_WORK_TOKEN;
 
+/// The second managed backend [`DirectAccountGateway::with_second`] adds,
+/// bound to the `personal-gmail` account (MIK-8406 two-account rows).
+pub(crate) const PERSONAL_BACKEND: &str = "personal-mail";
+
+/// The second backend as an external (signed-assertion) propagation target:
+/// it has no mint-free account view (MIK-8392 `Unjudged`).
+pub(crate) const EXTERNAL_BACKEND: &str = "partner";
+
+/// The backend [`DirectAccountGateway::with_second`] adds beside `BACKEND`.
+#[derive(Clone, Copy)]
+pub(crate) enum Second {
+    /// [`PERSONAL_BACKEND`], a managed account.
+    PersonalAccount,
+    /// [`EXTERNAL_BACKEND`], external propagation.
+    External,
+}
+
 /// How `BACKEND` is configured.
 pub(crate) enum Binding {
     /// `account: work-gmail`, a managed account, with empty custody.
@@ -75,25 +92,72 @@ impl DirectAccountGateway {
         binding: &Binding,
         configure: impl Fn(&mut crate::config::BackendConfig),
     ) -> Self {
-        let operator_grant = matches!(binding, Binding::Connected);
         let bind = match binding {
             Binding::Unconnected | Binding::Connected => Bind::Account(WORK),
             Binding::Propagation => Bind::Propagation(external_cfg()),
         };
-        let seed = if operator_grant {
-            vec![(operator_key(), grant(ALICE_WORK_TOKEN, u64::MAX))]
-        } else {
-            Vec::new()
+        Self::build((mode, auth), binding, &[(BACKEND, bind)], configure)
+    }
+
+    /// `BACKEND` (`account: work-gmail`) plus one `second` backend, over HTTP.
+    /// Under [`Binding::Connected`] the sole operator holds a live grant on
+    /// every managed account the gateway serves, each with its slot seeded.
+    pub(crate) fn with_second(
+        auth: crate::config::AuthConfig,
+        binding: &Binding,
+        second: Second,
+    ) -> Self {
+        let first = match binding {
+            Binding::Unconnected | Binding::Connected => Bind::Account(WORK),
+            Binding::Propagation => Bind::Propagation(external_cfg()),
         };
-        let slots = if operator_grant {
-            vec![Self::operator_binding()]
+        let other = match second {
+            Second::PersonalAccount => (PERSONAL_BACKEND, Bind::Account(PERSONAL)),
+            Second::External => (EXTERNAL_BACKEND, Bind::Propagation(external_cfg())),
+        };
+        Self::build(
+            (ServeMode::Http, auth),
+            binding,
+            &[(BACKEND, first), other],
+            |_| {},
+        )
+    }
+
+    fn build(
+        (mode, auth): (ServeMode, crate::config::AuthConfig),
+        binding: &Binding,
+        binds: &[(&str, Bind<'_>)],
+        configure: impl Fn(&mut crate::config::BackendConfig),
+    ) -> Self {
+        let operator_grant = matches!(binding, Binding::Connected);
+        let accounts: Vec<&str> = binds
+            .iter()
+            .filter_map(|(_, bind)| match bind {
+                Bind::Account(id) => Some(*id),
+                Bind::Propagation(_) => None,
+            })
+            .collect();
+        let (seed, slots) = if operator_grant {
+            accounts
+                .iter()
+                .map(|id| {
+                    let key = operator_key_for(id);
+                    let slot = expected_identity_key_for(&key, SEEDED_REVISION);
+                    ((key, grant(operator_token(id), u64::MAX)), slot)
+                })
+                .unzip()
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
         let custody = custody_with(&seed);
+        let descriptors: Vec<&str> = if accounts.is_empty() {
+            vec![WORK]
+        } else {
+            accounts
+        };
         let (meta, dispatches) = gateway_in_with(
-            &[(BACKEND, bind)],
-            &Descriptors::same(&[WORK]),
+            binds,
+            &Descriptors::same(&descriptors),
             &custody.installed(),
             &slots,
             (mode, auth),
@@ -151,6 +215,36 @@ impl DirectAccountGateway {
             .into_iter()
             .map(|call| (call.method.clone(), call.authorization(), call.identity_key))
             .collect()
+    }
+
+    /// Revoke the sole operator's grant on ONE managed backend's account; any
+    /// other account keeps its live grant.
+    pub(crate) async fn revoke_operator_grant_on(&self, backend: &str) {
+        let id = match backend {
+            BACKEND => WORK,
+            PERSONAL_BACKEND => PERSONAL,
+            other => panic!("{other} is not a managed backend of this fixture"),
+        };
+        self.custody
+            .handle
+            .invalidate(&operator_key_for(id))
+            .await
+            .expect("the seeded grant must revoke through real custody");
+    }
+
+    /// The `tools/call` requests sent to `backend`.
+    pub(crate) fn tool_calls_to(&self, backend: &str) -> usize {
+        self.dispatches
+            .calls()
+            .iter()
+            .filter(|call| call.server == backend)
+            .count()
+    }
+
+    /// Fail the next non-`tools/list` request with the HTTP `status` the
+    /// transport would report, with every account left live (MIK-8406 P8i).
+    pub(crate) fn fail_next(&self, status: u16) {
+        self.dispatches.answer_with(&[status]);
     }
 
     /// Answer the next non-`tools/list` request with `result`.
@@ -214,6 +308,7 @@ impl DirectAccountGateway {
                 },
                 Arc::new(CapturingTransport {
                     dispatches: Arc::clone(&self.dispatches),
+                    server: BACKEND.to_string(),
                 }),
             );
     }
@@ -271,11 +366,25 @@ impl DirectAccountGateway {
 
 /// The sole operator's key for [`WORK`], built the way custody builds it.
 pub(super) fn operator_key() -> AccountKey {
+    operator_key_for(WORK)
+}
+
+/// The sole operator's key for account `id`.
+fn operator_key_for(id: &str) -> AccountKey {
     crate::personal_accounts::identity::account_key(
         Some(crate::personal_accounts::identity::Principal::SoleOperator),
-        &key_descriptor(WORK),
+        &key_descriptor(id),
     )
     .expect("fixture principal and descriptor must bind")
+}
+
+/// The access token the sole operator's seeded grant on `id` carries.
+fn operator_token(id: &str) -> &'static str {
+    if id == PERSONAL {
+        ALICE_PERSONAL_TOKEN
+    } else {
+        ALICE_WORK_TOKEN
+    }
 }
 
 /// MIK-8392 T11, U2: a REST capability whose dispatch runs under alice's

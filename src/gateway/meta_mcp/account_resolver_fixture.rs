@@ -591,6 +591,8 @@ pub(super) struct Dispatch {
     /// The JSON-RPC method. F13 lists a cold slot before a `tools/call`, so
     /// positive assertions read the `tools/call` records only.
     pub(super) method: String,
+    /// The backend the call was sent to (MIK-8392: two-backend rows).
+    pub(super) server: String,
 }
 
 impl Dispatch {
@@ -705,6 +707,8 @@ fn answer(method: &str) -> crate::protocol::JsonRpcResponse {
 
 struct CapturingTransport {
     dispatches: Arc<Dispatches>,
+    /// The backend this transport serves, recorded on every dispatch.
+    server: String,
 }
 
 #[async_trait::async_trait]
@@ -720,6 +724,7 @@ impl crate::transport::Transport for CapturingTransport {
             headers: Vec::new(),
             identity_key: None,
             method: method.to_string(),
+            server: self.server.clone(),
         });
         Ok(answer(method))
     }
@@ -736,6 +741,7 @@ impl crate::transport::Transport for CapturingTransport {
             headers: extra_headers.to_vec(),
             identity_key: identity_key.map(str::to_string),
             method: method.to_string(),
+            server: self.server.clone(),
         });
         if method == "tools/call"
             && let Some(hook) = self.dispatches.on_call.lock().take()

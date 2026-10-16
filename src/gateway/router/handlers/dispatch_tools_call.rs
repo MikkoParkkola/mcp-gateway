@@ -648,8 +648,22 @@ pub(super) async fn tools_call(
     );
     let (owned_execution, replay) = match admission {
         Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Owned(lease)) => (Some(lease), None),
-        Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Replay(response, audit, _)) => {
-            (None, Some((response, audit)))
+        Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Replay(
+            response,
+            audit,
+            target,
+            _,
+        )) => {
+            // STORED.2 site 1: a retained single-call result is served only
+            // on proven liveness; otherwise the call proceeds as Unprotected
+            // and the lift serves it after a live proof.
+            match state
+                .meta_mcp
+                .defer_or_serve_replay(tool_name, &arguments, &caller, target, response, audit)
+            {
+                Some(replay) => (None, Some(replay)),
+                None => (None, None),
+            }
         }
         Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Unprotected) => (None, None),
         Err(error) => {

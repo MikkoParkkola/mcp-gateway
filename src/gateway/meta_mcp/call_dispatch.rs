@@ -153,13 +153,18 @@ impl MetaMcp {
         let invoke_args =
             admission::named_tool_envelope(server_name, tool_name, &arguments, caller);
         let mut chain = (ChainSource::NotEligible, None);
-        let result = self
+        let result = match self
             .invoke_tool_with_source(&invoke_args, session_id, caller)
             .await
-            .map(|(content, source, upstream)| {
+        {
+            Ok(invoke::SourcedOutcome::Live((content, source, upstream))) => {
                 chain = (source, upstream);
-                content
-            });
+                Ok(content)
+            }
+            // The lift's already-shaped answer: delivered unchanged (D8).
+            Ok(invoke::SourcedOutcome::Stored(response)) => return response,
+            Err(error) => Err(error),
+        };
         // Native: the envelope verbatim. The dispatch's chain source rides on
         // a success only, as on `gateway_invoke` (A3 R5, MIK-8159).
         let declared = caller.input_capabilities;
@@ -459,17 +464,49 @@ impl MetaMcp {
                 let prepare: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> =
                     Box::pin(self.prepare_repeated_call(&stored, caller.scope(), session_id));
                 prepare.await;
+                // E9: a target hidden only because its account cannot be read
+                // now answers as the live call does (retryable), before the
+                // catalogue refusal; every other withholding is unchanged.
+                if let Some(answer) = self
+                    .unavailable_repeat_answer(&id, &stored, (tool_name, session_id), caller)
+                    .await
+                {
+                    return answer;
+                }
                 // MIK-8392 site-5 split: the catalogue is judged here; an
                 // account that is not live is the call's own live path.
-                self.refuse_stored_repeat(&id, &stored, attestation, session_id, caller)
-                    .unwrap_or_else(|| {
-                        // The holds already sit in this request's scope.
-                        let held = super::sealed_hold::Held::new(
-                            stored,
-                            super::sealed_hold::CarriedHolds::none(),
-                        );
-                        BeginOutcome::Existing(held).into_response(id)
-                    })
+                if let Some(refusal) =
+                    self.refuse_stored_repeat(&id, &stored, attestation, session_id, caller)
+                {
+                    return refusal;
+                }
+                // E2: plan tasks are served as today with no account proof
+                // (P8406 pins it; the read matrix names the gap, MIK-8406).
+                if matches!(
+                    stored.task.tool(),
+                    "gateway_execute" | "gateway_run_playbook"
+                ) {
+                    // The holds already sit in this request's scope.
+                    let held = super::sealed_hold::Held::new(
+                        stored,
+                        super::sealed_hold::CarriedHolds::none(),
+                    );
+                    return BeginOutcome::Existing(held).into_response(id);
+                }
+                // A single call records at most one distinct target: the
+                // one-element slice site 5 proves.
+                let targets = stored
+                    .targets
+                    .first()
+                    .cloned()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                // The holds already sit in this request's scope.
+                let held =
+                    super::sealed_hold::Held::new(stored, super::sealed_hold::CarriedHolds::none());
+                return self
+                    .defer_or_serve_existing(id, tool_name, &targets, held, caller)
+                    .await;
             }
             Ok(outcome) => outcome.into_response(id),
             Err(crate::gateway::task_service::ServiceError::AuditUnavailable) => {
@@ -477,6 +514,91 @@ impl MetaMcp {
             }
             Err(_) => JsonRpcResponse::error(Some(id), -32603, "task store unavailable"),
         }
+    }
+
+    /// Site 5 (MIK-8392 STORED.2): the account step of a repeated task call,
+    /// run after `refuse_stored_repeat` returned None (the catalogue
+    /// judgement passed and the stored delivery's holds are already staged
+    /// in this request). A single call passes its one recorded target;
+    /// MIK-8406's plan caller passes the row's whole `stored.targets`.
+    /// `tool_name` is the presented tool, for the live-shaped answer a
+    /// carried fill failure takes (E4).
+    ///
+    /// Targets walk in recorded order. Each proves through the dispatch's own
+    /// resolution step (`prove_target_live`), de-duplicated by account: a
+    /// clean carried credential proves, a carried fill failure answers as the
+    /// failed dispatch (E4), and the first refusal answers through the
+    /// status-preserving error, keeping the connect offer. No task is
+    /// created, and the row keeps its slot: a refusal drops only this
+    /// request's clones. When every target is proven the stored answer is
+    /// served, with no second catalogue check and no memo write. An empty
+    /// slice serves as today: nothing was dispatched.
+    ///
+    /// Named residuals: an HTTP request reaches E4 here only across a gap of
+    /// 10 s or more inside one request, since the cold view answers first
+    /// (T6); T6u seeds it directly (M11). The stdio busy task repeat runs
+    /// this same walk but has no stdio row. If custody recovers between E9's
+    /// proof and this walk, one account can be proven twice (no
+    /// deterministic row).
+    pub(super) async fn defer_or_serve_existing(
+        &self,
+        id: RequestId,
+        tool_name: &str,
+        targets: &[crate::gateway::task_service::Target],
+        held: super::sealed_hold::Held<crate::gateway::task_service::CommittedTask>,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> JsonRpcResponse {
+        use crate::gateway::task_service::execution::BeginOutcome;
+
+        // (server, account) resolved already in this walk: an account
+        // resolved once is not resolved again.
+        let mut resolved = std::collections::HashSet::new();
+        for target in targets {
+            let (server, tool) = (target.server.as_str(), target.tool.as_str());
+            // A target that mints nothing per caller is exempt (U2); every
+            // other one (a managed account, or a per-caller mint, E7) proves
+            // only by a live resolution below. There is no shortcut for an
+            // outcome already read Live: a carried credential is taken above
+            // first, so it saved nothing measurable (E10b, T4).
+            if !self.mints_per_caller(server, tool) {
+                continue;
+            }
+            if !resolved.insert((server.to_owned(), self.target_account(server, tool))) {
+                continue;
+            }
+            match self.prove_target_live((server, tool), caller).await {
+                Ok(None) => {}
+                Ok(Some(value)) => return self.shape_repeat_fill(id, tool_name, value, caller),
+                Err(error) => return error_response_preserving_status(id, &error),
+            }
+        }
+        BeginOutcome::Existing(held).into_response(id)
+    }
+
+    /// A repeated task call's failed-fill answer (E4), shaped as the live
+    /// arm shapes the tool result for `tool_name`.
+    pub(super) fn shape_repeat_fill(
+        &self,
+        id: RequestId,
+        tool_name: &str,
+        value: Value,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> JsonRpcResponse {
+        let shape = if tool_name == "gateway_invoke"
+            || self.surfaced_tools_map.unscoped(tool_name).is_none()
+        {
+            ResultShape::Wrapped
+        } else {
+            ResultShape::Native
+        };
+        response_security::shape_meta_result(
+            id,
+            tool_name,
+            Ok(value),
+            shape,
+            caller.input_capabilities,
+            (ChainSource::NotEligible, None),
+        )
     }
 
     /// The dispatch tail below the confirmation gate, as the request thread
@@ -599,10 +721,15 @@ impl MetaMcp {
                 let sourced = self
                     .invoke_tool_sourced(&arguments, session_id, caller)
                     .await;
-                sourced.map(|(value, origin, chain)| {
-                    (source, upstream) = (origin, chain);
-                    value
-                })
+                match sourced {
+                    Ok(invoke::SourcedOutcome::Live((value, origin, chain))) => {
+                        (source, upstream) = (origin, chain);
+                        Ok(value)
+                    }
+                    // The lift's already-shaped answer: delivered unchanged (D8).
+                    Ok(invoke::SourcedOutcome::Stored(response)) => return response,
+                    Err(error) => Err(error),
+                }
             }
             "gateway_get_stats" => self.get_stats(&arguments, caller.is_admin).await,
             "gateway_cost_report" => self.get_cost_report(&arguments, session_id, caller).await,
@@ -660,3 +787,7 @@ pub(super) fn task_backend_name(meta: &MetaMcp, tool_name: &str, arguments: &Val
         other => other.to_owned(),
     }
 }
+
+#[cfg(test)]
+#[path = "stored_site5_tests.rs"]
+mod stored_site5_tests;
