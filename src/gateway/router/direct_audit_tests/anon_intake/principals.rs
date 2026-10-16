@@ -170,9 +170,10 @@ async fn send(fx: &Fixture, uri: &str, body: &Value, source: &Source) -> (Status
 }
 
 /// F1 CONTROL (UNIFY.1a′ drift guard): for every principal source, a keyed
-/// call on the direct route and on `/mcp` is admitted and runs once, and the
-/// same key again replays without a second dispatch (admission owned the key
-/// under that caller). Every cell runs; failures are listed together.
+/// call on the direct route and on `/mcp` is admitted and runs once (HTTP
+/// 200, a result that is not an error), and the same key again replays the
+/// same result without a second dispatch (admission owned the key under that
+/// caller). Every cell runs; failures are listed together.
 #[tokio::test]
 async fn f1_every_principal_source_is_admitted_keyed() {
     let mut wrong = Vec::new();
@@ -196,15 +197,24 @@ async fn f1_every_principal_source_is_admitted_keyed() {
         ] {
             let fx = fixture((source.setup)()).await;
             let (first_status, first) = send(&fx, uri, &body, &source).await;
-            let (_, again) = send(&fx, uri, &body, &source).await;
-            let calls = fx.calls.load(Ordering::SeqCst);
-            if first.get("error").is_some()
-                || again.get("error").is_some()
-                || first_status != StatusCode::OK
-                || calls != 1
+            let after_first = fx.calls.load(Ordering::SeqCst);
+            let (again_status, again) = send(&fx, uri, &body, &source).await;
+            let after_again = fx.calls.load(Ordering::SeqCst);
+            // Both answers are 200 successes with a result, the replay is the
+            // same result, and exactly one dispatch happened, after each.
+            let succeeded = |status: StatusCode, answer: &Value| {
+                status == StatusCode::OK
+                    && answer.get("error").is_none()
+                    && answer.pointer("/result/isError") == Some(&json!(false))
+            };
+            if !succeeded(first_status, &first)
+                || !succeeded(again_status, &again)
+                || first.get("result") != again.get("result")
+                || (after_first, after_again) != (1, 1)
             {
                 wrong.push(format!(
-                    "{} {route}: {first_status} {first} / again {again} / calls {calls}",
+                    "{} {route}: {first_status} {first} / again {again_status} {again} \
+                     / calls {after_first}, {after_again}",
                     source.label
                 ));
             }
@@ -233,6 +243,7 @@ async fn d5_mtls_subject_task_submit_is_not_refused_at_intake() {
     );
     body["params"]["task"] = json!({});
     let (status, answer) = send(&fx, "/mcp", &body, source).await;
+    assert_eq!(status, StatusCode::OK, "d5: {answer}");
     assert!(
         answer.pointer("/result/taskId").is_none(),
         "d5: a task was created: {answer}"

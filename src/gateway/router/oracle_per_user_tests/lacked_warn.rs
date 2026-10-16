@@ -239,7 +239,8 @@ async fn call_bearer(gw: &Gateway, entry: Entry, bearer: &str) -> (StatusCode, V
 
 /// E4 (and E5's limiter half): two callers with distinct caller keys
 /// (`k1`, `k2`), each refused on the required backend, log one WARN each;
-/// `k1` again within the window logs none. RED at base: nothing is logged.
+/// `k1` again within the window logs none. Each request is captured on its
+/// own. RED at base: 0 WARNs where one is wanted.
 #[test]
 fn e4_one_warn_per_caller_key() {
     let rt = runtime();
@@ -249,21 +250,23 @@ fn e4_one_warn_per_caller_key() {
         Warmth::Warm,
         "other",
     ));
-    let (answers, log) = crate::test_log_capture::capture_warnings(|| {
-        rt.block_on(async {
-            let mut answers = Vec::new();
-            for bearer in ["k1", "k2", "k1"] {
-                answers.push((bearer, call_bearer(&gw, Entry::Invoke, bearer).await));
-            }
-            answers
-        })
-    });
-    for (bearer, (status, answer)) in &answers {
+    // Each request captured on its own, on the one gateway (one limiter).
+    let mut cells = Vec::new();
+    for (bearer, want) in [("k1", 1), ("k2", 1), ("k1", 0)] {
+        let ((status, answer), log) = crate::test_log_capture::capture_warnings(|| {
+            rt.block_on(call_bearer(&gw, Entry::Invoke, bearer))
+        });
         assert_eq!(
-            (*status, answer.pointer("/error/code")),
+            (status, answer.pointer("/error/code")),
             (StatusCode::OK, Some(&json!(-32601))),
             "E4 premise {bearer}: not the absent answer: {answer}"
         );
+        if lacked_warns(&log) != want {
+            cells.push(format!(
+                "E4 {bearer}: {} WARNs, want {want}:\n{log}",
+                lacked_warns(&log)
+            ));
+        }
     }
-    assert_eq!(lacked_warns(&log), 2, "E4: want one WARN per key:\n{log}");
+    assert!(cells.is_empty(), "E4:\n{}", cells.join("\n"));
 }
