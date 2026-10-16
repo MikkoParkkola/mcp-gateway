@@ -120,34 +120,30 @@ impl<'a> Refused<'a> {
             tool: Some(tool),
             tenants: BTreeSet::new(),
         };
-        match id {
-            Some(id) => {
-                self.record(
-                    state,
-                    refusal,
-                    id,
-                    code,
-                    error.to_string(),
-                    StatusCode::BAD_REQUEST,
-                )
-                .await
+        // The predicate needs an `id` member; an unrecognised one is still
+        // answered, with no id, and recorded.
+        let Some(id) = id else {
+            crate::security::security_metrics::meta_refused(code);
+            if let Some(Err(error)) = self.write(state, refusal).await {
+                tracing::warn!(%error, "Transparency log write failed (non-fatal)");
             }
-            // The predicate needs an `id` member; an unrecognised one is
-            // still answered, with no id, and recorded.
-            None => {
-                crate::security::security_metrics::meta_refused(code);
-                if let Some(Err(error)) = self.write(state, refusal).await {
-                    tracing::warn!(%error, "Transparency log write failed (non-fatal)");
-                }
-                build_error_response(
-                    None,
-                    code,
-                    error.to_string(),
-                    self.session_id,
-                    StatusCode::BAD_REQUEST,
-                )
-            }
-        }
+            return build_error_response(
+                None,
+                code,
+                error.to_string(),
+                self.session_id,
+                StatusCode::BAD_REQUEST,
+            );
+        };
+        self.record(
+            state,
+            refusal,
+            id,
+            code,
+            error.to_string(),
+            StatusCode::BAD_REQUEST,
+        )
+        .await
     }
 
     /// MIK-8361: record a requested target the caller may not see, refused

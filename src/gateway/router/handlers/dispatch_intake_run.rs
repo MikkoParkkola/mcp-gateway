@@ -243,6 +243,18 @@ pub(in crate::gateway::router::handlers) async fn intake(
     let raw_id = crate::protocol::mrtr::raw_request_id(&request);
     // A failed grant-decision write refuses under this id (MIK-7663.GH2409.3).
     crate::gateway::meta_mcp::grant_audit::note_answer_id(raw_id.as_ref());
+    // MIK-8382 intake: judged on the request as sent, before signing capture
+    // takes its id off (restored later); answered after the chain nonce.
+    let intake_error = intake_judgement(
+        state,
+        &request,
+        (
+            verified_identity.as_ref(),
+            oauth_agent_identity.as_ref(),
+            cert_identity.as_ref(),
+        ),
+        (grant_subject.as_ref(), client.as_ref()),
+    );
     // Hardened signs every `tools/call` here, not only `gateway_invoke`
     // (GH1942.HARDEN.1 row 7).
     let mut signing_context = state.meta_mcp.signing_enabled().then(|| {
@@ -266,26 +278,19 @@ pub(in crate::gateway::router::handlers) async fn intake(
             ));
         }
     };
-    // MIK-8382 intake: a keyed `tools/call` from a caller with no execution
-    // principal is refused here, after protocol-field validation and before
-    // target mapping, sanitizing and every check, so its answer is one for
-    // every target and nothing reaches a backend. Owner and principal are
-    // read as admission reads them, through the one shared function.
-    if let Some(refusal) = intake_refusal(
-        state,
-        &request,
-        (
-            verified_identity.as_ref(),
-            oauth_agent_identity.as_ref(),
-            grant_subject.as_ref(),
-            cert_identity.as_ref(),
-            client.as_ref(),
-        ),
-        (raw_id.clone(), &session_id),
-    )
-    .await
-    {
-        return Err(refusal);
+    // MIK-8382 intake: the refusal judged above is answered here, after the
+    // chain nonce (kept first) and before target mapping, sanitizing and
+    // every check, so its answer is one for every target and nothing
+    // reaches a backend.
+    if let Some(error) = intake_error {
+        return Err(answer_intake(
+            state,
+            &request,
+            (client.as_ref(), grant_subject.as_ref()),
+            (raw_id, &session_id),
+            &error,
+        )
+        .await);
     }
     // MIK-8154 SAN.1: one sanitize step, after the call's backend targets are
     // mapped on the caller's view (a surfaced name judged through the request's
@@ -694,23 +699,29 @@ pub(in crate::gateway::router::handlers) async fn intake(
     ))
 }
 
-/// MIK-8382 UNIFY.1a′: the `/mcp` intake refusal, recorded as the direct
-/// route records it, for a keyed `tools/call` with an id from a caller with
-/// no execution principal; `None` lets the request go on. The routed owner
-/// and caller key are the ones admission reads (`route_owners`,
-/// `identity::caller_key`).
-async fn intake_refusal(
+/// The caller's proven identities, as the request carries them.
+type Proven<'r> = (
+    Option<&'r VerifiedIdentity>,
+    Option<&'r OAuthAgentIdentity>,
+    Option<&'r CertIdentity>,
+);
+
+/// What the caller presented: its grant subject and its credential.
+type Presented<'r> = (
+    Option<&'r crate::identity_grants::GrantSubject>,
+    Option<&'r AuthenticatedClient>,
+);
+
+/// MIK-8382 UNIFY.1a′: whether the `/mcp` intake refuses this request, a
+/// keyed `tools/call` with an id from a caller with no execution principal.
+/// The routed owner and caller key are the ones admission reads
+/// (`route_owners`, `identity::caller_key`), through the shared function.
+fn intake_judgement(
     state: &AppState,
     request: &Value,
-    (verified_identity, oauth_agent_identity, grant_subject, cert_identity, client): (
-        Option<&VerifiedIdentity>,
-        Option<&OAuthAgentIdentity>,
-        Option<&crate::identity_grants::GrantSubject>,
-        Option<&CertIdentity>,
-        Option<&AuthenticatedClient>,
-    ),
-    (id, session_id): (Option<crate::protocol::RequestId>, &str),
-) -> Option<axum::response::Response> {
+    (verified_identity, oauth_agent_identity, cert_identity): Proven<'_>,
+    (grant_subject, client): Presented<'_>,
+) -> Option<crate::Error> {
     let (_, _, owner) = tasks::route_owners(
         state,
         verified_identity,
@@ -719,13 +730,27 @@ async fn intake_refusal(
     );
     let caller_key =
         crate::gateway::router::identity::caller_key(grant_subject, cert_identity, client);
-    let error = crate::gateway::meta_mcp::intake_refusal(
+    crate::gateway::meta_mcp::intake_refusal(
         request,
         crate::gateway::meta_mcp::AdmissionOwner::routed(&owner),
         client.map(|client| client.principal.as_str()),
         grant_subject,
         Some(caller_key.as_str()).filter(|key| !key.is_empty()),
-    )?;
+    )
+}
+
+/// The `/mcp` intake refusal of `error`, recorded as the direct route
+/// records it (`invalid`), then answered -32003 / 400 with the request's id.
+async fn answer_intake(
+    state: &AppState,
+    request: &Value,
+    (client, grant_subject): (
+        Option<&AuthenticatedClient>,
+        Option<&crate::identity_grants::GrantSubject>,
+    ),
+    (id, session_id): (Option<crate::protocol::RequestId>, &str),
+    error: &crate::Error,
+) -> axum::response::Response {
     let empty = Value::Object(serde_json::Map::new());
     let params = request.get("params");
     let name = params
@@ -749,11 +774,12 @@ async fn intake_refusal(
     } else {
         ("", name)
     };
-    let refused = crate::gateway::router::meta_refusal_audit::Refused::of(
+    crate::gateway::router::meta_refusal_audit::Refused::of(
         arguments,
         client,
         grant_subject,
         session_id,
-    );
-    Some(refused.answer_intake(state, target, id, &error).await)
+    )
+    .answer_intake(state, target, id, error)
+    .await
 }
