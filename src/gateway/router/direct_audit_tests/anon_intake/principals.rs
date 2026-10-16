@@ -103,7 +103,7 @@ fn sources() -> [Source; 6] {
 }
 
 /// A modern keyed `tools/call` of `name` with `arguments`, key `key`.
-fn modern_keyed(name: &str, arguments: Value, key: &str, extra: Option<Value>) -> Value {
+fn modern_keyed(name: &str, arguments: &Value, key: &str, extra: Option<Value>) -> Value {
     let mut meta = json!({
         (crate::protocol::mrtr::IDEMPOTENCY_KEY_META): key,
         "io.modelcontextprotocol/protocolVersion": crate::protocol::meta::MODERN_VERSIONS[0],
@@ -181,14 +181,14 @@ async fn f1_every_principal_source_is_admitted_keyed() {
             (
                 "direct",
                 "/mcp/alpha",
-                modern_keyed("t", json!({"customer_id": "c"}), "f1-k", None),
+                modern_keyed("t", &json!({"customer_id": "c"}), "f1-k", None),
             ),
             (
                 "meta",
                 "/mcp",
                 modern_keyed(
                     "gateway_invoke",
-                    json!({"server": "alpha", "tool": "t", "arguments": {"customer_id": "c"}}),
+                    &json!({"server": "alpha", "tool": "t", "arguments": {"customer_id": "c"}}),
                     "f1-k",
                     None,
                 ),
@@ -216,15 +216,18 @@ async fn f1_every_principal_source_is_admitted_keyed() {
 /// D5 CONTROL: auth on, a caller with a proven mTLS subject and no
 /// credential sends a keyed task submit. Admission gives it a principal (its
 /// keyed sync call runs: the F1 `mtls` cell), so the intake check passes it
-/// and the task gate keeps answering: -32600 "task creation requires an
-/// authenticated caller", not -32003, and no task is created.
+/// and today's answer stays: the missing-task answer (`task_route.rs`
+/// `missing_task_error`, 200, -32602 "no such task", as
+/// `tests/e2e_task_api_key_owner.rs` pins for a keyed create with no
+/// credential), not -32003, and no task is created. Design d2 §4.1 expected
+/// the -32600 task gate; the base answers this.
 #[tokio::test]
 async fn d5_mtls_subject_task_submit_meets_the_task_gate() {
     let fx = fixture(public_auth()).await;
     let source = &sources()[4];
     let mut body = modern_keyed(
         "gateway_invoke",
-        json!({"server": "alpha", "tool": "t", "arguments": {"customer_id": "c"}}),
+        &json!({"server": "alpha", "tool": "t", "arguments": {"customer_id": "c"}}),
         "d5-k",
         Some(json!({"extensions": {"io.modelcontextprotocol/tasks": {}}})),
     );
@@ -236,10 +239,7 @@ async fn d5_mtls_subject_task_submit_meets_the_task_gate() {
     );
     assert_eq!(
         refusal(&answer),
-        (
-            Some(-32600),
-            "task creation requires an authenticated caller"
-        ),
+        (Some(-32602), "no such task"),
         "d5: {status} {answer}"
     );
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "d5: dispatched");
