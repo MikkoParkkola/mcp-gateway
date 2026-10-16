@@ -23,6 +23,9 @@ use crate::security::audit::AuditFailurePolicy;
 use crate::security::transparency_log::TransparencyLogConfig;
 use crate::transport::Transport;
 
+pub(in crate::gateway::router) mod anon_intake;
+mod extras;
+use extras::{Extra, arm_extras, backend_config, harden};
 mod anon_key;
 mod delivery;
 mod delivery_who;
@@ -41,6 +44,11 @@ mod tenants;
 /// else with a text result, or with a JSON-RPC error when `error` is set.
 struct Scripted {
     calls: Arc<AtomicUsize>,
+    /// MIK-8382: every `tools/list`, which `calls` skips.
+    lists: Arc<AtomicUsize>,
+    /// MIK-8382: `tools/list` fails at the transport, as an unreachable
+    /// backend's cold list does.
+    list_fail: bool,
     error: Option<i32>,
     /// MIK-7979: the call is counted, then the transport fails with this.
     fail: Option<fn() -> crate::Error>,
@@ -63,6 +71,10 @@ impl Transport for Scripted {
         // F13: a cold `tools/call` lists the backend first. The list names the
         // tool the rows call, and it is not a call, so `calls` skips it.
         if method == "tools/list" {
+            self.lists.fetch_add(1, Ordering::SeqCst);
+            if self.list_fail {
+                return Err(crate::Error::Transport("connection refused".into()));
+            }
             let tool = json!({"name": "t", "inputSchema": {"type": "object"}});
             return Ok(JsonRpcResponse::success(id, json!({ "tools": [tool] })));
         }
@@ -103,6 +115,7 @@ struct Fixture {
     log: Arc<TransparencyLogger>,
     path: std::path::PathBuf,
     calls: Arc<AtomicUsize>,
+    lists: Arc<AtomicUsize>,
     _dirs: (tempfile::TempDir, tempfile::TempDir),
 }
 
@@ -164,6 +177,8 @@ struct Setup {
     meta_mode: MetaMode,
     /// The backends refuse every notification (L1254).
     notify_refused: bool,
+    /// MIK-8382: the [`Extra`] switches this cell turns on.
+    extras: &'static [Extra],
     /// The backends' chain policy; under `Require` the gateway also has a
     /// chain identity, so their unchained answers are refused unread (MIK-7636).
     chain: crate::config::ChainMode,
@@ -240,19 +255,23 @@ async fn fixture(setup: Setup) -> Fixture {
         None => super::tests::test_router_app_state().await,
     };
     let calls = Arc::new(AtomicUsize::new(0));
+    let lists = Arc::new(AtomicUsize::new(0));
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
+    state_mut.sanitize_input = setup.has(Extra::Sanitize);
+    if setup.has(Extra::Hardened) {
+        harden(state_mut);
+    }
     for name in ["alpha", "beta"] {
         let backend = Arc::new(Backend::new(
             name,
-            BackendConfig {
-                signature_chain: setup.chain,
-                ..BackendConfig::default()
-            },
+            backend_config(&setup, name),
             &FailsafeConfig::default(),
             Duration::from_secs(60),
         ));
         backend.set_transport_for_test(Arc::new(Scripted {
             calls: Arc::clone(&calls),
+            lists: Arc::clone(&lists),
+            list_fail: setup.has(Extra::ListFail),
             error: setup.backend_error,
             fail: setup.backend_fail,
             reply: setup.reply.clone(),
@@ -260,6 +279,8 @@ async fn fixture(setup: Setup) -> Fixture {
         }));
         assert!(state_mut.backends.register(backend), "fixture registration");
     }
+    // Copied out before `agent_identity` is moved from `setup` below.
+    let extras = setup.extras;
     if let Some(config) = setup.agent_identity {
         state_mut.agent_identity_config = config;
     }
@@ -279,6 +300,7 @@ async fn fixture(setup: Setup) -> Fixture {
         ));
     }
     meta.enable_transparency_log(Arc::clone(&log));
+    meta = arm_extras(meta, extras);
     if setup.chain == crate::config::ChainMode::Require {
         meta.set_chain_signer(
             crate::security::signature_chain::ChainSigner::from_seed(&[7; 32], "gw-test")
@@ -307,6 +329,7 @@ async fn fixture(setup: Setup) -> Fixture {
         log,
         path,
         calls,
+        lists,
         _dirs: (audit, store),
     }
 }
@@ -385,6 +408,20 @@ async fn post(fx: &Fixture, backend: &str, body: &str, caller: &Caller) -> (Stat
 }
 
 async fn post_to(fx: &Fixture, uri: &str, body: &str, caller: &Caller) -> (StatusCode, Value) {
+    let (status, bytes) = post_to_raw(fx, uri, body, caller).await;
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// [`post_to`] with the response body as sent, for byte-identity rows.
+async fn post_to_raw(
+    fx: &Fixture,
+    uri: &str,
+    body: &str,
+    caller: &Caller,
+) -> (StatusCode, axum::body::Bytes) {
     let mut builder = axum::http::Request::builder()
         .method("POST")
         .uri(uri)
@@ -423,10 +460,9 @@ async fn post_to(fx: &Fixture, uri: &str, body: &str, caller: &Caller) -> (Statu
     insert_identity(&mut request, caller);
     let response = fx.router.clone().oneshot(request).await.unwrap();
     let status = response.status();
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     (
         status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        to_bytes(response.into_body(), usize::MAX).await.unwrap(),
     )
 }
 
