@@ -224,3 +224,119 @@ async fn a_direct_spend_refusal_after_a_failed_optional_mint_keeps_the_nonce() {
         }
     }
 }
+
+/// `inner`, every `tools/list` held until released and counted on arrival.
+struct HeldList {
+    inner: std::sync::Arc<dyn crate::transport::Transport>,
+    lists: std::sync::atomic::AtomicUsize,
+    release: tokio::sync::Semaphore,
+}
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for HeldList {
+    async fn request(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        if method == "tools/list" {
+            self.lists.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.release.acquire().await.expect("never closed").forget();
+        }
+        self.inner.request(method, params).await
+    }
+    async fn notify(&self, method: &str, params: Option<Value>) -> crate::Result<()> {
+        self.inner.notify(method, params).await
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// Pre-admission, KEEP (MIK-8353 PR-W, K-waiter-direct): A's cold
+/// `tools/list` on `alpha-pt` is held on the wire; B's direct call starts
+/// only once A is past `admit_fill` (so B's `fills_before` already counts A),
+/// its key check joins A's fill, and A is released only once the join is
+/// observed and B has not returned. The join is an effect (r4 §70): the
+/// witness is never minted and the re-send is a replay. Red on base: a join
+/// never moves `list_fills`. Mutant: mW (backend/metadata.rs:414).
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn a_direct_spend_refusal_after_joining_a_fill_keeps_the_nonce() {
+    use super::direct_continuation_tests::budget;
+    use super::direct_guards_fixture::fixture_hardened_signed_built;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let fx = fixture_hardened_signed_built(Answer::Ok, true, budget).await;
+    let (_, first) = signed_direct(&fx, ("k-budget", "alpha"), "n1", json!({})).await;
+    assert!(first.get("error").is_none(), "the paying call: {first}");
+    let cold = fx.state.backends.get("alpha-pt").expect("fixture backend");
+    assert!(!cold.has_cached_tools(), "premise: alpha-pt is cold");
+    let shared = crate::backend::PoolKey::Shared;
+    let wire = std::sync::Arc::new(HeldList {
+        inner: cold
+            .pooled_transport_for_test(&shared)
+            .expect("scripted transport"),
+        lists: std::sync::atomic::AtomicUsize::new(0),
+        release: tokio::sync::Semaphore::new(0),
+    });
+    cold.set_pooled_transport_for_test(&shared, wire.clone());
+    let fills = cold.list_fills();
+
+    let who = ("k-budget", "alpha-pt");
+    let (a_listed, b_done) = (AtomicBool::new(false), AtomicBool::new(false));
+    let a = async {
+        cold.get_tools_shared().await.expect("A's fill answers");
+    };
+    let b = async {
+        until("A's tools/list", || a_listed.load(Ordering::SeqCst)).await;
+        let (_, refused) = signed_direct(&fx, who, "n2", json!({})).await;
+        b_done.store(true, Ordering::SeqCst);
+        refused
+    };
+    let control = async {
+        until("A's tools/list", || wire.lists.load(Ordering::SeqCst) == 1).await;
+        assert_eq!(
+            cold.list_fills(),
+            fills + 1,
+            "premise: A's fill was admitted"
+        );
+        a_listed.store(true, Ordering::SeqCst);
+        until("B to join A's fill", || cold.tools_waiters_for_test() >= 1).await;
+        assert!(
+            !b_done.load(Ordering::SeqCst),
+            "premise: B waits on A's fill"
+        );
+        wire.release.add_permits(1);
+    };
+    let ((), refused, ()) = tokio::join!(a, b, control);
+    assert!(
+        refused.to_string().contains("budget exceeded"),
+        "premise: the spend refusal: {refused}"
+    );
+    assert_eq!(
+        wire.lists.load(Ordering::SeqCst),
+        1,
+        "premise: one tools/list, A's"
+    );
+
+    let (_, again) = signed_direct(&fx, who, "n2", json!({})).await;
+    assert!(
+        refused_as_replay(&again),
+        "the nonce was given back after joining a fill: {again}"
+    );
+    assert_eq!(dispatched(&fx), 1, "only the paying call reached a backend");
+}
+
+/// Wait until `ready`, failing the row (not hanging it) after 10 s.
+async fn until(what: &str, ready: impl Fn() -> bool) {
+    let waited = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while !ready() {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    })
+    .await;
+    assert!(waited.is_ok(), "timed out waiting for {what}");
+}
