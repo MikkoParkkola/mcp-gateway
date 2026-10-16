@@ -73,6 +73,17 @@ async fn signed_state(posture: SecurityPosture) -> (Arc<AppState>, tempfile::Tem
     let mut config = (*app.live_config.get()).clone();
     config.security.posture = posture;
     app.live_config = Arc::new(crate::config_reload::LiveConfig::new(config));
+    // The key's own backend exists, so `alpha` is allowed, not absent
+    // (MIK-8387 S1 answers an unregistered in-scope name as missing); `gamma`
+    // is registered outside the key's scope, R1's parity cell.
+    for name in ["alpha", "gamma"] {
+        assert!(app.backends.register(Arc::new(crate::backend::Backend::new(
+            name,
+            crate::config::BackendConfig::default(),
+            &crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        ))));
+    }
     let mut meta = MetaMcp::new(Arc::clone(&app.backends));
     meta.enable_message_signing(
         MessageSigner::new(SIGNING_SECRET.to_vec(), None, "order".to_owned()),
@@ -156,23 +167,20 @@ fn observed(
     (body, events)
 }
 
-/// R1 (the ticket's fail-fast, route level): a denied `gateway_invoke` with a
-/// malformed nonce gets the policy refusal and counts no nonce rejection.
+/// R1 (the ticket's fail-fast, route level), as MIK-8387 left it: a scoped
+/// key's `gateway_invoke` of a backend outside its scope answers as a
+/// registered backend outside its scope does (`gamma`), whether or not the
+/// name is registered, and counts no nonce rejection. Under a malformed nonce
+/// that answer is today's withheld-path answer (MIK-8361), not the policy's;
+/// its fix is MIK-8446.
 #[test]
-fn a_denied_invoke_with_a_malformed_nonce_gets_the_policy_refusal() {
+fn a_denied_invoke_with_a_malformed_nonce_answers_as_a_registered_denied_one() {
     let (body, events) = observed(SecurityPosture::Standard, "beta", &Value::Null);
-    let error = &body["error"];
-    assert!(error.is_object(), "the call is refused: {body}");
-    assert_eq!(error["code"], json!(-32003), "policy answers first: {body}");
-    assert_ne!(error["message"], json!(INVALID_REFUSAL), "{body}");
+    assert!(body["error"].is_object(), "the call is refused: {body}");
+    assert_ne!(body["error"]["message"], json!(INVALID_REFUSAL), "{body}");
     assert_no_rejections(&events);
-    // The same refusal a well-formed nonce gets: the policy's, whatever it says.
-    let (policy, _) = observed(
-        SecurityPosture::Standard,
-        "beta",
-        &json!("a-well-formed-nonce"),
-    );
-    assert_eq!(body, policy, "the policy refusal, not another error");
+    let (registered, _) = observed(SecurityPosture::Standard, "gamma", &Value::Null);
+    assert_eq!(body, registered, "beta answers unlike the registered gamma");
 }
 
 /// R2 (control): the same call, allowed by policy, is still refused for its

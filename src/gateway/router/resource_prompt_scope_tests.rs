@@ -302,10 +302,11 @@ async fn scoped_caller_cannot_reach_or_detect_another_backends_resources_and_pro
         json!({ "name": "beta/greet" }),
     )
     .await;
+    // A backend outside the key's scope answers as a missing one (MIK-8387 S5).
     assert_eq!(
         (status, body["error"]["code"].as_i64()),
-        (StatusCode::FORBIDDEN, Some(-32003)),
-        "prompts/get on beta by a caller scoped to alpha must be refused like tools/call: {body}"
+        (StatusCode::OK, Some(-32001)),
+        "prompts/get on beta by a caller scoped to alpha must answer the backend miss: {body}"
     );
     assert_eq!(
         f.beta.transcript(),
