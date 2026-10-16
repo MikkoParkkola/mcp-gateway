@@ -347,6 +347,8 @@ impl MetaMcp {
         >,
     > {
         use std::ops::ControlFlow::{Break, Continue};
+        #[cfg(test)]
+        dispatch_seam::dispatch_resolution_starts();
         // The verdict's busy custody, consumed once: the one retryable
         // transient answer, with no acting resolution and no mint — and
         // no second custody read in this request (MIK-8392 Busy parity).
@@ -524,3 +526,45 @@ impl MetaMcp {
 #[cfg(test)]
 #[path = "caller_verdict_outcome_tests.rs"]
 mod outcome_tests;
+
+/// Test-only hook between the invocation policy and the dispatch's
+/// resolution, for the MIK-8439 rows that change state in that window (a
+/// cooldown, a reload, a profile). Compiled out of non-test builds.
+#[cfg(test)]
+mod dispatch_seam {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static BEFORE_DISPATCH_RESOLUTION: RefCell<Option<Box<dyn FnOnce()>>> =
+            RefCell::new(None);
+    }
+
+    /// Clears an unfired hook when dropped, so it cannot fire in a later
+    /// test on the same thread.
+    pub(super) struct Armed;
+
+    impl Drop for Armed {
+        fn drop(&mut self) {
+            BEFORE_DISPATCH_RESOLUTION.with(|slot| slot.borrow_mut().take());
+        }
+    }
+
+    /// Run `hook` once, the next time a dispatch on this thread starts its
+    /// resolution, until the returned guard drops.
+    #[must_use]
+    pub(super) fn before_dispatch_resolution(hook: impl FnOnce() + 'static) -> Armed {
+        BEFORE_DISPATCH_RESOLUTION.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+        Armed
+    }
+
+    /// Called where a dispatch starts its resolution.
+    pub(super) fn dispatch_resolution_starts() {
+        if let Some(hook) = BEFORE_DISPATCH_RESOLUTION.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "noview_cooldown_tests.rs"]
+mod noview_cooldown_tests;
