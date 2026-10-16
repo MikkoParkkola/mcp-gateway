@@ -5,8 +5,8 @@
 
 use super::{
     Caller, Case, Extra, HARDENED_IDENTITY, KEY, NO_PRINCIPAL, Ordering, Setup, StatusCode, Value,
-    fixture, idempotent, json, keyed_body, keyed_invoke, message, poisoned_listing, post_to,
-    post_to_raw, post_uri_with_headers, refusal,
+    fixture, idempotent, json, keyed_body, keyed_invoke, poisoned_listing, post_to, post_to_raw,
+    post_uri_with_headers, refusal,
 };
 
 /// C4 (/mcp precedence): for a keyed no-principal `tools/call` on `/mcp`, the
