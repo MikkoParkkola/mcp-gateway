@@ -110,13 +110,13 @@ async fn r_mcp_a_offers_judges_the_nonce_then_meets_the_cooldown_at_dispatch() {
     assert_eq!(sent, 0, "R-MCP (a): sent");
 }
 
-/// The (b)/(c) assertions: the fresh-nonce control is refused for the
-/// cooldown (the arm reaches the policy), then the replay is refused as a
-/// replay, never with the cooldown. Nothing sent.
-fn assert_nonce_first(row: &str, (replay, fresh, sent): &(Value, Value, usize)) {
+/// The (b)/(c) assertions: the fresh-nonce control is answered with
+/// `first`, what the dispatch meets first in that arm, then the replay is
+/// refused as a replay, never with the cooldown. Nothing sent.
+fn assert_nonce_first(row: &str, first: &str, (replay, fresh, sent): &(Value, Value, usize)) {
     assert!(
-        fresh.to_string().contains(COOLDOWN),
-        "{row} control: a fresh nonce is not refused for the cooldown: {fresh}"
+        fresh.to_string().contains(first),
+        "{row} control: a fresh nonce is not answered with {first:?}: {fresh}"
     );
     assert!(
         message(replay).contains(REPLAY),
@@ -139,13 +139,22 @@ async fn r_mcp_b_unknown_judges_the_nonce_before_the_cooldown() {
         crate::config::InputSchemaEnforcement::Standard,
     )
     .await;
-    assert_nonce_first("R-MCP (b)", &arm(&gw, "rmcp-b").await);
+    assert_nonce_first("R-MCP (b)", COOLDOWN, &arm(&gw, "rmcp-b").await);
 }
 
 /// R-MCP (c), failed fill (red first): alpha's fill fails under `closed`,
 /// so the verdict is `Unavailable` and records nothing. RED at base, as (b).
+/// The fresh-nonce control gets the failed fill: the dispatch answers the
+/// carried fill failure before the cooldown, which waits for the credential
+/// step (MIK-8439); before MIK-8439 it got the cooldown from the policy.
 #[tokio::test]
 async fn r_mcp_c_failed_fill_judges_the_nonce_before_the_cooldown() {
     let gw = signed(Warmth::ColdFailing, CLOSED).await;
-    assert_nonce_first("R-MCP (c)", &arm(&gw, "rmcp-c").await);
+    let answers = arm(&gw, "rmcp-c").await;
+    assert!(
+        !answers.1.to_string().contains(COOLDOWN),
+        "R-MCP (c) control: the cooldown answered before the failed fill: {}",
+        answers.1
+    );
+    assert_nonce_first("R-MCP (c)", "upstream refused tools/list", &answers);
 }
