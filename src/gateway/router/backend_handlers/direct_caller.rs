@@ -248,9 +248,27 @@ pub(super) async fn read_envelope(
         }
     };
 
+    // MIK-8387 S4: for a scoped key, a backend outside its scope answers as a
+    // missing one (404), so the key cannot tell which names exist. The record
+    // keeps the scope refusal's code for a tool call. Before the backend
+    // lookup and the idempotency short-circuit. An empty grant keeps its own
+    // named 403 below (D2), and so does an unscoped caller.
+    let grant = crate::gateway::authz::BackendGrant::of(caller.client.as_ref());
+    if let Some(absence) = state.meta_mcp.scoped(grant).absence(name) {
+        let tool = params
+            .as_ref()
+            .and_then(|p| p.get("name"))
+            .and_then(Value::as_str);
+        if absence == crate::gateway::meta_mcp::scoped_backends::Absence::OutOfScope
+            && method == "tools/call"
+            && let Some(tool) = tool
+        {
+            crate::gateway::meta_mcp::visible::note_denial_code(name, tool, -32003);
+        }
+        return Err(backend_not_found(name));
+    }
     // D2-b: scope is checked after the parse, so its refusal names the tool,
-    // and before the backend lookup, so a scoped key gets 403 for an unknown
-    // backend as for a forbidden one, never a 404 existence oracle.
+    // and before the backend lookup. Only an empty grant reaches it now.
     if let Some(ref client) = caller.client
         && !client.can_access_backend(name)
     {
@@ -317,6 +335,16 @@ pub(super) fn explicit_cancel_key(
     crate::gateway::router::inflight_calls::CallKey::new(backend, owner, session, id)
 }
 
+/// The direct route's answer for a backend it cannot reach: 404, -32001.
+fn backend_not_found(name: &str) -> Rejection {
+    build_http_error_response(
+        None,
+        -32001,
+        format!("Backend not found: {name}"),
+        StatusCode::NOT_FOUND,
+    )
+}
+
 /// What stage 3 resolved: the backend and the session the caller owns.
 pub(super) struct Route<'a> {
     pub(super) backend: std::sync::Arc<crate::backend::Backend>,
@@ -333,12 +361,7 @@ pub(super) fn route<'a>(
     envelope: &Envelope,
 ) -> Result<Route<'a>, Rejection> {
     let Some(backend) = state.backends.get(name) else {
-        return Err(build_http_error_response(
-            None,
-            -32001,
-            format!("Backend not found: {name}"),
-            StatusCode::NOT_FOUND,
-        ));
+        return Err(backend_not_found(name));
     };
 
     let protocol_header = caller
