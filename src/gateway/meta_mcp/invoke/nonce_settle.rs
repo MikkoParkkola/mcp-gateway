@@ -93,3 +93,8 @@ impl Drop for Witnessed<'_, '_> {
         }
     }
 }
+
+// MIK-8353 PR-W: a joined fill keeps the nonce spent.
+#[cfg(all(test, feature = "cost-governance"))]
+#[path = "refund_waiter_tests.rs"]
+mod refund_waiter_tests;

@@ -865,7 +865,3 @@ mod tracing_target_tests;
 
 #[cfg(test)]
 mod mcp_credential_principal_tests;
-
-// MIK-8353 PR-W: a joined fill keeps the nonce spent.
-#[cfg(all(test, feature = "cost-governance"))]
-mod refund_waiter_tests;

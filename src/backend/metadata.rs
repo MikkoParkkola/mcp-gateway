@@ -85,13 +85,6 @@ impl Backend {
         self.list_fills.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// How many callers wait on the shared slot's tools fill in flight: a
-    /// join observed, not timed (MIK-8353 PR-W rows).
-    #[cfg(test)]
-    pub(crate) fn tools_waiters_for_test(&self) -> usize {
-        self.tools_slot(None).tools_cache.waiters_for_test()
-    }
-
     /// The shared slot's freshness. Used by readers that hold no caller.
     #[must_use]
     pub fn has_cached_tools(&self) -> bool {
