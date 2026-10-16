@@ -263,3 +263,55 @@ async fn an_a2a_question_on_this_route_is_bound_to_the_key_holder() {
     );
     assert_eq!(keys[2], None, "an anonymous caller binds to nothing");
 }
+
+/// D-a2a premise (MIK-8434): an A2A key holder on an optional
+/// `SignedAssertion` backend has no verified end-user identity, so the mint
+/// falls back to static credentials, and the A2A override still binds
+/// `identity_key` to the key holder. The fix commit adds the assertion that
+/// this propagation is unproven (mutant M-a2a: the A2A key read as a proof).
+#[cfg(feature = "a2a")]
+#[tokio::test]
+async fn an_unminted_a2a_key_holder_is_bound_but_not_proven() {
+    let fx = fixture(Answer::Ok, |_| {}).await;
+    let mut config = required_propagation();
+    if let Some(cfg) = config.identity_propagation.as_mut() {
+        cfg.required = false;
+    }
+    config.transport = crate::config::TransportConfig::A2a {
+        a2a_url: "http://127.0.0.1:9/".into(),
+        a2a_agent_card_path: None,
+    };
+    let route = Route {
+        backend: backend(config),
+        session_id: None,
+    };
+    let mut caller = anonymous();
+    caller.client = Some(crate::gateway::auth::AuthenticatedClient {
+        quota_principal: None,
+        name: "key-holder".to_string(),
+        rate_limit: 0,
+        backends: vec!["*".to_string()],
+        allowed_tools: None,
+        denied_tools: None,
+        admin: false,
+        // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
+        principal: "alice-digest".to_string(),
+        authenticated: true,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
+    });
+    let propagation = propagate_identity(
+        &fx.state,
+        "alpha",
+        &caller,
+        &route,
+        &guarded(),
+        &RequestId::Number(1),
+    )
+    .await
+    .unwrap_or_else(|(status, _)| panic!("premise: the optional fallback refused: {status}"));
+    assert_eq!(
+        propagation.identity_key.as_deref(),
+        Some(crate::hashing::sha256_hex(b"a2a-client:alice-digest").as_str()),
+        "premise: the A2A override bound the key holder"
+    );
+}

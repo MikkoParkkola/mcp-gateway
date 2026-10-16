@@ -142,6 +142,10 @@ impl LiveIdp {
 /// `account:`.
 pub(super) const TX: &str = "tx";
 
+/// The credential a passthrough caller forwards in
+/// `x-mcp-passthrough-authorization`.
+pub(super) const PASSTHROUGH_CREDENTIAL: &str = "Bearer alice-pt";
+
 /// The verified caller the `IdP` mints for.
 pub(super) fn alice() -> crate::key_server::oidc::VerifiedIdentity {
     crate::key_server::oidc::VerifiedIdentity {
@@ -203,6 +207,32 @@ pub(super) async fn gateway_with(
     Arc<AtomicUsize>,
     (tempfile::TempDir, tempfile::TempDir),
 ) {
+    let shape = (
+        requirement,
+        crate::identity_propagation::PropagationStrategyKind::TokenExchange,
+        crate::security::SecurityPosture::Standard,
+    );
+    gateway_shaped(key, endpoint, alice, shape, arm).await
+}
+
+/// [`gateway_with`] with [`TX`]'s strategy and the gateway's posture chosen
+/// too. A passthrough [`TX`] names no exchange endpoint and dispatches on the
+/// shared counting transport; `Hardened` signs every direct `tools/call`.
+pub(super) async fn gateway_shaped(
+    key: &Arc<crate::gateway::oauth::GatewayKeyPair>,
+    endpoint: String,
+    alice: &crate::key_server::oidc::VerifiedIdentity,
+    (requirement, strategy, posture): (
+        Requirement,
+        crate::identity_propagation::PropagationStrategyKind,
+        crate::security::SecurityPosture,
+    ),
+    arm: impl FnOnce(crate::gateway::meta_mcp::MetaMcp) -> crate::gateway::meta_mcp::MetaMcp,
+) -> (
+    axum::Router,
+    Arc<AtomicUsize>,
+    (tempfile::TempDir, tempfile::TempDir),
+) {
     use crate::config::{BackendConfig, TransportConfig};
     use crate::identity_propagation::{
         IdentityPropagationConfig, PropagationStrategyKind, SessionMode, TokenExchangeStrategy,
@@ -210,6 +240,7 @@ pub(super) async fn gateway_with(
     const AUDIENCE: &str = "https://tx.internal";
     const SCOPE: &str = "backends:tx tools:read";
     let sends = Arc::new(AtomicUsize::new(0));
+    let exchanges = strategy == PropagationStrategyKind::TokenExchange;
     let backend = Arc::new(crate::backend::Backend::new(
         TX,
         BackendConfig {
@@ -219,12 +250,12 @@ pub(super) async fn gateway_with(
                 protocol_version: None,
             },
             identity_propagation: Some(IdentityPropagationConfig {
-                strategy: PropagationStrategyKind::TokenExchange,
+                strategy,
                 audience: AUDIENCE.to_string(),
                 required: matches!(requirement, Requirement::Required),
                 session_mode: SessionMode::Stateless,
-                token_exchange_endpoint: Some(endpoint.clone()),
-                token_exchange_scope: Some(SCOPE.to_string()),
+                token_exchange_endpoint: exchanges.then(|| endpoint.clone()),
+                token_exchange_scope: exchanges.then(|| SCOPE.to_string()),
             }),
             ..BackendConfig::r2_off()
         },
@@ -250,6 +281,14 @@ pub(super) async fn gateway_with(
         SCOPE.len(),
         SCOPE,
     );
+    backend.set_pooled_transport_for_test(
+        &crate::backend::PoolKey::PerUser { binding },
+        Arc::clone(&counting),
+    );
+    // A forwarded passthrough credential dispatches on the slot its digest
+    // binds, charged to the caller (`charged_binding`).
+    let digest = crate::hashing::sha256_hex(PASSTHROUGH_CREDENTIAL.as_bytes());
+    let binding = crate::backend::passthrough_binding(&subject, &digest);
     backend.set_pooled_transport_for_test(&crate::backend::PoolKey::PerUser { binding }, counting);
     let tool: crate::protocol::Tool = serde_json::from_value(json!({
         "name": super::TOOL,
@@ -290,6 +329,11 @@ pub(super) async fn gateway_with(
     state_mut.backends = registry;
     state_mut.meta_mcp = Arc::new(arm(meta));
     state_mut.transparency_log = Some(log);
+    if posture != crate::security::SecurityPosture::Standard {
+        let mut config = crate::config::Config::default();
+        config.security.posture = posture;
+        state_mut.live_config = Arc::new(crate::config_reload::LiveConfig::new(config));
+    }
     (
         crate::gateway::router::create_router(state),
         sends,
@@ -313,22 +357,62 @@ pub(super) async fn send_method_as(
     (method, name): (&str, &str),
     params: Value,
 ) -> Value {
+    post_as(router, alice, ("/mcp", method, name), params, &[])
+        .await
+        .1
+}
+
+/// A keyed `tools/call` of [`super::TOOL`] on the direct route `/mcp/tx`, as
+/// `alice`, with `headers` added; the HTTP status with the body.
+pub(super) async fn send_direct_as(
+    router: &axum::Router,
+    alice: &crate::key_server::oidc::VerifiedIdentity,
+    params: Value,
+    headers: &[(&str, &str)],
+) -> (axum::http::StatusCode, Value) {
+    let uri = format!("/mcp/{TX}");
+    post_as(
+        router,
+        alice,
+        (&uri, "tools/call", super::TOOL),
+        params,
+        headers,
+    )
+    .await
+}
+
+/// One JSON-RPC request to `uri` as `alice`: the HTTP status and the body.
+pub(super) async fn post_as(
+    router: &axum::Router,
+    alice: &crate::key_server::oidc::VerifiedIdentity,
+    (uri, method, name): (&str, &str, &str),
+    params: Value,
+    headers: &[(&str, &str)],
+) -> (axum::http::StatusCode, Value) {
     let body = json!({"jsonrpc": "2.0", "id": 7, "method": method, "params": params});
-    let mut request = axum::http::Request::builder()
+    let mut builder = axum::http::Request::builder()
         .method("POST")
-        .uri("/mcp")
+        .uri(uri)
         .header("content-type", "application/json")
         .header("mcp-protocol-version", "2026-07-28")
         .header("mcp-method", method)
-        .header("mcp-name", name)
+        .header("mcp-name", name);
+    for (header, value) in headers {
+        builder = builder.header(*header, *value);
+    }
+    let mut request = builder
         .body(axum::body::Body::from(body.to_string()))
         .expect("a request");
     request.extensions_mut().insert(alice.clone());
     let response = router.clone().oneshot(request).await.expect("an answer");
+    let status = response.status();
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("a body");
-    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
 }
 
 pub(super) struct Counting {
