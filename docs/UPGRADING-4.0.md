@@ -1359,9 +1359,12 @@ named an API-key label rather than a person and skipped every refused or failed 
   to be forwarded to the backend without the per-tool authorization check, because there
   was no tool name to check.
 - **On the direct route, a key scoped away from a backend is now refused after the body is
-  read.** It still gets 403 and -32003 for a backend it may not use, including one that
-  does not exist. A body that is not JSON, or a JSON-RPC envelope that does not parse, now
-  gets its 400 first.
+  read.** It gets the answer a backend that does not exist gets (404 and -32001
+  `Backend not found`), so a scoped key cannot tell which backend names are registered; the
+  record still carries -32003 (MIK-8387). On `/mcp` the same backend answers as a tool the
+  backend does not list. A key with an empty `backends` list keeps its 403 grant message.
+  A body that is not JSON, or a JSON-RPC envelope that does not parse, now gets its 400
+  first.
 - **`request_hash` covers the whole `gateway_invoke` params the caller sent**, `_full` and
   `_claim` included, and **`response_hash` covers the value `gateway_invoke` returned**,
   after trace, prediction and provenance augmentation. The message-signing `_signature` is
