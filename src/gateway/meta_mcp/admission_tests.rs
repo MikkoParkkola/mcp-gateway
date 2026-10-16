@@ -49,6 +49,9 @@ impl ToolAuthorizer for MutablePolicy {
     fn quota_principal(&self) -> Option<&crate::gateway::auth::QuotaPrincipal> {
         None
     }
+    fn backend_grant(&self) -> crate::gateway::authz::BackendGrant<'_> {
+        crate::gateway::authz::BackendGrant::Unscoped
+    }
 
     fn decide<'a>(&'a self, target: ToolTarget<'a>) -> crate::gateway::authz::Decision<'a> {
         self.seen

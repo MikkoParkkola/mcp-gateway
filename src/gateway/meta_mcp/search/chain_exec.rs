@@ -33,6 +33,8 @@ impl MetaMcp {
         // A presented resume decides where the chain starts and how many rounds
         // this exchange has already spent. Both are sealed, so neither is a
         // number the caller can choose.
+        #[cfg(test)]
+        crate::gateway::meta_mcp::withheld_gate::seams::resume_start();
         let fingerprint = self
             .resume_fingerprint(&chain, session_id, caller, now)
             .await?;

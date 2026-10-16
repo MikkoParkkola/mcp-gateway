@@ -669,6 +669,9 @@ impl ToolAuthorizer for RouterAuthorizer<'_> {
         self.cert_identity
             .and_then(|cert| cert.quota_principal.as_ref())
     }
+    fn backend_grant(&self) -> crate::gateway::authz::BackendGrant<'_> {
+        crate::gateway::authz::BackendGrant::of(self.client)
+    }
 }
 
 /// Owned twin of [`RouterAuthorizer`]: captured on the request thread so a

@@ -24,6 +24,9 @@ impl ToolAuthorizer for RevokedAfter {
     fn quota_principal(&self) -> Option<&QuotaPrincipal> {
         None
     }
+    fn backend_grant(&self) -> crate::gateway::authz::BackendGrant<'_> {
+        crate::gateway::authz::BackendGrant::Unscoped
+    }
     fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
         if self.decided.fetch_add(1, Ordering::SeqCst) < self.allowed {
             return AllowAll.decide(target);

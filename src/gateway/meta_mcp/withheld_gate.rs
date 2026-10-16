@@ -13,6 +13,10 @@ pub(crate) mod seams {
         static SKIP_GATE: Cell<bool> = const { Cell::new(false) };
         static AFTER_GATE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
             const { std::cell::RefCell::new(None) };
+        static BEFORE_GATE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+            const { std::cell::RefCell::new(None) };
+        static BEFORE_RESUME: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+            const { std::cell::RefCell::new(None) };
     }
 
     /// Run `hook` once, the next time the `/mcp` route stage on this thread
@@ -20,6 +24,34 @@ pub(crate) mod seams {
     #[cfg(feature = "firewall")]
     pub(crate) fn after_gate(hook: impl FnOnce() + 'static) {
         AFTER_GATE.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    /// Run `hook` once, the next time the `/mcp` route stage on this thread
+    /// is about to ask the whole-call gate, after the route checks (MIK-8387
+    /// G0: a reload between S1 and S2).
+    #[cfg(feature = "firewall")]
+    pub(crate) fn before_gate(hook: impl FnOnce() + 'static) {
+        BEFORE_GATE.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    /// Called just before the route stage asks the whole-call gate.
+    pub(crate) fn gate_start() {
+        if let Some(hook) = BEFORE_GATE.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
+    }
+
+    /// Run `hook` once, the next time a chain on this thread is about to
+    /// judge its resume step (MIK-8387 R1g: a reload after S1).
+    pub(crate) fn before_resume(hook: impl FnOnce() + 'static) {
+        BEFORE_RESUME.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    /// Called just before a chain judges its resume step.
+    pub(crate) fn resume_start() {
+        if let Some(hook) = BEFORE_RESUME.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
     }
 
     /// Called where the route stage's gate judgement hands over.

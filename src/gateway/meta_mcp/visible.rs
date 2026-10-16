@@ -12,8 +12,11 @@ use crate::capability::validator::input_schema_is_structurally_valid;
 use crate::protocol::Tool;
 
 use super::{InvokeScope, MetaMcp};
+#[path = "visible_absent.rs"]
+mod absent;
 #[path = "visible_deferred.rs"]
 mod deferred;
+pub(crate) use absent::{absent_name, record_absent};
 pub(crate) use deferred::*;
 
 /// Why a tool is withheld from a caller. Read only by the audit owner; every
@@ -29,6 +32,8 @@ pub(crate) enum Withholding {
     /// The caller's own complete catalogue on a per-user backend does not
     /// list it (MIK-8356).
     Lacked,
+    /// Its backend is outside a scoped key's grant, or not registered (MIK-8387).
+    Absent,
 }
 
 /// Whether a caller may be shown a tool.
@@ -650,12 +655,6 @@ pub(crate) async fn with_visibility_memo<F: std::future::Future>(request: F) -> 
     VISIBILITY_MEMO
         .scope(VisibilityMemo::default(), request)
         .await
-}
-
-/// The answer to a name that matches no tool (-32601). A tool withheld from
-/// this caller answers with exactly this, so the two cannot be told apart.
-pub(crate) fn absent_name(tool_name: &str) -> crate::Error {
-    crate::Error::json_rpc(-32601, format!("Unknown tool: {tool_name}"))
 }
 
 /// A name this request's caller verdict withheld answers as absent at every

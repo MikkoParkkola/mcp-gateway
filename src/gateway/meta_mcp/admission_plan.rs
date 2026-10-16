@@ -155,6 +155,18 @@ impl MetaMcp {
                 caller,
             );
             match checked {
+                // MIK-8387 S2b′: a scoped key's absent step is the per-step
+                // gate's on a fresh call; a replay meets the backend miss, the
+                // same for all three cells. Its policy check above has already
+                // written the scope refusal's audit line; no kill switch is
+                // judged for it by name.
+                _ if self
+                    .scoped(caller.scope().authorizer.backend_grant())
+                    .absent_step(server, tool) =>
+                {
+                    let missing = Error::BackendNotFound(server.to_owned());
+                    deferred.push(((server.to_owned(), tool.to_owned()), missing));
+                }
                 Ok(()) => {}
                 // A step the caller cannot see, by the shared judgement or
                 // by its own catalogue's verdict this request recorded, is
