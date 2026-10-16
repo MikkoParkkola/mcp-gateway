@@ -458,5 +458,26 @@ async fn l4_a_lifted_replay_records_the_first_execution_s_hashes() {
     drop(idp);
 }
 
+/// The refusal an unminted proof answers with: at the lift and at site 5 on
+/// `/mcp`, and on the direct route (one definition, so the rows compare one).
+const UNPROVEN: &str = "Configuration error: identity propagation minted no credential \
+                        for backend 'tx'; a stored result is not served without one";
+
+fn assert_unproven(row: &str, answer: &Value) {
+    assert_eq!(
+        answer.pointer("/error/code").and_then(Value::as_i64),
+        Some(-32603),
+        "{row}: not the unproven refusal: {answer}"
+    );
+    assert_eq!(
+        answer.pointer("/error/message").and_then(Value::as_str),
+        Some(UNPROVEN),
+        "{row}: not the unproven refusal: {answer}"
+    );
+}
+
 #[path = "stored_replay_liveness_optional_tests.rs"]
 mod optional;
+
+#[path = "stored_replay_liveness_direct_tests.rs"]
+mod direct;

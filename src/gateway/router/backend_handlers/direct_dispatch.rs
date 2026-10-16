@@ -262,7 +262,7 @@ pub(super) async fn admit<'a>(
     admitted.witness = admission_witness(admitted.nonce.as_ref(), propagation, &route.backend);
     super::direct_idempotency::deliver_replay(
         scope,
-        (envelope, preflight),
+        (envelope, preflight, propagation),
         &mut admitted,
         (guarded, replay),
     )?;

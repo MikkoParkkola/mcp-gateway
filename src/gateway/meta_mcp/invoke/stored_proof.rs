@@ -40,9 +40,10 @@ fn minted_proof(resolved: &super::ResolvedDispatch) -> bool {
     resolved.binding.is_some()
 }
 
-/// The refusal an unminted proof answers with, at site 5 and at the lift: a
-/// retryable `-32603`, nothing sent.
-fn unminted_refusal(server: &str) -> crate::Error {
+/// The refusal an unminted proof answers with, at site 5, at the lift and on
+/// the direct route's stored replay (MIK-8434): a `-32603` that is not
+/// retryable, nothing sent.
+pub(super) fn unminted_refusal(server: &str) -> crate::Error {
     crate::Error::Config(format!(
         "identity propagation minted no credential for backend '{server}'; \
          a stored result is not served without one"
