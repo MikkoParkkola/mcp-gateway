@@ -78,26 +78,25 @@ async fn arm(gw: &Gateway, row: &str) -> (Value, Value, usize) {
 const COOLDOWN: &str = "temporarily disabled";
 
 /// R-MCP (a), Offers (green, kills M3 and M6): the verdict recorded
-/// `Visible`, so signing runs the policy first: the replay gets the
-/// cooldown, unprefixed, before the nonce. Nothing sent.
+/// `Visible`, so signing runs the policy first: the replay and a fresh-nonce
+/// call both get the cooldown, unprefixed, before the nonce. Nothing sent.
 #[tokio::test]
 async fn r_mcp_a_offers_answers_the_cooldown_before_the_nonce() {
     let gw = signed(Warmth::Warm, CLOSED).await;
-    let (replay, _, sent) = arm(&gw, "rmcp-a").await;
-    assert_eq!(
-        replay.pointer("/error/code"),
-        Some(&json!(-32000)),
-        "R-MCP (a): {replay}"
+    let (replay, fresh, sent) = arm(&gw, "rmcp-a").await;
+    let cooldown = format!(
+        "Capability '{TOOL}' on server '{BACKEND}' is temporarily disabled due to a high \
+         error rate. It will auto-recover after the cooldown period. Use \
+         gateway_list_disabled_capabilities to see all disabled capabilities."
     );
-    assert_eq!(
-        message(&replay),
-        format!(
-            "Capability '{TOOL}' on server '{BACKEND}' is temporarily disabled due to a high \
-             error rate. It will auto-recover after the cooldown period. Use \
-             gateway_list_disabled_capabilities to see all disabled capabilities."
-        ),
-        "R-MCP (a): {replay}"
-    );
+    for (call, answer) in [("replay", &replay), ("fresh nonce", &fresh)] {
+        assert_eq!(
+            answer.pointer("/error/code"),
+            Some(&json!(-32000)),
+            "R-MCP (a) {call}: {answer}"
+        );
+        assert_eq!(message(answer), cooldown, "R-MCP (a) {call}: {answer}");
+    }
     assert_eq!(sent, 0, "R-MCP (a): sent");
 }
 
