@@ -76,10 +76,11 @@ impl Backend {
             .is_fresh(self.cache_ttl)
     }
 
-    /// How many list fills on this backend have passed admission (any slot,
-    /// any caller). A change across a check means a fill may have started or
-    /// contacted the backend meanwhile, possibly another caller's: read as an
-    /// effect, that errs toward keeping a nonce spent.
+    /// How many list fills on this backend have passed admission, or were
+    /// joined while under way (any slot, any caller). A change across a check
+    /// means a fill may have started, contacted the backend or been waited on
+    /// meanwhile, possibly another caller's: read as an effect, that errs
+    /// toward keeping a nonce spent (MIK-8353, r4 §70).
     pub(crate) fn list_fills(&self) -> u64 {
         self.list_fills.load(std::sync::atomic::Ordering::SeqCst)
     }
@@ -410,8 +411,17 @@ impl Backend {
                     guard.end(FillEnd::Stored);
                 }
             },
-            // A joiner classifies its deadline by this fill (MIK-8046).
-            Provenance::joined,
+            // A joiner classifies its deadline by this fill (MIK-8046), and
+            // counts as a fill: waiting on another request's fill under way is
+            // an effect, so a check that joined one keeps the nonce spent
+            // (MIK-8353, r4 §70). `None` is this caller running the fill
+            // itself, already counted by `admit_fill`.
+            |mark| {
+                if mark.is_some() {
+                    self.list_fills.fetch_add(1, Ordering::SeqCst);
+                }
+                Provenance::joined(mark);
+            },
             on_abandon,
         ))
         .await

@@ -464,6 +464,15 @@ impl Backend {
         *entry.transport.write() = Some(transport);
     }
 
+    /// Test-only: how many callers wait on the shared slot's tools fill in
+    /// flight, a join observed, not timed (MIK-8353 PR-W rows).
+    #[cfg(all(test, feature = "cost-governance"))]
+    pub(crate) fn tools_waiters_for_test(&self) -> usize {
+        self.pool
+            .get(&PoolKey::Shared)
+            .map_or(0, |entry| entry.value().tools_cache.waiters_for_test())
+    }
+
     /// Test-only: one slot's transport, for `Arc::ptr_eq` isolation checks.
     #[cfg(test)]
     pub(crate) fn pooled_transport_for_test(&self, key: &PoolKey) -> Option<Arc<dyn Transport>> {

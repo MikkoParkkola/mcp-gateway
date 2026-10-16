@@ -329,3 +329,80 @@ async fn a_spend_refusal_after_a_failed_optional_mint_keeps_the_nonce() {
         assert_eq!(dispatched(&fx), 1, "{mode}");
     }
 }
+
+/// K-waiter-route (MIK-8353 PR-W, the fourth reader): A's cold `tools/list`
+/// on `alpha-pt` is held on the wire; B, a signed `gateway_invoke` on `/mcp`,
+/// starts only once A is past `admit_fill`. B's first catalogue read is the
+/// route stage's `invisible_call` (`dispatch_tools_call.rs` → gate.rs
+/// `fill_marks` / `filled_since`), ahead of `gated` and the invoke check, so
+/// it joins A's fill there. A is released only once the join is observed and
+/// B has not returned. The join is an effect (r4 §70): the re-send is a
+/// replay. Red on base: a join never moves `list_fills`. Mutants: mW
+/// (backend/metadata.rs:414); mRouteCarry (`invisible_call` returns the
+/// witness without `carry(.., filled)`: the later readers' marks are taken
+/// after the join, so they see no fill).
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn a_spend_refusal_after_the_route_stage_joins_a_fill_keeps_the_nonce() {
+    use super::direct_guards_fixture::fixture_hardened_signed_built;
+    use super::direct_nonce_witness_tests::{HeldList, budget_below_one_call, until};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let fx = fixture_hardened_signed_built(Answer::Ok, true, budget_below_one_call).await;
+    let cold = fx.state.backends.get("alpha-pt").expect("fixture backend");
+    assert!(!cold.has_cached_tools(), "premise: alpha-pt is cold");
+    let shared = crate::backend::PoolKey::Shared;
+    let wire = std::sync::Arc::new(HeldList {
+        inner: cold
+            .pooled_transport_for_test(&shared)
+            .expect("scripted transport"),
+        lists: std::sync::atomic::AtomicUsize::new(0),
+        release: tokio::sync::Semaphore::new(0),
+    });
+    cold.set_pooled_transport_for_test(&shared, wire.clone());
+    let fills = cold.list_fills();
+
+    let who = ("k-budget", "alpha-pt");
+    let (a_listed, b_done) = (AtomicBool::new(false), AtomicBool::new(false));
+    let a = async {
+        cold.get_tools_shared().await.expect("A's fill answers");
+    };
+    let b = async {
+        until("A's tools/list", || a_listed.load(Ordering::SeqCst)).await;
+        let (_, refused) = signed_call(&fx, who, "n2", json!({})).await;
+        b_done.store(true, Ordering::SeqCst);
+        refused
+    };
+    let control = async {
+        until("A's tools/list", || wire.lists.load(Ordering::SeqCst) == 1).await;
+        assert_eq!(
+            cold.list_fills(),
+            fills + 1,
+            "premise: A's fill was admitted"
+        );
+        a_listed.store(true, Ordering::SeqCst);
+        until("B to join A's fill", || cold.tools_waiters_for_test() >= 1).await;
+        assert!(
+            !b_done.load(Ordering::SeqCst),
+            "premise: B waits on A's fill"
+        );
+        wire.release.add_permits(1);
+    };
+    let ((), refused, ()) = tokio::join!(a, b, control);
+    assert_eq!(
+        code(&refused),
+        Some(-32003),
+        "premise: the spend refusal: {refused}"
+    );
+    assert_eq!(
+        wire.lists.load(Ordering::SeqCst),
+        1,
+        "premise: one tools/list, A's"
+    );
+
+    let (_, again) = signed_call(&fx, who, "n2", json!({})).await;
+    assert!(
+        refused_as_replay(&again),
+        "the nonce was given back after the route stage joined a fill: {again}"
+    );
+    assert_eq!(dispatched(&fx), 0, "nothing reached a backend");
+}
