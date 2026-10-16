@@ -77,7 +77,7 @@ async fn arm(gw: &Gateway, row: &str) -> (Value, Value, usize) {
 
 const COOLDOWN: &str = "temporarily disabled";
 
-/// R-MCP (a), Offers (kills M3): the verdict recorded `Visible`, and on a
+/// R-MCP (a), Offers: the verdict recorded `Visible`, and on a
 /// per-user backend the policy no longer reads the cooldown (MIK-8439): the
 /// replay is refused as a replay, before the cooldown is read, and a
 /// fresh-nonce call meets the cooldown at dispatch, in the dispatch's
