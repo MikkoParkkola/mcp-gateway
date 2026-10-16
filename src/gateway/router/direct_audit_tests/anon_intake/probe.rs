@@ -62,8 +62,11 @@ fn show(case: &str, (status, headers, bytes): &Raw) -> String {
     )
 }
 
+/// What a byte-identity row compares: status, sorted headers, body.
+type Compared = (StatusCode, Vec<(String, Vec<u8>)>, Vec<u8>);
+
 /// The parts of an answer a byte-identity row compares, minus `drop_header`.
-fn compared(raw: &Raw, drop_header: Option<&str>) -> (StatusCode, Vec<(String, Vec<u8>)>, Vec<u8>) {
+fn compared(raw: &Raw, drop_header: Option<&str>) -> Compared {
     let mut headers: Vec<(String, Vec<u8>)> = raw
         .1
         .iter()
