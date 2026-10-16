@@ -466,8 +466,16 @@ async fn g_live_1_eq_a_stream_at_its_certificate_not_after_is_still_told() {
     w.store_shared("alpha", alpha("r2"));
     // GET first: a GET stream that closed reads as told 0 here, where a
     // closed listen stream would stop the read inside the fixture instead.
-    assert_eq!(get.told(&w).await, 1, "at notAfter the certificate is valid on GET");
-    assert_eq!(listen.told(&w).await, 1, "at notAfter the certificate is valid on listen");
+    assert_eq!(
+        get.told(&w).await,
+        1,
+        "at notAfter the certificate is valid on GET"
+    );
+    assert_eq!(
+        listen.told(&w).await,
+        1,
+        "at notAfter the certificate is valid on listen"
+    );
     assert!(!listen.closed(&w).await, "the listen stream stays open");
     assert!(get.is_open(&w).await, "the GET stream stays open");
     drop(clock);
