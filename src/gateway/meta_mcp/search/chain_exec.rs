@@ -196,6 +196,17 @@ impl MetaMcp {
                 caller.principal_source(None),
             ));
         };
+        // MIK-8387 S6: a scoped key's pending step whose backend is absent,
+        // by this request's record first, is refused with the backend miss
+        // and its one invocation record, before anything resolves for it.
+        let scoped = self.scoped(caller.scope().authorizer.backend_grant());
+        if scoped.absent_step(server, tool) {
+            let step = (server, tool, &arguments);
+            let absence = scoped.absence(server);
+            return Err(self
+                .record_absent_step(step, session_id, caller, absence)
+                .await);
+        }
         // A step the caller can no longer see is refused as the name it
         // cannot see, never by its reason, and before its fingerprint can
         // resolve a credential for it (MIK-8361 A5 ruling A; ORACLE.3).
