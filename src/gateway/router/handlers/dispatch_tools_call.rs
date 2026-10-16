@@ -652,14 +652,24 @@ pub(super) async fn tools_call(
             response,
             audit,
             target,
-            _,
+            dispatched,
         )) => {
             // STORED.2 site 1: a retained single-call result is served only
             // on proven liveness; otherwise the call proceeds as Unprotected
-            // and the lift serves it after a live proof.
+            // and the lift serves it after a live proof. A plan replay is
+            // served only with every executed step's account proven, else it
+            // answers that step's live refusal (MIK-8406).
             match state
                 .meta_mcp
-                .defer_or_serve_replay(tool_name, &arguments, &caller, target, response, audit)
+                .defer_or_serve_replay(
+                    tool_name,
+                    &arguments,
+                    &caller,
+                    target,
+                    dispatched,
+                    (response, audit),
+                )
+                .await
             {
                 Some(replay) => (None, Some(replay)),
                 None => (None, None),

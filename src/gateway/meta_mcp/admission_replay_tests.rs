@@ -44,8 +44,8 @@ fn per_caller_meta() -> MetaMcp {
 /// of `None` (deferred), which would let the caller re-run a completed call
 /// unprotected with no lift to serve it. Answering `None` regardless of the
 /// record (M-closed) fails this row.
-#[test]
-fn an_unrecorded_deferral_fails_closed() {
+#[tokio::test]
+async fn an_unrecorded_deferral_fails_closed() {
     let meta = per_caller_meta();
     let retry = crate::protocol::mrtr::RetryFields {
         idempotency_key: Some("closed".to_string()),
@@ -60,17 +60,19 @@ fn an_unrecorded_deferral_fails_closed() {
         "premise: the target defers"
     );
     let stored = JsonRpcResponse::success(RequestId::Number(4), json!({"content": []}));
-    let answer = meta.defer_or_serve_replay(
-        "gateway_invoke",
-        &json!({"server": "idp", "tool": "read"}),
-        &caller,
-        Some(ReplayTarget {
-            server: "idp".to_string(),
-            tool: "read".to_string(),
-        }),
-        stored,
-        None,
-    );
+    let answer = meta
+        .defer_or_serve_replay(
+            "gateway_invoke",
+            &json!({"server": "idp", "tool": "read"}),
+            &caller,
+            Some(ReplayTarget {
+                server: "idp".to_string(),
+                tool: "read".to_string(),
+            }),
+            None,
+            (stored, None),
+        )
+        .await;
     let (response, audit) = answer.expect("R-closed: an unrecorded deferral answered None");
     assert!(
         audit.is_none(),

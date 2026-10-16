@@ -152,7 +152,13 @@ impl crate::gateway::meta_mcp::MetaMcp {
             std::ops::ControlFlow::Continue((_, resolved)) if !minted_proof(&resolved) => {
                 return Err(unminted_refusal(server));
             }
-            std::ops::ControlFlow::Continue(_) => None,
+            // A minted (or refreshed) binding is an effect: the witness is
+            // spent, so a later refusal in the same walk cannot give the
+            // nonce back (MIK-8406 G1).
+            std::ops::ControlFlow::Continue(_) => {
+                witness.spend();
+                None
+            }
             std::ops::ControlFlow::Break(answer) => Some(answer.into_parts().0),
         })
     }
