@@ -468,9 +468,11 @@ jobs:
 
   windows-check:
     name: Windows check
-    # Waits for the Linux suite: a red head never takes one of the account's
-    # few concurrent runner slots for a Windows run that cannot pass.
-    needs: test
+    # Starts alongside the Linux suite, not after it: the required path is
+    # then the longer of the two jobs, not their sum (Tests ~31 min, then
+    # Windows ~47 min measured on 2026-10-16). Heads reach CI only after the
+    # local fast gate (fmt, clippy on both feature sets, touched tests), so a
+    # red head that burns a Windows runner slot is the exception.
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: windows-2025
     steps:
