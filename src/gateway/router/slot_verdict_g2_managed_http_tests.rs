@@ -548,5 +548,5 @@ async fn no_grant_operator_direct_call_is_the_same_for_a_withheld_name() {
     );
 }
 
-#[path = "slot_verdict_g2_managed_http_noview_cooldown.rs"]
+#[path = "slot_verdict_g2_managed_http_noview_cooldown_tests.rs"]
 mod noview_cooldown;
