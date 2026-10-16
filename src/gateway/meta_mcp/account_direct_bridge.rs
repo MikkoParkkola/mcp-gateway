@@ -689,3 +689,14 @@ impl AccountCustody for ReleaseBudget {
         self.inner.refresh_after_rejection(lease).await
     }
 }
+
+/// The error-rate cooldown refusal for `server`'s `tool`, as
+/// `admit_enabled_capability` words it, without the `JSON-RPC error -32000: `
+/// prefix the dispatch's rendering adds (the MIK-8439 rows).
+pub(crate) fn cooldown_refusal(server: &str, tool: &str) -> String {
+    format!(
+        "Capability '{tool}' on server '{server}' is temporarily disabled due to a high error \
+         rate. It will auto-recover after the cooldown period. Use \
+         gateway_list_disabled_capabilities to see all disabled capabilities."
+    )
+}

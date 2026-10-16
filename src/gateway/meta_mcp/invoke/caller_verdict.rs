@@ -529,7 +529,10 @@ mod outcome_tests;
 
 /// Test-only hook between the invocation policy and the dispatch's
 /// resolution, for the MIK-8439 rows that change state in that window (a
-/// cooldown, a reload, a profile). Compiled out of non-test builds.
+/// cooldown, a reload, a profile). Compiled out of non-test builds. The hook
+/// is thread-local, so its rows run on the default current-thread tokio
+/// runtime: on a multi-thread one the dispatch may resolve on another
+/// thread and never fire it.
 #[cfg(test)]
 mod dispatch_seam {
     use std::cell::RefCell;

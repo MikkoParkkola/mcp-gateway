@@ -17,7 +17,7 @@ use crate::gateway::STDIO_CREDENTIAL_PRINCIPAL;
 use crate::gateway::authz::AllowAll;
 use crate::gateway::meta_mcp::account_resolver_fixture::caller_as;
 use crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::{
-    BACKEND, Binding, DirectAccountGateway,
+    BACKEND, Binding, DirectAccountGateway, cooldown_refusal,
 };
 use crate::gateway::meta_mcp::authz_tests::{counted_backend, ctx, invoke_args};
 use crate::gateway::meta_mcp::{AdmissionOwner, MetaMcp, MetaMcpCallerContext};
@@ -25,16 +25,6 @@ use crate::gateway::server::account_bindings::ServeMode;
 use crate::kill_switch::KillSwitch;
 
 const TOOL: &str = "read";
-
-/// The cooldown refusal's text for `tool` on `server`, as
-/// `admit_enabled_capability` words it.
-fn cooldown_text(server: &str, tool: &str) -> String {
-    format!(
-        "Capability '{tool}' on server '{server}' is temporarily disabled due to a high error \
-         rate. It will auto-recover after the cooldown period. Use \
-         gateway_list_disabled_capabilities to see all disabled capabilities."
-    )
-}
 
 /// Push `server`'s `tool` into error-rate cooldown, as other callers'
 /// failures would.
@@ -103,7 +93,7 @@ fn r5_shared_backend_cooldown_is_refused_at_admission() {
         panic!("R5: admission let a shared tool in cooldown through");
     };
     assert!(
-        error.to_string().contains(&cooldown_text("beta", TOOL)),
+        error.to_string().contains(&cooldown_refusal("beta", TOOL)),
         "R5: {error}"
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0, "R5: sent");
@@ -130,7 +120,7 @@ async fn r10_shared_backend_cooldown_after_the_policy_is_refused_at_dispatch() {
     let error = answer.expect_err("R10: a tool in cooldown at dispatch was answered");
     assert_eq!(error.to_rpc_code(), -32000, "R10: {error}");
     assert!(
-        error.to_string().contains(&cooldown_text("alpha", TOOL)),
+        error.to_string().contains(&cooldown_refusal("alpha", TOOL)),
         "R10: {error}"
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0, "R10: sent");
@@ -187,7 +177,7 @@ async fn r11_a_resolving_cooldown_refusal_leaves_the_witness_spent() {
     );
     let error = answer.expect_err("R11: a tool in cooldown was answered");
     assert!(
-        error.to_string().contains(&cooldown_text(BACKEND, TOOL)),
+        error.to_string().contains(&cooldown_refusal(BACKEND, TOOL)),
         "R11: {error}"
     );
     assert!(
@@ -197,11 +187,12 @@ async fn r11_a_resolving_cooldown_refusal_leaves_the_witness_spent() {
     assert_eq!(gateway.tool_calls().len(), 0, "R11: sent");
 }
 
-/// R12 (green at base): a reload replaces the per-user [`BACKEND`] with a
-/// shared one of the same name between the policy and the dispatch, the tool
-/// still in cooldown. The dispatch refuses it and the shared backend is
-/// never reached. Green at base: the policy still checks the per-user
-/// cooldown. Kills M3′ (dispatch half guarded per-user: the policy skipped
+/// R12 (red at base by design): a reload replaces the per-user [`BACKEND`]
+/// with a shared one of the same name between the policy and the dispatch,
+/// the tool still in cooldown. The dispatch refuses it and the shared
+/// backend is never reached. Red at base by design: the policy refuses the
+/// per-user cooldown first, so the reload window (the seam) is unreachable
+/// until the policy skip lands. Kills M3′ (dispatch half guarded per-user: the policy skipped
 /// it as per-user, the dispatch skips it as shared).
 #[tokio::test]
 async fn r12_a_reload_to_shared_between_policy_and_dispatch_keeps_the_cooldown() {
@@ -222,10 +213,18 @@ async fn r12_a_reload_to_shared_between_policy_and_dispatch_keeps_the_cooldown()
         assert!(registry.register(shared), "premise: the shared one came in");
     });
     let answer = meta.invoke_tool(&operator_args(), None, &operator()).await;
+    assert!(
+        !gateway
+            .backends()
+            .get(BACKEND)
+            .expect("a backend")
+            .keeps_per_user_catalogues(),
+        "R12: the reload seam never fired (refused before the dispatch): {answer:?}"
+    );
     let error = answer.expect_err("R12: a tool in cooldown was answered");
     assert_eq!(error.to_rpc_code(), -32000, "R12: {error}");
     assert!(
-        error.to_string().contains(&cooldown_text(BACKEND, TOOL)),
+        error.to_string().contains(&cooldown_refusal(BACKEND, TOOL)),
         "R12: {error}"
     );
     assert_eq!(shared_calls.load(Ordering::SeqCst), 0, "R12: shared sent");

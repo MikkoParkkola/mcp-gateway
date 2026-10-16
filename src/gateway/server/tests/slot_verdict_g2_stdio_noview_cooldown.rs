@@ -17,15 +17,6 @@ enum Signing {
     On,
 }
 
-/// The cooldown refusal as the dispatch renders it.
-fn dispatch_cooldown_text() -> String {
-    format!(
-        "JSON-RPC error -32000: Capability '{TOOL}' on server '{BACKEND}' is temporarily \
-         disabled due to a high error rate. It will auto-recover after the cooldown period. \
-         Use gateway_list_disabled_capabilities to see all disabled capabilities."
-    )
-}
-
 /// The operator's stdio gateway with its grant in state `binding`, signing
 /// on as `signing` says, the shared slot warm and [`TOOL`] in
 /// error-rate cooldown.
@@ -149,10 +140,11 @@ async fn r3_noview_cooldown_twin_answers_as_missing_stdio_signed() {
     assert_noview_twin(Signing::On).await;
 }
 
-/// R4 (NOVIEW.3 control on stdio, signed): an operator with a grant is still
-/// refused for the cooldown, with the dispatch's full text; nothing is sent.
-/// RED at base on the prefix: signing answers the raw message. The same row
-/// as MIK-8433's STDIO.3, kept here so this file does not depend on it.
+/// R4 (NOVIEW.3 control on stdio, signed; green at base): an operator with
+/// a grant is still refused for the cooldown (-32000, the text naming the
+/// tool, with or without the dispatch's prefix, which MIK-8433's STDIO.3
+/// pins) and nothing is sent. Kills M2: with the policy skip and no dispatch
+/// half, the call is sent.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn r4_view_caller_still_gets_cooldown_stdio() {
     let stdio = cooling(&Binding::Connected, Signing::On);
@@ -169,9 +161,16 @@ async fn r4_view_caller_still_gets_cooldown_stdio() {
         Some(&json!(-32000)),
         "R4: {answer}"
     );
-    assert_eq!(
-        answer.pointer("/error/message").and_then(Value::as_str),
-        Some(dispatch_cooldown_text().as_str()),
+    // The prefix the dispatch adds is MIK-8433's to pin (its STDIO.3 row).
+    let refusal =
+        crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::cooldown_refusal(
+            BACKEND, TOOL,
+        );
+    assert!(
+        answer
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.ends_with(&refusal)),
         "R4: {answer}"
     );
     assert_eq!(stdio.gateway.tool_calls().len(), before, "R4: sent");

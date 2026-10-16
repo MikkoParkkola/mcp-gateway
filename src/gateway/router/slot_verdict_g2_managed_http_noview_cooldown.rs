@@ -29,9 +29,10 @@ fn cool(fx: &Fx) {
 /// Display (error.rs) through `error_response_preserving_status`.
 fn dispatch_cooldown_text() -> String {
     format!(
-        "JSON-RPC error -32000: Capability '{TOOL}' on server '{BACKEND}' is temporarily \
-         disabled due to a high error rate. It will auto-recover after the cooldown period. \
-         Use gateway_list_disabled_capabilities to see all disabled capabilities."
+        "JSON-RPC error -32000: {}",
+        crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::cooldown_refusal(
+            BACKEND, TOOL
+        )
     )
 }
 
@@ -256,7 +257,11 @@ async fn r6_keyed_view_caller_cooldown_frees_its_key_mcp() {
     for id in [1, 2] {
         let (status, body) = post(&fx, &keyed(id), Some("gateway_invoke")).await;
         assert!(
-            body.contains(&cooldown_text_unprefixed()),
+            body.contains(
+                &crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::cooldown_refusal(
+                    BACKEND, TOOL,
+                ),
+            ),
             "R6 call {id}: not the cooldown ({status}): {body}"
         );
         assert_ne!(
@@ -280,11 +285,6 @@ async fn r6_keyed_view_caller_cooldown_frees_its_key_mcp() {
         sends + 1,
         "R6: one fresh send"
     );
-}
-
-/// The cooldown text without the Display prefix: in both renderings.
-fn cooldown_text_unprefixed() -> String {
-    dispatch_cooldown_text().replacen("JSON-RPC error -32000: ", "", 1)
 }
 
 /// A task's settled record, read from the store (a no-view caller's
@@ -390,6 +390,7 @@ async fn r8_noview_cooldown_chain_answers_as_missing_mcp() {
         "R8: the cooldown named the tool: {hidden:?}"
     );
     assert_eq!(hidden, missing, "R8: in cooldown vs missing");
+    assert_eq!(hidden.sent + missing.sent, 0, "R8: sent");
 }
 
 /// R9 (direct route control, green at base): `/mcp/{BACKEND}` resolves the
