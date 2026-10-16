@@ -203,6 +203,37 @@ pub(super) async fn gateway_with(
     Arc<AtomicUsize>,
     (tempfile::TempDir, tempfile::TempDir),
 ) {
+    let (router, sends, dirs, _) = build(key, endpoint, alice, requirement, arm).await;
+    (router, sends, dirs)
+}
+
+/// [`gateway`], also handing back the served `MetaMcp`, so a row can read
+/// its plan executor entries (MIK-8406).
+pub(super) async fn gateway_with_meta(
+    key: &Arc<crate::gateway::oauth::GatewayKeyPair>,
+    endpoint: String,
+    alice: &crate::key_server::oidc::VerifiedIdentity,
+) -> (
+    axum::Router,
+    Arc<AtomicUsize>,
+    (tempfile::TempDir, tempfile::TempDir),
+    Arc<crate::gateway::meta_mcp::MetaMcp>,
+) {
+    build(key, endpoint, alice, Requirement::Required, |meta| meta).await
+}
+
+async fn build(
+    key: &Arc<crate::gateway::oauth::GatewayKeyPair>,
+    endpoint: String,
+    alice: &crate::key_server::oidc::VerifiedIdentity,
+    requirement: Requirement,
+    arm: impl FnOnce(crate::gateway::meta_mcp::MetaMcp) -> crate::gateway::meta_mcp::MetaMcp,
+) -> (
+    axum::Router,
+    Arc<AtomicUsize>,
+    (tempfile::TempDir, tempfile::TempDir),
+    Arc<crate::gateway::meta_mcp::MetaMcp>,
+) {
     use crate::config::{BackendConfig, TransportConfig};
     use crate::identity_propagation::{
         IdentityPropagationConfig, PropagationStrategyKind, SessionMode, TokenExchangeStrategy,
@@ -288,12 +319,14 @@ pub(super) async fn gateway_with(
         crate::gateway::router::tests::test_router_app_state_with_auth(&auth).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.backends = registry;
-    state_mut.meta_mcp = Arc::new(arm(meta));
+    let meta = Arc::new(arm(meta));
+    state_mut.meta_mcp = Arc::clone(&meta);
     state_mut.transparency_log = Some(log);
     (
         crate::gateway::router::create_router(state),
         sends,
         (log_dir, store),
+        meta,
     )
 }
 

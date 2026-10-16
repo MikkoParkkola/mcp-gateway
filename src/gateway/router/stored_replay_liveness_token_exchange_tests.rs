@@ -460,3 +460,5 @@ async fn l4_a_lifted_replay_records_the_first_execution_s_hashes() {
 
 #[path = "stored_replay_liveness_optional_tests.rs"]
 mod optional;
+#[path = "stored_replay_liveness_plan_external_tests.rs"]
+mod plan_external;
