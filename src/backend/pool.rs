@@ -466,7 +466,7 @@ impl Backend {
 
     /// Test-only: how many callers wait on the shared slot's tools fill in
     /// flight, a join observed, not timed (MIK-8353 PR-W rows).
-    #[cfg(test)]
+    #[cfg(all(test, feature = "cost-governance"))]
     pub(crate) fn tools_waiters_for_test(&self) -> usize {
         self.pool
             .get(&PoolKey::Shared)

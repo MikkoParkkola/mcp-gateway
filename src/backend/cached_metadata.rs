@@ -280,7 +280,7 @@ impl<T> CachedMetadata<T> {
     /// How many callers wait on the fill in flight (0 with none): each
     /// subscribed in `acquire` and is told its mark before it awaits, and the
     /// leader's own receiver is gone once `acquire` returns (MIK-8353 PR-W).
-    #[cfg(test)]
+    #[cfg(all(test, feature = "cost-governance"))]
     pub(crate) fn waiters_for_test(&self) -> usize {
         self.state
             .read()
