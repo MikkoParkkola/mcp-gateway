@@ -158,7 +158,8 @@ async fn i1_t1_a_keyed_retry_after_removal_answers_as_an_absent_one() {
 /// I2(a) (d5, GPT F1; §2a cell 8), `ghost` only: a keyed mixed chain whose
 /// first run dispatched `ghost`; `ghost` is then removed and the key resent.
 /// The replay is refused 400 -32001 `Backend not found`, never served the
-/// stored output.
+/// stored output. No `beta` cell exists at T1, so the pin is the design's
+/// (design-8387 d5 §3 S2b′, §5 row I2(a); lead ruling on stage 1).
 #[tokio::test]
 async fn i2a_a_keyed_mixed_chain_replay_after_removal_answers_the_backend_miss() {
     let fx = scoped_fixture(code_mode()).await;

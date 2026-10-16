@@ -9,6 +9,7 @@
 use super::*;
 
 mod cells;
+mod gaps;
 mod keyed;
 #[cfg(feature = "firewall")]
 mod reload;

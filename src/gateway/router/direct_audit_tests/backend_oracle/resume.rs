@@ -131,7 +131,9 @@ fn assert_resume_missed(
 
 /// R1 (d4, GPT F1; §2a cell 10), `ghost` cell: unregistered between the stop
 /// and the resume. The resume answers -32001 `Backend not found` (escaping at
-/// chain_exec.rs:38) and writes exactly one not-found record.
+/// chain_exec.rs:38) and writes exactly one not-found record. No `beta`
+/// cell exists at T1, so the pin is the design's (design-8387 d5 §3 S6,
+/// §5 row R1; lead ruling on stage 1).
 #[tokio::test]
 async fn r1_a_resume_whose_step_was_removed_answers_the_backend_miss_with_one_record() {
     let (fx, calls, handle) = stopped(false).await;
@@ -142,7 +144,9 @@ async fn r1_a_resume_whose_step_was_removed_answers_the_backend_miss_with_one_re
 }
 
 /// R1(c): under `FailClosed` with a failing log, the resume answers the
-/// write error, as every other refusal on this writer does.
+/// write error, as every other refusal on this writer does (design-8387 d5
+/// §3 S6 `record_absent_step`, `written.and(result)` at audit.rs:513; §5
+/// row R1(c); lead ruling on stage 1).
 #[tokio::test]
 async fn r1c_a_resume_refusal_under_a_failing_log_answers_the_write_error() {
     let (fx, _calls, handle) = stopped(true).await;
@@ -156,7 +160,8 @@ async fn r1c_a_resume_refusal_under_a_failing_log_answers_the_write_error() {
 /// R1g (d5, GPT F3; §2a cell 11): `ghost` is unregistered when the resume
 /// request starts, so S1 records it absent, and is registered again at the
 /// seam just before `resume_fingerprint`. The record decides: the resume
-/// answers as R1 does, and `ghost` sees no second request.
+/// answers as R1 does, and `ghost` sees no second request (design-8387 d5
+/// §3 S6 memo-first, §5 row R1g; lead ruling on stage 1).
 #[tokio::test]
 async fn r1g_a_name_registered_before_the_resume_step_keeps_its_recorded_absence() {
     let (fx, calls, handle) = stopped(false).await;
