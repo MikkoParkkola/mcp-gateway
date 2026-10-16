@@ -181,6 +181,9 @@ mod oracle_parity_fixture;
 mod oracle_parity_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod oracle_per_user_tests;
+/// MIK-8406: a stored plan replay needs every plan account live.
+#[cfg(test)]
+mod plan_replay_liveness_tests;
 #[cfg(test)]
 mod playbook_envelope_tests;
 #[cfg(test)]

@@ -81,6 +81,8 @@ mod chain_interim;
 #[cfg(test)]
 mod chain_interim_tests;
 mod confirmation;
+#[cfg(test)]
+pub(crate) mod plan_entries;
 // Read only by the `firewall` collusion rows.
 #[cfg(all(test, feature = "cost-governance", feature = "firewall"))]
 mod cost_test_support;
