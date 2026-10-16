@@ -142,6 +142,10 @@ impl LiveIdp {
 /// `account:`.
 pub(super) const TX: &str = "tx";
 
+/// The credential a passthrough caller forwards in
+/// `x-mcp-passthrough-authorization`.
+pub(super) const PASSTHROUGH_CREDENTIAL: &str = "Bearer alice-pt";
+
 /// A backend with no account beside [`TX`] (MIK-8406 mFirst).
 pub(super) const PLAIN: &str = "plain";
 
@@ -206,7 +210,33 @@ pub(super) async fn gateway_with(
     Arc<AtomicUsize>,
     (tempfile::TempDir, tempfile::TempDir),
 ) {
-    let (router, sends, dirs, _) = build(key, endpoint, alice, requirement, arm).await;
+    let shape = (
+        requirement,
+        crate::identity_propagation::PropagationStrategyKind::TokenExchange,
+        crate::security::SecurityPosture::Standard,
+    );
+    gateway_shaped(key, endpoint, alice, shape, arm).await
+}
+
+/// [`gateway_with`] with [`TX`]'s strategy and the gateway's posture chosen
+/// too. A passthrough [`TX`] names no exchange endpoint and dispatches on the
+/// shared counting transport; `Hardened` signs every direct `tools/call`.
+pub(super) async fn gateway_shaped(
+    key: &Arc<crate::gateway::oauth::GatewayKeyPair>,
+    endpoint: String,
+    alice: &crate::key_server::oidc::VerifiedIdentity,
+    shape: (
+        Requirement,
+        crate::identity_propagation::PropagationStrategyKind,
+        crate::security::SecurityPosture,
+    ),
+    arm: impl FnOnce(crate::gateway::meta_mcp::MetaMcp) -> crate::gateway::meta_mcp::MetaMcp,
+) -> (
+    axum::Router,
+    Arc<AtomicUsize>,
+    (tempfile::TempDir, tempfile::TempDir),
+) {
+    let (router, sends, dirs, _) = build(key, endpoint, alice, shape, arm).await;
     (router, sends, dirs)
 }
 
@@ -222,14 +252,23 @@ pub(super) async fn gateway_with_meta(
     (tempfile::TempDir, tempfile::TempDir),
     Arc<crate::gateway::router::AppState>,
 ) {
-    build(key, endpoint, alice, Requirement::Required, |meta| meta).await
+    let shape = (
+        Requirement::Required,
+        crate::identity_propagation::PropagationStrategyKind::TokenExchange,
+        crate::security::SecurityPosture::Standard,
+    );
+    build(key, endpoint, alice, shape, |meta| meta).await
 }
 
 async fn build(
     key: &Arc<crate::gateway::oauth::GatewayKeyPair>,
     endpoint: String,
     alice: &crate::key_server::oidc::VerifiedIdentity,
-    requirement: Requirement,
+    (requirement, strategy, posture): (
+        Requirement,
+        crate::identity_propagation::PropagationStrategyKind,
+        crate::security::SecurityPosture,
+    ),
     arm: impl FnOnce(crate::gateway::meta_mcp::MetaMcp) -> crate::gateway::meta_mcp::MetaMcp,
 ) -> (
     axum::Router,
@@ -241,9 +280,8 @@ async fn build(
     use crate::identity_propagation::{
         IdentityPropagationConfig, PropagationStrategyKind, SessionMode, TokenExchangeStrategy,
     };
-    const AUDIENCE: &str = "https://tx.internal";
-    const SCOPE: &str = "backends:tx tools:read";
     let sends = Arc::new(AtomicUsize::new(0));
+    let exchanges = strategy == PropagationStrategyKind::TokenExchange;
     let backend = Arc::new(crate::backend::Backend::new(
         TX,
         BackendConfig {
@@ -253,41 +291,19 @@ async fn build(
                 protocol_version: None,
             },
             identity_propagation: Some(IdentityPropagationConfig {
-                strategy: PropagationStrategyKind::TokenExchange,
+                strategy,
                 audience: AUDIENCE.to_string(),
                 required: matches!(requirement, Requirement::Required),
                 session_mode: SessionMode::Stateless,
-                token_exchange_endpoint: Some(endpoint.clone()),
-                token_exchange_scope: Some(SCOPE.to_string()),
+                token_exchange_endpoint: exchanges.then(|| endpoint.clone()),
+                token_exchange_scope: exchanges.then(|| SCOPE.to_string()),
             }),
             ..BackendConfig::r2_off()
         },
         &crate::config::FailsafeConfig::default(),
         std::time::Duration::from_secs(60),
     ));
-    let counting: Arc<dyn crate::transport::Transport> = Arc::new(Counting {
-        sends: Arc::clone(&sends),
-    });
-    backend.set_transport_for_test(Arc::clone(&counting));
-    // The per-user slot token exchange dispatches on, keyed as its
-    // `exchange_cache_key` builds it: `cache_binding(subject, audience)`
-    // widened by the length-prefixed endpoint and scope.
-    let subject = alice.stable_actor_id();
-    let binding = format!(
-        "idp:{}:{}:{}:{}:{}:{}:{}:{}",
-        subject.len(),
-        subject,
-        AUDIENCE.len(),
-        AUDIENCE,
-        endpoint.len(),
-        endpoint,
-        SCOPE.len(),
-        SCOPE,
-    );
-    backend.set_pooled_transport_for_test(
-        &crate::backend::PoolKey::PerUser { binding },
-        Arc::clone(&counting),
-    );
+    install_counting(&backend, alice, &endpoint, &sends);
     let tool: crate::protocol::Tool = serde_json::from_value(json!({
         "name": super::TOOL,
         "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}}
@@ -296,6 +312,9 @@ async fn build(
     backend.store_shared_tools_for_test(vec![tool.clone()]);
     let registry = Arc::new(crate::backend::BackendRegistry::new());
     assert!(registry.register(backend), "the fixture backend registers");
+    let counting: Arc<dyn crate::transport::Transport> = Arc::new(Counting {
+        sends: Arc::clone(&sends),
+    });
     assert!(
         registry.register(plain_backend(counting, tool)),
         "the plain backend registers"
@@ -331,6 +350,11 @@ async fn build(
     state_mut.backends = registry;
     state_mut.meta_mcp = Arc::new(arm(meta));
     state_mut.transparency_log = Some(log);
+    if posture != crate::security::SecurityPosture::Standard {
+        let mut config = crate::config::Config::default();
+        config.security.posture = posture;
+        state_mut.live_config = Arc::new(crate::config_reload::LiveConfig::new(config));
+    }
     let served = Arc::clone(&state);
     (
         crate::gateway::router::create_router(state),
@@ -341,7 +365,7 @@ async fn build(
 }
 
 /// MIK-8406 mFirst: [`PLAIN`] has no account, so it mints nothing per
-/// caller; a chain records it before [`TX`]. It shares `counting`.
+/// caller; a chain records it before [`TX`]. It counts into the same sends.
 fn plain_backend(
     counting: Arc<dyn crate::transport::Transport>,
     tool: crate::protocol::Tool,
@@ -364,6 +388,50 @@ fn plain_backend(
     plain
 }
 
+/// [`TX`]'s exchange audience and scope.
+const AUDIENCE: &str = "https://tx.internal";
+const SCOPE: &str = "backends:tx tools:read";
+
+/// Serve every slot `alice` can dispatch on with a [`Counting`] transport
+/// that counts into `sends`: the shared one, the per-user slot a token
+/// exchange mints under, and the slot a forwarded passthrough credential
+/// binds.
+fn install_counting(
+    backend: &crate::backend::Backend,
+    alice: &crate::key_server::oidc::VerifiedIdentity,
+    endpoint: &str,
+    sends: &Arc<AtomicUsize>,
+) {
+    let counting: Arc<dyn crate::transport::Transport> = Arc::new(Counting {
+        sends: Arc::clone(sends),
+    });
+    backend.set_transport_for_test(Arc::clone(&counting));
+    // The per-user slot token exchange dispatches on, keyed as its
+    // `exchange_cache_key` builds it: `cache_binding(subject, audience)`
+    // widened by the length-prefixed endpoint and scope.
+    let subject = alice.stable_actor_id();
+    let binding = format!(
+        "idp:{}:{}:{}:{}:{}:{}:{}:{}",
+        subject.len(),
+        subject,
+        AUDIENCE.len(),
+        AUDIENCE,
+        endpoint.len(),
+        endpoint,
+        SCOPE.len(),
+        SCOPE,
+    );
+    backend.set_pooled_transport_for_test(
+        &crate::backend::PoolKey::PerUser { binding },
+        Arc::clone(&counting),
+    );
+    // A forwarded passthrough credential dispatches on the slot its digest
+    // binds, charged to the caller (`charged_binding`).
+    let digest = crate::hashing::sha256_hex(PASSTHROUGH_CREDENTIAL.as_bytes());
+    let binding = crate::backend::passthrough_binding(&subject, &digest);
+    backend.set_pooled_transport_for_test(&crate::backend::PoolKey::PerUser { binding }, counting);
+}
+
 /// A `tools/call` as `alice`, whose verified identity rides the request.
 pub(super) async fn send_as(
     router: &axum::Router,
@@ -380,22 +448,62 @@ pub(super) async fn send_method_as(
     (method, name): (&str, &str),
     params: Value,
 ) -> Value {
+    post_as(router, alice, ("/mcp", method, name), params, &[])
+        .await
+        .1
+}
+
+/// A keyed `tools/call` of [`super::TOOL`] on the direct route `/mcp/tx`, as
+/// `alice`, with `headers` added; the HTTP status with the body.
+pub(super) async fn send_direct_as(
+    router: &axum::Router,
+    alice: &crate::key_server::oidc::VerifiedIdentity,
+    params: Value,
+    headers: &[(&str, &str)],
+) -> (axum::http::StatusCode, Value) {
+    let uri = format!("/mcp/{TX}");
+    post_as(
+        router,
+        alice,
+        (&uri, "tools/call", super::TOOL),
+        params,
+        headers,
+    )
+    .await
+}
+
+/// One JSON-RPC request to `uri` as `alice`: the HTTP status and the body.
+pub(super) async fn post_as(
+    router: &axum::Router,
+    alice: &crate::key_server::oidc::VerifiedIdentity,
+    (uri, method, name): (&str, &str, &str),
+    params: Value,
+    headers: &[(&str, &str)],
+) -> (axum::http::StatusCode, Value) {
     let body = json!({"jsonrpc": "2.0", "id": 7, "method": method, "params": params});
-    let mut request = axum::http::Request::builder()
+    let mut builder = axum::http::Request::builder()
         .method("POST")
-        .uri("/mcp")
+        .uri(uri)
         .header("content-type", "application/json")
         .header("mcp-protocol-version", "2026-07-28")
         .header("mcp-method", method)
-        .header("mcp-name", name)
+        .header("mcp-name", name);
+    for (header, value) in headers {
+        builder = builder.header(*header, *value);
+    }
+    let mut request = builder
         .body(axum::body::Body::from(body.to_string()))
         .expect("a request");
     request.extensions_mut().insert(alice.clone());
     let response = router.clone().oneshot(request).await.expect("an answer");
+    let status = response.status();
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("a body");
-    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
 }
 
 pub(super) struct Counting {

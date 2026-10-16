@@ -134,7 +134,9 @@ WAIVER_KINDS = ("measured", "deferred")
 # waiver is retired -- a ratchet, not a high-water mark. A stale entry would
 # otherwise sit here holding permission for a waiver nobody is taking, ready
 # to re-authorise it silently.
-APPROVED_WAIVERS = frozenset({"MIK-3274.RANKING.3"})
+APPROVED_WAIVERS = frozenset(
+    {"MIK-3274.RANKING.3", "MIK-7211.PARENT.1", "MIK-7211.PARENT.5"}
+)
 
 
 def stage_burnup(criteria):

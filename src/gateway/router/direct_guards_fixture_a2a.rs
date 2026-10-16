@@ -66,6 +66,18 @@ pub(crate) async fn fixture_firewalled_with_a2a(
     rule: Option<crate::security::firewall::FirewallAction>,
 ) -> (Fx, Arc<AtomicUsize>) {
     let fx = fixture_firewalled_with(answer, rule, false).await;
+    let sends = register_a2a(&fx, a2a, None).await;
+    (fx, sends)
+}
+
+/// Register `alpha-a2a` on `fx`, answering `a2a`, with `identity_propagation`
+/// as its config's; returns the `SendMessage` counter (also counted in
+/// `fx.calls`).
+pub(crate) async fn register_a2a(
+    fx: &Fx,
+    a2a: A2aAnswer,
+    identity_propagation: Option<crate::identity_propagation::IdentityPropagationConfig>,
+) -> Arc<AtomicUsize> {
     let (calls, sends) = (Arc::clone(&fx.calls), Arc::new(AtomicUsize::new(0)));
     let counted = Arc::clone(&sends);
     let base = crate::a2a::test_agent::serve(move |body: Value| -> BoxFuture<'static, Value> {
@@ -84,6 +96,7 @@ pub(crate) async fn fixture_firewalled_with_a2a(
                 a2a_url: base.clone(),
                 a2a_agent_card_path: None,
             },
+            identity_propagation,
             ..BackendConfig::default()
         },
         &FailsafeConfig::default(),
@@ -91,5 +104,5 @@ pub(crate) async fn fixture_firewalled_with_a2a(
     ));
     backend.set_transport_for_test(crate::a2a::test_agent::started(&base).await);
     assert!(fx.state.backends.register(backend), "fixture registration");
-    (fx, sends)
+    sends
 }

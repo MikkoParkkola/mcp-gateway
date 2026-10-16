@@ -231,6 +231,12 @@ pub(super) struct Propagation {
     pub(super) fills_before: u64,
     /// A mint was attempted, whatever came of it (MIK-8379 H1).
     pub(super) attempted: bool,
+    /// This propagation-configured backend attached no per-caller credential
+    /// (an optional mint's static fallback, or a passthrough call that
+    /// forwarded none), so a stored per-user result is not served to it; the
+    /// refusal it answers with (MIK-8434). Set at stage 5 before the A2A
+    /// override, which binds a caller but proves no account.
+    pub(super) unproven: Option<crate::Error>,
 }
 
 type IdpConfig = crate::identity_propagation::IdentityPropagationConfig;
@@ -245,6 +251,7 @@ struct Resolution {
     managed: Option<crate::personal_accounts::ManagedLease>,
     typed: Option<crate::Error>,
     attempted: bool,
+    unproven: Option<crate::Error>,
 }
 
 /// Passthrough (ADR-008 rung 2, MIK-6746) forwards the caller's OWN credential
@@ -264,6 +271,7 @@ async fn resolve_headers(
         managed: None,
         typed: None,
         attempted: false,
+        unproven: None,
     };
     let passthrough_cfg = idp_cfg.filter(|c| {
         c.strategy == crate::identity_propagation::PropagationStrategyKind::Passthrough
@@ -275,6 +283,7 @@ async fn resolve_headers(
             route.backend.transport_carries_identity_headers(),
         ) {
             Ok((headers, binding)) => {
+                resolution.unproven = binding.is_none().then(|| unforwarded_refusal(name));
                 // Bind the upstream session bucket to this passthrough caller
                 // (MIK-6785): keyed by the SHA-256 of the forwarded credential,
                 // so distinct callers never share a stateful upstream's
@@ -298,11 +307,12 @@ async fn resolve_headers(
         .resolve_propagation_credential_attempted_for(name, Some(&route.backend), caller.proof())
         .await
     {
-        Ok(((headers, binding, held), attempted)) => {
+        Ok(((headers, binding, held), attempted, unproven)) => {
             // Bind the upstream session bucket to this caller (MIK-6784).
             resolution.identity_key = binding;
             resolution.managed = held;
             resolution.attempted = attempted;
+            resolution.unproven = unproven;
             Ok(headers)
         }
         Err(e) => {
@@ -312,6 +322,17 @@ async fn resolve_headers(
         }
     };
     resolution
+}
+
+/// The refusal a passthrough call that forwarded no credential answers a
+/// stored per-user result with: the meta route's unminted refusal
+/// (`stored_proof::unminted_refusal`, private to `invoke`), word for word,
+/// so a client sees one refusal however the backend propagates.
+fn unforwarded_refusal(name: &str) -> crate::Error {
+    crate::Error::Config(format!(
+        "identity propagation minted no credential for backend '{name}'; \
+         a stored result is not served without one"
+    ))
 }
 
 /// The generic client-facing answer when the mint audit cannot be written
@@ -428,6 +449,7 @@ pub(super) async fn propagate_identity(
         headers: Vec::new(),
         fills_before: route.backend.list_fills(),
         attempted: false,
+        unproven: None,
     };
     if !preflight.isolation_guarded {
         return Ok(propagation);
@@ -439,9 +461,11 @@ pub(super) async fn propagate_identity(
         managed,
         typed,
         attempted,
+        unproven,
     } = resolve_headers(state, name, caller, route, idp_cfg).await;
     propagation.identity_key = identity_key;
     propagation.attempted = attempted;
+    propagation.unproven = unproven;
     // MIK-8063: an A2A agent's question (an opaque, one-shot token) is bound
     // to the caller this gateway authenticated whenever no propagated identity
     // names them. The continuation seal (MIK-8078) binds the same callers; this

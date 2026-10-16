@@ -263,3 +263,143 @@ async fn an_a2a_question_on_this_route_is_bound_to_the_key_holder() {
     );
     assert_eq!(keys[2], None, "an anonymous caller binds to nothing");
 }
+
+/// D-a2a premise (MIK-8434): an A2A key holder on an optional
+/// `SignedAssertion` backend has no verified end-user identity, so the mint
+/// falls back to static credentials, and the A2A override still binds
+/// `identity_key` to the key holder, but the propagation stays unproven
+/// (mutant M-a2a: the A2A key read as a proof).
+#[cfg(feature = "a2a")]
+#[tokio::test]
+async fn an_unminted_a2a_key_holder_is_bound_but_not_proven() {
+    let fx = fixture(Answer::Ok, |_| {}).await;
+    let mut config = required_propagation();
+    if let Some(cfg) = config.identity_propagation.as_mut() {
+        cfg.required = false;
+    }
+    config.transport = crate::config::TransportConfig::A2a {
+        a2a_url: "http://127.0.0.1:9/".into(),
+        a2a_agent_card_path: None,
+    };
+    let route = Route {
+        backend: backend(config),
+        session_id: None,
+    };
+    let mut caller = anonymous();
+    caller.client = Some(crate::gateway::auth::AuthenticatedClient {
+        quota_principal: None,
+        name: "key-holder".to_string(),
+        rate_limit: 0,
+        backends: vec!["*".to_string()],
+        allowed_tools: None,
+        denied_tools: None,
+        admin: false,
+        // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
+        principal: "alice-digest".to_string(),
+        authenticated: true,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
+    });
+    let propagation = propagate_identity(
+        &fx.state,
+        "alpha",
+        &caller,
+        &route,
+        &guarded(),
+        &RequestId::Number(1),
+    )
+    .await
+    .unwrap_or_else(|(status, _)| panic!("premise: the optional fallback refused: {status}"));
+    assert_eq!(
+        propagation.identity_key.as_deref(),
+        Some(crate::hashing::sha256_hex(b"a2a-client:alice-digest").as_str()),
+        "premise: the A2A override bound the key holder"
+    );
+    assert!(
+        propagation.headers.is_empty() && !propagation.attempted,
+        "premise: the static fallback, not a mint: {:?}",
+        propagation.headers
+    );
+    // The A2A binding is not a proof of the caller's account.
+    assert_eq!(
+        propagation
+            .unproven
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some(
+            "Configuration error: identity propagation minted no credential for backend \
+             'alpha'; a stored result is not served without one"
+        ),
+        "D-a2a: the A2A key read as a proof"
+    );
+}
+
+/// D-a2a end to end (mutant M-a2a): the A2A key holder's binding does not
+/// get an unminted keyed retry past the refusal. The first call to the real
+/// A2A stub agent is answered; its 7a entry then ages out while the 7b
+/// execution store keeps it, so the same key replays from 7b: refused with
+/// the unminted refusal, and the agent is not reached again.
+#[cfg(all(feature = "a2a", feature = "firewall"))]
+#[tokio::test]
+async fn an_unminted_a2a_key_holder_is_not_served_a_7b_replay() {
+    use crate::gateway::router::direct_guards_fixture::{fixture_built, post_direct};
+    use crate::gateway::router::direct_guards_fixture_a2a::{A2A_BACKEND, A2aAnswer, register_a2a};
+    use std::sync::atomic::Ordering;
+
+    let cache = Arc::new(crate::idempotency::IdempotencyCache::new());
+    let installed = Arc::clone(&cache);
+    let fx = fixture_built(Answer::Ok, move |mut meta| {
+        meta.enable_idempotency(installed, Duration::from_secs(300));
+        meta
+    })
+    .await;
+    let optional = IdentityPropagationConfig {
+        strategy: PropagationStrategyKind::SignedAssertion,
+        audience: A2A_BACKEND.to_string(),
+        required: false,
+        session_mode: SessionMode::PerUser,
+        token_exchange_endpoint: None,
+        token_exchange_scope: None,
+    };
+    let sends = register_a2a(&fx, A2aAnswer::Text("agent-answer"), Some(optional)).await;
+    let call = async || {
+        let args = serde_json::json!({"message": "hi"});
+        post_direct(
+            &fx,
+            A2A_BACKEND,
+            "k-std",
+            "send_message",
+            args,
+            Some("a2a-k"),
+            None,
+        )
+        .await
+    };
+    let (status, first) = call().await;
+    assert_eq!(status, 200, "premise: {first}");
+    assert!(
+        first.to_string().contains("agent-answer"),
+        "premise: the agent answered: {first}"
+    );
+    assert_eq!(sends.load(Ordering::SeqCst), 1, "premise: one SendMessage");
+    // Past the cache's 24-hour completed lifetime: a forced 7a miss.
+    cache.advance_for_test(Duration::from_secs(25 * 60 * 60));
+    let (status, again) = call().await;
+    assert_eq!(
+        sends.load(Ordering::SeqCst),
+        1,
+        "D-a2a e2e: the agent was reached again: {again}"
+    );
+    assert_eq!(
+        (status.as_u16(), again.get("error")),
+        (
+            200,
+            Some(&serde_json::json!({
+                "code": -32603,
+                "message": "Configuration error: identity propagation minted no credential \
+                            for backend 'alpha-a2a'; a stored result is not served without one"
+            }))
+        ),
+        "D-a2a e2e: the A2A binding got the stored result past the refusal: {again}"
+    );
+}

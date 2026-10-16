@@ -46,11 +46,15 @@ Three options. **Recommendation was B; U4 resolved it to C.** The original reaso
 
 ## Decision 2 — the compatibility window
 
+> **Current policy (4.0.0), operator ruling 2026-10-16 (C7).** All five revisions the gateway accepts stay supported: 2026-07-28, 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05. None is dropped. The window is unmeasured; measurement and any deprecation are tracked in MIK-8442. 2026-07-28 is served by default: `server.modern_protocol` defaults to `true` (`src/config/server_config.rs:139`), and an operator can switch it off. The amendment below gives the reasons.
+
+**Superseded guidance (the original decision, not followed in 4.0.0):**
+
 **Support 2026-07-28, 2025-11-25 and 2025-06-18. Drop everything older.**
 
-Rationale: 2025-06-18 and 2025-11-25 are the two revisions currently in wide client use; 2025-03-26 and 2024-11-05 predate Streamable HTTP's stabilisation and their transport (HTTP+SSE) is now formally Deprecated in the spec itself. Carrying them means carrying a transport the specification has scheduled for removal.
+Rationale: 2025-06-18 and 2025-11-25 are the two revisions currently in wide client use; 2025-03-26 and 2024-11-05 predate Streamable HTTP's stabilisation and their transport (HTTP+SSE) is now formally Deprecated in the spec itself. Carrying them means carrying a transport the specification has scheduled for removal. *(2026-10-16: 4.0.0 does not drop them; see the amendment below.)*
 
-**This is a decision, not a fact — it needs the unknown below resolved before it is frozen.**
+**Amended 2026-10-16 by operator ruling: v4.0.0 keeps every revision it accepts supported (2026-07-28, 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05) and drops none, and that window is an assumption, not a measurement.** The operator's words, relayed verbatim by the release lead: "keep the old protocol versions supported in this release", "ship the usage unmeasured", "postpone the measurements and deprecating old MCP protocol versions to a future release" (Linear records it in paraphrase only, naming three versions: comment ccf2d862-c177-4049-b8eb-7637d771410c on MIK-7211 and MIK-8442's Context). No usage data backs the window. The "drop everything older" half above is not carried out: `SUPPORTED_VERSIONS` (`src/protocol/mod.rs`) still accepts 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05 at `initialize`, and 2026-07-28 is served without a handshake, as `docs/PROTOCOL_COMPATIBILITY.md` lists. U1 (MIK-7218) was meant to measure it and did not: the spike is Canceled with no work completed, and its original window (2026-10-02 18:49:39 → 2026-10-09 18:49:39 CEST) cannot be recovered as specified. The PID watch ends on 2026-10-07 at 17:51:37Z, 46 h 58 m before the final edge. The final scrape, its metadata and the stdio copy taken at the same time are all absent, and a rescrape cannot repair a past window. The ruling keeps all five revisions in 4.0.0 and retires none. The usage measurement, and any deprecation of the older revisions, are postponed to MIK-8442 (v4.1.0, criteria MIK-8442.U1REDO.1-4), which supersedes MIK-7211 AC.1 (U1 answered) and AC.5 (this decision frozen with U1 data). The parent's 5% KILL criterion and the child's 2% retirement rule below stand unchanged. Until MIK-8442 delivers data, nothing here may be cited as measured.
 
 ### U1 measurement (MIK-7218) — instrumentation prepared 2026-09-04
 
@@ -98,7 +102,7 @@ This prevents uncertainty from making a revision look safe to remove. Revisions
 with zero observations are still evaluated from the gateway's explicit
 `SUPPORTED_VERSIONS` table.
 
-**Production window: started 2026-10-02 18:49:39 CEST (unix 1790959779), ends 2026-10-09 18:49:39 CEST (604,800 s)** (live gateway 4.0.0-a87d8f28, PID 53431; baseline scrape sha256 1cc7a0c0…; durable stdio start 1790959779, the same second, so aligned; a restart invalidates it). No stdio client runs, so the stdio half will likely grade `NoObservations`: U1 is then answered for HTTP only and no revision is retired. The procedure below is how it was set up. Stop all gateway processes, archive any
+**HISTORICAL, INVALIDATED 2026-10-16: this window is unrecoverable and produced no grade (see the Decision 2 amendment). Do not follow the setup below for any new measurement; MIK-8442 defines the redo.** **Production window: started 2026-10-02 18:49:39 CEST (unix 1790959779), ends 2026-10-09 18:49:39 CEST (604,800 s)** (live gateway 4.0.0-a87d8f28, PID 53431; baseline scrape sha256 1cc7a0c0…; durable stdio start 1790959779, the same second, so aligned; a restart invalidates it). No stdio client runs, so the stdio half will likely grade `NoObservations`: U1 is then answered for HTTP only and no revision is retired. The procedure below is how it was set up. Stop all gateway processes, archive any
 earlier `protocol-revision-telemetry` directory, deploy, and then start the
 gateways. The HTTP service never creates the durable file; a stdio-mode gateway
 does, so start one (a config with no backends, stdin closed) on the real data
@@ -123,15 +127,17 @@ HTTP and stdio candidates. A standalone stdio result is not a production
 retirement decision.
 
 **Pre-registered 2% rule: not applied.** The stop criterion forbids narrowing
-on partial data. Decision 2 stays unfrozen. No revision is retired.
+on partial data. No revision is retired. The window above did not produce a
+usable grade (see the 2026-10-16 amendment to Decision 2). The measurement is
+redone under MIK-8442, and this rule applies to that window unchanged.
 
 ## Unknowns, each with a fail-fast (§P1)
 
-An unknown without a scheduled check is a defect. Seven. U3 and U4 resolved; U5 answered 2026-10-01; U7 answered by the session-keyed inventory (MIK-7211.PARENT.7); U2 moved out of 4.0.0 (MIK-7628); U1 and U6 outstanding:
+An unknown without a scheduled check is a defect. Seven. U3 and U4 resolved; U5 answered 2026-10-01; U7 answered by the session-keyed inventory (MIK-7211.PARENT.7); U2 moved out of 4.0.0 (MIK-7628); U1 moved out of 4.0.0 unanswered (MIK-8442, operator ruling 2026-10-16); U6 outstanding:
 
 | # | Question | The check | Blocks |
 |---|---|---|---|
-| **U1** | What revisions do the clients we actually serve speak? | Log `io.modelcontextprotocol/protocolVersion` (new) and `initialize.params.protocolVersion` (old) at the gateway for one week; count by client. | Decision 2. Do not freeze the window on a guess. |
+| **U1** | What revisions do the clients we actually serve speak? | Log `io.modelcontextprotocol/protocolVersion` (new) and `initialize.params.protocolVersion` (old) at the gateway for one week; count by client. | Decision 2. Do not freeze the window on a guess. *(2026-10-16: unanswered; the first window is unrecoverable. 4.0.0 ships the window unmeasured and the check moves to MIK-8442.)* |
 | **U2** | Does hebb's `-32016` session patch survive statelessness, or was it always a workaround for a protocol wart now deleted? | Read the patch, then run hebb's suite against a stateless transport with the patch reverted. | Whether hebb migrates or first de-forks. |
 | ~~U3~~ | ~~Does warm-start exist for protocol or availability reasons?~~ | **RESOLVED 2026-08-22** — see below | ~~Whether `server/discover` retires it~~ |
 | ~~U4~~ | ~~Does `rmcp` 3.x support more than one generation?~~ | **RESOLVED 2026-08-22** — see below | ~~Decisions 1 and 3~~ |
@@ -181,14 +187,14 @@ Legacy mode must keep per-connection list responses. Modern mode requires that `
 
 Revised 2026-08-22 after adversarial review found three contradictions in the previous ordering.
 
-1. **Resolve U1, U2, U5.** *(2026-10-01: U5 answered; U2 moved to MIK-7628; U1 open, see Decision 2.)* Nothing else starts. U5 first — it decides whether the gateway is in scope for convergence at all. (U3 already resolved; U4 resolved but see U6 below.)
+1. **Resolve U1, U2, U5.** *(2026-10-01: U5 answered; U2 moved to MIK-7628; U1 open, see Decision 2. 2026-10-16: U1 moved to MIK-8442 unanswered; 4.0.0 ships the window unmeasured.)* Nothing else starts. U5 first — it decides whether the gateway is in scope for convergence at all. (U3 already resolved; U4 resolved but see U6 below.)
 2. **Session-state inventory (U7).** Before removing anything, enumerate every behaviour currently keyed by connection or `Mcp-Session-Id` across all six surfaces — authentication, subscriptions, progress, cancellation, backend affinity — and name each one's stateless replacement. The previous version of this design removed sessions having inventoried only hebb's reconnect patch and the list caches, which is not an inventory.
 3. **`server/discover` on every surface** — additive, no breakage, immediate compatibility benefit.
 4. **`CacheableResult` and deterministic ordering, in the baseline — not deferred.** `ttlMs` and `cacheScope` are **required** by the specification on five endpoints. Deferring them to "capability adoption" while claiming complete 2026-07-28 support is a contradiction: a surface that omits them is non-compliant, not merely unoptimised. Their safe computation (step 5) ships with them.
 5. **Split legacy and modern list-result construction.** Not one path with a flag. Each cache scope is permitted only where the computation is provably invariant within that scope.
 6. **Retry and idempotency rules for side-effecting requests.** SSE resumability is gone, so a broken stream forces the client to re-issue with a new request ID. Without deduplication, that duplicates irreversible tool actions. Define idempotency keys, or route side-effecting operations through Tasks, before enabling 2026-07-28 anywhere.
 7. **MRTR continuation design** — see the open problem below. Blocks the gateway specifically.
-8. **Per-surface adoption behind a flag**, legacy mode default until U1's telemetry says otherwise.
+8. **Per-surface adoption behind a flag**, legacy mode default until U1's telemetry says otherwise (now MIK-8442's measurement; 4.0.0 has none). *Superseded for the gateway: 4.0.0 serves 2026-07-28 by default (`server.modern_protocol: true`, `src/config/server_config.rs:139`); see Decision 2's current policy.*
 9. **Remaining capability adoption** (OTel `_meta`, Tasks) — separate work, separate review. This step is genuinely optional; step 4 was not.
 
 ## Adversarial review, 2026-08-22 — both vendors SHIP-WITH-FIXES
