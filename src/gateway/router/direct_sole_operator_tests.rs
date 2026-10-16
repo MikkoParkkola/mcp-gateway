@@ -313,6 +313,17 @@ fn idp_refusals(fx: &Fx) -> usize {
         .count()
 }
 
+/// The outcome on the direct audit record a call of `tool` on [`BACKEND`] left.
+fn direct_outcome(fx: &Fx, tool: &str) -> Value {
+    let raw = std::fs::read_to_string(&fx.log_path).unwrap_or_default();
+    raw.lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
+        .filter(|entry| entry["route"] == "direct" && entry["tool"] == tool)
+        .map(|entry| entry["outcome"].clone())
+        .next_back()
+        .unwrap_or(Value::Null)
+}
+
 /// MIK-8361 oracle 2, no principal: a caller with no principal on a required
 /// per-user backend (a second key, or an anonymous public-path caller) gets,
 /// for a name the policy withholds (`run_command`), the answer a missing
@@ -334,6 +345,18 @@ async fn no_principal_caller_direct_call_is_the_same_for_a_withheld_name() {
         assert_eq!(missing.0, StatusCode::OK, "premise: {}", missing.1);
         assert!(missing.1.contains("-32601"), "premise: {}", missing.1);
         let withheld = raw_call(&fx, "run_command", bearer).await;
+        // Premise: the policy withholds `run_command` here, so the equal
+        // answers are the no-principal rule's doing, not a second missing name.
+        assert_eq!(
+            direct_outcome(&fx, "run_command"),
+            "denied",
+            "premise: withheld"
+        );
+        let missing_outcome = direct_outcome(&fx, "no_such_tool");
+        assert!(
+            !missing_outcome.is_null() && missing_outcome != "denied",
+            "premise: missing {missing_outcome}"
+        );
         seen.push((
             bearer,
             withheld,
