@@ -4,9 +4,14 @@
 //! keyed caller that admission gives an execution principal is never
 //! refused at intake. One cell per principal source admission reads
 //! (`owner.principal()`, then `credential_or_subject_owner`), on both
-//! routes. Green at the base; after the fix each cell fails if the intake's
-//! principal function drops the source it carries. The exact principal value
-//! is A5's (stage 2, beside the shared function).
+//! routes. Green at the base. What the cells kill after the fix: dropping
+//! `owner.principal()` from the intake's principal function fails the OIDC
+//! and trusted-proxy cells, the only ones with no other source; dropping
+//! `credential_or_subject_owner` fails the mTLS cell (owner empty with no
+//! credential) and D5. The auth-off agent, credential and auth-on agent
+//! cells carry both sources, so they guard that both still agree, not one
+//! source alone. The exact principal value is A5's (stage 2, beside the
+//! shared function).
 
 use super::*;
 
@@ -234,7 +239,11 @@ async fn f1_every_principal_source_is_admitted_keyed() {
 #[tokio::test]
 async fn d5_mtls_subject_task_submit_is_not_refused_at_intake() {
     let fx = fixture(public_auth()).await;
-    let source = &sources()[4];
+    let source = sources()
+        .into_iter()
+        .find(|source| source.label == "mtls subject, no credential")
+        .expect("F1 lists the mTLS source");
+    let source = &source;
     let mut body = modern_keyed(
         "gateway_invoke",
         &json!({"server": "alpha", "tool": "t", "arguments": {"customer_id": "c"}}),

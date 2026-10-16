@@ -6,15 +6,12 @@
 //! execution principal, limited per (backend, caller key). Listings and
 //! names the caller merely lacks log nothing.
 //!
-//! Gaps, not driven here (MIK-8382 stage 1): E5 (the dispatch funnel,
-//! `caller_verdict.rs` `dispatch_resolution`, via a playbook step from two
-//! keyed callers) and E5b (the funnel via the stored-replay proof,
-//! `prove_target_live`). No fixture reaches the funnel with a caller that
-//! has no principal on a required backend: an auth-off anonymous caller keys
-//! to the one shared "anonymous" bucket, and a stored read needs an owner
-//! whose submit was admitted on that backend. Mutants they would kill:
-//! deleting the WARN call at the funnel, and passing `None` for the caller
-//! key into `dispatch_resolution`. E4 below carries the per-key limiter.
+//! Gap, not driven here (MIK-8382 stage 1): E5b (the dispatch funnel via
+//! the stored-replay proof, `prove_target_live`). A stored read needs an
+//! owner whose submit was admitted on the required backend, and a caller
+//! with no principal there is refused at that submit, so no fixture reaches
+//! the proof with one. Mutant it would kill: deleting the WARN call at the
+//! funnel on that path (E5 kills it on the playbook path).
 //!
 //! A WARN is matched by content, not wording: a WARN line naming [`BACKEND`]
 //! and "execution principal". Each row builds its gateways outside the
@@ -246,9 +243,8 @@ fn e4_one_warn_per_caller_key() {
     let rt = runtime();
     let gw = rt.block_on(super::gateway_authed(
         &two_keys(),
-        CallerSlot::Valid,
-        Warmth::Warm,
-        "other",
+        (CallerSlot::Valid, Warmth::Warm, "other"),
+        |_| {},
     ));
     // Each request captured on its own, on the one gateway (one limiter).
     let mut cells = Vec::new();
@@ -269,4 +265,85 @@ fn e4_one_warn_per_caller_key() {
         }
     }
     assert!(cells.is_empty(), "E4:\n{}", cells.join("\n"));
+}
+
+/// A one-step playbook calling [`TOOL`] on [`BACKEND`].
+fn one_step_playbook() -> crate::playbook::PlaybookEngine {
+    let mut engine = crate::playbook::PlaybookEngine::new();
+    engine.register(
+        serde_json::from_value(json!({
+            "playbook": "1.0",
+            "name": "steps",
+            "description": "MIK-8382 E5: one step on the required backend",
+            "steps": [{"name": "read", "tool": TOOL, "server": BACKEND, "arguments": {}}]
+        }))
+        .expect("the playbook deserialises"),
+    );
+    engine
+}
+
+/// `bearer`'s `gateway_run_playbook` of [`one_step_playbook`].
+async fn run_playbook(gw: &Gateway, bearer: &str) -> (StatusCode, Value) {
+    let body = json!({"jsonrpc": "2.0", "id": 8, "method": "tools/call",
+        "params": {"name": "gateway_run_playbook", "arguments": {"name": "steps"}}});
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {bearer}"))
+        .body(axum::body::Body::from(body.to_string()))
+        .expect("a static request builds");
+    let response = gw
+        .router
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("the router is infallible");
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("an in-memory body reads");
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// E5 (the dispatch funnel, `caller_verdict.rs` `dispatch_resolution`): a
+/// playbook step runs through `invoke_tool_traced`, which reaches the funnel
+/// without the caller verdict `/mcp`'s `gateway_invoke` runs
+/// (`call_dispatch.rs`). Two API-key callers (`k1`, `k2`), each with no
+/// principal on the required backend, run the playbook: the step answers as
+/// a missing name, nothing is sent, and each logs one WARN; `k1` again logs
+/// none. Each run is captured on its own on the one gateway. Kills: deleting
+/// the funnel's WARN call, and passing `None` for the caller key into
+/// `dispatch_resolution` (`k2` then shares `k1`'s bucket and logs nothing).
+/// RED at base: 0 WARNs where one is wanted.
+#[test]
+fn e5_funnel_warns_once_per_caller_key() {
+    let rt = runtime();
+    let gw = rt.block_on(super::gateway_authed(
+        &two_keys(),
+        (CallerSlot::Valid, Warmth::Warm, "other"),
+        |meta| meta.set_playbook_engine(one_step_playbook()),
+    ));
+    let absent = crate::gateway::meta_mcp::visible::absent_name(TOOL).to_string();
+    let mut cells = Vec::new();
+    for (bearer, want) in [("k1", 1), ("k2", 1), ("k1", 0)] {
+        let ((status, answer), log) =
+            crate::test_log_capture::capture_warnings(|| rt.block_on(run_playbook(&gw, bearer)));
+        assert!(
+            status == StatusCode::OK && answer.to_string().contains(&absent),
+            "E5 premise {bearer}: the step did not answer as a missing name \
+             ({absent}): {status} {answer}"
+        );
+        if lacked_warns(&log) != want {
+            cells.push(format!(
+                "E5 {bearer}: {} WARNs, want {want}:\n{log}",
+                lacked_warns(&log)
+            ));
+        }
+    }
+    assert_eq!(gw.dispatched(), 0, "E5: a step was sent");
+    assert!(cells.is_empty(), "E5:\n{}", cells.join("\n"));
 }

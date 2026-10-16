@@ -63,27 +63,28 @@ async fn gateway_shared(
 ) -> Gateway {
     let state =
         direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
-    gateway_on(state, (slot, shared, warmth), denied, firewalled)
+    gateway_on(state, (slot, shared, warmth), (denied, firewalled), |_| {})
 }
 
-/// [`gateway`] behind `auth` (MIK-8382 E4: API-key callers).
+/// [`gateway`] behind `auth` (MIK-8382 E4/E5: API-key callers), with
+/// `configure` run on the Meta-MCP before it is mounted.
 async fn gateway_authed(
     auth: &crate::config::AuthConfig,
-    slot: CallerSlot,
-    warmth: Warmth,
-    denied: &str,
+    (slot, warmth, denied): (CallerSlot, Warmth, &str),
+    configure: impl FnOnce(&crate::gateway::test_helpers::MetaMcp),
 ) -> Gateway {
     let state = super::tests::test_router_app_state_with_auth(auth).await;
-    gateway_on(state, (slot, &valid(), warmth), denied, false)
+    gateway_on(state, (slot, &valid(), warmth), (denied, false), configure)
 }
 
 /// The per-user fixture over `state`: alpha's slot, the shared schema and the
-/// warmth, the active profile denying `denied`, the firewall when asked.
+/// warmth, the active profile denying `denied`, the firewall when asked,
+/// and `configure` run on the Meta-MCP before it is mounted.
 fn gateway_on(
     (mut state, store): (Arc<super::AppState>, tempfile::TempDir),
     (slot, shared, warmth): (CallerSlot, &Value, Warmth),
-    denied: &str,
-    firewalled: bool,
+    (denied, firewalled): (&str, bool),
+    configure: impl FnOnce(&crate::gateway::test_helpers::MetaMcp),
 ) -> Gateway {
     let (backend, caller, shared) =
         per_user_backend(slot, shared, warmth, InputSchemaEnforcement::Closed);
@@ -127,6 +128,7 @@ fn gateway_on(
             crate::security::firewall::Firewall::from_config(config, None),
         )));
     }
+    configure(&meta);
     state_mut.meta_mcp = Arc::new(meta);
     state_mut.transparency_log = Some(transparency_logger(&audit[1]));
     Gateway {
