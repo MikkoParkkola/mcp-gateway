@@ -146,19 +146,35 @@ async fn call_b(meta: &MetaMcp) -> Value {
     serde_json::to_value(&response).expect("a response serializes")
 }
 
-/// Whether `NONCE` is still free: an ordinary call presenting it is admitted.
-fn nonce_is_free(meta: &MetaMcp) -> bool {
+/// What a later call presenting `NONCE` meets.
+#[derive(Debug, PartialEq, Eq)]
+enum Nonce {
+    /// Admitted: the refused call gave it back.
+    Free,
+    /// Refused as a replay: the refused call kept it spent.
+    Replayed,
+}
+
+/// Probe `NONCE` with an ordinary call. Any answer but admission or the
+/// replay refusal fails the row, so a broken probe never reads as a KEEP.
+fn nonce_state(meta: &MetaMcp) -> Nonce {
     let (mut later, arguments) = signed("gateway_list_servers", &json!({}));
     let allow = AllowAll;
-    meta.prepare_signing_for_call(
+    match meta.prepare_signing_for_call(
         &mut later,
         "gateway_list_servers",
         &arguments,
         None,
         &ctx(&allow),
-    )
-    .is_ok()
-        && !later.awaits_admission()
+    ) {
+        Ok(()) if !later.awaits_admission() => Nonce::Free,
+        Ok(()) => panic!("the probe was not admitted and not refused"),
+        // `message_signing.rs`'s replay refusal: -32001, "Nonce replay detected".
+        Err(e) if e.to_rpc_code() == -32001 && e.to_string().contains("Nonce replay detected") => {
+            Nonce::Replayed
+        }
+        Err(e) => panic!("the probe failed for another reason: {e}"),
+    }
 }
 
 /// Wait until `ready`, failing the row (not hanging it) after 10 s.
@@ -239,8 +255,9 @@ async fn a_spend_refusal_after_joining_a_fill_keeps_the_nonce() {
     let (meta, alpha) = gateway(&wire);
     let _skip = crate::gateway::meta_mcp::withheld_gate::seams::skip_gate_for_test();
     let answer = b_joins_a_held_fill(&meta, &alpha, &wire).await;
-    assert!(
-        !nonce_is_free(&meta),
+    assert_eq!(
+        nonce_state(&meta),
+        Nonce::Replayed,
         "the nonce was given back after joining a fill: {answer}"
     );
 }
@@ -255,8 +272,9 @@ async fn a_spend_refusal_after_the_gate_joins_a_fill_keeps_the_nonce() {
     let wire = Arc::new(Holding::default());
     let (meta, alpha) = gateway(&wire);
     let answer = b_joins_a_held_fill(&meta, &alpha, &wire).await;
-    assert!(
-        !nonce_is_free(&meta),
+    assert_eq!(
+        nonce_state(&meta),
+        Nonce::Replayed,
         "the nonce was given back after the gate joined a fill: {answer}"
     );
 }
@@ -285,8 +303,9 @@ async fn a_spend_refusal_on_a_warm_slot_gives_the_nonce_back() {
         1,
         "premise: A's list only"
     );
-    assert!(
-        nonce_is_free(&meta),
+    assert_eq!(
+        nonce_state(&meta),
+        Nonce::Free,
         "the nonce was kept though nothing acted: {answer}"
     );
 }

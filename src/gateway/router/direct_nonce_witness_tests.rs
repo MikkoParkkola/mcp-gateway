@@ -226,12 +226,14 @@ async fn a_direct_spend_refusal_after_a_failed_optional_mint_keeps_the_nonce() {
 }
 
 /// `inner`, every `tools/list` held until released and counted on arrival.
-struct HeldList {
-    inner: std::sync::Arc<dyn crate::transport::Transport>,
-    lists: std::sync::atomic::AtomicUsize,
-    release: tokio::sync::Semaphore,
+#[cfg(feature = "cost-governance")]
+pub(super) struct HeldList {
+    pub(super) inner: std::sync::Arc<dyn crate::transport::Transport>,
+    pub(super) lists: std::sync::atomic::AtomicUsize,
+    pub(super) release: tokio::sync::Semaphore,
 }
 
+#[cfg(feature = "cost-governance")]
 #[async_trait::async_trait]
 impl crate::transport::Transport for HeldList {
     async fn request(
@@ -266,12 +268,9 @@ impl crate::transport::Transport for HeldList {
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn a_direct_spend_refusal_after_joining_a_fill_keeps_the_nonce() {
-    use super::direct_continuation_tests::budget;
     use super::direct_guards_fixture::fixture_hardened_signed_built;
     use std::sync::atomic::{AtomicBool, Ordering};
-    let fx = fixture_hardened_signed_built(Answer::Ok, true, budget).await;
-    let (_, first) = signed_direct(&fx, ("k-budget", "alpha"), "n1", json!({})).await;
-    assert!(first.get("error").is_none(), "the paying call: {first}");
+    let fx = fixture_hardened_signed_built(Answer::Ok, true, budget_below_one_call).await;
     let cold = fx.state.backends.get("alpha-pt").expect("fixture backend");
     assert!(!cold.has_cached_tools(), "premise: alpha-pt is cold");
     let shared = crate::backend::PoolKey::Shared;
@@ -327,11 +326,12 @@ async fn a_direct_spend_refusal_after_joining_a_fill_keeps_the_nonce() {
         refused_as_replay(&again),
         "the nonce was given back after joining a fill: {again}"
     );
-    assert_eq!(dispatched(&fx), 1, "only the paying call reached a backend");
+    assert_eq!(dispatched(&fx), 0, "nothing reached a backend");
 }
 
 /// Wait until `ready`, failing the row (not hanging it) after 10 s.
-async fn until(what: &str, ready: impl Fn() -> bool) {
+#[cfg(feature = "cost-governance")]
+pub(super) async fn until(what: &str, ready: impl Fn() -> bool) {
     let waited = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         while !ready() {
             tokio::time::sleep(std::time::Duration::from_millis(1)).await;
@@ -339,4 +339,25 @@ async fn until(what: &str, ready: impl Fn() -> bool) {
     })
     .await;
     assert!(waited.is_ok(), "timed out waiting for {what}");
+}
+
+/// Spend governance with `read` at 1.0 and `k-budget` allowed 0.5, so its
+/// first call is refused with no paying call before it.
+#[cfg(feature = "cost-governance")]
+pub(super) fn budget_below_one_call(
+    meta: crate::gateway::meta_mcp::MetaMcp,
+) -> crate::gateway::meta_mcp::MetaMcp {
+    use crate::cost_accounting::config::CostGovernanceConfig;
+    let mut cfg = CostGovernanceConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    cfg.tool_costs.insert("read".to_string(), 1.0);
+    cfg.budgets.per_key.insert("k-budget".to_string(), 0.5);
+    let registry = std::sync::Arc::new(crate::cost_accounting::registry::CostRegistry::new(&cfg));
+    let enforcer = std::sync::Arc::new(crate::cost_accounting::enforcer::BudgetEnforcer::new(
+        cfg,
+        std::sync::Arc::clone(&registry),
+    ));
+    meta.with_cost_governance(enforcer, registry)
 }
