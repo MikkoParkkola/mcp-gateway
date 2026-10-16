@@ -461,6 +461,24 @@ impl World {
         .await
     }
 
+    /// A gateway with gateway auth off and agent auth on against `registry`,
+    /// which the row may narrow, widen or empty while streams are open
+    /// (MIK-8377). Callers present tokens that registry validates.
+    pub(super) async fn start_agents(
+        registry: std::sync::Arc<crate::gateway::oauth::AgentRegistry>,
+    ) -> Self {
+        let key_server = std::sync::Arc::new(crate::key_server::KeyServer::new(
+            crate::config::KeyServerConfig::default(),
+        ));
+        Self::start_on(
+            key_server,
+            None,
+            |meta| meta,
+            super::audience_access::McpAccess::AgentOnly(registry),
+        )
+        .await
+    }
+
     /// A GET stream that presents no credential: the route's status, and the
     /// stream when it opened.
     pub(super) async fn anonymous_sse(&self) -> (axum::http::StatusCode, Option<Ear>) {

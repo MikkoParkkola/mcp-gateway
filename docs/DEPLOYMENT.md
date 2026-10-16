@@ -500,6 +500,10 @@ one, two certificates with the same CN count as one caller, so identity relies o
 unique CNs. A certificate with neither is not an identity for the per-caller limits
 (UPGRADING-4.0 item 94).
 
+An open notification stream closes once its client certificate passes `notAfter`, but
+revocation is checked only at the TLS handshake: the CRL is read at startup. To end the open
+stream of a revoked certificate, restart with the new CRL, or issue short-lived certificates.
+
 ### Strict validation and existing certificate generations
 
 Newly generated 4.0 CA certificates include certificate-signing and CRL-signing

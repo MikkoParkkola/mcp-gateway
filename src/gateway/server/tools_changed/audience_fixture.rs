@@ -236,6 +236,10 @@ auth:\n  required: false\n  type: none\n"
     )
 }
 
+/// When the API key `k-exp` expires, in unix seconds: a row expires it by
+/// forcing the clock past this.
+pub(super) const K_EXP_UNTIL: i64 = 4_102_444_800;
+
 /// The Open `WebUI` installation and header the adapter rows configure.
 pub(super) const ADAPTER_INSTALLATION: &str = "inst";
 const ADAPTER_HEADER: &str = "x-openwebui-assertion";
@@ -260,6 +264,33 @@ pub(super) fn adapter_assertion(sub: &str) -> String {
         &jsonwebtoken::EncodingKey::from_secret(ADAPTER_SECRET.as_bytes()),
     )
     .expect("sign")
+}
+
+/// The fixture's credentials under `access`: `k-std`, `k-deny` (denied
+/// `read`, `fetch` and the capability), `k-narrow` (`beta` alone), `k-exp`
+/// (expiring at [`K_EXP_UNTIL`]) and the agents' keys.
+fn fixture_auth(access: &super::audience_access::McpAccess) -> AuthConfig {
+    let mut auth = AuthConfig {
+        // An `AgentOnly` caller presents its agent token and no API key.
+        enabled: !matches!(access, super::audience_access::McpAccess::AgentOnly(_)),
+        public_paths: super::audience_access::public_paths(access),
+        api_keys: vec![
+            api_key("k-std", &[]),
+            api_key("k-deny", &["read", "fetch", "hidden_cap"]),
+            ApiKeyConfig {
+                backends: vec!["beta".to_string()],
+                ..api_key("k-narrow", &[])
+            },
+            ApiKeyConfig {
+                expires_at: chrono::DateTime::from_timestamp(K_EXP_UNTIL, 0),
+                ..api_key("k-exp", &[])
+            },
+        ],
+        ..AuthConfig::default()
+    };
+    auth.api_keys
+        .extend(super::audience_access::agent_api_keys(access));
+    auth
 }
 
 /// The gateway under test and the handles rows drive it with.
@@ -367,21 +398,8 @@ impl World {
         configure: impl FnOnce(MetaMcp) -> MetaMcp,
         access: super::audience_access::McpAccess,
     ) -> Self {
-        let mut auth = AuthConfig {
-            enabled: true,
-            public_paths: super::audience_access::public_paths(&access),
-            api_keys: vec![
-                api_key("k-std", &[]),
-                api_key("k-deny", &["read", "fetch", "hidden_cap"]),
-                ApiKeyConfig {
-                    backends: vec!["beta".to_string()],
-                    ..api_key("k-narrow", &[])
-                },
-            ],
-            ..AuthConfig::default()
-        };
-        auth.api_keys
-            .extend(super::audience_access::agent_api_keys(&access));
+        let agents = super::audience_access::agent_registry(&access);
+        let auth = fixture_auth(&access);
         let audit = tempfile::NamedTempFile::new().expect("tempfile");
         let logger = crate::security::TransparencyLogger::open(Arc::new(
             crate::security::TransparencyLogConfig {
@@ -411,7 +429,7 @@ impl World {
         let wire_probe = Arc::clone(&probe);
         let (mut state, store) = crate::gateway::router::tests::audience_state(
             &auth,
-            Some(Arc::clone(&key_server)),
+            (Some(Arc::clone(&key_server)), agents),
             move |meta| {
                 let mut meta = meta.with_surfaced_tools(surfaced);
                 meta.enable_transparency_log(Arc::new(logger));

@@ -232,6 +232,8 @@ impl Listener {
     /// once, so scope alone does not withhold it. A caller that no longer
     /// resolves closes the stream (D17i).
     pub(crate) async fn admit(&self, published: &Published) -> Admit {
+        #[cfg(test)]
+        before_listen_admit().pause().await;
         let backend = self.judged_backend(published);
         match self.delivery(published).await {
             Delivery::Dead => {
@@ -631,4 +633,17 @@ mod tests {
             "a reader that fell behind must be told, not silently starved"
         );
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static BEFORE_LISTEN_ADMIT: Arc<crate::test_pause::Slot> = Arc::default();
+}
+
+/// This thread's pause point as a listen stream starts to admit a published
+/// notification (MIK-8377). The listen body holds no multiplexer, so the
+/// point is thread-local, which serves the one-thread runtime the rows use.
+#[cfg(test)]
+pub(crate) fn before_listen_admit() -> Arc<crate::test_pause::Slot> {
+    BEFORE_LISTEN_ADMIT.with(Arc::clone)
 }

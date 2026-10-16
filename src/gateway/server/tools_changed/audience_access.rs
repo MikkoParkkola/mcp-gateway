@@ -17,9 +17,16 @@ pub(super) enum McpAccess {
     /// An mTLS policy admits any presented certificate to `alpha` and
     /// nothing else: a caller that presents none is shown nothing.
     MtlsCert,
+    /// An mTLS policy admits a certificate whose OU is this one to `alpha`,
+    /// and every other certificate to nothing (MIK-8377).
+    MtlsOu(&'static str),
     /// Agent auth is on: a caller is its OAuth agent token ([`agent_token`]),
     /// scoped to `alpha`, and is shown nothing without that identity.
     AgentToken,
+    /// Gateway auth is off and agent auth is on against this registry, which
+    /// a row may change while streams are open (MIK-8377): a caller is its
+    /// agent token alone, which is no API key.
+    AgentOnly(Arc<crate::gateway::oauth::AgentRegistry>),
 }
 
 /// The two agents the fixture registers under [`McpAccess::AgentToken`]. Both
@@ -54,35 +61,13 @@ pub(super) fn agent_api_keys(access: &McpAccess) -> Vec<crate::config::ApiKeyCon
     }
 }
 
-pub(super) fn public_paths(access: &McpAccess) -> Vec<String> {
+/// The agent registry `access` turns agent auth on against, if any. Handed
+/// to the state builder, so the listener registry and the request middleware
+/// re-validate against one registry.
+pub(super) fn agent_registry(
+    access: &McpAccess,
+) -> Option<Arc<crate::gateway::oauth::AgentRegistry>> {
     match access {
-        McpAccess::PublicPath => vec!["/mcp".to_string()],
-        _ => AuthConfig::default().public_paths,
-    }
-}
-
-/// Shape the state's identity checks for `access`.
-pub(super) fn apply(st: &mut AppState, access: &McpAccess) {
-    match access {
-        McpAccess::MtlsCert => {
-            st.mtls_policy = Arc::new(crate::mtls::MtlsPolicy::from_config(
-                &crate::mtls::MtlsConfig {
-                    enabled: true,
-                    policies: vec![crate::mtls::config::PolicyRuleConfig {
-                        match_criteria: crate::mtls::config::CertMatchConfig {
-                            any: Some(true),
-                            ..Default::default()
-                        },
-                        allow: crate::mtls::config::ToolScopeConfig {
-                            backends: vec!["alpha".to_string()],
-                            tools: vec!["*".to_string()],
-                        },
-                        deny: crate::mtls::config::ToolScopeConfig::default(),
-                    }],
-                    ..Default::default()
-                },
-            ));
-        }
         McpAccess::AgentToken => {
             let registry = Arc::new(crate::gateway::oauth::AgentRegistry::new());
             for id in [AGENT_A, AGENT_B] {
@@ -96,8 +81,50 @@ pub(super) fn apply(st: &mut AppState, access: &McpAccess) {
                     audience: Some(AUDIENCE.to_string()),
                 });
             }
-            st.agent_auth = crate::gateway::oauth::AgentAuthState::new(true, registry);
+            Some(registry)
         }
-        McpAccess::Authenticated | McpAccess::PublicPath => {}
+        McpAccess::AgentOnly(registry) => Some(Arc::clone(registry)),
+        _ => None,
     }
+}
+
+pub(super) fn public_paths(access: &McpAccess) -> Vec<String> {
+    match access {
+        McpAccess::PublicPath => vec!["/mcp".to_string()],
+        _ => AuthConfig::default().public_paths,
+    }
+}
+
+/// Shape the state's identity checks for `access`.
+pub(super) fn apply(st: &mut AppState, access: &McpAccess) {
+    // The agent registry is the state builder's ([`agent_registry`]); only
+    // the certificate policy is set here.
+    let admitted = match access {
+        McpAccess::MtlsCert => crate::mtls::config::CertMatchConfig {
+            any: Some(true),
+            ..Default::default()
+        },
+        McpAccess::MtlsOu(ou) => crate::mtls::config::CertMatchConfig {
+            ou: Some((*ou).to_string()),
+            ..Default::default()
+        },
+        McpAccess::Authenticated
+        | McpAccess::PublicPath
+        | McpAccess::AgentToken
+        | McpAccess::AgentOnly(_) => return,
+    };
+    st.mtls_policy = Arc::new(crate::mtls::MtlsPolicy::from_config(
+        &crate::mtls::MtlsConfig {
+            enabled: true,
+            policies: vec![crate::mtls::config::PolicyRuleConfig {
+                match_criteria: admitted,
+                allow: crate::mtls::config::ToolScopeConfig {
+                    backends: vec!["alpha".to_string()],
+                    tools: vec!["*".to_string()],
+                },
+                deny: crate::mtls::config::ToolScopeConfig::default(),
+            }],
+            ..Default::default()
+        },
+    ));
 }

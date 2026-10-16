@@ -164,22 +164,18 @@ mod mtls_listener {
         request.abort();
     }
 
-    fn ca(cn: &str) -> GeneratedCert {
-        CertGenerator::init_ca(&CaParams {
-            cn,
-            validity_days: 1,
-        })
-        .expect("CA")
+    fn ca(cn: &str, validity_days: u32) -> GeneratedCert {
+        CertGenerator::init_ca(&CaParams { cn, validity_days }).expect("CA")
     }
 
-    fn leaf(ca: &GeneratedCert, cn: &str, san_dns: &[&str]) -> GeneratedCert {
+    fn leaf(ca: &GeneratedCert, cn: &str, san_dns: &[&str], validity_days: u32) -> GeneratedCert {
         CertGenerator::issue_leaf(
             &LeafCertParams {
                 cn,
                 ou: None,
                 san_dns: san_dns.iter().map(ToString::to_string).collect(),
                 san_uris: vec![],
-                validity_days: 1,
+                validity_days,
             },
             &ca.cert_pem,
             &ca.key_pem,
@@ -188,7 +184,9 @@ mod mtls_listener {
     }
 
     /// Certificates on disk: `ca`, `server` (127.0.0.1), `client`
-    /// ("operator") and `auditor` from one CA; `stranger` from another.
+    /// ("operator") and `auditor` from one CA; `stranger` from another. The
+    /// CA, the server and the client expire on different days, so a
+    /// `notAfter` read from the wrong certificate shows.
     struct Pki {
         dir: tempfile::TempDir,
     }
@@ -197,16 +195,16 @@ mod mtls_listener {
         fn new() -> Self {
             let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
             let dir = tempfile::tempdir().expect("tempdir");
-            let root = ca("listener CA");
-            let other = ca("other CA");
+            let root = ca("listener CA", 3);
+            let other = ca("other CA", 3);
             let write = |cert: &GeneratedCert, stem: &str| {
                 CertGenerator::write_to_dir(cert, dir.path(), stem).expect("cert files");
             };
             write(&root, "ca");
-            write(&leaf(&root, "gateway", &["127.0.0.1"]), "server");
-            write(&leaf(&root, "operator", &[]), "client");
-            write(&leaf(&root, "auditor", &[]), "auditor");
-            write(&leaf(&other, "stranger", &[]), "stranger");
+            write(&leaf(&root, "gateway", &["127.0.0.1"], 2), "server");
+            write(&leaf(&root, "operator", &[], 1), "client");
+            write(&leaf(&root, "auditor", &[], 1), "auditor");
+            write(&leaf(&other, "stranger", &[], 1), "stranger");
             Self { dir }
         }
 
@@ -257,17 +255,26 @@ mod mtls_listener {
     async fn serve(config: MtlsConfig) -> Served {
         let hits = Arc::new(AtomicUsize::new(0));
         let seen = Arc::clone(&hits);
-        let app = axum::Router::new().route(
-            "/who",
-            axum::routing::get(move |identity: Option<Extension<CertIdentity>>| {
-                seen.fetch_add(1, Ordering::SeqCst);
-                async move {
-                    identity
-                        .and_then(|Extension(id)| id.common_name)
-                        .unwrap_or_else(|| "none".to_owned())
-                }
-            }),
-        );
+        let app = axum::Router::new()
+            .route(
+                "/who",
+                axum::routing::get(move |identity: Option<Extension<CertIdentity>>| {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        identity
+                            .and_then(|Extension(id)| id.common_name)
+                            .unwrap_or_else(|| "none".to_owned())
+                    }
+                }),
+            )
+            .route(
+                "/not-after",
+                axum::routing::get(
+                    |not_after: Option<Extension<crate::mtls::identity::CertNotAfter>>| async move {
+                        not_after.map_or_else(|| "none".to_owned(), |Extension(n)| n.0.to_string())
+                    },
+                ),
+            );
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         listener.set_nonblocking(true).expect("nonblocking");
         let addr = listener.local_addr().expect("addr");
@@ -315,6 +322,43 @@ mod mtls_listener {
             .expect("serve_tls returns after shutdown")
             .expect("task joins");
         assert!(ended.is_ok(), "{ended:?}");
+    }
+
+    /// G-TLS (MIK-8377): a real handshake hands the request the client
+    /// certificate's own `notAfter`, the field the stream's liveness reads
+    /// (killer M14: the acceptor layers no `notAfter`).
+    #[tokio::test]
+    async fn serve_tls_hands_the_request_the_client_certificate_not_after() {
+        let pki = Pki::new();
+        let s = serve(pki.config(true)).await;
+        let not_after = |stem: &str| {
+            let pem = std::fs::read(pki.path(&format!("{stem}.crt"))).expect("crt");
+            let (_, pem) = x509_parser::pem::parse_x509_pem(&pem).expect("a PEM block");
+            pem.parse_x509()
+                .expect("a certificate")
+                .validity()
+                .not_after
+                .timestamp()
+        };
+        let expected = not_after("client");
+        assert!(
+            expected != not_after("server") && expected != not_after("ca"),
+            "premise: the client, server and CA certificates expire apart"
+        );
+
+        let response = pki
+            .client(Some("client"))
+            .get(s.url.replace("/who", "/not-after"))
+            .send()
+            .await
+            .expect("a trusted client is served");
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.text().await.expect("body"),
+            expected.to_string(),
+            "the request carries the certificate's notAfter"
+        );
+        s.handle.graceful_shutdown(Some(Duration::from_secs(5)));
     }
 
     /// With a client certificate required, no certificate and one from an

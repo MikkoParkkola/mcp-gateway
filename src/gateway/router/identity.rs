@@ -157,7 +157,7 @@ pub(super) async fn caller_grant_subject(
     Ok(match header_identity {
         Some(HeaderAdmission::Proxy { subject, peer }) => CallerAdmission {
             subject: Some(subject),
-            source: crate::gateway::streaming::HeldSource::TrustedProxy { _peer: peer },
+            source: crate::gateway::streaming::HeldSource::TrustedProxy { peer },
         },
         Some(HeaderAdmission::Cloudflare { subject, held }) => CallerAdmission {
             subject: Some(subject),
@@ -202,13 +202,7 @@ fn trusted_proxy_identity(
         return Ok(None);
     }
     // No `ConnectInfo` is no proven peer (the reading of `auth.rs`).
-    let Some(peer) = peer.filter(|peer| {
-        let peer = peer.ip().to_canonical();
-        config
-            .trusted_proxies
-            .iter()
-            .any(|entry| entry.to_canonical() == peer)
-    }) else {
+    let Some(peer) = peer.filter(|peer| config.trusts_peer(*peer)) else {
         return Err(IdentityHeaderRefusal::UntrustedPeer);
     };
     if any_present(

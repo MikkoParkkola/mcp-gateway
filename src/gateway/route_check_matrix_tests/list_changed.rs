@@ -27,6 +27,17 @@ pub(crate) enum ViewCheck {
     OwnView,
     /// The identities the stream was opened under are part of that view.
     SubjectAtAttach,
+    /// That identity is judged again at every decision, and a stream whose
+    /// identity died is closed (MIK-8377).
+    ///
+    /// Carve-out of condition (3), ruled by the lead (Q1): the agent-mismatch
+    /// and proxy-peer clauses are pinned by unit rows on `live()`
+    /// (`r_agent_4`/`5`/`6`, `r_proxy_2_peer`), because no running gateway
+    /// reaches them: agent auth and `trusted_proxies` are restart-only, and
+    /// the session owner binds the agent's grant subject and the bearer's
+    /// digest (`owner_of`), so another agent's bearer cannot resume a session
+    /// to swap the agent under an open stream.
+    IdentityLiveness,
 }
 
 /// What a route does about a check.
@@ -43,7 +54,8 @@ impl NotifyRoute {
 }
 
 impl ViewCheck {
-    pub(crate) const ALL: [Self; 2] = [Self::OwnView, Self::SubjectAtAttach];
+    pub(crate) const ALL: [Self; 3] =
+        [Self::OwnView, Self::SubjectAtAttach, Self::IdentityLiveness];
 }
 
 /// Exhaustive: a new route or check without a row does not compile.
@@ -64,8 +76,15 @@ pub(crate) const fn expect_notify(route: NotifyRoute, check: ViewCheck) -> Notif
         (NotifyRoute::Listen, ViewCheck::SubjectAtAttach) => {
             NotifyExpect::Applies("audience_l2_tests::l2_grant_subject_one_key_two_adapter_users")
         }
-        (NotifyRoute::Stdio, ViewCheck::SubjectAtAttach) => {
+        // The stdio owner holds no stream identity to capture or judge.
+        (NotifyRoute::Stdio, ViewCheck::SubjectAtAttach | ViewCheck::IdentityLiveness) => {
             NotifyExpect::NotApplicable(super::Na::AlwaysLocalOperator)
+        }
+        (NotifyRoute::GetStream, ViewCheck::IdentityLiveness) => {
+            NotifyExpect::Applies("audience_liveness_tests::r_live_1_cert_get")
+        }
+        (NotifyRoute::Listen, ViewCheck::IdentityLiveness) => {
+            NotifyExpect::Applies("audience_liveness_tests::r_live_1_cert_listen")
         }
     }
 }

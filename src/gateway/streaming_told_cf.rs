@@ -18,7 +18,7 @@ pub(crate) enum HeldSource {
     None,
     Cloudflare(crate::key_server::oidc::VerifiedAssertion),
     TrustedProxy {
-        _peer: SocketAddr,
+        peer: SocketAddr,
     },
 }
 

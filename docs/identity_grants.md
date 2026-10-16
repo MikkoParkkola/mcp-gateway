@@ -74,6 +74,15 @@ Headers that were valid but not used are counted in
 `mcp_identity_header_ignored_total{reason}` (`oidc_precedence`,
 `cf_access_in_trusted_proxy`).
 
+An open `tools/list_changed` stream judges the identity it was opened under
+again at every notification, and closes when it no longer holds. Each closure
+is counted once in `mcp_view_liveness_dead_total{reason}`: `bearer` (the held
+credential no longer validates), `adapter` (the Open WebUI assertion expired),
+`cf` (the Cloudflare Access assertion no longer verifies), `agent` (the bearer
+validates as a different agent, or an agent appeared or disappeared), `cert`
+(the client certificate is past `notAfter`, or the clock cannot be read) and
+`proxy` (the trusted proxy left `trusted_proxies`).
+
 Validated OIDC temporary-token identities take precedence over header identities.
 Header identities take precedence over mTLS and agent-JWT identities. If none are
 present, dispatch falls back to the authenticated API key name as the local

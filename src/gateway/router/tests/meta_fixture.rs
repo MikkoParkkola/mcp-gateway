@@ -17,6 +17,17 @@ pub(in crate::gateway::router) async fn test_router_app_state_with_meta(
     fixture_with(auth, key_server, agent_auth, configure).await
 }
 
+/// [`test_router_app_state_with_meta`], with `agent_auth` in place from the
+/// start (the audience rows' agent registry, MIK-8377).
+pub(in crate::gateway::router) async fn test_router_app_state_with_meta_and_agent_auth(
+    auth: &AuthConfig,
+    key_server: Option<Arc<crate::key_server::KeyServer>>,
+    agent_auth: AgentAuthState,
+    configure: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fixture {
+    fixture_with(auth, key_server, agent_auth, configure).await
+}
+
 /// [`test_router_app_state_with_meta`], with `firewall` as the router's own
 /// engine (the response pass), as startup wires it beside the Meta-MCP's.
 #[cfg(feature = "firewall")]
