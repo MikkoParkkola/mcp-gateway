@@ -210,8 +210,8 @@ pub(super) async fn gateway_with(
     (router, sends, dirs)
 }
 
-/// [`gateway`], also handing back the served `MetaMcp`, so a row can read
-/// its plan executor entries (MIK-8406).
+/// [`gateway`], also handing back the router's state, so a row can read
+/// its plan executor entries and its task store (MIK-8406).
 pub(super) async fn gateway_with_meta(
     key: &Arc<crate::gateway::oauth::GatewayKeyPair>,
     endpoint: String,
@@ -220,7 +220,7 @@ pub(super) async fn gateway_with_meta(
     axum::Router,
     Arc<AtomicUsize>,
     (tempfile::TempDir, tempfile::TempDir),
-    Arc<crate::gateway::meta_mcp::MetaMcp>,
+    Arc<crate::gateway::router::AppState>,
 ) {
     build(key, endpoint, alice, Requirement::Required, |meta| meta).await
 }
@@ -235,7 +235,7 @@ async fn build(
     axum::Router,
     Arc<AtomicUsize>,
     (tempfile::TempDir, tempfile::TempDir),
-    Arc<crate::gateway::meta_mcp::MetaMcp>,
+    Arc<crate::gateway::router::AppState>,
 ) {
     use crate::config::{BackendConfig, TransportConfig};
     use crate::identity_propagation::{
@@ -329,14 +329,14 @@ async fn build(
         crate::gateway::router::tests::test_router_app_state_with_auth(&auth).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.backends = registry;
-    let meta = Arc::new(arm(meta));
-    state_mut.meta_mcp = Arc::clone(&meta);
+    state_mut.meta_mcp = Arc::new(arm(meta));
     state_mut.transparency_log = Some(log);
+    let served = Arc::clone(&state);
     (
         crate::gateway::router::create_router(state),
         sends,
         (log_dir, store),
-        meta,
+        served,
     )
 }
 

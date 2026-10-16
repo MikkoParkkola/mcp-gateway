@@ -150,6 +150,11 @@ async fn p4u_stdio_unavailable_replay_answers_the_live_twin_with_its_data() {
             .await
             .expect("a response");
     assert_eq!(
+        live.pointer("/error/code"),
+        Some(&json!(-32603)),
+        "premise: the live twin is the outage error: {live}"
+    );
+    assert_eq!(
         live.pointer("/error/data/retryable"),
         Some(&json!(true)),
         "premise: the live twin carries its data: {live}"

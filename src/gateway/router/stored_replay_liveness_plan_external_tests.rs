@@ -52,8 +52,9 @@ async fn p11_unjudged_plan_replay_answers_the_live_resolution_error() {
     let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
     let idp = r6m_token_exchange::LiveIdp::start(&key).await;
     let alice = r6m_token_exchange::alice();
-    let (router, sends, _dirs, meta_mcp) =
+    let (router, sends, _dirs, served) =
         r6m_token_exchange::gateway_with_meta(&key, idp.endpoint(), &alice).await;
+    let meta_mcp = Arc::clone(&served.meta_mcp);
     let call = ("tools/call", "gateway_execute");
     let first =
         r6m_token_exchange::send_method_as(&router, &alice, call, execute("p11", false)).await;
@@ -105,8 +106,9 @@ async fn p9p_unjudged_plan_task_repeat_answers_the_live_resolution_error() {
     let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
     let idp = r6m_token_exchange::LiveIdp::start(&key).await;
     let alice = r6m_token_exchange::alice();
-    let (router, sends, _dirs, meta_mcp) =
+    let (router, sends, _dirs, served) =
         r6m_token_exchange::gateway_with_meta(&key, idp.endpoint(), &alice).await;
+    let meta_mcp = Arc::clone(&served.meta_mcp);
     let call = ("tools/call", "gateway_execute");
     let made =
         r6m_token_exchange::send_method_as(&router, &alice, call, execute("p9p", true)).await;
@@ -176,8 +178,9 @@ async fn p9k_mixed_task_chain_judges_every_recorded_target() {
     let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
     let idp = r6m_token_exchange::LiveIdp::start(&key).await;
     let alice = r6m_token_exchange::alice();
-    let (router, sends, _dirs, meta_mcp) =
+    let (router, sends, _dirs, served) =
         r6m_token_exchange::gateway_with_meta(&key, idp.endpoint(), &alice).await;
+    let meta_mcp = Arc::clone(&served.meta_mcp);
     let call = ("tools/call", "gateway_execute");
     let step = |server: &str| json!({"tool": format!("{server}:{TOOL}"), "arguments": {"folder": "inbox"}});
     let mut chain = json!({"name": "gateway_execute",
@@ -207,6 +210,22 @@ async fn p9k_mixed_task_chain_judges_every_recorded_target() {
     }
     let sent = sends.load(Ordering::SeqCst);
     assert_eq!(sent, 2, "premise: both steps were sent");
+    let recorded: Vec<(String, String)> = served
+        .task_executor
+        .service
+        .store
+        .targets_for_test(&id)
+        .into_iter()
+        .map(|target| (target.server, target.tool))
+        .collect();
+    assert_eq!(
+        recorded,
+        [
+            (r6m_token_exchange::PLAIN.to_string(), TOOL.to_string()),
+            (r6m_token_exchange::TX.to_string(), TOOL.to_string()),
+        ],
+        "premise: the task recorded plain first, then tx"
+    );
     let entered = crate::gateway::meta_mcp::plan_entries::count(&meta_mcp);
     let _clock = outlive_the_token(idp);
     let again = r6m_token_exchange::send_method_as(&router, &alice, call, chain).await;
@@ -225,12 +244,14 @@ async fn p9k_mixed_task_chain_judges_every_recorded_target() {
     );
     assert!(
         again.pointer("/result/taskId").is_none(),
-        "P9k-mixed: the repeat answered a task (stored or new): {again}"
+        "P9k-mixed: the repeat answered a task: only the first recorded step \
+         (plain, which mints nothing) was judged, not the second (tx): {again}"
     );
     assert_eq!(
         id_masked(&again),
         id_masked(&live),
-        "P9k-mixed: the repeat is not the first unproven step's live answer"
+        "P9k-mixed: the repeat is not the tx step's live answer (the first \
+         unproven step; plain, recorded first, mints nothing)"
     );
     assert_eq!(replay_sends, 0, "P9k-mixed: the repeat reached a backend");
     assert_eq!(
