@@ -398,6 +398,9 @@ impl ToolAuthorizer for DenyEach {
     fn quota_principal(&self) -> Option<&crate::gateway::auth::QuotaPrincipal> {
         None
     }
+    fn backend_grant(&self) -> crate::gateway::authz::BackendGrant<'_> {
+        crate::gateway::authz::BackendGrant::Unscoped
+    }
     fn decide<'a>(
         &'a self,
         target: crate::gateway::authz::ToolTarget<'a>,

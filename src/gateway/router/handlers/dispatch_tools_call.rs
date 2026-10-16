@@ -460,8 +460,14 @@ pub(super) async fn tools_call(
     if invisible {
         // A backend-wide refusal (kill switch) is answered as admission
         // answers it for a missing name: the same 400.
+        // MIK-8387: an absent target (recorded or live) is never judged by
+        // name here, so a kill switch cannot single out a registered one.
+        let scoped = state
+            .meta_mcp
+            .scoped(caller.scope().authorizer.backend_grant());
         if let Some(refusal) = backend_targets
             .iter()
+            .filter(|target| !scoped.absent_step(&target.server, &target.tool))
             .find_map(|target| state.meta_mcp.admit_backend_wide(&target.server).err())
         {
             return Err(build_error_response(

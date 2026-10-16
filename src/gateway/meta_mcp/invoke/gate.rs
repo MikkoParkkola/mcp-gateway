@@ -10,12 +10,13 @@
 //! construction. A name the caller may see and the catalogue lists passes on
 //! untouched.
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::{GuardedValue, MetaMcp};
 use crate::backend::{Backend, CatalogueVerdict, Lens};
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
 use crate::gateway::meta_mcp::refund_witness::{RefundWitness, schema_effect};
+use crate::gateway::meta_mcp::scoped_backends::Absence;
 use crate::gateway::meta_mcp::visible::{
     Visibility, Withholding, absent_name, note_denial_code, record_visibility, recorded_visibility,
 };
@@ -327,6 +328,17 @@ impl MetaMcp {
         caller: &MetaMcpCallerContext<'_>,
         session_id: Option<&str>,
     ) -> bool {
+        // MIK-8387 S2: an absent name (recorded by S1, or absent now) is
+        // invisible. Recorded upgrade-only: this answer skips signing and
+        // admission, so S3 must keep it absent even if a reload restores the
+        // backend before it asks.
+        if self
+            .scoped(caller.scope().authorizer.backend_grant())
+            .absent_step(server, tool)
+        {
+            crate::gateway::meta_mcp::visible::record_absent(server, tool);
+            return true;
+        }
         let Some(backend) = self.backends.get(server) else {
             return false;
         };
@@ -456,7 +468,63 @@ impl MetaMcp {
         }
     }
 
+    /// The answer a scoped key gets for an absent name: the one a registered
+    /// backend outside its scope got before (the catalogue's miss text, as an
+    /// `isError` result), so the three cells are equal by construction. The
+    /// record keeps the scope refusal's code for an out-of-scope name; on a
+    /// task worker this is the only note (MIK-8387 W1).
+    async fn absent_answer(
+        &self,
+        (server, tool): (&str, &str),
+        caller: &MetaMcpCallerContext<'_>,
+        session_id: Option<&str>,
+    ) -> Result<GuardedValue> {
+        crate::gateway::meta_mcp::visible::record_absent(server, tool);
+        let scoped = self.scoped(caller.scope().authorizer.backend_grant());
+        if scoped.absence(server) == Some(Absence::OutOfScope) {
+            note_denial_code(server, tool, -32003);
+        }
+        self.record_withheld(server, tool, Withholding::Absent, caller, session_id)
+            .await;
+        let miss = json!({"content": [{"type": "text", "text": crate::backend::text_absent(tool)}],
+                          "isError": true});
+        let sealed = self
+            .seal_key_refusal(
+                (caller, session_id),
+                (server, tool),
+                Ok(Some(miss)),
+                (None, caller.verified_identity, std::time::Instant::now()),
+                &mut None,
+            )
+            .await;
+        match sealed {
+            Ok(Some(answer)) => Ok(answer),
+            Ok(None) => Err(absent_name(tool)),
+            Err(refusal) => Err(refusal),
+        }
+    }
+
     async fn gate_answer(
+        &self,
+        (server, tool): (&str, &str),
+        caller: &MetaMcpCallerContext<'_>,
+        session_id: Option<&str>,
+    ) -> Option<Result<GuardedValue>> {
+        // MIK-8387 S3: an absent name is answered before any name-keyed check
+        // (policy, capability, kill switch, catalogue), from the record first,
+        // so a reload since the route stage cannot reach a dispatch.
+        if self
+            .scoped(caller.scope().authorizer.backend_grant())
+            .absent_step(server, tool)
+        {
+            return Some(self.absent_answer((server, tool), caller, session_id).await);
+        }
+        self.named_gate_answer((server, tool), caller, session_id)
+            .await
+    }
+
+    /// [`Self::gate_answer`] for a name that is not absent.
+    async fn named_gate_answer(
         &self,
         (server, tool): (&str, &str),
         caller: &MetaMcpCallerContext<'_>,

@@ -178,4 +178,10 @@ impl ToolAuthorizer for HostAuthorizer<'_> {
             Self::Stdio(inner) => inner.quota_principal(),
         }
     }
+    fn backend_grant(&self) -> crate::gateway::authz::BackendGrant<'_> {
+        match self {
+            Self::Http(inner) => inner.backend_grant(),
+            Self::Stdio(inner) => inner.backend_grant(),
+        }
+    }
 }
