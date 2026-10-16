@@ -124,6 +124,8 @@ struct Gateway {
     sends: Arc<std::sync::atomic::AtomicUsize>,
     /// The served Meta-MCP, for its plan executor entries (MIK-8406).
     meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
+    /// The task store's directory, kept for the gateway's lifetime.
+    _store: tempfile::TempDir,
     _dir: tempfile::TempDir,
 }
 
@@ -152,7 +154,7 @@ async fn gateway_seeded(
     .unwrap();
     let config = config(&env, shape);
     let auth = Arc::new(ResolvedAuthConfig::from_config(&config.auth));
-    let (mut state, _store) =
+    let (mut state, store) =
         test_router_app_state_with(StreamingConfig::default(), config.clone()).await;
     // A per-user mint needs a durable audit record; a seeded grant mints.
     let log = crate::security::transparency_log::TransparencyLogConfig {
@@ -222,6 +224,7 @@ async fn gateway_seeded(
         fixture,
         sends: slot_sends,
         meta,
+        _store: store,
         _dir: dir,
     }
 }

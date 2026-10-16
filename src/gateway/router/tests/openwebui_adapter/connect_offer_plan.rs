@@ -74,10 +74,13 @@ async fn send(gw: &Gateway, body: &Value) -> Value {
         .header("x-openwebui-assertion", assertion(HMAC, "alice"))
         .header("content-type", "application/json")
         .header("mcp-protocol-version", "2026-07-28")
-        .header("mcp-method", "tools/call")
+        .header("mcp-method", body["method"].as_str().unwrap_or_default())
         .header(
             "mcp-name",
-            body["params"]["name"].as_str().unwrap_or_default(),
+            body["params"]["name"]
+                .as_str()
+                .or_else(|| body["params"]["taskId"].as_str())
+                .unwrap_or_default(),
         )
         .body(Body::from(body.to_string()))
         .unwrap();
@@ -121,4 +124,299 @@ async fn f0_a_seeded_bridged_caller_dispatches_then_is_offered_after_revoke() {
         "{live}"
     );
     assert_eq!(gw.sends.load(Ordering::SeqCst), 1, "the live call sent");
+}
+
+/// A chain of two `list_files` reads on [`BACKEND`].
+fn chain() -> Value {
+    json!({"chain": [single(), single()]})
+}
+
+/// A `gateway_run_playbook` of `name` with no inputs.
+fn playbook(name: &str) -> Value {
+    json!({"name": name, "arguments": {}})
+}
+
+/// Register two playbooks of two `list_files` reads each: `reads_abort`
+/// (`on_error: abort`) and `reads_continue` (`on_error: continue`).
+fn register_playbooks(gw: &Gateway) {
+    let mut engine = crate::playbook::PlaybookEngine::new();
+    for (name, on_error) in [("reads_abort", "abort"), ("reads_continue", "continue")] {
+        let step = |step: &str| json!({"name": step, "server": BACKEND, "tool": "list_files", "arguments": {}});
+        let definition = serde_json::from_value(json!({"playbook": "1.0", "name": name,
+            "description": "two reads", "steps": [step("s0"), step("s1")],
+            "on_error": on_error}))
+        .expect("the playbook deserialises");
+        engine.register(definition);
+    }
+    gw.meta.set_playbook_engine(engine);
+}
+
+/// [`keyed`] as a task-augmented call.
+fn tasked(name: &str, arguments: &Value, key: &str) -> Value {
+    let mut body = keyed(name, arguments, Some(key));
+    body["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] =
+        json!({"extensions": {"io.modelcontextprotocol/tasks": {}}});
+    body["params"]["task"] = json!({});
+    body
+}
+
+/// `answer` with the JSON-RPC `id` masked.
+fn id_masked(answer: &Value) -> Value {
+    let mut masked = answer.clone();
+    masked["id"] = Value::Null;
+    masked
+}
+
+/// Polls `tasks/get` (up to 10 s) until `id` completes.
+async fn completed(gw: &Gateway, id: &str) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let meta = json!({
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities":
+                {"extensions": {"io.modelcontextprotocol/tasks": {}}},
+        });
+        let got = send(gw, &call("tasks/get", &json!({"taskId": id, "_meta": meta}))).await;
+        let status = got.pointer("/result/status").and_then(Value::as_str);
+        if status == Some("completed") {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline
+                && !matches!(status, Some("failed" | "cancelled")),
+            "premise: the task completed: {got}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+/// What one revoked replay row measured.
+struct Replayed {
+    /// The keyed repeat's answer.
+    again: Value,
+    /// The live twin's answer: `twin` sent with a fresh key, not a task.
+    live: Value,
+    /// Slot sends the repeat added.
+    sends: usize,
+    /// Plan executor entries the repeat added.
+    entries: usize,
+}
+
+/// Run `(name, arguments)` keyed by `key` (as a task when `task`), with
+/// every step dispatching; revoke `alice`; repeat it; then send the live
+/// twin `twin`.
+async fn replay_after_revoke(
+    gw: &Gateway,
+    (name, arguments): (&str, &Value),
+    key: &str,
+    task: bool,
+    twin: (&str, &Value),
+) -> Replayed {
+    let body = if task {
+        tasked(name, arguments, key)
+    } else {
+        keyed(name, arguments, Some(key))
+    };
+    let first = send(gw, &body).await;
+    if task {
+        let id = first
+            .pointer("/result/taskId")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("premise: a task was made: {first}"))
+            .to_owned();
+        completed(gw, &id).await;
+    } else {
+        assert!(
+            first.to_string().contains(SLOT_MARKER),
+            "premise: the plan dispatched: {first}"
+        );
+    }
+    assert!(
+        gw.sends.load(Ordering::SeqCst) >= 1,
+        "premise: a step reached the slot"
+    );
+    revoke(gw).await;
+    let (sent, entered) = (
+        gw.sends.load(Ordering::SeqCst),
+        crate::gateway::meta_mcp::plan_entries::count(&gw.meta),
+    );
+    let again = send(gw, &body).await;
+    let (sends, entries) = (
+        gw.sends.load(Ordering::SeqCst) - sent,
+        crate::gateway::meta_mcp::plan_entries::count(&gw.meta) - entered,
+    );
+    let live = send(gw, &keyed(twin.0, twin.1, Some(&format!("{key}-live")))).await;
+    assert_eq!(
+        live["error"]["data"]["error"]["code"], "reconnect_required",
+        "premise: the live twin answers the offer: {live}"
+    );
+    Replayed {
+        again,
+        live,
+        sends,
+        entries,
+    }
+}
+
+/// The oracle every row shares: the repeat is the live twin's offer
+/// (normalising only `id`, `error.data` kept), it serves no stored output,
+/// makes no task, sends nothing and enters no plan executor.
+fn assert_live_offer(row: &str, replayed: &Replayed) {
+    let Replayed {
+        again,
+        live,
+        sends,
+        entries,
+    } = replayed;
+    assert!(
+        !again.to_string().contains(SLOT_MARKER) && again.pointer("/result/taskId").is_none(),
+        "{row}: the stored plan output was served: {again}"
+    );
+    assert_eq!(
+        id_masked(again),
+        id_masked(live),
+        "{row}: the repeat is not the live twin's offer"
+    );
+    assert_eq!(*sends, 0, "{row}: the repeat reached the backend");
+    assert_eq!(*entries, 0, "{row}: the repeat entered the plan executor");
+}
+
+/// P6b (sync, RED at 1577d7ff6): a keyed `gateway_execute` single, revoked
+/// after it ran, answers the live twin's offer with data. Kills mSync and
+/// mOfferLive.
+#[tokio::test]
+async fn p6b_sync_single_replay_answers_the_live_offer() {
+    let gw = Box::pin(connected()).await;
+    let one = single();
+    let replayed = replay_after_revoke(
+        &gw,
+        ("gateway_execute", &one),
+        "p6b",
+        false,
+        ("gateway_execute", &one),
+    )
+    .await;
+    assert_live_offer("P6b", &replayed);
+}
+
+/// P6b-chain (sync, RED; CR-1): a keyed chain of two reads answers the first
+/// unproven step's offer, which is the single form's live twin (no
+/// byte-equality with the live chain, which re-sends step 0).
+#[tokio::test]
+async fn p6b_chain_sync_replay_answers_the_first_unproven_offer() {
+    let gw = Box::pin(connected()).await;
+    let replayed = replay_after_revoke(
+        &gw,
+        ("gateway_execute", &chain()),
+        "p6b-chain",
+        false,
+        ("gateway_execute", &single()),
+    )
+    .await;
+    assert_live_offer("P6b-chain", &replayed);
+}
+
+/// P6b-pb abort (sync, RED): an abort playbook's live twin is the bare offer
+/// with data, and the replay must equal it.
+#[tokio::test]
+async fn p6b_pb_abort_sync_replay_answers_the_live_offer() {
+    let gw = Box::pin(connected()).await;
+    register_playbooks(&gw);
+    let pb = playbook("reads_abort");
+    let replayed = replay_after_revoke(
+        &gw,
+        ("gateway_run_playbook", &pb),
+        "p6b-pba",
+        false,
+        ("gateway_run_playbook", &pb),
+    )
+    .await;
+    assert_live_offer("P6b-pb abort", &replayed);
+}
+
+/// P6b-pb continue (sync, RED; CR-1): a continue playbook answers the first
+/// unproven step's offer (the single form's live twin), not the live run's
+/// success result.
+#[tokio::test]
+async fn p6b_pb_continue_sync_replay_answers_the_first_unproven_offer() {
+    let gw = Box::pin(connected()).await;
+    register_playbooks(&gw);
+    let replayed = replay_after_revoke(
+        &gw,
+        ("gateway_run_playbook", &playbook("reads_continue")),
+        "p6b-pbc",
+        false,
+        ("gateway_execute", &single()),
+    )
+    .await;
+    assert_live_offer("P6b-pb continue", &replayed);
+}
+
+/// P9l (ii) / P9o (task, RED): a task-augmented keyed `gateway_execute`
+/// single, revoked after it completed, answers the live twin's offer with
+/// data, with no stored or new task. Kills mCarve and mOfferLive.
+#[tokio::test]
+async fn p9l_task_single_repeat_answers_the_live_offer() {
+    let gw = Box::pin(connected()).await;
+    let one = single();
+    let replayed = replay_after_revoke(
+        &gw,
+        ("gateway_execute", &one),
+        "p9l",
+        true,
+        ("gateway_execute", &one),
+    )
+    .await;
+    assert_live_offer("P9l (ii)", &replayed);
+}
+
+/// P9k (ii) (task, RED; CR-1): a task-augmented keyed chain answers the
+/// first unproven step's offer. Kills mCarve.
+#[tokio::test]
+async fn p9k_task_chain_repeat_answers_the_first_unproven_offer() {
+    let gw = Box::pin(connected()).await;
+    let replayed = replay_after_revoke(
+        &gw,
+        ("gateway_execute", &chain()),
+        "p9k",
+        true,
+        ("gateway_execute", &single()),
+    )
+    .await;
+    assert_live_offer("P9k (ii)", &replayed);
+}
+
+/// P9q abort (task, RED): a task-augmented keyed abort playbook answers its
+/// live twin's offer. Kills mCarve for the playbook name.
+#[tokio::test]
+async fn p9q_task_abort_playbook_repeat_answers_the_live_offer() {
+    let gw = Box::pin(connected()).await;
+    register_playbooks(&gw);
+    let pb = playbook("reads_abort");
+    let replayed = replay_after_revoke(
+        &gw,
+        ("gateway_run_playbook", &pb),
+        "p9qa",
+        true,
+        ("gateway_run_playbook", &pb),
+    )
+    .await;
+    assert_live_offer("P9q abort", &replayed);
+}
+
+/// P9q continue (task, RED; CR-1): a task-augmented keyed continue playbook
+/// answers the first unproven step's offer.
+#[tokio::test]
+async fn p9q_task_continue_playbook_repeat_answers_the_first_unproven_offer() {
+    let gw = Box::pin(connected()).await;
+    register_playbooks(&gw);
+    let replayed = replay_after_revoke(
+        &gw,
+        ("gateway_run_playbook", &playbook("reads_continue")),
+        "p9qc",
+        true,
+        ("gateway_execute", &single()),
+    )
+    .await;
+    assert_live_offer("P9q continue", &replayed);
 }
