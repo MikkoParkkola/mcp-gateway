@@ -328,7 +328,7 @@ impl MetaMcp {
                     .filter(|value| !value.is_empty())
                     .map(str::to_owned)
             })
-            .ok_or_else(|| Error::json_rpc(-32003, "A verified execution principal is required"))?;
+            .ok_or_else(super::support::no_execution_principal)?;
         let operation = operation();
         #[cfg(test)]
         LAST_OPERATION.with(|last| *last.borrow_mut() = Some(operation.clone()));
@@ -499,7 +499,7 @@ impl MetaMcp {
         // store, one identity per caller. For stdio it is the reserved owner
         // value (MIK-7272.OWNER.3), never `STDIO_CREDENTIAL_PRINCIPAL`.
         // No task owner (a certificate or agent alone): its proven subject.
-        let owner_principal = owner.principal().or_else(|| caller.owner_principal());
+        let owner_principal = caller.execution_principal(owner);
         let retry = caller.retry;
         // The arm the dispatch will use, so a retry's representation names it.
         let arm_key = caller.experiment_key();

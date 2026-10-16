@@ -129,7 +129,7 @@ pub use prompt_cache::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerpri
 pub use support::prune_constant_signals;
 pub(crate) use support::{
     Authentication, STEP_NOT_PERMITTED, STEP_NOT_PERMITTED_CODE, STEP_NOT_PERMITTED_STATUS,
-    step_not_permitted,
+    intake_refusal, step_not_permitted,
 };
 pub(crate) use task_confirmation::{
     AdmissionOwner, TaskConfirmation, TaskConfirmationRequest, task_admission_request,
