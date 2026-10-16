@@ -464,11 +464,10 @@ async fn g_live_1_eq_a_stream_at_its_certificate_not_after_is_still_told() {
     let (mut listen, mut get) = certified(&w, not_after).await;
     let clock = crate::clock::test_clock::at_secs(not_after);
     w.store_shared("alpha", alpha("r2"));
-    assert_eq!(
-        [listen.told(&w).await, get.told(&w).await],
-        [1, 1],
-        "at notAfter the certificate is valid"
-    );
+    // GET first: a GET stream that closed reads as told 0 here, where a
+    // closed listen stream would stop the read inside the fixture instead.
+    assert_eq!(get.told(&w).await, 1, "at notAfter the certificate is valid on GET");
+    assert_eq!(listen.told(&w).await, 1, "at notAfter the certificate is valid on listen");
     assert!(!listen.closed(&w).await, "the listen stream stays open");
     assert!(get.is_open(&w).await, "the GET stream stays open");
     drop(clock);
