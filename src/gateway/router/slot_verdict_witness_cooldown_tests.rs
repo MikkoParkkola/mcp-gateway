@@ -158,3 +158,70 @@ async fn r_mcp_c_failed_fill_judges_the_nonce_before_the_cooldown() {
     );
     assert_nonce_first("R-MCP (c)", "upstream refused tools/list", &answers);
 }
+
+/// R-MCP (s), shared backend (green, kills MIK-8433's M6): on a shared
+/// backend signing still runs the full policy, cooldown included, before the
+/// nonce (MIK-8439 keeps the policy's check there). A caller with a view, the
+/// tool in cooldown: its replayed nonce and a fresh one both get the
+/// cooldown, unprefixed, before the nonce. Nothing sent. The order R-MCP (a)
+/// pinned for a per-user backend before MIK-8439.
+#[tokio::test]
+async fn r_mcp_s_shared_backend_answers_the_cooldown_before_the_nonce() {
+    use crate::gateway::router::direct_guards_fixture::{Answer, fixture, post_meta_invoke_nonce};
+    const SHARED: &str = "alpha";
+    let fx = fixture(Answer::Ok, |meta| {
+        meta.enable_message_signing(
+            crate::security::message_signing::MessageSigner::new(
+                b"cooldown-mcp-shared-signing-secret-32-bytes".to_vec(),
+                None,
+                "cooldown-mcp-shared".into(),
+            ),
+            std::time::Duration::from_secs(300),
+            true,
+        );
+    })
+    .await;
+    assert!(
+        !fx.state
+            .backends
+            .get(SHARED)
+            .expect("the shared backend")
+            .keeps_per_user_catalogues(),
+        "premise: {SHARED} is a shared backend"
+    );
+    let invoke = |nonce: &'static str| post_meta_invoke_nonce(&fx, "k-std", SHARED, TOOL, nonce);
+    let earlier = invoke("rmcp-s-spent").await;
+    let again = invoke("rmcp-s-spent").await;
+    assert!(
+        message(&again.1).contains(REPLAY),
+        "R-MCP (s) premise: the earlier call spent its nonce: {earlier:?} then {again:?}"
+    );
+    let kill_switch = fx.state.meta_mcp.kill_switch();
+    let cfg = crate::kill_switch::CapabilityErrorBudgetConfig::default();
+    for _ in 0..=cfg.window_size.max(cfg.min_samples) {
+        kill_switch.record_capability_failure(SHARED, TOOL, &cfg);
+    }
+    assert!(
+        kill_switch.is_capability_disabled(SHARED, TOOL),
+        "premise: {TOOL} is in cooldown"
+    );
+    let calls = fx.calls.load(std::sync::atomic::Ordering::SeqCst);
+    let cooldown =
+        crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::cooldown_refusal(
+            SHARED, TOOL,
+        );
+    for (call, nonce) in [("replay", "rmcp-s-spent"), ("fresh nonce", "rmcp-s-fresh")] {
+        let (_, answer) = invoke(nonce).await;
+        assert_eq!(
+            answer.pointer("/error/code"),
+            Some(&json!(-32000)),
+            "R-MCP (s) {call}: {answer}"
+        );
+        assert_eq!(message(&answer), cooldown, "R-MCP (s) {call}: {answer}");
+    }
+    assert_eq!(
+        fx.calls.load(std::sync::atomic::Ordering::SeqCst),
+        calls,
+        "R-MCP (s): sent"
+    );
+}
