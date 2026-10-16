@@ -71,7 +71,10 @@ fn a3_intake_predicate_table() {
         "key in params, not _meta"
     );
     let mut no_id = call(named(json!("k1")));
-    no_id.as_object_mut().unwrap().remove("id");
+    no_id
+        .as_object_mut()
+        .expect("a tools/call request is an object")
+        .remove("id");
     assert!(!intake_requires_principal(&no_id), "no id member");
     // Presence, not validity: an unrecognised id shape still asks for an answer.
     for id in [
@@ -79,7 +82,8 @@ fn a3_intake_predicate_table() {
         json!(true),
         json!(1.5),
         json!({}),
-        serde_json::from_str::<Value>("18446744073709551616").unwrap(),
+        serde_json::from_str::<Value>("18446744073709551616")
+            .expect("an integer above u64 parses as a JSON number"),
     ] {
         let mut r = call(named(json!("k1")));
         r["id"] = id.clone();
@@ -96,7 +100,10 @@ fn a3_intake_predicate_table() {
         assert!(!intake_requires_principal(&r), "method {method}");
     }
     let mut no_method = call(named(json!("k1")));
-    no_method.as_object_mut().unwrap().remove("method");
+    no_method
+        .as_object_mut()
+        .expect("a tools/call request is an object")
+        .remove("method");
     assert!(!intake_requires_principal(&no_method), "missing method");
     for params in [json!([1]), json!("x"), Value::Null] {
         assert!(

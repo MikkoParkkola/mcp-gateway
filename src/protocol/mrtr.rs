@@ -36,7 +36,7 @@ pub const IDEMPOTENCY_KEY_META: &str = "io.mcp-gateway/idempotency-key";
 /// Three outcomes, so a reader cannot treat a present-but-unusable key as no
 /// key: that would run unprotected the call the client asked to protect.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum KeyField<'a> {
+enum KeyField<'a> {
     /// No key member.
     Absent,
     /// A non-empty string.
@@ -48,7 +48,7 @@ pub enum KeyField<'a> {
 /// The one reader of the idempotency key: [`RetryFields::from_params`] and the
 /// intake check both read it here, so "keyed" means one thing at both.
 #[must_use]
-pub fn idempotency_key_of(params: &Value) -> KeyField<'_> {
+fn idempotency_key_of(params: &Value) -> KeyField<'_> {
     match params
         .get("_meta")
         .and_then(|m| m.get(IDEMPOTENCY_KEY_META))
@@ -65,7 +65,7 @@ pub fn idempotency_key_of(params: &Value) -> KeyField<'_> {
 /// malformed (a caller who sent a key asked for keyed handling). Reads only
 /// protocol fields that sanitizing never changes.
 #[must_use]
-pub fn intake_requires_principal(request: &Value) -> bool {
+fn intake_requires_principal(request: &Value) -> bool {
     request.get("method").and_then(Value::as_str) == Some("tools/call")
         && request.get("id").is_some()
         && request

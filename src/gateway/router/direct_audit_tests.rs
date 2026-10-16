@@ -462,7 +462,9 @@ async fn post_to_raw(
     let status = response.status();
     (
         status,
-        to_bytes(response.into_body(), usize::MAX).await.unwrap(),
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("an in-memory body reads"),
     )
 }
 

@@ -192,3 +192,30 @@ async fn c4c_mcp_signing_refusals_answer_after_intake() {
     let calls = signing.calls.load(Ordering::SeqCst) + hardened.calls.load(Ordering::SeqCst);
     assert_eq!(calls, 0, "c4c: dispatched");
 }
+
+/// C1b (UNIFY.1a′, /mcp): a keyed no-principal `gateway_invoke` of a
+/// policy-withheld target (`alpha/blocked`, blocked by its descriptor) gets
+/// the same bytes as one of an existing target. RED: today the withheld
+/// target is judged before admission and answers differently.
+#[tokio::test]
+async fn c1b_mcp_invoke_of_a_withheld_target_matches_an_existing_one() {
+    let fx = fixture(idempotent()).await;
+    let alpha = fx.state.backends.get("alpha").expect("alpha");
+    alpha.remember_listed_tools(None, false, &poisoned_listing());
+    assert!(alpha.is_blocked_tool("blocked"), "c1b premise: not blocked");
+    let existing = post_to_raw(&fx, "/mcp", &keyed_invoke("alpha", "t"), &Caller::Session).await;
+    let withheld = post_to_raw(
+        &fx,
+        "/mcp",
+        &keyed_invoke("alpha", "blocked"),
+        &Caller::Session,
+    )
+    .await;
+    assert_eq!(
+        withheld,
+        existing,
+        "c1b: withheld {} vs existing {}",
+        String::from_utf8_lossy(&withheld.1),
+        String::from_utf8_lossy(&existing.1)
+    );
+}

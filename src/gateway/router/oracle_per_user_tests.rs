@@ -23,6 +23,9 @@ use crate::gateway::meta_mcp::slot_verdict_fixture::{
 };
 use crate::key_server::oidc::VerifiedIdentity;
 
+/// MIK-8382 UNIFY.1b rows on this fixture.
+mod lacked_warn;
+
 /// The router over one per-user backend, with what it was asked.
 struct Gateway {
     router: axum::Router,
