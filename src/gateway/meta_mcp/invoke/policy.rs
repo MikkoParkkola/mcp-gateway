@@ -38,14 +38,26 @@ impl MetaMcp {
         )?;
         // S1 (kill switch, capability disable, session profile) is shared with
         // the per-backend route; every admission path reaches it through here.
-        self.admit_target(&dispatch_guards::BackendCall {
+        // MIK-8439: on a per-user backend the error-rate check names the tool,
+        // so it waits for the credential step; a caller with no view meets the
+        // account's answer there first, as a missing name does.
+        let call = dispatch_guards::BackendCall {
             server,
             tool,
             session_id,
             api_key_name: None,
             trace_id: "",
             caller_key: None,
-        })
+        };
+        let per_user = self
+            .backends
+            .get(server)
+            .is_some_and(|backend| backend.keeps_per_user_catalogues());
+        if per_user {
+            self.admit_named_target(&call)
+        } else {
+            self.admit_target(&call)
+        }
         .map_err(|refusal| {
             self.profile_refusal_as_undefined((server, tool), session_id, refusal)
         })?;
