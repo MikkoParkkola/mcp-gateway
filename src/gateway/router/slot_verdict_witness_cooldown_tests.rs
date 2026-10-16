@@ -93,6 +93,11 @@ async fn r_mcp_a_offers_judges_the_nonce_then_meets_the_cooldown_at_dispatch() {
         "R-MCP (a) replay: not judged as a replay first: {replay}"
     );
     assert_eq!(
+        replay.pointer("/error/code"),
+        Some(&json!(-32001)),
+        "R-MCP (a) replay: {replay}"
+    );
+    assert_eq!(
         fresh.pointer("/error/code"),
         Some(&json!(-32000)),
         "R-MCP (a) fresh nonce: {fresh}"
@@ -190,7 +195,18 @@ async fn r_mcp_s_shared_backend_answers_the_cooldown_before_the_nonce() {
         "premise: {SHARED} is a shared backend"
     );
     let invoke = |nonce: &'static str| post_meta_invoke_nonce(&fx, "k-std", SHARED, TOOL, nonce);
+    let before = fx.calls.load(std::sync::atomic::Ordering::SeqCst);
     let earlier = invoke("rmcp-s-spent").await;
+    assert!(
+        earlier.1.get("error").is_none()
+            && earlier.1.pointer("/result/isError") != Some(&json!(true)),
+        "R-MCP (s) premise: the first call succeeds: {earlier:?}"
+    );
+    assert_eq!(
+        fx.calls.load(std::sync::atomic::Ordering::SeqCst) - before,
+        1,
+        "R-MCP (s) premise: the first call was sent once: {earlier:?}"
+    );
     let again = invoke("rmcp-s-spent").await;
     assert!(
         message(&again.1).contains(REPLAY),
