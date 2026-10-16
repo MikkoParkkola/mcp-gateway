@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8382 rows C4 and C4b: on `/mcp`, the intake refusal answers before the
-//! refusals that come later today.
+//! MIK-8382 `/mcp` rows C1, C1b and C4-C4c: on `/mcp`, the intake refusal
+//! answers before the refusals that come later today, whatever the target.
 
 use super::{
     Caller, Case, Extra, KEY, NO_PRINCIPAL, Ordering, Setup, StatusCode, Value, fixture,
-    idempotent, json, keyed_body, message, post_to, post_uri_with_headers,
+    idempotent, json, keyed_body, keyed_invoke, message, poisoned_listing, post_to,
+    post_to_raw, post_uri_with_headers,
 };
 
 /// C4 (/mcp precedence): for a keyed no-principal `tools/call` on `/mcp`, the
@@ -203,6 +204,7 @@ async fn c1b_mcp_invoke_of_a_withheld_target_matches_an_existing_one() {
     let alpha = fx.state.backends.get("alpha").expect("alpha");
     alpha.remember_listed_tools(None, false, &poisoned_listing());
     assert!(alpha.is_blocked_tool("blocked"), "c1b premise: not blocked");
+    assert!(!alpha.is_blocked_tool("t"), "c1b premise: `t` is blocked");
     let existing = post_to_raw(&fx, "/mcp", &keyed_invoke("alpha", "t"), &Caller::Session).await;
     let withheld = post_to_raw(
         &fx,
@@ -217,5 +219,46 @@ async fn c1b_mcp_invoke_of_a_withheld_target_matches_an_existing_one() {
         "c1b: withheld {} vs existing {}",
         String::from_utf8_lossy(&withheld.1),
         String::from_utf8_lossy(&existing.1)
+    );
+}
+
+/// C1 (UNIFY.1a′, /mcp): a keyed no-principal `gateway_invoke` gets the
+/// same bytes whatever its target: an existing tool, a missing tool, a
+/// missing server. A CONTROL on the red base (adc733a8e); RED since #3901
+/// (MIK-8361), where a missing tool answers the absent-name tool error
+/// before admission's -32003. The /mcp intake answers all three first.
+#[tokio::test]
+async fn c1_mcp_invoke_is_name_independent() {
+    let fx = fixture(idempotent()).await;
+    let mut answers = Vec::new();
+    for (case, server, tool) in [
+        ("existing", "alpha", "t"),
+        ("missing tool", "alpha", "nope"),
+        ("missing server", "nope", "t"),
+    ] {
+        answers.push((
+            case,
+            post_to_raw(&fx, "/mcp", &keyed_invoke(server, tool), &Caller::Session).await,
+        ));
+    }
+    let (_, (_, first)) = &answers[0];
+    let wrong: Vec<String> = answers
+        .iter()
+        .filter(|(_, (status, bytes))| *status != StatusCode::BAD_REQUEST || bytes != first)
+        .map(|(case, (status, bytes))| {
+            format!("{case}: {status} {}", String::from_utf8_lossy(bytes))
+        })
+        .collect();
+    assert!(
+        wrong.is_empty(),
+        "c1 differs from the existing target:\n{}",
+        wrong.join("\n")
+    );
+    let body: Value = serde_json::from_slice(first).expect("JSON");
+    assert_eq!(message(&body), NO_PRINCIPAL, "c1: {body}");
+    assert_eq!(
+        fx.lists.load(Ordering::SeqCst),
+        0,
+        "c1: a backend was listed"
     );
 }

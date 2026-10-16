@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8382 CONTROL rows: answers the intake check must leave as they are
-//! (B5-B7, B9, C1, C5). Green before and after the fix.
+//! (B5-B7, B9, B9b, C5). Green before and after the fix.
 
 use super::*;
 
@@ -76,46 +76,6 @@ async fn b9_protocol_field_refusals_stay_first() {
             "b9 {case}: intake answered first"
         );
     }
-}
-
-/// C1 CONTROL (UNIFY.1a′, /mcp): a keyed no-principal `gateway_invoke` gets
-/// the same bytes whatever its target: an existing tool, a missing tool, a
-/// missing server. Green on the release line too: those targets already
-/// reach admission's -32003. C1b is the red case (a withheld target).
-#[tokio::test]
-async fn c1_control_mcp_invoke_is_name_independent() {
-    let fx = fixture(idempotent()).await;
-    let mut answers = Vec::new();
-    for (case, server, tool) in [
-        ("existing", "alpha", "t"),
-        ("missing tool", "alpha", "nope"),
-        ("missing server", "nope", "t"),
-    ] {
-        answers.push((
-            case,
-            post_to_raw(&fx, "/mcp", &keyed_invoke(server, tool), &Caller::Session).await,
-        ));
-    }
-    let (_, (_, first)) = &answers[0];
-    let wrong: Vec<String> = answers
-        .iter()
-        .filter(|(_, (status, bytes))| *status != StatusCode::BAD_REQUEST || bytes != first)
-        .map(|(case, (status, bytes))| {
-            format!("{case}: {status} {}", String::from_utf8_lossy(bytes))
-        })
-        .collect();
-    assert!(
-        wrong.is_empty(),
-        "c1 differs from the existing target:\n{}",
-        wrong.join("\n")
-    );
-    let body: Value = serde_json::from_slice(first).expect("JSON");
-    assert_eq!(message(&body), NO_PRINCIPAL, "c1: {body}");
-    assert_eq!(
-        fx.lists.load(Ordering::SeqCst),
-        0,
-        "c1: a backend was listed"
-    );
 }
 
 /// C5 CONTROL (D1, routed admission owner): with auth off and a trusted proxy

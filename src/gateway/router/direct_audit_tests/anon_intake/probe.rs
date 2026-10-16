@@ -177,6 +177,7 @@ async fn p0_mcp_probe() {
     let alpha = fx.state.backends.get("alpha").expect("alpha");
     alpha.remember_listed_tools(None, false, &poisoned_listing());
     assert!(alpha.is_blocked_tool("blocked"), "p0 mcp premise: not blocked");
+    assert!(!alpha.is_blocked_tool("t"), "p0 mcp premise: `t` is blocked");
     let answers = [
         (
             "existing",
