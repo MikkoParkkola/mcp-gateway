@@ -65,7 +65,11 @@ fn without_trace(body: &mut Value) {
 fn assert_grant_refusal(context: &str, (status, body): &(StatusCode, String)) {
     assert_eq!(*status, StatusCode::FORBIDDEN, "{context}: {body}");
     let parsed: Value = serde_json::from_str(body).expect("the answer is JSON");
-    assert_eq!(parsed["error"]["code"].as_i64(), Some(-32003), "{context}: {body}");
+    assert_eq!(
+        parsed["error"]["code"].as_i64(),
+        Some(-32003),
+        "{context}: {body}"
+    );
     assert_eq!(
         parsed["error"]["message"].as_str(),
         Some(GRANT_REFUSAL),
@@ -165,9 +169,15 @@ async fn a_non_empty_grant_is_untouched_by_the_empty_grant_answer() {
         );
 
         let fx = granted(&["alpha"]).await;
-        let (_, body) = answer(&fx, route, "beta").await;
+        let (status, body) = answer(&fx, route, "beta").await;
         assert!(!body.contains(NO_GRANT), "{route:?}: {body}");
-        if !matches!(route, Route::Direct) {
+        if matches!(route, Route::Direct) {
+            // The direct route's scope refusal, before any lookup.
+            assert_eq!(status, StatusCode::FORBIDDEN, "{route:?}: {body}");
+            let parsed: Value = serde_json::from_str(&body).expect("the answer is JSON");
+            assert_eq!(parsed["error"]["code"].as_i64(), Some(-32003), "{body}");
+        } else {
+            assert_eq!(status, StatusCode::OK, "{route:?}: {body}");
             assert!(
                 body.contains("the backend does not list a tool named `t`"),
                 "{route:?}: {body}"
@@ -182,24 +192,33 @@ async fn a_non_empty_grant_is_untouched_by_the_empty_grant_answer() {
 }
 
 /// MIK-8387.EMPTY.1, capability backend: its name is registered too, so an
-/// empty grant answers it with the grant refusal an unregistered name gets,
-/// never the capability's `ToolNotFound`, on `/mcp` invoke and execute.
+/// empty grant answers it on `route` with the grant refusal an unregistered
+/// name gets, never the capability's `ToolNotFound`.
+async fn assert_capability_name_answers_as_an_unregistered_one(route: Route) {
+    let fx = granted(&[]).await;
+    fx.state
+        .meta_mcp
+        .set_capabilities(Arc::new(crate::capability::CapabilityBackend::new(
+            CAPS,
+            Arc::new(crate::capability::CapabilityExecutor::new()),
+        )));
+    let caps = answer(&fx, route, CAPS).await;
+    let nosuch = answer(&fx, route, UNREGISTERED).await;
+    assert_eq!(
+        caps, nosuch,
+        "{route:?}: {CAPS} differs from {UNREGISTERED}"
+    );
+    assert_grant_refusal(&format!("{route:?} {CAPS}"), &caps);
+}
+
+/// MIK-8387.EMPTY.1, capability name, `/mcp` `gateway_invoke`.
 #[tokio::test]
-async fn capability_name_answers_as_an_unregistered_one() {
-    for route in [Route::Invoke, Route::Execute] {
-        let fx = granted(&[]).await;
-        fx.state
-            .meta_mcp
-            .set_capabilities(Arc::new(crate::capability::CapabilityBackend::new(
-                CAPS,
-                Arc::new(crate::capability::CapabilityExecutor::new()),
-            )));
-        let caps = answer(&fx, route, CAPS).await;
-        let nosuch = answer(&fx, route, UNREGISTERED).await;
-        assert_eq!(
-            caps, nosuch,
-            "{route:?}: {CAPS} differs from {UNREGISTERED}"
-        );
-        assert_grant_refusal(&format!("{route:?} {CAPS}"), &caps);
-    }
+async fn capability_name_answers_as_an_unregistered_one_on_invoke() {
+    assert_capability_name_answers_as_an_unregistered_one(Route::Invoke).await;
+}
+
+/// MIK-8387.EMPTY.1, capability name, `/mcp` `gateway_execute`.
+#[tokio::test]
+async fn capability_name_answers_as_an_unregistered_one_on_execute() {
+    assert_capability_name_answers_as_an_unregistered_one(Route::Execute).await;
 }
