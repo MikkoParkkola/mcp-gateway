@@ -154,13 +154,30 @@ pub(super) fn execution_lease(
 
 /// A 7a hit, else a 7b replay (whose 7a reservation is already given back),
 /// answered here as an early return; otherwise the 7a reservation is kept.
+///
+/// A 7b replay to a caller stage 5 attached no per-caller credential for is
+/// refused as `/mcp` refuses it (MIK-8434): the stored output was produced
+/// under the owner's per-user credential, and running the call again under
+/// the static one would send a write twice. A 7a hit is keyed on the same
+/// principal it was stored under, so it is served. The refusal comes after
+/// nonce admission, and an admitted nonce is given back only by
+/// `release_nonce`, so the refused nonce stays spent.
 pub(super) fn deliver_replay(
     scope: Scope<'_>,
-    (envelope, preflight): (&Envelope, &Preflight),
+    (envelope, preflight, propagation): (&Envelope, &Preflight, &Propagation),
     admitted: &mut Admitted<'_>,
     (guarded, replay): (Option<GuardOutcome>, Option<JsonRpcResponse>),
 ) -> Result<(), Rejection> {
     let (state, id, client) = (scope.state, scope.id, scope.caller.client.as_ref());
+    if replay.is_some()
+        && let Some(e) = propagation.unproven.as_ref()
+    {
+        let refused = super::super::direct_guards::refusal(Some(id.clone()), e);
+        return Err(build_http_response(
+            &Egressed::gateway_own(refused),
+            StatusCode::OK,
+        ));
+    }
     let replay = match guarded {
         Some(GuardOutcome::CachedResult(cached)) => {
             Some(JsonRpcResponse::success(id.clone(), cached))

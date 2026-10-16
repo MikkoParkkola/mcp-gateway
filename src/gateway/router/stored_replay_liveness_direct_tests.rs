@@ -384,10 +384,6 @@ const PASSTHROUGH: (&str, &str) = (
     r6m_token_exchange::PASSTHROUGH_CREDENTIAL,
 );
 
-/// The refusal a passthrough retry that forwarded no credential answers.
-const PT_UNPROVEN: &str = "Configuration error: identity propagation forwarded no passthrough \
-                           credential for backend 'tx'; a stored result is not served without one";
-
 /// A passthrough, optional [`r6m_token_exchange::TX`] with 7a NOT armed, so
 /// only 7b can serve a retry: the first call forwarded a credential.
 async fn passthrough_after_forwarded() -> (
@@ -429,11 +425,9 @@ async fn d_pt_a_retry_that_forwards_no_credential_is_refused() {
     eprintln!("D-pt answer ({status}): {again}");
     assert_eq!(sends.load(Ordering::SeqCst), 1, "D-pt: sent again: {again}");
     assert_eq!(status, axum::http::StatusCode::OK, "D-pt: {again}");
-    assert_eq!(
-        again.pointer("/error/message").and_then(Value::as_str),
-        Some(PT_UNPROVEN),
-        "D-pt: not the passthrough refusal: {again}"
-    );
+    // One refusal however the backend propagates (lead ruling): the
+    // unminted refusal, word for word.
+    assert_unproven("D-pt", &again);
     assert!(
         !again.to_string().contains(MARKER),
         "D-pt: the stored output went out"

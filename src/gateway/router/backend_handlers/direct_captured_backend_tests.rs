@@ -267,8 +267,8 @@ async fn an_a2a_question_on_this_route_is_bound_to_the_key_holder() {
 /// D-a2a premise (MIK-8434): an A2A key holder on an optional
 /// `SignedAssertion` backend has no verified end-user identity, so the mint
 /// falls back to static credentials, and the A2A override still binds
-/// `identity_key` to the key holder. The fix commit adds the assertion that
-/// this propagation is unproven (mutant M-a2a: the A2A key read as a proof).
+/// `identity_key` to the key holder, but the propagation stays unproven
+/// (mutant M-a2a: the A2A key read as a proof).
 #[cfg(feature = "a2a")]
 #[tokio::test]
 async fn an_unminted_a2a_key_holder_is_bound_but_not_proven() {
@@ -318,5 +318,18 @@ async fn an_unminted_a2a_key_holder_is_bound_but_not_proven() {
         propagation.headers.is_empty() && !propagation.attempted,
         "premise: the static fallback, not a mint: {:?}",
         propagation.headers
+    );
+    // The A2A binding is not a proof of the caller's account.
+    assert_eq!(
+        propagation
+            .unproven
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some(
+            "Configuration error: identity propagation minted no credential for backend \
+             'alpha'; a stored result is not served without one"
+        ),
+        "D-a2a: the A2A key read as a proof"
     );
 }

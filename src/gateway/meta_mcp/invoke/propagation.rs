@@ -72,28 +72,40 @@ impl MetaMcp {
     ) -> Result<HeldCredential> {
         self.resolve_propagation_credential_attempted_for(server, backend, caller)
             .await
-            .map(|(held, _attempted)| held)
+            .map(|(held, _attempted, _unproven)| held)
     }
 
-    /// [`Self::resolve_propagation_credential_held_for`], and whether a mint
-    /// was attempted whatever came of it: the direct route's refund rule
-    /// counts an attempt as an effect (MIK-8379 H1).
+    /// [`Self::resolve_propagation_credential_held_for`] for the direct route,
+    /// as three values:
+    /// - the held credential;
+    /// - whether a mint was attempted whatever came of it, which the direct
+    ///   route's refund rule counts as an effect (MIK-8379 H1);
+    /// - the refusal a stored per-user result answers with when this
+    ///   propagation-configured backend minted nothing (an optional backend's
+    ///   static fallback, IDP.5), else `None`: the same proof `/mcp` judges
+    ///   a stored replay by (MIK-8434). A backend with no propagation config
+    ///   proves nothing and needs nothing, so it is `None` too.
     pub(crate) async fn resolve_propagation_credential_attempted_for(
         &self,
         server: &str,
         backend: Option<&crate::backend::Backend>,
         caller: CallerProof<'_>,
-    ) -> Result<(HeldCredential, bool)> {
+    ) -> Result<(HeldCredential, bool, Option<Error>)> {
         let Some(idp_cfg) = backend.and_then(|b| b.identity_propagation_config().cloned()) else {
             Self::refuse_unbound_account_backend(server, backend)?;
-            return Ok(((Vec::new(), None, None), false));
+            return Ok(((Vec::new(), None, None), false, None));
         };
         let cred = self
             .resolve_caller_credential_as(server, backend, &idp_cfg, caller)
             .await?;
+        let unproven = cred
+            .cache_binding
+            .is_none()
+            .then(|| super::stored_proof::unminted_refusal(server));
         Ok((
             (cred.headers, cred.cache_binding, cred.managed),
             cred.attempted,
+            unproven,
         ))
     }
 
