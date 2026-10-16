@@ -568,7 +568,8 @@ async fn resumes_via_proxy(
 ) -> bool {
     let (status, got) = send(state, via_proxy(who, method, Some(id))).await;
     assert_eq!(status, StatusCode::OK, "{method} was refused outright");
-    got.as_deref() == Some(id)
+    // A missing session header must not read as a different session.
+    got.expect("the route names the session it answered in") == id
 }
 
 /// `cross_subject_session_refused` with the bearer bytes held equal: two
@@ -584,10 +585,12 @@ async fn proxied_subjects_on_one_bearer_are_refused_each_others_session() {
             "subject B resumed subject A's session on {method} through their shared key"
         );
     }
-    assert!(
-        resumes_via_proxy(&state, (Some("alice"), Some(KEY_ONE)), "POST", &a).await,
-        "B's attempts must not have displaced A's session"
-    );
+    for method in ["POST", "GET"] {
+        assert!(
+            resumes_via_proxy(&state, (Some("alice"), Some(KEY_ONE)), method, &a).await,
+            "B's attempts must not have displaced A's session on {method}"
+        );
+    }
 }
 
 /// `a_subject_without_a_credential_owns_its_session` through a subject that
@@ -605,8 +608,10 @@ async fn a_proxied_subject_without_a_credential_owns_its_session() {
             );
         }
     }
-    assert!(
-        resumes_via_proxy(&state, (Some("alice"), None), "GET", &a).await,
-        "the subject lost its own session"
-    );
+    for method in ["POST", "GET"] {
+        assert!(
+            resumes_via_proxy(&state, (Some("alice"), None), method, &a).await,
+            "the subject lost its own session on {method}"
+        );
+    }
 }
