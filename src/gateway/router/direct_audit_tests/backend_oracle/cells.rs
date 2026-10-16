@@ -70,7 +70,7 @@ async fn o5_a_tool_restricted_key_answers_an_unreachable_backend_as_an_absent_on
 }
 
 /// K1(a) (design r2, GPT-2): `beta` kill-switched. The kill switch is read
-/// by name after the gate (dispatch_tools_call.rs:461), so it must not give
+/// by name after the gate (`dispatch_tools_call.rs:461`), so it must not give
 /// `beta` an answer the absent names do not get.
 #[tokio::test]
 async fn k1a_a_kill_switched_backend_answers_as_an_absent_one() {
@@ -93,7 +93,7 @@ async fn n1_a_passthrough_backend_outside_the_scope_is_sanitized_as_an_absent_on
     let make = || async {
         let fx = fixture(Setup {
             auth: Some(scoped_key()),
-            sanitize_input: true,
+            sanitize: Sanitize::On,
             ..Setup::default()
         })
         .await;
@@ -145,6 +145,14 @@ async fn f1_a_failing_log_answers_every_unreachable_backend_alike() {
     for route in [Route::Invoke, Route::Direct] {
         let answers = cells(route, make, &json!({})).await;
         assert_cells_equal(&format!("F1 {route:?}"), &answers);
+        let (status, body) = &answers[0].1;
+        assert_eq!(
+            *status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "F1 {route:?}: {answers:?}"
+        );
+        let body: Value = serde_json::from_str(body).expect("JSON");
+        assert_eq!(body["error"]["code"], -32005, "F1 {route:?}: {answers:?}");
     }
 }
 
@@ -241,7 +249,7 @@ async fn post_keyed_direct(fx: &Fixture, uri: &str, body: &str) -> (StatusCode, 
 
 /// O3m, d5 (§2a cell 15), keyed half: a keyed `tools/call` sent twice on
 /// `/mcp/{X}` answers the miss both times, never reaching
-/// `idempotency_outcome` (direct_dispatch.rs:257).
+/// `idempotency_outcome` (`direct_dispatch.rs:257`).
 #[tokio::test]
 async fn o3m_a_keyed_direct_retry_answers_as_an_absent_one() {
     let mut answers = Vec::new();

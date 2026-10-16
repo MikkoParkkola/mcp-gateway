@@ -131,7 +131,7 @@ fn assert_resume_missed(
 
 /// R1 (d4, GPT F1; §2a cell 10), `ghost` cell: unregistered between the stop
 /// and the resume. The resume answers -32001 `Backend not found` (escaping at
-/// chain_exec.rs:38) and writes exactly one not-found record. No `beta`
+/// `chain_exec.rs:38`) and writes exactly one not-found record. No `beta`
 /// cell exists at T1, so the pin is the design's (design-8387 d5 §3 S6,
 /// §5 row R1; lead ruling on stage 1).
 #[tokio::test]
@@ -145,7 +145,7 @@ async fn r1_a_resume_whose_step_was_removed_answers_the_backend_miss_with_one_re
 
 /// R1(c): under `FailClosed` with a failing log, the resume answers the
 /// write error, as every other refusal on this writer does (design-8387 d5
-/// §3 S6 `record_absent_step`, `written.and(result)` at audit.rs:513; §5
+/// §3 S6 `record_absent_step`, `written.and(result)` at `audit.rs:513`; §5
 /// row R1(c); lead ruling on stage 1).
 #[tokio::test]
 async fn r1c_a_resume_refusal_under_a_failing_log_answers_the_write_error() {

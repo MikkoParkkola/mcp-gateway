@@ -12,8 +12,8 @@ fn tasks_meta() -> Value {
 }
 
 /// POST `method` with `params` as key `k` on the 2026-07-28 revision; `name`
-/// is the `mcp-name` header.
-async fn send(fx: &Fixture, method: &str, name: &str, params: Value) -> Value {
+/// is the `mcp-name` header. The HTTP status and the JSON-RPC message.
+async fn send(fx: &Fixture, method: &str, name: &str, params: Value) -> (StatusCode, Value) {
     let body = json!({"jsonrpc": "2.0", "id": 7, "method": method, "params": params});
     let request = axum::http::Request::builder()
         .method("POST")
@@ -27,12 +27,13 @@ async fn send(fx: &Fixture, method: &str, name: &str, params: Value) -> Value {
         .body(axum::body::Body::from(body.to_string()))
         .unwrap();
     let response = fx.router.clone().oneshot(request).await.unwrap();
+    let status = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    sse_or_json(&bytes)
+    (status, sse_or_json(&bytes))
 }
 
 /// A task call of `gateway_execute` `[alpha:t, X:t]`.
-async fn submit_mixed_chain(fx: &Fixture, server: &str) -> Value {
+async fn submit_mixed_chain(fx: &Fixture, server: &str) -> (StatusCode, Value) {
     let chain = json!([{"tool": "alpha:t", "arguments": {}},
                        {"tool": format!("{server}:t"), "arguments": {}}]);
     send(
@@ -56,7 +57,7 @@ fn keyed_tasks_meta(server: &str) -> Value {
 /// task as its caller does (`tasks/get`). A read of a task whose stored
 /// target is unregistered is answered by the stored-read layer, so the read
 /// itself, error or not, is the cell's outcome.
-async fn settled(fx: &Fixture, id: &str, server: &str) -> Value {
+async fn settled(fx: &Fixture, id: &str, server: &str) -> (StatusCode, Value) {
     let bound = std::time::Instant::now() + Duration::from_secs(10);
     while step_record(fx, server).is_empty() {
         assert!(
@@ -83,28 +84,29 @@ fn step_record(fx: &Fixture, server: &str) -> Vec<Value> {
         .collect()
 }
 
-/// Each cell's outcome, name and task id masked: the settled task, or the
-/// submit's own answer when intake refused to make one; with the fixture
-/// and whether a task was made.
+/// Each cell's outcome as (HTTP status, body), name and task id masked: the
+/// settled task's read, or the submit's own answer when intake refused to
+/// make one; with the fixture and whether a task was made.
 async fn worker_cells() -> Vec<(&'static str, (String, Fixture, bool))> {
     let mut cells = Vec::new();
     for name in [GHOST, WITHHELD, NOSUCH] {
         let fx = scoped_fixture(MetaMode::CodeMode).await;
-        let made = submit_mixed_chain(&fx, name).await;
+        let (submitted, made) = submit_mixed_chain(&fx, name).await;
         let id = made
             .pointer("/result/task/taskId")
             .or_else(|| made.pointer("/result/taskId"))
             .and_then(Value::as_str)
             .map(str::to_owned);
         let (outcome, worked) = match id {
-            Some(id) => (
-                settled(&fx, &id, name)
-                    .await
-                    .to_string()
-                    .replace(&id, "<task>"),
-                true,
+            Some(id) => {
+                let (status, read) = settled(&fx, &id, name).await;
+                let read = json!([status.as_u16(), read]).to_string();
+                (read.replace(&id, "<task>"), true)
+            }
+            None => (
+                json!([submitted.as_u16(), {"intake": made}]).to_string(),
+                false,
             ),
-            None => (json!({"intake": made}).to_string(), false),
         };
         let outcome = masked(&outcome, name);
         cells.push((name, (outcome, fx, worked)));
@@ -112,15 +114,28 @@ async fn worker_cells() -> Vec<(&'static str, (String, Fixture, bool))> {
     cells
 }
 
+/// `ghost`'s and `beta`'s tasks must be made at the tip: only `nosuch`'s
+/// intake refusal is the documented baseline (the O1 split), so no row can
+/// lose its worker or stored-read coverage to an intake refusal unseen.
+fn assert_tasks_made(row: &str, cells: &[(&str, (String, Fixture, bool))]) {
+    for (name, (outcome, _, worked)) in cells {
+        assert!(
+            *worked || *name == NOSUCH,
+            "{row}: premise: `{name}`'s task was not made: {outcome}"
+        );
+    }
+}
+
 /// W1 (d5, GPT F2; §2a cell 13), record half: the worker has no route-stage
 /// memo, so the step's own record must keep its reason: `beta` and `nosuch`
 /// `denied -32003`, and `ghost` not `denied`. Green at the tip through
-/// `may_invoke`'s note (gate.rs:472) for every cell whose task is made; at
-/// the tip intake refuses `nosuch`'s task (the O1 split), so that cell is
-/// checked by the answer half until S1 lets it through.
+/// `may_invoke`'s note (`gate.rs:472`). At the tip intake refuses `nosuch`'s
+/// task (the O1 split), so that cell is checked here once S1 lets it through.
 #[tokio::test]
 async fn w1_a_worker_step_record_keeps_the_scope_refusal() {
-    for (name, (outcome, fx, worked)) in worker_cells().await {
+    let cells = worker_cells().await;
+    assert_tasks_made("W1", &cells);
+    for (name, (outcome, fx, worked)) in cells {
         if !worked {
             continue;
         }
@@ -146,11 +161,12 @@ async fn w1_a_worker_step_record_keeps_the_scope_refusal() {
 /// answers -32003 naming `beta` (`authorize_stored`), `ghost`'s answers
 /// -32001, and intake refuses `nosuch`'s task. The worker's own answer is
 /// not observable through `tasks/get` once S7 refuses the read; W1's record
-/// half pins the worker. Every cell's task must be made and read alike.
+/// half pins the worker. Status and body are compared together.
 #[tokio::test]
 async fn r2_t0_a_stored_read_of_an_unreachable_step_answers_as_an_absent_one() {
-    let answers: Vec<(&str, String)> = worker_cells()
-        .await
+    let cells = worker_cells().await;
+    assert_tasks_made("R2 (T0)", &cells);
+    let answers: Vec<(&str, String)> = cells
         .into_iter()
         .map(|(name, (outcome, _, _))| (name, outcome))
         .collect();
@@ -164,7 +180,7 @@ async fn r2_t0_a_stored_read_of_an_unreachable_step_answers_as_an_absent_one() {
 async fn r2b_a_refused_task_call_stores_no_task_in_any_cell() {
     // Control: the same keyed task call to the key's own backend stores one.
     let fx = scoped_fixture(MetaMode::Plain).await;
-    let control = send(
+    let (_, control) = send(
         &fx,
         "tools/call",
         "gateway_invoke",
@@ -187,7 +203,7 @@ async fn r2b_a_refused_task_call_stores_no_task_in_any_cell() {
                             "arguments": {"server": name, "tool": "t", "arguments": {}},
                             "task": {}, "_meta": keyed_tasks_meta(name)});
         for attempt in ["submit", "repeat"] {
-            let made = send(&fx, "tools/call", "gateway_invoke", params.clone()).await;
+            let (_, made) = send(&fx, "tools/call", "gateway_invoke", params.clone()).await;
             let id = made
                 .pointer("/result/task/taskId")
                 .or_else(|| made.pointer("/result/taskId"));

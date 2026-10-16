@@ -59,7 +59,7 @@ fn single_miss() -> Value {
 
 /// The pinned miss of a mixed chain's second step: `beta`'s answer at the tip.
 fn chain_miss() -> Value {
-    let absent = crate::backend::text_absent("t");
+    let absent = ABSENT_T;
     json!({"error": {"code": -32603, "message": format!(
                "JSON-RPC error -32603: Chain step 1 ({NAME}:t) failed: {absent}")},
            "id": 7, "jsonrpc": "2.0"})
@@ -109,8 +109,8 @@ async fn i1_a_keyed_retry_of_an_absent_target_answers_as_an_absent_one() {
         }
         assert_cells_equal(&format!("I1 {label}"), &answers);
         assert_eq!(
-            core(&answers[0].1),
-            single_miss(),
+            (answers[0].1.0, core(&answers[0].1)),
+            (StatusCode::OK, single_miss()),
             "I1 {label}: unpinned answer"
         );
     }
@@ -197,20 +197,35 @@ async fn i2a_a_keyed_mixed_chain_replay_after_removal_answers_the_backend_miss()
 /// cells agree.
 #[tokio::test]
 async fn i2b_a_keyed_mixed_chain_replay_of_an_absent_step_answers_alike() {
-    let mut answers = Vec::new();
+    let (mut answers, mut runs) = (Vec::new(), Vec::new());
     for name in [GHOST, WITHHELD, NOSUCH] {
         let fx = scoped_fixture(code_mode()).await;
         let first = call(&fx, mixed_chain(name), Some("k-8387-i2b"), name).await;
+        let ran = fx.calls.load(Ordering::SeqCst);
         let second = call(&fx, mixed_chain(name), Some("k-8387-i2b"), name).await;
+        runs.push((name, ran, fx.calls.load(Ordering::SeqCst)));
         assert_eq!(first, second, "I2(b) {name}: the replay answered otherwise");
         answers.push((name, second));
     }
     assert_cells_equal("I2(b)", &answers);
-    assert_eq!(core(&answers[0].1), chain_miss(), "I2(b): unpinned answer");
+    // A replay serves the first run's answer: `alpha` ran once, and the
+    // retry did not run the chain again (two fresh runs also answer alike).
+    for (name, ran, after) in runs {
+        assert_eq!(
+            (ran, after),
+            (1, 1),
+            "I2(b) {name}: alpha runs (first, after retry)"
+        );
+    }
+    assert_eq!(
+        (answers[0].1.0, core(&answers[0].1)),
+        (StatusCode::OK, chain_miss()),
+        "I2(b): unpinned answer"
+    );
 }
 
 /// K1(b) (design r2, GPT-2): `beta` kill-switched, a keyed mixed chain. At
-/// the tip the plan-time kill switch (admission_plan.rs:169) refuses `beta`
+/// the tip the plan-time kill switch (`admission_plan.rs:169`) refuses `beta`
 /// alone with 400.
 #[tokio::test]
 async fn k1b_a_kill_switched_step_in_a_keyed_chain_answers_as_an_absent_one() {
@@ -224,7 +239,11 @@ async fn k1b_a_kill_switched_step_in_a_keyed_chain_answers_as_an_absent_one() {
         ));
     }
     assert_cells_equal("K1(b)", &answers);
-    assert_eq!(core(&answers[0].1), chain_miss(), "K1(b): unpinned answer");
+    assert_eq!(
+        (answers[0].1.0, core(&answers[0].1)),
+        (StatusCode::OK, chain_miss()),
+        "K1(b): unpinned answer"
+    );
 }
 
 /// O2m (§2a cell 7): an unkeyed mixed chain. The cells answer alike, and the
@@ -246,5 +265,9 @@ async fn o2m_a_mixed_chain_answers_an_unreachable_step_as_an_absent_one() {
         }
     }
     assert_cells_equal("O2m", &answers);
-    assert_eq!(core(&answers[0].1), chain_miss(), "O2m: unpinned answer");
+    assert_eq!(
+        (answers[0].1.0, core(&answers[0].1)),
+        (StatusCode::OK, chain_miss()),
+        "O2m: unpinned answer"
+    );
 }

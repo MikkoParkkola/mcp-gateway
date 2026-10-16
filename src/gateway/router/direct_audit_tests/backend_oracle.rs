@@ -22,6 +22,10 @@ const GHOST: &str = "ghost";
 const WITHHELD: &str = "beta";
 /// Not registered, outside the key's scope.
 const NOSUCH: &str = "nosuch";
+/// The absent-tool text every pin builds on, written out so a change to
+/// `text_absent` cannot move the answers and the pins together (O1 ties the
+/// helper to it).
+const ABSENT_T: &str = "the backend does not list a tool named `t`";
 /// What every name is replaced with before two answers are compared.
 const NAME: &str = "<backend>";
 
@@ -49,7 +53,7 @@ enum Route {
     /// `/mcp`, `gateway_execute` with a one-step chain.
     Execute,
     /// `/mcp`, `gateway_execute` with a single `{tool}`: delegated straight
-    /// to `invoke_tool` (search.rs:460), never through `step_failure`.
+    /// to `invoke_tool` (`search.rs:460`), never through `step_failure`.
     ExecuteSingle,
     /// `/mcp/{server}`, `tools/call`.
     Direct,
@@ -153,25 +157,10 @@ fn sse_or_json(bytes: &[u8]) -> Value {
 /// placeholder: two calls never share one, so it is no part of the answer a
 /// row compares.
 fn mask_trace_ids(text: &str) -> String {
-    const UUID_LEN: usize = 36;
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(at) = rest.find("gw-") {
-        let after = &rest[at + 3..];
-        let is_uuid = after.len() >= UUID_LEN
-            && after[..UUID_LEN]
-                .chars()
-                .all(|c| c.is_ascii_hexdigit() || c == '-');
-        out.push_str(&rest[..at + 3]);
-        if is_uuid {
-            out.push_str("<trace>");
-            rest = &after[UUID_LEN..];
-        } else {
-            rest = after;
-        }
-    }
-    out.push_str(rest);
-    out
+    static TRACE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new("gw-[0-9a-fA-F-]{36}").expect("trace id pattern")
+    });
+    TRACE.replace_all(text, "gw-<trace>").into_owned()
 }
 
 /// The one answer every absent name gets on `route`, with the name replaced
@@ -180,7 +169,7 @@ fn mask_trace_ids(text: &str) -> String {
 /// fix makes `ghost` and `nosuch` answer as `beta` does; on the direct route
 /// and `prompts/get` it is today's backend miss. `None`: a guard row, no pin.
 fn pinned(route: Route) -> Option<(StatusCode, String)> {
-    let absent = crate::backend::text_absent("t");
+    let absent = ABSENT_T;
     let wrapped = json!({"id": 7, "jsonrpc": "2.0", "result": {"content": [{
         "text": serde_json::to_string_pretty(
             &json!({"content": [{"text": absent, "type": "text"}], "isError": true}),
@@ -263,6 +252,8 @@ fn assert_cells_equal<T: PartialEq + std::fmt::Debug>(row: &str, answers: &[(&st
 /// MIK-8387.ORACLE.1/.3, `/mcp` `gateway_invoke`.
 #[tokio::test]
 async fn o1_invoke_answers_an_unreachable_backend_as_an_absent_one() {
+    // The pins are written from `ABSENT_T`; the production text must match.
+    assert_eq!(crate::backend::text_absent("t"), ABSENT_T);
     assert_one_answer(|| MetaMode::Plain, Route::Invoke).await;
 }
 
@@ -281,7 +272,7 @@ async fn o3_direct_answers_an_unreachable_backend_as_an_absent_one() {
 /// MIK-8387.ORACLE.4: a verified caller (the scoped API key) on `/mcp/{name}`
 /// gets byte-identical answers for a backend that does not exist and for a
 /// registered backend withheld from it. Green on the tip by construction (the
-/// scope check runs before the lookup, direct_caller.rs D2-b); a mutant that
+/// scope check runs before the lookup, `direct_caller.rs` D2-b); a mutant that
 /// moves it after the lookup must turn this row red.
 #[tokio::test]
 async fn o4_direct_missing_and_withheld_backends_answer_alike_for_a_verified_caller() {
@@ -364,7 +355,7 @@ async fn empty_grant_answers(route: Route) -> Vec<(&'static str, (StatusCode, St
 #[tokio::test]
 async fn e1_known_red_premise_mik_8441_an_empty_grant_splits_registered_names_on_mcp() {
     let answers = empty_grant_answers(Route::Invoke).await;
-    let absent = crate::backend::text_absent("t");
+    let absent = ABSENT_T;
     for (name, (status, body)) in &answers[..2] {
         assert_eq!(
             *status,
@@ -372,7 +363,7 @@ async fn e1_known_red_premise_mik_8441_an_empty_grant_splits_registered_names_on
             "{EMPTY_GRANT_TICKET} {name}: {body}"
         );
         assert!(
-            body.contains(&absent),
+            body.contains(absent),
             "{EMPTY_GRANT_TICKET} premise moved, {name}: {answers:?}"
         );
     }
@@ -402,7 +393,7 @@ async fn e1_an_empty_grant_answers_every_direct_name_alike_with_its_grant_messag
 }
 
 /// MIK-8387 D7 regression guard: `gateway_list_tools` already answers a
-/// backend outside the scope as an absent one (A3, search.rs:475-480).
+/// backend outside the scope as an absent one (A3, `search.rs:475-480`).
 #[tokio::test]
 async fn l1_listing_already_answers_an_unreachable_backend_as_an_absent_one() {
     assert_one_answer(|| MetaMode::Plain, Route::MetaList).await;

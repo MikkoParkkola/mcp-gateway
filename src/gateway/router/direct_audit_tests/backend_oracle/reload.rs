@@ -48,7 +48,7 @@ async fn g1_a_name_registered_after_the_gate_is_never_dispatched() {
 
 /// G1k (d5, §2a cell 3): as G1, and the seam also kill-switches `ghost`;
 /// `beta` is kill-switched before the call. The kill-switch `find_map`
-/// (dispatch_tools_call.rs:461) must skip every absent target, so no cell
+/// (`dispatch_tools_call.rs:461`) must skip every absent target, so no cell
 /// answers the kill switch's 400.
 #[tokio::test]
 async fn g1k_a_kill_switch_at_the_seam_gives_no_cell_its_400() {
@@ -108,4 +108,5 @@ async fn g0_a_name_removed_before_s2_and_restored_before_s3_is_never_dispatched(
         0,
         "G0: ghost was dispatched after S2 judged it absent: {answered:?}"
     );
+    assert_eq!(Some(answered), pinned(Route::Invoke), "G0: unpinned answer");
 }

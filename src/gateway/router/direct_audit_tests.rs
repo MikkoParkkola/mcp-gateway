@@ -171,7 +171,15 @@ struct Setup {
     /// `security.caller_identity` (MIK-7938 ATTR.4).
     caller_identity: Option<crate::security::caller_identity::CallerIdentityConfig>,
     /// `security.sanitize_input` on both routes (MIK-8387 N1).
-    sanitize_input: bool,
+    sanitize: Sanitize,
+}
+
+/// Whether both routes sanitize input (`security.sanitize_input`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Sanitize {
+    #[default]
+    Off,
+    On,
 }
 
 /// Whether both routes' firewalls run relay detection (MIK-8176 SLOT.6).
@@ -269,7 +277,7 @@ async fn fixture(setup: Setup) -> Fixture {
     if let Some(config) = setup.agent_identity {
         state_mut.agent_identity_config = config;
     }
-    state_mut.sanitize_input = setup.sanitize_input;
+    state_mut.sanitize_input = setup.sanitize == Sanitize::On;
     let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
     #[cfg(feature = "firewall")]
     if setup.request_firewall {
