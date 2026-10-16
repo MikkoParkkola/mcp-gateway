@@ -77,7 +77,8 @@ pub(crate) fn dispatch_effect(minted: bool, account: bool) -> Effect {
 /// backend passed admission while the check ran. Read from the fill itself,
 /// not from the slot's freshness before the check: a slot that expires in
 /// between still fetches, and a check that never fetches (enforcement `off`,
-/// held metadata, joining a fill already under way) acted on nothing.
+/// held metadata) acted on nothing. Joining another request's fill already
+/// under way counts as a fill (r4 §70): the fill bumps the counter for it.
 pub(crate) fn schema_effect(filled: bool) -> Effect {
     if filled { Effect::Took } else { Effect::None }
 }
