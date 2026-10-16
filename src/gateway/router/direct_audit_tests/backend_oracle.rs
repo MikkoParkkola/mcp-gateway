@@ -346,37 +346,17 @@ async fn empty_grant_answers(route: Route) -> Vec<(&'static str, (StatusCode, St
     answers
 }
 
-/// KNOWN-RED PREMISE (MIK-8387 stop 2; owned by [`EMPTY_GRANT_TICKET`], out of
-/// PR-A's scope). On `/mcp` an empty grant answers a registered name with the
-/// absent-tool text and an unregistered one with the grant message: the same
-/// oracle on a documented message (UPGRADING-4.0 section 32). This row pins
-/// today's split, so the fix for that ticket flips it on purpose; it must
-/// then be rewritten to assert one answer.
+/// MIK-8387.EMPTY.3 (flipped by [`EMPTY_GRANT_TICKET`]): on `/mcp` an empty
+/// grant answers a registered name as it answers an unregistered one, with
+/// the grant message (UPGRADING-4.0 section 32), decided before any lookup.
 #[tokio::test]
-async fn e1_known_red_premise_mik_8441_an_empty_grant_splits_registered_names_on_mcp() {
+async fn e1_an_empty_grant_answers_every_mcp_name_alike_with_its_grant_message() {
     let answers = empty_grant_answers(Route::Invoke).await;
-    let absent = ABSENT_T;
-    for (name, (status, body)) in &answers[..2] {
-        assert_eq!(
-            *status,
-            StatusCode::OK,
-            "{EMPTY_GRANT_TICKET} {name}: {body}"
-        );
-        assert!(
-            body.contains(absent),
-            "{EMPTY_GRANT_TICKET} premise moved, {name}: {answers:?}"
-        );
-    }
-    let (status, body) = &answers[2].1;
-    assert_eq!(
-        *status,
-        StatusCode::FORBIDDEN,
-        "{EMPTY_GRANT_TICKET}: {answers:?}"
-    );
     assert!(
-        body.contains("has no backends granted"),
-        "{EMPTY_GRANT_TICKET} premise moved: {answers:?}"
+        answers[0].1.1.contains("has no backends granted"),
+        "{EMPTY_GRANT_TICKET}: the empty-grant message is gone: {answers:?}"
     );
+    assert_cells_equal("Invoke, empty grant", &answers);
 }
 
 /// MIK-8387 D2, direct route: a key with `backends: []` reaches nothing, so

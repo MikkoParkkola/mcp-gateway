@@ -219,6 +219,15 @@ impl MetaMcp {
                 .profile_withheld_capability((server, tool), session_id)
                 .map_or(Ok(None), Err);
         };
+        // MIK-8441: an empty grant reaches no backend, so every name, the
+        // capability backend's included, keeps the grant refusal. It is
+        // decided before any lookup, so it tells no name from another.
+        if matches!(
+            scope.authorizer.backend_grant(),
+            crate::gateway::authz::BackendGrant::Empty
+        ) {
+            return Err(refusal);
+        }
         match self.get_capabilities() {
             // Even an unwritable record answers so: the call dispatches
             // nothing (D3-a narrowed, lead ruling 2026-10-11).

@@ -972,6 +972,12 @@ A token request whose `backends:` scope names none of the rule's backends is als
 `no_backends_granted`. Tool lists are unchanged: an empty `tools` still means every tool on the
 granted backends.
 
+A call made with such a key is refused with HTTP 403, JSON-RPC code -32003, "Client '<name>'
+has no backends granted", whatever backend it names: registered, the capability backend, or
+none at all. The answer is the same on `/mcp` (`gateway_invoke`, `gateway_execute`) and on
+`/mcp/{name}`, and it is decided before any backend lookup, so it does not reveal which
+backends exist (MIK-8441).
+
 ## 33. `/metrics` requires its own scrape token
 
 **Startup:** prints a notice
