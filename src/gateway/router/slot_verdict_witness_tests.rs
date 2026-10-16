@@ -243,3 +243,6 @@ async fn w3_http_an_absent_surfaced_name_after_a_verdict_act_keeps_the_nonce() {
         "the nonce was given back after the verdict minted and listed: {resent}"
     );
 }
+
+#[path = "slot_verdict_witness_cooldown_tests.rs"]
+mod cooldown;
