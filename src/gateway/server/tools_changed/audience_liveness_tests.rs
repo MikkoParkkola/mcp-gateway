@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use super::audience_ear::{Attach, Ear, EventOutcome};
 use super::audience_fixture::{World, tool};
-use super::audience_guard_8377_tests::{VALID_FOR, agent, certified, with_cert};
+use super::audience_guard_8377_tests::{VALID_FOR, agent, certified, ended_unwritten, with_cert};
 use crate::gateway::oauth::AgentRegistry;
 use crate::gateway::streaming::{DeadReason, HeldSource, LiveCtx, ViewSubject};
 use crate::security::caller_identity::CallerIdentityConfig;
@@ -38,7 +38,7 @@ async fn r_live_1_cert_listen() {
     let clock = crate::clock::test_clock::at_secs(not_after + 1);
     w.store_shared("alpha", alpha("r2", "w"));
     assert!(
-        ear.closed(&w).await,
+        ended_unwritten(&mut ear, &w).await,
         "past notAfter the listen stream is closed"
     );
     drop(clock);
@@ -75,7 +75,10 @@ fn r_live_1_cert_metric_a_lapsed_certificate_is_counted_once_as_cert() {
         let mut ear = w.listen_with("k-std", with_cert(not_after)).await;
         let clock = crate::clock::test_clock::at_secs(not_after + 1);
         w.store_shared("alpha", alpha("r2", "w"));
-        assert!(ear.closed(&w).await, "past notAfter the stream is closed");
+        assert!(
+            ended_unwritten(&mut ear, &w).await,
+            "past notAfter the stream is closed"
+        );
         drop(clock);
     });
     super::audience_guard_8377_tests::assert_one_death(&series, "cert");
@@ -92,7 +95,7 @@ async fn r_live_1_clock_an_unreadable_clock_closes_a_certified_stream() {
     let clock = crate::clock::test_clock::before_epoch();
     w.store_shared("alpha", alpha("r2", "w"));
     assert!(
-        listen.closed(&w).await,
+        ended_unwritten(&mut listen, &w).await,
         "an unreadable clock closes the listen stream"
     );
     assert_eq!(
@@ -117,7 +120,7 @@ fn r_live_1_clock_metric_an_unreadable_clock_is_counted_as_cert() {
         let clock = crate::clock::test_clock::before_epoch();
         w.store_shared("alpha", alpha("r2", "w"));
         assert!(
-            ear.closed(&w).await,
+            ended_unwritten(&mut ear, &w).await,
             "an unreadable clock closes the stream"
         );
         drop(clock);

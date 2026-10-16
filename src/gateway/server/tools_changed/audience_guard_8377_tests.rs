@@ -11,8 +11,8 @@ use axum::extract::ConnectInfo;
 use axum::http::HeaderValue;
 use serde_json::json;
 
-use super::audience_ear::Ear;
-use super::audience_fixture::{World, adapter_assertion, asserted, tool};
+use super::audience_ear::{Ear, EventOutcome};
+use super::audience_fixture::{SENTINEL, World, adapter_assertion, asserted, tool};
 use crate::gateway::oauth::{AgentDefinition, AgentRegistry};
 use crate::identity_grants::{
     GrantAgent, GrantAgentKey, GrantScope, GrantSubject, IdentityGrant, LocalIdentityGrantStore,
@@ -33,6 +33,26 @@ fn alpha(read: &str) -> Vec<crate::protocol::Tool> {
         tool("scan", "s"),
         tool("fetch", "f"),
     ]
+}
+
+/// Whether a listen stream ends before it writes anything more: everything
+/// queued is decided, a sentinel is published behind it, and the very next
+/// read is the end of the stream. A frame of any kind first is `false`;
+/// [`Ear::closed`] would read past it to the end.
+pub(super) async fn ended_unwritten(ear: &mut Ear, w: &World) -> bool {
+    let Ear::Listen(events) = ear else {
+        panic!("ended_unwritten() reads a listen stream");
+    };
+    w.settle().await;
+    w.state.subscriptions.publish(json!({
+        "jsonrpc": "2.0", "method": SENTINEL, "params": { "mark": u64::MAX }
+    }));
+    match events.next().await {
+        EventOutcome::Eof => true,
+        EventOutcome::Event(_) => false,
+        EventOutcome::Timeout => panic!("VOID: no sentinel within ARRIVAL — closure unproven"),
+        EventOutcome::Error(error) => panic!("VOID: listen body error: {error}"),
+    }
 }
 
 /// Register (or replace) `client_id` with `scopes`, and a token it validates
@@ -345,7 +365,7 @@ async fn g_live_1_agent_a_removed_agent_is_closed_on_both_routes() {
     );
     w.store_shared("alpha", alpha("r3"));
     assert!(
-        listen.closed(&w).await,
+        ended_unwritten(&mut listen, &w).await,
         "the removed agent's listen stream is closed"
     );
     assert_eq!(get.told(&w).await, 0, "the change is not written on GET");
@@ -406,7 +426,7 @@ fn g_live_1_agent_metric_a_removed_agent_is_counted_once_as_bearer() {
         registry.remove("a1");
         w.store_shared("alpha", alpha("r2"));
         assert!(
-            ear.closed(&w).await,
+            ended_unwritten(&mut ear, &w).await,
             "premise of the count: the stream died"
         );
     });
@@ -468,6 +488,9 @@ async fn g_proxy_2_bearer_a_proxied_stream_whose_key_expires_is_closed() {
     let after = u64::try_from(super::audience_fixture::K_EXP_UNTIL).expect("after 1970") + 1;
     let clock = crate::clock::test_clock::at_secs(after);
     w.store_shared("alpha", alpha("r3"));
-    assert!(ear.closed(&w).await, "the expired key's stream is closed");
+    assert!(
+        ended_unwritten(&mut ear, &w).await,
+        "the expired key's stream is closed"
+    );
     drop(clock);
 }

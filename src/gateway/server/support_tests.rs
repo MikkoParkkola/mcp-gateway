@@ -164,22 +164,18 @@ mod mtls_listener {
         request.abort();
     }
 
-    fn ca(cn: &str) -> GeneratedCert {
-        CertGenerator::init_ca(&CaParams {
-            cn,
-            validity_days: 1,
-        })
-        .expect("CA")
+    fn ca(cn: &str, validity_days: u32) -> GeneratedCert {
+        CertGenerator::init_ca(&CaParams { cn, validity_days }).expect("CA")
     }
 
-    fn leaf(ca: &GeneratedCert, cn: &str, san_dns: &[&str]) -> GeneratedCert {
+    fn leaf(ca: &GeneratedCert, cn: &str, san_dns: &[&str], validity_days: u32) -> GeneratedCert {
         CertGenerator::issue_leaf(
             &LeafCertParams {
                 cn,
                 ou: None,
                 san_dns: san_dns.iter().map(ToString::to_string).collect(),
                 san_uris: vec![],
-                validity_days: 1,
+                validity_days,
             },
             &ca.cert_pem,
             &ca.key_pem,
@@ -188,7 +184,9 @@ mod mtls_listener {
     }
 
     /// Certificates on disk: `ca`, `server` (127.0.0.1), `client`
-    /// ("operator") and `auditor` from one CA; `stranger` from another.
+    /// ("operator") and `auditor` from one CA; `stranger` from another. The
+    /// CA, the server and the client expire on different days, so a
+    /// `notAfter` read from the wrong certificate shows.
     struct Pki {
         dir: tempfile::TempDir,
     }
@@ -197,16 +195,16 @@ mod mtls_listener {
         fn new() -> Self {
             let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
             let dir = tempfile::tempdir().expect("tempdir");
-            let root = ca("listener CA");
-            let other = ca("other CA");
+            let root = ca("listener CA", 3);
+            let other = ca("other CA", 3);
             let write = |cert: &GeneratedCert, stem: &str| {
                 CertGenerator::write_to_dir(cert, dir.path(), stem).expect("cert files");
             };
             write(&root, "ca");
-            write(&leaf(&root, "gateway", &["127.0.0.1"]), "server");
-            write(&leaf(&root, "operator", &[]), "client");
-            write(&leaf(&root, "auditor", &[]), "auditor");
-            write(&leaf(&other, "stranger", &[]), "stranger");
+            write(&leaf(&root, "gateway", &["127.0.0.1"], 2), "server");
+            write(&leaf(&root, "operator", &[], 1), "client");
+            write(&leaf(&root, "auditor", &[], 1), "auditor");
+            write(&leaf(&other, "stranger", &[], 1), "stranger");
             Self { dir }
         }
 
@@ -333,14 +331,20 @@ mod mtls_listener {
     async fn serve_tls_hands_the_request_the_client_certificate_not_after() {
         let pki = Pki::new();
         let s = serve(pki.config(true)).await;
-        let pem = std::fs::read(pki.path("client.crt")).expect("crt");
-        let (_, pem) = x509_parser::pem::parse_x509_pem(&pem).expect("a PEM block");
-        let expected = pem
-            .parse_x509()
-            .expect("a certificate")
-            .validity()
-            .not_after
-            .timestamp();
+        let not_after = |stem: &str| {
+            let pem = std::fs::read(pki.path(&format!("{stem}.crt"))).expect("crt");
+            let (_, pem) = x509_parser::pem::parse_x509_pem(&pem).expect("a PEM block");
+            pem.parse_x509()
+                .expect("a certificate")
+                .validity()
+                .not_after
+                .timestamp()
+        };
+        let expected = not_after("client");
+        assert!(
+            expected != not_after("server") && expected != not_after("ca"),
+            "premise: the client, server and CA certificates expire apart"
+        );
 
         let response = pki
             .client(Some("client"))
