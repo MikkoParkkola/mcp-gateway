@@ -222,7 +222,7 @@ async fn f1_every_principal_source_is_admitted_keyed() {
 /// credential), not -32003, and no task is created. Design d2 §4.1 expected
 /// the -32600 task gate; the base answers this.
 #[tokio::test]
-async fn d5_mtls_subject_task_submit_meets_the_task_gate() {
+async fn d5_mtls_subject_task_submit_is_not_refused_at_intake() {
     let fx = fixture(public_auth()).await;
     let source = &sources()[4];
     let mut body = modern_keyed(
