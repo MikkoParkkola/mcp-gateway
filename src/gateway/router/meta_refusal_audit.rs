@@ -100,6 +100,56 @@ impl<'a> Refused<'a> {
             .await
     }
 
+    /// MIK-8382: record a keyed call with no execution principal refused at
+    /// the `/mcp` intake as `invalid` with the error's code (the direct
+    /// route's D2-a record of the same refusal), then answer it with HTTP 400.
+    /// The intake runs before any target is mapped, so the record names the
+    /// target as the request spells it: `gateway_invoke`'s server and tool,
+    /// else no server and the called name.
+    pub(super) async fn answer_intake(
+        self,
+        state: &AppState,
+        (server, tool): (&str, &str),
+        id: Option<RequestId>,
+        error: &crate::Error,
+    ) -> axum::response::Response {
+        let code = error.to_rpc_code();
+        let refusal = Refusal {
+            outcome: AuditOutcome::Invalid(code),
+            server,
+            tool: Some(tool),
+            tenants: BTreeSet::new(),
+        };
+        match id {
+            Some(id) => {
+                self.record(
+                    state,
+                    refusal,
+                    id,
+                    code,
+                    error.to_string(),
+                    StatusCode::BAD_REQUEST,
+                )
+                .await
+            }
+            // The predicate needs an `id` member; an unrecognised one is
+            // still answered, with no id, and recorded.
+            None => {
+                crate::security::security_metrics::meta_refused(code);
+                if let Some(Err(error)) = self.write(state, refusal).await {
+                    tracing::warn!(%error, "Transparency log write failed (non-fatal)");
+                }
+                build_error_response(
+                    None,
+                    code,
+                    error.to_string(),
+                    self.session_id,
+                    StatusCode::BAD_REQUEST,
+                )
+            }
+        }
+    }
+
     /// MIK-8361: record a requested target the caller may not see, refused
     /// by `code` at the route, which then takes the missing name's path. The
     /// record names the real reason, as every refusal's does; it is written
