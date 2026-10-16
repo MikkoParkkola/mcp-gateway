@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use super::audience_ear::{Attach, Ear, EventOutcome};
+use super::audience_ear::{Attach, Ear};
 use super::audience_fixture::{World, tool};
 use super::audience_guard_8377_tests::{VALID_FOR, agent, certified, ended_unwritten, with_cert};
 use crate::gateway::oauth::AgentRegistry;
@@ -360,7 +360,11 @@ fn r_live_1_queued_listen_a_change_parked_past_not_after_is_not_written() {
             release.notify_one();
             clock
         });
-        assert_eq!(outcome, EventOutcome::Eof, "no frame for the parked change");
+        assert_eq!(
+            outcome,
+            super::audience_ear::EventOutcome::Eof,
+            "no frame for the parked change"
+        );
         drop(clock);
     });
     super::audience_guard_8377_tests::assert_one_death(&series, "cert");
