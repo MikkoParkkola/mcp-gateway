@@ -119,6 +119,8 @@ accounts:
 
 struct Gateway {
     router: axum::Router,
+    /// The Meta-MCP the router serves (its kill switch, MIK-8439 R1b).
+    meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
     _fixture: RevokeFixture,
     _dir: tempfile::TempDir,
 }
@@ -160,9 +162,11 @@ async fn gateway(shape: Shape) -> Gateway {
     )
     .expect("the production installer accepts the binding");
     install_capability(&state.meta_mcp);
+    let meta = Arc::clone(&state.meta_mcp);
     let router = create_router_with_accounts(state, None, Some(fixture.handles()));
     Gateway {
         router,
+        meta,
         _fixture: fixture,
         _dir: dir,
     }
@@ -503,3 +507,6 @@ async fn t_bc1_no_catalogue_method_mints_or_discloses_an_offer() {
     let meta = invoke(&gw, Caller::Bridged, "dave").await;
     offered(&meta, "account_not_connected");
 }
+
+#[path = "connect_offer_noview_cooldown.rs"]
+mod noview_cooldown;

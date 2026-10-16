@@ -452,6 +452,9 @@ fn refused(answer: &Value) -> bool {
 #[path = "slot_verdict_g2_stdio_f5a.rs"]
 mod f5a;
 
+#[path = "slot_verdict_g2_stdio_noview_cooldown.rs"]
+mod noview_cooldown;
+
 /// F5(b), stdio (guard, kills M17): a request the request firewall refuses (a
 /// path-traversal argument) resolves nothing and fills nothing for a surfaced
 /// tool with the operator's slot cold. A verdict taken ahead of the firewall

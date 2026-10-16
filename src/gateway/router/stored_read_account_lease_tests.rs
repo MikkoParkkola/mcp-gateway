@@ -452,3 +452,6 @@ async fn wr1_a_resume_with_a_live_grant_serves_on_one_resolution() {
     );
     assert_eq!(fx.gateway.releases() - releases, 1, "WR1: one resolution");
 }
+
+#[path = "stored_read_account_cooldown_tests.rs"]
+mod cooldown;
