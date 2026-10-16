@@ -641,7 +641,9 @@ impl super::MetaMcp {
         // MIK-8361 amendment A1: a target the caller cannot see is judged here
         // as a missing name is, so neither its reason nor the order of its
         // nonce refusal tells the two apart. The route stage answers it
-        // absent; admission re-runs the policy before any replay.
+        // absent; admission re-runs the policy before any replay. A per-user
+        // target with no visible verdict yet counts as one (MIK-8433): on
+        // stdio its slot is judged only after signing.
         let skipped = context.origin == Origin::GatewayInvoke
             && self.withheld_invoke_target(arguments, session, caller);
         if context.origin == Origin::GatewayInvoke && !skipped {
