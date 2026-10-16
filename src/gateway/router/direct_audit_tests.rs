@@ -548,7 +548,8 @@ async fn meta_invocation_record_says_route_meta() {
     assert_eq!(only_invocation(&fx)["route"], "meta");
 }
 
-/// D2-T2. A scope refusal is a `denied` record that names the tool.
+/// D2-T2. A scope refusal is a `denied` record that names the tool. The
+/// wire answers the backend miss (MIK-8387 S4); the record keeps -32003.
 #[tokio::test]
 async fn direct_scope_refusal_is_denied_record() {
     let fx = fixture(Setup {
@@ -557,8 +558,8 @@ async fn direct_scope_refusal_is_denied_record() {
     })
     .await;
     let (status, body) = post(&fx, "beta", &tools_call("t"), &Caller::Key).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    assert_eq!(body["error"]["code"], -32003, "{body}");
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"]["code"], -32001, "{body}");
 
     let entry = only_invocation(&fx);
     assert_eq!(entry["outcome"], "denied", "{entry}");
@@ -654,17 +655,18 @@ async fn agent_identity_refusal_writes_no_record() {
 }
 
 /// D2-T8, positive control. Moving the scope check below the body read must
-/// not make an unknown backend distinguishable from a forbidden one.
+/// not make a missing backend distinguishable from a forbidden one: both
+/// answer the backend miss (MIK-8387 S4), and the record keeps the refusal.
 #[tokio::test]
-async fn scoped_key_gets_403_for_unknown_backend() {
+async fn scoped_key_gets_the_miss_for_a_missing_backend() {
     let fx = fixture(Setup {
         auth: Some(key_for_alpha(None)),
         ..Setup::default()
     })
     .await;
     let (status, body) = post(&fx, "nope", &tools_call("t"), &Caller::Key).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    assert_eq!(body["error"]["code"], -32003, "{body}");
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"]["code"], -32001, "{body}");
     let entry = only_invocation(&fx);
     assert_eq!(
         (&entry["outcome"], &entry["tool"]),
