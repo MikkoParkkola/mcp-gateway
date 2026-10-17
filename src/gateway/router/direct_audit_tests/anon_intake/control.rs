@@ -129,17 +129,18 @@ async fn c5_trusted_proxy_subject_is_a_principal() {
 }
 
 /// B6 CONTROL: a key scoped to `alpha` calling `beta` keeps its own scope
-/// refusal (403). A scoped key is a credential, so its caller has a principal
-/// and passes the intake check: the scope check can't flip.
+/// answer, the miss a backend that does not exist gets (404, MIK-8387). A
+/// scoped key is a credential, so its caller has a principal and passes the
+/// intake check: the scope check can't flip.
 #[tokio::test]
-async fn b6_scoped_key_outside_its_backends_keeps_403() {
+async fn b6_scoped_key_outside_its_backends_keeps_its_scope_answer() {
     let fx = fixture(Setup {
         auth: Some(key_for_alpha(None)),
         ..idempotent()
     })
     .await;
     let (status, body) = post(&fx, "beta", &keyed("t"), &Caller::Key).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "b6: {body}");
+    assert_eq!(status, StatusCode::NOT_FOUND, "b6: {body}");
     assert_ne!(message(&body), NO_PRINCIPAL, "b6: intake answered: {body}");
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "b6: dispatched");
 }
