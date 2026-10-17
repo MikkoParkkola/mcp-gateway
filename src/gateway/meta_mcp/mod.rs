@@ -633,6 +633,8 @@ mod test_callers;
 pub(super) use test_callers::{anonymous_caller, callback_capability, identified_caller};
 
 #[cfg(test)]
+mod boundary_pins;
+#[cfg(test)]
 pub(super) mod grant_audit_fixture;
 #[cfg(test)]
 mod grant_decision_audit_tests;
@@ -655,8 +657,6 @@ mod policy_epoch_tests;
 /// MIK-8356: a per-user call is judged by the caller's own catalogue slot.
 #[cfg(test)]
 pub(crate) mod slot_verdict_fixture;
-#[cfg(test)]
-mod boundary_pins;
 #[cfg(test)]
 mod slot_verdict_g3_tests;
 #[cfg(test)]

@@ -172,7 +172,11 @@ pub(super) fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
 /// it, such as `src/lib.rs`), reporting every production node to `sink`.
 /// A declared module whose file cannot be found or parsed is an error, so a
 /// walk can never silently cover less than the compiler does.
-pub(super) fn walk(crate_root: &Path, roots: &[&str], sink: &mut dyn Sink) -> Result<(), Vec<String>> {
+pub(super) fn walk(
+    crate_root: &Path,
+    roots: &[&str],
+    sink: &mut dyn Sink,
+) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
     for root in roots {
         let path = crate_root.join(root);
@@ -189,7 +193,11 @@ pub(super) fn walk(crate_root: &Path, roots: &[&str], sink: &mut dyn Sink) -> Re
         };
         walker.file(&path);
     }
-    if errors.is_empty() { Ok(()) } else { Err(errors) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 struct Walker<'a> {
@@ -232,15 +240,19 @@ impl Walker<'_> {
 
     /// Load the out-of-line module `name` (with its `#[path]`, if any).
     fn module_file(&mut self, name: &str, attrs: &[syn::Attribute]) {
-        let explicit = attrs.iter().find(|a| a.path().is_ident("path")).and_then(|a| {
-            match &a.meta {
+        let explicit = attrs
+            .iter()
+            .find(|a| a.path().is_ident("path"))
+            .and_then(|a| match &a.meta {
                 syn::Meta::NameValue(nv) => match &nv.value {
-                    syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) => Some(s.value()),
+                    syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(s),
+                        ..
+                    }) => Some(s.value()),
                     _ => None,
                 },
                 _ => None,
-            }
-        });
+            });
         let (target, owns_dir) = match explicit {
             Some(rel) => (self.path_base.join(rel), true),
             None => {
@@ -360,7 +372,11 @@ impl<'ast> Visit<'ast> for Walker<'_> {
         let top = std::mem::take(&mut self.stmt_top);
         self.sink.expr(&self.place, expr);
         let saved = self.owner;
-        self.owner = if top { Owner::Statement } else { Owner::Expression };
+        self.owner = if top {
+            Owner::Statement
+        } else {
+            Owner::Expression
+        };
         syn::visit::visit_expr(self, expr);
         self.owner = saved;
     }

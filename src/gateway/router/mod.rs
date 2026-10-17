@@ -174,8 +174,6 @@ mod nonce_failure_class_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod oracle_capability_tests;
 #[cfg(all(test, feature = "firewall"))]
-mod oracle_response_targets_tests;
-#[cfg(all(test, feature = "firewall"))]
 mod oracle_order_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod oracle_parity_fixture;
@@ -183,6 +181,8 @@ mod oracle_parity_fixture;
 mod oracle_parity_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod oracle_per_user_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod oracle_response_targets_tests;
 /// MIK-8406: a stored plan replay needs every plan account live.
 #[cfg(test)]
 mod plan_replay_liveness_tests;

@@ -186,7 +186,10 @@ fn cold_marks(gw: &Gateway) -> (usize, Option<Duration>, usize) {
 
 /// Age the slot past the idle window, run `read`, then a real idle eviction:
 /// whether the slot survived says whether `read` touched it.
-async fn touched_by<F: std::future::Future<Output = Value>>(gw: &Gateway, read: F) -> (bool, Value) {
+async fn touched_by<F: std::future::Future<Output = Value>>(
+    gw: &Gateway,
+    read: F,
+) -> (bool, Value) {
     let slot = backend(gw);
     slot.age_per_user_slot_for_test(BINDING, AGED);
     let answer = read.await;
@@ -258,12 +261,18 @@ async fn s7a_cold_an_excluded_read_resolves_claims_and_lists_nothing() {
     assert_eq!(lease, None, "premise: no cold lease runs before the read");
     let read = task_get(&gw, EXCLUDED, &id).await;
     let (mints_after, lease_after, lists_after) = cold_marks(&gw);
-    assert_eq!(mints_after, mints, "S7a-cold: resolve counter moved; read: {read}");
+    assert_eq!(
+        mints_after, mints,
+        "S7a-cold: resolve counter moved; read: {read}"
+    );
     assert_eq!(
         lease_after, None,
         "S7a-cold: cold claim made: cold_lease_remaining is Some; read: {read}"
     );
-    assert_eq!(lists_after, lists, "S7a-cold: list counter moved; read: {read}");
+    assert_eq!(
+        lists_after, lists,
+        "S7a-cold: list counter moved; read: {read}"
+    );
     let control = task_get(&gw, INCLUDED, &id).await;
     assert_ne!(
         cold_marks(&gw),
@@ -279,7 +288,10 @@ async fn second_key_answer(excluded_scope: &'static str, unregister: bool) -> St
     let gw = fixture_scoped(excluded_scope).await;
     let id = finished(&gw, "s7a-twin").await;
     if unregister {
-        assert!(gw.meta.backends.remove(BACKEND), "premise: {BACKEND} was registered");
+        assert!(
+            gw.meta.backends.remove(BACKEND),
+            "premise: {BACKEND} was registered"
+        );
     }
     let read = task_get(&gw, EXCLUDED, &id).await;
     read.to_string().replace(&id, "<task>")
@@ -301,4 +313,3 @@ async fn s7a_twin_an_out_of_scope_target_answers_as_an_unregistered_one() {
         "S7a-twin: out-of-scope target vs unregistered target"
     );
 }
-

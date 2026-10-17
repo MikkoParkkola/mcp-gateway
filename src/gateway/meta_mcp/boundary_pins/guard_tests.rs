@@ -29,10 +29,18 @@ fn lint_names(attr: &syn::Attribute) -> Vec<String> {
     };
     let lints = |meta: &syn::Meta| -> Vec<String> {
         match meta {
-            syn::Meta::List(list) if list.path.is_ident("allow") || list.path.is_ident("expect") => list
-                .parse_args_with(Metas::parse_terminated)
-                .map(|args| args.iter().filter(|m| matches!(m, syn::Meta::Path(_))).map(path).collect())
-                .unwrap_or_default(),
+            syn::Meta::List(list)
+                if list.path.is_ident("allow") || list.path.is_ident("expect") =>
+            {
+                list.parse_args_with(Metas::parse_terminated)
+                    .map(|args| {
+                        args.iter()
+                            .filter(|m| matches!(m, syn::Meta::Path(_)))
+                            .map(path)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }
             _ => Vec::new(),
         }
     };
@@ -82,7 +90,11 @@ struct Envelopes {
 impl Sink for Envelopes {
     fn expr(&mut self, at: &Place, expr: &syn::Expr) {
         if let syn::Expr::Struct(lit) = expr
-            && lit.path.segments.last().is_some_and(|s| s.ident == "Envelope")
+            && lit
+                .path
+                .segments
+                .last()
+                .is_some_and(|s| s.ident == "Envelope")
             && at.file.ends_with("backend_handlers/direct_caller.rs")
         {
             self.literals.insert(at.func.clone().unwrap_or_default());
@@ -117,7 +129,11 @@ fn t2b_only_read_envelope_builds_the_envelope_route_consumes() {
         BTreeSet::from(["read_envelope".to_string()]),
         "Envelope literal outside read_envelope"
     );
-    assert_eq!(found.route_takes_envelope, Some(true), "route takes &Envelope");
+    assert_eq!(
+        found.route_takes_envelope,
+        Some(true),
+        "route takes &Envelope"
+    );
 }
 
 /// T1e: `BackendRegistry`'s surface, pinned. Its non-private inherent
@@ -128,32 +144,52 @@ fn t2b_only_read_envelope_builds_the_envelope_route_consumes() {
 /// `#[cfg(test)]`); derive extraction is proven on SCAN-18.
 #[test]
 fn t1e_the_backend_registry_surface_is_pinned() {
-    let source = std::fs::read_to_string(crate_root().join("src/backend/registry.rs"))
-        .expect("registry.rs");
+    let source =
+        std::fs::read_to_string(crate_root().join("src/backend/registry.rs")).expect("registry.rs");
     let file = syn::parse_file(&source).expect("registry.rs parses");
-    let is_registry = |ty: &syn::Type| {
-        matches!(ty, syn::Type::Path(p) if p.path.is_ident("BackendRegistry"))
-    };
-    let (mut methods, mut traits, mut derives, mut public_fields) =
-        (BTreeSet::new(), BTreeSet::new(), BTreeSet::new(), Vec::new());
+    let is_registry =
+        |ty: &syn::Type| matches!(ty, syn::Type::Path(p) if p.path.is_ident("BackendRegistry"));
+    let (mut methods, mut traits, mut derives, mut public_fields) = (
+        BTreeSet::new(),
+        BTreeSet::new(),
+        BTreeSet::new(),
+        Vec::new(),
+    );
     for item in &file.items {
         match item {
             syn::Item::Struct(s) if s.ident == "BackendRegistry" => {
                 for attr in s.attrs.iter().filter(|a| a.path().is_ident("derive")) {
                     let _ = attr.parse_nested_meta(|meta| {
-                        derives.insert(meta.path.segments.last().map(|s| s.ident.to_string()).unwrap_or_default());
+                        derives.insert(
+                            meta.path
+                                .segments
+                                .last()
+                                .map(|s| s.ident.to_string())
+                                .unwrap_or_default(),
+                        );
                         Ok(())
                     });
                 }
                 for field in &s.fields {
                     if !matches!(field.vis, syn::Visibility::Inherited) {
-                        public_fields.push(field.ident.as_ref().map(ToString::to_string).unwrap_or_default());
+                        public_fields.push(
+                            field
+                                .ident
+                                .as_ref()
+                                .map(ToString::to_string)
+                                .unwrap_or_default(),
+                        );
                     }
                 }
             }
             syn::Item::Impl(imp) if is_registry(&imp.self_ty) => match &imp.trait_ {
                 Some((_, path, _)) => {
-                    traits.insert(path.segments.last().map(|s| s.ident.to_string()).unwrap_or_default());
+                    traits.insert(
+                        path.segments
+                            .last()
+                            .map(|s| s.ident.to_string())
+                            .unwrap_or_default(),
+                    );
                 }
                 None => {
                     for inner in &imp.items {
@@ -170,16 +206,41 @@ fn t1e_the_backend_registry_surface_is_pinned() {
         }
     }
     let want: BTreeSet<String> = [
-        "new", "subscribe_started", "reload_read_slot", "lock_reload", "register",
-        "observe_breakers", "enforce_destinations", "set_change_feed", "catalogue_hook",
-        "nudge_catalogue", "nudge_catalogue_scanned", "resolve_unwarmed", "with_membership",
-        "get", "all", "statuses", "remove", "is_stopping (test)", "stop_all",
+        "new",
+        "subscribe_started",
+        "reload_read_slot",
+        "lock_reload",
+        "register",
+        "observe_breakers",
+        "enforce_destinations",
+        "set_change_feed",
+        "catalogue_hook",
+        "nudge_catalogue",
+        "nudge_catalogue_scanned",
+        "resolve_unwarmed",
+        "with_membership",
+        "get",
+        "all",
+        "statuses",
+        "remove",
+        "is_stopping (test)",
+        "stop_all",
     ]
     .into_iter()
     .map(str::to_string)
     .collect();
-    assert_eq!(methods, want, "method set changed: a new reader must join the ban (MIK-8387)");
-    assert_eq!(traits, BTreeSet::from(["Default".to_string()]), "trait impls changed");
+    assert_eq!(
+        methods, want,
+        "method set changed: a new reader must join the ban (MIK-8387)"
+    );
+    assert_eq!(
+        traits,
+        BTreeSet::from(["Default".to_string()]),
+        "trait impls changed"
+    );
     assert!(derives.is_empty(), "derives changed: {derives:?}");
-    assert!(public_fields.is_empty(), "field is not private: {public_fields:?}");
+    assert!(
+        public_fields.is_empty(),
+        "field is not private: {public_fields:?}"
+    );
 }
