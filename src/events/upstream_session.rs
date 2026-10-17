@@ -158,6 +158,7 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
         }
         // Signals sent before this check are answered by it.
         wake.borrow_and_update();
+        #[allow(clippy::disallowed_methods, reason = "Background: the events source watches backends; no caller request")]
         let Some(backend) = registry.get(&shared.name) else {
             // Gone: park until the interest changes or the keys are deleted.
             // A removed backend owes nothing; a re-added one starts afresh.
@@ -259,6 +260,7 @@ impl WaitProbe {
 /// Whether the registry no longer holds `ended` under `name`: the backend
 /// was removed or replaced since its session ended.
 fn registered_anew(registry: &BackendRegistry, name: &str, ended: &Arc<Backend>) -> bool {
+    #[allow(clippy::disallowed_methods, reason = "Background: the events source watches backends; no caller request")]
     registry
         .get(name)
         .is_none_or(|now| !Arc::ptr_eq(&now, ended))

@@ -154,6 +154,7 @@ impl Gateway {
 
             cap_backend.spawn_listing_watch(Arc::clone(&self.backends), shutdown_tx.subscribe());
             // Start file watcher for hot-reload
+            #[allow(clippy::disallowed_methods, reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request")]
             match CapabilityWatcher::start(
                 Arc::clone(&cap_backend),
                 shutdown_tx.subscribe(),
@@ -278,6 +279,7 @@ impl Gateway {
     }
 
     pub(super) fn managed_recovery_adapters(&self) -> Vec<String> {
+        #[allow(clippy::disallowed_methods, reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request")]
         self.config
             .tasks
             .recovery_adapters

@@ -51,6 +51,7 @@ impl CapabilityBackend {
         let changed = now != before;
         *last = Some(now);
         if changed {
+            #[allow(clippy::disallowed_methods, reason = "Lifecycle: the capability catalogue announcing its own listing")]
             registry.nudge_catalogue(&self.name);
         }
         changed
@@ -72,6 +73,7 @@ impl CapabilityBackend {
     /// MIK-7268), then announce once.
     pub(crate) fn finish_initial_scan(&self, registry: &BackendRegistry) {
         self.mark_initial_scan_complete();
+        #[allow(clippy::disallowed_methods, reason = "Lifecycle: the capability catalogue announcing its own listing")]
         registry.nudge_catalogue_scanned(&self.name);
     }
 

@@ -78,6 +78,10 @@ pub(super) trait Sink {
     fn expr(&mut self, _at: &Place, _expr: &syn::Expr) {}
     /// A production item.
     fn item(&mut self, _at: &Place, _item: &syn::Item) {}
+    /// A production statement.
+    fn stmt(&mut self, _at: &Place, _stmt: &syn::Stmt) {}
+    /// A production file, with its inner attributes.
+    fn file(&mut self, _at: &Place, _file: &syn::File) {}
 }
 
 /// The kind of node an attribute is attached to.
@@ -178,6 +182,8 @@ pub(super) fn walk(
     sink: &mut dyn Sink,
 ) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
+    // A module the lib and a bin both declare is one file: walked once.
+    let mut visited = std::collections::HashSet::new();
     for root in roots {
         let path = crate_root.join(root);
         let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
@@ -190,6 +196,7 @@ pub(super) fn walk(
             stmt_top: false,
             sink: &mut *sink,
             errors: &mut errors,
+            visited: &mut visited,
         };
         walker.file(&path);
     }
@@ -212,10 +219,15 @@ struct Walker<'a> {
     stmt_top: bool,
     sink: &'a mut dyn Sink,
     errors: &'a mut Vec<String>,
+    visited: &'a mut std::collections::HashSet<PathBuf>,
 }
 
 impl Walker<'_> {
     fn file(&mut self, path: &Path) {
+        let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if !self.visited.insert(key) {
+            return;
+        }
         let source = match std::fs::read_to_string(path) {
             Ok(source) => source,
             Err(e) => return self.errors.push(format!("{}: {e}", path.display())),
@@ -238,6 +250,7 @@ impl Walker<'_> {
             func: None,
         };
         self.owner = Owner::Module;
+        self.sink.file(&self.place, &parsed);
         self.visit_file(&parsed);
         self.place = saved;
     }
@@ -387,6 +400,7 @@ impl<'ast> Visit<'ast> for Walker<'_> {
         if test_only(attrs) {
             return;
         }
+        self.sink.stmt(&self.place, stmt);
         let saved = self.owner;
         self.owner = Owner::Statement;
         self.stmt_top = matches!(stmt, syn::Stmt::Expr(..));

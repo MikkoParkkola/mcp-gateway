@@ -89,6 +89,7 @@ impl Gateway {
         posture::log_startup(&config);
 
         let backends = Arc::new(BackendRegistry::new());
+        #[allow(clippy::disallowed_methods, reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request")]
         backends.enforce_destinations(
             DestinationPolicy::for_posture(config.security.posture),
             &config.security.hardened.private_backends,
@@ -120,8 +121,10 @@ impl Gateway {
             // Construction time: this registry is brand new and cannot be
             // shutting down, so a refusal here is unreachable. Asserted rather
             // than ignored, so the day that stops being true is not silent.
+            #[allow(clippy::disallowed_methods, reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request")]
+            let registered = backends.register(Arc::new(backend));
             assert!(
-                backends.register(Arc::new(backend)),
+                registered,
                 "a freshly built registry refused a backend registration"
             );
             info!(backend = %name, transport = %backend_config.transport.transport_type(), "Registered backend");

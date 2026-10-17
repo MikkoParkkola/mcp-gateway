@@ -192,6 +192,7 @@ impl ScopedBackends<'_> {
         if !granted.iter().any(|backend| backend == name) {
             return Some(Absence::OutOfScope);
         }
+        #[allow(clippy::disallowed_methods, reason = "Visibility: the scoped view's own lookup, after its grant check")]
         let registered =
             self.registry.get(name).is_some() || self.capability.as_deref() == Some(name);
         (!registered).then_some(Absence::Unregistered)
@@ -213,6 +214,7 @@ impl ScopedBackends<'_> {
         if self.absence(name).is_some() {
             return None;
         }
+        #[allow(clippy::disallowed_methods, reason = "Visibility: the scoped view's own lookup, after its grant check")]
         self.registry.get(name)
     }
 }

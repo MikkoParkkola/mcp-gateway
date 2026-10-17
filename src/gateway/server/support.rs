@@ -48,7 +48,9 @@ pub(super) fn log_startup_banner(
         .and_then(DashboardBootstrap::bound_port)
         .unwrap_or(config.server.port);
     info!(host = %config.server.host, port = %port, "Listening");
-    info!(backends = backends.all().len(), "Backends registered");
+    #[allow(clippy::disallowed_methods, reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request")]
+    let registered = backends.all().len();
+    info!(backends = registered, "Backends registered");
 
     if config.auth.enabled {
         // Print the dashboard link. A browser navigation carries no
@@ -131,6 +133,7 @@ pub(super) fn log_startup_banner(
     }
 
     info!("Direct backend access:");
+    #[allow(clippy::disallowed_methods, reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request")]
     for backend in backends.all() {
         info!("  /mcp/{}", backend.name);
     }

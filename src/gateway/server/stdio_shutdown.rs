@@ -180,6 +180,7 @@ impl Gateway {
         {
             warn!(error = %e, "Personal account custody shutdown failed");
         }
+        #[allow(clippy::disallowed_methods, reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request")]
         bounded_step(deadline, "backend stop", self.backends.stop_all()).await;
     }
 }

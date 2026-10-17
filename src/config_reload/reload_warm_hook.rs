@@ -58,6 +58,7 @@ impl ReloadContext {
             .iter()
             .filter(|name| !warmed.contains(name))
         {
+            #[allow(clippy::disallowed_methods, reason = "Lifecycle: config reload applies the operator's backend set; no caller request")]
             self.registry.resolve_unwarmed(name);
         }
     }

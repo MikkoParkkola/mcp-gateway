@@ -107,7 +107,13 @@ pub(crate) type Detected<'a> = &'a dyn Fn(&str) -> Option<bool>;
 
 /// The flavour `registry`'s backends detected, read live at each call.
 pub(crate) fn detected_in(registry: &BackendRegistry) -> impl Fn(&str) -> Option<bool> + '_ {
-    |name| registry.get(name).and_then(|b| b.connected_streamable())
+    #[allow(
+        clippy::disallowed_methods,
+        clippy::let_and_return,
+        reason = "Background: the events source watches backends; no caller request"
+    )]
+    let detected = |name: &str| registry.get(name).and_then(|b| b.connected_streamable());
+    detected
 }
 
 /// The backends the live config and the live connections make ineligible,

@@ -50,6 +50,7 @@ pub async fn dashboard_handler(
             .into_response();
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Admin: the operator dashboard behind admin auth; not a tenant read")]
     let backends = state.backends.all();
 
     // Collect per-backend health data.

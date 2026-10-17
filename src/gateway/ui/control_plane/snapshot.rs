@@ -54,6 +54,7 @@ pub(super) fn local_runtime_snapshot(
 
     snapshot.policies = local_policy_rows(state);
 
+    #[allow(clippy::disallowed_methods, reason = "Admin: the operator dashboard behind admin auth; not a tenant read")]
     let backends = state.backends.all();
     for backend in backends {
         if !can_view_backend(client, &backend.name) {
@@ -175,6 +176,7 @@ pub(super) fn trust_card_digest_sha256(card: &TrustCard) -> String {
 }
 
 pub(super) async fn local_shadow_radar(state: &AppState) -> ControlPlaneShadowRadar {
+    #[allow(clippy::disallowed_methods, reason = "Admin: the operator dashboard behind admin auth; not a tenant read")]
     let registered_names: HashSet<String> = state
         .backends
         .all()

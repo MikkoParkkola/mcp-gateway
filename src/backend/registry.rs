@@ -479,6 +479,7 @@ impl BackendRegistry {
     /// stored list (`NudgeKind::Resolved`): no warm-up will fill it, so it
     /// shows nothing until something stores one.
     pub(crate) fn resolve_unwarmed(&self, name: &str) {
+        #[allow(clippy::disallowed_methods, reason = "Lifecycle: the registry resolving its own unwarmed entry")]
         if let Some(backend) = self.get(name) {
             backend.nudge_tools(super::tools_nudge::NudgeKind::Resolved);
         }

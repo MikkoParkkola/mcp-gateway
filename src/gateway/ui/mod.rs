@@ -358,6 +358,7 @@ async fn status(
     client: Option<Extension<AuthenticatedClient>>,
 ) -> Json<Value> {
     let client = client.map(|Extension(c)| c);
+    #[allow(clippy::disallowed_methods, reason = "Admin: the operator dashboard behind admin auth; not a tenant read")]
     let backends = state.backends.all();
     let total = backends.len();
 
@@ -440,6 +441,7 @@ async fn tools(
         return auth_required(StatusCode::FORBIDDEN).into_response();
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Admin: the operator dashboard behind admin auth; not a tenant read")]
     let backends = state.backends.all();
     let mut entries: Vec<Value> = Vec::new();
     let query_lower = params.q.as_deref().unwrap_or("").to_lowercase();
@@ -496,6 +498,7 @@ async fn config(
     }
 
     // Build a sanitized config snapshot from AppState
+    #[allow(clippy::disallowed_methods, reason = "Admin: the operator dashboard behind admin auth; not a tenant read")]
     let backends = state.backends.all();
     let servers: Vec<Value> = backends
         .iter()
