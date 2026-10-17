@@ -144,7 +144,7 @@ reason = "config-gated on `agent_identity.require_id` / `known_agents`; enforcem
 
 [[control]]
 id = "agent-identity-config-refusal"
-description = "a known_agents entry with no proof source, or a declared entry that enabled enforcement would leave inert, is refused at config load"
+description = "a known_agents entry with no proof source is refused at config load, and so is a `declared` entry while agent_identity.enabled is true and allow_unverified_agent_identity is false"
 source = "src/security/agent_identity.rs"
 probe = "none"
 reason = "a config-load refusal: the gateway refuses to start or reload, so there is no request on the wire to probe; pinned by the agent_identity load tests"
