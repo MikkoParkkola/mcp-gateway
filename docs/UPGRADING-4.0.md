@@ -976,7 +976,9 @@ A call made with such a key is refused with HTTP 403, JSON-RPC code -32003, "Cli
 has no backends granted", whatever backend it names: registered, the capability backend, or
 none at all. The answer is the same on `/mcp` (`gateway_invoke`, `gateway_execute`) and on
 `/mcp/{name}`, and it is decided before any backend lookup, so it does not reveal which
-backends exist (MIK-8441).
+backends exist (MIK-8441). With `security.sanitize_input` on, such a key's request is
+sanitized whatever it names: a `passthrough: true` backend is not exempt for it, so input the
+sanitizer refuses answers 400 for every name alike.
 
 ## 33. `/metrics` requires its own scrape token
 

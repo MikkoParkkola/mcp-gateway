@@ -352,11 +352,28 @@ async fn empty_grant_answers(route: Route) -> Vec<(&'static str, (StatusCode, St
 #[tokio::test]
 async fn e1_an_empty_grant_answers_every_mcp_name_alike_with_its_grant_message() {
     let answers = empty_grant_answers(Route::Invoke).await;
-    assert!(
-        answers[0].1.1.contains("has no backends granted"),
-        "{EMPTY_GRANT_TICKET}: the empty-grant message is gone: {answers:?}"
-    );
     assert_cells_equal("Invoke, empty grant", &answers);
+    // The exact pin `empty_grant.rs` holds, so the two cannot drift.
+    let (status, body) = &answers[0].1;
+    assert_eq!(
+        *status,
+        StatusCode::FORBIDDEN,
+        "{EMPTY_GRANT_TICKET}: {body}",
+    );
+    let parsed: Value = serde_json::from_str(body).expect("the answer is JSON");
+    assert_eq!(
+        parsed["error"]["code"].as_i64(),
+        Some(-32003),
+        "{EMPTY_GRANT_TICKET}: {body}"
+    );
+    assert_eq!(
+        parsed["error"]["message"].as_str(),
+        Some(
+            "Client 'grant-client' has no backends granted: an empty `backends` list \
+             reaches none (docs/UPGRADING-4.0.md section 32)"
+        ),
+        "{EMPTY_GRANT_TICKET}: {body}"
+    );
 }
 
 /// MIK-8387 D2, direct route: a key with `backends: []` reaches nothing, so

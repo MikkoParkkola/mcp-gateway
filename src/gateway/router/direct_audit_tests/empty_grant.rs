@@ -46,19 +46,19 @@ async fn granted(backends: &[&str]) -> Fixture {
     .await
 }
 
-/// Drop the per-call trace id (`result.trace_id`, `error.data.trace_id`),
-/// so two calls compare on what they say.
-fn without_trace(body: &mut Value) {
-    if let Some(result) = body.get_mut("result").and_then(Value::as_object_mut) {
-        result.remove("trace_id");
-    }
-    if let Some(data) = body
-        .get_mut("error")
-        .and_then(|error| error.get_mut("data"))
-        .and_then(Value::as_object_mut)
-    {
-        data.remove("trace_id");
-    }
+/// The per-call trace ids in `raw` (`result.trace_id`, `error.data.trace_id`),
+/// masked in place, so two calls compare on what they say, byte for byte.
+fn without_trace(raw: &str) -> String {
+    let parsed: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
+    let ids = [
+        &parsed["result"]["trace_id"],
+        &parsed["error"]["data"]["trace_id"],
+    ];
+    ids.iter()
+        .filter_map(|id| id.as_str())
+        .fold(raw.to_string(), |text, id| {
+            text.replace(&format!("\"{id}\""), "\"<trace>\"")
+        })
 }
 
 /// `body` is the grant refusal, exactly: code -32003 and the whole message.
@@ -77,34 +77,55 @@ fn assert_grant_refusal(context: &str, (status, body): &(StatusCode, String)) {
     );
 }
 
-/// Call `server`'s tool `t` on `route` as key `k`: the status and the body,
-/// trace ids dropped and every backend name replaced by [`NAME`].
+/// Call `server`'s tool `t` on `route` as key `k` with no arguments.
 async fn answer(fx: &Fixture, route: Route, server: &str) -> (StatusCode, String) {
+    answer_with(fx, route, server, &json!({})).await
+}
+
+/// Call `server`'s tool `t` on `route` as key `k`: the status and the raw
+/// response bytes, trace ids masked and every backend name replaced by
+/// [`NAME`]. Never parsed and re-serialised, so whitespace and member order
+/// are compared too.
+async fn answer_with(
+    fx: &Fixture,
+    route: Route,
+    server: &str,
+    arguments: &Value,
+) -> (StatusCode, String) {
     let (uri, body) = match route {
         Route::Invoke => (
             "/mcp".to_string(),
             json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
                    "params": {"name": "gateway_invoke",
-                              "arguments": {"server": server, "tool": "t", "arguments": {}}}}),
+                              "arguments": {"server": server, "tool": "t", "arguments": arguments}}}),
         ),
         Route::Execute => (
             "/mcp".to_string(),
             json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
                    "params": {"name": "gateway_execute",
                               "arguments": {"chain": [{"tool": format!("{server}:t"),
-                                                       "arguments": {}}]}}}),
+                                                       "arguments": arguments}]}}}),
         ),
         Route::Direct => (
             format!("/mcp/{server}"),
             json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
-                   "params": {"name": "t", "arguments": {}}}),
+                   "params": {"name": "t", "arguments": arguments}}),
         ),
     };
-    let (status, mut body) = post_to(fx, &uri, &body.to_string(), &Caller::Key).await;
-    without_trace(&mut body);
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer k")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = fx.router.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let raw = String::from_utf8(bytes.to_vec()).expect("the answer is UTF-8");
     // Every backend name, not just the called one: a refusal that names
     // another backend must not split two answers that agree.
-    let mut text = body.to_string().replace(server, NAME);
+    let mut text = without_trace(&raw).replace(server, NAME);
     for name in REGISTERED.into_iter().chain([UNREGISTERED, CAPS]) {
         text = text.replace(name, NAME);
     }
@@ -114,16 +135,17 @@ async fn answer(fx: &Fixture, route: Route, server: &str) -> (StatusCode, String
 /// EMPTY.1 + EMPTY.2: on `route`, an empty grant answers both registered
 /// names and the unregistered one with the grant refusal, byte for byte.
 async fn assert_one_grant_refusal(route: Route) {
+    // One gateway for every name, so the answers compare in one state.
+    let fx = granted(&[]).await;
     let mut answers = Vec::new();
     for name in REGISTERED.into_iter().chain([UNREGISTERED]) {
-        let fx = granted(&[]).await;
         answers.push((name, answer(&fx, route, name).await));
-        assert_eq!(
-            fx.calls.load(Ordering::SeqCst),
-            0,
-            "{route:?} {name}: a backend was called"
-        );
     }
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        0,
+        "{route:?}: a backend was called"
+    );
     let (_, expected) = &answers[2];
     for (name, got) in &answers[..2] {
         assert_eq!(
@@ -244,4 +266,145 @@ async fn a_non_empty_grant_refusing_a_tool_in_scope_answers_it_as_absent() {
         );
     }
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "alpha:t dispatched");
+}
+
+/// An empty-grant fixture with `security.sanitize_input` on, `beta`
+/// re-registered `passthrough: true` and the capability backend named
+/// [`CAPS`].
+async fn sanitized_passthrough() -> Fixture {
+    let mut auth = key_for_alpha(None);
+    auth.api_keys[0].name = "grant-client".to_string();
+    auth.api_keys[0].backends = Vec::new();
+    let fx = fixture(Setup {
+        auth: Some(auth),
+        sanitize: Sanitize::On,
+        ..Setup::default()
+    })
+    .await;
+    assert!(fx.state.backends.remove("beta"), "the fixture has beta");
+    let beta = Arc::new(Backend::new(
+        "beta",
+        BackendConfig {
+            passthrough: true,
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    beta.set_transport_for_test(Arc::new(Scripted {
+        calls: Arc::clone(&fx.calls),
+        error: None,
+        fail: None,
+        reply: None,
+        notify_refused: false,
+    }));
+    assert!(fx.state.backends.register(beta), "beta re-registers");
+    fx.state
+        .meta_mcp
+        .set_capabilities(Arc::new(crate::capability::CapabilityBackend::new(
+            CAPS,
+            Arc::new(crate::capability::CapabilityExecutor::new()),
+        )));
+    fx
+}
+
+/// MIK-8387.EMPTY.1 with sanitize on: a NUL in the arguments gets one answer
+/// for a registered passthrough backend (`beta`), a registered plain one
+/// (`alpha`), the capability name and an unregistered name. The passthrough
+/// exemption must not single out `beta`; every name is sanitized alike (the
+/// 400 a scoped key's absent names get, MIK-8387 N1).
+async fn assert_nul_answers_every_name_alike(route: Route) {
+    let nul = json!({"q": "a\u{0}b"});
+    let fx = sanitized_passthrough().await;
+    let mut answers = Vec::new();
+    for name in ["beta", "alpha", CAPS, UNREGISTERED] {
+        answers.push((name, answer_with(&fx, route, name, &nul).await));
+    }
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        0,
+        "{route:?}: a backend was called"
+    );
+    let (_, expected) = &answers[3];
+    for (name, got) in &answers[..3] {
+        assert_eq!(
+            got, expected,
+            "{route:?}: {name} differs from {UNREGISTERED}: {answers:?}"
+        );
+    }
+    assert_eq!(
+        expected.0,
+        StatusCode::BAD_REQUEST,
+        "{route:?}: {answers:?}",
+    );
+}
+
+/// The NUL row on `/mcp` `gateway_invoke`.
+#[tokio::test]
+async fn a_nul_gets_one_answer_for_every_name_on_invoke() {
+    assert_nul_answers_every_name_alike(Route::Invoke).await;
+}
+
+/// The NUL row on `/mcp` `gateway_execute`.
+#[tokio::test]
+async fn a_nul_gets_one_answer_for_every_name_on_execute() {
+    assert_nul_answers_every_name_alike(Route::Execute).await;
+}
+
+/// The NUL row on `/mcp/{name}`, which sanitizes before its scope check.
+#[tokio::test]
+async fn a_nul_gets_one_answer_for_every_name_per_backend_route() {
+    assert_nul_answers_every_name_alike(Route::Direct).await;
+}
+
+/// The Empty-only arms cannot fire for a caller with no backend scope: with
+/// authentication off the caller is unscoped (as stdio's always is), so a
+/// registered backend dispatches, and a passthrough one stays exempt from
+/// sanitize, NUL and all.
+#[tokio::test]
+async fn an_unscoped_caller_is_untouched_by_the_empty_grant_arms() {
+    let fx = fixture(Setup::default()).await;
+    let (status, body) = answer(&fx, Route::Invoke, "alpha").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        1,
+        "alpha not dispatched: {body}",
+    );
+
+    let fx = fixture(Setup {
+        sanitize: Sanitize::On,
+        ..Setup::default()
+    })
+    .await;
+    assert!(fx.state.backends.remove("beta"), "the fixture has beta");
+    let beta = Arc::new(Backend::new(
+        "beta",
+        BackendConfig {
+            passthrough: true,
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    beta.set_transport_for_test(Arc::new(Scripted {
+        calls: Arc::clone(&fx.calls),
+        error: None,
+        fail: None,
+        reply: None,
+        notify_refused: false,
+    }));
+    assert!(fx.state.backends.register(beta), "beta re-registers");
+    let nul = json!({"q": "a\u{0}b"});
+    let (status, body) = answer_with(&fx, Route::Invoke, "beta", &nul).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "passthrough beta was sanitized: {body}",
+    );
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        1,
+        "beta not dispatched: {body}",
+    );
 }

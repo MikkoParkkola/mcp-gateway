@@ -18,6 +18,12 @@ impl MetaMcp {
         grant: crate::gateway::authz::BackendGrant<'_>,
         server: &str,
     ) -> Option<std::sync::Arc<crate::backend::Backend>> {
+        // MIK-8441: an empty grant reaches no backend, so none is exempt and
+        // every name it names is sanitized alike (`absence` is `None` under
+        // an empty grant, which keeps its own refusal).
+        if matches!(grant, crate::gateway::authz::BackendGrant::Empty) {
+            return None;
+        }
         if self.scoped(grant).absence(server).is_some() {
             return None;
         }
