@@ -364,6 +364,9 @@ impl crate::gateway::authz::ToolAuthorizer for NoBackends {
     fn quota_principal(&self) -> Option<&crate::gateway::auth::QuotaPrincipal> {
         None
     }
+    fn backend_grant(&self) -> crate::gateway::authz::BackendGrant<'_> {
+        crate::gateway::authz::BackendGrant::Unscoped
+    }
 }
 
 /// MIK-7962: a filtered `tools/list` from a caller whose scope admits no

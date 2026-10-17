@@ -122,6 +122,31 @@ pub(crate) fn authorize_backend(
     }
 }
 
+/// A caller's backend grant, as [`authorize_backend`] reads it (MIK-8387):
+/// the one input the scoped absence predicate judges a name against. `pub`
+/// like the trait's other return types (`Transport`, `Decision`): the module
+/// is crate-private, so this reaches no further than the crate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendGrant<'a> {
+    /// No client (stdio, key-less), or a list holding `*`: no scope to hide.
+    Unscoped,
+    /// A non-empty list without `*`.
+    Scoped(&'a [String]),
+    /// `backends: []`: reaches nothing, and keeps its named grant message.
+    Empty,
+}
+
+impl<'a> BackendGrant<'a> {
+    pub(crate) fn of(client: Option<&'a super::auth::AuthenticatedClient>) -> Self {
+        match client {
+            None => Self::Unscoped,
+            Some(client) if client.backends.iter().any(|b| b == "*") => Self::Unscoped,
+            Some(client) if client.backends.is_empty() => Self::Empty,
+            Some(client) => Self::Scoped(&client.backends),
+        }
+    }
+}
+
 /// Which transport the caller arrived on.
 ///
 /// Reported by the authorizer rather than carried beside it: a field set next
@@ -173,6 +198,11 @@ pub trait ToolAuthorizer {
     /// Validated quota authority, never a client-selected name or session ID.
     /// Each transport and wrapper must explicitly preserve or omit authority.
     fn quota_principal(&self) -> Option<&QuotaPrincipal>;
+
+    /// The caller's backend grant (MIK-8387). Required, like
+    /// `quota_principal`: a wrapper delegates, and only a transport with no
+    /// client scope answers [`BackendGrant::Unscoped`].
+    fn backend_grant(&self) -> BackendGrant<'_>;
 }
 
 /// Whether a decision writes its audit record. An enum rather than a `bool`
@@ -275,6 +305,9 @@ impl ToolAuthorizer for AllowAll {
     fn quota_principal(&self) -> Option<&QuotaPrincipal> {
         None
     }
+    fn backend_grant(&self) -> BackendGrant<'_> {
+        BackendGrant::Unscoped
+    }
     fn decide<'a>(&'a self, _target: ToolTarget<'a>) -> Decision<'a> {
         Decision::of(Ok(()))
     }
@@ -298,6 +331,9 @@ pub(crate) struct DenyAll;
 impl ToolAuthorizer for DenyAll {
     fn quota_principal(&self) -> Option<&QuotaPrincipal> {
         None
+    }
+    fn backend_grant(&self) -> BackendGrant<'_> {
+        BackendGrant::Unscoped
     }
     fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
         Decision::of(Err(AuthorizationError::forbidden(
@@ -333,6 +369,9 @@ pub(crate) struct DenyOne {
 impl ToolAuthorizer for DenyOne {
     fn quota_principal(&self) -> Option<&QuotaPrincipal> {
         None
+    }
+    fn backend_grant(&self) -> BackendGrant<'_> {
+        BackendGrant::Unscoped
     }
     fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
         if target.tool == self.tool {
@@ -390,6 +429,9 @@ impl<A: ToolAuthorizer> ToolAuthorizer for CountingAuthorizer<A> {
     fn quota_principal(&self) -> Option<&QuotaPrincipal> {
         self.inner.quota_principal()
     }
+    fn backend_grant(&self) -> BackendGrant<'_> {
+        self.inner.backend_grant()
+    }
     fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
         *self
             .counts
@@ -428,6 +470,9 @@ pub(crate) struct ToolPolicyAuthorizer<'a> {
 impl ToolAuthorizer for ToolPolicyAuthorizer<'_> {
     fn quota_principal(&self) -> Option<&QuotaPrincipal> {
         None
+    }
+    fn backend_grant(&self) -> BackendGrant<'_> {
+        BackendGrant::Unscoped
     }
     fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
         if target.server.is_empty() || target.tool.is_empty() {

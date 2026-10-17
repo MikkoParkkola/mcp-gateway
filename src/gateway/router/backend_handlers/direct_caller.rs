@@ -234,7 +234,8 @@ pub(super) async fn read_envelope(
     let attestation = super::take_attestation_token(json_request.get_mut("params"));
 
     if state.sanitize_input {
-        json_request = sanitized(state, name, json_request)?;
+        let grant = crate::gateway::authz::BackendGrant::of(caller.client.as_ref());
+        json_request = sanitized(state, (name, grant), json_request)?;
     }
 
     let (id, method, params) = match super::super::helpers::parse_request(&json_request) {
@@ -247,9 +248,27 @@ pub(super) async fn read_envelope(
         }
     };
 
+    // MIK-8387 S4: for a scoped key, a backend outside its scope answers as a
+    // missing one (404), so the key cannot tell which names exist. The record
+    // keeps the scope refusal's code for a tool call. Before the backend
+    // lookup and the idempotency short-circuit. An empty grant keeps its own
+    // named 403 below (D2), and so does an unscoped caller.
+    let grant = crate::gateway::authz::BackendGrant::of(caller.client.as_ref());
+    if let Some(absence) = state.meta_mcp.scoped(grant).absence(name) {
+        let tool = params
+            .as_ref()
+            .and_then(|p| p.get("name"))
+            .and_then(Value::as_str);
+        if absence == crate::gateway::meta_mcp::scoped_backends::Absence::OutOfScope
+            && method == "tools/call"
+            && let Some(tool) = tool
+        {
+            crate::gateway::meta_mcp::visible::note_denial_code(name, tool, -32003);
+        }
+        return Err(backend_not_found(name));
+    }
     // D2-b: scope is checked after the parse, so its refusal names the tool,
-    // and before the backend lookup, so a scoped key gets 403 for an unknown
-    // backend as for a forbidden one, never a 404 existence oracle.
+    // and before the backend lookup. Only an empty grant reaches it now.
     if let Some(ref client) = caller.client
         && !client.can_access_backend(name)
     {
@@ -316,6 +335,16 @@ pub(super) fn explicit_cancel_key(
     crate::gateway::router::inflight_calls::CallKey::new(backend, owner, session, id)
 }
 
+/// The direct route's answer for a backend it cannot reach: 404, -32001.
+fn backend_not_found(name: &str) -> Rejection {
+    build_http_error_response(
+        None,
+        -32001,
+        format!("Backend not found: {name}"),
+        StatusCode::NOT_FOUND,
+    )
+}
+
 /// What stage 3 resolved: the backend and the session the caller owns.
 pub(super) struct Route<'a> {
     pub(super) backend: std::sync::Arc<crate::backend::Backend>,
@@ -332,12 +361,7 @@ pub(super) fn route<'a>(
     envelope: &Envelope,
 ) -> Result<Route<'a>, Rejection> {
     let Some(backend) = state.backends.get(name) else {
-        return Err(build_http_error_response(
-            None,
-            -32001,
-            format!("Backend not found: {name}"),
-            StatusCode::NOT_FOUND,
-        ));
+        return Err(backend_not_found(name));
     };
 
     let protocol_header = caller
@@ -485,7 +509,11 @@ pub(super) async fn forward_notification(
 /// parses or judges the request: its protocol fields validated (S2'), then
 /// the whole request sanitized unless the backend this route names is
 /// `passthrough` (option (a)), whose instance is then recorded (F2).
-fn sanitized(state: &AppState, name: &str, request: Value) -> Result<Value, Rejection> {
+fn sanitized(
+    state: &AppState,
+    (name, grant): (&str, crate::gateway::authz::BackendGrant<'_>),
+    request: Value,
+) -> Result<Value, Rejection> {
     use crate::security::sanitize::{ProtocolRoute, sanitize_request, validate_protocol_fields};
     // A protocol-field refusal answers no id (the id may be what is dirty);
     // past validation, the request's own id is answered.
@@ -503,7 +531,7 @@ fn sanitized(state: &AppState, name: &str, request: Value) -> Result<Value, Reje
         ProtocolRoute::Direct,
     )
     .map_err(|e| refused(None, e))?;
-    let exempt = state.meta_mcp.passthrough_instance(name);
+    let exempt = state.meta_mcp.passthrough_instance(grant, name);
     if let Some(instance) = &exempt {
         crate::gateway::meta_mcp::visible::record_exempt_instances(std::slice::from_ref(instance));
     }

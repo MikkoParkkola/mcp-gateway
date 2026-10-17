@@ -102,6 +102,7 @@ mod protocol;
 pub(crate) mod refund_witness;
 mod resources;
 pub(crate) mod response_security;
+pub(in crate::gateway) mod scoped_backends;
 pub(crate) use response_security::error_response_preserving_status;
 #[cfg(test)]
 mod response_security_tests;

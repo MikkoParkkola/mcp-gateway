@@ -23,6 +23,7 @@
 use serde_json::Value;
 
 use crate::gateway::authz::{Emit, ToolTarget};
+use crate::gateway::meta_mcp::scoped_backends::Absence;
 use crate::gateway::meta_mcp::{InvokeScope, MetaMcp};
 use crate::{Error, Result};
 
@@ -191,6 +192,25 @@ impl MetaMcp {
         arguments: &Value,
         session_id: Option<&str>,
     ) -> Result<Option<Error>> {
+        // MIK-8387 S1: for a scoped key, a backend outside its scope and one
+        // that is not registered are one absent name. Recorded first, before
+        // the caller verdict and the response-target filter read the memo, so
+        // every later site answers all three alike. An unregistered name has
+        // nothing to authorize, so the name-keyed route rules (a tool scope
+        // among them) never single it out; an out-of-scope one keeps the
+        // scope refusal for the call's record.
+        if let Some(absence) = self
+            .scoped(scope.authorizer.backend_grant())
+            .absence(server)
+        {
+            crate::gateway::meta_mcp::visible::record_absent(server, tool);
+            return Ok(match absence {
+                Absence::OutOfScope => self
+                    .authorize_route_target(scope, (server, tool), arguments)
+                    .err(),
+                Absence::Unregistered => None,
+            });
+        }
         let Err(refusal) = self.authorize_route_target(scope, (server, tool), arguments) else {
             // The route authorize reads no session, so no routing profile: a
             // defined capability the profile excludes is refused here, as the
@@ -199,13 +219,22 @@ impl MetaMcp {
                 .profile_withheld_capability((server, tool), session_id)
                 .map_or(Ok(None), Err);
         };
+        // MIK-8441: an empty grant reaches no backend, so every name, the
+        // capability backend's included, keeps the grant refusal. It is
+        // decided before any lookup, so it tells no name from another.
+        if matches!(
+            scope.authorizer.backend_grant(),
+            crate::gateway::authz::BackendGrant::Empty
+        ) {
+            return Err(refusal);
+        }
         match self.get_capabilities() {
             // Even an unwritable record answers so: the call dispatches
             // nothing (D3-a narrowed, lead ruling 2026-10-11).
             Some(cap) if cap.name == server => Err(Error::ToolNotFound(tool.to_string())),
-            // No gate answers a backend that is not registered: its refusal
-            // stays the strict one, recorded fail-closed (MIK-8387 owns its
-            // parity).
+            // No gate answers a backend that is not registered: for a caller
+            // with no scoped grant its refusal stays the strict one, recorded
+            // fail-closed (a scoped key's absent names are S1's, above).
             _ if self.backends.get(server).is_none() => Err(refusal),
             _ => {
                 // Recorded before every later reader (MIK-8356's caller

@@ -24,8 +24,10 @@ use crate::security::transparency_log::TransparencyLogConfig;
 use crate::transport::Transport;
 
 mod anon_key;
+mod backend_oracle;
 mod delivery;
 mod delivery_who;
+mod empty_grant;
 mod lost_round;
 mod meta_malformed_retry;
 mod meta_refusal;
@@ -169,6 +171,16 @@ struct Setup {
     chain: crate::config::ChainMode,
     /// `security.caller_identity` (MIK-7938 ATTR.4).
     caller_identity: Option<crate::security::caller_identity::CallerIdentityConfig>,
+    /// `security.sanitize_input` on both routes (MIK-8387 N1).
+    sanitize: Sanitize,
+}
+
+/// Whether both routes sanitize input (`security.sanitize_input`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Sanitize {
+    #[default]
+    Off,
+    On,
 }
 
 /// Whether both routes' firewalls run relay detection (MIK-8176 SLOT.6).
@@ -192,6 +204,8 @@ enum MetaMode {
     Idempotent,
     /// `alpha`'s tool `t` is surfaced, so it is called by name on `/mcp`.
     SurfacedT,
+    /// Code mode is on, so `gateway_execute` runs chains (MIK-8387 rows).
+    CodeMode,
 }
 
 impl MetaMode {
@@ -205,6 +219,7 @@ impl MetaMode {
                 Arc::new(crate::idempotency::IdempotencyCache::new()),
                 crate::idempotency::CLEANUP_INTERVAL,
             ),
+            Self::CodeMode => return meta.with_code_mode(true),
             Self::SurfacedT => {
                 return meta.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
                     server: "alpha".to_string(),
@@ -263,6 +278,7 @@ async fn fixture(setup: Setup) -> Fixture {
     if let Some(config) = setup.agent_identity {
         state_mut.agent_identity_config = config;
     }
+    state_mut.sanitize_input = setup.sanitize == Sanitize::On;
     let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
     #[cfg(feature = "firewall")]
     if setup.request_firewall {
@@ -533,7 +549,8 @@ async fn meta_invocation_record_says_route_meta() {
     assert_eq!(only_invocation(&fx)["route"], "meta");
 }
 
-/// D2-T2. A scope refusal is a `denied` record that names the tool.
+/// D2-T2. A scope refusal is a `denied` record that names the tool. The
+/// wire answers the backend miss (MIK-8387 S4); the record keeps -32003.
 #[tokio::test]
 async fn direct_scope_refusal_is_denied_record() {
     let fx = fixture(Setup {
@@ -542,8 +559,8 @@ async fn direct_scope_refusal_is_denied_record() {
     })
     .await;
     let (status, body) = post(&fx, "beta", &tools_call("t"), &Caller::Key).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    assert_eq!(body["error"]["code"], -32003, "{body}");
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"]["code"], -32001, "{body}");
 
     let entry = only_invocation(&fx);
     assert_eq!(entry["outcome"], "denied", "{entry}");
@@ -639,17 +656,18 @@ async fn agent_identity_refusal_writes_no_record() {
 }
 
 /// D2-T8, positive control. Moving the scope check below the body read must
-/// not make an unknown backend distinguishable from a forbidden one.
+/// not make a missing backend distinguishable from a forbidden one: both
+/// answer the backend miss (MIK-8387 S4), and the record keeps the refusal.
 #[tokio::test]
-async fn scoped_key_gets_403_for_unknown_backend() {
+async fn scoped_key_gets_the_miss_for_a_missing_backend() {
     let fx = fixture(Setup {
         auth: Some(key_for_alpha(None)),
         ..Setup::default()
     })
     .await;
     let (status, body) = post(&fx, "nope", &tools_call("t"), &Caller::Key).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    assert_eq!(body["error"]["code"], -32003, "{body}");
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"]["code"], -32001, "{body}");
     let entry = only_invocation(&fx);
     assert_eq!(
         (&entry["outcome"], &entry["tool"]),

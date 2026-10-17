@@ -213,7 +213,8 @@ async fn direct_scope_denial_counted() {
     })
     .await;
     let ((status, _), text) = scrape(post(&fx, "beta", &tools_call("t"), &Caller::Key));
-    assert_eq!(status, StatusCode::FORBIDDEN);
+    // The wire answers the backend miss (MIK-8387 S4); the count keeps the scope.
+    assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(
         series(&text, DENY, r#"reason="backend_scope",route="direct""#),
         1,

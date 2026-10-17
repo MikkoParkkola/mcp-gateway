@@ -295,6 +295,50 @@ impl MetaMcp {
         crate::gateway::meta_mcp::visible::with_visibility_memo(traced).await
     }
 
+    /// The one invocation record for a chain resume refused because its
+    /// pending step's backend is absent for a scoped key (MIK-8387 S6). It
+    /// never dispatches: the caller's `requestState` is still unredeemed here.
+    /// It runs the frame [`Self::invoke_tool_sourced`] does (log admission, a
+    /// trace id, a request memo) and the same writer, so all three cells get
+    /// one record and one failure policy: `denied -32003` for an out-of-scope
+    /// name, the not-found outcome for an unregistered one, and the log's
+    /// write error when it fails closed.
+    pub(in crate::gateway::meta_mcp) async fn record_absent_step(
+        &self,
+        (server, tool, arguments): (&str, &str, &Value),
+        session_id: Option<&str>,
+        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+        absence: Option<crate::gateway::meta_mcp::scoped_backends::Absence>,
+    ) -> Error {
+        if let Some(log) = &self.transparency_logger
+            && let Err(refused) = log.admit().await
+        {
+            return refused;
+        }
+        let args = serde_json::json!({"server": server, "tool": tool, "arguments": arguments});
+        let trace_id = trace::generate();
+        let recorded_trace = trace_id.clone();
+        let recorded = trace::with_trace_id(trace_id, async move {
+            if absence == Some(crate::gateway::meta_mcp::scoped_backends::Absence::OutOfScope) {
+                crate::gateway::meta_mcp::visible::note_denial_code(server, tool, -32003);
+            }
+            let missing = Err(Error::BackendNotFound(server.to_owned()));
+            self.audit_invocation(
+                &args,
+                session_id,
+                caller,
+                &recorded_trace,
+                missing,
+                audit::DispatchNotes::default(),
+            )
+            .await
+        });
+        match crate::gateway::meta_mcp::visible::with_visibility_memo(recorded).await {
+            Err(error) => error,
+            Ok(_) => Error::BackendNotFound(server.to_owned()),
+        }
+    }
+
     /// The post-dispatch response gates a backend result must pass before any
     /// caller — or any durable record — may hold it.
     ///
