@@ -468,17 +468,14 @@ impl MetaMcp {
         if crate::playbook::current_step().is_some() {
             return Err(refusal);
         }
-        match self.gate_answer((server, tool), caller, session_id).await {
-            Some(answer) => {
-                caller.signing.inspect(|signing| signing.want_refund());
-                answer
-            }
-            None => {
-                // The policy's own refusal at dispatch, before anything this
-                // step does acts: the witness decides (MIK-8353 3d).
-                super::nonce_settle::ask_refund(caller);
-                Err(refusal)
-            }
+        if let Some(answer) = self.gate_answer((server, tool), caller, session_id).await {
+            caller.signing.inspect(|signing| signing.want_refund());
+            answer
+        } else {
+            // The policy's own refusal at dispatch, before anything this
+            // step does acts: the witness decides (MIK-8353 3d).
+            super::nonce_settle::ask_refund(caller);
+            Err(refusal)
         }
     }
 
