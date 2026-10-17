@@ -194,10 +194,10 @@ async fn a_non_empty_grant_is_untouched_by_the_empty_grant_answer() {
         let (status, body) = answer(&fx, route, "beta").await;
         assert!(!body.contains(NO_GRANT), "{route:?}: {body}");
         if matches!(route, Route::Direct) {
-            // The direct route's scope refusal, before any lookup.
-            assert_eq!(status, StatusCode::FORBIDDEN, "{route:?}: {body}");
+            // MIK-8387: a backend outside the scope answers as a missing one.
+            assert_eq!(status, StatusCode::NOT_FOUND, "{route:?}: {body}");
             let parsed: Value = serde_json::from_str(&body).expect("the answer is JSON");
-            assert_eq!(parsed["error"]["code"].as_i64(), Some(-32003), "{body}");
+            assert_eq!(parsed["error"]["code"].as_i64(), Some(-32001), "{body}");
         } else {
             assert_eq!(status, StatusCode::OK, "{route:?}: {body}");
             assert!(
