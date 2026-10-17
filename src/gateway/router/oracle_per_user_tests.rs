@@ -23,6 +23,9 @@ use crate::gateway::meta_mcp::slot_verdict_fixture::{
 };
 use crate::key_server::oidc::VerifiedIdentity;
 
+/// MIK-8382 UNIFY.1b rows on this fixture.
+mod lacked_warn;
+
 /// The router over one per-user backend, with what it was asked.
 struct Gateway {
     router: axum::Router,
@@ -58,11 +61,34 @@ async fn gateway_shared(
     denied: &str,
     firewalled: bool,
 ) -> Gateway {
+    let state =
+        direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
+    gateway_on(state, (slot, shared, warmth), (denied, firewalled), |_| {})
+}
+
+/// [`gateway`] behind `auth` (MIK-8382 E4/E5: API-key callers), with
+/// `configure` run on the Meta-MCP before it is mounted.
+async fn gateway_authed(
+    auth: &crate::config::AuthConfig,
+    (slot, warmth, denied): (CallerSlot, Warmth, &str),
+    configure: impl FnOnce(&crate::gateway::test_helpers::MetaMcp),
+) -> Gateway {
+    let state = super::tests::test_router_app_state_with_auth(auth).await;
+    gateway_on(state, (slot, &valid(), warmth), (denied, false), configure)
+}
+
+/// The per-user fixture over `state`: alpha's slot, the shared schema and the
+/// warmth, the active profile denying `denied`, the firewall when asked,
+/// and `configure` run on the Meta-MCP before it is mounted.
+fn gateway_on(
+    (mut state, store): (Arc<super::AppState>, tempfile::TempDir),
+    (slot, shared, warmth): (CallerSlot, &Value, Warmth),
+    (denied, firewalled): (&str, bool),
+    configure: impl FnOnce(&crate::gateway::test_helpers::MetaMcp),
+) -> Gateway {
     let (backend, caller, shared) =
         per_user_backend(slot, shared, warmth, InputSchemaEnforcement::Closed);
     let kept = Arc::clone(&backend);
-    let (mut state, store) =
-        direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     assert!(state_mut.backends.register(backend), "fixture registration");
     let audit = [
@@ -102,6 +128,7 @@ async fn gateway_shared(
             crate::security::firewall::Firewall::from_config(config, None),
         )));
     }
+    configure(&meta);
     state_mut.meta_mcp = Arc::new(meta);
     state_mut.transparency_log = Some(transparency_logger(&audit[1]));
     Gateway {

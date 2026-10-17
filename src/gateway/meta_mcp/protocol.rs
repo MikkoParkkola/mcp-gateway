@@ -248,17 +248,21 @@ impl MetaMcp {
             );
         };
 
-        // Scope first, on the name: an out-of-scope caller learns nothing about
-        // whether the backend exists.
+        // MIK-8387 S5: for a scoped key, a backend outside its scope answers as
+        // a missing one; its scope refusal still writes the audit line.
+        let grant = crate::gateway::authz::BackendGrant::of(client);
+        if let Some(absence) = self.scoped(grant).absence(backend_name) {
+            if absence == super::scoped_backends::Absence::OutOfScope {
+                let _ = Self::scope_refusal(&id, backend_name, "prompts/get", client);
+            }
+            return backend_missing(id, backend_name);
+        }
+        // Scope first, on the name, for any other caller.
         if let Some(refused) = Self::scope_refusal(&id, backend_name, "prompts/get", client) {
             return refused;
         }
         let Some(backend) = self.backends.get(backend_name) else {
-            return JsonRpcResponse::error(
-                Some(id),
-                -32001,
-                format!("Backend not found: {backend_name}"),
-            );
+            return backend_missing(id, backend_name);
         };
 
         let mut forward_params = json!({ "name": original_name });
@@ -367,6 +371,15 @@ impl MetaMcp {
 // ============================================================================
 // Tests
 // ============================================================================
+
+/// `prompts/get`'s answer for a backend the caller cannot reach (-32001).
+fn backend_missing(id: RequestId, backend_name: &str) -> JsonRpcResponse {
+    JsonRpcResponse::error(
+        Some(id),
+        -32001,
+        format!("Backend not found: {backend_name}"),
+    )
+}
 
 #[cfg(test)]
 mod tests {

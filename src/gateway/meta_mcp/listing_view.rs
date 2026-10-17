@@ -91,6 +91,28 @@ impl MetaMcp {
         }) && self.principal_for(backend, caller).is_none()
     }
 
+    /// MIK-8382 UNIFY.1b: a call answered as an absent name because `backend`
+    /// requires identity propagation and the caller has no principal for it
+    /// logs one WARN per (backend, caller key) per window (`warn_limit`).
+    /// The caller key is the limiter's only; it is never logged. A caller
+    /// with no key shares one bucket per backend.
+    pub(crate) fn warn_lacked_principal(&self, backend: &str, caller_key: Option<&str>) {
+        let due = super::warn_limit::first_warn(
+            &mut self.lacked_warned.lock(),
+            backend,
+            caller_key.unwrap_or("anonymous"),
+            std::time::Instant::now(),
+        );
+        if due {
+            tracing::warn!(
+                backend,
+                missing = "execution principal",
+                "call answered as an absent name: the backend requires identity \
+                 propagation and the caller has no principal for it"
+            );
+        }
+    }
+
     /// Whether a name-only listing names `tool` on `server` to this caller.
     /// Judged by the caller's own catalogue entry on a per-user backend; a
     /// name the caller's warm slot lacks, or holds with an invalid schema, is

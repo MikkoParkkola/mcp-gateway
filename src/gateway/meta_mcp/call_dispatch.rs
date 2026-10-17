@@ -480,27 +480,10 @@ impl MetaMcp {
                 {
                     return refusal;
                 }
-                // E2: plan tasks are served as today with no account proof
-                // (P8406 pins it; the read matrix names the gap, MIK-8406).
-                if matches!(
-                    stored.task.tool(),
-                    "gateway_execute" | "gateway_run_playbook"
-                ) {
-                    // The holds already sit in this request's scope.
-                    let held = super::sealed_hold::Held::new(
-                        stored,
-                        super::sealed_hold::CarriedHolds::none(),
-                    );
-                    return BeginOutcome::Existing(held).into_response(id);
-                }
-                // A single call records at most one distinct target: the
-                // one-element slice site 5 proves.
-                let targets = stored
-                    .targets
-                    .first()
-                    .cloned()
-                    .into_iter()
-                    .collect::<Vec<_>>();
+                // Site 5 walks every recorded target (MIK-8406 PLANREPLAY.4). A
+                // pre-v5 row was refused above (-32003, task_replay.rs); a v5 row
+                // holds every authorized step (grant_audit.rs), never none.
+                let targets = stored.targets.clone();
                 // The holds already sit in this request's scope.
                 let held =
                     super::sealed_hold::Held::new(stored, super::sealed_hold::CarriedHolds::none());
@@ -550,11 +533,36 @@ impl MetaMcp {
     ) -> JsonRpcResponse {
         use crate::gateway::task_service::execution::BeginOutcome;
 
+        // Collected before the walk: an iterator adapter held across its
+        // awaits makes the dispatch future's `Send` bound not general enough.
+        let walk: Vec<(&str, &str)> = targets
+            .iter()
+            .map(|target| (target.server.as_str(), target.tool.as_str()))
+            .collect();
+        if let Some(answer) = self.first_unproven(&id, tool_name, &walk, caller).await {
+            return answer;
+        }
+        BeginOutcome::Existing(held).into_response(id)
+    }
+
+    /// The account walk site 5 and the sync plan replay share (MIK-8406
+    /// PLANREPLAY.3): `targets` in recorded order, skipping any that mints
+    /// nothing per caller, each distinct `(server, account)` proven once
+    /// through `prove_target_live`. `None` when every target is proven;
+    /// otherwise the first non-proof's answer: a carried failed fill shaped
+    /// as the live tool answer (E4), or the refusal through the
+    /// status-preserving error, keeping the connect offer.
+    pub(super) async fn first_unproven(
+        &self,
+        id: &RequestId,
+        tool_name: &str,
+        targets: &[(&str, &str)],
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> Option<JsonRpcResponse> {
         // (server, account) resolved already in this walk: an account
         // resolved once is not resolved again.
         let mut resolved = std::collections::HashSet::new();
-        for target in targets {
-            let (server, tool) = (target.server.as_str(), target.tool.as_str());
+        for &(server, tool) in targets {
             // A target that mints nothing per caller is exempt (U2); every
             // other one (a managed account, or a per-caller mint, E7) proves
             // only by a live resolution below. There is no shortcut for an
@@ -568,11 +576,13 @@ impl MetaMcp {
             }
             match self.prove_target_live((server, tool), caller).await {
                 Ok(None) => {}
-                Ok(Some(value)) => return self.shape_repeat_fill(id, tool_name, value, caller),
-                Err(error) => return error_response_preserving_status(id, &error),
+                Ok(Some(value)) => {
+                    return Some(self.shape_repeat_fill(id.clone(), tool_name, value, caller));
+                }
+                Err(error) => return Some(error_response_preserving_status(id.clone(), &error)),
             }
         }
-        BeginOutcome::Existing(held).into_response(id)
+        None
     }
 
     /// A repeated task call's failed-fill answer (E4), shaped as the live

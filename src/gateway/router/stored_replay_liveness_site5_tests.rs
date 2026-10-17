@@ -5,14 +5,15 @@
 
 use super::*;
 
-/// P8406 (gap pin, MIK-8406 PLANREPLAY.4): a plan-task repeat skips site 5,
-/// so a completed keyed `gateway_execute` task repeated on a live account is
-/// served its stored task with no account proof: it resolves only for the
-/// route stage's per-step checks (2, measured), never at site 5. This row
-/// turns red when MIK-8406 adds the proof, and the read matrix's gap row
-/// moves with it.
+/// P8406 (cost guard, MIK-8406 PLANREPLAY.4): a completed keyed
+/// `gateway_execute` task repeated on a live account is served its stored
+/// task after site 5 proves every recorded account, at the base cost: the
+/// route stage's per-step checks resolve twice (measured before and after
+/// the fix), and site 5's proof takes the resolution they carried instead of
+/// resolving again. A walk that resolved anew would move the count. The
+/// proof itself is pinned by P9p and P9k-mixed, which refuse.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn p8406_a_plan_task_repeat_is_served_without_an_account_proof() {
+async fn p8406_a_live_plan_task_repeat_is_served_at_the_base_cost() {
     let fx = fixture(false).await;
     answer_marker(&fx);
     let made = send(
@@ -50,12 +51,12 @@ async fn p8406_a_plan_task_repeat_is_served_without_an_account_proof() {
         Some(id.as_str()),
         "P8406: the plan repeat is not the stored task: {again}"
     );
-    // The route stage's per-step checks resolve twice; a site-5 proof would
-    // add one per account.
+    // The route stage's per-step checks resolve twice; site 5 takes what
+    // they carried.
     assert_eq!(
         fx.gateway.resolves() - resolved,
         2,
-        "P8406: the plan repeat's resolutions moved (MIK-8406 closed?): {again}"
+        "P8406: the live plan repeat resolved again instead of taking the carried resolution: {again}"
     );
 }
 

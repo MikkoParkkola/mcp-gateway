@@ -93,15 +93,20 @@ async fn meta_mcp_gateway_execute_enforces_api_key_tool_scope() {
 
     let response = router.oneshot(request).await.unwrap();
 
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    // `demo` is in the key's scope but not registered, so the call is answered
+    // as a missing name before any name-keyed rule (MIK-8387 S1, O5): no
+    // allowlist text reaches the caller, and nothing is dispatched. A
+    // registered backend's refused tool reads as absent too (MIK-8361).
+    assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"]["code"], -32600);
+    assert_eq!(json["result"]["isError"], true, "{json}");
+    let text = json.to_string();
     assert!(
-        json["error"]["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("allowlist"))
+        text.contains(&crate::backend::text_absent("blocked_tool")),
+        "{json}"
     );
+    assert!(!text.contains("allowlist"), "{json}");
 }
 
 #[tokio::test]

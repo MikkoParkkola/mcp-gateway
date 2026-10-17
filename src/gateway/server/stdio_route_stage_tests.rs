@@ -28,6 +28,9 @@ impl ToolAuthorizer for RefusesArguments {
     fn quota_principal(&self) -> Option<&crate::gateway::auth::QuotaPrincipal> {
         None
     }
+    fn backend_grant(&self) -> crate::gateway::authz::BackendGrant<'_> {
+        crate::gateway::authz::BackendGrant::Unscoped
+    }
     fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
         if target.arguments.as_object().is_some_and(|a| !a.is_empty()) {
             return Decision::of(Err(AuthorizationError::forbidden(

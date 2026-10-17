@@ -81,6 +81,9 @@ mod chain_interim;
 #[cfg(test)]
 mod chain_interim_tests;
 mod confirmation;
+#[cfg(test)]
+pub(crate) mod plan_entries;
+mod warn_limit;
 // Read only by the `firewall` collusion rows.
 #[cfg(all(test, feature = "cost-governance", feature = "firewall"))]
 mod cost_test_support;
@@ -102,6 +105,7 @@ mod protocol;
 pub(crate) mod refund_witness;
 mod resources;
 pub(crate) mod response_security;
+pub(in crate::gateway) mod scoped_backends;
 pub(crate) use response_security::error_response_preserving_status;
 #[cfg(test)]
 mod response_security_tests;
@@ -129,7 +133,7 @@ pub use prompt_cache::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerpri
 pub use support::prune_constant_signals;
 pub(crate) use support::{
     Authentication, STEP_NOT_PERMITTED, STEP_NOT_PERMITTED_CODE, STEP_NOT_PERMITTED_STATUS,
-    step_not_permitted,
+    intake_refusal, step_not_permitted,
 };
 pub(crate) use task_confirmation::{
     AdmissionOwner, TaskConfirmation, TaskConfirmationRequest, task_admission_request,
@@ -194,6 +198,8 @@ pub struct MetaMcp {
     pub(super) idempotency_config: RwLock<crate::config::IdempotencyConfig>,
     /// `server.idempotency_key` and the un-keyed admission warn limit (F10).
     pub(super) unkeyed: admission::UnkeyedPolicy,
+    /// The case-B WARN limit, per (backend, caller key) (MIK-8382 UNIFY.1b).
+    pub(super) lacked_warned: parking_lot::Mutex<warn_limit::WarnedAt>,
     /// Continuation keys, spent-ledger and held legacy exchanges.
     ///
     /// Here rather than on `AppState` because of lifetime: this struct is built

@@ -23,9 +23,14 @@ use crate::security::audit::AuditFailurePolicy;
 use crate::security::transparency_log::TransparencyLogConfig;
 use crate::transport::Transport;
 
+pub(in crate::gateway::router) mod anon_intake;
+mod extras;
+use extras::{Extra, arm_extras, backend_config, harden};
 mod anon_key;
+mod backend_oracle;
 mod delivery;
 mod delivery_who;
+mod empty_grant;
 mod lost_round;
 mod meta_malformed_retry;
 mod meta_refusal;
@@ -41,6 +46,12 @@ mod tenants;
 /// else with a text result, or with a JSON-RPC error when `error` is set.
 struct Scripted {
     calls: Arc<AtomicUsize>,
+    /// MIK-8382: every `tools/list`, which `calls` skips.
+    lists: Arc<AtomicUsize>,
+    /// MIK-8382: the cell's transport switches, [`Extra::ListFail`] (a
+    /// `tools/list` fails, as an unreachable backend's cold list does) and
+    /// [`Extra::Hang`] (every request is counted, then never answered).
+    extras: &'static [Extra],
     error: Option<i32>,
     /// MIK-7979: the call is counted, then the transport fails with this.
     fail: Option<fn() -> crate::Error>,
@@ -63,10 +74,20 @@ impl Transport for Scripted {
         // F13: a cold `tools/call` lists the backend first. The list names the
         // tool the rows call, and it is not a call, so `calls` skips it.
         if method == "tools/list" {
+            self.lists.fetch_add(1, Ordering::SeqCst);
+            if self.extras.contains(&Extra::Hang) {
+                std::future::pending::<()>().await;
+            }
+            if self.extras.contains(&Extra::ListFail) {
+                return Err(crate::Error::Transport("connection refused".into()));
+            }
             let tool = json!({"name": "t", "inputSchema": {"type": "object"}});
             return Ok(JsonRpcResponse::success(id, json!({ "tools": [tool] })));
         }
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.extras.contains(&Extra::Hang) {
+            std::future::pending::<()>().await;
+        }
         if let Some(fail) = self.fail {
             return Err(fail());
         }
@@ -103,6 +124,7 @@ struct Fixture {
     log: Arc<TransparencyLogger>,
     path: std::path::PathBuf,
     calls: Arc<AtomicUsize>,
+    lists: Arc<AtomicUsize>,
     _dirs: (tempfile::TempDir, tempfile::TempDir),
 }
 
@@ -164,11 +186,23 @@ struct Setup {
     meta_mode: MetaMode,
     /// The backends refuse every notification (L1254).
     notify_refused: bool,
+    /// MIK-8382: the [`Extra`] switches this cell turns on.
+    extras: &'static [Extra],
     /// The backends' chain policy; under `Require` the gateway also has a
     /// chain identity, so their unchained answers are refused unread (MIK-7636).
     chain: crate::config::ChainMode,
     /// `security.caller_identity` (MIK-7938 ATTR.4).
     caller_identity: Option<crate::security::caller_identity::CallerIdentityConfig>,
+    /// `security.sanitize_input` on both routes (MIK-8387 N1).
+    sanitize: Sanitize,
+}
+
+/// Whether both routes sanitize input (`security.sanitize_input`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Sanitize {
+    #[default]
+    Off,
+    On,
 }
 
 /// Whether both routes' firewalls run relay detection (MIK-8176 SLOT.6).
@@ -192,6 +226,8 @@ enum MetaMode {
     Idempotent,
     /// `alpha`'s tool `t` is surfaced, so it is called by name on `/mcp`.
     SurfacedT,
+    /// Code mode is on, so `gateway_execute` runs chains (MIK-8387 rows).
+    CodeMode,
 }
 
 impl MetaMode {
@@ -205,6 +241,7 @@ impl MetaMode {
                 Arc::new(crate::idempotency::IdempotencyCache::new()),
                 crate::idempotency::CLEANUP_INTERVAL,
             ),
+            Self::CodeMode => return meta.with_code_mode(true),
             Self::SurfacedT => {
                 return meta.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
                     server: "alpha".to_string(),
@@ -240,19 +277,22 @@ async fn fixture(setup: Setup) -> Fixture {
         None => super::tests::test_router_app_state().await,
     };
     let calls = Arc::new(AtomicUsize::new(0));
+    let lists = Arc::new(AtomicUsize::new(0));
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
+    if setup.has(Extra::Hardened) {
+        harden(state_mut);
+    }
     for name in ["alpha", "beta"] {
         let backend = Arc::new(Backend::new(
             name,
-            BackendConfig {
-                signature_chain: setup.chain,
-                ..BackendConfig::default()
-            },
+            backend_config(&setup, name),
             &FailsafeConfig::default(),
             Duration::from_secs(60),
         ));
         backend.set_transport_for_test(Arc::new(Scripted {
             calls: Arc::clone(&calls),
+            lists: Arc::clone(&lists),
+            extras: setup.extras,
             error: setup.backend_error,
             fail: setup.backend_fail,
             reply: setup.reply.clone(),
@@ -260,9 +300,12 @@ async fn fixture(setup: Setup) -> Fixture {
         }));
         assert!(state_mut.backends.register(backend), "fixture registration");
     }
+    // Copied out before `agent_identity` is moved from `setup` below.
+    let extras = setup.extras;
     if let Some(config) = setup.agent_identity {
         state_mut.agent_identity_config = config;
     }
+    state_mut.sanitize_input = setup.sanitize == Sanitize::On;
     let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
     #[cfg(feature = "firewall")]
     if setup.request_firewall {
@@ -279,6 +322,7 @@ async fn fixture(setup: Setup) -> Fixture {
         ));
     }
     meta.enable_transparency_log(Arc::clone(&log));
+    meta = arm_extras(meta, extras);
     if setup.chain == crate::config::ChainMode::Require {
         meta.set_chain_signer(
             crate::security::signature_chain::ChainSigner::from_seed(&[7; 32], "gw-test")
@@ -307,6 +351,7 @@ async fn fixture(setup: Setup) -> Fixture {
         log,
         path,
         calls,
+        lists,
         _dirs: (audit, store),
     }
 }
@@ -385,6 +430,20 @@ async fn post(fx: &Fixture, backend: &str, body: &str, caller: &Caller) -> (Stat
 }
 
 async fn post_to(fx: &Fixture, uri: &str, body: &str, caller: &Caller) -> (StatusCode, Value) {
+    let (status, bytes) = post_to_raw(fx, uri, body, caller).await;
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// [`post_to`] with the response body as sent, for byte-identity rows.
+async fn post_to_raw(
+    fx: &Fixture,
+    uri: &str,
+    body: &str,
+    caller: &Caller,
+) -> (StatusCode, axum::body::Bytes) {
     let mut builder = axum::http::Request::builder()
         .method("POST")
         .uri(uri)
@@ -423,10 +482,11 @@ async fn post_to(fx: &Fixture, uri: &str, body: &str, caller: &Caller) -> (Statu
     insert_identity(&mut request, caller);
     let response = fx.router.clone().oneshot(request).await.unwrap();
     let status = response.status();
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     (
         status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("an in-memory body reads"),
     )
 }
 
@@ -533,7 +593,8 @@ async fn meta_invocation_record_says_route_meta() {
     assert_eq!(only_invocation(&fx)["route"], "meta");
 }
 
-/// D2-T2. A scope refusal is a `denied` record that names the tool.
+/// D2-T2. A scope refusal is a `denied` record that names the tool. The
+/// wire answers the backend miss (MIK-8387 S4); the record keeps -32003.
 #[tokio::test]
 async fn direct_scope_refusal_is_denied_record() {
     let fx = fixture(Setup {
@@ -542,8 +603,8 @@ async fn direct_scope_refusal_is_denied_record() {
     })
     .await;
     let (status, body) = post(&fx, "beta", &tools_call("t"), &Caller::Key).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    assert_eq!(body["error"]["code"], -32003, "{body}");
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"]["code"], -32001, "{body}");
 
     let entry = only_invocation(&fx);
     assert_eq!(entry["outcome"], "denied", "{entry}");
@@ -639,17 +700,18 @@ async fn agent_identity_refusal_writes_no_record() {
 }
 
 /// D2-T8, positive control. Moving the scope check below the body read must
-/// not make an unknown backend distinguishable from a forbidden one.
+/// not make a missing backend distinguishable from a forbidden one: both
+/// answer the backend miss (MIK-8387 S4), and the record keeps the refusal.
 #[tokio::test]
-async fn scoped_key_gets_403_for_unknown_backend() {
+async fn scoped_key_gets_the_miss_for_a_missing_backend() {
     let fx = fixture(Setup {
         auth: Some(key_for_alpha(None)),
         ..Setup::default()
     })
     .await;
     let (status, body) = post(&fx, "nope", &tools_call("t"), &Caller::Key).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    assert_eq!(body["error"]["code"], -32003, "{body}");
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"]["code"], -32001, "{body}");
     let entry = only_invocation(&fx);
     assert_eq!(
         (&entry["outcome"], &entry["tool"]),

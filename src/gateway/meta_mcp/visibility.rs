@@ -188,7 +188,9 @@ impl MetaMcp {
         session_id: Option<&str>,
     ) {
         match reason {
-            super::visible::Withholding::Refused => {
+            // An absent backend is noted as a refused one is (MIK-8387), so
+            // the three cells write the same operator record.
+            super::visible::Withholding::Refused | super::visible::Withholding::Absent => {
                 let refused = super::grant_audit::note_withheld_best_effort(server, || {
                     self.withheld_surfaced(server, tool_name, caller, session_id)
                 })
@@ -512,6 +514,9 @@ impl ToolAuthorizer for Operator {
     }
     fn quota_principal(&self) -> Option<&crate::gateway::auth::QuotaPrincipal> {
         None
+    }
+    fn backend_grant(&self) -> crate::gateway::authz::BackendGrant<'_> {
+        crate::gateway::authz::BackendGrant::Unscoped
     }
 }
 

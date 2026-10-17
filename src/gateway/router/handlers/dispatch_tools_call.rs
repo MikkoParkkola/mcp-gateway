@@ -442,6 +442,8 @@ pub(super) async fn tools_call(
     // see is answered by the gate as a missing name is, before X14, the task
     // gate, signing and admission act on it. The judgement is recorded, so
     // the gate answers it absent whatever the catalogue does next.
+    #[cfg(test)]
+    crate::gateway::meta_mcp::withheld_gate::seams::gate_start();
     let (invisible, witness) = state
         .meta_mcp
         .invisible_call(
@@ -458,8 +460,14 @@ pub(super) async fn tools_call(
     if invisible {
         // A backend-wide refusal (kill switch) is answered as admission
         // answers it for a missing name: the same 400.
+        // MIK-8387: an absent target (recorded or live) is never judged by
+        // name here, so a kill switch cannot single out a registered one.
+        let scoped = state
+            .meta_mcp
+            .scoped(caller.scope().authorizer.backend_grant());
         if let Some(refusal) = backend_targets
             .iter()
+            .filter(|target| !scoped.absent_step(&target.server, &target.tool))
             .find_map(|target| state.meta_mcp.admit_backend_wide(&target.server).err())
         {
             return Err(build_error_response(
@@ -652,14 +660,24 @@ pub(super) async fn tools_call(
             response,
             audit,
             target,
-            _,
+            dispatched,
         )) => {
             // STORED.2 site 1: a retained single-call result is served only
             // on proven liveness; otherwise the call proceeds as Unprotected
-            // and the lift serves it after a live proof.
+            // and the lift serves it after a live proof. A plan replay is
+            // served only with every executed step's account proven, else it
+            // answers that step's live refusal (MIK-8406).
             match state
                 .meta_mcp
-                .defer_or_serve_replay(tool_name, &arguments, &caller, target, response, audit)
+                .defer_or_serve_replay(
+                    tool_name,
+                    &arguments,
+                    &caller,
+                    target,
+                    dispatched,
+                    (response, audit),
+                )
+                .await
             {
                 Some(replay) => (None, Some(replay)),
                 None => (None, None),

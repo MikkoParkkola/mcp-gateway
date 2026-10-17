@@ -57,6 +57,9 @@ pub(crate) enum Stage {
     ChainLink,
     /// The response firewall.
     ResponseFirewall,
+    /// A keyed call from a caller with no execution principal is refused at
+    /// intake, -32003, before every later check (MIK-8382).
+    KeyedPrincipal,
 }
 
 /// Why a stage cannot apply on a route. Closed: a new reason is a design
@@ -84,6 +87,13 @@ pub(crate) enum Na {
     /// `AdmissionOwner::local_operator()` (`stdio_dispatch.rs`), so it has no
     /// keyed-principal check (MIK-8382 design r2, R2-8 "stdio: no site").
     /// Premise pinned by `keyed::stdio_owner_is_the_local_operator_for_any_key`.
+    /// Mutant proof (run 8382-mut-owner4): with admission's owner principal
+    /// forced to none (`admission.rs`, `owner_principal`), the row fails at
+    /// its "refused" assert with -32003. Narrower cuts survive by design:
+    /// stdio's principal has three sources (the call site's
+    /// `local_operator()`, the stdio-transport fallback in
+    /// `caller_context.rs` `owner_principal`, and the stdio credential), and
+    /// any one keeps it a principal.
     AlwaysLocalOperator,
 }
 
@@ -91,7 +101,6 @@ pub(crate) enum Na {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Ticket {
     Mik8353,
-    Mik8406,
 }
 
 /// What a (method, route, stage) row asserts.
@@ -126,7 +135,7 @@ impl Route {
 }
 
 impl Stage {
-    pub(crate) const ALL: [Self; 11] = [
+    pub(crate) const ALL: [Self; 12] = [
         Self::RouteFirewall,
         Self::ChokepointRescan,
         Self::Sanitize,
@@ -138,6 +147,7 @@ impl Stage {
         Self::NonceGiveBack,
         Self::ChainLink,
         Self::ResponseFirewall,
+        Self::KeyedPrincipal,
     ];
 
     /// Exhaustive: a new variant without an index does not compile.
@@ -154,6 +164,7 @@ impl Stage {
             Self::NonceGiveBack => 8,
             Self::ChainLink => 9,
             Self::ResponseFirewall => 10,
+            Self::KeyedPrincipal => 11,
         }
     }
 }
@@ -208,11 +219,12 @@ fn the_table_answers_every_route_and_stage() {
             }
         }
     }
-    // Today's gap: R4a nonce give-back (D2). MIK-8353 3b closed R1 nonce
-    // (relay). P3 closed R5 route firewall, sanitize and X14; MIK-8315 closed
-    // authorize (D3); MIK-8150 closed R2 and R5 nonce give-back (admission);
-    // MIK-8351 closed R3 rescan; MIK-8159 closed R2's chain link; MIK-8154
-    // closed R3 lease and R3 sanitize.
+    // Today's gap: R4a nonce give-back (D2). MIK-8382 closed the four
+    // keyed-principal intake cells it opened. MIK-8353 3b closed R1 nonce (relay). P3 closed R5 route
+    // firewall, sanitize and X14; MIK-8315 closed authorize (D3); MIK-8150
+    // closed R2 and R5 nonce give-back (admission); MIK-8351 closed R3
+    // rescan; MIK-8159 closed R2's chain link; MIK-8154 closed R3 lease and
+    // R3 sanitize.
     assert_eq!(
         gaps, 1,
         "the gap count moved: update the table and this pin"
@@ -253,6 +265,11 @@ const DRIVEN: &[(Route, Stage)] = &[
     (Route::Invoke, Stage::ResponseFirewall),
     (Route::Direct, Stage::ResponseFirewall),
     (Route::Stdio, Stage::ResponseFirewall),
+    // `keyed` (MIK-8382), through the anon-intake fixture's driver.
+    (Route::Invoke, Stage::KeyedPrincipal),
+    (Route::Surfaced, Stage::KeyedPrincipal),
+    (Route::Direct, Stage::KeyedPrincipal),
+    (Route::TaskSubmit, Stage::KeyedPrincipal),
 ];
 
 /// Cells the table states but no live row drives yet, each with the reason

@@ -478,6 +478,8 @@ fn assert_unproven(row: &str, answer: &Value) {
 
 #[path = "stored_replay_liveness_optional_tests.rs"]
 mod optional;
+#[path = "stored_replay_liveness_plan_external_tests.rs"]
+mod plan_external;
 
 #[path = "stored_replay_liveness_direct_tests.rs"]
 mod direct;

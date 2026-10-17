@@ -4,8 +4,8 @@
 //! output of a call made earlier, so it must judge the target as a live call
 //! would: against the caller's account and the caller's own view. One row per
 //! (read route, stage); `expect` has no wildcard arm, so a new route or stage
-//! without a row does not compile. The `ExpectedGap` row names the ticket
-//! that closes it, and the gap pin turns red when it closes.
+//! without a row does not compile. An `ExpectedGap` row would name the
+//! ticket that closes it; the gap pin turns red when the gap set moves.
 
 use super::Expect;
 
@@ -23,7 +23,7 @@ pub(crate) enum ReadRoute {
     /// A repeated task-augmented `tools/call` with the same key.
     RepeatedCall,
     /// The same, for a plan (`gateway_execute`, `gateway_run_playbook`):
-    /// served as today, its account step owned by MIK-8406.
+    /// its account step walks every recorded target (MIK-8406).
     RepeatedPlan,
     /// `tasks/update`.
     Update,
@@ -123,23 +123,22 @@ pub(crate) const fn expect(route: ReadRoute, stage: ReadStage) -> ReadExpect {
     match (route, stage) {
         // The repeat is a live tools/call: the live admission judges the
         // caller's view first. Its account step is STORED.2's site 5
-        // (`defer_or_serve_existing`, MIK-8392), which closed the gap.
-        (HttpGet | StdioGet | HttpFrame | RepeatedCall, AccountView | CallerView)
-        | (RepeatedPlan, CallerView) => Stated(Expect::Applies),
-        // A plan repeat skips site 5 and serves its stored task with no
-        // account proof (E2; pinned by P8406). MIK-8406 PLANREPLAY.4 owns
-        // closing the proof.
-        (RepeatedPlan, AccountView) => Stated(Expect::ExpectedGap(super::Ticket::Mik8406)),
+        // (`defer_or_serve_existing`, MIK-8392), which a plan repeat now
+        // walks over every recorded target (MIK-8406 PLANREPLAY.4).
+        (
+            HttpGet | StdioGet | HttpFrame | RepeatedCall | RepeatedPlan,
+            AccountView | CallerView,
+        ) => Stated(Expect::Applies),
         (StdioFrame, AccountView | CallerView) => NotApplicable(ReadNa::NoStdioSubscribers),
         (Update | Cancel, AccountView | CallerView) => NotApplicable(ReadNa::GatewayAuthoredAck),
     }
 }
 
-/// One gap remains, named: a plan repeat's account step (MIK-8406). The
-/// single call's was closed by MIK-8392 STORED.2 (site 5,
-/// `defer_or_serve_existing`). A new gap, or this one closing, moves the pin.
+/// No gap remains: the single call's account step was closed by MIK-8392
+/// STORED.2 (site 5, `defer_or_serve_existing`) and the plan repeat's by
+/// MIK-8406. A new gap moves the pin.
 #[test]
-fn the_read_table_names_only_the_plan_repeat_gap() {
+fn the_read_table_names_no_gap() {
     let gaps: Vec<_> = ReadRoute::ALL
         .into_iter()
         .flat_map(|r| ReadStage::ALL.into_iter().map(move |s| (r, s)))
@@ -147,7 +146,7 @@ fn the_read_table_names_only_the_plan_repeat_gap() {
         .collect();
     assert_eq!(
         gaps,
-        vec![(ReadRoute::RepeatedPlan, ReadStage::AccountView)],
+        Vec::<(ReadRoute, ReadStage)>::new(),
         "the gap set moved: update the table and this pin"
     );
 }
@@ -191,7 +190,8 @@ const DRIVEN: &[(ReadRoute, ReadStage, &str)] = &[
     (
         ReadRoute::RepeatedPlan,
         ReadStage::AccountView,
-        "GAP MIK-8406 PLANREPLAY.4: router::stored_replay_liveness_tests P8406 pins it (no proof)",
+        "router::stored_replay_liveness_tests::token_exchange::plan_external P9p, P9k-mixed; \
+         router::stored_replay_liveness_tests P8406",
     ),
     (
         ReadRoute::RepeatedPlan,

@@ -40,6 +40,16 @@ pub(crate) fn sanitize_exempt(
     };
     let empty = Value::Object(serde_json::Map::new());
     let arguments = params.and_then(|p| p.get("arguments")).unwrap_or(&empty);
+    // The caller's grant judges the exemption (MIK-8387 S0); an attribution
+    // of a dispatched call names no caller and keeps the unscoped view.
+    let grant = match &view {
+        crate::gateway::meta_mcp::visible::TargetView::Caller(scope, _) => {
+            scope.authorizer.backend_grant()
+        }
+        crate::gateway::meta_mcp::visible::TargetView::Dispatched => {
+            crate::gateway::authz::BackendGrant::Unscoped
+        }
+    };
     let servers: Vec<(String, TargetNaming)> = if name == "gateway_run_playbook" {
         let playbook = arguments.get("name").and_then(Value::as_str).unwrap_or("");
         let Some((servers, digest)) = meta_mcp.playbook_step_servers(playbook) else {
@@ -64,7 +74,7 @@ pub(crate) fn sanitize_exempt(
         .iter()
         .map(|(server, naming)| {
             meta_mcp
-                .passthrough_instance(server)
+                .passthrough_instance(grant, server)
                 .filter(|backend| !per_user_surfaced(backend, *naming))
         })
         .collect();
@@ -668,6 +678,9 @@ impl ToolAuthorizer for RouterAuthorizer<'_> {
         }
         self.cert_identity
             .and_then(|cert| cert.quota_principal.as_ref())
+    }
+    fn backend_grant(&self) -> crate::gateway::authz::BackendGrant<'_> {
+        crate::gateway::authz::BackendGrant::of(self.client)
     }
 }
 

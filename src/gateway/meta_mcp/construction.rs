@@ -41,6 +41,7 @@ impl MetaMcp {
             ),
             idempotency_config: RwLock::new(crate::config::IdempotencyConfig::default()),
             unkeyed: admission::UnkeyedPolicy::default(),
+            lacked_warned: parking_lot::Mutex::default(),
             continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
             stats,
             ranker,

@@ -60,6 +60,7 @@ mod stdio_sole_operator;
 
 mod playbook_retry_stdio;
 
+mod plan_replay_liveness_stdio;
 mod stdio_catalogue_sole_operator;
 mod stored_replay_liveness_stdio;
 
