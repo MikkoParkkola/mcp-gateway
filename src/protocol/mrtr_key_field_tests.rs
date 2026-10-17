@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8382 unit rows A1-A3: the one key reader and the intake predicate.
 
 use super::{
