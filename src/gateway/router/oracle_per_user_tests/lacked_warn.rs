@@ -139,21 +139,27 @@ fn e2_no_warn_without_a_refused_call() {
             ]
         })
     });
-    // As each listing answers at the base: the direct `tools/list` of a
-    // no-principal caller is refused by identity propagation (403), the
-    // meta listings answer 200 with a result, not a JSON-RPC error, so they
-    // ran as listings. None of them is a refused call.
+    // As each listing answers at the base. The direct `tools/list` of a
+    // no-principal caller is refused by identity propagation (403). Its
+    // `gateway_list_tools` of the backend answers the no-view listing's
+    // -32001 (the backend is not shown to it); its search answers with a
+    // result. None of them is a refused call.
     let [direct, listed_tools, searched] = &statuses;
     assert_eq!(direct.0, StatusCode::FORBIDDEN, "E2 premise: {direct:?}");
-    for answer in [listed_tools, searched] {
-        assert!(
-            answer.0 == StatusCode::OK
-                && answer.1.get("error").is_none()
-                && answer.1.get("result").is_some()
-                && answer.1.pointer("/result/isError") != Some(&json!(true)),
-            "E2 premise: a meta listing did not answer as one: {answer:?}"
-        );
-    }
+    assert_eq!(
+        (listed_tools.0, listed_tools.1.pointer("/error/message")),
+        (
+            StatusCode::OK,
+            Some(&json!(format!("Backend not found: {BACKEND}")))
+        ),
+        "E2 premise: the listing did not answer the no-view listing: {listed_tools:?}"
+    );
+    assert!(
+        searched.0 == StatusCode::OK
+            && searched.1.get("error").is_none()
+            && searched.1.pointer("/result/isError") != Some(&json!(true)),
+        "E2 premise: the search did not answer as one: {searched:?}"
+    );
     assert_eq!(
         lacked_warns(&log),
         0,
