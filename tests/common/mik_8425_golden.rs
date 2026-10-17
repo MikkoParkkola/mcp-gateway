@@ -26,6 +26,53 @@ pub fn digest(bytes: &[u8]) -> String {
     format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
+/// A YAML tree written out with every node's kind, every tag and every
+/// mapping key's type, in document order. JSON cannot carry this: a tagged
+/// node and a one-key map serialize alike there, and so do `1` and `"1"` as
+/// keys. The replacement parser's tree must produce the same text.
+pub fn yaml_structure(value: &serde_yaml::Value) -> String {
+    let mut out = String::new();
+    write_structure(value, &mut out);
+    out
+}
+
+fn write_structure(value: &serde_yaml::Value, out: &mut String) {
+    use serde_yaml::Value;
+    match value {
+        Value::Null => out.push('~'),
+        Value::Bool(b) => out.push_str(&format!("b:{b}")),
+        Value::Number(n) => out.push_str(&format!("n:{n}")),
+        Value::String(s) => out.push_str(&format!("s:{s:?}")),
+        Value::Sequence(items) => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_structure(item, out);
+            }
+            out.push(']');
+        }
+        Value::Mapping(map) => {
+            out.push('{');
+            for (i, (key, item)) in map.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_structure(key, out);
+                out.push_str("=>");
+                write_structure(item, out);
+            }
+            out.push('}');
+        }
+        Value::Tagged(tagged) => {
+            out.push_str(&format!("t:{}(", tagged.tag));
+            write_structure(&tagged.value, out);
+            out.push(')');
+        }
+    }
+}
+
 /// One error line, never more: a golden row stays one row.
 pub fn one_line(message: &str) -> String {
     message.replace('\n', " | ")

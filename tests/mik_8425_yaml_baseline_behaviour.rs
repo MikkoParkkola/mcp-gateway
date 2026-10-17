@@ -47,6 +47,15 @@ fn ok_json<T: Serialize, E: std::fmt::Display>(result: Result<T, E>) -> String {
     }
 }
 
+/// A tree reading as its structure (kinds, tags, key types), which JSON
+/// cannot carry: a tagged node and a one-key map serialize alike there.
+fn ok_tree(result: Result<serde_yaml::Value, serde_yaml::Error>) -> String {
+    match result {
+        Ok(value) => format!("OK {}", golden::yaml_structure(&value)),
+        Err(error) => format!("ERR {}", golden::one_line(&error.to_string())),
+    }
+}
+
 /// A tree scalar by kind, so `.inf` and `.nan` do not both read as JSON null.
 fn scalar_kind(value: &serde_yaml::Value) -> String {
     match value {
@@ -58,7 +67,7 @@ fn scalar_kind(value: &serde_yaml::Value) -> String {
             .or_else(|| n.as_u64().map(|u| format!("uint:{u}")))
             .unwrap_or_else(|| format!("float:{}", n.as_f64().unwrap_or(f64::NAN))),
         serde_yaml::Value::String(s) => format!("str:{s:?}"),
-        other => format!("other:{}", ok_json::<_, String>(Ok(other))),
+        other => format!("other:{}", golden::yaml_structure(other)),
     }
 }
 
@@ -84,7 +93,7 @@ fn duplicates(out: &mut String) {
     row(
         out,
         "dup/tree",
-        &ok_json(serde_yaml::from_str::<serde_yaml::Value>(top)),
+        &ok_tree(serde_yaml::from_str::<serde_yaml::Value>(top)),
     );
     row(
         out,
@@ -114,7 +123,7 @@ fn merge_keys(out: &mut String) {
     row(
         out,
         "merge/tree",
-        &ok_json(serde_yaml::from_str::<serde_yaml::Value>(merge)),
+        &ok_tree(serde_yaml::from_str::<serde_yaml::Value>(merge)),
     );
     row(
         out,
@@ -127,7 +136,7 @@ fn merge_keys(out: &mut String) {
     row(
         out,
         "merge/tagged-tree",
-        &ok_json(serde_yaml::from_str::<serde_yaml::Value>(tagged)),
+        &ok_tree(serde_yaml::from_str::<serde_yaml::Value>(tagged)),
     );
 }
 
@@ -162,7 +171,7 @@ fn documents(out: &mut String) {
         row(
             out,
             case,
-            &ok_json(serde_yaml::from_str::<serde_yaml::Value>(doc)),
+            &ok_tree(serde_yaml::from_str::<serde_yaml::Value>(doc)),
         );
     }
     for (case, doc) in [
@@ -174,7 +183,7 @@ fn documents(out: &mut String) {
         // after a malformed document the stream may keep yielding errors.
         let mut readings = Vec::new();
         for document in serde_yaml::Deserializer::from_str(doc).take(16) {
-            let reading = ok_json(serde_yaml::Value::deserialize(document));
+            let reading = ok_tree(serde_yaml::Value::deserialize(document));
             let refused = reading.starts_with("ERR");
             readings.push(reading);
             if refused {
@@ -189,10 +198,17 @@ fn documents(out: &mut String) {
     }
 }
 
+/// Refusal text, or the digest of the expanded tree's structure, so a
+/// replacement that parses but expands differently cannot match.
 fn parsed_or_refused(doc: &str) -> String {
     serde_yaml::from_str::<serde_yaml::Value>(doc).map_or_else(
         |e| format!("ERR {}", golden::one_line(&e.to_string())),
-        |_| "OK parsed".to_owned(),
+        |value| {
+            format!(
+                "OK {}",
+                golden::digest(golden::yaml_structure(&value).as_bytes())
+            )
+        },
     )
 }
 

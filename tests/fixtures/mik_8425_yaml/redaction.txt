@@ -1,6 +1,6 @@
-capability/type-error	refused leaks=true
-capability/syntax-error	refused leaks=false
-config/type-error	refused leaks=false
-config/key-name-control	refused leaks=true
-config/syntax-error	refused leaks=false
-config/nested-type-error	refused leaks=false
+capability/type-error	refused names=true leaks=true control=loads
+capability/syntax-error	refused names=true leaks=false control=loads
+config/type-error	refused names=true leaks=false control=loads
+config/key-name-control	refused names=true leaks=true control=loads
+config/syntax-error	refused names=true leaks=false control=loads
+config/nested-type-error	refused names=true leaks=false control=loads

@@ -30,50 +30,106 @@ fn capability(provider_timeout: &str) -> String {
     )
 }
 
-fn outcome(message: Result<(), String>) -> String {
-    match message {
-        Ok(()) => "accepted".to_owned(),
-        Err(message) => format!("refused leaks={}", message.contains(SENTINEL)),
+/// One case: input with the sentinel, the same input corrected, and a
+/// fragment the refusal must contain to prove it is refused for the reason
+/// the case names (the key path, or a location for a syntax error).
+struct Case {
+    name: &'static str,
+    bad: String,
+    good: String,
+    names: &'static str,
+}
+
+/// `refused names=<bool> leaks=<bool> control=<loads|refused>`: a refusal
+/// counts only if it names the expected key or place, and only if the
+/// corrected input loads, so an unrelated refusal cannot pass as redaction.
+fn outcome(case: &Case, load: impl Fn(&str) -> Result<(), String>) -> String {
+    let control = if load(&case.good).is_ok() {
+        "loads"
+    } else {
+        "refused"
+    };
+    match load(&case.bad) {
+        Ok(()) => format!("accepted control={control}"),
+        Err(message) => format!(
+            "refused names={} leaks={} control={control}",
+            message.contains(case.names),
+            message.contains(SENTINEL)
+        ),
     }
+}
+
+fn load_capability(text: &str) -> Result<(), String> {
+    parse_capability(text)
+        .map(|_| ())
+        .map_err(|e| format!("{e} {e:?}"))
+}
+
+fn load_config(text: &str) -> Result<(), String> {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, text).expect("write config");
+    Config::load(Some(&path))
+        .map(|_| ())
+        .map_err(|e| format!("{e} {e:?}"))
 }
 
 fn capability_rows(out: &mut String) {
     let cases = [
-        ("capability/type-error", capability(SENTINEL)),
-        ("capability/syntax-error", format!("name: [{SENTINEL}\n")),
+        Case {
+            name: "capability/type-error",
+            bad: capability(SENTINEL),
+            good: capability("30"),
+            names: "providers.primary: invalid type: string",
+        },
+        Case {
+            name: "capability/syntax-error",
+            bad: format!("name: \"unterminated {SENTINEL}\n"),
+            good: capability("30"),
+            names: "while scanning a quoted scalar",
+        },
     ];
-    for (case, text) in cases {
-        let result = parse_capability(&text)
-            .map(|_| ())
-            .map_err(|e| format!("{e} {e:?}"));
-        out.push_str(&format!("{case}\t{}\n", outcome(result)));
+    for case in &cases {
+        out.push_str(&format!(
+            "{}\t{}\n",
+            case.name,
+            outcome(case, load_capability)
+        ));
     }
 }
 
 fn config_rows(out: &mut String) {
     let cases = [
-        (
-            "config/type-error",
-            format!("server:\n  port: {SENTINEL}\n"),
-        ),
+        Case {
+            name: "config/type-error",
+            bad: format!("server:\n  port: {SENTINEL}\n"),
+            good: "server:\n  port: 39400\n".to_owned(),
+            names: "server.port",
+        },
         // A key name is printed by design (load_error keeps key paths), so
         // a sentinel used as a key is expected to appear: a control row
         // proving the check can see the sentinel, not a leak.
-        ("config/key-name-control", format!("{SENTINEL}: 1\n")),
-        ("config/syntax-error", format!("server: [{SENTINEL}\n")),
-        (
-            "config/nested-type-error",
-            format!("backends:\n  x:\n    command: y\n    timeout: [{SENTINEL}]\n"),
-        ),
+        Case {
+            name: "config/key-name-control",
+            bad: format!("{SENTINEL}: 1\n"),
+            good: "server: {}\n".to_owned(),
+            names: SENTINEL,
+        },
+        Case {
+            name: "config/syntax-error",
+            bad: format!("server: \"unterminated {SENTINEL}\n"),
+            good: "server: {}\n".to_owned(),
+            names: "while scanning a quoted scalar",
+        },
+        Case {
+            name: "config/nested-type-error",
+            bad: format!("backends:\n  x:\n    command: y\n    timeout: [{SENTINEL}]\n"),
+            good: "backends:\n  x:\n    command: y\n    timeout: 5s\n".to_owned(),
+            names: "backends.x.timeout",
+        },
     ];
-    for (case, text) in cases {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("gateway.yaml");
-        mcp_gateway::gateway::test_helpers::write_owner_only(&path, &text).expect("write config");
-        let result = Config::load(Some(&path))
-            .map(|_| ())
-            .map_err(|e| format!("{e} {e:?}"));
-        out.push_str(&format!("{case}\t{}\n", outcome(result)));
+    for case in &cases {
+        out.push_str(&format!("{}\t{}\n", case.name, outcome(case, load_config)));
     }
 }
 
@@ -96,11 +152,11 @@ fn yaml_error_leaks_are_as_recorded() {
 fn the_baseline_shows_the_capability_leak_and_a_clean_config_path() {
     let report = report();
     assert!(
-        report.contains("capability/type-error\trefused leaks=true"),
+        report.contains("capability/type-error\trefused names=true leaks=true control=loads"),
         "the recorded before-state is a leak on the capability path: {report}"
     );
     assert!(
-        report.contains("config/type-error\trefused leaks=false"),
+        report.contains("config/type-error\trefused names=true leaks=false control=loads"),
         "the config path removes values today: {report}"
     );
 }
@@ -113,4 +169,11 @@ fn record_redaction_golden() {
         "----- BEGIN redaction.txt -----\n{}----- END redaction.txt -----\n",
         report()
     );
+    // For the reviewer, not the golden: the refusal each capability row saw.
+    for text in [
+        capability(SENTINEL),
+        format!("name: \"unterminated {SENTINEL}\n"),
+    ] {
+        println!("capability refusal: {:?}", load_capability(&text).err());
+    }
 }

@@ -4,9 +4,9 @@ dup/tree	ERR duplicate entry with key "a"
 dup/dict	OK {"a":2}
 dup/map-in-struct	OK {"m":{"a":2}}
 dup/nested-dict	OK {"x":{"a":2}}
-merge/tree	OK {"b":{"x":1},"m":{"<<":{"x":1},"y":2}}
+merge/tree	OK {s:"b"=>{s:"x"=>n:1},s:"m"=>{s:"<<"=>{s:"x"=>n:1},s:"y"=>n:2}}
 merge/dict	OK {"b":{"x":1},"m":{"<<":{"x":1},"y":2}}
-merge/tagged-tree	OK {"m":{"<<":{"x":1}}}
+merge/tagged-tree	OK {s:"m"=>{s:"<<"=>{s:"x"=>n:1}}}
 scalar/tree "yes"	OK str:"yes"
 scalar/string "yes"	OK {"v":"yes"}
 scalar/bool "yes"	ERR v: invalid type: string "yes", expected a boolean at line 1 column 4
@@ -82,18 +82,18 @@ scalar/bool "'yes'"	ERR v: invalid type: string "yes", expected a boolean at lin
 scalar/tree "\"0755\""	OK str:"0755"
 scalar/string "\"0755\""	OK {"v":"0755"}
 scalar/bool "\"0755\""	ERR v: invalid type: string "0755", expected a boolean at line 1 column 4
-doc/empty	OK null
-doc/explicit-start	OK {"a":1}
+doc/empty	OK ~
+doc/explicit-start	OK {s:"a"=>n:1}
 doc/two	ERR deserializing from YAML containing more than one document is not supported
-stream/two	2 docs: OK {"a":1} ; OK {"b":2}
-stream/empty-middle	3 docs: OK {"a":1} ; OK null ; OK {"b":2}
-stream/malformed-later	2 docs: OK {"a":1} ; ERR did not find expected ',' or ']' at line 4 column 1, while parsing a flow sequence at line 3 column 4
-limit/depth 64	OK parsed
-limit/depth 127	OK parsed
-limit/depth 128	OK parsed
+stream/two	2 docs: OK {s:"a"=>n:1} ; OK {s:"b"=>n:2}
+stream/empty-middle	3 docs: OK {s:"a"=>n:1} ; OK ~ ; OK {s:"b"=>n:2}
+stream/malformed-later	2 docs: OK {s:"a"=>n:1} ; ERR did not find expected ',' or ']' at line 4 column 1, while parsing a flow sequence at line 3 column 4
+limit/depth 64	OK sha256:b3ff3b51ce17ef2a2a68203329ff0e73738c07df874044149c283b28841a0035
+limit/depth 127	OK sha256:0d0ce008686806cefb2386af80bbb495dc8279da83466a8fc0bb25faa9660142
+limit/depth 128	OK sha256:dbaec29ce2fb52a1a372e1da31b0d434d257fe11bebee2d31c6649710e3052a6
 limit/depth 129	ERR recursion limit exceeded at line 1 column 129
-limit/alias-fanout-10 levels 2	OK parsed
-limit/alias-fanout-10 levels 3	OK parsed
+limit/alias-fanout-10 levels 2	OK sha256:4b9b36b85e83476abadc1a06f7731f3f9069a15c7618ef13fd6658b5fc84706c
+limit/alias-fanout-10 levels 3	OK sha256:acc372e24eb09234aed5a5c1b1a2bf7752776e54023c49476d02a69151163258
 limit/alias-fanout-10 levels 4	ERR repetition limit exceeded
 limit/alias-fanout-10 levels 5	ERR repetition limit exceeded
 limit/alias-fanout-10 levels 6	ERR repetition limit exceeded
