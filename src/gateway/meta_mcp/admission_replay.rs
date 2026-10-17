@@ -85,10 +85,12 @@ impl MetaMcp {
     /// live dispatch (MIK-8392 STORED.2): every target whose dispatch binds a
     /// per-caller credential (a managed account, or a per-caller mint with no
     /// account, E7) defers, and the lift serves it once resolution proves the
-    /// account live. Only a backend that mints nothing per caller is exempt
-    /// (U1/U2). There is no admission shortcut for an account already known
-    /// live: the lift reuses the route-stage resolution, so serving here would
-    /// save nothing measurable (lead ruling on M14).
+    /// account live. Only a target that mints nothing per caller is exempt:
+    /// a backend with no per-caller credential (U1/U2), or a capability
+    /// account declared `shared` (MIK-8451). There is no admission shortcut
+    /// for an account already known live: the lift reuses the route-stage
+    /// resolution, so serving here would save nothing measurable (lead
+    /// ruling on M14).
     pub(crate) fn stored_replay_defers(&self, server: &str, tool: &str) -> bool {
         self.mints_per_caller(server, tool)
     }
@@ -97,12 +99,19 @@ impl MetaMcp {
     /// (MIK-8392 STORED.2 E7): the dispatch's own mint conditions, an
     /// identity-propagation backend (with or without an `account:`) or a
     /// capability account. A target this refuses needs no liveness proof.
+    /// A capability account declared `shared` dispatches under the gateway's
+    /// static credential (`AccountCredential::Legacy`), so it mints nothing
+    /// per caller and has no binding a proof could show (MIK-8451).
     pub(crate) fn mints_per_caller(&self, server: &str, tool: &str) -> bool {
-        self.target_account(server, tool).is_some()
-            || self
-                .backends
-                .get(server)
-                .is_some_and(|backend| backend.identity_propagation_config().is_some())
+        use crate::personal_accounts::config::DescriptorMode;
+        self.target_account(server, tool).is_some_and(|account| {
+            self.account_strategies
+                .declared(&account.0)
+                .is_none_or(|declared| declared.mode != DescriptorMode::Shared)
+        }) || self
+            .backends
+            .get(server)
+            .is_some_and(|backend| backend.identity_propagation_config().is_some())
     }
 
     /// STORED.2 site 1: serve `response` when its account is proven live,

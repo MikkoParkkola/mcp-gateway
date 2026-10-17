@@ -397,12 +397,30 @@ pub(crate) struct CapabilityAccount {
     /// proved by the peer seeing it, not by an outer "completed").
     captured: Arc<super::super::account_rest_fixture::Captured>,
     log: Arc<crate::security::TransparencyLogger>,
-    external: bool,
+    kind: AccountKind,
     personal: bool,
     log_dir: tempfile::TempDir,
     /// Test-only (MIK-8428 Case A): see [`ReleaseBudget`].
     release_budget: Arc<Mutex<Option<usize>>>,
 }
+
+/// What the capability's account reference names (MIK-8451).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AccountKind {
+    /// `WORK`, a managed descriptor: the vault mints per caller.
+    Managed,
+    /// `WORK`, an external descriptor (no vault, so its view is unjudged).
+    External,
+    /// `WORK`, a `shared` descriptor: the gateway's static credential, no
+    /// per-caller binding.
+    Shared,
+    /// [`GHOST`], which no descriptor declares, registered with no registry
+    /// to check it against.
+    Undeclared,
+}
+
+/// An account id no fixture descriptor declares (MIK-8451).
+pub(crate) const GHOST: &str = "ghost";
 
 /// The capability server and tool [`CapabilityAccount`] serves.
 pub(crate) const CAPABILITY_SERVER: &str = super::super::account_rest_fixture::CAPABILITIES;
@@ -445,7 +463,11 @@ impl CapabilityAccount {
             port,
             captured,
             log,
-            external,
+            kind: if external {
+                AccountKind::External
+            } else {
+                AccountKind::Managed
+            },
             personal: false,
             log_dir: dir,
             release_budget: Arc::new(Mutex::new(None)),
@@ -458,6 +480,25 @@ impl CapabilityAccount {
     pub(crate) async fn start_personal() -> Self {
         let mut account = Self::start(false).await;
         account.personal = true;
+        account
+    }
+
+    /// As [`Self::start`], with `WORK` a `shared` descriptor: it resolves
+    /// to the static credential, with no per-caller binding (MIK-8406).
+    pub(crate) async fn start_shared() -> Self {
+        let mut account = Self::start(false).await;
+        account.kind = AccountKind::Shared;
+        account
+    }
+
+    /// As [`Self::start`], with the capability naming [`GHOST`], an account
+    /// no descriptor declares. Its executor carries no registry, so
+    /// registration has nothing to check the reference against
+    /// (`execution_context.rs` returns `Ok` with no registry) and only the
+    /// dispatch can refuse it (MIK-8451).
+    pub(crate) async fn start_undeclared() -> Self {
+        let mut account = Self::start(false).await;
+        account.kind = AccountKind::Undeclared;
         account
     }
 
@@ -483,12 +524,14 @@ impl CapabilityAccount {
 
     /// Install the account and the capability on `meta`.
     pub(crate) fn install(&self, mut meta: MetaMcp) -> MetaMcp {
-        use super::super::account_rest_fixture::{capability, external, managed, rest_config};
+        use super::super::account_rest_fixture::{
+            capability, external, managed, rest_config, shared,
+        };
         meta.enable_transparency_log(Arc::clone(&self.log));
-        let descriptor = if self.external {
-            external(WORK)
-        } else {
-            managed(WORK)
+        let descriptor = match self.kind {
+            AccountKind::Shared => shared(WORK),
+            AccountKind::External => external(WORK),
+            AccountKind::Managed | AccountKind::Undeclared => managed(WORK),
         };
         let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
         let custody: Arc<dyn AccountCustody> = Arc::new(ReleaseBudget {
@@ -507,14 +550,27 @@ impl CapabilityAccount {
             .timeout(std::time::Duration::from_secs(5))
             .build()
             .expect("an HTTP client");
+        let executor = crate::capability::CapabilityExecutor::new();
+        let executor = if self.kind == AccountKind::Undeclared {
+            executor
+        } else {
+            executor.with_account_strategies(meta.account_strategies())
+        };
         let executor = Arc::new(
-            crate::capability::CapabilityExecutor::new()
-                .with_account_strategies(meta.account_strategies())
+            executor
                 .with_test_http_client(client)
                 // The meta dispatch opens no loopback egress, and the capture
                 // peer is loopback (#3892 healthy controls).
                 .with_test_loopback_egress(),
         );
+        if self.kind == AccountKind::Shared {
+            // A shared account dispatches under the gateway's own static
+            // OAuth token, so the fixture seeds one.
+            let token =
+                serde_json::from_value(serde_json::json!({"access_token": "shared-static"}))
+                    .expect("a static token");
+            executor.set_oauth_token("google", token);
+        }
         let backend = Arc::new(crate::capability::CapabilityBackend::new(
             CAPABILITY_SERVER,
             executor,
@@ -529,7 +585,11 @@ impl CapabilityAccount {
             capability(
                 &format!("http://127.0.0.1:{}", self.port),
                 "oauth:google",
-                Some(WORK),
+                Some(if self.kind == AccountKind::Undeclared {
+                    GHOST
+                } else {
+                    WORK
+                }),
             )
         };
         backend
