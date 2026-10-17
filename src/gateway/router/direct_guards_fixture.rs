@@ -27,6 +27,9 @@ pub(crate) enum Answer {
     /// Like `Ok`, its `tools/list` also naming a second tool, `note`, and an
     /// open-schema backend tool named `gateway_invoke` (MIK-8154 S9f).
     WithNote,
+    /// Like `Ok`, its `tools/list` giving `read` a structurally invalid input
+    /// schema, so a surfaced `read` is withheld for it (MIK-8353 3d-2, K5).
+    InvalidRead,
     /// Success envelope, `isError: true` (a tool refusing a request).
     IsError,
     /// JSON-RPC `error`, an arbitrary non-rate-limit code.
