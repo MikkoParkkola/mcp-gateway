@@ -20,7 +20,7 @@ use super::super::slot_verdict_http_tests::{CLOSED, Gateway, gateway_tuned};
 use super::{OUTPUT, modern_meta};
 use crate::config::{ApiKeyConfig, AuthConfig, api_key_digest_spec};
 use crate::gateway::meta_mcp::slot_verdict_fixture::{
-    BACKEND, BINDING, CallerSlot, Surfaced, TOOL, Warmth, rearm_alpha_slot_with, valid,
+    Asked, BACKEND, BINDING, CallerSlot, Surfaced, TOOL, Warmth, rearm_alpha_slot_with, valid,
 };
 use crate::key_server::oidc::VerifiedIdentity;
 
@@ -163,7 +163,7 @@ fn identity() -> VerifiedIdentity {
 
 /// Drop the slot by a real idle eviction and re-attach its upstream, so the
 /// next read of the task is cold (as `stored_read_lease_tests::evict_alpha`).
-fn evict(gw: &Gateway) {
+fn evict(gw: &Gateway) -> std::sync::Arc<Asked> {
     let slot = backend(gw);
     slot.age_per_user_slot_for_test(BINDING, AGED);
     slot.evict_idle_per_user_entries(EVICT_AFTER);
@@ -171,16 +171,20 @@ fn evict(gw: &Gateway) {
         !slot.holds_per_user_slot_for_test(BINDING),
         "premise: the real eviction dropped the slot"
     );
-    let _ = rearm_alpha_slot_with(&slot, &valid(), false);
+    rearm_alpha_slot_with(&slot, &valid(), false)
 }
 
-/// The three cold-path observables: resolutions, the running cold lease, and
-/// upstream lists.
-fn cold_marks(gw: &Gateway) -> (usize, Option<Duration>, usize) {
+/// The three cold-path observables: resolutions; whether a cold claim was
+/// made, read as a running lease (a failed fill) or a held caller view (a successful
+/// one, which leaves no lease); and lists on `upstream`, the
+/// transport [`evict`] re-armed (the fixture's first one is gone).
+fn cold_marks(gw: &Gateway, upstream: &Asked) -> (usize, bool, usize) {
+    let slot = backend(gw);
+    let actor = identity().stable_actor_id();
     (
         gw.mints.load(std::sync::atomic::Ordering::SeqCst),
-        backend(gw).cold_lease_remaining(&identity().stable_actor_id()),
-        gw.caller.lists(),
+        slot.cold_lease_remaining(&actor).is_some() || slot.caller_slot_held(&actor).is_some(),
+        upstream.lists(),
     )
 }
 
@@ -245,39 +249,42 @@ async fn s7a_warm_an_excluded_read_does_not_touch_the_targets_slot() {
 }
 
 /// S7a-cold, a guard (test plan v2): with the target's slot evicted, the
-/// excluded key's stored read makes no custody resolution, claims no cold
-/// lease and lists nothing upstream. Green on the tip: account resolution
-/// skips refused targets (`task_replay.rs:136`) and `settle_caller_view`
-/// returns before any claim (`:245`). The control, the included key's own
-/// cold read, moves the marks, so the guard cannot pass on dead observables.
-/// Mutants: S7a-c-m1 (the `:136` filter removed), S7a-c-m2 (the `:245`
-/// return removed), S7a-c-m3 (m2, observed at the list counter alone).
+/// excluded key's stored read makes no custody resolution, no cold claim and
+/// no upstream list. Green on the tip: account resolution skips refused
+/// targets (`task_replay.rs:136`) and `settle_caller_view` returns before
+/// any claim (`:245`). The control, the included key's own cold read, moves
+/// each mark on its own, so no assertion can pass on a dead observable.
+/// Mutants: S7a-c-m2 (the `:245` return removed), and m3a/m3b (m2 observed
+/// at the claim and list marks with the earlier assertions off). S7a-c-m1
+/// (the `:136` filter removed) is equivalent here: the fixture's backend has
+/// no account descriptor, so there is nothing to filter.
 #[tokio::test]
 async fn s7a_cold_an_excluded_read_resolves_claims_and_lists_nothing() {
     let gw = fixture().await;
     let id = finished(&gw, "s7a-cold").await;
-    evict(&gw);
-    let (mints, lease, lists) = cold_marks(&gw);
-    assert_eq!(lease, None, "premise: no cold lease runs before the read");
+    let upstream = evict(&gw);
+    let (mints, claimed, lists) = cold_marks(&gw, &upstream);
+    assert!(!claimed, "premise: no claim before the read");
     let read = task_get(&gw, EXCLUDED, &id).await;
-    let (mints_after, lease_after, lists_after) = cold_marks(&gw);
+    let (mints_after, claimed_after, lists_after) = cold_marks(&gw, &upstream);
     assert_eq!(
         mints_after, mints,
         "S7a-cold: resolve counter moved; read: {read}"
     );
-    assert_eq!(
-        lease_after, None,
-        "S7a-cold: cold claim made: cold_lease_remaining is Some; read: {read}"
+    assert!(
+        !claimed_after,
+        "S7a-cold: cold claim made: a lease runs or the slot was re-established; read: {read}"
     );
     assert_eq!(
         lists_after, lists,
         "S7a-cold: list counter moved; read: {read}"
     );
     let control = task_get(&gw, INCLUDED, &id).await;
-    assert_ne!(
-        cold_marks(&gw),
-        (mints, lease, lists),
-        "S7a-cold control: the included key's cold read moved a mark: {control}"
+    let (mints_c, claimed_c, lists_c) = cold_marks(&gw, &upstream);
+    assert!(
+        mints_c > mints && claimed_c && lists_c > lists,
+        "S7a-cold control: the included key's cold read moves every mark \
+         (mints {mints}->{mints_c}, claimed {claimed_c}, lists {lists}->{lists_c}): {control}"
     );
 }
 
