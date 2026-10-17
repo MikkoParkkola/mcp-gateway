@@ -84,6 +84,16 @@ src/gateway/server/persistence.rs	with_data_dir	-	Gateway construction, once at 
 src/gateway/server/persistence.rs	write_costs	-	periodic cost saver task and shutdown saves, off the request path
 src/gateway/server/provenance_signer.rs	provenance_key	-	startup signer installation, once per serve
 src/gateway/server/provenance_signer.rs	resolve_provenance_signer	-	startup signer installation, once per serve
+src/gateway/server/route_matrix_driver_tests/playbook_drivers.rs	close	-	test-only (the module is cfg(test))
+src/gateway/server/route_matrix_driver_tests/playbook_drivers.rs	is_connected	-	test-only (the module is cfg(test))
+src/gateway/server/route_matrix_driver_tests/playbook_drivers.rs	notify	-	test-only (the module is cfg(test))
+src/gateway/server/route_matrix_driver_tests/playbook_drivers.rs	playbook_of	-	test-only (the module is cfg(test))
+src/gateway/server/route_matrix_driver_tests/playbook_drivers.rs	request	-	test-only (the module is cfg(test))
+src/gateway/server/route_matrix_driver_tests/playbook_drivers.rs	stdio_params_counted	-	test-only (the module is cfg(test))
+src/gateway/server/route_matrix_driver_tests/playbook_drivers.rs	stdio_params_over	-	test-only (the module is cfg(test))
+src/gateway/server/route_matrix_driver_tests/playbook_drivers.rs	stdio_playbook_flaky	-	test-only (the module is cfg(test))
+src/gateway/server/route_matrix_driver_tests/playbook_drivers.rs	stdio_playbook_over	-	test-only (the module is cfg(test))
+src/gateway/server/route_matrix_driver_tests/playbook_drivers.rs	stdio_playbook_runs	-	test-only (the module is cfg(test))
 src/gateway/server/run.rs	run	-	the HTTP serve mode's startup and shutdown loop, started once; per-request work is in the router it builds
 src/gateway/server/run_steps.rs	generate_gateway_key_pair	-	startup step of Gateway::run, once per serve
 src/gateway/server/run_steps.rs	managed_recovery_adapters	-	startup step of Gateway::run, once per serve
@@ -139,6 +149,7 @@ src/gateway/server/stdio_notify.rs	queue_notification	-	on-path, untimed: only w
 src/gateway/server/stdio_refusal.rs	admit_stdio_request	stdio_invoke_tiny	admits every stdio request in the read loop
 src/gateway/server/stdio_refusal.rs	stdio_busy_batch_response	-	on-path, untimed: only when stdio admission is saturated; the timed rows never saturate it
 src/gateway/server/stdio_refusal.rs	stdio_busy_response	-	on-path, untimed: only when stdio admission is saturated; the timed rows never saturate it
+src/gateway/server/stdio_route_stage.rs	authorize_targets	stdio_invoke_tiny	the route stage every stdio tools/call runs before admission
 src/gateway/server/stdio_route_stage.rs	stdio_route_stage	stdio_invoke_tiny	the route stage every stdio tools/call runs before admission
 src/gateway/server/stdio_seams.rs	after_commit	-	test-only seam (the module is cfg(test))
 src/gateway/server/stdio_seams.rs	announcer_started	-	test-only seam (the module is cfg(test))
@@ -178,9 +189,12 @@ src/gateway/server/stdio_single.rs	run_stdio	-	starts the stdio loop once
 src/gateway/server/stdio_single.rs	stdio_caller_context	-	test-only fixture (cfg(test)); production builds build_stdio_caller_context
 src/gateway/server/stdio_single.rs	stdio_routing_keys_only	stdio_invoke_tiny	on the stdio single-request path
 src/gateway/server/stdio_single.rs	stdio_take_merged_client_meta	-	on-path, untimed: only when params._meta must be merged into the arguments; the timed rows carry no _meta
+src/gateway/server/stdio_startup.rs	install_stdio_startup_catalogue	-	startup step of the stdio loop, once per serve
+src/gateway/server/stdio_startup.rs	key_error	-	startup error of the stdio loop, once per serve
 src/gateway/server/stdio_tasks.rs	advertised	-	initialize and server/discover answers only
 src/gateway/server/stdio_tasks.rs	degraded	-	task store open failure at session start
 src/gateway/server/stdio_tasks.rs	dispatch	-	tasks/* methods only, not the tools/call path
+src/gateway/server/stdio_tasks.rs	dispatch_get	-	tasks/* methods only, not the tools/call path
 src/gateway/server/stdio_tasks.rs	drop	-	task worker guard dropped at session end
 src/gateway/server/stdio_tasks.rs	intent	-	on-path, untimed: task-augmented stdio calls only; the timed rows carry no task member
 src/gateway/server/stdio_tasks.rs	new	-	task worker guard built once per session
@@ -214,6 +228,7 @@ src/gateway/server/support.rs	serve_tls	-	the TLS listener loop, started once pe
 src/gateway/server/support.rs	shutdown_signal	-	shutdown signal handling, off the request path
 src/gateway/server/support.rs	start_refusal	-	startup pre-bind checks, before any listener opens
 src/gateway/server/support.rs	url_authority	-	startup banner link, once per serve
+src/gateway/server/support.rs	with_not_after	-	TLS connection setup, once per accepted connection; the harness calls the router in-process with no socket layer
 src/gateway/server/task_runtime.rs	is_real_store	-	shutdown task-store settle, off the request path
 src/gateway/server/task_runtime.rs	open	-	startup task-store opening, once per serve or session
 src/gateway/server/task_runtime.rs	settle_store	-	shutdown task-store settle, off the request path
@@ -244,12 +259,123 @@ src/gateway/server/tools_changed.rs	per_user_seen	-	the tools/list_changed drain
 src/gateway/server/tools_changed.rs	revoked	-	the tools/list_changed drain task, off the request path
 src/gateway/server/tools_changed.rs	slot_seen	-	the tools/list_changed drain task, off the request path
 src/gateway/server/tools_changed.rs	spawn_drain	-	startup: spawns the tools/list_changed drain once per serve
+src/gateway/server/tools_changed/audience_access.rs	agent_api_keys	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_access.rs	agent_registry	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_access.rs	agent_secret	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_access.rs	agent_token	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_access.rs	apply	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_access.rs	public_paths	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	anonymous_sse	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	attach_raw	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	closed	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	drop	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	expect_event	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	frames	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	is_open	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	legacy_owned	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	legacy_with	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	listen	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	listen_as	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	listen_at	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	listen_request	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	listen_undrained	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	listen_with	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	next	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	next_by	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	next_unbounded	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	recv	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	session_id	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	spawn_relay	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	start_agent	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	start_agents	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	start_mtls	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	start_public	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_ear.rs	told	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	adapter_assertion	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	alpha_answers_calls	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	api_key	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	api_key_for	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	asserted	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	backend	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	binding	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	capability_yaml	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	close	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	fixture_auth	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	is_connected	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	notify	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	per_user_backend	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	per_user_backend_probed	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	post_session	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	principal	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	principal_token	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	propagate	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	register_late	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	request	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	revoke	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	scoped_token	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	set_capability	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	set_capability_yaml	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	settle	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	shared_backend	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	slot_serves	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	start	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	start_adapter	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	start_adapter_as	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	start_oidc	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	start_oidc_with	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	start_on	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	start_with	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	store_shared	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	store_user	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture.rs	tool	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_custody_controls.rs	alpha_with	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_custody_controls.rs	basic_beside_a_live_cookie_is_refused_and_the_cookie_alone_admits	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_custody_controls.rs	custody_one	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_custody_controls.rs	dropping_an_admitted_legacy_ear_ends_custody_not_the_session	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_custody_controls.rs	require_admitted	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_custody_controls.rs	require_bearer_refusal	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_custody_controls.rs	retained	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_custody_controls.rs	tool	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_requests.rs	dashboard_cookie	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_requests.rs	discovered	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_requests.rs	discovered_as	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_requests.rs	legacy	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_requests.rs	post	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_requests.rs	post_as	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_requests.rs	post_in	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_requests.rs	rekey	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_requests.rs	served	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_requests.rs	served_names	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_requests.rs	sse	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_requests.rs	sse_as	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_requests.rs	sse_at	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_requests.rs	sse_open	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_requests.rs	sse_request	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_requests.rs	sse_resume	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_fixture_requests.rs	sse_with	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_source_tests/get_admission.rs	get	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_source_tests/get_admission.rs	l1_cancel_pending_full_get_admission_has_zero_session_effects	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_source_tests/get_admission.rs	l1_refused_known_anonymous_get_preserves_native_history_and_body	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_source_tests/get_admission.rs	l1_refused_new_get_creates_no_session	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_source_tests/get_admission.rs	l1_same_owner_adapter_dies_after_owner_resolution_without_session_mutation	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_source_tests/get_admission.rs	marker	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_source_tests/get_admission.rs	next	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_source_tests/get_admission.rs	refusal	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/audience_source_tests/get_admission.rs	resume_controls	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/drain_seam.rs	arm	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/drain_seam.rs	finished	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/drain_seam.rs	label	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/drain_seam.rs	park	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/drain_seam.rs	reached	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/drain_seam.rs	release	-	test-only (the module is cfg(test))
+src/gateway/server/tools_changed/drain_seam.rs	wait_finished	-	test-only (the module is cfg(test))
 src/gateway/server/tools_changed/stdio.rs	drain_alive	-	test-only probe of the stdio announcer
 src/gateway/server/tools_changed/stdio.rs	drop	-	stdio announcer dropped at session end
 src/gateway/server/tools_changed/stdio.rs	initialized	-	the client's notifications/initialized, once per stdio session, not per call
 src/gateway/server/tools_changed/stdio.rs	send_when_ready	-	the stdio announcer's sender task, off the request path
 src/gateway/server/tools_changed/stdio.rs	shutdown	-	stdio announcer teardown at session end
 src/gateway/server/tools_changed/stdio.rs	start	-	stdio announcer started once per stdio session
+src/gateway/server/tools_changed/stdio.rs	stdio_view	-	the tools/list_changed drain task's audience views, off the request path
 src/gateway/server/tools_changed/stdio.rs	stop	-	stdio announcer teardown at session end
 src/gateway/server/tools_changed/views.rs	acct	-	the tools/list_changed drain task's audience views, off the request path
 src/gateway/server/tools_changed/views.rs	adopt	-	the tools/list_changed drain task's audience views, off the request path
