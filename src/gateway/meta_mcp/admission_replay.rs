@@ -107,24 +107,42 @@ impl MetaMcp {
 
     /// STORED.2 site 1: serve `response` when its account is proven live,
     /// else record it as deferred and answer `None`, in which case the
-    /// caller proceeds as Unprotected, with no lease. A replay with no
-    /// target (a plan) is served as today, as is an unkeyed one, which the
-    /// lift could never meet.
-    pub(crate) fn defer_or_serve_replay(
+    /// caller proceeds as Unprotected, with no lease. A plan replay
+    /// (`gateway_execute`, `gateway_run_playbook`) has no single target: it
+    /// is served only once every account its dispatched steps used is proven
+    /// live (MIK-8406), and otherwise answers the first unproven step's live
+    /// refusal, with nothing run. An unkeyed replay is served as today, since
+    /// the lift could never meet it.
+    ///
+    /// `dispatched` is the stored record's executed steps; `None` (a record
+    /// from before they were kept) judges the call's declared targets, fail
+    /// closed.
+    pub(crate) async fn defer_or_serve_replay(
         &self,
         tool_name: &str,
         arguments: &Value,
         caller: &super::super::MetaMcpCallerContext<'_>,
         target: Option<ReplayTarget>,
-        response: JsonRpcResponse,
-        audit: Option<ReplayAudit>,
+        dispatched: Option<Vec<(String, String)>>,
+        (response, audit): (JsonRpcResponse, Option<ReplayAudit>),
     ) -> Option<(JsonRpcResponse, Option<ReplayAudit>)> {
-        // A replay with no target (a plan) is served as today (D1): there
-        // is no account to prove live, and the lift could never meet it.
-        // `?` would answer `None` here, which the caller reads as
-        // "deferred", re-running the plan live instead of serving it (S6).
+        // A replay with no target is a plan or a read-only meta tool. A plan
+        // proves every account its steps used before it is served; the rest
+        // are served as today. `?` would answer `None` here, which the caller
+        // reads as "deferred", re-running the call live (S6).
         let Some(target) = target else {
-            return Some((response, audit));
+            if !matches!(tool_name, "gateway_execute" | "gateway_run_playbook") {
+                return Some((response, audit));
+            }
+            return Some(
+                match self
+                    .first_unproven_plan_step(tool_name, arguments, caller, dispatched, &response)
+                    .await
+                {
+                    None => (response, audit),
+                    Some(answer) => (answer, None),
+                },
+            );
         };
         // Unkeyed likewise: admission never replays one, so the lift could
         // never meet it either.
@@ -156,6 +174,51 @@ impl MetaMcp {
             ));
         }
         None
+    }
+
+    /// MIK-8406 PLANREPLAY.1/.2: the first step of a stored plan whose
+    /// account is not live in this request, answered as its live refusal;
+    /// `None` when every account is proven. The steps are the record's
+    /// executed ones, or with none recorded the call's declared targets
+    /// (fail closed). The plan executor is never entered. A refusal settles
+    /// the signed nonce here, since this exit never reaches the per-call
+    /// settle: a busy refusal before any effect gives it back, and a walk
+    /// that minted keeps it (G1, G2).
+    async fn first_unproven_plan_step(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        caller: &super::super::MetaMcpCallerContext<'_>,
+        dispatched: Option<Vec<(String, String)>>,
+        response: &JsonRpcResponse,
+    ) -> Option<JsonRpcResponse> {
+        // Admission builds every replay with the request's id; without one
+        // the stored plan is not served (fail closed).
+        let Some(id) = response.id.clone() else {
+            return Some(JsonRpcResponse::error(
+                None,
+                -32603,
+                "stored plan replay has no request id",
+            ));
+        };
+        let steps: Vec<(String, String)> = dispatched.unwrap_or_else(|| {
+            // A plan tool is never a surfaced name, so no session is read.
+            let view = super::super::visible::TargetView::Caller(caller.scope(), None);
+            crate::gateway::router::backend_tool_targets_for_call(self, tool_name, arguments, view)
+                .into_iter()
+                .chain(self.playbook_step_targets(tool_name, arguments))
+                .map(|target| (target.server, target.tool))
+                .collect()
+        });
+        let walk: Vec<(&str, &str)> = steps
+            .iter()
+            .map(|(server, tool)| (server.as_str(), tool.as_str()))
+            .collect();
+        let answer = self.first_unproven(&id, tool_name, &walk, caller).await?;
+        if let Some(context) = caller.signing {
+            self.settle_nonce_refund(context, super::super::signing::nonce_principal(caller));
+        }
+        Some(answer)
     }
 }
 

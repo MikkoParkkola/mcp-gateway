@@ -360,6 +360,8 @@ impl MetaMcp {
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
         self.refuse_unattested_plan()?;
+        #[cfg(test)]
+        crate::gateway::meta_mcp::plan_entries::note(self);
         let name = extract_required_str(args, "name")?;
         let arguments = parse_tool_arguments(args)?;
 

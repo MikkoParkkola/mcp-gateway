@@ -146,6 +146,9 @@ pub(super) const TX: &str = "tx";
 /// `x-mcp-passthrough-authorization`.
 pub(super) const PASSTHROUGH_CREDENTIAL: &str = "Bearer alice-pt";
 
+/// A backend with no account beside [`TX`] (MIK-8406 mFirst).
+pub(super) const PLAIN: &str = "plain";
+
 /// The verified caller the `IdP` mints for.
 pub(super) fn alice() -> crate::key_server::oidc::VerifiedIdentity {
     crate::key_server::oidc::VerifiedIdentity {
@@ -222,6 +225,46 @@ pub(super) async fn gateway_shaped(
     key: &Arc<crate::gateway::oauth::GatewayKeyPair>,
     endpoint: String,
     alice: &crate::key_server::oidc::VerifiedIdentity,
+    shape: (
+        Requirement,
+        crate::identity_propagation::PropagationStrategyKind,
+        crate::security::SecurityPosture,
+    ),
+    arm: impl FnOnce(crate::gateway::meta_mcp::MetaMcp) -> crate::gateway::meta_mcp::MetaMcp,
+) -> (
+    axum::Router,
+    Arc<AtomicUsize>,
+    (tempfile::TempDir, tempfile::TempDir),
+) {
+    let (router, sends, dirs, _, _) = build(key, endpoint, alice, shape, arm).await;
+    (router, sends, dirs)
+}
+
+/// [`gateway`], also handing back the router's state, so a row can read
+/// its plan executor entries and its task store (MIK-8406).
+pub(super) async fn gateway_with_meta(
+    key: &Arc<crate::gateway::oauth::GatewayKeyPair>,
+    endpoint: String,
+    alice: &crate::key_server::oidc::VerifiedIdentity,
+) -> (
+    axum::Router,
+    Arc<AtomicUsize>,
+    (tempfile::TempDir, tempfile::TempDir),
+    Arc<crate::gateway::router::AppState>,
+    Hold,
+) {
+    let shape = (
+        Requirement::Required,
+        crate::identity_propagation::PropagationStrategyKind::TokenExchange,
+        crate::security::SecurityPosture::Standard,
+    );
+    build(key, endpoint, alice, shape, |meta| meta).await
+}
+
+async fn build(
+    key: &Arc<crate::gateway::oauth::GatewayKeyPair>,
+    endpoint: String,
+    alice: &crate::key_server::oidc::VerifiedIdentity,
     (requirement, strategy, posture): (
         Requirement,
         crate::identity_propagation::PropagationStrategyKind,
@@ -232,6 +275,8 @@ pub(super) async fn gateway_shaped(
     axum::Router,
     Arc<AtomicUsize>,
     (tempfile::TempDir, tempfile::TempDir),
+    Arc<crate::gateway::router::AppState>,
+    Hold,
 ) {
     use crate::config::{BackendConfig, TransportConfig};
     use crate::identity_propagation::{
@@ -260,15 +305,24 @@ pub(super) async fn gateway_shaped(
         &crate::config::FailsafeConfig::default(),
         std::time::Duration::from_secs(60),
     ));
-    install_counting(&backend, alice, &endpoint, &sends);
+    let hold: Hold = Arc::new(tokio::sync::watch::channel(false).0);
+    install_counting(&backend, alice, &endpoint, (&sends, &hold));
     let tool: crate::protocol::Tool = serde_json::from_value(json!({
         "name": super::TOOL,
         "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}}
     }))
     .expect("a tool");
-    backend.store_shared_tools_for_test(vec![tool]);
+    backend.store_shared_tools_for_test(vec![tool.clone()]);
     let registry = Arc::new(crate::backend::BackendRegistry::new());
     assert!(registry.register(backend), "the fixture backend registers");
+    let counting: Arc<dyn crate::transport::Transport> = Arc::new(Counting {
+        sends: Arc::clone(&sends),
+        hold: Arc::clone(&hold),
+    });
+    assert!(
+        registry.register(plain_backend(counting, tool)),
+        "the plain backend registers"
+    );
 
     let mut meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::clone(&registry));
     meta.set_identity_propagation(Arc::new(TokenExchangeStrategy::with_http_client(
@@ -305,11 +359,38 @@ pub(super) async fn gateway_shaped(
         config.security.posture = posture;
         state_mut.live_config = Arc::new(crate::config_reload::LiveConfig::new(config));
     }
+    let served = Arc::clone(&state);
     (
         crate::gateway::router::create_router(state),
         sends,
         (log_dir, store),
+        served,
+        hold,
     )
+}
+
+/// MIK-8406 mFirst: [`PLAIN`] has no account, so it mints nothing per
+/// caller; a chain records it before [`TX`]. It counts into the same sends.
+fn plain_backend(
+    counting: Arc<dyn crate::transport::Transport>,
+    tool: crate::protocol::Tool,
+) -> Arc<crate::backend::Backend> {
+    let plain = Arc::new(crate::backend::Backend::new(
+        PLAIN,
+        crate::config::BackendConfig {
+            transport: crate::config::TransportConfig::Http {
+                http_url: "https://plain.internal/mcp".to_string(),
+                streamable_http: Some(true),
+                protocol_version: None,
+            },
+            ..crate::config::BackendConfig::r2_off()
+        },
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    ));
+    plain.set_transport_for_test(counting);
+    plain.store_shared_tools_for_test(vec![tool]);
+    plain
 }
 
 /// [`TX`]'s exchange audience and scope.
@@ -324,10 +405,11 @@ fn install_counting(
     backend: &crate::backend::Backend,
     alice: &crate::key_server::oidc::VerifiedIdentity,
     endpoint: &str,
-    sends: &Arc<AtomicUsize>,
+    (sends, hold): (&Arc<AtomicUsize>, &Hold),
 ) {
     let counting: Arc<dyn crate::transport::Transport> = Arc::new(Counting {
         sends: Arc::clone(sends),
+        hold: Arc::clone(hold),
     });
     backend.set_transport_for_test(Arc::clone(&counting));
     // The per-user slot token exchange dispatches on, keyed as its
@@ -432,7 +514,13 @@ pub(super) async fn post_as(
 
 pub(super) struct Counting {
     pub(super) sends: Arc<AtomicUsize>,
+    /// While set, a `tools/call` waits before it answers, so a task stays
+    /// working (MIK-8406 P9n, P9i).
+    pub(super) hold: Hold,
 }
+
+/// The switch [`Counting`] waits on: `true` holds every `tools/call`.
+pub(super) type Hold = Arc<tokio::sync::watch::Sender<bool>>;
 
 #[async_trait::async_trait]
 impl crate::transport::Transport for Counting {
@@ -444,6 +532,9 @@ impl crate::transport::Transport for Counting {
         use crate::protocol::{JsonRpcResponse, RequestId};
         if method == "tools/call" {
             self.sends.fetch_add(1, Ordering::SeqCst);
+            let mut held = self.hold.subscribe();
+            // A closed channel cannot hold; the fixture keeps its sender.
+            let _ = held.wait_for(|held| !*held).await;
             return Ok(JsonRpcResponse::success(
                 RequestId::Number(1),
                 json!({"content": [{"type": "text", "text": super::MARKER}]}),

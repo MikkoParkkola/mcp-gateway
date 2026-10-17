@@ -167,9 +167,9 @@ pub(crate) enum SyncAdmission {
     /// A completed execution's secured response, its record facts, and the
     /// single-call target it was admitted for (MIK-8392 STORED.2: the
     /// target-branch target, else a continuation retry's origin, else `None`
-    /// for a plan, which is served as today; it steers the route-stage
-    /// deferral only), and the steps it dispatched (`None` in a record that
-    /// predates the list, MIK-8361).
+    /// for a plan; it steers the route-stage deferral), and the steps it
+    /// dispatched (`None` in a record that predates the list, MIK-8361),
+    /// which a plan replay proves live before it is served (MIK-8406).
     Replay(
         JsonRpcResponse,
         Option<ReplayAudit>,

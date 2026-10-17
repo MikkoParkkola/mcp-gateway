@@ -673,20 +673,25 @@ impl Gateway {
                     response,
                     audit,
                     target,
-                    _,
+                    dispatched,
                 )) => {
                     // STORED.2 site 1: a retained single-call result is
                     // served only on proven liveness; otherwise the call
                     // proceeds as Unprotected and the lift serves it after a
-                    // live proof.
-                    match meta_mcp.defer_or_serve_replay(
-                        &tool_name,
-                        arguments.as_ref(),
-                        &caller,
-                        target,
-                        response,
-                        audit,
-                    ) {
+                    // live proof. A plan replay is served only with every
+                    // executed step's account proven, else it answers that
+                    // step's live refusal (MIK-8406).
+                    match meta_mcp
+                        .defer_or_serve_replay(
+                            &tool_name,
+                            arguments.as_ref(),
+                            &caller,
+                            target,
+                            dispatched,
+                            (response, audit),
+                        )
+                        .await
+                    {
                         Some((response, audit)) => {
                             // #2480: a replay is a delivered call, recorded as its first run was.
                             let (args, session) = (arguments.as_ref(), Some(session_id));
