@@ -60,6 +60,15 @@ async fn s3c_stdio_sealed_refusal_gives_the_nonce_back() {
         prime.pointer("/result/taskId").is_some(),
         "premise: a signed stdio task is created: {prime}"
     );
+    // The primed task dispatches on its worker after it is answered: wait for
+    // that dispatch, or the no-refusal-reached-the-backend premise races it.
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while calls.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("premise: the primed task reached the backend");
     let admission = fixture.tasks.service.admission();
     admission.adjust_sealed(0, 1);
     let committed = fixture.tasks.service.store.committed_count_for_test();
