@@ -138,9 +138,16 @@ reason = "tripping the breaker means driving repeated backend failures against a
 id = "agent-identity-allowlist"
 description = "a caller that proved no agent identity is refused under require_id, and a proven principal outside known_agents is refused"
 authority = "nfr-sec1:6"
-source = "src/security/agent_identity.rs"
+source = "src/security/agent_identity_validate.rs"
 probe = "none"
 reason = "config-gated on `agent_identity.require_id` / `known_agents`; enforcement is off by default, so absence on the wire is not drift"
+
+[[control]]
+id = "agent-identity-config-refusal"
+description = "a known_agents entry with no proof source, or a declared entry that enabled enforcement would leave inert, is refused at config load"
+source = "src/security/agent_identity.rs"
+probe = "none"
+reason = "a config-load refusal: the gateway refuses to start or reload, so there is no request on the wire to probe; pinned by the agent_identity load tests"
 
 [[control]]
 id = "agent-identity-proof-rank"
