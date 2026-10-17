@@ -88,6 +88,7 @@ src/gateway/router/collusion_direct_tests.rs
 src/gateway/router/direct_audit_tests/tenants.rs
 src/gateway/router/identity_header_tests.rs
 src/gateway/router/mcp_nonce_tests.rs
+src/gateway/router/mcp_setup_refusal_tests.rs
 src/gateway/router/sso_admin_tests.rs
 src/gateway/router/tests/issue_555_listing_scope/residuals.rs
 src/gateway/router/tests/openwebui_adapter.rs
