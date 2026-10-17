@@ -73,6 +73,8 @@ mod direct_guards;
 mod adapter_get_rollback_tests;
 #[cfg(test)]
 mod audit_degraded_tests;
+/// MIK-8392.STORED.1 T10: a revoked account's stored task read.
+mod backend_choke;
 #[cfg(test)]
 mod body_limit_tests;
 #[cfg(test)]
@@ -203,7 +205,6 @@ pub(super) mod route_matrix_x14_nonce_tests;
 mod slot_quota_direct_tests;
 #[cfg(test)]
 mod stored_read_account_excluded_tests;
-/// MIK-8392.STORED.1 T10: a revoked account's stored task read.
 #[cfg(test)]
 mod stored_read_account_tests;
 #[cfg(test)]

@@ -303,3 +303,57 @@ fn t1e_the_backend_registry_surface_is_pinned() {
         surface.public_fields
     );
 }
+
+#[derive(Default)]
+struct BackendForRefs {
+    refs: BTreeSet<(String, String)>,
+    definitions: usize,
+}
+
+impl Sink for BackendForRefs {
+    fn expr(&mut self, at: &Place, expr: &syn::Expr) {
+        // A call's callee is itself a path expression, so this one arm sees
+        // calls and function-item references alike.
+        if let syn::Expr::Path(path) = expr
+            && path
+                .path
+                .segments
+                .last()
+                .is_some_and(|s| s.ident == "backend_for")
+        {
+            self.refs
+                .insert((at.file.clone(), at.func.clone().unwrap_or_default()));
+        }
+    }
+
+    fn item(&mut self, _at: &Place, item: &syn::Item) {
+        if let syn::Item::Fn(func) = item
+            && func.sig.ident == "backend_for"
+        {
+            self.definitions += 1;
+        }
+    }
+}
+
+/// T2c: every production reference to the router choke point, by file and
+/// enclosing fn, function items included, and one definition of it. A new
+/// reader, such as a helper called from `read_envelope` before S4, is a new
+/// key. Mutants: M20 (a call in `read_envelope`), M20c (a helper calling it).
+#[test]
+fn t2c_every_reference_to_the_router_choke_point_is_pinned() {
+    let mut found = BackendForRefs::default();
+    walk(crate_root(), &ROOTS, &mut found).expect("the walk reads every module");
+    assert_eq!(found.definitions, 1, "second definition of backend_for");
+    let want: BTreeSet<(String, String)> = [
+        ("src/gateway/router/authorization.rs", "backend_tool_names"),
+        ("src/gateway/router/authorization.rs", "decide_tool_target"),
+        (
+            "src/gateway/router/backend_handlers/direct_caller.rs",
+            "route",
+        ),
+    ]
+    .into_iter()
+    .map(|(f, n)| (f.to_string(), n.to_string()))
+    .collect();
+    assert_eq!(found.refs, want, "unpinned reference to backend_for");
+}

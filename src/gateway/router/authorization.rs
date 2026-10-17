@@ -423,7 +423,11 @@ pub(super) fn decide_tool_target<'a>(
     let mut verdict = Ok(());
     if state.ssrf_protection
         && !state.trust_configured_backends
-        && let Some(backend) = state.backends.get(target.server)
+        && let Some(backend) = super::backend_choke::backend_for(
+            state,
+            crate::gateway::authz::BackendGrant::of(client),
+            target.server,
+        )
         && let Some(url) = backend.transport_url()
     {
         verdict = backend
@@ -479,12 +483,14 @@ fn backend_admitted(
     if agent.is_none() && !mtls {
         return true;
     }
-    backend_tool_names(state, server).iter().any(|tool| {
-        agent.is_none_or(|id| {
-            check_scopes(&id.scopes, &id.client_id, server, tool, &Action::Execute).is_ok()
-        }) && (!mtls
-            || state.mtls_policy.evaluate(cert_identity, server, tool) != PolicyDecision::Deny)
-    })
+    backend_tool_names(state, client, server)
+        .iter()
+        .any(|tool| {
+            agent.is_none_or(|id| {
+                check_scopes(&id.scopes, &id.client_id, server, tool, &Action::Execute).is_ok()
+            }) && (!mtls
+                || state.mtls_policy.evaluate(cert_identity, server, tool) != PolicyDecision::Deny)
+        })
 }
 
 /// The names of `server`'s known tools: an MCP backend's cache, or the
@@ -493,8 +499,16 @@ fn backend_admitted(
 /// Cache-only by design (MIK-7962): this is a per-request policy read, and a
 /// read that filled the cache would let any caller, admitted or not, send
 /// traffic to a backend. A cold backend is filled by discovery instead.
-fn backend_tool_names(state: &AppState, server: &str) -> Vec<String> {
-    if let Some(backend) = state.backends.get(server) {
+fn backend_tool_names(
+    state: &AppState,
+    client: Option<&AuthenticatedClient>,
+    server: &str,
+) -> Vec<String> {
+    if let Some(backend) = super::backend_choke::backend_for(
+        state,
+        crate::gateway::authz::BackendGrant::of(client),
+        server,
+    ) {
         return backend
             .get_cached_tools_snapshot()
             .iter()
