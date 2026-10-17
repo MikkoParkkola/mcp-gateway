@@ -490,37 +490,32 @@ async fn a_profile_refused_backend_tool_keeps_its_answer() {
 async fn c2_an_out_of_scope_capability_backend_answers_as_an_unregistered_server() {
     const NOWHERE: &str = "no_such_server_8387";
     let fx = twin(Reason::Admin, true).await;
-    let call = |server: &str| {
-        json!({"name": "gateway_invoke",
-            "arguments": {"server": server, "tool": "nosuch_8387", "arguments": {}}})
-    };
-    let mut answers = Vec::new();
-    for server in [CAPS, NOWHERE] {
-        let (status, mut body) = send(
-            &fx,
-            "/mcp",
-            "k-alpha-ghost",
-            "tools/call",
-            call(server),
-            None,
-        )
-        .await;
-        if let Some(obj) = body.as_object_mut() {
-            obj.remove("id");
+    // One cell per tool: the capability backend's defined tool and an
+    // undefined one (Gemini review: a defined tool would reach the
+    // capability arm if the scope check ever stopped running first).
+    for tool in [CAP, "nosuch_8387"] {
+        let mut answers = Vec::new();
+        for server in [CAPS, NOWHERE] {
+            let call = json!({"name": "gateway_invoke",
+                "arguments": {"server": server, "tool": tool, "arguments": {}}});
+            let (status, mut body) =
+                send(&fx, "/mcp", "k-alpha-ghost", "tools/call", call, None).await;
+            if let Some(obj) = body.as_object_mut() {
+                obj.remove("id");
+            }
+            answers.push((status, body.to_string().replace(server, "SERVER")));
         }
-        answers.push((status, body.to_string().replace(server, "SERVER")));
+        assert_eq!(
+            answers[0], answers[1],
+            "C2 answer changed for `{tool}`: out-of-scope capability backend vs unregistered server"
+        );
+        // The pinned answer itself: the absent miss naming the tool.
+        let (status, body) = &answers[1];
+        assert!(
+            *status == axum::http::StatusCode::OK
+                && body.contains(tool)
+                && (body.contains("\"isError\":true") || body.contains("\"error\"")),
+            "C2: the answer for `{tool}` is not the absent miss: {status} {body}"
+        );
     }
-    assert_eq!(
-        answers[0], answers[1],
-        "C2 answer changed: out-of-scope capability backend vs unregistered server"
-    );
-    // The pinned answer itself: the absent miss for the tool, never an
-    // answer that names the server's capability arm.
-    let (status, body) = &answers[1];
-    assert!(
-        *status == axum::http::StatusCode::OK
-            && body.contains("nosuch_8387")
-            && (body.contains("\"isError\":true") || body.contains("\"error\"")),
-        "C2: the answer is not the absent miss: {status} {body}"
-    );
 }

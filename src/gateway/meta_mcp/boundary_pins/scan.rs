@@ -224,6 +224,10 @@ impl Walker<'_> {
             Ok(parsed) => parsed,
             Err(e) => return self.errors.push(format!("{}: {e}", path.display())),
         };
+        // A file whose own inner attributes say `#![cfg(test)]` is test-only.
+        if test_only(&parsed.attrs) {
+            return;
+        }
         let saved = self.place.clone();
         self.place = Place {
             file: path

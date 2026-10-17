@@ -75,3 +75,28 @@ fn scan_1_to_6_test_only_by_cfg_evaluation() {
         assert_eq!(test_only(&attrs(attr)), want, "{row}: {attr}");
     }
 }
+
+/// SCAN-18 (test plan v2): what T1e's sink reads off a struct. Derives,
+/// including one under `cfg_attr`, and a field more visible than private.
+/// Mutants: SCAN-m10 (derives discarded), SCAN-m11 (field visibility
+/// ignored), both in the same `Surface` sink T1e uses.
+#[test]
+fn scan_18_derive_and_field_visibility_extraction() {
+    use super::scan::{Place, Sink};
+    let item: syn::Item = syn::parse_str(
+        "#[derive(Debug, Clone)] #[cfg_attr(feature = \"x\", derive(serde::Serialize))] \
+         struct BackendRegistry { pub x: u8, y: u8 }",
+    )
+    .expect("a struct");
+    let mut surface = super::guard_tests::Surface::default();
+    surface.item(&Place::default(), &item);
+    assert_eq!(
+        surface.derives,
+        ["Clone", "Debug", "Serialize"]
+            .map(String::from)
+            .into_iter()
+            .collect(),
+        "SCAN-18: derives"
+    );
+    assert_eq!(surface.public_fields, ["x"], "SCAN-18: field visibility");
+}

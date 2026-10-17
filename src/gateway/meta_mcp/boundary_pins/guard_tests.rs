@@ -121,13 +121,11 @@ impl Sink for Envelopes {
             syn::Item::Use(u) if renames_envelope(&u.tree) => {
                 self.aliases.push(format!("{}: use .. as", at.file));
             }
-            syn::Item::Type(t)
-                if matches!(&*t.ty, syn::Type::Path(p) if names_envelope(&p.path)) =>
+            syn::Item::Type(t) if matches!(&*t.ty, syn::Type::Path(p) if names_envelope(&p.path)) =>
             {
                 self.aliases.push(format!("{}: type {}", at.file, t.ident));
             }
-            syn::Item::Impl(imp)
-                if matches!(&*imp.self_ty, syn::Type::Path(p) if names_envelope(&p.path)) =>
+            syn::Item::Impl(imp) if matches!(&*imp.self_ty, syn::Type::Path(p) if names_envelope(&p.path)) =>
             {
                 self.aliases.push(format!("{}: impl Envelope", at.file));
             }
@@ -158,8 +156,16 @@ fn t2b_only_read_envelope_builds_the_envelope_route_consumes() {
         BTreeSet::from(["read_envelope".to_string()]),
         "Envelope literal outside read_envelope"
     );
-    assert!(found.aliases.is_empty(), "Envelope built through an alias: {:?}", found.aliases);
-    assert_eq!(found.route_takes_envelope, Some(true), "route takes &Envelope");
+    assert!(
+        found.aliases.is_empty(),
+        "Envelope built through an alias: {:?}",
+        found.aliases
+    );
+    assert_eq!(
+        found.route_takes_envelope,
+        Some(true),
+        "route takes &Envelope"
+    );
 }
 
 /// Derive names, including derives under any depth of `cfg_attr`.
@@ -167,7 +173,9 @@ fn derives_in(attrs: &[syn::Attribute]) -> BTreeSet<String> {
     type Metas = syn::punctuated::Punctuated<syn::Meta, syn::Token![,]>;
     fn walk_meta(meta: &syn::Meta, out: &mut BTreeSet<String>) {
         let syn::Meta::List(list) = meta else { return };
-        let Ok(args) = list.parse_args_with(Metas::parse_terminated) else { return };
+        let Ok(args) = list.parse_args_with(Metas::parse_terminated) else {
+            return;
+        };
         if list.path.is_ident("derive") {
             for arg in &args {
                 if let Some(last) = arg.path().segments.last() {
@@ -194,11 +202,11 @@ fn is_registry(ty: &syn::Type) -> bool {
 /// `BackendRegistry`'s production surface, gathered crate-wide: an `impl`
 /// may live in any module and name the type by any path.
 #[derive(Default)]
-struct Surface {
+pub(super) struct Surface {
     methods: BTreeSet<String>,
     traits: BTreeSet<String>,
-    derives: BTreeSet<String>,
-    public_fields: Vec<String>,
+    pub(super) derives: BTreeSet<String>,
+    pub(super) public_fields: Vec<String>,
 }
 
 impl Sink for Surface {
@@ -208,8 +216,13 @@ impl Sink for Surface {
                 self.derives.extend(derives_in(&s.attrs));
                 for field in &s.fields {
                     if !matches!(field.vis, syn::Visibility::Inherited) {
-                        self.public_fields
-                            .push(field.ident.as_ref().map(ToString::to_string).unwrap_or_default());
+                        self.public_fields.push(
+                            field
+                                .ident
+                                .as_ref()
+                                .map(ToString::to_string)
+                                .unwrap_or_default(),
+                        );
                     }
                 }
             }
@@ -274,7 +287,19 @@ fn t1e_the_backend_registry_surface_is_pinned() {
         surface.methods, want,
         "method set changed: a new reader must join the ban (MIK-8387)"
     );
-    assert_eq!(surface.traits, BTreeSet::from(["Default".to_string()]), "trait impls changed");
-    assert!(surface.derives.is_empty(), "derives changed: {:?}", surface.derives);
-    assert!(surface.public_fields.is_empty(), "field is not private: {:?}", surface.public_fields);
+    assert_eq!(
+        surface.traits,
+        BTreeSet::from(["Default".to_string()]),
+        "trait impls changed"
+    );
+    assert!(
+        surface.derives.is_empty(),
+        "derives changed: {:?}",
+        surface.derives
+    );
+    assert!(
+        surface.public_fields.is_empty(),
+        "field is not private: {:?}",
+        surface.public_fields
+    );
 }
