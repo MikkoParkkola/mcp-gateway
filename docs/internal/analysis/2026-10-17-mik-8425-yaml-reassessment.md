@@ -41,7 +41,9 @@ alternative. Choosing between them belongs to the operator.
   The figment edge comes from the `yaml` feature at `Cargo.toml:152`
   (`figment = { version = "0.10", features = ["yaml", "env"] }`). The direct
   edge is `Cargo.toml:146` (`serde_yaml = "0.9"`). Removing only one edge
-  leaves the advisory in the tree.
+  leaves the advisory in the tree. The `/home/mikko/mirrors/...` path in the
+  tree output is spark-cargo's Spark mirror of this worktree, at the same
+  release-line commit.
 
 ## Advisory status (primary sources, all read 2026-10-17)
 
@@ -77,15 +79,23 @@ mcp-gateway under PolyForm Noncommercial 1.0.0, provided the notices are
 kept. Any new crate is added to `docs/legal/dependency-licenses.tsv`.
 
 serde-saphyr's optional `figment` feature depends on figment `^0.10` with
-default features, which are `env` only, so it does not re-enable figment's
-`yaml` feature.
+`default_features: true`. Figment 0.10.19 as published declares no
+`default` feature (crates.io features: `env`, `json`, `parse-value`, `test`,
+`yaml`), so that dependency does not enable figment's `yaml` feature.
+serde-saphyr's MSRV of 1.89 is below mcp-gateway's `rust-version = "1.95"`
+(`Cargo.toml:5`).
 
 ## YAML.1 inventory (release line 13590f362)
 
 Size, in counts:
 
-- `serde_yaml` appears 467 times in 184 `.rs` files. 52 of those files are
-  outside test paths.
+- `serde_yaml` appears 467 times in 184 `.rs` files. 46 of those files are
+  production code: outside test modules, `*_tests` paths and fixtures.
+  By API use, 21 of them only parse into typed values and 8 also
+  serialize. Another 15 walk a `Value`/`Mapping` tree, 6 of which also
+  serialize. Three use the figment `Yaml` provider: `config_file.rs`,
+  `doctor/hidden_keys.rs`, and `backend_url_keys.rs`, which is also one of
+  the tree walkers.
 - 100 of the references are `serde_yaml::Value`, `Mapping` or `Sequence`,
   spread over 31 files. 13 of those files are production code.
 - `serde_yaml::to_*` serializers appear in 14 production files.
@@ -173,7 +183,7 @@ Sources: the 2.0.0 docs.rs page for `Options`, and the README.
 
 ## Options and trade-off
 
-- **A. Migrate before 2026-10-26.** Rejected. It touches 52 production
+- **A. Migrate before 2026-10-26.** Rejected. It touches 46 production
   files, two dependency edges, a new tree type and four semantic defaults,
   on a crate whose major version is four days old. Landing that inside the
   window means skipping the compatibility proof the ticket requires.
@@ -204,6 +214,25 @@ imports and skills frontmatter are the most exposed inputs.
    ticket's due date to the same day.
 2. Approve filing the migration ticket with the criteria below.
 
+Proposed for C: `.github/osv-scanner.toml:40`, change `ignoreUntil` from
+2026-10-26 to **2027-01-26**. Line 41 (`reason`) gets new text that cites
+this note, the migration ticket and the decision date. The reason for that
+date: 92 days is one quarterly review cycle, and it is the ceiling. Any later
+date needs a fresh reviewed decision, so a slipped migration re-fires the
+gate rather than drifting. This is a review cadence, not an estimate of the
+migration. The operator may choose an earlier date.
+
+What a reader of the release notes needs (v4.0.x, if C is ratified): "The
+container and publish security gate carries one time-boxed exception,
+RUSTSEC-2024-0449. It is an informational advisory: unsafe-libyaml, reached
+through serde_yaml, is unmaintained. It is not a known vulnerability, and no
+patched release exists. It is used to parse operator-supplied configuration,
+capability and grants files. The exception expires on <date>, and a
+replacement parser (pure Rust, no unsafe code) is planned under <ticket>.
+YAML behaviour does not change in this release." If B is chosen instead,
+there is no release note, because no image or publish happens until the
+migration lands.
+
 The config edit for C belongs to a separate, reviewed change with the same
 OSV controls as MIK-8424.OSV.3 (an expired entry fails and an unrelated
 advisory fails). This note does not make that edit.
@@ -217,9 +246,13 @@ advisory fails). This note does not make that edit.
   existing test passes unchanged. API visibility stays crate-private.
 - **MIG.2 Backend swap behind the adapter.** Use serde-saphyr `=2.0.x` with
   options `merge_keys: AsOrdinary` (so `<<` is still refused by strict keys)
-  and `strict_booleans: true`, plus an explicit duplicate-key policy matching
-  serde_yaml's error. Remove figment's `yaml` feature. Record
-  `spark-cargo tree -i unsafe-libyaml` reporting no match.
+  and `strict_booleans: true`. For duplicate keys, each consumer keeps its
+  current behaviour. Today `Config::load` keeps the last value (through
+  figment's `Dict`, pinned by `value_the_loader_accepts_loads` and
+  `unrecognised_key_after_a_loader_accepted_value_refused` in
+  `tests/c1_unrecognised_config_keys.rs:170-185`), while direct typed
+  deserialization refuses a duplicate key. Remove figment's `yaml` feature.
+  Record `spark-cargo tree -i unsafe-libyaml` reporting no match.
 - **MIG.3 Comparison fixtures (old parser compared with new, through
   `serde_json::Value` or the typed struct, in one test binary during the
   swap):**
@@ -231,12 +264,18 @@ advisory fails). This note does not make that edit.
     by the new serializer must still be readable by serde_yaml (rollback);
   - `merge_key_refused_at_root` and `merge_key_refused_under_a_backend`;
   - splice tag and alias tests, and `count_yaml_aliases`;
-  - duplicate keys at the root and inside a backend;
+  - duplicate keys at the root and inside a backend, run both through
+    `Config::load` (last value wins) and through direct deserialization
+    (refused);
   - the scalars `yes`, `no`, `on`, `off`, `0755`, `0o755`, `.inf`, `~`,
     `null`, and an empty value;
   - multi-document input, which must give the same outcome as serde_yaml
     gives today;
-  - an alias-bomb input that stays under the budget.
+  - an alias input that stays within the budget and loads, and an
+    alias-bomb input past the budget that is refused.
+  - Write-new/read-old checks compare semantic equality, not only that the
+    parse succeeds. They run on fixtures for tags, non-string keys and
+    non-finite numbers.
 - **MIG.4 Redaction security gate.** For every case in
   `src/config/tests/load_error.rs`, the secret sentinel value is absent from
   the rendered error and the key path, line and column are present. Changes
@@ -249,9 +288,49 @@ advisory fails). This note does not make that edit.
   real OSV scanner and exact-head CI evidence, then update
   `docs/legal/dependency-licenses.tsv`.
 
-**Rollback:** revert the MIG.2 commit (dependency plus adapter backend) and
-restore the exception entry if it has expired. MIG.1 can stay in place.
-Rollback is only safe if the grants write-new/read-old check in MIG.3 passes.
+Order in which the 46 production files move to the adapter in MIG.1. Each
+group is one commit and keeps the suite green.
+
+1. The 21 typed-only readers. Capability parser and validator first,
+   because the 143-file comparison covers them; then trust, mTLS, firewall,
+   audit rotation, events, playbook, provisioning and the rest.
+2. The 8 serializer-only files (OpenAPI convert, protocol-import planner,
+   discovery, executors, UI backend ops, `identity_grants.rs`), each with
+   byte-output tests.
+3. The 15 tree walkers. Grants matching moves together with
+   `identity_grants.rs` because of the tag semantics. Then skills,
+   rug-pull, Kubernetes, the UI capabilities page, upgrade, `cap`, the
+   rewriters, both config persistence modules and `strict_keys.rs`.
+4. Last, the figment provider files (`config_file.rs`,
+   `doctor/hidden_keys.rs`, `backend_url_keys.rs`), together with
+   `load_error.rs` and its redaction tests. Only after this group can MIG.2
+   drop figment's `yaml` feature.
+
+**Rollback:** revert the MIG.2 commit (the dependency plus the adapter
+backend). If MIG.6 removed the exception, or it has expired, restore the
+entry with a newly ratified future expiry, and require a passing OSV scanner
+run on the rollback commit. MIG.1 can stay in place. Rollback is only safe if
+the write-new/read-old checks in MIG.3 pass.
+
+## Review record (YAML.2)
+
+Two independent non-author seats reviewed commit 925aef8e5, the decision
+only, on 2026-10-17. Both returned SHIP. Their findings were checked against
+source before folding:
+
+- Duplicate keys: `Config::load` keeps the last value. Confirmed at
+  `tests/c1_unrecognised_config_keys.rs:170-185`, and MIG.2 and MIG.3 now
+  say so.
+- Rollback without an unexpired exception: added to the rollback text.
+- Figment default features: corrected from crates.io 0.10.19. The seat's
+  claim that the default is `test` was itself wrong.
+- MSRV: checked; 1.89 is at or below `rust-version = "1.95"`.
+- Budget accept/reject cases and semantic write-new/read-old checks: added
+  to MIG.3.
+- Not folded, because they are residuals for the migration ticket: an
+  empirical check of the serde-saphyr 2.0.0 duplicate-key default (MIG.2
+  sets the policy explicitly in any case), and archiving the raw upstream
+  manifests and advisory responses.
 
 ## Sources (all read 2026-10-17)
 
