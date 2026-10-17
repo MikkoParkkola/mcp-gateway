@@ -134,7 +134,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
         let proven = self
             .dispatch_resolution(
                 (server, tool),
-                (proof, caller.verified_identity),
+                (proof, caller.verified_identity, caller.caller_key),
                 self.hint_surface(caller),
                 &mut witness,
             )

@@ -272,6 +272,45 @@ pub(super) fn credential_or_subject_owner<'a>(
         .or_else(|| proven_subject_owner(grant_subject, caller_key))
 }
 
+/// The execution principal a keyed call is admitted under (MIK-8382
+/// UNIFY.1a′): the routed admission owner (verified identity, agent, proven
+/// subject or credential, as `route_owners` resolves it; the pooled
+/// anonymous owner is none), else [`credential_or_subject_owner`]. The ONE
+/// definition the intake check and admission share, so the intake cannot
+/// refuse a caller admission would admit.
+pub(super) fn execution_principal<'a>(
+    owner: super::AdmissionOwner<'a>,
+    credential_principal: Option<&'a str>,
+    grant_subject: Option<&crate::identity_grants::GrantSubject>,
+    caller_key: Option<&'a str>,
+) -> Option<&'a str> {
+    owner
+        .principal()
+        .or_else(|| credential_or_subject_owner(credential_principal, grant_subject, caller_key))
+}
+
+/// The refusal of a keyed call with no execution principal, -32003. Its text
+/// is written here only, so the intake and admission answer it alike.
+pub(super) fn no_execution_principal() -> crate::Error {
+    crate::Error::json_rpc(-32003, "A verified execution principal is required")
+}
+
+/// The intake check (MIK-8382 UNIFY.1a′): a keyed `tools/call` with an id
+/// from a caller with no execution principal is refused here, before any
+/// backend lookup, tool judgement or backend work, so its answer is one for
+/// every tool and backend name. `None` lets the request go on.
+pub(crate) fn intake_refusal(
+    request: &serde_json::Value,
+    owner: super::AdmissionOwner<'_>,
+    credential_principal: Option<&str>,
+    grant_subject: Option<&crate::identity_grants::GrantSubject>,
+    caller_key: Option<&str>,
+) -> Option<crate::Error> {
+    (crate::protocol::mrtr::intake_requires_principal(request)
+        && execution_principal(owner, credential_principal, grant_subject, caller_key).is_none())
+    .then(no_execution_principal)
+}
+
 /// The proven subject a caller with no credential owns its keyed calls by
 /// (MIK-7688): an OAuth agent (its client id) or a client certificate (its
 /// SAN URI, else its CN), as the router's `caller_key` encodes them. Never a

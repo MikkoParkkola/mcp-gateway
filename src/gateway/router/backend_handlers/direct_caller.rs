@@ -194,8 +194,9 @@ pub(super) struct Envelope {
     pub(super) declared: crate::protocol::meta::Declared,
 }
 
-/// Stage 2: read and parse the body, fill the D2-a audit slot, then refuse
-/// what the envelope and the key's scope forbid. Consumes `request`.
+/// Stage 2: read and parse the body, fill the D2-a audit slot, refuse a keyed
+/// call with no execution principal (MIK-8382 intake), then refuse what the
+/// envelope and the key's scope forbid. Consumes `request`.
 pub(super) async fn read_envelope(
     state: &AppState,
     name: &str,
@@ -233,6 +234,17 @@ pub(super) async fn read_envelope(
     // the request: parse, telemetry and every forwarding arm see no token.
     let attestation = super::take_attestation_token(json_request.get_mut("params"));
 
+    // MIK-8382 intake: protocol fields are validated first (with sanitizing
+    // on, as `/mcp` does), then a keyed call with no execution principal is
+    // refused before sanitizing, the parse, the backend lookup and every
+    // backend touch, so it gets one answer whatever the tool or backend name.
+    // It reads only fields validation checked and sanitizing never changes.
+    if state.sanitize_input {
+        validated(&json_request)?;
+    }
+    if let Some(refusal) = intake_refusal(state, &json_request, caller) {
+        return Err(refusal);
+    }
     if state.sanitize_input {
         let grant = crate::gateway::authz::BackendGrant::of(caller.client.as_ref());
         json_request = sanitized(state, (name, grant), json_request)?;
@@ -505,32 +517,64 @@ pub(super) async fn forward_notification(
     }
 }
 
-/// MIK-8154 SAN.1: the one sanitize step on the direct route, before anything
-/// parses or judges the request: its protocol fields validated (S2'), then
-/// the whole request sanitized unless the backend this route names is
-/// `passthrough` (option (a)), whose instance is then recorded (F2).
+/// A refusal of the sanitize step's: HTTP 400 with the error's code and text.
+fn refused(id: Option<crate::protocol::RequestId>, e: &crate::Error) -> Rejection {
+    build_http_error_response(id, e.to_rpc_code(), e.to_string(), StatusCode::BAD_REQUEST)
+}
+
+/// MIK-8154 S2': the request's protocol fields validated, before the intake
+/// check reads any of them. Its refusal answers no id (the id may be what is
+/// dirty).
+fn validated(request: &Value) -> Result<(), Rejection> {
+    crate::security::sanitize::validate_protocol_fields(
+        request,
+        &crate::gateway::PROTOCOL_NONCES,
+        crate::security::sanitize::ProtocolRoute::Direct,
+    )
+    .map_err(|e| refused(None, &e))
+}
+
+/// MIK-8382 UNIFY.1a′: the intake refusal for a keyed `tools/call` from a
+/// caller with no execution principal: -32003, HTTP 400, the request's own
+/// id. The owner and principal are read as admission reads them
+/// (`direct_idempotency.rs`), through the one shared function.
+fn intake_refusal(state: &AppState, request: &Value, caller: &Caller) -> Option<Rejection> {
+    let (_, _, owner) = super::super::handlers::route_owners(
+        state,
+        caller.verified_identity.as_ref(),
+        caller.oauth_agent_identity.as_ref(),
+        (
+            caller.grant_subject.as_ref(),
+            caller.cert_identity.as_ref(),
+            caller.client.as_ref(),
+        ),
+    );
+    let error = crate::gateway::meta_mcp::intake_refusal(
+        request,
+        crate::gateway::meta_mcp::AdmissionOwner::routed(&owner),
+        caller
+            .client
+            .as_ref()
+            .map(|client| client.principal.as_str()),
+        caller.grant_subject.as_ref(),
+        Some(caller.spend_key.as_str()).filter(|key| !key.is_empty()),
+    )?;
+    Some(refused(
+        crate::protocol::mrtr::raw_request_id(request),
+        &error,
+    ))
+}
+
+/// MIK-8154 SAN.1: the one sanitize step on the direct route, after protocol
+/// fields are validated and the intake check: the whole request sanitized
+/// unless the backend this route names is `passthrough` (option (a)), whose
+/// instance is then recorded (F2).
 fn sanitized(
     state: &AppState,
     (name, grant): (&str, crate::gateway::authz::BackendGrant<'_>),
     request: Value,
 ) -> Result<Value, Rejection> {
-    use crate::security::sanitize::{ProtocolRoute, sanitize_request, validate_protocol_fields};
-    // A protocol-field refusal answers no id (the id may be what is dirty);
-    // past validation, the request's own id is answered.
-    let refused = |id, e: crate::Error| {
-        super::super::helpers::build_http_error_response(
-            id,
-            e.to_rpc_code(),
-            e.to_string(),
-            StatusCode::BAD_REQUEST,
-        )
-    };
-    validate_protocol_fields(
-        &request,
-        &crate::gateway::PROTOCOL_NONCES,
-        ProtocolRoute::Direct,
-    )
-    .map_err(|e| refused(None, e))?;
+    use crate::security::sanitize::{ProtocolRoute, sanitize_request};
     let exempt = state.meta_mcp.passthrough_instance(grant, name);
     if let Some(instance) = &exempt {
         crate::gateway::meta_mcp::visible::record_exempt_instances(std::slice::from_ref(instance));
@@ -542,5 +586,5 @@ fn sanitized(
         return Ok(request);
     }
     let id = crate::protocol::mrtr::raw_request_id(&request);
-    sanitize_request(&request, ProtocolRoute::Direct).map_err(|e| refused(id, e))
+    sanitize_request(&request, ProtocolRoute::Direct).map_err(|e| refused(id, &e))
 }

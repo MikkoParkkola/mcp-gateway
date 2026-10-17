@@ -216,7 +216,7 @@ impl MetaMcp {
         let (backend, resolved) = match self
             .dispatch_resolution(
                 (server, tool),
-                (caller_proof, verified_identity),
+                (caller_proof, verified_identity, caller.caller_key),
                 surface,
                 &mut witness,
             )

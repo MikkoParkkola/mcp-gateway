@@ -11,6 +11,7 @@ use crate::{Error, Result};
 
 use super::MetaMcp;
 use super::effects::{Effect, meta_tool_effect};
+use super::warn_limit::{WarnedAt, first_warn};
 
 #[path = "admission_plan.rs"]
 mod plan;
@@ -328,7 +329,7 @@ impl MetaMcp {
                     .filter(|value| !value.is_empty())
                     .map(str::to_owned)
             })
-            .ok_or_else(|| Error::json_rpc(-32003, "A verified execution principal is required"))?;
+            .ok_or_else(super::support::no_execution_principal)?;
         let operation = operation();
         #[cfg(test)]
         LAST_OPERATION.with(|last| *last.borrow_mut() = Some(operation.clone()));
@@ -499,7 +500,7 @@ impl MetaMcp {
         // store, one identity per caller. For stdio it is the reserved owner
         // value (MIK-7272.OWNER.3), never `STDIO_CREDENTIAL_PRINCIPAL`.
         // No task owner (a certificate or agent alone): its proven subject.
-        let owner_principal = owner.principal().or_else(|| caller.owner_principal());
+        let owner_principal = caller.execution_principal(owner);
         let retry = caller.retry;
         // The arm the dispatch will use, so a retry's representation names it.
         let arm_key = caller.experiment_key();
@@ -676,7 +677,7 @@ impl MetaMcp {
     }
 
     /// Count every un-keyed admission, and warn about a MODERN one at most once
-    /// per (backend, tool) per [`UNKEYED_WARN_INTERVAL`]. Labels carry no identity.
+    /// per (backend, tool) per [`super::warn_limit::WARN_INTERVAL`]. Labels carry no identity.
     fn record_unkeyed(&self, is_modern: bool, read_only: bool, (server, tool): (&str, &str)) {
         telemetry_metrics::counter!(
             "mcp_unkeyed_calls_total",
@@ -698,38 +699,6 @@ impl MetaMcp {
         );
     }
 }
-
-/// Whether (server, tool) is due a warn at `now`, recording it if so. `now` is
-/// a parameter so the eviction order can be tested without sleeping.
-fn first_warn(warned: &mut WarnedAt, server: &str, tool: &str, now: std::time::Instant) -> bool {
-    let key = (server.to_owned(), tool.to_owned());
-    if warned
-        .get(&key)
-        .is_some_and(|last| now.duration_since(*last) < UNKEYED_WARN_INTERVAL)
-    {
-        return false;
-    }
-    // `gateway_invoke` names come from caller arguments: bound the map. Expired
-    // entries go first; a map still full of live ones loses its oldest.
-    if warned.len() >= UNKEYED_WARN_CAP {
-        warned.retain(|_, last| now.duration_since(*last) < UNKEYED_WARN_INTERVAL);
-    }
-    if warned.len() >= UNKEYED_WARN_CAP
-        && let Some(oldest) = warned
-            .iter()
-            .min_by_key(|(_, last)| **last)
-            .map(|(k, _)| k.clone())
-    {
-        warned.remove(&oldest);
-    }
-    warned.insert(key, now);
-    true
-}
-
-const UNKEYED_WARN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(600);
-const UNKEYED_WARN_CAP: usize = 1024;
-
-type WarnedAt = std::collections::HashMap<(String, String), std::time::Instant>;
 
 /// `_meta` keys that change WHAT a meta-tool call does, and so stay in its
 /// operation fingerprint (MIK-8192). Empty: every request `_meta` key the

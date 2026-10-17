@@ -154,6 +154,22 @@ impl<'a> MetaMcpCallerContext<'a> {
         )
     }
 
+    /// The execution principal admission admits this caller's keyed call
+    /// under, given its routed `owner`: the stdio arm first (the local
+    /// operator), then the one shared function the intake check reads
+    /// (MIK-8382), so the two cannot disagree on an HTTP caller.
+    pub(super) fn execution_principal(&self, owner: super::AdmissionOwner<'a>) -> Option<&'a str> {
+        if self.stdio_nonce.is_some() {
+            return owner.principal().or(Some(LOCAL_OPERATOR_PRINCIPAL));
+        }
+        support::execution_principal(
+            owner,
+            self.credential_principal,
+            self.grant_subject.as_ref(),
+            self.caller_key,
+        )
+    }
+
     /// How this caller was established. The stdio transport's mark decides
     /// `LocalTransport`; principal text alone never does (MIK-7272.OWNER.3).
     pub(crate) fn provenance(&self) -> crate::identity_propagation::CallerProvenance {

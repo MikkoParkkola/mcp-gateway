@@ -18,6 +18,7 @@ use crate::gateway::meta_mcp::MetaMcp;
 mod step;
 #[path = "route_matrix_driver_trace_tests.rs"]
 mod trace;
+pub(crate) use super::direct_audit_tests::anon_intake::{NO_PRINCIPAL, keyed_no_principal_on};
 pub(crate) use step::{
     playbook_as, playbook_budgeted, playbook_exposed, playbook_minting, playbook_then_task,
 };

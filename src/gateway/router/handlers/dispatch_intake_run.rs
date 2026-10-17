@@ -243,6 +243,18 @@ pub(in crate::gateway::router::handlers) async fn intake(
     let raw_id = crate::protocol::mrtr::raw_request_id(&request);
     // A failed grant-decision write refuses under this id (MIK-7663.GH2409.3).
     crate::gateway::meta_mcp::grant_audit::note_answer_id(raw_id.as_ref());
+    // MIK-8382 intake: judged on the request as sent, before signing capture
+    // takes its id off (restored later); answered after the chain nonce.
+    let intake_error = intake_judgement(
+        state,
+        &request,
+        (
+            verified_identity.as_ref(),
+            oauth_agent_identity.as_ref(),
+            cert_identity.as_ref(),
+        ),
+        (grant_subject.as_ref(), client.as_ref()),
+    );
     // Hardened signs every `tools/call` here, not only `gateway_invoke`
     // (GH1942.HARDEN.1 row 7).
     let mut signing_context = state.meta_mcp.signing_enabled().then(|| {
@@ -266,6 +278,20 @@ pub(in crate::gateway::router::handlers) async fn intake(
             ));
         }
     };
+    // MIK-8382 intake: the refusal judged above is answered here, after the
+    // chain nonce (kept first) and before target mapping, sanitizing and
+    // every check, so its answer is one for every target and nothing
+    // reaches a backend.
+    if let Some(error) = intake_error {
+        return Err(answer_intake(
+            state,
+            &request,
+            (client.as_ref(), grant_subject.as_ref()),
+            (raw_id, &session_id),
+            &error,
+        )
+        .await);
+    }
     // MIK-8154 SAN.1: one sanitize step, after the call's backend targets are
     // mapped on the caller's view (a surfaced name judged through the request's
     // visibility memo) and before restore and every check; a request whose
@@ -671,4 +697,98 @@ pub(in crate::gateway::router::handlers) async fn intake(
             _inflight_permit: inflight_permit,
         },
     ))
+}
+
+/// The caller's proven identities, as the request carries them.
+type Proven<'r> = (
+    Option<&'r VerifiedIdentity>,
+    Option<&'r OAuthAgentIdentity>,
+    Option<&'r CertIdentity>,
+);
+
+/// What the caller presented: its grant subject and its credential.
+type Presented<'r> = (
+    Option<&'r crate::identity_grants::GrantSubject>,
+    Option<&'r AuthenticatedClient>,
+);
+
+/// MIK-8382 UNIFY.1a′: whether the `/mcp` intake refuses this request, a
+/// keyed `tools/call` with an id from a caller with no execution principal,
+/// except a task submit on a gateway with authentication off.
+/// The routed owner and caller key are the ones admission reads
+/// (`route_owners`, `identity::caller_key`), through the shared function.
+fn intake_judgement(
+    state: &AppState,
+    request: &Value,
+    (verified_identity, oauth_agent_identity, cert_identity): Proven<'_>,
+    (grant_subject, client): Presented<'_>,
+) -> Option<crate::Error> {
+    // Lead ruling 2026-10-17 (B): a gateway with authentication off keeps
+    // pooled anonymous task ownership (MIK-7272.TASK.1.20, design 2026-09-08),
+    // so a task submit there is left to the task path, which admits it under
+    // the pooled owner. A submit the task path declines runs as a sync call,
+    // whose admission still refuses it -32003.
+    if !state.auth_config.enabled && request.pointer("/params/task").is_some() {
+        return None;
+    }
+    let (_, _, owner) = tasks::route_owners(
+        state,
+        verified_identity,
+        oauth_agent_identity,
+        (grant_subject, cert_identity, client),
+    );
+    let caller_key =
+        crate::gateway::router::identity::caller_key(grant_subject, cert_identity, client);
+    crate::gateway::meta_mcp::intake_refusal(
+        request,
+        crate::gateway::meta_mcp::AdmissionOwner::routed(&owner),
+        client.map(|client| client.principal.as_str()),
+        grant_subject,
+        Some(caller_key.as_str()).filter(|key| !key.is_empty()),
+    )
+}
+
+/// The `/mcp` intake refusal of `error`, recorded as the direct route
+/// records it (`invalid`), then answered -32003 / 400 with the request's id.
+async fn answer_intake(
+    state: &AppState,
+    request: &Value,
+    (client, grant_subject): (
+        Option<&AuthenticatedClient>,
+        Option<&crate::identity_grants::GrantSubject>,
+    ),
+    (id, session_id): (Option<crate::protocol::RequestId>, &str),
+    error: &crate::Error,
+) -> axum::response::Response {
+    let empty = Value::Object(serde_json::Map::new());
+    let params = request.get("params");
+    let name = params
+        .and_then(|params| params.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let arguments = params
+        .and_then(|params| params.get("arguments"))
+        .unwrap_or(&empty);
+    // ponytail: the target as the request spells it, `gateway_invoke`'s
+    // server and tool else the called name; a surfaced name is recorded
+    // unmapped, since mapping is the backend-touching step this precedes.
+    let field = |key: &str| {
+        arguments
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+    };
+    let target = if name == "gateway_invoke" {
+        (field("server"), field("tool"))
+    } else {
+        ("", name)
+    };
+    crate::gateway::router::meta_refusal_audit::Refused::of(
+        arguments,
+        client,
+        grant_subject,
+        session_id,
+    )
+    .answer_intake(state, target, id, error)
+    .await
 }

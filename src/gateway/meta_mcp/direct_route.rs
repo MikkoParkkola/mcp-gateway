@@ -120,9 +120,8 @@ impl MetaMcp {
         (server, tool, params): (&str, &str, Option<&Value>),
         id: &crate::protocol::RequestId,
     ) -> Result<super::admission::SyncAdmission> {
-        let owner_principal = owner.principal().or_else(|| {
-            support::credential_or_subject_owner(credential_principal, grant_subject, caller_key)
-        });
+        let owner_principal =
+            support::execution_principal(owner, credential_principal, grant_subject, caller_key);
         let empty = Value::Object(serde_json::Map::new());
         let params = params.unwrap_or(&empty);
         // The direct route forwards `arguments` as sent and never refused a

@@ -85,6 +85,10 @@ pub(super) async fn guard_before_credential(
     // slot there: it lacks every tool, -32601 as on every other entry
     // (MIK-8356 R3.7), before any credential is resolved for it.
     if no_principal {
+        scope.state.meta_mcp.warn_lacked_principal(
+            &backend.name,
+            Some(caller.spend_key.as_str()).filter(|key| !key.is_empty()),
+        );
         let tool = envelope
             .params
             .as_ref()
