@@ -85,10 +85,12 @@ impl MetaMcp {
     /// live dispatch (MIK-8392 STORED.2): every target whose dispatch binds a
     /// per-caller credential (a managed account, or a per-caller mint with no
     /// account, E7) defers, and the lift serves it once resolution proves the
-    /// account live. Only a backend that mints nothing per caller is exempt
-    /// (U1/U2). There is no admission shortcut for an account already known
-    /// live: the lift reuses the route-stage resolution, so serving here would
-    /// save nothing measurable (lead ruling on M14).
+    /// account live. Only a target that mints nothing per caller is exempt:
+    /// a backend with no per-caller credential (U1/U2), or a capability
+    /// account declared `shared` (MIK-8451). There is no admission shortcut
+    /// for an account already known live: the lift reuses the route-stage
+    /// resolution, so serving here would save nothing measurable (lead
+    /// ruling on M14).
     pub(crate) fn stored_replay_defers(&self, server: &str, tool: &str) -> bool {
         self.mints_per_caller(server, tool)
     }

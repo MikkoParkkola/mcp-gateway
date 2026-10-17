@@ -402,10 +402,16 @@ pub(crate) struct CapabilityAccount {
     /// `WORK` is a `shared` descriptor (MIK-8406): the static credential
     /// path, no per-caller binding.
     shared: bool,
+    /// The capability names an account no descriptor declares, registered
+    /// with no registry to check it against (MIK-8451).
+    undeclared: bool,
     log_dir: tempfile::TempDir,
     /// Test-only (MIK-8428 Case A): see [`ReleaseBudget`].
     release_budget: Arc<Mutex<Option<usize>>>,
 }
+
+/// An account id no fixture descriptor declares (MIK-8451).
+pub(crate) const GHOST: &str = "ghost";
 
 /// The capability server and tool [`CapabilityAccount`] serves.
 pub(crate) const CAPABILITY_SERVER: &str = super::super::account_rest_fixture::CAPABILITIES;
@@ -451,6 +457,7 @@ impl CapabilityAccount {
             external,
             personal: false,
             shared: false,
+            undeclared: false,
             log_dir: dir,
             release_budget: Arc::new(Mutex::new(None)),
         }
@@ -470,6 +477,17 @@ impl CapabilityAccount {
     pub(crate) async fn start_shared() -> Self {
         let mut account = Self::start(false).await;
         account.shared = true;
+        account
+    }
+
+    /// As [`Self::start`], with the capability naming [`GHOST`], an account
+    /// no descriptor declares. Its executor carries no registry, so
+    /// registration has nothing to check the reference against
+    /// (`execution_context.rs` returns `Ok` with no registry) and only the
+    /// dispatch can refuse it (MIK-8451).
+    pub(crate) async fn start_undeclared() -> Self {
+        let mut account = Self::start(false).await;
+        account.undeclared = true;
         account
     }
 
@@ -523,9 +541,14 @@ impl CapabilityAccount {
             .timeout(std::time::Duration::from_secs(5))
             .build()
             .expect("an HTTP client");
+        let executor = crate::capability::CapabilityExecutor::new();
+        let executor = if self.undeclared {
+            executor
+        } else {
+            executor.with_account_strategies(meta.account_strategies())
+        };
         let executor = Arc::new(
-            crate::capability::CapabilityExecutor::new()
-                .with_account_strategies(meta.account_strategies())
+            executor
                 .with_test_http_client(client)
                 // The meta dispatch opens no loopback egress, and the capture
                 // peer is loopback (#3892 healthy controls).
@@ -552,7 +575,7 @@ impl CapabilityAccount {
             capability(
                 &format!("http://127.0.0.1:{}", self.port),
                 "oauth:google",
-                Some(WORK),
+                Some(if self.undeclared { GHOST } else { WORK }),
             )
         };
         backend
