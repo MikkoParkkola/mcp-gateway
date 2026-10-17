@@ -53,27 +53,35 @@ fn keyed_tasks_meta(server: &str) -> Value {
     meta
 }
 
-/// Wait until the worker has written `server`'s step record, then read the
-/// task as its caller does (`tasks/get`). A read of a task whose stored
-/// target is unregistered is answered by the stored-read layer, so the read
-/// itself, error or not, is the cell's outcome.
+/// Wait until the worker has written `server`'s step record and the task
+/// has left `working`, then return the read as its caller sees it
+/// (`tasks/get`). A read of a task whose stored target is unregistered is
+/// answered by the stored-read layer, so the read itself, error or not, is
+/// the cell's outcome.
 async fn settled(fx: &Fixture, id: &str, server: &str) -> (StatusCode, Value) {
     let bound = std::time::Instant::now() + Duration::from_secs(10);
-    while step_record(fx, server).is_empty() {
+    loop {
+        let read = send(
+            fx,
+            "tasks/get",
+            id,
+            json!({"taskId": id, "_meta": tasks_meta()}),
+        )
+        .await;
+        let working = read
+            .1
+            .pointer("/result/status")
+            .is_some_and(|status| status == "working" || status == "submitted");
+        if !working && !step_record(fx, server).is_empty() {
+            return read;
+        }
         assert!(
             std::time::Instant::now() < bound,
-            "premise: the worker reaches `{server}`'s step: {:?}",
+            "premise: the worker settles `{server}`'s step: {read:?} {:?}",
             invocations(fx)
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    send(
-        fx,
-        "tasks/get",
-        id,
-        json!({"taskId": id, "_meta": tasks_meta()}),
-    )
-    .await
 }
 
 /// The worker's record for `server`'s step, once the task has settled.

@@ -293,9 +293,10 @@ async fn caller_b_task_subscription_never_reaches_backend() {
 }
 
 /// The refusal sits after the backend scope check, so a caller not allowed on
-/// the backend still gets the same 403 as for any other method.
+/// the backend gets the same answer as for any other method: the backend
+/// miss, as for a backend that does not exist (MIK-8387 S4).
 #[tokio::test]
-async fn out_of_scope_caller_still_gets_403_for_task_methods() {
+async fn out_of_scope_caller_gets_the_backend_miss_for_task_methods() {
     let (state, wire) = gateway().await;
 
     for (method, params) in [
@@ -304,8 +305,8 @@ async fn out_of_scope_caller_still_gets_403_for_task_methods() {
     ] {
         let (status, body) = send(&state, KEY_C, method, params).await;
 
-        assert_eq!(status, StatusCode::FORBIDDEN, "{method}: {body}");
-        assert_eq!(body["error"]["code"], -32003, "{method}: {body}");
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method}: {body}");
+        assert_eq!(body["error"]["code"], -32001, "{method}: {body}");
     }
     assert_eq!(wire.task_calls(), 0, "{:?}", wire.seen.lock());
 }

@@ -38,7 +38,12 @@ async fn fixture(policy: AuditFailurePolicy) -> Fixture {
         .expect("open log")
         .with_failure_policy(policy),
     );
-    let (mut state, store) = test_router_app_state_with_auth(&scoped_auth_config(false)).await;
+    // An empty grant is the caller the router still refuses before the meta
+    // layer: a scoped key's absent backend is answered as missing instead
+    // (MIK-8387), and an empty grant keeps its named refusal (MIK-8441).
+    let mut auth = scoped_auth_config(false);
+    auth.api_keys[0].backends = Vec::new();
+    let (mut state, store) = test_router_app_state_with_auth(&auth).await;
     Arc::get_mut(&mut state)
         .expect("state is unique")
         .transparency_log = Some(Arc::clone(&log));
@@ -50,8 +55,8 @@ async fn fixture(policy: AuditFailurePolicy) -> Fixture {
     }
 }
 
-/// A `gateway_invoke` aimed at a backend the scoped key cannot reach: refused
-/// by the router before the meta layer sees it.
+/// A `gateway_invoke` aimed at a backend the key's empty grant cannot reach:
+/// refused by the router before the meta layer sees it.
 async fn refused_invoke(fx: &Fixture, meta: Option<Value>) -> (StatusCode, Value) {
     let mut arguments = json!({"server": "elsewhere", "tool": "t", "arguments": {}});
     if let Some(meta) = meta {
