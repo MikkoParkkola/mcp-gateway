@@ -391,7 +391,10 @@ async fn direct_route_without_a_key_calls_the_backend_each_time() {
 ///
 /// Ignoring it runs the call unprotected, which is precisely the outcome the
 /// client asked to prevent; the meta route already refuses this shape at
-/// `src/gateway/router/handlers.rs:1223`.
+/// `src/gateway/router/handlers.rs:1223`. The caller has a principal: a
+/// keyed call from one with none is refused at intake first (MIK-8382), so
+/// only a principal's malformed key reaches the retry-field check this row
+/// pins. The anonymous half is asserted below.
 #[tokio::test]
 async fn direct_route_refuses_a_malformed_key() {
     let calls = Arc::new(AtomicUsize::new(0));
@@ -399,10 +402,28 @@ async fn direct_route_refuses_a_malformed_key() {
     let (state, _store_dir) = state_with_idempotency().await;
     register_backend(&state, &url);
 
-    let (status, body) = post_direct(
+    // MIK-8382: the same malformed key from a caller with no principal asked
+    // for keyed handling, so the intake refuses it -32003 before the key is
+    // read, and nothing dispatches.
+    let (anonymous_status, anonymous) = post_direct(
         &state,
         call_body(1, Some(json!({ IDEMPOTENCY_KEY_META: 42 }))),
         None,
+    )
+    .await;
+    assert_eq!(
+        (
+            anonymous_status,
+            anonymous.pointer("/error/code").and_then(Value::as_i64)
+        ),
+        (StatusCode::BAD_REQUEST, Some(-32003)),
+        "a no-principal malformed key is refused at intake: {anonymous}"
+    );
+
+    let (status, body) = post_direct(
+        &state,
+        call_body(1, Some(json!({ IDEMPOTENCY_KEY_META: 42 }))),
+        Some(principal()),
     )
     .await;
 
