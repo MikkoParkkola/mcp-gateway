@@ -392,6 +392,12 @@ async fn a_refusal_after_catalogue_collection_keeps_the_nonce() {
             wire["error"]["code"], -32600,
             "premise: {name}: the discovery firewall refused: {wire}"
         );
+        // Only the collected listing carries the credential the Block rule
+        // refuses, so this refusal also proves collection ran on the call's path.
+        assert_eq!(
+            wire["error"]["message"], "Response blocked by security firewall",
+            "premise: {name}: the refusal is the discovery firewall's: {wire}"
+        );
         assert!(alpha.list_fills() > 0, "premise: {name}: collection filled");
         assert_eq!(calls.load(Ordering::SeqCst), 0, "premise: {name}: unsent");
         assert!(
