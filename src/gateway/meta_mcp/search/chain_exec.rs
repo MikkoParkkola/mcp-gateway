@@ -24,7 +24,8 @@ impl MetaMcp {
         use crate::gateway::meta_mcp::invoke::relay::plan_step;
 
         if chain.is_empty() {
-            return Err(Error::json_rpc(-32602, "Chain must not be empty"));
+            let empty = Err(Error::json_rpc(-32602, "Chain must not be empty"));
+            return super::asking(caller, empty);
         }
 
         let now = crate::protocol::continuation::clock_now().map_err(|_| {

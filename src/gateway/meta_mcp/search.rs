@@ -72,6 +72,14 @@ fn tool_matches_role(tool: &Tool, want: Option<Role>) -> bool {
     want.is_none_or(|r| effective_role(tool) == r)
 }
 
+/// A meta tool's own refusal of its arguments, before it collects or sends
+/// anything: it asks for the nonce back, and the witness decides (MIK-8353 3d).
+pub(super) fn asking<T>(caller: &super::MetaMcpCallerContext<'_>, parsed: Result<T>) -> Result<T> {
+    parsed.inspect_err(|_| {
+        caller.signing.inspect(|signing| signing.want_refund());
+    })
+}
+
 /// Parse a role filter argument (case-insensitive). Absent / null means no
 /// filter; a typo or a non-string value is rejected so it fails fast rather
 /// than silently returning everything.
@@ -353,10 +361,11 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &super::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
-        let raw_query = extract_required_str(args, "query")?;
+        let raw_query = asking(caller, extract_required_str(args, "query"))?;
         let query = raw_query.to_lowercase();
         let limit = extract_search_limit(args);
-        let disclosure = crate::gateway::search_disclosure::resolve_search_disclosure(args)?;
+        let disclosure = crate::gateway::search_disclosure::resolve_search_disclosure(args);
+        let disclosure = asking(caller, disclosure)?;
         let use_glob = is_glob_pattern(&query);
         let options = CodeModeSearchOptions { use_glob };
 
@@ -427,7 +436,7 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &super::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
-        self.refuse_unattested_plan()?;
+        asking(caller, self.refuse_unattested_plan())?;
         #[cfg(test)]
         super::plan_entries::note(self);
         // Chain mode: sequential execution
@@ -436,20 +445,23 @@ impl MetaMcp {
         }
 
         // Single tool execution
-        let tool_ref = extract_required_str(args, "tool")?;
+        let tool_ref = asking(caller, extract_required_str(args, "tool"))?;
         let (tool_name, server_opt) = parse_code_mode_tool_ref(tool_ref);
 
-        let server = server_opt.ok_or_else(|| {
-            Error::json_rpc(
-                -32602,
-                format!(
-                    "Tool reference '{tool_ref}' is missing server prefix. \
+        let server = asking(
+            caller,
+            server_opt.ok_or_else(|| {
+                Error::json_rpc(
+                    -32602,
+                    format!(
+                        "Tool reference '{tool_ref}' is missing server prefix. \
                      Use format 'server:tool_name' from gateway_search results."
-                ),
-            )
-        })?;
+                    ),
+                )
+            }),
+        )?;
 
-        let arguments = parse_tool_arguments(args)?;
+        let arguments = asking(caller, parse_tool_arguments(args))?;
         let invoke_args = json!({
             "server": server,
             "tool": tool_name,
@@ -555,7 +567,7 @@ impl MetaMcp {
         let profile = self.active_profile(session_id);
         // Optional role filter (MIK-3532): None = all tools; Some(role) keeps
         // only tools whose effective role (explicit tag, else inferred) matches.
-        let role_filter = parse_role_filter(args)?;
+        let role_filter = asking(caller, parse_role_filter(args))?;
 
         // If server is specified, return tools from that single backend (existing behavior)
         if let Some(server) = extract_optional_str(args, "server") {
@@ -658,7 +670,7 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &super::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
-        let query = extract_required_str(args, "query")?.to_lowercase();
+        let query = asking(caller, extract_required_str(args, "query"))?.to_lowercase();
         let limit = extract_search_limit(args);
         let explain = extract_bool_or(args, "explain", false);
         let profile = self.active_profile(session_id);

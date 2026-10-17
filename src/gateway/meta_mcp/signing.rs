@@ -590,8 +590,8 @@ impl super::MetaMcp {
         self.release_unasked_nonce(caller);
     }
 
-    /// Give back the nonce of a call refused before anything could dispatch:
-    /// its confirmation question could not be delivered (MIK-7869). Only a
+    /// Give back the nonce of a call refused before anything could dispatch,
+    /// for [`Self::release_witnessed_nonce`], whose witness proves it. Only a
     /// nonce this call admitted: a call left unadmitted registered none. A step
     /// refused inside an execution asks with
     /// [`SigningInvocationContext::want_refund`].
