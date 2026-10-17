@@ -226,14 +226,13 @@ async fn surfaced_invalid(warm: bool) -> ([Value; 4], [usize; 2], usize) {
 /// K5-R (stdio): a warm surfaced name withheld for its schema is answered as
 /// a name that matches no tool, before anything acted; each refused send
 /// gives the nonce back exactly once, and it is accepted once more. Green on
-/// base. Mutants mK5-ask (the arm's ask removed) and mK5-uncond (the arm
-/// also gives the nonce back without the witness: twice per send).
+/// base. Mutant mK5-ask (the arm's ask removed).
 #[tokio::test]
 async fn a_withheld_surfaced_name_gives_the_nonce_back_on_stdio() {
     let ([first, second, third, fourth], counts, rounds) = surfaced_invalid(true).await;
-    assert_eq!(counts, [1, 1], "each refused send gives the nonce back once");
     assert_eq!(first["error"]["code"], -32601, "premise: absent: {first}");
     assert_eq!(second["error"]["code"], -32601, "the nonce was kept: {second}");
+    assert_eq!(counts, [1, 1], "each refused send gives the nonce back once");
     assert!(third.get("error").is_none(), "send 3 was refused: {third}");
     assert!(message(&fourth).contains(REPLAY), "given back twice: {fourth}");
     assert_eq!(rounds, 0, "nothing was sent");

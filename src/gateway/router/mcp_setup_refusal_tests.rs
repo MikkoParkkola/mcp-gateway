@@ -205,19 +205,24 @@ async fn an_execute_parse_refusal_gives_the_nonce_back() {
     }
 }
 
+/// The hardened fixture with plan attestation enforced.
+async fn attested() -> Fx {
+    use crate::attestation::{AttestationMode, AttestationValidator, BnautAttestationSigner};
+    fixture_hardened_signed_built(Answer::Ok, true, |meta| {
+        let signer = BnautAttestationSigner::new(b"plan-key".to_vec(), "plan");
+        let validator = AttestationValidator::new(signer.with_audience("test-gateway"));
+        meta.with_attestation(std::sync::Arc::new(validator), AttestationMode::Enforce)
+    })
+    .await
+}
+
 /// K8-R unattested plan: under enforced attestation an unkeyed plan is
 /// refused before any step (admission refuses only a keyed one). The nonce
 /// comes back; sends 3 and 4 are a `gateway_search` under it. Red on base at
 /// send 2. Mutant mK8-attest.
 #[tokio::test]
 async fn an_unattested_plan_refusal_gives_the_nonce_back() {
-    use crate::attestation::{AttestationMode, AttestationValidator, BnautAttestationSigner};
-    let fx = fixture_hardened_signed_built(Answer::Ok, true, |meta| {
-        let signer = BnautAttestationSigner::new(b"plan-key".to_vec(), "plan");
-        let validator = AttestationValidator::new(signer.with_audience("test-gateway"));
-        meta.with_attestation(std::sync::Arc::new(validator), AttestationMode::Enforce)
-    })
-    .await;
+    let fx = attested().await;
     // Warm: a cold step target is filled at the route stage, which keeps the
     // nonce spent (an effect, not this row's premise).
     let alpha = fx.state.backends.get("alpha").expect("alpha");
@@ -268,7 +273,8 @@ async fn a_withheld_surfaced_name_gives_the_nonce_back() {
 /// verdict, so nothing withholds the name before dispatch; dispatch lists
 /// alpha, which drops the witness, then refuses it. The nonce stays spent.
 /// Green on base. (The `_ =>` arm's own unconditional give-back, mK5-uncond,
-/// is killed by the stdio K5-R row's exactly-once count.)
+/// is killed by the dispatcher row in `meta_mcp/signing_refusal_kind_tests.rs`:
+/// on a shared backend no may-effect step precedes that arm.)
 #[tokio::test]
 async fn a_withheld_surfaced_name_after_a_cold_fill_keeps_the_nonce() {
     let fx = surfacing_invalid_read().await;
@@ -397,13 +403,7 @@ async fn a_playbook_step_policy_refusal_after_a_sent_step_keeps_the_nonce() {
 /// which drops the witness, so the refusal keeps the nonce spent.
 #[tokio::test]
 async fn an_unattested_plan_refusal_after_a_cold_fill_keeps_the_nonce() {
-    use crate::attestation::{AttestationMode, AttestationValidator, BnautAttestationSigner};
-    let fx = fixture_hardened_signed_built(Answer::Ok, true, |meta| {
-        let signer = BnautAttestationSigner::new(b"plan-key".to_vec(), "plan");
-        let validator = AttestationValidator::new(signer.with_audience("test-gateway"));
-        meta.with_attestation(std::sync::Arc::new(validator), AttestationMode::Enforce)
-    })
-    .await;
+    let fx = attested().await;
     let alpha = fx.state.backends.get("alpha").expect("alpha");
     let fills = alpha.list_fills();
     let plan = json!({"tool": "alpha:read"});
