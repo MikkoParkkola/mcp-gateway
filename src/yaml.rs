@@ -3,7 +3,7 @@
 //! The gateway's one YAML seam (MIK-8425).
 //!
 //! Every YAML read and write goes through here, so the parser behind it can
-//! be replaced in one place. Today the backend is serde_yaml 0.9.34, and
+//! be replaced in one place. Today the backend is `serde_yaml` 0.9.34, and
 //! each item is that crate's own behaviour, unchanged: the tree types are
 //! re-exported and the functions delegate. A later stage swaps the backend
 //! behind this same surface; `tests/fixtures/mik_8425_yaml/` records what
@@ -14,6 +14,7 @@
 //! one implementation.
 #![allow(
     dead_code,
+    unused_imports,
     reason = "MIK-8425: consumers are routed through this seam in MIG.1b to MIG.1f; \
               until then parts of it have no caller"
 )]
@@ -24,7 +25,7 @@ use figment::value::{Dict, Map};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-/// The YAML tree, its mapping and the parse error. They stay serde_yaml's
+/// The YAML tree, its mapping and the parse error. They stay `serde_yaml`'s
 /// own until the backend swap, which keeps routing a pure path rename.
 pub(crate) use serde_yaml::{Error, Mapping, Value};
 
@@ -42,6 +43,10 @@ pub(crate) fn from_str_loose(text: &str) -> Result<Dict, Error> {
 
 /// The config file's data as figment's YAML provider gives it: the
 /// document under its profile, or the provider's own error.
+#[allow(
+    clippy::result_large_err,
+    reason = "figment's own `Provider::data` signature, which the config loader returns"
+)]
 pub(crate) fn figment_data(text: &str) -> figment::Result<Map<figment::Profile, Dict>> {
     Yaml::string(text).data()
 }
@@ -62,7 +67,7 @@ pub(crate) fn from_value<T: DeserializeOwned>(value: Value) -> Result<T, Error> 
 }
 
 /// Every document of a multi-document stream, in order, ending after the
-/// first refusal. serde_yaml's own stream can keep yielding after a
+/// first refusal. `serde_yaml`'s own stream can keep yielding after a
 /// malformed document, so a caller that does not stop grows without bound;
 /// this iterator stops for it. There is no document count cap: a long
 /// manifest is read in full.

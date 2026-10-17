@@ -11,4 +11,4 @@
 #[path = "../../src/yaml.rs"]
 mod adapter;
 
-pub use adapter::*;
+pub(crate) use adapter::*;

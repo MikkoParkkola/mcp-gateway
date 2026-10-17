@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8425 MIG.1a: the YAML adapter (`src/yaml.rs`) behaves exactly as
-//! serde_yaml and figment do today, and no new file bypasses it.
+//! `serde_yaml` and figment do today, and no new file bypasses it.
 //!
 //! T1 to T3 and T5 of the MIG.1a test plan
 //! (`docs/internal/plans/2026-10-18-mik-8425-mig1a-adapter.md`).
@@ -113,7 +113,7 @@ fn tree_or_refusal(r: Result<yaml::Value, impl std::fmt::Display>) -> String {
     r.map_or_else(|e| format!("ERR {e}"), |v| format!("OK {v:?}"))
 }
 
-/// T3: on every recorded behaviour input the adapter reads what serde_yaml
+/// T3: on every recorded behaviour input the adapter reads what `serde_yaml`
 /// reads, as a tree, as a `Dict`, as a stream and as a typed map.
 #[test]
 fn adapter_reads_like_serde_yaml_on_the_behaviour_cases() {
