@@ -654,7 +654,14 @@ impl Gateway {
                     session_id,
                 ) {
                     Ok(intent) => caller.task = intent,
-                    Err(refusal) => break 'tool_call *refusal,
+                    // Refused before any key, lease or task existed: the
+                    // nonce goes back with the witness (MIK-8353 3d).
+                    Err(refusal) => {
+                        if let Some(witness) = witness {
+                            meta_mcp.release_witnessed_nonce(&caller, witness);
+                        }
+                        break 'tool_call *refusal;
+                    }
                 }
             }
             let admission = meta_mcp.admit_meta_sync(

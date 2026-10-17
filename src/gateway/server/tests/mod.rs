@@ -94,6 +94,9 @@ mod owner2_stdio_tasks;
 pub(super) mod route_matrix_stdio_tasks;
 /// MIK-8353 slice 3c: the stdio twin of the R4a nonce give-back row.
 mod s3c_stdio_refund;
+/// MIK-8353 slice 3d-2 (K6): a stdio task-intent refusal and its nonce.
+#[cfg(feature = "firewall")]
+mod s3d2_stdio_task_intent;
 mod stdio_task_policy_recheck;
 mod submit_authz_stdio;
 // MIK-7839.CANCEL.3: a dropped run_stdio future stops its task workers.
