@@ -223,6 +223,15 @@ mod tests {
 RUST
 printf '\n#[cfg(not(test))]\nmod registry_lint_plants;\n' >> "$scratch/src/gateway/meta_mcp/mod.rs"
 
+# A config entry with no plant could resolve and still never bite: every
+# banned name needs a PLANT line that references or calls it.
+entries=$(sed -n 's/.*path = "[^"]*::\([A-Za-z_0-9]*\)".*/\1/p' "$scratch/scripts/lint/registry-ban/clippy.toml")
+[[ -n "$entries" ]] || { echo "check_registry_lint: no config entries read" >&2; exit 1; }
+for name in $entries; do
+  grep -Eq "(::|\.)${name}[^A-Za-z_0-9].*// PLANT " "$scratch/$plant" \
+    || { echo "check_registry_lint: config entry $name has no plant" >&2; exit 1; }
+done
+
 # `-D warnings` as CI does, `--cap-lints warn` so the plants stay warnings.
 run_pass() { # mode, extra cargo args...
   local mode=$1 out="$scratch/clippy-$1.json" rc=0

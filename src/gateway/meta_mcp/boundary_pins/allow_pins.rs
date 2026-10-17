@@ -94,10 +94,11 @@ impl<'ast> Visit<'ast> for Names {
         // A path names a banned method only on its own type: `Cell::get` is not
         // `BackendRegistry::get`.
         let segs: Vec<String> = path.path.segments.iter().map(|s| s.ident.to_string()).collect();
-        if let [.., owner, name] = segs.as_slice() {
-            if BANNED.contains(&name.as_str()) && ["BackendRegistry", "MetaMcp", "Self"].contains(&owner.as_str()) {
-                *self.0.entry(name.clone()).or_default() += 1;
-            }
+        if let [.., owner, name] = segs.as_slice()
+            && BANNED.contains(&name.as_str())
+            && ["BackendRegistry", "MetaMcp", "Self"].contains(&owner.as_str())
+        {
+            *self.0.entry(name.clone()).or_default() += 1;
         }
         syn::visit::visit_expr_path(self, path);
     }
@@ -109,7 +110,7 @@ impl<'ast> Visit<'ast> for Names {
 struct Allows(Vec<String>);
 
 impl Allows {
-    fn row(&mut self, at: &Place, kind: &str, class: String, names: Names) {
+    fn row(&mut self, at: &Place, kind: &str, class: &str, names: Names) {
         let names: Vec<String> = names.0.into_iter().map(|(n, c)| format!("{n}x{c}")).collect();
         self.0.push(format!(
             "{}\t{}\t{kind}\t{class}\t{}",
@@ -131,7 +132,7 @@ impl Sink for Allows {
         if let Some(class) = ban_allow(attrs) {
             let mut names = Names::default();
             names.visit_stmt(stmt);
-            self.row(at, "statement", class, names);
+            self.row(at, "statement", &class, names);
         }
     }
 
@@ -139,7 +140,7 @@ impl Sink for Allows {
         if let Some(class) = ban_allow(item_attrs(item)) {
             let mut names = Names::default();
             names.visit_item(item);
-            self.row(at, "item", class, names);
+            self.row(at, "item", &class, names);
         }
     }
 
@@ -147,7 +148,7 @@ impl Sink for Allows {
         if let Some(class) = ban_allow(&file.attrs) {
             let mut names = Names::default();
             names.visit_file(file);
-            self.row(at, "module", class, names);
+            self.row(at, "module", &class, names);
         }
     }
 }
