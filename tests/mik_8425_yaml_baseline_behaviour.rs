@@ -328,6 +328,19 @@ fn yaml_behaviour_matches_the_recording() {
     golden::assert_golden("behaviour.txt", &report());
 }
 
+/// The structural form keeps what JSON loses: a tagged node is not a one-key
+/// map, and a numeric key is not a string key. Without this, the tree
+/// digests could not tell those readings apart.
+#[test]
+fn the_structural_form_separates_tags_from_maps_and_key_types() {
+    let structure = |doc: &str| {
+        golden::yaml_structure(&serde_yaml::from_str::<serde_yaml::Value>(doc).expect("parses"))
+    };
+    assert_ne!(structure("a: !exact x\n"), structure("a: {'!exact': x}\n"));
+    assert_ne!(structure("1: x\n"), structure("'1': x\n"));
+    assert_ne!(structure("a: 1\n"), structure("a: '1'\n"));
+}
+
 /// Prints the golden for review; never part of a normal run.
 #[test]
 #[ignore = "records tests/fixtures/mik_8425_yaml/behaviour.txt; run with --ignored --nocapture"]
