@@ -97,12 +97,19 @@ impl MetaMcp {
     /// (MIK-8392 STORED.2 E7): the dispatch's own mint conditions, an
     /// identity-propagation backend (with or without an `account:`) or a
     /// capability account. A target this refuses needs no liveness proof.
+    /// A capability account declared `shared` dispatches under the gateway's
+    /// static credential (`AccountCredential::Legacy`), so it mints nothing
+    /// per caller and has no binding a proof could show (MIK-8451).
     pub(crate) fn mints_per_caller(&self, server: &str, tool: &str) -> bool {
-        self.target_account(server, tool).is_some()
-            || self
-                .backends
-                .get(server)
-                .is_some_and(|backend| backend.identity_propagation_config().is_some())
+        use crate::personal_accounts::config::DescriptorMode;
+        self.target_account(server, tool).is_some_and(|account| {
+            self.account_strategies
+                .declared(&account.0)
+                .is_none_or(|declared| declared.mode != DescriptorMode::Shared)
+        }) || self
+            .backends
+            .get(server)
+            .is_some_and(|backend| backend.identity_propagation_config().is_some())
     }
 
     /// STORED.2 site 1: serve `response` when its account is proven live,
