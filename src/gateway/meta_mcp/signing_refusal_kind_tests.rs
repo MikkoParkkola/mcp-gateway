@@ -104,7 +104,7 @@ async fn an_undelivered_question_with_its_witness_gives_the_nonce_back() {
 
 /// The meta-tool setup refusals of K8: a call its own parse refuses, the
 /// refusal's text, and whether plan attestation is enforced.
-fn setup_refusals() -> [(&'static str, Value, &'static str, bool); 11] {
+fn setup_refusals() -> [(&'static str, Value, &'static str, bool); 13] {
     let unattested = "multi-step plans carry no attestation";
     [
         ("gateway_search", json!({}), "Missing 'query'", false),
@@ -116,6 +116,8 @@ fn setup_refusals() -> [(&'static str, Value, &'static str, bool); 11] {
         ("gateway_execute", json!({"tool": "read"}), "missing server prefix", false),
         ("gateway_execute", json!({"tool": "alpha:read", "arguments": 5}), "Invalid 'arguments'", false),
         ("gateway_execute", json!({"tool": "alpha:read"}), unattested, true),
+        ("gateway_run_playbook", json!({}), "Missing 'name'", false),
+        ("gateway_run_playbook", json!({"name": "x", "arguments": 5}), "Invalid 'arguments'", false),
         ("gateway_run_playbook", json!({"name": "nosuch"}), "Playbook not found", false),
         ("gateway_run_playbook", json!({"name": "nosuch"}), unattested, true),
     ]

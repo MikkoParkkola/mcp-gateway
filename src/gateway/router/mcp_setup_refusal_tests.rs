@@ -264,9 +264,11 @@ async fn a_withheld_surfaced_name_gives_the_nonce_back() {
     assert_eq!(dispatched(&fx), 0, "nothing was sent");
 }
 
-/// K5-K (`/mcp`): the same name on a cold catalogue. The call lists alpha
-/// first, which drops the witness, so the nonce stays spent. Green on base.
-/// Mutant mK5-uncond: the arm gives the nonce back past the witness.
+/// K5-K (`/mcp`): the same name on a cold catalogue. A cold cache is no
+/// verdict, so nothing withholds the name before dispatch; dispatch lists
+/// alpha, which drops the witness, then refuses it. The nonce stays spent.
+/// Green on base. (The `_ =>` arm's own unconditional give-back, mK5-uncond,
+/// is killed by the stdio K5-R row's exactly-once count.)
 #[tokio::test]
 async fn a_withheld_surfaced_name_after_a_cold_fill_keeps_the_nonce() {
     let fx = surfacing_invalid_read().await;
@@ -388,4 +390,33 @@ async fn a_playbook_step_policy_refusal_after_a_sent_step_keeps_the_nonce() {
         again["error"]["message"], "Nonce replay detected",
         "the nonce was given back after a sent step: {again}"
     );
+}
+
+/// K8-K (`/mcp`, a real effect): the same unattested `gateway_execute` with
+/// alpha cold. The route stage fills alpha's catalogue for the step target,
+/// which drops the witness, so the refusal keeps the nonce spent.
+#[tokio::test]
+async fn an_unattested_plan_refusal_after_a_cold_fill_keeps_the_nonce() {
+    use crate::attestation::{AttestationMode, AttestationValidator, BnautAttestationSigner};
+    let fx = fixture_hardened_signed_built(Answer::Ok, true, |meta| {
+        let signer = BnautAttestationSigner::new(b"plan-key".to_vec(), "plan");
+        let validator = AttestationValidator::new(signer.with_audience("test-gateway"));
+        meta.with_attestation(std::sync::Arc::new(validator), AttestationMode::Enforce)
+    })
+    .await;
+    let alpha = fx.state.backends.get("alpha").expect("alpha");
+    let fills = alpha.list_fills();
+    let plan = json!({"tool": "alpha:read"});
+    let first = call(&fx, "gateway_execute", plan, "k8ak-n1").await;
+    assert!(
+        refused_with(&first, "multi-step plans carry no attestation"),
+        "premise: the plan refusal: {first}"
+    );
+    assert!(alpha.list_fills() > fills, "premise: the call filled alpha");
+    let again = call(&fx, "gateway_search", json!({"query": "read"}), "k8ak-n1").await;
+    assert_eq!(
+        again["error"]["message"], "Nonce replay detected",
+        "the nonce was given back after a fill: {again}"
+    );
+    assert_eq!(dispatched(&fx), 0, "nothing was sent");
 }

@@ -3,7 +3,8 @@
 //! MIK-8353 slice 3d-2 (NONCEFX.11, K6): on hardened, signed stdio a task
 //! call the task surface refuses (`stdio_tasks::task_intent`) took no key,
 //! lease or task, so it gives its nonce back with the refund witness; after
-//! X14 consumed a grant the nonce stays spent.
+//! X14 consumed a grant the nonce stays spent. The K5 rows (a surfaced name
+//! withheld for its schema) share the fixture.
 
 use std::sync::atomic::Ordering;
 
@@ -180,9 +181,13 @@ fn plain_call(id: u64, name: &str, arguments: Value, nonce: &str) -> Value {
 
 /// K5 (stdio): the surfaced `echo` listed with a structurally invalid input
 /// schema, `warm` or cold. Returns sends 1 and 2 of it under one nonce, then
-/// a `gateway_search` under the same nonce twice, and the backend's
-/// `tools/call` count.
-async fn surfaced_invalid(warm: bool) -> ([Value; 4], usize) {
+/// a `gateway_search` under the same nonce twice; how many nonces sends 1
+/// and 2 each gave back; and the backend's `tools/call` count. Warm, the
+/// name is withheld at dispatch (`call_dispatch.rs`, the `_ =>` arm): a
+/// surfaced name never takes the route stage's absent path, which only
+/// `gateway_invoke` and `gateway_execute` take.
+async fn surfaced_invalid(warm: bool) -> ([Value; 4], [usize; 2], usize) {
+    use crate::gateway::meta_mcp::signing::given_back_on_this_thread as given;
     const NONCE: &str = "s3d2-k5-nonce-0001";
     let served = backend_listing(json!([{"name": TOOL, "inputSchema": {"type": "string"}}])).await;
     let fixture = Box::pin(fixture_on_with(served, None, |config| {
@@ -206,21 +211,27 @@ async fn surfaced_invalid(warm: bool) -> ([Value; 4], usize) {
             .expect("the backend is registered");
         backend.get_tools().await.expect("the backend lists");
     }
+    let before = given();
     let first = dispatch(&fixture, plain_call(1, TOOL, json!({}), NONCE)).await;
+    let between = given();
     let second = dispatch(&fixture, plain_call(2, TOOL, json!({}), NONCE)).await;
+    let counts = [between - before, given() - between];
     let search = json!({"query": "echo"});
     let third = dispatch(&fixture, plain_call(3, "gateway_search", search.clone(), NONCE)).await;
     let fourth = dispatch(&fixture, plain_call(4, "gateway_search", search, NONCE)).await;
     let rounds = fixture.rounds.load(Ordering::SeqCst);
-    ([first, second, third, fourth], rounds)
+    ([first, second, third, fourth], counts, rounds)
 }
 
 /// K5-R (stdio): a warm surfaced name withheld for its schema is answered as
-/// a name that matches no tool, before anything acted; the nonce comes back
-/// once.
+/// a name that matches no tool, before anything acted; each refused send
+/// gives the nonce back exactly once, and it is accepted once more. Green on
+/// base. Mutants mK5-ask (the arm's ask removed) and mK5-uncond (the arm
+/// also gives the nonce back without the witness: twice per send).
 #[tokio::test]
 async fn a_withheld_surfaced_name_gives_the_nonce_back_on_stdio() {
-    let ([first, second, third, fourth], rounds) = surfaced_invalid(true).await;
+    let ([first, second, third, fourth], counts, rounds) = surfaced_invalid(true).await;
+    assert_eq!(counts, [1, 1], "each refused send gives the nonce back once");
     assert_eq!(first["error"]["code"], -32601, "premise: absent: {first}");
     assert_eq!(second["error"]["code"], -32601, "the nonce was kept: {second}");
     assert!(third.get("error").is_none(), "send 3 was refused: {third}");
@@ -228,11 +239,13 @@ async fn a_withheld_surfaced_name_gives_the_nonce_back_on_stdio() {
     assert_eq!(rounds, 0, "nothing was sent");
 }
 
-/// K5-K (stdio): the same name on a cold catalogue: the call lists the
-/// backend first, so the nonce stays spent.
+/// K5-K (stdio): the same name on a cold catalogue. Nothing withholds it
+/// before dispatch (a cold cache is no verdict), so dispatch lists the
+/// backend, finds no usable `echo` and refuses; the fill keeps the nonce
+/// spent.
 #[tokio::test]
 async fn a_withheld_surfaced_name_after_a_cold_fill_keeps_the_nonce_on_stdio() {
-    let ([first, second, ..], rounds) = surfaced_invalid(false).await;
+    let ([first, second, ..], _, rounds) = surfaced_invalid(false).await;
     assert!(
         first["result"]["isError"] == true || first.get("error").is_some(),
         "premise: refused: {first}"
