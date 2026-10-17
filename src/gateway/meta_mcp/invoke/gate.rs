@@ -473,7 +473,12 @@ impl MetaMcp {
                 caller.signing.inspect(|signing| signing.want_refund());
                 answer
             }
-            None => Err(refusal),
+            None => {
+                // The policy's own refusal at dispatch, before anything this
+                // step does acts: the witness decides (MIK-8353 3d).
+                super::nonce_settle::ask_refund(caller);
+                Err(refusal)
+            }
         }
     }
 
