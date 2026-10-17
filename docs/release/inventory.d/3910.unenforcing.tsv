@@ -1,0 +1,3 @@
+src/gateway/router/backend_handlers/direct_caller.rs	refused	1	Builds the HTTP 400 refusal from the error code and text; decides nothing
+src/gateway/router/backend_handlers/direct_caller.rs	validated	1	Calls the shared protocol-field validation and maps its refusal to HTTP 400 with no id; the validation rules live in security::sanitize
+src/gateway/router/backend_handlers/direct_caller.rs	intake_refusal	1	Reads the routed owner and principal and passes them to the shared intake judgement, then wraps its refusal as HTTP 400; the decision is made in meta_mcp::intake_refusal
