@@ -20,7 +20,7 @@ use super::super::slot_verdict_http_tests::{CLOSED, Gateway, gateway_tuned};
 use super::{OUTPUT, modern_meta};
 use crate::config::{ApiKeyConfig, AuthConfig, api_key_digest_spec};
 use crate::gateway::meta_mcp::slot_verdict_fixture::{
-    BACKEND, BINDING, CallerSlot, Surfaced, TOOL, Warmth, valid,
+    BACKEND, BINDING, CallerSlot, Surfaced, TOOL, Warmth, rearm_alpha_slot_with, valid,
 };
 use crate::key_server::oidc::VerifiedIdentity;
 
@@ -47,12 +47,13 @@ fn key(secret: &str, name: &str, backend: &str) -> ApiKeyConfig {
     }
 }
 
-fn auth() -> AuthConfig {
+/// The two keys; `excluded_scope` is the backend the second key may reach.
+fn auth(excluded_scope: &str) -> AuthConfig {
     AuthConfig {
         enabled: true,
         api_keys: vec![
             key(INCLUDED, "included", BACKEND),
-            key(EXCLUDED, "excluded", ELSEWHERE),
+            key(EXCLUDED, "excluded", excluded_scope),
         ],
         ..AuthConfig::default()
     }
@@ -60,6 +61,11 @@ fn auth() -> AuthConfig {
 
 /// The per-user fixture with `alpha`'s slot warm, behind the two keys.
 async fn fixture() -> Gateway {
+    fixture_scoped(ELSEWHERE).await
+}
+
+/// [`fixture`] with the second key scoped to `excluded_scope`.
+async fn fixture_scoped(excluded_scope: &'static str) -> Gateway {
     gateway_tuned(
         (CallerSlot::Valid, &valid(), Warmth::Warm),
         CLOSED,
@@ -67,7 +73,7 @@ async fn fixture() -> Gateway {
         (|_| {}, |_| {}),
         |state| {
             state.auth_config = std::sync::Arc::new(
-                crate::gateway::auth::ResolvedAuthConfig::from_config(&auth()),
+                crate::gateway::auth::ResolvedAuthConfig::from_config(&auth(excluded_scope)),
             );
         },
     )
@@ -88,13 +94,7 @@ async fn send(gw: &Gateway, secret: &str, method: &str, name: &str, params: Valu
         .header("mcp-name", name)
         .body(axum::body::Body::from(body.to_string()))
         .expect("a request");
-    request.extensions_mut().insert(VerifiedIdentity {
-        subject: "alpha".to_string(),
-        email: "alpha@example.invalid".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://issuer.example.invalid".to_string(),
-    });
+    request.extensions_mut().insert(identity());
     let response = gw.router.clone().oneshot(request).await.expect("an answer");
     let bytes = to_bytes(response.into_body(), usize::MAX)
         .await
@@ -149,6 +149,39 @@ async fn finished(gw: &Gateway, idempotency: &str) -> String {
 
 fn backend(gw: &Gateway) -> std::sync::Arc<crate::backend::Backend> {
     gw.meta.backends.get(BACKEND).expect("the backend")
+}
+
+fn identity() -> VerifiedIdentity {
+    VerifiedIdentity {
+        subject: "alpha".to_string(),
+        email: "alpha@example.invalid".to_string(),
+        name: None,
+        groups: vec![],
+        issuer: "https://issuer.example.invalid".to_string(),
+    }
+}
+
+/// Drop the slot by a real idle eviction and re-attach its upstream, so the
+/// next read of the task is cold (as `stored_read_lease_tests::evict_alpha`).
+fn evict(gw: &Gateway) {
+    let slot = backend(gw);
+    slot.age_per_user_slot_for_test(BINDING, AGED);
+    slot.evict_idle_per_user_entries(EVICT_AFTER);
+    assert!(
+        !slot.holds_per_user_slot_for_test(BINDING),
+        "premise: the real eviction dropped the slot"
+    );
+    let _ = rearm_alpha_slot_with(&slot, &valid(), false);
+}
+
+/// The three cold-path observables: resolutions, the running cold lease, and
+/// upstream lists.
+fn cold_marks(gw: &Gateway) -> (usize, Option<Duration>, usize) {
+    (
+        gw.mints.load(std::sync::atomic::Ordering::SeqCst),
+        backend(gw).cold_lease_remaining(&identity().stable_actor_id()),
+        gw.caller.lists(),
+    )
 }
 
 /// Age the slot past the idle window, run `read`, then a real idle eviction:
@@ -207,3 +240,65 @@ async fn s7a_warm_an_excluded_read_does_not_touch_the_targets_slot() {
         "S7a-warm: the excluded key is not served the output: {read}"
     );
 }
+
+/// S7a-cold, a guard (test plan v2): with the target's slot evicted, the
+/// excluded key's stored read makes no custody resolution, claims no cold
+/// lease and lists nothing upstream. Green on the tip: account resolution
+/// skips refused targets (`task_replay.rs:136`) and `settle_caller_view`
+/// returns before any claim (`:245`). The control, the included key's own
+/// cold read, moves the marks, so the guard cannot pass on dead observables.
+/// Mutants: S7a-c-m1 (the `:136` filter removed), S7a-c-m2 (the `:245`
+/// return removed), S7a-c-m3 (m2, observed at the list counter alone).
+#[tokio::test]
+async fn s7a_cold_an_excluded_read_resolves_claims_and_lists_nothing() {
+    let gw = fixture().await;
+    let id = finished(&gw, "s7a-cold").await;
+    evict(&gw);
+    let (mints, lease, lists) = cold_marks(&gw);
+    assert_eq!(lease, None, "premise: no cold lease runs before the read");
+    let read = task_get(&gw, EXCLUDED, &id).await;
+    let (mints_after, lease_after, lists_after) = cold_marks(&gw);
+    assert_eq!(mints_after, mints, "S7a-cold: resolve counter moved; read: {read}");
+    assert_eq!(
+        lease_after, None,
+        "S7a-cold: cold claim made: cold_lease_remaining is Some; read: {read}"
+    );
+    assert_eq!(lists_after, lists, "S7a-cold: list counter moved; read: {read}");
+    let control = task_get(&gw, INCLUDED, &id).await;
+    assert_ne!(
+        cold_marks(&gw),
+        (mints, lease, lists),
+        "S7a-cold control: the included key's cold read moved a mark: {control}"
+    );
+}
+
+/// The stored-read answer of the second key, ids blanked: `excluded_scope`
+/// is its scope, and `unregister` drops the target from the registry after
+/// the task has finished and before the read.
+async fn second_key_answer(excluded_scope: &'static str, unregister: bool) -> String {
+    let gw = fixture_scoped(excluded_scope).await;
+    let id = finished(&gw, "s7a-twin").await;
+    if unregister {
+        assert!(gw.meta.backends.remove(BACKEND), "premise: {BACKEND} was registered");
+    }
+    let read = task_get(&gw, EXCLUDED, &id).await;
+    read.to_string().replace(&id, "<task>")
+}
+
+/// S7a-twin, the oracle row (lead, 2026-10-17): a stored task whose target is
+/// registered but outside the reader's scope answers exactly as one whose
+/// target is inside the scope but unregistered, PR-A's `beta` and `ghost`
+/// cells on the stored-read path. Same method, arguments and target name;
+/// only scope and registration differ, since an out-of-scope name is
+/// judged out of scope before registration (`scoped_backends.rs:43`).
+/// Mutant S7a-t-m1: S7's out-of-scope branch answers its own code.
+#[tokio::test]
+async fn s7a_twin_an_out_of_scope_target_answers_as_an_unregistered_one() {
+    let out_of_scope = second_key_answer(ELSEWHERE, false).await;
+    let unregistered = second_key_answer(BACKEND, true).await;
+    assert_eq!(
+        out_of_scope, unregistered,
+        "S7a-twin: out-of-scope target vs unregistered target"
+    );
+}
+

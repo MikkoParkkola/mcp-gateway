@@ -222,3 +222,53 @@ async fn r2b_a_refused_task_call_stores_no_task_in_any_cell() {
     }
     assert!(stored.is_empty(), "R2b: tasks were stored: {stored:?}");
 }
+
+/// MIK-8387 PR-B R3, a guard (test plan v2 §5): R2 (T0)'s stored read of
+/// `beta`'s task, refused by S7's `check_visible_policy`, emits the
+/// `audit_refusal` warning with its real fields (`authz.rs:281`: server and
+/// the scope refusal's reason, no numeric code; W1 pins the record's -32003);
+/// `ghost`'s read emits none. The capture covers one read after the task has
+/// settled, so the worker's own warnings stay out of it. Mutant M16: S7's
+/// `check_visible_policy` call removed.
+#[test]
+fn r3_a_stored_read_refused_for_scope_logs_the_refusal_and_an_absent_one_does_not() {
+    const REFUSED: &str = "Tool invocation refused by authorization";
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime");
+    let mut cells = Vec::new();
+    for name in [WITHHELD, GHOST] {
+        let (fx, id) = rt.block_on(async {
+            let fx = scoped_fixture(MetaMode::CodeMode).await;
+            let (_, made) = submit_mixed_chain(&fx, name).await;
+            let id = made
+                .pointer("/result/task/taskId")
+                .or_else(|| made.pointer("/result/taskId"))
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("R3 {name}: premise: a task was made: {made}"))
+                .to_owned();
+            let _ = settled(&fx, &id, name).await;
+            (fx, id)
+        });
+        let (read, warnings) = crate::test_log_capture::capture_warnings(|| {
+            rt.block_on(send(
+                &fx,
+                "tasks/get",
+                &id,
+                json!({"taskId": id, "_meta": tasks_meta()}),
+            ))
+        });
+        cells.push((name, read, warnings));
+    }
+    let (_, beta_read, beta) = &cells[0];
+    assert!(
+        beta.contains(REFUSED) && beta.contains(WITHHELD),
+        "R3: no audit_refusal warning for beta; read {beta_read:?}; log:\n{beta}"
+    );
+    let (_, ghost_read, ghost) = &cells[1];
+    assert!(
+        !ghost.contains(REFUSED),
+        "R3: ghost's read logged a refusal; read {ghost_read:?}; log:\n{ghost}"
+    );
+}

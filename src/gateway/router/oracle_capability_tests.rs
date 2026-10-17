@@ -479,3 +479,32 @@ async fn a_profile_refused_backend_tool_keeps_its_answer() {
         "execute keeps its answer: {body}"
     );
 }
+
+/// MIK-8387 PR-B C2, a guard (test plan v2 §5): a key whose scope excludes
+/// the capability backend, calling a tool it does not define there, gets the
+/// answer it gets for a server no registry knows, on `/mcp` `gateway_invoke`.
+/// Green on the tip: S3 answers the out-of-scope name as absent
+/// (`gate.rs` `gate_answer`) before the capability arm. Mutant C2-m: S3 moved
+/// below the capability arm exposes the scope refusal instead.
+#[tokio::test]
+async fn c2_an_out_of_scope_capability_backend_answers_as_an_unregistered_server() {
+    const NOWHERE: &str = "no_such_server_8387";
+    let fx = twin(Reason::Admin, true).await;
+    let call = |server: &str| {
+        json!({"name": "gateway_invoke",
+            "arguments": {"server": server, "tool": "nosuch_8387", "arguments": {}}})
+    };
+    let mut answers = Vec::new();
+    for server in [CAPS, NOWHERE] {
+        let (status, mut body) =
+            send(&fx, "/mcp", "k-alpha-only", "tools/call", call(server), None).await;
+        if let Some(obj) = body.as_object_mut() {
+            obj.remove("id");
+        }
+        answers.push((status, body.to_string().replace(server, "SERVER")));
+    }
+    assert_eq!(
+        answers[0], answers[1],
+        "C2 answer changed: out-of-scope capability backend vs unregistered server"
+    );
+}
