@@ -32,6 +32,11 @@ pub(super) struct TestSeams {
     /// production one. A row sets it long, so no tick lands mid-row.
     #[cfg(test)]
     telemetry_save_every: Option<std::time::Duration>,
+    /// The HTTP window saver's checkpoint interval (MIK-7211); `None` is the
+    /// production one. A row sets it long, so only the open and the final
+    /// write touch the window file mid-row.
+    #[cfg(test)]
+    window_save_every: Option<std::time::Duration>,
     /// A pause at the start of this gateway's stdio dispatches, before the
     /// request is observed (MIK-8364 drain-window row). Per gateway, so no
     /// other session in the test binary stops on it.
@@ -62,6 +67,12 @@ impl TestSeams {
     #[cfg(test)]
     pub(super) fn telemetry_save_every(&self) -> Option<std::time::Duration> {
         self.telemetry_save_every
+    }
+
+    /// The HTTP window saver's interval a test set, if any (MIK-7211).
+    #[cfg(test)]
+    pub(super) fn window_save_every(&self) -> Option<std::time::Duration> {
+        self.window_save_every
     }
 
     /// The test's shutdown trigger, taken once by `run`.
@@ -143,6 +154,14 @@ impl super::Gateway {
     #[cfg(test)]
     pub(super) fn with_telemetry_save_interval(mut self, every: std::time::Duration) -> Self {
         self.test_seams.telemetry_save_every = Some(every);
+        self
+    }
+
+    /// Checkpoint the HTTP window every `every` instead of the production
+    /// interval (MIK-7211).
+    #[cfg(test)]
+    pub(super) fn with_window_save_interval(mut self, every: std::time::Duration) -> Self {
+        self.test_seams.window_save_every = Some(every);
         self
     }
 

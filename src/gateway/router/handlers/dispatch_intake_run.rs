@@ -404,17 +404,19 @@ pub(in crate::gateway::router::handlers) async fn intake(
         }
     };
 
-    let protocol_header = headers
-        .get("mcp-protocol-version")
-        .and_then(|value| value.to_str().ok());
-    crate::protocol_revision_telemetry::observe_inbound_request(
+    let sealed = &state.meta_mcp.window_seal;
+    if !crate::gateway::router::helpers::observe_http(
         &request,
         params,
         &method,
-        protocol_header,
+        &headers,
         Some(session_id.as_str()),
-        crate::protocol_revision_telemetry::Transport::Http,
-    );
+        sealed,
+    ) {
+        return Err(
+            crate::gateway::router::helpers::window_sealed_response(&request).into_response(),
+        );
+    }
 
     // Which protocol generation is this request written against? Decided per
     // request, not per connection: 2026-07-28 removed the handshake precisely so

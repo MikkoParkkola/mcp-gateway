@@ -7,10 +7,14 @@
 //! their identity in `_meta`; legacy HTTP requests carry a protocol header, and
 //! legacy stdio follow-ups reuse the bounded attribution learned at initialize.
 
+mod agents;
 mod durable;
 #[cfg(test)]
 pub(crate) use durable::write_seam;
 mod observe;
+pub(crate) mod window;
+#[cfg(test)]
+mod window_decide;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write as _;
@@ -23,10 +27,8 @@ use serde_json::Value;
 
 use crate::protocol::extensions::Extension;
 
-pub use durable::{
-    DurableTelemetrySink, DurableWindow, durable_window_path, load_durable_window,
-    production_retirement_decision, production_retirement_decision_at,
-};
+pub use durable::{DurableTelemetrySink, durable_window_path};
+pub(crate) use observe::{HttpCaller, observe_inbound_request_from};
 pub use observe::{
     bind_session_revision, extension_adoption, global_shadow_count, global_snapshot,
     observe_client_extensions, observe_inbound_request, observe_tools_list, register_metrics,
@@ -67,13 +69,13 @@ const MEASURED_CLIENTS: &[&str] = &[
     "chatgpt",
     "other",
 ];
+// Only the zero-registration of metric series enumerates transports.
+#[cfg(feature = "metrics")]
 const MEASURED_TRANSPORTS: &[Transport] = &[Transport::Http, Transport::Stdio, Transport::Internal];
 /// Directory below the gateway data directory that holds the restart-safe window.
 pub const DURABLE_TELEMETRY_DIR: &str = "protocol-revision-telemetry";
 /// Durable aggregate filename read by operators after the measurement window.
 pub const DURABLE_WINDOW_FILE: &str = "window.json";
-/// Schema identifier for the operator-readable aggregate.
-pub const DURABLE_WINDOW_SCHEMA: &str = "mcp_protocol_revision_window.v1";
 
 /// Inbound transport for a negotiated session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,6 +192,13 @@ pub struct Registry {
     shadow_counts: [u64; 16],
     session_attributions: BTreeMap<u64, SessionAttribution>,
     session_order: VecDeque<u64>,
+    /// The same observations, split by transport. The merged fields above are
+    /// the public view; a retirement decision reads one transport only, so a
+    /// stdio request can never stand in for HTTP traffic (U1 v2 window).
+    per_transport: BTreeMap<&'static str, Snapshot>,
+    /// Requests with no revision, by bounded caller key (named client, else
+    /// User-Agent family). Diagnoses the unattributed share; gates nothing.
+    missing_revision_agents: BTreeMap<&'static str, BTreeMap<String, u64>>,
 }
 
 /// Snapshot for `/metrics` tests and the Linear table.
@@ -220,8 +229,6 @@ pub enum RetirementBlocked {
     UnattributedAtOrAboveRetirementThreshold,
     /// Present but unrecognized revisions are too common to classify safely.
     OtherAtOrAboveRetirementThreshold,
-    /// HTTP and stdio evidence do not cover the same production window.
-    WindowMisaligned,
 }
 
 impl Registry {
@@ -251,18 +258,50 @@ impl Registry {
         client: &str,
         transport: Transport,
     ) {
-        self.total += 1;
+        self.observe_request_from(requested_revision, client, transport, None);
+    }
+
+    /// [`Self::observe_request`] with the caller's raw User-Agent, reduced to a
+    /// bounded family before anything is stored.
+    pub(crate) fn observe_request_from(
+        &mut self,
+        requested_revision: Option<&str>,
+        client: &str,
+        transport: Transport,
+        user_agent: Option<&str>,
+    ) {
         let client = client_label(client);
+        let revision = revision_label(requested_revision);
+        self.total += 1;
         *self.by_client.entry(client.to_string()).or_insert(0) += 1;
         *self
             .by_transport
             .entry(transport.as_str().to_string())
             .or_insert(0) += 1;
-        match revision_label(requested_revision) {
+        match revision {
             Some(rev) => {
                 *self.by_revision.entry(rev.to_string()).or_insert(0) += 1;
             }
             None => self.unattributed += 1,
+        }
+        let slice = self.per_transport.entry(transport.as_str()).or_default();
+        slice.total += 1;
+        *slice.by_client.entry(client.to_string()).or_insert(0) += 1;
+        *slice
+            .by_transport
+            .entry(transport.as_str().to_string())
+            .or_insert(0) += 1;
+        if let Some(rev) = revision {
+            *slice.by_revision.entry(rev.to_string()).or_insert(0) += 1;
+        } else {
+            slice.unattributed += 1;
+            let key = agents::missing_revision_agent(client, user_agent);
+            *self
+                .missing_revision_agents
+                .entry(transport.as_str())
+                .or_default()
+                .entry(key.to_string())
+                .or_insert(0) += 1;
         }
     }
 
@@ -333,6 +372,22 @@ impl Registry {
     /// Count for one of the finite `tools/list` filter combinations.
     pub fn shadow_count(&self, filters: ListFilters) -> u64 {
         self.shadow_counts[shadow_index(filters)]
+    }
+
+    /// This process's observations on one transport only.
+    pub(crate) fn transport_snapshot(&self, transport: Transport) -> Snapshot {
+        self.per_transport
+            .get(transport.as_str())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Requests on `transport` with no revision, by bounded caller key.
+    pub(crate) fn missing_revision_agents(&self, transport: Transport) -> BTreeMap<String, u64> {
+        self.missing_revision_agents
+            .get(transport.as_str())
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn shadow_snapshot(&self) -> BTreeMap<String, u64> {
@@ -614,5 +669,7 @@ pub(crate) fn reset_global_for_tests() {
 
 #[cfg(test)]
 mod lock_tests;
+#[cfg(test)]
+mod slice_tests;
 #[cfg(test)]
 mod tests;

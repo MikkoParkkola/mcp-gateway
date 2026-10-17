@@ -96,12 +96,16 @@ async fn sigterm_ends_stdio_gracefully_and_saves_every_observed_request() {
     );
     drop(stdin);
 
-    let saved = mcp_gateway::protocol_revision_telemetry::load_durable_window(
+    // Read as raw JSON, like tests/u1_v1_window_grade.rs: the window loader
+    // is crate-private since the v2 window (MIK-7211).
+    let path = mcp_gateway::protocol_revision_telemetry::durable_window_path(
         &temp.path().join(".mcp-gateway"),
-    )
-    .expect("the window file reads")
-    .snapshot;
-    let saved_stdio = saved.by_transport.get("stdio").copied().unwrap_or(0);
+    );
+    let saved: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("the window file reads"))
+            .expect("the window file is JSON");
+    let saved = &saved["stdio"];
+    let saved_stdio = saved["by_transport"]["stdio"].as_u64().unwrap_or(0);
     assert!(
         saved_stdio > PINGS,
         "the window saved after SIGTERM holds {saved_stdio} stdio requests; {} were observed: {saved:?}",
