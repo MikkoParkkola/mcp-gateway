@@ -205,6 +205,8 @@ mod slot_quota_direct_tests;
 #[cfg(test)]
 mod stored_read_account_tests;
 #[cfg(test)]
+mod stored_read_account_excluded_tests;
+#[cfg(test)]
 mod stored_read_capability_tests;
 /// MIK-8392.STORED.1 order twins: stored reads refuse in live-call order.
 #[cfg(test)]
