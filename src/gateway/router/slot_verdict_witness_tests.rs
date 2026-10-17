@@ -309,7 +309,8 @@ async fn p0_http_a_verdict_mint_then_a_sealed_task_submit_keeps_the_nonce() {
         |state| executor = Some(std::sync::Arc::clone(&state.task_executor)),
     )
     .await;
-    let admission = executor.expect("the fixture state").service.admission();
+    let executor = executor.expect("the fixture state");
+    let admission = executor.service.admission();
     admission.adjust_sealed(0, 1);
     let refused = task_invoke(&gw, "p0-k1", "p0-n1").await;
     assert_eq!(

@@ -372,23 +372,35 @@ async fn s3c_chained_refusal_gives_the_nonce_back() {
     let chained = Arc::new(crate::backend::Backend::new(
         CHAINED,
         BackendConfig {
+            enabled: true,
             signature_chain: ChainMode::Require,
             ..BackendConfig::default()
         },
         &FailsafeConfig::default(),
         std::time::Duration::from_secs(60),
     ));
+    let chained_mock = MockBackend::answering(Answer::ok());
+    chained.set_transport_for_test(Arc::clone(&chained_mock) as Arc<dyn Transport>);
     assert!(state.backends.register(chained), "fixture registration");
     prime_one_settled_task(&state, 440, "s3c-ch-prime", "s3c-ch-n0").await;
-    let records = assert_primed(&mock, &store);
-    let to_chained = |id: i64| {
-        let mut body = signed_task(id, &format!("s3c-ch-{id}"), "s3c-ch-n1", "c");
+    let to_chained = |id: i64, nonce: &str| {
+        let mut body = signed_task(id, &format!("s3c-ch-{id}"), nonce, "c");
         body["params"]["arguments"]["server"] = json!(CHAINED);
         body
     };
+    // The route-stage gate fills CHAINED's cold catalogue on its first call:
+    // an effect, so that call's nonce stays spent. Warmed here, under its own
+    // nonce, the rows below meet a warm catalogue with nothing acted.
+    let warmed = post(&state, "key-a", to_chained(445, "s3c-ch-warm")).await;
+    std::assert_eq!(
+        error_code(&warmed),
+        -32001,
+        "premise: the warming call meets the chain refusal: {warmed}"
+    );
+    let records = assert_primed(&mock, &store);
 
-    let first = post(&state, "key-a", to_chained(441)).await;
-    let second = post(&state, "key-a", to_chained(442)).await;
+    let first = post(&state, "key-a", to_chained(441, "s3c-ch-n1")).await;
+    let second = post(&state, "key-a", to_chained(442, "s3c-ch-n1")).await;
     assert_refused_twice(
         "S-chained",
         &first,
