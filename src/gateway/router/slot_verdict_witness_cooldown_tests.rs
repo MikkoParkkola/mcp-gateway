@@ -83,7 +83,8 @@ const COOLDOWN: &str = "temporarily disabled";
 /// fresh-nonce call meets the cooldown at dispatch, in the dispatch's
 /// rendering. Nothing sent. Before MIK-8439 both answered the cooldown,
 /// unprefixed, before the nonce; that order now holds for a shared backend
-/// only (R-MCP (s)).
+/// only (R-MCP (s)). After MIK-8439 this arm and (b) converge on a per-user
+/// backend by design: each pins its own verdict arm, so keep both.
 #[tokio::test]
 async fn r_mcp_a_offers_judges_the_nonce_then_meets_the_cooldown_at_dispatch() {
     let gw = signed(Warmth::Warm, CLOSED).await;
@@ -136,7 +137,8 @@ fn assert_nonce_first(row: &str, first: &str, (replay, fresh, sent): &(Value, Va
 
 /// R-MCP (b), Unknown (red first, kills M1): alpha's fill fails under
 /// `standard`, so the verdict is `Unknown` (`catalogue_verdict.rs:52`) and
-/// records nothing. RED at base: signing answers the cooldown first.
+/// records nothing. RED at base: signing answers the cooldown first. It
+/// converges with (a) on a per-user backend after MIK-8439, by design.
 #[tokio::test]
 async fn r_mcp_b_unknown_judges_the_nonce_before_the_cooldown() {
     let gw = signed(
@@ -169,7 +171,8 @@ async fn r_mcp_c_failed_fill_judges_the_nonce_before_the_cooldown() {
 /// nonce (MIK-8439 keeps the policy's check there). A caller with a view, the
 /// tool in cooldown: its replayed nonce and a fresh one both get the
 /// cooldown, unprefixed, before the nonce. Nothing sent. The order R-MCP (a)
-/// pinned for a per-user backend before MIK-8439.
+/// pinned for a per-user backend before MIK-8439: since then this is the only
+/// row that exercises the policy's cooldown-before-nonce order.
 #[tokio::test]
 async fn r_mcp_s_shared_backend_answers_the_cooldown_before_the_nonce() {
     use crate::gateway::router::direct_guards_fixture::{Answer, fixture, post_meta_invoke_nonce};
