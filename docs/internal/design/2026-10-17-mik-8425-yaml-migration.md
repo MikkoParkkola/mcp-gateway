@@ -39,9 +39,12 @@ What follows from the table:
   (`loose`) keep the last value. serde-saphyr's policy is one setting per
   parse, and neither setting reproduces all four destinations: `Error`
   tightens nested maps, while `LastWins` may relax structs. MIG.0 records
-  all four (struct, nested map in a struct, tree, `Dict`). **MIG.2 is
-  blocked until each one either matches or its difference is put to the
-  operator as a named decision.** The `Dict` call sites go through an
+  all four (struct, nested map in a struct, tree, `Dict`). **Exact parity in
+  all four destinations is an unconditional MIG.2 precondition.** No
+  difference ships as an accepted change. If the adapter cannot reach
+  parity, for example with a pre-pass over its own tree that refuses
+  duplicates where serde_yaml did, the fallback applies: the dated
+  extension, by a new reviewed decision. The `Dict` call sites go through an
   explicit `from_str_loose` (`LastWins`).
 - The serializer must keep writing the tag form, so grants and config
   written by the new code stay readable by the old code. Use serde_yaml's
@@ -66,21 +69,26 @@ What follows from the table:
 
 The serializer form is not yet solved. serde-saphyr 2.0.0 documents
 `Tagged<T>` for emitting a tag, but no global switch from enum-as-map to
-enum-as-tag. The plan: `GrantAgent` (`identity_grants.rs:85`) gets
-`serialize_with` emitting `Tagged("!exact", id)`. MIG.3 then proves that
-serde_yaml reads the output. If that fails, the grants writer stays on the
-tag form through the adapter's own emitter for that one enum. MIG.2 is
-blocked until one of the two passes. MIG.1a runs a static audit before the
+enum-as-tag. **No type's `Serialize` impl changes.** `GrantAgent` is also
+serialized to JSON, both for JSON grants files and for `grant_digest`
+(`identity_grants/journal.rs:173-177` hashes `serde_json::to_vec(grant)`),
+so a `serialize_with` hook would break JSON compatibility and every stored
+journal digest. Instead, the adapter's `to_string` serializes into its own
+tree. In that tree an externally tagged newtype or struct variant becomes a
+tagged node (`!variant <content>`), as serde_yaml wrote it. The adapter then
+emits the tree through serde-saphyr. MIG.0 records goldens for JSON grants
+and for `grant_digest`, and they must stay unchanged in every stage. MIG.2
+is blocked until G1 passes with this emitter. MIG.1a runs a static audit before the
 swap's shape is fixed: every type serialized through the adapter that
 serde_yaml writes with a tag (enums: `rg` for `Serialize` plus `enum` in the
 8 serializer files and in the types they emit). Each type found gets the
-same `Tagged` treatment and a golden file in MIG.0. The same MIG.1a
+same tagged-node treatment and a golden file in MIG.0. The same MIG.1a
 inventory of the `Value` and `Mapping` API in use (indexing, `get`,
 `as_*`, tag access, `Number`) fixes the contract of the MIG.2 owned tree.
 
 ## Stages
 
-### Gating criteria (MIG.2 cannot merge until both pass on its exact head)
+### Gating criteria (MIG.2 cannot merge until G1, G2 and G3 pass on its exact head)
 
 - **G1, grants rollback.** Every type the gateway serializes and reads back
   (identity grants first) is written by the new backend byte-equal to the
@@ -97,6 +105,27 @@ inventory of the `Value` and `Mapping` API in use (indexing, `get`,
   extract, and `doctor/hidden_keys`/`backend_url_keys`). Both `Display` and
   `Debug` are checked. Setting `with_snippet: false` is necessary but not
   enough: the test proves the result, not the setting.
+- **G3, read-side enum parity.** serde-saphyr accepts the map form
+  (`agent: {exact: runner}`) where serde_yaml 0.9 refuses it (probe). MIG.1a
+  inventories every enum reachable from a YAML deserialization: the field
+  types of every type passed to the adapter's `from_str`. MIG.0 records,
+  for each one, the tag form (accepted) and the map form (refused by
+  serde_yaml). On the MIG.2 head each map-form fixture must still be
+  refused. How is not decided yet, and it is a MIG.1a spike on Spark: a
+  serde-saphyr option, or a check in the adapter's tree pre-pass. If neither
+  reaches parity, the fallback applies.
+- **Resource limits.** MIG.2 sets serde-saphyr's `Budget` and alias limits
+  explicitly, naming each field and value in `src/yaml.rs`. None may be
+  looser than serde_yaml's behaviour measured in MIG.0: the depth at which
+  nesting is refused, and the alias-expansion size at which a bomb is
+  refused. The alias fixtures test at and just past each limit.
+- **G1 harness provenance.** The throwaway harness's source, exact
+  `spark-cargo` command, `Cargo.lock` and output SHA-256 are attached to the
+  MIG.2 PR, not the output alone.
+- Dependency provenance (unsafe policy, maintenance, MSRV, advisory history
+  for serde-saphyr and granit-parser) is recorded in the reassessment note's
+  candidate table. MIG.2 re-checks it against OSV and crates.io on the day
+  it opens.
 
 Each stage is its own PR off the release line, reviewed by two non-author
 seats, with a one-pass pre-push and exact-head CI. Each is revertable as one
@@ -114,10 +143,23 @@ commit.
   `mod commands;` and `mod runtime;` itself (`main.rs:18`, `:46`), so
   `crate::yaml` must resolve there too. Those are the only shared edits. No
   behaviour changes.
+  MIG.1a also extends the `READ_BACK` pattern in
+  `scripts/release/check_identity_sources.py:216` to recognise the adapter's
+  parse functions (`yaml::from_str`, `from_str_loose`, `from_value`, and the
+  document stream). It adds a recognition test and a negative control, so
+  that routing consumers through the adapter in MIG.1b cannot hide an
+  identity read-back from that CI check.
+  Integration-test crates under `tests/` (45 files use serde_yaml) cannot
+  reach the crate-private adapter, and API visibility is not widened.
+  MIG.1a adds `tests/common/yaml.rs`, a test helper that wraps serde_yaml
+  for now. MIG.1f routes the 45 files through it in PRs of at most 15
+  files. MIG.2 then swaps the helper's backend to `serde_saphyr` (a normal
+  dependency, so visible to tests) with the adapter's options, and MIG.3
+  checks that the helper's options equal the adapter's.
 - **MIG.1b–e: route consumers through the adapter**, one group per PR, in
   the order of the overlap map below. Purely mechanical:
   `serde_yaml::` becomes `crate::yaml::`. The existing tests are the oracle.
-- **MIG.2: swap the backend. BLOCKED until G1 and G2 pass on the swap PR's
+- **MIG.2: swap the backend. BLOCKED until G1, G2, G3 and duplicate-key parity pass on the swap PR's
   exact head, along with MIG.3 to MIG.5.** No swap without the
   write-new/read-old test passing.
   Only `src/yaml.rs`, `Cargo.toml` and `Cargo.lock` change: add `serde-saphyr = "=2.0.0"`, drop `serde_yaml`, and
@@ -164,7 +206,10 @@ commit.
     and `count_yaml_aliases`;
   - scalars `yes`, `no`, `on`, `off`, `0755`, `0o755`, `.inf`, `~`, `null`
     and an empty value, read into String, bool and the tree type;
-  - multi-document input gives the same outcome;
+  - documents: a single document; an explicit `---` single document; a
+    Kubernetes multi-document stream (`kubernetes.rs`, the one
+    `Deserializer` use) including empty documents and a malformed later
+    document. Each gives the same values or the same refusal as serde_yaml;
   - write-side quoting: strings that look like other scalars (`"yes"`,
     `"no"`, `"on"`, `"off"`, `"0755"`, `"null"`, `"~"`, `".inf"`) go through
     every writer, are byte-compared to the goldens, and read back as
@@ -192,14 +237,15 @@ not against expectations written by hand.
 
 | PR | Stage | Files | Content | Wait |
 |---|---|---|---|---|
-| 1 | MIG.0 | ~6 new test files and golden files | Golden capture with serde_yaml: JSON of all 143 parsed capability definitions plus pins; `Config` of each config fixture; byte output of the config writers (splice, URL, upgrade, `cap`, `config_write`) and of the grants writer; a behaviour table (duplicates map/struct, merge, scalars, multi-document, alias budget, both `!exact` forms); G2 harness over the figment path, plus a recorded baseline of the direct-path errors | none |
-| 2 | MIG.1a | 3 (`src/yaml.rs`, plus one `mod yaml;` line each in `src/lib.rs` and `src/main.rs`) | Adapter over serde_yaml, with the comparison harness reading the MIG.0 golden files | PR 1 |
+| 1 | MIG.0 | ~6 new test files and golden files | Golden capture with serde_yaml: JSON of all 143 parsed capability definitions plus pins; `Config` of each config fixture; byte output of the config writers (splice, URL, upgrade, `cap`, `config_write`) and of the grants writer; JSON grants bytes and `grant_digest` values (must never change); the current leak at `capability/parser.rs:16-17` as a documented "before"; a behaviour table (duplicates map/struct, merge, scalars, multi-document, alias budget, both `!exact` forms); G2 harness over the figment path, plus a recorded baseline of the direct-path errors | none |
+| 2 | MIG.1a | 6 (`src/yaml.rs`, plus one `mod yaml;` line each in `src/lib.rs` and `src/main.rs`; `tests/common/yaml.rs`; `check_identity_sources.py` and its test) | Adapter over serde_yaml, with the comparison harness reading the MIG.0 golden files | PR 1 |
 | 3 | MIG.1b | 15 | Typed-only readers (list under "Order", item 2) | PR 2 |
 | 4 | MIG.1c | 13 | Serializers and tree walkers with no holder (item 3) | PR 2 |
 | 5 | MIG.1d-i | 10 | The remaining files with no holder (item 4) | PR 2 |
 | 6 | MIG.1d-ii | 1–4, one PR per released split | Held files (item 4) | each MIK-8102 split |
 | 7 | MIG.1e | 4 plus test-only files, split to stay at 15 or fewer | Figment provider path (item 5) | U1 merged |
-| 8 | MIG.2 | 4 (`src/yaml.rs`, `Cargo.toml`, `Cargo.lock`, `dependency-licenses.tsv`) plus any updated golden assertions | Backend swap; G1, G2 and MIG.3 to MIG.5 green on the exact head | PRs 3–7 |
+| 7f | MIG.1f | 45 integration-test files in 3 PRs of 15 | Route `tests/*.rs` through `tests/common/yaml.rs` | PR 2 |
+| 8 | MIG.2 | 5 (`src/yaml.rs`, `tests/common/yaml.rs`, `Cargo.toml`, `Cargo.lock`, `dependency-licenses.tsv`) plus any updated golden assertions | Backend swap; G1, G2 and MIG.3 to MIG.5 green on the exact head | PRs 3–7f |
 | 9 | MIG.6 | 2 (`.github/osv-scanner.toml`, `docs/legal/dependency-licenses.tsv`) | Exception removal after a real scan | PR 8 |
 
 PRs 3, 4 and 5 touch disjoint files and can run in parallel lanes. Before
@@ -317,3 +363,18 @@ reviewed decision.
 - Also folded: the enum and API audit moves to MIG.1a, write-side quoting
   fixtures, the licence check moves to MIG.2, both snippet settings are
   named, and the U1 v2 landing condition is stated.
+- Round 2 (confirmation), 2026-10-17, on 9fb6b9ce5. Both seats returned
+  SHIP-WITH-FIXES with HIGH findings, so the design stays open for another
+  round. The kimi seat produced no verdict twice (exit 65, raw tool-call
+  tokens); those runs were excluded. The third run, with the cited source
+  excerpts inlined, returned a verdict. Folded after source checks:
+  - the `GrantAgent` hook would change JSON grants and `grant_digest`
+    (`journal.rs:173-177`), so tags are emitted inside the adapter only;
+  - the `READ_BACK` pattern (`check_identity_sources.py:216`) is extended
+    before routing;
+  - `tests/` access goes through a test helper (MIG.1f);
+  - Kubernetes stream fixtures are added;
+  - exact duplicate-key parity is unconditional;
+  - G3 adds read-side enum parity (map form refused);
+  - budgets are named, harness provenance is attached, and dependency
+    provenance is re-checked.
