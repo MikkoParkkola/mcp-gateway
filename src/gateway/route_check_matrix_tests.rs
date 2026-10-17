@@ -99,7 +99,10 @@ pub(crate) enum Na {
 
 /// The ticket that closes an expected gap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[expect(dead_code, reason = "no gap is open; the next one names its ticket here")]
+#[expect(
+    dead_code,
+    reason = "no gap is open; the next one names its ticket here"
+)]
 pub(crate) enum Ticket {
     Mik8353,
 }
