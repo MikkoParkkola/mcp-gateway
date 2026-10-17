@@ -121,6 +121,8 @@ pub(crate) fn step_not_permitted() -> crate::Error {
 #[async_trait::async_trait]
 impl ToolInvoker for MetaMcpInvoker<'_, '_> {
     async fn invoke(&self, server: &str, tool: &str, arguments: Value) -> Result<Value> {
+        #[cfg(test)]
+        crate::gateway::meta_mcp::withheld_gate::seams::step_start();
         let args = internal_invoke_args(server, tool, arguments);
         let writes_mark = crate::gateway::gateway_writes::mark();
         // Steps inherit the invoking caller's standing, admin included.

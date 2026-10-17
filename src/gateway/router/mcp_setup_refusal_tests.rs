@@ -284,3 +284,108 @@ async fn a_withheld_surfaced_name_after_a_cold_fill_keeps_the_nonce() {
     );
     assert_eq!(dispatched(&fx), 0, "nothing was sent");
 }
+
+/// Disable `(server, read)` by its error rate, as enough failures do, at the
+/// playbook step seam: after admission, before the next step meets its
+/// dispatch-time policy (the gate does not read it, the policy does).
+fn disable_before_step(fx: &Fx, server: &'static str) {
+    let state = std::sync::Arc::clone(&fx.state);
+    crate::gateway::meta_mcp::withheld_gate::seams::before_step(move || {
+        let cfg = crate::kill_switch::CapabilityErrorBudgetConfig::default();
+        let switch = state.meta_mcp.kill_switch();
+        for _ in 0..cfg.min_samples.max(1) {
+            switch.record_capability_failure(server, "read", &cfg);
+        }
+        assert!(switch.is_capability_disabled(server, "read"), "premise: disabled");
+    });
+}
+
+fn revive(fx: &Fx, server: &str) {
+    fx.state.meta_mcp.kill_switch().revive_capability(server, "read");
+}
+
+const TWO_STEPS: &str = r"
+name: two
+description: two steps
+on_error: abort
+steps:
+  - name: first
+    server: alpha
+    tool: read
+  - name: second
+    server: alpha-pt
+    tool: read
+";
+
+/// The hardened fixture with the `one` and `two` playbooks, both backends warm.
+async fn with_playbooks() -> Fx {
+    let one = serde_yaml::from_str(ONE_STEP).expect("one parses");
+    let two = serde_yaml::from_str(TWO_STEPS).expect("two parses");
+    let fx = fixture_hardened_signed_built(Answer::Ok, true, |meta| {
+        let mut engine = crate::playbook::PlaybookEngine::new();
+        engine.register(one);
+        engine.register(two);
+        meta.set_playbook_engine(engine);
+        meta
+    })
+    .await;
+    for backend in ["alpha", "alpha-pt"] {
+        let warmed = fx.state.backends.get(backend).expect("backend");
+        warmed.get_tools().await.expect("lists");
+    }
+    fx
+}
+
+fn refused(body: &Value) -> bool {
+    body.get("error").is_some() || body["result"]["isError"] == true
+}
+
+/// PB-R: a playbook's first step is refused by its dispatch-time policy (its
+/// error-rate disable lands after admission), before anything acted. The
+/// step asks for the nonce back: send 2 meets the same refusal; with the
+/// step revived, send 3 runs it; send 4 is a replay. Red on base at send 2
+/// (`invoke/gate.rs` returned a playbook step's refusal before asking).
+/// Mutant mPB-ask.
+#[tokio::test]
+async fn a_playbook_step_policy_refusal_gives_the_nonce_back() {
+    let fx = with_playbooks().await;
+    let one = json!({"name": "one"});
+    for send in 1..=2 {
+        disable_before_step(&fx, "alpha");
+        let body = call(&fx, "gateway_run_playbook", one.clone(), "pb-n1").await;
+        assert!(
+            refused(&body) && body["error"]["message"] != "Nonce replay detected",
+            "send {send}: the step's refusal (at send 2: the nonce was kept): {body}"
+        );
+        revive(&fx, "alpha");
+    }
+    assert_eq!(dispatched(&fx), 0, "premise: nothing was sent");
+    let third = call(&fx, "gateway_run_playbook", one.clone(), "pb-n1").await;
+    assert!(!refused(&third), "send 3 was refused: {third}");
+    assert_eq!(dispatched(&fx), 1, "send 3 ran the step once");
+    let fourth = call(&fx, "gateway_run_playbook", one, "pb-n1").await;
+    assert_eq!(
+        fourth["error"]["message"], "Nonce replay detected",
+        "the nonce was given back twice: {fourth}"
+    );
+}
+
+/// PB-K: the second step of `two` is refused by its dispatch-time policy
+/// after the first step was sent. The send marked the call dispatched and
+/// spent the witness, so the nonce stays spent. Green on base. Mutant
+/// mPB-uncond: the step's refusal gives the nonce back past the witness.
+#[tokio::test]
+async fn a_playbook_step_policy_refusal_after_a_sent_step_keeps_the_nonce() {
+    let fx = with_playbooks().await;
+    disable_before_step(&fx, "alpha-pt");
+    let two = json!({"name": "two"});
+    let first = call(&fx, "gateway_run_playbook", two.clone(), "pbk-n1").await;
+    assert!(refused(&first), "premise: step 2 was refused: {first}");
+    assert_eq!(dispatched(&fx), 1, "premise: step 1 was sent");
+    revive(&fx, "alpha-pt");
+    let again = call(&fx, "gateway_run_playbook", two, "pbk-n1").await;
+    assert_eq!(
+        again["error"]["message"], "Nonce replay detected",
+        "the nonce was given back after a sent step: {again}"
+    );
+}

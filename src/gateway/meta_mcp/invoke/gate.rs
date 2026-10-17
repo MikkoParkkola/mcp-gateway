@@ -466,6 +466,9 @@ impl MetaMcp {
         refusal: Error,
     ) -> Result<GuardedValue> {
         if crate::playbook::current_step().is_some() {
+            // A playbook step keeps its neutral refusal (A3) and asks, as a
+            // chain step does: the witness decides (MIK-8353 3d-2).
+            super::nonce_settle::ask_refund(caller);
             return Err(refusal);
         }
         if let Some(answer) = self.gate_answer((server, tool), caller, session_id).await {
