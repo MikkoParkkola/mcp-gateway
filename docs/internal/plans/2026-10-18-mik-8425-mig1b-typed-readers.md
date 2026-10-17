@@ -14,24 +14,27 @@ allowlist. The 15th, the `validator/mod.rs` doctest, moves to MIG.1c to
 keep this PR at 15 paths. The backend is still serde_yaml 0.9.34 behind the adapter, so
 every rename is the same call.
 
-## The 29 uses routed here (inventory, 2026-10-18)
+## The 28 uses routed here, on 26 lines (inventory, 2026-10-18)
 
 | File | Uses | Change |
 |---|---|---|
-| `capability/parser.rs:16` | `parse_capability` typed read | `crate::yaml::from_str` |
-| `capability/discovery/detector.rs:26` | read into `serde_json::Value` | `crate::yaml::from_str::<Value>` |
-| `capability/definition/webhook.rs:60` | test-module read | `crate::yaml::from_str` |
-| `capability/openapi/convert.rs:110` | typed read (JSON then YAML fallback) | `crate::yaml::from_str` |
-| `capability/openapi/convert.rs:589,596` | `to_string` of schemas into the generated capability text | `crate::yaml::to_string`; byte output unchanged (same backend) |
-| `capability/backend_rug_pull.rs:73-88` | tree read, `Value::as_str` | `crate::yaml::from_str::<crate::yaml::Value>`, `crate::yaml::Value::as_str` |
-| `commands/trust.rs:203`, `trust/baseline.rs:23`, `trust/lab.rs:374` | typed read after a JSON attempt | `crate::yaml::from_str` |
-| `commands/protocol_import.rs:379` | typed read of untrusted specs (after the size and alias guard) | `crate::yaml::from_str` |
-| `commands/protocol_import.rs:395` | doc comment naming `serde_yaml` | reworded to "the YAML parser", because the comment would keep the file on the allowlist |
-| `commands/setup.rs:412`, `add_remove.rs:301,389`, `doctor/provenance.rs:35`, `mtls/config.rs:170-248` (6) | test-module reads | `crate::yaml::from_str` |
-| `runtime/provision.rs:255` | typed read | `crate::yaml::from_str` |
+| `src/capability/parser.rs:16` | `parse_capability` typed read | `crate::yaml::from_str` |
+| `src/capability/discovery/detector.rs:26` | read into `serde_json::Value` | `crate::yaml::from_str::<Value>` |
+| `src/capability/definition/webhook.rs:60` | test-module read | `crate::yaml::from_str` |
+| `src/capability/openapi/convert.rs:110` | typed read (JSON then YAML fallback) | `crate::yaml::from_str` |
+| `src/capability/openapi/convert.rs:589,596` | `to_string` of schemas into the generated capability text | `crate::yaml::to_string`; byte output unchanged (same backend) |
+| `src/capability/backend_rug_pull.rs:73-88` | tree read, `Value::as_str` | `crate::yaml::from_str::<crate::yaml::Value>`, `crate::yaml::Value::as_str` |
+| `src/commands/trust.rs:203`, `src/commands/trust/baseline.rs:23`, `src/commands/trust/lab.rs:374` | typed read after a JSON attempt | `crate::yaml::from_str` |
+| `src/commands/protocol_import.rs:379` | typed read of untrusted specs (after the size and alias guard) | `crate::yaml::from_str` |
+| `src/commands/protocol_import.rs:395` | doc comment naming `serde_yaml` | reworded to "the YAML parser", because the comment would keep the file on the allowlist |
+| `src/commands/setup.rs:412`, `src/commands/add_remove.rs:301,389`, `src/commands/doctor/provenance.rs:35`, `src/mtls/config.rs:170-248` (6) | test-module reads | `crate::yaml::from_str` |
+| `src/runtime/provision.rs:255` | typed read | `crate::yaml::from_str` |
 
-Two of these are in the binary crate's tree (`commands/`, `runtime/`), and
-both crate roots mount `yaml` (MIG.1a). `scripts/release/check_identity_sources.py`
+Eight of the 14 files are under `src/commands/` (trust, trust baseline,
+trust lab, protocol import, setup, add/remove, doctor provenance), which
+only the binary compiles (`main.rs:18`), and `src/runtime/` (provision),
+which both roots compile. Both crate roots mount `yaml` (MIG.1a), so
+`crate::yaml` resolves in each. `scripts/release/check_identity_sources.py`
 keys its allowed read-backs by file and function; `parse_capability` stays
 an allowed site, and the pattern now matches `yaml::from_str` there (MIG.1a
 T4).
@@ -53,9 +56,10 @@ T4).
 - **R3, writer bytes:** `openapi/convert.rs` writes YAML into generated
   capabilities. The existing protocol-import and OpenAPI tests that compare
   generated text (`commands/protocol_import_tests.rs`,
-  `capability/openapi` tests) must pass unchanged. No golden is added here,
-  because the backend is unchanged in MIG.1. The byte goldens for writers
-  are MIG.5.
+  `capability/openapi` tests) must pass unchanged. Those tests check the
+  generated text semantically and by substring, not byte for byte. That is
+  enough here only because the backend is the same serde_yaml call; byte
+  equality of writer output is MIG.5's gate, before the backend changes.
 
 ## Overlap
 
@@ -73,13 +77,26 @@ files in MIG.1e. The allowlist must keep shrinking to `src/yaml.rs` and
 `tests/common/yaml.rs` by MIG.2. Any file that joins later gets a row in
 this list.
 
-## Files (15 paths, plus this plan)
+## Files: two PRs
 
-The 14 sources above and the allowlist fixture. The `validator/mod.rs`
+This plan lands alone as a docs-only PR. The routing PR, based on it, holds
+only the 14 sources above and the allowlist fixture: 15 paths, inside the
+cap. The `validator/mod.rs`
 doctest moves to MIG.1c. A doctest compiles against the public crate and
 cannot reach the crate-private adapter, so its change there is to read
 through the public `mcp_gateway::capability::parse_capability(yaml)`, which
 does exactly this read.
+
+## Review record
+
+Plan round 1, 2026-10-18, on 71a47ba41: gpt SHIP-WITH-FIXES. The kimi seat
+failed twice (backend 503, no verdict) and was replaced by agy (Gemini), on
+the lead's instruction; agy returned SHIP, with improvements folded (full
+paths in the table, the binary and library crate wording). Folded from
+gpt:
+- the plan goes in its own PR, so the routing PR keeps the 15-path cap;
+- the use count is corrected (28 occurrences on 26 lines);
+- the writer-test coverage is described honestly (semantic, not bytes).
 
 ## Rollback
 
