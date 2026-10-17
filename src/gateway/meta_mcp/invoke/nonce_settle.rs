@@ -7,6 +7,7 @@
 
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
 use crate::gateway::meta_mcp::refund_witness::{Effect, RefundWitness};
+use crate::gateway::task_service::execution::BeginOutcome;
 
 /// The only entry outside `invoke` that spends a refund witness (MIK-8353
 /// 3b): something outside the invoke path consumed or acted for this call (a
@@ -19,6 +20,38 @@ pub(crate) fn spend_witness(caller: &MetaMcpCallerContext<'_>) {
 /// continuation or its spend). Settled when the call returns.
 pub(crate) fn ask_refund(caller: &MetaMcpCallerContext<'_>) {
     caller.signing.inspect(|signing| signing.want_refund());
+}
+
+/// A task submit refused before its task exists asks for the nonce back
+/// (MIK-8353 3c): a key mismatch, a key in flight, no free worker and sealed
+/// intake are decided before any write (`TaskService::create_targeted`), and a
+/// dropped lease only releases the key. `Unavailable` may follow a commit, so
+/// it stays spent, as do a created or stored task.
+pub(crate) fn ask_if_refused_submit(
+    caller: &MetaMcpCallerContext<'_>,
+    outcome: BeginOutcome,
+) -> BeginOutcome {
+    if matches!(
+        outcome,
+        BeginOutcome::Mismatch
+            | BeginOutcome::InFlight
+            | BeginOutcome::Capacity
+            | BeginOutcome::Sealed
+    ) {
+        ask_refund(caller);
+    }
+    outcome
+}
+
+/// A task submit refused before its task is begun (a backend that requires a
+/// signature chain, MIK-8353 3c): ask for the nonce back, then answer `error`.
+pub(crate) fn refused_submit_answer(
+    caller: &MetaMcpCallerContext<'_>,
+    id: crate::protocol::RequestId,
+    error: &crate::Error,
+) -> crate::protocol::JsonRpcResponse {
+    ask_refund(caller);
+    crate::gateway::meta_mcp::response_security::error_response_preserving_status(id, error)
 }
 
 /// Note `step` on the execution lease as served to this execution: sent, or
