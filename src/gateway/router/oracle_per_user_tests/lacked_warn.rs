@@ -6,12 +6,14 @@
 //! execution principal, limited per (backend, caller key). Listings and
 //! names the caller merely lacks log nothing.
 //!
-//! Gap, not driven here (MIK-8382 stage 1): E5b (the dispatch funnel via
-//! the stored-replay proof, `prove_target_live`). A stored read needs an
-//! owner whose submit was admitted on the required backend, and a caller
-//! with no principal there is refused at that submit, so no fixture reaches
-//! the proof with one. Mutant it would kill: deleting the WARN call at the
-//! funnel on that path (E5 kills it on the playbook path).
+//! Gap, not driven here: the dispatch funnel's no-principal arm
+//! (`caller_verdict.rs` `dispatch_resolution`). Every HTTP target is judged
+//! first by the route-stage caller verdicts (`caller_verdicts`), a playbook
+//! step included, so the verdict answers before the funnel is reached; the
+//! stored-replay proof (`prove_target_live`, E5b) needs an owner whose submit
+//! was admitted on the required backend, which such a caller never has.
+//! Mutants these fixtures cannot kill: deleting the funnel's WARN call, and
+//! passing `None` for its caller key (mutant run, MIK-8382 stage 2).
 //!
 //! A WARN is matched by content, not wording: a WARN line naming [`BACKEND`]
 //! and "execution principal". Each row builds its gateways outside the
@@ -42,7 +44,7 @@ fn lacked_warns(log: &str) -> usize {
 
 /// A no-principal caller's `tools/list` on the direct route, or a
 /// `gateway_list_tools` / `gateway_search_tools` on `/mcp`: listings only.
-async fn list_unidentified(gw: &Gateway, uri: &str, params: Value) -> StatusCode {
+async fn list_unidentified(gw: &Gateway, uri: &str, params: Value) -> (StatusCode, Value) {
     let method = if uri == "/mcp" {
         "tools/call"
     } else {
@@ -62,10 +64,13 @@ async fn list_unidentified(gw: &Gateway, uri: &str, params: Value) -> StatusCode
         .await
         .expect("the router is infallible");
     let status = response.status();
-    let _ = to_bytes(response.into_body(), usize::MAX)
+    let bytes = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("an in-memory body reads");
-    status
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
 }
 
 /// E1: on `gateway_invoke` and on the direct route, a no-principal call of
@@ -136,12 +141,19 @@ fn e2_no_warn_without_a_refused_call() {
     });
     // As each listing answers at the base: the direct `tools/list` of a
     // no-principal caller is refused by identity propagation (403), the
-    // meta listings answer 200. None of them is a refused call.
-    assert_eq!(
-        statuses,
-        [StatusCode::FORBIDDEN, StatusCode::OK, StatusCode::OK],
-        "E2 premise: a listing answered differently"
-    );
+    // meta listings answer 200 with a result, not a JSON-RPC error, so they
+    // ran as listings. None of them is a refused call.
+    let [direct, listed_tools, searched] = &statuses;
+    assert_eq!(direct.0, StatusCode::FORBIDDEN, "E2 premise: {direct:?}");
+    for answer in [listed_tools, searched] {
+        assert!(
+            answer.0 == StatusCode::OK
+                && answer.1.get("error").is_none()
+                && answer.1.get("result").is_some()
+                && answer.1.pointer("/result/isError") != Some(&json!(true)),
+            "E2 premise: a meta listing did not answer as one: {answer:?}"
+        );
+    }
     assert_eq!(
         lacked_warns(&log),
         0,
@@ -309,18 +321,15 @@ async fn run_playbook(gw: &Gateway, bearer: &str) -> (StatusCode, Value) {
     )
 }
 
-/// E5 (the dispatch funnel, `caller_verdict.rs` `dispatch_resolution`): a
-/// playbook step runs through `invoke_tool_traced`, which reaches the funnel
-/// without the caller verdict `/mcp`'s `gateway_invoke` runs
-/// (`call_dispatch.rs`). Two API-key callers (`k1`, `k2`), each with no
-/// principal on the required backend, run the playbook: the step answers as
-/// a missing name, nothing is sent, and each logs one WARN; `k1` again logs
-/// none. Each run is captured on its own on the one gateway. Kills: deleting
-/// the funnel's WARN call, and passing `None` for the caller key into
-/// `dispatch_resolution` (`k2` then shares `k1`'s bucket and logs nothing).
-/// RED at base: 0 WARNs where one is wanted.
+/// E5 (the playbook path): a playbook step is judged by the route-stage
+/// caller verdict (`caller_verdicts`), whose WARN answers it. Two API-key
+/// callers (`k1`, `k2`), each with no principal on the required backend,
+/// run the playbook: the step answers as a missing name, nothing is sent,
+/// and each logs one WARN; `k1` again logs none. Each run is captured on its
+/// own on the one gateway. Kills: deleting the caller verdict's WARN call
+/// (mutant run). RED at base: 0 WARNs where one is wanted.
 #[test]
-fn e5_funnel_warns_once_per_caller_key() {
+fn e5_playbook_step_warns_once_per_caller_key() {
     let rt = runtime();
     let gw = rt.block_on(super::gateway_authed(
         &two_keys(),
