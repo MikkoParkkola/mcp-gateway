@@ -399,6 +399,9 @@ pub(crate) struct CapabilityAccount {
     log: Arc<crate::security::TransparencyLogger>,
     external: bool,
     personal: bool,
+    /// `WORK` is a `shared` descriptor (MIK-8406): the static credential
+    /// path, no per-caller binding.
+    shared: bool,
     log_dir: tempfile::TempDir,
     /// Test-only (MIK-8428 Case A): see [`ReleaseBudget`].
     release_budget: Arc<Mutex<Option<usize>>>,
@@ -447,6 +450,7 @@ impl CapabilityAccount {
             log,
             external,
             personal: false,
+            shared: false,
             log_dir: dir,
             release_budget: Arc::new(Mutex::new(None)),
         }
@@ -458,6 +462,14 @@ impl CapabilityAccount {
     pub(crate) async fn start_personal() -> Self {
         let mut account = Self::start(false).await;
         account.personal = true;
+        account
+    }
+
+    /// As [`Self::start`], with `WORK` a `shared` descriptor: it resolves
+    /// to the static credential, with no per-caller binding (MIK-8406).
+    pub(crate) async fn start_shared() -> Self {
+        let mut account = Self::start(false).await;
+        account.shared = true;
         account
     }
 
@@ -483,9 +495,13 @@ impl CapabilityAccount {
 
     /// Install the account and the capability on `meta`.
     pub(crate) fn install(&self, mut meta: MetaMcp) -> MetaMcp {
-        use super::super::account_rest_fixture::{capability, external, managed, rest_config};
+        use super::super::account_rest_fixture::{
+            capability, external, managed, rest_config, shared,
+        };
         meta.enable_transparency_log(Arc::clone(&self.log));
-        let descriptor = if self.external {
+        let descriptor = if self.shared {
+            shared(WORK)
+        } else if self.external {
             external(WORK)
         } else {
             managed(WORK)
@@ -515,6 +531,13 @@ impl CapabilityAccount {
                 // peer is loopback (#3892 healthy controls).
                 .with_test_loopback_egress(),
         );
+        if self.shared {
+            // A shared account dispatches under the gateway's own static
+            // OAuth token, so the fixture seeds one.
+            let token = serde_json::from_value(serde_json::json!({"access_token": "shared-static"}))
+                .expect("a static token");
+            executor.set_oauth_token("google", token);
+        }
         let backend = Arc::new(crate::capability::CapabilityBackend::new(
             CAPABILITY_SERVER,
             executor,
