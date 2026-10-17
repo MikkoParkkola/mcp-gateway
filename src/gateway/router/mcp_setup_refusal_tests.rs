@@ -123,7 +123,7 @@ async fn a_search_parse_refusal_gives_the_nonce_back() {
     }
 }
 
-/// K8-R search_tools: `gateway_search_tools` refuses a call with no `query`.
+/// K8-R `search_tools`: `gateway_search_tools` refuses a call with no `query`.
 /// Red on base at send 2. Mutant mK8-tools.
 #[tokio::test]
 async fn a_search_tools_parse_refusal_gives_the_nonce_back() {
@@ -133,7 +133,7 @@ async fn a_search_tools_parse_refusal_gives_the_nonce_back() {
     assert_given_back(&fx, "gateway_search_tools", pair, refused).await;
 }
 
-/// K8-R list_tools: `gateway_list_tools` refuses an unknown role filter
+/// K8-R `list_tools`: `gateway_list_tools` refuses an unknown role filter
 /// before it lists anything. Red on base at send 2. Mutant mK8-role.
 #[tokio::test]
 async fn a_list_tools_role_refusal_gives_the_nonce_back() {
