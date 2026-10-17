@@ -3,7 +3,7 @@
 //! MIK-8425 MIG.0 golden comparison shared by the `mik_8425_yaml_baseline_*`
 //! tests.
 //!
-//! A golden is a text report recorded with serde_yaml 0.9.34, the parser
+//! A golden is a text report recorded with `serde_yaml` 0.9.34, the parser
 //! being replaced. Each later stage (adapter, backend swap) must reproduce
 //! it. A test only compares; recording is a separate `#[ignore]`d
 //! `record_*` test that prints the report for a reviewer to commit under
@@ -11,6 +11,7 @@
 //! setting can turn a mismatch into a pass.
 #![allow(dead_code)]
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -40,9 +41,15 @@ fn write_structure(value: &serde_yaml::Value, out: &mut String) {
     use serde_yaml::Value;
     match value {
         Value::Null => out.push('~'),
-        Value::Bool(b) => out.push_str(&format!("b:{b}")),
-        Value::Number(n) => out.push_str(&format!("n:{n}")),
-        Value::String(s) => out.push_str(&format!("s:{s:?}")),
+        Value::Bool(b) => {
+            let _ = write!(out, "b:{b}");
+        }
+        Value::Number(n) => {
+            let _ = write!(out, "n:{n}");
+        }
+        Value::String(s) => {
+            let _ = write!(out, "s:{s:?}");
+        }
         Value::Sequence(items) => {
             out.push('[');
             for (i, item) in items.iter().enumerate() {
@@ -66,7 +73,7 @@ fn write_structure(value: &serde_yaml::Value, out: &mut String) {
             out.push('}');
         }
         Value::Tagged(tagged) => {
-            out.push_str(&format!("t:{}(", tagged.tag));
+            let _ = write!(out, "t:{}(", tagged.tag);
             write_structure(&tagged.value, out);
             out.push(')');
         }
@@ -196,11 +203,7 @@ pub fn keyed_rows(paths: &[String], read: impl Fn(&str) -> String) -> String {
     for path in paths {
         let text = std::fs::read_to_string(repo_root().join(path))
             .unwrap_or_else(|error| panic!("{path} unreadable: {error}"));
-        out.push_str(&format!(
-            "{path}\t{}\t{}\n",
-            digest(text.as_bytes()),
-            read(&text)
-        ));
+        let _ = writeln!(out, "{path}\t{}\t{}", digest(text.as_bytes()), read(&text));
     }
     out
 }

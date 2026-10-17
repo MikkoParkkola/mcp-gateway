@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8425 MIG.0: identity grants as the gateway reads and writes them with
-//! serde_yaml 0.9.34, recorded before the parser is replaced (gate G1).
+//! `serde_yaml` 0.9.34, recorded before the parser is replaced (gate G1).
 //!
 //! A grants file the gateway writes must stay readable by a gateway rolled
-//! back to serde_yaml. So the YAML writer's exact bytes are the golden: the
+//! back to `serde_yaml`. So the YAML writer's exact bytes are the golden: the
 //! `!exact` tag form, never the map form. The JSON writer and
 //! `grant_digest` (over the JSON form) must not move at all, because stored
 //! journals carry those digests.
@@ -17,6 +17,7 @@ mod golden;
 
 use mcp_gateway::identity_grants::journal::grant_digest;
 use mcp_gateway::identity_grants::{read_identity_grants_file, write_identity_grants_file};
+use std::fmt::Write as _;
 
 const QUALIFIED: &str = "schema_version: identity_grants.v1
 grants:
@@ -76,11 +77,7 @@ async fn report() -> String {
 
     let mut out = String::new();
     for grant in &file.grants {
-        out.push_str(&format!(
-            "digest {}\t{}\n",
-            grant.grant_id,
-            grant_digest(grant)
-        ));
+        let _ = writeln!(out, "digest {}\t{}", grant.grant_id, grant_digest(grant));
     }
     for name in ["out.yaml", "out.json"] {
         let path = dir.path().join(name);
@@ -88,15 +85,12 @@ async fn report() -> String {
             .await
             .expect("grants write");
         let written = std::fs::read_to_string(&path).expect("read back written grants");
-        out.push_str(&format!(
-            "write {name}\t{}\n",
-            golden::digest(written.as_bytes())
-        ));
-        out.push_str(&format!("text {name}\t{}\n", golden::one_line(&written)));
+        let _ = writeln!(out, "write {name}\t{}", golden::digest(written.as_bytes()));
+        let _ = writeln!(out, "text {name}\t{}", golden::one_line(&written));
         let again = read_identity_grants_file(&path)
             .await
             .expect("the gateway reads the file it wrote");
-        out.push_str(&format!("round-trip {name}\t{}\n", again == file));
+        let _ = writeln!(out, "round-trip {name}\t{}", again == file);
     }
     for (name, fixture) in [
         (
@@ -117,7 +111,7 @@ async fn report() -> String {
             },
             |_| "READ".to_owned(),
         );
-        out.push_str(&format!("legacy {name}\t{outcome}\n"));
+        let _ = writeln!(out, "legacy {name}\t{outcome}");
     }
     out
 }

@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8425 MIG.0: what serde_yaml 0.9.34 reads from every YAML file in the
+//! MIK-8425 MIG.0: what `serde_yaml` 0.9.34 reads from every YAML file in the
 //! repository, recorded before the parser is replaced.
 //!
 //! For each file the golden records three readings, each as a digest or as
@@ -15,7 +15,7 @@
 //!   document count plus the digest of each document's structure.
 //!
 //! The backend swap must reproduce every digest. A refusal row keeps
-//! serde_yaml's text: a later stage compares refusal against refusal, never
+//! `serde_yaml`'s text: a later stage compares refusal against refusal, never
 //! the wording.
 
 #[path = "common/mik_8425_golden.rs"]
@@ -107,7 +107,7 @@ fn readings(text: &str) -> String {
     format!("value={value}\tdict={dict}\tstream={}", stream(text))
 }
 
-/// Every unchanged repository YAML file reads exactly as serde_yaml 0.9.34
+/// Every unchanged repository YAML file reads exactly as `serde_yaml` 0.9.34
 /// read it when the golden was recorded.
 #[test]
 fn every_repository_yaml_file_reads_as_recorded() {
@@ -117,7 +117,7 @@ fn every_repository_yaml_file_reads_as_recorded() {
 /// Compares the recorded paths with the YAML files on disk, and requires
 /// every root to be represented. A file added after the recording has no
 /// row and is NOT baselined: it is listed here, and MIG.2 re-records the
-/// golden on the last commit that still has serde_yaml. Failing on every new
+/// golden on the last commit that still has `serde_yaml`. Failing on every new
 /// file would break unrelated PRs that add a capability.
 #[test]
 fn the_golden_is_compared_with_the_yaml_files_on_disk() {

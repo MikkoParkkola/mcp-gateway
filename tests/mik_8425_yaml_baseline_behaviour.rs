@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8425 MIG.0: serde_yaml 0.9.34's behaviour on the cases where the
+//! MIK-8425 MIG.0: `serde_yaml` 0.9.34's behaviour on the cases where the
 //! replacement parser is known or suspected to differ, recorded before the
 //! swap. One golden, `behaviour.txt`, one row per case:
 //! `case \t OK <reading>` or `case \t ERR <serde_yaml text>`.
@@ -14,6 +14,7 @@
 mod golden;
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use figment::providers::Format as _;
 use mcp_gateway::identity_grants::IdentityGrantFile;
@@ -231,8 +232,8 @@ fn limits(out: &mut String) {
         let mut doc = String::from("l0: &l0 [x, x, x, x, x, x, x, x, x, x]\n");
         for level in 1..=levels {
             let prev = format!("*l{}", level - 1);
-            let items = vec![prev.as_str(); 10].join(", ");
-            doc.push_str(&format!("l{level}: &l{level} [{items}]\n"));
+            let items = [prev.as_str(); 10].join(", ");
+            let _ = writeln!(doc, "l{level}: &l{level} [{items}]");
         }
         row(
             out,
@@ -322,7 +323,7 @@ fn report() -> String {
     out
 }
 
-/// serde_yaml 0.9.34's outcome on every recorded case is unchanged.
+/// `serde_yaml` 0.9.34's outcome on every recorded case is unchanged.
 #[test]
 fn yaml_behaviour_matches_the_recording() {
     golden::assert_golden("behaviour.txt", &report());
