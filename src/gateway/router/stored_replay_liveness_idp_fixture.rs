@@ -236,7 +236,7 @@ pub(super) async fn gateway_shaped(
     Arc<AtomicUsize>,
     (tempfile::TempDir, tempfile::TempDir),
 ) {
-    let (router, sends, dirs, _) = build(key, endpoint, alice, shape, arm).await;
+    let (router, sends, dirs, _, _) = build(key, endpoint, alice, shape, arm).await;
     (router, sends, dirs)
 }
 
@@ -251,6 +251,7 @@ pub(super) async fn gateway_with_meta(
     Arc<AtomicUsize>,
     (tempfile::TempDir, tempfile::TempDir),
     Arc<crate::gateway::router::AppState>,
+    Hold,
 ) {
     let shape = (
         Requirement::Required,
@@ -275,6 +276,7 @@ async fn build(
     Arc<AtomicUsize>,
     (tempfile::TempDir, tempfile::TempDir),
     Arc<crate::gateway::router::AppState>,
+    Hold,
 ) {
     use crate::config::{BackendConfig, TransportConfig};
     use crate::identity_propagation::{
@@ -303,7 +305,8 @@ async fn build(
         &crate::config::FailsafeConfig::default(),
         std::time::Duration::from_secs(60),
     ));
-    install_counting(&backend, alice, &endpoint, &sends);
+    let hold: Hold = Arc::new(tokio::sync::watch::channel(false).0);
+    install_counting(&backend, alice, &endpoint, (&sends, &hold));
     let tool: crate::protocol::Tool = serde_json::from_value(json!({
         "name": super::TOOL,
         "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}}
@@ -314,6 +317,7 @@ async fn build(
     assert!(registry.register(backend), "the fixture backend registers");
     let counting: Arc<dyn crate::transport::Transport> = Arc::new(Counting {
         sends: Arc::clone(&sends),
+        hold: Arc::clone(&hold),
     });
     assert!(
         registry.register(plain_backend(counting, tool)),
@@ -361,6 +365,7 @@ async fn build(
         sends,
         (log_dir, store),
         served,
+        hold,
     )
 }
 
@@ -400,10 +405,11 @@ fn install_counting(
     backend: &crate::backend::Backend,
     alice: &crate::key_server::oidc::VerifiedIdentity,
     endpoint: &str,
-    sends: &Arc<AtomicUsize>,
+    (sends, hold): (&Arc<AtomicUsize>, &Hold),
 ) {
     let counting: Arc<dyn crate::transport::Transport> = Arc::new(Counting {
         sends: Arc::clone(sends),
+        hold: Arc::clone(hold),
     });
     backend.set_transport_for_test(Arc::clone(&counting));
     // The per-user slot token exchange dispatches on, keyed as its
@@ -508,7 +514,13 @@ pub(super) async fn post_as(
 
 pub(super) struct Counting {
     pub(super) sends: Arc<AtomicUsize>,
+    /// While set, a `tools/call` waits before it answers, so a task stays
+    /// working (MIK-8406 P9n, P9i).
+    pub(super) hold: Hold,
 }
+
+/// The switch [`Counting`] waits on: `true` holds every `tools/call`.
+pub(super) type Hold = Arc<tokio::sync::watch::Sender<bool>>;
 
 #[async_trait::async_trait]
 impl crate::transport::Transport for Counting {
@@ -520,6 +532,9 @@ impl crate::transport::Transport for Counting {
         use crate::protocol::{JsonRpcResponse, RequestId};
         if method == "tools/call" {
             self.sends.fetch_add(1, Ordering::SeqCst);
+            let mut held = self.hold.subscribe();
+            // A closed channel cannot hold; the fixture keeps its sender.
+            let _ = held.wait_for(|held| !*held).await;
             return Ok(JsonRpcResponse::success(
                 RequestId::Number(1),
                 json!({"content": [{"type": "text", "text": super::MARKER}]}),

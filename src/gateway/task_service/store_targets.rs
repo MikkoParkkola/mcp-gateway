@@ -137,6 +137,16 @@ impl TaskStore {
         entry.record.version = entry.record.version.min(3);
     }
 
+    /// Test-only: turn `id` into a row whose run dispatched nothing: no
+    /// targets, its version kept, so the empty list still counts as recorded
+    /// (MIK-8406 P9g).
+    #[cfg(test)]
+    pub(crate) fn empty_targets_for_test(&self, id: &str) {
+        let mut state = self.0.state();
+        let entry = state.entries.get_mut(id).expect("the fixture task exists");
+        entry.record.targets.clear();
+    }
+
     /// Test-only: give `id` the upstream descriptor a legacy row keeps when
     /// its call went to an upstream task, bound to its own operation digest.
     #[cfg(test)]
