@@ -459,9 +459,11 @@ pub(super) async fn backend_handler(
 /// The direct backend route, as an ordered sequence of stages. Each stage
 /// returns the route's HTTP answer as its `Err`, so an early return inside a
 /// stage is an early return here, at the same point in the same order:
-/// refusal precedence is security-relevant (scope before backend lookup, so no
-/// 404 oracle; attestation before the propagation mint; the tool-call gate
-/// before the idempotency cache; the signing nonce after every refusal).
+/// refusal precedence is security-relevant (the keyed-principal intake before
+/// the backend lookup and every backend touch, so one answer for every name,
+/// MIK-8382; scope before backend lookup, so no 404 oracle; attestation before
+/// the propagation mint; the tool-call gate before the idempotency cache; the
+/// signing nonce after every refusal).
 async fn backend_handler_inner(
     state: Arc<AppState>,
     name: String,
