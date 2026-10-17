@@ -1,0 +1,227 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! Design rows 1-4, 9, 10, 17 and 21: the decision reads only sealed
+//! evidence from the declared writer.
+
+use std::collections::BTreeMap;
+
+use super::*;
+use crate::protocol_revision_telemetry::window::{Segment, WindowV2};
+use crate::protocol_revision_telemetry::{Registry, empty_shadow_counts};
+
+const DAY_MS: u64 = 86_400_000;
+const LISTEN: &str = "127.0.0.1:39401";
+const EXE: &str = "/opt/mcp-gateway/4.0.0/mcp-gateway";
+
+fn declaration() -> Declaration {
+    Declaration {
+        population: vec![Transport::Http],
+        listen: LISTEN.to_string(),
+        exe_prefix: "/opt/mcp-gateway/".to_string(),
+    }
+}
+
+/// `requests` HTTP requests at 2026-07-28, plus `unattributed` with none.
+fn snapshot(requests: u64, unattributed: u64) -> Snapshot {
+    let mut registry = Registry::new();
+    for _ in 0..requests {
+        registry.observe_request_from(Some("2026-07-28"), "claude", Transport::Http, None);
+    }
+    for _ in 0..unattributed {
+        registry.observe_request_from(None, "claude", Transport::Http, None);
+    }
+    registry.snapshot()
+}
+
+/// A clean segment from `start_ms` to `sealed_ms`.
+fn sealed(start_ms: u64, sealed_ms: u64, requests: u64) -> Segment {
+    Segment {
+        listen: LISTEN.to_string(),
+        exe: EXE.to_string(),
+        process_started_at_ms: start_ms,
+        opened_at: start_ms / 1000,
+        last_checkpoint_at: sealed_ms / 1000,
+        sealed_at_ms: Some(sealed_ms),
+        closed_cleanly: true,
+        snapshot: snapshot(requests, 0),
+        missing_revision_agents: BTreeMap::new(),
+        tools_list_shadow: empty_shadow_counts(),
+    }
+}
+
+fn open(start_ms: u64, requests: u64) -> Segment {
+    Segment {
+        sealed_at_ms: None,
+        closed_cleanly: false,
+        ..sealed(start_ms, start_ms, requests)
+    }
+}
+
+fn window(segments: Vec<Segment>) -> WindowV2 {
+    WindowV2 {
+        http_segments: segments,
+        ..WindowV2::empty(0)
+    }
+}
+
+/// Three clean back-to-back segments over 7.5 days.
+fn seven_days() -> Vec<Segment> {
+    vec![
+        sealed(0, 3 * DAY_MS, 4_000),
+        sealed(3 * DAY_MS + 10_000, 6 * DAY_MS, 4_000),
+        sealed(6 * DAY_MS + 10_000, 7 * DAY_MS + DAY_MS / 2, 2_000),
+    ]
+}
+
+#[test]
+fn seven_sealed_days_certify_and_the_span_is_the_sealed_time() {
+    let (span, outcome) = decide(&window(seven_days()), &declaration());
+    let span = span.expect("a sealed span");
+    assert_eq!(span.segments, 3);
+    assert_eq!(span.snapshot.total, 10_000);
+    assert_eq!(span.ended_at_ms, 7 * DAY_MS + DAY_MS / 2);
+    let retired = outcome.expect("certified");
+    assert!(retired.iter().any(|revision| revision == "2024-11-05"));
+}
+
+#[test]
+fn stdio_is_never_certified() {
+    let mut file = window(seven_days());
+    file.stdio = {
+        let mut registry = Registry::new();
+        registry.observe_request_from(Some("2025-06-18"), "codex", Transport::Stdio, None);
+        registry.snapshot()
+    };
+    assert_eq!(
+        decide(&file, &declaration()).1,
+        Err(WindowBlocked::PopulationMismatch)
+    );
+    let stdio_declared = Declaration {
+        population: vec![Transport::Http, Transport::Stdio],
+        ..declaration()
+    };
+    assert_eq!(
+        decide(&window(seven_days()), &stdio_declared).1,
+        Err(WindowBlocked::PopulationMismatch)
+    );
+}
+
+#[test]
+fn an_open_newest_segment_is_outside_the_span_with_its_counts() {
+    let mut segments = seven_days();
+    let mut late = open(8 * DAY_MS, 0);
+    late.snapshot = {
+        let mut registry = Registry::new();
+        for _ in 0..500 {
+            registry.observe_request_from(Some("2024-11-05"), "claude", Transport::Http, None);
+        }
+        registry.snapshot()
+    };
+    late.process_started_at_ms = 7 * DAY_MS + DAY_MS / 2 + 5_000;
+    segments.push(late);
+    let (span, outcome) = decide(&window(segments), &declaration());
+    assert_eq!(span.expect("span").snapshot.total, 10_000);
+    assert!(outcome.expect("certified").iter().any(|r| r == "2024-11-05"));
+}
+
+#[test]
+fn a_span_under_seven_days_is_too_short_however_old_the_file() {
+    let file = window(vec![sealed(0, 6 * DAY_MS, 10_000)]);
+    assert_eq!(
+        decide(&file, &declaration()).1,
+        Err(WindowBlocked::Retirement(RetirementBlocked::WindowTooShort))
+    );
+}
+
+#[test]
+fn an_unclean_segment_followed_by_another_blocks() {
+    let mut segments = seven_days();
+    segments.insert(1, open(3 * DAY_MS + 1_000, 10));
+    assert_eq!(
+        decide(&window(segments), &declaration()).1,
+        Err(WindowBlocked::UncleanSegment)
+    );
+}
+
+#[test]
+fn a_successor_started_before_its_predecessor_sealed_is_concurrent() {
+    let mut segments = seven_days();
+    // 300 ms before the first segment's seal: sub-second overlap (row 21).
+    segments[1].process_started_at_ms = 3 * DAY_MS - 300;
+    assert_eq!(
+        decide(&window(segments), &declaration()).1,
+        Err(WindowBlocked::ConcurrentHttpWriters)
+    );
+    let mut same_instant = seven_days();
+    same_instant[1].process_started_at_ms = 3 * DAY_MS;
+    assert!(decide(&window(same_instant), &declaration()).1.is_ok());
+}
+
+#[test]
+fn a_foreign_writer_blocks_wherever_it_sits() {
+    for (index, listen, exe) in [
+        (1, "127.0.0.1:39411", EXE),
+        (0, "127.0.0.1:39411", EXE),
+        (2, LISTEN, "/Users/dev/worktree/target/debug/mcp-gateway"),
+    ] {
+        let mut segments = seven_days();
+        segments[index].listen = listen.to_string();
+        segments[index].exe = exe.to_string();
+        assert_eq!(
+            decide(&window(segments), &declaration()).1,
+            Err(WindowBlocked::ForeignWriter),
+            "segment {index}"
+        );
+    }
+}
+
+#[test]
+fn a_gap_past_the_restart_budget_blocks_and_a_short_one_passes() {
+    let mut gap = seven_days();
+    gap[1].process_started_at_ms = 3 * DAY_MS + 3_600_000;
+    assert_eq!(
+        decide(&window(gap), &declaration()).1,
+        Err(WindowBlocked::CoverageGap)
+    );
+    assert!(decide(&window(seven_days()), &declaration()).1.is_ok());
+}
+
+#[test]
+fn eight_percent_unattributed_blocks_whatever_the_breakdown_says() {
+    let mut segments = seven_days();
+    segments[0].snapshot = snapshot(3_200, 800);
+    segments[0].missing_revision_agents = BTreeMap::from([("claude".to_string(), 800)]);
+    assert_eq!(
+        decide(&window(segments), &declaration()).1,
+        Err(WindowBlocked::Retirement(
+            RetirementBlocked::UnattributedAtOrAboveRetirementThreshold
+        ))
+    );
+}
+
+#[test]
+fn no_sealed_segment_is_its_own_block() {
+    assert_eq!(
+        decide(&window(vec![open(0, 10)]), &declaration()).1,
+        Err(WindowBlocked::NoSealedSegment)
+    );
+}
+
+#[test]
+fn the_declaration_requires_every_value() {
+    let ok = parse_declaration(Some("http"), Some(LISTEN), Some("/opt/mcp-gateway/"));
+    assert_eq!(ok.expect("valid"), declaration());
+    for (population, listen, prefix) in [
+        (None, Some(LISTEN), Some("/opt/")),
+        (Some("http"), None, Some("/opt/")),
+        (Some("http"), Some(LISTEN), None),
+        (Some("stdio"), Some(LISTEN), Some("/opt/")),
+        (Some("http"), Some("not-an-address"), Some("/opt/")),
+        (Some("http"), Some(LISTEN), Some("relative/path")),
+    ] {
+        assert!(
+            parse_declaration(population, listen, prefix).is_err(),
+            "{population:?} {listen:?} {prefix:?}"
+        );
+    }
+}

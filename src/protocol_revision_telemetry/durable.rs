@@ -253,7 +253,7 @@ fn add_snapshot(target: &mut Snapshot, delta: &Snapshot) -> io::Result<()> {
     Ok(())
 }
 
-fn add_map(target: &mut BTreeMap<String, u64>, delta: &BTreeMap<String, u64>) -> io::Result<()> {
+pub(super) fn add_map(target: &mut BTreeMap<String, u64>, delta: &BTreeMap<String, u64>) -> io::Result<()> {
     for (key, increment) in delta {
         let value = target.entry(key.clone()).or_insert(0);
         *value = checked_counter_add(*value, *increment)?;
@@ -261,7 +261,7 @@ fn add_map(target: &mut BTreeMap<String, u64>, delta: &BTreeMap<String, u64>) ->
     Ok(())
 }
 
-fn checked_counter_add(current: u64, increment: u64) -> io::Result<u64> {
+pub(super) fn checked_counter_add(current: u64, increment: u64) -> io::Result<u64> {
     current
         .checked_add(increment)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "telemetry counter overflow"))
@@ -322,7 +322,7 @@ fn validate_window(window: &DurableWindow) -> io::Result<()> {
     Ok(())
 }
 
-fn validate_bounded_keys<'a>(
+pub(super) fn validate_bounded_keys<'a>(
     values: &BTreeMap<String, u64>,
     allowed: impl Iterator<Item = &'a str>,
     label: &str,
@@ -336,11 +336,11 @@ fn validate_bounded_keys<'a>(
     Ok(())
 }
 
-fn invalid_window(message: &str) -> io::Error {
+pub(super) fn invalid_window(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
-fn checked_counter_sum(mut values: impl Iterator<Item = u64>) -> io::Result<u64> {
+pub(super) fn checked_counter_sum(mut values: impl Iterator<Item = u64>) -> io::Result<u64> {
     values.try_fold(0, checked_counter_add)
 }
 
@@ -349,9 +349,14 @@ fn unix_seconds() -> io::Result<u64> {
 }
 
 fn write_window_atomic(path: &Path, window: &DurableWindow) -> io::Result<()> {
+    write_json_atomic(path, window)
+}
+
+/// Write `value` to a private temporary file, fsync it, and rename it over `path`.
+pub(super) fn write_json_atomic(path: &Path, value: &impl Serialize) -> io::Result<()> {
     #[cfg(test)]
     write_seam::record(path);
-    let bytes = serde_json::to_vec_pretty(window)
+    let bytes = serde_json::to_vec_pretty(value)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     let temporary = path.with_extension("json.tmp");
     {
@@ -365,7 +370,7 @@ fn write_window_atomic(path: &Path, window: &DurableWindow) -> io::Result<()> {
 }
 
 #[cfg(unix)]
-fn sync_parent_directory(path: &Path) -> io::Result<()> {
+pub(super) fn sync_parent_directory(path: &Path) -> io::Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "window has no parent"))?;
@@ -373,7 +378,7 @@ fn sync_parent_directory(path: &Path) -> io::Result<()> {
 }
 
 #[cfg(unix)]
-fn force_directory_owner_only(path: &Path) -> io::Result<()> {
+pub(super) fn force_directory_owner_only(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
 }
@@ -383,7 +388,7 @@ fn force_directory_owner_only(path: &Path) -> io::Result<()> {
 #[path = "nonunix.rs"]
 mod nonunix;
 #[cfg(not(unix))]
-use nonunix::{force_directory_owner_only, sync_parent_directory};
+pub(super) use nonunix::{force_directory_owner_only, sync_parent_directory};
 
 /// Test support: window writes counted per window file (MIK-8364), so a row
 /// can assert that a request path wrote nothing. Keyed by path, so parallel

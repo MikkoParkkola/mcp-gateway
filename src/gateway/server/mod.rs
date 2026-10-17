@@ -74,6 +74,9 @@ mod tools_changed;
 pub(crate) use cleartext::reload_posture_refusal;
 pub(crate) use support::start_refusal as next_start_refusal;
 mod warmstart;
+mod window_saver;
+#[cfg(test)]
+mod window_seal_http_tests;
 
 use std::path::PathBuf;
 use std::sync::Arc;

@@ -7,10 +7,14 @@
 //! their identity in `_meta`; legacy HTTP requests carry a protocol header, and
 //! legacy stdio follow-ups reuse the bounded attribution learned at initialize.
 
+mod agents;
 mod durable;
 #[cfg(test)]
 pub(crate) use durable::write_seam;
 mod observe;
+pub(crate) mod window;
+#[cfg(test)]
+mod window_decide;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write as _;
@@ -190,6 +194,13 @@ pub struct Registry {
     shadow_counts: [u64; 16],
     session_attributions: BTreeMap<u64, SessionAttribution>,
     session_order: VecDeque<u64>,
+    /// The same observations, split by transport. The merged fields above are
+    /// the public view; a retirement decision reads one transport only, so a
+    /// stdio request can never stand in for HTTP traffic (U1 v2 window).
+    per_transport: BTreeMap<&'static str, Snapshot>,
+    /// Requests with no revision, by bounded caller key (named client, else
+    /// User-Agent family). Diagnoses the unattributed share; gates nothing.
+    missing_revision_agents: BTreeMap<String, u64>,
 }
 
 /// Snapshot for `/metrics` tests and the Linear table.
@@ -251,6 +262,19 @@ impl Registry {
         client: &str,
         transport: Transport,
     ) {
+        self.observe_request_from(requested_revision, client, transport, None);
+    }
+
+    /// [`Self::observe_request`] with the caller's raw User-Agent, reduced to a
+    /// bounded family before anything is stored.
+    pub(crate) fn observe_request_from(
+        &mut self,
+        requested_revision: Option<&str>,
+        client: &str,
+        transport: Transport,
+        user_agent: Option<&str>,
+    ) {
+        let _ = user_agent;
         self.total += 1;
         let client = client_label(client);
         *self.by_client.entry(client.to_string()).or_insert(0) += 1;
@@ -333,6 +357,17 @@ impl Registry {
     /// Count for one of the finite `tools/list` filter combinations.
     pub fn shadow_count(&self, filters: ListFilters) -> u64 {
         self.shadow_counts[shadow_index(filters)]
+    }
+
+    /// This process's observations on one transport only.
+    pub(crate) fn transport_snapshot(&self, transport: Transport) -> Snapshot {
+        let _ = transport;
+        Snapshot::default()
+    }
+
+    /// Requests with no revision, by bounded caller key.
+    pub(crate) fn missing_revision_agents(&self) -> BTreeMap<String, u64> {
+        BTreeMap::new()
     }
 
     fn shadow_snapshot(&self) -> BTreeMap<String, u64> {
@@ -614,5 +649,7 @@ pub(crate) fn reset_global_for_tests() {
 
 #[cfg(test)]
 mod lock_tests;
+#[cfg(test)]
+mod slice_tests;
 #[cfg(test)]
 mod tests;
