@@ -257,16 +257,13 @@ impl Walker<'_> {
                 },
                 _ => None,
             });
-        let (target, owns_dir) = match explicit {
-            Some(rel) => (self.path_base.join(rel), true),
-            None => {
-                let flat = self.child_dir.join(format!("{name}.rs"));
-                if flat.exists() {
-                    (flat, false)
-                } else {
-                    (self.child_dir.join(name).join("mod.rs"), true)
-                }
-            }
+        let flat = self.child_dir.join(format!("{name}.rs"));
+        let (target, owns_dir) = if let Some(rel) = explicit {
+            (self.path_base.join(rel), true)
+        } else if flat.exists() {
+            (flat, false)
+        } else {
+            (self.child_dir.join(name).join("mod.rs"), true)
         };
         let parent = target.parent().map(Path::to_path_buf).unwrap_or_default();
         // A `mod.rs` or `#[path]` file owns its directory; `x.rs` owns `x/`.

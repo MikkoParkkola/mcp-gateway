@@ -654,6 +654,8 @@ mod oracle_audit_tests;
 #[cfg(test)]
 #[path = "policy_epoch_tests.rs"]
 mod policy_epoch_tests;
+#[cfg(test)]
+mod scoped_backends_view_tests;
 /// MIK-8356: a per-user call is judged by the caller's own catalogue slot.
 #[cfg(test)]
 pub(crate) mod slot_verdict_fixture;
