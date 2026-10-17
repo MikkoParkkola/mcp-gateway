@@ -4,9 +4,9 @@
 //! answers before the refusals that come later today, whatever the target.
 
 use super::{
-    Caller, Case, Extra, HARDENED_IDENTITY, KEY, NO_PRINCIPAL, Ordering, Setup, StatusCode, Value,
-    fixture, idempotent, json, keyed_body, keyed_invoke, poisoned_listing, post_to, post_to_raw,
-    post_uri_with_headers, refusal,
+    AuthConfig, Caller, Case, Extra, HARDENED_IDENTITY, KEY, NO_PRINCIPAL, Ordering, Setup,
+    StatusCode, Value, fixture, idempotent, json, key_for_alpha, keyed_body, keyed_invoke,
+    poisoned_listing, post_to, post_to_raw, post_uri_with_headers, refusal,
 };
 
 /// C4 (/mcp precedence): for a keyed no-principal `tools/call` on `/mcp`, the
@@ -63,7 +63,8 @@ fn keyed_mcp_body(version: Option<&str>, args: &Value) -> Value {
 /// C4b (/mcp precedence, continued): for a keyed no-principal `tools/call` on
 /// `/mcp`, the intake refusal answers before the shared protocol checks
 /// (`request_check_refusal` and the Malformed arm), a malformed key, the
-/// tasks-extension gate, attestation under enforce and (feature `firewall`)
+/// tasks-extension gate (auth on: ruling B leaves an auth-off task submit
+/// to the task path), attestation under enforce and (feature `firewall`)
 /// the request firewall. Before: each answers its own code (red run);
 /// after: -32003, HTTP 400, id 5.
 /// Not here: the signing restore and early nonce refusal (the fixture has no
@@ -100,7 +101,6 @@ async fn c4b_mcp_protocol_refusals_answer_after_intake() {
         ("duplicated name", declared(modern), twice),
         ("mirrored name", declared(modern), mirrors("other")),
         ("malformed key", bad_key, vec![session]),
-        ("tasks extension", tasked, mirrors("gateway_invoke")),
     ];
     let fx = fixture(idempotent()).await;
     let mut wrong = Vec::new();
@@ -119,7 +119,25 @@ async fn c4b_mcp_protocol_refusals_answer_after_intake() {
     if refusal(&answer) != (Some(-32003), NO_PRINCIPAL) || status != StatusCode::BAD_REQUEST {
         wrong.push(format!("attestation: {status} {answer}"));
     }
-    let calls = fx.calls.load(Ordering::SeqCst) + attested.calls.load(Ordering::SeqCst);
+    // A task submit: on an auth-off gateway the intake leaves it to the task
+    // path (ruling 2026-10-17, B), so this cell runs with auth on and `/mcp`
+    // public, where it applies.
+    let authed = fixture(Setup {
+        auth: Some(AuthConfig {
+            public_paths: vec!["/mcp".to_string()],
+            ..key_for_alpha(None)
+        }),
+        ..idempotent()
+    })
+    .await;
+    let (status, answer) =
+        post_uri_with_headers(&authed, "/mcp", &tasked, &mirrors("gateway_invoke")).await;
+    if refusal(&answer) != (Some(-32003), NO_PRINCIPAL) || status != StatusCode::BAD_REQUEST {
+        wrong.push(format!("tasks extension: {status} {answer}"));
+    }
+    let calls = fx.calls.load(Ordering::SeqCst)
+        + attested.calls.load(Ordering::SeqCst)
+        + authed.calls.load(Ordering::SeqCst);
     #[cfg(feature = "firewall")]
     let calls = calls + {
         let walled = fixture(Setup {

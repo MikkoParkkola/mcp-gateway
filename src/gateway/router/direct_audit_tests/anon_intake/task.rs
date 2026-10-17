@@ -43,46 +43,55 @@ async fn d2_auth_off_anonymous_keyed_task_keeps_the_pooled_owner() {
     );
 }
 
-/// D2b (ruling B's proof row): an auth-off anonymous keyed task submit
-/// naming a counting backend (`alpha`), an unreachable one (`dead`, a socket
-/// bound and never listening) and an absent one (`nope`) is answered with a
-/// task handle each time, and `alpha` is sent no `tools/list` and no
-/// `tools/call` by the time its handle is returned: the submit does no
-/// backend work before task admission. Counters are read straight after the
-/// answer, so the worker running after the handle can only add to them, and
-/// zero holds only if nothing ran before it. `dead` and `nope` are not
-/// counted transports: their cells show only that no backend failure decided
-/// the answer.
+/// D2b (ruling B's proof row): an auth-off anonymous keyed task submit does
+/// no backend work before its task handle. Counting cell: every request to
+/// `alpha` is counted and never answered ([`Extra::Hang`]), so a submit that
+/// waited on `alpha` before answering would never answer; it must answer
+/// with a handle within 10 s. What `alpha` was sent by then is the worker's,
+/// started after the handle, and is reported, not asserted. Unreachable
+/// (`dead`, a socket bound and never listening) and absent (`nope`) cells:
+/// a handle each time, so no backend failure decided the answer.
 #[tokio::test]
 async fn d2b_auth_off_task_submit_does_no_backend_work_before_its_handle() {
+    let hung = fixture(Setup {
+        extras: &[Extra::Hang],
+        ..idempotent()
+    })
+    .await;
+    let counted = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        post_to(
+            &hung,
+            "/mcp",
+            &task_submit("alpha", "d2b-alpha"),
+            &Caller::Modern,
+        ),
+    )
+    .await;
+    let (status, answer) = counted.unwrap_or_else(|_| {
+        panic!(
+            "d2b counting: no answer in 10 s while alpha held every request \
+             (tools/list {}, tools/call {}): the submit waited on the backend",
+            hung.lists.load(Ordering::SeqCst),
+            hung.calls.load(Ordering::SeqCst)
+        )
+    });
+    assert!(
+        status == StatusCode::OK && answer.pointer("/result/taskId").is_some(),
+        "d2b counting: no task handle: {status} {answer}"
+    );
     let fx = fixture(idempotent()).await;
     let _closed = register_dead(&fx);
-    let mut cells = Vec::new();
-    // The counting cell last: the earlier cells' workers name other backends,
-    // so alpha's counters stay its own.
-    for (case, server) in [
-        ("unreachable", "dead"),
-        ("absent", "nope"),
-        ("counting", "alpha"),
-    ] {
+    let mut wrong = Vec::new();
+    for (case, server) in [("unreachable", "dead"), ("absent", "nope")] {
         let key = format!("d2b-{server}");
         let (status, answer) =
             post_to(&fx, "/mcp", &task_submit(server, &key), &Caller::Modern).await;
-        let (lists, calls) = (
-            fx.lists.load(Ordering::SeqCst),
-            fx.calls.load(Ordering::SeqCst),
-        );
         if status != StatusCode::OK || answer.pointer("/result/taskId").is_none() {
-            cells.push(format!("d2b {case}: no task handle: {status} {answer}"));
-        }
-        if (lists, calls) != (0, 0) {
-            cells.push(format!(
-                "d2b {case}: alpha was sent tools/list {lists}, tools/call {calls} \
-                 by the time the handle came back"
-            ));
+            wrong.push(format!("d2b {case}: no task handle: {status} {answer}"));
         }
     }
-    assert!(cells.is_empty(), "d2b:\n{}", cells.join("\n"));
+    assert!(wrong.is_empty(), "d2b:\n{}", wrong.join("\n"));
 }
 
 /// D6 (D8(c)): a keyed no-principal modern `gateway_set_profile` is refused
