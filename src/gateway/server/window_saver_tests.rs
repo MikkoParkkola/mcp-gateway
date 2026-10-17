@@ -208,6 +208,7 @@ async fn a_clock_failing_at_the_seal_leaves_a_healthy_segment_unclean() {
     assert_eq!(rig.segments().len(), 1, "the open used the healthy clock");
     SEAL_CLOCK_BROKEN.store(true, Ordering::SeqCst);
     stop(&rig, saver).await;
+    SEAL_CLOCK_BROKEN.store(false, Ordering::SeqCst);
     assert!(rig.seal.load(Ordering::SeqCst), "a clock error still seals");
     let segment = rig.segments().remove(0);
     assert!(!segment.closed_cleanly, "{segment:?}");

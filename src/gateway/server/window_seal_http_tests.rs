@@ -52,13 +52,23 @@ fn config(dir: &std::path::Path, mode: ProtocolRevisionWindow, backend: &str) ->
     config
 }
 
-fn initialize(id: u64) -> String {
+/// An `initialize` whose client name the held backend can recognise.
+fn initialize(id: u64, client: &str) -> String {
     serde_json::json!({
         "jsonrpc": "2.0", "id": id, "method": "initialize",
         "params": {"protocolVersion": "2025-11-25", "capabilities": {},
-                   "clientInfo": {"name": "row14", "version": "1"}}
+                   "clientInfo": {"name": client, "version": "1"}}
     })
     .to_string()
+}
+
+/// A completed answer: HTTP 200 and a JSON-RPC result for request `id`.
+fn assert_served(answer: &(u16, String), id: u64) {
+    let (status, text) = answer;
+    assert_eq!(*status, 200, "{text}");
+    assert!(text.contains(&format!("\"id\":{id}")), "{text}");
+    assert!(text.contains("\"result\""), "{text}");
+    assert!(!text.contains("window sealed"), "{text}");
 }
 
 /// Send `path`'s headers and `body`, keeping back its last byte if `hold`.
@@ -142,15 +152,23 @@ async fn across_shutdown(mode: ProtocolRevisionWindow) -> Answers {
     }
     let (close_in, close_go) = stall_seam::arm(&path, stall_seam::Role::Close);
 
-    let (after_body, meta_body, backend_body) = (initialize(43), initialize(41), initialize(42));
-    let after = send(port, "/mcp/remote_docs", &after_body, false).await;
+    let meta_body = initialize(41, "row14-meta");
+    let backend_body = initialize(42, "row14-before");
+    let after_body = initialize(43, "row14-after");
+    // Accepted first, so a later request reaching its handler proves this
+    // one was accepted too: the listener accepts connections in order.
     let meta = send(port, "/mcp", &meta_body, true).await;
     let held = send(port, "/mcp/remote_docs", &backend_body, true).await;
-    // `/mcp/{name}` takes its in-flight permit before reading the body, so two
-    // taken permits mean both backend-route requests are in their handlers.
-    // The `/mcp` request was accepted before the second of them, on the same
-    // listener, so it is in its body read too.
-    eventually("the held requests never reached their handlers", || {
+    let after = send(port, "/mcp/remote_docs", &after_body, false).await;
+    // The backend receiving request 43 is the acknowledgment tied to it: the
+    // gateway forwards only after the count point, so 43 is counted.
+    eventually("request 43 never reached the backend", || {
+        backend.received("row14-after")
+    })
+    .await;
+    // `/mcp/{name}` takes its permit before reading the body: 42 is in its
+    // handler, held in its body read, before its count point.
+    eventually("request 42 never reached its handler", || {
         gate.available_permits() <= idle - 2
     })
     .await;
@@ -166,10 +184,21 @@ async fn across_shutdown(mode: ProtocolRevisionWindow) -> Answers {
                 .is_ok()
         });
         assert!(entered.await.expect("join"), "the shutdown never sealed");
+    } else {
+        // The broadcast has reached the listener once it refuses a connection.
+        let mut refused = false;
+        let start = std::time::Instant::now();
+        while !refused {
+            assert!(start.elapsed() < ARRIVAL, "the listener never stopped");
+            refused = TcpStream::connect(("127.0.0.1", port)).await.is_err();
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
     let meta_before = answer(meta, &meta_body, true).await;
-    let backend_before = answer(held, &backend_body, true).await;
+    // Released before 42's last byte: with `off`, 42 is forwarded and needs
+    // the backend; with `record`, it is refused before forwarding.
     backend.release();
+    let backend_before = answer(held, &backend_body, true).await;
     let backend_after = answer(after, &after_body, false).await;
     drop(close_go);
     let _ = tokio::time::timeout(ARRIVAL, server).await;
@@ -189,21 +218,14 @@ async fn with_record_a_request_counted_after_the_seal_is_refused_on_both_routes(
     let (status, backend) = &answers.backend_before;
     assert_eq!(*status, 503, "{backend}");
     assert!(backend.contains("\"id\":42"), "{backend}");
-    let (status, after) = &answers.backend_after;
-    assert_ne!(*status, 503, "a request counted before the seal was refused: {after}");
-    assert!(!after.contains("window sealed"), "{after}");
+    // Counted before the seal: completes, however long its backend held it.
+    assert_served(&answers.backend_after, 43);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn with_off_every_request_is_served_across_the_shutdown() {
     let answers = across_shutdown(ProtocolRevisionWindow::Off).await;
-    for (status, text) in [
-        &answers.meta_before,
-        &answers.backend_before,
-        &answers.backend_after,
-    ] {
-        assert_ne!(*status, 503, "{text}");
-        assert!(!text.contains("window sealed"), "{text}");
-    }
-    assert_eq!(answers.meta_before.0, 200, "{}", answers.meta_before.1);
+    assert_served(&answers.meta_before, 41);
+    assert_served(&answers.backend_before, 42);
+    assert_served(&answers.backend_after, 43);
 }

@@ -15,6 +15,14 @@ fn identity(started_ms: u64) -> WriterIdentity {
     }
 }
 
+/// A directory where the atomic write's temporary file must be created, so
+/// the next write fails before its rename (for root too). Returns its path.
+fn block_the_temporary_file(data_dir: &std::path::Path) -> std::path::PathBuf {
+    let blocker = window_paths(data_dir).0.with_extension("json.tmp");
+    std::fs::create_dir(&blocker).expect("plant a directory at the temporary path");
+    blocker
+}
+
 fn counts(http_requests: u64) -> SegmentCounts {
     // Built from the merged snapshot, so the sink rows judge only the sink:
     // every request here is HTTP, so the merged view is the HTTP slice.
@@ -101,17 +109,14 @@ fn an_idle_interval_still_writes_a_checkpoint_and_an_empty_close_lands() {
     assert_eq!(segment.snapshot.total, 0);
 }
 
-#[cfg(unix)]
 #[test]
 fn a_failed_write_followed_by_a_success_loses_no_count() {
-    use std::os::unix::fs::PermissionsExt as _;
     let dir = tempfile::tempdir().expect("tempdir");
     let mut sink = HttpSegmentSink::open(dir.path(), identity(1_000), 10).expect("open");
-    let telemetry = dir.path().join(DURABLE_TELEMETRY_DIR);
-    std::fs::set_permissions(&telemetry, std::fs::Permissions::from_mode(0o500)).expect("chmod");
+    let blocker = block_the_temporary_file(dir.path());
     let failed = sink.checkpoint(&counts(3), 11);
-    std::fs::set_permissions(&telemetry, std::fs::Permissions::from_mode(0o700)).expect("chmod");
-    assert!(failed.is_err(), "the read-only directory must fail the write");
+    std::fs::remove_dir(&blocker).expect("unblock");
+    assert!(failed.is_err(), "a blocked temporary file must fail the write");
     assert_eq!(load(dir.path()).expect("reopen").http_segments[0].snapshot.total, 0);
 
     sink.checkpoint(&counts(7), 12).expect("the next write succeeds");
@@ -151,19 +156,16 @@ fn the_stdio_sink_writes_only_stdio_counts_into_the_v2_window() {
     assert!(window.http_segments.is_empty());
 }
 
-#[cfg(unix)]
 #[test]
 fn a_failed_close_leaves_the_segment_open_for_a_retried_close() {
     // `closed` is set only once the sealed write has landed: a close that
     // fails must not turn the sink into a no-op, or the retry seals nothing.
-    use std::os::unix::fs::PermissionsExt as _;
     let dir = tempfile::tempdir().expect("tempdir");
     let mut sink = HttpSegmentSink::open(dir.path(), identity(1_000), 10).expect("open");
-    let telemetry = dir.path().join(DURABLE_TELEMETRY_DIR);
-    std::fs::set_permissions(&telemetry, std::fs::Permissions::from_mode(0o500)).expect("chmod");
+    let blocker = block_the_temporary_file(dir.path());
     let failed = sink.close(&counts(3), 11, 11_000);
-    std::fs::set_permissions(&telemetry, std::fs::Permissions::from_mode(0o700)).expect("chmod");
-    assert!(failed.is_err(), "the read-only directory must fail the close");
+    std::fs::remove_dir(&blocker).expect("unblock");
+    assert!(failed.is_err(), "a blocked temporary file must fail the close");
     assert!(!load(dir.path()).expect("reopen").http_segments[0].closed_cleanly);
 
     sink.close(&counts(3), 12, 11_000).expect("the retried close lands");

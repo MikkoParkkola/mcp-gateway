@@ -16,7 +16,11 @@ pub(super) struct HeldBackend {
     pub(super) url: String,
     released: Arc<Notify>,
     gate: Arc<std::sync::atomic::AtomicBool>,
+    seen: Seen,
 }
+
+/// Every request body the backend has read, in arrival order.
+type Seen = Arc<std::sync::Mutex<Vec<String>>>;
 
 impl HeldBackend {
     pub(super) async fn start() -> Self {
@@ -24,17 +28,29 @@ impl HeldBackend {
         let url = format!("http://{}/mcp", listener.local_addr().expect("addr"));
         let released = Arc::new(Notify::new());
         let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let (wait, open) = (Arc::clone(&released), Arc::clone(&gate));
+        let seen = Seen::default();
+        let (wait, open, log) = (Arc::clone(&released), Arc::clone(&gate), Arc::clone(&seen));
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
-                tokio::spawn(answer(stream, Arc::clone(&wait), Arc::clone(&open)));
+                let (wait, open, log) = (Arc::clone(&wait), Arc::clone(&open), Arc::clone(&log));
+                tokio::spawn(answer(stream, wait, open, log));
             }
         });
         Self {
             url,
             released,
             gate,
+            seen,
         }
+    }
+
+    /// Whether a request body naming `marker` has reached the backend.
+    pub(super) fn received(&self, marker: &str) -> bool {
+        self.seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .any(|body| body.contains(marker))
     }
 
     /// Answer every held request, and every later one at once.
@@ -48,6 +64,7 @@ async fn answer(
     mut stream: TcpStream,
     released: Arc<Notify>,
     open: Arc<std::sync::atomic::AtomicBool>,
+    seen: Seen,
 ) {
     let mut buffer = Vec::new();
     let mut chunk = [0_u8; 4096];
@@ -80,6 +97,9 @@ async fn answer(
             .await;
         return;
     }
+    seen.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(String::from_utf8_lossy(&buffer[head_end..head_end + length]).into_owned());
     let released = released.notified();
     if !open.load(std::sync::atomic::Ordering::SeqCst) {
         released.await;

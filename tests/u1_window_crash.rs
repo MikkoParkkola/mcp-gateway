@@ -6,7 +6,13 @@
 //! segment is opened before the listener serves, not at the first periodic
 //! save, so a crash cannot hide a process that served traffic.
 //!
-//! The real binary, so the kill is a real process death.
+//! The real binary, so the kill is a real process death. The binary has no
+//! knob to stop its periodic save (every 5 s), so the row SIGKILLs at once
+//! after the first response and asserts the kill landed inside 5 s of the
+//! spawn: before any periodic save could have created the file, so only the
+//! open-before-serving can explain a segment. A slower run fails rather than
+//! passing for that wrong reason. The ordering itself is pinned in-crate
+//! (`the_segment_is_open_before_serving_and_sealed_on_the_broadcast`).
 #![cfg(unix)]
 
 #[path = "common/gateway_bin.rs"]
@@ -17,6 +23,9 @@ use std::time::{Duration, Instant};
 
 /// Bound on each wait for something that must happen.
 const ARRIVAL: Duration = Duration::from_secs(60);
+/// The shipped window save interval (`WINDOW_SAVE_INTERVAL`); the kill must
+/// land before the first periodic save could.
+const FIRST_PERIODIC_SAVE: Duration = Duration::from_secs(5);
 
 #[test]
 fn a_record_gateway_killed_after_serving_leaves_an_unclean_segment() {
@@ -43,7 +52,8 @@ fn a_record_gateway_killed_after_serving_leaves_an_unclean_segment() {
         .spawn()
         .expect("the built mcp-gateway binary spawns");
 
-    let start = Instant::now();
+    let spawned = Instant::now();
+    let start = spawned;
     let port = loop {
         if let Some(port) = gateway_bin::logged_port(&log).filter(|p| gateway_bin::answers_livez(*p)) {
             break port;
@@ -57,7 +67,13 @@ fn a_record_gateway_killed_after_serving_leaves_an_unclean_segment() {
     assert!(post_initialize(port).starts_with("HTTP/1.1 200"), "the request was not served");
 
     child.kill().expect("SIGKILL");
+    let killed_after = spawned.elapsed();
     let _ = child.wait();
+    assert!(
+        killed_after < FIRST_PERIODIC_SAVE,
+        "inconclusive: the kill landed {killed_after:?} after spawn, when a periodic save may \
+         already have written the file; rerun on a less loaded host"
+    );
 
     let path = state.join("protocol-revision-telemetry").join("window.json");
     let window: serde_json::Value = serde_json::from_str(

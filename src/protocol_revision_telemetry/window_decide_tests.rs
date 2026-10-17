@@ -276,6 +276,23 @@ fn the_operator_run_refuses_a_missing_variable_and_writes_its_decision() {
         decision["retire"].as_array().is_some_and(|r| !r.is_empty()),
         "{decision}"
     );
+
+    // Blocked evidence: a declaration naming another writer certifies nothing.
+    let foreign = |key: &str| match key {
+        "U1_LISTEN" => Some("127.0.0.1:39411".to_string()),
+        _ => full(key),
+    };
+    let report = run_operator(&foreign).expect("a blocked decision still reports");
+    assert!(report.contains("ForeignWriter"), "{report}");
+    let written = std::fs::read(path.with_file_name("decision.json")).expect("decision.json");
+    let decision: serde_json::Value = serde_json::from_slice(&written).expect("JSON");
+    assert_eq!(decision["retire"], serde_json::json!([]), "{decision}");
+    assert_eq!(decision["blocked"], "ForeignWriter", "{decision}");
+    let malformed = |key: &str| match key {
+        "U1_EXE_PREFIX" => Some("relative/path".to_string()),
+        _ => full(key),
+    };
+    assert!(run_operator(&malformed).is_err(), "a relative prefix ran");
 }
 
 /// The operator's entry point. Ignored: it reads the real environment.
