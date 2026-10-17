@@ -213,7 +213,13 @@ RENAMED = re.compile(r"\b(" + "|".join(("VerifiedIdentity", "GrantSubject", "Cer
 ALIAS = re.compile(r"\btype\s+\w+(?:<[^>]*>)?\s*=\s*(?:[\w:]+::)?(" + "|".join(TYPES) + r")\b")
 # Deserialization from untrusted bytes into a caller identity, or a struct
 # carrying one: each must be a listed read-back with its check site.
-READ_BACK = re.compile(r"\b(?:serde_json|serde_yaml|toml|serde_yml)::from_(?:str|slice|value|reader)\b")
+READ_BACK = re.compile(
+    r"\b(?:serde_json|serde_yaml|toml|serde_yml)::from_(?:str|slice|value|reader)\b"
+    # MIK-8425: the crate's YAML adapter, so routing a read through it does
+    # not hide it from this check. `my_yaml::` and `serde_yaml::` do not
+    # match this branch (no word boundary before `yaml`).
+    r"|\b(?:crate::)?yaml::(?:from_str_loose|from_str|from_value|documents)\b"
+)
 READ_BACKS = {
     # RULE data: operator input naming who a grant or a capability is for,
     # never a request's identity. A rule may name anyone; checking happens

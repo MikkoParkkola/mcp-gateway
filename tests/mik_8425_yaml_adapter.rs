@@ -22,9 +22,15 @@ fn documents_stops_at_the_first_refusal() {
         .collect();
     assert_eq!(read, [true, false], "Ok, then the refusal, then the end");
 
-    let many = "a: 1\n---\n".repeat(300);
+    // Joined, not terminated: a trailing `---` would start a 301st, empty
+    // document, in serde_yaml as here.
+    let many = vec!["a: 1"; 300].join("\n---\n");
     let read = yaml::documents(&many).collect::<Vec<_>>();
-    assert_eq!(read.len(), 300, "no document cap: every valid document is read");
+    assert_eq!(
+        read.len(),
+        300,
+        "no document cap: every valid document is read"
+    );
     assert!(read.iter().all(Result::is_ok));
 
     let late = format!("{}b: [1, 2\n", "a: 1\n---\n".repeat(260));
@@ -38,7 +44,10 @@ fn documents_stops_at_the_first_refusal() {
 #[test]
 fn from_str_loose_keeps_the_last_repeated_key() {
     let dict = yaml::from_str_loose("a: 1\na: 2\n").expect("a Dict keeps the last value");
-    assert_eq!(dict.get("a").and_then(|v| v.to_i128()), Some(2));
+    assert_eq!(
+        serde_json::to_value(&dict).expect("a Dict serializes"),
+        serde_json::json!({"a": 2})
+    );
 }
 
 #[test]
@@ -64,10 +73,18 @@ fn figment_data_matches_the_yaml_provider() {
         match (ours, theirs) {
             (Ok(a), Ok(b)) => assert_eq!(a, b, "same profiles and values for {text:?}"),
             (Err(a), Err(b)) => {
-                assert_eq!(a.kind.to_string(), b.kind.to_string(), "same kind for {text:?}");
+                assert_eq!(
+                    a.kind.to_string(),
+                    b.kind.to_string(),
+                    "same kind for {text:?}"
+                );
                 assert_eq!(a.to_string(), b.to_string(), "same message for {text:?}");
             }
-            (a, b) => panic!("{text:?}: adapter {:?} vs provider {:?}", a.is_ok(), b.is_ok()),
+            (a, b) => panic!(
+                "{text:?}: adapter {:?} vs provider {:?}",
+                a.is_ok(),
+                b.is_ok()
+            ),
         }
     }
 }
@@ -107,7 +124,10 @@ fn adapter_reads_like_serde_yaml_on_the_behaviour_cases() {
             "tree reading of {text:?}"
         );
         assert_eq!(
-            format!("{:?}", yaml::from_str_loose(text).map_err(|e| e.to_string())),
+            format!(
+                "{:?}",
+                yaml::from_str_loose(text).map_err(|e| e.to_string())
+            ),
             format!(
                 "{:?}",
                 Yaml::from_str::<figment::value::Dict>(text).map_err(|e| e.to_string())
@@ -117,8 +137,9 @@ fn adapter_reads_like_serde_yaml_on_the_behaviour_cases() {
         let ours: Vec<String> = yaml::documents(text).map(tree_or_refusal).collect();
         let mut theirs = Vec::new();
         for document in serde_yaml::Deserializer::from_str(text) {
-            let reading =
-                tree_or_refusal(<serde_yaml::Value as serde::Deserialize>::deserialize(document));
+            let reading = tree_or_refusal(<serde_yaml::Value as serde::Deserialize>::deserialize(
+                document,
+            ));
             let refused = reading.starts_with("ERR");
             theirs.push(reading);
             if refused {
@@ -127,7 +148,10 @@ fn adapter_reads_like_serde_yaml_on_the_behaviour_cases() {
         }
         assert_eq!(ours, theirs, "stream reading of {text:?}");
         assert_eq!(
-            format!("{:?}", yaml::from_str::<BTreeMap<String, String>>(text).map_err(|e| e.to_string())),
+            format!(
+                "{:?}",
+                yaml::from_str::<BTreeMap<String, String>>(text).map_err(|e| e.to_string())
+            ),
             format!(
                 "{:?}",
                 serde_yaml::from_str::<BTreeMap<String, String>>(text).map_err(|e| e.to_string())
@@ -161,7 +185,11 @@ fn names_a_parser(text: &str) -> bool {
 fn direct_users(root: &std::path::Path) -> Vec<String> {
     let mut found: Vec<String> = ["src", "tests"]
         .iter()
-        .flat_map(|dir| walkdir::WalkDir::new(root.join(dir)).into_iter().filter_map(Result::ok))
+        .flat_map(|dir| {
+            walkdir::WalkDir::new(root.join(dir))
+                .into_iter()
+                .filter_map(Result::ok)
+        })
         .filter(|e| e.file_type().is_file() && e.path().extension().is_some_and(|x| x == "rs"))
         .filter(|e| std::fs::read_to_string(e.path()).is_ok_and(|t| names_a_parser(&t)))
         .map(|e| {
@@ -216,12 +244,27 @@ fn no_new_file_names_a_yaml_parser_directly() {
 fn the_bypass_scan_flags_each_way_of_naming_a_parser() {
     let root = tempfile::tempdir().expect("tempdir");
     let files = [
-        ("src/direct.rs", "fn f() { let _ = serde_yaml::from_str::<u8>(\"1\"); }\n"),
-        ("src/imported.rs", "use figment::providers::{Format, Yaml};\n"),
-        ("src/pathed.rs", "fn f() { figment::providers::Yaml::string(\"\"); }\n"),
+        (
+            "src/direct.rs",
+            "fn f() { let _ = serde_yaml::from_str::<u8>(\"1\"); }\n",
+        ),
+        (
+            "src/imported.rs",
+            "use figment::providers::{Format, Yaml};\n",
+        ),
+        (
+            "src/pathed.rs",
+            "fn f() { figment::providers::Yaml::string(\"\"); }\n",
+        ),
         ("tests/x_tests.rs", "use serde_yaml::Value;\n"),
-        ("src/clean.rs", "fn f() -> &'static str { \"serde_yaml_like\" }\n"),
-        ("src/other.rs", "use figment::providers::Env;\nstruct Yaml;\n"),
+        (
+            "src/clean.rs",
+            "fn f() -> &'static str { \"serde_yaml_like\" }\n",
+        ),
+        (
+            "src/other.rs",
+            "use figment::providers::Env;\nstruct Yaml;\n",
+        ),
     ];
     for (rel, text) in files {
         let path = root.path().join(rel);
@@ -230,7 +273,12 @@ fn the_bypass_scan_flags_each_way_of_naming_a_parser() {
     }
     assert_eq!(
         direct_users(root.path()),
-        ["src/direct.rs", "src/imported.rs", "src/pathed.rs", "tests/x_tests.rs"]
+        [
+            "src/direct.rs",
+            "src/imported.rs",
+            "src/pathed.rs",
+            "tests/x_tests.rs"
+        ]
     );
 }
 

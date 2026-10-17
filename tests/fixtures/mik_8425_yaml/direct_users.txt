@@ -140,6 +140,7 @@ src/security/posture_tests.rs
 src/skills/parser.rs
 src/transform/pipeline/tests.rs
 src/trust/tests.rs
+src/yaml.rs
 tests/add_keeps_comments.rs
 tests/capability_pin_policy.rs
 tests/capability_read_only_classified.rs

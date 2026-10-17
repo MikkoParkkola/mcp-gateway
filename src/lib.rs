@@ -159,6 +159,8 @@ pub mod validator;
 mod private_fs;
 #[cfg(windows)]
 mod win_acl;
+/// The one YAML seam (MIK-8425); crate-private.
+mod yaml;
 
 #[doc(hidden)]
 pub use error::{Error, Result};
