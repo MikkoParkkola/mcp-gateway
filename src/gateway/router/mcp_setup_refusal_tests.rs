@@ -197,7 +197,11 @@ async fn an_execute_parse_refusal_gives_the_nonce_back() {
     let cases = [
         (json!({}), "Missing 'tool'", "k8e-n1"),
         (json!({"tool": "read"}), "missing server prefix", "k8e-n2"),
-        (json!({"tool": "alpha:read", "arguments": 5}), "Invalid 'arguments'", "k8e-n3"),
+        (
+            json!({"tool": "alpha:read", "arguments": 5}),
+            "Invalid 'arguments'",
+            "k8e-n3",
+        ),
     ];
     for (bad, needle, nonce) in cases {
         let pair = (bad, good.clone());
@@ -304,12 +308,18 @@ fn disable_before_step(fx: &Fx, server: &'static str) {
         for _ in 0..cfg.min_samples.max(1) {
             switch.record_capability_failure(server, "read", &cfg);
         }
-        assert!(switch.is_capability_disabled(server, "read"), "premise: disabled");
+        assert!(
+            switch.is_capability_disabled(server, "read"),
+            "premise: disabled"
+        );
     });
 }
 
 fn revive(fx: &Fx, server: &str) {
-    fx.state.meta_mcp.kill_switch().revive_capability(server, "read");
+    fx.state
+        .meta_mcp
+        .kill_switch()
+        .revive_capability(server, "read");
 }
 
 const TWO_STEPS: &str = r"

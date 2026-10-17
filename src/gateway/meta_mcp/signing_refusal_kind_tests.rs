@@ -110,18 +110,63 @@ fn setup_refusals() -> [(&'static str, Value, &'static str, bool); 13] {
     let unattested = "multi-step plans carry no attestation";
     [
         ("gateway_search", json!({}), "Missing 'query'", false),
-        ("gateway_search", json!({"query": "r", "detail": "l9"}), "l9", false),
+        (
+            "gateway_search",
+            json!({"query": "r", "detail": "l9"}),
+            "l9",
+            false,
+        ),
         ("gateway_search_tools", json!({}), "Missing 'query'", false),
-        ("gateway_list_tools", json!({"role": "bogus"}), "Invalid role filter", false),
-        ("gateway_execute", json!({"chain": []}), "Chain must not be empty", false),
+        (
+            "gateway_list_tools",
+            json!({"role": "bogus"}),
+            "Invalid role filter",
+            false,
+        ),
+        (
+            "gateway_execute",
+            json!({"chain": []}),
+            "Chain must not be empty",
+            false,
+        ),
         ("gateway_execute", json!({}), "Missing 'tool'", false),
-        ("gateway_execute", json!({"tool": "read"}), "missing server prefix", false),
-        ("gateway_execute", json!({"tool": "alpha:read", "arguments": 5}), "Invalid 'arguments'", false),
-        ("gateway_execute", json!({"tool": "alpha:read"}), unattested, true),
+        (
+            "gateway_execute",
+            json!({"tool": "read"}),
+            "missing server prefix",
+            false,
+        ),
+        (
+            "gateway_execute",
+            json!({"tool": "alpha:read", "arguments": 5}),
+            "Invalid 'arguments'",
+            false,
+        ),
+        (
+            "gateway_execute",
+            json!({"tool": "alpha:read"}),
+            unattested,
+            true,
+        ),
         ("gateway_run_playbook", json!({}), "Missing 'name'", false),
-        ("gateway_run_playbook", json!({"name": "x", "arguments": 5}), "Invalid 'arguments'", false),
-        ("gateway_run_playbook", json!({"name": "nosuch"}), "Playbook not found", false),
-        ("gateway_run_playbook", json!({"name": "nosuch"}), unattested, true),
+        (
+            "gateway_run_playbook",
+            json!({"name": "x", "arguments": 5}),
+            "Invalid 'arguments'",
+            false,
+        ),
+        (
+            "gateway_run_playbook",
+            json!({"name": "nosuch"}),
+            "Playbook not found",
+            false,
+        ),
+        (
+            "gateway_run_playbook",
+            json!({"name": "nosuch"}),
+            unattested,
+            true,
+        ),
     ]
 }
 
@@ -133,7 +178,10 @@ async fn a_setup_refusal_without_its_witness_keeps_the_nonce() {
     for (name, arguments, needle, attested) in setup_refusals() {
         let (meta, calls) = counted(attested);
         let wire = signed(&meta, (name, arguments), ctx(&AllowAll), Witness::None).await;
-        assert!(refused_with(&wire, needle), "premise: {name} {needle}: {wire}");
+        assert!(
+            refused_with(&wire, needle),
+            "premise: {name} {needle}: {wire}"
+        );
         assert_nothing_acted(&meta, &calls, name);
         assert!(
             !nonce_is_free(&meta),
@@ -149,7 +197,10 @@ async fn a_setup_refusal_with_its_witness_gives_the_nonce_back() {
     for (name, arguments, needle, attested) in setup_refusals() {
         let (meta, calls) = counted(attested);
         let wire = signed(&meta, (name, arguments), ctx(&AllowAll), Witness::Kept).await;
-        assert!(refused_with(&wire, needle), "premise: {name} {needle}: {wire}");
+        assert!(
+            refused_with(&wire, needle),
+            "premise: {name} {needle}: {wire}"
+        );
         assert_nothing_acted(&meta, &calls, name);
         assert!(nonce_is_free(&meta), "{name} {needle}: kept its nonce");
         assert!(!nonce_is_free(&meta), "{name} {needle}: given back twice");
@@ -199,12 +250,11 @@ async fn surfacing_invalid_read() -> MetaMcp {
     backend.set_transport_for_test(Arc::new(InvalidRead));
     let _ = registry.register(Arc::clone(&backend));
     backend.get_tools().await.expect("alpha lists");
-    let mut meta = MetaMcp::new(registry).with_surfaced_tools(vec![
-        crate::config::SurfacedToolConfig {
+    let mut meta =
+        MetaMcp::new(registry).with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
             server: "alpha".to_string(),
             tool: "read".to_string(),
-        },
-    ]);
+        }]);
     meta.enable_message_signing(
         crate::security::message_signing::MessageSigner::new(
             b"signing-kinds-key-0123456789abcdef".to_vec(),

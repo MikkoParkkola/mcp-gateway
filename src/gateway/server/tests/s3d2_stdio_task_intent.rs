@@ -150,7 +150,10 @@ async fn a_stdio_task_intent_refusal_after_a_consumed_grant_keeps_the_nonce() {
     let before = ledger.ledger().len().await;
     let mut redemption = task_call(2, NONCE, Some("k6k-a"), accept(&challenge));
     let declared = &mut redemption["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"];
-    declared.as_object_mut().expect("capabilities").remove("extensions");
+    declared
+        .as_object_mut()
+        .expect("capabilities")
+        .remove("extensions");
     let refused = dispatch(&fixture, redemption).await;
     assert!(
         message(&refused).contains("extension to be declared"),
@@ -217,7 +220,11 @@ async fn surfaced_invalid(warm: bool) -> ([Value; 4], [usize; 2], usize) {
     let second = dispatch(&fixture, plain_call(2, TOOL, json!({}), NONCE)).await;
     let counts = [between - before, given() - between];
     let search = json!({"query": "echo"});
-    let third = dispatch(&fixture, plain_call(3, "gateway_search", search.clone(), NONCE)).await;
+    let third = dispatch(
+        &fixture,
+        plain_call(3, "gateway_search", search.clone(), NONCE),
+    )
+    .await;
     let fourth = dispatch(&fixture, plain_call(4, "gateway_search", search, NONCE)).await;
     let rounds = fixture.rounds.load(Ordering::SeqCst);
     ([first, second, third, fourth], counts, rounds)
@@ -231,10 +238,20 @@ async fn surfaced_invalid(warm: bool) -> ([Value; 4], [usize; 2], usize) {
 async fn a_withheld_surfaced_name_gives_the_nonce_back_on_stdio() {
     let ([first, second, third, fourth], counts, rounds) = surfaced_invalid(true).await;
     assert_eq!(first["error"]["code"], -32601, "premise: absent: {first}");
-    assert_eq!(second["error"]["code"], -32601, "the nonce was kept: {second}");
-    assert_eq!(counts, [1, 1], "each refused send gives the nonce back once");
+    assert_eq!(
+        second["error"]["code"], -32601,
+        "the nonce was kept: {second}"
+    );
+    assert_eq!(
+        counts,
+        [1, 1],
+        "each refused send gives the nonce back once"
+    );
     assert!(third.get("error").is_none(), "send 3 was refused: {third}");
-    assert!(message(&fourth).contains(REPLAY), "given back twice: {fourth}");
+    assert!(
+        message(&fourth).contains(REPLAY),
+        "given back twice: {fourth}"
+    );
     assert_eq!(rounds, 0, "nothing was sent");
 }
 

@@ -448,15 +448,18 @@ impl MetaMcp {
         let tool_ref = asking(caller, extract_required_str(args, "tool"))?;
         let (tool_name, server_opt) = parse_code_mode_tool_ref(tool_ref);
 
-        let server = asking(caller, server_opt.ok_or_else(|| {
-            Error::json_rpc(
-                -32602,
-                format!(
-                    "Tool reference '{tool_ref}' is missing server prefix. \
+        let server = asking(
+            caller,
+            server_opt.ok_or_else(|| {
+                Error::json_rpc(
+                    -32602,
+                    format!(
+                        "Tool reference '{tool_ref}' is missing server prefix. \
                      Use format 'server:tool_name' from gateway_search results."
-                ),
-            )
-        }))?;
+                    ),
+                )
+            }),
+        )?;
 
         let arguments = asking(caller, parse_tool_arguments(args))?;
         let invoke_args = json!({
