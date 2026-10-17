@@ -52,7 +52,7 @@ pub(in crate::gateway) use chokepoint::{DirectPermit, Outbound};
 pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2.1)
 pub(crate) mod egress;
 mod nonce_settle; // MIK-8150: refund requests and dispatch marks of a signed execution
-pub(super) use nonce_settle::spend_witness;
+pub(super) use nonce_settle::{ask_if_refused_submit, refused_submit_answer, spend_witness};
 mod r2_check;
 mod step_fingerprint;
 // #1962: settlement of a bridged round's key, kept out of this file's size baseline.
@@ -351,6 +351,7 @@ impl MetaMcp {
         // the check's fill spent.
         witness.carry(rw::schema_effect(fills() != fills_before));
         if let Some(refusal) = checked? {
+            nonce_settle::ask_refund(caller); // MIK-8353 3d: the witness decides
             return Ok(TracedOutcome::Live(refusal));
         }
 

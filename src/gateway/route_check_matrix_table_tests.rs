@@ -4,12 +4,12 @@
 //! re-verified route-check matrix (b3 note r4, seats grok + gpt). One arm per
 //! stage, then one arm per answer for that stage, each with its evidence.
 
-use super::{Expect, MethodKind, Na, Route, Stage, Ticket};
+use super::{Expect, MethodKind, Na, Route, Stage};
 
 /// What `stage` does on `route` for `method` today. No wildcard arm: every
 /// (route, stage) pair is decided here, so a new variant fails to compile.
 pub(crate) const fn expect(method: MethodKind, route: Route, stage: Stage) -> Expect {
-    use Expect::{Applies, ExpectedGap, NotApplicable};
+    use Expect::{Applies, NotApplicable};
     use Route::{Direct, Invoke, Stdio, Surfaced, TaskSubmit, TaskWorker};
     match method {
         MethodKind::ToolsCall => match stage {
@@ -78,10 +78,10 @@ pub(crate) const fn expect(method: MethodKind, route: Route, stage: Stage) -> Ex
             // nonce back on /mcp and stdio (MIK-8150, `signing::admit_meta_sync`),
             // as the direct route does (direct_dispatch.rs:313-316). A relay
             // refusal gives it back too when nothing before it acted
-            // (MIK-8353 3b); a task submit refusal still keeps it (MIK-8353).
+            // (MIK-8353 3b), and so does a task submit refused before its task
+            // exists (MIK-8353 3c).
             Stage::NonceGiveBack => match route {
-                TaskSubmit => ExpectedGap(Ticket::Mik8353),
-                Invoke | Surfaced | Stdio | Direct => Applies,
+                Invoke | Surfaced | TaskSubmit | Stdio | Direct => Applies,
                 TaskWorker => NotApplicable(Na::TransportHasNoNonce),
             },
             // A surfaced-name call keeps its chain source (MIK-8159).

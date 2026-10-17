@@ -335,7 +335,7 @@ impl MetaMcp {
             if let Err(error) =
                 self.refuse_chained_task(tool_name, &arguments, (caller.scope(), session_id))
             {
-                return error_response_preserving_status(id, &error);
+                return invoke::refused_submit_answer(&caller, id, &error);
             }
             return self
                 .begin_task(
@@ -491,7 +491,7 @@ impl MetaMcp {
                     .defer_or_serve_existing(id, tool_name, &targets, held, caller)
                     .await;
             }
-            Ok(outcome) => outcome.into_response(id),
+            Ok(outcome) => invoke::ask_if_refused_submit(caller, outcome).into_response(id),
             Err(crate::gateway::task_service::ServiceError::AuditUnavailable) => {
                 error_response_preserving_status(id, &crate::Error::AuditUnavailable)
             }

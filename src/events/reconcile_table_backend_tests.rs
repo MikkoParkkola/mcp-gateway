@@ -12,8 +12,8 @@
 //! - T02 re-add: rows of a removed backend come back; K started and the
 //!   parked upstream task woken within 1 s, not by its 30 s timer
 //!   (`upstream_session.rs:154-165`). Upstream fixture.
-//! - T03 hot-add during the startup reconcile: the new backend's row is kept
-//!   and started (F3; `backend_source.rs:172-184`). Needs the R1 pass pause.
+//! - T03 hot-add during the startup reconcile: written, in
+//!   `reconcile_table_hot_add_tests.rs`.
 //! - T04 publish order: the listen handle is visible whenever the transport
 //!   is (`repin.rs:20` against `lifecycle.rs:527`). Upstream fixture.
 //! - T05/T06 snapshot: after a replace, or after the last URI interest leaves,
@@ -488,3 +488,6 @@ async fn t07_a_stale_revocation_leaves_a_re_grant() {
         "the re-grant survives the stale revocation"
     );
 }
+
+#[path = "reconcile_table_hot_add_tests.rs"]
+mod hot_add;
