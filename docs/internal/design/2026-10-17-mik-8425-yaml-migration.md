@@ -60,6 +60,22 @@ the 8 serializer files).
 
 ## Stages
 
+### Gating criteria (MIG.2 cannot merge until both pass on its exact head)
+
+- **G1, grants rollback.** Every type the gateway serializes and reads back
+  (identity grants first) is written by the new backend and read by
+  serde_yaml 0.9.34. The read value must be semantically equal, and the
+  `!exact` tag form must be kept byte for byte against the MIG.0 golden
+  files. A map-form `agent: {exact: ...}` in any written file fails G1.
+- **G2, CWE-532 sentinel.** A sentinel value goes into a type error, a
+  syntax error, a duplicate key, an unknown variant, an alias error and a
+  budget refusal. It must be absent from the rendered error of every public
+  adapter function (`from_str`, `from_str_map`, tree parse) and of the
+  figment provider path (`ConfigFile::data`, the full `Config::load`
+  extract, and `doctor/hidden_keys`/`backend_url_keys`). Both `Display` and
+  `Debug` are checked. Setting `with_snippet: false` is necessary but not
+  enough: the test proves the result, not the setting.
+
 Each stage is its own PR off the release line, reviewed by two non-author
 seats, with a one-pass pre-push and exact-head CI. Each is revertable as one
 commit.
@@ -72,8 +88,10 @@ commit.
 - **MIG.1b–e: route consumers through the adapter**, one group per PR, in
   the order of the overlap map below. Purely mechanical:
   `serde_yaml::` becomes `crate::yaml::`. The existing tests are the oracle.
-- **MIG.2: swap the backend.** Only `src/yaml.rs`, `Cargo.toml` and
-  `Cargo.lock` change: add `serde-saphyr = "=2.0.0"`, drop `serde_yaml`, and
+- **MIG.2: swap the backend. BLOCKED until G1 and G2 pass on the swap PR's
+  exact head, along with MIG.3 to MIG.5.** No swap without the
+  write-new/read-old test passing.
+  Only `src/yaml.rs`, `Cargo.toml` and `Cargo.lock` change: add `serde-saphyr = "=2.0.0"`, drop `serde_yaml`, and
   drop `yaml` from figment's features. The figment provider becomes
   `yaml::from_str_map` into `figment::value::Dict` inside `ConfigFile::data`
   and the other two figment call sites. Before this, MIG.1e routes those
@@ -115,6 +133,41 @@ commit.
   exact-head Docker and release security checks, then update
   `docs/legal/dependency-licenses.tsv` (add serde-saphyr and granit-parser,
   remove serde_yaml and unsafe-libyaml).
+
+## PR sequence (at most 15 files each; fixtures first)
+
+The golden fixtures are recorded with the **old** parser before anything
+moves, so every later stage is proved against serde_yaml's actual output and
+not against expectations written by hand.
+
+| PR | Stage | Files | Content | Wait |
+|---|---|---|---|---|
+| 1 | MIG.0 | ~6 new test files and golden files | Golden capture with serde_yaml: JSON of all 143 parsed capability definitions plus pins; `Config` of each config fixture; byte output of the config writers (splice, URL, upgrade, `cap`, `config_write`) and of the grants writer; a behaviour table (duplicates map/struct, merge, scalars, multi-document, alias budget, both `!exact` forms); G2 harness over the figment path, plus a recorded baseline of the direct-path errors | none |
+| 2 | MIG.1a | 2 (`src/yaml.rs`, one line in `src/lib.rs`) | Adapter over serde_yaml, with the comparison harness reading the MIG.0 golden files | PR 1 |
+| 3 | MIG.1b | 15 | Typed-only readers (list under "Order", item 2) | PR 2 |
+| 4 | MIG.1c | 13 | Serializers and tree walkers with no holder (item 3) | PR 2 |
+| 5 | MIG.1d-i | 10 | The remaining files with no holder (item 4) | PR 2 |
+| 6 | MIG.1d-ii | 1–4, one PR per released split | Held files (item 4) | each MIK-8102 split |
+| 7 | MIG.1e | 4 plus test-only files, split to stay at 15 or fewer | Figment provider path (item 5) | U1 merged |
+| 8 | MIG.2 | 3 (`src/yaml.rs`, `Cargo.toml`, `Cargo.lock`) plus any updated golden assertions | Backend swap; G1, G2 and MIG.3 to MIG.5 green on the exact head | PRs 3–7 |
+| 9 | MIG.6 | 2 (`.github/osv-scanner.toml`, `docs/legal/dependency-licenses.tsv`) | Exception removal after a real scan | PR 8 |
+
+PRs 3, 4 and 5 touch disjoint files and can run in parallel lanes. Before
+each one opens, re-run the overlap check.
+
+Observed while drafting G2: the direct paths already leak values today. For
+example, `capability/parser.rs:16-17` formats the full serde_yaml error
+(`invalid type: string "<value>"`). That is a pre-existing CWE-532 surface,
+outside the figment path that `load_error.rs` protects. MIG.0 records it as
+the baseline. After MIG.2, with snippets off and serde-saphyr's
+value-free type errors (`invalid u16` in the probe), G2 requires absence on
+these paths as well. If any direct path still leaks after the swap, the
+adapter redacts the message rather than shipping the leak.
+
+Note on the count: "46 production files" means files outside test
+directories and `*_tests` modules. A few of them, for example
+`mtls/config.rs`, use serde_yaml only inside their own `#[cfg(test)]`
+module. They still move, because the dependency goes away.
 
 ## Overlap map and ordering
 
