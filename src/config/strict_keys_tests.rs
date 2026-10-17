@@ -94,6 +94,7 @@ fn known_backend_keys_match_struct() {
             transport,
             stop_when_idle_for: Some(Duration::from_secs(1)),
             max_frame_bytes: Some(1 << 20),
+            // timing: fixture
             timeout: Duration::from_secs(1),
             env: one(),
             headers: one(),
