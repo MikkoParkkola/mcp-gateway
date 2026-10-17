@@ -326,9 +326,20 @@ impl EventsHub {
         // Backends are registered before the hub starts, so their catalogue is
         // complete whatever the capability scan did: a backend removed while
         // the gateway was down takes its subscriptions with it (MIK-7803).
-        let offered: std::collections::HashSet<String> =
-            self.catalogue().into_iter().map(|d| d.name).collect();
-        if !self.withdraw(&self.absent_backend_names(&offered)) {
+        let judge = |_epoch: u64| {
+            let offered: std::collections::HashSet<String> =
+                self.catalogue().into_iter().map(|d| d.name).collect();
+            self.withdraw(&self.absent_backend_names(&offered))
+        };
+        // Snapshot and withdraw under the registry's membership read guard,
+        // which every register and remove takes for writing: no backend added
+        // between them loses its rows (MIK-7897 LIFE.2). Order: catalogue gate,
+        // then membership; the registry never takes the catalogue gate.
+        let withdrawn = match self.runtime.backends.get() {
+            Some(registry) => registry.with_membership(judge),
+            None => judge(0),
+        };
+        if !withdrawn {
             return false;
         }
         if !webhooks_on {

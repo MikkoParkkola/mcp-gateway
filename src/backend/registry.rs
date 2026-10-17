@@ -499,6 +499,12 @@ impl BackendRegistry {
     /// form): `parking_lot::RwLock` read guards are not re-entrant once a
     /// writer is queued, so a nested read would deadlock against a waiting
     /// `register`/`remove`/`stop_all`.
+    ///
+    /// Not only short map reads: the events startup reconcile holds it across
+    /// its catalogue snapshot and store withdraw (MIK-7897), so a registration
+    /// waits that long once at startup. Locks taken inside are leaves under
+    /// this guard (the live config's, the events store's); none is held by a
+    /// caller of `register`, `remove` or `stop_all`.
     pub(crate) fn with_membership<T>(&self, read: impl FnOnce(u64) -> T) -> T {
         let _stopping = self.stopping.read();
         let epoch = self.membership.load(std::sync::atomic::Ordering::Relaxed);
