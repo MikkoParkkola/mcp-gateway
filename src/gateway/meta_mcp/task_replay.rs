@@ -359,15 +359,23 @@ impl MetaMcp {
     /// A stored read found no account outcome for `server`'s target: every
     /// read entry runs the pre-pass first, so this is a broken invariant
     /// (MIK-8392 N0). It still fails closed; tests observe it by count.
-    fn unfilled_outcome_read(backends: &crate::backend::BackendRegistry, server: &str) {
+    ///
+    /// The registry is read only in test builds, for the count: production
+    /// reports the invariant and reads nothing (MIK-8387 PR-B commit 3).
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::unused_self,
+            reason = "the registry is read only in test builds"
+        )
+    )]
+    fn unfilled_outcome_read(&self, server: &str) {
         #[cfg(test)]
-        if let Some(backend) = backends.get(server) {
+        if let Some(backend) = self.backends.get(server) {
             backend
                 .unfilled_outcome_reads
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
-        #[cfg(not(test))]
-        let _ = backends;
         tracing::error!(server, "stored read without the account pre-pass");
     }
 
@@ -559,7 +567,7 @@ impl MetaMcp {
             };
             let outcome = visible::account_outcome(server, &account);
             if outcome.is_none() {
-                Self::unfilled_outcome_read(&self.backends, server);
+                self.unfilled_outcome_read(server);
             }
             match outcome {
                 // Unfilled: the pre-pass never ran for it. Fail closed,

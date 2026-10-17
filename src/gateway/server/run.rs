@@ -290,6 +290,7 @@ impl Gateway {
         events_wiring::install(
             &self.config,
             &meta_mcp,
+            &self.backends,
             &webhook_registry,
             &live_config,
             credentials,
