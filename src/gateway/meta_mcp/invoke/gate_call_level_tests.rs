@@ -295,3 +295,147 @@ async fn under_off_a_lacked_name_is_not_invisible_at_the_route() {
         "control: under standard a lacked name is invisible at the route"
     );
 }
+
+// MIK-8433 (MIK-8361.STDIO.2): signing cannot read a per-user caller's slot
+// before the route stage judges it (stdio), so a per-user target the request
+// holds no `Visible` verdict for is the route stage's, as a missing name is.
+// The predicate never reads the error-rate cooldown (design §3, U1-U4).
+
+/// The per-user fixture with alpha's slot offering `read`, and alpha.
+fn per_user_alpha() -> (
+    crate::gateway::meta_mcp::slot_verdict_fixture::PerUser,
+    crate::key_server::oidc::VerifiedIdentity,
+) {
+    use crate::gateway::meta_mcp::slot_verdict_fixture::{
+        CallerSlot, Surfaced, Warmth, per_user, valid,
+    };
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Warm,
+        crate::config::InputSchemaEnforcement::Closed,
+        Surfaced::No,
+    );
+    let alpha = crate::gateway::meta_mcp::catalogue_per_caller_tests::identity("alpha");
+    (fx, alpha)
+}
+
+/// Push `server`'s `tool` into error-rate cooldown under `meta`'s budget.
+fn cool(meta: &MetaMcp, server: &str, tool: &str) {
+    let cfg = meta.capability_budget_config.read().clone();
+    for _ in 0..=cfg.window_size.max(cfg.min_samples) {
+        meta.kill_switch
+            .record_capability_failure(server, tool, &cfg);
+    }
+    assert!(
+        meta.kill_switch.is_capability_disabled(server, tool),
+        "premise: {server}:{tool} is in cooldown"
+    );
+}
+
+fn per_user_invoke() -> serde_json::Value {
+    use crate::gateway::meta_mcp::slot_verdict_fixture::{BACKEND, TOOL};
+    json!({"server": BACKEND, "tool": TOOL, "arguments": {"q": "x"}})
+}
+
+/// U1 (red first): a per-user target in cooldown, nothing recorded for it in
+/// the request: signing skips the policy for it. RED at base: no slot read.
+#[tokio::test]
+async fn u1_a_per_user_target_without_a_visible_verdict_is_withheld() {
+    use crate::gateway::meta_mcp::slot_verdict_fixture::{BACKEND, TOOL};
+    let (fx, alpha) = per_user_alpha();
+    cool(&fx.meta, BACKEND, TOOL);
+    let caller = crate::gateway::meta_mcp::identified_caller(&alpha);
+    let withheld = crate::gateway::meta_mcp::visible::with_visibility_memo(async {
+        fx.meta
+            .withheld_invoke_target(&per_user_invoke(), None, &caller)
+    })
+    .await;
+    assert!(
+        withheld,
+        "U1: signing would run the policy, which names the tool"
+    );
+}
+
+/// U2 (green, pins the Offers arm): the request already holds `Visible` for
+/// the per-user target, so signing runs the policy before the nonce.
+#[tokio::test]
+async fn u2_a_per_user_target_the_request_judged_visible_is_not_withheld() {
+    use crate::gateway::meta_mcp::slot_verdict_fixture::{BACKEND, TOOL};
+    use crate::gateway::meta_mcp::visible::{
+        Visibility, record_visibility, recorded_visibility, with_visibility_memo,
+    };
+    let (fx, alpha) = per_user_alpha();
+    cool(&fx.meta, BACKEND, TOOL);
+    let caller = crate::gateway::meta_mcp::identified_caller(&alpha);
+    let withheld = with_visibility_memo(async {
+        record_visibility(BACKEND, TOOL, Visibility::Visible);
+        assert_eq!(
+            recorded_visibility(BACKEND, TOOL),
+            Some(Visibility::Visible),
+            "premise: the memo holds the verdict"
+        );
+        fx.meta
+            .withheld_invoke_target(&per_user_invoke(), None, &caller)
+    })
+    .await;
+    assert!(!withheld, "U2: a judged-visible target was skipped");
+}
+
+/// U3 (green, pins the per-user guard): a shared backend's target in
+/// cooldown, empty memo: not withheld, signing runs the policy.
+#[tokio::test]
+async fn u3_a_shared_target_in_cooldown_is_not_withheld() {
+    use crate::gateway::authz::AllowAll;
+    let (registry, _) = counted_backend("alpha");
+    let meta = MetaMcp::new(registry);
+    cool(&meta, "alpha", "read");
+    let caller = ctx(&AllowAll);
+    let arguments = json!({"server": "alpha", "tool": "read", "arguments": {}});
+    let withheld = crate::gateway::meta_mcp::visible::with_visibility_memo(async {
+        meta.withheld_invoke_target(&arguments, None, &caller)
+    })
+    .await;
+    assert!(!withheld, "U3: a shared target was skipped");
+}
+
+/// U4 (red first on the first case): the predicate neither reads nor
+/// recovers the cooldown. Not in cooldown: withheld all the same. In
+/// cooldown whose period has elapsed: withheld, and the entry is still
+/// disabled after the call (no auto-recovery written by signing).
+#[tokio::test]
+async fn u4_the_withheld_predicate_ignores_the_cooldown() {
+    use crate::gateway::meta_mcp::slot_verdict_fixture::{BACKEND, TOOL};
+    use crate::gateway::meta_mcp::visible::with_visibility_memo;
+    let (fx, alpha) = per_user_alpha();
+    let caller = crate::gateway::meta_mcp::identified_caller(&alpha);
+    let cold = with_visibility_memo(async {
+        fx.meta
+            .withheld_invoke_target(&per_user_invoke(), None, &caller)
+    })
+    .await;
+    assert!(
+        cold,
+        "U4: a per-user target not in cooldown was not withheld"
+    );
+
+    // Armed under the default (long) cooldown, then the period set to zero:
+    // the entry stays disabled to `is_capability_disabled`, which never
+    // recovers, while `is_capability_disabled_with_cooldown` with the zero
+    // period would recover it on the spot. So a predicate that read the
+    // cooldown (the d1 form) both changes the answer and clears the entry.
+    // Arming under zero would not work: each recorded failure re-checks
+    // with that period and recovers at once (kill_switch/mod.rs:73).
+    cool(&fx.meta, BACKEND, TOOL);
+    fx.meta.capability_budget_config.write().cooldown = std::time::Duration::ZERO;
+    let elapsed = with_visibility_memo(async {
+        fx.meta
+            .withheld_invoke_target(&per_user_invoke(), None, &caller)
+    })
+    .await;
+    assert!(
+        fx.meta.kill_switch.is_capability_disabled(BACKEND, TOOL),
+        "U4: the predicate recovered the cooldown entry"
+    );
+    assert!(elapsed, "U4: an elapsed cooldown changed the answer");
+}

@@ -8,6 +8,13 @@
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
 use crate::gateway::meta_mcp::refund_witness::{Effect, RefundWitness};
 
+/// The only entry outside `invoke` that spends a refund witness (MIK-8353
+/// 3b): something outside the invoke path consumed or acted for this call (a
+/// chain resume's handle), so no later refusal of it may give the nonce back.
+pub(crate) fn spend_witness(caller: &MetaMcpCallerContext<'_>) {
+    Witnessed::take(caller).spend();
+}
+
 /// Ask for the nonce back: this step was refused before its backend (its
 /// continuation or its spend). Settled when the call returns.
 pub(crate) fn ask_refund(caller: &MetaMcpCallerContext<'_>) {

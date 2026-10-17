@@ -145,12 +145,42 @@ impl MetaMcp {
     /// S1 policy: session profile, kill switch, capability disable. Runs
     /// before idempotency, cache and nonce on both routes.
     pub(crate) fn admit_target(&self, call: &BackendCall<'_>) -> Result<()> {
+        self.admit_named_target(call)?;
+        self.admit_enabled_capability(call.server, call.tool)
+    }
+
+    /// [`Self::admit_target`] without the error-rate check: the session
+    /// profile and the kill switch. The invocation policy takes it for a
+    /// per-user backend, whose error-rate check waits for the credential
+    /// step (MIK-8439).
+    pub(super) fn admit_named_target(&self, call: &BackendCall<'_>) -> Result<()> {
         let (server, tool) = (call.server, call.tool);
         self.active_profile(call.session_id)
             .check(server, tool)
             .map_err(Error::Protocol)?;
-        self.admit_backend_wide(server)?;
-        self.admit_enabled_capability(server, tool)
+        self.admit_backend_wide(server)
+    }
+
+    /// MIK-8439: [`Self::admit_target`] after the credential step, for every
+    /// backend, a profile refusal answered as the policy answers it. The
+    /// policy skips the error-rate check on a per-user backend; a shared one
+    /// meets it twice, so a reload that swaps the backend's kind in between
+    /// cannot skip both.
+    pub(super) fn admit_after_credential(
+        &self,
+        (server, tool): (&str, &str),
+        session_id: Option<&str>,
+        trace_id: &str,
+    ) -> Result<()> {
+        self.admit_target(&BackendCall {
+            server,
+            tool,
+            session_id,
+            api_key_name: None,
+            trace_id,
+            caller_key: None,
+        })
+        .map_err(|refusal| self.profile_refusal_as_undefined((server, tool), session_id, refusal))
     }
 
     /// The refusal of [`Self::admit_target`] that says nothing about whether
@@ -168,8 +198,9 @@ impl MetaMcp {
     }
 
     /// A capability disabled for its error rate. Its refusal names the tool,
-    /// so it is met only at dispatch, by a caller who can see the tool; a
-    /// caller who cannot gets the missing name's answer (#3872 review C).
+    /// so it is met only at dispatch, by a caller who can see the tool, and on
+    /// a per-user backend only after the credential step (MIK-8439); a caller
+    /// who cannot see it gets the missing name's answer (#3872 review C).
     fn admit_enabled_capability(&self, server: &str, tool: &str) -> Result<()> {
         let cooldown = self.capability_budget_config.read().cooldown;
         if self

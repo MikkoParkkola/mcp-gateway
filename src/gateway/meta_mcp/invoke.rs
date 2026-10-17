@@ -52,13 +52,7 @@ pub(in crate::gateway) use chokepoint::{DirectPermit, Outbound};
 pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2.1)
 pub(crate) mod egress;
 mod nonce_settle; // MIK-8150: refund requests and dispatch marks of a signed execution
-
-/// The only entry outside `invoke` that spends a refund witness (MIK-8353
-/// 3b): something outside the invoke path consumed or acted for this call (a
-/// chain resume's handle), so no later refusal of it may give the nonce back.
-pub(super) fn spend_witness(caller: &super::MetaMcpCallerContext<'_>) {
-    nonce_settle::Witnessed::take(caller).spend();
-}
+pub(super) use nonce_settle::spend_witness;
 mod r2_check;
 mod step_fingerprint;
 // #1962: settlement of a bridged round's key, kept out of this file's size baseline.
@@ -257,6 +251,8 @@ impl MetaMcp {
         // A failed optional mint counts too: it may have reached the issuer.
         let minted = caller_credential.cache_binding.is_some() || caller_credential.attempted;
         witness.carry(rw::dispatch_effect(minted, account_credential.is_some()));
+        // MIK-8439: the error-rate check after the credential step, for every backend.
+        self.admit_after_credential((server, tool), session_id, trace_id)?;
         // Who the response cache keys on, in one place and one namespace per
         // source (`support::caller_cache_principal`). The binding when identity
         // propagation is minting per-user credentials, then the verified OIDC

@@ -51,6 +51,10 @@ fn sole_operator() -> AuthConfig {
 struct Fx {
     router: axum::Router,
     gateway: DirectAccountGateway,
+    /// The Meta-MCP the router serves (its kill switch, MIK-8439).
+    meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
+    /// The router's state (its task store, MIK-8439 R7).
+    state: Arc<super::AppState>,
     dirs: (tempfile::TempDir, tempfile::TempDir),
 }
 
@@ -62,6 +66,14 @@ async fn fixture() -> Fx {
 
 /// [`fixture`] with the operator's grant in state `binding`.
 async fn fixture_with(binding: &Binding) -> Fx {
+    fixture_armed(binding, |_| {}).await
+}
+
+/// [`fixture_with`], `arm` applied to the Meta-MCP before it is shared.
+async fn fixture_armed(
+    binding: &Binding,
+    arm: impl FnOnce(&mut crate::gateway::meta_mcp::MetaMcp),
+) -> Fx {
     let audit = tempfile::tempdir().unwrap();
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
@@ -88,7 +100,9 @@ async fn fixture_with(binding: &Binding) -> Fx {
             tool: TOOL.to_string(),
         }]);
     meta.enable_transparency_log(Arc::clone(&log));
-    state_mut.meta_mcp = Arc::new(meta);
+    arm(&mut meta);
+    let meta = Arc::new(meta);
+    state_mut.meta_mcp = Arc::clone(&meta);
     state_mut.transparency_log = Some(log);
     let tool: crate::protocol::Tool = serde_json::from_value(json!({
         "name": TOOL, "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}}
@@ -100,8 +114,10 @@ async fn fixture_with(binding: &Binding) -> Fx {
         .expect("the backend")
         .store_shared_tools_for_test(vec![tool]);
     Fx {
-        router: create_router(state),
+        router: create_router(Arc::clone(&state)),
         gateway,
+        meta,
+        state,
         dirs: (audit, store),
     }
 }
@@ -531,3 +547,6 @@ async fn no_grant_operator_direct_call_is_the_same_for_a_withheld_name() {
         "a no-grant call reached the backend"
     );
 }
+
+#[path = "slot_verdict_g2_managed_http_noview_cooldown_tests.rs"]
+mod noview_cooldown;
