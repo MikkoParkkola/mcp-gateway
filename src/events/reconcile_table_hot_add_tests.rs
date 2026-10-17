@@ -105,7 +105,10 @@ async fn t03b_a_registration_waits_for_the_startup_snapshot_and_withdraw() {
     let added_before_withdraw = finishes_soon(&adding).await;
     after_withdraw.notify_one();
     assert!(within("the startup pass", pass).await.expect("join"));
-    assert!(within("the registration", adding).await.expect("join"), "registered");
+    assert!(
+        within("the registration", adding).await.expect("join"),
+        "registered"
+    );
     assert!(
         !added_at_snapshot,
         "a registration completed while the pass read its snapshot"
