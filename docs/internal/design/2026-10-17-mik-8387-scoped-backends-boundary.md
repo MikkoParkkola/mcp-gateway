@@ -1,6 +1,6 @@
 # MIK-8387 PR-B: a compiler-enforced boundary between a caller and the backend registry
 
-Status: design **v5**, the last revision before code. The boundary is enforced by a clippy lint banning every production `BackendRegistry` method, in production code only (§2, §2.8). Rounds 1 to 3 are answered in §9 to §11; v5's trade against v4 is §12. Base: release line `19ca01f07` (PR #3907, which carries PR-A). Ticket: MIK-8387, criterion ORACLE.5. Gap ticket: MIK-8447. 
+Status: design **v6**, v5 plus the fixes from its design review (§13); the last revision before code. The boundary is enforced by a clippy lint banning every production `BackendRegistry` method, in production code only (§2, §2.8). Rounds 1 to 3 are answered in §9 to §11; v5's trade against v4 is §12; the v5 review is answered in §13. Base: release line `19ca01f07` (PR #3907, which carries PR-A). Ticket: MIK-8387, criterion ORACLE.5. Gap ticket: MIK-8447. 
 
 ## 1. Problem
 
@@ -34,7 +34,7 @@ T1(e) pins this surface: the method list (with each method's `cfg(test)` flag, s
 
 ### 2.2 Evidence (Spark, 2026-10-17)
 
-**A. Standalone crate** (§2.2 of v3). Every access shape was flagged: field chain, chain through a call, alias, function-item binding, fully qualified call, inferred binding, and test code. A module allow silenced only its own module. v4 committed that crate as a negative fixture. **v5 replaces it with the repo's own pattern:** `scripts/dev/check_registry_lint.sh --self-test`, a sibling of `check_clock_lint.sh` (MIK-8202 AC.9). It checks HEAD into a scratch worktree and plants, in a new production module of the real crate: one violation per config entry (so an entry that stops resolving is caught, which clippy itself only warns about), an alias, a function-item binding, a fully qualified call, a statement with a leaf allow (must not fire), and a `#[cfg(test)]` module with a raw read (must not fire in this pass). It runs the §2.8 pass with `--message-format=json` and checks every plant at its own line, and no other site (the clean control). It also fails on any "does not refer to a reachable function" warning. This is stronger than a standalone crate: it resolves the real paths in the real crate (GPT r3).
+**A. Standalone crate** (§2.2 of v3). Every access shape was flagged: field chain, chain through a call, alias, function-item binding, fully qualified call, inferred binding, and test code. A module allow silenced only its own module. v4 committed that crate as a negative fixture. **v5 replaces it with the repo's own pattern:** `scripts/dev/check_registry_lint.sh --self-test`, a sibling of `check_clock_lint.sh` (MIK-8202 AC.9). It checks HEAD into a scratch worktree and plants, in a new production module of the real crate: one violation per config entry (so an entry that stops resolving is caught, which clippy itself only warns about), an alias, a function-item binding, a fully qualified call, a raw read inside a local `macro_rules!` body invoked from production code (Kimi v5; the one shape not yet evidenced), a function-item reference to each propagation API, a statement with a leaf allow (must not fire), and a `#[cfg(test)]` module with a raw read (must not fire in this pass). It runs the §2.8 pass with `--message-format=json` and checks every plant at its own line, and no other site (the clean control). It also fails on any "does not refer to a reachable function" warning. This is stronger than a standalone crate: it resolves the real paths in the real crate (GPT r3).
 
 **B. The real crate at `19ca01f07`, all 18 methods banned** (probe 2), with `spark-cargo clippy --all-targets --all-features -D warnings`. No unresolved-path warning.
 - **Production (lib target): 126 sites in 59 files.**
@@ -79,7 +79,7 @@ impl ScopedBackends<'_> {
 
 ### 2.4 Leaf allows, and the allows that already exist
 
-**Rule (GPT r3 HIGH, Kimi r3 LOW).** A sanctioned raw call carries `#[allow(clippy::disallowed_methods, reason = "<Unscoped variant>: <why>")]` on the **statement or expression** that holds it, never on a fn, impl or module. The reason starts with one of the five `Unscoped` names (Kimi r3). The production sites outside the meta layer get leaf allows: 54 of the 60, with the router's 6 going through the choke point (§2.5). By class:
+**Rule (GPT r3 HIGH, Kimi r3 LOW).** A sanctioned raw call carries `#[allow(clippy::disallowed_methods, reason = "<Unscoped variant>: <why>")]` on the **statement** that holds it (a `let` or an expression statement), never on a fn, impl, module or nested expression. Attributes on nested expressions need the unstable `stmt_expr_attributes`, so a raw call inside a larger expression is first hoisted into its own `let` (Kimi v5). The attribute is `allow`, not `expect`: the normal pass does not load the ban, so an `expect` would be unfulfilled there and fail it. The reason starts with one of the five `Unscoped` names (Kimi r3). The production sites outside the meta layer get leaf allows: 54 of the 60. The router's 6 go through `backend_for` (4 `get`) or through `Registry` operations with a literal class (`statuses_for` in `health.rs`, `all_for` in `view_judge.rs`), §2.5. By class:
 
 | Area | Sites | Class |
 |---|---|---|
@@ -99,10 +99,10 @@ impl ScopedBackends<'_> {
 
 ### 2.5 The router choke point
 
-- `router/backend_choke.rs` holds the router's only registry reads: `backend_for(state, grant, name)` and `backends_for(state, why)`.
-- They read through `state.meta_mcp.registry()`, the `Registry` `MetaMcp` already stores, over the same `Arc` as `AppState.backends` (Kimi r3). Nothing is re-wrapped per call, and `AppState` is unchanged.
+- `router/backend_choke.rs` holds the router's one scoped read, `backend_for(state, grant, name)`. **v6 drops `backends_for(state, why)`** (GPT v5): it would forward a non-literal class, which T1(a) rejects. The router's two class reads call `state.meta_mcp.registry().statuses_for(Unscoped::Admin)` and `.all_for(Unscoped::Visibility)` directly, with literal classes, and T1(a) keys them.
+- It reads through `state.meta_mcp.registry()`, the `Registry` `MetaMcp` already stores, over the same `Arc` as `AppState.backends` (Kimi r3). Nothing is re-wrapped per call, and `AppState` is unchanged.
 - **Capability (Kimi r3).** Router grants can name the capability provider: a key's `backends` list may hold its name. So `backend_for` builds its view with the provider name from `state.meta_mcp.get_capabilities()`, the same as `MetaMcp::scoped`, and its answer equals `ScopedBackends::scoped_get` for every grant. T4 gets a router cell to show that.
-- **References (GPT r3 HIGH).** T2(c) pins **every production reference** to `backend_for` and `backends_for` across the crate, function-item references included, by (file, enclosing fn). A new indirect reader, such as a helper called before S4, changes the inventory and is red.
+- **References (GPT r3 HIGH).** T2(c) pins **every production reference** to `backend_for` across the crate, function-item references included, by (file, enclosing fn). A new indirect reader, such as a helper called before S4, changes the inventory and is red.
 
 ### 2.6 The grantless propagation APIs (GPT r3 HIGH and MEDIUM)
 
@@ -157,6 +157,8 @@ Two probe findings the design now carries:
 +  run_cargo "registry ban all-features" clippy --lib --bins --all-features --quiet -- -D warnings
 +  run_cargo "registry ban no-default-features" clippy --lib --bins --no-default-features --quiet -- -D warnings
 +  unset CLIPPY_CONF_DIR
++  step "registry lint self-test"
++  scripts/dev/check_registry_lint.sh --self-test
 +
    step "cargo test --lib"
 ```
@@ -186,7 +188,14 @@ Two probe findings the design now carries:
 
 **v4:** this lexical scan predates the lint. It uses a filename filter (`--glob '!*test*'`) and is kept only as the key for the class table. The authoritative inventory is the lint (§2.2 B), and test-ness in every pin comes from cfg ancestry (§4.2), never filenames (Kimi r3).
 
-Probe 2 (§2.2 B) finds 126 production sites in 59 files, 66 of them in the meta layer. The lexical count below covers only `MetaMcp.backends` in `meta_mcp`; one multi-line chain can hold two reads.
+Probe 2 (§2.2 B) finds 126 production sites in 59 files: 66 in the meta layer, 60 outside it.
+
+**Reconciliation (v6, Kimi v5), checked line by line against the §2.8 B2 log.** The 73 lexical reads below and the 66 meta-layer lint sites agree once three differences are named: 73 = 66 + 2 + 6 − 1.
+- **2 handle exports** (`events_hook.rs:23`, `task_replay.rs:553`) pass the registry on without a method call, so the lint does not flag them; they are the escape closures of §6 commit 3.
+- **6 multi-line chains** counted twice by `rg -U`, once at the `self` line and once at the `.backends` line, where the lint reports one site at the method: `admission_replay.rs:104`, `search.rs:514`, `caller_verdict.rs:159`, `visibility.rs:264`, `policy.rs:54`, `discovery_fetch.rs:307`.
+- **1 read the pattern misses:** `scoped_backends.rs:47`, the existing `ScopedBackends` raw read, which goes through its own field, not `self.backends`.
+
+So the class table is keyed by **lint sites**, (file, fn, line of the method call) from the second pass's JSON output, not by lexical lines; the scan below stays only as history.
 
 Every read of `MetaMcp.backends`, at `19ca01f07`. `-U` makes a `self` and `.backends` split across two lines count. The enclosing fn and test status come from a scan of each hit, and the scan script lands with T1 so the table can be re-derived:
 
@@ -299,24 +308,26 @@ L (the lint) is red on the tip with 127 production violations (§2.8); it turns 
 |---|---|---|---|
 | **L** the lint | `scripts/lint/registry-ban/clippy.toml` bans the 17 production `BackendRegistry` methods (all but `new`, `Default` and the test-only `is_stopping`) and the two grantless propagation APIs (§2.1, §2.6). Pre-push and CI run the second pass on `--lib --bins` with both feature sets, plus `check_registry_lint.sh --self-test` (§2.2 A, §2.8) | 127 production violations (126 registry, 1 propagation) are the red evidence (§2.8); green from the type-flip commit | M19: a raw read added anywhere in production. M19c: a helper that returns the raw registry and is then read. M19f: a new production reference to `resolve_propagation_credential`, a function-item binding included |
 | **T1** pins (§4.2) | (a) The class-taking operation call sites, by (file, enclosing fn, operation, class), equal `scoped_backends_classes.tsv`. The receiver follows from the operation name: `scoped_get` is the scoped view, `*_for` is `Registry`. (b) Every production `disallowed_methods` allow, crate-wide, by (file, fn, reason class), with its complete raw-call content. (d) `Registry::new` call sites. (e) `BackendRegistry`'s method set, trait impls and derives. (f) The `clippy.toml` `disallowed-methods` block, entry for entry | no compile (the types are absent) | M19b: one class swapped, total unchanged. M19d: a new allow, or a second raw call inside one. M19g: a `clippy.toml` entry deleted or its path changed. M19h: a new `pub fn` on `BackendRegistry` |
-| **T2** router choke point | (a) The router holds no `disallowed_methods` allow at all once commit 5 lands: the choke point reads through `Registry` (via T1(b)). (b) Order, structurally: `route` takes `&Envelope`, and `Envelope { .. }` literals in production occur only in `read_envelope`. (c) Every production reference to `backend_for` / `backends_for`, function-item references included, by (file, enclosing fn), equals the pinned list. `read_envelope` is not in it | green after the choke-point commit | M20: a `backend_for` call added in `read_envelope` before S4 (c). M20b: `route` called before `read_envelope` (b). M20c: a helper called from `read_envelope` that calls `backend_for` (c: new key) |
+| **T2** router choke point | (a) The router holds no `disallowed_methods` allow at all once commit 5 lands: the choke point reads through `Registry` (via T1(b)). (b) Order, structurally: `route` takes `&Envelope`, and `Envelope { .. }` literals in production occur only in `read_envelope`. (c) Every production reference to `backend_for`, function-item references included, by (file, enclosing fn), equals the pinned list. `read_envelope` is not in it | green after the choke-point commit | M20: a `backend_for` call added in `read_envelope` before S4 (c). M20b: `route` called before `read_envelope` (b). M20c: a helper called from `read_envelope` that calls `backend_for` (c: new key) |
 | **T4** view table | Registry `{alpha, beta}` plus capability `cap`. Grants `Scoped([alpha, ghost])`, `Scoped([alpha, cap])`, `Empty`, `Unscoped` (from `*` and from no client). Names alpha, beta, ghost, nosuch, cap. Each cell pins `scoped_get(name).is_some()`, `absence(name)`, and `absent_step(name, "t")` with and without a recorded `Withheld(Absent)`. The capability cells are built through `Registry::scoped(.., Some("cap"))` and through `MetaMcp::scoped`, which must agree. **Router cell (v4):** `backend_for(state, grant, name)` equals `scoped_get` for every grant and name | no compile | M31 (registration before scope), M32 (`Empty` as `Scoped([])`), M33 (`scoped_get` ignores the grant), M34 (`MetaMcp::scoped` passes `None` for the capability: `cap` turns `Unregistered`), M35 (`backend_for` passes `None` for the capability) |
 | **FW1** response targets | A response-firewall rule keyed on target `X` and one keyed on the gateway's own target. Asserts the three cells are equal, **and** pins the verdict: the `X` rule applies to no cell, the gateway-target rule to all. Observed through the response firewall's own audit projection, the record of which rule fired, with no new seam | green | **M10, M23** (§5) |
 | **C2** capability out of scope | Fixture with a capability provider outside the key's scope, against `nosuch`, on `/mcp` invoke: one answer, pinned | green | C2-mutant: S3's absent check moved below the capability arm (`gate.rs`) → `ToolNotFound` |
 | **R3** stored-read reason | R2 (T0)'s `beta` cell emits the `audit_refusal` warning (tracing capture) naming -32003 and the scope; `ghost` emits none; answers equal under a failing log | green | M16: S7's `check_visible_policy` call removed |
-| **S7a** warm and cold, excluded target | Fixture from §4.0. **Positive witnesses first:** the two callers resolve the same `stable_actor_id`, and the first one's call leaves a warm slot for it on `beta` (`holds_per_user_slot_for_test`). **Then the excluded read:** a `tasks/get` by the `[alpha]` caller of a task targeting `beta` must not touch the slot (slot age unchanged after `age_per_user_slot_for_test`). A cold variant, with the slot evicted first, asserts no custody read (the fixture's resolve counter is unchanged), no cold claim (`cold_lease_remaining` stays `None`) and no catalogue refresh (`beta`'s list counter is unchanged) | **red** | the §6 fix; mutant: the fix removed |
+| **S7a** warm and cold, excluded target | Fixture from §4.0. **Positive witnesses first:** the two callers resolve the same `stable_actor_id`, and the first one's call leaves a warm slot for it on `beta` (`holds_per_user_slot_for_test`). **Then the excluded read:** a `tasks/get` by the `[alpha]` caller of a task targeting `beta` must not touch the slot (slot age unchanged after `age_per_user_slot_for_test`). A cold variant, with the slot evicted first, asserts no custody read (the fixture's resolve counter is unchanged), no cold claim (`cold_lease_remaining` stays `None`) and no catalogue refresh (`beta`'s list counter is unchanged) | **red** | the §6 fix: the commit-5 conversions, or the commit-6 filter; mutants as in §6 |
 
 ### 4.2 What is still a scan, and its grammar (v4)
 
 The lint carries the ban. The pins only record what it cannot: claimed classes, allow contents, reference sets, the banned surface, and the config itself.
-- **Item tree and test-ness.** Parse with `syn` (in `Cargo.lock` at 2.0.119 and 3.0.5; it becomes a dev-dependency, with no new crate downloaded), from `src/lib.rs` down the module declarations. An item is test-only when it or any ancestor has `#[cfg(test)]` (or a `cfg` whose predicate includes `test`, as in `cfg(all(test, ..))`). Filenames are never used (GPT r2). `router/latest.rs` is production.
+- **Item tree and test-ness.** Parse with `syn` (in `Cargo.lock` at 2.0.119 and 3.0.5; it becomes a dev-dependency, with no new crate downloaded), from **every root the second pass checks**: `src/lib.rs`, `src/main.rs` (which declares its own modules, some by `#[path]`) and `src/bin/provenance-eval.rs`, following `mod` and `#[path]` declarations. A new `[[bin]]` or `src/bin` file is a new root, and T1 fails if `Cargo.toml` names a target it does not walk (GPT v5). **Test-ness (GPT v5):** an item is test-only only when its cfg predicate, or an ancestor's, is false with `test` false. `test` is false; `not`, `all` and `any` evaluate as logic; every other atom (`feature`, `debug_assertions`, `windows`) is unknown and taken as true. So `cfg(test)` and `cfg(all(test, feature = "x"))` are test-only, while `cfg(any(test, feature = "webui"))` and `cfg(not(test))` are production. Filenames are never used (GPT r2). `router/latest.rs` is production.
 - **T1(a).** Method calls whose name is one of `scoped_get`, `get_for`, `all_for`, `membership_for`, `statuses_for`, `subscribe_started_for` and `nudge_catalogue_for`, in production items.
   - The class is the `Unscoped::X` path argument. For `scoped_get` it is "scoped". A non-literal class argument fails T1.
   - Any other reference to these names, such as a path `Registry::get_for` not in call position, fails T1 (GPT r2).
   - Bound views need no binding tracking: the receiver class follows from the operation name.
-- **T1(b).** Every attribute `allow`, `expect` or `cfg_attr(.., allow(..))` naming `clippy::disallowed_methods` on a production item, statement or expression. Recorded: the attributed node's kind (statement or expression; anything else fails), its reason's leading class word, and the list of `BackendRegistry`-banned method names called inside the node. The pin compares those lists exactly.
-- **T1(d) and T2(c).** Paths and method calls resolving by name to `Registry::new`, `backend_for` and `backends_for` in production items: calls and non-call path references alike, keyed by enclosing fn.
-- **T1(e).** In `backend/registry.rs`: the names of the inherent `pub` and `pub(crate)` fns of `impl BackendRegistry`, the trait names of `impl _ for BackendRegistry`, and the derive list. Each set must equal its pin.
+- **T1(b).** Every attribute `allow`, `expect` or `cfg_attr(.., allow(..))` naming `clippy::disallowed_methods` on a production item or statement. Recorded: the attributed node's kind (a statement; anything else fails, except the pre-existing item allows of §2.4), its reason's leading class word, and the list of all 19 banned names (17 methods, 2 propagation APIs) referenced inside the node, as calls **or** as path and function-item references (GPT v5). The pin compares those lists exactly, so a new grantless reference inside an existing allow, the clock and home allows included, is red.
+- **T1(b2), broad suppressions (GPT v5).** A production `allow` or `expect` of `warnings`, `clippy::all` or `clippy::style` (the group `disallowed_methods` belongs to) would silence the ban without a class. There are none today; T1 pins that set at empty.
+- **T1(g), release-only code (GPT v5).** Both passes compile the dev profile, so code under `cfg(not(debug_assertions))` is never linted. Today that is `probe_cap` in `backend/era.rs` and items in `home_dir.rs` and `debug_trust_roots.rs`, none touching the registry. Instead of a release-profile pass, T1(g) pins that no production item whose predicate is false with `debug_assertions` true references any of the 19 banned names.
+- **T1(d) and T2(c).** Paths and method calls resolving by name to `Registry::new` and `backend_for` in production items: calls and non-call path references alike, keyed by enclosing fn.
+- **T1(e).** In `backend/registry.rs`: the names of the inherent `pub` and `pub(crate)` fns of `impl BackendRegistry`, the trait names of `impl _ for BackendRegistry`, the derive list, and the struct's field names with their visibility (all private today, among them `backends`, `membership` and `change_feed`). Each set must equal its pin, so a `pub` field that would let a read bypass the method ban is red (Kimi v5).
 - **T1(c)** is gone: the lint now carries the propagation ban (§2.6), and T1(b) pins its one allow.
 - **T1(f).** The `toml` crate is not in `Cargo.lock`, so no parser. `clippy.toml` already groups its entries under a ticket comment; the MIK-8387 entries sit between `# MIK-8387 begin` and `# MIK-8387 end` lines in `scripts/lint/registry-ban/clippy.toml` (v5), and T1(f) compares that span byte for byte with the pin. T1(f) also pins that the file holds nothing outside the span, and that both workflow steps and the pre-push step name that directory, so pointing `CLIPPY_CONF_DIR` elsewhere is red. Deleting or editing an entry is red. Moving one outside the span means deleting it inside, so that is red too. The MIK-8202 and MIK-8001 entries are left to their owners.
 
@@ -340,7 +351,7 @@ FW1 asserts both equality and the pinned verdict. The pin kills M10; equality ki
 ## 6. The S7a fix, and the size
 
 **S7a fix.** `prepare_stored_read_kind` (`task_replay.rs:92-146`) drops every stored target whose backend is absent for the reading caller's grant, before `fill_account_outcomes`, `keep_permanent_refusal`, `settle_caller_view` and `settle_shared_view`. That means `Scoped` grants only; `Empty` and `Unscoped` keep their behaviour, including MIK-8441's.
-- After PR-B those helpers read through `scoped(..).scoped_get(..)`, which is `None` for an absent name, so the type closes the same hole. The explicit filter stays, so the row does not depend on every helper being converted.
+- **v6 (GPT v5):** after commit 5 those helpers read through `scoped(..).scoped_get(..)`, which is `None` for an absent name, so the conversions themselves should close the hole, and a filter on top would leave its own removal mutant surviving. So: S7a is red before commit 5. If it is green at commit 5, no filter lands; the fix is the conversions, and S7a's mutants turn each stored-read helper's `scoped_get` back into `get_for(Unscoped::Visibility)`, one at a time. If S7a is still red at commit 5, the filter above lands as commit 6, and its removal is the mutant.
 - The S7a row checks the cold path too: no custody read, no claim, no catalogue refresh for an excluded target.
 
 **Commits (v4; v3 corrected per GPT r2).** v2's sequence did not compile: its conversions called `Registry`-only operations while `MetaMcp.backends` was still an `Arc<BackendRegistry>`. v3 splits only what compiles alone:
@@ -349,7 +360,7 @@ FW1 asserts both equality and the pinned verdict. The pin kills M10; equality ki
 3. **Escape closures.** `events_backend_registry` is deleted and wired from the startup `Arc`; `unfilled_outcome_read`'s argument becomes `cfg(test)`. Compiles alone.
 4. **Router choke point** (`backend_choke.rs`) and its six reads, with T2. Until commit 5 the choke point reads `AppState.backends` directly, so it compiles alone; commit 5 switches it to `state.meta_mcp.registry()`.
 5. **The type flip, atomic.** `MetaMcp.backends: Registry` and `MetaMcp::registry()`, the 66 meta-layer conversions, the choke point's switch, the dedicated config (19 entries), the pre-push step, the leaf allows of §2.4 and §2.6, the class-table file, T1 and the registry-lint self-test (§2.2 A, §2.8). The CI steps follow in the lead's workflow commit. None of these compiles without the others, so they are one commit. It is about 70 files, mechanical, and the compiler and the lint list every site in it.
-6. The S7a fix (§6, above), after its red row.
+6. The S7a filter (§6, above), only if S7a is still red after commit 5.
 
 **Size** (from §3; the ± is a guess, not a measurement):
 
@@ -360,7 +371,6 @@ FW1 asserts both equality and the pinned verdict. The pin kills M10; equality ki
 | 73 production reads, 2 escape closures | 27 + `events_wiring.rs`, `run.rs` | ~75 changed, +45 net |
 | 7 cfg(test) reads + 47 test reads → `for_test()` | ~30 | ~54 changed |
 | Dedicated config (19 entries), pre-push step; 55 leaf allows (§2.4, §2.6) | ~32 | +140 |
-| Test reads of `MetaMcp.backends` → `for_test()` (type change, not lint) | ~30 | ~54 changed |
 | `check_registry_lint.sh --self-test` (§2.2 A) | 1 new | +150 |
 | Router choke point (`backend_choke.rs`) and its 6 callers | 6 | +50 |
 | T1 (a, b, d, e, f) and T2 (a, b, c) | 2 new | +300 |
@@ -368,7 +378,7 @@ FW1 asserts both equality and the pinned verdict. The pin kills M10; equality ki
 | FW1, C2, R3, S7a rows and fixture | 4–5 new, 1–2 fixture edits | +550 |
 | S7a fix | `task_replay.rs` | +10 |
 | Docs, inventory rows | 3–4 | +40 |
-| **Total (v5)** | **~105 files** | **~+1,600 / −140** |
+| **Total (v6)** | **~75 files** | **~+1,550 / −140** |
 
 ## 7. Risks, visibility, and the reads with no grant in hand
 
@@ -382,7 +392,7 @@ FW1 asserts both equality and the pinned verdict. The pin kills M10; equality ki
 | `Registry::for_test` | `pub(in crate::gateway)`, `#[cfg(test)]` | |
 | `Unscoped` (5 variants: Visibility, Discovery, Background, Admin, Lifecycle) | `pub(in crate::gateway)` | |
 | `ScopedBackends::scoped_get` | `pub(in crate::gateway)` | Renamed from `get` (§2.3); the capability name is now owned |
-| `router::backend_choke::{backend_for, backends_for}` | `pub(super)` (router) | New |
+| `router::backend_choke::backend_for` | `pub(super)` (router) | New; `backends_for` dropped in v6 (§2.5) |
 | `MetaMcp.backends` | `pub(super)`, unchanged | Type changes to `Registry` |
 | `MetaMcp::events_backend_registry` | `pub(crate)` → **removed** | A narrowing |
 | `events_wiring::install` | `pub(super)`, unchanged | Gains a `&Arc<BackendRegistry>` parameter |
@@ -503,14 +513,39 @@ Both seats found the lint approach sound. v4 makes it complete by construction a
 | Lost | Why it is acceptable |
 |---|---|
 | Test code reads the raw registry with no class and no allow | ORACLE.5 is a property of production caller paths. A test is not a caller: it builds the registry it reads, and nothing it does ships. v4 would have made test reads carry an allow too, but a blanket `Lifecycle: test fixture` reason on about 190 modules classes nothing; it is noise, not review. |
-| Production code that exists only on Windows (`cfg(windows)`) is not linted by the second pass, which runs on Linux | v4 caught it, because the Windows job runs clippy with the repo config. A name search found no registry call in the Windows-only blocks of the files that mention the registry; the implementer confirms it with the Windows clippy log of commit 5. Adding the pass to the Windows job is one more clippy run on a scarce runner pool, so v5 leaves it out. T1(b) and T2(c) are `syn` scans that ignore `cfg`, so a classed allow or a router reference added on Windows is still pinned; only an unannotated raw call there escapes. |
+| Production code that exists only on Windows (`cfg(windows)`) is not linted by the second pass, which runs on Linux. Out of scope for this PR, filed as its own ticket. Proposal (Kimi v5): that ticket blocks the next release cut, the lead's call | v4 caught it, because the Windows job runs clippy with the repo config. A name search found no registry call in the Windows-only blocks of the files that mention the registry; the implementer confirms it with the Windows clippy log of commit 5. Adding the pass to the Windows job is one more clippy run on a scarce runner pool, so v5 leaves it out. T1(b) and T2(c) are `syn` scans that ignore `cfg`, so a classed allow or a router reference added on Windows is still pinned; only an unannotated raw call there escapes. |
 | `feature-combos.yml` combinations are not run through the second pass | The two passes cover `--all-features` and `--no-default-features`, which bracket the combinations, the same as the repo's pre-push gate. |
-| One extra lib check per feature set, in pre-push and CI | Cargo re-checks the lib when `CLIPPY_CONF_DIR` changes (§2.8 A2), so the second pass is a full `mcp-gateway` lib and bin check each time, dependencies cached. Not yet measured. |
+| One extra lib check per feature set, in pre-push and CI | Cargo re-checks the lib when `CLIPPY_CONF_DIR` changes (§2.8 A2), so the second pass is a full `mcp-gateway` lib and bin check each time, dependencies cached. **Measured (v6, Spark, `spark-cargo`, `--lib --bins --all-features`, wall time incl. transfer):** warm normal pass 130 s; repeated normal pass 83 s; ban pass 88 s, again 89 s; normal pass after it 87 s. A no-op `spark-cargo` call already costs about 85 s, so the ban pass adds about one such call per feature set: roughly 3 minutes per push for both, on top of today's gate. The self-test adds its own scratch build. If that proves too slow, the self-test moves to CI only; the ban pass stays in pre-push. |
 | `spark-cargo` must forward `CLIPPY_CONF_DIR` | Operator tooling, outside this repo (§2.8). Until it does, the pre-push step under `spark-cargo` is vacuous, and the self-test turns that into a red step instead of a silent pass. |
 
 **Can a test-only read mask a production bug?** Not through the boundary. The lint and T1 inspect production code only, so a raw read in a test cannot make a raw production read pass. Neither can a test-only helper: a `#[cfg(test)]` helper does not exist in the build the second pass checks, so a production caller cannot call it at all. The one shape to watch is a helper gated on a feature or `debug_assertions` rather than `test`: such a helper is compiled in the second pass, so its raw read is flagged like any production read. There are four `cfg(any(test, ..))` items today (`auth_dashboard.rs:264,283`, `control_plane/store.rs:41`, `task_service/execution/operations.rs:72`), and the probe already linted them under `--all-features`.
 
 What a test can still do is assert against the raw registry where the caller would see the scoped view, and so pass while production misbehaves. That is a test-quality risk, not a boundary one, and it was the same under v4: an allow does not make a test assert the right thing. The rows that guard the boundary (T4, FW1, C2, R3, S7a) assert through the scoped view or through the router, not through raw reads.
 
-**Size:** v4 was about 320 files and +1,770 lines. v5 is about 105 files and +1,600 lines (§6). The atomic type-flip commit drops from about 250 files to about 70.
+**Size:** v4 was about 320 files and +1,770 lines. v5 was about 105 files and +1,600 lines; v6, with a duplicated row removed (Kimi v5), is about 75 files and +1,550 lines (§6). The atomic type-flip commit drops from about 250 files to about 70.
+
+## 13. The v5 review, item by item
+
+Both seats: SHIP-WITH-FIXES. Every claim was checked at source before folding; where a seat was wrong, it says so.
+
+| Finding (seat) | Checked at source | v6 |
+|---|---|---|
+| HIGH: the test-only predicate drops `cfg(any(test, feature))` and `cfg(not(test))` items from the pins (GPT) | **GPT right.** v5's "a predicate that includes `test`" excludes both; four `cfg(any(test, ..))` items exist | Test-only means false with `test` false; unknown atoms count as true (§4.2) |
+| HIGH: walking only `src/lib.rs` misses binary-only modules (GPT) | **GPT right.** `src/main.rs` declares its own modules (`#[path]` included) and `src/bin/provenance-eval.rs` exists | T1 walks every checked root and fails on an unwalked target (§4.2) |
+| HIGH: T1(b) records only method calls of the 17, not function-item references or the propagation APIs (GPT) | **GPT right**, per v5's own text | All 19 names, calls and path references (§4.2) |
+| HIGH: `#[allow(warnings)]` and lint-group allows bypass the ban unpinned (GPT) | **GPT right** in principle; none exist today | T1(b2) pins that set at empty (§4.2) |
+| HIGH: `cfg(not(debug_assertions))` code is never linted (GPT) | **GPT right**; three files today, none touching the registry | T1(g), a syn pin, instead of a release-profile pass (§4.2) |
+| HIGH: `BackendRegistry` fields unpinned (Kimi) | **Kimi right** prospectively; all fields are private today | T1(e) pins fields and visibility (§4.2) |
+| MEDIUM: `backends_for(state, why)` forwards a non-literal class that T1(a) rejects (GPT) | **GPT right** | `backends_for` dropped; the two router class reads use literal classes (§2.5) |
+| MEDIUM: the S7a filter's removal mutant survives the conversions (GPT) | **GPT right**: v5 kept the filter and the conversions both | The filter lands only if S7a is still red after commit 5; the mutants follow the fix (§6) |
+| MEDIUM: 73 lexical reads vs 66 lint sites unexplained; outside-meta "~56 vs 60" (Kimi) | **Kimi right** on 73/66, explained exactly in §3.1. **Kimi wrong** on outside-meta: 126 − 66 = 60, which the B2 log confirms | Class table keyed by lint sites (§3.1) |
+| MEDIUM: pre-push cost unmeasured (Kimi) | **Kimi right** that it was unmeasured. Measured on Spark: about 88 s per ban pass, near the ~85 s floor of any `spark-cargo` call | §12 cost row; the self-test can move to CI only if needed |
+| MEDIUM: Windows-only code has no release gate (Kimi) | Out of scope per the review brief | Filed separately; release-gate proposal left to the lead (§12) |
+| LOW: the size table counts the `for_test()` row twice (Kimi) | **Kimi right**: v5 added a duplicate | Removed; totals recomputed (§6, §12) |
+| LOW: attributes on nested expressions are unstable (Kimi) | **Kimi right**: they need `stmt_expr_attributes` | Allows on statements only; hoist into a `let` (§2.4) |
+| Improvement: run the self-test in pre-push (GPT) | | Added to the §2.8 diff |
+| Improvement: a macro plant (Kimi) | | Added to the self-test (§2.2 A) |
+| Improvement: `expect` over `allow` (Kimi) | **Rejected**: the normal pass does not load the ban, so every `expect` would be unfulfilled there and fail it | `allow` stays (§2.4) |
+| Improvement: commit the probe outputs (Kimi) | **Declined**: a base-commit site list goes stale at commit 5, when the count reaches 0. The red evidence is reproducible by running the second pass at `19ca01f07` | No change |
+| Improvement: land the CI step in the same window as pre-push (Kimi) | The lead owns workflow files | Passed to the lead |
 
