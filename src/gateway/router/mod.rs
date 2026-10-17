@@ -201,11 +201,11 @@ pub(super) mod route_matrix_driver_tests;
 pub(super) mod route_matrix_x14_nonce_tests;
 #[cfg(test)]
 mod slot_quota_direct_tests;
+#[cfg(test)]
+mod stored_read_account_excluded_tests;
 /// MIK-8392.STORED.1 T10: a revoked account's stored task read.
 #[cfg(test)]
 mod stored_read_account_tests;
-#[cfg(test)]
-mod stored_read_account_excluded_tests;
 #[cfg(test)]
 mod stored_read_capability_tests;
 /// MIK-8392.STORED.1 order twins: stored reads refuse in live-call order.

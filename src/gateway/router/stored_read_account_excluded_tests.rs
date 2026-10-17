@@ -114,12 +114,23 @@ async fn send(fx: &Fx, secret: &str, method: &str, name: &str, params: Value) ->
     let bytes = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("a body");
-    serde_json::from_slice(&bytes)
-        .unwrap_or_else(|e| panic!("{method}: not JSON ({e}): {}", String::from_utf8_lossy(&bytes)))
+    serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+        panic!(
+            "{method}: not JSON ({e}): {}",
+            String::from_utf8_lossy(&bytes)
+        )
+    })
 }
 
 async fn task_get(fx: &Fx, secret: &str, id: &str) -> Value {
-    send(fx, secret, "tasks/get", id, json!({"taskId": id, "_meta": modern_meta()})).await
+    send(
+        fx,
+        secret,
+        "tasks/get",
+        id,
+        json!({"taskId": id, "_meta": modern_meta()}),
+    )
+    .await
 }
 
 /// S7a-acct, a guard: the excluded key's stored read of a task on the
