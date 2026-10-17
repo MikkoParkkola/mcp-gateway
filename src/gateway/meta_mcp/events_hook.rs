@@ -23,7 +23,7 @@ impl MetaMcp {
     /// startup registry instead (MIK-8387 PR-B commit 3).
     #[cfg(all(test, feature = "firewall"))]
     pub(crate) fn registry_for_test(&self) -> Arc<crate::backend::BackendRegistry> {
-        Arc::clone(&self.backends)
+        Arc::clone(self.backends.for_test())
     }
 
     /// Backend `backend`'s tool set changed: an event, when events are on.

@@ -46,7 +46,7 @@ impl MetaMcp {
         if view.absence(server).is_some() {
             return None;
         }
-        if let Some(backend) = self.backends.get(server)
+        if let Some(backend) = view.scoped_get(server)
             && backend.identity_propagation_config().is_some()
             && let Some(descriptor) = backend.account_descriptor_id()
         {
@@ -90,7 +90,7 @@ impl MetaMcp {
                 continue;
             }
             let outcome = self
-                .judge_account((server, tool), &account, caller, writes)
+                .judge_account(view, (server, tool), &account, caller, writes)
                 .await;
             visible::record_account_outcome(server, &account, outcome);
         }
@@ -123,7 +123,11 @@ impl MetaMcp {
         for target in &targets {
             let target = target.as_target();
             let (server, tool) = (target.server, target.tool);
-            if self.backends.get(server).is_some() {
+            if self
+                .scoped(caller.scope().authorizer.backend_grant())
+                .scoped_get(server)
+                .is_some()
+            {
                 continue;
             }
             let Some(account) =
@@ -136,6 +140,7 @@ impl MetaMcp {
             }
             let outcome = self
                 .judge_account(
+                    &self.scoped(scope.authorizer.backend_grant()),
                     (server, tool),
                     &account,
                     scope.caller,
@@ -153,6 +158,7 @@ impl MetaMcp {
     /// read's fill does not, as nothing in that request dispatches.
     async fn judge_account(
         &self,
+        scope_view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
         (server, tool): (&str, &str),
         account: &AccountKey,
         caller: CallerProof<'_>,
@@ -173,7 +179,7 @@ impl MetaMcp {
             // refuse is no view either (as `has_no_view_for`). Only an
             // identity-propagation backend has those rules; a capability
             // account has none.
-            self.backends.get(server).is_some_and(|backend| {
+            scope_view.scoped_get(server).is_some_and(|backend| {
                 backend.identity_propagation_config().is_some()
                     && (self.meta_route_isolation_refused_for_caller(&backend, Some(binding))
                         || !backend.fetch_carries_caller_identity(Some(binding)))

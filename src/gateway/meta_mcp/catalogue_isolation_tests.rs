@@ -330,6 +330,7 @@ async fn identity_bound_backends_stay_refused_on_the_shared_credential_paths() {
     let refused = |name: &str| {
         let backend = meta
             .backends
+            .for_test()
             .get(name)
             .unwrap_or_else(|| panic!("fixture backend `{name}` is registered"));
         meta.meta_route_isolation_refused(&backend)

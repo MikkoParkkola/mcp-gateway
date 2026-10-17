@@ -90,7 +90,10 @@ impl MetaMcp {
         }
 
         // MCP backend tools (cached only)
-        for backend in self.backends.all() {
+        for backend in self
+            .backends
+            .all_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Discovery)
+        {
             // INV-2 (MIK-6742): skip isolated backends on a multi-user gateway.
             // A backend this caller's scope does not admit is skipped before
             // the fill below can ask it anything (MIK-7962).
@@ -216,7 +219,10 @@ impl MetaMcp {
         }
 
         // Check MCP backends
-        for backend in self.backends.all() {
+        for backend in self
+            .backends
+            .all_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Discovery)
+        {
             // INV-2 (MIK-6742): skip OAuth-isolated backends on a multi-user gateway.
             if self.meta_route_isolation_refused(&backend) {
                 continue;
@@ -285,7 +291,10 @@ impl MetaMcp {
                     .filter(|n| self.shows_name(&cap.name, n, scope, session_id)),
             );
         }
-        for backend in self.backends.all() {
+        for backend in self
+            .backends
+            .all_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Discovery)
+        {
             // INV-2 (MIK-6742): don't leak an isolated backend's tool names via
             // "did you mean?" suggestions on a multi-user gateway.
             if self.meta_route_isolation_refused(&backend)

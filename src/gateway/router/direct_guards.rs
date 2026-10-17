@@ -141,7 +141,13 @@ impl DirectRouteGuards {
         // against the challenge this dispatch minted (never read back).
         let slot = crate::gateway::meta_mcp::response_security::chain_receipt::ChainSlot::default();
         if let Some(result) = response.result.as_mut() {
-            meta.chain_receive_for(call.server, result, challenge, &slot)?;
+            meta.chain_receive_for(
+                &meta.scoped(crate::gateway::authz::BackendGrant::of(client)),
+                call.server,
+                result,
+                challenge,
+                &slot,
+            )?;
         }
         let receipt = std::mem::take(&mut *slot.lock());
         // MIK-8078 (MRTR.2a): the backend's state is sealed after the raw

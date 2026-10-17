@@ -55,6 +55,7 @@ fn signed_two_accounts() -> (DirectAccountGateway, MetaMcp) {
             .expect("a tool");
     for server in [BACKEND, EXTERNAL_BACKEND] {
         meta.backends
+            .for_test()
             .get(server)
             .expect("the backend")
             .store_shared_tools_for_test(vec![tool.clone()]);
@@ -104,7 +105,7 @@ async fn carry(
     server: &str,
     caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
 ) {
-    let backend = meta.backends.get(server).expect("the backend");
+    let backend = meta.backends.for_test().get(server).expect("the backend");
     let resolved = meta
         .resolve_dispatch(
             (server, TOOL),

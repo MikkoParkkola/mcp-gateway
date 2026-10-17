@@ -156,8 +156,8 @@ impl MetaMcp {
         witness: Option<RefundWitness>,
     ) -> crate::Result<(CallerVerdict, Option<RefundWitness>)> {
         let Some(backend) = self
-            .backends
-            .get(server)
+            .scoped(caller.scope().authorizer.backend_grant())
+            .scoped_get(server)
             .filter(|backend| backend.keeps_per_user_catalogues())
         else {
             return Ok((CallerVerdict::Proceed, witness));
@@ -339,6 +339,7 @@ impl MetaMcp {
     /// arm resolves nothing and keeps it.
     pub(super) async fn dispatch_resolution(
         &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
         (server, tool): (&str, &str),
         (caller_proof, verified_identity, caller_key): (
             CallerProof<'_>,
@@ -399,7 +400,7 @@ impl MetaMcp {
                 Ok(Continue((Some(carried.backend), carried.resolved)))
             }
             None => {
-                let backend = self.backends.get(server);
+                let backend = view.scoped_get(server);
                 // No principal on a required per-user backend: an absent name,
                 // answered before any resolution (lead ruling 2026-10-11).
                 if backend

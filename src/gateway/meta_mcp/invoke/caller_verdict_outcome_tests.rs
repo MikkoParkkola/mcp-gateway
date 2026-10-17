@@ -58,7 +58,7 @@ async fn in_request<F: std::future::Future>(body: F) -> F::Output {
 /// Carry a real resolution for `(BACKEND, TOOL)`, as the caller verdict
 /// does, with `fill_error` as given.
 async fn carry(meta: &MetaMcp, fill_error: Option<crate::Error>) {
-    let backend = meta.backends.get(BACKEND).expect("the backend");
+    let backend = meta.backends.for_test().get(BACKEND).expect("the backend");
     let resolved = meta
         .resolve_dispatch((BACKEND, TOOL), Some(&backend), operator(), None)
         .await

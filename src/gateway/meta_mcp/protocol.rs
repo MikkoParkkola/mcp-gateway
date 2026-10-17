@@ -162,7 +162,10 @@ impl MetaMcp {
         // backend the caller may not see is dropped here (fail-closed = omit).
         let caller = Self::handler_proof(client, verified_identity);
         let mut credentialed = Vec::new();
-        for backend in self.backends.all() {
+        for backend in self
+            .backends
+            .all_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility)
+        {
             if crate::gateway::authz::authorize_backend(client, &backend.name).is_err() {
                 continue;
             }
@@ -261,7 +264,10 @@ impl MetaMcp {
         if let Some(refused) = Self::scope_refusal(&id, backend_name, "prompts/get", client) {
             return refused;
         }
-        let Some(backend) = self.backends.get(backend_name) else {
+        let Some(backend) = self
+            .scoped(crate::gateway::authz::BackendGrant::of(client))
+            .scoped_get(backend_name)
+        else {
             return backend_missing(id, backend_name);
         };
 
@@ -332,7 +338,10 @@ impl MetaMcp {
             warn!(error = %err, "failed to serialize logging/setLevel params for backend forwarding");
             json!({})
         });
-        for backend in self.backends.all() {
+        for backend in self
+            .backends
+            .all_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Background)
+        {
             // INV-2 (ADR-008): never drive the gateway-held OAuth token to an
             // isolated backend on behalf of an arbitrary caller on a multi-user
             // gateway. Skip isolated backends (MIK-6742 leak class).

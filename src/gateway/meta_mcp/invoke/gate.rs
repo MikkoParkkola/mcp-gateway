@@ -52,8 +52,10 @@ impl MetaMcp {
         ) else {
             return false;
         };
-        self.backends.get(server).is_some_and(|backend| {
-            self.may_invoke(server, tool, caller.scope(), session)
+        self.scoped(caller.scope().authorizer.backend_grant())
+            .scoped_get(server)
+            .is_some_and(|backend| {
+                self.may_invoke(server, tool, caller.scope(), session)
                 .is_err()
                 || backend.blocked_tool_refusal(None, tool).is_some()
                 // Signing cannot read a per-user caller's slot before the
@@ -62,7 +64,7 @@ impl MetaMcp {
                 // missing name is. No cooldown read: the dispatch meets it.
                 || (backend.keeps_per_user_catalogues()
                     && recorded_visibility(server, tool) != Some(Visibility::Visible))
-        })
+            })
     }
 
     /// What signing still judges for a target it skipped the policy for: what
@@ -291,16 +293,22 @@ impl MetaMcp {
     /// target is the same instance as at the mark and its count compares
     /// soundly.
     fn fill_marks<'s>(&self, servers: impl Iterator<Item = &'s str>) -> (u64, Vec<Option<u64>>) {
-        self.backends.with_membership(|membership| {
-            let fills = servers
-                .map(|server| {
-                    self.backends
-                        .get(server)
-                        .map(|backend| backend.list_fills())
-                })
-                .collect();
-            (membership, fills)
-        })
+        self.backends.membership_for(
+            crate::gateway::meta_mcp::scoped_backends::Unscoped::Discovery,
+            |membership| {
+                let fills = servers
+                    .map(|server| {
+                        self.backends
+                            .get_for(
+                                crate::gateway::meta_mcp::scoped_backends::Unscoped::Discovery,
+                                server,
+                            )
+                            .map(|backend| backend.list_fills())
+                    })
+                    .collect();
+                (membership, fills)
+            },
+        )
     }
 
     /// Whether a named backend filled since `marks`: any count changed OR
@@ -313,15 +321,21 @@ impl MetaMcp {
         (membership, marks): &(u64, Vec<Option<u64>>),
         servers: impl Iterator<Item = &'s str>,
     ) -> bool {
-        self.backends.with_membership(|epoch| {
-            let counts_changed = marks.iter().zip(servers).any(|(mark, server)| {
-                self.backends
-                    .get(server)
-                    .map(|backend| backend.list_fills())
-                    != *mark
-            });
-            counts_changed || epoch != *membership
-        })
+        self.backends.membership_for(
+            crate::gateway::meta_mcp::scoped_backends::Unscoped::Discovery,
+            |epoch| {
+                let counts_changed = marks.iter().zip(servers).any(|(mark, server)| {
+                    self.backends
+                        .get_for(
+                            crate::gateway::meta_mcp::scoped_backends::Unscoped::Discovery,
+                            server,
+                        )
+                        .map(|backend| backend.list_fills())
+                        != *mark
+                });
+                counts_changed || epoch != *membership
+            },
+        )
     }
 
     /// The route stage's judgement of one requested backend target: whether
@@ -348,7 +362,10 @@ impl MetaMcp {
             crate::gateway::meta_mcp::visible::record_absent(server, tool);
             return true;
         }
-        let Some(backend) = self.backends.get(server) else {
+        let Some(backend) = self
+            .scoped(caller.scope().authorizer.backend_grant())
+            .scoped_get(server)
+        else {
             return false;
         };
         let refused = self
@@ -563,7 +580,9 @@ impl MetaMcp {
                 .await;
             return Some(Err(Error::ToolNotFound(tool.to_string())));
         }
-        let backend = self.backends.get(server)?;
+        let backend = self
+            .scoped(caller.scope().authorizer.backend_grant())
+            .scoped_get(server)?;
         // Not existence-sensitive: answered alike for every name, before any
         // fill (K2).
         if let Err(refusal) = self.admit_backend_wide(server) {

@@ -142,7 +142,7 @@ async fn anonymous_caller_gets_no_tools_from_a_required_backend() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn anonymous_caller_is_not_served_a_required_backends_shared_snapshot() {
     let (meta, dispatches, _custody) = gateway(false);
-    let backend = meta.backends.get(REQUIRED).expect("registered");
+    let backend = meta.backends.for_test().get(REQUIRED).expect("registered");
     let seeded = backend
         .get_tools_for_binding(None, &[])
         .await
@@ -199,7 +199,7 @@ async fn optional_backend_and_operator_views_are_unchanged() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn list_servers_counts_a_required_backend_only_for_a_caller_with_a_view() {
     let (meta, _dispatches, _custody) = gateway(false);
-    let backend = meta.backends.get(REQUIRED).expect("registered");
+    let backend = meta.backends.for_test().get(REQUIRED).expect("registered");
     let seeded = backend
         .get_tools_for_binding(None, &[])
         .await
@@ -250,7 +250,7 @@ async fn list_servers_does_not_count_a_required_backend_for_an_operator_without_
         ServeMode::Http,
         single_user(),
     );
-    let backend = meta.backends.get(REQUIRED).expect("registered");
+    let backend = meta.backends.for_test().get(REQUIRED).expect("registered");
     let seeded = backend
         .get_tools_for_binding(None, &[])
         .await
@@ -283,7 +283,7 @@ async fn operator_row(stored: crate::personal_accounts::GrantRecord) -> (Value, 
         ServeMode::Http,
         single_user(),
     );
-    let backend = meta.backends.get(REQUIRED).expect("registered");
+    let backend = meta.backends.for_test().get(REQUIRED).expect("registered");
     let seeded = backend
         .get_tools_for_binding(None, &[])
         .await

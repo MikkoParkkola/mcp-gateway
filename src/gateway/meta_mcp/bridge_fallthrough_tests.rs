@@ -484,6 +484,7 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
 
     let (mut m, _calls) = meta_that_always_asks(ROOTS);
     m.backends
+        .for_test()
         .get("asks")
         .expect("the fixture registers asks")
         .set_transport_for_test(Arc::new(AsksThenAnswers {

@@ -167,7 +167,11 @@ async fn finished(gw: &Gateway, idempotency: &str) -> String {
 }
 
 fn backend(gw: &Gateway) -> std::sync::Arc<crate::backend::Backend> {
-    gw.meta.backends.get(BACKEND).expect("the backend")
+    gw.meta
+        .backends
+        .for_test()
+        .get(BACKEND)
+        .expect("the backend")
 }
 
 fn identity() -> VerifiedIdentity {
@@ -317,7 +321,7 @@ async fn second_key_answer(excluded_scope: &'static str, unregister: bool) -> St
     let id = finished(&gw, "s7a-twin").await;
     if unregister {
         assert!(
-            gw.meta.backends.remove(BACKEND),
+            gw.meta.backends.for_test().remove(BACKEND),
             "premise: {BACKEND} was registered"
         );
     }

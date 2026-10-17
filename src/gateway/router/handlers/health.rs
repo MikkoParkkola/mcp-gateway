@@ -35,7 +35,10 @@ pub(in crate::gateway::router) async fn health_handler(
     State(state): State<Arc<AppState>>,
     request: axum::http::Request<axum::body::Body>,
 ) -> impl IntoResponse {
-    let statuses = state.backends.statuses();
+    let statuses = state
+        .meta_mcp
+        .registry()
+        .statuses_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Admin);
     // The in-process capability backend is not in the registry: its health (MIK-5080) and its
     // startup scan (MIK-7268) count here. None configured is healthy (`all` of nothing).
     let capability_status = state.meta_mcp.get_capabilities().map(|c| c.status());

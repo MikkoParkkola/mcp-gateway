@@ -261,7 +261,7 @@ impl MetaMcp {
     ) -> (ToolTotal, usize) {
         let backends: Vec<_> = self
             .backends
-            .all()
+            .all_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility)
             .into_iter()
             .filter(|b| self.admits_backend(&b.name, scope, session_id))
             .collect();
@@ -337,10 +337,14 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
         session_id: Option<&str>,
     ) -> bool {
-        let on_backend = self.backends.all().into_iter().any(|b| {
-            self.listing_tool(&b, name, scope).is_some()
-                && self.shows_name(&b.name, name, scope, session_id)
-        });
+        let on_backend = self
+            .backends
+            .all_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility)
+            .into_iter()
+            .any(|b| {
+                self.listing_tool(&b, name, scope).is_some()
+                    && self.shows_name(&b.name, name, scope, session_id)
+            });
         on_backend
             || self.get_capabilities().is_some_and(|cap| {
                 cap.has_capability(name)

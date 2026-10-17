@@ -372,7 +372,7 @@ pub(crate) fn per_user_on(
 /// `{subject}@ledger`, as `PerIdentityMint` names it), serving [`TOOL`] with
 /// `schema`. For rows that need a second principal.
 pub(crate) fn add_caller(meta: &MetaMcp, subject: &str, schema: &Value) -> Arc<Asked> {
-    let backend = meta.backends.get(BACKEND).expect("the backend");
+    let backend = meta.backends.for_test().get(BACKEND).expect("the backend");
     let asked = Arc::new(Asked::default());
     let tools = vec![tool(TOOL, schema), tool(SIBLING, &valid())];
     backend.set_pooled_transport_for_test(
@@ -391,7 +391,7 @@ pub(crate) fn add_caller(meta: &MetaMcp, subject: &str, schema: &Value) -> Arc<A
 /// Replace alpha's upstream with one whose catalogue is empty: a complete,
 /// successful list of no tools.
 pub(crate) fn serve_alpha_empty(meta: &MetaMcp) -> Arc<Asked> {
-    let backend = meta.backends.get(BACKEND).expect("the backend");
+    let backend = meta.backends.for_test().get(BACKEND).expect("the backend");
     let asked = Arc::new(Asked::default());
     backend.set_pooled_transport_for_test(
         &PoolKey::PerUser {
@@ -423,7 +423,7 @@ pub(crate) async fn call_as_alpha(meta: &MetaMcp, name: &str, arguments: Value) 
 /// The binding the caller-slot index holds for `subject` on [`BACKEND`].
 pub(crate) fn indexed_binding_for(meta: &MetaMcp, subject: &str) -> Option<String> {
     let who = identity(subject);
-    let backend = meta.backends.get(BACKEND).expect("the backend");
+    let backend = meta.backends.for_test().get(BACKEND).expect("the backend");
     let caller = identified_caller(&who);
     meta.caller_slot_binding_for(&backend, MetaMcp::proof_of(&caller))
 }
@@ -511,7 +511,7 @@ pub(crate) fn indexed_binding_for_alpha(meta: &MetaMcp) -> Option<String> {
 /// of every row; on the stub it would turn the guards red, so for now it is
 /// its own row.)
 pub(crate) fn assert_index_covers_populated_slots(meta: &MetaMcp, row: &str) {
-    let backend = meta.backends.get(BACKEND).expect("the backend");
+    let backend = meta.backends.for_test().get(BACKEND).expect("the backend");
     let populated = backend.populated_per_user_bindings_for_test();
     let indexed = backend.indexed_bindings_for_test();
     let missing: Vec<_> = populated.iter().filter(|b| !indexed.contains(b)).collect();

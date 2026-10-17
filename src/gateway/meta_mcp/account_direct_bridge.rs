@@ -175,7 +175,7 @@ impl DirectAccountGateway {
             configure,
         );
         Self {
-            backends: Arc::clone(&meta.backends),
+            backends: Arc::clone(meta.backends.for_test()),
             meta: Some(meta),
             dispatches,
             custody,

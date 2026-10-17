@@ -215,6 +215,7 @@ impl MetaMcp {
         // MIK-8356 R5.2: the resolution a caller verdict carried, or a fresh one.
         let (backend, resolved) = match self
             .dispatch_resolution(
+                &self.scoped(caller.scope().authorizer.backend_grant()),
                 (server, tool),
                 (caller_proof, verified_identity, caller.caller_key),
                 surface,

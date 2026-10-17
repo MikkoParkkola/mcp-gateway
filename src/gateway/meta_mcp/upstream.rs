@@ -131,7 +131,7 @@ fn failed_answer(error: Option<&Value>) -> UpstreamAnswer {
 /// handle whose task the owner cancelled (MIK-7642). It cannot name a tool or
 /// arguments, so it could not resubmit the original operation if it tried to.
 pub(crate) struct NativeUpstreamTasks {
-    backends: Arc<BackendRegistry>,
+    backends: super::scoped_backends::Registry,
     /// Names from `tasks.recovery_adapters`. Read on every claim, so an
     /// operator's removal takes effect at the next read rather than the next
     /// restart of a caller's memory of it.
@@ -145,7 +145,7 @@ pub(crate) struct NativeUpstreamTasks {
 impl NativeUpstreamTasks {
     pub(crate) fn new(backends: Arc<BackendRegistry>, trusted: &[String]) -> Self {
         Self {
-            backends,
+            backends: super::scoped_backends::Registry::new(backends),
             trusted: trusted.iter().cloned().collect(),
             declared: DashMap::new(),
         }
@@ -162,7 +162,10 @@ impl NativeUpstreamTasks {
         if !self.trusted.contains(name) {
             return None;
         }
-        let backend = self.backends.get(name)?;
+        let backend = self.backends.get_for(
+            crate::gateway::meta_mcp::scoped_backends::Unscoped::Background,
+            name,
+        )?;
         if backend.identity_propagation_config().is_some()
             || backend.oauth_requires_per_user_isolation()
         {
@@ -216,7 +219,11 @@ impl UpstreamRecovery for NativeUpstreamTasks {
     }
 
     fn started(&self) -> Option<tokio::sync::broadcast::Receiver<String>> {
-        Some(self.backends.subscribe_started())
+        Some(
+            self.backends.subscribe_started_for(
+                crate::gateway::meta_mcp::scoped_backends::Unscoped::Background,
+            ),
+        )
     }
 
     async fn query(&self, handle: &UpstreamHandle, deadline: Duration) -> UpstreamAnswer {
@@ -263,10 +270,12 @@ impl UpstreamRecovery for NativeUpstreamTasks {
             // for within the deadline; one still holding the slot after it is
             // a login or a slow peer, and the attempt is not counted
             // (MIK-8347): the holder retries when that start succeeds.
-            if let Some(backend) = self.backends.get(&handle.backend)
-                && tokio::time::timeout(deadline, backend.start_settled())
-                    .await
-                    .is_err()
+            if let Some(backend) = self.backends.get_for(
+                crate::gateway::meta_mcp::scoped_backends::Unscoped::Background,
+                &handle.backend,
+            ) && tokio::time::timeout(deadline, backend.start_settled())
+                .await
+                .is_err()
             {
                 let name = handle.backend.as_str();
                 tracing::warn!(
@@ -521,7 +530,10 @@ impl MetaMcp {
             .and_then(|entry| entry.tool.output_schema)
             .or_else(|| {
                 self.backends
-                    .get(server)
+                    .get_for(
+                        crate::gateway::meta_mcp::scoped_backends::Unscoped::Background,
+                        server,
+                    )
                     .and_then(|backend| backend.get_cached_tool(tool))
                     .and_then(|cached| cached.output_schema)
             });

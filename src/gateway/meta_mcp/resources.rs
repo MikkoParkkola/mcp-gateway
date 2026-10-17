@@ -306,7 +306,10 @@ impl MetaMcp {
         // backend the caller may not see is dropped here (fail-closed = omit).
         let caller = Self::handler_proof(client, verified_identity);
         let mut credentialed = Vec::new();
-        for backend in self.backends.all() {
+        for backend in self
+            .backends
+            .all_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility)
+        {
             if authorize_backend(client, &backend.name).is_err() {
                 continue;
             }
@@ -408,7 +411,10 @@ impl MetaMcp {
         let mut all_templates: Vec<ResourceTemplate> = Vec::new();
         let caller = Self::handler_proof(client, verified_identity);
 
-        for backend in self.backends.all() {
+        for backend in self
+            .backends
+            .all_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility)
+        {
             if authorize_backend(client, &backend.name).is_err() {
                 continue;
             }
@@ -457,7 +463,10 @@ impl MetaMcp {
         verified_identity: Option<&VerifiedIdentity>,
     ) -> Option<(Arc<crate::backend::Backend>, ForwardCredential)> {
         let caller = Self::handler_proof(client, verified_identity);
-        for backend in self.backends.all() {
+        for backend in self
+            .backends
+            .all_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Discovery)
+        {
             if authorize_backend(client, &backend.name).is_err() {
                 continue;
             }

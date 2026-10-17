@@ -217,14 +217,15 @@ impl super::super::MetaMcp {
 impl super::super::MetaMcp {
     /// [`Self::chain_receive`] for the backend registered as `server`; the
     /// direct route's entry point. `challenge` is the nonce this gateway wrote.
-    pub(crate) fn chain_receive_for(
+    pub(in crate::gateway) fn chain_receive_for(
         &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
         server: &str,
         result: &mut Value,
         challenge: Option<&str>,
         slot: &ChainSlot,
     ) -> crate::Result<()> {
-        let Some(backend) = self.backends.get(server) else {
+        let Some(backend) = view.scoped_get(server) else {
             return Ok(());
         };
         self.chain_receive(backend.chain_policy(), result, challenge, slot)
@@ -239,12 +240,15 @@ impl super::super::MetaMcp {
 
     /// The chain mode of `server`: `Off` for a name not registered, a
     /// capability backend, or a gateway with no chain identity of its own.
-    pub(crate) fn chain_mode_of(&self, server: &str) -> ChainMode {
+    pub(in crate::gateway) fn chain_mode_of(
+        &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
+        server: &str,
+    ) -> ChainMode {
         if self.chain_signer.is_none() {
             return ChainMode::Off;
         }
-        self.backends
-            .get(server)
+        view.scoped_get(server)
             .map_or(ChainMode::Off, |backend| backend.chain_policy().0)
     }
 }
@@ -286,7 +290,9 @@ impl super::super::MetaMcp {
                 .surfaced_for(tool_name, scope, session_id)
                 .visible_server(),
         };
-        match server.map(|server| self.chain_mode_of(server)) {
+        match server.map(|server| {
+            self.chain_mode_of(&self.scoped(scope.authorizer.backend_grant()), server)
+        }) {
             Some(ChainMode::Require) => Err(crate::Error::json_rpc(
                 -32001,
                 "task execution is not available for a backend that requires a signature chain",

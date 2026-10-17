@@ -339,7 +339,10 @@ async fn l2_predictions_judge_each_backends_slot() {
             tool(&super::slot_verdict_fixture::invalid())
         ]))),
     );
-    assert!(fx.meta.backends.register(vault), "second backend registers");
+    assert!(
+        fx.meta.backends.for_test().register(vault),
+        "second backend registers"
+    );
     warm_by_listing(&fx.meta).await;
     let alpha = super::catalogue_per_caller_tests::identity("alpha");
     fx.meta

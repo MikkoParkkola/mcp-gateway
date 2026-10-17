@@ -124,6 +124,7 @@ async fn i3b_index_entry_removed_on_grant_revocation() {
     let backend = fx
         .meta
         .backends
+        .for_test()
         .get(super::slot_verdict_fixture::BACKEND)
         .expect("the backend");
     assert!(
@@ -171,6 +172,7 @@ async fn i2e_index_covers_every_populated_slot() {
     let backend = fx
         .meta
         .backends
+        .for_test()
         .get(super::slot_verdict_fixture::BACKEND)
         .expect("the backend");
     assert!(
@@ -213,6 +215,7 @@ async fn i3_index_entry_removed_on_idle_eviction() {
     let backend = fx
         .meta
         .backends
+        .for_test()
         .get(super::slot_verdict_fixture::BACKEND)
         .expect("the backend");
     assert!(

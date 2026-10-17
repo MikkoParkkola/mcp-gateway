@@ -114,14 +114,15 @@ impl MetaMcp {
         tool: &str,
     ) -> bool {
         use crate::personal_accounts::config::DescriptorMode;
-        self.target_account(view, server, tool).is_some_and(|account| {
-            self.account_strategies
-                .declared(&account.0)
-                .is_none_or(|declared| declared.mode != DescriptorMode::Shared)
-        }) || self
-            .backends
-            .get(server)
-            .is_some_and(|backend| backend.identity_propagation_config().is_some())
+        self.target_account(view, server, tool)
+            .is_some_and(|account| {
+                self.account_strategies
+                    .declared(&account.0)
+                    .is_none_or(|declared| declared.mode != DescriptorMode::Shared)
+            })
+            || view
+                .scoped_get(server)
+                .is_some_and(|backend| backend.identity_propagation_config().is_some())
     }
 
     /// STORED.2 site 1: serve `response` when its account is proven live,

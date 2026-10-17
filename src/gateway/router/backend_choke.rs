@@ -22,8 +22,12 @@ pub(super) fn backend_for(
     view_for(state, grant).scoped_get(name)
 }
 
-/// The view [`backend_for`] reads through: the stored registry with this
-/// gateway's capability provider, the view the Meta-MCP layer builds.
+/// The view [`backend_for`] reads through: the registry `MetaMcp` stores,
+/// with this gateway's capability provider, as `MetaMcp::scoped` builds it.
 pub(super) fn view_for<'a>(state: &'a AppState, grant: BackendGrant<'a>) -> ScopedBackends<'a> {
-    state.meta_mcp.scoped(grant)
+    let capability = state
+        .meta_mcp
+        .get_capabilities()
+        .map(|cap| cap.name.clone());
+    state.meta_mcp.registry().scoped(grant, capability)
 }

@@ -109,7 +109,7 @@ impl MetaMcp {
         let targets: Vec<(&str, &str)> = targets
             .into_iter()
             .filter(|(server, _)| {
-                self.backends.get(server).is_none_or(|backend| {
+                self.backends.for_test().get(server).is_none_or(|backend| {
                     !backend
                         .skip_account_prepass
                         .load(std::sync::atomic::Ordering::SeqCst)
@@ -186,7 +186,10 @@ impl MetaMcp {
         session_id: Option<&str>,
     ) {
         let caller = scope.caller;
-        let Some(backend) = self.backends.get(server) else {
+        let Some(backend) = self
+            .scoped(scope.authorizer.backend_grant())
+            .scoped_get(server)
+        else {
             return;
         };
         if !backend.keeps_per_user_catalogues() {
@@ -272,7 +275,10 @@ impl MetaMcp {
         scope: super::visibility::InvokeScope<'_>,
         session_id: Option<&str>,
     ) {
-        let Some(backend) = self.backends.get(server) else {
+        let Some(backend) = self
+            .scoped(scope.authorizer.backend_grant())
+            .scoped_get(server)
+        else {
             return;
         };
         // Only backends whose stored read judges the shared catalogue:
@@ -309,7 +315,10 @@ impl MetaMcp {
         scope: super::visibility::InvokeScope<'_>,
         session_id: Option<&str>,
     ) -> bool {
-        if let Some(backend) = self.backends.get(server) {
+        if let Some(backend) = self
+            .scoped(scope.authorizer.backend_grant())
+            .scoped_get(server)
+        {
             self.refused_without_catalogue(&backend, (server, tool), scope, session_id)
         } else {
             if self.may_invoke(server, tool, scope, session_id).is_err() {
@@ -371,7 +380,7 @@ impl MetaMcp {
     )]
     fn unfilled_outcome_read(&self, server: &str) {
         #[cfg(test)]
-        if let Some(backend) = self.backends.get(server) {
+        if let Some(backend) = self.backends.for_test().get(server) {
             backend
                 .unfilled_outcome_reads
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -385,7 +394,9 @@ impl MetaMcp {
         server: &str,
         caller: &MetaMcpCallerContext<'_>,
     ) -> Option<std::time::Duration> {
-        let backend = self.backends.get(server)?;
+        let backend = self
+            .scoped(caller.scope().authorizer.backend_grant())
+            .scoped_get(server)?;
         let proof = crate::identity_propagation::CallerProof::new(
             caller.verified_identity,
             caller.provenance(),
@@ -441,7 +452,10 @@ impl MetaMcp {
         // (`BackendNotFound`, the invoke path's answer for an unknown
         // server), after policy, as the live call refuses on policy before
         // it dispatches.
-        if let Some(error) = self.unknown_server_refusal(stored) {
+        if let Some(error) = self.unknown_server_refusal(
+            &self.scoped(caller.scope().authorizer.backend_grant()),
+            stored,
+        ) {
             return Some(error_response_preserving_status(id.clone(), &error));
         }
         if let Err(withheld) = self.judge_stored_accounts(
@@ -530,10 +544,14 @@ impl MetaMcp {
     /// captured). A capability tool still judges through the catalogue and
     /// policy path; a personal-account backend that was removed answers
     /// here too, as its live call does.
-    fn unknown_server_refusal(&self, stored: &CommittedTask) -> Option<Error> {
+    fn unknown_server_refusal(
+        &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
+        stored: &CommittedTask,
+    ) -> Option<Error> {
         for target in &stored.targets {
             let (server, tool) = (target.server.as_str(), target.tool.as_str());
-            if self.backends.get(server).is_some() {
+            if view.scoped_get(server).is_some() {
                 continue;
             }
             let offered = self

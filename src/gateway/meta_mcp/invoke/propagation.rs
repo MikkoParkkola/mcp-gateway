@@ -44,7 +44,10 @@ impl MetaMcp {
     ) -> Result<(Vec<(String, String)>, Option<String>)> {
         // Identity-only by construction; production reads pass a proof (#2231).
         let caller = CallerProof::new(verified_identity, CallerProvenance::Anonymous);
-        let backend = self.backends.get(server);
+        let backend = self.backends.get_for(
+            crate::gateway::meta_mcp::scoped_backends::Unscoped::Discovery,
+            server,
+        );
         self.resolve_propagation_credential_held_for(server, backend.as_deref(), caller)
             .await
             .map(|(headers, cache_binding, _)| (headers, cache_binding))
@@ -155,7 +158,7 @@ impl MetaMcp {
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> Result<CallerCredential> {
         let caller = CallerProof::new(verified_identity, CallerProvenance::Anonymous);
-        let backend = self.backends.get(server);
+        let backend = self.backends.for_test().get(server);
         self.resolve_caller_credential_as(server, backend.as_deref(), idp_cfg, caller)
             .await
     }

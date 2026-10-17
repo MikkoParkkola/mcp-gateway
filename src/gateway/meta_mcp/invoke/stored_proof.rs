@@ -136,6 +136,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
         let mut witness = super::nonce_settle::Witnessed::take(caller);
         let proven = self
             .dispatch_resolution(
+                &self.scoped(caller.scope().authorizer.backend_grant()),
                 (server, tool),
                 (proof, caller.verified_identity, caller.caller_key),
                 self.hint_surface(caller),

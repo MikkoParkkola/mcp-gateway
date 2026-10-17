@@ -6,9 +6,10 @@ use serde_json::Value;
 use tracing::warn;
 
 use super::AppState;
+use super::backend_choke::backend_for;
 use crate::gateway::auth::AuthenticatedClient;
 pub(super) use crate::gateway::authz::{AuthorizationError, CallTarget, ToolTarget};
-use crate::gateway::authz::{Decision, Emit, ToolAuthorizer, Transport};
+use crate::gateway::authz::{BackendGrant, Decision, Emit, ToolAuthorizer, Transport};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::invoke::TargetNaming;
 use crate::gateway::oauth::{
@@ -423,11 +424,7 @@ pub(super) fn decide_tool_target<'a>(
     let mut verdict = Ok(());
     if state.ssrf_protection
         && !state.trust_configured_backends
-        && let Some(backend) = super::backend_choke::backend_for(
-            state,
-            crate::gateway::authz::BackendGrant::of(client),
-            target.server,
-        )
+        && let Some(backend) = backend_for(state, BackendGrant::of(client), target.server)
         && let Some(url) = backend.transport_url()
     {
         verdict = backend
@@ -504,11 +501,7 @@ fn backend_tool_names(
     client: Option<&AuthenticatedClient>,
     server: &str,
 ) -> Vec<String> {
-    if let Some(backend) = super::backend_choke::backend_for(
-        state,
-        crate::gateway::authz::BackendGrant::of(client),
-        server,
-    ) {
+    if let Some(backend) = backend_for(state, BackendGrant::of(client), server) {
         return backend
             .get_cached_tools_snapshot()
             .iter()

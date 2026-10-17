@@ -88,6 +88,7 @@ async fn c14_http_descriptor_blocked_target_resolves_nothing() {
     let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::No).await;
     gw.meta
         .backends
+        .for_test()
         .get(BACKEND)
         .expect("the backend")
         .block_tool_for_test(TOOL);
@@ -163,6 +164,7 @@ async fn c6b_standard_direct_route_argument_key_refusal_unchanged() {
     .expect("a tool");
     gw.meta
         .backends
+        .for_test()
         .get(BACKEND)
         .expect("the backend")
         .store_per_user_tools_for_test(BINDING, vec![closed]);
@@ -219,6 +221,7 @@ async fn i2b_truncated_direct_route_listing_leaves_no_index_entry() {
     let gw = gateway_cold(CallerSlot::Valid, Surfaced::Yes).await;
     gw.meta
         .backends
+        .for_test()
         .get(BACKEND)
         .expect("the backend")
         .set_pooled_transport_for_test(
@@ -440,6 +443,7 @@ async fn r1_keyed_replay_after_the_callers_catalogue_withholds_answers_absent() 
         serde_json::from_value(json!({"name": TOOL, "inputSchema": invalid()})).expect("a tool");
     gw.meta
         .backends
+        .for_test()
         .get(BACKEND)
         .expect("the backend")
         .store_per_user_tools_for_test(BINDING, vec![withheld]);
@@ -560,6 +564,7 @@ async fn r1_direct_keyed_replay_after_the_callers_catalogue_withholds_answers_ab
         serde_json::from_value(json!({"name": TOOL, "inputSchema": invalid()})).expect("a tool");
     gw.meta
         .backends
+        .for_test()
         .get(BACKEND)
         .expect("the backend")
         .store_per_user_tools_for_test(BINDING, vec![withheld]);

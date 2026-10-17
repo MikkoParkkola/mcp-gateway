@@ -30,10 +30,6 @@ pub(in crate::gateway) enum Absence {
 /// Why a registry read is not one caller's scoped view. The class is a
 /// claim a reviewer checks against `scoped_backends_classes.tsv`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "first read in PR-B commit 5 (MIK-8387)")
-)]
 pub(in crate::gateway) enum Unscoped {
     /// Deciding what a caller may see: listing, search, the visible digest.
     Visibility,
@@ -44,21 +40,20 @@ pub(in crate::gateway) enum Unscoped {
     /// The operator's own views: the admin UI, health.
     Admin,
     /// Startup, registration, reload and stop.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "names the leaf allows of lifecycle code; no Registry operation reads under it"
+        )
+    )]
     Lifecycle,
 }
 
 /// The backend registry, reachable only through a scoped view or a classed
 /// operation.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "first read in PR-B commit 5 (MIK-8387)")
-)]
 pub(in crate::gateway) struct Registry(Arc<BackendRegistry>);
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "first read in PR-B commit 5 (MIK-8387)")
-)]
 impl Registry {
     pub(in crate::gateway) fn new(inner: Arc<BackendRegistry>) -> Self {
         Self(inner)
@@ -163,11 +158,16 @@ pub(in crate::gateway) struct ScopedBackends<'a> {
 }
 
 impl MetaMcp {
+    /// The stored registry, for the router choke point (design §2.5).
+    pub(in crate::gateway) fn registry(&self) -> &Registry {
+        &self.backends
+    }
+
     /// The registry as `grant` sees it, with this gateway's capability
     /// provider.
     pub(in crate::gateway) fn scoped<'a>(&'a self, grant: BackendGrant<'a>) -> ScopedBackends<'a> {
         ScopedBackends {
-            registry: &self.backends,
+            registry: &self.backends.0,
             grant,
             capability: self.get_capabilities().map(|cap| cap.name.clone()),
         }

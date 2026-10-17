@@ -192,6 +192,7 @@ async fn l6b_evicted_caller_disabled_list_withholds() {
     let backend = fx
         .meta
         .backends
+        .for_test()
         .get(super::slot_verdict_fixture::BACKEND)
         .expect("the backend");
     assert!(
@@ -349,6 +350,7 @@ async fn l11a_truncated_caller_slot_counts_at_least() {
     let backend = fx
         .meta
         .backends
+        .for_test()
         .get(super::slot_verdict_fixture::BACKEND)
         .expect("the backend");
     backend.mark_per_user_truncated_for_test(super::slot_verdict_fixture::BINDING);
@@ -378,6 +380,7 @@ async fn l11b_empty_caller_slot_withholds() {
     let backend = fx
         .meta
         .backends
+        .for_test()
         .get(super::slot_verdict_fixture::BACKEND)
         .expect("the backend");
     backend.store_per_user_tools_for_test(super::slot_verdict_fixture::BINDING, Vec::new());

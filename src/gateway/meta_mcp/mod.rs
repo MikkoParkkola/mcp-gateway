@@ -174,7 +174,7 @@ pub(crate) const LOCAL_OPERATOR_PRINCIPAL: &str = "\0local-operator.v1";
 // over their product would have more states than the struct has fields.
 #[allow(clippy::struct_excessive_bools)]
 pub struct MetaMcp {
-    pub(super) backends: Arc<BackendRegistry>,
+    pub(super) backends: scoped_backends::Registry,
     pub(super) change_feed: std::sync::OnceLock<crate::gateway::ChangeFeed>,
     /// MCP Events hub (MIK-7630); unset while events are off or on stdio.
     pub(super) events: std::sync::OnceLock<Arc<crate::events::EventsHub>>,

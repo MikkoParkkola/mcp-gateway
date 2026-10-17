@@ -519,3 +519,35 @@ async fn c2_an_out_of_scope_capability_backend_answers_as_an_unregistered_server
         );
     }
 }
+
+/// MIK-8387 PR-B T4 router cell (test plan v2 §5): the router choke point's
+/// view answers `absence` exactly as `MetaMcp::scoped` does, for every grant
+/// and name, the capability provider included: a grant naming it sees it as
+/// registered. Mutant M35: `view_for` passes no capability name.
+#[tokio::test]
+async fn t4_router_cell_the_choke_point_view_matches_the_meta_view() {
+    use crate::gateway::authz::BackendGrant;
+    let fx = twin(Reason::Admin, true).await;
+    let alpha_caps = ["alpha".to_string(), CAPS.to_string()];
+    let alpha_ghost = ["alpha".to_string(), "ghost".to_string()];
+    let grants = [
+        BackendGrant::Scoped(&alpha_caps),
+        BackendGrant::Scoped(&alpha_ghost),
+        BackendGrant::Empty,
+        BackendGrant::Unscoped,
+    ];
+    for grant in grants {
+        for name in ["alpha", "alpha-pt", "ghost", "nosuch", CAPS] {
+            assert_eq!(
+                super::backend_choke::view_for(&fx.state, grant).absence(name),
+                fx.state.meta_mcp.scoped(grant).absence(name),
+                "router cell {name} under {grant:?}"
+            );
+        }
+    }
+    assert_eq!(
+        super::backend_choke::view_for(&fx.state, BackendGrant::Scoped(&alpha_caps)).absence(CAPS),
+        None,
+        "router cell {CAPS}: a grant naming the capability provider sees it"
+    );
+}

@@ -110,13 +110,18 @@ fn alpha_lacks(gw: &Gateway) {
     .expect("a tool");
     gw.meta
         .backends
+        .for_test()
         .get(BACKEND)
         .expect("the backend")
         .store_per_user_tools_for_test(BINDING, vec![other]);
 }
 
 fn backend(gw: &Gateway) -> std::sync::Arc<crate::backend::Backend> {
-    gw.meta.backends.get(BACKEND).expect("the backend")
+    gw.meta
+        .backends
+        .for_test()
+        .get(BACKEND)
+        .expect("the backend")
 }
 
 /// T8: alpha's own warm slot no longer lists the tool (the shared slot still

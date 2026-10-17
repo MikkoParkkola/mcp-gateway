@@ -50,7 +50,7 @@ fn connected() -> (DirectAccountGateway, MetaMcp) {
 /// Carry the operator's real resolution for `(BACKEND, TOOL)`, as the
 /// route stage's caller verdict leaves it, with `fill_error`.
 async fn carry(meta: &MetaMcp, fill_error: Option<crate::Error>) {
-    let backend = meta.backends.get(BACKEND).expect("the backend");
+    let backend = meta.backends.for_test().get(BACKEND).expect("the backend");
     let resolved = meta
         .resolve_dispatch(
             (BACKEND, TOOL),
@@ -97,6 +97,7 @@ fn shared_tools(meta: &MetaMcp, name: &str) {
     }))
     .expect("a tool");
     meta.backends
+        .for_test()
         .get(BACKEND)
         .expect("the backend")
         .store_shared_tools_for_test(vec![tool]);

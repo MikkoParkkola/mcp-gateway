@@ -25,7 +25,12 @@ async fn m1_a_descriptor_block_in_the_callers_slot_is_recorded_as_descriptor() {
         crate::config::InputSchemaEnforcement::Closed,
         Surfaced::Yes,
     );
-    let backend = fx.meta.backends.get(BACKEND).expect("the backend");
+    let backend = fx
+        .meta
+        .backends
+        .for_test()
+        .get(BACKEND)
+        .expect("the backend");
     backend.block_tool_for_test(TOOL);
     let alpha = crate::gateway::meta_mcp::catalogue_per_caller_tests::identity("alpha");
     let caller = crate::gateway::meta_mcp::identified_caller(&alpha);
