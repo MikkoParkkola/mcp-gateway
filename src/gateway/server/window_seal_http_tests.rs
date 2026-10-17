@@ -154,7 +154,7 @@ async fn across_shutdown(mode: ProtocolRevisionWindow) -> Answers {
 
     let meta_body = initialize(41, "row14-meta");
     let backend_body = initialize(42, "row14-before");
-    let after_body = initialize(43, "row14-after");
+    let after_body = initialize(43, super::window_seal_http_backend::HELD_MARKER);
     // Accepted first, so a later request reaching its handler proves this
     // one was accepted too: the listener accepts connections in order.
     let meta = send(port, "/mcp", &meta_body, true).await;
@@ -163,7 +163,7 @@ async fn across_shutdown(mode: ProtocolRevisionWindow) -> Answers {
     // The backend receiving request 43 is the acknowledgment tied to it: the
     // gateway forwards only after the count point, so 43 is counted.
     eventually("request 43 never reached the backend", || {
-        backend.received("row14-after")
+        backend.received(super::window_seal_http_backend::HELD_MARKER)
     })
     .await;
     // `/mcp/{name}` takes its permit before reading the body: 42 is in its

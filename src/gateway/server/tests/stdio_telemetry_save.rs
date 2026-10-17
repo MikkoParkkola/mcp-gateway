@@ -7,7 +7,7 @@
 //! Driven in process through `Gateway::run_stdio_on` over in-memory pipes,
 //! with the data directory in a tempdir. Writes are counted per window file
 //! by `durable::write_seam`, and the saved counts are read back with
-//! `load_durable_window`, the loader an operator's report uses.
+//! `window::load`, the v2 window loader.
 //!
 //! The saved window holds the process-wide counter registry, so in a test
 //! binary it also carries other tests' observations. Counts are therefore
@@ -24,7 +24,7 @@ use tokio::time::timeout;
 use crate::config::Config;
 use crate::gateway::Gateway;
 use crate::protocol_revision_telemetry::{
-    Snapshot, durable_window_path, load_durable_window, write_seam,
+    Snapshot, durable_window_path, window, write_seam,
 };
 
 /// Bound on every wait for a frame or a session end that must happen.
@@ -202,9 +202,9 @@ impl Session {
             .expect("the session ends")
             .expect("no panic")
             .expect("Ok");
-        load_durable_window(data)
+        window::load(data)
             .expect("the window file reads")
-            .snapshot
+            .stdio
     }
 }
 
@@ -318,7 +318,7 @@ async fn the_saver_persists_observed_requests_while_the_session_runs() {
     let saved = crate::test_pause::within("the saver writing the observed requests", async {
         loop {
             let saved =
-                load_durable_window(&data).map_or(0, |window| stdio_requests(&window.snapshot));
+                window::load(&data).map_or(0, |window| stdio_requests(&window.stdio));
             if saved > PINGS {
                 return saved;
             }
@@ -366,9 +366,9 @@ async fn a_stop_with_a_hung_dispatch_still_ends_and_saves() {
         .expect("no panic")
         .expect("Ok");
     drop((client, lines));
-    let saved = load_durable_window(&data)
+    let saved = window::load(&data)
         .expect("the window file reads")
-        .snapshot;
+        .stdio;
     assert!(
         stdio_requests(&saved) >= 1,
         "the final save after a hung dispatch holds no stdio request: {saved:?}"

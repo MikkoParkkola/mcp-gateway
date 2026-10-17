@@ -27,10 +27,8 @@ use serde_json::Value;
 
 use crate::protocol::extensions::Extension;
 
-pub use durable::{
-    DurableTelemetrySink, DurableWindow, durable_window_path, load_durable_window,
-    production_retirement_decision, production_retirement_decision_at,
-};
+pub use durable::{DurableTelemetrySink, durable_window_path};
+pub(crate) use observe::{HttpCaller, observe_inbound_request_from};
 pub use observe::{
     bind_session_revision, extension_adoption, global_shadow_count, global_snapshot,
     observe_client_extensions, observe_inbound_request, observe_tools_list, register_metrics,
@@ -71,13 +69,13 @@ const MEASURED_CLIENTS: &[&str] = &[
     "chatgpt",
     "other",
 ];
+// Only the zero-registration of metric series enumerates transports.
+#[cfg(feature = "metrics")]
 const MEASURED_TRANSPORTS: &[Transport] = &[Transport::Http, Transport::Stdio, Transport::Internal];
 /// Directory below the gateway data directory that holds the restart-safe window.
 pub const DURABLE_TELEMETRY_DIR: &str = "protocol-revision-telemetry";
 /// Durable aggregate filename read by operators after the measurement window.
 pub const DURABLE_WINDOW_FILE: &str = "window.json";
-/// Schema identifier for the operator-readable aggregate.
-pub const DURABLE_WINDOW_SCHEMA: &str = "mcp_protocol_revision_window.v1";
 
 /// Inbound transport for a negotiated session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -231,8 +229,6 @@ pub enum RetirementBlocked {
     UnattributedAtOrAboveRetirementThreshold,
     /// Present but unrecognized revisions are too common to classify safely.
     OtherAtOrAboveRetirementThreshold,
-    /// HTTP and stdio evidence do not cover the same production window.
-    WindowMisaligned,
 }
 
 impl Registry {
@@ -274,19 +270,37 @@ impl Registry {
         transport: Transport,
         user_agent: Option<&str>,
     ) {
-        let _ = user_agent;
-        self.total += 1;
         let client = client_label(client);
+        let revision = revision_label(requested_revision);
+        self.total += 1;
         *self.by_client.entry(client.to_string()).or_insert(0) += 1;
         *self
             .by_transport
             .entry(transport.as_str().to_string())
             .or_insert(0) += 1;
-        match revision_label(requested_revision) {
+        match revision {
             Some(rev) => {
                 *self.by_revision.entry(rev.to_string()).or_insert(0) += 1;
             }
             None => self.unattributed += 1,
+        }
+        let slice = self.per_transport.entry(transport.as_str()).or_default();
+        slice.total += 1;
+        *slice.by_client.entry(client.to_string()).or_insert(0) += 1;
+        *slice
+            .by_transport
+            .entry(transport.as_str().to_string())
+            .or_insert(0) += 1;
+        match revision {
+            Some(rev) => *slice.by_revision.entry(rev.to_string()).or_insert(0) += 1,
+            None => {
+                slice.unattributed += 1;
+                let key = agents::missing_revision_agent(client, user_agent);
+                *self
+                    .missing_revision_agents
+                    .entry(key.to_string())
+                    .or_insert(0) += 1;
+            }
         }
     }
 
@@ -361,13 +375,15 @@ impl Registry {
 
     /// This process's observations on one transport only.
     pub(crate) fn transport_snapshot(&self, transport: Transport) -> Snapshot {
-        let _ = transport;
-        Snapshot::default()
+        self.per_transport
+            .get(transport.as_str())
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Requests with no revision, by bounded caller key.
     pub(crate) fn missing_revision_agents(&self) -> BTreeMap<String, u64> {
-        BTreeMap::new()
+        self.missing_revision_agents.clone()
     }
 
     fn shadow_snapshot(&self) -> BTreeMap<String, u64> {

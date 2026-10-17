@@ -20,7 +20,7 @@ use tracing::warn;
 
 use crate::clock::ClockBeforeEpoch;
 use crate::config::ProtocolRevisionWindow;
-use crate::protocol_revision_telemetry::window::{HttpSegmentSink, SegmentCounts};
+use crate::protocol_revision_telemetry::window::{HttpSegmentSink, SegmentCounts, WriterIdentity};
 
 /// How often an HTTP process rewrites its window segment.
 pub(super) const WINDOW_SAVE_INTERVAL: Duration = Duration::from_secs(5);
@@ -69,6 +69,9 @@ pub(super) fn global_counts(seal: Arc<AtomicBool>) -> CountsFn {
     })
 }
 
+/// The sink every write of this process's segment takes in turn.
+type Sink = Arc<Mutex<Option<HttpSegmentSink>>>;
+
 /// Open the segment (waiting at most `open_bound`), then keep it current
 /// until `shutdown`, and seal it. `None` with `off`: nothing is recorded or
 /// sealed, and shutdown serves as in 3.5.x. Await the handle after the
@@ -78,17 +81,151 @@ pub(super) async fn start_window_saver(
     data_dir: PathBuf,
     listen: SocketAddr,
     counts: CountsFn,
-    shutdown: tokio::sync::broadcast::Receiver<()>,
+    mut shutdown: tokio::sync::broadcast::Receiver<()>,
     settings: SaverSettings,
 ) -> Option<tokio::task::JoinHandle<()>> {
-    // STUB(red): records nothing and seals nothing.
-    let _ = (mode, data_dir, listen, counts, settings, NOT_DURABLE);
-    let _: Option<Arc<Mutex<Option<HttpSegmentSink>>>> = None;
-    let mut shutdown = shutdown;
+    if mode == ProtocolRevisionWindow::Off {
+        return None;
+    }
+    let sink: Sink = Arc::default();
+    // No readable clock means no start time to record: no segment is
+    // written (never a 0), but the seal below still refuses late requests.
+    let identity = match (settings.clock_ms)() {
+        Ok(started_ms) => Some(WriterIdentity {
+            listen: listen.to_string(),
+            exe: std::env::current_exe()
+                .map_or_else(|_| "unknown".to_string(), |path| path.display().to_string()),
+            process_started_at_ms: started_ms,
+        }),
+        Err(_) => {
+            warn!(data_dir = %data_dir.display(), "{NOT_DURABLE} (clock before 1970)");
+            None
+        }
+    };
+    if let Some(identity) = &identity {
+        let opened = open_detached(&sink, &data_dir, identity, settings.clock_ms);
+        match tokio::time::timeout(settings.open_bound, opened).await {
+            Ok(Ok(true)) => {}
+            Ok(_) => warn!(data_dir = %data_dir.display(), "{NOT_DURABLE}"),
+            Err(_) => warn!(data_dir = %data_dir.display(), "{NOT_DURABLE} (open still running)"),
+        }
+    }
     Some(tokio::spawn(async move {
-        let _ = shutdown.recv().await;
-        warn!("window saver stub stopped");
+        let mut interval = tokio::time::interval(settings.every);
+        interval.tick().await;
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    if let Some(identity) = &identity {
+                        checkpoint_detached(&sink, &data_dir, identity, &counts, settings.clock_ms);
+                    }
+                }
+                _ = shutdown.recv() => break,
+            }
+        }
+        // The seal, in memory and under the registry lock: refusals start
+        // now, whatever the disk does next.
+        let sealed_counts = counts(true);
+        let sealed_at_ms = (settings.clock_ms)();
+        let deadline = tokio::time::Instant::now() + settings.close_bound;
+        let close: super::persistence::ShutdownSave = (
+            "protocol-revision window seal",
+            Box::new(move || {
+                let mut held = sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let (Some(sink), Ok(sealed_at_ms)) = (held.as_mut(), sealed_at_ms) else {
+                    warn!("{NOT_DURABLE}: the window segment was not sealed");
+                    return;
+                };
+                let now = sealed_at_ms / 1_000;
+                if let Err(error) = sink.close(&sealed_counts, now, sealed_at_ms) {
+                    warn!(%error, "{NOT_DURABLE}: the window segment seal did not land");
+                }
+            }),
+        );
+        super::persistence::run_shutdown_saves(deadline, vec![close]).await;
     }))
+}
+
+/// Open the segment on a detached thread holding the sink mutex. Resolves to
+/// whether it opened; a stalled open keeps the mutex until it finishes.
+fn open_detached(
+    sink: &Sink,
+    data_dir: &std::path::Path,
+    identity: &WriterIdentity,
+    clock_ms: fn() -> Result<u64, ClockBeforeEpoch>,
+) -> impl std::future::Future<Output = Result<bool, tokio::sync::oneshot::error::RecvError>> {
+    let (done, opened) = tokio::sync::oneshot::channel();
+    let (sink, data_dir, identity) = (Arc::clone(sink), data_dir.to_path_buf(), identity.clone());
+    let spawned = std::thread::Builder::new()
+        .name("protocol-revision window open".to_owned())
+        .spawn(move || {
+            let mut held = sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _ = done.send(open_into(&mut held, &data_dir, identity, clock_ms));
+        });
+    if let Err(error) = spawned {
+        warn!(%error, "the window open could not start a thread");
+    }
+    opened
+}
+
+/// Open into `held` unless already open. `true` once a sink is held.
+fn open_into(
+    held: &mut Option<HttpSegmentSink>,
+    data_dir: &std::path::Path,
+    identity: WriterIdentity,
+    clock_ms: fn() -> Result<u64, ClockBeforeEpoch>,
+) -> bool {
+    if held.is_some() {
+        return true;
+    }
+    let Ok(now_ms) = clock_ms() else {
+        return false;
+    };
+    match HttpSegmentSink::open(data_dir, identity, now_ms / 1_000) {
+        Ok(opened) => {
+            *held = Some(opened);
+            true
+        }
+        Err(error) => {
+            warn!(%error, data_dir = %data_dir.display(), "{NOT_DURABLE}");
+            false
+        }
+    }
+}
+
+/// One periodic checkpoint on a detached thread. A tick that finds the sink
+/// busy skips (`try_lock`); with no sink yet, it retries the open first.
+/// Counts are cumulative from process start, so a skipped tick loses nothing.
+fn checkpoint_detached(
+    sink: &Sink,
+    data_dir: &std::path::Path,
+    identity: &WriterIdentity,
+    counts: &CountsFn,
+    clock_ms: fn() -> Result<u64, ClockBeforeEpoch>,
+) {
+    let (sink, data_dir, identity) = (Arc::clone(sink), data_dir.to_path_buf(), identity.clone());
+    let counts = Arc::clone(counts);
+    let spawned = std::thread::Builder::new()
+        .name("protocol-revision window checkpoint".to_owned())
+        .spawn(move || {
+            let mut held = match sink.try_lock() {
+                Ok(held) => held,
+                Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => return,
+            };
+            if !open_into(&mut held, &data_dir, identity, clock_ms) {
+                return;
+            }
+            let (Some(sink), Ok(now_ms)) = (held.as_mut(), clock_ms()) else {
+                return;
+            };
+            if let Err(error) = sink.checkpoint(&counts(false), now_ms / 1_000) {
+                warn!(%error, "failed to checkpoint the HTTP protocol-revision window segment");
+            }
+        });
+    if let Err(error) = spawned {
+        warn!(%error, "a window checkpoint could not start a thread; skipped");
+    }
 }
 
 #[cfg(test)]

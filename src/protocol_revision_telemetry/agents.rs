@@ -29,8 +29,34 @@ pub(crate) fn missing_revision_agent(
     client: &'static str,
     user_agent: Option<&str>,
 ) -> &'static str {
-    let _ = (client, user_agent);
-    "other"
+    if NAMED_CLIENTS.contains(&client) {
+        return client;
+    }
+    user_agent_family(user_agent)
+}
+
+fn user_agent_family(user_agent: Option<&str>) -> &'static str {
+    let Some(agent) = user_agent.map(str::trim).filter(|a| !a.is_empty()) else {
+        return "absent";
+    };
+    let agent = agent.to_ascii_lowercase();
+    // Order matters: the specific Python clients are tried before anything
+    // broader, and HTTPie's agent is "HTTPie/x".
+    [
+        ("python-urllib", "python-urllib"),
+        ("python-requests", "python-requests"),
+        ("python-httpx", "python-httpx"),
+        ("curl/", "curl"),
+        ("xh/", "xh"),
+        ("httpie", "httpie"),
+        ("node", "node"),
+        ("undici", "node"),
+        ("go-http-client", "go"),
+        ("reqwest", "reqwest"),
+    ]
+    .into_iter()
+    .find_map(|(needle, family)| agent.contains(needle).then_some(family))
+    .unwrap_or("other")
 }
 
 #[cfg(test)]

@@ -388,14 +388,26 @@ pub(super) fn route<'a>(
         .get("mcp-session-id")
         .and_then(|value| value.to_str().ok())
         .filter(|id| state.multiplexer.touch_if_owned(id, &owner));
-    crate::protocol_revision_telemetry::observe_inbound_request(
+    // U1 (MIK-7211): refused unserved after the window seal, as on `/mcp`.
+    if !crate::protocol_revision_telemetry::observe_inbound_request_from(
         &envelope.json_request,
         envelope.params.as_ref(),
         &envelope.method,
         protocol_header,
         session_id,
         crate::protocol_revision_telemetry::Transport::Http,
-    );
+        Some(crate::protocol_revision_telemetry::HttpCaller {
+            user_agent: caller
+                .inbound_headers
+                .get(axum::http::header::USER_AGENT)
+                .and_then(|value| value.to_str().ok()),
+            sealed: &state.meta_mcp.window_seal,
+        }),
+    ) {
+        return Err(crate::gateway::router::helpers::window_sealed_response(
+            &envelope.json_request,
+        ));
+    }
     let client_name = caller.client.as_ref().map(|c| &c.name);
     tracing::debug!(backend = %name, method = %envelope.method, client = ?client_name, "Backend request");
 

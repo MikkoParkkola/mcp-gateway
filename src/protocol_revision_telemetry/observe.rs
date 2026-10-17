@@ -140,7 +140,15 @@ pub(super) fn observe_into(
     let mut reg = registry
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let _ = &http;
+    // Under the lock the seal is taken under (`window::global_segment_counts`),
+    // so a request is either in the sealed counts or refused here, unserved.
+    if http
+        .as_ref()
+        .is_some_and(|caller| caller.sealed.load(std::sync::atomic::Ordering::SeqCst))
+    {
+        return false;
+    }
+    let user_agent = http.and_then(|caller| caller.user_agent);
     let previous = (transport == Transport::Stdio)
         .then(|| reg.session_attribution(session_id))
         .flatten();
@@ -166,7 +174,7 @@ pub(super) fn observe_into(
             },
         );
     }
-    reg.observe_request(requested_label, client, transport);
+    reg.observe_request_from(requested_label, client, transport, user_agent);
     drop(reg);
     emit_request_metrics(requested_label, client, transport);
     tracing::debug!(

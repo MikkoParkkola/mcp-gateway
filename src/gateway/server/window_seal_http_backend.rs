@@ -19,6 +19,9 @@ pub(super) struct HeldBackend {
     seen: Seen,
 }
 
+/// The client name of the one request this backend holds.
+pub(super) const HELD_MARKER: &str = "row14-after";
+
 /// Every request body the backend has read, in arrival order.
 type Seen = Arc<std::sync::Mutex<Vec<String>>>;
 
@@ -100,8 +103,11 @@ async fn answer(
     seen.lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .push(String::from_utf8_lossy(&buffer[head_end..head_end + length]).into_owned());
+    // Only the row's own request is held; the gateway's own handshake with
+    // this backend is answered at once, or it would block the forward.
     let released = released.notified();
-    if !open.load(std::sync::atomic::Ordering::SeqCst) {
+    let held = String::from_utf8_lossy(&buffer[head_end..head_end + length]).contains(HELD_MARKER);
+    if held && !open.load(std::sync::atomic::Ordering::SeqCst) {
         released.await;
     }
     let body: serde_json::Value =

@@ -85,7 +85,18 @@ pub(crate) fn load(data_dir: &Path) -> io::Result<WindowV2> {
 /// instruction: converting it would claim HTTP coverage it never had.
 pub(crate) fn read_window_v2(path: &Path) -> io::Result<WindowV2> {
     let bytes = std::fs::read(path)?;
-    let _ = WINDOW_SCHEMA_V1; // STUB(red): v1 is not refused yet
+    let schema = serde_json::from_slice::<serde_json::Value>(&bytes)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?
+        .get("schema_version")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    if schema.as_deref() == Some(WINDOW_SCHEMA_V1) {
+        return Err(invalid_window(&format!(
+            "v1 protocol-revision window at {}: archive (move) its directory, then restart; \
+             it is never converted",
+            path.display()
+        )));
+    }
     let window: WindowV2 = serde_json::from_slice(&bytes)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     validate_window_v2(&window)?;

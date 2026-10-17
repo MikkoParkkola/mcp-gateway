@@ -95,7 +95,9 @@ impl HttpSegmentSink {
     /// Rewrite this segment's cumulative counts. A no-op once closed. A
     /// failed write loses nothing: the next carries the same cumulative counts.
     pub(crate) fn checkpoint(&mut self, counts: &SegmentCounts, now: u64) -> io::Result<()> {
-        // STUB(red): ignores `closed`.
+        if self.closed {
+            return Ok(());
+        }
         self.write(counts, now, None)
     }
 
@@ -107,8 +109,12 @@ impl HttpSegmentSink {
         now: u64,
         sealed_at_ms: u64,
     ) -> io::Result<()> {
-        let _ = sealed_at_ms; // STUB(red): writes an unsealed checkpoint
-        self.write(counts, now, None)
+        if self.closed {
+            return Ok(());
+        }
+        self.write(counts, now, Some(sealed_at_ms))?;
+        self.closed = true;
+        Ok(())
     }
 
     fn write(&self, counts: &SegmentCounts, now: u64, sealed_at_ms: Option<u64>) -> io::Result<()> {
