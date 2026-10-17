@@ -51,6 +51,14 @@ pub mod memory_scanner;
 pub mod principal_window;
 pub mod redactor;
 mod response;
+mod verdict;
+#[cfg(kani)]
+use verdict::default_action_for_severity;
+#[cfg(test)]
+use verdict::rule_matches;
+use verdict::{
+    compile_rule, decide_firewall_action, first_matching_rule_action, strongest_finding_severity,
+};
 pub mod tenant_guard;
 /// Re-exported here, where the guard that attributes reads lives.
 pub(crate) use crate::security::tenant_reads;
@@ -635,88 +643,6 @@ pub const BLOCKED_RESPONSE_MESSAGE: &str =
     "Security firewall blocked this response: backend content failed a content scan";
 
 impl FirewallVerdict {
-    /// Construct an unconditional allow verdict (used when scanning is disabled).
-    fn allow() -> Self {
-        Self {
-            allowed: true,
-            action: FirewallAction::Allow,
-            findings: Vec::new(),
-            anomaly_score: None,
-        }
-    }
-
-    /// Returns `true` when the block was triggered solely by anomaly detection
-    /// (OWASP ASI10 — Rogue Agents), i.e. every blocking finding is a
-    /// `SequenceAnomaly` at `Severity::High`.
-    ///
-    /// Callers should use JSON-RPC error code `-32002` for anomaly blocks to
-    /// distinguish them from generic security blocks (`-32600`).
-    pub fn is_anomaly_block(&self) -> bool {
-        self.blocked_only_by(|_| false)
-    }
-
-    /// [`Self::is_anomaly_block`] widened to relay findings (OWASP ASI10,
-    /// COLLUDE.1): every finding is a high `SequenceAnomaly` or a
-    /// `CollusionRelay`. Crate-internal so the public meaning stays put.
-    pub(crate) fn is_asi10_block(&self) -> bool {
-        self.blocked_only_by(|f| f.scan_type == ScanType::CollusionRelay)
-    }
-
-    /// The code and message a blocked request answers on every route: an
-    /// ASI10 block (OWASP rogue agents) `-32002` "Anomaly detection blocked:
-    /// …", any other block `-32600` "Firewall blocked: …". `None` when the
-    /// verdict allows. One definition, so `/mcp`, `/mcp/{name}`, stdio and the
-    /// dispatch chokepoint cannot word one refusal differently
-    /// (route-check-parity P3). The HTTP status stays with each route.
-    pub(crate) fn request_refusal(&self) -> Option<(i32, String)> {
-        if self.allowed {
-            return None;
-        }
-        let desc = self
-            .findings
-            .first()
-            .map_or("Security firewall blocked this request", |f| {
-                f.description.as_str()
-            });
-        Some(if self.is_asi10_block() {
-            (-32002, format!("Anomaly detection blocked: {desc}"))
-        } else {
-            (-32600, format!("Firewall blocked: {desc}"))
-        })
-    }
-
-    /// Whether the finding a refusal words (the first) came from a content scan
-    /// of the arguments, not from a stateful control. A stateful control's
-    /// text carries counts and scores only; a content scan's names the
-    /// argument and the pattern it matched.
-    pub(crate) fn refusal_words_content(&self) -> bool {
-        self.findings.first().is_some_and(|finding| {
-            // Exhaustive on purpose: a new scan type must choose a side here.
-            match finding.scan_type {
-                ScanType::BudgetExceeded
-                | ScanType::CrossTenantReach
-                | ScanType::SequenceAnomaly
-                | ScanType::CollusionRelay => false,
-                ScanType::Credentials
-                | ScanType::Pii
-                | ScanType::PromptInjection
-                | ScanType::ShellInjection
-                | ScanType::PathTraversal
-                | ScanType::SqlInjection
-                | ScanType::MemoryPoisoning => true,
-            }
-        })
-    }
-
-    fn blocked_only_by(&self, also: impl Fn(&Finding) -> bool) -> bool {
-        !self.allowed
-            && !self.findings.is_empty()
-            && self.findings.iter().all(|f| {
-                (f.scan_type == ScanType::SequenceAnomaly && f.severity == Severity::High)
-                    || also(f)
-            })
-    }
-
     /// Returns `true` when a blocking verdict must stop the response payload
     /// from being served (MIK/GH517 RESPONSE.1).
     ///
@@ -736,66 +662,6 @@ impl FirewallVerdict {
                 .findings
                 .iter()
                 .any(|f| f.scan_type != ScanType::Credentials)
-    }
-}
-
-// ─── Rule helpers ─────────────────────────────────────────────────────────────
-
-fn compile_rule(rule: &FirewallRule) -> CompiledRule {
-    let pattern = glob::Pattern::new(&rule.tool_match)
-        .unwrap_or_else(|_| glob::Pattern::new("*").expect("fallback pattern compiles"));
-    CompiledRule {
-        pattern,
-        action: rule.action,
-        scans: rule.scan.clone(),
-        reason: rule.reason.clone(),
-    }
-}
-
-fn rule_matches(rule: &CompiledRule, tool: &str) -> bool {
-    rule.pattern.matches(tool)
-}
-
-fn first_matching_rule_action(rules: &[CompiledRule], tool: &str) -> Option<FirewallAction> {
-    rules
-        .iter()
-        .find(|rule| rule_matches(rule, tool))
-        .map(|rule| rule.action)
-}
-
-fn strongest_finding_severity(findings: &[Finding]) -> Option<Severity> {
-    findings
-        .iter()
-        .map(|finding| finding.severity)
-        .min_by_key(|severity| severity_rank(*severity))
-}
-
-const fn severity_rank(severity: Severity) -> u8 {
-    match severity {
-        Severity::High => 0,
-        Severity::Medium => 1,
-        Severity::Low => 2,
-    }
-}
-
-const fn default_action_for_severity(severity: Severity) -> FirewallAction {
-    match severity {
-        Severity::High => FirewallAction::Block,
-        Severity::Medium => FirewallAction::Warn,
-        Severity::Low => FirewallAction::Allow,
-    }
-}
-
-const fn decide_firewall_action(
-    matching_rule_action: Option<FirewallAction>,
-    highest_severity: Option<Severity>,
-) -> FirewallAction {
-    match highest_severity {
-        None => FirewallAction::Allow,
-        Some(severity) => match matching_rule_action {
-            Some(action) => action,
-            None => default_action_for_severity(severity),
-        },
     }
 }
 
