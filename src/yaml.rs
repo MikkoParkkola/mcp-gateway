@@ -16,7 +16,7 @@
     dead_code,
     unused_imports,
     reason = "MIK-8425: consumers are routed through this seam in MIG.1b to MIG.1f; \
-              until then parts of it have no caller"
+              until then parts of it have no caller. Delete this allow in MIG.1f."
 )]
 
 use figment::Provider as _;

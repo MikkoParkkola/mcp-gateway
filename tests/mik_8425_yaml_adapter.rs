@@ -10,6 +10,7 @@
 mod yaml;
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use figment::Provider as _;
 use figment::providers::{Format as _, Yaml};
@@ -65,6 +66,7 @@ fn figment_data_matches_the_yaml_provider() {
         "server: \"unterminated\n",
         "a: [1, 2\n",
         "- not\n- a map\n",
+        "default:\n  port: 39400\nglobal:\n  log: info\n",
         "",
     ];
     for text in cases {
@@ -161,6 +163,79 @@ fn adapter_reads_like_serde_yaml_on_the_behaviour_cases() {
     }
 }
 
+/// T3, limits: the nesting depth and alias-expansion refusal points recorded
+/// in MIG.0 (`behaviour.txt`) hold through the adapter.
+#[test]
+fn adapter_keeps_the_recorded_refusal_points() {
+    let nested = |depth: usize| format!("{}{}", "[".repeat(depth), "]".repeat(depth));
+    let fanout = |levels: usize| {
+        let mut doc = String::from("l0: &l0 [x, x, x, x, x, x, x, x, x, x]\n");
+        for level in 1..=levels {
+            let items = [format!("*l{}", level - 1).as_str(); 10].join(", ");
+            let _ = writeln!(doc, "l{level}: &l{level} [{items}]");
+        }
+        doc
+    };
+    for (doc, refused) in [
+        (nested(128), false),
+        (nested(129), true),
+        (fanout(3), false),
+        (fanout(4), true),
+    ] {
+        assert_eq!(yaml::from_str::<yaml::Value>(&doc).is_err(), refused);
+        assert_eq!(
+            tree_or_refusal(yaml::from_str::<yaml::Value>(&doc)),
+            tree_or_refusal(serde_yaml::from_str::<serde_yaml::Value>(&doc))
+        );
+    }
+}
+
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Shape {
+    Unit,
+    Newtype(String),
+    Pair { x: u8, y: u8 },
+}
+
+/// T3, enums and the write side: typed enums read, and `to_string`,
+/// `to_value` and `from_value` give exactly what `serde_yaml` gives.
+#[test]
+fn adapter_writes_and_converts_like_serde_yaml() {
+    for doc in [
+        "unit",
+        "!newtype hi",
+        "{newtype: hi}",
+        "!pair {x: 1, y: 2}",
+        "{pair: {x: 1, y: 2}}",
+    ] {
+        assert_eq!(
+            format!(
+                "{:?}",
+                yaml::from_str::<Shape>(doc).map_err(|e| e.to_string())
+            ),
+            format!(
+                "{:?}",
+                serde_yaml::from_str::<Shape>(doc).map_err(|e| e.to_string())
+            ),
+            "typed enum reading of {doc:?}"
+        );
+    }
+    let shapes = vec![
+        Shape::Unit,
+        Shape::Newtype("hi".into()),
+        Shape::Pair { x: 1, y: 2 },
+    ];
+    assert_eq!(
+        yaml::to_string(&shapes).expect("serialises"),
+        serde_yaml::to_string(&shapes).expect("serialises")
+    );
+    let value = yaml::to_value(&shapes).expect("to a tree");
+    assert_eq!(value, serde_yaml::to_value(&shapes).expect("to a tree"));
+    let back: Vec<Shape> = yaml::from_value(value).expect("from a tree");
+    assert_eq!(back, shapes);
+}
+
 /// `true` when `word` occurs in `text` as a whole identifier.
 fn has_ident(text: &str, word: &str) -> bool {
     let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
@@ -171,13 +246,15 @@ fn has_ident(text: &str, word: &str) -> bool {
     })
 }
 
-/// Whether a source file names a YAML parser directly: `serde_yaml`, or
-/// figment's YAML provider on a line that names `figment::providers`.
+/// Whether a source file names a YAML parser directly: `serde_yaml`, a
+/// `providers::Yaml` path, or `Yaml` inside a whole `use figment` declaration
+/// (read up to its `;`, so nested and multi-line imports count).
 fn names_a_parser(text: &str) -> bool {
-    has_ident(text, "serde_yaml")
-        || text
-            .lines()
-            .any(|line| line.contains("figment::providers") && has_ident(line, "Yaml"))
+    let figment_import = text.match_indices("use figment").any(|(at, _)| {
+        let end = text[at..].find(';').map_or(text.len(), |e| at + e);
+        has_ident(&text[at..end], "Yaml")
+    });
+    has_ident(text, "serde_yaml") || has_ident(text, "providers::Yaml") || figment_import
 }
 
 /// Every `.rs` file under `src/` and `tests/` of `root` that names a parser,
@@ -256,6 +333,14 @@ fn the_bypass_scan_flags_each_way_of_naming_a_parser() {
             "src/pathed.rs",
             "fn f() { figment::providers::Yaml::string(\"\"); }\n",
         ),
+        (
+            "src/nested.rs",
+            "use figment::{providers::Yaml, Provider};\n",
+        ),
+        (
+            "src/multiline.rs",
+            "use figment::{\n    providers::{Env, Format,\n        Yaml},\n    Figment,\n};\n",
+        ),
         ("tests/x_tests.rs", "use serde_yaml::Value;\n"),
         (
             "src/clean.rs",
@@ -276,6 +361,8 @@ fn the_bypass_scan_flags_each_way_of_naming_a_parser() {
         [
             "src/direct.rs",
             "src/imported.rs",
+            "src/multiline.rs",
+            "src/nested.rs",
             "src/pathed.rs",
             "tests/x_tests.rs"
         ]

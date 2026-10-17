@@ -87,7 +87,7 @@ and MIG.2 requires the list to hold only `src/yaml.rs` and
 Each test is written to fail before the implementation and to pass after
 it.
 
-- **T1** `documents_stops_at_the_first_refusal` (unit, `src/yaml_tests.rs`):
+- **T1** `documents_stops_at_the_first_refusal` (in `tests/mik_8425_yaml_adapter.rs`, through the helper):
   `"a: 1\n---\nb: [1, 2\n"` gives Ok, then Err, then the end. A stream of
   300 valid documents yields all 300. A stream with a malformed document
   after 260 valid ones yields 260 Ok values, then that Err, then the end.
@@ -126,7 +126,7 @@ directly until MIG.1f routes them through the helper.
 
 ## Files (8 paths, under the 15-file cap and the 800-line ceiling)
 
-`src/yaml.rs` (new), `src/yaml_tests.rs` (new), `src/lib.rs` (+1 line),
+`src/yaml.rs` (new), `tests/mik_8425_yaml_adapter.rs` (new), the allowlist fixture, `src/lib.rs` (+1 line),
 `src/main.rs` (+1 line), `tests/common/yaml.rs` (new),
 `scripts/release/check_identity_sources.py` and its test, and this plan.
 
@@ -152,6 +152,17 @@ findings were checked at source and folded:
 - `config_file.rs:80` gets `figment_data` and T2b;
 - T4 covers all four names, bare and prefixed;
 - the usage survey includes digits.
+
+Implementation note, 2026-10-18: T1 to T3 and T5 run in the integration
+test `tests/mik_8425_yaml_adapter.rs` instead of a unit file. The helper
+compiles the same `src/yaml.rs`, so the coverage is the same, and no
+`cfg(test)` code sits in a file that integration tests also compile. The
+code review (gpt, kimi) is folded there: whole `use figment` declarations
+are scanned, limits and enums are added to T3, writer parity is checked,
+T2b gets a profile-shaped document, and the allow is tied to MIG.1f.
+Kimi's HIGH ('from_str_loose does not compile') was refuted at source: in
+figment 0.10.19, Yaml::from_str returns serde_yaml::Error, and the adapter
+builds and passes on Spark.
 
 ## Note for MIG.2 (not built here)
 
