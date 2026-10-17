@@ -284,3 +284,125 @@ async fn a_withheld_surfaced_name_gives_the_nonce_back_only_with_its_witness() {
         assert!(!nonce_is_free(&meta), "the nonce was given back twice");
     }
 }
+
+/// A backend `alpha` whose `tools/list` offers `read` with a credential in
+/// its description, which the discovery firewall's Block rule refuses; it
+/// counts any `tools/call`.
+#[cfg(feature = "firewall")]
+struct CredentialListing(Arc<AtomicUsize>);
+
+#[cfg(feature = "firewall")]
+#[async_trait::async_trait]
+impl crate::transport::Transport for CredentialListing {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        if method != "tools/list" {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+        let token = concat!("ghp_", "abcdefghijklmnopqrstuvwxyz1234567890");
+        let tools = json!({"tools": [{
+            "name": "read",
+            "description": format!("token: {token} for auth"),
+            "inputSchema": {"type": "object"}
+        }]});
+        Ok(crate::protocol::JsonRpcResponse::success(
+            crate::protocol::RequestId::Number(1),
+            tools,
+        ))
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// NONCEFX.10, catalogue collection: signing on, Code Mode on, over a cold
+/// `alpha` ([`CredentialListing`]), with a firewall whose Block rule on
+/// `tools/list` refuses a discovery answer carrying a credential, after the
+/// answer has been collected.
+#[cfg(feature = "firewall")]
+fn collecting_then_refused() -> (MetaMcp, Arc<AtomicUsize>) {
+    use crate::security::firewall::{Firewall, FirewallAction, FirewallConfig, FirewallRule};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let backend = Arc::new(crate::backend::Backend::new(
+        "alpha",
+        crate::config::BackendConfig::r2_off(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    backend.set_transport_for_test(Arc::new(CredentialListing(Arc::clone(&calls))));
+    let _ = registry.register(backend);
+    let mut meta = MetaMcp::new(registry).with_code_mode(true);
+    let rule = FirewallRule {
+        tool_match: "tools/list".to_string(),
+        action: FirewallAction::Block,
+        reason: None,
+        scan: Vec::new(),
+    };
+    let config = FirewallConfig {
+        rules: vec![rule],
+        ..FirewallConfig::default()
+    };
+    let firewall = Firewall::from_config(config, None).with_continuations(meta.continuation());
+    meta.set_firewall(Some(Arc::new(firewall)));
+    meta.enable_message_signing(
+        crate::security::message_signing::MessageSigner::new(
+            b"signing-kinds-key-0123456789abcdef".to_vec(),
+            None,
+            "kinds-current".into(),
+        ),
+        Duration::from_secs(300),
+        false,
+    );
+    (meta, calls)
+}
+
+/// NONCEFX.10 KEEP, catalogue collection: each discovery call holds the
+/// witness admission keeps, fills alpha's cold catalogue on its own path (a
+/// `server:` query or a named server), and is then refused by the discovery
+/// firewall. An unscoped read and `gateway_search_tools` never fill a shared
+/// slot on the call's path: they fill behind the answer (`discovery_fetch.rs`,
+/// `backend_tools_for_discovery` with no empty-cache fetch). The nonce
+/// stays spent. Today no refusal that asks follows collection
+/// (`search::asking` wraps only the parse before it), so this row pins that a
+/// later refusal never gives back a nonce a fill spent. Green on base.
+/// Planted bug mCollect: the discovery refusal asks.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_refusal_after_catalogue_collection_keeps_the_nonce() {
+    let cases = [
+        ("gateway_search", json!({"query": "alpha:read"})),
+        ("gateway_list_tools", json!({"server": "alpha"})),
+    ];
+    for (name, arguments) in cases {
+        let (meta, calls) = collecting_then_refused();
+        let alpha = meta.backends.get("alpha").expect("alpha");
+        assert_eq!(alpha.list_fills(), 0, "premise: {name}: alpha is cold");
+        let wire = signed(&meta, (name, arguments), ctx(&AllowAll), Witness::Kept).await;
+        assert_eq!(
+            wire["error"]["code"], -32600,
+            "premise: {name}: the discovery firewall refused: {wire}"
+        );
+        // Only the collected listing carries the credential the Block rule
+        // refuses, so this refusal also proves collection ran on the call's path.
+        assert_eq!(
+            wire["error"]["message"], "Response blocked by security firewall",
+            "premise: {name}: the refusal is the discovery firewall's: {wire}"
+        );
+        assert!(alpha.list_fills() > 0, "premise: {name}: collection filled");
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "premise: {name}: unsent");
+        assert!(
+            !nonce_is_free(&meta),
+            "{name}: a refusal after a fill gave the nonce back"
+        );
+    }
+}
