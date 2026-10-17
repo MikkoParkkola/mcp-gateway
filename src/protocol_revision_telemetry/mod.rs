@@ -12,6 +12,7 @@ mod durable;
 #[cfg(test)]
 pub(crate) use durable::write_seam;
 mod observe;
+mod slices;
 pub(crate) mod window;
 #[cfg(test)]
 mod window_decide;
@@ -195,10 +196,7 @@ pub struct Registry {
     /// The same observations, split by transport. The merged fields above are
     /// the public view; a retirement decision reads one transport only, so a
     /// stdio request can never stand in for HTTP traffic (U1 v2 window).
-    per_transport: BTreeMap<&'static str, Snapshot>,
-    /// Requests with no revision, by bounded caller key (named client, else
-    /// User-Agent family). Diagnoses the unattributed share; gates nothing.
-    missing_revision_agents: BTreeMap<&'static str, BTreeMap<String, u64>>,
+    per_transport: slices::TransportSlices,
 }
 
 /// Snapshot for `/metrics` tests and the Linear table.
@@ -284,25 +282,10 @@ impl Registry {
             }
             None => self.unattributed += 1,
         }
-        let slice = self.per_transport.entry(transport.as_str()).or_default();
-        slice.total += 1;
-        *slice.by_client.entry(client.to_string()).or_insert(0) += 1;
-        *slice
-            .by_transport
-            .entry(transport.as_str().to_string())
-            .or_insert(0) += 1;
-        if let Some(rev) = revision {
-            *slice.by_revision.entry(rev.to_string()).or_insert(0) += 1;
-        } else {
-            slice.unattributed += 1;
-            let key = agents::missing_revision_agent(client, user_agent);
-            *self
-                .missing_revision_agents
-                .entry(transport.as_str())
-                .or_default()
-                .entry(key.to_string())
-                .or_insert(0) += 1;
-        }
+        // Allocation-free: the stdio refusal paths are held to a budget.
+        self.per_transport.count(transport, revision, client, || {
+            agents::missing_revision_agent(client, user_agent)
+        });
     }
 
     fn bind_session(&mut self, session_id: &str, attribution: SessionAttribution) {
@@ -376,18 +359,14 @@ impl Registry {
 
     /// This process's observations on one transport only.
     pub(crate) fn transport_snapshot(&self, transport: Transport) -> Snapshot {
-        self.per_transport
-            .get(transport.as_str())
-            .cloned()
-            .unwrap_or_default()
+        self.per_transport.snapshot(transport)
     }
 
-    /// Requests on `transport` with no revision, by bounded caller key.
+    /// Requests on `transport` with no revision, by bounded caller key
+    /// (named client, else User-Agent family). Diagnoses the unattributed
+    /// share; gates nothing.
     pub(crate) fn missing_revision_agents(&self, transport: Transport) -> BTreeMap<String, u64> {
-        self.missing_revision_agents
-            .get(transport.as_str())
-            .cloned()
-            .unwrap_or_default()
+        self.per_transport.agents(transport)
     }
 
     fn shadow_snapshot(&self) -> BTreeMap<String, u64> {

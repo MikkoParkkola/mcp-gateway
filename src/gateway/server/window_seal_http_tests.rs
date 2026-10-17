@@ -220,7 +220,7 @@ async fn across_shutdown(mode: ProtocolRevisionWindow) -> Answers {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn with_record_a_request_counted_after_the_seal_is_refused_on_both_routes() {
-    let answers = across_shutdown(ProtocolRevisionWindow::Record).await;
+    let answers = Box::pin(across_shutdown(ProtocolRevisionWindow::Record)).await;
     let (status, meta) = &answers.meta_before;
     assert_eq!(*status, 503, "{meta}");
     assert!(meta.contains("\"id\":41"), "{meta}");
@@ -233,7 +233,7 @@ async fn with_record_a_request_counted_after_the_seal_is_refused_on_both_routes(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn with_off_every_request_is_served_across_the_shutdown() {
-    let answers = across_shutdown(ProtocolRevisionWindow::Off).await;
+    let answers = Box::pin(across_shutdown(ProtocolRevisionWindow::Off)).await;
     assert_served(&answers.meta_before, 41);
     assert_served(&answers.backend_before, 42);
     assert_served(&answers.backend_after, 43);
