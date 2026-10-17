@@ -167,13 +167,13 @@ def main() -> int:
     for must in ("test", "windows-check", "macos-check"):
         if must in SKIPPED:
             errors.append(f"test job {must} is in the skipped set")
-    # A red Linux suite must not start a Windows run: Windows slots are the
-    # scarce part of the account's concurrent-job pool.
-    for outcome in ("failure", "cancelled", "skipped"):
-        for name, base in cases.items():
-            c = dict(base, needs=dict(base["needs"], test={"result": outcome, "outputs": {}}))
-            if runs(jobs["windows-check"], c):
-                errors.append(f"{name}: windows-check runs after a {outcome} Tests job")
+    # The Windows check runs alongside the Tests job, not after it, so the
+    # required path is the longer job and not their sum. It must stay
+    # independent of `test` (a `needs: test` would serialise them again).
+    needs_of_windows = jobs["windows-check"].get("needs") or []
+    needs_of_windows = [needs_of_windows] if isinstance(needs_of_windows, str) else needs_of_windows
+    if "test" in needs_of_windows:
+        errors.append("windows-check needs the Tests job: it must start in parallel with it")
     for name, c in cases.items():
         ran = {k for k, j in jobs.items() if k not in NOT_ON_PRS and runs(j, c)}
         want = (SKIPPED | KEPT) - (SKIPPED if name == "docs-only PR" else set())

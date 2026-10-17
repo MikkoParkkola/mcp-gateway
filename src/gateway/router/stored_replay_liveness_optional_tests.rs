@@ -19,23 +19,6 @@ fn call(key: &str, task: bool) -> Value {
     params
 }
 
-/// The refusal an unminted proof answers with, at the lift and at site 5.
-const UNPROVEN: &str = "Configuration error: identity propagation minted no credential \
-                        for backend 'tx'; a stored result is not served without one";
-
-fn assert_unproven(row: &str, answer: &Value) {
-    assert_eq!(
-        answer.pointer("/error/code").and_then(Value::as_i64),
-        Some(-32603),
-        "{row}: not the unproven refusal: {answer}"
-    );
-    assert_eq!(
-        answer.pointer("/error/message").and_then(Value::as_str),
-        Some(UNPROVEN),
-        "{row}: not the unproven refusal: {answer}"
-    );
-}
-
 /// The optional-propagation router with the idempotency cache armed, as
 /// production arms it (`server/build_meta.rs`).
 async fn optional_gateway(
