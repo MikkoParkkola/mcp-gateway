@@ -160,18 +160,31 @@ fn keyed(mut params: Value, key: &str) -> Value {
 /// Run `params` (a keyed `name` call) twice on `router`. The first run must
 /// reach the capture peer once and succeed; the replay must equal it apart
 /// from `id`, with nothing sent again.
-async fn assert_replay_served(row: &str, router: &axum::Router, account: &CapabilityAccount, name: &str, params: Value) {
+async fn assert_replay_served(
+    row: &str,
+    router: &axum::Router,
+    account: &CapabilityAccount,
+    name: &str,
+    params: Value,
+) {
     let first = send(router, "tools/call", name, params.clone()).await;
     assert!(
         first.get("error").is_none() && first.pointer("/result/isError") != Some(&json!(true)),
         "premise: the call succeeded: {first}"
     );
-    assert_eq!(account.peer_requests(), 1, "premise: the run reached the peer once");
+    assert_eq!(
+        account.peer_requests(),
+        1,
+        "premise: the run reached the peer once"
+    );
     let again = send(router, "tools/call", name, params).await;
     let mut masked = (again.clone(), first);
     masked.0["id"] = Value::Null;
     masked.1["id"] = Value::Null;
-    assert_eq!(masked.0, masked.1, "{row}: the replay differs from the run: {again}");
+    assert_eq!(
+        masked.0, masked.1,
+        "{row}: the replay differs from the run: {again}"
+    );
     assert_eq!(account.peer_requests(), 1, "{row}: the replay was sent");
 }
 
@@ -187,7 +200,14 @@ async fn p8s_a_shared_account_plan_replay_is_served() {
     let (router, _keep) = shared_router(&account, true).await;
     let params = json!({"name": "gateway_execute",
         "arguments": {"tool": format!("{CAPABILITY_SERVER}:{CAPABILITY_TOOL}"), "arguments": {}}});
-    assert_replay_served("P8s", &router, &account, "gateway_execute", keyed(params, "p8s")).await;
+    assert_replay_served(
+        "P8s",
+        &router,
+        &account,
+        "gateway_execute",
+        keyed(params, "p8s"),
+    )
+    .await;
 }
 
 /// P8s-single (MIK-8451.PLAN.2): the single-call twin, with the idempotency
@@ -200,5 +220,12 @@ async fn p8s_single_a_shared_account_replay_is_served_without_the_cache() {
     let (router, _keep) = shared_router(&account, false).await;
     let params = json!({"name": "gateway_invoke",
         "arguments": {"server": CAPABILITY_SERVER, "tool": CAPABILITY_TOOL, "arguments": {}}});
-    assert_replay_served("P8s-single", &router, &account, "gateway_invoke", keyed(params, "p8s-single")).await;
+    assert_replay_served(
+        "P8s-single",
+        &router,
+        &account,
+        "gateway_invoke",
+        keyed(params, "p8s-single"),
+    )
+    .await;
 }
