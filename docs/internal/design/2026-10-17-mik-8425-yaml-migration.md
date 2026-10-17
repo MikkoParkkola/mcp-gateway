@@ -30,16 +30,32 @@ output is in the evidence file.
 
 What follows from the table:
 
-- figment's YAML provider deserializes into a map, and that is why
-  `Config::load` keeps the last value. To preserve it, the adapter's map
-  path uses `DuplicateKeyPolicy::LastWins` and its typed path keeps the
-  error.
+- Duplicate keys depend on the destination, not on a typed-versus-map
+  split. serde_yaml refuses them in a struct (serde's `duplicate field`)
+  and in `serde_yaml::Value` (`strict_keys.rs:345-347`). It keeps the last
+  value in any map, including figment's `Dict` and nested `HashMap` and
+  `BTreeMap` fields inside typed structs. That is why `Config::load`, the
+  `Dict` fallback in `strict_keys.rs:351` and `retired_config_keys.rs:64`
+  (`loose`) keep the last value. serde-saphyr's policy is one setting per
+  parse, and neither setting reproduces all four destinations: `Error`
+  tightens nested maps, while `LastWins` may relax structs. MIG.0 records
+  all four (struct, nested map in a struct, tree, `Dict`). **MIG.2 is
+  blocked until each one either matches or its difference is put to the
+  operator as a named decision.** The `Dict` call sites go through an
+  explicit `from_str_loose` (`LastWins`).
 - The serializer must keep writing the tag form, so grants and config
   written by the new code stay readable by the old code. Use serde_yaml's
   form as the reference and emit tags. The option to check is
   serde-saphyr's `Tagged`/serializer options; if no option gives the tag
   form, keep a tag-form writer for enums inside the adapter. MIG.2 does not
   ship until the write-new/read-old test passes.
+- Grants acceptance must not widen. serde-saphyr also *reads* the YAML map
+  form `agent: {exact: ...}`, which serde_yaml refuses. YAML grants accept
+  only the tag form; JSON keeps the map form. The 3.x bare
+  `!exact runner` rows (`grants-3.4.0.yaml`) are refused today, because
+  `GrantAgent::Exact` holds a `GrantAgentKey` (`identity_grants.rs:85-90`),
+  so they stay refusal fixtures. Successful reads and rollback use
+  qualified `!exact {source, id}` rows.
 - Set merge keys to `AsOrdinary`, so `<<` reaches strict keys and is
   refused as it is today. Set `strict_booleans: true`.
 - **Error snippets leak values.** The CWE-532 rule in `load_error.rs` makes
@@ -54,23 +70,29 @@ enum-as-tag. The plan: `GrantAgent` (`identity_grants.rs:85`) gets
 `serialize_with` emitting `Tagged("!exact", id)`. MIG.3 then proves that
 serde_yaml reads the output. If that fails, the grants writer stays on the
 tag form through the adapter's own emitter for that one enum. MIG.2 is
-blocked until one of the two passes. Every other serialized type is checked
-in MIG.5 for enums written by serde_yaml as tags (`rg 'Serialize' + enum` on
-the 8 serializer files).
+blocked until one of the two passes. MIG.1a runs a static audit before the
+swap's shape is fixed: every type serialized through the adapter that
+serde_yaml writes with a tag (enums: `rg` for `Serialize` plus `enum` in the
+8 serializer files and in the types they emit). Each type found gets the
+same `Tagged` treatment and a golden file in MIG.0. The same MIG.1a
+inventory of the `Value` and `Mapping` API in use (indexing, `get`,
+`as_*`, tag access, `Number`) fixes the contract of the MIG.2 owned tree.
 
 ## Stages
 
 ### Gating criteria (MIG.2 cannot merge until both pass on its exact head)
 
 - **G1, grants rollback.** Every type the gateway serializes and reads back
-  (identity grants first) is written by the new backend and read by
-  serde_yaml 0.9.34. The read value must be semantically equal, and the
-  `!exact` tag form must be kept byte for byte against the MIG.0 golden
-  files. A map-form `agent: {exact: ...}` in any written file fails G1.
+  (identity grants first) is written by the new backend byte-equal to the
+  MIG.0 golden files, which serde_yaml 0.9.34 was proven in MIG.0 to read
+  back to the same value. The throwaway harness re-reads the MIG.2 head's
+  actual output with serde_yaml 0.9.34 for semantic equality, and the
+  output is attached to the PR. A map-form `agent: {exact: ...}` in any
+  written file fails G1.
 - **G2, CWE-532 sentinel.** A sentinel value goes into a type error, a
   syntax error, a duplicate key, an unknown variant, an alias error and a
   budget refusal. It must be absent from the rendered error of every public
-  adapter function (`from_str`, `from_str_map`, tree parse) and of the
+  adapter function (`from_str`, `from_str_loose`, tree parse) and of the
   figment provider path (`ConfigFile::data`, the full `Config::load`
   extract, and `doctor/hidden_keys`/`backend_url_keys`). Both `Display` and
   `Debug` are checked. Setting `with_snippet: false` is necessary but not
@@ -80,11 +102,18 @@ Each stage is its own PR off the release line, reviewed by two non-author
 seats, with a one-pass pre-push and exact-head CI. Each is revertable as one
 commit.
 
-- **MIG.1a: add the adapter.** A new crate-private module `src/yaml.rs` with
-  `from_str`, `from_str_map` (last value wins), `to_string`, and a tree type,
-  `yaml::Value`. The tree is a re-export of `serde_yaml::Value` in MIG.1, and
-  an owned tree with tags and non-string keys in MIG.2. The only shared edit
-  is one `mod yaml;` line in `src/lib.rs`. No behaviour changes.
+- **MIG.1a: add the adapter.** A new crate-private module `src/yaml.rs`.
+  Its surface matches what the consumers use today (`rg -o
+  'serde_yaml::[a-zA-Z_]+'`): `from_str` (237 uses), `Value` (62),
+  `to_string` (39), `to_value` (10), `Mapping` (5), `from_value` (3),
+  `Error` (2) and a document stream for the one `Deserializer` use. It also
+  adds `from_str_loose` for the `Dict` call sites. `Value` and `Mapping` are
+  re-exports of serde_yaml's types in MIG.1, and become an owned tree with
+  tags and non-string keys in MIG.2. The module is mounted in **both** crate
+  roots, `src/lib.rs` and `src/main.rs`. The binary compiles
+  `mod commands;` and `mod runtime;` itself (`main.rs:18`, `:46`), so
+  `crate::yaml` must resolve there too. Those are the only shared edits. No
+  behaviour changes.
 - **MIG.1b–e: route consumers through the adapter**, one group per PR, in
   the order of the overlap map below. Purely mechanical:
   `serde_yaml::` becomes `crate::yaml::`. The existing tests are the oracle.
@@ -93,31 +122,53 @@ commit.
   write-new/read-old test passing.
   Only `src/yaml.rs`, `Cargo.toml` and `Cargo.lock` change: add `serde-saphyr = "=2.0.0"`, drop `serde_yaml`, and
   drop `yaml` from figment's features. The figment provider becomes
-  `yaml::from_str_map` into `figment::value::Dict` inside `ConfigFile::data`
+  `yaml::from_str_loose` into `figment::value::Dict` inside `ConfigFile::data`
   and the other two figment call sites. Before this, MIG.1e routes those
   call sites through the adapter. Options: merge keys `AsOrdinary`,
-  `strict_booleans`, map path `LastWins`, typed path `Error`, and snippets
-  off (`with_snippet: false`). Record `spark-cargo tree -i unsafe-libyaml`:
-  "did not match any packages".
-- **MIG.3: comparison tests**, landed in MIG.1a as a dev-only module and run
-  against both backends in MIG.2. Fixtures:
+  `strict_booleans`, map path `LastWins`, typed path `Error` (subject to the
+  duplicate-key block above), and snippets off. Snippets are off with
+  `with_snippet: false`; `crop_radius: 0` also disables snippet wrapping
+  (docs.rs 2.0.0). Both are set, and G2 proves the result. The same PR adds
+  serde-saphyr and granit-parser to `docs/legal/dependency-licenses.tsv`.
+  Both are MIT OR Apache-2.0 per their published Cargo.toml; GitHub's
+  `NOASSERTION` for granit-parser comes from its license detector. That
+  licence check therefore happens while rollback is trivial. Record
+  `spark-cargo tree -i unsafe-libyaml`: "did not match any packages".
+- **MIG.3: comparison tests.** They compare against the golden files that
+  MIG.0 recorded with serde_yaml. Where MIG.0 needs to read data back, it
+  proves that serde_yaml reads its own goldens. After MIG.2, new output must
+  equal those goldens byte for byte, so serde_yaml's readability carries
+  over without serde_yaml staying in the graph. **No legacy parser remains
+  in the product dependency graph, including dev-dependencies**, because OSV
+  scans `Cargo.lock`. Any live old-against-new check on the MIG.2 head runs
+  in a throwaway Spark harness outside the repository, like the probe, with
+  its output attached to the PR. Fixtures:
   - every `capabilities/*.yaml` (143) gives an identical parsed definition,
     compared as JSON, and an identical pin hash;
   - `gateway.example.yaml`, `deploy/single-node` and Helm values configs,
     and the config test fixtures, load to an identical `Config` (compared
     through `Debug`/JSON);
-  - `tests/fixtures/identity_grants_3x/grants-3.4.0.yaml`, plus
-    `!exact {source, id}`: the same value is read; written by the new code
-    and read by serde_yaml with semantic equality;
+  - grants: `grants-3.4.0.yaml` (bare rows) and a YAML map-form
+    `agent: {exact: {source, id}}` stay **refused**. Qualified
+    `!exact {source, id}` rows read to the same value, and the new code's
+    output is byte-equal to the tag-form golden;
   - `merge_key_refused_at_root` and `merge_key_refused_under_a_backend`
     still refuse;
-  - `value_the_loader_accepts_loads` (last value wins) and a direct typed
-    parse of a duplicate (refused);
+  - `value_the_loader_accepts_loads` (last value wins), plus duplicate keys
+    in each of the four destinations: struct, nested map inside a struct,
+    tree, and `Dict`. Include a backend-key typo after a repeated key
+    (`unrecognised_key_after_a_loader_accepted_value_refused`);
+  - write-new/read-old for tree values: tags, non-string keys and
+    non-finite numbers, round-tripped against the goldens;
   - the splice tag/alias tests (`config_persistence_splice_tests.rs:118-135`)
     and `count_yaml_aliases`;
   - scalars `yes`, `no`, `on`, `off`, `0755`, `0o755`, `.inf`, `~`, `null`
     and an empty value, read into String, bool and the tree type;
   - multi-document input gives the same outcome;
+  - write-side quoting: strings that look like other scalars (`"yes"`,
+    `"no"`, `"on"`, `"off"`, `"0755"`, `"null"`, `"~"`, `".inf"`) go through
+    every writer, are byte-compared to the goldens, and read back as
+    strings;
   - an alias input within the budget loads, and an alias bomb is refused.
 - **MIG.4: redaction security gate.** Every case in
   `src/config/tests/load_error.rs`, plus a new type-error case carrying a
@@ -130,9 +181,8 @@ commit.
   `docs/UPGRADING-4.0.md`.
 - **MIG.6: remove the exception.** After MIG.2 merges, remove the
   RUSTSEC-2024-0449 entry with a real OSV scan (rc 0 without the entry) and
-  exact-head Docker and release security checks, then update
-  `docs/legal/dependency-licenses.tsv` (add serde-saphyr and granit-parser,
-  remove serde_yaml and unsafe-libyaml).
+  exact-head Docker and release security checks. Remove the serde_yaml and
+  unsafe-libyaml rows from `docs/legal/dependency-licenses.tsv`.
 
 ## PR sequence (at most 15 files each; fixtures first)
 
@@ -143,13 +193,13 @@ not against expectations written by hand.
 | PR | Stage | Files | Content | Wait |
 |---|---|---|---|---|
 | 1 | MIG.0 | ~6 new test files and golden files | Golden capture with serde_yaml: JSON of all 143 parsed capability definitions plus pins; `Config` of each config fixture; byte output of the config writers (splice, URL, upgrade, `cap`, `config_write`) and of the grants writer; a behaviour table (duplicates map/struct, merge, scalars, multi-document, alias budget, both `!exact` forms); G2 harness over the figment path, plus a recorded baseline of the direct-path errors | none |
-| 2 | MIG.1a | 2 (`src/yaml.rs`, one line in `src/lib.rs`) | Adapter over serde_yaml, with the comparison harness reading the MIG.0 golden files | PR 1 |
+| 2 | MIG.1a | 3 (`src/yaml.rs`, plus one `mod yaml;` line each in `src/lib.rs` and `src/main.rs`) | Adapter over serde_yaml, with the comparison harness reading the MIG.0 golden files | PR 1 |
 | 3 | MIG.1b | 15 | Typed-only readers (list under "Order", item 2) | PR 2 |
 | 4 | MIG.1c | 13 | Serializers and tree walkers with no holder (item 3) | PR 2 |
 | 5 | MIG.1d-i | 10 | The remaining files with no holder (item 4) | PR 2 |
 | 6 | MIG.1d-ii | 1–4, one PR per released split | Held files (item 4) | each MIK-8102 split |
 | 7 | MIG.1e | 4 plus test-only files, split to stay at 15 or fewer | Figment provider path (item 5) | U1 merged |
-| 8 | MIG.2 | 3 (`src/yaml.rs`, `Cargo.toml`, `Cargo.lock`) plus any updated golden assertions | Backend swap; G1, G2 and MIG.3 to MIG.5 green on the exact head | PRs 3–7 |
+| 8 | MIG.2 | 4 (`src/yaml.rs`, `Cargo.toml`, `Cargo.lock`, `dependency-licenses.tsv`) plus any updated golden assertions | Backend swap; G1, G2 and MIG.3 to MIG.5 green on the exact head | PRs 3–7 |
 | 9 | MIG.6 | 2 (`.github/osv-scanner.toml`, `docs/legal/dependency-licenses.tsv`) | Exception removal after a real scan | PR 8 |
 
 PRs 3, 4 and 5 touch disjoint files and can run in parallel lanes. Before
@@ -178,7 +228,7 @@ with holds and planned work:
 
 | Holder | Files held / planned | Our files affected | Rule |
 |---|---|---|---|
-| U1 window (u1-window-2469, `feat/mik-7211-u1-window-v2`, PR #2469) | `src/config/mod.rs`, `config/secret_file_population_tests.rs`, router, `meta_mcp/mod.rs` | none directly; `config/config_file.rs`, `config/load_error.rs` and `config/strict_keys.rs` are siblings in `config/` | never edit `config/mod.rs`; MIG.1e and MIG.2's figment change wait for U1 to merge |
+| U1 window (u1-window-2469, `feat/mik-7211-u1-window-v2`; historical PR #2469) | `src/config/mod.rs`, `config/secret_file_population_tests.rs`, router, `meta_mcp/mod.rs` | none directly; `config/config_file.rs`, `config/load_error.rs` and `config/strict_keys.rs` are siblings in `config/` | never edit `config/mod.rs`; MIG.1e and MIG.2's figment change wait for U1 to merge |
 | MIK-8102 splits (events P3 now; firewall, strict_keys, idempotency next) | `events/`, `config/features/events.rs`, `security/firewall/`, `config/strict_keys.rs` (780/800 lines) | `events/upstream.rs`, `config/features/events.rs`, `security/firewall/anomaly_config.rs`, `config/strict_keys.rs` | each waits for its split to merge; strict_keys moves only after its split, and it is at the ceiling |
 | MIK-8353 3d-2, MIK-8387 PR-B, MIK-8451 | `gateway/router/**`, `gateway/meta_mcp/**` | none of the 46 production files (only test fixtures under router/meta_mcp use serde_yaml) | no wait; leave those test files to the last MIG.1 group |
 | File ceiling 800 (`scripts/dev/check-file-size.py`) | `commands/cap.rs` 777, `gateway/ui/capabilities.rs` 739 | — | a mechanical rename keeps the line count; no added lines in those files |
@@ -215,17 +265,28 @@ Group sizes: 15 + 13 + 10 + 4 + 4 = 46.
 6. **MIG.2**, then MIG.4 and MIG.5 green on the swap PR, then **MIG.6**.
 
 Before each MIG.1 PR, re-run the overlap check. If a holder appears,
-the group moves later; files are never shared.
+the group moves later; files are never shared. Before MIG.2 and MIG.6,
+also re-run it for `Cargo.toml`, `Cargo.lock` and `.github/osv-scanner.toml`
+across every open PR and lane branch. Any lane changing manifests
+(MIK-8387 PR-B was reported to; its pushed branch
+`test/mik-8387-oracle-red` shows no manifest diff on 2026-10-17)
+coordinates the merge order with this lane.
+
+The U1 hold is released by the merge of the v2 branch the lead named,
+`feat/mik-7211-u1-window-v2`. It is not released by historical PR #2469
+(`fix/mik-7211-u1-window`, last pushed 2026-09-30). The v2 branch was not
+yet on the remote on 2026-10-17.
 
 ## Rollback
 
 - MIG.1: revert any one group; the adapter still uses serde_yaml.
 - MIG.2: revert the single commit (`src/yaml.rs` backend, `Cargo.toml`,
-  `Cargo.lock`). That is safe only because MIG.3 proves that files written
-  by the new code are read by serde_yaml.
-- If MIG.6 has already merged, the revert also restores the
-  RUSTSEC-2024-0449 entry with a newly ratified future date, and needs a
-  passing OSV scan on the rollback commit.
+  `Cargo.lock`). That is safe only because G1 proves that files written by
+  the new code are read by serde_yaml.
+- Whenever a revert puts unsafe-libyaml back and the RUSTSEC-2024-0449
+  entry is absent or expired, whether or not MIG.6 has merged (the current
+  entry expires 2026-10-26), the revert needs a newly ratified exception
+  date and a passing OSV scan on the rollback commit before it merges.
 
 ## Fallback trigger
 
@@ -233,3 +294,26 @@ If MIG.3, MIG.4 or MIG.5 cannot pass before the freeze, stop at MIG.1. That
 is no behaviour change and still has value. Take the dated extension
 (`.github/osv-scanner.toml:40`, 2027-01-26 ceiling) to the operator as a new
 reviewed decision.
+
+## Review record
+
+- Round 1, 2026-10-17. The gpt seat reviewed 464294ad1 and returned
+  SHIP-WITH-FIXES. The kimi seat's first run on 464294ad1 produced no
+  verdict (exit 65) and was excluded. Its re-run on 85d8e474e returned
+  SHIP-WITH-FIXES.
+- The gate-NOW findings were checked at source and folded:
+  - duplicate keys follow the destination (`strict_keys.rs:345-353`,
+    `retired_config_keys.rs:60-66`);
+  - the adapter is mounted in both crate roots, and its API surface comes
+    from usage counts (`main.rs:18`, `:46`);
+  - grants refusal fixtures (`identity_grants.rs:85-90`);
+  - no legacy parser stays in the graph, so live cross-reads happen
+    outside the repository;
+  - manifests are added to the overlap check;
+  - rollback restores an expired exception.
+- The MIK-8387 manifest change was not confirmed: its pushed branch has
+  no `Cargo.toml` or `Cargo.lock` diff. The general check was adopted
+  anyway.
+- Also folded: the enum and API audit moves to MIG.1a, write-side quoting
+  fixtures, the licence check moves to MIG.2, both snippet settings are
+  named, and the U1 v2 landing condition is stated.
