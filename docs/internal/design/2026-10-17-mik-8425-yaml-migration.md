@@ -111,14 +111,18 @@ inventory of the `Value` and `Mapping` API in use (indexing, `get`,
   types of every type passed to the adapter's `from_str`. MIG.0 records,
   for each one, the tag form (accepted) and the map form (refused by
   serde_yaml). On the MIG.2 head each map-form fixture must still be
-  refused. How is not decided yet, and it is a MIG.1a spike on Spark: a
-  serde-saphyr option, or a check in the adapter's tree pre-pass. If neither
-  reaches parity, the fallback applies.
+  refused. How is not decided yet. It is a Spark spike (a serde-saphyr
+  option, or a check in the adapter's tree pre-pass), run alongside MIG.0
+  so that the fallback decision comes a stage earlier. The arbiter is the
+  spike's output against the MIG.0 goldens, reviewed by both seats. If
+  neither approach reaches parity, the fallback applies.
 - **Resource limits.** MIG.2 sets serde-saphyr's `Budget` and alias limits
-  explicitly, naming each field and value in `src/yaml.rs`. None may be
-  looser than serde_yaml's behaviour measured in MIG.0: the depth at which
-  nesting is refused, and the alias-expansion size at which a bomb is
-  refused. The alias fixtures test at and just past each limit.
+  explicitly, naming each field and value in `src/yaml.rs`. Each value sits
+  at or beyond serde_yaml's refusal point measured in MIG.0, for nesting
+  depth and alias-expansion size. A tighter value refuses documents that
+  load today, which is a behaviour change: it is recorded in MIG.3 and in
+  `docs/UPGRADING-4.0.md`, and goes through the fallback rule. The alias
+  fixtures test at and just past each limit.
 - **G1 harness provenance.** The throwaway harness's source, exact
   `spark-cargo` command, `Cargo.lock` and output SHA-256 are attached to the
   MIG.2 PR, not the output alone.
@@ -129,7 +133,11 @@ inventory of the `Value` and `Mapping` API in use (indexing, `get`,
 
 Each stage is its own PR off the release line, reviewed by two non-author
 seats, with a one-pass pre-push and exact-head CI. Each is revertable as one
-commit.
+commit. The MIG.3 to MIG.5 tests land in MIG.0 (goldens) and MIG.1a
+(harness), and run against the new backend inside the MIG.2 PR; they are
+not separate PRs after the swap. The MIG.1a inventories (enums and the
+tree API) are committed as checklists, and each item names its parity
+fixture.
 
 - **MIG.1a: add the adapter.** A new crate-private module `src/yaml.rs`.
   Its surface matches what the consumers use today (`rg -o
@@ -154,8 +162,10 @@ commit.
   MIG.1a adds `tests/common/yaml.rs`, a test helper that wraps serde_yaml
   for now. MIG.1f routes the 45 files through it in PRs of at most 15
   files. MIG.2 then swaps the helper's backend to `serde_saphyr` (a normal
-  dependency, so visible to tests) with the adapter's options, and MIG.3
-  checks that the helper's options equal the adapter's.
+  dependency, so visible to tests) with the adapter's options. Equality is
+  by construction: both the adapter and the helper assert their options
+  against one shared fixture file (`tests/fixtures/mik_8425_yaml/options.txt`),
+  so neither has to inspect the other.
 - **MIG.1b–e: route consumers through the adapter**, one group per PR, in
   the order of the overlap map below. Purely mechanical:
   `serde_yaml::` becomes `crate::yaml::`. The existing tests are the oracle.
@@ -245,7 +255,7 @@ not against expectations written by hand.
 | 6 | MIG.1d-ii | 1–4, one PR per released split | Held files (item 4) | each MIK-8102 split |
 | 7 | MIG.1e | 4 plus test-only files, split to stay at 15 or fewer | Figment provider path (item 5) | U1 merged |
 | 7f | MIG.1f | 45 integration-test files in 3 PRs of 15 | Route `tests/*.rs` through `tests/common/yaml.rs` | PR 2 |
-| 8 | MIG.2 | 5 (`src/yaml.rs`, `tests/common/yaml.rs`, `Cargo.toml`, `Cargo.lock`, `dependency-licenses.tsv`) plus any updated golden assertions | Backend swap; G1, G2 and MIG.3 to MIG.5 green on the exact head | PRs 3–7f |
+| 8 | MIG.2 | 5 (`src/yaml.rs`, `tests/common/yaml.rs`, `Cargo.toml`, `Cargo.lock`, `dependency-licenses.tsv`) plus any updated golden assertions | Backend swap; G1, G2, G3, duplicate-key parity and MIG.3 to MIG.5 green on the exact head | PRs 3–7f |
 | 9 | MIG.6 | 2 (`.github/osv-scanner.toml`, `docs/legal/dependency-licenses.tsv`) | Exception removal after a real scan | PR 8 |
 
 PRs 3, 4 and 5 touch disjoint files and can run in parallel lanes. Before
@@ -378,3 +388,14 @@ reviewed decision.
   - G3 adds read-side enum parity (map form refused);
   - budgets are named, harness provenance is attached, and dependency
     provenance is re-checked.
+- Round 3 (final full round), 2026-10-17, on 9322eaa8a. The gpt seat
+  returned SHIP and the kimi seat SHIP-WITH-FIXES. Neither found a HIGH,
+  so the design is closed. Folded:
+  - the PR 8 gate cell now names G3 and duplicate-key parity;
+  - a budget tighter than serde_yaml's is a recorded behaviour change;
+  - helper and adapter options are compared through a shared fixture;
+  - the MIG.3 to MIG.5 tests run inside the MIG.2 PR;
+  - the inventories become checklists;
+  - the G3 and parity spike runs alongside MIG.0.
+  Not folded: automating the overlap re-check as a script, recorded as a
+  LATER improvement.
