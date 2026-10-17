@@ -47,7 +47,7 @@ ignores `task`. The gateway refuses to create a task when:
 | Condition | Answer |
 |---|---|
 | The tasks extension is not declared | An error whose `data.requiredCapabilities` names the extension |
-| The caller has no execution principal: no credential, no verified identity, no agent token and no proven client-certificate subject, for example an anonymous caller on a public `/mcp` | `-32003` "A verified execution principal is required", before any other check |
+| Auth is on and the caller has no execution principal: no credential, no verified identity, no agent token and no proven client-certificate subject, for example an anonymous caller on a public `/mcp`. With auth off, an anonymous caller still creates tasks under the shared anonymous owner | `-32003` "A verified execution principal is required", before any other check |
 | Auth is on and the caller has a client-certificate subject but no credential | `-32602` "no such task", the same answer as for a task that does not exist |
 | No idempotency key | `-32602` "task creation requires an idempotency key" |
 | The call needs a confirmation and the client did not declare `elicitation` | `-32021` |

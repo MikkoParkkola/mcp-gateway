@@ -713,7 +713,8 @@ type Presented<'r> = (
 );
 
 /// MIK-8382 UNIFY.1a′: whether the `/mcp` intake refuses this request, a
-/// keyed `tools/call` with an id from a caller with no execution principal.
+/// keyed `tools/call` with an id from a caller with no execution principal,
+/// except a task submit on a gateway with authentication off.
 /// The routed owner and caller key are the ones admission reads
 /// (`route_owners`, `identity::caller_key`), through the shared function.
 fn intake_judgement(
@@ -722,6 +723,14 @@ fn intake_judgement(
     (verified_identity, oauth_agent_identity, cert_identity): Proven<'_>,
     (grant_subject, client): Presented<'_>,
 ) -> Option<crate::Error> {
+    // Lead ruling 2026-10-17 (B): a gateway with authentication off keeps
+    // pooled anonymous task ownership (MIK-7272.TASK.1.20, design 2026-09-08),
+    // so a task submit there is left to the task path, which admits it under
+    // the pooled owner. A submit the task path declines runs as a sync call,
+    // whose admission still refuses it -32003.
+    if !state.auth_config.enabled && request.pointer("/params/task").is_some() {
+        return None;
+    }
     let (_, _, owner) = tasks::route_owners(
         state,
         verified_identity,

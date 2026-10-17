@@ -283,8 +283,18 @@ pub(crate) async fn keyed_no_principal_on(
                 json!({"server": "alpha", "tool": "t", "arguments": {"customer_id": "c"}});
             (fx, "/mcp", body, malformed("gateway_invoke"))
         }
+        // Auth on, `/mcp` public: a gateway with authentication off keeps
+        // pooled anonymous task ownership (ruling 2026-10-17, B), so the
+        // intake applies to a task submit only where auth draws a boundary.
         Route::TaskSubmit => {
-            let fx = fixture(idempotent()).await;
+            let fx = fixture(Setup {
+                auth: Some(AuthConfig {
+                    public_paths: vec!["/mcp".to_string()],
+                    ..key_for_alpha(None)
+                }),
+                ..idempotent()
+            })
+            .await;
             let mut body = keyed_body(Some(modern));
             body["params"]["name"] = json!("gateway_invoke");
             body["params"]["arguments"] =
