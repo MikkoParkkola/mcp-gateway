@@ -335,13 +335,13 @@ impl MetaMcp {
     pub(super) async fn dispatch_resolution(
         &self,
         (server, tool): (&str, &str),
-        (caller_proof, verified_identity): (
+        (caller_proof, verified_identity, caller_key): (
             CallerProof<'_>,
             Option<&crate::key_server::oidc::VerifiedIdentity>,
+            Option<&str>,
         ),
         surface: crate::gateway::recovery::MetaSurface,
         witness: &mut super::nonce_settle::Witnessed<'_, '_>,
-        caller_key: Option<&str>,
     ) -> crate::Result<
         std::ops::ControlFlow<
             super::GuardedValue,
