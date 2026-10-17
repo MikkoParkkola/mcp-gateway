@@ -1,6 +1,6 @@
 # MIK-8387 PR-B: a compiler-enforced boundary between a caller and the backend registry
 
-Status: design **v4**, the last revision before code. The boundary is enforced by a clippy lint banning every `BackendRegistry` method (§2). Rounds 1 to 3 are answered in §9 to §11. Base: release line `19ca01f07` (PR #3907, which carries PR-A). Ticket: MIK-8387, criterion ORACLE.5. Gap ticket: MIK-8447. 
+Status: design **v5**, the last revision before code. The boundary is enforced by a clippy lint banning every production `BackendRegistry` method, in production code only (§2, §2.8). Rounds 1 to 3 are answered in §9 to §11; v5's trade against v4 is §12. Base: release line `19ca01f07` (PR #3907, which carries PR-A). Ticket: MIK-8387, criterion ORACLE.5. Gap ticket: MIK-8447. 
 
 ## 1. Problem
 
@@ -16,7 +16,7 @@ Two facts show the risk is real:
 
 ### 2.0 Enforcement is a clippy lint (since v3)
 
-The repo already bans calls this way for the wall clock (MIK-8202) and the home directory (MIK-8001). `clippy.toml` lists `disallowed-methods`, and CI runs `clippy --all-targets -D warnings` on both feature sets. v3 showed the lint resolves every access shape (§2.2). v4 makes the list complete and pins it.
+The repo already bans calls this way for the wall clock (MIK-8202) and the home directory (MIK-8001). `clippy.toml` lists `disallowed-methods`, and CI runs `clippy --all-targets -D warnings` on both feature sets. v3 showed the lint resolves every access shape (§2.2). v4 made the list complete and pinned it. **v5 moves the MIK-8387 entries out of the repo `clippy.toml` into a dedicated config, enforced by a second clippy pass over non-test targets only (§2.8).**
 
 ### 2.1 The ban, complete by construction (v4)
 
@@ -24,15 +24,17 @@ The repo already bans calls this way for the wall clock (MIK-8202) and the home 
 
 `subscribe_started`, `reload_read_slot`, `lock_reload`, `register`, `observe_breakers`, `enforce_destinations`, `set_change_feed`, `catalogue_hook`, `nudge_catalogue`, `nudge_catalogue_scanned`, `resolve_unwarmed`, `with_membership`, `get`, `all`, `statuses`, `remove`, `is_stopping`, `stop_all`.
 
-v3 banned five reads. GPT r3 showed that `remove` leaks membership through its `bool`, and so does `register`. v4 therefore bans **all 18**: every method except `new` and `Default::default`. That way none has to be judged "harmless", and each call site states its class at a leaf allow.
+**v5:** `is_stopping` is `#[cfg(test)]` (`:554`), so it does not exist in a non-test build. The v5 probe confirmed it: clippy warned that the entry "does not refer to a reachable function". The production surface is **17 methods**, and the v5 config lists exactly those.
 
-T1(e) pins this surface: the method list, the trait-impl list (`Default` only) and the derive list (none). A new method, derive or trait impl on `BackendRegistry` is a red test and a reviewed diff (Kimi r3).
+v3 banned five reads. GPT r3 showed that `remove` leaks membership through its `bool`, and so does `register`. v4 therefore banned **all 18**; v5 bans the 17 that exist in production, every method except `new`, `Default::default` and the test-only `is_stopping`. That way none has to be judged "harmless", and each call site states its class at a leaf allow.
 
-The `clippy.toml` block gets 18 entries, each with the reason "go through `Registry` or a leaf allow naming its class (MIK-8387)". **T1(f) pins the block itself, entry for entry** (Kimi r3 HIGH): it is the whole enforcement, so weakening it is a red test, not a green build.
+T1(e) pins this surface: the method list (with each method's `cfg(test)` flag, so `is_stopping` turning production is red), the trait-impl list (`Default` only) and the derive list (none). A new method, derive or trait impl on `BackendRegistry` is a red test and a reviewed diff (Kimi r3).
+
+**v5:** the block lives in `scripts/lint/registry-ban/clippy.toml` (§2.8), not the repo `clippy.toml`. It has 17 entries, plus the 2 propagation APIs (§2.6), each with the reason "go through `Registry` or a leaf allow naming its class (MIK-8387)". **T1(f) pins the block itself, entry for entry** (Kimi r3 HIGH): it is the whole enforcement, so weakening it is a red test, not a green build.
 
 ### 2.2 Evidence (Spark, 2026-10-17)
 
-**A. Standalone crate** (§2.2 of v3). Every access shape was flagged: field chain, chain through a call, alias, function-item binding, fully qualified call, inferred binding, and test code. A module allow silenced only its own module. v4 commits that crate as a **negative compilation fixture**, `scripts/lint-fixtures/registry-ban/` (GPT r3). Each violating line carries a `//~ disallowed` marker. A small script runs `cargo clippy` there and asserts that the set of flagged lines equals the marked set. CI runs it with the other script checks, so a toolchain change that stops resolving a path, an alias or a function-item binding turns it red.
+**A. Standalone crate** (§2.2 of v3). Every access shape was flagged: field chain, chain through a call, alias, function-item binding, fully qualified call, inferred binding, and test code. A module allow silenced only its own module. v4 committed that crate as a negative fixture. **v5 replaces it with the repo's own pattern:** `scripts/dev/check_registry_lint.sh --self-test`, a sibling of `check_clock_lint.sh` (MIK-8202 AC.9). It checks HEAD into a scratch worktree and plants, in a new production module of the real crate: one violation per config entry (so an entry that stops resolving is caught, which clippy itself only warns about), an alias, a function-item binding, a fully qualified call, a statement with a leaf allow (must not fire), and a `#[cfg(test)]` module with a raw read (must not fire in this pass). It runs the §2.8 pass with `--message-format=json` and checks every plant at its own line, and no other site (the clean control). It also fails on any "does not refer to a reachable function" warning. This is stronger than a standalone crate: it resolves the real paths in the real crate (GPT r3).
 
 **B. The real crate at `19ca01f07`, all 18 methods banned** (probe 2), with `spark-cargo clippy --all-targets --all-features -D warnings`. No unresolved-path warning.
 - **Production (lib target): 126 sites in 59 files.**
@@ -111,10 +113,72 @@ impl ScopedBackends<'_> {
 
 ### 2.7 Test code
 
+**v5 supersedes this section: the second pass compiles no test code, so the test-module allows below are not needed (§2.8, §12).** v4's text follows for the record.
+
 The test target holds 508 of the 634 sites. Clippy has no per-entry test exemption for `disallowed-methods`. The repo's existing practice for MIK-8202 is a module-level `#![cfg_attr(test, allow(clippy::disallowed_methods, reason = ".."))]` in each test module that reads the clock (AC.14).
 - **v4 follows it:** each test module that builds or reads a registry takes the same one-line inner allow, with reason `Lifecycle: test fixture builds and reads the registry (MIK-8387)`. That is about 221 test files, the 280 with violations less the 59 production files. The roughly 90 test files already allowed for the clock reported none and need nothing.
 - **Test code is outside ORACLE.5.** It is not a caller path, so T1 pins production allows only.
 - **The rejected alternative:** one crate-root `#![cfg_attr(test, allow(clippy::disallowed_methods))]` would be a single line. But it would also lift MIK-8202's per-module test discipline for the clock, which is that ticket owner's call, not this one's.
+
+### 2.8 v5: production-only enforcement
+
+**The mechanism.** The 19 MIK-8387 entries (17 methods, 2 propagation APIs) sit in `scripts/lint/registry-ban/clippy.toml`, between `# MIK-8387 begin` and `# MIK-8387 end`. The repo `clippy.toml` is unchanged. A second clippy pass reads that file instead of the repo one, over the non-test targets only:
+
+```
+CLIPPY_CONF_DIR="$REPO_ROOT/scripts/lint/registry-ban" cargo clippy --lib --bins --all-features -- -D warnings
+CLIPPY_CONF_DIR="$REPO_ROOT/scripts/lint/registry-ban" cargo clippy --lib --bins --no-default-features -- -D warnings
+```
+
+A `#[cfg(test)]` module is not compiled in a `--lib --bins` build, so the pass never sees test code, and v4's test-module allows (§2.7) go away. The normal pass (`--all-targets`, repo `clippy.toml`) is unchanged and keeps the clock and home bans. The dedicated file carries only `disallowed-methods`, and the repo `clippy.toml` sets no other key, so every other lint behaves the same in both passes.
+
+**Evidence (Spark, 2026-10-17, the real crate at `19ca01f07`, in a scratch worktree since removed).** Two plants: a production `SystemTime::now()`, and a `#[cfg(test)]` module calling `BackendRegistry::all`.
+
+| Run | Config | Result |
+|---|---|---|
+| A: normal pass, `--lib --bins --all-features` | repo `clippy.toml` | 1 disallowed: the clock plant. No registry site |
+| B2: second pass, `--all-features` | dedicated | **127 = the 126 registry sites in 59 files, identical per method to probe 2, plus 1 `resolve_propagation_credential` at `propagation.rs:26`.** No clock error. The cfg(test) plant did not fire (`all` stays at 31) |
+| C2: second pass, `--no-default-features` | dedicated | 114 sites in 53 files (feature-gated code drops out) |
+| A2: normal pass again, after B2 | repo `clippy.toml` | 1 disallowed: the clock plant. The configs do not leak into each other, and cargo re-checks when `CLIPPY_CONF_DIR` changes, so a shared target dir replays nothing stale |
+
+Two probe findings the design now carries:
+- **`CLIPPY_CONF_DIR` must be a real environment variable.** Setting it through `cargo --config 'env.CLIPPY_CONF_DIR=..'` was silently ignored: run B linted with the repo `clippy.toml`. The scripts export it.
+- **`spark-cargo` does not forward the environment.** The probe used a scratch copy that sets `CLIPPY_CONF_DIR` remotely, re-rooted at the mirror. For `CARGO=spark-cargo scripts/dev/pre-push.sh`, `spark-cargo` (`~/.claude/bin`, outside this repo) needs the same one-line change: when `CLIPPY_CONF_DIR` names a path under the local repo root, export it remotely under `$m/src`. That is operator tooling, so it is the lead's or the operator's call. Without it, the pre-push step under `spark-cargo` lints with the repo config and passes vacuously. The self-test below catches that, because its plants would not fire.
+
+**Pre-push** (`scripts/dev/pre-push.sh`, after line 89, in this PR):
+
+```diff
+   step "cargo clippy --all-targets --no-default-features -D warnings"
+   run_cargo "clippy no-default-features" clippy --all-targets --no-default-features --quiet -- -D warnings
+ 
++  # MIK-8387: production code reaches the backend registry only through
++  # Registry or a classed leaf allow. Non-test targets only, its own config.
++  step "registry ban (production targets, both feature sets)"
++  export CLIPPY_CONF_DIR="$REPO_ROOT/scripts/lint/registry-ban"
++  run_cargo "registry ban all-features" clippy --lib --bins --all-features --quiet -- -D warnings
++  run_cargo "registry ban no-default-features" clippy --lib --bins --no-default-features --quiet -- -D warnings
++  unset CLIPPY_CONF_DIR
++
+   step "cargo test --lib"
+```
+
+**CI** (`.github/workflows/ci.yml`, job `check` "Clippy (pedantic)", after the clock self-test at line 460; the lead applies it):
+
+```diff
+       - name: The clock lint still bites (MIK-8202)
+         run: scripts/dev/check_clock_lint.sh --self-test
++      # MIK-8387: the registry ban, production targets only, from its own
++      # config. The self-test proves each entry still resolves and bites.
++      - name: Registry ban (MIK-8387)
++        env:
++          CLIPPY_CONF_DIR: ${{ github.workspace }}/scripts/lint/registry-ban
++        run: |
++          cargo clippy --lib --bins --all-features -- -D warnings
++          cargo clippy --lib --bins --no-default-features -- -D warnings
++      - name: The registry lint still bites (MIK-8387)
++        run: scripts/dev/check_registry_lint.sh --self-test
+```
+
+`feature-combos.yml` (post-merge) and the Windows job are unchanged; §12 says what that costs.
 
 ## 3. Call sites that change, counted
 
@@ -229,11 +293,11 @@ So:
 
 ### 4.1 Rows, with their colour on the tip
 
-L (the lint) is red on the tip with 126 production violations (634 across all targets); it turns green with the type flip. T1 and T4 name types and operations that do not exist on the tip, so on the tip they do not compile. They land in the same commit as the types, and the commit before it is their red evidence. T2 lands with the choke point (§6 commit 4); the commit before it, with the six router reads inline, is its red evidence. FW1, C2 and R3 pin behaviour PR-A shipped, so they are expected green; they are guards and mutant killers, and if one is red, that is a new defect. S7a is the one behavioural red row.
+L (the lint) is red on the tip with 127 production violations (§2.8); it turns green with the type flip. T1 and T4 name types and operations that do not exist on the tip, so on the tip they do not compile. They land in the same commit as the types, and the commit before it is their red evidence. T2 lands with the choke point (§6 commit 4); the commit before it, with the six router reads inline, is its red evidence. FW1, C2 and R3 pin behaviour PR-A shipped, so they are expected green; they are guards and mutant killers, and if one is red, that is a new defect. S7a is the one behavioural red row.
 
 | Row | What it asserts | Tip | Kills |
 |---|---|---|---|
-| **L** the lint | `clippy.toml` bans all 18 `BackendRegistry` methods (all but `new` and `Default`) and the two grantless propagation APIs (§2.1, §2.6). CI runs `clippy --all-targets -D warnings` with both feature sets, plus the negative-fixture script (§2.2 A) | 126 production violations are the red evidence (§2.2 B); green from the type-flip commit | M19: a raw read added anywhere in production. M19c: a helper that returns the raw registry and is then read. M19f: a new production reference to `resolve_propagation_credential`, a function-item binding included |
+| **L** the lint | `scripts/lint/registry-ban/clippy.toml` bans the 17 production `BackendRegistry` methods (all but `new`, `Default` and the test-only `is_stopping`) and the two grantless propagation APIs (§2.1, §2.6). Pre-push and CI run the second pass on `--lib --bins` with both feature sets, plus `check_registry_lint.sh --self-test` (§2.2 A, §2.8) | 127 production violations (126 registry, 1 propagation) are the red evidence (§2.8); green from the type-flip commit | M19: a raw read added anywhere in production. M19c: a helper that returns the raw registry and is then read. M19f: a new production reference to `resolve_propagation_credential`, a function-item binding included |
 | **T1** pins (§4.2) | (a) The class-taking operation call sites, by (file, enclosing fn, operation, class), equal `scoped_backends_classes.tsv`. The receiver follows from the operation name: `scoped_get` is the scoped view, `*_for` is `Registry`. (b) Every production `disallowed_methods` allow, crate-wide, by (file, fn, reason class), with its complete raw-call content. (d) `Registry::new` call sites. (e) `BackendRegistry`'s method set, trait impls and derives. (f) The `clippy.toml` `disallowed-methods` block, entry for entry | no compile (the types are absent) | M19b: one class swapped, total unchanged. M19d: a new allow, or a second raw call inside one. M19g: a `clippy.toml` entry deleted or its path changed. M19h: a new `pub fn` on `BackendRegistry` |
 | **T2** router choke point | (a) The router holds no `disallowed_methods` allow at all once commit 5 lands: the choke point reads through `Registry` (via T1(b)). (b) Order, structurally: `route` takes `&Envelope`, and `Envelope { .. }` literals in production occur only in `read_envelope`. (c) Every production reference to `backend_for` / `backends_for`, function-item references included, by (file, enclosing fn), equals the pinned list. `read_envelope` is not in it | green after the choke-point commit | M20: a `backend_for` call added in `read_envelope` before S4 (c). M20b: `route` called before `read_envelope` (b). M20c: a helper called from `read_envelope` that calls `backend_for` (c: new key) |
 | **T4** view table | Registry `{alpha, beta}` plus capability `cap`. Grants `Scoped([alpha, ghost])`, `Scoped([alpha, cap])`, `Empty`, `Unscoped` (from `*` and from no client). Names alpha, beta, ghost, nosuch, cap. Each cell pins `scoped_get(name).is_some()`, `absence(name)`, and `absent_step(name, "t")` with and without a recorded `Withheld(Absent)`. The capability cells are built through `Registry::scoped(.., Some("cap"))` and through `MetaMcp::scoped`, which must agree. **Router cell (v4):** `backend_for(state, grant, name)` equals `scoped_get` for every grant and name | no compile | M31 (registration before scope), M32 (`Empty` as `Scoped([])`), M33 (`scoped_get` ignores the grant), M34 (`MetaMcp::scoped` passes `None` for the capability: `cap` turns `Unregistered`), M35 (`backend_for` passes `None` for the capability) |
@@ -254,7 +318,7 @@ The lint carries the ban. The pins only record what it cannot: claimed classes, 
 - **T1(d) and T2(c).** Paths and method calls resolving by name to `Registry::new`, `backend_for` and `backends_for` in production items: calls and non-call path references alike, keyed by enclosing fn.
 - **T1(e).** In `backend/registry.rs`: the names of the inherent `pub` and `pub(crate)` fns of `impl BackendRegistry`, the trait names of `impl _ for BackendRegistry`, and the derive list. Each set must equal its pin.
 - **T1(c)** is gone: the lint now carries the propagation ban (§2.6), and T1(b) pins its one allow.
-- **T1(f).** The `toml` crate is not in `Cargo.lock`, so no parser. `clippy.toml` already groups its entries under a ticket comment; the MIK-8387 entries sit between `# MIK-8387 begin` and `# MIK-8387 end` lines, and T1(f) compares that span byte for byte with the pin. Deleting or editing an entry is red. Moving one outside the span means deleting it inside, so that is red too. The MIK-8202 and MIK-8001 entries are left to their owners.
+- **T1(f).** The `toml` crate is not in `Cargo.lock`, so no parser. `clippy.toml` already groups its entries under a ticket comment; the MIK-8387 entries sit between `# MIK-8387 begin` and `# MIK-8387 end` lines in `scripts/lint/registry-ban/clippy.toml` (v5), and T1(f) compares that span byte for byte with the pin. T1(f) also pins that the file holds nothing outside the span, and that both workflow steps and the pre-push step name that directory, so pointing `CLIPPY_CONF_DIR` elsewhere is red. Deleting or editing an entry is red. Moving one outside the span means deleting it inside, so that is red too. The MIK-8202 and MIK-8001 entries are left to their owners.
 
 `syn` sees names, not resolved types. That is enough here: every pinned name is unique to its item in the crate (`scoped_get`, the `*_for` operations, `backend_for`), and T1 fails if a second definition of any of them appears.
 
@@ -284,7 +348,7 @@ FW1 asserts both equality and the pinned verdict. The pin kills M10; equality ki
 2. **Grant threading, no type change.** `fill_account_outcomes`, `live_refusal`, `mints_per_caller`, `target_account` and their callers take the caller's `ScopedBackends` from the request entry points (§7.2). They still read through the old field. This compiles alone, and the PR-A rows stay green.
 3. **Escape closures.** `events_backend_registry` is deleted and wired from the startup `Arc`; `unfilled_outcome_read`'s argument becomes `cfg(test)`. Compiles alone.
 4. **Router choke point** (`backend_choke.rs`) and its six reads, with T2. Until commit 5 the choke point reads `AppState.backends` directly, so it compiles alone; commit 5 switches it to `state.meta_mcp.registry()`.
-5. **The type flip, atomic.** `MetaMcp.backends: Registry` and `MetaMcp::registry()`, the 66 meta-layer conversions, the choke point's switch, the 20 `clippy.toml` entries, the leaf allows of §2.4 and §2.6, the test-module allows of §2.7, the class-table file, T1 and the negative fixture (§2.2 A). None of these compiles without the others, so they are one commit. It is large, about 250 files counting the test-module allows, but mechanical, and the compiler and the lint list every site in it.
+5. **The type flip, atomic.** `MetaMcp.backends: Registry` and `MetaMcp::registry()`, the 66 meta-layer conversions, the choke point's switch, the dedicated config (19 entries), the pre-push step, the leaf allows of §2.4 and §2.6, the class-table file, T1 and the registry-lint self-test (§2.2 A, §2.8). The CI steps follow in the lead's workflow commit. None of these compiles without the others, so they are one commit. It is about 70 files, mechanical, and the compiler and the lint list every site in it.
 6. The S7a fix (§6, above), after its red row.
 
 **Size** (from §3; the ± is a guess, not a measurement):
@@ -295,16 +359,16 @@ FW1 asserts both equality and the pinned verdict. The pin kills M10; equality ki
 | Class table file | 1 new | +80 |
 | 73 production reads, 2 escape closures | 27 + `events_wiring.rs`, `run.rs` | ~75 changed, +45 net |
 | 7 cfg(test) reads + 47 test reads → `for_test()` | ~30 | ~54 changed |
-| `clippy.toml` (20 entries); 55 leaf allows (§2.4, §2.6) | ~30 | +130 |
-| Test-module allows (§2.7) | ~190 | +190 |
-| Negative fixture crate and its script (§2.2 A) | 3 new | +120 |
+| Dedicated config (19 entries), pre-push step; 55 leaf allows (§2.4, §2.6) | ~32 | +140 |
+| Test reads of `MetaMcp.backends` → `for_test()` (type change, not lint) | ~30 | ~54 changed |
+| `check_registry_lint.sh --self-test` (§2.2 A) | 1 new | +150 |
 | Router choke point (`backend_choke.rs`) and its 6 callers | 6 | +50 |
 | T1 (a, b, d, e, f) and T2 (a, b, c) | 2 new | +300 |
 | T4 | 1 new | +130 |
 | FW1, C2, R3, S7a rows and fixture | 4–5 new, 1–2 fixture edits | +550 |
 | S7a fix | `task_replay.rs` | +10 |
 | Docs, inventory rows | 3–4 | +40 |
-| **Total** | **~320 files** | **~+1,770 / −140** |
+| **Total (v5)** | **~105 files** | **~+1,600 / −140** |
 
 ## 7. Risks, visibility, and the reads with no grant in hand
 
@@ -323,8 +387,8 @@ FW1 asserts both equality and the pinned verdict. The pin kills M10; equality ki
 | `MetaMcp::events_backend_registry` | `pub(crate)` → **removed** | A narrowing |
 | `events_wiring::install` | `pub(super)`, unchanged | Gains a `&Arc<BackendRegistry>` parameter |
 | `target_account`, `fill_account_outcomes`, `live_refusal`, `mints_per_caller` | unchanged | Each gains a `&ScopedBackends` parameter (§7.2) |
-| `clippy.toml` | config | 20 `disallowed-methods` entries: 18 `BackendRegistry` methods, 2 propagation APIs |
-| `scripts/lint-fixtures/registry-ban/` | test fixture, not in the workspace | New (§2.2 A) |
+| `scripts/lint/registry-ban/clippy.toml` | config, new | 19 `disallowed-methods` entries: 17 `BackendRegistry` methods, 2 propagation APIs. Repo `clippy.toml` unchanged |
+| `scripts/dev/check_registry_lint.sh`, `scripts/dev/pre-push.sh` | scripts | New self-test; one new pre-push step (§2.8) |
 
 - `BackendRegistry` and its `pub` methods are unchanged.
 - `AppState.backends` (`pub`) and `ReloadContext.registry` (`pub` field) are unchanged; they are API surface.
@@ -370,8 +434,8 @@ v2 assumed every caller "holds a scope". GPT r2 found that several helpers get o
 2. **The commits of §6, 1 to 6,** each on the fast gate (fmt, clippy with `--all-features` and with `--no-default-features`, the touched modules).
    - T4 comes with commit 1, and M31 to M34 run there, not at the end (Kimi r2).
    - T2 comes with commit 4, with M20, M20b and M20c.
-   - L, T1, the negative fixture and T4's router cell come with commit 5. M19, M19b, M19c, M19d, M19f, M19g, M19h and M35 run there.
-   - The negative fixture's script runs in CI from commit 5; it is red if any marked line goes unflagged or an unmarked line is flagged.
+   - L, T1, the registry-lint self-test and T4's router cell come with commit 5. M19, M19b, M19c, M19d, M19f, M19g, M19h and M35 run there.
+   - The self-test runs in pre-push from commit 5, and in CI once the lead's workflow commit lands (§2.8). It is red if a plant goes unflagged, an allowed or cfg(test) plant is flagged, or an entry does not resolve.
 3. **The S7a fix,** which turns S7a green.
 4. **MIK-8447's gaps leave the pinned gap set** (`backend_oracle/gaps.rs`) as each gets its row, and the pin moves in the same commit.
 5. **Mutants run in a scratch worktree** (anchor asserted once; VOID on a compile failure or an empty filter). The full suite runs in CI.
@@ -420,7 +484,7 @@ Both seats found the lint approach sound. v4 makes it complete by construction a
 |---|---|
 | HIGH: a helper called before S4 can read through the router choke point (GPT) | T2(c) pins every production reference to `backend_for` and `backends_for`, function items included, by (file, fn). A new helper is a new key (§2.5, M20c) |
 | HIGH: an allow on a fn or module admits later raw reads inside it (GPT; Kimi LOW) | Allows sit on one statement or expression (§2.4). T1(b) pins each allow's complete raw-call content, crate-wide, and pins the pre-existing clock and home allows at 0 registry calls. Inherited test-module allows are accepted and bounded to test code (§2.7) |
-| HIGH: `remove` leaks membership through its `bool` (GPT) | All 18 methods but `new` and `Default` are banned (§2.1); lifecycle calls take a `Lifecycle` leaf allow |
+| HIGH: `remove` leaks membership through its `bool` (GPT) | All methods but `new` and `Default` are banned; v5: the 17 that exist in production (§2.1); lifecycle calls take a `Lifecycle` leaf allow |
 | HIGH: the ban holds only for five inherent methods; traits, derives and new methods are unpinned (Kimi) | `BackendRegistry` has no derives and only `Default`. T1(e) pins the method, trait-impl and derive sets (§2.1, M19h) |
 | HIGH: nothing pins the `clippy.toml` entries (Kimi) | T1(f) pins the marked MIK-8387 span byte for byte (§4.2, M19g) |
 | HIGH: function-item references to the propagation APIs escape T1(c) (GPT) | Both APIs are in `clippy.toml`, which flags function items (§2.2 A, §2.6). T1(c) is retired |
@@ -428,6 +492,25 @@ Both seats found the lint approach sound. v4 makes it complete by construction a
 | MEDIUM: T1's receiver grammar misses bound views (GPT, Kimi) | The scoped read is `scoped_get`; the receiver follows from the operation name. The receiver-type column is dropped (§2.3, §3.2, §4.2) |
 | MEDIUM: `backend_for` has no capability input (Kimi) | Router grants can name the capability provider, so `backend_for` takes the provider name from `get_capabilities()`; T4's router cell pins it equal to `scoped_get` (§2.5, M35) |
 | MEDIUM: §3.1 excludes tests by filename (Kimi) | §3.1 is only the class-table key; every pin uses cfg ancestry (§3.1, §4.2) |
-| Improvement: commit the lint experiments as fixtures (GPT) | `scripts/lint-fixtures/registry-ban/` with `//~ disallowed` markers, run in CI (§2.2 A) |
+| Improvement: commit the lint experiments as fixtures (GPT) | v4: `scripts/lint-fixtures/registry-ban/` with `//~ disallowed` markers. v5: replaced by `check_registry_lint.sh --self-test`, plants in the real crate (§2.2 A) |
 | Improvement: allow reasons use the `Unscoped` names (Kimi) | Each reason starts with one of the five variant names; T1(b) checks the word (§2.4) |
 | Improvement: the router reads a stored `Registry`, not a per-call wrapper (Kimi) | It reads `state.meta_mcp.registry()`, the `Registry` stored in `MetaMcp` inside `AppState`, over the same `Arc` as `AppState.backends` (§2.5) |
+
+## 12. v5 against v4: what production-only enforcement gives up
+
+**Verdict: take v5.** It enforces the same boundary on the same 127 production sites (§2.8) and drops about 190 one-line test-module allows, the largest conflict surface for the open lanes. What it gives up:
+
+| Lost | Why it is acceptable |
+|---|---|
+| Test code reads the raw registry with no class and no allow | ORACLE.5 is a property of production caller paths. A test is not a caller: it builds the registry it reads, and nothing it does ships. v4 would have made test reads carry an allow too, but a blanket `Lifecycle: test fixture` reason on about 190 modules classes nothing; it is noise, not review. |
+| Production code that exists only on Windows (`cfg(windows)`) is not linted by the second pass, which runs on Linux | v4 caught it, because the Windows job runs clippy with the repo config. A name search found no registry call in the Windows-only blocks of the files that mention the registry; the implementer confirms it with the Windows clippy log of commit 5. Adding the pass to the Windows job is one more clippy run on a scarce runner pool, so v5 leaves it out. T1(b) and T2(c) are `syn` scans that ignore `cfg`, so a classed allow or a router reference added on Windows is still pinned; only an unannotated raw call there escapes. |
+| `feature-combos.yml` combinations are not run through the second pass | The two passes cover `--all-features` and `--no-default-features`, which bracket the combinations, the same as the repo's pre-push gate. |
+| One extra lib check per feature set, in pre-push and CI | Cargo re-checks the lib when `CLIPPY_CONF_DIR` changes (§2.8 A2), so the second pass is a full `mcp-gateway` lib and bin check each time, dependencies cached. Not yet measured. |
+| `spark-cargo` must forward `CLIPPY_CONF_DIR` | Operator tooling, outside this repo (§2.8). Until it does, the pre-push step under `spark-cargo` is vacuous, and the self-test turns that into a red step instead of a silent pass. |
+
+**Can a test-only read mask a production bug?** Not through the boundary. The lint and T1 inspect production code only, so a raw read in a test cannot make a raw production read pass. Neither can a test-only helper: a `#[cfg(test)]` helper does not exist in the build the second pass checks, so a production caller cannot call it at all. The one shape to watch is a helper gated on a feature or `debug_assertions` rather than `test`: such a helper is compiled in the second pass, so its raw read is flagged like any production read. There are four `cfg(any(test, ..))` items today (`auth_dashboard.rs:264,283`, `control_plane/store.rs:41`, `task_service/execution/operations.rs:72`), and the probe already linted them under `--all-features`.
+
+What a test can still do is assert against the raw registry where the caller would see the scoped view, and so pass while production misbehaves. That is a test-quality risk, not a boundary one, and it was the same under v4: an allow does not make a test assert the right thing. The rows that guard the boundary (T4, FW1, C2, R3, S7a) assert through the scoped view or through the router, not through raw reads.
+
+**Size:** v4 was about 320 files and +1,770 lines. v5 is about 105 files and +1,600 lines (§6). The atomic type-flip commit drops from about 250 files to about 70.
+
