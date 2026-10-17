@@ -299,7 +299,7 @@ impl MetaMcp {
             {
                 GateOutcome::Refuse(response) => return *response,
                 GateOutcome::RefuseUnasked(response) => {
-                    self.release_unasked_nonce(&caller);
+                    caller.signing.inspect(|signing| signing.want_refund()); // MIK-8353 3d
                     return *response;
                 }
                 GateOutcome::Proceed => false,
