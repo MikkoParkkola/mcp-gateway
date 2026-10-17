@@ -335,18 +335,25 @@ async fn an_api_key_caller_owns_its_task_and_no_one_else_sees_it() {
     );
 
     // MIK-7967.ANON.1: a caller with no credential still cannot create one.
-    // It is answered as a missing task (the unattributed gate, which names
-    // nothing), the code TASKS.md documents.
+    // MIK-8382: its keyed create is refused at intake, before the
+    // unattributed gate, with the intake's answer, which names nothing.
     let anonymous = gateway.create_task(None, 4, "anon-1").await;
     assert_eq!(
-        anonymous.pointer("/error/code"),
-        Some(&json!(-32602)),
-        "a caller with no credential must be refused as a missing task: {anonymous}"
+        (
+            anonymous.pointer("/error/code"),
+            anonymous.pointer("/error/message")
+        ),
+        (
+            Some(&json!(-32003)),
+            Some(&json!(
+                "JSON-RPC error -32003: A verified execution principal is required"
+            ))
+        ),
+        "a caller with no credential must be refused at intake: {anonymous}"
     );
-    assert_eq!(
-        anonymous.get("error"),
-        missing.get("error"),
-        "the refusal names nothing: it is the missing-task answer"
+    assert!(
+        anonymous.pointer("/error/data").is_none(),
+        "the refusal names nothing: {anonymous}"
     );
     assert!(
         anonymous.get("result").is_none(),
@@ -420,13 +427,14 @@ async fn two_subjects_behind_one_key_own_separate_tasks() {
     );
 
     // MIK-7967.SUBJECT.2: a subject header is not a credential. Without a
-    // key the caller is still refused as a missing task.
+    // key the caller has no execution principal, so its keyed create is
+    // refused at intake (MIK-8382), before the unattributed gate.
     let headless = gateway
         .create_task_as(None, Some("alice"), 5, "alice-anon", "tide_table")
         .await;
     assert_eq!(
         headless.pointer("/error/code"),
-        Some(&json!(-32602)),
+        Some(&json!(-32003)),
         "a subject with no credential must be refused: {headless}"
     );
     assert!(headless.get("result").is_none(), "{headless}");

@@ -257,11 +257,12 @@ async fn ac_task_1_18_an_unattributed_caller_owns_no_task() {
         unattributed_created
             .pointer("/error/message")
             .and_then(Value::as_str),
-        Some("no such task"),
-        "the unattributed dispatch must be refused BY THE ROUTER, in the \
-         id-free wording of `missing_task_error` — a middleware refusal \
-         short of the router would answer 401 to everything below and make \
-         the comparison vacuous: {unattributed_created}"
+        Some("JSON-RPC error -32003: A verified execution principal is required"),
+        "the unattributed dispatch must be refused BY THE ROUTER, at its \
+         intake (MIK-8382: a keyed call with no execution principal), in \
+         wording that names no task — a middleware refusal short of the \
+         router would answer 401 to everything below and make the \
+         comparison vacuous: {unattributed_created}"
     );
     assert_eq!(
         fixture.backend.calls(),
