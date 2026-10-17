@@ -43,23 +43,23 @@ async fn d2_auth_off_anonymous_keyed_task_keeps_the_pooled_owner() {
     );
 }
 
-/// D2b (ruling B's proof row): an auth-off anonymous keyed task submit does
-/// no backend work before its task handle. Counting cell: every request to
-/// `alpha` is counted and never answered ([`Extra::Hang`]), so a submit that
-/// waited on `alpha` before answering would never answer; it must answer
-/// with a handle within 10 s. What `alpha` was sent by then is the worker's,
-/// started after the handle, and is reported, not asserted. Unreachable
-/// (`dead`, a socket bound and never listening) and absent (`nope`) cells:
-/// a handle each time, so no backend failure decided the answer.
+/// D2b (ruling B's proof row, pinning what the submit sends): an auth-off
+/// anonymous keyed task submit waits on exactly one `tools/list` to its
+/// backend, and sends no `tools/call`, before it answers with a task handle.
+/// Counting cell: every request to `alpha` is counted and never answered
+/// ([`Extra::Hang`]), so the submit does not answer within 3 s, and by then
+/// `alpha` was sent one `tools/list` and no `tools/call`. Unreachable (`dead`,
+/// a socket bound and never listening) and absent (`nope`) cells: a handle
+/// each time, so a failed or impossible list does not decide the answer.
 #[tokio::test]
-async fn d2b_auth_off_task_submit_does_no_backend_work_before_its_handle() {
+async fn d2b_auth_off_task_submit_waits_on_one_list_before_its_handle() {
     let hung = fixture(Setup {
         extras: &[Extra::Hang],
         ..idempotent()
     })
     .await;
-    let counted = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
+    let answered = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
         post_to(
             &hung,
             "/mcp",
@@ -68,17 +68,17 @@ async fn d2b_auth_off_task_submit_does_no_backend_work_before_its_handle() {
         ),
     )
     .await;
-    let (status, answer) = counted.unwrap_or_else(|_| {
-        panic!(
-            "d2b counting: no answer in 10 s while alpha held every request \
-             (tools/list {}, tools/call {}): the submit waited on the backend",
+    assert!(
+        answered.is_err(),
+        "d2b counting: the submit answered while alpha held every request: {answered:?}"
+    );
+    assert_eq!(
+        (
             hung.lists.load(Ordering::SeqCst),
             hung.calls.load(Ordering::SeqCst)
-        )
-    });
-    assert!(
-        status == StatusCode::OK && answer.pointer("/result/taskId").is_some(),
-        "d2b counting: no task handle: {status} {answer}"
+        ),
+        (1, 0),
+        "d2b counting: what the submit sent before its handle (tools/list, tools/call)"
     );
     let fx = fixture(idempotent()).await;
     let _closed = register_dead(&fx);

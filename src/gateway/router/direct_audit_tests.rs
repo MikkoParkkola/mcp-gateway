@@ -46,11 +46,10 @@ struct Scripted {
     calls: Arc<AtomicUsize>,
     /// MIK-8382: every `tools/list`, which `calls` skips.
     lists: Arc<AtomicUsize>,
-    /// MIK-8382: `tools/list` fails at the transport, as an unreachable
-    /// backend's cold list does.
-    list_fail: bool,
-    /// MIK-8382: every request is counted and then never answered.
-    hang: bool,
+    /// MIK-8382: the cell's transport switches, [`Extra::ListFail`] (a
+    /// `tools/list` fails, as an unreachable backend's cold list does) and
+    /// [`Extra::Hang`] (every request is counted, then never answered).
+    extras: &'static [Extra],
     error: Option<i32>,
     /// MIK-7979: the call is counted, then the transport fails with this.
     fail: Option<fn() -> crate::Error>,
@@ -74,17 +73,17 @@ impl Transport for Scripted {
         // tool the rows call, and it is not a call, so `calls` skips it.
         if method == "tools/list" {
             self.lists.fetch_add(1, Ordering::SeqCst);
-            if self.hang {
+            if self.extras.contains(&Extra::Hang) {
                 std::future::pending::<()>().await;
             }
-            if self.list_fail {
+            if self.extras.contains(&Extra::ListFail) {
                 return Err(crate::Error::Transport("connection refused".into()));
             }
             let tool = json!({"name": "t", "inputSchema": {"type": "object"}});
             return Ok(JsonRpcResponse::success(id, json!({ "tools": [tool] })));
         }
         self.calls.fetch_add(1, Ordering::SeqCst);
-        if self.hang {
+        if self.extras.contains(&Extra::Hang) {
             std::future::pending::<()>().await;
         }
         if let Some(fail) = self.fail {
@@ -279,8 +278,7 @@ async fn fixture(setup: Setup) -> Fixture {
         backend.set_transport_for_test(Arc::new(Scripted {
             calls: Arc::clone(&calls),
             lists: Arc::clone(&lists),
-            list_fail: setup.has(Extra::ListFail),
-            hang: setup.has(Extra::Hang),
+            extras: setup.extras,
             error: setup.backend_error,
             fail: setup.backend_fail,
             reply: setup.reply.clone(),
