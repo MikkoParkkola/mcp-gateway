@@ -557,8 +557,9 @@ impl CapabilityAccount {
         if self.shared {
             // A shared account dispatches under the gateway's own static
             // OAuth token, so the fixture seeds one.
-            let token = serde_json::from_value(serde_json::json!({"access_token": "shared-static"}))
-                .expect("a static token");
+            let token =
+                serde_json::from_value(serde_json::json!({"access_token": "shared-static"}))
+                    .expect("a static token");
             executor.set_oauth_token("google", token);
         }
         let backend = Arc::new(crate::capability::CapabilityBackend::new(
