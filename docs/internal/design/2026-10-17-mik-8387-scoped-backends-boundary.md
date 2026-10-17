@@ -1,6 +1,6 @@
 # MIK-8387 PR-B: a compiler-enforced boundary between a caller and the backend registry
 
-Status: design **v7**: v5 plus the fixes from its design review and its confirm round (§13, §14); the last revision before code. The boundary is enforced by a clippy lint banning every production `BackendRegistry` method, in production code only (§2, §2.8). Rounds 1 to 3 are answered in §9 to §11; v5's trade against v4 is §12; the v5 review is answered in §13 and its confirm round in §14. Base: release line `19ca01f07` (PR #3907, which carries PR-A). Ticket: MIK-8387, criterion ORACLE.5. Gap ticket: MIK-8447. 
+Status: design **v8**: v5 plus the fixes from its design review and two confirm rounds (§13 to §15); the last revision before code. The boundary is enforced by a clippy lint banning every production `BackendRegistry` method, in production code only (§2, §2.8). Rounds 1 to 3 are answered in §9 to §11; v5's trade against v4 is §12; the v5 review is answered in §13, its confirm rounds in §14 and §15. Base: release line `19ca01f07` (PR #3907, which carries PR-A). Ticket: MIK-8387, criterion ORACLE.5. Gap ticket: MIK-8447. 
 
 ## 1. Problem
 
@@ -180,7 +180,18 @@ Two probe findings the design now carries:
 +        run: scripts/dev/check_registry_lint.sh --self-test
 ```
 
-`feature-combos.yml` (post-merge) and the Windows job are unchanged; §12 says what that costs.
+**Release-profile pass (v8, GPT v7 confirm).** Both passes above compile the dev profile, so code under `cfg(not(debug_assertions))` is never linted there. CI adds the same two commands with `--release`; pre-push does not, to keep the push gate at its measured cost (§12). The lead adds to the `check` job's `Registry ban (MIK-8387)` step:
+
+```diff
+           cargo clippy --lib --bins --all-features -- -D warnings
+           cargo clippy --lib --bins --no-default-features -- -D warnings
++          cargo clippy --release --lib --bins --all-features -- -D warnings
++          cargo clippy --release --lib --bins --no-default-features -- -D warnings
+```
+
+The self-test (§2.2 A) gains a release run with three release-only plants that must fire: a `#[cfg(not(debug_assertions))]` statement, a compound `cfg(any(not(debug_assertions), target_os = "macos"))` item, and a release-gated invocation of the macro plant.
+
+`feature-combos.yml` (post-merge) is unchanged. The Windows pass is MIK-8449, in v4.0.0 scope (§12).
 
 ## 3. Call sites that change, counted
 
@@ -307,7 +318,7 @@ L (the lint) is red on the tip with 127 production violations (§2.8); it turns 
 | Row | What it asserts | Tip | Kills |
 |---|---|---|---|
 | **L** the lint | `scripts/lint/registry-ban/clippy.toml` bans the 17 production `BackendRegistry` methods (all but `new`, `Default` and the test-only `is_stopping`) and the two grantless propagation APIs (§2.1, §2.6). Pre-push and CI run the second pass on `--lib --bins` with both feature sets, plus `check_registry_lint.sh --self-test` (§2.2 A, §2.8) | 127 production violations (126 registry, 1 propagation) are the red evidence (§2.8); green from the type-flip commit | M19: a raw read added anywhere in production. M19c: a helper that returns the raw registry and is then read. M19f: a new production reference to `resolve_propagation_credential`, a function-item binding included |
-| **T1** pins (§4.2) | (a) The class-taking operation call sites, by (file, enclosing fn, operation, class), equal `scoped_backends_classes.tsv`. The receiver follows from the operation name: `scoped_get` is the scoped view, `*_for` is `Registry`. (b) Every production `disallowed_methods` allow, crate-wide, by (file, fn, reason class), with its complete raw-call content. (d) `Registry::new` call sites. (b2) No broad suppression (`warnings`, `clippy::all`, `clippy::style`). (e) `BackendRegistry`'s method set, trait impls and derives, and all fields private. (f) The dedicated config's MIK-8387 block, entry for entry. (g) No banned name under a release-only predicate | no compile (the types are absent) | M19b: one class swapped, total unchanged. M19d: a new allow, or a second raw call inside one. M19g: a `clippy.toml` entry deleted or its path changed. M19h: a new `pub fn` on `BackendRegistry` |
+| **T1** pins (§4.2) | (a) The class-taking operation call sites, by (file, enclosing fn, operation, class), equal `scoped_backends_classes.tsv`. The receiver follows from the operation name: `scoped_get` is the scoped view, `*_for` is `Registry`. (b) Every production `disallowed_methods` allow, crate-wide, by (file, fn, reason class), with its complete raw-call content. (d) `Registry::new` call sites. (b2) No broad suppression (`warnings`, `clippy::all`, `clippy::style`). (e) `BackendRegistry`'s method set, trait impls and derives, and all fields private. (f) The dedicated config's MIK-8387 block, entry for entry. Release-only code: the CI release pass (§2.8), not a pin | no compile (the types are absent) | M19b: one class swapped, total unchanged. M19d: a new allow, or a second raw call inside one. M19g: a `clippy.toml` entry deleted or its path changed. M19h: a new `pub fn` on `BackendRegistry` |
 | **T2** router choke point | (a) The router holds no `disallowed_methods` allow at all once commit 5 lands: the choke point reads through `Registry` (via T1(b)). (b) Order, structurally: `route` takes `&Envelope`, and `Envelope { .. }` literals in production occur only in `read_envelope`. (c) Every production reference to `backend_for`, function-item references included, by (file, enclosing fn), equals the pinned list. `read_envelope` is not in it | green after the choke-point commit | M20: a `backend_for` call added in `read_envelope` before S4 (c). M20b: `route` called before `read_envelope` (b). M20c: a helper called from `read_envelope` that calls `backend_for` (c: new key) |
 | **T4** view table | Registry `{alpha, beta}` plus capability `cap`. Grants `Scoped([alpha, ghost])`, `Scoped([alpha, cap])`, `Empty`, `Unscoped` (from `*` and from no client). Names alpha, beta, ghost, nosuch, cap. Each cell pins `scoped_get(name).is_some()`, `absence(name)`, and `absent_step(name, "t")` with and without a recorded `Withheld(Absent)`. The capability cells are built through `Registry::scoped(.., Some("cap"))` and through `MetaMcp::scoped`, which must agree. **Router cell (v4):** `backend_for(state, grant, name)` equals `scoped_get` for every grant and name | no compile | M31 (registration before scope), M32 (`Empty` as `Scoped([])`), M33 (`scoped_get` ignores the grant), M34 (`MetaMcp::scoped` passes `None` for the capability: `cap` turns `Unregistered`), M35 (`backend_for` passes `None` for the capability) |
 | **FW1** response targets | A response-firewall rule keyed on target `X` and one keyed on the gateway's own target. Asserts the three cells are equal, **and** pins the verdict: the `X` rule applies to no cell, the gateway-target rule to all. Observed through the response firewall's own audit projection, the record of which rule fired, with no new seam | green | **M10, M23** (§5) |
@@ -325,7 +336,7 @@ The lint carries the ban. The pins only record what it cannot: claimed classes, 
   - Bound views need no binding tracking: the receiver class follows from the operation name.
 - **T1(b).** Every attribute `allow`, `expect` or `cfg_attr(.., allow(..))` naming `clippy::disallowed_methods` on a production item or statement. Recorded: the attributed node's kind (a statement; anything else fails, except the pre-existing item allows of §2.4), its reason's leading class word, and the list of all 19 banned names (17 methods, 2 propagation APIs) referenced inside the node, as calls **or** as path and function-item references (GPT v5). The pin compares those lists exactly, so a new grantless reference inside an existing allow, the clock and home allows included, is red.
 - **T1(b2), broad suppressions (GPT v5).** A production `allow` or `expect` of `warnings`, `clippy::all` or `clippy::style` (the group `disallowed_methods` belongs to) would silence the ban without a class. There are none today; T1 pins that set at empty.
-- **T1(g), release-only code (GPT v5).** Both passes compile the dev profile, so code under `cfg(not(debug_assertions))` is never linted. Today that is `probe_cap` in `backend/era.rs` and items in `home_dir.rs` and `debug_trust_roots.rs`, none touching the registry. Instead of a release-profile pass, T1(g) pins that no production node (item, statement, block or expression) carrying a `cfg` or `cfg_attr` predicate that is false with `debug_assertions` true references any of the 19 banned names. **v7 (GPT confirm):** v6 covered items only; a release-only statement inside an unconditional fn is now covered too. `cfg!(debug_assertions)` in an `if` is not a gate: both branches compile in the dev profile, so the lint sees them. A release-profile pass was weighed and not taken: it costs about 3 more minutes per push (§12), and the syn pin covers the same nodes.
+- **T1(g) is retired in v8 (GPT v7 confirm).** A syn pin cannot see release-only code reliably: a compound predicate such as `cfg(any(not(debug_assertions), target_os = "macos"))` is unknown to the scanner but false in both Linux dev passes, and a release-gated invocation of an unconditional macro whose body holds the raw call carries no banned name. The **release-profile pass** of §2.8 replaces it: the compiler expands both cases.
 - **T1(d) and T2(c).** Paths and method calls resolving by name to `Registry::new` and `backend_for` in production items: calls and non-call path references alike, keyed by enclosing fn.
 - **T1(e).** In `backend/registry.rs`: the names of the inherent `pub` and `pub(crate)` fns of `impl BackendRegistry`, the trait names of `impl _ for BackendRegistry`, the derive list, and the invariant that **every field of `BackendRegistry` is private** (all are today, among them `backends`, `membership` and `change_feed`). A `pub` or `pub(..)` field, which would let a read bypass the method ban, is red (Kimi v5); a new private field is not, since it opens nothing (Kimi confirm).
 - **T1(c)** is gone: the lint now carries the propagation ban (§2.6), and T1(b) pins its one allow.
@@ -351,7 +362,7 @@ FW1 asserts both equality and the pinned verdict. The pin kills M10; equality ki
 ## 6. The S7a fix, and the size
 
 **S7a fix.** `prepare_stored_read_kind` (`task_replay.rs:92-146`) drops every stored target whose backend is absent for the reading caller's grant, before `fill_account_outcomes`, `keep_permanent_refusal`, `settle_caller_view` and `settle_shared_view`. That means `Scoped` grants only; `Empty` and `Unscoped` keep their behaviour, including MIK-8441's.
-- **v6 (GPT v5):** after commit 5 those helpers read through `scoped(..).scoped_get(..)`, which is `None` for an absent name, so the conversions themselves should close the hole, and a filter on top would leave its own removal mutant surviving. So: S7a is red before commit 5. If it is green at commit 5, no filter lands; the fix is the conversions, and S7a's mutants turn back into `get_for(Unscoped::Visibility)` the `scoped_get` of each stored-read helper **that the per-user fixture reaches**: `settle_caller_view` (the warm touch) and the helpers on the cold path (custody read, claim, catalogue refresh). The test plan lists them from a coverage run of the fixture. **v7 (GPT confirm):** `settle_shared_view` returns early for a per-user backend (`task_replay.rs:283`), so its reversion is equivalent under this fixture and is not an S7a mutant. If S7a is still red at commit 5, the filter above lands as commit 6, and its removal is the mutant.
+- **v6 (GPT v5):** after commit 5 those helpers read through `scoped(..).scoped_get(..)`, which is `None` for an absent name, so the conversions themselves should close the hole, and a filter on top would leave its own removal mutant surviving. So: S7a is red before commit 5. If it is green at commit 5, no filter lands; the fix is the conversions, and **S7a must kill one mutant: `settle_caller_view`'s `scoped_get` turned back into `get_for(Unscoped::Visibility)`**, which restores the warm-slot touch. The cold assertions (no custody read, no claim, no catalogue refresh) stay in the row. **v8 (GPT v7 confirm):** the reversions of other stored-read helpers are not promised as S7a kills. Some are equivalent under this fixture: `settle_shared_view` returns early for a per-user backend (`task_replay.rs:283`), and `target_refused_without_catalogue` refuses the excluded caller through `may_invoke` (`task_replay.rs:311`) whether or not its lookup is scoped. Their reads are covered by T1a's class pin, not by a behavioural kill.
 - The S7a row checks the cold path too: no custody read, no claim, no catalogue refresh for an excluded target.
 
 **Commits (v4; v3 corrected per GPT r2).** v2's sequence did not compile: its conversions called `Registry`-only operations while `MetaMcp.backends` was still an `Arc<BackendRegistry>`. v3 splits only what compiles alone:
@@ -373,7 +384,7 @@ FW1 asserts both equality and the pinned verdict. The pin kills M10; equality ki
 | Dedicated config (19 entries), pre-push step; 55 leaf allows (§2.4, §2.6) | ~32 | +140 |
 | `check_registry_lint.sh --self-test` (§2.2 A) | 1 new | +150 |
 | Router choke point (`backend_choke.rs`) and its 6 callers | 6 | +50 |
-| T1 (a, b, b2, d, e, f, g) and T2 (a, b, c) | 2 new | +330 |
+| T1 (a, b, b2, d, e, f) and T2 (a, b, c) | 2 new | +310 |
 | T4 | 1 new | +130 |
 | FW1, C2, R3, S7a rows and fixture | 4–5 new, 1–2 fixture edits | +550 |
 | S7a fix | `task_replay.rs` | +10 |
@@ -565,4 +576,15 @@ Scope: the v5-to-v6 delta. Both seats: SHIP-WITH-FIXES. Each seat's earlier find
 | Improvement: pin "all fields private", not the exact field set (Kimi) | Taken: a new private field opens nothing | §4.2 T1(e) |
 | Improvement: say why `rg -U` double-counts (Kimi) | Taken | §3.1 |
 | Improvement: adversarial fixtures for the pin scanner (GPT) | Taken, for the test plan: negated and nested predicates, cfg-gated broad suppressions, a release-only statement, a `#[path]` module under `main.rs` | Next stage |
+
+## 15. The v7 confirm pass (gpt alone, §14 delta)
+
+Verdict SHIP-WITH-FIXES. The three-valued cfg evaluation is **closed**. Two HIGH findings and one MEDIUM, all checked at source:
+
+| Finding | Checked at source | v8 |
+|---|---|---|
+| HIGH: a compound predicate such as `any(not(debug_assertions), target_os = "macos")` is unknown to the scanner but compiled in neither Linux dev pass | **Right**: unknown is not "definitely false", so T1(g) skips it | T1(g) retired; release-profile pass in CI (§2.8, §4.2) |
+| HIGH: a release-gated invocation of an unconditional macro holding the raw call carries no banned name, since `syn` keeps macros unexpanded | **Right** | Same: the compiler expands the macro in the release pass; the self-test plants it (§2.8) |
+| MEDIUM: coverage-based S7a mutant selection still includes equivalent reversions | **Right**: `target_refused_without_catalogue` refuses through `may_invoke` (`task_replay.rs:311`) either way | S7a must kill the `settle_caller_view` reversion; no promise for the others (§6) |
+| Improvement: exhaustive three-valued truth tables, including empty `all()` and `any()` | Taken | Test plan, SCAN rows |
 
