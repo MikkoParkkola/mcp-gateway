@@ -4,8 +4,8 @@
 //! answers before the refusals that come later today, whatever the target.
 
 use super::{
-    AuthConfig, Caller, Case, Extra, HARDENED_IDENTITY, KEY, NO_PRINCIPAL, Ordering, Setup,
-    StatusCode, Value, fixture, idempotent, json, key_for_alpha, keyed_body, keyed_invoke,
+    AuthConfig, Caller, Case, Extra, HARDENED_IDENTITY, KEY, NO_PRINCIPAL, Ordering, Sanitize,
+    Setup, StatusCode, Value, fixture, idempotent, json, key_for_alpha, keyed_body, keyed_invoke,
     poisoned_listing, post_to, post_to_raw, post_uri_with_headers, refusal,
 };
 
