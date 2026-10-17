@@ -59,7 +59,17 @@ pre-registered. 2026-07-28 has no session to count. The wording gap in MIK-8442.
   one final write, which sets `sealed_at_ms` and `closed_cleanly` together. After that, nothing
   touches the segment.
 - **Validation.** `sealed_at_ms` is present exactly when `closed_cleanly` is true.
-- **There is no `opened_while_another_was_open` field.**
+- **Delta from the source schema:** `opened_while_another_was_open` is dropped.
+  `process_started_at` becomes `process_started_at_ms`. `sealed_at_ms` is new. The coverage check
+  and the span measure "close" as `sealed_at_ms`, not `last_checkpoint_at`.
+- **Cross-process write discipline:** every read-modify-write of `window.json`, whether a stdio
+  delta, an HTTP open, a checkpoint or a final write, holds the `.window.lock` file lock
+  (`ExclusiveFileLock`) from read to rename. An HTTP process rewrites only its own segment,
+  identified by index together with its `exe` and `process_started_at_ms`. The open appends under
+  the same lock. A predecessor's late final write and a successor's open therefore serialize, and
+  neither can lose the other's segment.
+- **Decision output** lists each segment's `listen`, `exe`, `process_started_at_ms`,
+  `sealed_at_ms` and `closed_cleanly`, so the operator can attest the writers and their timing.
 - **Overlap.** `ConcurrentHttpWriters` when `next.process_started_at_ms <
   previous.sealed_at_ms`.
 - **Coverage.** `CoverageGap` when `next.process_started_at_ms - previous.sealed_at_ms >
@@ -204,7 +214,9 @@ New rows for the line's changes:
     - A predecessor that never closes, followed by a successor, returns `UncleanSegment`.
 18. **Shutdown with a stalled open.** With the open stalled, `run.rs` serves once
     `WINDOW_OPEN_STARTUP_BOUND` passes, and the marker is logged. The broadcast still seals at
-    once. The saver ends within the deadline, and the segment is absent or unclean.
+    once. The saver ends within the deadline. If the stall is never released, the segment is absent or
+    unclean. If it is released after the deadline, the segment is clean with exactly the sealed
+    counts.
 19. **Crash in the first interval** (round 3, HIGH). With `record`, the process serves one
     request and is then dropped without shutdown, before any periodic tick. The reopened file
     holds this process's segment, unclean, so the window blocks. It never holds no segment.
@@ -213,6 +225,11 @@ New rows for the line's changes:
     the segment, which holds every count since process start.
 21. **Sub-second overlap.** A successor started 300 ms before its predecessor's `sealed_at_ms`
     returns `ConcurrentHttpWriters`.
+
+**Test seam for stalls** (rows 11, 16, 18): a `#[cfg(test)]` hook in `HttpSegmentSink`'s write
+path that blocks on a per-path gate, with a matching release. It follows the per-path
+`write_seam` in `durable.rs`. Rows wait on the gate's "entered" signal and on the seal flag, never
+on a sleep.
 
 ## Risks and falsifiers
 
@@ -254,3 +271,7 @@ New rows for the line's changes:
 | Opening at the first periodic tick lets a process serve and crash with no segment and no marker (seat 1, HIGH; a regression from round 1's reuse of `spawn_periodic_save`) | Accepted. The open happens before serving, bounded by `WINDOW_OPEN_STARTUP_BOUND`, with the marker on failure and a retry on ticks. Rows 18-20. Reported to the lead first; a round-4 delta pass on this change only. |
 | Whole-second comparisons miss sub-second overlap (seat 1, MEDIUM) | Accepted. `process_started_at_ms` and `sealed_at_ms` are in milliseconds (row 21). The primary guarantee is that two listeners cannot bind one address, and other addresses are `ForeignWriter`. Overlap cannot double-count, because each process writes only what it served. |
 | Publish one current schema (seat 1, improvement) | Added: "Segment schema and lifecycle". |
+| No cross-process write discipline is specified now that writers overlap routinely (seat 2, MEDIUM) | Stated: `.window.lock` is held from read to rename for every write, and each process rewrites only its own segment. (This was already true of the source design's sink; it is now explicit.) |
+| The open deferred to the first tick (seat 2, MEDIUM) | The same finding as seat 1's HIGH, folded above. |
+| Row 18 omits a clean late landing (seat 2, LOW) | Fixed: all three outcomes are listed. |
+| Schema delta, a named stall seam, per-writer timing in the output (seat 2, improvements) | Adopted. |
