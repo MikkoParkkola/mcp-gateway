@@ -83,6 +83,18 @@ async fn fixture_scoped(excluded_scope: &'static str) -> Gateway {
 /// POST a modern request with `secret` as the bearer and the shared verified
 /// identity riding as a request extension.
 async fn send(gw: &Gateway, secret: &str, method: &str, name: &str, params: Value) -> Value {
+    send_full(gw, secret, (method, name), params).await.1
+}
+
+/// [`send`] with the HTTP status. A body that is not JSON fails the row: no
+/// answer is ever collapsed to `null`, so two broken answers cannot compare
+/// equal.
+async fn send_full(
+    gw: &Gateway,
+    secret: &str,
+    (method, name): (&str, &str),
+    params: Value,
+) -> (u16, Value) {
     let body = json!({"jsonrpc": "2.0", "id": 9, "method": method, "params": params});
     let mut request = axum::http::Request::builder()
         .method("POST")
@@ -96,10 +108,14 @@ async fn send(gw: &Gateway, secret: &str, method: &str, name: &str, params: Valu
         .expect("a request");
     request.extensions_mut().insert(identity());
     let response = gw.router.clone().oneshot(request).await.expect("an answer");
+    let status = response.status().as_u16();
     let bytes = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("a body");
-    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    let body = serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+        panic!("{method}: the answer is not JSON ({e}): {}", String::from_utf8_lossy(&bytes))
+    });
+    (status, body)
 }
 
 async fn task_get(gw: &Gateway, secret: &str, id: &str) -> Value {
@@ -249,8 +265,10 @@ async fn s7a_warm_an_excluded_read_does_not_touch_the_targets_slot() {
 }
 
 /// S7a-cold, a guard (test plan v2): with the target's slot evicted, the
-/// excluded key's stored read makes no custody resolution, no cold claim and
-/// no upstream list. Green on the tip: account resolution skips refused
+/// excluded key's stored read makes no credential resolution (the fixture's
+/// mint counter: this backend's custody is the propagation mint, it has no
+/// managed account), no cold claim and no upstream list. A managed-account
+/// target's account resolution is outside this fixture (S7a-c-m1 below). Green on the tip: account resolution skips refused
 /// targets (`task_replay.rs:136`) and `settle_caller_view` returns before
 /// any claim (`:245`). The control, the included key's own cold read, moves
 /// each mark on its own, so no assertion can pass on a dead observable.
@@ -300,8 +318,14 @@ async fn second_key_answer(excluded_scope: &'static str, unregister: bool) -> St
             "premise: {BACKEND} was registered"
         );
     }
-    let read = task_get(&gw, EXCLUDED, &id).await;
-    read.to_string().replace(&id, "<task>")
+    let (status, read) = send_full(
+        &gw,
+        EXCLUDED,
+        ("tasks/get", &id),
+        json!({"taskId": id, "_meta": modern_meta()}),
+    )
+    .await;
+    format!("{status} {read}").replace(&id, "<task>")
 }
 
 /// S7a-twin, the oracle row (lead, 2026-10-17): a stored task whose target is

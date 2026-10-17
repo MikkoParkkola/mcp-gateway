@@ -302,6 +302,24 @@ impl<'ast> Visit<'ast> for Walker<'_> {
         }
         // `mod r#override;` lives in `override.rs`.
         let name = syn::ext::IdentExt::unraw(&module.ident).to_string();
+        // Shapes the walk does not resolve fail loudly rather than skip a
+        // module: a `#[path]` behind `cfg_attr`, or one on an inline module.
+        let conditional_path = module.attrs.iter().any(|a| {
+            a.path().is_ident("cfg_attr")
+                && a.parse_args_with(
+                    syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+                )
+                .is_ok_and(|args| args.iter().skip(1).any(|m| m.path().is_ident("path")))
+        });
+        let inline_path =
+            module.content.is_some() && module.attrs.iter().any(|a| a.path().is_ident("path"));
+        if conditional_path || inline_path {
+            self.errors.push(format!(
+                "{}: module `{name}` uses a path shape the pin walk does not resolve",
+                self.place.file
+            ));
+            return;
+        }
         match &module.content {
             None => self.module_file(&name, &module.attrs),
             Some((_, items)) => {
@@ -316,6 +334,17 @@ impl<'ast> Visit<'ast> for Walker<'_> {
                 (self.child_dir, self.path_base) = saved;
             }
         }
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        // `include!` splices a file the walk cannot see as a module.
+        if mac.path.is_ident("include") {
+            self.errors.push(format!(
+                "{}: include! in production code is not walked",
+                self.place.file
+            ));
+        }
+        syn::visit::visit_macro(self, mac);
     }
 
     fn visit_item_fn(&mut self, func: &'ast syn::ItemFn) {

@@ -514,4 +514,13 @@ async fn c2_an_out_of_scope_capability_backend_answers_as_an_unregistered_server
         answers[0], answers[1],
         "C2 answer changed: out-of-scope capability backend vs unregistered server"
     );
+    // The pinned answer itself: the absent miss for the tool, never an
+    // answer that names the server's capability arm.
+    let (status, body) = &answers[1];
+    assert!(
+        *status == axum::http::StatusCode::OK
+            && body.contains("nosuch_8387")
+            && (body.contains("\"isError\":true") || body.contains("\"error\"")),
+        "C2: the answer is not the absent miss: {status} {body}"
+    );
 }
