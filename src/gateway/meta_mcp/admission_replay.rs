@@ -134,15 +134,16 @@ impl MetaMcp {
             if !matches!(tool_name, "gateway_execute" | "gateway_run_playbook") {
                 return Some((response, audit));
             }
-            return Some(
-                match self
-                    .first_unproven_plan_step(tool_name, arguments, caller, dispatched, &response)
-                    .await
-                {
-                    None => (response, audit),
-                    Some(answer) => (answer, None),
-                },
+            // Boxed: the walk's state (resolution, custody) would otherwise
+            // sit in every route stage's dispatch future, cold refusals
+            // included, and grow it past its allocation budget.
+            let walk = Box::pin(
+                self.first_unproven_plan_step(tool_name, arguments, caller, dispatched, &response),
             );
+            return Some(match walk.await {
+                None => (response, audit),
+                Some(answer) => (answer, None),
+            });
         };
         // Unkeyed likewise: admission never replays one, so the lift could
         // never meet it either.
