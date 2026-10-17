@@ -100,3 +100,51 @@ fn scan_18_derive_and_field_visibility_extraction() {
     );
     assert_eq!(surface.public_fields, ["x"], "SCAN-18: field visibility");
 }
+
+/// Walk a synthetic crate of `(path, source)` files with T1b2's sink and
+/// return the broad suppressions it reports.
+fn broad_in(files: &[(&str, &str)]) -> Vec<String> {
+    let dir = tempfile::tempdir().expect("a temp crate");
+    for (path, source) in files {
+        let full = dir.path().join(path);
+        std::fs::create_dir_all(full.parent().expect("a parent")).expect("dirs");
+        std::fs::write(full, source).expect("a file");
+    }
+    let mut broad = super::guard_tests::Broad::default();
+    super::scan::walk(dir.path(), &["src/lib.rs"], &mut broad).expect("the walk");
+    broad.0
+}
+
+/// SCAN-8b: a broad suppression under nested `cfg_attr` is seen.
+/// Mutant SCAN-m3c: `lints_in` stops recursing into `cfg_attr`.
+#[test]
+fn scan_8b_a_nested_cfg_attr_suppression_is_seen() {
+    let found = broad_in(&[(
+        "src/lib.rs",
+        "#[cfg_attr(feature = \"a\", cfg_attr(feature = \"b\", allow(warnings)))] fn f() {}",
+    )]);
+    assert_eq!(found.len(), 1, "SCAN-8b: {found:?}");
+}
+
+/// SCAN-19: a module file whose own inner attribute says `#![cfg(test)]` is
+/// test-only, while the same file without it is production, so the walk
+/// both skips the first and reaches the second. Mutant SCAN-m16: the
+/// file-level check removed.
+#[test]
+fn scan_19_a_file_level_cfg_test_module_is_test_only() {
+    let module = |inner: &str| format!("{inner}\n#[allow(warnings)] fn f() {{}}");
+    let skipped = broad_in(&[
+        ("src/lib.rs", "mod a;"),
+        ("src/a.rs", &module("#![cfg(test)]")),
+    ]);
+    assert!(
+        skipped.is_empty(),
+        "SCAN-19: a #![cfg(test)] file was walked: {skipped:?}"
+    );
+    let walked = broad_in(&[("src/lib.rs", "mod a;"), ("src/a.rs", &module(""))]);
+    assert_eq!(
+        walked.len(),
+        1,
+        "SCAN-19 control: the production file was walked: {walked:?}"
+    );
+}

@@ -50,7 +50,7 @@ fn lints_in(meta: &syn::Meta) -> Vec<String> {
 }
 
 #[derive(Default)]
-struct Broad(Vec<String>);
+pub(super) struct Broad(pub(super) Vec<String>);
 
 impl Sink for Broad {
     fn attribute(&mut self, at: &Place, _owner: Owner, attr: &syn::Attribute) {
