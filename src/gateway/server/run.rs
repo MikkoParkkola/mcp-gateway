@@ -574,10 +574,6 @@ impl Gateway {
         let shutdown = support::shutdown_signal(shutdown_tx);
         let std_listener = listener.into_std()?;
         listener::serve(app, std_listener, addr, &self.config, shutdown).await?;
-        // Ends within its close bound of the broadcast (MIK-8157).
-        if let Some(saver) = window_saver {
-            drop(saver.await);
-        }
 
         // Saved under one deadline, off the runtime's threads (MIK-8157).
         #[cfg(feature = "cost-governance")]
@@ -594,6 +590,11 @@ impl Gateway {
         let (ranker, tracker) = (ranker_for_shutdown, tracker_for_shutdown);
         let paths = (ranker_path.clone(), transition_path.clone());
         persistence::save_state_on_shutdown(ranker, paths.0, tracker, paths.1, cost).await;
+        // Awaited after the state saves, not before: its own deadline runs
+        // from the broadcast, so a stalled window disk never delays them.
+        if let Some(saver) = window_saver {
+            drop(saver.await);
+        }
 
         let drain_timeout = self.config.server.shutdown_timeout;
         Self::drain_inflight(&inflight, drain_timeout).await;

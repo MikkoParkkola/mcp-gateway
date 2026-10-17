@@ -198,7 +198,7 @@ pub struct Registry {
     per_transport: BTreeMap<&'static str, Snapshot>,
     /// Requests with no revision, by bounded caller key (named client, else
     /// User-Agent family). Diagnoses the unattributed share; gates nothing.
-    missing_revision_agents: BTreeMap<String, u64>,
+    missing_revision_agents: BTreeMap<&'static str, BTreeMap<String, u64>>,
 }
 
 /// Snapshot for `/metrics` tests and the Linear table.
@@ -298,6 +298,8 @@ impl Registry {
             let key = agents::missing_revision_agent(client, user_agent);
             *self
                 .missing_revision_agents
+                .entry(transport.as_str())
+                .or_default()
                 .entry(key.to_string())
                 .or_insert(0) += 1;
         }
@@ -380,9 +382,12 @@ impl Registry {
             .unwrap_or_default()
     }
 
-    /// Requests with no revision, by bounded caller key.
-    pub(crate) fn missing_revision_agents(&self) -> BTreeMap<String, u64> {
-        self.missing_revision_agents.clone()
+    /// Requests on `transport` with no revision, by bounded caller key.
+    pub(crate) fn missing_revision_agents(&self, transport: Transport) -> BTreeMap<String, u64> {
+        self.missing_revision_agents
+            .get(transport.as_str())
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn shadow_snapshot(&self) -> BTreeMap<String, u64> {

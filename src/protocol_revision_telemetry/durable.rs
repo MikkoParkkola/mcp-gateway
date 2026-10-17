@@ -46,7 +46,7 @@ impl StdioCounts {
         Self {
             snapshot: registry.transport_snapshot(Transport::Stdio),
             shadow: registry.shadow_snapshot(),
-            agents: registry.missing_revision_agents(),
+            agents: registry.missing_revision_agents(Transport::Stdio),
         }
     }
 }

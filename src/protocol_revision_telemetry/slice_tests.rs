@@ -42,7 +42,7 @@ fn a_missing_revision_is_broken_down_by_bounded_caller() {
     registry.observe_request_from(None, "Claude Code", Transport::Http, Some("node"));
     registry.observe_request_from(Some("2025-11-25"), "x", Transport::Http, Some("curl/8"));
 
-    let agents = registry.missing_revision_agents();
+    let agents = registry.missing_revision_agents(Transport::Http);
     assert_eq!(agents.get("curl"), Some(&2));
     assert_eq!(agents.get("claude"), Some(&1));
     assert_eq!(
@@ -122,4 +122,22 @@ fn stdio_is_never_refused() {
     assert!(served);
     let registry = registry.into_inner().expect("not poisoned");
     assert_eq!(registry.transport_snapshot(Transport::Stdio).total, 1);
+}
+
+#[test]
+fn the_missing_revision_breakdown_is_kept_per_transport() {
+    // An HTTP segment writes only HTTP callers, and stdio only stdio's.
+    let mut registry = Registry::new();
+    registry.observe_request_from(None, "other", Transport::Http, Some("curl/8.4.0"));
+    registry.observe_request_from(None, "other", Transport::Stdio, Some("node"));
+    registry.observe_request_from(None, "other", Transport::Internal, Some("xh/0.22"));
+    let http = registry.missing_revision_agents(Transport::Http);
+    assert_eq!(http.len(), 1, "{http:?}");
+    assert_eq!(http.get("curl"), Some(&1));
+    let stdio = registry.missing_revision_agents(Transport::Stdio);
+    assert_eq!(stdio.get("node"), Some(&1));
+    assert!(
+        !stdio.contains_key("curl") && !stdio.contains_key("xh"),
+        "{stdio:?}"
+    );
 }

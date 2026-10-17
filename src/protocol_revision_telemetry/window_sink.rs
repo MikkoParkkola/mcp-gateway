@@ -46,15 +46,15 @@ impl SegmentCounts {
     }
 }
 
-/// This process's segment. `closed` is in memory and read and set only by
-/// the holder of the saver's sink mutex: once set, nothing writes again.
+/// This process's segment. Once its seal is on disk nothing rewrites it:
+/// every write reads the segment under the file lock and stops at a seal,
+/// so the on-disk record, not this handle, is what ends the segment.
 #[derive(Debug)]
 pub(crate) struct HttpSegmentSink {
     window_path: PathBuf,
     lock_path: PathBuf,
     index: usize,
     identity: WriterIdentity,
-    closed: bool,
 }
 
 impl HttpSegmentSink {
@@ -89,33 +89,25 @@ impl HttpSegmentSink {
             lock_path,
             index,
             identity,
-            closed: false,
         })
     }
 
-    /// Rewrite this segment's cumulative counts. A no-op once closed. A
+    /// Rewrite this segment's cumulative counts; a no-op once sealed. A
     /// failed write loses nothing: the next carries the same cumulative counts.
     pub(crate) fn checkpoint(&mut self, counts: &SegmentCounts, now: u64) -> io::Result<()> {
-        if self.closed {
-            return Ok(());
-        }
         self.write(counts, now, None)
     }
 
     /// The final write: the sealed counts and `sealed_at_ms` with
-    /// `closed_cleanly` in one rename. `closed` is set only once it lands.
+    /// `closed_cleanly` in one rename. A close that fails leaves the segment
+    /// open on disk, so a retried close can still seal it.
     pub(crate) fn close(
         &mut self,
         counts: &SegmentCounts,
         now: u64,
         sealed_at_ms: u64,
     ) -> io::Result<()> {
-        if self.closed {
-            return Ok(());
-        }
-        self.write(counts, now, Some(sealed_at_ms))?;
-        self.closed = true;
-        Ok(())
+        self.write(counts, now, Some(sealed_at_ms))
     }
 
     fn write(&self, counts: &SegmentCounts, now: u64, sealed_at_ms: Option<u64>) -> io::Result<()> {
@@ -138,6 +130,12 @@ impl HttpSegmentSink {
                     && segment.process_started_at_ms == self.identity.process_started_at_ms
             })
             .ok_or_else(|| invalid_window("this process's segment is missing from the window"))?;
+        // A sealed segment is never rewritten: not by a late checkpoint, and
+        // not by a second close (a close whose rename landed but whose
+        // directory sync failed reports an error with the seal on disk).
+        if segment.closed_cleanly {
+            return Ok(());
+        }
         segment.snapshot = counts.snapshot.clone();
         segment.missing_revision_agents = counts.missing_revision_agents.clone();
         segment.tools_list_shadow = counts.tools_list_shadow.clone();
@@ -163,7 +161,7 @@ pub(crate) fn global_segment_counts(seal: Option<&AtomicBool>) -> SegmentCounts 
     }
     SegmentCounts {
         snapshot: registry.transport_snapshot(Transport::Http),
-        missing_revision_agents: registry.missing_revision_agents(),
+        missing_revision_agents: registry.missing_revision_agents(Transport::Http),
         tools_list_shadow: registry.shadow_snapshot(),
     }
 }

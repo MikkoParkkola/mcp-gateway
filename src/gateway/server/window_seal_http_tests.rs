@@ -206,7 +206,11 @@ async fn across_shutdown(mode: ProtocolRevisionWindow) -> Answers {
     let backend_before = answer(held, &backend_body, true).await;
     let backend_after = answer(after, &after_body, false).await;
     drop(close_go);
-    let _ = tokio::time::timeout(ARRIVAL, server).await;
+    let ended = tokio::time::timeout(ARRIVAL, server)
+        .await
+        .expect("run returns after the shutdown")
+        .expect("run does not panic");
+    assert!(ended.is_ok(), "a graceful shutdown returns Ok: {ended:?}");
     Answers {
         meta_before,
         backend_before,
