@@ -99,6 +99,10 @@ pub(crate) enum Na {
 
 /// The ticket that closes an expected gap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    dead_code,
+    reason = "no gap is open; the next one names its ticket here"
+)]
 pub(crate) enum Ticket {
     Mik8353,
 }
@@ -108,6 +112,7 @@ pub(crate) enum Ticket {
 pub(crate) enum Expect {
     Applies,
     NotApplicable(Na),
+    #[expect(dead_code, reason = "no gap is open (MIK-8353 3c closed the last)")]
     ExpectedGap(Ticket),
 }
 
@@ -219,14 +224,14 @@ fn the_table_answers_every_route_and_stage() {
             }
         }
     }
-    // Today's gap: R4a nonce give-back (D2). MIK-8382 closed the four
+    // No gap today: MIK-8353 3c closed R4a nonce give-back (D2). MIK-8382 closed the four
     // keyed-principal intake cells it opened. MIK-8353 3b closed R1 nonce (relay). P3 closed R5 route
     // firewall, sanitize and X14; MIK-8315 closed authorize (D3); MIK-8150
     // closed R2 and R5 nonce give-back (admission); MIK-8351 closed R3
     // rescan; MIK-8159 closed R2's chain link; MIK-8154 closed R3 lease and
     // R3 sanitize.
     assert_eq!(
-        gaps, 1,
+        gaps, 0,
         "the gap count moved: update the table and this pin"
     );
 }
@@ -258,6 +263,8 @@ const DRIVEN: &[(Route, Stage)] = &[
     (Route::Direct, Stage::NonceGiveBack),
     (Route::Surfaced, Stage::NonceGiveBack),
     (Route::Stdio, Stage::NonceGiveBack),
+    // Driven by task_execution_adapter::signing_joint::refund (S-sealed).
+    (Route::TaskSubmit, Stage::NonceGiveBack),
     (Route::Invoke, Stage::ChainLink),
     (Route::Surfaced, Stage::ChainLink),
     (Route::Direct, Stage::ChainLink),
@@ -341,11 +348,6 @@ const UNDRIVEN: &[(Route, Stage, &str)] = &[
         Route::TaskSubmit,
         Stage::Idempotency,
         "needs the outer-admission eviction helper; MIK-8314",
-    ),
-    (
-        Route::TaskSubmit,
-        Stage::NonceGiveBack,
-        "gap MIK-8353: a task-submit refusal keeps the nonce until every effect is marked; driven red-first by MIK-8353.NONCEFX.3",
     ),
     (
         Route::TaskWorker,
