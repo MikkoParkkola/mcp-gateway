@@ -519,6 +519,9 @@ pub(super) struct Counting {
     pub(super) hold: Hold,
 }
 
+/// The `folder` argument on which [`Counting`] answers an input round.
+pub(super) const ASK: &str = "ask";
+
 /// The switch [`Counting`] waits on: `true` holds every `tools/call`.
 pub(super) type Hold = Arc<tokio::sync::watch::Sender<bool>>;
 
@@ -527,7 +530,7 @@ impl crate::transport::Transport for Counting {
     async fn request(
         &self,
         method: &str,
-        _params: Option<Value>,
+        params: Option<Value>,
     ) -> crate::Result<crate::protocol::JsonRpcResponse> {
         use crate::protocol::{JsonRpcResponse, RequestId};
         if method == "tools/call" {
@@ -535,6 +538,18 @@ impl crate::transport::Transport for Counting {
             let mut held = self.hold.subscribe();
             // A closed channel cannot hold; the fixture keeps its sender.
             let _ = held.wait_for(|held| !*held).await;
+            // A call on folder [`ASK`] answers an input round (MIK-8406 P9j).
+            let folder = params.as_ref().and_then(|p| p.pointer("/arguments/folder"));
+            if folder.and_then(Value::as_str) == Some(ASK) {
+                return Ok(JsonRpcResponse::success(
+                    RequestId::Number(1),
+                    json!({"resultType": "input_required",
+                        "inputRequests": {"k1": {"method": "elicitation/create",
+                            "params": {"message": "Which account?",
+                                "requestedSchema": {"type": "object"}}}},
+                        "requestState": "backend-state-1"}),
+                ));
+            }
             return Ok(JsonRpcResponse::success(
                 RequestId::Number(1),
                 json!({"content": [{"type": "text", "text": super::MARKER}]}),
