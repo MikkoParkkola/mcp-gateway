@@ -234,6 +234,12 @@ fn adapter_writes_and_converts_like_serde_yaml() {
     assert_eq!(value, serde_yaml::to_value(&shapes).expect("to a tree"));
     let back: Vec<Shape> = yaml::from_value(value).expect("from a tree");
     assert_eq!(back, shapes);
+    let bad = serde_yaml::Value::String("no_such_variant".to_owned());
+    assert_eq!(
+        yaml::from_value::<Shape>(bad.clone()).map_err(|e| e.to_string()),
+        serde_yaml::from_value::<Shape>(bad).map_err(|e| e.to_string()),
+        "from_value refuses exactly as serde_yaml does"
+    );
 }
 
 /// `true` when `word` occurs in `text` as a whole identifier.
@@ -247,14 +253,37 @@ fn has_ident(text: &str, word: &str) -> bool {
 }
 
 /// Whether a source file names a YAML parser directly: `serde_yaml`, a
-/// `providers::Yaml` path, or `Yaml` inside a whole `use figment` declaration
-/// (read up to its `;`, so nested and multi-line imports count).
+/// `providers::Yaml` path, or any `use` declaration (read from `use` to its
+/// `;`) naming both `figment` and `Yaml`, which covers grouped, absolute,
+/// nested and multi-line imports.
+///
+/// Known limit, accepted: a module alias (`use figment::providers as p;`
+/// then `p::Yaml`) is not seen. This is a lexical guard against accidental
+/// bypass, not a proof; review catches a deliberate one.
 fn names_a_parser(text: &str) -> bool {
-    let figment_import = text.match_indices("use figment").any(|(at, _)| {
-        let end = text[at..].find(';').map_or(text.len(), |e| at + e);
-        has_ident(&text[at..end], "Yaml")
-    });
+    let figment_import = text
+        .match_indices("use")
+        .filter(|(at, _)| {
+            let ends_word = !text[*at + 3..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+            is_word_start(text, *at) && ends_word
+        })
+        .any(|(at, _)| {
+            let end = text[at..].find(';').map_or(text.len(), |e| at + e);
+            let stmt = &text[at..end];
+            has_ident(stmt, "figment") && has_ident(stmt, "Yaml")
+        });
     has_ident(text, "serde_yaml") || has_ident(text, "providers::Yaml") || figment_import
+}
+
+/// `true` when the character before `at` cannot continue an identifier.
+fn is_word_start(text: &str, at: usize) -> bool {
+    !text[..at]
+        .chars()
+        .next_back()
+        .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Every `.rs` file under `src/` and `tests/` of `root` that names a parser,
@@ -341,6 +370,14 @@ fn the_bypass_scan_flags_each_way_of_naming_a_parser() {
             "src/multiline.rs",
             "use figment::{\n    providers::{Env, Format,\n        Yaml},\n    Figment,\n};\n",
         ),
+        (
+            "src/grouped.rs",
+            "use {figment::providers::{Format, Yaml}};\n",
+        ),
+        (
+            "src/absolute.rs",
+            "use ::figment::providers::{Format, Yaml};\n",
+        ),
         ("tests/x_tests.rs", "use serde_yaml::Value;\n"),
         (
             "src/clean.rs",
@@ -359,7 +396,9 @@ fn the_bypass_scan_flags_each_way_of_naming_a_parser() {
     assert_eq!(
         direct_users(root.path()),
         [
+            "src/absolute.rs",
             "src/direct.rs",
+            "src/grouped.rs",
             "src/imported.rs",
             "src/multiline.rs",
             "src/nested.rs",
