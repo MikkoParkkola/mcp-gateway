@@ -475,6 +475,9 @@ async fn f4_a_cold_descriptor_blocked_read_resolves_nothing() {
 #[path = "stored_read_lease_tests.rs"]
 mod lease;
 
+#[path = "stored_read_excluded_target_tests.rs"]
+mod excluded_target;
+
 /// F4 `admit_target` (MIK-8392): a cold view whose target is under the kill
 /// switch claims nothing — 0 resolutions, no backend traffic — and the read
 /// answers the policy refusal without the output. Red with
