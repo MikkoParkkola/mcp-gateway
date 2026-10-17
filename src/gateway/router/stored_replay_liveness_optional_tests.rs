@@ -360,9 +360,10 @@ async fn p10u_an_unminted_plan_refusal_keeps_its_nonce_spent() {
     );
     let spent =
         r6m_token_exchange::send_method_as(&router, &alice, plan, keyed("p10u-n1", "n1")).await;
-    assert!(
-        spent.get("error").is_some() && !spent.to_string().contains(MARKER),
-        "premise: a spent nonce is refused on a fresh key: {spent}"
+    assert_eq!(
+        spent.pointer("/error"),
+        Some(&json!({"code": -32001, "message": "Nonce replay detected"})),
+        "premise: a spent nonce is refused on a fresh key as a replay: {spent}"
     );
     let addr = idp.addr();
     idp.kill();
@@ -372,8 +373,9 @@ async fn p10u_an_unminted_plan_refusal_keeps_its_nonce_spent() {
     assert_unproven("premise: the plan replay is refused unminted", &unproven);
     let _idp = r6m_token_exchange::LiveIdp::restart(&key, addr).await;
     let reused = r6m_token_exchange::send_method_as(&router, &alice, plan, signed("n2")).await;
-    assert!(
-        reused.get("error").is_some() && !reused.to_string().contains(MARKER),
+    assert_eq!(
+        reused.pointer("/error"),
+        Some(&json!({"code": -32001, "message": "Nonce replay detected"})),
         "P10u: the refused plan replay's nonce was given back: {reused}"
     );
     let fresh = r6m_token_exchange::send_method_as(&router, &alice, plan, signed("n3")).await;

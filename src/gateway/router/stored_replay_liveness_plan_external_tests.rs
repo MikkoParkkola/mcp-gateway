@@ -578,14 +578,18 @@ async fn p9j_an_input_required_plan_row_repeat_answers_the_live_resolution_error
         .unwrap_or_else(|| panic!("premise: a task was made: {made}"))
         .to_owned();
     await_status(&router, &alice, &id, "input_required").await;
-    assert!(
-        !served
-            .task_executor
-            .service
-            .store
-            .targets_for_test(&id)
-            .is_empty(),
-        "premise: the park recorded the plan's target"
+    let recorded: Vec<(String, String)> = served
+        .task_executor
+        .service
+        .store
+        .targets_for_test(&id)
+        .into_iter()
+        .map(|target| (target.server, target.tool))
+        .collect();
+    assert_eq!(
+        recorded,
+        vec![(r6m_token_exchange::TX.to_owned(), TOOL.to_owned())],
+        "premise: the park recorded exactly the plan's one target"
     );
     let served_prompt =
         r6m_token_exchange::send_method_as(&router, &alice, call, asking("p9j", true)).await;
