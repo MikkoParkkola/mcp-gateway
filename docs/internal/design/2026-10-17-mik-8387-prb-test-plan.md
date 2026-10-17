@@ -105,7 +105,7 @@ The pins live in `src/gateway/meta_mcp/boundary_pins/t1_tests.rs` and `src/gatew
    - every PR-A row, unchanged, green (design §7.3: a row that turns red has found a reachable site and gets a row and a reported fix);
    - `scripts/release/check_surface_inventory.py` exits 0;
    - `check_inventory_rows.py <base> HEAD` and `check_inventory_rows.py --all` exit 0;
-   - the pre-push gate (`CARGO=spark-cargo scripts/dev/pre-push.sh`), exit 0, with its new registry-ban step. Until `spark-cargo` forwards `CLIPPY_CONF_DIR` (an operator decision), that step's self-test is red under `spark-cargo`; the step is then run with local `cargo` against the Spark mirror's result, and the run is recorded as such, never skipped.
+   - the pre-push gate (`CARGO=spark-cargo scripts/dev/pre-push.sh`), exit 0, with its new registry-ban step. Until `spark-cargo` forwards `CLIPPY_CONF_DIR` (an operator decision), that step is red under `spark-cargo` by design. That is a reported blocker on the push, never bypassed or skipped. Meanwhile the ban pass and the self-test are run on Spark with `CLIPPY_CONF_DIR` set on the remote side (the probe method of design §2.8, from a scratch script, with `spark-cargo` itself untouched), and recorded as that.
 
 ## 7. The v1 test-plan review, item by item
 
