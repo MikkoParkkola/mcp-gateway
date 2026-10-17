@@ -222,3 +222,26 @@ async fn capability_name_answers_as_an_unregistered_one_on_invoke() {
 async fn capability_name_answers_as_an_unregistered_one_on_execute() {
     assert_capability_name_answers_as_an_unregistered_one(Route::Execute).await;
 }
+
+/// MIK-8387.EMPTY.4 control, in scope: a non-empty grant whose own tool
+/// scope denies `alpha:t` keeps the absent-tool answer on `/mcp`. The empty
+/// grant's strict refusal is for the empty grant alone.
+#[tokio::test]
+async fn a_non_empty_grant_refusing_a_tool_in_scope_answers_it_as_absent() {
+    let mut auth = key_for_alpha(Some(vec!["t".to_string()]));
+    auth.api_keys[0].name = "grant-client".to_string();
+    let fx = fixture(Setup {
+        auth: Some(auth),
+        ..Setup::default()
+    })
+    .await;
+    for route in [Route::Invoke, Route::Execute] {
+        let (status, body) = answer(&fx, route, "alpha").await;
+        assert_eq!(status, StatusCode::OK, "{route:?}: {body}");
+        assert!(
+            body.contains("the backend does not list a tool named `t`"),
+            "{route:?}: {body}"
+        );
+    }
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "alpha:t dispatched");
+}
