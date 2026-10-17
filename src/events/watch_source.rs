@@ -23,7 +23,7 @@ use std::time::Duration;
 use serde_json::{Map, Value, json};
 
 use super::fanout::SourceEvent;
-use super::records::{ApiKeyRef, Subscription, WatchClass};
+use super::records::{Subscription, WatchClass};
 use super::store::{Held, Judged};
 use super::types::{EventDescriptor, RpcError, SourceKind, Visibility};
 use super::{EventSource, EventsHub};
@@ -41,102 +41,6 @@ const BACKOFF_AFTER: u32 = 5;
 /// change on every call without the answer changing.
 const VOLATILE: [&str; 4] = ["timestamp", "requestId", "request_id", "generatedAt"];
 
-/// Whose credential a capability call needs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CredentialUse {
-    /// None: one poller serves every principal.
-    Free,
-    /// A gateway-held key (env, keychain, file): a poller per principal.
-    Keyed,
-    /// A per-user account credential: not watchable (needs the caller's
-    /// verified identity, which a stored subscription does not hold).
-    Account,
-}
-
-/// One REST capability as the watch source sees it.
-#[derive(Debug, Clone)]
-pub(crate) struct Target {
-    pub capability: String,
-    /// The backend the capability is served under (visibility scope).
-    pub backend: String,
-    /// Classified read-only as data (MIK-7216.IDEM.1); anything else is
-    /// side-effecting and never watchable.
-    pub read_only: bool,
-    // ci-allow-secret-debug: an enum naming whose credential a call needs; it holds no secret.
-    pub credential: CredentialUse,
-    pub input_schema: Value,
-}
-
-/// The subscriber a poll runs as.
-#[derive(Debug, Clone)]
-pub(crate) struct Holder {
-    pub principal: String,
-    // ci-allow-secret-debug: a key's name and digest-derived principal, never the secret.
-    pub api_key: ApiKeyRef,
-}
-
-/// Which budget a poll is charged to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Charge {
-    /// The holder's own (a credentialed poller).
-    Holder,
-    /// The gateway's global budget (a shared poller).
-    Global,
-}
-
-/// A poll that produced no answer: refused by a control or failed upstream.
-#[derive(Debug)]
-pub(crate) struct PollFailed;
-
-/// One read of the capability catalogue (MIK-8037).
-#[derive(Debug, Clone, Default)]
-pub(crate) struct Catalogue {
-    /// Every REST capability in it, read-only or not.
-    pub targets: Vec<Target>,
-    /// Every capability name in it, REST-served or not, and every name read
-    /// yet absent (refused, or unloaded): a capability not here was not
-    /// read, which is not the same as reclassified.
-    pub present: std::collections::HashSet<String>,
-    /// Every capability directory loaded, after the startup scan completed.
-    pub complete: bool,
-    /// The catalogue generation it was read at.
-    pub generation: u64,
-}
-
-/// What the gateway lends the source: the capability catalogue, the live
-/// grant check and the enforced poll.
-#[async_trait::async_trait]
-pub(crate) trait WatchHost: Send + Sync {
-    /// The catalogue now, read once: its contents, completeness and
-    /// generation agree (MIK-8037).
-    fn catalogue(&self) -> Catalogue;
-    /// Every REST capability now, read-only or not.
-    fn targets(&self) -> Vec<Target> {
-        self.catalogue().targets
-    }
-    /// The catalogue generation now: it moves at every catalogue write, so a
-    /// denial is trusted only when it has not moved since the read the
-    /// decision started from (MIK-8037).
-    fn catalogue_generation(&self) -> u64;
-    /// Whether `holder` may invoke `target` at the caller's reading `now` (MIK-8202).
-    fn may_invoke(
-        &self,
-        holder: &Holder,
-        target: &Target,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> bool;
-    /// Call `target` as `holder` with every control a `tools/call` gets, and
-    /// return the firewall-approved application value, before per-call
-    /// metadata is attached.
-    async fn poll(
-        &self,
-        holder: &Holder,
-        target: &Target,
-        arguments: &Value,
-        charge: Charge,
-    ) -> Result<Value, PollFailed>;
-}
-
 /// The capability `name` watches, if it is a watch type.
 fn capability_of(name: &str) -> Option<&str> {
     name.strip_prefix(PREFIX)?.strip_suffix(SUFFIX)
@@ -153,77 +57,6 @@ pub(crate) fn event_name(capability: &str) -> String {
     format!("{PREFIX}{capability}{SUFFIX}")
 }
 
-/// A subscription's watch options, validated.
-#[derive(Debug, Clone, PartialEq)]
-struct Options {
-    arguments: Value,
-    interval: Duration,
-    fields: Option<Vec<String>>,
-}
-
-fn options(arguments: &Value) -> Result<Options, RpcError> {
-    let call = match arguments.get("arguments") {
-        None => json!({}),
-        Some(object @ Value::Object(_)) => object.clone(),
-        Some(_) => return Err(RpcError::invalid("arguments.arguments")),
-    };
-    let interval = match arguments.get("interval") {
-        None => DEFAULT_INTERVAL,
-        Some(value) => value
-            .as_u64()
-            .filter(|s| (MIN_INTERVAL..=MAX_INTERVAL).contains(s))
-            .ok_or_else(|| RpcError::invalid("arguments.interval"))?,
-    };
-    let fields = match arguments.get("fields") {
-        None => None,
-        Some(Value::Array(items)) if !items.is_empty() => Some(
-            items
-                .iter()
-                .map(|p| p.as_str().filter(|p| p.starts_with('/')).map(str::to_owned))
-                .collect::<Option<Vec<_>>>()
-                .ok_or_else(|| RpcError::invalid("arguments.fields"))?,
-        ),
-        Some(_) => return Err(RpcError::invalid("arguments.fields")),
-    };
-    Ok(Options {
-        arguments: call,
-        interval: Duration::from_secs(interval),
-        fields,
-    })
-}
-
-/// The part of an answer the digest covers, as pointer -> value: the named
-/// `fields`, or every top-level key but `_meta` and the volatile ones.
-fn projection(value: &Value, fields: Option<&[String]>) -> BTreeMap<String, Value> {
-    match fields {
-        Some(pointers) => pointers
-            .iter()
-            .filter_map(|p| value.pointer(p).map(|v| (p.clone(), v.clone())))
-            .collect(),
-        None => match value {
-            Value::Object(map) => map
-                .iter()
-                .filter(|(k, _)| k.as_str() != "_meta" && !VOLATILE.contains(&k.as_str()))
-                .map(|(k, v)| {
-                    (
-                        format!("/{}", k.replace('~', "~0").replace('/', "~1")),
-                        v.clone(),
-                    )
-                })
-                .collect(),
-            other => BTreeMap::from([(String::new(), other.clone())]),
-        },
-    }
-}
-
-/// SHA-256 over the JCS of a projection, `sha256:` + hex.
-fn digest(projection: &BTreeMap<String, Value>) -> String {
-    use sha2::Digest as _;
-    let map: Map<String, Value> = projection.clone().into_iter().collect();
-    let bytes = serde_json::to_vec(&Value::Object(map)).unwrap_or_default();
-    format!("sha256:{}", hex::encode(sha2::Sha256::digest(bytes)))
-}
-
 /// Whether `name` is a REST watch event type.
 fn is_watch(name: &str) -> bool {
     name.starts_with(PREFIX) && name.ends_with(SUFFIX)
@@ -238,17 +71,6 @@ fn poll_key(principal: Option<&str>, name: &str, arguments: &Value) -> String {
         None => json!([name, arguments]),
     }
     .to_string()
-}
-
-/// The pointers whose values differ between two projections.
-fn changed(before: &BTreeMap<String, Value>, after: &BTreeMap<String, Value>) -> Vec<String> {
-    let mut keys: Vec<&String> = before.keys().chain(after.keys()).collect();
-    keys.sort();
-    keys.dedup();
-    keys.into_iter()
-        .filter(|k| before.get(*k) != after.get(*k))
-        .cloned()
-        .collect()
 }
 
 /// A running poller and the principal that opened it, against whose cap it
@@ -787,6 +609,14 @@ impl EventsHub {
         self.register_source(Arc::new(WatchSource::new(self, host)));
     }
 }
+
+#[path = "watch_source_host.rs"]
+mod host;
+pub(crate) use host::{Catalogue, Charge, CredentialUse, Holder, PollFailed, Target, WatchHost};
+
+#[path = "watch_source_shape.rs"]
+mod shape;
+use shape::{Options, changed, digest, options, projection};
 
 #[path = "watch_source_hold.rs"]
 mod hold;
