@@ -20,7 +20,7 @@ pub(super) async fn read_lab_baseline(path: &Path) -> Result<TrustLabBaseline, S
         .await
         .map_err(|e| format!("failed to read TrustLab baseline {}: {e}", path.display()))?;
     serde_json::from_str::<TrustLabBaseline>(&content)
-        .or_else(|_| serde_yaml::from_str::<TrustLabBaseline>(&content))
+        .or_else(|_| crate::yaml::from_str::<TrustLabBaseline>(&content))
         .map_err(|e| format!("failed to parse TrustLab baseline {}: {e}", path.display()))
 }
 

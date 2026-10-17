@@ -252,7 +252,7 @@ pub fn preflight(
 pub fn compile_descriptor_file(path: &Path, both: bool) -> Result<CompileReport, ProvisionError> {
     let raw = std::fs::read_to_string(path).map_err(ProvisionError::Io)?;
     let descriptor: SandboxDescriptor =
-        serde_yaml::from_str(&raw).map_err(|e| ProvisionError::Parse(e.to_string()))?;
+        crate::yaml::from_str(&raw).map_err(|e| ProvisionError::Parse(e.to_string()))?;
     compile_descriptor(&descriptor, both)
 }
 

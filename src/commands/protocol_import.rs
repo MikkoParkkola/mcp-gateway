@@ -376,7 +376,7 @@ fn parse_document<T: DeserializeOwned>(
     serde_json::from_str(content).or_else(|json_err| {
         guard_untrusted_yaml(content)
             .map_err(|guard_err| format!("rejected {label} {}: {guard_err}", file.display()))?;
-        serde_yaml::from_str(content).map_err(|yaml_err| {
+        crate::yaml::from_str(content).map_err(|yaml_err| {
             format!(
                 "failed to parse {label} {} as JSON or YAML: {json_err}; {yaml_err}",
                 file.display()
@@ -392,7 +392,7 @@ const MAX_SPEC_BYTES: usize = 16 * 1024 * 1024;
 /// a low cap kills the exponential "billion laughs" alias-amplification bomb.
 const MAX_YAML_ALIASES: usize = 64;
 
-/// Reject hostile untrusted YAML before it reaches `serde_yaml`, which expands
+/// Reject hostile untrusted YAML before it reaches the YAML parser, which expands
 /// anchor/alias references during deserialization (a "billion laughs" memory /
 /// stack `DoS`). JSON parsing is already bounded by `serde_json`'s recursion limit,
 /// so this guard only runs on the YAML fallback path.
