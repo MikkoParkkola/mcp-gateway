@@ -89,16 +89,26 @@ impl MetaMcp {
     /// (U1/U2). There is no admission shortcut for an account already known
     /// live: the lift reuses the route-stage resolution, so serving here would
     /// save nothing measurable (lead ruling on M14).
-    pub(crate) fn stored_replay_defers(&self, server: &str, tool: &str) -> bool {
-        self.mints_per_caller(server, tool)
+    pub(in crate::gateway) fn stored_replay_defers(
+        &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
+        server: &str,
+        tool: &str,
+    ) -> bool {
+        self.mints_per_caller(view, server, tool)
     }
 
     /// Whether dispatching `(server, tool)` mints a per-caller credential
     /// (MIK-8392 STORED.2 E7): the dispatch's own mint conditions, an
     /// identity-propagation backend (with or without an `account:`) or a
     /// capability account. A target this refuses needs no liveness proof.
-    pub(crate) fn mints_per_caller(&self, server: &str, tool: &str) -> bool {
-        self.target_account(server, tool).is_some()
+    pub(in crate::gateway) fn mints_per_caller(
+        &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
+        server: &str,
+        tool: &str,
+    ) -> bool {
+        self.target_account(view, server, tool).is_some()
             || self
                 .backends
                 .get(server)
@@ -152,7 +162,11 @@ impl MetaMcp {
         else {
             return Some((response, audit));
         };
-        if !self.stored_replay_defers(&target.server, &target.tool) {
+        if !self.stored_replay_defers(
+            &self.scoped(caller.scope().authorizer.backend_grant()),
+            &target.server,
+            &target.tool,
+        ) {
             return Some((response, audit));
         }
         let id = response.id.clone();

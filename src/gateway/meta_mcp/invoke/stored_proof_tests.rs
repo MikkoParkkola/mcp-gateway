@@ -182,7 +182,7 @@ async fn e9u_an_unavailable_repeat_answers_only_a_lacked_target() {
     let (_gateway, meta) = connected();
     let task = finished();
     let account = meta
-        .target_account(BACKEND, TOOL)
+        .target_account(&meta.unscoped_for_test(), BACKEND, TOOL)
         .expect("an account target");
     let stored = stored_on(&task, vec![target()]);
     let run = |lacked: bool, fill_error: Option<crate::Error>| {

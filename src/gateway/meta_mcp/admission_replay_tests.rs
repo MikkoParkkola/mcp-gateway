@@ -56,7 +56,7 @@ async fn an_unrecorded_deferral_fails_closed() {
         ..ctx(&AllowAll)
     };
     assert!(
-        meta.stored_replay_defers("idp", "read"),
+        meta.stored_replay_defers(&meta.unscoped_for_test(), "idp", "read"),
         "premise: the target defers"
     );
     let stored = JsonRpcResponse::success(RequestId::Number(4), json!({"content": []}));

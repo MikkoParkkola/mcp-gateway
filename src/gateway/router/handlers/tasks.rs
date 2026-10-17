@@ -749,15 +749,19 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
                 .and_then(Value::as_str)
                 .and_then(|id| self.state.tasks.get(&self.owner, id).ok())
         });
-        let mut pending = crate::gateway::meta_mcp::visible::with_visibility_memo(async {
-            if let Some(Some(task)) = prepared.as_ref() {
-                prepare_stored_read_with_policy(&self.state, task, &live).await;
-            }
-            self.state
-                .meta_mcp
-                .task_notification_frame(notification, stored, refused, subscription)
-                .await
-        })
+        // Boxed: the stored-read pre-pass and the frame together pass the
+        // large-future limit once the reader's view is threaded (MIK-8387).
+        let mut pending = Box::pin(crate::gateway::meta_mcp::visible::with_visibility_memo(
+            async {
+                if let Some(Some(task)) = prepared.as_ref() {
+                    prepare_stored_read_with_policy(&self.state, task, &live).await;
+                }
+                self.state
+                    .meta_mcp
+                    .task_notification_frame(notification, stored, refused, subscription)
+                    .await
+            },
+        ))
         .await?;
         let holds = std::mem::take(&mut pending.holds);
         Some(crate::gateway::streaming::TaskFrame {

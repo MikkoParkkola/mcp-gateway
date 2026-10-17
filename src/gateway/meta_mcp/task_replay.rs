@@ -136,9 +136,12 @@ impl MetaMcp {
                 !self.target_refused_without_catalogue((server, tool), scope, session_id)
             })
             .collect();
-        self.fill_account_outcomes(&judged, caller, writes).await;
+        let view = self.scoped(scope.authorizer.backend_grant());
+        self.fill_account_outcomes(&view, &judged, caller, writes)
+            .await;
         for &(server, tool) in &targets {
-            self.keep_permanent_refusal(server, tool, caller).await;
+            self.keep_permanent_refusal(&view, server, tool, caller)
+                .await;
             self.settle_caller_view(server, tool, scope, session_id)
                 .await;
             self.settle_shared_view((server, tool), scope, session_id)
@@ -152,11 +155,12 @@ impl MetaMcp {
     /// Busy, shutting-down and store failures stay retryable.
     async fn keep_permanent_refusal(
         &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
         server: &str,
         tool: &str,
         caller: crate::identity_propagation::CallerProof<'_>,
     ) {
-        let Some(account) = self.target_account(server, tool) else {
+        let Some(account) = self.target_account(view, server, tool) else {
             return;
         };
         if visible::account_outcome(server, &account) != Some(AccountOutcome::Unavailable)
@@ -164,7 +168,7 @@ impl MetaMcp {
         {
             return;
         }
-        if let Some(refusal) = self.live_refusal((server, tool), caller).await {
+        if let Some(refusal) = self.live_refusal(view, (server, tool), caller).await {
             visible::record_account_refusal(server, &account, refusal);
         }
     }
@@ -209,7 +213,7 @@ impl MetaMcp {
             // grant) forgets the entry, but only while it is still the one
             // seen here, so a lease claimed meanwhile survives.
             let current = self
-                .target_account(server, tool)
+                .target_account(&self.scoped(scope.authorizer.backend_grant()), server, tool)
                 .and_then(|account| visible::account_binding(server, &account));
             if current.is_none_or(|current| current == held.binding()) {
                 // MIK-8392 F2: a held catalogue past its TTL is stale, by
@@ -230,7 +234,7 @@ impl MetaMcp {
             }
         }
         let account = self
-            .target_account(server, tool)
+            .target_account(&self.scoped(scope.authorizer.backend_grant()), server, tool)
             .map(|account| visible::account_outcome(server, &account));
         // Only a live grant may re-establish a view (d1): a NoView entry is
         // reclaimed only on Live, and nothing is claimed while the account
@@ -432,7 +436,11 @@ impl MetaMcp {
         if let Some(error) = self.unknown_server_refusal(stored) {
             return Some(error_response_preserving_status(id.clone(), &error));
         }
-        if let Err(withheld) = self.judge_stored_accounts(stored, read) {
+        if let Err(withheld) = self.judge_stored_accounts(
+            &self.scoped(caller.scope().authorizer.backend_grant()),
+            stored,
+            read,
+        ) {
             return Some(match withheld {
                 StoredWithheld::Retry(after) => retry_later(id, after),
                 StoredWithheld::Refused(error) => {
@@ -537,6 +545,7 @@ impl MetaMcp {
     /// resolution.
     fn judge_stored_accounts(
         &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
         stored: &CommittedTask,
         read: StoredRead,
     ) -> std::result::Result<(), StoredWithheld> {
@@ -545,7 +554,7 @@ impl MetaMcp {
         }
         for target in &stored.targets {
             let (server, tool) = (target.server.as_str(), target.tool.as_str());
-            let Some(account) = self.target_account(server, tool) else {
+            let Some(account) = self.target_account(view, server, tool) else {
                 continue;
             };
             let outcome = visible::account_outcome(server, &account);

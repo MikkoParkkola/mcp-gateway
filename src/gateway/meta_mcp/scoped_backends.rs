@@ -172,6 +172,12 @@ impl MetaMcp {
             capability: self.get_capabilities().map(|cap| cap.name.clone()),
         }
     }
+    /// The view of a caller with no scope, for tests that judge a target
+    /// with no request around it.
+    #[cfg(test)]
+    pub(in crate::gateway) fn unscoped_for_test(&self) -> ScopedBackends<'_> {
+        self.scoped(BackendGrant::Unscoped)
+    }
 }
 
 impl ScopedBackends<'_> {
@@ -203,10 +209,6 @@ impl ScopedBackends<'_> {
     /// The scoped read: `name`'s backend, or `None` when it is absent for
     /// this grant. Named apart from `BackendRegistry::get`, so its receiver
     /// follows from the name wherever the view is bound.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "first read in PR-B commit 2 (MIK-8387)")
-    )]
     pub(in crate::gateway) fn scoped_get(&self, name: &str) -> Option<Arc<Backend>> {
         if self.absence(name).is_some() {
             return None;

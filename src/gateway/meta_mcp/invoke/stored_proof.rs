@@ -123,9 +123,12 @@ impl crate::gateway::meta_mcp::MetaMcp {
         // A permanent refusal this request's repeat pre-pass already met is
         // the live answer (#3892 Ub-repeat): resolving again would write a
         // second refusal record for one call.
-        if let Some(account) = self.target_account(server, tool)
-            && let Some(refusal) =
-                crate::gateway::meta_mcp::visible::take_account_refusal(server, &account)
+        if let Some(account) = self.target_account(
+            &self.scoped(caller.scope().authorizer.backend_grant()),
+            server,
+            tool,
+        ) && let Some(refusal) =
+            crate::gateway::meta_mcp::visible::take_account_refusal(server, &account)
         {
             return Err(refusal);
         }
@@ -192,13 +195,18 @@ impl crate::gateway::meta_mcp::MetaMcp {
         // A repeat's fill (#3892): outcomes recorded, a busy custody writes
         // no transient `idp_refuse` (R5).
         self.fill_account_outcomes(
+            &self.scoped(caller.scope().authorizer.backend_grant()),
             &targets,
             proof,
             crate::gateway::meta_mcp::account_outcome::AccountWrites::PermanentOnly,
         )
         .await;
         for &(server, tool) in &targets {
-            let Some(account) = self.target_account(server, tool) else {
+            let Some(account) = self.target_account(
+                &self.scoped(caller.scope().authorizer.backend_grant()),
+                server,
+                tool,
+            ) else {
                 continue;
             };
             if visible::account_outcome(server, &account) != Some(AccountOutcome::Unavailable) {

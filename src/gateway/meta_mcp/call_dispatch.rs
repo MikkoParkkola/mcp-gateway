@@ -568,10 +568,19 @@ impl MetaMcp {
             // only by a live resolution below. There is no shortcut for an
             // outcome already read Live: a carried credential is taken above
             // first, so it saved nothing measurable (E10b, T4).
-            if !self.mints_per_caller(server, tool) {
+            if !self.mints_per_caller(
+                &self.scoped(caller.scope().authorizer.backend_grant()),
+                server,
+                tool,
+            ) {
                 continue;
             }
-            if !resolved.insert((server.to_owned(), self.target_account(server, tool))) {
+            let account = self.target_account(
+                &self.scoped(caller.scope().authorizer.backend_grant()),
+                server,
+                tool,
+            );
+            if !resolved.insert((server.to_owned(), account)) {
                 continue;
             }
             match self.prove_target_live((server, tool), caller).await {

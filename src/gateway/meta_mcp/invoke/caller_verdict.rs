@@ -114,10 +114,11 @@ impl MetaMcp {
     /// what a live call runs, including the refusal's audit record.
     pub(in crate::gateway::meta_mcp) async fn live_refusal(
         &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
         (server, tool): (&str, &str),
         caller: CallerProof<'_>,
     ) -> Option<crate::Error> {
-        let backend = self.backends.get(server);
+        let backend = view.scoped_get(server);
         self.resolve_dispatch(
             (server, tool),
             backend.as_deref(),
@@ -213,7 +214,11 @@ impl MetaMcp {
                 // consumed once at the dispatch.
                 let reason = error.to_string();
                 visible::record_account_transient(server, tool, reason.clone());
-                if let Some(account) = self.target_account(server, tool) {
+                if let Some(account) = self.target_account(
+                    &self.scoped(caller.scope().authorizer.backend_grant()),
+                    server,
+                    tool,
+                ) {
                     visible::record_account_outcome(
                         server,
                         &account,

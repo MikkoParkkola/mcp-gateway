@@ -33,7 +33,19 @@ pub(super) enum AccountWrites {
 
 impl MetaMcp {
     /// The account `server`'s `tool` dispatches under, if any.
-    pub(crate) fn target_account(&self, server: &str, tool: &str) -> Option<AccountKey> {
+    ///
+    /// `view` is the reading caller's: a name absent for its grant has no
+    /// account here, so no account of a backend it cannot reach is judged
+    /// (MIK-8387 PR-B).
+    pub(in crate::gateway) fn target_account(
+        &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
+        server: &str,
+        tool: &str,
+    ) -> Option<AccountKey> {
+        if view.absence(server).is_some() {
+            return None;
+        }
         if let Some(backend) = self.backends.get(server)
             && backend.identity_propagation_config().is_some()
             && let Some(descriptor) = backend.account_descriptor_id()
@@ -54,12 +66,13 @@ impl MetaMcp {
     /// ([`AccountOutcome::Unavailable`]), never an error.
     pub(super) async fn fill_account_outcomes(
         &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
         targets: &[(&str, &str)],
         caller: CallerProof<'_>,
         writes: AccountWrites,
     ) {
         for &(server, tool) in targets {
-            let Some(account) = self.target_account(server, tool) else {
+            let Some(account) = self.target_account(view, server, tool) else {
                 continue;
             };
             if visible::account_outcome(server, &account).is_some() {
@@ -113,7 +126,9 @@ impl MetaMcp {
             if self.backends.get(server).is_some() {
                 continue;
             }
-            let Some(account) = self.target_account(server, tool) else {
+            let Some(account) =
+                self.target_account(&self.scoped(scope.authorizer.backend_grant()), server, tool)
+            else {
                 continue;
             };
             if visible::account_outcome(server, &account).is_some() {
