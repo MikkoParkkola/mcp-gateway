@@ -9,6 +9,8 @@ mod fixture;
 mod hardened_signing;
 mod key_only;
 mod review_regressions;
+/// MIK-8353 slice 3c: a consumed grant keeps the nonce through a submit refusal.
+mod s3c_keep;
 mod slot_release;
 use fixture::*;
 
