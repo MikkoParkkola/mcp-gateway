@@ -216,9 +216,11 @@ New rows for the line's changes:
     `WINDOW_OPEN_STARTUP_BOUND` passes, and the marker is logged. The broadcast still seals at
     once. The saver ends within the deadline. If the stall is never released, the segment is absent or
     unclean. If it is released after the deadline, the segment is clean with exactly the sealed
-    counts.
-19. **Crash in the first interval** (round 3, HIGH). With `record`, the process serves one
-    request and is then dropped without shutdown, before any periodic tick. The reopened file
+    counts. A third arm: the open times out at startup but completes before the shutdown deadline.
+    The window then holds exactly one segment, clean, with exactly the sealed counts.
+19. **Crash in the first interval** (round 3, HIGH). With `record` and a startup open that
+    succeeded, the real binary (`#![cfg(unix)]` integration test, port 0, its own config dir)
+    serves one request and is SIGKILLed before any periodic tick. The reopened file
     holds this process's segment, unclean, so the window blocks. It never holds no segment.
 20. **Open failure and retry.** The open fails at startup (an unwritable directory). The marker
     is logged and requests are served. Once the directory is made writable, a later tick opens
@@ -275,3 +277,9 @@ on a sleep.
 | The open deferred to the first tick (seat 2, MEDIUM) | The same finding as seat 1's HIGH, folded above. |
 | Row 18 omits a clean late landing (seat 2, LOW) | Fixed: all three outcomes are listed. |
 | Schema delta, a named stall seam, per-writer timing in the output (seat 2, improvements) | Adopted. |
+
+## Round 4 (delta pass on the open-before-serving change; seat 1 only, by lead ruling): SHIP
+
+No findings. Two improvements were adopted. Row 18 gained a third arm, an open that times out but
+completes before the deadline. Row 19 now SIGKILLs the real binary after a successful startup
+open. **The design is closed.**
