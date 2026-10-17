@@ -397,17 +397,26 @@ pub(crate) struct CapabilityAccount {
     /// proved by the peer seeing it, not by an outer "completed").
     captured: Arc<super::super::account_rest_fixture::Captured>,
     log: Arc<crate::security::TransparencyLogger>,
-    external: bool,
+    kind: AccountKind,
     personal: bool,
-    /// `WORK` is a `shared` descriptor (MIK-8406): the static credential
-    /// path, no per-caller binding.
-    shared: bool,
-    /// The capability names an account no descriptor declares, registered
-    /// with no registry to check it against (MIK-8451).
-    undeclared: bool,
     log_dir: tempfile::TempDir,
     /// Test-only (MIK-8428 Case A): see [`ReleaseBudget`].
     release_budget: Arc<Mutex<Option<usize>>>,
+}
+
+/// What the capability's account reference names (MIK-8451).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AccountKind {
+    /// `WORK`, a managed descriptor: the vault mints per caller.
+    Managed,
+    /// `WORK`, an external descriptor (no vault, so its view is unjudged).
+    External,
+    /// `WORK`, a `shared` descriptor: the gateway's static credential, no
+    /// per-caller binding.
+    Shared,
+    /// [`GHOST`], which no descriptor declares, registered with no registry
+    /// to check it against.
+    Undeclared,
 }
 
 /// An account id no fixture descriptor declares (MIK-8451).
@@ -454,10 +463,12 @@ impl CapabilityAccount {
             port,
             captured,
             log,
-            external,
+            kind: if external {
+                AccountKind::External
+            } else {
+                AccountKind::Managed
+            },
             personal: false,
-            shared: false,
-            undeclared: false,
             log_dir: dir,
             release_budget: Arc::new(Mutex::new(None)),
         }
@@ -476,7 +487,7 @@ impl CapabilityAccount {
     /// to the static credential, with no per-caller binding (MIK-8406).
     pub(crate) async fn start_shared() -> Self {
         let mut account = Self::start(false).await;
-        account.shared = true;
+        account.kind = AccountKind::Shared;
         account
     }
 
@@ -487,7 +498,7 @@ impl CapabilityAccount {
     /// dispatch can refuse it (MIK-8451).
     pub(crate) async fn start_undeclared() -> Self {
         let mut account = Self::start(false).await;
-        account.undeclared = true;
+        account.kind = AccountKind::Undeclared;
         account
     }
 
@@ -517,12 +528,10 @@ impl CapabilityAccount {
             capability, external, managed, rest_config, shared,
         };
         meta.enable_transparency_log(Arc::clone(&self.log));
-        let descriptor = if self.shared {
-            shared(WORK)
-        } else if self.external {
-            external(WORK)
-        } else {
-            managed(WORK)
+        let descriptor = match self.kind {
+            AccountKind::Shared => shared(WORK),
+            AccountKind::External => external(WORK),
+            AccountKind::Managed | AccountKind::Undeclared => managed(WORK),
         };
         let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
         let custody: Arc<dyn AccountCustody> = Arc::new(ReleaseBudget {
@@ -542,7 +551,7 @@ impl CapabilityAccount {
             .build()
             .expect("an HTTP client");
         let executor = crate::capability::CapabilityExecutor::new();
-        let executor = if self.undeclared {
+        let executor = if self.kind == AccountKind::Undeclared {
             executor
         } else {
             executor.with_account_strategies(meta.account_strategies())
@@ -554,7 +563,7 @@ impl CapabilityAccount {
                 // peer is loopback (#3892 healthy controls).
                 .with_test_loopback_egress(),
         );
-        if self.shared {
+        if self.kind == AccountKind::Shared {
             // A shared account dispatches under the gateway's own static
             // OAuth token, so the fixture seeds one.
             let token =
@@ -576,7 +585,11 @@ impl CapabilityAccount {
             capability(
                 &format!("http://127.0.0.1:{}", self.port),
                 "oauth:google",
-                Some(if self.undeclared { GHOST } else { WORK }),
+                Some(if self.kind == AccountKind::Undeclared {
+                    GHOST
+                } else {
+                    WORK
+                }),
             )
         };
         backend
