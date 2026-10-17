@@ -126,3 +126,144 @@ async fn u2_an_external_account_is_unjudged_and_served() {
         "U2: {read}"
     );
 }
+
+/// A router over `account`'s capability, armed with the idempotency cache
+/// when `cache` is set (as production arms it).
+async fn capability_router(account: &CapabilityAccount, cache: bool) -> (axum::Router, impl Sized) {
+    let (state, store) = super::tests::meta_fixture::test_router_app_state_with_meta(
+        &AuthConfig::default(),
+        None,
+        |meta| {
+            let mut meta = account.install(meta);
+            if cache {
+                meta.enable_idempotency(
+                    Arc::new(crate::idempotency::IdempotencyCache::new()),
+                    std::time::Duration::from_secs(60),
+                );
+            }
+            meta
+        },
+    )
+    .await;
+    (super::create_router(Arc::clone(&state)), (state, store))
+}
+
+/// `params` keyed with `key`.
+fn keyed(mut params: Value, key: &str) -> Value {
+    let mut meta = modern_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+    params["_meta"] = meta;
+    params
+}
+
+/// Run `params` (a keyed `name` call) twice on `router`. The first run must
+/// reach the capture peer once and succeed; the replay must equal it apart
+/// from `id`, with nothing sent again.
+async fn assert_replay_served(
+    row: &str,
+    router: &axum::Router,
+    account: &CapabilityAccount,
+    name: &str,
+    params: Value,
+) {
+    let first = send(router, "tools/call", name, params.clone()).await;
+    assert!(
+        first.get("error").is_none() && first.pointer("/result/isError") != Some(&json!(true)),
+        "premise: the call succeeded: {first}"
+    );
+    assert!(
+        first
+            .pointer("/result/content/0/text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.is_empty()),
+        "premise: the run carries the peer's payload: {first}"
+    );
+    assert_eq!(
+        account.peer_requests(),
+        1,
+        "premise: the run reached the peer once"
+    );
+    let again = send(router, "tools/call", name, params).await;
+    let mut masked = (again.clone(), first);
+    masked.0["id"] = Value::Null;
+    masked.1["id"] = Value::Null;
+    assert_eq!(
+        masked.0, masked.1,
+        "{row}: the replay differs from the run: {again}"
+    );
+    assert_eq!(account.peer_requests(), 1, "{row}: the replay was sent");
+}
+
+/// P8s (MIK-8451.PLAN.1): a keyed `gateway_execute` on a capability whose
+/// account is an explicit `shared` descriptor. The account dispatches under
+/// the gateway's static credential, with no per-caller binding, and never
+/// lapses, so the stored plan replay is served: the same answer, nothing
+/// sent again. Production config (idempotency cache armed). Red at
+/// 19ca01f07: the plan walk demanded a per-caller mint and refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn p8s_a_shared_account_plan_replay_is_served() {
+    let account = CapabilityAccount::start_shared().await;
+    let (router, _keep) = capability_router(&account, true).await;
+    let params = json!({"name": "gateway_execute",
+        "arguments": {"tool": format!("{CAPABILITY_SERVER}:{CAPABILITY_TOOL}"), "arguments": {}}});
+    assert_replay_served(
+        "P8s",
+        &router,
+        &account,
+        "gateway_execute",
+        keyed(params, "p8s"),
+    )
+    .await;
+}
+
+/// P8s-single (MIK-8451.PLAN.2): the single-call twin, with the idempotency
+/// cache unarmed. A shared account needs no liveness proof, so the retained
+/// result is served at admission. Red at 19ca01f07, where only the cache
+/// fallback (STORED.2 FIX 1b) served it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn p8s_single_a_shared_account_replay_is_served_without_the_cache() {
+    let account = CapabilityAccount::start_shared().await;
+    let (router, _keep) = capability_router(&account, false).await;
+    let params = json!({"name": "gateway_invoke",
+        "arguments": {"server": CAPABILITY_SERVER, "tool": CAPABILITY_TOOL, "arguments": {}}});
+    assert_replay_served(
+        "P8s-single",
+        &router,
+        &account,
+        "gateway_invoke",
+        keyed(params, "p8s-single"),
+    )
+    .await;
+}
+
+/// P8u (MIK-8451, mUndeclared): a capability naming an account no descriptor
+/// declares, registered with no registry to check it against. Dispatch is
+/// the only refusal (`account_strategies.rs` `declared_installed`), so the
+/// live call refuses before the peer, and a keyed replay of it gives the
+/// same refusal: nothing was stored to serve, and nothing is sent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn p8u_an_undeclared_account_refuses_live_and_on_replay() {
+    let account = CapabilityAccount::start_undeclared().await;
+    let (router, _keep) = capability_router(&account, true).await;
+    let params = keyed(
+        json!({"name": "gateway_execute",
+            "arguments": {"tool": format!("{CAPABILITY_SERVER}:{CAPABILITY_TOOL}"),
+                "arguments": {}}}),
+        "p8u",
+    );
+    let live = send(&router, "tools/call", "gateway_execute", params.clone()).await;
+    assert!(
+        live.to_string()
+            .contains("which is not a key in accounts.descriptors"),
+        "P8u: the live call was not refused as undeclared: {live}"
+    );
+    let again = send(&router, "tools/call", "gateway_execute", params).await;
+    let mut masked = (again.clone(), live);
+    masked.0["id"] = Value::Null;
+    masked.1["id"] = Value::Null;
+    assert_eq!(
+        masked.0, masked.1,
+        "P8u: the replay differs from the live refusal: {again}"
+    );
+    assert_eq!(account.peer_requests(), 0, "P8u: a call reached the peer");
+}

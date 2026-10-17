@@ -119,7 +119,12 @@ impl MetaMcp {
             // A replay restores the stored call's write record; everything
             // noted after this mark is that record (MIK-7991).
             let mark = super::gateway_writes::mark();
-            match enforce(idem_cache, key, fingerprint)? {
+            // The guard's own refusals (mismatch, in flight, at capacity)
+            // reserve nothing: they ask for the nonce back, and the witness
+            // decides (MIK-8353 3d). A stored failure below is an answer.
+            let admitted = enforce(idem_cache, key, fingerprint)
+                .inspect_err(|_| super::nonce_settle::ask_refund(caller))?;
+            match admitted {
                 // A dispatched call that failed is terminal: serving the stored
                 // error is what stops the retry re-running a side effect that
                 // may already have committed (ADR-012 consequence 1).
