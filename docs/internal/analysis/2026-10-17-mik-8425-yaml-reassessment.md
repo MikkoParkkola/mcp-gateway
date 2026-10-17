@@ -1,6 +1,6 @@
 # MIK-8425: reassessment of the abandoned YAML parser (RUSTSEC-2024-0449)
 
-Status: proposed decision, 2026-10-17. Refs MIK-8425, MIK-8424. It needs an
+Status: decided 2026-10-17 (see "Decision"). Refs MIK-8425, MIK-8424. It needed an
 operator decision (see "Decision required"). This note changes no code,
 lockfile or scanner config.
 
@@ -16,6 +16,17 @@ Recommendation: option C. The operator ratifies a dated extension of the one
 RUSTSEC-2024-0449 entry, tied to a staged migration ticket that carries the
 named criteria below. Option B, letting the exception expire, is the
 alternative. Choosing between them belongs to the operator.
+
+## Decision (operator, 2026-10-17, recorded on MIK-8425)
+
+Migrate to serde-saphyr before the 4.0.0 freeze, in staged, reviewed
+changes under MIK-8425 YAML.4, following MIG.1 to MIG.6 below. MIK-8425 is
+now in v4.0.0 and In Progress.
+
+The dated extension of the RUSTSEC-2024-0449 entry (option C) is a fallback
+only. It is used if the migration cannot pass its comparison tests in time,
+and it would still need its own reviewed config change. This note's earlier
+recommendation of C as the primary path is superseded by this decision.
 
 ## Current state (observed, release line 13590f362, 2026-10-17)
 
