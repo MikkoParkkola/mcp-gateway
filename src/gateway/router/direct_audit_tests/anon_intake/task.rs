@@ -47,8 +47,8 @@ async fn d2_auth_off_anonymous_keyed_task_keeps_the_pooled_owner() {
 /// anonymous keyed task submit waits on exactly one `tools/list` to its
 /// backend, and sends no `tools/call`, before it answers with a task handle.
 /// Counting cell: every request to `alpha` is counted and never answered
-/// ([`Extra::Hang`]), so the submit does not answer within 3 s, and by then
-/// `alpha` was sent one `tools/list` and no `tools/call`. Unreachable (`dead`,
+/// ([`Extra::Hang`]), so the submit is still waiting once `alpha` counted its
+/// list, and by then `alpha` was sent one `tools/list` and no `tools/call`. Unreachable (`dead`,
 /// a socket bound and never listening) and absent (`nope`) cells: a handle
 /// each time, so a failed or impossible list does not decide the answer.
 #[tokio::test]
@@ -58,19 +58,31 @@ async fn d2b_auth_off_task_submit_waits_on_one_list_before_its_handle() {
         ..idempotent()
     })
     .await;
-    let answered = tokio::time::timeout(
-        std::time::Duration::from_secs(3),
-        post_to(
-            &hung,
-            "/mcp",
-            &task_submit("alpha", "d2b-alpha"),
-            &Caller::Modern,
-        ),
-    )
-    .await;
+    let submit = post_to(
+        &hung,
+        "/mcp",
+        &task_submit("alpha", "d2b-alpha"),
+        &Caller::Modern,
+    );
+    tokio::pin!(submit);
+    // Wait on the event, not a window: alpha counted its `tools/list`. The
+    // 30 s bound is a hang guard; `alpha` answers nothing, so the submit
+    // cannot answer first.
+    let listed = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while hung.lists.load(Ordering::SeqCst) < 1 {
+            tokio::task::yield_now().await;
+        }
+    });
+    tokio::select! {
+        biased;
+        answered = &mut submit => {
+            panic!("d2b counting: the submit answered while alpha held every request: {answered:?}")
+        }
+        listed = listed => assert!(listed.is_ok(), "d2b counting: alpha was never sent a tools/list"),
+    }
     assert!(
-        answered.is_err(),
-        "d2b counting: the submit answered while alpha held every request: {answered:?}"
+        futures::poll!(&mut submit).is_pending(),
+        "d2b counting: the submit answered while alpha held every request"
     );
     assert_eq!(
         (
