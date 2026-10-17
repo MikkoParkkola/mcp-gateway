@@ -313,12 +313,24 @@ pub(super) async fn test_router_app_state_with_auth_and_key_server(
 
 /// MIK-8350: the authenticated fixture with a key server and a configured
 /// Meta-MCP, for the `list_changed` audience rows under `gateway::server`.
+/// With `agents`, agent auth is on against that registry from the start, so
+/// the listener registry and the request middleware share it (MIK-8377).
 pub(crate) async fn audience_state(
     auth: &AuthConfig,
-    key_server: Option<Arc<crate::key_server::KeyServer>>,
+    (key_server, agents): (
+        Option<Arc<crate::key_server::KeyServer>>,
+        Option<Arc<AgentRegistry>>,
+    ),
     configure: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> (Arc<AppState>, tempfile::TempDir) {
-    meta_fixture::test_router_app_state_with_meta(auth, key_server, configure).await
+    let agent_auth = match agents {
+        Some(registry) => AgentAuthState::new(true, registry),
+        None => AgentAuthState::new(false, Arc::new(AgentRegistry::new())),
+    };
+    meta_fixture::test_router_app_state_with_meta_and_agent_auth(
+        auth, key_server, agent_auth, configure,
+    )
+    .await
 }
 
 /// The streaming-session owner the router derives for `held` (as
