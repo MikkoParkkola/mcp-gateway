@@ -546,3 +546,82 @@ async fn p9g_a_plan_row_with_an_empty_recorded_list_is_served() {
     assert_row_status("P9g", &again, &id, "completed");
     assert_eq!(sends.load(Ordering::SeqCst), sent, "P9g: the repeat sent");
 }
+
+/// A keyed `gateway_execute` single whose step asks for input: the fixture's
+/// backend answers an input round on folder [`r6m_token_exchange::ASK`].
+fn asking(key: &str, task: bool) -> Value {
+    let mut params = execute(key, task);
+    params["arguments"]["arguments"]["folder"] = json!(r6m_token_exchange::ASK);
+    params
+}
+
+/// P9j (ii) (MIK-8406, task half; mutant mCarve): a plan task parks
+/// `input_required` on the token-exchange backend, its target recorded at
+/// the park. With the account live, its repeat serves the parked row (the
+/// prompt). The `IdP` then dies and the TTL passes: the repeat is answered
+/// exactly as the same call made live (normalising only `id`), with no row
+/// served, nothing sent and no plan executor entered. A carve-out that
+/// serves plan tasks unjudged (mCarve, the pre-fix base) serves the prompt.
+#[tokio::test]
+async fn p9j_an_input_required_plan_row_repeat_answers_the_live_resolution_error() {
+    let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
+    let idp = r6m_token_exchange::LiveIdp::start(&key).await;
+    let alice = r6m_token_exchange::alice();
+    let (router, sends, _dirs, served, _hold) =
+        r6m_token_exchange::gateway_with_meta(&key, idp.endpoint(), &alice).await;
+    let meta_mcp = Arc::clone(&served.meta_mcp);
+    let call = ("tools/call", "gateway_execute");
+    let made = r6m_token_exchange::send_method_as(&router, &alice, call, asking("p9j", true)).await;
+    let id = made
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("premise: a task was made: {made}"))
+        .to_owned();
+    await_status(&router, &alice, &id, "input_required").await;
+    let recorded: Vec<(String, String)> = served
+        .task_executor
+        .service
+        .store
+        .targets_for_test(&id)
+        .into_iter()
+        .map(|target| (target.server, target.tool))
+        .collect();
+    assert_eq!(
+        recorded,
+        vec![(r6m_token_exchange::TX.to_owned(), TOOL.to_owned())],
+        "premise: the park recorded exactly the plan's one target"
+    );
+    let served_prompt =
+        r6m_token_exchange::send_method_as(&router, &alice, call, asking("p9j", true)).await;
+    assert_row_status("P9j all-live", &served_prompt, &id, "input_required");
+    let (sent, entered) = (
+        sends.load(Ordering::SeqCst),
+        crate::gateway::meta_mcp::plan_entries::count(&meta_mcp),
+    );
+    let _clock = outlive_the_token(idp);
+    let again =
+        r6m_token_exchange::send_method_as(&router, &alice, call, asking("p9j", true)).await;
+    let replay_entries = crate::gateway::meta_mcp::plan_entries::count(&meta_mcp) - entered;
+    let replay_sends = sends.load(Ordering::SeqCst) - sent;
+    let live =
+        r6m_token_exchange::send_method_as(&router, &alice, call, asking("p9j-live", false)).await;
+    assert_eq!(
+        live.pointer("/error/code"),
+        Some(&json!(-32603)),
+        "premise: the live call is refused with the resolution error: {live}"
+    );
+    assert!(
+        again.pointer("/result/taskId").is_none(),
+        "P9j: the repeat answered a task (stored or new): {again}"
+    );
+    assert_eq!(
+        id_masked(&again),
+        id_masked(&live),
+        "P9j: the repeat differs from the live call"
+    );
+    assert_eq!(replay_sends, 0, "P9j: the repeat reached the backend");
+    assert_eq!(
+        replay_entries, 0,
+        "P9j: the replay entered the plan executor"
+    );
+}

@@ -351,6 +351,7 @@ impl MetaMcp {
         // the check's fill spent.
         witness.carry(rw::schema_effect(fills() != fills_before));
         if let Some(refusal) = checked? {
+            nonce_settle::ask_refund(caller); // MIK-8353 3d: the witness decides
             return Ok(TracedOutcome::Live(refusal));
         }
 
