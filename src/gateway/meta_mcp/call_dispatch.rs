@@ -480,8 +480,9 @@ impl MetaMcp {
                 {
                     return refusal;
                 }
-                // Site 5 walks every recorded target: one for a single call,
-                // one per dispatched step for a plan (MIK-8406 PLANREPLAY.4).
+                // Site 5 walks every recorded target (MIK-8406 PLANREPLAY.4). A
+                // pre-v5 row was refused above (-32003, task_replay.rs); a v5 row
+                // holds every authorized step (grant_audit.rs), never none.
                 let targets = stored.targets.clone();
                 // The holds already sit in this request's scope.
                 let held =
