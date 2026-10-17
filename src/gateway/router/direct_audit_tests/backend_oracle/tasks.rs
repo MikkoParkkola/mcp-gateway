@@ -265,7 +265,9 @@ fn r3_a_stored_read_refused_for_scope_logs_the_refusal_and_an_absent_one_does_no
     let line = beta
         .lines()
         .find(|l| l.contains(REFUSED))
-        .unwrap_or_else(|| panic!("R3: no audit_refusal warning for beta; read {beta_read:?}; log:\n{beta}"));
+        .unwrap_or_else(|| {
+            panic!("R3: no audit_refusal warning for beta; read {beta_read:?}; log:\n{beta}")
+        });
     // The warning's own fields (`authz.rs` `audit_refusal`): the scoped
     // key's caller name, the stored target, and the scope refusal's reason.
     for field in [
@@ -274,7 +276,10 @@ fn r3_a_stored_read_refused_for_scope_logs_the_refusal_and_an_absent_one_does_no
         "tool=\"t\"",
         "reason=\"Client 'alpha-client' not authorized for backend 'beta'\"",
     ] {
-        assert!(line.contains(field), "R3: refusal line lacks {field}: {line}");
+        assert!(
+            line.contains(field),
+            "R3: refusal line lacks {field}: {line}"
+        );
     }
     let (_, ghost_read, ghost) = &cells[1];
     assert!(

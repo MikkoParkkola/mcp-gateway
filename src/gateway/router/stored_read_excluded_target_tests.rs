@@ -113,7 +113,10 @@ async fn send_full(
         .await
         .expect("a body");
     let body = serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-        panic!("{method}: the answer is not JSON ({e}): {}", String::from_utf8_lossy(&bytes))
+        panic!(
+            "{method}: the answer is not JSON ({e}): {}",
+            String::from_utf8_lossy(&bytes)
+        )
     });
     (status, body)
 }
