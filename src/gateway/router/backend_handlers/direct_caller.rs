@@ -376,10 +376,6 @@ pub(super) fn route<'a>(
         return Err(backend_not_found(name));
     };
 
-    let protocol_header = caller
-        .inbound_headers
-        .get("mcp-protocol-version")
-        .and_then(|value| value.to_str().ok());
     // A presented session counts only for its owner, by the `/mcp` owner rule.
     let owner =
         super::super::handlers::owner_of(key, &caller.inbound_headers, caller.client.as_ref());
@@ -388,21 +384,13 @@ pub(super) fn route<'a>(
         .get("mcp-session-id")
         .and_then(|value| value.to_str().ok())
         .filter(|id| state.multiplexer.touch_if_owned(id, &owner));
-    // U1 (MIK-7211): refused unserved after the window seal, as on `/mcp`.
-    if !crate::protocol_revision_telemetry::observe_inbound_request_from(
+    if !super::super::helpers::observe_http(
         &envelope.json_request,
         envelope.params.as_ref(),
         &envelope.method,
-        protocol_header,
+        &caller.inbound_headers,
         session_id,
-        crate::protocol_revision_telemetry::Transport::Http,
-        Some(crate::protocol_revision_telemetry::HttpCaller {
-            user_agent: caller
-                .inbound_headers
-                .get(axum::http::header::USER_AGENT)
-                .and_then(|value| value.to_str().ok()),
-            sealed: &state.meta_mcp.window_seal,
-        }),
+        &state.meta_mcp.window_seal,
     ) {
         return Err(crate::gateway::router::helpers::window_sealed_response(
             &envelope.json_request,

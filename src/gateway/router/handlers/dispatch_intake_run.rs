@@ -404,26 +404,9 @@ pub(in crate::gateway::router::handlers) async fn intake(
         }
     };
 
-    let protocol_header = headers
-        .get("mcp-protocol-version")
-        .and_then(|value| value.to_str().ok());
-    // U1 (MIK-7211): a request that reaches this count point after the
-    // window seal is refused unserved, so every served request is counted.
-    if !crate::protocol_revision_telemetry::observe_inbound_request_from(
-        &request,
-        params,
-        &method,
-        protocol_header,
-        Some(session_id.as_str()),
-        crate::protocol_revision_telemetry::Transport::Http,
-        Some(crate::protocol_revision_telemetry::HttpCaller {
-            user_agent: headers
-                .get(axum::http::header::USER_AGENT)
-                .and_then(|value| value.to_str().ok()),
-            sealed: &state.meta_mcp.window_seal,
-        }),
-    ) {
-        return Err(crate::gateway::router::helpers::window_sealed_response(&request).into_response());
+    let sealed = &state.meta_mcp.window_seal;
+    if !super::super::helpers::observe_http(&request, params, &method, &headers, Some(session_id.as_str()), sealed) {
+        return Err(super::super::helpers::window_sealed_response(&request).into_response());
     }
 
     // Which protocol generation is this request written against? Decided per

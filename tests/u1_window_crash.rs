@@ -69,6 +69,7 @@ fn a_record_gateway_killed_after_serving_leaves_an_unclean_segment() {
     child.kill().expect("SIGKILL");
     let killed_after = spawned.elapsed();
     let _ = child.wait();
+    // timing-oracle: vs WINDOW_SAVE_INTERVAL (MIK-7211)
     assert!(
         killed_after < FIRST_PERIODIC_SAVE,
         "inconclusive: the kill landed {killed_after:?} after spawn, when a periodic save may \

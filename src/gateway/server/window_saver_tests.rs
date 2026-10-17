@@ -136,6 +136,7 @@ async fn a_final_write_stalled_past_its_bound_leaves_the_segment_unclean() {
     entered.recv_timeout(ARRIVAL).expect("the final write starts");
     assert!(rig.seal.load(Ordering::SeqCst), "the seal waits for no write");
     tokio::time::timeout(ARRIVAL, saver).await.expect("bounded").expect("no panic");
+    // timing-oracle: vs CLOSE_BOUND (MIK-7211)
     assert!(
         broadcast.elapsed() < CLOSE_BOUND + ALLOWANCE,
         "the saver outlived its close bound: {:?}",

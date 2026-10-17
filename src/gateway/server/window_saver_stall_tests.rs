@@ -6,6 +6,10 @@
 
 use super::*;
 
+/// Bound on each wait for something that must happen (a hang guard); local
+/// so the timing gate resolves it in this file.
+const ARRIVAL: Duration = Duration::from_secs(30);
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stalled_checkpoint_never_overtakes_the_final_write() {
     // Row 16.
@@ -49,6 +53,7 @@ async fn a_stalled_open_delays_serving_by_its_bound_only() {
         .await
         .expect("record");
     let open_bound = settings(CLOSE_BOUND).open_bound;
+    // timing-oracle: vs WINDOW_OPEN_STARTUP_BOUND (MIK-7211)
     assert!(
         started.elapsed() < open_bound + ALLOWANCE,
         "serving waited past the open bound: {:?}",
@@ -57,6 +62,7 @@ async fn a_stalled_open_delays_serving_by_its_bound_only() {
     open_in.recv_timeout(ARRIVAL).expect("the open started");
     let broadcast = std::time::Instant::now();
     stop(&rig, saver).await;
+    // timing-oracle: vs CLOSE_BOUND (MIK-7211)
     assert!(broadcast.elapsed() < CLOSE_BOUND + ALLOWANCE);
     assert!(rig.seal.load(Ordering::SeqCst));
     assert!(rig.segments().is_empty(), "{:?}", rig.segments());
