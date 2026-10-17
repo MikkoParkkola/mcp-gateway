@@ -52,52 +52,48 @@ pre-registered. 2026-07-28 has no session to count. The wording gap in MIK-8442.
 | 4 | MIK-8202: the wall clock is read only through `crate::clock` | `crate::clock::unix_secs()`. On `ClockBeforeEpoch` the tick is skipped and logged. The old code wrote a 0 timestamp instead. On a clock error at close, the segment stays unclean (fail-safe). |
 | 5 | Router split | `observe_inbound_request_from(.., Some(HttpCaller { user_agent, sealed }))` is called at `router/handlers/dispatch_intake_run.rs:410`, which returns `Err(<503 response>)`, and at `router/backend_handlers/direct_caller.rs:391`, which returns `Err(Rejection)`. The response is built once in `router/helpers.rs` (`window_sealed_response`). Stdio (`server/stdio_single.rs:282`) keeps the public `observe_inbound_request` and is never refused. |
 | 6 | The serve path moved to `server/run.rs`; MIK-8156 added an in-process shutdown trigger | The saver is spawned beside the cost saver in `run.rs` and awaited after `listener::serve`. That await is bounded because the final write is. The saver calls `run_shutdown_saves` itself, with its own deadline taken at the broadcast, so `save_state_on_shutdown` keeps its signature. The shutdown test uses `test_seams` (port 0, tempdir data dir, trigger), not a fixed-port binary. The `#![cfg(unix)]` SIGTERM binary test is dropped: the trigger enters the same broadcast that `shutdown_signal` sends (`test_seams.rs:104`). |
-| 7 | `ServerConfig` moved to `src/config/server_config.rs` | The field goes there, if ruling B allows it (below). |
+| 7 | `ServerConfig` moved to `src/config/server_config.rs` | The field goes there (ruling B, below). |
 | 8 | Secret-file population | A new row for `src/protocol_revision_telemetry/window.rs`. |
 | 9 | UPGRADING uses `upgrading.d/` fragments | `upgrading.d/<PR>.md`. The startup marker follows `upgrading-startup-grammar.json`. A v1 file now produces a WARN on every stdio start and on every HTTP open while `record` is set, so the marker names the log line and does not say "no notice". |
 | 10 | More callers of the v1 items | Listed under ruling B. |
 
-## Ruling B (public API), pending the operator: both outcomes
+## Ruling B (public API): APPROVED 2026-10-17
 
-**B approved.** The source design ships as adapted above.
-- Removed from `mcp_gateway::protocol_revision_telemetry`: `DurableWindow`, `load_durable_window`,
-  `production_retirement_decision`, `production_retirement_decision_at`, `DURABLE_WINDOW_SCHEMA`
-  and `RetirementBlocked::WindowMisaligned` (nothing produces it once the evaluator above is gone).
-- Added: `pub ServerConfig::protocol_revision_window` and `pub enum ProtocolRevisionWindow
-  { Off, Record }`, default `Off`. With `Off`, no segment is written, nothing is sealed, and
-  shutdown serves as in 3.5.x.
-- Unchanged public items: `DurableTelemetrySink` (no new public method), `durable_window_path`,
-  `DURABLE_TELEMETRY_DIR`, `DURABLE_WINDOW_FILE`, `observe_inbound_request`,
-  `Registry::observe_request`, `global_snapshot`, `Registry::snapshot`.
-- Callers moved:
-  - `tests/stdio_sigterm_telemetry.rs` reads `window.json` as raw JSON (`stdio.total`), the way
-    `tests/u1_v1_window_grade.rs` already does.
-  - `tests/mik_7218_acs.rs`: its two v1 window tests move in-crate (`window_tests.rs`).
-  - In-crate tests (`stdio_telemetry_save.rs`, `stdio_dispatch.rs`, `durable_tests.rs`,
+The operator delegated the ruling to the release lead, who approved option B. The source design
+ships as adapted above. The B-declined plan of the earlier draft is withdrawn.
+
+- **Removed** from `mcp_gateway::protocol_revision_telemetry`:
+  - `DurableWindow`;
+  - `load_durable_window`;
+  - `production_retirement_decision`;
+  - `production_retirement_decision_at`;
+  - `DURABLE_WINDOW_SCHEMA`;
+  - `RetirementBlocked::WindowMisaligned`, which nothing produces once the v1 evaluator is gone.
+- **Added:**
+  - `mcp_gateway::config::ServerConfig::protocol_revision_window`, a `pub` field;
+  - `pub enum mcp_gateway::config::ProtocolRevisionWindow { Off, Record }`, default `Off`.
+
+  With `Off`, no segment is written, nothing is sealed, and shutdown serves as in 3.5.x.
+- **Unchanged** public items:
+  - `DurableTelemetrySink`, with no new public method;
+  - `durable_window_path`, `DURABLE_TELEMETRY_DIR`, `DURABLE_WINDOW_FILE`;
+  - `observe_inbound_request`, `Registry::observe_request`;
+  - `global_snapshot`, `Registry::snapshot`.
+- **Conditions:**
+  - The PR body lists every removed and added public item with its path, so the operator can
+    veto before merge.
+  - An `upgrading.d` note states the removal and the new setting with its default.
+- **Callers moved:**
+  - `tests/stdio_sigterm_telemetry.rs` drives the real binary over SIGTERM, so it cannot move
+    in-crate. It stops calling the removed loader and reads `window.json` as raw JSON
+    (`stdio.total`), as `tests/u1_v1_window_grade.rs` already does.
+  - `tests/mik_7218_acs.rs`: its two v1 window tests move in-crate, into `window_tests.rs`.
+  - The in-crate tests (`stdio_telemetry_save.rs`, `stdio_dispatch.rs`, `durable_tests.rs`,
     `lock_tests.rs`) switch to the `pub(crate)` `window::load`.
-
-**B declined.** No public item changes, and v1 keeps working.
-- `window.json` stays v1 and stdio keeps writing it exactly as today. The v1 items keep working on
-  it. They are not deprecated, because a deprecation attribute is itself a public change.
-- The v2 data goes to a **second file**, `protocol-revision-telemetry/http-window.json`
-  (`mcp_protocol_revision_http_window.v1`, `pub(crate)`). It holds the HTTP segments and the agent
-  breakdown. There is no stdio slice in it, because stdio is never certified.
-- With no config field, HTTP recording has no switch. Two sub-options, and the lead picks:
-  - **B-off**: the writer, the seal and the evaluator ship, reachable only from tests. That is
-    dead in production and not useful to MIK-8442 until 4.1 adds a switch.
-  - **B-defer**: land only the in-memory per-transport split and the agent breakdown (which feed
-    nothing durable), and move the HTTP half to MIK-8442.
-  - My recommendation under a decline is B-defer, since dead production code is the worse
-    outcome.
-  - An environment variable switch would also be a public interface and needs the same approval.
-
-**Build order, so that no work is wasted whichever way the ruling goes.**
-- **Step 1**, common to every outcome including B-defer: the registry's per-transport slices and
-  agent map, `observe_inbound_request_from` and `HttpCaller`.
-- **Step 2**, common to B approved and B-off only: the window module's segment sink and
-  validation, the evaluator and the saver. Under B approved and B-off, only the file name, the
-  schema constant and the switch differ.
-- **Step 2 starts only after the ruling.**
+- **Build order:**
+  - Step 1: the registry's per-transport slices and agent map, `observe_inbound_request_from`
+    and `HttpCaller`.
+  - Step 2: the window module, the saver, the evaluator, the config field and the v1 removal.
 
 ## New `pub(crate)` and test-only items (for the PR body)
 
@@ -142,8 +138,7 @@ Rows 1-10 carry over from the source design:
    - no raw string reaches the file;
    - an unknown `clientInfo` with a curl agent counts as `curl`;
    - a key outside the set is rejected.
-8. A v1 file is refused and left byte-identical. Under B declined: v1 is untouched and v2 goes to
-   the second file.
+8. A v1 file is refused and left byte-identical.
 9. 8% unattributed returns `UnattributedAtOrAboveRetirementThreshold`.
 10. Operator command: a missing or unparsable variable fails; success writes `decision.json`; the
     qualified name selects exactly one test.
@@ -166,7 +161,7 @@ New rows for the line's changes:
       sleep.
     - Held-before requests are answered 503 with their own id, and are not in the sealed counts.
     - Held-after requests complete 200, and are in them.
-    - With `off` (or no switch), every request is served.
+    - With `off`, every request is served.
     - Stdio is never refused.
 15. **Stdio slice (the MIK-8364 path).** After a saver tick, and after the signal-stop persist,
     `stdio` holds only stdio counts, even when the same process also served HTTP.
