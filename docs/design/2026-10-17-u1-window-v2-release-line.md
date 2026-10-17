@@ -48,10 +48,10 @@ pre-registered. 2026-07-28 has no session to count. The wording gap in MIK-8442.
 |---|---|---|
 | 1 | #3728 split the telemetry file into `src/protocol_revision_telemetry/` | `window.rs` holds the schema, I/O, `HttpSegmentSink` and agent keys. `window_decide.rs` is `#[cfg(test)]` and holds the evaluator, `parse_declaration` and the operator test. With that split, no file-wide `allow(dead_code)` is needed. Each has a sibling `*_tests.rs`. |
 | 2 | MIK-8364 (#3830): stdio saves through a saver plus a signal-stop persist | `DurableTelemetrySink::persist_global` and `persist_registry` write the registry's **stdio slice** and the agents into the v2 `stdio` and `missing_revision_agents` fields. The cadence is unchanged. |
-| 3 | MIK-8157 (#3621): HTTP shutdown saves run on detached threads under a 10 s deadline | The window saver is a new `src/gateway/server/window_saver.rs` (`persistence.rs` is at 767 lines). Periodic checkpoints run on a detached thread, with a busy guard so a slow write skips ticks. On the broadcast, the saver task seals and takes the counts on the runtime (in memory, no I/O, so refusals start at once), then hands the final write to `run_shutdown_saves` under `SHUTDOWN_SAVES_TIMEOUT`. A write abandoned at the deadline leaves the segment unclean, so the window blocks. That is the fail-safe. The open, including its wait of up to 2 s for an unsealed predecessor, runs on the saver's thread, never on a runtime worker. |
+| 3 | MIK-8157 (#3621): HTTP shutdown saves run on detached threads under a 10 s deadline | The window saver lives in a new file, `src/gateway/server/window_saver.rs`, because `persistence.rs` is already at 767 lines. **Periodic checkpoints** reuse `persistence::spawn_periodic_save`, which runs each write on a detached thread. The sink sits in a `Mutex`. A tick that finds the mutex taken skips (`try_lock`), so a slow write skips ticks rather than piling up. **Close:** on the broadcast, the saver seals and takes the counts on the runtime. Both are in memory with no I/O, so refusals start at once. It then hands the final write to `run_shutdown_saves` under `SHUTDOWN_SAVES_TIMEOUT`. That write takes the same mutex blocking, so it waits behind any checkpoint still in flight and can never be overtaken by one. **Ordering invariant:** `checkpoint` refuses to touch a segment that is already `closed_cleanly`, and only the final write sets that flag. A stalled periodic write that finishes late therefore cannot reopen the segment or replace the sealed counts. **What cleanliness means:** `closed_cleanly: true` is written only in the same atomic rename as the sealed counts. A final write abandoned at the deadline keeps running on its thread. If it lands before the process exits, the file holds the exact sealed counts, which are correct. If the process exits first, or is SIGKILLed, the rename never happened and the segment reads unclean, so the window blocks. A partial state is impossible. **Open:** the open, including its wait for an unsealed predecessor, runs on the saver's thread and never on a runtime worker. The wait is `SHUTDOWN_SAVES_TIMEOUT` plus 2 s, so a predecessor's slow but healthy final write is not mislabeled as concurrent. The old wait was 2 s. Counts are cumulative from process start, so the wait loses nothing. |
 | 4 | MIK-8202: the wall clock is read only through `crate::clock` | `crate::clock::unix_secs()`. On `ClockBeforeEpoch` the tick is skipped and logged. The old code wrote a 0 timestamp instead. On a clock error at close, the segment stays unclean (fail-safe). |
 | 5 | Router split | `observe_inbound_request_from(.., Some(HttpCaller { user_agent, sealed }))` is called at `router/handlers/dispatch_intake_run.rs:410`, which returns `Err(<503 response>)`, and at `router/backend_handlers/direct_caller.rs:391`, which returns `Err(Rejection)`. The response is built once in `router/helpers.rs` (`window_sealed_response`). Stdio (`server/stdio_single.rs:282`) keeps the public `observe_inbound_request` and is never refused. |
-| 6 | The serve path moved to `server/run.rs`; MIK-8156 added an in-process shutdown trigger | The saver is spawned beside the cost saver in `run.rs` and awaited after `listener::serve`. The await is bounded, because the final write is. The shutdown test uses `test_seams` (port 0, tempdir data dir, trigger), not a fixed-port binary. The `#![cfg(unix)]` SIGTERM binary test is dropped: the trigger enters the same broadcast that `shutdown_signal` sends (`test_seams.rs:104`). |
+| 6 | The serve path moved to `server/run.rs`; MIK-8156 added an in-process shutdown trigger | The saver is spawned beside the cost saver in `run.rs` and awaited after `listener::serve`. That await is bounded because the final write is. The saver calls `run_shutdown_saves` itself, with its own deadline taken at the broadcast, so `save_state_on_shutdown` keeps its signature. The shutdown test uses `test_seams` (port 0, tempdir data dir, trigger), not a fixed-port binary. The `#![cfg(unix)]` SIGTERM binary test is dropped: the trigger enters the same broadcast that `shutdown_signal` sends (`test_seams.rs:104`). |
 | 7 | `ServerConfig` moved to `src/config/server_config.rs` | The field goes there, if ruling B allows it (below). |
 | 8 | Secret-file population | A new row for `src/protocol_revision_telemetry/window.rs`. |
 | 9 | UPGRADING uses `upgrading.d/` fragments | `upgrading.d/<PR>.md`. The startup marker follows `upgrading-startup-grammar.json`. A v1 file now produces a WARN on every stdio start and on every HTTP open while `record` is set, so the marker names the log line and does not say "no notice". |
@@ -91,10 +91,13 @@ pre-registered. 2026-07-28 has no session to count. The wording gap in MIK-8442.
     outcome.
   - An environment variable switch would also be a public interface and needs the same approval.
 
-What is common to both outcomes (written first, while the ruling is pending): the registry's
-per-transport slices and agent map, `observe_inbound_request_from` and `HttpCaller`, the window
-module's segment sink and validation, the evaluator, and the saver. Only the file name, the
-schema constant and the switch differ.
+**Build order, so that no work is wasted whichever way the ruling goes.**
+- **Step 1**, common to every outcome including B-defer: the registry's per-transport slices and
+  agent map, `observe_inbound_request_from` and `HttpCaller`.
+- **Step 2**, common to B approved and B-off only: the window module's segment sink and
+  validation, the evaluator and the saver. Under B approved and B-off, only the file name, the
+  schema constant and the switch differ.
+- **Step 2 starts only after the ruling.**
 
 ## New `pub(crate)` and test-only items (for the PR body)
 
@@ -147,24 +150,51 @@ Rows 1-10 carry over from the source design:
 
 New rows for the line's changes:
 
-11. **Bounded close (MIK-8157):** a final write stalled past the deadline does not hold
-    shutdown. The saver ends within the deadline and the segment reads unclean.
-12. **Refusal starts at the broadcast:** with the final write stalled, a request after the
+11. **Bounded close (MIK-8157).** A final write stalled past the deadline does not hold the
+    shutdown: the saver ends within the deadline. Two separate arms, each reopening the file:
+    - The stall is never released. The segment reads unclean.
+    - The stall is released after the deadline. The segment reads clean with exactly the sealed
+      counts. A late write is correct data.
+12. **Refusal starts at the broadcast.** With the final write stalled, a request after the
     broadcast is refused at once and is not counted.
-13. **Clock:** with `clock::test_support` forcing a time before the epoch, a tick writes nothing
+13. **Clock.** With `clock::test_support` forcing a time before the epoch, a tick writes nothing,
     and a close leaves the segment unclean. A 0 timestamp is never written.
-14. **Both HTTP routes, in process (test seams, port 0):**
-    - after the trigger, `/mcp` and `/mcp/{name}` each answer 503 with their own id;
-    - with `off` (or no switch) they are served;
-    - stdio is never refused.
-15. **Stdio slice (the MIK-8364 path):** after a saver tick and after the signal-stop persist,
+14. **Both HTTP routes, in-process** (test seams, port 0).
+    - One request on each of `/mcp` and `/mcp/{name}` is admitted and held *before* its count
+      point; two more are held *after* their count point.
+    - Then the trigger fires, and the test waits for the seal (the flag is observable), not for a
+      sleep.
+    - Held-before requests are answered 503 with their own id, and are not in the sealed counts.
+    - Held-after requests complete 200, and are in them.
+    - With `off` (or no switch), every request is served.
+    - Stdio is never refused.
+15. **Stdio slice (the MIK-8364 path).** After a saver tick, and after the signal-stop persist,
     `stdio` holds only stdio counts, even when the same process also served HTTP.
+16. **Checkpoint versus final write.** A periodic checkpoint is stalled holding older counts, then
+    shutdown runs. The final write waits behind it and lands. Releasing the stalled checkpoint
+    afterwards neither reopens the segment nor replaces the sealed counts.
+17. **Slow predecessor.** A predecessor whose final write lands 5 s after the successor starts its
+    open is *not* flagged `opened_while_another_was_open`. A predecessor that never closes is
+    flagged.
 
 ## Risks and falsifiers
 
 - **A 503 during shutdown is user-visible**, with `record` only. Falsifier: row 14's `off` arm.
   Any refusal with `off` means the design is wrong.
-- **An abandoned final write blocks the next window**, by design. Falsifier: row 11. An abandoned
-  write must never read `closed_cleanly: true`.
+- **A final write that never lands blocks the next window.** This is by design.
+  - Falsifier, row 11: the segment must read either unclean or clean with exactly the sealed
+    counts, never anything else.
+  - Falsifier, row 16: a late checkpoint must never reopen a closed segment.
 - **A v1 file in the operator's data dir** gives a WARN on every start until it is archived. The
   file is never touched (row 8).
+
+## Resolution of design review round 1 (two seats, both SHIP-WITH-FIXES)
+
+| Finding (seat, severity) | Resolution |
+|---|---|
+| A timeout does not make a segment unclean; the detached writer can still land `closed_cleanly: true` later (seat 1, MEDIUM) | Accepted. Cleanliness is defined by the atomic rename that carries the sealed counts. A late landing is correct data. Row 11 now has both arms. |
+| A late periodic checkpoint could overwrite the final write (seat 1, improvement) | Accepted as a defect. One mutex orders the writes, and `checkpoint` never touches a closed segment. Row 16 added. |
+| Hold requests on both sides of the count point and wait on the seal, not on timing (seat 1, improvement) | Adopted in row 14. |
+| The 2 s open wait under-covers the 10 s final-write bound (seat 2, MEDIUM) | Accepted. The wait is now `SHUTDOWN_SAVES_TIMEOUT` plus 2 s, on the saver thread. Row 17 added. |
+| "Common to both outcomes" contradicts B-defer (seat 2 LOW; seat 1 improvement) | Accepted. The build order is split into step 1 (every outcome) and step 2 (after the ruling). |
+| Reuse `spawn_periodic_save`; say how the final write reaches the deadline (seat 2, improvements) | Adopted (row 3). The saver calls `run_shutdown_saves` itself, so `save_state_on_shutdown` is unchanged (row 6). |
