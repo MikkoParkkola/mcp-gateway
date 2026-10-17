@@ -89,6 +89,13 @@ fn playbook_of(
 /// managed read with a conditional read on the second account (P8).
 fn playbooks() -> Vec<crate::playbook::PlaybookDefinition> {
     vec![
+        // N1: one step that is itself a plan (a `gateway_execute` of a read).
+        serde_json::from_value(json!({"playbook": "1.0", "name": "nested",
+            "description": "a plan in a step", "on_error": "abort",
+            "steps": [{"name": "inner", "server": "gateway", "tool": "gateway_execute",
+                       "arguments": {"tool": format!("{BACKEND}:{TOOL}"),
+                                     "arguments": {"folder": "inbox"}}}]}))
+        .expect("the playbook deserialises"),
         reads(PLAYBOOK, &[(BACKEND, None), (BACKEND, None)]),
         reads(
             "conditional",
@@ -383,5 +390,42 @@ async fn p8_control_unrun_conditional_step_revoked_does_not_block() {
         plan_entries(&fx),
         entered,
         "P8: the replay entered the plan executor: {again}"
+    );
+}
+
+/// N1 (GUARD, d4 §12.4): a plan step that names a meta plan tool is not a
+/// plan. Neither a chain step `gateway:gateway_execute` nor a playbook step
+/// on server `gateway` runs an inner plan: `gateway` is no backend, so the
+/// step fails "Backend not found" and nothing is sent. No plan nests inside
+/// a step by that route; a backend fanning out through the meta layer stays
+/// untraced (the changelog's MIK-8409 sentence).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn n1_a_step_naming_a_meta_plan_runs_no_inner_plan() {
+    let fx = fixture().await;
+    let entered = plan_entries(&fx);
+    let inner = json!({"tool": format!("{BACKEND}:{TOOL}"), "arguments": {"folder": "inbox"}});
+    let chain = json!({"name": "gateway_execute",
+        "arguments": {"chain": [{"tool": "gateway:gateway_execute", "arguments": inner}]},
+        "_meta": meta("n1-chain")});
+    let chained = send(&fx, "gateway_execute", chain).await;
+    assert!(
+        chained.to_string().contains("Backend not found: gateway"),
+        "N1: the chain's meta-plan step was not refused as a missing backend: {chained}"
+    );
+    let playbook = send(
+        &fx,
+        "gateway_run_playbook",
+        playbook_params("nested", "n1-pb", &json!({})),
+    )
+    .await;
+    assert!(
+        playbook.to_string().contains("Backend not found: gateway"),
+        "N1: the playbook's meta-plan step was not refused as a missing backend: {playbook}"
+    );
+    assert_eq!(fx.gateway.tool_calls().len(), 0, "N1: an inner plan sent");
+    assert_eq!(
+        plan_entries(&fx) - entered,
+        2,
+        "N1: only the two outer plans entered the executor"
     );
 }
