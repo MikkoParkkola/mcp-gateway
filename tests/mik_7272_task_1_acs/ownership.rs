@@ -400,17 +400,19 @@ async fn ac_task_1_20_auth_disabled_admits_the_unattributed_caller() {
 
     let public_fixture = state_public_mcp().await;
     let (_, refused) = post_unattributed(Arc::clone(&public_fixture.state), call.clone()).await;
+    // MIK-8382: with auth ENABLED the keyed create of a caller with no
+    // execution principal is refused at intake, before `missing_task_error`.
     assert_eq!(
         refused.pointer("/error/message").and_then(Value::as_str),
-        Some("no such task"),
+        Some("JSON-RPC error -32003: A verified execution principal is required"),
         "control: with auth ENABLED the same call must still be refused, or \
          the contrast below says nothing about the predicate: {refused}"
     );
     assert_eq!(
         refused.pointer("/error/code"),
-        Some(&json!(-32602)),
-        "and refused in `missing_task_error`'s own code — a different error \
-         wearing that message would be a different rule: {refused}"
+        Some(&json!(-32003)),
+        "and refused in the intake's own code — a different error wearing \
+         that message would be a different rule: {refused}"
     );
     assert_eq!(
         refused.pointer("/error/data"),
