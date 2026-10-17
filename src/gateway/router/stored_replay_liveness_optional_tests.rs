@@ -301,3 +301,91 @@ async fn t_opt_a_failed_optional_mint_is_not_a_proof_at_site_five() {
         "T-opt: the call was sent: {again}"
     );
 }
+
+/// P10u (MIK-8406 G2): S-opt-signed for a stored plan. A signed keyed
+/// `gateway_execute` single on the optional backend runs under `n1`; the
+/// `IdP` dies and the TTL passes, so its replay under `n2` mints nothing and
+/// is refused at the plan boundary. `n2` stays spent: after the `IdP`
+/// recovers, `n2` is refused as a replay, and a re-signed `n3` is served the
+/// stored result. One send in all. Hardened, as only that posture signs a
+/// plan on HTTP; the premise checks `n1` is spent on a fresh key, so the row
+/// cannot pass with signing off. It does not kill mRefund: the route stage's
+/// verdict carried the resolution, and taking it spent the refund witness
+/// before the refusal settled (measured), as on P10's revoked path.
+#[tokio::test]
+async fn p10u_an_unminted_plan_refusal_keeps_its_nonce_spent() {
+    use std::sync::atomic::Ordering;
+
+    let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
+    let idp = r6m_token_exchange::LiveIdp::start(&key).await;
+    let alice = r6m_token_exchange::alice();
+    // Hardened: the HTTP route signs every `tools/call`, a plan included.
+    let shape = (
+        r6m_token_exchange::Requirement::Optional,
+        crate::identity_propagation::PropagationStrategyKind::TokenExchange,
+        crate::security::SecurityPosture::Hardened,
+    );
+    let (router, sends, _dirs) =
+        r6m_token_exchange::gateway_shaped(&key, idp.endpoint(), &alice, shape, |mut meta| {
+            meta.enable_idempotency(
+                Arc::new(crate::idempotency::IdempotencyCache::new()),
+                std::time::Duration::from_secs(60),
+            );
+            meta.enable_message_signing(
+                crate::security::message_signing::MessageSigner::new(
+                    b"p10u-signing-key-0123456789abcdef-s".to_vec(),
+                    None,
+                    "p10u".into(),
+                ),
+                std::time::Duration::from_secs(300),
+                true,
+            );
+            meta
+        })
+        .await;
+    let keyed = |key: &str, nonce: &str| {
+        let mut params = json!({"name": "gateway_execute",
+            "arguments": {"tool": format!("{}:{TOOL}", r6m_token_exchange::TX),
+                "arguments": {"folder": "inbox"}},
+            "_meta": meta(Some(key), false)});
+        params["_meta"][crate::gateway::meta_mcp::signing::NONCE_META] = json!(nonce);
+        params
+    };
+    let signed = |nonce: &str| keyed("p10u", nonce);
+    let plan = ("tools/call", "gateway_execute");
+    let first = r6m_token_exchange::send_method_as(&router, &alice, plan, signed("n1")).await;
+    assert!(
+        first.to_string().contains(MARKER),
+        "premise: the plan ran: {first}"
+    );
+    let spent =
+        r6m_token_exchange::send_method_as(&router, &alice, plan, keyed("p10u-n1", "n1")).await;
+    assert_eq!(
+        spent.pointer("/error"),
+        Some(&json!({"code": -32001, "message": "Nonce replay detected"})),
+        "premise: a spent nonce is refused on a fresh key as a replay: {spent}"
+    );
+    let addr = idp.addr();
+    idp.kill();
+    let now = crate::clock::unix_secs().expect("a test host clock reads after 1970");
+    let _clock = crate::clock::test_clock::at_secs(now + 7200);
+    let unproven = r6m_token_exchange::send_method_as(&router, &alice, plan, signed("n2")).await;
+    assert_unproven("premise: the plan replay is refused unminted", &unproven);
+    let _idp = r6m_token_exchange::LiveIdp::restart(&key, addr).await;
+    let reused = r6m_token_exchange::send_method_as(&router, &alice, plan, signed("n2")).await;
+    assert_eq!(
+        reused.pointer("/error"),
+        Some(&json!({"code": -32001, "message": "Nonce replay detected"})),
+        "P10u: the refused plan replay's nonce was given back: {reused}"
+    );
+    let fresh = r6m_token_exchange::send_method_as(&router, &alice, plan, signed("n3")).await;
+    assert!(
+        fresh.to_string().contains(MARKER) && fresh.get("error").is_none(),
+        "control: a re-signed plan replay was not served: {fresh}"
+    );
+    assert_eq!(
+        sends.load(Ordering::SeqCst),
+        1,
+        "P10u: a replay was sent again: {fresh}"
+    );
+}
