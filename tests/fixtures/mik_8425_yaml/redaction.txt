@@ -1,0 +1,6 @@
+capability/type-error	refused leaks=true
+capability/syntax-error	refused leaks=false
+config/type-error	refused leaks=false
+config/key-name-control	refused leaks=true
+config/syntax-error	refused leaks=false
+config/nested-type-error	refused leaks=false
