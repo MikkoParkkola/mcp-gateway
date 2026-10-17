@@ -19,7 +19,8 @@ there are options to set, in MIG.2.
 ## Surface
 
 These items are counted from current use, with `rg -o
-'serde_yaml::[A-Za-z_]+(::[A-Za-z_]+)?' src tests`, run on 2026-10-18:
+'serde_yaml::[A-Za-z_0-9]+(::[A-Za-z_0-9]+)?' src tests`, run on 2026-10-18 (the
+pattern includes digits, so `as_u64` is not cut to `as_u`):
 
 | Item | Uses | Adapter item |
 |---|---|---|
@@ -31,15 +32,18 @@ These items are counted from current use, with `rg -o
 | `Error` | 5 | `yaml::Error`, re-exported for now |
 | `Deserializer::from_str` (stream) | 4 (1 in production, `kubernetes.rs:361`) | `yaml::documents(&str) -> impl Iterator<Item = Result<Value, Error>>` |
 | `from_value` | 3 | `yaml::from_value` |
-| figment `Yaml` provider, and `from_str::<figment::value::Dict>` | 6 sites | `yaml::from_str_loose(&str) -> Result<figment::value::Dict, Error>` |
+| `from_str::<figment::value::Dict>` and figment `Yaml::from_str::<Dict>` | 5 sites | `yaml::from_str_loose(&str) -> Result<figment::value::Dict, Error>` |
+| figment `Yaml::string(text).data()` (`config/config_file.rs:80`, the config loader) | 1 site | `yaml::figment_data(&str) -> figment::Result<Map<Profile, Dict>>`, delegating to figment's provider in MIG.1a so that profiles, error kind and message are identical |
 
 The re-exported types stay serde_yaml's own until MIG.2, so MIG.1 routing
 is a pure path rename. The tree API above is the checklist the MIG.2 owned
 tree must meet; each item names its parity fixture in MIG.2.
 
-`documents` stops after the first refusal and reads at most 256 documents.
-That matches `kubernetes.rs:361`, which already returns at its first error.
-It also removes the hazard found in MIG.0: serde_yaml's stream iterator kept
+`documents` yields every document and ends after the first refusal. It
+has no count cap: `kubernetes.rs:361` reads every document today, so a cap
+would silently drop valid trailing documents. Stopping at the first refusal
+matches `kubernetes.rs`, which already returns at its first error, and it
+removes the hazard found in MIG.0: serde_yaml's stream iterator kept
 yielding after a malformed document, and a loop that did not stop grew
 without bound.
 
@@ -49,11 +53,14 @@ compiles `mod commands;` and `mod runtime;` itself (`main.rs:18`, `:46`).
 
 ## Integration-test helper
 
-`tests/common/yaml.rs` gives integration tests the same functions over
-serde_yaml (`from_str`, `to_string`, `documents`, `from_str_loose`). The
-crate-private adapter is not visible from `tests/`, and visibility is not
-widened. MIG.1f routes the 45 integration-test files through it. MIG.2 swaps
-its backend together with the adapter's.
+`tests/common/yaml.rs` compiles the adapter's own source,
+`#[path = "../../src/yaml.rs"] mod adapter;`, and re-exports it. Integration
+tests therefore get the complete surface (types and conversions included)
+from one implementation, with no visibility widening and no second copy to
+drift. This requires `src/yaml.rs` to depend only on `serde`, `serde_yaml`
+and `figment`, never on `crate::` paths, and a compile of the helper proves
+it. MIG.1f routes the 45 integration-test files through it. MIG.2 swaps
+both at once because they are the same file.
 
 ## Identity read-back check
 
@@ -65,13 +72,15 @@ then cannot hide an identity deserialization from that release check.
 
 ## Bypass gate
 
-A unit test lists every production source file that still names
-`serde_yaml` directly: the 46 recorded on 2026-10-17, plus `src/yaml.rs`.
-It fails if any other production file starts naming it. Each MIG.1 PR
-removes its files from that list, and MIG.2 requires the list to hold only
-`src/yaml.rs`. Production means `src/**/*.rs` minus test modules, using the
-same rule as the 46-file count (names ending `_tests.rs`, `tests.rs`, or
-under a `tests/` directory, and fixtures).
+A test lists every Rust source file under `src/` and `tests/` that names
+either parser directly: `serde_yaml`, or figment's YAML provider
+(`figment::providers::Yaml`, or `Yaml` imported from `figment::providers`).
+That is 193 files on 2026-10-18, plus `src/yaml.rs` and the helper. The
+test fails if any other file starts naming either one. It scans every file
+and does not exempt test code by filename, so a production module cannot
+escape it through its name. Each MIG.1 PR removes its files from the list,
+and MIG.2 requires the list to hold only `src/yaml.rs` and
+`tests/common/yaml.rs`.
 
 ## Test plan (red first)
 
@@ -79,27 +88,38 @@ Each test is written to fail before the implementation and to pass after
 it.
 
 - **T1** `documents_stops_at_the_first_refusal` (unit, `src/yaml_tests.rs`):
-  `"a: 1\n---\nb: [1, 2\n"` gives Ok, then Err, then the end. A 300-document
-  stream gives 256 items and stops. Red: the function does not exist.
+  `"a: 1\n---\nb: [1, 2\n"` gives Ok, then Err, then the end. A stream of
+  300 valid documents yields all 300. A stream with a malformed document
+  after 260 valid ones yields 260 Ok values, then that Err, then the end.
+  Red: the function does not exist.
 - **T2** `from_str_loose_keeps_the_last_repeated_key`, and
   `from_str_refuses_a_repeated_key_in_a_tree`: these are anchors, not new
   behaviour. They pin the duplicate-key destination rule (Dict keeps the
   last value; Value refuses) on the adapter's own paths. Red: the functions
   do not exist.
+- **T2b** `figment_data_matches_the_yaml_provider`: for the config fixtures
+  in the MIG.0 trees golden, and for the redaction cases (type error, syntax
+  error, duplicate key), `yaml::figment_data` equals
+  `Yaml::string(text).data()`. Ok compares profiles and Dicts; Err compares
+  `Kind` and the rendered message. Red: the function does not exist.
 - **T3** `adapter_reads_like_serde_yaml_on_the_behaviour_cases`: for the
   MIG.0 behaviour inputs (duplicates, merge, scalars, documents, limits,
   enum forms), the adapter's result equals serde_yaml's direct result. Red:
   the functions do not exist. In MIG.1 it guards the routing; in MIG.2 it
   becomes the comparison against the goldens.
-- **T4** (Python, `scripts/release/test_check_identity_sources.py`):
-  `let t: Tok = yaml::from_str(s)?` and `crate::yaml::from_value(v)` into a
-  carrier are violations. Controls: `yaml::to_string(&t)` is not a
-  violation, and `my_yaml::from_str` is not a match. Red: the pattern does
-  not recognise `yaml::`.
-- **T5** `no_new_file_names_serde_yaml_directly` (the bypass gate above). It
-  starts green, with the allowlist equal to today's 46 files. Its red proof
-  is a negative control in the same test: a scan of a synthetic file list
-  that adds one unlisted file must fail. Green is not taken on trust.
+- **T4** (Python, `scripts/release/test_check_identity_sources.py`): each
+  of `from_str`, `from_str_loose`, `from_value` and `documents`, called as
+  `yaml::...` and as `crate::yaml::...` into a carrier, is a violation:
+  eight rows. Controls: `yaml::to_string(&t)` is not a violation, and
+  `my_yaml::from_str` is not a match. Red: the pattern does not recognise
+  `yaml::`.
+- **T5** `no_new_file_names_a_yaml_parser_directly` (the bypass gate
+  above). It starts green, with the allowlist equal to today's files. Its
+  red proof is a negative control: the same scan function, run over a
+  synthetic temporary source tree, must flag an unlisted file that names
+  `serde_yaml`, and one that imports `figment::providers::Yaml`. It must
+  not flag a file that mentions the word only in a comment-free string
+  such as `"serde_yaml_like"`. Green is not taken on trust.
 
 The MIG.0 goldens stay untouched in MIG.1a; they still call serde_yaml
 directly until MIG.1f routes them through the helper.
@@ -117,6 +137,21 @@ Overlap: `src/lib.rs` and `src/main.rs` are shared roots. The edit is one
 lane holds `scripts/release/check_identity_sources.py` (checked before the
 push). Rollback: revert the single commit; nothing routes through the
 adapter yet.
+
+## Review record
+
+Round 1, 2026-10-18, on ee3250c33. Both seats returned SHIP-WITH-FIXES;
+findings were checked at source and folded:
+- the 256-document cap is removed, because it silently dropped trailing
+  documents. Kimi proposed a loud cap instead; that would refuse manifests
+  over 256 documents that load today, a behaviour change, so the gpt fix
+  (no cap, stop at the first refusal) is taken;
+- the bypass gate covers figment's YAML provider and scans every file,
+  with no filename exemption;
+- the integration helper compiles the adapter source through `#[path]`;
+- `config_file.rs:80` gets `figment_data` and T2b;
+- T4 covers all four names, bare and prefixed;
+- the usage survey includes digits.
 
 ## Note for MIG.2 (not built here)
 
