@@ -32,12 +32,28 @@ fn counts(http_requests: u64) -> SegmentCounts {
 #[test]
 fn a_v1_window_is_refused_and_left_byte_identical() {
     let dir = tempfile::tempdir().expect("tempdir");
-    crate::protocol_revision_telemetry::DurableTelemetrySink::open(dir.path()).expect("v1 window");
+    // A frozen v1 file, as 4.0.0 prereleases wrote it (not through today's
+    // sink, which writes v2).
     let path = window_paths(dir.path()).0;
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("telemetry dir");
+    let v1 = serde_json::json!({
+        "schema_version": "mcp_protocol_revision_window.v1",
+        "started_at_unix_seconds": 1_790_959_779_u64,
+        "updated_at_unix_seconds": 1_790_959_800_u64,
+        "snapshot": {"by_revision": {"2025-11-25": 3}, "by_client": {"claude": 3},
+                     "by_transport": {"stdio": 3}, "unattributed": 0, "total": 3},
+        "tools_list_shadow": empty_shadow_counts(),
+    });
+    std::fs::write(&path, serde_json::to_vec_pretty(&v1).expect("json")).expect("plant v1");
     let before = std::fs::read(&path).expect("v1 bytes");
 
     let error = HttpSegmentSink::open(dir.path(), identity(1_000), 1).expect_err("v1 is refused");
     assert!(error.to_string().contains("archive"), "{error}");
+    assert_eq!(std::fs::read(&path).expect("bytes after"), before, "v1 was rewritten");
+
+    let stdio = crate::protocol_revision_telemetry::DurableTelemetrySink::open(dir.path())
+        .expect_err("the stdio sink refuses v1 too");
+    assert!(stdio.to_string().contains("archive"), "{stdio}");
     assert_eq!(std::fs::read(&path).expect("bytes after"), before, "v1 was rewritten");
 }
 
@@ -133,4 +149,26 @@ fn the_stdio_sink_writes_only_stdio_counts_into_the_v2_window() {
     assert_eq!(window.stdio.total, 2);
     assert_eq!(window.stdio.by_transport.get("stdio"), Some(&2));
     assert!(window.http_segments.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_close_leaves_the_segment_open_for_a_retried_close() {
+    // `closed` is set only once the sealed write has landed: a close that
+    // fails must not turn the sink into a no-op, or the retry seals nothing.
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut sink = HttpSegmentSink::open(dir.path(), identity(1_000), 10).expect("open");
+    let telemetry = dir.path().join(DURABLE_TELEMETRY_DIR);
+    std::fs::set_permissions(&telemetry, std::fs::Permissions::from_mode(0o500)).expect("chmod");
+    let failed = sink.close(&counts(3), 11, 11_000);
+    std::fs::set_permissions(&telemetry, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+    assert!(failed.is_err(), "the read-only directory must fail the close");
+    assert!(!load(dir.path()).expect("reopen").http_segments[0].closed_cleanly);
+
+    sink.close(&counts(3), 12, 11_000).expect("the retried close lands");
+    let segment = load(dir.path()).expect("reopen").http_segments[0].clone();
+    assert!(segment.closed_cleanly);
+    assert_eq!(segment.sealed_at_ms, Some(11_000));
+    assert_eq!(segment.snapshot.total, 3);
 }

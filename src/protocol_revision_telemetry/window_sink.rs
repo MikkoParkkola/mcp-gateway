@@ -65,7 +65,7 @@ impl HttpSegmentSink {
         std::fs::create_dir_all(&directory)?;
         force_directory_owner_only(&directory)?;
         #[cfg(test)]
-        stall_seam::pass(&window_path);
+        stall_seam::pass(&window_path, stall_seam::Role::Open);
         let _lock = ExclusiveFileLock::acquire(&lock_path)?;
         let mut window = read_or_create(&window_path, now)?;
         window.http_segments.push(Segment {
@@ -113,7 +113,14 @@ impl HttpSegmentSink {
 
     fn write(&self, counts: &SegmentCounts, now: u64, sealed_at_ms: Option<u64>) -> io::Result<()> {
         #[cfg(test)]
-        stall_seam::pass(&self.window_path);
+        stall_seam::pass(
+            &self.window_path,
+            if sealed_at_ms.is_some() {
+                stall_seam::Role::Close
+            } else {
+                stall_seam::Role::Checkpoint
+            },
+        );
         let _lock = ExclusiveFileLock::acquire(&self.lock_path)?;
         let mut window = read_window_v2(&self.window_path)?;
         let segment = window
@@ -154,20 +161,31 @@ pub(crate) fn global_segment_counts(seal: Option<&AtomicBool>) -> SegmentCounts 
     }
 }
 
-/// Test support: block a segment write on a per-path gate, so a row can hold
-/// a write in flight and release it, waiting on signals rather than sleeps.
+/// Test support: block a segment write on a per-path, per-role gate, so a
+/// row can hold one kind of write in flight and release it, waiting on
+/// signals rather than sleeps. A role a row did not arm passes freely, so a
+/// periodic checkpoint can never stand in for the final write.
 #[cfg(test)]
 pub(crate) mod stall_seam {
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex, PoisonError, mpsc};
 
-    type Gate = (mpsc::Sender<()>, Arc<Mutex<mpsc::Receiver<()>>>);
-    static GATES: Mutex<Option<HashMap<PathBuf, Gate>>> = Mutex::new(None);
+    /// Which write is passing the gate.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub(crate) enum Role {
+        Open,
+        Checkpoint,
+        Close,
+    }
 
-    /// Held writes to `path` signal on the returned receiver as they enter;
-    /// each `()` sent on the returned sender releases one.
-    pub(crate) fn arm(path: &Path) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+    type Gate = (mpsc::Sender<()>, Arc<Mutex<mpsc::Receiver<()>>>);
+    static GATES: Mutex<Option<HashMap<(PathBuf, Role), Gate>>> = Mutex::new(None);
+
+    /// Held `role` writes to `path` signal on the returned receiver as they
+    /// enter; each `()` sent on the returned sender releases one. Dropping
+    /// the sender releases every later one.
+    pub(crate) fn arm(path: &Path, role: Role) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
         let (entered_tx, entered_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
         GATES
@@ -175,18 +193,18 @@ pub(crate) mod stall_seam {
             .unwrap_or_else(PoisonError::into_inner)
             .get_or_insert_with(HashMap::new)
             .insert(
-                path.to_path_buf(),
+                (path.to_path_buf(), role),
                 (entered_tx, Arc::new(Mutex::new(release_rx))),
             );
         (entered_rx, release_tx)
     }
 
-    pub(super) fn pass(path: &Path) {
+    pub(super) fn pass(path: &Path, role: Role) {
         let gate = GATES
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
-            .and_then(|gates| gates.get(path).cloned());
+            .and_then(|gates| gates.get(&(path.to_path_buf(), role)).cloned());
         if let Some((entered, release)) = gate {
             let _ = entered.send(());
             let _ = release.lock().unwrap_or_else(PoisonError::into_inner).recv();

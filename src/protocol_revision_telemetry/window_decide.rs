@@ -64,6 +64,21 @@ pub(crate) fn parse_declaration(
     })
 }
 
+/// The operator's command, fully qualified so `--exact` selects one test:
+/// `cargo test --lib <this> -- --ignored --exact --nocapture`, with
+/// `U1_DATA_DIR`, `U1_POPULATION=http`, `U1_LISTEN` and `U1_EXE_PREFIX`.
+/// The runbook checks the output says `1 passed`.
+pub(crate) const OPERATOR_TEST: &str =
+    "protocol_revision_telemetry::window_decide::tests::u1_production_decision";
+
+/// Run the decision for the operator: read the declaration and the window
+/// named by `env`, write `decision.json` beside the window, and return the
+/// printed report (distribution table, per-writer list, span, outcome).
+pub(crate) fn run_operator(env: &dyn Fn(&str) -> Option<String>) -> io::Result<String> {
+    let _ = env; // STUB(red): reads nothing, writes nothing
+    Ok(String::new())
+}
+
 #[cfg(test)]
 #[path = "window_decide_tests.rs"]
 mod tests;

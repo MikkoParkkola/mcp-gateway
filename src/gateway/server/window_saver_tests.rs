@@ -3,18 +3,24 @@
 //! Design rows 11, 12, 13, 16, 18, 20 and the `off` arm: the saver's open,
 //! checkpoints and seal. Counts come from a stub, so no row seals the
 //! process-wide registry other tests count through. Stalls wait on the
-//! write gate's signals and on the seal flag, never on a sleep.
+//! write gate's signals and on the seal flag, never on a sleep. The runtime
+//! has two workers: a row blocks one on a gate signal while the saver runs.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use super::*;
-use crate::protocol_revision_telemetry::window::{self, stall_seam};
+use crate::protocol_revision_telemetry::window::stall_seam::{self, Role};
+use crate::protocol_revision_telemetry::window;
 use crate::protocol_revision_telemetry::{Registry, Transport};
 
-/// Bound on each wait for something that must happen.
+/// Bound on each wait for something that must happen (a setup watchdog).
 const ARRIVAL: Duration = Duration::from_secs(30);
+/// Scheduling allowance on top of a configured bound, for a loaded CI host.
+const ALLOWANCE: Duration = Duration::from_secs(5);
+/// The short close bound the deadline rows configure.
+const CLOSE_BOUND: Duration = Duration::from_millis(300);
 
 struct Rig {
     dir: tempfile::TempDir,
@@ -93,7 +99,7 @@ async fn stop(rig: &Rig, saver: tokio::task::JoinHandle<()>) {
         .expect("the saver does not panic");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn with_the_mode_off_nothing_is_recorded_or_sealed() {
     let rig = Rig::new();
     assert!(rig.start(ProtocolRevisionWindow::Off, settings(ARRIVAL)).await.is_none());
@@ -102,7 +108,7 @@ async fn with_the_mode_off_nothing_is_recorded_or_sealed() {
     assert!(!rig.dir.path().join("protocol-revision-telemetry").exists());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_segment_is_open_before_serving_and_sealed_on_the_broadcast() {
     let rig = Rig::new();
     let saver = rig.start(ProtocolRevisionWindow::Record, settings(ARRIVAL)).await.expect("record");
@@ -118,27 +124,33 @@ async fn the_segment_is_open_before_serving_and_sealed_on_the_broadcast() {
     assert!(rig.seal.load(Ordering::SeqCst));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_final_write_stalled_past_its_bound_leaves_the_segment_unclean() {
     // Row 11 arm 1, and row 12: refusals start at the broadcast regardless.
     let rig = Rig::new();
-    let saver = rig.start(ProtocolRevisionWindow::Record, settings(Duration::from_millis(300))).await.expect("record");
-    let (entered, release) = stall_seam::arm(&rig.window_path());
+    let saver = rig.start(ProtocolRevisionWindow::Record, settings(CLOSE_BOUND)).await.expect("record");
+    let (entered, release) = stall_seam::arm(&rig.window_path(), Role::Close);
     rig.served.store(4, Ordering::SeqCst);
+    let broadcast = std::time::Instant::now();
     rig.shutdown.send(()).expect("subscribed");
     entered.recv_timeout(ARRIVAL).expect("the final write starts");
     assert!(rig.seal.load(Ordering::SeqCst), "the seal waits for no write");
     tokio::time::timeout(ARRIVAL, saver).await.expect("bounded").expect("no panic");
+    assert!(
+        broadcast.elapsed() < CLOSE_BOUND + ALLOWANCE,
+        "the saver outlived its close bound: {:?}",
+        broadcast.elapsed()
+    );
     assert!(!rig.segments()[0].closed_cleanly, "an unlanded close reads clean");
     drop(release);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_final_write_released_after_its_bound_lands_the_exact_sealed_counts() {
     // Row 11 arm 2: a late landing is correct data.
     let rig = Rig::new();
-    let saver = rig.start(ProtocolRevisionWindow::Record, settings(Duration::from_millis(300))).await.expect("record");
-    let (entered, release) = stall_seam::arm(&rig.window_path());
+    let saver = rig.start(ProtocolRevisionWindow::Record, settings(CLOSE_BOUND)).await.expect("record");
+    let (entered, release) = stall_seam::arm(&rig.window_path(), Role::Close);
     rig.served.store(4, Ordering::SeqCst);
     rig.shutdown.send(()).expect("subscribed");
     entered.recv_timeout(ARRIVAL).expect("the final write starts");
@@ -150,7 +162,7 @@ async fn a_final_write_released_after_its_bound_lands_the_exact_sealed_counts() 
     assert_eq!(rig.segments()[0].snapshot.total, 4);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_clock_before_1970_never_writes_a_zero_and_never_closes_clean() {
     // Row 13: with no readable clock there is no start time to record, so no
     // segment is written; the seal is still taken, so refusals still start.
@@ -169,6 +181,37 @@ async fn a_clock_before_1970_never_writes_a_zero_and_never_closes_clean() {
             .all(|s| !s.closed_cleanly && s.process_started_at_ms != 0),
         "{segments:?}"
     );
+}
+
+/// A clock that reads normally until its row breaks it. Only the row below
+/// passes it to a saver, so no other row sees it break.
+static SEAL_CLOCK_BROKEN: AtomicBool = AtomicBool::new(false);
+
+fn clock_that_breaks() -> Result<u64, ClockBeforeEpoch> {
+    if SEAL_CLOCK_BROKEN.load(Ordering::SeqCst) {
+        Err(ClockBeforeEpoch)
+    } else {
+        crate::clock::unix_millis()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_clock_failing_at_the_seal_leaves_a_healthy_segment_unclean() {
+    // Row 13, after a healthy open: no seal time can be written, so the
+    // close never lands, and the seal still refuses later requests.
+    let rig = Rig::new();
+    let breaking = SaverSettings {
+        clock_ms: clock_that_breaks,
+        ..settings(ARRIVAL)
+    };
+    let saver = rig.start(ProtocolRevisionWindow::Record, breaking).await.expect("record");
+    assert_eq!(rig.segments().len(), 1, "the open used the healthy clock");
+    SEAL_CLOCK_BROKEN.store(true, Ordering::SeqCst);
+    stop(&rig, saver).await;
+    assert!(rig.seal.load(Ordering::SeqCst), "a clock error still seals");
+    let segment = rig.segments().remove(0);
+    assert!(!segment.closed_cleanly, "{segment:?}");
+    assert!(segment.sealed_at_ms.is_none());
 }
 
 fn wait_for(mut done: impl FnMut() -> bool) -> bool {

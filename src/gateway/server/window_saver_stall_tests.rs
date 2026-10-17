@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Design rows 16, 18 and 20: writes that stall or fail around the open and
-//! the seal. Each release is one `()` on the gate; every write to the window
-//! file (the open included) passes the gate once.
+//! the seal. Each gate holds one role of write (`Open`, `Checkpoint`,
+//! `Close`), so a periodic checkpoint can never stand in for the final write.
 
 use super::*;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stalled_checkpoint_never_overtakes_the_final_write() {
     // Row 16.
     let rig = Rig::new();
@@ -16,55 +16,84 @@ async fn a_stalled_checkpoint_never_overtakes_the_final_write() {
     };
     let saver = rig.start(ProtocolRevisionWindow::Record, quick).await.expect("record");
     rig.served.store(2, Ordering::SeqCst);
-    let (entered, release) = stall_seam::arm(&rig.window_path());
-    entered.recv_timeout(ARRIVAL).expect("a checkpoint is in flight");
+    let (checkpoint_in, checkpoint_go) = stall_seam::arm(&rig.window_path(), Role::Checkpoint);
+    let (close_in, close_go) = stall_seam::arm(&rig.window_path(), Role::Close);
+    checkpoint_in.recv_timeout(ARRIVAL).expect("a checkpoint is in flight");
     rig.served.store(6, Ordering::SeqCst);
     rig.shutdown.send(()).expect("subscribed");
     assert!(
         wait_for(|| rig.seal.load(Ordering::SeqCst)),
         "the seal waits for no write"
     );
-    release.send(()).expect("release the checkpoint");
-    entered.recv_timeout(ARRIVAL).expect("the final write follows it");
-    release.send(()).expect("release the final write");
+    assert!(
+        close_in.try_recv().is_err(),
+        "the final write ran while a checkpoint held the sink"
+    );
+    drop(checkpoint_go); // release this and every later checkpoint
+    close_in.recv_timeout(ARRIVAL).expect("the final write follows it");
+    close_go.send(()).expect("release the final write");
     tokio::time::timeout(ARRIVAL, saver).await.expect("bounded").expect("no panic");
     let segment = rig.segments().remove(0);
     assert!(segment.closed_cleanly, "{segment:?}");
     assert_eq!(segment.snapshot.total, 6, "the checkpoint's older counts won");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stalled_open_delays_serving_by_its_bound_only() {
     // Row 18 arm 1: never released.
     let rig = Rig::new();
-    let (entered, release) = stall_seam::arm(&rig.window_path());
+    let (open_in, open_go) = stall_seam::arm(&rig.window_path(), Role::Open);
     let started = std::time::Instant::now();
     let saver = rig
-        .start(ProtocolRevisionWindow::Record, settings(Duration::from_millis(300)))
+        .start(ProtocolRevisionWindow::Record, settings(CLOSE_BOUND))
         .await
         .expect("record");
-    entered.recv_timeout(ARRIVAL).expect("the open started");
-    assert!(started.elapsed() < ARRIVAL, "serving waited past the open bound");
+    let open_bound = settings(CLOSE_BOUND).open_bound;
+    assert!(
+        started.elapsed() < open_bound + ALLOWANCE,
+        "serving waited past the open bound: {:?}",
+        started.elapsed()
+    );
+    open_in.recv_timeout(ARRIVAL).expect("the open started");
+    let broadcast = std::time::Instant::now();
     stop(&rig, saver).await;
+    assert!(broadcast.elapsed() < CLOSE_BOUND + ALLOWANCE);
     assert!(rig.seal.load(Ordering::SeqCst));
     assert!(rig.segments().is_empty(), "{:?}", rig.segments());
-    drop(release);
+    drop(open_go);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stalled_open_released_after_the_deadline_lands_the_sealed_counts() {
+    // Row 18 arm 2: the final write was abandoned at the deadline but still
+    // waits behind the open on its own thread; once the open lands, the
+    // final write lands too, with exactly the sealed counts (late data is
+    // correct data), never the counts served after the seal.
+    let rig = Rig::new();
+    let (open_in, open_go) = stall_seam::arm(&rig.window_path(), Role::Open);
+    let saver = rig.start(ProtocolRevisionWindow::Record, settings(CLOSE_BOUND)).await.expect("record");
+    open_in.recv_timeout(ARRIVAL).expect("the open started");
+    rig.served.store(2, Ordering::SeqCst);
+    stop(&rig, saver).await;
+    rig.served.store(50, Ordering::SeqCst);
+    open_go.send(()).expect("release the open");
+    let landed = wait_for(|| rig.segments().first().is_some_and(|s| s.closed_cleanly));
+    assert!(landed, "the queued final write never landed: {:?}", rig.segments());
+    assert_eq!(rig.segments()[0].snapshot.total, 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_late_open_still_seals_one_clean_segment() {
     // Row 18 arm 3: the open times out at startup, then completes before
     // the shutdown deadline; the final write lands in it.
     let rig = Rig::new();
-    let (entered, release) = stall_seam::arm(&rig.window_path());
+    let (open_in, open_go) = stall_seam::arm(&rig.window_path(), Role::Open);
     let saver = rig.start(ProtocolRevisionWindow::Record, settings(ARRIVAL)).await.expect("record");
-    entered.recv_timeout(ARRIVAL).expect("the open started");
+    open_in.recv_timeout(ARRIVAL).expect("the open started");
     rig.served.store(3, Ordering::SeqCst);
     rig.shutdown.send(()).expect("subscribed");
     assert!(wait_for(|| rig.seal.load(Ordering::SeqCst)));
-    release.send(()).expect("release the open");
-    entered.recv_timeout(ARRIVAL).expect("the final write follows the open");
-    release.send(()).expect("release the final write");
+    open_go.send(()).expect("release the open");
     tokio::time::timeout(ARRIVAL, saver).await.expect("bounded").expect("no panic");
     let segments = rig.segments();
     assert_eq!(segments.len(), 1, "{segments:?}");
@@ -72,7 +101,7 @@ async fn a_late_open_still_seals_one_clean_segment() {
     assert_eq!(segments[0].snapshot.total, 3);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_open_is_retried_and_records_every_count_since_start() {
     // Row 20: a file where the data directory should be fails the open.
     let rig = Rig::new();

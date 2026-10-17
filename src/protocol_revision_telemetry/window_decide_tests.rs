@@ -33,14 +33,18 @@ fn snapshot(requests: u64, unattributed: u64) -> Snapshot {
     registry.snapshot()
 }
 
-/// A clean segment from `start_ms` to `sealed_ms`.
+/// A clean segment whose process starts at `start_ms` and seals at
+/// `sealed_ms`. Every timestamp differs from the one a wrong evaluator might
+/// read instead: the open is 1 s after the start, and the last checkpoint is
+/// 2 s before the seal, so only `opened_at` and `sealed_at_ms` give the span,
+/// and only `process_started_at_ms` and `sealed_at_ms` give gaps and overlap.
 fn sealed(start_ms: u64, sealed_ms: u64, requests: u64) -> Segment {
     Segment {
         listen: LISTEN.to_string(),
         exe: EXE.to_string(),
         process_started_at_ms: start_ms,
-        opened_at: start_ms / 1000,
-        last_checkpoint_at: sealed_ms / 1000,
+        opened_at: start_ms / 1000 + 1,
+        last_checkpoint_at: (sealed_ms / 1000).saturating_sub(2),
         sealed_at_ms: Some(sealed_ms),
         closed_cleanly: true,
         snapshot: snapshot(requests, 0),
@@ -77,6 +81,7 @@ fn seven_days() -> Vec<Segment> {
 fn seven_sealed_days_certify_and_the_span_is_the_sealed_time() {
     let (span, outcome) = decide(&window(seven_days()), &declaration());
     let span = span.expect("a sealed span");
+    assert_eq!(span.started_at, 1, "the span starts at the first open");
     assert_eq!(span.segments, 3);
     assert_eq!(span.snapshot.total, 10_000);
     assert_eq!(span.ended_at_ms, 7 * DAY_MS + DAY_MS / 2);
@@ -224,4 +229,59 @@ fn the_declaration_requires_every_value() {
             "{population:?} {listen:?} {prefix:?}"
         );
     }
+}
+
+#[test]
+fn the_seven_day_boundary_is_measured_from_the_open_to_the_seal() {
+    // Opened at 1 s; sealed exactly seven days later passes, 1 ms less is short.
+    let exact = sealed(0, 1_000 + 7 * DAY_MS, 10_000);
+    assert!(decide(&window(vec![exact]), &declaration()).1.is_ok());
+    let short = sealed(0, 1_000 + 7 * DAY_MS - 1, 10_000);
+    assert_eq!(
+        decide(&window(vec![short]), &declaration()).1,
+        Err(WindowBlocked::Retirement(RetirementBlocked::WindowTooShort))
+    );
+}
+
+#[test]
+fn the_operator_command_names_this_module_exactly() {
+    let here = module_path!().trim_start_matches("mcp_gateway::");
+    assert_eq!(OPERATOR_TEST, format!("{here}::u1_production_decision"));
+}
+
+#[test]
+fn the_operator_run_refuses_a_missing_variable_and_writes_its_decision() {
+    let data = tempfile::tempdir().expect("tempdir");
+    let path = crate::protocol_revision_telemetry::window::window_paths(data.path()).0;
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+    let file = serde_json::to_vec(&window(seven_days())).expect("json");
+    std::fs::write(&path, file).expect("window");
+    let full = |key: &str| match key {
+        "U1_DATA_DIR" => Some(data.path().display().to_string()),
+        "U1_POPULATION" => Some("http".to_string()),
+        "U1_LISTEN" => Some(LISTEN.to_string()),
+        "U1_EXE_PREFIX" => Some("/opt/mcp-gateway/".to_string()),
+        _ => None,
+    };
+    for missing in ["U1_DATA_DIR", "U1_POPULATION", "U1_LISTEN", "U1_EXE_PREFIX"] {
+        let without = |key: &str| if key == missing { None } else { full(key) };
+        assert!(run_operator(&without).is_err(), "ran without {missing}");
+    }
+    let report = run_operator(&full).expect("a complete declaration runs");
+    assert!(report.contains("| total | 10000 |"), "{report}");
+    assert!(report.contains(EXE), "the report lists each writer: {report}");
+    let written = std::fs::read(path.with_file_name("decision.json")).expect("decision.json");
+    let decision: serde_json::Value = serde_json::from_slice(&written).expect("JSON");
+    assert!(
+        decision["retire"].as_array().is_some_and(|r| !r.is_empty()),
+        "{decision}"
+    );
+}
+
+/// The operator's entry point. Ignored: it reads the real environment.
+#[test]
+#[ignore = "operator command: run with the U1_* variables (see OPERATOR_TEST)"]
+fn u1_production_decision() {
+    let report = run_operator(&|key| std::env::var(key).ok()).expect("the U1 decision runs");
+    println!("{report}");
 }
