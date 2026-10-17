@@ -71,7 +71,10 @@ async fn execute(fx: &Fx, chain: Value, nonce: &str) -> Value {
 }
 
 fn message(body: &Value) -> String {
-    body["error"]["message"].as_str().unwrap_or_default().to_owned()
+    body["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
 }
 
 fn is_replay(body: &Value) -> bool {
@@ -132,9 +135,16 @@ async fn an_idempotency_capacity_refusal_gives_the_nonce_back() {
     cache.remove("held");
     let third = invoke(&fx, "alpha", json!({}), "k1-n1", idem("k1-key")).await;
     assert!(third.get("error").is_none(), "send 3 was refused: {third}");
-    assert_eq!(dispatched(&fx), before + 1, "send 3 reached the backend once");
+    assert_eq!(
+        dispatched(&fx),
+        before + 1,
+        "send 3 reached the backend once"
+    );
     let fourth = invoke(&fx, "alpha", json!({}), "k1-n1", idem("k1-key2")).await;
-    assert!(is_replay(&fourth), "the nonce was given back twice: {fourth}");
+    assert!(
+        is_replay(&fourth),
+        "the nonce was given back twice: {fourth}"
+    );
 }
 
 /// K1-K: the same capacity refusal after the call minted a credential (the
@@ -157,7 +167,10 @@ async fn an_idempotency_capacity_refusal_after_a_mint_keeps_the_nonce() {
 
     cache.remove("held");
     let again = invoke(&fx, "alpha", json!({}), "k1k-n1", idem("k1k-key")).await;
-    assert!(is_replay(&again), "the nonce was given back after a mint: {again}");
+    assert!(
+        is_replay(&again),
+        "the nonce was given back after a mint: {again}"
+    );
 }
 
 fn undeclared(body: &Value) -> bool {
@@ -180,15 +193,25 @@ async fn an_undeclared_key_refusal_gives_the_nonce_back() {
     let first = invoke(&fx, "alpha", bogus.clone(), "k2-n1", json!({})).await;
     assert!(undeclared(&first), "premise: the key refusal: {first}");
     let second = invoke(&fx, "alpha", bogus, "k2-n1", json!({})).await;
-    assert!(undeclared(&second), "the refused call kept its nonce: {second}");
+    assert!(
+        undeclared(&second),
+        "the refused call kept its nonce: {second}"
+    );
     assert_eq!(warmed.list_fills(), fills, "premise: no fill");
     assert_eq!(dispatched(&fx), before, "premise: nothing was sent");
 
     let third = invoke(&fx, "alpha", json!({}), "k2-n1", json!({})).await;
     assert!(third.get("error").is_none(), "send 3 was refused: {third}");
-    assert_eq!(dispatched(&fx), before + 1, "send 3 reached the backend once");
+    assert_eq!(
+        dispatched(&fx),
+        before + 1,
+        "send 3 reached the backend once"
+    );
     let fourth = invoke(&fx, "alpha", json!({}), "k2-n1", json!({})).await;
-    assert!(is_replay(&fourth), "the nonce was given back twice: {fourth}");
+    assert!(
+        is_replay(&fourth),
+        "the nonce was given back twice: {fourth}"
+    );
 }
 
 /// K2-K: the same refusal on a cold slot: the call filled `tools/list` from
@@ -205,10 +228,16 @@ async fn an_undeclared_key_refusal_after_a_cold_fill_keeps_the_nonce() {
     let bogus = json!({"bogus": "x"});
     let first = invoke(&fx, "alpha-pt", bogus, "k2k-n1", json!({})).await;
     assert!(undeclared(&first), "premise: the key refusal: {first}");
-    assert!(cold.list_fills() > fills, "premise: the refused call filled");
+    assert!(
+        cold.list_fills() > fills,
+        "premise: the refused call filled"
+    );
 
     let again = invoke(&fx, "alpha-pt", json!({}), "k2k-n1", json!({})).await;
-    assert!(is_replay(&again), "the nonce was given back after a fill: {again}");
+    assert!(
+        is_replay(&again),
+        "the nonce was given back after a fill: {again}"
+    );
     assert_eq!(dispatched(&fx), 0, "nothing reached the backend");
 }
 
@@ -273,9 +302,16 @@ async fn a_policy_recheck_refusal_gives_the_nonce_back() {
 
     let third = execute(&fx, chain.clone(), "k4-n1").await;
     assert!(third.get("error").is_none(), "send 3 was refused: {third}");
-    assert_eq!(dispatched(&fx), before + 1, "send 3 reached the backend once");
+    assert_eq!(
+        dispatched(&fx),
+        before + 1,
+        "send 3 reached the backend once"
+    );
     let fourth = execute(&fx, chain, "k4-n1").await;
-    assert!(is_replay(&fourth), "the nonce was given back twice: {fourth}");
+    assert!(
+        is_replay(&fourth),
+        "the nonce was given back twice: {fourth}"
+    );
 }
 
 /// K4-K: a two-step chain whose first step was sent, then whose second step
@@ -305,5 +341,8 @@ async fn a_policy_recheck_refusal_after_a_sent_step_keeps_the_nonce() {
         .revive_capability("alpha-pt", "read");
 
     let again = execute(&fx, chain, "k4k-n1").await;
-    assert!(is_replay(&again), "the nonce was given back after a send: {again}");
+    assert!(
+        is_replay(&again),
+        "the nonce was given back after a send: {again}"
+    );
 }
