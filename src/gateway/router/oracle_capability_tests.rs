@@ -497,7 +497,7 @@ async fn c2_an_out_of_scope_capability_backend_answers_as_an_unregistered_server
     let mut answers = Vec::new();
     for server in [CAPS, NOWHERE] {
         let (status, mut body) =
-            send(&fx, "/mcp", "k-alpha-only", "tools/call", call(server), None).await;
+            send(&fx, "/mcp", "k-alpha-ghost", "tools/call", call(server), None).await;
         if let Some(obj) = body.as_object_mut() {
             obj.remove("id");
         }
