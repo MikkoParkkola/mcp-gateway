@@ -200,6 +200,40 @@ async fn a_final_write_released_after_its_bound_lands_the_exact_sealed_counts() 
     assert_eq!(rig.segments()[0].snapshot.total, 4);
 }
 
+/// Reads before 1970 once (the saver's start-time read), then normally. Only
+/// the row below uses it.
+static START_CLOCK_READS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn clock_unreadable_at_start() -> Result<u64, ClockBeforeEpoch> {
+    if START_CLOCK_READS.fetch_add(1, Ordering::SeqCst) == 0 {
+        Err(ClockBeforeEpoch)
+    } else {
+        crate::clock::unix_millis()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_start_time_the_clock_could_not_read_is_never_written_as_zero() {
+    // Row 13: with no start time there is no segment, even once the clock
+    // reads again; a 0 start would look like a process from 1970.
+    let rig = Rig::new();
+    let recovering = SaverSettings {
+        clock_ms: clock_unreadable_at_start,
+        ..settings(ARRIVAL)
+    };
+    let saver = rig
+        .start(ProtocolRevisionWindow::Record, recovering)
+        .await
+        .expect("record");
+    rig.served.store(3, Ordering::SeqCst);
+    stop(&rig, saver).await;
+    let segments = rig.segments();
+    assert!(
+        segments.iter().all(|s| s.process_started_at_ms != 0),
+        "a 0 start time was written: {segments:?}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_clock_before_1970_never_writes_a_zero_and_never_closes_clean() {
     // Row 13: with no readable clock there is no start time to record, so no
