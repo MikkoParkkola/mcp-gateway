@@ -76,7 +76,9 @@ pub(crate) fn window_paths(data_dir: &Path) -> (PathBuf, PathBuf) {
     )
 }
 
-/// Read and validate the v2 window below `data_dir`.
+/// Read and validate the v2 window below `data_dir` (tests and the operator
+/// command read it; the writers go through their own locked read).
+#[cfg(test)]
 pub(crate) fn load(data_dir: &Path) -> io::Result<WindowV2> {
     read_window_v2(&window_paths(data_dir).0)
 }
@@ -152,7 +154,11 @@ fn validate_snapshot(snapshot: &Snapshot, transport: Transport) -> io::Result<()
         .copied()
         .chain(std::iter::once(OTHER_REVISION));
     validate_bounded_keys(&snapshot.by_revision, revisions, "revision")?;
-    validate_bounded_keys(&snapshot.by_client, MEASURED_CLIENTS.iter().copied(), "client")?;
+    validate_bounded_keys(
+        &snapshot.by_client,
+        MEASURED_CLIENTS.iter().copied(),
+        "client",
+    )?;
     validate_bounded_keys(
         &snapshot.by_transport,
         std::iter::once(transport.as_str()),
@@ -168,7 +174,10 @@ fn validate_snapshot(snapshot: &Snapshot, transport: Transport) -> io::Result<()
     if Some(checked_counter_sum(snapshot.by_client.values().copied())?) != total {
         return Err(invalid_window("client counters do not equal total"));
     }
-    if Some(checked_counter_sum(snapshot.by_transport.values().copied())?) != total {
+    if Some(checked_counter_sum(
+        snapshot.by_transport.values().copied(),
+    )?) != total
+    {
         return Err(invalid_window("transport counters do not equal total"));
     }
     Ok(())
@@ -188,9 +197,9 @@ fn validate_shadow(shadow: &BTreeMap<String, u64>) -> io::Result<()> {
 
 #[path = "window_sink.rs"]
 mod sink;
-pub(crate) use sink::{HttpSegmentSink, SegmentCounts, WriterIdentity, global_segment_counts};
 #[cfg(test)]
 pub(crate) use sink::stall_seam;
+pub(crate) use sink::{HttpSegmentSink, SegmentCounts, WriterIdentity, global_segment_counts};
 
 #[cfg(test)]
 #[path = "window_tests.rs"]

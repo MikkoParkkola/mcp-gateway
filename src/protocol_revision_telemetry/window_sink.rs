@@ -37,6 +37,7 @@ pub(crate) struct SegmentCounts {
 
 impl SegmentCounts {
     /// Valid counts for a process that has served nothing yet.
+    #[cfg(test)]
     pub(crate) fn empty() -> Self {
         Self {
             tools_list_shadow: empty_shadow_counts(),
@@ -213,7 +214,10 @@ pub(crate) mod stall_seam {
             .and_then(|gates| gates.get(&(path.to_path_buf(), role)).cloned());
         if let Some((entered, release)) = gate {
             let _ = entered.send(());
-            let _ = release.lock().unwrap_or_else(PoisonError::into_inner).recv();
+            let _ = release
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .recv();
         }
     }
 }

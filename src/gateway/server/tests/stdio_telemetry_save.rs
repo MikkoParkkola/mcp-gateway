@@ -23,9 +23,7 @@ use tokio::time::timeout;
 
 use crate::config::Config;
 use crate::gateway::Gateway;
-use crate::protocol_revision_telemetry::{
-    Snapshot, durable_window_path, window, write_seam,
-};
+use crate::protocol_revision_telemetry::{Snapshot, durable_window_path, window, write_seam};
 
 /// Bound on every wait for a frame or a session end that must happen.
 const ARRIVAL: Duration = Duration::from_secs(30);
@@ -202,9 +200,7 @@ impl Session {
             .expect("the session ends")
             .expect("no panic")
             .expect("Ok");
-        window::load(data)
-            .expect("the window file reads")
-            .stdio
+        window::load(data).expect("the window file reads").stdio
     }
 }
 
@@ -317,8 +313,7 @@ async fn the_saver_persists_observed_requests_while_the_session_runs() {
     let data = session.data.clone();
     let saved = crate::test_pause::within("the saver writing the observed requests", async {
         loop {
-            let saved =
-                window::load(&data).map_or(0, |window| stdio_requests(&window.stdio));
+            let saved = window::load(&data).map_or(0, |window| stdio_requests(&window.stdio));
             if saved > PINGS {
                 return saved;
             }
@@ -366,9 +361,7 @@ async fn a_stop_with_a_hung_dispatch_still_ends_and_saves() {
         .expect("no panic")
         .expect("Ok");
     drop((client, lines));
-    let saved = window::load(&data)
-        .expect("the window file reads")
-        .stdio;
+    let saved = window::load(&data).expect("the window file reads").stdio;
     assert!(
         stdio_requests(&saved) >= 1,
         "the final save after a hung dispatch holds no stdio request: {saved:?}"

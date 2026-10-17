@@ -405,8 +405,17 @@ pub(in crate::gateway::router::handlers) async fn intake(
     };
 
     let sealed = &state.meta_mcp.window_seal;
-    if !super::super::helpers::observe_http(&request, params, &method, &headers, Some(session_id.as_str()), sealed) {
-        return Err(super::super::helpers::window_sealed_response(&request).into_response());
+    if !crate::gateway::router::helpers::observe_http(
+        &request,
+        params,
+        &method,
+        &headers,
+        Some(session_id.as_str()),
+        sealed,
+    ) {
+        return Err(
+            crate::gateway::router::helpers::window_sealed_response(&request).into_response(),
+        );
     }
 
     // Which protocol generation is this request written against? Decided per

@@ -27,7 +27,9 @@ type Seen = Arc<std::sync::Mutex<Vec<String>>>;
 
 impl HeldBackend {
     pub(super) async fn start() -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind backend");
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind backend");
         let url = format!("http://{}/mcp", listener.local_addr().expect("addr"));
         let released = Arc::new(Notify::new());
         let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -72,7 +74,9 @@ async fn answer(
     let mut buffer = Vec::new();
     let mut chunk = [0_u8; 4096];
     let (head_end, length) = loop {
-        let Ok(read) = stream.read(&mut chunk).await else { return };
+        let Ok(read) = stream.read(&mut chunk).await else {
+            return;
+        };
         if read == 0 {
             return;
         }
@@ -88,7 +92,9 @@ async fn answer(
         }
     };
     while buffer.len() < head_end + length {
-        let Ok(read) = stream.read(&mut chunk).await else { return };
+        let Ok(read) = stream.read(&mut chunk).await else {
+            return;
+        };
         if read == 0 {
             return;
         }
@@ -121,7 +127,11 @@ async fn answer(
         .to_string(),
         None => String::new(),
     };
-    let status = if reply.is_empty() { "202 Accepted" } else { "200 OK" };
+    let status = if reply.is_empty() {
+        "202 Accepted"
+    } else {
+        "200 OK"
+    };
     let response = format!(
         "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{reply}",
         reply.len()

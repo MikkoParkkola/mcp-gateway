@@ -7,7 +7,10 @@ use super::*;
 
 #[test]
 fn a_named_client_wins_over_its_user_agent() {
-    assert_eq!(missing_revision_agent("claude", Some("curl/8.4.0")), "claude");
+    assert_eq!(
+        missing_revision_agent("claude", Some("curl/8.4.0")),
+        "claude"
+    );
 }
 
 #[test]
@@ -37,7 +40,11 @@ fn each_family_is_recognised_from_a_real_agent_string() {
         ("reqwest/0.12", "reqwest"),
         ("Mozilla/5.0", "other"),
     ] {
-        assert_eq!(missing_revision_agent("other", Some(agent)), family, "{agent}");
+        assert_eq!(
+            missing_revision_agent("other", Some(agent)),
+            family,
+            "{agent}"
+        );
     }
 }
 

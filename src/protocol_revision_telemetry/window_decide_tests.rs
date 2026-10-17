@@ -126,7 +126,12 @@ fn an_open_newest_segment_is_outside_the_span_with_its_counts() {
     segments.push(late);
     let (span, outcome) = decide(&window(segments), &declaration());
     assert_eq!(span.expect("span").snapshot.total, 10_000);
-    assert!(outcome.expect("certified").iter().any(|r| r == "2024-11-05"));
+    assert!(
+        outcome
+            .expect("certified")
+            .iter()
+            .any(|r| r == "2024-11-05")
+    );
 }
 
 #[test]
@@ -269,7 +274,10 @@ fn the_operator_run_refuses_a_missing_variable_and_writes_its_decision() {
     }
     let report = run_operator(&full).expect("a complete declaration runs");
     assert!(report.contains("| total | 10000 |"), "{report}");
-    assert!(report.contains(EXE), "the report lists each writer: {report}");
+    assert!(
+        report.contains(EXE),
+        "the report lists each writer: {report}"
+    );
     let written = std::fs::read(path.with_file_name("decision.json")).expect("decision.json");
     let decision: serde_json::Value = serde_json::from_slice(&written).expect("JSON");
     assert!(

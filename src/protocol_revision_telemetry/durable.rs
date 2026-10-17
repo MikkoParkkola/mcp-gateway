@@ -171,7 +171,10 @@ fn add_snapshot(target: &mut Snapshot, delta: &Snapshot) -> io::Result<()> {
     Ok(())
 }
 
-pub(super) fn add_map(target: &mut BTreeMap<String, u64>, delta: &BTreeMap<String, u64>) -> io::Result<()> {
+pub(super) fn add_map(
+    target: &mut BTreeMap<String, u64>,
+    delta: &BTreeMap<String, u64>,
+) -> io::Result<()> {
     for (key, increment) in delta {
         let value = target.entry(key.clone()).or_insert(0);
         *value = checked_counter_add(*value, *increment)?;

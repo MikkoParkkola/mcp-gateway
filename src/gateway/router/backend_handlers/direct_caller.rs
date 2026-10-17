@@ -13,9 +13,9 @@ use serde_json::Value;
 use super::super::AppState;
 use super::super::authorization::{refusal_principal, slot_principal};
 use super::super::hardened_identity::hardened_identity_refusal;
-use super::super::helpers::build_http_error_response;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
+use crate::gateway::router::helpers::build_http_error_response;
 use crate::identity_grants::GrantSubject;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
@@ -208,7 +208,7 @@ pub(super) async fn read_envelope(
     ),
 ) -> Result<Envelope, Rejection> {
     reads.name_caller(caller.client.as_ref(), caller.grant_subject.as_ref());
-    let body_bytes = super::super::helpers::read_body(request).await?;
+    let body_bytes = crate::gateway::router::helpers::read_body(request).await?;
     let mut json_request: Value = match serde_json::from_slice(&body_bytes) {
         Ok(v) => v,
         Err(e) => {
@@ -250,10 +250,10 @@ pub(super) async fn read_envelope(
         json_request = sanitized(state, (name, grant), json_request)?;
     }
 
-    let (id, method, params) = match super::super::helpers::parse_request(&json_request) {
+    let (id, method, params) = match crate::gateway::router::helpers::parse_request(&json_request) {
         Ok(parsed) => parsed,
         Err(response) => {
-            return Err(super::super::helpers::build_http_response(
+            return Err(crate::gateway::router::helpers::build_http_response(
                 &Egressed::gateway_own(response),
                 StatusCode::BAD_REQUEST,
             ));
@@ -384,7 +384,7 @@ pub(super) fn route<'a>(
         .get("mcp-session-id")
         .and_then(|value| value.to_str().ok())
         .filter(|id| state.multiplexer.touch_if_owned(id, &owner));
-    if !super::super::helpers::observe_http(
+    if !crate::gateway::router::helpers::observe_http(
         &envelope.json_request,
         envelope.params.as_ref(),
         &envelope.method,
@@ -509,7 +509,7 @@ pub(super) async fn forward_notification(
             );
             let client = caller.client.as_ref();
             super::super::direct_guards::scan_direct_egress(state, screen, client, &mut response);
-            super::super::helpers::build_http_response(
+            crate::gateway::router::helpers::build_http_response(
                 &Egressed::of(response),
                 StatusCode::INTERNAL_SERVER_ERROR,
             )

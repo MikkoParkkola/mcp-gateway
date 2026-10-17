@@ -18,11 +18,16 @@ async fn a_stalled_checkpoint_never_overtakes_the_final_write() {
         every: Duration::from_millis(50),
         ..settings(ARRIVAL)
     };
-    let saver = rig.start(ProtocolRevisionWindow::Record, quick).await.expect("record");
+    let saver = rig
+        .start(ProtocolRevisionWindow::Record, quick)
+        .await
+        .expect("record");
     rig.served.store(2, Ordering::SeqCst);
     let (checkpoint_in, checkpoint_go) = stall_seam::arm(&rig.window_path(), Role::Checkpoint);
     let (close_in, close_go) = stall_seam::arm(&rig.window_path(), Role::Close);
-    checkpoint_in.recv_timeout(ARRIVAL).expect("a checkpoint is in flight");
+    checkpoint_in
+        .recv_timeout(ARRIVAL)
+        .expect("a checkpoint is in flight");
     rig.served.store(6, Ordering::SeqCst);
     rig.shutdown.send(()).expect("subscribed");
     assert!(
@@ -34,12 +39,20 @@ async fn a_stalled_checkpoint_never_overtakes_the_final_write() {
         "the final write ran while a checkpoint held the sink"
     );
     drop(checkpoint_go); // release this and every later checkpoint
-    close_in.recv_timeout(ARRIVAL).expect("the final write follows it");
+    close_in
+        .recv_timeout(ARRIVAL)
+        .expect("the final write follows it");
     close_go.send(()).expect("release the final write");
-    tokio::time::timeout(ARRIVAL, saver).await.expect("bounded").expect("no panic");
+    tokio::time::timeout(ARRIVAL, saver)
+        .await
+        .expect("bounded")
+        .expect("no panic");
     let segment = rig.segments().remove(0);
     assert!(segment.closed_cleanly, "{segment:?}");
-    assert_eq!(segment.snapshot.total, 6, "the checkpoint's older counts won");
+    assert_eq!(
+        segment.snapshot.total, 6,
+        "the checkpoint's older counts won"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -77,14 +90,21 @@ async fn a_stalled_open_released_after_the_deadline_lands_the_sealed_counts() {
     // correct data), never the counts served after the seal.
     let rig = Rig::new();
     let (open_in, open_go) = stall_seam::arm(&rig.window_path(), Role::Open);
-    let saver = rig.start(ProtocolRevisionWindow::Record, settings(CLOSE_BOUND)).await.expect("record");
+    let saver = rig
+        .start(ProtocolRevisionWindow::Record, settings(CLOSE_BOUND))
+        .await
+        .expect("record");
     open_in.recv_timeout(ARRIVAL).expect("the open started");
     rig.served.store(2, Ordering::SeqCst);
     stop(&rig, saver).await;
     rig.served.store(50, Ordering::SeqCst);
     open_go.send(()).expect("release the open");
     let landed = wait_for(|| rig.segments().first().is_some_and(|s| s.closed_cleanly));
-    assert!(landed, "the queued final write never landed: {:?}", rig.segments());
+    assert!(
+        landed,
+        "the queued final write never landed: {:?}",
+        rig.segments()
+    );
     assert_eq!(rig.segments()[0].snapshot.total, 2);
 }
 
@@ -94,13 +114,19 @@ async fn a_late_open_still_seals_one_clean_segment() {
     // the shutdown deadline; the final write lands in it.
     let rig = Rig::new();
     let (open_in, open_go) = stall_seam::arm(&rig.window_path(), Role::Open);
-    let saver = rig.start(ProtocolRevisionWindow::Record, settings(ARRIVAL)).await.expect("record");
+    let saver = rig
+        .start(ProtocolRevisionWindow::Record, settings(ARRIVAL))
+        .await
+        .expect("record");
     open_in.recv_timeout(ARRIVAL).expect("the open started");
     rig.served.store(3, Ordering::SeqCst);
     rig.shutdown.send(()).expect("subscribed");
     assert!(wait_for(|| rig.seal.load(Ordering::SeqCst)));
     open_go.send(()).expect("release the open");
-    tokio::time::timeout(ARRIVAL, saver).await.expect("bounded").expect("no panic");
+    tokio::time::timeout(ARRIVAL, saver)
+        .await
+        .expect("bounded")
+        .expect("no panic");
     let segments = rig.segments();
     assert_eq!(segments.len(), 1, "{segments:?}");
     assert!(segments[0].closed_cleanly);
@@ -132,7 +158,10 @@ async fn a_failed_open_is_retried_and_records_every_count_since_start() {
     let opened = wait_for(|| window::load(&data_dir).is_ok_and(|w| w.http_segments.len() == 1));
     assert!(opened, "a later tick never retried the open");
     stop(&rig, saver).await;
-    let segment = window::load(&data_dir).expect("reopen").http_segments.remove(0);
+    let segment = window::load(&data_dir)
+        .expect("reopen")
+        .http_segments
+        .remove(0);
     assert!(segment.closed_cleanly);
     assert_eq!(segment.snapshot.total, 5);
 }

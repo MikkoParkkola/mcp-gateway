@@ -90,17 +90,16 @@ pub(super) async fn start_window_saver(
     let sink: Sink = Arc::default();
     // No readable clock means no start time to record: no segment is
     // written (never a 0), but the seal below still refuses late requests.
-    let identity = match (settings.clock_ms)() {
-        Ok(started_ms) => Some(WriterIdentity {
+    let identity = if let Ok(started_ms) = (settings.clock_ms)() {
+        Some(WriterIdentity {
             listen: listen.to_string(),
             exe: std::env::current_exe()
                 .map_or_else(|_| "unknown".to_string(), |path| path.display().to_string()),
             process_started_at_ms: started_ms,
-        }),
-        Err(_) => {
-            warn!(data_dir = %data_dir.display(), "{NOT_DURABLE} (clock before 1970)");
-            None
-        }
+        })
+    } else {
+        warn!(data_dir = %data_dir.display(), "{NOT_DURABLE} (clock before 1970)");
+        None
     };
     if let Some(identity) = &identity {
         let opened = open_detached(&sink, &data_dir, identity, settings.clock_ms);
@@ -131,7 +130,9 @@ pub(super) async fn start_window_saver(
         let close: super::persistence::ShutdownSave = (
             "protocol-revision window seal",
             Box::new(move || {
-                let mut held = sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let mut held = sink
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let (Some(sink), Ok(sealed_at_ms)) = (held.as_mut(), sealed_at_ms) else {
                     warn!("{NOT_DURABLE}: the window segment was not sealed");
                     return;
@@ -159,7 +160,9 @@ fn open_detached(
     let spawned = std::thread::Builder::new()
         .name("protocol-revision window open".to_owned())
         .spawn(move || {
-            let mut held = sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut held = sink
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let _ = done.send(open_into(&mut held, &data_dir, identity, clock_ms));
         });
     if let Err(error) = spawned {

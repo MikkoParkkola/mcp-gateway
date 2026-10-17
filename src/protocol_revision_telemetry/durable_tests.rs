@@ -19,18 +19,12 @@ fn committed_window_is_not_counted_twice_after_parent_sync_failure() {
         .expect_err("parent sync must fail after the rename");
     assert_eq!(error.kind(), io::ErrorKind::Other);
     assert!(sink.parent_sync_pending);
-    assert_eq!(
-        window::load(directory.path()).unwrap().stdio.total,
-        1
-    );
+    assert_eq!(window::load(directory.path()).unwrap().stdio.total, 1);
 
     sink.persist_with_parent_sync(StdioCounts::of(&registry), 2, |_| Ok(()))
-    .expect("retry pending parent sync");
+        .expect("retry pending parent sync");
     assert!(!sink.parent_sync_pending);
-    assert_eq!(
-        window::load(directory.path()).unwrap().stdio.total,
-        1
-    );
+    assert_eq!(window::load(directory.path()).unwrap().stdio.total, 1);
 }
 
 #[cfg(windows)]
@@ -61,7 +55,9 @@ fn the_stdio_window_survives_a_process_restart() {
         first_process.observe_request(Some("2025-11-25"), "claude", Transport::Stdio);
     }
     first_process.shadow_tools_list(crate::protocol_revision_telemetry::ListFilters::default());
-    first_sink.persist_registry(&first_process).expect("persist the first process");
+    first_sink
+        .persist_registry(&first_process)
+        .expect("persist the first process");
     let first = window::load(data_dir.path()).expect("load the first process's window");
     assert_eq!(first.stdio.total, 60);
     assert_eq!(first.tools_list_shadow.values().sum::<u64>(), 1);
@@ -72,7 +68,9 @@ fn the_stdio_window_survives_a_process_restart() {
     for _ in 0..40 {
         second_process.observe_request(Some("2025-06-18"), "codex", Transport::Stdio);
     }
-    restarted.persist_registry(&second_process).expect("persist after the restart");
+    restarted
+        .persist_registry(&second_process)
+        .expect("persist after the restart");
     let window = window::load(data_dir.path()).expect("load after the restart");
     assert_eq!(window.stdio.total, 100);
     assert_eq!(window.stdio.by_revision.get("2025-11-25"), Some(&60));

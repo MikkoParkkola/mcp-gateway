@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! U1 v2 design row 19: an HTTP `serve` with `server.protocol_revision_window:
-//! record` that serves a request and is then SIGKILLed leaves its segment in
+//! record` that serves a request and is then killed (`SIGKILL`) leaves its segment in
 //! the window, unclean, so the window blocks. It never leaves no segment: the
 //! segment is opened before the listener serves, not at the first periodic
 //! save, so a crash cannot hide a process that served traffic.
 //!
 //! The real binary, so the kill is a real process death. The binary has no
-//! knob to stop its periodic save (every 5 s), so the row SIGKILLs at once
+//! knob to stop its periodic save (every 5 s), so the row kills it (`SIGKILL`) at once
 //! after the first response and asserts the kill landed inside 5 s of the
 //! spawn: before any periodic save could have created the file, so only the
 //! open-before-serving can explain a segment. A slower run fails rather than
@@ -55,16 +55,24 @@ fn a_record_gateway_killed_after_serving_leaves_an_unclean_segment() {
     let spawned = Instant::now();
     let start = spawned;
     let port = loop {
-        if let Some(port) = gateway_bin::logged_port(&log).filter(|p| gateway_bin::answers_livez(*p)) {
+        if let Some(port) =
+            gateway_bin::logged_port(&log).filter(|p| gateway_bin::answers_livez(*p))
+        {
             break port;
         }
         if start.elapsed() > ARRIVAL || child.try_wait().expect("wait").is_some() {
             let _ = child.kill();
-            panic!("the gateway never served:\n{}", std::fs::read_to_string(&log).unwrap_or_default());
+            panic!(
+                "the gateway never served:\n{}",
+                std::fs::read_to_string(&log).unwrap_or_default()
+            );
         }
         std::thread::sleep(Duration::from_millis(50));
     };
-    assert!(post_initialize(port).starts_with("HTTP/1.1 200"), "the request was not served");
+    assert!(
+        post_initialize(port).starts_with("HTTP/1.1 200"),
+        "the request was not served"
+    );
 
     child.kill().expect("SIGKILL");
     let killed_after = spawned.elapsed();
@@ -76,7 +84,9 @@ fn a_record_gateway_killed_after_serving_leaves_an_unclean_segment() {
          already have written the file; rerun on a less loaded host"
     );
 
-    let path = state.join("protocol-revision-telemetry").join("window.json");
+    let path = state
+        .join("protocol-revision-telemetry")
+        .join("window.json");
     let window: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(&path).expect("a served process left its window file"),
     )

@@ -291,16 +291,15 @@ impl Registry {
             .by_transport
             .entry(transport.as_str().to_string())
             .or_insert(0) += 1;
-        match revision {
-            Some(rev) => *slice.by_revision.entry(rev.to_string()).or_insert(0) += 1,
-            None => {
-                slice.unattributed += 1;
-                let key = agents::missing_revision_agent(client, user_agent);
-                *self
-                    .missing_revision_agents
-                    .entry(key.to_string())
-                    .or_insert(0) += 1;
-            }
+        if let Some(rev) = revision {
+            *slice.by_revision.entry(rev.to_string()).or_insert(0) += 1;
+        } else {
+            slice.unattributed += 1;
+            let key = agents::missing_revision_agent(client, user_agent);
+            *self
+                .missing_revision_agents
+                .entry(key.to_string())
+                .or_insert(0) += 1;
         }
     }
 

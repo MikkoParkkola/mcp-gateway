@@ -45,7 +45,11 @@ fn a_missing_revision_is_broken_down_by_bounded_caller() {
     let agents = registry.missing_revision_agents();
     assert_eq!(agents.get("curl"), Some(&2));
     assert_eq!(agents.get("claude"), Some(&1));
-    assert_eq!(agents.values().sum::<u64>(), 2 + 1, "a declared revision is not broken down");
+    assert_eq!(
+        agents.values().sum::<u64>(),
+        2 + 1,
+        "a declared revision is not broken down"
+    );
     assert!(
         agents.keys().all(|key| !key.contains('/')),
         "a raw agent reached the map: {agents:?}"
@@ -80,7 +84,11 @@ fn a_sealed_gateway_refuses_and_does_not_count() {
     );
     let registry = registry.into_inner().expect("not poisoned");
     assert_eq!(registry.transport_snapshot(Transport::Http).total, 1);
-    assert_eq!(registry.snapshot().total, 1, "a refused request is not counted");
+    assert_eq!(
+        registry.snapshot().total,
+        1,
+        "a refused request is not counted"
+    );
 }
 
 #[test]
@@ -88,7 +96,14 @@ fn a_notification_is_never_refused_or_counted() {
     let registry = Mutex::new(Registry::new());
     let sealed = AtomicBool::new(true);
     assert!(observe(&registry, "notifications/initialized", &sealed));
-    assert_eq!(registry.into_inner().expect("not poisoned").snapshot().total, 0);
+    assert_eq!(
+        registry
+            .into_inner()
+            .expect("not poisoned")
+            .snapshot()
+            .total,
+        0
+    );
 }
 
 #[test]

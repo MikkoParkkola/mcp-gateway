@@ -6,13 +6,13 @@
 //! write gate's signals and on the seal flag, never on a sleep. The runtime
 //! has two workers: a row blocks one on a gate signal while the saver runs.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use super::*;
-use crate::protocol_revision_telemetry::window::stall_seam::{self, Role};
 use crate::protocol_revision_telemetry::window;
+use crate::protocol_revision_telemetry::window::stall_seam::{self, Role};
 use crate::protocol_revision_telemetry::{Registry, Transport};
 
 /// Bound on each wait for something that must happen (a setup watchdog).
@@ -61,7 +61,11 @@ impl Rig {
         })
     }
 
-    async fn start(&self, mode: ProtocolRevisionWindow, settings: SaverSettings) -> Option<tokio::task::JoinHandle<()>> {
+    async fn start(
+        &self,
+        mode: ProtocolRevisionWindow,
+        settings: SaverSettings,
+    ) -> Option<tokio::task::JoinHandle<()>> {
         start_window_saver(
             mode,
             self.dir.path().to_path_buf(),
@@ -102,7 +106,11 @@ async fn stop(rig: &Rig, saver: tokio::task::JoinHandle<()>) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn with_the_mode_off_nothing_is_recorded_or_sealed() {
     let rig = Rig::new();
-    assert!(rig.start(ProtocolRevisionWindow::Off, settings(ARRIVAL)).await.is_none());
+    assert!(
+        rig.start(ProtocolRevisionWindow::Off, settings(ARRIVAL))
+            .await
+            .is_none()
+    );
     rig.shutdown.send(()).ok();
     assert!(!rig.seal.load(Ordering::SeqCst));
     assert!(!rig.dir.path().join("protocol-revision-telemetry").exists());
@@ -111,9 +119,16 @@ async fn with_the_mode_off_nothing_is_recorded_or_sealed() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_segment_is_open_before_serving_and_sealed_on_the_broadcast() {
     let rig = Rig::new();
-    let saver = rig.start(ProtocolRevisionWindow::Record, settings(ARRIVAL)).await.expect("record");
+    let saver = rig
+        .start(ProtocolRevisionWindow::Record, settings(ARRIVAL))
+        .await
+        .expect("record");
     let segments = rig.segments();
-    assert_eq!(segments.len(), 1, "the segment must exist before serving starts");
+    assert_eq!(
+        segments.len(),
+        1,
+        "the segment must exist before serving starts"
+    );
     assert!(!segments[0].closed_cleanly);
     rig.served.store(9, Ordering::SeqCst);
     stop(&rig, saver).await;
@@ -128,21 +143,35 @@ async fn the_segment_is_open_before_serving_and_sealed_on_the_broadcast() {
 async fn a_final_write_stalled_past_its_bound_leaves_the_segment_unclean() {
     // Row 11 arm 1, and row 12: refusals start at the broadcast regardless.
     let rig = Rig::new();
-    let saver = rig.start(ProtocolRevisionWindow::Record, settings(CLOSE_BOUND)).await.expect("record");
+    let saver = rig
+        .start(ProtocolRevisionWindow::Record, settings(CLOSE_BOUND))
+        .await
+        .expect("record");
     let (entered, release) = stall_seam::arm(&rig.window_path(), Role::Close);
     rig.served.store(4, Ordering::SeqCst);
     let broadcast = std::time::Instant::now();
     rig.shutdown.send(()).expect("subscribed");
-    entered.recv_timeout(ARRIVAL).expect("the final write starts");
-    assert!(rig.seal.load(Ordering::SeqCst), "the seal waits for no write");
-    tokio::time::timeout(ARRIVAL, saver).await.expect("bounded").expect("no panic");
+    entered
+        .recv_timeout(ARRIVAL)
+        .expect("the final write starts");
+    assert!(
+        rig.seal.load(Ordering::SeqCst),
+        "the seal waits for no write"
+    );
+    tokio::time::timeout(ARRIVAL, saver)
+        .await
+        .expect("bounded")
+        .expect("no panic");
     // timing-oracle: vs CLOSE_BOUND (MIK-7211)
     assert!(
         broadcast.elapsed() < CLOSE_BOUND + ALLOWANCE,
         "the saver outlived its close bound: {:?}",
         broadcast.elapsed()
     );
-    assert!(!rig.segments()[0].closed_cleanly, "an unlanded close reads clean");
+    assert!(
+        !rig.segments()[0].closed_cleanly,
+        "an unlanded close reads clean"
+    );
     drop(release);
 }
 
@@ -150,12 +179,20 @@ async fn a_final_write_stalled_past_its_bound_leaves_the_segment_unclean() {
 async fn a_final_write_released_after_its_bound_lands_the_exact_sealed_counts() {
     // Row 11 arm 2: a late landing is correct data.
     let rig = Rig::new();
-    let saver = rig.start(ProtocolRevisionWindow::Record, settings(CLOSE_BOUND)).await.expect("record");
+    let saver = rig
+        .start(ProtocolRevisionWindow::Record, settings(CLOSE_BOUND))
+        .await
+        .expect("record");
     let (entered, release) = stall_seam::arm(&rig.window_path(), Role::Close);
     rig.served.store(4, Ordering::SeqCst);
     rig.shutdown.send(()).expect("subscribed");
-    entered.recv_timeout(ARRIVAL).expect("the final write starts");
-    tokio::time::timeout(ARRIVAL, saver).await.expect("bounded").expect("no panic");
+    entered
+        .recv_timeout(ARRIVAL)
+        .expect("the final write starts");
+    tokio::time::timeout(ARRIVAL, saver)
+        .await
+        .expect("bounded")
+        .expect("no panic");
     rig.served.store(99, Ordering::SeqCst); // after the seal: never in the file
     release.send(()).expect("release");
     let landed = wait_for(|| rig.segments().first().is_some_and(|s| s.closed_cleanly));
@@ -172,7 +209,10 @@ async fn a_clock_before_1970_never_writes_a_zero_and_never_closes_clean() {
         clock_ms: before_epoch,
         ..settings(ARRIVAL)
     };
-    let saver = rig.start(ProtocolRevisionWindow::Record, clockless).await.expect("record");
+    let saver = rig
+        .start(ProtocolRevisionWindow::Record, clockless)
+        .await
+        .expect("record");
     stop(&rig, saver).await;
     assert!(rig.seal.load(Ordering::SeqCst), "a clock error still seals");
     let segments = rig.segments();
@@ -205,7 +245,10 @@ async fn a_clock_failing_at_the_seal_leaves_a_healthy_segment_unclean() {
         clock_ms: clock_that_breaks,
         ..settings(ARRIVAL)
     };
-    let saver = rig.start(ProtocolRevisionWindow::Record, breaking).await.expect("record");
+    let saver = rig
+        .start(ProtocolRevisionWindow::Record, breaking)
+        .await
+        .expect("record");
     assert_eq!(rig.segments().len(), 1, "the open used the healthy clock");
     SEAL_CLOCK_BROKEN.store(true, Ordering::SeqCst);
     stop(&rig, saver).await;

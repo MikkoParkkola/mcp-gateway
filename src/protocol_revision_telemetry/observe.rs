@@ -11,9 +11,8 @@ use serde_json::Value;
 // MIK-6704: label only (imported for telemetry attribution, never a decision).
 use super::{
     CacheScope, ListFilters, META_CLIENT_INFO, META_PROTOCOL_VERSION, Registry, SessionAttribution,
-    Snapshot,
-    ToolsListShadow, Transport, UNATTRIBUTED_CLIENT, client_info_name, client_label, global,
-    public_over_filtered, request_meta_value, requested_revision, revision_label,
+    Snapshot, ToolsListShadow, Transport, UNATTRIBUTED_CLIENT, client_info_name, client_label,
+    global, public_over_filtered, request_meta_value, requested_revision, revision_label,
 };
 // Only the zero-registration loop in `register_metrics` reads these.
 #[cfg(feature = "metrics")]

@@ -103,15 +103,7 @@ async fn a_saved_stdio_observation_is_operator_readable() {
     let window = crate::protocol_revision_telemetry::window::load(data_dir.path())
         .expect("load durable stdio aggregate");
     assert!(window.stdio.total >= 1);
-    assert!(
-        window
-            .stdio
-            .by_transport
-            .get("stdio")
-            .copied()
-            .unwrap_or(0)
-            >= 1
-    );
+    assert!(window.stdio.by_transport.get("stdio").copied().unwrap_or(0) >= 1);
     assert!(
         window
             .stdio

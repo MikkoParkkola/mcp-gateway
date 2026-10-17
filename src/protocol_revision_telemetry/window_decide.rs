@@ -152,7 +152,9 @@ pub(crate) fn parse_declaration(
         .map_err(|error| invalid_input(format!("U1_LISTEN: {error}")))?;
     let exe_prefix = required(exe_prefix, "U1_EXE_PREFIX")?;
     if !std::path::Path::new(&exe_prefix).is_absolute() {
-        return Err(invalid_input("U1_EXE_PREFIX must be an absolute path".to_string()));
+        return Err(invalid_input(
+            "U1_EXE_PREFIX must be an absolute path".to_string(),
+        ));
     }
     Ok(Declaration {
         population,

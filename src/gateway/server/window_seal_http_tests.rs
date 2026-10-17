@@ -73,7 +73,9 @@ fn assert_served(answer: &(u16, String), id: u64) {
 
 /// Send `path`'s headers and `body`, keeping back its last byte if `hold`.
 async fn send(port: u16, path: &str, body: &str, hold: bool) -> TcpStream {
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).await.expect("connect");
+    let mut stream = TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("connect");
     let head = format!(
         "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\n\
          Accept: application/json, text/event-stream\r\nUser-Agent: curl/8.4.0\r\n\
@@ -82,7 +84,10 @@ async fn send(port: u16, path: &str, body: &str, hold: bool) -> TcpStream {
     );
     stream.write_all(head.as_bytes()).await.expect("headers");
     let sent = if hold { body.len() - 1 } else { body.len() };
-    stream.write_all(&body.as_bytes()[..sent]).await.expect("body");
+    stream
+        .write_all(&body.as_bytes()[..sent])
+        .await
+        .expect("body");
     stream
 }
 
