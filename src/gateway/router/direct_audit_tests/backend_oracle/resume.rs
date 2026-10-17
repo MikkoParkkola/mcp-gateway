@@ -18,6 +18,8 @@ fn asking_ghost(calls: &Arc<AtomicUsize>) -> Arc<Backend> {
     ));
     backend.set_transport_for_test(Arc::new(Scripted {
         calls: Arc::clone(calls),
+        lists: Arc::default(),
+        extras: &[],
         error: None,
         fail: None,
         reply: Some(json!({

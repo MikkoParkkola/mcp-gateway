@@ -150,7 +150,8 @@ fn mint_rows(fx: &Fixture) -> usize {
 
 fn sanitizing() -> Setup {
     Setup {
-        extras: &[Extra::Sanitize, Extra::BetaPassthrough],
+        extras: &[Extra::BetaPassthrough],
+        sanitize: Sanitize::On,
         ..idempotent()
     }
 }

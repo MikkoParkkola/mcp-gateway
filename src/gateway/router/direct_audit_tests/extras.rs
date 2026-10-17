@@ -17,8 +17,6 @@ pub(super) enum Extra {
     /// Every backend request is counted, then never answered, so a stage
     /// that waits on a backend before answering never answers.
     Hang,
-    /// `security.sanitize_input` (the router's default here is off).
-    Sanitize,
     /// `beta` is a `passthrough: true` backend.
     BetaPassthrough,
     /// `security.posture: hardened` (auth stays off).

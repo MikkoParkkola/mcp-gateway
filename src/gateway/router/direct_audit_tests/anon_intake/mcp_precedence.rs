@@ -16,7 +16,7 @@ use super::{
 #[tokio::test]
 async fn c4_mcp_intake_answers_before_later_refusals() {
     let fx = fixture(Setup {
-        extras: &[Extra::Sanitize],
+        sanitize: Sanitize::On,
         ..idempotent()
     })
     .await;

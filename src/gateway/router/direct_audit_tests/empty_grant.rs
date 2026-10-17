@@ -293,6 +293,8 @@ async fn sanitized_passthrough() -> Fixture {
     ));
     beta.set_transport_for_test(Arc::new(Scripted {
         calls: Arc::clone(&fx.calls),
+        lists: Arc::default(),
+        extras: &[],
         error: None,
         fail: None,
         reply: None,
@@ -389,6 +391,8 @@ async fn an_unscoped_caller_is_untouched_by_the_empty_grant_arms() {
     ));
     beta.set_transport_for_test(Arc::new(Scripted {
         calls: Arc::clone(&fx.calls),
+        lists: Arc::default(),
+        extras: &[],
         error: None,
         fail: None,
         reply: None,

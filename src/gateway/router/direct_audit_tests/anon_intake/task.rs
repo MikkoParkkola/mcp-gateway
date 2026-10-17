@@ -58,12 +58,8 @@ async fn d2b_auth_off_task_submit_waits_on_one_list_before_its_handle() {
         ..idempotent()
     })
     .await;
-    let submit = post_to(
-        &hung,
-        "/mcp",
-        &task_submit("alpha", "d2b-alpha"),
-        &Caller::Modern,
-    );
+    let body = task_submit("alpha", "d2b-alpha");
+    let submit = post_to(&hung, "/mcp", &body, &Caller::Modern);
     tokio::pin!(submit);
     // Wait on the event, not a window: alpha counted its `tools/list`. The
     // 30 s bound is a hang guard; `alpha` answers nothing, so the submit

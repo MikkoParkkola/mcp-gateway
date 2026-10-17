@@ -279,7 +279,6 @@ async fn fixture(setup: Setup) -> Fixture {
     let calls = Arc::new(AtomicUsize::new(0));
     let lists = Arc::new(AtomicUsize::new(0));
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
-    state_mut.sanitize_input = setup.has(Extra::Sanitize);
     if setup.has(Extra::Hardened) {
         harden(state_mut);
     }

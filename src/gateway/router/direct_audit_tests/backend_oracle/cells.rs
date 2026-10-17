@@ -20,6 +20,8 @@ pub(super) fn scripted(
     ));
     backend.set_transport_for_test(Arc::new(Scripted {
         calls: Arc::clone(calls),
+        lists: Arc::default(),
+        extras: &[],
         error: None,
         fail: None,
         reply: None,
