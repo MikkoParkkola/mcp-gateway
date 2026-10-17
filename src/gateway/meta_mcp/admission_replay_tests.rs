@@ -159,3 +159,52 @@ async fn p8_empty_a_plan_record_that_dispatched_nothing_is_served() {
         "P8-empty: the stored plan was not served as stored"
     );
 }
+
+/// P8-noid (MIK-8406, fail closed): a stored plan replay with no request id
+/// is not served. Admission always stamps the request's id, so only a
+/// constructed record reaches this; the answer is -32603 with no id and no
+/// stored facts. Its empty step list would otherwise serve it unproven, so
+/// dropping the guard fails this row.
+#[tokio::test]
+async fn p8_noid_a_stored_plan_replay_with_no_request_id_fails_closed() {
+    let meta = per_caller_meta();
+    let (arguments, mut stored) = plan_replay();
+    stored.id = None;
+    let answer = crate::gateway::meta_mcp::visible::with_visibility_memo(async {
+        meta.defer_or_serve_replay(
+            "gateway_execute",
+            &arguments,
+            &ctx(&AllowAll),
+            None,
+            Some(Vec::new()),
+            (stored, None),
+        )
+        .await
+    })
+    .await;
+    let (response, audit) = answer.expect("P8-noid: a plan replay is answered, never deferred");
+    let response = serde_json::to_value(&response).expect("serialises");
+    assert_eq!(
+        response.get("id"),
+        Some(&serde_json::Value::Null),
+        "{response}"
+    );
+    assert_eq!(
+        response.pointer("/error/code"),
+        Some(&json!(-32603)),
+        "{response}"
+    );
+    assert_eq!(
+        response.pointer("/error/message"),
+        Some(&json!("stored plan replay has no request id")),
+        "{response}"
+    );
+    assert!(
+        response.get("result").is_none(),
+        "P8-noid: served: {response}"
+    );
+    assert!(
+        audit.is_none(),
+        "P8-noid: stored facts travelled with the refusal"
+    );
+}
