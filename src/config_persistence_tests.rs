@@ -599,7 +599,10 @@ fn a_file_changed_since_it_was_loaded_is_not_spliced() {
 /// MIK-8425: the full-rewrite URL writer's exact output, recorded with the
 /// current YAML backend, so a backend swap that changes a written byte fails
 /// here. One backend only: `backends` is a hash map, and a map with one entry
-/// has no order to vary.
+/// has no order to vary. The fixture was recorded with the default features,
+/// and two of them add config sections to the output (`cost_governance`,
+/// `security.firewall`), so the comparison runs only when both are on.
+#[cfg(all(feature = "cost-governance", feature = "firewall"))]
 fn url_render_report() -> String {
     let mut config = Config::default();
     let backend =
@@ -614,12 +617,14 @@ fn url_render_report() -> String {
     format!("== fresh\n{fresh}== keeps-http_url\n{aliased}")
 }
 
+#[cfg(all(feature = "cost-governance", feature = "firewall"))]
 #[test]
 fn the_url_writer_renders_exactly_as_recorded() {
     let golden = include_str!("../tests/fixtures/mik_8425_yaml/url_render.txt");
     assert_eq!(url_render_report(), golden);
 }
 
+#[cfg(all(feature = "cost-governance", feature = "firewall"))]
 #[test]
 #[ignore = "records tests/fixtures/mik_8425_yaml/url_render.txt; run with --ignored --nocapture"]
 fn record_url_render_golden() {
