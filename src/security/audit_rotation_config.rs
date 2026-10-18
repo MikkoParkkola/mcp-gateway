@@ -116,7 +116,7 @@ mod tests {
     #[test]
     fn on_disk_full_parses_both_arms() {
         let r: RotationConfig =
-            serde_yaml::from_str("on_disk_full: refuse\nretain_segments: 3\n").unwrap();
+            crate::yaml::from_str("on_disk_full: refuse\nretain_segments: 3\n").unwrap();
         assert_eq!(r.on_disk_full, OnDiskFull::Refuse);
         assert_eq!(r.retain_segments, 3);
         assert_eq!(r.max_segment_bytes, 64 * 1024 * 1024);

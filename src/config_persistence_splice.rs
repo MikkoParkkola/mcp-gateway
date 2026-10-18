@@ -4,7 +4,7 @@
 //! the file's comments survive. A re-serialised `Config` drops every comment,
 //! including the security warning `init` writes next to `bearer_token`.
 
-use serde_yaml::{Mapping, Value};
+use crate::yaml::{Mapping, Value};
 
 use super::eol::{Line, render as render_lines};
 
@@ -27,7 +27,7 @@ pub(super) fn with_backend_edited(
         return None;
     }
     // A file of comments alone parses as no document: it is an empty mapping.
-    let mut want = match serde_yaml::from_str(original).ok()? {
+    let mut want = match crate::yaml::from_str(original).ok()? {
         Value::Null => Value::Mapping(Mapping::new()),
         document => document,
     };
@@ -43,12 +43,12 @@ pub(super) fn with_backend_edited(
     let backends = root.get_mut(&key)?.as_mapping_mut()?;
     let edited = match (before.backends.get(name), config.backends.get(name)) {
         (None, Some(backend)) => {
-            let mut entry_value = serde_yaml::to_value(backend).ok()?;
+            let mut entry_value = crate::yaml::to_value(backend).ok()?;
             super::url_spelling::spell_as_url(entry_value.as_mapping_mut()?);
             let mut entry = Mapping::new();
             entry.insert(name.into(), entry_value.clone());
             backends.insert(name.into(), entry_value);
-            splice(original, &serde_yaml::to_string(&entry).ok()?)?
+            splice(original, &crate::yaml::to_string(&entry).ok()?)?
         }
         (Some(_), None) => {
             backends.remove(name)?;
@@ -56,8 +56,8 @@ pub(super) fn with_backend_edited(
         }
         (Some(old), Some(new)) => {
             let (Value::Mapping(mut old), Value::Mapping(mut new)) = (
-                serde_yaml::to_value(old).ok()?,
-                serde_yaml::to_value(new).ok()?,
+                crate::yaml::to_value(old).ok()?,
+                crate::yaml::to_value(new).ok()?,
             ) else {
                 return None;
             };
@@ -70,7 +70,7 @@ pub(super) fn with_backend_edited(
         }
         (None, None) => return None,
     };
-    let got: Value = serde_yaml::from_str(&edited).ok()?;
+    let got: Value = crate::yaml::from_str(&edited).ok()?;
     // The text must also load as `config` itself: `original` is re-read at
     // write time, and a file another writer changed since `before` was
     // loaded would otherwise be written without `config`'s validation.
@@ -279,7 +279,7 @@ type Edit = (usize, usize, Vec<String>);
 fn render(key: &Value, value: &Value, pad: &str) -> Option<Vec<String>> {
     let mut one = Mapping::new();
     one.insert(key.clone(), value.clone());
-    let text = serde_yaml::to_string(&one).ok()?;
+    let text = crate::yaml::to_string(&one).ok()?;
     Some(text.lines().map(|l| format!("{pad}{l}")).collect())
 }
 
@@ -358,7 +358,7 @@ fn edit_block(
 /// anchors defined elsewhere still resolve. Text the parser keeps as part of
 /// a value is never carried as a comment.
 pub(super) fn parsed_as_comment(lines: &[&str], line: usize, comment: &str) -> bool {
-    let parse = |text: &[&str]| serde_yaml::from_str::<Value>(&text.join("\n")).ok();
+    let parse = |text: &[&str]| crate::yaml::from_str::<Value>(&text.join("\n")).ok();
     let mut cut = lines.to_vec();
     cut[line] = &lines[line][..lines[line].len() - comment.len()];
     matches!((parse(lines), parse(&cut)), (Some(with), Some(without)) if with == without)

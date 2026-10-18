@@ -354,7 +354,7 @@ mod caller_identity_config_tests {
     #[test]
     fn removed_trust_flag_is_a_load_error() {
         let yaml = "identity_grants:\n  trust_caller_identity_headers: true\n";
-        let err = serde_yaml::from_str::<crate::config::SecurityConfig>(yaml)
+        let err = crate::yaml::from_str::<crate::config::SecurityConfig>(yaml)
             .expect_err("the removed key loaded silently")
             .to_string();
         assert!(err.contains("trust_caller_identity_headers"), "{err}");
