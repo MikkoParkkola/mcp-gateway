@@ -32,7 +32,7 @@ fn l2_a_set_port_does_not_warn() {
 #[test]
 fn l5_the_role_mapping_admin_widening_is_logged_once_across_reloads() {
     let mapping: crate::control_plane::role_mapping::ControlPlaneRoleMappingConfig =
-        serde_yaml::from_str(
+        crate::yaml::from_str(
             "rules: [{issuer: 'https://l5.issuer.example', group: admins, role: admin}]",
         )
         .expect("rule parses");
@@ -49,7 +49,7 @@ fn l5_the_role_mapping_admin_widening_is_logged_once_across_reloads() {
 #[test]
 fn l6_dormant_declared_agents_are_logged_once_across_reloads() {
     let identity: crate::security::agent_identity::AgentIdentityConfig =
-        serde_yaml::from_str("enabled: false\nknown_agents: [{source: declared, id: l6-agent}]")
+        crate::yaml::from_str("enabled: false\nknown_agents: [{source: declared, id: l6-agent}]")
             .expect("config parses");
     let logs = records(|| {
         for _ in 0..3 {
@@ -64,7 +64,7 @@ fn l6_dormant_declared_agents_are_logged_once_across_reloads() {
 #[test]
 fn l5b_an_admin_rule_edited_in_place_warns_again() {
     let parse = |group: &str| -> crate::control_plane::role_mapping::ControlPlaneRoleMappingConfig {
-        serde_yaml::from_str(&format!(
+        crate::yaml::from_str(&format!(
             "rules: [{{issuer: 'https://l5b.issuer.example', group: {group}, role: admin}}]"
         ))
         .expect("rule parses")

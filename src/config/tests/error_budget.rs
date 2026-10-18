@@ -7,7 +7,7 @@ use super::*;
 // ── GH #475 — error_budget section ─────────────────────────────────────────────
 
 /// Load YAML through the production loader (figment + validation), not
-/// `serde_yaml::from_str`: `deny_unknown_fields` and `validate_with_env` only
+/// `crate::yaml::from_str`: `deny_unknown_fields` and `validate_with_env` only
 /// interact on the real path.
 fn gh475_load(yaml: &str) -> Result<Config> {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -268,7 +268,7 @@ fn duration_serialize_preserves_25ms_config_roundtrip() {
     )
     .expect("write");
     let cfg = Config::load(Some(&path)).expect("load 25ms");
-    let yaml = serde_yaml::to_string(&cfg).expect("serialize");
+    let yaml = crate::yaml::to_string(&cfg).expect("serialize");
     assert!(
         yaml.contains("25ms"),
         "as_secs truncation would emit 0s; got {yaml}"
@@ -299,7 +299,7 @@ fn duration_serialize_preserves_1250ms_config_roundtrip() {
     )
     .expect("write");
     let cfg = Config::load(Some(&path)).expect("load 1250ms");
-    let yaml = serde_yaml::to_string(&cfg).expect("serialize");
+    let yaml = crate::yaml::to_string(&cfg).expect("serialize");
     assert!(
         yaml.contains("1250ms"),
         "as_secs truncation would emit 1s; got {yaml}"
@@ -330,7 +330,7 @@ fn duration_serialize_keeps_whole_seconds_as_seconds() {
     )
     .expect("write");
     let cfg = Config::load(Some(&path)).expect("load 30s");
-    let yaml = serde_yaml::to_string(&cfg).expect("serialize");
+    let yaml = crate::yaml::to_string(&cfg).expect("serialize");
     assert!(
         yaml.contains("30s"),
         "whole seconds must stay NNs; got {yaml}"
@@ -361,7 +361,7 @@ fn duration_serialize_zero_and_max_whole_seconds() {
     )
     .expect("write");
     let mut cfg = Config::load(Some(&path)).expect("load 0s");
-    let yaml = serde_yaml::to_string(&cfg).expect("serialize 0s");
+    let yaml = crate::yaml::to_string(&cfg).expect("serialize 0s");
     assert!(
         yaml.contains("0s"),
         "zero whole seconds encode as 0s; got {yaml}"
@@ -370,7 +370,7 @@ fn duration_serialize_zero_and_max_whole_seconds() {
         .get_mut("owned")
         .expect("backend")
         .stop_when_idle_for = Some(crate::duration_bound::MAX_DURATION);
-    let yaml = serde_yaml::to_string(&cfg).expect("serialize the longest duration");
+    let yaml = crate::yaml::to_string(&cfg).expect("serialize the longest duration");
     assert!(
         yaml.contains("3155760000s"),
         "the longest duration stays whole seconds; got {yaml}"
@@ -381,7 +381,7 @@ fn duration_serialize_zero_and_max_whole_seconds() {
         .expect("backend")
         .stop_when_idle_for =
         Some(crate::duration_bound::MAX_DURATION + std::time::Duration::from_secs(1));
-    assert!(serde_yaml::to_string(&cfg).is_err());
+    assert!(crate::yaml::to_string(&cfg).is_err());
 }
 
 #[test]
@@ -399,7 +399,7 @@ fn duration_serialize_rejects_sub_ms_and_over_u64_millis() {
         .expect("backend")
         .stop_when_idle_for = Some(std::time::Duration::from_nanos(500));
     assert!(
-        serde_yaml::to_string(&cfg).is_err(),
+        crate::yaml::to_string(&cfg).is_err(),
         "sub-millisecond precision must be a serde error"
     );
     cfg.backends
@@ -411,7 +411,7 @@ fn duration_serialize_rejects_sub_ms_and_over_u64_millis() {
             .expect("Duration can hold max secs + 1ms"),
     );
     assert!(
-        serde_yaml::to_string(&cfg).is_err(),
+        crate::yaml::to_string(&cfg).is_err(),
         "a duration no load accepts must be a serde error"
     );
 }
