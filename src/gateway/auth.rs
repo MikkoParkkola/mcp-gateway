@@ -685,6 +685,10 @@ mod tests;
 #[path = "auth_clock_tests.rs"]
 mod clock_tests;
 
+#[cfg(test)]
+#[path = "auth_client_state_tests.rs"]
+mod client_state_tests;
+
 /// SIGNING.5 row 44: which nonce-quota authority a dashboard session carries.
 ///
 /// Every identity here is produced by [`auth_middleware`] itself, from a handle
