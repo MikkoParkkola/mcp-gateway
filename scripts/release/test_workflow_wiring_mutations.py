@@ -1495,11 +1495,12 @@ CASES += [
      "  packaged-suite:\n    needs: resolve\n    uses: ./.github/workflows/task-sdk-recovery.yml\n", CAUGHT),
     ("crates-publish-stops-waiting-for-release", "release.yml",
      "  publish:\n    needs: [release, verify]\n", "  publish:\n    needs: [verify]\n", CAUGHT),
+    # MIK-8482: the Linux suite's skips live in scripts/ci/shard_tests.py; a
+    # `--skip` written into the shard job instead escapes the packaged-run
+    # parity rule, so it is caught.
     ("test-job-gains-a-skip-the-package-lacks", "ci.yml",
-     "      # that job provisions, and the gate below `needs` that job.\n"
-     "      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst\n",
-     "      # that job provisions, and the gate below `needs` that job.\n"
-     "      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst --skip some_new_skip\n",
+     "        run: python3 scripts/ci/shard_tests.py run linux ${{ matrix.shard }}\n",
+     "        run: python3 scripts/ci/shard_tests.py run linux ${{ matrix.shard }} --skip some_new_skip\n",
      CAUGHT),
 ]
 
@@ -1768,12 +1769,17 @@ CASES += [
     ("recipe-smoke-rebuilds-the-image", "docker.yml", '          MCP_GATEWAY_DOCKER_BUILD: "0"\n',
      '          MCP_GATEWAY_DOCKER_BUILD: "1"\n', CAUGHT),
     # MIK-7644: the Windows suite skips the full burst, and only the full burst.
+    # MIK-8482: the Windows skip set lives in scripts/ci/shard_tests.py,
+    # which this harness cannot mutate (test_windows_job_scope.py pins it by
+    # equality). What the workflow can still break: run the suite outside
+    # the runner, or hand the runner an extra argument.
     ("windows-runs-the-full-burst", "ci.yml",
-     "--no-fail-fast -- --show-output --skip mik_7479_full_burst\n",
-     "--no-fail-fast -- --show-output\n", CAUGHT),
+     "        run: python scripts/ci/shard_tests.py run windows ${{ matrix.shard }}\n",
+     "        run: cargo test --all-features --tests --no-fail-fast -- --show-output\n", CAUGHT),
     ("windows-skip-also-drops-the-per-pr-burst", "ci.yml",
-     "--no-fail-fast -- --show-output --skip mik_7479_full_burst\n",
-     "--no-fail-fast -- --show-output --skip mik_7479_full_burst --skip ac_mrtr_7b_every\n", CAUGHT),
+     "        run: python scripts/ci/shard_tests.py run windows ${{ matrix.shard }}\n",
+     "        run: python scripts/ci/shard_tests.py run windows ${{ matrix.shard }} --skip ac_mrtr_7b_every\n",
+     CAUGHT),
 ]
 
 # Throwaway runs carry the release tooling's Python suites. The hosted job is
