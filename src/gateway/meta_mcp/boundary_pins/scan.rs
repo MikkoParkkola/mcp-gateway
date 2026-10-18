@@ -246,7 +246,8 @@ impl Walker<'_> {
                 .strip_prefix(self.crate_root)
                 .unwrap_or(path)
                 .to_string_lossy()
-                .into_owned(),
+                // The pinned data keys files with `/`; Windows paths use `\`.
+                .replace('\\', "/"),
             func: None,
         };
         self.owner = Owner::Module;
