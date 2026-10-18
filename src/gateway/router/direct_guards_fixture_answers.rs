@@ -54,6 +54,7 @@ pub(super) fn call_answer(answer: Answer, id: RequestId) -> crate::Result<JsonRp
         )),
         Answer::Ok
         | Answer::WithNote
+        | Answer::InvalidRead
         | Answer::Paged(..)
         | Answer::Unreadable(_)
         | Answer::NonNumeric(_) => Ok(JsonRpcResponse::success(
@@ -115,6 +116,9 @@ pub(super) fn listing(answer: Answer, params: Option<&Value>) -> Value {
         "properties": {"cmd": {"type": "string"}}
     }}]});
     match answer {
+        Answer::InvalidRead => {
+            result["tools"] = json!([{"name": "read", "inputSchema": {"type": "string"}}]);
+        }
         Answer::WithNote => {
             result["tools"] = json!([
                 {"name": "read", "inputSchema": {"type": "object"}},

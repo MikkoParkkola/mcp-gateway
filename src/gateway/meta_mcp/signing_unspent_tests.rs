@@ -219,10 +219,14 @@ fn nonce_is_free(meta: &MetaMcp) -> bool {
         && later.admitted
 }
 
-/// MIK-7869.NONCE.1: the question could not be delivered, the call is refused,
-/// and the retry carries the same nonce.
+/// MIK-7869.NONCE.1, K7-K since MIK-8353 3d-2: the question could not be
+/// delivered and the call is refused, but this call never passed execution
+/// admission, so it holds no refund witness and keeps its nonce. The
+/// give-back is the witness's to decide (the witnessed twin is
+/// `refusal_kinds::an_undelivered_question_with_its_witness_gives_the_nonce_back`).
+/// Red on base, whose give-back read no witness.
 #[tokio::test]
-async fn a_failed_elicitation_leaves_the_nonce_unspent() {
+async fn a_failed_elicitation_without_its_witness_keeps_the_nonce() {
     use crate::gateway::destructive_confirmation::ConfirmationPolicy;
     let (meta, proxy) = (meta(), undeliverable_proxy());
     let wire = kill_with_nonce(&meta, &proxy, ConfirmationPolicy::for_modern(), "").await;
@@ -234,7 +238,10 @@ async fn a_failed_elicitation_leaves_the_nonce_unspent() {
         wire["error"]["code"], -32603,
         "not the unadmitted fail-safe: {wire}"
     );
-    assert!(nonce_is_free(&meta), "a refused delivery spent the nonce");
+    assert!(
+        !nonce_is_free(&meta),
+        "a call with no witness got its nonce back"
+    );
 }
 
 /// MIK-7869.NONCE.2: a call the question let through spends it.
@@ -556,3 +563,7 @@ fn r3_the_send_order_spent_then_dispatched_is_not_due() {
     context.want_refund();
     assert!(!context.refund_due(), "R3: the send-order refund was due");
 }
+
+// MIK-8353 3d-2: the K7 and K8 refusal kinds at the dispatcher.
+#[path = "signing_refusal_kind_tests.rs"]
+mod refusal_kinds;
