@@ -35,8 +35,9 @@ struct Slice {
 pub(super) struct TransportSlices([Slice; 3]);
 
 impl TransportSlices {
-    /// Count one request. Every label is one the registry already bounded;
-    /// a label outside its list (impossible by construction) is not counted.
+    /// Count one request. Every label is one the registry already bounded; a
+    /// label outside its list is a new label someone forgot to add here, and
+    /// fails debug builds (every test) rather than vanishing from the window.
     pub(super) fn count(
         &mut self,
         transport: Transport,
@@ -46,20 +47,24 @@ impl TransportSlices {
     ) {
         let slice = &mut self.0[transport_index(transport)];
         slice.total += 1;
-        if let Some(i) = index_of(MEASURED_CLIENTS, client) {
+        let client_slot = index_of(MEASURED_CLIENTS, client);
+        debug_assert!(client_slot.is_some(), "unbounded client label {client}");
+        if let Some(i) = client_slot {
             slice.by_client[i] += 1;
         }
-        match revision {
-            Some(rev) => {
-                if let Some(i) = revision_index(rev) {
-                    slice.by_revision[i] += 1;
-                }
+        if let Some(rev) = revision {
+            let slot = revision_index(rev);
+            debug_assert!(slot.is_some(), "unbounded revision label {rev}");
+            if let Some(i) = slot {
+                slice.by_revision[i] += 1;
             }
-            None => {
-                slice.unattributed += 1;
-                if let Some(i) = agent_index(missing_revision_agent()) {
-                    slice.agents[i] += 1;
-                }
+        } else {
+            slice.unattributed += 1;
+            let agent = missing_revision_agent();
+            let slot = agent_index(agent);
+            debug_assert!(slot.is_some(), "unbounded missing-revision agent {agent}");
+            if let Some(i) = slot {
+                slice.agents[i] += 1;
             }
         }
     }
@@ -120,3 +125,7 @@ fn seen<'a>(keys: impl Iterator<Item = &'a str>, counts: &[u64]) -> BTreeMap<Str
         .map(|(key, count)| (key.to_string(), *count))
         .collect()
 }
+
+#[cfg(test)]
+#[path = "slices_tests.rs"]
+mod tests;
