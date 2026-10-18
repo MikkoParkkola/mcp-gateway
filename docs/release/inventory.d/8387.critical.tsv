@@ -1,0 +1,2 @@
+src/gateway/router/backend_choke.rs	backend_for	1	critical	a	backend_for	The router's caller read of the backend registry: answers None for a name absent for the caller's grant, out of scope or unregistered alike, so a scoped key cannot tell a hidden backend from a missing one (MIK-8387 PR-B, design 2.5)
+src/gateway/router/backend_choke.rs	view_for	1	standard	a	view_for	Builds the scoped view backend_for reads through from the caller's grant and this gateway's capability provider; a mistake would widen the router's reads past the grant (MIK-8387 PR-B)
