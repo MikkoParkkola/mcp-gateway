@@ -33,6 +33,15 @@ fn id_masked(answer: &Value) -> Value {
     masked
 }
 
+/// The committed task rows in `served`'s store.
+fn task_rows(served: &crate::gateway::router::AppState) -> usize {
+    served
+        .task_executor
+        .service
+        .store
+        .committed_count_for_test()
+}
+
 /// Kill `idp` and move this thread's clock past the cached token's TTL (one
 /// hour); the retained result (one day) is still present.
 fn outlive_the_token(idp: r6m_token_exchange::LiveIdp) -> crate::clock::test_clock::Forced {
@@ -135,9 +144,11 @@ async fn p9p_unjudged_plan_task_repeat_answers_the_live_resolution_error() {
     let sent = sends.load(Ordering::SeqCst);
     assert_eq!(sent, 1, "premise: the step was sent once");
     let entered = crate::gateway::meta_mcp::plan_entries::count(&meta_mcp);
+    let rows = task_rows(&served);
     let _clock = outlive_the_token(idp);
     let again =
         r6m_token_exchange::send_method_as(&router, &alice, call, execute("p9p", true)).await;
+    let replay_rows = task_rows(&served) - rows;
     // mProceed is killed only by this entries assert: a fall-through to the
     // live run refuses the same way and sends nothing. Keep it.
     let replay_entries = crate::gateway::meta_mcp::plan_entries::count(&meta_mcp) - entered;
@@ -159,6 +170,7 @@ async fn p9p_unjudged_plan_task_repeat_answers_the_live_resolution_error() {
         id_masked(&live),
         "P9p: the repeat differs from the live call"
     );
+    assert_eq!(replay_rows, 0, "P9p: the repeat changed the task count");
     assert_eq!(replay_sends, 0, "P9p: the repeat reached the backend");
     assert_eq!(
         replay_entries, 0,
@@ -227,8 +239,10 @@ async fn p9k_mixed_task_chain_judges_every_recorded_target() {
         "premise: the task recorded plain first, then tx"
     );
     let entered = crate::gateway::meta_mcp::plan_entries::count(&meta_mcp);
+    let rows = task_rows(&served);
     let _clock = outlive_the_token(idp);
     let again = r6m_token_exchange::send_method_as(&router, &alice, call, chain).await;
+    let replay_rows = task_rows(&served) - rows;
     // mProceed is killed only by this entries assert: a fall-through to the
     // live run refuses the same way and sends nothing. Keep it.
     let replay_entries = crate::gateway::meta_mcp::plan_entries::count(&meta_mcp) - entered;
@@ -252,6 +266,10 @@ async fn p9k_mixed_task_chain_judges_every_recorded_target() {
         id_masked(&live),
         "P9k-mixed: the repeat is not the tx step's live answer (the first \
          unproven step; plain, recorded first, mints nothing)"
+    );
+    assert_eq!(
+        replay_rows, 0,
+        "P9k-mixed: the repeat changed the task count"
     );
     assert_eq!(replay_sends, 0, "P9k-mixed: the repeat reached a backend");
     assert_eq!(
@@ -594,13 +612,15 @@ async fn p9j_an_input_required_plan_row_repeat_answers_the_live_resolution_error
     let served_prompt =
         r6m_token_exchange::send_method_as(&router, &alice, call, asking("p9j", true)).await;
     assert_row_status("P9j all-live", &served_prompt, &id, "input_required");
-    let (sent, entered) = (
+    let (sent, entered, rows) = (
         sends.load(Ordering::SeqCst),
         crate::gateway::meta_mcp::plan_entries::count(&meta_mcp),
+        task_rows(&served),
     );
     let _clock = outlive_the_token(idp);
     let again =
         r6m_token_exchange::send_method_as(&router, &alice, call, asking("p9j", true)).await;
+    let replay_rows = task_rows(&served) - rows;
     let replay_entries = crate::gateway::meta_mcp::plan_entries::count(&meta_mcp) - entered;
     let replay_sends = sends.load(Ordering::SeqCst) - sent;
     let live =
@@ -619,6 +639,7 @@ async fn p9j_an_input_required_plan_row_repeat_answers_the_live_resolution_error
         id_masked(&live),
         "P9j: the repeat differs from the live call"
     );
+    assert_eq!(replay_rows, 0, "P9j: the repeat changed the task count");
     assert_eq!(replay_sends, 0, "P9j: the repeat reached the backend");
     assert_eq!(
         replay_entries, 0,
