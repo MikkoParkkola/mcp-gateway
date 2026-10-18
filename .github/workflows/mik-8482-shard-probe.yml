@@ -1,0 +1,157 @@
+name: MIK-8482 shard probe
+
+# Stage 0 of MIK-8482 (throwaway, never merged): measures route B, which is
+# the OS test jobs sharded by test target with plain `cargo test`. Every job
+# runs only on the throwaway/mik-8482 probe PR. No required check changes;
+# ci.yml is untouched. scripts/ci/mik_8482_shard_probe.py does the counting.
+on:
+  pull_request:
+    branches: [docs/ranking-1-release-line]
+
+concurrency:
+  group: mik-8482-probe-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+  RUSTFLAGS: -Dwarnings
+
+jobs:
+  # P0-glob + per-selection baselines: one build, then `--list` for the
+  # unsharded selection and every shard selection, without running a test.
+  baseline:
+    name: Probe baseline (${{ matrix.kind }})
+    if: startsWith(github.head_ref, 'throwaway/mik-8482')
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, kind: linux }
+          - { os: windows-2025, kind: windows }
+          - { os: macos-latest, kind: macos }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - name: Sample memory every 30 s (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          ( while true; do date -u +%FT%TZ; sysctl vm.swapusage; vm_stat | head -8
+            ps -axo rss,comm | awk '/rustc|ld$/{s+=$1} END{print "rustc+ld rss KB", s}'
+            sleep 30; done ) > "$RUNNER_TEMP/mem.log" 2>&1 &
+      - name: Baseline (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: python3 scripts/ci/mik_8482_shard_probe.py baseline ${{ matrix.kind }} out/baseline-${{ matrix.kind }}.json
+      - name: Baseline (Windows, pwsh as ci.yml runs its tests)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python scripts/ci/mik_8482_shard_probe.py baseline windows out/baseline-windows.json
+      - name: Collect
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p out
+          cp -r target/cargo-timings out/ 2>/dev/null || true
+          cp "$RUNNER_TEMP/mem.log" out/ 2>/dev/null || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: probe-baseline-${{ matrix.kind }}
+          path: out
+          retention-days: 7
+
+  # P0a: the macOS compile wall, three ways. cold-lib is the lib-test target
+  # alone, which is what the Lib shards inherit.
+  macos-compile:
+    name: Probe macOS compile (${{ matrix.variant }})
+    if: startsWith(github.head_ref, 'throwaway/mik-8482')
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, variant: cold-lib, args: "--lib", jobs: "" }
+          - { os: macos-latest, variant: jobs2, args: "", jobs: "2" }
+          - { os: macos-15-intel, variant: intel, args: "", jobs: "" }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - name: Compile with memory sampling
+        shell: bash
+        env:
+          ARGS: ${{ matrix.args }}
+          JOBS: ${{ matrix.jobs }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          ( while true; do date -u +%FT%TZ; sysctl vm.swapusage; vm_stat | head -8
+            ps -axo rss,comm | awk '/rustc|ld$/{s+=$1} END{print "rustc+ld rss KB", s}'
+            sleep 30; done ) > out/mem.log 2>&1 &
+          if [ -n "$JOBS" ]; then export CARGO_BUILD_JOBS="$JOBS"; fi
+          start=$(date +%s)
+          # shellcheck disable=SC2086 # ARGS is empty or one flag
+          cargo test --all-features $ARGS --no-run --timings 2>&1 | tail -40
+          echo "{\"variant\": \"${{ matrix.variant }}\", \"compile_seconds\": $(( $(date +%s) - start ))}" | tee out/compile.json >> "$GITHUB_STEP_SUMMARY"
+          cp -r target/cargo-timings out/
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: probe-macos-compile-${{ matrix.variant }}
+          path: out
+          retention-days: 7
+
+  # P0b: each shard x each OS x 5 runs, with each OS job's real exclusions.
+  # `run` is the first axis so each run fans out across every OS early.
+  shard:
+    name: Probe ${{ matrix.os }} ${{ matrix.shard }} run ${{ matrix.run }}
+    if: startsWith(github.head_ref, 'throwaway/mik-8482')
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        run: [1, 2, 3, 4, 5]
+        os: [ubuntu-latest, windows-2025, macos-latest]
+        shard: [liba, libb, inta, intb]
+        include:
+          - { os: ubuntu-latest, kind: linux }
+          - { os: windows-2025, kind: windows }
+          - { os: macos-latest, kind: macos }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      # As ci.yml's Windows check: W-T6 no-follow rows need symlink creation.
+      - name: Allow symlink creation
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: >-
+          New-ItemProperty -Force -PropertyType DWORD -Value 1 -Name AllowDevelopmentWithoutDevLicense
+          -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock
+      - name: Shard (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: python3 scripts/ci/mik_8482_shard_probe.py shard ${{ matrix.kind }} ${{ matrix.shard }} out/${{ matrix.kind }}-${{ matrix.shard }}-${{ matrix.run }}.json
+      - name: Shard (Windows, pwsh as ci.yml runs its tests)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python scripts/ci/mik_8482_shard_probe.py shard windows ${{ matrix.shard }} out/windows-${{ matrix.shard }}-${{ matrix.run }}.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: probe-${{ matrix.kind }}-${{ matrix.shard }}-${{ matrix.run }}
+          path: out/*.json
+          retention-days: 7
