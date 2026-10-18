@@ -51,7 +51,7 @@ use crate::secret_injection::CredentialRule;
 #[test]
 fn known_backend_keys_match_struct() {
     let identity: IdentityPropagationConfig =
-        serde_yaml::from_str("{strategy: token_exchange, audience: a, session_mode: stateless}")
+        crate::yaml::from_str("{strategy: token_exchange, audience: a, session_mode: stateless}")
             .expect("identity propagation sample parses");
     let transports = vec![
         TransportConfig::Stdio {
@@ -79,8 +79,8 @@ fn known_backend_keys_match_struct() {
         });
         all
     };
-    let oauth: OAuthConfig = serde_yaml::from_str("{}").expect("oauth sample parses");
-    let rule: CredentialRule = serde_yaml::from_str("{name: n, value: v, inject_key: k}")
+    let oauth: OAuthConfig = crate::yaml::from_str("{}").expect("oauth sample parses");
+    let rule: CredentialRule = crate::yaml::from_str("{name: n, value: v, inject_key: k}")
         .expect("credential rule sample parses");
     let one = || std::iter::once(("k".to_owned(), "v".to_owned())).collect();
     let mut serialized = BTreeSet::new();
@@ -111,7 +111,7 @@ fn known_backend_keys_match_struct() {
             chain_origins: vec!["o".into()],
             chain_signer: Some("s".into()),
         };
-        let value = serde_yaml::to_value(&backend).expect("backend serializes");
+        let value = crate::yaml::to_value(&backend).expect("backend serializes");
         let fields = value.as_mapping().expect("backend is a mapping");
         serialized.extend(fields.keys().filter_map(|k| k.as_str().map(str::to_owned)));
     }
@@ -132,7 +132,7 @@ fn known_backend_keys_match_struct() {
 /// section that is absent by default is not covered here.
 #[test]
 fn annotation_prefixes_name_no_real_key() {
-    fn walk(value: &serde_yaml::Value, path: &str) {
+    fn walk(value: &crate::yaml::Value, path: &str) {
         if let Some(map) = value.as_mapping() {
             for (key, child) in map {
                 let key = key.as_str().unwrap_or_default();
@@ -147,7 +147,7 @@ fn annotation_prefixes_name_no_real_key() {
     for key in KNOWN_BACKEND_KEYS.iter().chain(A2A_BACKEND_KEYS) {
         assert!(!is_annotation(key), "backend key `{key}`");
     }
-    let config = serde_yaml::to_value(crate::config::Config::default()).expect("serializes");
+    let config = crate::yaml::to_value(crate::config::Config::default()).expect("serializes");
     walk(&config, "");
 }
 
