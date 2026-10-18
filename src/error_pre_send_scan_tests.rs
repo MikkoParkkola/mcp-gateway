@@ -312,7 +312,7 @@ const TRANSIENT_SITES: &[(&str, usize)] = &[
     // A per-user mint's admission, before the dispatch.
     ("gateway/meta_mcp/invoke/propagation.rs", 1),
     // The task intake answer: no task, nothing dispatched.
-    ("gateway/meta_mcp/call_dispatch.rs", 1),
+    ("gateway/meta_mcp/call_dispatch/task_intake.rs", 1),
     // The caller verdict's view Busy, answered before the backend.
     ("gateway/meta_mcp/invoke/caller_verdict.rs", 1),
     // A stored task read: no dispatch at all.

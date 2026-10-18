@@ -3,7 +3,6 @@
 # The http_invoke rows time a whole HTTP gateway_invoke end to end, and the stdio rows a whole stdio call, so a function on those paths is inside them.
 # A "-" reason starting "on-path, untimed" is a per-call production cost the harness does not exercise; it is not a claim that the cost is zero.
 # file	fn	row (or -)	reason
-src/gateway/meta_mcp/call_dispatch.rs	begin_task	-	task-augmented calls only
 src/gateway/meta_mcp/call_dispatch.rs	defer_or_serve_existing	-	on-path, untimed: a repeated task submit (BeginOutcome::Existing) only; the timed rows carry no task member
 src/gateway/meta_mcp/call_dispatch.rs	dispatch_below_gate	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/call_dispatch.rs	dispatch_below_gate_native_result	-	task worker and watch poll only
@@ -17,7 +16,8 @@ src/gateway/meta_mcp/call_dispatch.rs	route_direct_backend_call	-	direct /mcp/{b
 src/gateway/meta_mcp/call_dispatch.rs	route_retry_to_origin_backend	-	retry-to-origin path only
 src/gateway/meta_mcp/call_dispatch.rs	shape_repeat_fill	-	on-path, untimed: a repeated task call or plan replay (admission_replay) whose account fill failed only; the timed rows carry no task member
 src/gateway/meta_mcp/call_dispatch.rs	task_backend_name	-	task-augmented calls only
-src/gateway/meta_mcp/call_dispatch.rs	task_intake_transient	http_invoke_tiny	the tools/call entry both transports call; returns at once for a call with no task member
+src/gateway/meta_mcp/call_dispatch/task_intake.rs	begin_task	-	task-augmented calls only
+src/gateway/meta_mcp/call_dispatch/task_intake.rs	task_intake_transient	http_invoke_tiny	the tools/call entry both transports call; returns at once for a call with no task member
 src/gateway/meta_mcp/grant_audit.rs	allow_unslotted_check_for_test	-	test-only helper
 src/gateway/meta_mcp/grant_audit.rs	check_or_stamp	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	dispatch_below_gate_shaped	http_invoke_tiny	on the HTTP gateway_invoke path
