@@ -8,12 +8,16 @@
 //! target.
 
 use super::{
-    Arc, BeginOutcome, CancelOutcome, CommitFailure, CommitObserver, CommitStage, CommittedTask,
-    CreateOutcome, CreateWrite, DrainOutcome, Duration, EXECUTION_TARGET, ErrorAuthor, Handoff,
-    HandoffRegistry, Mutex, PublicationHook, Semaphore, ServiceError, SubscriptionRegistry, Target,
-    Task, TaskCall, TaskExecutor, TaskIntent, TaskService, TaskTransition, TransitionWrite,
-    UpstreamRecovery, commit_and_run, commit_to_service, is_terminal, json, oneshot, upstream,
+    Arc, BeginOutcome, CancelOutcome, CommitFailure, CommitStage, CommittedTask, CreateOutcome,
+    CreateWrite, DrainOutcome, Duration, EXECUTION_TARGET, ErrorAuthor, Handoff, HandoffRegistry,
+    Mutex, PublicationHook, Semaphore, ServiceError, SubscriptionRegistry, Target, Task, TaskCall,
+    TaskExecutor, TaskIntent, TaskService, TaskTransition, TransitionWrite, UpstreamRecovery,
+    commit_and_run, commit_to_service, is_terminal, json, oneshot, upstream,
 };
+
+// Used only by `observe_commits`, which is compiled out of release builds.
+#[cfg(any(test, debug_assertions))]
+use super::CommitObserver;
 
 impl TaskExecutor {
     pub(crate) fn new(
