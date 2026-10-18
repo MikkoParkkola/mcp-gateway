@@ -234,6 +234,13 @@ impl MetaMcp {
                 return Err(error);
             }
         };
+        // MIK-8475: the cooldown check precedes the lift, so a keyed replay of
+        // a cooling tool is refused as the live call is (same nonce accounting).
+        witness.carry(rw::dispatch_effect(
+            resolved.minted(),
+            resolved.account_credential.is_some(),
+        ));
+        self.admit_after_credential((server, tool), session_id, trace_id)?;
         // The lift (MIK-8392 STORED.2): proven live, before key/spend/redeem/relay act.
         let unproven = match self
             .lift_deferred((server, tool), &resolved, &mut witness, session_id, caller)
@@ -248,11 +255,6 @@ impl MetaMcp {
             account_credential,
             binding: dispatch_binding,
         } = resolved;
-        // A failed optional mint counts too: it may have reached the issuer.
-        let minted = caller_credential.cache_binding.is_some() || caller_credential.attempted;
-        witness.carry(rw::dispatch_effect(minted, account_credential.is_some()));
-        // MIK-8439: the error-rate check after the credential step, for every backend.
-        self.admit_after_credential((server, tool), session_id, trace_id)?;
         // Who the response cache keys on, in one place and one namespace per
         // source (`support::caller_cache_principal`). The binding when identity
         // propagation is minting per-user credentials, then the verified OIDC

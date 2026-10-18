@@ -103,15 +103,45 @@ impl MetaMcp {
     /// static credential (`AccountCredential::Legacy`), so it mints nothing
     /// per caller and has no binding a proof could show (MIK-8451).
     pub(crate) fn mints_per_caller(&self, server: &str, tool: &str) -> bool {
+        self.account_mints_per_caller(server, tool)
+            || self
+                .backends
+                .get(server)
+                .is_some_and(|backend| backend.identity_propagation_config().is_some())
+    }
+
+    /// [`Self::first_unproven`], then the error-rate check of every walked
+    /// target whose cooldown waits for the credential step (MIK-8475). The
+    /// walk proves one account once, so a later tool on a proven account
+    /// meets its own cooldown here; the answer is the live call's.
+    pub(in crate::gateway::meta_mcp) async fn first_refused(
+        &self,
+        id: &crate::protocol::RequestId,
+        tool_name: &str,
+        targets: &[(&str, &str)],
+        caller: &super::super::MetaMcpCallerContext<'_>,
+    ) -> Option<JsonRpcResponse> {
+        if let Some(answer) = self.first_unproven(id, tool_name, targets, caller).await {
+            return Some(answer);
+        }
+        targets.iter().find_map(|&(server, tool)| {
+            let refused = self.defers_error_rate_cooldown(server, tool);
+            refused
+                .then(|| self.admit_enabled_capability(server, tool).err())
+                .flatten()
+                .map(|error| super::super::error_response_preserving_status(id.clone(), &error))
+        })
+    }
+
+    /// Whether `server`'s `tool` dispatches under an account that is not a
+    /// declared `shared` descriptor: a credential per caller.
+    pub(crate) fn account_mints_per_caller(&self, server: &str, tool: &str) -> bool {
         use crate::personal_accounts::config::DescriptorMode;
         self.target_account(server, tool).is_some_and(|account| {
             self.account_strategies
                 .declared(&account.0)
                 .is_none_or(|declared| declared.mode != DescriptorMode::Shared)
-        }) || self
-            .backends
-            .get(server)
-            .is_some_and(|backend| backend.identity_propagation_config().is_some())
+        })
     }
 
     /// STORED.2 site 1: serve `response` when its account is proven live,
@@ -224,7 +254,7 @@ impl MetaMcp {
             .iter()
             .map(|(server, tool)| (server.as_str(), tool.as_str()))
             .collect();
-        let answer = self.first_unproven(&id, tool_name, &walk, caller).await?;
+        let answer = self.first_refused(&id, tool_name, &walk, caller).await?;
         if let Some(context) = caller.signing {
             self.settle_nonce_refund(context, super::super::signing::nonce_principal(caller));
         }

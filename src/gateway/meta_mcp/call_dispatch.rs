@@ -539,7 +539,7 @@ impl MetaMcp {
             .iter()
             .map(|target| (target.server.as_str(), target.tool.as_str()))
             .collect();
-        if let Some(answer) = self.first_unproven(&id, tool_name, &walk, caller).await {
+        if let Some(answer) = self.first_refused(&id, tool_name, &walk, caller).await {
             return answer;
         }
         BeginOutcome::Existing(held).into_response(id)

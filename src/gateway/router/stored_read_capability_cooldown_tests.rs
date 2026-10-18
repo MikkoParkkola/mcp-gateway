@@ -16,7 +16,14 @@ async fn router_and_state(
     let (state, store) = super::super::tests::meta_fixture::test_router_app_state_with_meta(
         &AuthConfig::default(),
         None,
-        |meta| account.install(meta),
+        |meta| {
+            let mut meta = account.install(meta);
+            meta.enable_idempotency(
+                Arc::new(crate::idempotency::IdempotencyCache::new()),
+                std::time::Duration::from_secs(60),
+            );
+            meta
+        },
     )
     .await;
     (
@@ -154,4 +161,65 @@ async fn a_caller_with_a_view_invoking_a_cooling_capability_still_meets_the_cool
         "MIK-8475 control: the cooldown answer: {live}"
     );
     assert_eq!(account.peer_requests(), sent, "MIK-8475 control: sent");
+}
+
+/// A keyed live `gateway_invoke` of the capability tool.
+async fn keyed_invoke(router: &axum::Router, key: &str) -> Value {
+    let mut meta = modern_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+    send(
+        router,
+        "tools/call",
+        "gateway_invoke",
+        json!({"name": "gateway_invoke",
+            "arguments": {"server": CAPABILITY_SERVER, "tool": CAPABILITY_TOOL, "arguments": {}},
+            "_meta": meta}),
+    )
+    .await
+}
+
+/// MIK-8475: a keyed replay of a finished call is refused while the tool
+/// cools, as the live call is, and sends nothing; it serves again once the
+/// cooldown ends. Red while the deferred cooldown lets the lift serve it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_keyed_replay_of_a_cooling_capability_is_refused_then_served() {
+    let account = CapabilityAccount::start(false).await;
+    let (router, state, _keep) = router_and_state(&account).await;
+    let first = keyed_invoke(&router, "8475-replay").await;
+    assert!(
+        first.get("error").is_none(),
+        "premise: the run served: {first}"
+    );
+    cool(&state);
+    let sent = account.peer_requests();
+    let cooling = keyed_invoke(&router, "8475-replay").await;
+    assert!(
+        cooling.to_string().contains("temporarily disabled"),
+        "MIK-8475: the replay meets the cooldown: {cooling}"
+    );
+    assert_eq!(account.peer_requests(), sent, "MIK-8475: the replay sent");
+    state
+        .meta_mcp
+        .kill_switch()
+        .revive_capability(CAPABILITY_SERVER, CAPABILITY_TOOL);
+    let served = keyed_invoke(&router, "8475-replay").await;
+    assert!(
+        served.get("error").is_none(),
+        "served after revive: {served}"
+    );
+}
+
+/// MIK-8475 control: an explicit `shared` account has no per-caller view to
+/// protect, so its cooling tool keeps the cooldown first (policy), with no
+/// credential step.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_shared_account_capability_keeps_the_cooldown_first() {
+    let account = CapabilityAccount::start_shared().await;
+    let (router, state, _keep) = router_and_state(&account).await;
+    cool(&state);
+    let live = invoke(&router, CAPABILITY_TOOL).await;
+    assert!(
+        live.to_string().contains("temporarily disabled"),
+        "MIK-8475 control: {live}"
+    );
 }
