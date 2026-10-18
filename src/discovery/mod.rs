@@ -290,10 +290,10 @@ mod yaml_redaction_tests {
                 ..ServerMetadata::default()
             },
         );
-        let yaml = serde_yaml::to_string(&server.redacted_for_diagnostics()).expect("yaml");
+        let yaml = crate::yaml::to_string(&server.redacted_for_diagnostics()).expect("yaml");
         assert!(!yaml.contains(CANARY), "{yaml}");
         assert!(yaml.contains("command:"), "{yaml}");
-        let raw = serde_yaml::to_string(&server).expect("raw");
+        let raw = crate::yaml::to_string(&server).expect("raw");
         assert!(
             raw.contains(CANARY),
             "fixture is only useful if raw YAML would leak"

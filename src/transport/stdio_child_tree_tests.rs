@@ -299,12 +299,20 @@ async fn a_foreign_reap_leaks_rather_than_signals() {
     // Proof of life before cleanup, so a failed assertion still cleans up.
     let beats = || std::fs::metadata(w.path().join("hb")).map_or(0, |m| m.len());
     let before = beats();
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let after = beats();
+    // Waited on the next beat, not a window: a loaded runner can starve the
+    // heartbeat's `sleep 0.1` loop for longer than any short window (MIK-8486).
+    let beat = crate::test_wait::wait_until(HANG_BOUND, || {
+        std::future::ready(if beats() > before {
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue("no beat since close".to_owned())
+        })
+    })
+    .await;
     let _ = kill_process(child, Signal::KILL);
     assert_eq!(signals, 0, "a group not proven ours was signalled");
     assert!(refused >= 1, "the refusal is recorded");
-    assert!(after > before, "the descendant's heartbeat stopped");
+    beat.expect("the descendant's heartbeat stopped");
 }
 
 /// A leader that ignores SIGTERM, with a descendant that inherits the trap,
