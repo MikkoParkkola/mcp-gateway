@@ -99,9 +99,22 @@ fn reconcile_plan_blocks_missing_policy_reference() {
 /// reports it as a parse error, before and after routing through the adapter.
 #[test]
 fn parse_refuses_a_malformed_later_document() {
-    let manifest = "apiVersion: v1\nkind: Gateway\nmetadata:\n  name: gw\n---\nkind: [unclosed\n";
+    let manifest = "apiVersion: v1\nkind: Gateway\nmetadata:\n  name: gw\n---\nkind: [unclosed\n---\napiVersion: v1\nkind: Gateway\nmetadata:\n  name: later\n";
     let err = parse_resources(manifest).expect_err("a malformed later document must refuse");
     assert!(matches!(err, KubernetesPlanError::Parse(_)), "got {err:?}");
+}
+
+/// MIK-8425 MIG.1c: documents are checked in order, so an earlier document's
+/// validation failure is reported before a later document's parse error.
+#[test]
+fn an_earlier_invalid_document_is_reported_before_a_later_parse_error() {
+    let manifest =
+        "apiVersion: v1\nkind: Gateway\nmetadata:\n  name: --all\n---\nkind: [unclosed\n";
+    let err = parse_resources(manifest).expect_err("the first document is invalid");
+    assert!(
+        matches!(err, KubernetesPlanError::InvalidName { .. }),
+        "got {err:?}"
+    );
 }
 
 /// MIK-8425 MIG.1c: an empty document is skipped but still counts towards the

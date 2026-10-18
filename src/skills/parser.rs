@@ -88,6 +88,10 @@ pub struct ImportedSkill {
     pub code_blocks: Vec<SkillCodeBlock>,
 
     /// Other frontmatter fields kept verbatim (e.g. `metadata`).
+    ///
+    /// The value type is still the YAML parser's own tree type, named here
+    /// through the crate's YAML adapter, so this release does not change it.
+    /// 4.0.0 changes it to `serde_json::Value` (MIK-8425 MIG.2).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extra: BTreeMap<String, crate::yaml::Value>,
 
