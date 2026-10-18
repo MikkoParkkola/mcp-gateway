@@ -10,7 +10,9 @@ use std::path::Path;
     clippy::unnecessary_wraps,
     reason = "a no-op off unix that keeps the unix signature"
 )]
-pub(super) fn sync_parent_directory(_path: &Path) -> io::Result<()> {
+pub(in crate::protocol_revision_telemetry) fn sync_parent_directory(
+    _path: &Path,
+) -> io::Result<()> {
     Ok(())
 }
 
@@ -18,6 +20,8 @@ pub(super) fn sync_parent_directory(_path: &Path) -> io::Result<()> {
     clippy::unnecessary_wraps,
     reason = "a no-op off unix that keeps the unix signature"
 )]
-pub(super) fn force_directory_owner_only(_path: &Path) -> io::Result<()> {
+pub(in crate::protocol_revision_telemetry) fn force_directory_owner_only(
+    _path: &Path,
+) -> io::Result<()> {
     Ok(())
 }

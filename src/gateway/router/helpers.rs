@@ -131,6 +131,48 @@ pub(super) fn build_http_response(rpc: &Egressed, status: StatusCode) -> (Status
     (status, Json(body))
 }
 
+/// Count one HTTP request for U1 (MIK-7211), on both routes alike. `false`
+/// means this gateway's window segment has sealed: the caller refuses the
+/// request unserved ([`window_sealed_response`]), so every served request is
+/// in the sealed counts.
+pub(super) fn observe_http(
+    request: &Value,
+    params: Option<&Value>,
+    method: &str,
+    headers: &axum::http::HeaderMap,
+    session_id: Option<&str>,
+    sealed: &std::sync::atomic::AtomicBool,
+) -> bool {
+    let header = |name| headers.get(name).and_then(|value| value.to_str().ok());
+    crate::protocol_revision_telemetry::observe_inbound_request_from(
+        request,
+        params,
+        method,
+        header(axum::http::HeaderName::from_static("mcp-protocol-version")),
+        session_id,
+        crate::protocol_revision_telemetry::Transport::Http,
+        Some(crate::protocol_revision_telemetry::HttpCaller {
+            user_agent: header(axum::http::header::USER_AGENT),
+            sealed,
+        }),
+    )
+}
+
+/// The refusal for a request that reaches its count point after this gateway's
+/// U1 window segment sealed (MIK-7211): it is neither counted nor served, so
+/// the client retries against the next process. It answers with the request's
+/// own id, so a client waiting on that id sees the refusal, not a timeout.
+pub(super) fn window_sealed_response(request: &Value) -> (StatusCode, Json<Value>) {
+    build_http_error_response(
+        request
+            .get("id")
+            .and_then(|id| serde_json::from_value(id.clone()).ok()),
+        -32000,
+        "U1 window sealed: this gateway is shutting down; retry",
+        StatusCode::SERVICE_UNAVAILABLE,
+    )
+}
+
 /// Build a JSON-RPC HTTP error body without attaching a session header.
 pub(super) fn build_http_error_response(
     id: Option<RequestId>,
