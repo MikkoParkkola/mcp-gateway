@@ -158,7 +158,7 @@ pub(crate) fn mark_rejection(outcome: super::RejectionOutcome, refused: &Error) 
 ///   send: `CapabilityBackend`, the executor's `prepare_account_context`
 ///   (before the cache read) and `inject_auth` (before the wire);
 /// - the caller verdict's view Busy (`invoke/caller_verdict.rs`);
-/// - the task intake answer (`call_dispatch.rs`): no task, nothing sent;
+/// - the task intake answer (`call_dispatch/task_intake.rs`): no task, nothing sent;
 /// - a stored task read (`task_replay.rs`): no dispatch at all.
 pub(crate) fn transient_retry_error(after: Option<std::time::Duration>) -> Error {
     let mut data = json!({ "retryable": true });
