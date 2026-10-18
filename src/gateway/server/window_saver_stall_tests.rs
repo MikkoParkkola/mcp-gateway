@@ -10,6 +10,17 @@ use super::*;
 /// so the timing gate resolves it in this file.
 const ARRIVAL: Duration = Duration::from_secs(30);
 
+// The windows of the two elapsed-bound asserts in
+// `a_stalled_open_delays_serving_by_its_bound_only`, declared here so the
+// timing gate resolves each as a literal sum (5.2 s and 5.3 s: over its 5 s
+// cutoff). Each repeats a value the parent file owns; the checks below keep
+// the copies equal to it.
+const ALLOWANCE: Duration = Duration::from_secs(5);
+const CLOSE_BOUND: Duration = Duration::from_millis(300);
+const OPEN_BOUND: Duration = Duration::from_millis(200);
+const _: () = assert!(ALLOWANCE.as_millis() == super::ALLOWANCE.as_millis());
+const _: () = assert!(CLOSE_BOUND.as_millis() == super::CLOSE_BOUND.as_millis());
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stalled_checkpoint_never_overtakes_the_final_write() {
     // Row 16.
@@ -65,10 +76,14 @@ async fn a_stalled_open_delays_serving_by_its_bound_only() {
         .start(ProtocolRevisionWindow::Record, stalled_open(CLOSE_BOUND))
         .await
         .expect("record");
-    let open_bound = stalled_open(CLOSE_BOUND).open_bound;
+    assert_eq!(
+        stalled_open(CLOSE_BOUND).open_bound,
+        OPEN_BOUND,
+        "the local open bound drifted from the saver's settings"
+    );
     // timing-oracle: vs WINDOW_OPEN_STARTUP_BOUND (MIK-7211)
     assert!(
-        started.elapsed() < open_bound + ALLOWANCE,
+        started.elapsed() < OPEN_BOUND + ALLOWANCE,
         "serving waited past the open bound: {:?}",
         started.elapsed()
     );
