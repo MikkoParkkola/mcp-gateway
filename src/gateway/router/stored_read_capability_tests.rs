@@ -267,3 +267,6 @@ async fn p8u_an_undeclared_account_refuses_live_and_on_replay() {
     );
     assert_eq!(account.peer_requests(), 0, "P8u: a call reached the peer");
 }
+
+#[path = "stored_read_capability_cooldown_tests.rs"]
+mod cooldown;
