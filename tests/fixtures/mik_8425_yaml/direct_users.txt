@@ -1,15 +1,3 @@
-src/capability/definition/caller_addressed_state_tests.rs
-src/capability/definition/tests.rs
-src/capability/definition/tests/descriptions.rs
-src/capability/definition/tests/protocol_configs.rs
-src/capability/definition/tests/repo_capabilities.rs
-src/capability/definition/tests/transforms.rs
-src/capability/executor/cli_argv_tests.rs
-src/capability/executor/oauth_refresh_tests.rs
-src/capability/executor/readiness_list_tests.rs
-src/capability/executor_tests/body_content_type.rs
-src/capability/executor_tests/request_params.rs
-src/capability/executor_tests/static_params.rs
 src/config/tests/validate_config.rs
 src/config/ws_backend_tests.rs
 src/config_persistence_edit_tests.rs

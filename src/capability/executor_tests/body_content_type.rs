@@ -187,7 +187,7 @@ method: "POST"
 body_content_type: "text/plain"
 body: "SELECT * FROM bus_msg LIMIT 10"
 "#;
-    let config: RestConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: RestConfig = crate::yaml::from_str(yaml).unwrap();
     assert_eq!(config.body_content_type, "text/plain");
     assert_eq!(
         config.body.unwrap().as_str().unwrap(),
