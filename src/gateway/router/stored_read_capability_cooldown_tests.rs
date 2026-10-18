@@ -142,6 +142,68 @@ async fn a_revoked_caller_reading_a_cooling_capability_task_answers_as_absent() 
     );
 }
 
+/// MIK-8475 control (stored): a caller WITH a view reading the stored task of
+/// a cooling capability tool is answered retryable, sends nothing, and is
+/// served again (without re-running the peer) once the cooldown ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_caller_with_a_view_reading_a_cooling_capability_task_answers_retryable_then_serves() {
+    let account = CapabilityAccount::start(false).await;
+    let (router, state, _keep) = router_and_state(&account).await;
+    let mut meta = modern_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!("8475-stored-view");
+    let made = send(
+        &router,
+        "tools/call",
+        "gateway_invoke",
+        json!({"name": "gateway_invoke",
+            "arguments": {"server": CAPABILITY_SERVER, "tool": CAPABILITY_TOOL, "arguments": {}},
+            "task": {}, "_meta": meta}),
+    )
+    .await;
+    let id = made
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("premise: a task was made: {made}"))
+        .to_owned();
+    let bound = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while task_get(&router, &id).await.pointer("/result/status") != Some(&json!("completed")) {
+        assert!(std::time::Instant::now() < bound, "premise: completes");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    cool(&state);
+    let sent = account.peer_requests();
+    let read = task_get(&router, &id).await;
+    assert_eq!(
+        read.pointer("/error/code"),
+        Some(&json!(-32603)),
+        "retryable: {read}"
+    );
+    assert_eq!(
+        read.pointer("/error/data/retryable"),
+        Some(&json!(true)),
+        "{read}"
+    );
+    assert_eq!(
+        account.peer_requests(),
+        sent,
+        "MIK-8475 control: a stored read sent"
+    );
+    state
+        .meta_mcp
+        .kill_switch()
+        .revive_capability(CAPABILITY_SERVER, CAPABILITY_TOOL);
+    let served = task_get(&router, &id).await;
+    assert!(
+        served.get("error").is_none(),
+        "served after revive: {served}"
+    );
+    assert_eq!(
+        account.peer_requests(),
+        sent,
+        "MIK-8475 control: served by re-running"
+    );
+}
+
 /// CAPCD.3 (control): a caller WITH a view and a cooling tool still gets the
 /// cooldown refusal on a live call.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
