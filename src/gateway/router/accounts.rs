@@ -231,7 +231,10 @@ fn evict_slots(state: &AppState, config: &Config, key: &AccountKey, account_id: 
         if binding.descriptor_id != account_id {
             continue;
         }
-        let Some(backend) = state.backends.get(name) else {
+        let Some(backend) = state.meta_mcp.registry().get_for(
+            crate::gateway::meta_mcp::scoped_backends::Unscoped::Admin,
+            name,
+        ) else {
             tracing::warn!(
                 %account_id,
                 account = tag,

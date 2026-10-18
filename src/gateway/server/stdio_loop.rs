@@ -62,6 +62,10 @@ impl Gateway {
         // before warm-start and the capability load, so their nudges count.
         meta_mcp.set_change_feed(crate::gateway::ChangeFeed::StdioLegacy);
         let (nudges, nudge_rx) = tokio::sync::mpsc::unbounded_channel();
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
+        )]
         self.backends.set_change_feed(nudges);
         let warmer = WarmerGuard::new(&self.backends, WarmStartMode::Stdio, None);
         let protocol_telemetry_sink = Arc::new(StdioTelemetry::new(
@@ -183,6 +187,10 @@ impl Gateway {
         );
         let _capability_watcher = meta_mcp.get_capabilities().and_then(|cap_backend| {
             cap_backend.spawn_listing_watch(Arc::clone(&self.backends), announcer.shutdown());
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
+            )]
             crate::capability::CapabilityWatcher::start(
                 cap_backend,
                 announcer.shutdown(),

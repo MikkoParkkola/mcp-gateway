@@ -61,7 +61,7 @@ async fn direct(steps: &[ProviderStep]) -> Direct {
     let (mut state, store) =
         direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
-    state_mut.backends = Arc::clone(&meta.backends);
+    state_mut.backends = Arc::clone(meta.backends.for_test());
     state_mut.meta_mcp = Arc::new(meta);
     let audit = tempfile::NamedTempFile::new().expect("audit file");
     state_mut.transparency_log = Some(route_audit(&audit));

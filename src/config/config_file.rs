@@ -9,7 +9,6 @@
 
 use std::path::{Path, PathBuf};
 
-use figment::providers::{Format, Yaml};
 use figment::value::{Dict, Map};
 use figment::{Metadata, Profile, Provider};
 
@@ -77,7 +76,9 @@ impl Provider for ConfigFile {
     }
 
     fn data(&self) -> figment::Result<Map<Profile, Dict>> {
-        let mut data = Yaml::string(&self.text).data()?;
+        // `figment_data`, not `from_str_loose`: the provider's own read keeps
+        // the document under its profile and returns figment's error type.
+        let mut data = crate::yaml::figment_data(&self.text)?;
         for dict in data.values_mut() {
             resolve_backend_urls(dict).map_err(figment::Error::from)?;
         }

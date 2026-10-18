@@ -140,7 +140,12 @@ async fn twin(side: Side, reason: Reason, surface_tool: bool) -> Twin {
         },
     ))
     .await;
-    let backend = fixture.meta.backends.get(BACKEND).expect("backend");
+    let backend = fixture
+        .meta
+        .backends
+        .for_test()
+        .get(BACKEND)
+        .expect("backend");
     backend
         .get_tools_shared()
         .await

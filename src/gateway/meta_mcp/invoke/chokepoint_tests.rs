@@ -207,7 +207,11 @@ async fn a_chokepoint_refusal_after_the_gate_fills_keeps_the_nonce() {
         std::time::Duration::from_secs(300),
         true,
     );
-    let alpha = meta.backends.get("alpha").expect("fixture backend");
+    let alpha = meta
+        .backends
+        .for_test()
+        .get("alpha")
+        .expect("fixture backend");
     let fills = alpha.list_fills();
 
     let revoked = RevokedAfter {

@@ -39,6 +39,10 @@ pub(crate) enum Binding {
     Unconnected,
     /// [`Self::Unconnected`] with a connected grant for the sole operator.
     Connected,
+    /// [`Self::Unconnected`] with a connected grant for the verified OIDC
+    /// subject named, for a gateway with more than one credential, where no
+    /// sole operator exists (MIK-8387 S7a-acct: two scoped keys, one person).
+    ConnectedFor(&'static str),
     /// A backend-level signed-assertion `identity_propagation` block: minted
     /// per caller, never by the sole-operator assertion.
     Propagation,
@@ -93,7 +97,9 @@ impl DirectAccountGateway {
         configure: impl Fn(&mut crate::config::BackendConfig),
     ) -> Self {
         let bind = match binding {
-            Binding::Unconnected | Binding::Connected => Bind::Account(WORK),
+            Binding::Unconnected | Binding::Connected | Binding::ConnectedFor(_) => {
+                Bind::Account(WORK)
+            }
             Binding::Propagation => Bind::Propagation(external_cfg()),
         };
         Self::build((mode, auth), binding, &[(BACKEND, bind)], configure)
@@ -108,7 +114,9 @@ impl DirectAccountGateway {
         second: Second,
     ) -> Self {
         let first = match binding {
-            Binding::Unconnected | Binding::Connected => Bind::Account(WORK),
+            Binding::Unconnected | Binding::Connected | Binding::ConnectedFor(_) => {
+                Bind::Account(WORK)
+            }
             Binding::Propagation => Bind::Propagation(external_cfg()),
         };
         let other = match second {
@@ -129,7 +137,7 @@ impl DirectAccountGateway {
         binds: &[(&str, Bind<'_>)],
         configure: impl Fn(&mut crate::config::BackendConfig),
     ) -> Self {
-        let operator_grant = matches!(binding, Binding::Connected);
+        let operator_grant = matches!(binding, Binding::Connected | Binding::ConnectedFor(_));
         let accounts: Vec<&str> = binds
             .iter()
             .filter_map(|(_, bind)| match bind {
@@ -141,7 +149,10 @@ impl DirectAccountGateway {
             accounts
                 .iter()
                 .map(|id| {
-                    let key = operator_key_for(id);
+                    let key = match binding {
+                        Binding::ConnectedFor(subject) => account_key(subject, id),
+                        _ => operator_key_for(id),
+                    };
                     let slot = expected_identity_key_for(&key, SEEDED_REVISION);
                     ((key, grant(operator_token(id), u64::MAX)), slot)
                 })
@@ -164,7 +175,7 @@ impl DirectAccountGateway {
             configure,
         );
         Self {
-            backends: Arc::clone(&meta.backends),
+            backends: Arc::clone(meta.backends.for_test()),
             meta: Some(meta),
             dispatches,
             custody,
@@ -356,6 +367,12 @@ impl DirectAccountGateway {
     /// The per-user slot the sole operator's seeded grant selects.
     pub(crate) fn operator_binding() -> String {
         expected_identity_key_for(&operator_key(), SEEDED_REVISION)
+    }
+
+    /// The verified identity [`Binding::ConnectedFor`]`(subject)`'s grant is
+    /// held by, as a request extension would carry it.
+    pub(crate) fn verified(subject: &str) -> crate::key_server::oidc::VerifiedIdentity {
+        identity(subject)
     }
 
     /// The audit subject the sole operator is recorded under.

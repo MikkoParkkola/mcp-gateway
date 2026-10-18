@@ -184,6 +184,10 @@ impl EventsHub {
         }
         let multi_user = upstream::multi_user(services.live.running());
         let registry = self.runtime.backends.get();
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Discovery: judges every configured backend's upstream eligibility; callers see only backends sees_backend admits"
+        )]
         let detected = |name: &str| registry?.get(name)?.connected_streamable();
         upstream::judged_backends(&services.live.get(), multi_user, &detected)
     }
@@ -205,6 +209,10 @@ impl EventsHub {
             // Refused already: answer it before anything reads the backend.
             Some(Judged::Refused(_)) => {}
             Some(Judged::Unresolved) => {
+                #[allow(
+                    clippy::disallowed_methods,
+                    reason = "Discovery: resolves the transport of a backend this caller's subscription already passed sees_backend for"
+                )]
                 let Some(handle) = self.runtime.backends.get().and_then(|r| r.get(backend)) else {
                     return Err(RpcError::not_found());
                 };

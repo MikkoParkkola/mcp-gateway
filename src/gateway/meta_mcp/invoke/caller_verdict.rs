@@ -114,10 +114,11 @@ impl MetaMcp {
     /// what a live call runs, including the refusal's audit record.
     pub(in crate::gateway::meta_mcp) async fn live_refusal(
         &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
         (server, tool): (&str, &str),
         caller: CallerProof<'_>,
     ) -> Option<crate::Error> {
-        let backend = self.backends.get(server);
+        let backend = view.scoped_get(server);
         self.resolve_dispatch(
             (server, tool),
             backend.as_deref(),
@@ -155,8 +156,8 @@ impl MetaMcp {
         witness: Option<RefundWitness>,
     ) -> crate::Result<(CallerVerdict, Option<RefundWitness>)> {
         let Some(backend) = self
-            .backends
-            .get(server)
+            .scoped(caller.scope().authorizer.backend_grant())
+            .scoped_get(server)
             .filter(|backend| backend.keeps_per_user_catalogues())
         else {
             return Ok((CallerVerdict::Proceed, witness));
@@ -213,7 +214,11 @@ impl MetaMcp {
                 // consumed once at the dispatch.
                 let reason = error.to_string();
                 visible::record_account_transient(server, tool, reason.clone());
-                if let Some(account) = self.target_account(server, tool) {
+                if let Some(account) = self.target_account(
+                    &self.scoped(caller.scope().authorizer.backend_grant()),
+                    server,
+                    tool,
+                ) {
                     visible::record_account_outcome(
                         server,
                         &account,
@@ -334,6 +339,7 @@ impl MetaMcp {
     /// arm resolves nothing and keeps it.
     pub(super) async fn dispatch_resolution(
         &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
         (server, tool): (&str, &str),
         (caller_proof, verified_identity, caller_key): (
             CallerProof<'_>,
@@ -394,7 +400,7 @@ impl MetaMcp {
                 Ok(Continue((Some(carried.backend), carried.resolved)))
             }
             None => {
-                let backend = self.backends.get(server);
+                let backend = view.scoped_get(server);
                 // No principal on a required per-user backend: an absent name,
                 // answered before any resolution (lead ruling 2026-10-11).
                 if backend

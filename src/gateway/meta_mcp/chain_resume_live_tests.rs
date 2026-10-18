@@ -497,7 +497,12 @@ async fn handle_expiring_at(meta: &MetaMcp, expires_at: u64, now: u64) -> String
         .expect("the caller has a fingerprint");
     // What the chain driver's seal records for the stopped step (MIK-8168):
     // its digest over the backend object that asked, length-prefixed name.
-    let instance = meta.backends.get("srv").expect("registered").instance();
+    let instance = meta
+        .backends
+        .for_test()
+        .get("srv")
+        .expect("registered")
+        .instance();
     let asked = crate::protocol::continuation::Payload::mint(
         "srv".into(),
         None,

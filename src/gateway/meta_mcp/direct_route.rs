@@ -243,7 +243,7 @@ impl MetaMcp {
         binding: &str,
         tools: Vec<crate::protocol::Tool>,
     ) {
-        let backend = self.backends.get(server).expect("the backend");
+        let backend = self.backends.for_test().get(server).expect("the backend");
         backend.store_per_user_tools_for_test(binding, tools);
         self.remember_caller_slot(&backend, caller, Some(binding));
         assert!(

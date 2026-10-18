@@ -232,6 +232,10 @@ impl ReloadContext {
                 continue;
             };
             let mut hit = 0usize;
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "Lifecycle: config reload applies the operator's backend set; no caller request"
+            )]
             for backend in self.registry.all() {
                 hit += backend.evict_identity_slots(&prefix);
             }

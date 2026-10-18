@@ -86,7 +86,7 @@ async fn a_stdio_task_intent_refusal_gives_the_nonce_back() {
     const NONCE: &str = "s3d2-k6-nonce-0001";
     let fixture = signed_listing(json!({"destructiveHint": false, "readOnlyHint": true})).await;
     let backend =
-        (fixture.meta.events_backend_registry().get(BACKEND)).expect("the backend is registered");
+        (fixture.meta.backends.for_test().get(BACKEND)).expect("the backend is registered");
     backend
         .get_tools()
         .await
@@ -210,8 +210,8 @@ async fn surfaced_invalid(warm: bool) -> ([Value; 4], [usize; 2], usize) {
     }))
     .await;
     if warm {
-        let backend = (fixture.meta.events_backend_registry().get(BACKEND))
-            .expect("the backend is registered");
+        let backend =
+            (fixture.meta.backends.for_test().get(BACKEND)).expect("the backend is registered");
         backend.get_tools().await.expect("the backend lists");
     }
     let before = given();

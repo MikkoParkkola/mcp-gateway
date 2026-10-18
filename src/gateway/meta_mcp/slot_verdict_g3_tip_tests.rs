@@ -48,9 +48,12 @@ async fn g3_c12_reload_between_verdict_and_dispatch() {
             matches!(verdict, CallerVerdict::Proceed),
             "premise: {verdict:?}"
         );
-        assert!(fx.meta.backends.remove(BACKEND), "premise: reload removes");
         assert!(
-            fx.meta.backends.register(replacement),
+            fx.meta.backends.for_test().remove(BACKEND),
+            "premise: reload removes"
+        );
+        assert!(
+            fx.meta.backends.for_test().register(replacement),
             "premise: reload registers"
         );
         let response = Box::pin(fx.meta.handle_tools_call(

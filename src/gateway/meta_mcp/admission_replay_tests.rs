@@ -56,7 +56,7 @@ async fn an_unrecorded_deferral_fails_closed() {
         ..ctx(&AllowAll)
     };
     assert!(
-        meta.stored_replay_defers("idp", "read"),
+        meta.stored_replay_defers(&meta.unscoped_for_test(), "idp", "read"),
         "premise: the target defers"
     );
     let stored = JsonRpcResponse::success(RequestId::Number(4), json!({"content": []}));
@@ -84,6 +84,24 @@ async fn an_unrecorded_deferral_fails_closed() {
         response.id,
         Some(RequestId::Number(4)),
         "R-closed: the request's id"
+    );
+}
+
+/// MIK-8387: a target outside the caller's grant defers to the live dispatch,
+/// so a stored result for it is never served at admission. Dropping the
+/// absence check serves it, and this row fails.
+#[test]
+fn an_out_of_scope_target_defers() {
+    let meta = per_caller_meta();
+    let granted = ["other".to_string()];
+    let view = meta.scoped(crate::gateway::authz::BackendGrant::Scoped(&granted));
+    assert!(
+        meta.stored_replay_defers(&view, "idp", "read"),
+        "out of scope: defers"
+    );
+    assert!(
+        meta.stored_replay_defers(&view, "ghost", "read"),
+        "unregistered: defers"
     );
 }
 

@@ -19,6 +19,7 @@ use crate::gateway::meta_mcp::MetaMcp;
 pub(super) fn install(
     config: &Config,
     meta_mcp: &MetaMcp,
+    registry: &Arc<crate::backend::BackendRegistry>,
     webhooks: &Arc<parking_lot::RwLock<WebhookRegistry>>,
     live_config: &Arc<crate::config_reload::LiveConfig>,
     credentials: crate::events::LiveCredentials,
@@ -36,7 +37,7 @@ pub(super) fn install(
         webhooks.write().set_events(Arc::clone(&hub));
     }
     if config.events.sources.backend_notifications {
-        let registry = meta_mcp.events_backend_registry();
+        let registry = Arc::clone(registry);
         let capability = config
             .capabilities
             .enabled
@@ -45,6 +46,10 @@ pub(super) fn install(
             Arc::new({
                 let registry = Arc::clone(&registry);
                 move || {
+                    #[allow(
+                        clippy::disallowed_methods,
+                        reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
+                    )]
                     let mut names: Vec<String> =
                         registry.all().iter().map(|b| b.name.clone()).collect();
                     names.extend(capability.clone());
@@ -56,10 +61,7 @@ pub(super) fn install(
         );
     }
     if config.events.sources.operational {
-        let source = hub.install_operational_source(
-            &meta_mcp.kill_switch(),
-            &meta_mcp.events_backend_registry(),
-        );
+        let source = hub.install_operational_source(&meta_mcp.kill_switch(), registry);
         #[cfg(feature = "cost-governance")]
         if let Some(budget) = &meta_mcp.budget_enforcer {
             source.report_budgets(budget);

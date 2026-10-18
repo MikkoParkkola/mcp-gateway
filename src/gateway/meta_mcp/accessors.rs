@@ -71,7 +71,10 @@ impl MetaMcp {
             .iter()
             .filter_map(|key| {
                 let (server, tool) = key.split_once(':')?;
-                let backend = self.backends.get(server)?;
+                let backend = self.backends.get_for(
+                    crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility,
+                    server,
+                )?;
                 // INV-2 (MIK-6742): never surface an OAuth-isolated backend's cached
                 // tool to another user on a multi-user gateway. Omit (fail closed).
                 if self.meta_route_isolation_refused(&backend) {

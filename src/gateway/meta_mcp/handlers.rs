@@ -191,7 +191,9 @@ impl MetaMcp {
     /// Uses only the in-memory cache — no I/O.  Both counts are 0 when the
     /// registry is empty (e.g. in unit tests).
     pub(super) fn backend_counts(&self) -> (ToolTotal, usize) {
-        let backends = self.backends.all();
+        let backends = self
+            .backends
+            .all_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility);
         let server_count = backends.len();
         (tool_total(&backends), server_count)
     }
@@ -272,7 +274,14 @@ impl MetaMcp {
         if !self.code_mode_enabled {
             for surfaced in &self.surfaced_tools {
                 if let Some(tool) = self.resolve_surfaced_tool(surfaced, session_id, scope) {
-                    let server_id = if self.backends.get(&surfaced.server).is_some() {
+                    let server_id = if self
+                        .backends
+                        .get_for(
+                            crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility,
+                            &surfaced.server,
+                        )
+                        .is_some()
+                    {
                         format!("backend:{}", surfaced.server)
                     } else {
                         format!("capability:{}", surfaced.server)

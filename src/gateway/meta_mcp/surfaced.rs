@@ -132,7 +132,10 @@ impl MetaMcp {
     /// read.
     pub(super) fn surfaced_schema_withheld(&self, server: &str, tool_name: &str) -> bool {
         self.backends
-            .get(server)
+            .get_for(
+                crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility,
+                server,
+            )
             .and_then(|backend| backend.get_cached_tool(tool_name))
             .is_some_and(|tool| !input_schema_is_structurally_valid(&tool.input_schema))
     }
@@ -176,7 +179,10 @@ impl MetaMcp {
         }
 
         // MCP backend path: resolve from the backend's tool cache.
-        if let Some(backend) = self.backends.get(&surfaced.server) {
+        if let Some(backend) = self.backends.get_for(
+            crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility,
+            &surfaced.server,
+        ) {
             // INV-2 (MIK-6742): do not surface an isolated backend's tool on a
             // multi-user gateway; omit it from tools/list (fail-closed).
             if self.meta_route_isolation_refused(&backend) {
@@ -258,7 +264,10 @@ impl MetaMcp {
         let scope = caller.scope();
         let proof = Self::proof_of(caller);
         let mut servers: Vec<Value> = Vec::new();
-        for b in self.backends.all() {
+        for b in self
+            .backends
+            .all_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility)
+        {
             if !self.admits_backend(&b.name, scope, session_id) {
                 continue;
             }

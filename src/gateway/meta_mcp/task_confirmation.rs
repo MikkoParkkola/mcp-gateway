@@ -306,7 +306,10 @@ impl MetaMcp {
         let server = self
             .surfaced_for(tool_name, request.scope, request.session_id)
             .visible_server()?;
-        let backend = self.backends.get(server)?;
+        let backend = self.backends.get_for(
+            crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility,
+            server,
+        )?;
         if request.verified_identity.is_some() && backend.identity_propagation_config().is_some() {
             debug!(
                 server,

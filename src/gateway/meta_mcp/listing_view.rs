@@ -125,7 +125,10 @@ impl MetaMcp {
         session_id: Option<&str>,
         cold: ColdRule,
     ) -> bool {
-        let Some(backend) = self.backends.get(server) else {
+        let Some(backend) = self.backends.get_for(
+            crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility,
+            server,
+        ) else {
             return self.shows_shared_name(server, tool, scope, session_id);
         };
         match self.listing_view(&backend, scope) {
@@ -199,7 +202,10 @@ impl MetaMcp {
         self.promoted_tools_for_session(session_id)
             .into_iter()
             .filter_map(|(server, tool)| {
-                let Some(backend) = self.backends.get(&server) else {
+                let Some(backend) = self.backends.get_for(
+                    crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility,
+                    &server,
+                ) else {
                     return Some((server, tool));
                 };
                 match self.listing_view(&backend, scope) {

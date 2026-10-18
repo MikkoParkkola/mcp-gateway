@@ -742,23 +742,24 @@ fn r6u_per_caller_propagation_without_account_defers() {
     let meta = gateway.take_meta();
     // No `account:`, so no per-user account to judge ...
     assert!(
-        meta.target_account(BACKEND, TOOL).is_none(),
+        meta.target_account(&meta.unscoped_for_test(), BACKEND, TOOL)
+            .is_none(),
         "R6u: a propagation backend without `account:` names an account"
     );
     // ... but it mints per caller, so site 1 defers to a live mint (E7).
     assert!(
-        meta.mints_per_caller(BACKEND, TOOL),
+        meta.mints_per_caller(&meta.unscoped_for_test(), BACKEND, TOOL),
         "R6u: a per-caller propagation backend mints nothing per caller"
     );
     assert!(
-        meta.stored_replay_defers(BACKEND, TOOL),
+        meta.stored_replay_defers(&meta.unscoped_for_test(), BACKEND, TOOL),
         "R6u: a per-caller propagation backend's Replay does not defer"
     );
     // Contrast: a backend that mints nothing per caller is exempt.
     let empty =
         crate::gateway::meta_mcp::MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
     assert!(
-        !empty.stored_replay_defers("no-backend", "no-tool"),
+        !empty.stored_replay_defers(&empty.unscoped_for_test(), "no-backend", "no-tool"),
         "R6u: a backend that mints nothing per caller defers"
     );
 }

@@ -494,6 +494,13 @@ fn fixture_auth() -> AuthConfig {
                 denied_tools: Some(vec!["hook_or_day".to_string()]),
                 ..key("k-deny-cap")
             },
+            ApiKeyConfig {
+                // MIK-8387 C2 and FW1: a key scoped to `alpha` and the
+                // never-registered `ghost`, so `alpha-pt` and the capability
+                // backend sit outside its scope.
+                backends: vec!["alpha".to_string(), "ghost".to_string()],
+                ..key("k-alpha-ghost")
+            },
         ],
         ..Default::default()
     };

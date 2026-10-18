@@ -480,7 +480,12 @@ pub(crate) fn stdio_refund_through_delivery() -> [Delivered; 3] {
         let fixture = Fixture::start_hardened().await;
         // The refusal must be effect-free to earn a refund (NONCEFX.9): a
         // cold schema slot would fetch `tools/list` first and keep the nonce.
-        let backend = fixture.meta.backends.get(BACKEND).expect("backend");
+        let backend = fixture
+            .meta
+            .backends
+            .for_test()
+            .get(BACKEND)
+            .expect("backend");
         backend
             .get_tools_shared()
             .await

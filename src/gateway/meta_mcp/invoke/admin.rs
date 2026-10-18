@@ -131,7 +131,9 @@ impl MetaMcp {
             .as_ref()
             .ok_or_else(|| Error::json_rpc(-32603, "Statistics not enabled for this gateway"))?;
 
-        let all_backends = self.backends.all();
+        let all_backends = self
+            .backends
+            .all_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Admin);
         // Publish completeness: an unenumerated backend contributes 0.
         // A truncated drain publishes a lower bound, not a complete total.
         // List and flag under one guard, so a fill landing between the reads
@@ -217,7 +219,10 @@ impl MetaMcp {
         self.kill_switch.revive(server);
 
         let mut breaker_was_open = false;
-        if let Some(backend) = self.backends.get(server) {
+        if let Some(backend) = self.backends.get_for(
+            crate::gateway::meta_mcp::scoped_backends::Unscoped::Admin,
+            server,
+        ) {
             breaker_was_open =
                 backend.circuit_breaker_stats().state != crate::failsafe::CircuitState::Closed;
             backend.reset_circuit_breaker();
@@ -315,7 +320,10 @@ impl MetaMcp {
         match backend.reload().await {
             Ok(total) => {
                 // Listeners hear of it only if what they see changed (`MIK-8127`).
-                self.backends.nudge_catalogue(&backend.name);
+                self.backends.nudge_catalogue_for(
+                    crate::gateway::meta_mcp::scoped_backends::Unscoped::Admin,
+                    &backend.name,
+                );
                 Ok(json!({
                     "status": "ok",
                     "backend": backend.name,

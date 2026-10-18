@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::*;
-use figment::providers::Yaml;
 
 /// Parse as the loader does.
 fn yaml(text: &str) -> Dict {
-    Yaml::from_str(text).expect("test yaml parses")
+    crate::yaml::from_str_loose(text).expect("test yaml parses")
 }
 
 #[test]
@@ -89,7 +88,7 @@ fn doctor_adds_no_hidden_settings_row_for_a_fresh_init_config() {
                 String::new()
             };
             let config = crate::commands::build_init_config(with_examples, profile, &starter);
-            let parsed: Dict = Yaml::from_str(&config)
+            let parsed: Dict = crate::yaml::from_str_loose(&config)
                 .unwrap_or_else(|e| panic!("init --profile {profile} writes invalid YAML: {e}"));
             std::fs::write(&path, &config).expect("write init config");
             assert!(

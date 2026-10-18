@@ -10,7 +10,6 @@
 
 use std::path::Path;
 
-use figment::providers::{Format as _, Yaml};
 use figment::value::{Dict, Value};
 
 use super::super::regular_file::read_regular_text;
@@ -173,7 +172,7 @@ fn is_set(map: &Dict, path: &[&str]) -> bool {
 fn read_key_names(path: &Path) -> Option<(String, Dict)> {
     let text = read_regular_text(path).ok()?;
     // The loader's own reader: two equal keys keep the last, as the gateway does.
-    let dict = Yaml::from_str::<Dict>(&text).ok()?;
+    let dict = crate::yaml::from_str_loose(&text).ok()?;
     Some((text, dict))
 }
 

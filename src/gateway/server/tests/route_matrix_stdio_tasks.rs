@@ -321,7 +321,7 @@ pub(crate) async fn stdio_task_refused_without_a_grant() -> (Value, Value, Strin
     let fixture =
         signed_fixture_listing(json!({"destructiveHint": false, "readOnlyHint": true})).await;
     let backend =
-        (fixture.meta.events_backend_registry().get(BACKEND)).expect("the backend is registered");
+        (fixture.meta.registry_for_test().get(BACKEND)).expect("the backend is registered");
     backend
         .get_tools()
         .await

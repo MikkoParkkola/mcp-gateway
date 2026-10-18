@@ -479,3 +479,75 @@ async fn a_profile_refused_backend_tool_keeps_its_answer() {
         "execute keeps its answer: {body}"
     );
 }
+
+/// MIK-8387 PR-B C2, a guard (test plan v2 §5): a key whose scope excludes
+/// the capability backend, calling a tool it does not define there, gets the
+/// answer it gets for a server no registry knows, on `/mcp` `gateway_invoke`.
+/// Green on the tip: S3 answers the out-of-scope name as absent
+/// (`gate.rs` `gate_answer`) before the capability arm. Mutant C2-m: S3 moved
+/// below the capability arm exposes the scope refusal instead.
+#[tokio::test]
+async fn c2_an_out_of_scope_capability_backend_answers_as_an_unregistered_server() {
+    const NOWHERE: &str = "no_such_server_8387";
+    let fx = twin(Reason::Admin, true).await;
+    // One cell per tool: the capability backend's defined tool and an
+    // undefined one (Gemini review: a defined tool would reach the
+    // capability arm if the scope check ever stopped running first).
+    for tool in [CAP, "nosuch_8387"] {
+        let mut answers = Vec::new();
+        for server in [CAPS, NOWHERE] {
+            let call = json!({"name": "gateway_invoke",
+                "arguments": {"server": server, "tool": tool, "arguments": {}}});
+            let (status, mut body) =
+                send(&fx, "/mcp", "k-alpha-ghost", "tools/call", call, None).await;
+            if let Some(obj) = body.as_object_mut() {
+                obj.remove("id");
+            }
+            answers.push((status, body.to_string().replace(server, "SERVER")));
+        }
+        assert_eq!(
+            answers[0], answers[1],
+            "C2 answer changed for `{tool}`: out-of-scope capability backend vs unregistered server"
+        );
+        // The pinned answer itself: the absent miss naming the tool.
+        let (status, body) = &answers[1];
+        assert!(
+            *status == axum::http::StatusCode::OK
+                && body.contains(tool)
+                && (body.contains("\"isError\":true") || body.contains("\"error\"")),
+            "C2: the answer for `{tool}` is not the absent miss: {status} {body}"
+        );
+    }
+}
+
+/// MIK-8387 PR-B T4 router cell (test plan v2 §5): the router choke point's
+/// view answers `absence` exactly as `MetaMcp::scoped` does, for every grant
+/// and name, the capability provider included: a grant naming it sees it as
+/// registered. Mutant M35: `view_for` passes no capability name.
+#[tokio::test]
+async fn t4_router_cell_the_choke_point_view_matches_the_meta_view() {
+    use crate::gateway::authz::BackendGrant;
+    let fx = twin(Reason::Admin, true).await;
+    let alpha_caps = ["alpha".to_string(), CAPS.to_string()];
+    let alpha_ghost = ["alpha".to_string(), "ghost".to_string()];
+    let grants = [
+        BackendGrant::Scoped(&alpha_caps),
+        BackendGrant::Scoped(&alpha_ghost),
+        BackendGrant::Empty,
+        BackendGrant::Unscoped,
+    ];
+    for grant in grants {
+        for name in ["alpha", "alpha-pt", "ghost", "nosuch", CAPS] {
+            assert_eq!(
+                super::backend_choke::view_for(&fx.state, grant).absence(name),
+                fx.state.meta_mcp.scoped(grant).absence(name),
+                "router cell {name} under {grant:?}"
+            );
+        }
+    }
+    assert_eq!(
+        super::backend_choke::view_for(&fx.state, BackendGrant::Scoped(&alpha_caps)).absence(CAPS),
+        None,
+        "router cell {CAPS}: a grant naming the capability provider sees it"
+    );
+}

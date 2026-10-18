@@ -372,7 +372,11 @@ async fn a_backend_unavailable_refusal_frees_the_key() {
 async fn a_backend_stopped_mid_call_is_not_executed_again() {
     let (meta, wire) = gateway(vec![Step::ParkUntilClosed, Step::Answer(done())]);
     let client = answering();
-    let backend = meta.backends.get("svc").expect("svc is registered");
+    let backend = meta
+        .backends
+        .for_test()
+        .get("svc")
+        .expect("svc is registered");
     let (first, ()) = tokio::join!(call(&meta, &client), async {
         wire.parked.notified().await;
         backend.stop().await.expect("stop never fails");

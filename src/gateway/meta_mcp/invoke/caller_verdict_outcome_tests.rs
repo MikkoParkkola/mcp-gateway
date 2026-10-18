@@ -58,7 +58,7 @@ async fn in_request<F: std::future::Future>(body: F) -> F::Output {
 /// Carry a real resolution for `(BACKEND, TOOL)`, as the caller verdict
 /// does, with `fill_error` as given.
 async fn carry(meta: &MetaMcp, fill_error: Option<crate::Error>) {
-    let backend = meta.backends.get(BACKEND).expect("the backend");
+    let backend = meta.backends.for_test().get(BACKEND).expect("the backend");
     let resolved = meta
         .resolve_dispatch((BACKEND, TOOL), Some(&backend), operator(), None)
         .await
@@ -79,17 +79,19 @@ async fn carry(meta: &MetaMcp, fill_error: Option<crate::Error>) {
 async fn o3_two_fills_in_one_request_read_custody_once() {
     let (gateway, meta) = connected();
     let account = meta
-        .target_account(BACKEND, TOOL)
+        .target_account(&meta.unscoped_for_test(), BACKEND, TOOL)
         .expect("a managed account");
     in_request(async {
         let before = gateway.resolves();
         meta.fill_account_outcomes(
+            &meta.unscoped_for_test(),
             &[(BACKEND, TOOL)],
             operator(),
             crate::gateway::meta_mcp::account_outcome::AccountWrites::All,
         )
         .await;
         meta.fill_account_outcomes(
+            &meta.unscoped_for_test(),
             &[(BACKEND, TOOL), (BACKEND, TOOL)],
             operator(),
             crate::gateway::meta_mcp::account_outcome::AccountWrites::All,
@@ -110,7 +112,7 @@ async fn o3_two_fills_in_one_request_read_custody_once() {
 async fn o6_outside_a_request_no_outcome_is_judged_or_kept() {
     let (gateway, meta) = connected();
     let account = meta
-        .target_account(BACKEND, TOOL)
+        .target_account(&meta.unscoped_for_test(), BACKEND, TOOL)
         .expect("a managed account");
     let before = gateway.resolves();
     assert_eq!(visible::account_outcome(BACKEND, &account), None);
@@ -140,12 +142,13 @@ async fn o5_an_external_account_is_unjudged_with_no_custody_read() {
 async fn e5a_a_clean_carried_resolution_is_reused_as_live() {
     let (gateway, meta) = connected();
     let account = meta
-        .target_account(BACKEND, TOOL)
+        .target_account(&meta.unscoped_for_test(), BACKEND, TOOL)
         .expect("a managed account");
     in_request(async {
         carry(&meta, None).await;
         let before = gateway.resolves();
         meta.fill_account_outcomes(
+            &meta.unscoped_for_test(),
             &[(BACKEND, TOOL)],
             operator(),
             crate::gateway::meta_mcp::account_outcome::AccountWrites::All,
@@ -166,12 +169,13 @@ async fn e5a_a_clean_carried_resolution_is_reused_as_live() {
 async fn e5b_a_carried_resolution_whose_fill_failed_is_read_again() {
     let (gateway, meta) = connected();
     let account = meta
-        .target_account(BACKEND, TOOL)
+        .target_account(&meta.unscoped_for_test(), BACKEND, TOOL)
         .expect("a managed account");
     in_request(async {
         carry(&meta, Some(crate::Error::json_rpc(-32603, "fill failed"))).await;
         let before = gateway.resolves();
         meta.fill_account_outcomes(
+            &meta.unscoped_for_test(),
             &[(BACKEND, TOOL)],
             operator(),
             crate::gateway::meta_mcp::account_outcome::AccountWrites::All,

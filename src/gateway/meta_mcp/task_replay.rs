@@ -6,12 +6,13 @@
 //! caller already owns. Neither may do so once current policy blocks the calls
 //! that produced it, the way a synchronous replay is refused (#2445).
 
+mod receipts;
+
 use serde_json::json;
 
 use super::visible::{self, AccountOutcome};
 use super::{MetaMcp, MetaMcpCallerContext, error_response_preserving_status};
 use crate::gateway::task_service::CommittedTask;
-use crate::protocol::tasks::TaskStatus;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::{Error, Result};
 
@@ -109,7 +110,7 @@ impl MetaMcp {
         let targets: Vec<(&str, &str)> = targets
             .into_iter()
             .filter(|(server, _)| {
-                self.backends.get(server).is_none_or(|backend| {
+                self.backends.for_test().get(server).is_none_or(|backend| {
                     !backend
                         .skip_account_prepass
                         .load(std::sync::atomic::Ordering::SeqCst)
@@ -136,9 +137,12 @@ impl MetaMcp {
                 !self.target_refused_without_catalogue((server, tool), scope, session_id)
             })
             .collect();
-        self.fill_account_outcomes(&judged, caller, writes).await;
+        let view = self.scoped(scope.authorizer.backend_grant());
+        self.fill_account_outcomes(&view, &judged, caller, writes)
+            .await;
         for &(server, tool) in &targets {
-            self.keep_permanent_refusal(server, tool, caller).await;
+            self.keep_permanent_refusal(&view, server, tool, caller)
+                .await;
             self.settle_caller_view(server, tool, scope, session_id)
                 .await;
             self.settle_shared_view((server, tool), scope, session_id)
@@ -152,11 +156,12 @@ impl MetaMcp {
     /// Busy, shutting-down and store failures stay retryable.
     async fn keep_permanent_refusal(
         &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
         server: &str,
         tool: &str,
         caller: crate::identity_propagation::CallerProof<'_>,
     ) {
-        let Some(account) = self.target_account(server, tool) else {
+        let Some(account) = self.target_account(view, server, tool) else {
             return;
         };
         if visible::account_outcome(server, &account) != Some(AccountOutcome::Unavailable)
@@ -164,7 +169,7 @@ impl MetaMcp {
         {
             return;
         }
-        if let Some(refusal) = self.live_refusal((server, tool), caller).await {
+        if let Some(refusal) = self.live_refusal(view, (server, tool), caller).await {
             visible::record_account_refusal(server, &account, refusal);
         }
     }
@@ -182,7 +187,10 @@ impl MetaMcp {
         session_id: Option<&str>,
     ) {
         let caller = scope.caller;
-        let Some(backend) = self.backends.get(server) else {
+        let Some(backend) = self
+            .scoped(scope.authorizer.backend_grant())
+            .scoped_get(server)
+        else {
             return;
         };
         if !backend.keeps_per_user_catalogues() {
@@ -209,7 +217,7 @@ impl MetaMcp {
             // grant) forgets the entry, but only while it is still the one
             // seen here, so a lease claimed meanwhile survives.
             let current = self
-                .target_account(server, tool)
+                .target_account(&self.scoped(scope.authorizer.backend_grant()), server, tool)
                 .and_then(|account| visible::account_binding(server, &account));
             if current.is_none_or(|current| current == held.binding()) {
                 // MIK-8392 F2: a held catalogue past its TTL is stale, by
@@ -230,7 +238,7 @@ impl MetaMcp {
             }
         }
         let account = self
-            .target_account(server, tool)
+            .target_account(&self.scoped(scope.authorizer.backend_grant()), server, tool)
             .map(|account| visible::account_outcome(server, &account));
         // Only a live grant may re-establish a view (d1): a NoView entry is
         // reclaimed only on Live, and nothing is claimed while the account
@@ -268,7 +276,10 @@ impl MetaMcp {
         scope: super::visibility::InvokeScope<'_>,
         session_id: Option<&str>,
     ) {
-        let Some(backend) = self.backends.get(server) else {
+        let Some(backend) = self
+            .scoped(scope.authorizer.backend_grant())
+            .scoped_get(server)
+        else {
             return;
         };
         // Only backends whose stored read judges the shared catalogue:
@@ -305,7 +316,10 @@ impl MetaMcp {
         scope: super::visibility::InvokeScope<'_>,
         session_id: Option<&str>,
     ) -> bool {
-        if let Some(backend) = self.backends.get(server) {
+        if let Some(backend) = self
+            .scoped(scope.authorizer.backend_grant())
+            .scoped_get(server)
+        {
             self.refused_without_catalogue(&backend, (server, tool), scope, session_id)
         } else {
             if self.may_invoke(server, tool, scope, session_id).is_err() {
@@ -321,7 +335,8 @@ impl MetaMcp {
             };
             // MIK-8475: an account-bearing capability waits for the
             // credential step too.
-            if self.defers_error_rate_cooldown(server, tool) {
+            let view = self.scoped(scope.authorizer.backend_grant());
+            if self.defers_error_rate_cooldown(&view, server, tool) {
                 self.admit_named_target(&call).is_err()
             } else {
                 self.admit_target(&call).is_err()
@@ -338,8 +353,9 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
     ) -> bool {
+        let view = self.scoped(caller.scope().authorizer.backend_grant());
         stored.targets.iter().any(|target| {
-            self.defers_error_rate_cooldown(&target.server, &target.tool)
+            self.defers_error_rate_cooldown(&view, &target.server, &target.tool)
                 && self
                     .admit_target(&super::invoke::dispatch_guards::BackendCall {
                         server: &target.server,
@@ -384,7 +400,8 @@ impl MetaMcp {
         // Skipping the target for it left it unfilled, so a caller with no
         // view got "retry" where a missing name gets "absent". The read
         // answers the cooldown last (`deferred_cooldown_refuses`).
-        if self.defers_error_rate_cooldown(server, tool) {
+        let view = self.scoped(scope.authorizer.backend_grant());
+        if self.defers_error_rate_cooldown(&view, server, tool) {
             self.admit_named_target(&call).is_err()
         } else {
             self.admit_target(&call).is_err()
@@ -394,15 +411,23 @@ impl MetaMcp {
     /// A stored read found no account outcome for `server`'s target: every
     /// read entry runs the pre-pass first, so this is a broken invariant
     /// (MIK-8392 N0). It still fails closed; tests observe it by count.
-    fn unfilled_outcome_read(backends: &crate::backend::BackendRegistry, server: &str) {
+    ///
+    /// The registry is read only in test builds, for the count: production
+    /// reports the invariant and reads nothing (MIK-8387 PR-B commit 3).
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::unused_self,
+            reason = "the registry is read only in test builds"
+        )
+    )]
+    fn unfilled_outcome_read(&self, server: &str) {
         #[cfg(test)]
-        if let Some(backend) = backends.get(server) {
+        if let Some(backend) = self.backends.for_test().get(server) {
             backend
                 .unfilled_outcome_reads
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
-        #[cfg(not(test))]
-        let _ = backends;
         tracing::error!(server, "stored read without the account pre-pass");
     }
 
@@ -412,7 +437,9 @@ impl MetaMcp {
         server: &str,
         caller: &MetaMcpCallerContext<'_>,
     ) -> Option<std::time::Duration> {
-        let backend = self.backends.get(server)?;
+        let backend = self
+            .scoped(caller.scope().authorizer.backend_grant())
+            .scoped_get(server)?;
         let proof = crate::identity_propagation::CallerProof::new(
             caller.verified_identity,
             caller.provenance(),
@@ -468,10 +495,17 @@ impl MetaMcp {
         // (`BackendNotFound`, the invoke path's answer for an unknown
         // server), after policy, as the live call refuses on policy before
         // it dispatches.
-        if let Some(error) = self.unknown_server_refusal(stored) {
+        if let Some(error) = self.unknown_server_refusal(
+            &self.scoped(caller.scope().authorizer.backend_grant()),
+            stored,
+        ) {
             return Some(error_response_preserving_status(id.clone(), &error));
         }
-        if let Err(withheld) = self.judge_stored_accounts(stored, read) {
+        if let Err(withheld) = self.judge_stored_accounts(
+            &self.scoped(caller.scope().authorizer.backend_grant()),
+            stored,
+            read,
+        ) {
             return Some(match withheld {
                 StoredWithheld::Retry(after) => retry_later(id, after),
                 StoredWithheld::Refused(error) => {
@@ -561,10 +595,14 @@ impl MetaMcp {
     /// captured). A capability tool still judges through the catalogue and
     /// policy path; a personal-account backend that was removed answers
     /// here too, as its live call does.
-    fn unknown_server_refusal(&self, stored: &CommittedTask) -> Option<Error> {
+    fn unknown_server_refusal(
+        &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
+        stored: &CommittedTask,
+    ) -> Option<Error> {
         for target in &stored.targets {
             let (server, tool) = (target.server.as_str(), target.tool.as_str());
-            if self.backends.get(server).is_some() {
+            if view.scoped_get(server).is_some() {
                 continue;
             }
             let offered = self
@@ -584,6 +622,7 @@ impl MetaMcp {
     /// resolution.
     fn judge_stored_accounts(
         &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
         stored: &CommittedTask,
         read: StoredRead,
     ) -> std::result::Result<(), StoredWithheld> {
@@ -592,12 +631,12 @@ impl MetaMcp {
         }
         for target in &stored.targets {
             let (server, tool) = (target.server.as_str(), target.tool.as_str());
-            let Some(account) = self.target_account(server, tool) else {
+            let Some(account) = self.target_account(view, server, tool) else {
                 continue;
             };
             let outcome = visible::account_outcome(server, &account);
             if outcome.is_none() {
-                Self::unfilled_outcome_read(&self.backends, server);
+                self.unfilled_outcome_read(server);
             }
             match outcome {
                 // Unfilled: the pre-pass never ran for it. Fail closed,
@@ -672,85 +711,6 @@ impl MetaMcp {
             }
             Ok(())
         })
-    }
-}
-
-impl MetaMcp {
-    /// Stage the receipt a read of `stored` renews: its result, its pending
-    /// input requests, or (MIK-7887) the peer's own error of a failed task. A
-    /// multi-target task, an error the gateway wrote or whose author is not
-    /// established, and a working or cancelled task stage nothing.
-    pub(crate) fn stage_stored_receipt(
-        &self,
-        who: super::invoke::relay::RelayKey<'_>,
-        api_key_name: Option<&str>,
-        stored: &CommittedTask,
-    ) {
-        let [target] = stored.targets.as_slice() else {
-            return;
-        };
-        if !self.relay_active() || !stored.serves_backend_output() {
-            return;
-        }
-        let to = (target.server.as_str(), target.tool.as_str());
-        match stored.task.status() {
-            TaskStatus::Completed => {
-                if let Some(result) = stored.backend_result() {
-                    // MIK-7993.STORE.1: the members the gateway wrote into the
-                    // stored result are its own text; restored into this
-                    // read's record, the receipt (and its rebuild from what
-                    // is delivered) leaves exactly those out.
-                    super::invoke::gateway_writes::restore(&stored.gateway_writes);
-                    self.stage_relay_receipt(who, to, result);
-                }
-            }
-            TaskStatus::InputRequired => {
-                if let Some(requests) = stored.task.input_requests() {
-                    let prompt = serde_json::Value::Object(requests.clone());
-                    let recorded = self.recorded_prompt(to, api_key_name, "tasks/get", &prompt);
-                    self.stage_relay_receipt(who, to, &recorded);
-                }
-            }
-            TaskStatus::Failed => {
-                // Only an error the gateway established as the peer's is the
-                // backend's text; its own errors receipt nothing (MIK-7887.RECEIPT.1).
-                if let Some(error) = stored.backend_error()
-                    && let Ok(error) = serde_json::to_value(error)
-                {
-                    // Classified like a pending prompt, so a sensitive error
-                    // is recorded as sensitive without a `sources` rule.
-                    let recorded = self.recorded_prompt(to, api_key_name, "tasks/get", &error);
-                    self.stage_relay_receipt(who, to, &recorded);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-impl MetaMcp {
-    /// MIK-7887.RECEIPT.1: a followed task's failure at settlement. A peer's
-    /// own error replaces the working stub with its receipt, classified like a
-    /// pending prompt as a read classifies it; any other error is the
-    /// gateway's and drops the stub, so nothing it wrote is receipted.
-    pub(crate) fn stage_followed_error(
-        &self,
-        who: super::invoke::relay::RelayKey<'_>,
-        target: (&str, &str),
-        error: &crate::protocol::JsonRpcError,
-        author: crate::gateway::task_service::ErrorAuthor,
-    ) {
-        if !self.relay_active() {
-            return;
-        }
-        if author == crate::gateway::task_service::ErrorAuthor::Peer
-            && let Ok(error) = serde_json::to_value(error)
-        {
-            let recorded = self.recorded_prompt(target, None, "tasks/settle", &error);
-            self.stage_upstream_result(who, target, &recorded);
-        } else {
-            super::invoke::relay::discard_staged();
-        }
     }
 }
 

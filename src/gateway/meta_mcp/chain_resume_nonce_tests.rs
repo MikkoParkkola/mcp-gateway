@@ -130,7 +130,11 @@ async fn a_chain_resume_refused_after_its_handle_was_spent_keeps_the_nonce() {
     let meta = signed_and_budgeted(Arc::clone(&stub), 1.5);
     let stop = unsigned_execute(&meta, &NO_RETRY).await;
     let handle = handle_in(&stop);
-    let srv = meta.backends.get("srv").expect("fixture backend");
+    let srv = meta
+        .backends
+        .for_test()
+        .get("srv")
+        .expect("fixture backend");
     let fills = srv.list_fills();
 
     let refused = signed_execute(&meta, "chain-n1", &answers(&handle)).await;

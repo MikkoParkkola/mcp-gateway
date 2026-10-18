@@ -56,7 +56,7 @@ fn counted(attested: bool) -> (MetaMcp, Arc<AtomicUsize>) {
 /// Nothing acted: no backend call and no tool-list fill.
 fn assert_nothing_acted(meta: &MetaMcp, calls: &AtomicUsize, name: &str) {
     assert_eq!(calls.load(Ordering::SeqCst), 0, "premise: {name} sent");
-    let alpha = meta.backends.get("alpha").expect("alpha");
+    let alpha = meta.backends.for_test().get("alpha").expect("alpha");
     assert_eq!(alpha.list_fills(), 0, "premise: {name} filled");
 }
 
@@ -275,10 +275,15 @@ async fn surfacing_invalid_read() -> MetaMcp {
 async fn a_withheld_surfaced_name_gives_the_nonce_back_only_with_its_witness() {
     for (witness, freed) in [(Witness::None, false), (Witness::Kept, true)] {
         let meta = surfacing_invalid_read().await;
-        let fills = meta.backends.get("alpha").expect("alpha").list_fills();
+        let fills = meta
+            .backends
+            .for_test()
+            .get("alpha")
+            .expect("alpha")
+            .list_fills();
         let wire = signed(&meta, ("read", json!({})), ctx(&AllowAll), witness).await;
         assert_eq!(wire["error"]["code"], -32601, "premise: absent: {wire}");
-        let alpha = meta.backends.get("alpha").expect("alpha");
+        let alpha = meta.backends.for_test().get("alpha").expect("alpha");
         assert_eq!(alpha.list_fills(), fills, "premise: nothing listed");
         assert_eq!(nonce_is_free(&meta), freed, "witness kept: {freed}");
         assert!(!nonce_is_free(&meta), "the nonce was given back twice");
@@ -385,7 +390,7 @@ async fn a_refusal_after_catalogue_collection_keeps_the_nonce() {
     ];
     for (name, arguments) in cases {
         let (meta, calls) = collecting_then_refused();
-        let alpha = meta.backends.get("alpha").expect("alpha");
+        let alpha = meta.backends.for_test().get("alpha").expect("alpha");
         assert_eq!(alpha.list_fills(), 0, "premise: {name}: alpha is cold");
         let wire = signed(&meta, (name, arguments), ctx(&AllowAll), Witness::Kept).await;
         assert_eq!(

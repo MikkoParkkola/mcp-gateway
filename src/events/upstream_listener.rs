@@ -434,6 +434,10 @@ impl UpstreamListeners {
     /// replaced backend is judged live (design r3 L4, MIK-7897 LIFE.3b).
     fn answering(&self, backend: &str) -> Option<Arc<Shared>> {
         let entry = self.backends.lock().get(backend).cloned()?;
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Background: the events source watches backends; no caller request"
+        )]
         let now = self.registry.get(backend);
         let current = entry.ledger();
         // Replaced: the ledgers map holds another instance, or the entry has
@@ -459,6 +463,10 @@ impl UpstreamListeners {
 
     /// Whether a registered backend called `name` exists.
     pub(crate) fn knows(&self, name: &str) -> bool {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Background: the events source watches backends; no caller request"
+        )]
         self.registry.get(name).is_some()
     }
 
@@ -481,6 +489,10 @@ impl UpstreamListeners {
                 Verdict::Deliver | Verdict::Skip => Ok(()),
             };
         }
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Background: the events source watches backends; no caller request"
+        )]
         let Some(found) = self.registry.get(backend) else {
             return Ok(());
         };
@@ -553,6 +565,10 @@ impl UpstreamListeners {
     /// The backend's ledger, fresh when the registry holds another `Backend`
     /// than the one it was made for.
     fn ledger(&self, backend: &str) -> Arc<Mutex<Ledger>> {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Background: the events source watches backends; no caller request"
+        )]
         let current = self
             .registry
             .get(backend)

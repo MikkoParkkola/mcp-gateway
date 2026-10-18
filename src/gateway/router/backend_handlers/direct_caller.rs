@@ -372,7 +372,11 @@ pub(super) fn route<'a>(
     key: Option<String>,
     envelope: &Envelope,
 ) -> Result<Route<'a>, Rejection> {
-    let Some(backend) = state.backends.get(name) else {
+    let Some(backend) = super::super::backend_choke::backend_for(
+        state,
+        crate::gateway::authz::BackendGrant::of(caller.client.as_ref()),
+        name,
+    ) else {
         return Err(backend_not_found(name));
     };
 
