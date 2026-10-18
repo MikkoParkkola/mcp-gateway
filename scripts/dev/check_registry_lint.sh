@@ -19,10 +19,18 @@
 # line, nothing else anywhere (the clean control: no unclassed production
 # read), no unresolved config path, and a clean build. The checker is proven
 # on synthetic diagnostics first. CARGO=spark-cargo runs the passes on Spark.
+#
+# Warm cache: verified on clippy 1.99 (2026-10-18, Spark) that a change of
+# CLIPPY_CONF_DIR alone re-lints a crate an earlier plain clippy pass left
+# fresh, so the ban steps after CI's and pre-push's ordinary clippy are not
+# cache replays. Rerun `--cache-probe` (manual, not in CI) when the toolchain
+# pin changes: a plain pass warms the cache, then the dev ban pass must still
+# report every plant.
 set -euo pipefail
 
-if [ "${1:-}" != "--self-test" ]; then
-  echo "usage: $0 --self-test" >&2
+action=${1:-}
+if [ "$action" != "--self-test" ] && [ "$action" != "--cache-probe" ]; then
+  echo "usage: $0 --self-test | --cache-probe" >&2
   exit 2
 fi
 
@@ -214,6 +222,8 @@ fn release_compound(registry: &BackendRegistry) {
     let _ = registry.all(); // RELEASE release_compound
 }
 
+// Documents scope, cannot go red: no pass compiles cfg(test). The ban's reach
+// is the passes' target selection (`--lib --bins`), not this config.
 #[cfg(test)]
 mod tests {
     fn reads(registry: &crate::backend::BackendRegistry) {
@@ -244,5 +254,19 @@ run_pass() { # mode, extra cargo args...
   ) > "$out" 2> "$scratch/clippy-$mode.stderr" || rc=$?
   python3 -I "$checker" "$mode" "$out" "$scratch/$plant" "$plant" "$rc" "$scratch/clippy-$mode.stderr"
 }
+
+if [ "$action" = "--cache-probe" ]; then
+  # The same lint flags as run_pass: clippy re-lints on a flag change, which
+  # would make the probe pass for the wrong reason.
+  (
+    cd "$scratch"
+    CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$root/target}" \
+      ${CARGO:-cargo} clippy --lib --all-features --quiet -- \
+      -D warnings -W clippy::disallowed_methods --cap-lints warn
+  ) > "$tmp/warm.log" 2>&1 || { cat "$tmp/warm.log" >&2; echo "check_registry_lint: warm-up pass failed" >&2; exit 1; }
+  run_pass dev
+  echo "check_registry_lint: cache probe ok: a CLIPPY_CONF_DIR change re-lints a warm cache"
+  exit 0
+fi
 run_pass dev
 run_pass release --release
