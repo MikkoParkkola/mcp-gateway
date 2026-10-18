@@ -48,6 +48,7 @@ src/config/log_once_tests.rs
 src/config/remote_provenance_posture_tests.rs
 src/config/secret_file_ref_tests.rs
 src/config/strict_keys.rs
+src/config/strict_keys_tests.rs
 src/config/tests/error_budget.rs
 src/config/tests/load_error.rs
 src/config/tests/loading.rs
