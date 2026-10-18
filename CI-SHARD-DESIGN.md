@@ -49,8 +49,10 @@ so no two test processes share a host; within a shard the process model is today
   - Lib B: `cargo test --all-features --lib -- --skip gateway:: <skips>`
 - **Integration split:** cargo `--test` takes Unix globs; `'[a-l]*'` and `'[!a-l]*'` are exact complements.
   First letters of the 217 targets: a-l is 74 files, the rest is 143 (93 of them `m*`). Rebalance the class from the per-binary times.
-  - Int A: `cargo test --all-features --bins --test '[a-l]*' -- <skips>`
-  - Int B: `cargo test --all-features --test '[!a-l]*' -- <skips>`, plus doctests and examples where the OS ran them
+  - Int A: `cargo test --all-features --no-fail-fast --bins --test '[a-l]*' -- <skips>`
+  - Int B: `cargo test --all-features --no-fail-fast --test '[!a-l]*' -- <skips>`, then (Linux/macOS only)
+    `cargo test --all-features --no-fail-fast --doc` and `cargo build --all-features --examples`
+  - Lib shards also carry `--no-fail-fast` (several lib binaries: `--lib` is one, but the flag is uniform).
 - **Compile splits too:** lib shards build only the lib-test target; integration shards build the lib (non-test),
   the bins and their own tests. That is the only lever on macOS's 38 min compile.
 
@@ -64,18 +66,30 @@ The test_ports PR stays worth doing for the Spark gate, but off this critical pa
 
 ## Plan
 
-**Stage 0: probes (throwaway draft PR, no merge).**
-- P0a, macOS: run `cargo test --all-features --no-run --timings`, sampling `vm_stat`, `sysctl vm.swapusage`
-  and peak rustc RSS every 30 s. Repeat with `CARGO_BUILD_JOBS=2`, and once on `macos-15-intel` (4 cores, 14 GB).
-  Upload `cargo-timing.html`. Decides M1 vs M2 vs M3 below.
-  If the lib-test target alone takes more than ~25 min to compile, no target split meets the threshold.
-  Only a runner change or shrinking that target would.
+**Stage 0: probes (throwaway draft PR, no merge). Route B chosen (MIK-8482).**
+- P0-glob (seconds, first): `cargo test --all-features --test '[a-l]*' --no-run` and `'[!a-l]*'`, with the
+  `Executable` lines captured from each, checked against `cargo metadata` test targets. Pass = both sets non-empty,
+  disjoint, and their union equals every `kind: test` target. Cargo documents glob support for `--test`
+  (doc.rust-lang.org/cargo/commands/cargo-test.html, target selection). This step is the test that `[!..]` negation works.
+- P0a, macOS:
+  - First, cold and isolated: `cargo test --all-features --lib --no-run --timings` in a fresh job, deps only from the cache.
+    This is the lib-test compile wall that the Lib shards inherit.
+  - Then the full `--no-run --timings`, sampling `vm_stat`, `sysctl vm.swapusage` and peak rustc RSS every 30 s.
+  - Repeat with `CARGO_BUILD_JOBS=2`, and once on `macos-15-intel`. Upload `cargo-timing.html`.
+  - If the lib-test target alone takes more than ~25 min to compile, no target split meets the threshold.
+    Only a runner change or shrinking that target would.
 - P0b, Linux, Windows **and macOS**, 5 runs each at one SHA. It runs the route-B shard commands, with each OS job's
   real exclusions:
   - Linux and macOS: `--skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst` (ci.yml:596, :613).
   - Windows: `--skip mik_7479_full_burst` (ci.yml:533).
-  - Pass = 0 failures, and on every run the summed per-shard passed+ignored equals that OS's unsharded baseline
-    (Linux: 14,543 passed, 42 ignored).
+  - Baselines are recorded **per shard and per step**, on all three OSes at the probe SHA: the suite step,
+    doctests, UPGRADING (Linux), and the privileged rows (Windows). Parity is checked per selection, never as one sum:
+    - the suite-step shards sum to the unsharded suite step;
+    - each auxiliary step is compared with its own unsharded value.
+    This avoids double counting.
+  - Pass = 0 failures in all 5 runs, and per-selection counts equal to the unsharded run each time
+    (Linux suite reference from PR 3930: 14,543 passed, 42 ignored).
+  - Output: the per-shard selected-count table (the floors for Stage 1) and per-shard wall times.
   - If route A is chosen, the same probe runs `cargo nextest` with the same exclusions as a filterset, after the
     test_ports PR has merged. It also measures cross-binary overlap (f24, mik_7479, mik_7212, admission cap,
     gateway spawns) and Windows spawn cost.
@@ -88,6 +102,8 @@ The test_ports PR stays worth doing for the Spark gate, but off this critical pa
 - Windows: 4 shards. The lib shards take about 14 + 9 min; integration about 12 + 7. Expected **~24 min (I)**.
   Each shard compiles for itself, so no archive and no new handoff. Doctests stay out on Windows, as today (`--tests`).
   The privileged rows (`--lib --ignored win_privileged::`) run in Windows Lib A, after its suite, with `!cancelled()`.
+  Every Windows shard runs "Allow symlink creation" before its suite, because the W-T6 no-follow rows can land in any shard.
+  "The debug exe starts" runs in Windows Int A, which builds `--bins`, right after that shard's build.
 
 **Stage 2: macOS, target-filtered (not compile-minimal); threshold set after P0a.**
 - **macOS Lib A / Lib B** (the lib split above) each compile the lib-test target and run half of the 790 s.
@@ -100,6 +116,11 @@ The test_ports PR stays worth doing for the Spark gate, but off this critical pa
   - M3: Intel runner, which needs an operator decision because it loses arm64 coverage.
 - 4 macOS jobs per PR against the cap of 5 shared by every PR in flight: a second PR queues its macOS work.
   Merging Int A into Int B gives 3 jobs if queueing dominates.
+- **Calibrated projection** (published in the Stage 0 report, before Stage 2 is built):
+  macOS wall = max over shards of (deps ~1.3 + that shard's P0a compile + its P0b run).
+  The 3-job variant is used when either holds:
+  - queue time for macOS shards exceeds 5 min on 2 of the 3 threshold runs; or
+  - the projected Int A + Int B merged wall stays ≤ 30 min.
 
 ## Required names kept (exact) and the aggregate rule
 
@@ -113,7 +134,8 @@ Job keys `test`, `windows-check` and `macos-check` and names `Tests`, `Windows c
 - `macOS shard 1/4..4/4`. `.git/lead-mon/guarded_merge.sh:14-15` excludes macOS only by EXACT `$1!="macOS check"`.
   So the macOS shards would be waited on, and counted as failures, without the `macos` flag.
 - The plan changes both awk filters to `$1 !~ /^macOS /`, with a self-test: fixture `gh pr checks` output in which a
-  pending or failing `macOS shard 2/4` neither blocks nor fails without `macos`, and does both with it.
+  pending or failing `macOS shard 2/4` neither blocks nor fails without `macos`, and does both with it. The same fixture
+  asserts that the `macOS check` aggregate behaves exactly as today in both flag modes.
 - The script lives outside the repo, so its change ships alongside this one (lead-mon owner) and lands before the first sharded PR.
 - An exact-match guard (new, in `test_docs_only_gating.py`) pins the three aggregate names and asserts that no shard name equals one of them.
 
@@ -126,8 +148,10 @@ Job keys `test`, `windows-check` and `macos-check` and names `Tests`, `Windows c
   each OS's shard matrix forms complement pairs; the union of target flags equals the original command's targets
   (Linux/macOS: lib, bins, tests, doc, examples; Windows: `--tests`); and every shard repeats that OS's exact skip list.
 - Every shard also fails if libtest reports `running 0 tests` across all its binaries. That catches a broken filter, not imbalance.
-- Muse asked for a count artifact; it is not needed: complement pairs cannot drop a test, and an artifact adds a handoff
-  that `test_check_tag_manifest.py:2866` must inventory. Each shard still writes its passed/ignored counts to the step summary for audit.
+- **Per-shard selected-count floor (muse r2 HIGH).** Each shard step sums libtest's `running N tests` lines and fails
+  when N is below that shard's floor. Floors are written as literals in the matrix (`floor:`), seeded from the P0b
+  minimum. A PR that deletes tests lowers the floor in the same diff, where review sees it. No artifact and no handoff.
+  Each shard also writes passed/ignored to the step summary.
 
 **Aggregate mutation cases (test plan):** an evaluator over the aggregate's `if:` plus body, fed synthetic `needs` results.
 - one shard `failure` → red
@@ -144,8 +168,15 @@ Job keys `test`, `windows-check` and `macos-check` and names `Tests`, `Windows c
 - `scripts/release/check_macos_exclusions.py:380`: reads `--skip` inside `macos-check`. It moves to the macOS shard job,
   and must ignore the `--skip gateway::` complement filter. Otherwise that filter reads as a macOS exclusion.
 - `scripts/ci/check-pick-then-bind.py:169`: untouched under route B (no `nextest` in workflows); under route A, the test_ports PR first.
-- `scripts/release/test_windows_job_scope.py`: exact `cargo test --all-features --tests --no-fail-fast` in windows-check.
-- `scripts/release/test_check_tag_manifest.py:2840`: the same for Windows. :2866 sets artifact handoff retention = HANDOFF_RETENTION_DAYS.
+- `scripts/release/test_windows_job_scope.py`: rewritten to read the `windows-shards` matrix. It asserts:
+  - the shards are exactly {Lib A, Lib B, Int A, Int B};
+  - Lib A/Lib B are `--lib -- gateway::` / `--lib -- --skip gateway::`, and Int A/Int B are `--bins --test '[a-l]*'` / `--test '[!a-l]*'`;
+  - every shard has `--all-features --no-fail-fast` and exactly one `--skip mik_7479_full_burst`, with no other skip;
+  - the union of shard targets equals `--tests`.
+- `scripts/release/test_check_tag_manifest.py:2840`: the `cargo test --all-features --tests` single-command match becomes
+  a check over the `windows-shards` steps. Every shard's skip list is exactly `["mik_7479_full_burst"]`, and no skip is a
+  substring of `ac_mrtr_7b_every_call_reaches_one_terminal_frame`, so the per-PR burst property still runs on Windows.
+  :2866 is unchanged (no new handoff).
 - `test_throwaway_routing.py` requires the inverse guard on every new job. `check-hosted-runners.sh` accepts literal labels / `matrix.os` only.
 - `test_workflow_wiring_mutations.py` anchors on name + runs-on.
 
