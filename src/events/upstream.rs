@@ -248,7 +248,7 @@ mod tests {
     }
 
     fn backend(yaml: &str) -> BackendConfig {
-        serde_yaml::from_str(yaml).expect("backend config")
+        crate::yaml::from_str(yaml).expect("backend config")
     }
 
     const SSE: Option<Judged> = Some(Judged::Refused(Ineligible::SseHandshake));
@@ -313,7 +313,7 @@ mod tests {
     /// The refused set leaves the unresolved out; the judged set has both.
     #[test]
     fn only_definite_refusals_are_ineligible() {
-        let config: Config = serde_yaml::from_str(
+        let config: Config = crate::yaml::from_str(
             "backends:\n  u:\n    http_url: http://h/mcp\n  \
              s:\n    http_url: http://h/mcp\n    streamable_http: false\n",
         )
@@ -361,7 +361,7 @@ mod tests {
              b:\n    http_url: http://h/mcp\n    streamable_http: true\n    account: theirs\n  \
              c:\n    http_url: http://h/mcp\n    streamable_http: true\n    account: ours\n  \
              off:\n    http_url: http://h/sse\n    enabled: false\n";
-        let config: Config = serde_yaml::from_str(yaml).expect("config");
+        let config: Config = crate::yaml::from_str(yaml).expect("config");
         crate::config::account_bindings::compile(&config).expect("the fixture compiles");
         for multi_user in [false, true] {
             let refused = ineligible_backends(&config, multi_user, &|_| None);
