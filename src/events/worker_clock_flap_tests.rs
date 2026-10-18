@@ -108,7 +108,14 @@ async fn a_last_window_read_that_fails_once_sends_nothing() {
 async fn the_delivery_worker_outlives_a_clock_before_1970() {
     use std::sync::atomic::Ordering::{Release, SeqCst};
     let dir = tempfile::tempdir().expect("dir");
-    let hub = EventsHub::open(&private_callbacks(), dir.path()).expect("hub");
+    // The callback answers nothing, so an attempt fails; one attempt only, so
+    // no jittered retry can add a second send before the count is read
+    // (MIK-8486).
+    let config = crate::config::EventsConfig {
+        retry_max_attempts: 1,
+        ..private_callbacks()
+    };
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
     let services = std::sync::Arc::new(logged_services(dir.path()));
     offer(&hub, &[NAME]);
     let (port, accepted) = counting_callback().await;
