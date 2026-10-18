@@ -169,15 +169,18 @@ impl MetaMcp {
     /// capability on an account that is not a declared `shared` descriptor.
     /// A caller with no view meets the account's answer first, so the
     /// cooldown cannot say the tool exists.
+    ///
+    /// MIK-8387: read through the caller's view. A target outside it is not
+    /// a deferred one, so the cooldown cannot meet that caller first.
     pub(in crate::gateway::meta_mcp) fn defers_error_rate_cooldown(
         &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
         server: &str,
         tool: &str,
     ) -> bool {
-        self.backends
-            .get(server)
+        view.scoped_get(server)
             .is_some_and(|backend| backend.keeps_per_user_catalogues())
-            || self.account_mints_per_caller(server, tool)
+            || self.account_mints_per_caller(view, server, tool)
     }
 
     /// MIK-8439: [`Self::admit_target`] after the credential step, for every

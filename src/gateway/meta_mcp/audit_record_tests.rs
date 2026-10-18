@@ -459,7 +459,7 @@ async fn a_peer_error_code_is_not_a_gateway_denial() {
     for code in [-32001, -32004] {
         let dir = tempfile::tempdir().unwrap();
         let meta = meta(Ok(ok_result()), &dir);
-        let backend = meta.backends.get("alpha").expect("alpha");
+        let backend = meta.backends.for_test().get("alpha").expect("alpha");
         backend.set_transport_for_test(Arc::new(PeerError(code)));
         let who = api_key_caller();
         let _ = meta

@@ -50,7 +50,8 @@ impl MetaMcp {
             trace_id: "",
             caller_key: None,
         };
-        if self.defers_error_rate_cooldown(server, tool) {
+        let view = self.scoped(caller.scope().authorizer.backend_grant());
+        if self.defers_error_rate_cooldown(&view, server, tool) {
             self.admit_named_target(&call)
         } else {
             self.admit_target(&call)
@@ -59,7 +60,9 @@ impl MetaMcp {
             self.profile_refusal_as_undefined((server, tool), session_id, refusal)
         })?;
         // #2445: a withheld tool is refused here, ahead of every replay layer.
-        let backend = self.backends.get(server);
+        let backend = self
+            .scoped(caller.scope().authorizer.backend_grant())
+            .scoped_get(server);
         match backend.and_then(|b| b.blocked_tool_refusal(None, tool)) {
             Some(refusal) => Err(Error::Protocol(refusal)),
             None => Ok(()),

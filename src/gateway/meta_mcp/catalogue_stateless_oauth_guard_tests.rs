@@ -168,6 +168,7 @@ async fn a_required_stateless_backend_is_admitted_and_fetched_on_the_callers_slo
         .caller_credential_for_identity(
             &meta
                 .backends
+                .for_test()
                 .get(PLAIN_STATELESS_BACKEND)
                 .expect("the plain stateless backend is registered"),
             crate::identity_propagation::CallerProof::Verified(&alpha_id),

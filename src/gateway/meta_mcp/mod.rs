@@ -174,7 +174,7 @@ pub(crate) const LOCAL_OPERATOR_PRINCIPAL: &str = "\0local-operator.v1";
 // over their product would have more states than the struct has fields.
 #[allow(clippy::struct_excessive_bools)]
 pub struct MetaMcp {
-    pub(super) backends: Arc<BackendRegistry>,
+    pub(super) backends: scoped_backends::Registry,
     pub(super) change_feed: std::sync::OnceLock<crate::gateway::ChangeFeed>,
     /// MCP Events hub (MIK-7630); unset while events are off or on stdio.
     pub(super) events: std::sync::OnceLock<Arc<crate::events::EventsHub>>,
@@ -636,6 +636,8 @@ mod test_callers;
 pub(super) use test_callers::{anonymous_caller, callback_capability, identified_caller};
 
 #[cfg(test)]
+mod boundary_pins;
+#[cfg(test)]
 pub(super) mod grant_audit_fixture;
 #[cfg(test)]
 mod grant_decision_audit_tests;
@@ -655,6 +657,8 @@ mod oracle_audit_tests;
 #[cfg(test)]
 #[path = "policy_epoch_tests.rs"]
 mod policy_epoch_tests;
+#[cfg(test)]
+mod scoped_backends_view_tests;
 /// MIK-8356: a per-user call is judged by the caller's own catalogue slot.
 #[cfg(test)]
 pub(crate) mod slot_verdict_fixture;

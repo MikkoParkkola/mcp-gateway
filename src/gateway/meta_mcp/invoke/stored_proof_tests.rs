@@ -50,7 +50,7 @@ fn connected() -> (DirectAccountGateway, MetaMcp) {
 /// Carry the operator's real resolution for `(BACKEND, TOOL)`, as the
 /// route stage's caller verdict leaves it, with `fill_error`.
 async fn carry(meta: &MetaMcp, fill_error: Option<crate::Error>) {
-    let backend = meta.backends.get(BACKEND).expect("the backend");
+    let backend = meta.backends.for_test().get(BACKEND).expect("the backend");
     let resolved = meta
         .resolve_dispatch(
             (BACKEND, TOOL),
@@ -97,6 +97,7 @@ fn shared_tools(meta: &MetaMcp, name: &str) {
     }))
     .expect("a tool");
     meta.backends
+        .for_test()
         .get(BACKEND)
         .expect("the backend")
         .store_shared_tools_for_test(vec![tool]);
@@ -182,7 +183,7 @@ async fn e9u_an_unavailable_repeat_answers_only_a_lacked_target() {
     let (_gateway, meta) = connected();
     let task = finished();
     let account = meta
-        .target_account(BACKEND, TOOL)
+        .target_account(&meta.unscoped_for_test(), BACKEND, TOOL)
         .expect("an account target");
     let stored = stored_on(&task, vec![target()]);
     let run = |lacked: bool, fill_error: Option<crate::Error>| {

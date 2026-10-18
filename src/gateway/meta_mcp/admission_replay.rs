@@ -91,8 +91,16 @@ impl MetaMcp {
     /// for an account already known live: the lift reuses the route-stage
     /// resolution, so serving here would save nothing measurable (lead
     /// ruling on M14).
-    pub(crate) fn stored_replay_defers(&self, server: &str, tool: &str) -> bool {
-        self.mints_per_caller(server, tool)
+    pub(in crate::gateway) fn stored_replay_defers(
+        &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
+        server: &str,
+        tool: &str,
+    ) -> bool {
+        // MIK-8387: a target absent for this grant (out of scope or
+        // unregistered) never serves a stored result at admission; the live
+        // dispatch answers it as absent, the same as for any other call.
+        view.absence(server).is_some() || self.mints_per_caller(view, server, tool)
     }
 
     /// Whether dispatching `(server, tool)` mints a per-caller credential
@@ -102,11 +110,15 @@ impl MetaMcp {
     /// A capability account declared `shared` dispatches under the gateway's
     /// static credential (`AccountCredential::Legacy`), so it mints nothing
     /// per caller and has no binding a proof could show (MIK-8451).
-    pub(crate) fn mints_per_caller(&self, server: &str, tool: &str) -> bool {
-        self.account_mints_per_caller(server, tool)
-            || self
-                .backends
-                .get(server)
+    pub(in crate::gateway) fn mints_per_caller(
+        &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
+        server: &str,
+        tool: &str,
+    ) -> bool {
+        self.account_mints_per_caller(view, server, tool)
+            || view
+                .scoped_get(server)
                 .is_some_and(|backend| backend.identity_propagation_config().is_some())
     }
 
@@ -124,8 +136,9 @@ impl MetaMcp {
         if let Some(answer) = self.first_unproven(id, tool_name, targets, caller).await {
             return Some(answer);
         }
+        let view = self.scoped(caller.scope().authorizer.backend_grant());
         targets.iter().find_map(|&(server, tool)| {
-            let refused = self.defers_error_rate_cooldown(server, tool);
+            let refused = self.defers_error_rate_cooldown(&view, server, tool);
             refused
                 .then(|| self.admit_enabled_capability(server, tool).err())
                 .flatten()
@@ -135,13 +148,19 @@ impl MetaMcp {
 
     /// Whether `server`'s `tool` dispatches under an account that is not a
     /// declared `shared` descriptor: a credential per caller.
-    pub(crate) fn account_mints_per_caller(&self, server: &str, tool: &str) -> bool {
+    pub(in crate::gateway) fn account_mints_per_caller(
+        &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
+        server: &str,
+        tool: &str,
+    ) -> bool {
         use crate::personal_accounts::config::DescriptorMode;
-        self.target_account(server, tool).is_some_and(|account| {
-            self.account_strategies
-                .declared(&account.0)
-                .is_none_or(|declared| declared.mode != DescriptorMode::Shared)
-        })
+        self.target_account(view, server, tool)
+            .is_some_and(|account| {
+                self.account_strategies
+                    .declared(&account.0)
+                    .is_none_or(|declared| declared.mode != DescriptorMode::Shared)
+            })
     }
 
     /// STORED.2 site 1: serve `response` when its account is proven live,
@@ -191,7 +210,11 @@ impl MetaMcp {
         else {
             return Some((response, audit));
         };
-        if !self.stored_replay_defers(&target.server, &target.tool) {
+        if !self.stored_replay_defers(
+            &self.scoped(caller.scope().authorizer.backend_grant()),
+            &target.server,
+            &target.tool,
+        ) {
             return Some((response, audit));
         }
         let id = response.id.clone();

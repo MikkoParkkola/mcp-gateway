@@ -36,7 +36,9 @@ impl MetaMcp {
         if let Some(error) = super::super::visible::take_resolution_error(server, tool) {
             return Err(error);
         }
-        let backend = self.backends.get(server);
+        let backend = self
+            .scoped(caller.scope().authorizer.backend_grant())
+            .scoped_get(server);
         let proof = CallerProof::new(caller.verified_identity, caller.provenance());
         let resolved = self
             .resolve_dispatch(

@@ -1,0 +1,69 @@
+# MIK-8387 T1b: every production allow of the registry ban (file, fn, kind, class, banned names inside with counts).
+src/backend/registry.rs	resolve_unwarmed	statement	Lifecycle	getx1
+src/capability/backend_listing.rs	announce_listing_change	statement	Lifecycle	nudge_cataloguex1
+src/capability/backend_listing.rs	finish_initial_scan	statement	Lifecycle	nudge_catalogue_scannedx1
+src/clock.rs	-	module	the one place the wall clock is read	
+src/config_reload/grant_reload.rs	reload_identity_grants	statement	Lifecycle	allx1
+src/config_reload/mod.rs	apply_patch	statement	Lifecycle	getx1
+src/config_reload/mod.rs	apply_patch	statement	Lifecycle	getx1
+src/config_reload/mod.rs	apply_patch	statement	Lifecycle	registerx1
+src/config_reload/mod.rs	apply_patch	statement	Lifecycle	registerx1
+src/config_reload/mod.rs	apply_patch	statement	Lifecycle	removex1
+src/config_reload/reload_context.rs	load_off_worker	statement	Lifecycle	reload_read_slotx1
+src/config_reload/reload_context.rs	lock_reload_within	statement	Lifecycle	lock_reloadx1
+src/config_reload/reload_context.rs	new	statement	Lifecycle	enforce_destinationsx1
+src/config_reload/reload_context.rs	reload_outcome	statement	Lifecycle	lock_reloadx1
+src/config_reload/reload_warm_hook.rs	report_registered	statement	Lifecycle	resolve_unwarmedx1
+src/config_reload/watcher.rs	start_with_hook	statement	Lifecycle	enforce_destinationsx1
+src/events/fanout.rs	reconcile_catalogue_after	statement	Background	with_membershipx1
+src/events/operational_source.rs	install_operational_source	statement	Background	observe_breakersx1
+src/events/rpc.rs	judged_backends	statement	Discovery	getx1
+src/events/rpc.rs	resolve_upstream	statement	Discovery	getx1
+src/events/upstream.rs	detected_in	statement	Background	getx1
+src/events/upstream_listener.rs	answering	statement	Background	getx1
+src/events/upstream_listener.rs	authorize_uri	statement	Background	getx1
+src/events/upstream_listener.rs	knows	statement	Background	getx1
+src/events/upstream_listener.rs	ledger	statement	Background	getx1
+src/events/upstream_session.rs	registered_anew	statement	Background	getx1
+src/events/upstream_session.rs	run	statement	Background	getx1
+src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_headers	statement	Discovery	resolve_propagation_credentialx1
+src/gateway/meta_mcp/scoped_backends.rs	absence	statement	Visibility	getx1
+src/gateway/meta_mcp/scoped_backends.rs	all_for	statement	Lifecycle	allx1
+src/gateway/meta_mcp/scoped_backends.rs	get_for	statement	Lifecycle	getx1
+src/gateway/meta_mcp/scoped_backends.rs	membership_for	statement	Lifecycle	with_membershipx1
+src/gateway/meta_mcp/scoped_backends.rs	nudge_catalogue_for	statement	Lifecycle	nudge_cataloguex1
+src/gateway/meta_mcp/scoped_backends.rs	scoped_get	statement	Visibility	getx1
+src/gateway/meta_mcp/scoped_backends.rs	statuses_for	statement	Lifecycle	statusesx1
+src/gateway/meta_mcp/scoped_backends.rs	subscribe_started_for	statement	Lifecycle	subscribe_startedx1
+src/gateway/server/background.rs	spawn_idle_reaper	statement	Background	allx1
+src/gateway/server/construct.rs	new_with_env	statement	Lifecycle	enforce_destinationsx1
+src/gateway/server/construct.rs	new_with_env	statement	Lifecycle	registerx1
+src/gateway/server/events_wiring.rs	install	statement	Lifecycle	allx1
+src/gateway/server/run.rs	run	statement	Lifecycle	set_change_feedx1
+src/gateway/server/run.rs	run	statement	Lifecycle	stop_allx1
+src/gateway/server/run_steps.rs	managed_recovery_adapters	statement	Lifecycle	getx1
+src/gateway/server/run_steps.rs	start_capability_watcher	statement	Lifecycle	catalogue_hookx1
+src/gateway/server/stdio_loop.rs	run_stdio_on	statement	Lifecycle	catalogue_hookx1
+src/gateway/server/stdio_loop.rs	run_stdio_on	statement	Lifecycle	set_change_feedx1
+src/gateway/server/stdio_shutdown.rs	stdio_teardown	statement	Lifecycle	stop_allx1
+src/gateway/server/support.rs	log_startup_banner	statement	Lifecycle	allx1
+src/gateway/server/support.rs	log_startup_banner	statement	Lifecycle	allx1
+src/gateway/server/tools_changed.rs	decide_on	statement	Background	getx1
+src/gateway/server/tools_changed.rs	decide_on	statement	Background	getx1
+src/gateway/server/warmstart.rs	build_warm_start_list	statement	Background	allx1
+src/gateway/server/warmstart.rs	warm_locked	statement	Background	getx1
+src/gateway/server/warmstart.rs	warm_start_until_cached	statement	Background	getx1
+src/gateway/server/warmstart.rs	warm_start_until_cached	statement	Background	getx1
+src/gateway/server/warmstart.rs	warm_start_until_cached	statement	Background	getx1
+src/gateway/streaming_session.rs	subscribe_backend	statement	Background	getx1
+src/gateway/ui/backends.rs	revive_backend	statement	Admin	getx1
+src/gateway/ui/control_plane/snapshot.rs	local_runtime_snapshot	statement	Admin	allx1
+src/gateway/ui/control_plane/snapshot.rs	local_shadow_radar	statement	Admin	allx1
+src/gateway/ui/dashboard.rs	dashboard_handler	statement	Admin	allx1
+src/gateway/ui/mod.rs	config	statement	Admin	allx1
+src/gateway/ui/mod.rs	status	statement	Admin	allx1
+src/gateway/ui/mod.rs	tools	statement	Admin	allx1
+src/home_dir.rs	-	item	the one place the platform lookups are called	
+src/home_dir.rs	-	item	the one place the platform lookups are called	
+src/home_dir.rs	-	item	the one place the platform lookups are called	
+src/home_dir.rs	-	item	the one place the platform lookups are called	

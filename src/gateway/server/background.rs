@@ -220,6 +220,7 @@ pub(super) fn spawn_health_loop(
         loop {
             tokio::select! {
                 () = ticker.tick() => {
+                    #[allow(clippy::disallowed_methods, reason = "Background: background work over the registered backends; no caller request")]
                     for backend in backends.all() {
                         // Probe running backends (liveness) AND backends whose
                         // breaker is tripped (recovery). The old guard only
@@ -284,6 +285,10 @@ pub(super) fn spawn_idle_reaper(
                 tick.await;
             }
 
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "Background: background work over the registered backends; no caller request"
+            )]
             for backend in backends.all() {
                 let closed = backend.evict_idle_per_user_entries(PER_USER_IDLE_TTL);
                 if closed > 0 {

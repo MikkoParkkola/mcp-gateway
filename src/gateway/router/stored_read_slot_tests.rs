@@ -110,13 +110,18 @@ fn alpha_lacks(gw: &Gateway) {
     .expect("a tool");
     gw.meta
         .backends
+        .for_test()
         .get(BACKEND)
         .expect("the backend")
         .store_per_user_tools_for_test(BINDING, vec![other]);
 }
 
 fn backend(gw: &Gateway) -> std::sync::Arc<crate::backend::Backend> {
-    gw.meta.backends.get(BACKEND).expect("the backend")
+    gw.meta
+        .backends
+        .for_test()
+        .get(BACKEND)
+        .expect("the backend")
 }
 
 /// T8: alpha's own warm slot no longer lists the tool (the shared slot still
@@ -504,6 +509,9 @@ async fn a_withdrawn_cooling_tool_still_answers_absent_after_the_refresh() {
 
 #[path = "stored_read_lease_tests.rs"]
 mod lease;
+
+#[path = "stored_read_excluded_target_tests.rs"]
+mod excluded_target;
 
 /// F4 `admit_target` (MIK-8392): a cold view whose target is under the kill
 /// switch claims nothing — 0 resolutions, no backend traffic — and the read

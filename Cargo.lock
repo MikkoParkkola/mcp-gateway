@@ -1936,6 +1936,7 @@ dependencies = [
  "sha2",
  "shlex",
  "subtle",
+ "syn 2.0.119",
  "tempfile",
  "thiserror",
  "time",

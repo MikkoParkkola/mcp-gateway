@@ -136,6 +136,14 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "writability probe",
     ),
     (
+        "src/gateway/meta_mcp/boundary_pins/allow_pins.rs",
+        "cfg(test) pin reading the registry-ban clippy.toml and pre-push.sh for the MIK-8387 boundary pins; no secret",
+    ),
+    (
+        "src/gateway/meta_mcp/boundary_pins/scan.rs",
+        "cfg(test) source scanner reading the crate's own source for the MIK-8387 boundary pins; no secret",
+    ),
+    (
         "src/gateway/meta_mcp/sealed_hold_guards.rs",
         "cfg(test) source scanner reading the crate's own src/gateway files (MIK-8176 A1); no secret",
     ),

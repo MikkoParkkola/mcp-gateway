@@ -33,8 +33,20 @@ pub(super) enum AccountWrites {
 
 impl MetaMcp {
     /// The account `server`'s `tool` dispatches under, if any.
-    pub(crate) fn target_account(&self, server: &str, tool: &str) -> Option<AccountKey> {
-        if let Some(backend) = self.backends.get(server)
+    ///
+    /// `view` is the reading caller's: a name absent for its grant has no
+    /// account here, so no account of a backend it cannot reach is judged
+    /// (MIK-8387 PR-B).
+    pub(in crate::gateway) fn target_account(
+        &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
+        server: &str,
+        tool: &str,
+    ) -> Option<AccountKey> {
+        if view.absence(server).is_some() {
+            return None;
+        }
+        if let Some(backend) = view.scoped_get(server)
             && backend.identity_propagation_config().is_some()
             && let Some(descriptor) = backend.account_descriptor_id()
         {
@@ -54,12 +66,13 @@ impl MetaMcp {
     /// ([`AccountOutcome::Unavailable`]), never an error.
     pub(super) async fn fill_account_outcomes(
         &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
         targets: &[(&str, &str)],
         caller: CallerProof<'_>,
         writes: AccountWrites,
     ) {
         for &(server, tool) in targets {
-            let Some(account) = self.target_account(server, tool) else {
+            let Some(account) = self.target_account(view, server, tool) else {
                 continue;
             };
             if visible::account_outcome(server, &account).is_some() {
@@ -77,7 +90,7 @@ impl MetaMcp {
                 continue;
             }
             let outcome = self
-                .judge_account((server, tool), &account, caller, writes)
+                .judge_account(view, (server, tool), &account, caller, writes)
                 .await;
             visible::record_account_outcome(server, &account, outcome);
         }
@@ -110,10 +123,16 @@ impl MetaMcp {
         for target in &targets {
             let target = target.as_target();
             let (server, tool) = (target.server, target.tool);
-            if self.backends.get(server).is_some() {
+            if self
+                .scoped(caller.scope().authorizer.backend_grant())
+                .scoped_get(server)
+                .is_some()
+            {
                 continue;
             }
-            let Some(account) = self.target_account(server, tool) else {
+            let Some(account) =
+                self.target_account(&self.scoped(scope.authorizer.backend_grant()), server, tool)
+            else {
                 continue;
             };
             if visible::account_outcome(server, &account).is_some() {
@@ -121,6 +140,7 @@ impl MetaMcp {
             }
             let outcome = self
                 .judge_account(
+                    &self.scoped(scope.authorizer.backend_grant()),
                     (server, tool),
                     &account,
                     scope.caller,
@@ -138,6 +158,7 @@ impl MetaMcp {
     /// read's fill does not, as nothing in that request dispatches.
     async fn judge_account(
         &self,
+        scope_view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
         (server, tool): (&str, &str),
         account: &AccountKey,
         caller: CallerProof<'_>,
@@ -158,7 +179,7 @@ impl MetaMcp {
             // refuse is no view either (as `has_no_view_for`). Only an
             // identity-propagation backend has those rules; a capability
             // account has none.
-            self.backends.get(server).is_some_and(|backend| {
+            scope_view.scoped_get(server).is_some_and(|backend| {
                 backend.identity_propagation_config().is_some()
                     && (self.meta_route_isolation_refused_for_caller(&backend, Some(binding))
                         || !backend.fetch_carries_caller_identity(Some(binding)))

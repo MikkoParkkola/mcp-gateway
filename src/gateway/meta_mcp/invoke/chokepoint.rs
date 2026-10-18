@@ -235,7 +235,13 @@ impl MetaMcp {
             // No gate answers a backend that is not registered: for a caller
             // with no scoped grant its refusal stays the strict one, recorded
             // fail-closed (a scoped key's absent names are S1's, above).
-            _ if self.backends.get(server).is_none() => Err(refusal),
+            _ if self
+                .scoped(scope.authorizer.backend_grant())
+                .scoped_get(server)
+                .is_none() =>
+            {
+                Err(refusal)
+            }
             _ => {
                 // Recorded before every later reader (MIK-8356's caller
                 // verdict included), so a policy-refused target resolves no

@@ -268,6 +268,8 @@ log = "=0.4.34"
 serde_urlencoded = "0.7"
 criterion = { version = "0.8", features = ["html_reports"] }
 jsonschema = { version = "0.56.0", default-features = false }
+# MIK-8387 boundary pins: parse the crate's own source (already in Cargo.lock).
+syn = { version = "2.0.119", features = ["full", "visit"] }
 
 [features]
 default = ["a2a", "webui", "config-export", "cost-governance", "firewall", "discovery", "semantic-search", "tool-profiles", "metrics"]

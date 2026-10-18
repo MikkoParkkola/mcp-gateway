@@ -243,6 +243,10 @@ impl EventsHub {
             );
         }));
         let health = Arc::clone(&source);
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Background: the events source watches backends; no caller request"
+        )]
         backends.observe_breakers(Arc::new(move |change: crate::failsafe::HealthChange| {
             health.emit(
                 HEALTH_CHANGED,

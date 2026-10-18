@@ -43,7 +43,10 @@ impl MetaMcp {
             || !self.admits_backend(backend, scope, session_id)
         {
             Vec::new()
-        } else if let Some(b) = self.backends.get(backend) {
+        } else if let Some(b) = self.backends.get_for(
+            crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility,
+            backend,
+        ) {
             self.listing_snapshot(&b, scope)
                 .map(|(tools, _)| {
                     tools

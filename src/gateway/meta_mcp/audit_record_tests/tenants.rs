@@ -162,6 +162,7 @@ async fn attributed_meta_record_verifies() {
 async fn declare_read_only(meta: &MetaMcp) {
     let alpha = meta
         .backends
+        .for_test()
         .get("alpha")
         .expect("the fixture registers alpha");
     alpha
@@ -359,6 +360,7 @@ async fn a_replayed_peer_error_result_is_recorded_as_a_cached_delivery() {
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let base = meta(Ok(reply_naming("cust-9", "")), &dir);
     base.backends
+        .for_test()
         .get("alpha")
         .expect("alpha")
         .set_transport_for_test(Arc::new(CountedPeerError(Arc::clone(&calls))));

@@ -18,9 +18,12 @@ impl MetaMcp {
         let _ = self.events.set(hub);
     }
 
-    /// The backend registry, for the events backend source's catalogue.
-    pub(crate) fn events_backend_registry(&self) -> Arc<crate::backend::BackendRegistry> {
-        Arc::clone(&self.backends)
+    /// The backend registry, for tests outside `meta_mcp` that inspect a
+    /// registered backend. Production wires the events source from the
+    /// startup registry instead (MIK-8387 PR-B commit 3).
+    #[cfg(all(test, feature = "firewall"))]
+    pub(crate) fn registry_for_test(&self) -> Arc<crate::backend::BackendRegistry> {
+        Arc::clone(self.backends.for_test())
     }
 
     /// Backend `backend`'s tool set changed: an event, when events are on.

@@ -293,6 +293,7 @@ async fn a_bridged_cold_list_401_refreshes_and_releases_the_key() {
     );
     let backend = meta
         .backends
+        .for_test()
         .get("mail")
         .expect("the fixture registers mail");
     dispatches.on_next_call(move || backend.empty_tool_catalogues_for_test());

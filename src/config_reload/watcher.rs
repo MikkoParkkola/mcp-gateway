@@ -180,6 +180,10 @@ impl ConfigWatcher {
         // exists; the reload task's own context then pairs as a no-op.
         {
             let running = live_config.running();
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "Lifecycle: config reload applies the operator's backend set; no caller request"
+            )]
             registry.enforce_destinations(
                 DestinationPolicy::for_posture(running.security.posture),
                 &running.security.hardened.private_backends,

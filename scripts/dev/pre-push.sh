@@ -88,6 +88,18 @@ if [[ -f Cargo.toml ]]; then
   step "cargo clippy --all-targets --no-default-features -D warnings"
   run_cargo "clippy no-default-features" clippy --all-targets --no-default-features --quiet -- -D warnings
 
+  # MIK-8387: production code reaches the backend registry only through
+  # Registry or a classed statement-level allow. Non-test targets only, from
+  # its own config (the repo clippy.toml is untouched); the self-test proves
+  # each entry still resolves and bites.
+  step "registry ban (production targets, both feature sets)"
+  export CLIPPY_CONF_DIR="$REPO_ROOT/scripts/lint/registry-ban"
+  run_cargo "registry ban all-features" clippy --lib --bins --all-features --quiet -- -D warnings
+  run_cargo "registry ban no-default-features" clippy --lib --bins --no-default-features --quiet -- -D warnings
+  unset CLIPPY_CONF_DIR
+  step "registry lint self-test"
+  scripts/dev/check_registry_lint.sh --self-test
+
   step "cargo test --lib"
   run_cargo "cargo test --lib" test --lib --quiet
 fi

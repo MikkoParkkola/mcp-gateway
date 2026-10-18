@@ -140,7 +140,11 @@ async fn a_declared_input_request_passes_the_gateway_gate() {
             &crate::protocol::mrtr::original_request_digest(
                 &format!(
                     "7:booking:{}",
-                    meta.backends.get("booking").expect("registered").instance()
+                    meta.backends
+                        .for_test()
+                        .get("booking")
+                        .expect("registered")
+                        .instance()
                 ),
                 "book_flight",
                 &json!({}),

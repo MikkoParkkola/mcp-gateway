@@ -31,6 +31,7 @@ fn managed() -> (MetaMcp, Custody) {
     }))
     .expect("a tool");
     meta.backends
+        .for_test()
         .get(SERVER)
         .expect("the backend")
         .store_shared_tools_for_test(vec![tool]);
@@ -107,7 +108,7 @@ async fn managed_index_entry_checked_against_current_grant() {
     )
     .await;
     let indexed = expected_identity_key("alice", WORK, SEEDED_REVISION);
-    let backend = meta.backends.get(SERVER).expect("the backend");
+    let backend = meta.backends.for_test().get(SERVER).expect("the backend");
     assert!(
         backend
             .populated_per_user_bindings_for_test()

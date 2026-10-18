@@ -298,7 +298,10 @@ impl MetaMcp {
         caller: &super::MetaMcpCallerContext<'_>,
         session_id: Option<&str>,
     ) {
-        for backend in self.backends.all() {
+        for backend in self
+            .backends
+            .all_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Discovery)
+        {
             if !profile.backend_allowed(&backend.name) {
                 continue;
             }
@@ -523,7 +526,10 @@ impl MetaMcp {
         // Otherwise, look in MCP backends
         let backend = self
             .backends
-            .get(server)
+            .get_for(
+                crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility,
+                server,
+            )
             .ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
 
         // INV-2 (MIK-6742): an isolated backend must be indistinguishable from
@@ -606,7 +612,10 @@ impl MetaMcp {
 
         // MCP backend tools use cached/warm-started snapshots. Stale non-empty
         // snapshots stay visible while a background refresh updates the cache.
-        for backend in self.backends.all() {
+        for backend in self
+            .backends
+            .all_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility)
+        {
             if !profile.backend_allowed(&backend.name) {
                 continue;
             }

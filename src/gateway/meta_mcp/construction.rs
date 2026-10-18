@@ -28,7 +28,7 @@ impl MetaMcp {
         >,
     ) -> Self {
         Self {
-            backends,
+            backends: super::scoped_backends::Registry::new(backends),
             change_feed: std::sync::OnceLock::new(),
             events: std::sync::OnceLock::new(),
             capabilities: RwLock::new(None),

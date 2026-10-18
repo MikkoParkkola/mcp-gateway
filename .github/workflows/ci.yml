@@ -465,6 +465,22 @@ jobs:
       # entry is proven to still bite by planting a read in a scratch copy.
       - name: The clock lint still bites (MIK-8202)
         run: scripts/dev/check_clock_lint.sh --self-test
+      # MIK-8387: production code reaches the backend registry only through
+      # Registry or a classed statement-level allow. Non-test targets only,
+      # from its own config (the repo clippy.toml is untouched). The release
+      # passes cover code under cfg(not(debug_assertions)), which the dev
+      # passes never compile. The self-test proves each config entry still
+      # resolves and bites, in both profiles.
+      - name: Registry ban (MIK-8387)
+        env:
+          CLIPPY_CONF_DIR: ${{ github.workspace }}/scripts/lint/registry-ban
+        run: |
+          cargo clippy --lib --bins --all-features -- -D warnings
+          cargo clippy --lib --bins --no-default-features -- -D warnings
+          cargo clippy --release --lib --bins --all-features -- -D warnings
+          cargo clippy --release --lib --bins --no-default-features -- -D warnings
+      - name: The registry lint still bites (MIK-8387)
+        run: scripts/dev/check_registry_lint.sh --self-test
       # Here because this job is a required Linux check: the futures' depth
       # margin below rustc's recursion limit, which Windows and Kani exceed
       # first (MIK-7678).

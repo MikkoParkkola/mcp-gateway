@@ -152,7 +152,10 @@ impl MetaMcp {
     /// becomes `NoView` even over a stored read's running cold lease
     /// (MIK-8392 d1 F9): intended, the revocation is the newer fact.
     pub(crate) async fn revalidate_caller_slots(&self, caller: CallerProof<'_>) {
-        for backend in self.backends.all() {
+        for backend in self
+            .backends
+            .all_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Discovery)
+        {
             if !backend.keeps_per_user_catalogues() {
                 continue;
             }
@@ -304,11 +307,18 @@ impl MetaMcp {
         {
             return self
                 .backends
-                .get(server)
+                .get_for(
+                    crate::gateway::meta_mcp::scoped_backends::Unscoped::Discovery,
+                    server,
+                )
                 .map_or_else(|| (Vec::new(), false), |backend| (vec![backend], true));
         }
 
-        (self.backends.all(), false)
+        (
+            self.backends
+                .all_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Discovery),
+            false,
+        )
     }
 
     pub(super) async fn refresh_stale_backend_tools(backend: Arc<Backend>) {
@@ -371,6 +381,7 @@ impl MetaMcp {
         };
         let backend = self
             .backends
+            .for_test()
             .get(server)
             .expect("seeded backend is registered");
         let shared = backend

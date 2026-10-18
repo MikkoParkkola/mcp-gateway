@@ -161,6 +161,7 @@ async fn a_spend_refusal_after_a_refresh(slot: Slot) -> Refused {
         refreshes: custody.refreshes(),
         fills: meta
             .backends
+            .for_test()
             .get("mail")
             .expect("fixture backend")
             .list_fills(),

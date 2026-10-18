@@ -95,7 +95,12 @@ async fn g3_i6_index_bounded_by_admission() {
         CLOSED,
         Surfaced::Yes,
     );
-    let backend = fx.meta.backends.get(BACKEND).expect("the backend");
+    let backend = fx
+        .meta
+        .backends
+        .for_test()
+        .get(BACKEND)
+        .expect("the backend");
     // alpha already holds one slot (the fixture opened it); 63 more fill the pool.
     let others: Vec<String> = (1..64).map(|i| format!("p{i}")).collect();
     for subject in &others {
@@ -154,7 +159,12 @@ async fn g3_i7_index_read_has_no_side_effects() {
         CLOSED,
         Surfaced::Yes,
     );
-    let backend = fx.meta.backends.get(BACKEND).expect("the backend");
+    let backend = fx
+        .meta
+        .backends
+        .for_test()
+        .get(BACKEND)
+        .expect("the backend");
     let (mints, lists) = (fx.mints(), fx.caller.lists() + fx.shared.lists());
     let populated = backend.populated_per_user_bindings_for_test();
     let slots = backend.pool_len_for_test();

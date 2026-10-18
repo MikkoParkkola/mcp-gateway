@@ -200,8 +200,9 @@ fn baseline_for(
     session_id: &str,
 ) -> HashMap<String, ViewDigest> {
     let mut names: Vec<String> = state
-        .backends
-        .all()
+        .meta_mcp
+        .registry()
+        .all_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility)
         .iter()
         .map(|b| b.name.clone())
         .collect();

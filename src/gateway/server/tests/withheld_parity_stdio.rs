@@ -92,7 +92,12 @@ async fn twin_with(spec: Spec, configure: impl FnOnce(&mut crate::config::Config
         },
     ))
     .await;
-    let backend = fixture.meta.backends.get(BACKEND).expect("backend");
+    let backend = fixture
+        .meta
+        .backends
+        .for_test()
+        .get(BACKEND)
+        .expect("backend");
     backend
         .get_tools_shared()
         .await

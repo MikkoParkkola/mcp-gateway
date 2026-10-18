@@ -35,8 +35,8 @@ impl MetaMcp {
         {
             return None;
         }
-        self.backends
-            .get(server)
+        self.scoped(grant)
+            .scoped_get(server)
             .filter(|backend| backend.passthrough())
     }
 
