@@ -865,3 +865,5 @@ mod tracing_target_tests;
 
 #[cfg(test)]
 mod mcp_credential_principal_tests;
+#[cfg(test)]
+mod stage_boundary_tests;
