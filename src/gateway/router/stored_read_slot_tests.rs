@@ -489,6 +489,10 @@ async fn a_withdrawn_cooling_tool_still_answers_absent_after_the_refresh() {
             .kill_switch()
             .record_capability_failure(BACKEND, TOOL, &cfg);
     }
+    assert!(
+        gw.meta.kill_switch().is_capability_disabled(BACKEND, TOOL),
+        "premise: {TOOL} is in cooldown"
+    );
     let _ = task_get(&gw, &id).await;
     let second = task_get(&gw, &id).await;
     assert_eq!(
@@ -511,12 +515,9 @@ async fn f4_a_cold_kill_switched_read_resolves_nothing() {
     let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await;
     let id = finished(&gw, "s1-f4k").await;
     backend(&gw).forget_caller_slots_for_test();
-    let cfg = crate::kill_switch::budget::CapabilityErrorBudgetConfig::default();
-    for _ in 0..cfg.min_samples.max(cfg.window_size) {
-        gw.meta
-            .kill_switch()
-            .record_capability_failure(BACKEND, TOOL, &cfg);
-    }
+    // MIK-8474: the backend is killed outright; an error-rate cooldown no
+    // longer stops the claim on a per-user backend (it is met last).
+    gw.meta.kill_switch().kill(BACKEND);
     let before_mints = gw.mints.load(Ordering::SeqCst);
     let before_lists = gw.caller.lists();
     let read = task_get(&gw, &id).await;
