@@ -20,6 +20,7 @@ Static checks on ci.yml and scripts/ci/shard_tests.py:
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -102,6 +103,12 @@ def workflow_problems(jobs: dict, st) -> list[str]:
         calls = [s.get("run", "").strip() for s in shard.get("steps", []) if "shard_tests.py" in s.get("run", "")]
         if calls != [call]:
             out.append(f"{shard_key}: runner calls {calls}, want exactly [{call!r}]")
+        # A duty pinned to one shard must name a shard that exists, or it
+        # silently never runs (the UPGRADING, privileged and smoke steps).
+        for s in shard.get("steps", []):
+            for leg in re.findall(r"matrix\.shard == '([^']+)'", str(s.get("if", ""))):
+                if leg not in (legs or []):
+                    out.append(f"{shard_key}: step {s.get('name')!r} is pinned to {leg!r}, not a shard")
         if not name.startswith(prefix) or name in required or "Tests" in name:
             out.append(f"{shard_key}: name {name!r} must start {prefix!r}, not be a required name, not say Tests")
         if agg.get("name") != agg_name:
@@ -153,6 +160,9 @@ def self_test(jobs: dict, st) -> None:
         "runner gets an extra argument": lambda j: next(
             s for s in j["macos-shards"]["steps"] if "shard_tests.py" in s.get("run", "")
         ).__setitem__("run", "python3 scripts/ci/shard_tests.py run macos ${{ matrix.shard }} --skip x"),
+        "duty pinned to a missing shard": lambda j: next(
+            s for s in j["test-shards"]["steps"] if "UPGRADING" in s.get("name", "")
+        ).__setitem__("if", "matrix.shard == 'int-z'"),
     }
     survived = [n for n, m in mutations.items() if not broken(m)]
     assert not survived, f"wiring mutations not caught: {survived}"

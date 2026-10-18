@@ -104,16 +104,22 @@ def selected(lines: list[str]) -> int:
 
 
 def cargo(args: list[str]) -> tuple[int, list[str]]:
-    """Run cargo with output mirrored to this job's log."""
-    p = subprocess.Popen(["cargo", *args], stdout=subprocess.PIPE,
-                         stderr=subprocess.STDOUT, text=True, errors="replace")
+    """Run cargo with output mirrored to this job's log.
+
+    Bytes are mirrored as they arrive and decoded (UTF-8, lossy) only for
+    counting. Decoding through the locale and writing text back died on
+    Windows: cp1252 turned an output byte into U+FFFD, which cp1252 stdout
+    cannot encode (#3944, Windows int-a).
+    """
+    p = subprocess.Popen(["cargo", *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     lines = []
     assert p.stdout is not None
-    for line in p.stdout:
-        sys.stdout.write(line)
-        sys.stdout.flush()
+    out = sys.stdout.buffer
+    for raw in p.stdout:
+        out.write(raw)
+        out.flush()
         # ci.yml sets CARGO_TERM_COLOR=always: match on the text, not the escapes.
-        lines.append(ANSI.sub("", line.rstrip("\n")))
+        lines.append(ANSI.sub("", raw.decode("utf-8", "replace").rstrip("\r\n")))
     return p.wait(), lines
 
 
