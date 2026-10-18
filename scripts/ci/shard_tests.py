@@ -103,7 +103,7 @@ def selected(lines: list[str]) -> int:
     return total
 
 
-def cargo(args: list[str]) -> tuple[int, list[str]]:
+def cargo(args: list[str], program: tuple[str, ...] = ("cargo",)) -> tuple[int, list[str]]:
     """Run cargo with output mirrored to this job's log.
 
     Bytes are mirrored as they arrive and decoded (UTF-8, lossy) only for
@@ -111,7 +111,7 @@ def cargo(args: list[str]) -> tuple[int, list[str]]:
     Windows: cp1252 turned an output byte into U+FFFD, which cp1252 stdout
     cannot encode (#3944, Windows int-a).
     """
-    p = subprocess.Popen(["cargo", *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    p = subprocess.Popen([*program, *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     lines = []
     assert p.stdout is not None
     out = sys.stdout.buffer
@@ -167,6 +167,21 @@ def self_test() -> int:
                "running 4 tests",
                "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"]
     assert selected(rustdoc) == 55, selected(rustdoc)
+    # #3944: a byte cp1252 cannot map, mirrored to a strict cp1252 stdout as
+    # on the Windows runner. The mirror must not raise, and the line counts.
+    import io
+    sink = io.BytesIO()
+    real = sys.stdout
+    sys.stdout = wrapper = io.TextIOWrapper(sink, encoding="cp1252", errors="strict")
+    try:
+        emit = "import sys; sys.stdout.buffer.write(b'     Running x\\r\\nrunning 3 tests \\x81\\r\\n')"
+        rc, lines = cargo([], program=(sys.executable, "-c", emit))
+    finally:
+        sys.stdout = real
+        wrapper.flush()
+        wrapper.detach()  # keep `sink` open for the assertions below
+    assert rc == 0 and b"\x81" in sink.getvalue(), (rc, sink.getvalue())
+    assert lines == ["     Running x", "running 3 tests �"], lines
     colored = "\x1b[1m\x1b[92m     Running\x1b[0m tests/y.rs (target/debug/deps/y-3)"
     assert selected([ANSI.sub("", colored), "running 4 tests"]) == 4
     assert selected(["running 3 tests"]) == 0, "a count with no header is a child's"

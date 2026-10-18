@@ -33,6 +33,8 @@ JOBS = {  # os: (shard job, aggregate job, aggregate name, shard name prefix)
     "macos": ("macos-shards", "macos-check", "macOS check", "macOS shard "),
 }
 EXTRA_NEEDS = {"windows-check": ["windows-clippy"]}
+# `matrix.shard == 'x'` in any spacing or quoting an expression accepts.
+PIN = re.compile(r"""matrix\.shard\s*==\s*['"]([^'"]+)['"]""")
 COVERS = {"linux": {"lib", "bins", "tests", "doc"}, "macos": {"lib", "bins", "tests", "doc"},
           "windows": {"lib", "bins", "tests"}}
 
@@ -106,7 +108,7 @@ def workflow_problems(jobs: dict, st) -> list[str]:
         # A duty pinned to one shard must name a shard that exists, or it
         # silently never runs (the UPGRADING, privileged and smoke steps).
         for s in shard.get("steps", []):
-            for leg in re.findall(r"matrix\.shard == '([^']+)'", str(s.get("if", ""))):
+            for leg in PIN.findall(str(s.get("if", ""))):
                 if leg not in (legs or []):
                     out.append(f"{shard_key}: step {s.get('name')!r} is pinned to {leg!r}, not a shard")
         if not name.startswith(prefix) or name in required or "Tests" in name:
@@ -166,6 +168,8 @@ def self_test(jobs: dict, st) -> None:
     }
     survived = [n for n, m in mutations.items() if not broken(m)]
     assert not survived, f"wiring mutations not caught: {survived}"
+    for spelled in ("matrix.shard=='int-z'", 'matrix.shard == "int-z"', "matrix.shard  ==  'int-z'"):
+        assert PIN.findall(spelled) == ["int-z"], spelled
     saved = st.SHARDS["linux"]["lib-b"]
     st.SHARDS["linux"]["lib-b"] = [("suite", ["--lib"], ["--skip", "other::"], 1)]
     try:

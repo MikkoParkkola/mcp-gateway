@@ -636,8 +636,9 @@ jobs:
         # Three jobs: the account has five macOS runners in all (MIK-8482).
         shard: [lib-a, lib-b, int]
     env:
-      # Trial (MIK-8482 ruling): kept only if PR runs beat the probe's
-      # default-jobs timings; the 7 GB runner swapped at the default.
+      # Two build jobs on the 3-core, 7 GB runner: the default swapped. Kept
+      # on measurement (MIK-8482): the slowest shard took 25.5 min (#3944
+      # run 1), against 35 min at the default in the Stage 0 probe.
       CARGO_BUILD_JOBS: 2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -676,6 +677,7 @@ jobs:
     name: Linux shard ${{ matrix.shard }}
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
