@@ -86,24 +86,13 @@ impl ResolvedAuthConfig {
             api_keys.iter().map(|k| (k.name.as_str(), &k.digest)),
         )?;
 
-        // Pre-create rate limiters for clients with rate limits
-        let rate_limiters = DashMap::new();
-        for key in &api_keys {
-            if key.rate_limit > 0
-                && let Some(quota) = NonZeroU32::new(key.rate_limit)
-            {
-                let limiter = RateLimiter::direct(Quota::per_minute(quota));
-                rate_limiters.insert(key.name.clone(), Arc::new(limiter));
-            }
-        }
-
         Ok(Self {
             enabled: config.enabled,
             bearer_token,
             bearer_quota_principal,
             api_keys,
             public_paths: config.enforced_public_paths(),
-            rate_limiters,
+            rate_limiters: DashMap::new(),
             client_circuit_breaker: config.client_circuit_breaker.clone(),
             client_circuit_breakers: DashMap::new(),
         })
@@ -257,21 +246,12 @@ impl ResolvedAuthConfig {
         (!crate::config::api_key_expired(key.expires_at, now)).then(|| Self::client_of(key))
     }
 
-    /// Check rate limit for a client. Returns true if allowed, false if rate limited.
-    #[must_use]
-    pub fn check_rate_limit(&self, client_name: &str) -> bool {
-        if let Some(limiter) = self.rate_limiters.get(client_name) {
-            limiter.check().is_ok()
-        } else {
-            // No rate limiter = unlimited
-            true
-        }
-    }
-
     /// Check rate limiting for a fully resolved authenticated client.
     ///
-    /// Static API keys are pre-created at startup; temporary key-server identities
-    /// create their per-client bucket on first use from the verified OIDC identity.
+    /// The bucket is created on first use from the client's own `rate_limit`
+    /// and keyed by [`client_state_key`], so it belongs to the credential
+    /// (MIK-8489): two keys sharing a display name keep separate limits, and
+    /// two key-server tokens of one OIDC identity share one.
     #[must_use]
     pub fn check_authenticated_client_rate_limit(&self, client: &AuthenticatedClient) -> bool {
         if client.rate_limit == 0 {
@@ -283,7 +263,7 @@ impl ResolvedAuthConfig {
         };
         let limiter = self
             .rate_limiters
-            .entry(client.name.clone())
+            .entry(client_state_key(client))
             .or_insert_with(|| Arc::new(RateLimiter::direct(Quota::per_minute(quota))))
             .clone();
         limiter.check().is_ok()
@@ -291,7 +271,7 @@ impl ResolvedAuthConfig {
 
     /// Check whether this authenticated client's dispatch circuit allows a request.
     #[must_use]
-    pub fn check_client_circuit_breaker(&self, client_name: &str) -> bool {
+    pub fn check_client_circuit_breaker(&self, client: &AuthenticatedClient) -> bool {
         let Some(config) = self.client_circuit_breaker.as_ref() else {
             return true;
         };
@@ -299,53 +279,72 @@ impl ResolvedAuthConfig {
             return true;
         }
 
-        self.client_circuit_breaker_for(client_name, config)
+        self.client_circuit_breaker_for(client, config)
             .can_proceed()
     }
 
     /// Record a successful dispatch for this authenticated client.
-    pub fn record_client_success(&self, client_name: &str) {
-        if let Some(breaker) = self.active_client_circuit_breaker(client_name) {
+    pub fn record_client_success(&self, client: &AuthenticatedClient) {
+        if let Some(breaker) = self.active_client_circuit_breaker(client) {
             breaker.record_success();
         }
     }
 
     /// Record a failed dispatch for this authenticated client.
-    pub fn record_client_failure(&self, client_name: &str) {
-        if let Some(breaker) = self.active_client_circuit_breaker(client_name) {
+    pub fn record_client_failure(&self, client: &AuthenticatedClient) {
+        if let Some(breaker) = self.active_client_circuit_breaker(client) {
             breaker.record_failure("client_dispatch_failure", std::time::Duration::ZERO);
         }
     }
 
     /// Return the current circuit state for tests and observability adapters.
     #[must_use]
-    pub fn client_circuit_state(&self, client_name: &str) -> Option<CircuitState> {
+    pub fn client_circuit_state(&self, client: &AuthenticatedClient) -> Option<CircuitState> {
         self.client_circuit_breakers
-            .get(client_name)
+            .get(&client_state_key(client))
             .map(|breaker| breaker.state())
     }
 
-    fn active_client_circuit_breaker(&self, client_name: &str) -> Option<Arc<CircuitBreaker>> {
+    fn active_client_circuit_breaker(
+        &self,
+        client: &AuthenticatedClient,
+    ) -> Option<Arc<CircuitBreaker>> {
         let config = self.client_circuit_breaker.as_ref()?;
         if !config.enabled {
             return None;
         }
-        Some(self.client_circuit_breaker_for(client_name, config))
+        Some(self.client_circuit_breaker_for(client, config))
     }
 
     fn client_circuit_breaker_for(
         &self,
-        client_name: &str,
+        client: &AuthenticatedClient,
         config: &CircuitBreakerConfig,
     ) -> Arc<CircuitBreaker> {
         self.client_circuit_breakers
-            .entry(client_name.to_string())
+            .entry(client_state_key(client))
             .or_insert_with(|| {
+                // The label is for logs only; the map key is the credential.
                 Arc::new(CircuitBreaker::new(
-                    &format!("client:{client_name}"),
+                    &format!("client:{}", client.name),
                     config,
                 ))
             })
             .clone()
     }
+}
+
+/// The key of a client's rate-limit bucket and circuit breaker (MIK-8489).
+///
+/// The credential's quota principal (an API key's digest, the bearer, an OIDC
+/// issuer and subject, the dashboard session, an OAuth `client_id`), never the
+/// display name: a name is operator-chosen and may repeat, or equal the name
+/// another identity kind uses (`bearer`, an OIDC actor id). Identities that
+/// carry no quota principal (anonymous, public, stdio) key on a tagged label,
+/// which cannot equal a quota key: those are 64 hex digits, never `:`.
+fn client_state_key(client: &AuthenticatedClient) -> String {
+    client.quota_principal.as_ref().map_or_else(
+        || format!("label:{}", client.name),
+        |quota| quota.as_store_key().to_owned(),
+    )
 }
