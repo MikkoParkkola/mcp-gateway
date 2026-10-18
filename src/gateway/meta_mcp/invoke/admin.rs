@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use tracing::debug;
 
 use crate::gateway::meta_mcp::MetaMcp;
+use crate::gateway::meta_mcp::search::asking;
 use crate::gateway::meta_mcp::support::MetaMcpInvoker;
 use crate::gateway::meta_mcp_helpers::{
     build_circuit_breaker_stats_json, build_server_safety_status, build_stats_response,
@@ -359,11 +360,12 @@ impl MetaMcp {
         args: &Value,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
-        self.refuse_unattested_plan()?;
+        // Setup refusals precede every step: the witness decides (MIK-8353 3d).
+        asking(caller, self.refuse_unattested_plan())?;
         #[cfg(test)]
         crate::gateway::meta_mcp::plan_entries::note(self);
-        let name = extract_required_str(args, "name")?;
-        let arguments = parse_tool_arguments(args)?;
+        let name = asking(caller, extract_required_str(args, "name"))?;
+        let arguments = asking(caller, parse_tool_arguments(args))?;
 
         debug!(playbook = name, "Running playbook");
 
@@ -374,10 +376,9 @@ impl MetaMcp {
             definition.clone()
         } else {
             let engine = self.playbook_engine.read();
-            engine
-                .get(name)
-                .cloned()
-                .ok_or_else(|| Error::json_rpc(-32602, format!("Playbook not found: {name}")))?
+            let found = engine.get(name).cloned();
+            let missing = || Error::json_rpc(-32602, format!("Playbook not found: {name}"));
+            asking(caller, found.ok_or_else(missing))?
         };
         // MIK-8154 C2e: intake judged the sanitize exemption on one definition;
         // a different one (reloaded since) is refused, never run under it.

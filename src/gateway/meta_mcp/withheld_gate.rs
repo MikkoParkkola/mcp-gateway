@@ -17,6 +17,8 @@ pub(crate) mod seams {
             const { std::cell::RefCell::new(None) };
         static BEFORE_RESUME: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
             const { std::cell::RefCell::new(None) };
+        static BEFORE_STEP: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+            const { std::cell::RefCell::new(None) };
     }
 
     /// Run `hook` once, the next time the `/mcp` route stage on this thread
@@ -50,6 +52,20 @@ pub(crate) mod seams {
     /// Called just before a chain judges its resume step.
     pub(crate) fn resume_start() {
         if let Some(hook) = BEFORE_RESUME.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
+    }
+
+    /// Run `hook` once, the next time a playbook on this thread is about to
+    /// invoke a step, after admission (MIK-8353 3d-2: a policy change between
+    /// admission and the step).
+    pub(crate) fn before_step(hook: impl FnOnce() + 'static) {
+        BEFORE_STEP.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    /// Called just before a playbook invokes a step.
+    pub(crate) fn step_start() {
+        if let Some(hook) = BEFORE_STEP.with(|slot| slot.borrow_mut().take()) {
             hook();
         }
     }

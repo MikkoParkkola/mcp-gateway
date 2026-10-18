@@ -406,3 +406,7 @@ async fn a_spend_refusal_after_the_route_stage_joins_a_fill_keeps_the_nonce() {
     );
     assert_eq!(dispatched(&fx), 0, "nothing reached a backend");
 }
+
+// MIK-8353 3d-2: meta-tool setup refusals on `/mcp` (NONCEFX.11).
+#[path = "mcp_setup_refusal_tests.rs"]
+mod setup_refusals;

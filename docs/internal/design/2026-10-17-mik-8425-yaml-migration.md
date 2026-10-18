@@ -117,12 +117,20 @@ inventory of the `Value` and `Mapping` API in use (indexing, `get`,
   spike's output against the MIG.0 goldens, reviewed by both seats. If
   neither approach reaches parity, the fallback applies.
 - **Resource limits.** MIG.2 sets serde-saphyr's `Budget` and alias limits
-  explicitly, naming each field and value in `src/yaml.rs`. Each value sits
-  at or beyond serde_yaml's refusal point measured in MIG.0, for nesting
-  depth and alias-expansion size. A tighter value refuses documents that
-  load today, which is a behaviour change: it is recorded in MIG.3 and in
-  `docs/UPGRADING-4.0.md`, and goes through the fallback rule. The alias
-  fixtures test at and just past each limit.
+  explicitly, naming each field and value in `src/yaml.rs`. The baseline,
+  measured with serde_yaml 0.9.34 on 2026-10-17 and recorded in
+  `tests/fixtures/mik_8425_yaml/behaviour.txt`:
+  - nesting depth 128 parses; depth 129 is refused (`recursion limit
+    exceeded`);
+  - the alias fan-out document (10 aliases per level over a 10-item base)
+    parses at level 3, about 10^4 expanded nodes. From level 4, about 10^5
+    nodes, it is refused (`repetition limit exceeded`).
+  The replacement must refuse depth 129 and the level-4 document at the
+  latest; a looser budget fails this gate. A tighter value refuses documents
+  that load today (depth 128, the level-3 document). That is a behaviour
+  change: it is recorded in MIG.3 and in `docs/UPGRADING-4.0.md`, and goes
+  through the fallback rule. The alias fixtures test at and just past each
+  limit.
 - **G1 harness provenance.** The throwaway harness's source, exact
   `spark-cargo` command, `Cargo.lock` and output SHA-256 are attached to the
   MIG.2 PR, not the output alone.
