@@ -45,7 +45,7 @@ fn a_type_mismatch_names_the_key_and_type_not_the_value() {
 }
 
 /// CFGLEAK.2, tagged scalar (docsfix probe 2): YAML itself refuses the value,
-/// and `serde_yaml`'s message quotes it.
+/// and the YAML parser's message quotes it.
 #[test]
 fn a_tagged_scalar_names_the_key_and_place_not_the_value() {
     let sentinel = "cfgleak-sentinel-r2";
