@@ -72,6 +72,12 @@ def table_problems(st) -> list[str]:
             out.append(f"glob classes {st.GLOB_A} and {st.GLOB_B} are not complements")
         if bins != 1:
             out.append(f"{os_kind}: --bins must be in exactly one shard, found {bins}")
+        for name, steps in shards.items():
+            in_shard = [a[a.index("--test") + 1] for _, a, _, _ in steps if "--test" in a]
+            if len(in_shard) > 1:
+                out.append(f"{os_kind} {name}: holds {in_shard}; each glob class belongs to its own shard")
+        if st.EXAMPLES.get(os_kind) not in shards:
+            out.append(f"{os_kind}: the examples build is assigned to no shard ({st.EXAMPLES.get(os_kind)!r})")
         if kinds != COVERS[os_kind]:
             out.append(f"{os_kind}: shards cover {sorted(kinds)}, the suite ran {sorted(COVERS[os_kind])}")
     return out
@@ -91,6 +97,11 @@ def workflow_problems(jobs: dict, st) -> list[str]:
         if shard.get("strategy", {}).get("fail-fast") is not False:
             out.append(f"{shard_key}: fail-fast must be false, so one red shard does not cancel the rest")
         name = shard.get("name", "")
+        py = "python" if os_kind == "windows" else "python3"
+        call = f"{py} scripts/ci/shard_tests.py run {os_kind} ${{{{ matrix.shard }}}}"
+        calls = [s.get("run", "").strip() for s in shard.get("steps", []) if "shard_tests.py" in s.get("run", "")]
+        if calls != [call]:
+            out.append(f"{shard_key}: runner calls {calls}, want exactly [{call!r}]")
         if not name.startswith(prefix) or name in required or "Tests" in name:
             out.append(f"{shard_key}: name {name!r} must start {prefix!r}, not be a required name, not say Tests")
         if agg.get("name") != agg_name:
@@ -139,6 +150,9 @@ def self_test(jobs: dict, st) -> None:
         "leg dropped": lambda j: j["test-shards"]["strategy"]["matrix"].__setitem__("shard", ["lib-a"]),
         "fail-fast": lambda j: j["windows-shards"]["strategy"].__setitem__("fail-fast", True),
         "clippy guard drift": lambda j: j["windows-clippy"].__setitem__("if", "${{ true }}"),
+        "runner gets an extra argument": lambda j: next(
+            s for s in j["macos-shards"]["steps"] if "shard_tests.py" in s.get("run", "")
+        ).__setitem__("run", "python3 scripts/ci/shard_tests.py run macos ${{ matrix.shard }} --skip x"),
     }
     survived = [n for n, m in mutations.items() if not broken(m)]
     assert not survived, f"wiring mutations not caught: {survived}"

@@ -54,7 +54,11 @@ def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print(__doc__, file=sys.stderr)
         return 2
-    problems = verdict(json.loads(os.environ["NEEDS"]), argv[1:])
+    raw = os.environ.get("NEEDS")
+    if not raw:
+        print("::error::NEEDS is unset: the step must pass NEEDS: ${{ toJSON(needs) }}")
+        return 1
+    problems = verdict(json.loads(raw), argv[1:])
     for p in problems:
         print(f"::error::{p}")
     if not problems:

@@ -82,16 +82,24 @@ def selected(lines: list[str]) -> int:
     counts. A test that re-runs its own binary as a child with inherited
     stdout (transparency_log_lease_tests.rs) prints a further `running 1
     test`, which is the child's, not another selected test.
+
+    Rustdoc is the exception: it runs merged doctests and standalone ones as
+    two batches under one `Doc-tests` header (`running 51`, then `running 4`).
+    Inside a doctest section each `test result:` re-arms the count. Doctests
+    spawn no libtest children, so nothing else can print there.
     """
-    total, armed = 0, False
+    total, armed, doc = 0, False, False
     for line in lines:
-        if HEADER.match(line):
-            armed = True
+        m = HEADER.match(line)
+        if m:
+            armed, doc = True, m.group(1) == "Doc-tests"
             continue
         m = RUNNING.match(line.strip())
         if m and armed:
             total += int(m.group(1))
             armed = False
+        elif doc and RESULT.search(line):
+            armed = True
     return total
 
 
@@ -142,6 +150,17 @@ def self_test() -> int:
         "   Doc-tests mcp_gateway", "running 55 tests",
     ]
     assert selected(lease) == 6996, selected(lease)
+    # The child's own result line must not re-arm the count outside doctests.
+    child = ["     Running unittests src/lib.rs (x)", "running 2 tests", "running 1 test",
+             "test result: ok. 1 passed; 0 failed; 0 ignored", "running 1 test",
+             "test result: ok. 2 passed; 0 failed; 0 ignored"]
+    assert selected(child) == 2, selected(child)
+    # Rustdoc's two batches under one header (probe run 39135535466, Linux int-b).
+    rustdoc = ["   Doc-tests mcp_gateway", "running 51 tests",
+               "test result: ok. 41 passed; 0 failed; 10 ignored; 0 measured; 0 filtered out",
+               "running 4 tests",
+               "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"]
+    assert selected(rustdoc) == 55, selected(rustdoc)
     colored = "\x1b[1m\x1b[92m     Running\x1b[0m tests/y.rs (target/debug/deps/y-3)"
     assert selected([ANSI.sub("", colored), "running 4 tests"]) == 4
     assert selected(["running 3 tests"]) == 0, "a count with no header is a child's"
