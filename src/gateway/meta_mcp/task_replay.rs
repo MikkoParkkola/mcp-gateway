@@ -336,6 +336,32 @@ impl MetaMcp {
         }
     }
 
+    /// Whether a recorded target on a per-user backend is refused by the
+    /// dispatch admission (the error-rate cooldown included, auto-recovery
+    /// with it).
+    fn per_user_target_cooling(
+        &self,
+        stored: &CommittedTask,
+        session_id: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> bool {
+        stored.targets.iter().any(|target| {
+            self.backends
+                .get(&target.server)
+                .is_some_and(|backend| backend.keeps_per_user_catalogues())
+                && self
+                    .admit_target(&super::invoke::dispatch_guards::BackendCall {
+                        server: &target.server,
+                        tool: &target.tool,
+                        session_id,
+                        api_key_name: caller.api_key_name,
+                        trace_id: "",
+                        caller_key: None,
+                    })
+                    .is_err()
+        })
+    }
+
     /// MIK-8392 F4: whether `server`'s `tool` is refused for this caller
     /// without reading any catalogue: descriptor-blocked, refused by the
     /// invocation policy (the silent check the name judgement uses), or by
@@ -362,7 +388,16 @@ impl MetaMcp {
             trace_id: "",
             caller_key: None,
         };
-        self.admit_target(&call).is_err()
+        // MIK-8474: on a per-user backend the error-rate cooldown waits for
+        // the credential step, as the live call's policy has it (MIK-8439).
+        // Skipping the target for it left it unfilled, so a caller with no
+        // view got "retry" where a missing name gets "absent". The read
+        // answers the cooldown last (`per_user_target_cooling`).
+        if backend.keeps_per_user_catalogues() {
+            self.admit_named_target(&call).is_err()
+        } else {
+            self.admit_target(&call).is_err()
+        }
     }
 
     /// A stored read found no account outcome for `server`'s target: every
@@ -478,6 +513,14 @@ impl MetaMcp {
         }
         if let Some(after) = cold {
             return Some(retry_later(id, after));
+        }
+        // MIK-8474: the error-rate cooldown of a per-user tool is met last,
+        // as on the live call (it waits for the credential step): a caller
+        // with no view of the tool has already been answered as a missing
+        // name above, so the cooldown cannot tell it the tool exists. A
+        // repeat never judges accounts and is answered by site 5.
+        if read == StoredRead::Read && self.per_user_target_cooling(stored, session, caller) {
+            return Some(retry_later(id, None));
         }
         // COLLUDE.1 §13.3: a stored result or pending prompt delivered again
         // renews the reader's receipt; the delivery owner commits it.

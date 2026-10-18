@@ -125,6 +125,8 @@ struct Gateway {
     /// The served Meta-MCP: its kill switch (MIK-8439 R1b) and its plan
     /// executor entries (MIK-8406).
     meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
+    /// The served task executor: its store's committed rows (MIK-8406).
+    tasks: Arc<crate::gateway::task_service::TaskExecutor>,
     /// The task store's directory, kept for the gateway's lifetime.
     _store: tempfile::TempDir,
     _dir: tempfile::TempDir,
@@ -223,12 +225,14 @@ async fn gateway_seeded(
     .expect("the production installer accepts the binding");
     install_capability(&state.meta_mcp);
     let meta = Arc::clone(&state.meta_mcp);
+    let tasks = Arc::clone(&state.task_executor);
     let router = create_router_with_accounts(state, None, Some(fixture.handles()));
     Gateway {
         router,
         fixture,
         sends: slot_sends,
         meta,
+        tasks,
         _store: store,
         _dir: dir,
     }

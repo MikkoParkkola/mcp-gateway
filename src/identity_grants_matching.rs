@@ -67,7 +67,7 @@ impl GrantAgent {
 pub(super) fn parse_refusal(
     path: &std::path::Path,
     content: &str,
-    yaml_error: &serde_yaml::Error,
+    yaml_error: &crate::yaml::Error,
 ) -> String {
     let tree = Tree::parse(content);
     let bare = tree.as_ref().map(Tree::bare_rows).unwrap_or_default();
@@ -106,11 +106,11 @@ pub(super) fn parse_refusal(
 }
 
 /// A grants file read once as an untyped tree, in its own encoding. JSON is
-/// tried first: JSON is also YAML, but `serde_yaml` refuses the JSON map form
+/// tried first: JSON is also YAML, but the YAML parser refuses the JSON map form
 /// of `exact`, so a JSON file stays JSON.
 enum Tree {
     Json(serde_json::Value),
-    Yaml(serde_yaml::Value),
+    Yaml(crate::yaml::Value),
 }
 
 impl Tree {
@@ -118,7 +118,7 @@ impl Tree {
         serde_json::from_str(content)
             .map(Self::Json)
             .ok()
-            .or_else(|| serde_yaml::from_str(content).ok().map(Self::Yaml))
+            .or_else(|| crate::yaml::from_str(content).ok().map(Self::Yaml))
     }
 
     /// `(grant_id, id)` of every 3.x bare `exact` row. 3.x wrote YAML rows as
@@ -144,7 +144,7 @@ impl Tree {
                 .filter_map(|row| {
                     let id = bare_yaml_id(row)?;
                     Some(named(
-                        row.get("grant_id").and_then(serde_yaml::Value::as_str),
+                        row.get("grant_id").and_then(crate::yaml::Value::as_str),
                         id,
                     ))
                 })
@@ -174,11 +174,11 @@ impl Tree {
             Self::Yaml(mut file) => {
                 if let Some(rows) = file
                     .get_mut("grants")
-                    .and_then(serde_yaml::Value::as_sequence_mut)
+                    .and_then(crate::yaml::Value::as_sequence_mut)
                 {
                     rows.retain(|row| bare_yaml_id(row).is_none());
                 }
-                serde_yaml::from_value::<super::IdentityGrantFile>(file)
+                crate::yaml::from_value::<super::IdentityGrantFile>(file)
                     .err()
                     .map(|e| e.to_string())
             }
@@ -193,18 +193,18 @@ fn json_rows(file: &serde_json::Value) -> impl Iterator<Item = &serde_json::Valu
         .flatten()
 }
 
-fn yaml_rows(file: &serde_yaml::Value) -> impl Iterator<Item = &serde_yaml::Value> {
+fn yaml_rows(file: &crate::yaml::Value) -> impl Iterator<Item = &crate::yaml::Value> {
     file.get("grants")
-        .and_then(serde_yaml::Value::as_sequence)
+        .and_then(crate::yaml::Value::as_sequence)
         .into_iter()
         .flatten()
 }
 
 /// The id of a bare YAML row: `!exact runner` or `{exact: runner}`.
-fn bare_yaml_id(row: &serde_yaml::Value) -> Option<&str> {
+fn bare_yaml_id(row: &crate::yaml::Value) -> Option<&str> {
     match row.get("agent")? {
-        serde_yaml::Value::Tagged(tagged) if tagged.tag == "exact" => tagged.value.as_str(),
-        agent @ serde_yaml::Value::Mapping(_) => agent.get("exact")?.as_str(),
+        crate::yaml::Value::Tagged(tagged) if tagged.tag == "exact" => tagged.value.as_str(),
+        agent @ crate::yaml::Value::Mapping(_) => agent.get("exact")?.as_str(),
         _ => None,
     }
 }
