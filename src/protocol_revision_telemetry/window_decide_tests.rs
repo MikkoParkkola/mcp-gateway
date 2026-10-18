@@ -11,13 +11,26 @@ use crate::protocol_revision_telemetry::{Registry, empty_shadow_counts};
 
 const DAY_MS: u64 = 86_400_000;
 const LISTEN: &str = "127.0.0.1:39401";
+// The declared prefix must be absolute on the platform the row runs on: a
+// POSIX path is not absolute on Windows (#3920 Windows CI).
+#[cfg(not(windows))]
+const EXE_PREFIX: &str = "/opt/mcp-gateway/";
+#[cfg(windows)]
+const EXE_PREFIX: &str = r"C:\opt\mcp-gateway\";
+#[cfg(not(windows))]
 const EXE: &str = "/opt/mcp-gateway/4.0.0/mcp-gateway";
+#[cfg(windows)]
+const EXE: &str = r"C:\opt\mcp-gateway\4.0.0\mcp-gateway.exe";
+#[cfg(not(windows))]
+const OTHER_ABSOLUTE: &str = "/opt/";
+#[cfg(windows)]
+const OTHER_ABSOLUTE: &str = r"C:\opt\";
 
 fn declaration() -> Declaration {
     Declaration {
         population: vec![Transport::Http],
         listen: LISTEN.to_string(),
-        exe_prefix: "/opt/mcp-gateway/".to_string(),
+        exe_prefix: EXE_PREFIX.to_string(),
     }
 }
 
@@ -219,14 +232,14 @@ fn no_sealed_segment_is_its_own_block() {
 
 #[test]
 fn the_declaration_requires_every_value() {
-    let ok = parse_declaration(Some("http"), Some(LISTEN), Some("/opt/mcp-gateway/"));
+    let ok = parse_declaration(Some("http"), Some(LISTEN), Some(EXE_PREFIX));
     assert_eq!(ok.expect("valid"), declaration());
     for (population, listen, prefix) in [
-        (None, Some(LISTEN), Some("/opt/")),
-        (Some("http"), None, Some("/opt/")),
+        (None, Some(LISTEN), Some(OTHER_ABSOLUTE)),
+        (Some("http"), None, Some(OTHER_ABSOLUTE)),
         (Some("http"), Some(LISTEN), None),
-        (Some("stdio"), Some(LISTEN), Some("/opt/")),
-        (Some("http"), Some("not-an-address"), Some("/opt/")),
+        (Some("stdio"), Some(LISTEN), Some(OTHER_ABSOLUTE)),
+        (Some("http"), Some("not-an-address"), Some(OTHER_ABSOLUTE)),
         (Some("http"), Some(LISTEN), Some("relative/path")),
     ] {
         assert!(
@@ -265,7 +278,7 @@ fn the_operator_run_refuses_a_missing_variable_and_writes_its_decision() {
         "U1_DATA_DIR" => Some(data.path().display().to_string()),
         "U1_POPULATION" => Some("http".to_string()),
         "U1_LISTEN" => Some(LISTEN.to_string()),
-        "U1_EXE_PREFIX" => Some("/opt/mcp-gateway/".to_string()),
+        "U1_EXE_PREFIX" => Some(EXE_PREFIX.to_string()),
         _ => None,
     };
     for missing in ["U1_DATA_DIR", "U1_POPULATION", "U1_LISTEN", "U1_EXE_PREFIX"] {

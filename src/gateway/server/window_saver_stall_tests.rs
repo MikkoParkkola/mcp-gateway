@@ -62,10 +62,10 @@ async fn a_stalled_open_delays_serving_by_its_bound_only() {
     let (open_in, open_go) = stall_seam::arm(&rig.window_path(), Role::Open);
     let started = std::time::Instant::now();
     let saver = rig
-        .start(ProtocolRevisionWindow::Record, settings(CLOSE_BOUND))
+        .start(ProtocolRevisionWindow::Record, stalled_open(CLOSE_BOUND))
         .await
         .expect("record");
-    let open_bound = settings(CLOSE_BOUND).open_bound;
+    let open_bound = stalled_open(CLOSE_BOUND).open_bound;
     // timing-oracle: vs WINDOW_OPEN_STARTUP_BOUND (MIK-7211)
     assert!(
         started.elapsed() < open_bound + ALLOWANCE,
@@ -91,7 +91,7 @@ async fn a_stalled_open_released_after_the_deadline_lands_the_sealed_counts() {
     let rig = Rig::new();
     let (open_in, open_go) = stall_seam::arm(&rig.window_path(), Role::Open);
     let saver = rig
-        .start(ProtocolRevisionWindow::Record, settings(CLOSE_BOUND))
+        .start(ProtocolRevisionWindow::Record, stalled_open(CLOSE_BOUND))
         .await
         .expect("record");
     open_in.recv_timeout(ARRIVAL).expect("the open started");
@@ -115,7 +115,7 @@ async fn a_late_open_still_seals_one_clean_segment() {
     let rig = Rig::new();
     let (open_in, open_go) = stall_seam::arm(&rig.window_path(), Role::Open);
     let saver = rig
-        .start(ProtocolRevisionWindow::Record, settings(ARRIVAL))
+        .start(ProtocolRevisionWindow::Record, stalled_open(ARRIVAL))
         .await
         .expect("record");
     open_in.recv_timeout(ARRIVAL).expect("the open started");

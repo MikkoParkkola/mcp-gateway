@@ -82,12 +82,24 @@ impl Rig {
     }
 }
 
+/// Settings for a row that is not about the startup bound: the open gets
+/// the whole watchdog, so `start` returns once it lands. A short bound here
+/// made the open-before-serving row race a slow open (Windows CI, #3920).
 fn settings(close_bound: Duration) -> SaverSettings {
     SaverSettings {
         every: Duration::from_secs(3600),
-        open_bound: Duration::from_millis(200),
+        open_bound: ARRIVAL,
         close_bound,
         clock_ms: crate::clock::unix_millis,
+    }
+}
+
+/// Settings for a row that stalls the open on purpose and needs `start` to
+/// give up on it: a short startup bound, as production's, but shorter.
+fn stalled_open(close_bound: Duration) -> SaverSettings {
+    SaverSettings {
+        open_bound: Duration::from_millis(200),
+        ..settings(close_bound)
     }
 }
 
