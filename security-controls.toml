@@ -69,6 +69,10 @@ module = "src/security/transparency_log_segments.rs"
 reason = "segment file naming, listing and the high-water mark codec; a helper for rotation and verify, not a gate"
 
 [[coverage.not_a_control]]
+module = "src/security/transparency_log_checks.rs"
+reason = "the check half of the audit-log-verify control (first-record seams, each entry's chain and signature, the tail against .hwm and the anchor verdict); an offline report that refuses no request; the control row names transparency_log_verify.rs"
+
+[[coverage.not_a_control]]
 module = "src/security/transparency_log_session.rs"
 reason = "show_session_entries: reads one session's entries across the segments for lookup; it decides nothing and refuses no call"
 
