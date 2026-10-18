@@ -559,28 +559,19 @@ impl MetaMcp {
         targets: &[(&str, &str)],
         caller: &MetaMcpCallerContext<'_>,
     ) -> Option<JsonRpcResponse> {
-        // (server, account) resolved already in this walk: an account
-        // resolved once is not resolved again.
+        // (server, account) pairs this walk resolved already: each resolves once.
         let mut resolved = std::collections::HashSet::new();
+        let view = self.scoped(caller.scope().authorizer.backend_grant());
         for &(server, tool) in targets {
             // A target that mints nothing per caller is exempt (U2); every
             // other one (a managed account, or a per-caller mint, E7) proves
             // only by a live resolution below. There is no shortcut for an
             // outcome already read Live: a carried credential is taken above
             // first, so it saved nothing measurable (E10b, T4).
-            if !self.mints_per_caller(
-                &self.scoped(caller.scope().authorizer.backend_grant()),
-                server,
-                tool,
-            ) {
+            if !self.mints_per_caller(&view, server, tool) {
                 continue;
             }
-            let account = self.target_account(
-                &self.scoped(caller.scope().authorizer.backend_grant()),
-                server,
-                tool,
-            );
-            if !resolved.insert((server.to_owned(), account)) {
+            if !resolved.insert((server.to_owned(), self.target_account(&view, server, tool))) {
                 continue;
             }
             match self.prove_target_live((server, tool), caller).await {

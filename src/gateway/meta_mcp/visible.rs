@@ -12,6 +12,7 @@ use crate::capability::validator::input_schema_is_structurally_valid;
 use crate::protocol::Tool;
 
 use super::{InvokeScope, MetaMcp};
+use super::scoped_backends::Unscoped;
 #[path = "visible_absent.rs"]
 mod absent;
 #[path = "visible_deferred.rs"]
@@ -84,13 +85,7 @@ impl MetaMcp {
         // loads, and a webhook-only one carries a null schema by design, so
         // only a tool from a registry backend is judged here, as
         // `surfaced_schema_withheld` judges it.
-        if self
-            .backends
-            .get_for(
-                crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility,
-                server,
-            )
-            .is_some()
+        if self.backends.get_for(Unscoped::Visibility, server).is_some()
             && !input_schema_is_structurally_valid(&tool.input_schema)
         {
             return Visibility::Withheld(Withholding::Schema);
@@ -132,10 +127,7 @@ impl MetaMcp {
     /// predicate both the route filter and the caller verdict read.
     pub(crate) fn keeps_per_user_catalogues(&self, server: &str) -> bool {
         self.backends
-            .get_for(
-                crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility,
-                server,
-            )
+            .get_for(Unscoped::Visibility, server)
             .is_some_and(|backend| backend.keeps_per_user_catalogues())
     }
 
@@ -179,10 +171,7 @@ impl MetaMcp {
         if self.descriptor_blocked(server, tool) {
             return Some(Visibility::Withheld(Withholding::Descriptor));
         }
-        let Some(backend) = self.backends.get_for(
-            crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility,
-            server,
-        ) else {
+        let Some(backend) = self.backends.get_for(Unscoped::Visibility, server) else {
             return Some(self.judge_name(server, tool, scope, session_id));
         };
         // A Passthrough backend is never indexed (`remember_caller_slot` skips
@@ -261,10 +250,7 @@ impl MetaMcp {
     /// Descriptor blocking applies whether or not the cache is warm (A6).
     fn descriptor_blocked(&self, server: &str, tool: &str) -> bool {
         self.backends
-            .get_for(
-                crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility,
-                server,
-            )
+            .get_for(Unscoped::Visibility, server)
             .is_some_and(|backend| backend.is_blocked_tool(tool))
     }
 
