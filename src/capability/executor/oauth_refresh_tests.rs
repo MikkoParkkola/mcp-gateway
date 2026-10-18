@@ -41,7 +41,7 @@ async fn recording_token_server() -> (String, Arc<AtomicUsize>) {
 
 /// An `oauth:` capability auth block naming `token_endpoint`.
 fn oauth_auth(provider: &str, token_endpoint: &str) -> AuthConfig {
-    serde_yaml::from_str(&format!(
+    crate::yaml::from_str(&format!(
         "required: true\ntype: oauth\nkey: \"oauth:{provider}\"\ntoken_endpoint: \"{token_endpoint}\"\n"
     ))
     .unwrap()

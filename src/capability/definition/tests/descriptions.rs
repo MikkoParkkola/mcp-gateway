@@ -318,7 +318,7 @@ fallback:
     config:
       endpoint: https://api.groq.com/v1/chat
 ";
-    let providers: ProvidersConfig = serde_yaml::from_str(yaml).unwrap();
+    let providers: ProvidersConfig = crate::yaml::from_str(yaml).unwrap();
     assert!(providers.named.contains_key("primary"));
     assert_eq!(providers.fallback.len(), 2);
     assert_eq!(providers.fallback[0].service, "anthropic");

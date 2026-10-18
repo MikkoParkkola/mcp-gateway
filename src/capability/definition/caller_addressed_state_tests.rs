@@ -16,7 +16,7 @@ fn named_def(name: &str, method: &str, input: &serde_json::Value) -> CapabilityD
         "fulcrum: \"1.0\"\nname: {name}\ndescription: d\nschema:\n  input: {}\nproviders:\n  primary:\n    service: s\n    config:\n      endpoint: https://example.com/x\n      method: {method}\nauth:\n  required: false\n  type: none\nmetadata:\n  read_only: {read_only}\n",
         serde_json::to_string(input).unwrap()
     );
-    serde_yaml::from_str(&yaml).expect("definition parses")
+    crate::yaml::from_str(&yaml).expect("definition parses")
 }
 
 #[test]
@@ -44,7 +44,7 @@ fn the_shipped_capabilities_classify_as_expected() {
                 let Ok(text) = std::fs::read_to_string(&path) else {
                     continue;
                 };
-                if let Ok(def) = serde_yaml::from_str::<CapabilityDefinition>(&text)
+                if let Ok(def) = crate::yaml::from_str::<CapabilityDefinition>(&text)
                     && creates_caller_addressed_external_state(&def)
                 {
                     flagged.push(def.name);
