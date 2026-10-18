@@ -56,6 +56,9 @@ PREFIXES = (
     "src/transport/stdio.rs",
     "src/transport/command_split.rs",
     "src/gateway/input_bridge.rs",
+    # Its child modules (channel, debug, outcome), spelled apart for the same
+    # reason as task_confirmation below.
+    "src/gateway/input_bridge/",
     "src/gateway/task_service/",
     # The module file and its directory, spelled apart: a git pathspec names
     # one path, so the stem alone matched only the directory.
