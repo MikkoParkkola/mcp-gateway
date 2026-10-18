@@ -84,6 +84,24 @@ class ReadBacks(unittest.TestCase):
                     "mod a;\n")
         self.assertEqual(cis.violations(root), [])
 
+    # MIK-8425 MIG.1a: a read routed through the YAML adapter is still a read.
+    ADAPTER_READS = ("from_str", "from_str_loose", "from_value", "documents")
+
+    def test_an_adapter_read_into_a_carrier_fails_bare_and_prefixed(self):
+        for prefix in ("yaml::", "crate::yaml::"):
+            for name in self.ADAPTER_READS:
+                with self.subTest(call=prefix + name):
+                    body = f"fn load(s: &str) -> Tok {{ {prefix}{name}(s).unwrap() }}\n"
+                    root = tree({"src/a.rs": self.CARRIER + body}, "mod a;\n")
+                    self.assertTrue(any("deserializes" in v for v in cis.violations(root)))
+
+    def test_an_adapter_write_and_a_lookalike_module_pass(self):
+        for body in ("fn save(t: &Tok) -> String { yaml::to_string(t).unwrap() }\n",
+                     "fn load(s: &str) -> Tok { my_yaml::from_str(s).unwrap() }\n"):
+            with self.subTest(body=body):
+                root = tree({"src/a.rs": self.CARRIER + body}, "mod a;\n")
+                self.assertEqual(cis.violations(root), [])
+
 
 class TestDetection(unittest.TestCase):
     LIT = "fn mint() -> VerifiedIdentity { VerifiedIdentity { subject: s } }\n"
