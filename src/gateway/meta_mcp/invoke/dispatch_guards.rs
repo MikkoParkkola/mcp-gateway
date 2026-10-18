@@ -153,7 +153,10 @@ impl MetaMcp {
     /// profile and the kill switch. The invocation policy takes it for a
     /// per-user backend, whose error-rate check waits for the credential
     /// step (MIK-8439).
-    pub(super) fn admit_named_target(&self, call: &BackendCall<'_>) -> Result<()> {
+    pub(in crate::gateway::meta_mcp) fn admit_named_target(
+        &self,
+        call: &BackendCall<'_>,
+    ) -> Result<()> {
         let (server, tool) = (call.server, call.tool);
         self.active_profile(call.session_id)
             .check(server, tool)

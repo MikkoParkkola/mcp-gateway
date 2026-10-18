@@ -61,15 +61,15 @@ impl Removal {
 /// value winning. Presence is read here; an edit is proven with [`parse`].
 /// `None` when the file is not a mapping of keys; `upgrade` then stops
 /// before reading anything (`config_write::rewrite_url_aliases_in`).
-pub(crate) fn loose(text: &str) -> Option<serde_yaml::Value> {
-    serde_yaml::from_str::<figment::value::Dict>(text)
+pub(crate) fn loose(text: &str) -> Option<crate::yaml::Value> {
+    crate::yaml::from_str_loose(text)
         .ok()
-        .and_then(|dict| serde_yaml::to_value(dict).ok())
+        .and_then(|dict| crate::yaml::to_value(dict).ok())
 }
 
 /// Every concrete path `pattern` names in `doc`, `*` expanded over the
 /// mapping keys at that place.
-fn concrete(doc: &serde_yaml::Value, pattern: &[&str]) -> Vec<Vec<String>> {
+fn concrete(doc: &crate::yaml::Value, pattern: &[&str]) -> Vec<Vec<String>> {
     let Some((head, rest)) = pattern.split_first() else {
         return vec![Vec::new()];
     };
@@ -195,15 +195,15 @@ pub(crate) fn drop_key(text: &str, path: &[String]) -> (Option<String>, Retired)
     }
 }
 
-fn parse(text: &str) -> Option<serde_yaml::Value> {
-    serde_yaml::from_str(text).ok()
+fn parse(text: &str) -> Option<crate::yaml::Value> {
+    crate::yaml::from_str(text).ok()
 }
 
 /// The mapping at `path` in `doc`; the root for an empty path.
 fn section<'a>(
-    doc: &'a mut serde_yaml::Value,
+    doc: &'a mut crate::yaml::Value,
     path: &[String],
-) -> Option<&'a mut serde_yaml::Mapping> {
+) -> Option<&'a mut crate::yaml::Mapping> {
     path.iter()
         .try_fold(doc, |node, name| {
             node.as_mapping_mut()?.get_mut(name.as_str())

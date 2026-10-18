@@ -152,7 +152,7 @@ async fn cap_pin(file: std::path::PathBuf) -> ExitCode {
     };
 
     // Sanity-check: the file must parse as a capability before we pin it.
-    if let Err(e) = serde_yaml::from_str::<serde_yaml::Value>(&content) {
+    if let Err(e) = crate::yaml::from_str::<crate::yaml::Value>(&content) {
         eprintln!("❌ Not a valid YAML file ({}): {e}", file.display());
         return ExitCode::FAILURE;
     }
@@ -437,7 +437,7 @@ async fn cap_discover_shadow(
             "{}",
             serde_json::to_string_pretty(&report).unwrap_or_default()
         ),
-        "yaml" => println!("{}", serde_yaml::to_string(&report).unwrap_or_default()),
+        "yaml" => println!("{}", crate::yaml::to_string(&report).unwrap_or_default()),
         _ => print_shadow_report(&report),
     }
 
@@ -565,7 +565,7 @@ fn print_discovered_servers(servers: &[mcp_gateway::discovery::DiscoveredServer]
                     serde_json::to_string_pretty(&redacted).unwrap_or_default()
                 );
             } else {
-                println!("{}", serde_yaml::to_string(&redacted).unwrap_or_default());
+                println!("{}", crate::yaml::to_string(&redacted).unwrap_or_default());
             }
         }
         _ => {
