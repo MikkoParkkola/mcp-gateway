@@ -9,8 +9,9 @@ MIG.1c), MIG.1a adapter (#3922), MIG.1b (#3925). Plan branch
 ## Goal
 
 Route the 13 serializer and tree-walker files with no holder (design
-"Order", item 3), plus the `validator/mod.rs` doctest deferred from
-MIG.1b, through `crate::yaml`. There is no behaviour change, and the files
+"Order", item 3) through `crate::yaml`. The `validator/mod.rs` doctest,
+deferred from MIG.1b, moves on to MIG.1d-i, so that the new Kubernetes
+test below fits the 15-path cap. There is no behaviour change, and the files
 leave the bypass allowlist. The backend is still serde_yaml 0.9.34 behind
 the adapter.
 
@@ -21,7 +22,7 @@ against the release line. Nothing touches any of the 14 sources. Control:
 the same scan returns the 16 files of the merged MIG.1b branch. It is
 re-run before the push.
 
-## Inventory: 71 occurrences in 14 files
+## Inventory: 70 occurrences in 13 files, plus one new test
 
 | File | What | Change |
 |---|---|---|
@@ -34,7 +35,6 @@ re-run before the push.
 | `src/commands/upgrade.rs` (7), `src/commands/api_key_rewrite.rs` (5), `src/commands/config_write.rs` (3), `src/commands/mod.rs` (2, test module), `src/commands/cap.rs` (4) | tree reads, accessors, `to_string` of reports | path rename |
 | `src/commands/retired_config_keys.rs` (8) | `from_str::<figment::value::Dict>` (:65), `to_value`, tree types | `crate::yaml::from_str_loose(text)` at :65; checked at source that figment 0.10.19 formats YAML with `serde_yaml::from_str` (`providers/data.rs:522`), so it is the same call; the rest is a path rename |
 | `src/protocol_imports/planner.rs:197,637` | read into `serde_json::Value`, `to_string` | path rename |
-| `src/capability/validator/mod.rs:41` | doctest in `//!` | `let cap = mcp_gateway::capability::parse_capability(yaml).unwrap();`. A doctest compiles against the public crate, which cannot see the crate-private adapter. `parse_capability` is `serde_yaml::from_str` with only the error mapped (`capability/parser.rs:15-17`), so the doctest reads the same value |
 
 Crates: `src/commands/` is compiled only by the binary (`main.rs:18`); the
 rest compile in the library, and `runtime` in both. Both roots mount `yaml`.
@@ -44,9 +44,21 @@ function) keys, and the MIG.1a pattern matches `yaml::from_str` and
 
 ## Tests (red first)
 
-- **R1, red:** remove the 14 files from
+- **R1, red:** remove the 13 files from
   `tests/fixtures/mik_8425_yaml/direct_users.txt`. T5 must fail listing
-  exactly those 14; after routing it passes.
+  exactly those 13; after routing it passes. `src/commands/upgrade/tests.rs`
+  (7 uses, test-only) stays on the allowlist and is not one of the 13. It
+  names the same `Value` type and moves with the test-only files in
+  MIG.1e.
+- **R1b, Kubernetes caller behaviour:** this is the one site that is not a
+  path rename. In `src/kubernetes_tests.rs`, add `parse_resources` cases for
+  - a valid document followed by a malformed one, refused as
+    `KubernetesPlanError::Parse`;
+  - a stream with an empty middle document, where the next document's
+    `MissingField` index is its stream position, counting the empty one.
+  They are written before the rewrite and must pass both before and after
+  it. This is a parity test, not a red test, because the behaviour must not
+  move.
 - **R2, unchanged behaviour:**
   - the MIG.0 golden suites (grants writer bytes and digests, trees,
     capabilities, behaviour, redaction) and the adapter suite;
@@ -54,7 +66,6 @@ function) keys, and the MIG.1a pattern matches `yaml::from_str` and
     `gateway::ui`, `protocol_imports`; bin `commands::`;
   - `tests/kubernetes_manifest_tests.rs`, `tests/identity_grants*` and the
     skills tests under `tests/`;
-  - the validator doctest (`cargo test --doc capability::validator`);
   - the Python identity checker and the repository check.
 - **R3, writer output:** `identity_grants.rs:319` is covered byte for byte
   by the MIG.0 grants golden. `backend_ops.rs:481`, `cap.rs` and
@@ -64,13 +75,22 @@ function) keys, and the MIG.1a pattern matches `yaml::from_str` and
 
 ## Files
 
-The plan lands alone as a docs-only PR. The routing PR holds the 14
-sources and the allowlist: 15 paths, inside the cap. `cap.rs` (777 of 800
+The plan lands alone as a docs-only PR. The routing PR holds the 13
+sources, `src/kubernetes_tests.rs` and the allowlist: 15 paths, inside the
+cap. `cap.rs` (777 of 800
 lines) and `gateway/ui/capabilities.rs` (739) gain at most the rustfmt
 rewraps of a one-character-longer path, which the line ceiling is
 re-checked against.
 
 ## MIG.1 sequence notes
+
+- MIG.1d-i gains the `validator/mod.rs` doctest. The doctest keeps its
+  `CapabilityDefinition` annotation and reads through the public
+  `parse_capability`:
+  `let cap: CapabilityDefinition = mcp_gateway::capability::parse_capability(yaml).unwrap();`.
+  So the import stays used, and the doctest still documents the result type.
+  `parse_capability` is the same call with only the error mapped
+  (`capability/parser.rs:15-17`).
 
 - U1 v2 merged on the line (#3920, 45ccc519c), so the MIG.1e hold
   (`config/config_file.rs`, `config/load_error.rs`,
@@ -79,6 +99,15 @@ re-checked against.
 - Allowlist joiners after MIG.0: `src/gateway/router/mcp_setup_refusal_tests.rs`
   (via #3922, moves in MIG.1e) and `src/config/strict_keys_tests.rs`
   (MIK-8102's P5 split, #3926, moves with `strict_keys.rs` in MIG.1d-ii).
+
+## Review record
+
+Plan round 1, 2026-10-18, on 6638c81a9: gpt SHIP and grok SHIP. Folded:
+- explicit Kubernetes caller tests (both seats);
+- the doctest keeps its type annotation (gpt; this also answers grok's
+  unused-import point);
+- `upgrade/tests.rs` is stated to stay on the allowlist (grok);
+- the doctest moves to MIG.1d-i to keep the cap.
 
 ## Rollback
 
