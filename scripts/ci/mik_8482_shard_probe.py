@@ -184,6 +184,10 @@ def baseline(os_kind, out):
 
 
 def main(argv):
+    # The per-step log sits next to the record; its directory must exist
+    # before the first cargo call appends to it.
+    if len(argv) >= 4:
+        os.makedirs(os.path.dirname(argv[-1]) or ".", exist_ok=True)
     if len(argv) == 5 and argv[1] == "shard":
         return shard(argv[2], argv[3], argv[4])
     if len(argv) == 4 and argv[1] == "baseline":
