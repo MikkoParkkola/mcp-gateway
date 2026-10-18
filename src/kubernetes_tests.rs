@@ -94,3 +94,31 @@ fn reconcile_plan_blocks_missing_policy_reference() {
             .any(|condition| condition.reason == "K8S_REFERENCE_MISSING")
     );
 }
+
+/// MIK-8425 MIG.1c: the stream read stops at the first malformed document and
+/// reports it as a parse error, before and after routing through the adapter.
+#[test]
+fn parse_refuses_a_malformed_later_document() {
+    let manifest =
+        "apiVersion: v1\nkind: Gateway\nmetadata:\n  name: gw\n---\nkind: [unclosed\n";
+    let err = parse_resources(manifest).expect_err("a malformed later document must refuse");
+    assert!(matches!(err, KubernetesPlanError::Parse(_)), "got {err:?}");
+}
+
+/// MIK-8425 MIG.1c: an empty document is skipped but still counts towards the
+/// index reported for a later document's missing field.
+#[test]
+fn an_empty_document_keeps_later_document_indices() {
+    let manifest = "apiVersion: v1\nkind: Gateway\nmetadata:\n  name: gw\n---\n---\nkind: Gateway\n";
+    let err = parse_resources(manifest).expect_err("the third document has no name");
+    assert!(
+        matches!(
+            err,
+            KubernetesPlanError::MissingField {
+                document: 2,
+                field: "metadata.name"
+            }
+        ),
+        "got {err:?}"
+    );
+}
