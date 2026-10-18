@@ -37,7 +37,7 @@ fn github_graphql_sample_capability_loads() {
     // WHEN: parsed as CapabilityDefinition
     // THEN: all fields are correct and service maps to graphql
     let yaml = include_str!("../../../capabilities/examples/github_graphql.yaml");
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
 
     assert_eq!(cap.name, "github_graphql_viewer");
     assert!(cap.description.contains("GraphQL"));
@@ -59,7 +59,7 @@ fn github_graphql_sample_capability_loads() {
 #[test]
 fn jsonrpc_sample_capability_loads() {
     let yaml = include_str!("../../../capabilities/examples/jsonrpc_example.yaml");
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
 
     assert_eq!(cap.name, "jsonrpc_eth_block_number");
     assert!(cap.description.contains("block number"));

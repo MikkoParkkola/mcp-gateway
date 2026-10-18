@@ -40,8 +40,8 @@ fn protocol_config_rest_round_trips_through_serde_yaml() {
         ..Default::default()
     }));
 
-    let yaml = serde_yaml::to_string(&config).unwrap();
-    let restored: ProtocolConfig = serde_yaml::from_str(&yaml).unwrap();
+    let yaml = crate::yaml::to_string(&config).unwrap();
+    let restored: ProtocolConfig = crate::yaml::from_str(&yaml).unwrap();
 
     assert_eq!(restored.protocol_name(), "rest");
     let rest = restored.as_rest().unwrap();
@@ -149,7 +149,7 @@ config:
   path: /v1/forecast
   method: GET
 ";
-    let provider: ProviderConfig = serde_yaml::from_str(yaml).unwrap();
+    let provider: ProviderConfig = crate::yaml::from_str(yaml).unwrap();
     assert_eq!(provider.service, "rest");
     assert_eq!(provider.timeout, 15);
 
@@ -170,7 +170,7 @@ fn provider_config_default_service_is_rest() {
 config:
   base_url: https://api.example.com
 ";
-    let provider: ProviderConfig = serde_yaml::from_str(yaml).unwrap();
+    let provider: ProviderConfig = crate::yaml::from_str(yaml).unwrap();
     assert_eq!(provider.service, "rest");
     assert_eq!(provider.protocol_config().protocol_name(), "rest");
 }
@@ -218,8 +218,8 @@ fn protocol_config_graphql_round_trips_through_serde_yaml() {
         ..Default::default()
     });
 
-    let yaml = serde_yaml::to_string(&config).unwrap();
-    let restored: ProtocolConfig = serde_yaml::from_str(&yaml).unwrap();
+    let yaml = crate::yaml::to_string(&config).unwrap();
+    let restored: ProtocolConfig = crate::yaml::from_str(&yaml).unwrap();
 
     assert_eq!(restored.protocol_name(), "graphql");
     let gql = restored.as_graphql().unwrap();
@@ -405,7 +405,7 @@ config:
   body:
     query: "query { viewer { login name } }"
 "#;
-    let provider: ProviderConfig = serde_yaml::from_str(yaml).unwrap();
+    let provider: ProviderConfig = crate::yaml::from_str(yaml).unwrap();
     assert_eq!(provider.service, "graphql");
 
     let proto = provider.protocol_config();
@@ -456,8 +456,8 @@ fn protocol_config_jsonrpc_round_trips_through_serde_yaml() {
         ..Default::default()
     });
 
-    let yaml = serde_yaml::to_string(&config).unwrap();
-    let restored: ProtocolConfig = serde_yaml::from_str(&yaml).unwrap();
+    let yaml = crate::yaml::to_string(&config).unwrap();
+    let restored: ProtocolConfig = crate::yaml::from_str(&yaml).unwrap();
 
     assert_eq!(restored.protocol_name(), "jsonrpc");
     let jrpc = restored.as_jsonrpc().unwrap();
@@ -521,7 +521,7 @@ config:
   static_params:
     tag: "latest"
 "#;
-    let provider: ProviderConfig = serde_yaml::from_str(yaml).unwrap();
+    let provider: ProviderConfig = crate::yaml::from_str(yaml).unwrap();
     assert_eq!(provider.service, "jsonrpc");
 
     let proto = provider.protocol_config();

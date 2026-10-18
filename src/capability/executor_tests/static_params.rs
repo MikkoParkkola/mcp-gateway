@@ -148,7 +148,7 @@ static_params:
   timezone: auto
   forecast_days: 7
 ";
-    let config: RestConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: RestConfig = crate::yaml::from_str(yaml).unwrap();
     assert_eq!(
         config.static_params["current"],
         "temperature_2m,weather_code"

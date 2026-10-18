@@ -23,7 +23,7 @@ fn test_build_url() {
 }
 
 fn socialdeal_path_selector_config() -> RestConfig {
-    serde_yaml::from_str(
+    crate::yaml::from_str(
         r"
 base_url: https://www.socialdeal.nl
 path: /sitemap/deals/lmd/{city}/deals.xml
@@ -80,7 +80,7 @@ fn path_selector_uses_declared_default_when_parameter_is_absent() {
 #[test]
 fn path_selector_substitutes_selected_default_into_its_own_placeholder() {
     let executor = CapabilityExecutor::new();
-    let config: RestConfig = serde_yaml::from_str(
+    let config: RestConfig = crate::yaml::from_str(
         r"
 base_url: https://api.example.com
 path: /feeds/current/{city}

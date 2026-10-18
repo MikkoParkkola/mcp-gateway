@@ -76,7 +76,7 @@ fn config_with_accounts() -> crate::config::Config {
          client_id: c\n      redirect_uri: https://gw.example.invalid/cb\n      \
          scopes: [s]\n      send_resource_parameter: true\n    \
          ours:\n      mode: shared\n      provider: p\n";
-    serde_yaml::from_str(yaml).expect("config parses")
+    crate::yaml::from_str(yaml).expect("config parses")
 }
 
 #[test]

@@ -8,7 +8,7 @@ fn load_repo_capability(relative_path: &str) -> CapabilityDefinition {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
     let yaml = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
-    serde_yaml::from_str(&yaml)
+    crate::yaml::from_str(&yaml)
         .unwrap_or_else(|e| panic!("failed to parse {}: {e}", path.display()))
 }
 
