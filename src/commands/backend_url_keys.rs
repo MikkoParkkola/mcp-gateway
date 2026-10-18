@@ -99,7 +99,7 @@ pub(crate) fn rewrite_url_aliases(text: &str, only: Option<&BTreeSet<String>>) -
             let value = doc
                 .as_ref()
                 .and_then(|d| d.get("backends")?.get(entry.name.as_str())?.get(alias))
-                .and_then(serde_yaml::Value::as_str);
+                .and_then(crate::yaml::Value::as_str);
             let Some(value) = value else {
                 // The parsed file has no such key: the line is text inside a
                 // value, so the backend needs a hand edit.
@@ -153,10 +153,9 @@ pub(crate) fn rewrite_url_aliases(text: &str, only: Option<&BTreeSet<String>>) -
 /// The file as the gateway's loader reads it, where a repeated key keeps its
 /// last value. It only decides what to report and which values to test; every
 /// edit is still proved against the strict parse in [`only_renamed`].
-fn loader_view(text: &str) -> Option<serde_yaml::Value> {
-    use figment::providers::Format as _;
-    let dict = figment::providers::Yaml::from_str::<figment::value::Dict>(text).ok()?;
-    serde_yaml::to_value(dict).ok()
+fn loader_view(text: &str) -> Option<crate::yaml::Value> {
+    let dict = crate::yaml::from_str_loose(text).ok()?;
+    crate::yaml::to_value(dict).ok()
 }
 
 /// Report each backend the parsed file gives an older key that the line scan
@@ -165,13 +164,13 @@ fn loader_view(text: &str) -> Option<serde_yaml::Value> {
 /// as a hand edit to `url` would be refused or switch transport; any other is
 /// left for a hand edit.
 fn report_unplaced(
-    doc: &serde_yaml::Value,
+    doc: &crate::yaml::Value,
     placed: &BTreeSet<String>,
     only: Option<&BTreeSet<String>>,
     skipped: &mut Vec<String>,
     kept: &mut Vec<String>,
 ) {
-    let Some(backends) = doc.get("backends").and_then(serde_yaml::Value::as_mapping) else {
+    let Some(backends) = doc.get("backends").and_then(crate::yaml::Value::as_mapping) else {
         return;
     };
     for (name, fields) in backends {
@@ -203,10 +202,10 @@ fn report_unplaced(
 /// Whether `after` parses to exactly `before` with each `(backend, alias)`
 /// key renamed `url` and every value, comment-free, unchanged.
 fn only_renamed(before: &str, after: &str, renamed: &[(String, &'static str)]) -> bool {
-    use serde_yaml::Value;
+    use crate::yaml::Value;
     let (Ok(mut expected), Ok(actual)) = (
-        serde_yaml::from_str::<Value>(before),
-        serde_yaml::from_str::<Value>(after),
+        crate::yaml::from_str::<Value>(before),
+        crate::yaml::from_str::<Value>(after),
     ) else {
         return false;
     };
