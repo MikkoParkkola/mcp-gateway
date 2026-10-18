@@ -7,6 +7,8 @@ use std::path::Path;
 
 use syn::visit::Visit;
 
+use super::ci_wiring::{CI_WORKFLOW, assert_ci_registry_ban_conf_dir};
+use super::packaged::repo_file;
 use super::scan::{Place, Sink, expr_attrs, item_attrs, walk};
 
 const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.rs"];
@@ -242,12 +244,7 @@ fn t1f_the_ban_config_and_its_wiring_are_pinned() {
     // The config and pre-push are repo tooling, not shipped in the published
     // crate: the whole check is checkout-only (the span below is read from the
     // config, so it cannot run without it).
-    let packaged = is_packaged_crate();
-    let Some(config) = read_or_skip(
-        crate_root(),
-        "scripts/lint/registry-ban/clippy.toml",
-        packaged,
-    ) else {
+    let Some(config) = repo_file("scripts/lint/registry-ban/clippy.toml") else {
         return;
     };
     let (before, rest) = config
@@ -261,81 +258,18 @@ fn t1f_the_ban_config_and_its_wiring_are_pinned() {
         );
     }
     assert_eq!(span, include_str!("registry_ban_span.toml"), "span differs");
-    let Some(pre_push) = read_or_skip(crate_root(), "scripts/dev/pre-push.sh", packaged) else {
+    let Some(pre_push) = repo_file("scripts/dev/pre-push.sh") else {
         return;
     };
     assert!(
         pre_push.contains("export CLIPPY_CONF_DIR=\"$REPO_ROOT/scripts/lint/registry-ban\""),
         "pre-push does not name scripts/lint/registry-ban"
     );
-}
-
-/// A repository file `t1f` reads, or `None` when it is not there and `packaged`
-/// says the crate is the unpacked published one. `Cargo.toml` `include` leaves
-/// repo tooling out of that crate, so the file is legitimately absent there; in
-/// a checkout a missing file is a failure, so a deleted or renamed pinned file
-/// cannot pass vacuously.
-fn read_or_skip(root: &Path, rel: &str, packaged: bool) -> Option<String> {
-    match std::fs::read_to_string(root.join(rel)) {
-        Ok(text) => Some(text),
-        Err(_) if packaged => {
-            eprintln!("skipped: {rel} is not in the packaged crate");
-            None
-        }
-        Err(e) => panic!("{rel} not found in a checkout: {e}"),
-    }
-}
-
-/// `cargo package` writes `Cargo.toml.orig` into the published crate and never
-/// into a checkout.
-fn is_packaged_crate() -> bool {
-    crate_root().join("Cargo.toml.orig").exists()
-}
-
-/// The decision, on a scratch root: a present file is read in either mode.
-#[test]
-fn a_present_file_is_read_in_both_modes() {
-    let root = tempfile::tempdir().expect("tempdir");
-    std::fs::write(root.path().join("f.txt"), "x").expect("write");
-    for packaged in [false, true] {
-        assert_eq!(
-            read_or_skip(root.path(), "f.txt", packaged).as_deref(),
-            Some("x")
-        );
-    }
-}
-
-/// A missing file is a skip in a packaged crate.
-#[test]
-fn a_missing_file_is_skipped_in_a_packaged_crate() {
-    let root = tempfile::tempdir().expect("tempdir");
-    assert_eq!(read_or_skip(root.path(), "gone.txt", true), None);
-}
-
-/// A missing file in a checkout panics: the pin cannot pass vacuously.
-#[test]
-#[should_panic(expected = "gone.txt")]
-fn a_missing_file_in_a_checkout_panics() {
-    let root = tempfile::tempdir().expect("tempdir");
-    let _ = read_or_skip(root.path(), "gone.txt", false);
-}
-
-/// The vacuity guard: outside a packaged crate both files `t1f` reads exist,
-/// so the skip above cannot be what a checkout run took.
-#[test]
-fn t1f_pinned_files_are_read_in_a_checkout() {
-    if is_packaged_crate() {
+    // MIK-8481: the Linux CI step, the required check, names it too.
+    let Some(ci) = repo_file(CI_WORKFLOW) else {
         return;
-    }
-    for rel in [
-        "scripts/lint/registry-ban/clippy.toml",
-        "scripts/dev/pre-push.sh",
-    ] {
-        assert!(
-            crate_root().join(rel).is_file(),
-            "{rel} missing in a checkout"
-        );
-    }
+    };
+    assert_ci_registry_ban_conf_dir(&ci);
 }
 
 /// The class-taking operations and the scoped read.

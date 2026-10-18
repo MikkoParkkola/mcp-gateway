@@ -1,7 +1,7 @@
 # MIK-8481: pin the Linux CI registry-ban step's `CLIPPY_CONF_DIR`
 
-Status: design v2 (after two design seats). Test-only. Refs MIK-8481, family
-boundary-pins (MIK-8387).
+Status: design v3 (after two design seats and two PACKED.1 review seats).
+Test-only. Refs MIK-8481, family boundary-pins (MIK-8387).
 
 ## Problem
 
@@ -57,22 +57,53 @@ PR-time packaged job only compiles (`--no-run`); the post-merge
 `packaged-suite` runs the tests from the unpacked crate, where the existing
 `t1f` would panic on the missing config.
 
-One test-only helper, `repo_file(rel) -> Option<String>`:
+PACKED.1 (PR #3949) added the helper; this PR moves it to a shared module,
+`boundary_pins/packaged.rs`, with `repo_file(rel) -> Option<String>`:
 
 - file readable: `Some(text)`;
-- file missing and `Cargo.toml.orig` exists beside `Cargo.toml` (cargo writes it
-  into every packaged crate, never into a checkout): `None`, and `t1f` skips its
-  whole file-dependent block with a printed note;
-- file missing in a checkout: panic, so deleting or renaming a pinned file
-  cannot pass vacuously.
+- file not found and the crate is packaged: `None`, and `t1f` skips its whole
+  file-dependent block with a printed note;
+- any other read error, or a missing file in a checkout: panic, so deleting or
+  renaming a pinned file, or pointing it at an unreadable path, cannot pass
+  vacuously. (Seat residual: PACKED.1 skipped on any error.)
+
+"Packaged" is `Cargo.toml.orig` present and no `.git` beside it (cargo writes
+the marker into every packaged crate and an unpacked crate has no `.git`; a
+checkout has one, a file in a worktree). Seat residual: a stray `Cargo.toml.orig`
+in a checkout is therefore not mistaken for a packaged crate, and a test,
+`no_stray_cargo_toml_orig_in_a_checkout`, fails on it with a message instead of
+letting it pass silently.
 
 `t1f` uses it for all three reads (config, pre-push, CI workflow). In the
 packaged crate the config span comparison and both wiring assertions are
 skipped together (the span is extracted from the missing config, so it cannot
 run there); only compilation of the embedded snapshot is verified. A companion
-test, `t1f_pinned_files_are_read_in_a_checkout`, asserts that outside a
+test, `pinned_repo_files_are_read_in_a_checkout`, asserts that outside a
 packaged crate all three files are present, so the pin cannot pass vacuously
 in both modes.
+
+## PACKED.2: a PR-time guard against the whole class
+
+The packaged job at pull-request time only compiles, so any test that joins a
+literal onto the crate root and reads a file `Cargo.toml` `include` leaves out
+fails only after merge. `boundary_pins/shipped_reads.rs` closes that at PR
+time. Per Rust file under `src/`, `tests/` and `benches/`: a file that mentions
+`CARGO_MANIFEST_DIR` and does not go through `repo_file` / `read_or_skip` may
+not contain a string literal that names an existing file, or an existing path
+with a directory part, that is not shipped (`include` entry, glob, `dir/**`, or
+a directory with something shipped under it). On today's tree this finds nothing
+(measured before writing it: the only two offenders were `t1f`'s, now routed
+through the helper), so there is no allowlist.
+
+Limits, accepted: a literal is not proof of a read, and a path built at run time
+(`format!`, `concat!`) is not seen; the guarded failure is the plain
+`root.join("literal")` read. The guard is checkout-only (it asks whether files
+exist). Falsifiers, on a scratch root: an unshipped file and an unshipped path
+with a directory part are flagged; the helper exempts a file; a shipped file, a
+directory with a shipped file under it, a name that is not a path and a path
+that does not exist are not flagged; a file that never mentions the crate root is
+not scanned. On the real tree, a scratch test file reading an unshipped file
+turns the guard red (run once, not committed).
 
 ## Not changed
 
