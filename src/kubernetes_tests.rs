@@ -99,8 +99,7 @@ fn reconcile_plan_blocks_missing_policy_reference() {
 /// reports it as a parse error, before and after routing through the adapter.
 #[test]
 fn parse_refuses_a_malformed_later_document() {
-    let manifest =
-        "apiVersion: v1\nkind: Gateway\nmetadata:\n  name: gw\n---\nkind: [unclosed\n";
+    let manifest = "apiVersion: v1\nkind: Gateway\nmetadata:\n  name: gw\n---\nkind: [unclosed\n";
     let err = parse_resources(manifest).expect_err("a malformed later document must refuse");
     assert!(matches!(err, KubernetesPlanError::Parse(_)), "got {err:?}");
 }
@@ -109,7 +108,8 @@ fn parse_refuses_a_malformed_later_document() {
 /// index reported for a later document's missing field.
 #[test]
 fn an_empty_document_keeps_later_document_indices() {
-    let manifest = "apiVersion: v1\nkind: Gateway\nmetadata:\n  name: gw\n---\n---\nkind: Gateway\n";
+    let manifest =
+        "apiVersion: v1\nkind: Gateway\nmetadata:\n  name: gw\n---\n---\nkind: Gateway\n";
     let err = parse_resources(manifest).expect_err("the third document has no name");
     assert!(
         matches!(

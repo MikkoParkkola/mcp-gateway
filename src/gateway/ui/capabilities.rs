@@ -185,26 +185,26 @@ pub struct CapabilityMeta {
 /// returning 1 if the file parses — is also acceptable, but extracting the
 /// actual provider count gives more useful metadata.
 fn count_tools(yaml: &str) -> usize {
-    // Use serde_yaml to deserialize as generic Value and count providers keys.
-    let Ok(val) = serde_yaml::from_str::<serde_yaml::Value>(yaml) else {
+    // Use the YAML parser to deserialize as generic Value and count providers keys.
+    let Ok(val) = crate::yaml::from_str::<crate::yaml::Value>(yaml) else {
         return 0;
     };
-    if let serde_yaml::Value::Mapping(map) = &val
+    if let crate::yaml::Value::Mapping(map) = &val
         && let Some(providers) = map.get("providers")
     {
         match providers {
-            serde_yaml::Value::Mapping(m) => return m.len().max(1),
-            serde_yaml::Value::Sequence(s) => return s.len().max(1),
+            crate::yaml::Value::Mapping(m) => return m.len().max(1),
+            crate::yaml::Value::Sequence(s) => return s.len().max(1),
             _ => {}
         }
     }
     // Treat as a single-tool capability if parsing succeeds.
-    usize::from(val != serde_yaml::Value::Null)
+    usize::from(val != crate::yaml::Value::Null)
 }
 
 /// Extract the `description` field from raw YAML without full deserialize.
 fn extract_description(yaml: &str) -> Option<String> {
-    let val: serde_yaml::Value = serde_yaml::from_str(yaml).ok()?;
+    let val: crate::yaml::Value = crate::yaml::from_str(yaml).ok()?;
     val.get("description")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
@@ -537,13 +537,13 @@ fn validate_yaml_body(yaml: &str) -> Option<String> {
     }
 
     // 1. Parse as generic YAML to catch syntax errors.
-    let val: serde_yaml::Value = match serde_yaml::from_str(yaml) {
+    let val: crate::yaml::Value = match crate::yaml::from_str(yaml) {
         Ok(v) => v,
         Err(e) => return Some(format!("YAML syntax error: {e}")),
     };
 
     // 2. Must be a mapping at the top level.
-    let serde_yaml::Value::Mapping(ref map) = val else {
+    let crate::yaml::Value::Mapping(ref map) = val else {
         return Some("YAML must be a mapping (key-value document)".to_owned());
     };
 

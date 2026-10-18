@@ -56,7 +56,7 @@ pub(crate) fn hash_plaintext_api_keys(text: &str) -> (Option<String>, Vec<KeyRew
                 let key = entry.get("key")?.as_str()?.to_owned();
                 let name = entry
                     .get("name")
-                    .and_then(serde_yaml::Value::as_str)
+                    .and_then(crate::yaml::Value::as_str)
                     .map_or_else(|| format!("#{i}"), str::to_owned);
                 let digest = entry
                     .get("key_sha256")
@@ -106,7 +106,7 @@ pub(crate) fn hash_plaintext_api_keys(text: &str) -> (Option<String>, Vec<KeyRew
 /// `text` with the `key:` line of entry `index` edited, proven by a strict
 /// parse to change only that entry, and the edited line's number.
 fn edit_entry(text: &str, index: usize, edit: Edit<'_>) -> Option<(String, usize)> {
-    let mut expected: serde_yaml::Value = serde_yaml::from_str(text).ok()?;
+    let mut expected: crate::yaml::Value = crate::yaml::from_str(text).ok()?;
     let entry = expected
         .get_mut("auth")?
         .get_mut("api_keys")?
@@ -149,7 +149,7 @@ fn edit_entry(text: &str, index: usize, edit: Edit<'_>) -> Option<(String, usize
             .enumerate()
             .map(|(i, l)| if i == at { replacement.as_str() } else { l })
             .collect();
-        let actual: serde_yaml::Value = serde_yaml::from_str(&after).ok()?;
+        let actual: crate::yaml::Value = crate::yaml::from_str(&after).ok()?;
         (actual == expected).then_some((after, at + 1))
     })
 }

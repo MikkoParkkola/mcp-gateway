@@ -194,7 +194,7 @@ impl ProtocolImportPlanner {
         source_digest: &str,
         yaml: &str,
     ) -> Result<CapabilityDraft> {
-        let value: Value = serde_yaml::from_str(yaml).map_err(|e| {
+        let value: Value = crate::yaml::from_str(yaml).map_err(|e| {
             Error::Config(format!("Failed to parse generated capability YAML: {e}"))
         })?;
         let name = value
@@ -634,5 +634,5 @@ fn postman_capability_yaml(
 }
 
 fn yaml_from_json(value: &Value) -> Option<String> {
-    serde_yaml::to_string(&value).ok()
+    crate::yaml::to_string(&value).ok()
 }

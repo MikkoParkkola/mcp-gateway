@@ -137,7 +137,7 @@ enable `auth.enabled: true`.";
 const NOTICE_ALREADY_CONFIGURED: &str = "migration: v3.0.0 multi-user posture already configured (auth.single_user or oauth.shared_account set) — no action needed.";
 
 /// Look up a dotted boolean path in a parsed YAML document (e.g. `["auth", "enabled"]`).
-fn yaml_bool(yaml: &serde_yaml::Value, path: &[&str]) -> Option<bool> {
+fn yaml_bool(yaml: &crate::yaml::Value, path: &[&str]) -> Option<bool> {
     let mut cur = yaml;
     for key in path {
         cur = cur.get(key)?;
@@ -146,22 +146,22 @@ fn yaml_bool(yaml: &serde_yaml::Value, path: &[&str]) -> Option<bool> {
 }
 
 /// `true` when any `backends.*.oauth.shared_account` is explicitly `true`.
-fn any_backend_shared_account(yaml: &serde_yaml::Value) -> bool {
+fn any_backend_shared_account(yaml: &crate::yaml::Value) -> bool {
     yaml.get("backends")
-        .and_then(serde_yaml::Value::as_mapping)
+        .and_then(crate::yaml::Value::as_mapping)
         .is_some_and(|backends| {
             backends.values().any(|backend| {
                 backend
                     .get("oauth")
                     .and_then(|oauth| oauth.get("shared_account"))
-                    .and_then(serde_yaml::Value::as_bool)
+                    .and_then(crate::yaml::Value::as_bool)
                     .unwrap_or(false)
             })
         })
 }
 
 /// Classify a parsed config's multi-user posture without mutating it.
-fn detect_multi_user_posture(yaml: &serde_yaml::Value) -> MultiUserPosture {
+fn detect_multi_user_posture(yaml: &crate::yaml::Value) -> MultiUserPosture {
     if !yaml_bool(yaml, &["auth", "enabled"]).unwrap_or(false) {
         return MultiUserPosture::AuthDisabled;
     }
@@ -190,7 +190,7 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
         // No config file at this location: nothing to detect, nothing to warn about.
         return Ok(());
     };
-    let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(&text) else {
+    let Ok(yaml) = crate::yaml::from_str::<crate::yaml::Value>(&text) else {
         // Config::load() will surface the real parse error at startup; the
         // migration must not fail the upgrade over an informational notice.
         tracing::warn!(

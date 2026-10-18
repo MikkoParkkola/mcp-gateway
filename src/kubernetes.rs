@@ -14,6 +14,7 @@ pub mod cluster;
 pub mod controller;
 pub mod evidence;
 
+use crate::yaml::Value;
 pub use cluster::{
     KUBERNETES_CLUSTER_APPLY_PLAN_SCHEMA, KUBERNETES_CLUSTER_EXECUTION_REPORT_SCHEMA,
     KubernetesClusterApplyIntent, KubernetesClusterApplyOptions, KubernetesClusterApplyPlan,
@@ -32,7 +33,6 @@ pub use evidence::{
     KubernetesEvidenceTransport, plan_evidence_exports,
 };
 use serde::{Deserialize, Serialize};
-use serde_yaml::Value;
 
 /// Schema version emitted by Kubernetes reconcile plans.
 pub const KUBERNETES_RECONCILE_PLAN_SCHEMA: &str = "kubernetes.reconcile_plan.v1";
@@ -358,9 +358,8 @@ fn is_valid_k8s_object_name(name: &str) -> bool {
 
 fn parse_resources(input: &str) -> Result<Vec<KubernetesResource>, KubernetesPlanError> {
     let mut resources = Vec::new();
-    for (index, document) in serde_yaml::Deserializer::from_str(input).enumerate() {
-        let value = Value::deserialize(document)
-            .map_err(|err| KubernetesPlanError::Parse(err.to_string()))?;
+    for (index, document) in crate::yaml::documents(input).enumerate() {
+        let value = document.map_err(|err| KubernetesPlanError::Parse(err.to_string()))?;
         if value.is_null() {
             continue;
         }
