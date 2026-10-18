@@ -141,7 +141,7 @@ fn kind_word(unexpected: &str) -> &str {
         .unwrap_or("a value")
 }
 
-/// `serde_yaml`'s trailing ` at line L column C`, kept only when it is exactly
+/// The YAML parser's trailing ` at line L column C`, kept only when it is exactly
 /// that, so no part of a value can ride along.
 fn location(tail: &str) -> &str {
     let Some(at) = tail.rfind(" at line ") else {
