@@ -100,21 +100,13 @@ async fn a_saved_stdio_observation_is_operator_readable() {
     // the final save at teardown) persists it. This is that save.
     Gateway::persist_stdio_protocol_telemetry(&sink);
 
-    let window = crate::protocol_revision_telemetry::load_durable_window(data_dir.path())
+    let window = crate::protocol_revision_telemetry::window::load(data_dir.path())
         .expect("load durable stdio aggregate");
-    assert!(window.snapshot.total >= 1);
+    assert!(window.stdio.total >= 1);
+    assert!(window.stdio.by_transport.get("stdio").copied().unwrap_or(0) >= 1);
     assert!(
         window
-            .snapshot
-            .by_transport
-            .get("stdio")
-            .copied()
-            .unwrap_or(0)
-            >= 1
-    );
-    assert!(
-        window
-            .snapshot
+            .stdio
             .by_revision
             .get("2025-11-25")
             .copied()

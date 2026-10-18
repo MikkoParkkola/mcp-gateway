@@ -742,6 +742,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `server.metrics_token` | KEEP | `None` | security opt-out or credential; must stay an explicit operator decision | - | src/config/server_config.rs:77 |
 | `server.modern_protocol` | KEEP | `true` | multi-replica deployments turn it off (DEPLOYMENT.md:181); it is also the protocol rollback switch | - | src/config/server_config.rs:30 |
 | `server.port` | KEEP | `39400` | where the gateway listens and how clients reach it | - | src/config/server_config.rs:34 |
+| `server.protocol_revision_window` | KEEP | `ProtocolRevisionWindow::Off` | operator decision to start the RFC-0060 U1 measurement window (MIK-8442); `record` seals on shutdown and refuses later requests with 503 | - | src/config/server_config.rs:43 |
 | `server.public_url` | KEEP | `None` | where the gateway listens and how clients reach it | - | src/config/server_config.rs:52 |
 | `server.replicas` | KEEP | `1` | declared, not observable from inside a pod | - | src/config/server_config.rs:83 |
 | `server.request_timeout` | REMOVE | — | retired in 4.0; never had an effect | a load error naming the key and `mcp-gateway upgrade`, which deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs); see UPGRADING 39 | src/config/strict_keys.rs:48 |

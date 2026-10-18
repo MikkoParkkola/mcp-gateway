@@ -13,7 +13,7 @@ use tracing::debug;
 ///
 /// Returns an error if the YAML content cannot be parsed into a capability definition.
 pub fn parse_capability(content: &str) -> Result<CapabilityDefinition> {
-    serde_yaml::from_str(content)
+    crate::yaml::from_str(content)
         .map_err(|e| Error::Config(format!("Failed to parse capability YAML: {e}")))
 }
 

@@ -3,14 +3,16 @@
 //! Process-wide observation entry points over the shared registry.
 
 use std::collections::BTreeMap;
+use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
 
 use serde_json::Value;
 
 // MIK-6704: label only (imported for telemetry attribution, never a decision).
 use super::{
-    CacheScope, ListFilters, META_CLIENT_INFO, META_PROTOCOL_VERSION, SessionAttribution, Snapshot,
-    ToolsListShadow, Transport, UNATTRIBUTED_CLIENT, client_info_name, client_label, global,
-    public_over_filtered, request_meta_value, requested_revision, revision_label,
+    CacheScope, ListFilters, META_CLIENT_INFO, META_PROTOCOL_VERSION, Registry, SessionAttribution,
+    Snapshot, ToolsListShadow, Transport, UNATTRIBUTED_CLIENT, client_info_name, client_label,
+    global, public_over_filtered, request_meta_value, requested_revision, revision_label,
 };
 // Only the zero-registration loop in `register_metrics` reads these.
 #[cfg(feature = "metrics")]
@@ -59,8 +61,66 @@ pub fn observe_inbound_request(
     session_id: Option<&str>,
     transport: Transport,
 ) {
+    let _ = observe_inbound_request_from(
+        request,
+        params,
+        method,
+        protocol_header,
+        session_id,
+        transport,
+        None,
+    );
+}
+
+/// An HTTP request's caller facts for [`observe_inbound_request_from`].
+pub(crate) struct HttpCaller<'a> {
+    /// Raw `User-Agent`; only ever becomes a bounded family key.
+    pub(crate) user_agent: Option<&'a str>,
+    /// The serving gateway's U1 seal (`MetaMcp::window_seal`).
+    pub(crate) sealed: &'a AtomicBool,
+}
+
+/// [`observe_inbound_request`] for an HTTP caller. `false` means the serving
+/// gateway's U1 segment has sealed: the caller must refuse the request, which
+/// is then neither counted nor served. The check runs under the registry lock
+/// the seal is taken under, so a counted request is always in the seal.
+#[must_use]
+pub(crate) fn observe_inbound_request_from(
+    request: &Value,
+    params: Option<&Value>,
+    method: &str,
+    protocol_header: Option<&str>,
+    session_id: Option<&str>,
+    transport: Transport,
+    http: Option<HttpCaller<'_>>,
+) -> bool {
+    observe_into(
+        global(),
+        request,
+        params,
+        method,
+        protocol_header,
+        session_id,
+        transport,
+        http,
+    )
+}
+
+/// The observation over a given registry, so a row can count into its own.
+// One argument per observed fact; a struct would only rename them.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn observe_into(
+    registry: &Mutex<Registry>,
+    request: &Value,
+    params: Option<&Value>,
+    method: &str,
+    protocol_header: Option<&str>,
+    session_id: Option<&str>,
+    transport: Transport,
+    http: Option<HttpCaller<'_>>,
+) -> bool {
     if method.starts_with("notifications/") {
-        return;
+        return true;
     }
     let initialize_params = (method == "initialize").then_some(params).flatten();
     let explicit_requested = request_meta_value(request, params, META_PROTOCOL_VERSION)
@@ -76,9 +136,18 @@ pub fn observe_inbound_request(
         .or_else(|| client_info_name(initialize_params.and_then(|p| p.get("clientInfo"))))
         .unwrap_or_else(|| UNATTRIBUTED_CLIENT.to_string());
 
-    let mut reg = global()
+    let mut reg = registry
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Under the lock the seal is taken under (`window::global_segment_counts`),
+    // so a request is either in the sealed counts or refused here, unserved.
+    if http
+        .as_ref()
+        .is_some_and(|caller| caller.sealed.load(std::sync::atomic::Ordering::SeqCst))
+    {
+        return false;
+    }
+    let user_agent = http.and_then(|caller| caller.user_agent);
     let previous = (transport == Transport::Stdio)
         .then(|| reg.session_attribution(session_id))
         .flatten();
@@ -104,7 +173,7 @@ pub fn observe_inbound_request(
             },
         );
     }
-    reg.observe_request(requested_label, client, transport);
+    reg.observe_request_from(requested_label, client, transport, user_agent);
     drop(reg);
     emit_request_metrics(requested_label, client, transport);
     tracing::debug!(
@@ -113,6 +182,7 @@ pub fn observe_inbound_request(
         transport = transport.as_str(),
         "mcp728.u1 inbound request observation"
     );
+    true
 }
 
 /// Record the extensions a client negotiated for one `tools/call`.

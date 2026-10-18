@@ -246,7 +246,9 @@ src/gateway/server/test_seams.rs	stdio_drain_seams_for_test	-	test-only seam (cf
 src/gateway/server/test_seams.rs	stdio_meta_mcp_for_test	-	test-only seam (cfg(test))
 src/gateway/server/test_seams.rs	take_shutdown_trigger	-	test-only seam (cfg(test))
 src/gateway/server/test_seams.rs	telemetry_save_every	-	test-only seam (cfg(test))
+src/gateway/server/test_seams.rs	window_save_every	-	test-only (the module is cfg(test))
 src/gateway/server/test_seams.rs	with_telemetry_save_interval	-	test-only seam (cfg(test))
+src/gateway/server/test_seams.rs	with_window_save_interval	-	test-only (the module is cfg(test))
 src/gateway/server/tools_changed.rs	backend	-	the tools/list_changed drain task's audience views, off the request path
 src/gateway/server/tools_changed.rs	backend_views	-	the tools/list_changed drain task, off the request path
 src/gateway/server/tools_changed.rs	catalogue	-	the tools/list_changed drain task's catalogue views, off the request path
@@ -435,3 +437,13 @@ src/gateway/server/warmstart/tests.rs	resolve_warm_start_names_uses_all_backends
 src/gateway/server/warmstart/tests.rs	the_attempt_ceiling_follows_the_operators_backend_timeout	-	test-only (the module is cfg(test))
 src/gateway/server/warmstart/tests.rs	unreachable_backend	-	test-only (the module is cfg(test))
 src/gateway/server/warmstart/tests.rs	warm_start_prefetches_tools_in_both_modes	-	test-only (the module is cfg(test))
+src/gateway/server/window_saver.rs	checkpoint_detached	-	U1 window checkpoint on a detached thread every 5 s, off the request path
+src/gateway/server/window_saver.rs	global_counts	-	U1 window counts for the saver's ticks and seal, off the request path
+src/gateway/server/window_saver.rs	open_detached	-	U1 window segment open, once per serve before serving
+src/gateway/server/window_saver.rs	open_into	-	U1 window segment open and its tick retries, off the request path
+src/gateway/server/window_saver.rs	production	-	startup saver settings, once per serve
+src/gateway/server/window_saver.rs	start_window_saver	-	startup U1 window saver, once per serve; seals at shutdown
+src/gateway/server/window_seal_http_backend.rs	answer	-	test-only (the module is cfg(test))
+src/gateway/server/window_seal_http_backend.rs	received	-	test-only (the module is cfg(test))
+src/gateway/server/window_seal_http_backend.rs	release	-	test-only (the module is cfg(test))
+src/gateway/server/window_seal_http_backend.rs	start	-	test-only (the module is cfg(test))
