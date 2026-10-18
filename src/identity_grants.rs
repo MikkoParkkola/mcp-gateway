@@ -249,7 +249,7 @@ pub async fn read_identity_grants_file(path: &Path) -> Result<IdentityGrantFile,
             )
         })?;
     let file = serde_json::from_str::<IdentityGrantFile>(&content)
-        .or_else(|_| serde_yaml::from_str::<IdentityGrantFile>(&content))
+        .or_else(|_| crate::yaml::from_str::<IdentityGrantFile>(&content))
         .map_err(|e| matching::parse_refusal(path, &content, &e))?;
 
     if file.schema_version != IDENTITY_GRANTS_FILE_SCHEMA_VERSION {
@@ -316,7 +316,7 @@ pub async fn write_identity_grants_file(
         serde_json::to_string_pretty(grant_file)
             .map_err(|error| format!("failed to serialize identity grants JSON: {error}"))?
     } else {
-        serde_yaml::to_string(grant_file)
+        crate::yaml::to_string(grant_file)
             .map_err(|error| format!("failed to serialize identity grants YAML: {error}"))?
     };
 

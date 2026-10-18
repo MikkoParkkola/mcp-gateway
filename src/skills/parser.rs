@@ -88,8 +88,12 @@ pub struct ImportedSkill {
     pub code_blocks: Vec<SkillCodeBlock>,
 
     /// Other frontmatter fields kept verbatim (e.g. `metadata`).
+    ///
+    /// The value type is still the YAML parser's own tree type, named here
+    /// through the crate's YAML adapter, so this release does not change it.
+    /// 4.0.0 changes it to `serde_json::Value` (MIK-8425 MIG.2).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, serde_yaml::Value>,
+    pub extra: BTreeMap<String, crate::yaml::Value>,
 
     /// Absolute path to the source SKILL.md file, if parsed from disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -123,7 +127,7 @@ const RECOGNISED_LANGS: &[&str] = &["bash", "sh", "shell", "python", "py", "json
 pub fn parse_skill_md(content: &str) -> Result<ImportedSkill> {
     let (frontmatter, body) = split_frontmatter(content)?;
 
-    let raw: serde_yaml::Value = serde_yaml::from_str(frontmatter)
+    let raw: crate::yaml::Value = crate::yaml::from_str(frontmatter)
         .map_err(|e| Error::Config(format!("SKILL.md YAML frontmatter parse error: {e}")))?;
 
     let mapping = raw
@@ -300,9 +304,9 @@ fn find_frontmatter_end(s: &str) -> Option<usize> {
     None
 }
 
-fn take_required_string(map: &serde_yaml::Mapping, key: &str) -> Result<String> {
+fn take_required_string(map: &crate::yaml::Mapping, key: &str) -> Result<String> {
     let value = map
-        .get(serde_yaml::Value::String(key.to_owned()))
+        .get(crate::yaml::Value::String(key.to_owned()))
         .ok_or_else(|| Error::Config(format!("SKILL.md missing required field '{key}'")))?;
     let s = value
         .as_str()
@@ -316,8 +320,8 @@ fn take_required_string(map: &serde_yaml::Mapping, key: &str) -> Result<String> 
     Ok(s.to_owned())
 }
 
-fn take_optional_string(map: &serde_yaml::Mapping, key: &str) -> Option<String> {
-    map.get(serde_yaml::Value::String(key.to_owned()))
+fn take_optional_string(map: &crate::yaml::Mapping, key: &str) -> Option<String> {
+    map.get(crate::yaml::Value::String(key.to_owned()))
         .and_then(|v| v.as_str())
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
@@ -325,8 +329,8 @@ fn take_optional_string(map: &serde_yaml::Mapping, key: &str) -> Option<String> 
 
 /// Extract a list of strings from either a YAML sequence or a comma-separated
 /// string.  Unknown types are silently ignored (returns empty vec).
-fn take_string_list(map: &serde_yaml::Mapping, key: &str) -> Vec<String> {
-    let Some(value) = map.get(serde_yaml::Value::String(key.to_owned())) else {
+fn take_string_list(map: &crate::yaml::Mapping, key: &str) -> Vec<String> {
+    let Some(value) = map.get(crate::yaml::Value::String(key.to_owned())) else {
         return Vec::new();
     };
     if let Some(seq) = value.as_sequence() {

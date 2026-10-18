@@ -95,7 +95,7 @@ fn refuse_unreadable(path: &Path, text: &str) -> Result<(), String> {
     if super::retired_config_keys::loose(text).is_some() {
         return Ok(());
     }
-    let why = match serde_yaml::from_str::<serde_yaml::Value>(text) {
+    let why = match crate::yaml::from_str::<crate::yaml::Value>(text) {
         Ok(doc) if doc.is_mapping() => "it has a key the gateway's loader cannot read".to_owned(),
         Ok(_) => "its top level is not a mapping of keys".to_owned(),
         Err(e) => e.location().map_or_else(
@@ -236,7 +236,7 @@ mod tests {
                     .is_ok(),
                 "upgrade never waited for the config lock"
             );
-            let x = serde_yaml::from_str("command: x\n").expect("backend");
+            let x = crate::yaml::from_str("command: x\n").expect("backend");
             config.backends.insert("x".into(), x);
             Ok::<_, String>(cli)
         })
