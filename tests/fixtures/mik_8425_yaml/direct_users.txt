@@ -24,13 +24,10 @@ src/commands/upgrade/tests.rs
 src/config/account_consumer_config_tests/managed_transport.rs
 src/config/config_file.rs
 src/config/features/auth_dashboard_session_tests.rs
-src/config/features/events.rs
 src/config/load_error.rs
 src/config/log_once_tests.rs
 src/config/remote_provenance_posture_tests.rs
 src/config/secret_file_ref_tests.rs
-src/config/strict_keys.rs
-src/config/strict_keys_tests.rs
 src/config/tests/error_budget.rs
 src/config/tests/load_error.rs
 src/config/tests/loading.rs
@@ -48,7 +45,6 @@ src/discovery/secret_flow_tests.rs
 src/discovery/secret_map.rs
 src/duration_bound_tests.rs
 src/events/rpc_tests.rs
-src/events/upstream.rs
 src/events/upstream_session_tests.rs
 src/events/worker_detect_gate_tests.rs
 src/gateway/auth_backend_grant_tests.rs
@@ -110,7 +106,6 @@ src/scheduler/tests.rs
 src/security/agent_identity_load_tests.rs
 src/security/audit_rotation_config.rs
 src/security/caller_identity.rs
-src/security/firewall/anomaly_config.rs
 src/security/firewall/collusion_gate_tests.rs
 src/security/posture_tests.rs
 src/transform/pipeline/tests.rs
