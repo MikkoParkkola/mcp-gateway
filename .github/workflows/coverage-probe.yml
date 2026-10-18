@@ -22,6 +22,7 @@ on:
       - "src/transport/stdio.rs"
       - "src/transport/command_split.rs"
       - "src/gateway/input_bridge.rs"
+      - "src/gateway/input_bridge/**"
       - "src/gateway/task_service/**"
       - "src/gateway/meta_mcp/task_confirmation.rs"
       - "src/gateway/meta_mcp/task_confirmation/**"
