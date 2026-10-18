@@ -204,6 +204,8 @@ struct Replayed {
     sends: usize,
     /// Plan executor entries the repeat added.
     entries: usize,
+    /// Committed task rows the repeat added.
+    tasks: usize,
 }
 
 /// Run `(name, arguments)` keyed by `key` (as a task when `task`), with
@@ -246,14 +248,16 @@ async fn replay_after_revoke(
         "premise: every step reached the slot once"
     );
     revoke(gw).await;
-    let (sent, entered) = (
+    let (sent, entered, rows) = (
         gw.sends.load(Ordering::SeqCst),
         crate::gateway::meta_mcp::plan_entries::count(&gw.meta),
+        gw.tasks.service.store.committed_count_for_test(),
     );
     let again = send(gw, &body).await;
-    let (sends, entries) = (
+    let (sends, entries, tasks) = (
         gw.sends.load(Ordering::SeqCst) - sent,
         crate::gateway::meta_mcp::plan_entries::count(&gw.meta) - entered,
+        gw.tasks.service.store.committed_count_for_test() - rows,
     );
     let live = send(gw, &keyed(twin.0, twin.1, Some(&format!("{key}-live")))).await;
     assert_eq!(
@@ -265,6 +269,7 @@ async fn replay_after_revoke(
         live,
         sends,
         entries,
+        tasks,
     }
 }
 
@@ -277,6 +282,7 @@ fn assert_live_offer(row: &str, replayed: &Replayed) {
         live,
         sends,
         entries,
+        tasks,
     } = replayed;
     assert!(
         !again.to_string().contains(SLOT_MARKER) && again.pointer("/result/taskId").is_none(),
@@ -287,6 +293,7 @@ fn assert_live_offer(row: &str, replayed: &Replayed) {
         id_masked(live),
         "{row}: the repeat is not the live twin's offer"
     );
+    assert_eq!(*tasks, 0, "{row}: the repeat changed the task count");
     assert_eq!(*sends, 0, "{row}: the repeat reached the backend");
     // mProceed is killed only by this entries assert: a fall-through to the
     // live run refuses the same way and sends nothing. Keep it.
@@ -382,6 +389,7 @@ fn assert_withheld_frame(row: &str, replayed: &Replayed) {
         again,
         sends,
         entries,
+        tasks,
         ..
     } = replayed;
     assert!(
@@ -394,6 +402,7 @@ fn assert_withheld_frame(row: &str, replayed: &Replayed) {
             "message": "JSON-RPC error -32601: Unknown tool: list_files"}}),
         "{row}: not STORED.1's withheld frame"
     );
+    assert_eq!(*tasks, 0, "{row}: the repeat changed the task count");
     assert_eq!(*sends, 0, "{row}: the repeat reached the backend");
     assert_eq!(*entries, 0, "{row}: the repeat entered the plan executor");
 }

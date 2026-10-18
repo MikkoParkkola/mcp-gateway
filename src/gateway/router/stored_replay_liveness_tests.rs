@@ -22,6 +22,10 @@ const MARKER: &str = "stored-output-8392";
 struct Fx {
     router: axum::Router,
     gateway: DirectAccountGateway,
+    /// The served task executor: its store's committed rows (MIK-8406).
+    tasks: Arc<crate::gateway::task_service::TaskExecutor>,
+    /// The served Meta-MCP: its plan executor entries (MIK-8406).
+    meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
     _store: tempfile::TempDir,
     audit: Option<tempfile::TempDir>,
 }
@@ -115,9 +119,13 @@ async fn fixture_bound(surfaced: bool, audited: bool, binding: &Binding) -> Fx {
         .get(BACKEND)
         .expect("the backend")
         .store_shared_tools_for_test(vec![tool]);
+    let tasks = Arc::clone(&state.task_executor);
+    let served = Arc::clone(&state.meta_mcp);
     Fx {
         router: super::create_router(state),
         gateway,
+        tasks,
+        meta: served,
         _store: store,
         audit,
     }
@@ -629,9 +637,13 @@ async fn two_account_fixture_revokes_one_account_only() {
             .expect("registered")
             .store_shared_tools_for_test(vec![tool]);
     }
+    let tasks = Arc::clone(&state.task_executor);
+    let served = Arc::clone(&state.meta_mcp);
     let fx = Fx {
         router: super::create_router(state),
         gateway,
+        tasks,
+        meta: served,
         _store: tempfile::tempdir().unwrap(),
         audit: None,
     };
