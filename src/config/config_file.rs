@@ -76,6 +76,8 @@ impl Provider for ConfigFile {
     }
 
     fn data(&self) -> figment::Result<Map<Profile, Dict>> {
+        // `figment_data`, not `from_str_loose`: the provider's own read keeps
+        // the document under its profile and returns figment's error type.
         let mut data = crate::yaml::figment_data(&self.text)?;
         for dict in data.values_mut() {
             resolve_backend_urls(dict).map_err(figment::Error::from)?;
