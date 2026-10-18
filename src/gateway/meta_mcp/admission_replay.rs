@@ -97,7 +97,10 @@ impl MetaMcp {
         server: &str,
         tool: &str,
     ) -> bool {
-        self.mints_per_caller(view, server, tool)
+        // MIK-8387: a target absent for this grant (out of scope or
+        // unregistered) never serves a stored result at admission; the live
+        // dispatch answers it as absent, the same as for any other call.
+        view.absence(server).is_some() || self.mints_per_caller(view, server, tool)
     }
 
     /// Whether dispatching `(server, tool)` mints a per-caller credential

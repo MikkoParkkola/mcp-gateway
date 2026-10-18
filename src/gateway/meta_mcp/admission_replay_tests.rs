@@ -87,6 +87,24 @@ async fn an_unrecorded_deferral_fails_closed() {
     );
 }
 
+/// MIK-8387: a target outside the caller's grant defers to the live dispatch,
+/// so a stored result for it is never served at admission. Dropping the
+/// absence check serves it, and this row fails.
+#[test]
+fn an_out_of_scope_target_defers() {
+    let meta = per_caller_meta();
+    let granted = ["other".to_string()];
+    let view = meta.scoped(crate::gateway::authz::BackendGrant::Scoped(&granted));
+    assert!(
+        meta.stored_replay_defers(&view, "idp", "read"),
+        "out of scope: defers"
+    );
+    assert!(
+        meta.stored_replay_defers(&view, "ghost", "read"),
+        "unregistered: defers"
+    );
+}
+
 /// A stored `gateway_execute` answer and the call that made it: one step
 /// on the per-caller backend `idp`, whose account no caller here can prove.
 fn plan_replay() -> (serde_json::Value, JsonRpcResponse) {
