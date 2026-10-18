@@ -29,6 +29,7 @@ closes early and can drop its test."""
 
 from __future__ import annotations
 
+import importlib.util
 import re
 import sys
 import tomllib
@@ -36,6 +37,7 @@ from pathlib import Path
 
 LIST = "docs/release/macos-test-exclusions.tsv"
 WORKFLOW = ".github/workflows/ci.yml"
+SHARD_RUNNER = "scripts/ci/shard_tests.py"
 # The two CI configurations a gate is evaluated under (MIK-8237), with every
 # declared feature on (`--all-features`). A test counts as kept off macOS when
 # its gate is off on macOS but not off on Linux: the list is macOS's coverage
@@ -375,11 +377,26 @@ def listed(root: Path) -> tuple[set[tuple[str, str]], list[str]]:
 
 
 def skipped(root: Path) -> set[tuple[str, str]]:
-    """The `--skip` filters of the macOS job's test step, as (workflow, name)."""
+    """Every `--skip` the macOS suite applies, as (source file, name).
+
+    Since MIK-8482 the suite runs as `macos-shards`, whose skips live in
+    scripts/ci/shard_tests.py (SKIPS["macos"]). The job text is still read,
+    so a `--skip` added straight into the workflow needs a row too. The lib
+    split's `--skip gateway::` is not in SKIPS: it is a complement filter
+    whose other half runs in the sibling shard, not an exclusion.
+    """
     text = (root / WORKFLOW).read_text()
-    job = text.split("\n  macos-check:\n", 1)[1]
+    job = text.split("\n  macos-shards:\n", 1)[1]
     job = re.split(r"\n  [A-Za-z0-9_-]+:\n", job, maxsplit=1)[0]
-    return {(WORKFLOW, name) for name in re.findall(r"--skip[= ](\S+)", job)}
+    found = {(WORKFLOW, name) for name in re.findall(r"--skip[= ](\S+)", job)}
+    runner = root / SHARD_RUNNER
+    if runner.is_file():
+        spec = importlib.util.spec_from_file_location("shard_tests", runner)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        args = module.SKIPS["macos"]
+        found |= {(SHARD_RUNNER, args[i + 1]) for i, a in enumerate(args) if a == "--skip"}
+    return found
 
 
 def problems(root: Path) -> list[str]:

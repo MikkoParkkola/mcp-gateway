@@ -10,7 +10,7 @@ use super::{MAX_EACH_ITEMS, build_cli_invocation};
 use crate::capability::definition::CliConfig;
 
 fn cfg(yaml: &str) -> CliConfig {
-    serde_yaml::from_str(yaml).expect("test config parses")
+    crate::yaml::from_str(yaml).expect("test config parses")
 }
 
 fn argv(config: &CliConfig, params: &Value) -> Vec<String> {
@@ -224,7 +224,7 @@ args: ["{\"calendarId\": \"{calendarId}\", \"q\": \"{q}\"}"]
 
 #[test]
 fn an_unknown_config_key_does_not_parse() {
-    let parsed: Result<CliConfig, _> = serde_yaml::from_str(
+    let parsed: Result<CliConfig, _> = crate::yaml::from_str(
         r#"
 command: trawl
 args_template: "{{ url }}"

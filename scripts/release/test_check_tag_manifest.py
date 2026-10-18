@@ -2449,15 +2449,24 @@ class WorkflowWiring(unittest.TestCase):
         )
         self.assertIn("uses: ./.github/workflows/packaged-suite.yml", jobs("ci.yml")["packaged-suite-rehearsal"])
 
-        # The packaged run skips what ci.yml `test` skips, plus only the tests
-        # that read repository files deliberately kept out of the crate.
-        script = (pathlib.Path(__file__).parents[2] / "scripts" / "ci" / "packaged-tests.sh").read_text(encoding="utf-8")
-        test_cmd = " ".join(c for b in steps("ci.yml", "test") for c in joined(b))
+        # The packaged run skips what the Linux suite skips, plus only the tests
+        # that read repository files deliberately kept out of the crate. Since
+        # MIK-8482 that suite's skips are SKIPS["linux"] in the shard runner,
+        # and no `--skip` may sit in the `test-shards` job text itself.
+        root = pathlib.Path(__file__).parents[2]
+        script = (root / "scripts" / "ci" / "packaged-tests.sh").read_text(encoding="utf-8")
+        shard_job = " ".join(c for b in steps("ci.yml", "test-shards") for c in joined(b))
+        self.assertNotIn("--skip", shard_job, "a Linux suite skip outside scripts/ci/shard_tests.py")
+        spec = importlib.util.spec_from_file_location("shard_tests", root / "scripts" / "ci" / "shard_tests.py")
+        st = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(st)
+        args = st.SKIPS["linux"]
+        linux_skips = {args[i + 1] for i, a in enumerate(args) if a == "--skip"}
         packaged_only: set[str] = set()  # none: every file the suite reads ships (MIK-8163)
         self.assertEqual(
             set(re.findall(r"--skip\s+(\S+)", script)),
-            set(re.findall(r"--skip\s+(\S+)", test_cmd)) | packaged_only,
-            "the packaged run must skip ci.yml test's list plus only the repo-only reads",
+            linux_skips | packaged_only,
+            "the packaged run must skip the Linux suite's list plus only the repo-only reads",
         )
 
     def test_release_tooling_unit_tests_block_on_every_ref(self):
@@ -2841,16 +2850,25 @@ class WorkflowWiring(unittest.TestCase):
         # runner, so the Windows suite skips it by name as `test` does. The
         # property it checks still runs there at the per-PR size: `--skip`
         # matches substrings, so no Windows skip may occur in that test's name.
+        # Since MIK-8482 the suite is `windows-shards`, one runner call per
+        # shard, with every shard's skips in scripts/ci/shard_tests.py.
         suite = [
-            c for b in steps("ci.yml", "windows-check") for c in joined(b)
-            if re.search(r"\bcargo test --all-features --tests\b", c)
+            c for b in steps("ci.yml", "windows-shards") for c in joined(b)
+            if "scripts/ci/shard_tests.py run windows" in c
         ]
         self.assertEqual(len(suite), 1, suite)
-        skips = re.findall(r"--skip\s+(\S+)", suite[0])
-        self.assertIn("mik_7479_full_burst", skips, "Windows must skip the full burst by name")
+        # Exact: an argument appended in the workflow would bypass SKIPS.
+        self.assertEqual(suite[0].strip(), "run: python scripts/ci/shard_tests.py run windows ${{ matrix.shard }}")
+        root = pathlib.Path(__file__).parents[2]
+        spec = importlib.util.spec_from_file_location("shard_tests", root / "scripts" / "ci" / "shard_tests.py")
+        st = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(st)
+        args = st.SKIPS["windows"]
+        skips = [args[i + 1] for i, a in enumerate(args) if a == "--skip"]
+        self.assertEqual(skips, ["mik_7479_full_burst"], "Windows must skip the full burst by name, and only it")
         per_pr = "ac_mrtr_7b_every_call_reaches_one_terminal_frame"
         self.assertFalse([s for s in skips if s in per_pr], f"a Windows skip also drops {per_pr}")
-        ledger = (pathlib.Path(__file__).parents[2] / "tests" / "mik_7479_mrtr7b_ledger.rs").read_text(encoding="utf-8")
+        ledger = (root / "tests" / "mik_7479_mrtr7b_ledger.rs").read_text(encoding="utf-8")
         self.assertIn(f"async fn {per_pr}()", ledger)
 
     def test_a_job_handoff_is_kept_as_long_as_the_repository_allows(self):

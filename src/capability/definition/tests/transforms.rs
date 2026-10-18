@@ -20,7 +20,7 @@ providers:
       path: /v1/test
 ";
     // WHEN: deserializing
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     // THEN: response_transform is empty / noop
     assert!(cap.response_transform.project.is_empty());
     assert!(cap.response_transform.rename.is_empty());
@@ -47,7 +47,7 @@ response_transform:
     - name
 ";
     // WHEN: deserializing
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     // THEN: project fields are populated
     assert_eq!(cap.response_transform.project, vec!["id", "name"]);
     assert!(!cap.response_transform.is_empty());
@@ -71,7 +71,7 @@ response_transform:
       replacement: '[REDACTED]'
 ";
     // WHEN: deserializing
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     // THEN: redact rules are populated
     assert_eq!(cap.response_transform.redact.len(), 1);
     assert_eq!(cap.response_transform.redact[0].pattern, r"\bsecret\b");
@@ -106,7 +106,7 @@ fn response_transform_skipped_in_serialization_when_empty() {
     // GIVEN: a capability with empty response_transform
     let cap = make_capability("test_tool", "Test", vec![]);
     // WHEN: serializing to YAML
-    let yaml = serde_yaml::to_string(&cap).unwrap();
+    let yaml = crate::yaml::to_string(&cap).unwrap();
     // THEN: response_transform key is absent (skip_serializing_if)
     assert!(!yaml.contains("response_transform"));
 }
@@ -117,7 +117,7 @@ fn response_transform_included_in_serialization_when_non_empty() {
     let mut cap = make_capability("test_tool", "Test", vec![]);
     cap.response_transform.project = vec!["id".to_string()];
     // WHEN: serializing to YAML
-    let yaml = serde_yaml::to_string(&cap).unwrap();
+    let yaml = crate::yaml::to_string(&cap).unwrap();
     // THEN: response_transform key is present
     assert!(yaml.contains("response_transform"));
 }
