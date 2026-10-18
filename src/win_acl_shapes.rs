@@ -3,6 +3,7 @@
 //! The safe half of the Windows store custody module: the SID, descriptor
 //! and ACE shapes, and the path encoding every Win32 call takes. Nothing here
 //! is `unsafe`; every Win32 call stays in `win_acl.rs` (ADR-016).
+#![forbid(unsafe_code)]
 
 use std::ffi::OsStr;
 use std::fmt::Write as _;
