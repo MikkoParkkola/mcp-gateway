@@ -53,7 +53,7 @@ impl PlaybookEngine {
             let file_path = entry.path();
             if file_path.extension().and_then(|e| e.to_str()) == Some("yaml") {
                 match std::fs::read_to_string(&file_path) {
-                    Ok(content) => match serde_yaml::from_str::<PlaybookDefinition>(&content) {
+                    Ok(content) => match crate::yaml::from_str::<PlaybookDefinition>(&content) {
                         Ok(def) if !def.sealed_state_references().is_empty() => {
                             for (step, reference) in def.sealed_state_references() {
                                 warn!(path = %file_path.display(), step = %step, reference = %reference,

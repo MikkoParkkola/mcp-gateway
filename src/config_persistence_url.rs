@@ -4,7 +4,7 @@
 //! a backend it adds, and one the file already spelled `url`. Other backends
 //! keep the spelling the operator chose.
 
-use serde_yaml::{Mapping, Value};
+use crate::yaml::{Mapping, Value};
 
 use crate::config::{Config, transport_key_for};
 
@@ -38,8 +38,8 @@ pub(super) fn follow_file_spelling(file: &Mapping, old: &mut Mapping, new: &mut 
 /// (the file's text, when there is one) does not have or spells `url`.
 pub(super) fn render(config: &Config, existing: Option<&str>) -> Result<String, String> {
     let mut value =
-        serde_yaml::to_value(config).map_err(|e| format!("Failed to serialize config: {e}"))?;
-    let file: Option<Value> = existing.and_then(|text| serde_yaml::from_str(text).ok());
+        crate::yaml::to_value(config).map_err(|e| format!("Failed to serialize config: {e}"))?;
+    let file: Option<Value> = existing.and_then(|text| crate::yaml::from_str(text).ok());
     let in_file = file
         .as_ref()
         .and_then(|f| f.get("backends"))
@@ -54,5 +54,5 @@ pub(super) fn render(config: &Config, existing: Option<&str>) -> Result<String, 
             }
         }
     }
-    serde_yaml::to_string(&value).map_err(|e| format!("Failed to serialize config: {e}"))
+    crate::yaml::to_string(&value).map_err(|e| format!("Failed to serialize config: {e}"))
 }
