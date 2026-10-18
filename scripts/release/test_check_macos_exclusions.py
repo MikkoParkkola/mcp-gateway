@@ -26,7 +26,7 @@ class CheckMacosExclusions(unittest.TestCase):
         root = Path(self.dir.name)
         (root / mac.WORKFLOW).parent.mkdir(parents=True, exist_ok=True)
         (root / mac.WORKFLOW).write_text(
-            f"jobs:\n  macos-check:\n    steps:\n      - run: cargo test{skips}\n"
+            f"jobs:\n  macos-shards:\n    steps:\n      - run: cargo test{skips}\n"
             "  test:\n    steps:\n      - run: cargo test -- --skip linux_only\n"
         )
         (root / path).parent.mkdir(parents=True, exist_ok=True)
@@ -101,6 +101,17 @@ class CheckMacosExclusions(unittest.TestCase):
             self.tree(rust, path="tests/events.rs"),
             ["not run on macOS and not listed: tests/events.rs *"],
         )
+
+    def test_a_shard_runner_skip_needs_a_row_and_the_lib_split_does_not(self) -> None:
+        # MIK-8482: the macOS skips live in the shard runner's SKIPS table.
+        runner = Path(self.dir.name) / mac.SHARD_RUNNER
+        runner.parent.mkdir(parents=True, exist_ok=True)
+        runner.write_text('LIB_SPLIT = "gateway::"\nSKIPS = {"macos": ["--skip", "burst"]}\n')
+        self.assertEqual(
+            self.tree("fn nothing() {}\n"),
+            ["not run on macOS and not listed: scripts/ci/shard_tests.py burst"],
+        )
+        self.assertEqual(self.tree("fn nothing() {}\n", "scripts/ci/shard_tests.py\tburst\tn/a\tr\n"), [])
 
     def test_an_equals_skip_is_seen(self) -> None:
         found = self.tree("fn nothing() {}\n", skips=" -- --skip=burst")

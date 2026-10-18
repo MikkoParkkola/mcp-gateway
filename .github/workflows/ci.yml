@@ -178,6 +178,14 @@ jobs:
         run: |
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
           python3 scripts/ci/test_feature_shards.py
+      # The OS test shards are exact complements of the suites they replaced,
+      # with each floor and aggregate wired as ruled (MIK-8482).
+      - name: Validate the OS test shards and their aggregates
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
+          python3 scripts/ci/shard_tests.py --self-test
+          python3 scripts/ci/check_needs.py --self-test
+          python3 scripts/ci/test_os_shards.py
       - name: Validate the gateway-spawn check against planted spawns
         run: python3 scripts/ci/check-gateway-spawns.py --self-test
       - name: Start the gateway in tests only through its isolating helper
@@ -473,27 +481,54 @@ jobs:
 
   # Feature combinations run post-merge only: see feature-combos.yml.
 
-  windows-check:
-    name: Windows check
-    # Starts alongside the Linux suite, not after it: the required path is
-    # then the longer of the two jobs, not their sum (Tests ~31 min, then
-    # Windows ~47 min measured on 2026-10-16). Heads reach CI only after the
-    # local fast gate (fmt, clippy on both feature sets, touched tests), so a
-    # red head that burns a Windows runner slot is the exception.
+  # The Windows suite as shards (MIK-8482): `windows-check` below is the
+  # aggregate that keeps the required name. Starts alongside the Linux suite,
+  # not after it. Heads reach CI only after the local fast gate (fmt, clippy
+  # on both feature sets, touched tests), so a red head that burns Windows
+  # runner slots is the exception.
+  windows-shards:
+    name: Windows shard ${{ matrix.shard }}
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        # Selections and floors: scripts/ci/shard_tests.py.
+        shard: [lib-a, lib-b, int-a, int-b]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
-      # Every test target still has to compile for Windows. The run below is
-      # a subset, and this is what catches a unix-only API slipping into any
-      # target it does not run.
-      - run: cargo test --all-features --no-run
+      # Symlink creation for the no-follow row (W-T6): Developer Mode lets a
+      # non-elevated token create symlinks, so the row runs rather than skips.
+      # Every shard: the W-T6 rows can land in any of them.
+      - name: Allow symlink creation
+        shell: pwsh
+        run: >-
+          New-ItemProperty -Force -PropertyType DWORD -Value 1 -Name AllowDevelopmentWithoutDevLicense
+          -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock
+      # Together the shards are every test target: library, binary and the
+      # integration targets under tests/ (`--tests`), and the examples build.
+      # Each shard compiles the targets it runs, so a unix-only API slipping
+      # into any target still fails here. The store suites are included: both
+      # stores run on Windows with owner-only DACLs (ADR-016). Windows-only
+      # limits are `cfg(unix)` gates.
+      # mik_7479_full_burst is skipped as in `test` (MIK-7644): 1,026 calls missed
+      # its former flat 510 s deadline on this runner (not re-measured at 590 s,
+      # MIK-7534). The exactly-one-terminal-frame property
+      # still runs here at 194 calls (ac_mrtr_7b_every_call_reaches_one_terminal_frame),
+      # and the full burst runs in mrtr7b-full-burst.yml (MIK-7479).
+      # pwsh, never Git Bash: MSYS2 enables backup/restore privilege on the
+      # admin runner, which writes through a DACL deny (MIK-7749).
+      - name: Shard suite
+        shell: pwsh
+        run: python scripts/ci/shard_tests.py run windows ${{ matrix.shard }}
       # The unoptimized exe must start. Clap's derived parser needs ~900 KB of
       # stack in a debug build, over Windows' 1 MiB main-thread default, so
       # every test that spawns the binary died before parsing its arguments.
+      # int-a builds the binaries (`--bins`).
       - name: The debug exe starts
+        if: ${{ !cancelled() && matrix.shard == 'int-a' }}
         shell: bash
         run: |
           set +e
@@ -508,36 +543,14 @@ jobs:
           rc=$?
           echo "hash-key on an empty key exited $rc"
           [[ $rc -eq 2 ]]
-      # The Windows-only modules (`win_acl`, the one module allowed `unsafe`
-      # under ADR-016, and `private_fs`) compile nowhere else, so the Linux
-      # clippy jobs never see them. Lint them where they compile.
-      # No job-wide allow: each non-unix no-op stub that keeps the unix
-      # signature carries its own #[expect(clippy::unnecessary_wraps)]
-      # (MIK-8223).
-      - run: cargo clippy --all-targets --all-features -- -D warnings
-      # Symlink creation for the no-follow row (W-T6): Developer Mode lets a
-      # non-elevated token create symlinks, so the row runs rather than skips.
-      - name: Allow symlink creation
-        shell: pwsh
-        run: >-
-          New-ItemProperty -Force -PropertyType DWORD -Value 1 -Name AllowDevelopmentWithoutDevLicense
-          -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock
-      # Every test target: library, binary and the integration targets under
-      # tests/. The store suites are included: both stores run on Windows with
-      # owner-only DACLs (ADR-016). Windows-only limits are `cfg(unix)` gates.
-      # mik_7479_full_burst is skipped as in `test` (MIK-7644): 1,026 calls missed
-      # its former flat 510 s deadline on this runner (not re-measured at 590 s,
-      # MIK-7534). The exactly-one-terminal-frame property
-      # still runs here at 194 calls (ac_mrtr_7b_every_call_reaches_one_terminal_frame),
-      # and the full burst runs in mrtr7b-full-burst.yml (MIK-7479).
-      - run: cargo test --all-features --tests --no-fail-fast -- --show-output --skip mik_7479_full_burst
       # Owner-only rows that need real Windows state: a second, non-admin
       # account (the runner is an administrator, whose rights bypass DACLs), a
       # mapped network drive, and FAT32/exFAT volumes. Runs after the suite
       # even when it failed, so no evidence hides behind an earlier failure.
+      # lib-a: the rows are library tests, and that shard has the lib built.
       - name: Privileged owner-only rows
         id: privileged
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.shard == 'lib-a' }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -575,11 +588,56 @@ jobs:
           cargo test --all-features --lib -- --ignored --show-output win_privileged::
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-  macos-check:
-    name: macOS check
+  # Moved out of the Windows suite so the lint does not sit on its critical
+  # path (MIK-8482). The Windows-only modules (`win_acl`, the one module
+  # allowed `unsafe` under ADR-016, and `private_fs`) compile nowhere else,
+  # so the Linux clippy jobs never see them. Lint them where they compile.
+  # No job-wide allow: each non-unix no-op stub that keeps the unix
+  # signature carries its own #[expect(clippy::unnecessary_wraps)]
+  # (MIK-8223).
+  windows-clippy:
+    name: Windows clippy
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+
+  # The required name. Green only when every Windows shard and the clippy job
+  # succeeded: a skipped or cancelled one is red (scripts/ci/check_needs.py).
+  # always() so a failed shard still yields a verdict; the skip guards are the
+  # shards' own, so a throwaway PR or a post-merge push skips this as before.
+  windows-check:
+    name: Windows check
+    needs: [windows-shards, windows-clippy]
+    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Every Windows shard and the clippy job succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 scripts/ci/check_needs.py windows-shards windows-clippy
+
+  # The macOS suite as shards (MIK-8482); `macos-check` is the aggregate.
+  macos-shards:
+    name: macOS shard ${{ matrix.shard }}
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: macos-latest
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        # Three jobs: the account has five macOS runners in all (MIK-8482).
+        shard: [lib-a, lib-b, int]
+    env:
+      # Trial (MIK-8482 ruling): kept only if PR runs beat the probe's
+      # default-jobs timings; the 7 GB runner swapped at the default.
+      CARGO_BUILD_JOBS: 2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -592,13 +650,36 @@ jobs:
       # Tests job's, for the same reason; every test that does not run on
       # macOS is listed in docs/release/macos-test-exclusions.tsv.
       - name: Every test kept off macOS is listed (MIK-8174)
+        if: matrix.shard == 'lib-a'
         run: python3 scripts/release/check_macos_exclusions.py
-      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
+      - name: Shard suite
+        run: python3 scripts/ci/shard_tests.py run macos ${{ matrix.shard }}
 
-  test:
-    name: Tests
+  macos-check:
+    name: macOS check
+    needs: [macos-shards]
+    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Every macOS shard succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 scripts/ci/check_needs.py macos-shards
+
+  # The Linux suite as shards (MIK-8482); `test` below is the aggregate that
+  # keeps the required name `Tests` (and docker-build's `needs: test`).
+  test-shards:
+    name: Linux shard ${{ matrix.shard }}
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Selections and floors: scripts/ci/shard_tests.py.
+        shard: [lib-a, lib-b, int-a, int-b]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -610,12 +691,16 @@ jobs:
       # The external journey is executed by the mandatory SDK job below.
       # Not a flake skip (MIK-7534): it needs Python and Redis, which only
       # that job provisions, and the gate below `needs` that job.
-      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
+      # The skips themselves live in scripts/ci/shard_tests.py (SKIPS).
+      - name: Shard suite
+        run: python3 scripts/ci/shard_tests.py run linux ${{ matrix.shard }}
       # MIK-8185: the UPGRADING checks again, on the guide as release
       # preparation will assemble it from upgrading.d/, so a fragment that
       # would break a check at release breaks its own PR. A run that selects
       # no test fails: a renamed module must not turn this into a green no-op.
       - name: UPGRADING checks on the assembled guide (MIK-8185)
+        # int-b: its `[!a-l]*` targets include upgrading_summary_rows.
+        if: matrix.shard == 'int-b'
         run: |
           set -euo pipefail
           python3 scripts/release/upgrading_fragments.py assemble --dry-run > "$RUNNER_TEMP/UPGRADING-4.0.md"
@@ -628,6 +713,20 @@ jobs:
               exit 1
             fi
           done
+
+  test:
+    name: Tests
+    needs: [test-shards]
+    if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Every Linux shard succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 scripts/ci/check_needs.py test-shards
 
   # The test run for red-first and mutation-proof pull requests: a same-repo
   # `throwaway/` branch into the release line. Every other job in this file
