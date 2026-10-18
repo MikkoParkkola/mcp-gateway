@@ -167,7 +167,7 @@ mod tests {
     fn default_require_client_cert_is_true() {
         // GIVEN: config with enabled=true, no explicit require_client_cert
         let yaml = "enabled: true\nserver_cert: a\nserver_key: b\nca_cert: c";
-        let cfg: MtlsConfig = serde_yaml::from_str(yaml).unwrap();
+        let cfg: MtlsConfig = crate::yaml::from_str(yaml).unwrap();
         // THEN: strict mode is the default
         assert!(cfg.require_client_cert);
     }
@@ -177,7 +177,7 @@ mod tests {
         // GIVEN: explicit require_client_cert: false
         let yaml =
             "enabled: true\nserver_cert: a\nserver_key: b\nca_cert: c\nrequire_client_cert: false";
-        let cfg: MtlsConfig = serde_yaml::from_str(yaml).unwrap();
+        let cfg: MtlsConfig = crate::yaml::from_str(yaml).unwrap();
         // THEN: optional client cert mode
         assert!(!cfg.require_client_cert);
     }
@@ -206,7 +206,7 @@ allow:
 deny:
   tools: ["*_write*", "*_delete*"]
 "#;
-        let rule: PolicyRuleConfig = serde_yaml::from_str(yaml).unwrap();
+        let rule: PolicyRuleConfig = crate::yaml::from_str(yaml).unwrap();
         // THEN: fields parsed correctly
         assert_eq!(rule.match_criteria.cn.as_deref(), Some("github-actions-ci"));
         assert_eq!(rule.allow.backends, &["tavily", "brave"]);
@@ -217,7 +217,7 @@ deny:
     #[test]
     fn catch_all_rule_uses_any_true() {
         let yaml = "match:\n  any: true\ndeny:\n  backends: [\"*\"]\n  tools: [\"*\"]";
-        let rule: PolicyRuleConfig = serde_yaml::from_str(yaml).unwrap();
+        let rule: PolicyRuleConfig = crate::yaml::from_str(yaml).unwrap();
         assert_eq!(rule.match_criteria.any, Some(true));
         assert_eq!(rule.deny.backends, &["*"]);
     }
@@ -233,7 +233,7 @@ deny:
     fn cert_match_config_all_fields_optional() {
         // GIVEN: empty match block
         let yaml = "{}";
-        let m: CertMatchConfig = serde_yaml::from_str(yaml).unwrap();
+        let m: CertMatchConfig = crate::yaml::from_str(yaml).unwrap();
         // THEN: all None / false
         assert!(m.cn.is_none());
         assert!(m.ou.is_none());
@@ -245,7 +245,7 @@ deny:
     #[test]
     fn spiffe_san_uri_preserved_in_config() {
         let yaml = "match:\n  san_uri: \"spiffe://company.com/agent/*\"\nallow:\n  tools: [\"*\"]";
-        let rule: PolicyRuleConfig = serde_yaml::from_str(yaml).unwrap();
+        let rule: PolicyRuleConfig = crate::yaml::from_str(yaml).unwrap();
         assert_eq!(
             rule.match_criteria.san_uri.as_deref(),
             Some("spiffe://company.com/agent/*")

@@ -107,7 +107,7 @@ impl OpenApiConverter {
     pub fn convert_string(&self, content: &str) -> Result<Vec<GeneratedCapability>> {
         // Try JSON first (most specs are served as JSON); fall back to YAML.
         let spec: OpenApiSpec = serde_json::from_str(content)
-            .or_else(|_| serde_yaml::from_str(content))
+            .or_else(|_| crate::yaml::from_str(content))
             .map_err(|e| Error::Config(format!("Failed to parse OpenAPI spec: {e}")))?;
 
         self.convert_spec(&spec)
@@ -586,14 +586,14 @@ impl OpenApiConverter {
 
         // Schema
         yaml.push_str("schema:\n  input:\n");
-        for line in serde_yaml::to_string(input_schema)
+        for line in crate::yaml::to_string(input_schema)
             .unwrap_or_default()
             .lines()
         {
             let _ = writeln!(yaml, "    {line}");
         }
         yaml.push_str("  output:\n");
-        for line in serde_yaml::to_string(output_schema)
+        for line in crate::yaml::to_string(output_schema)
             .unwrap_or_default()
             .lines()
         {

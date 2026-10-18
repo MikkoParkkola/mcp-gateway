@@ -70,22 +70,22 @@ async fn detect_rug_pulls_in_dir(dir: &Path, out: &mut Vec<RugPullRecord>) {
         // Extract embedded pin via lightweight deserialisation. A parse error
         // here is not a rug-pull (the loader will surface it); we only care
         // about files that self-declare a pin that no longer matches.
-        let pinned: Option<String> = serde_yaml::from_str::<serde_yaml::Value>(&content)
+        let pinned: Option<String> = crate::yaml::from_str::<crate::yaml::Value>(&content)
             .ok()
             .and_then(|v| {
                 v.get("sha256")
-                    .and_then(serde_yaml::Value::as_str)
+                    .and_then(crate::yaml::Value::as_str)
                     .map(str::to_string)
             });
         let Some(expected) = pinned else { continue };
         let actual = compute_capability_hash(&content);
         if !expected.eq_ignore_ascii_case(&actual) {
             // Recover the capability name the same way parse_capability_file does.
-            let name = serde_yaml::from_str::<serde_yaml::Value>(&content)
+            let name = crate::yaml::from_str::<crate::yaml::Value>(&content)
                 .ok()
                 .and_then(|v| {
                     v.get("name")
-                        .and_then(serde_yaml::Value::as_str)
+                        .and_then(crate::yaml::Value::as_str)
                         .map(str::to_string)
                 })
                 .or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned()))

@@ -19,7 +19,7 @@ use super::warmstart::{WarmStartMode, WarmerGuard, build_warm_start_list};
 use super::{
     BuiltMetaMcp, events_wiring, expand_home_path, identity_grants, listener, persistence,
     spawn_export_task, spawn_health_loop, spawn_idle_reaper, start_checks, task_runtime,
-    tools_changed,
+    tools_changed, window_saver,
 };
 use crate::capability::CapabilityWatcher;
 use crate::config_reload::{ConfigWatcher, LiveConfig, ReloadContext};
@@ -69,8 +69,8 @@ impl Gateway {
         }
 
         // ── Shared MetaMcp initialisation ────────────────────────────────────
-        // `data_dir` is read only by the cost-governance persistence tasks.
-        #[cfg_attr(not(feature = "cost-governance"), allow(unused_variables))]
+        // `data_dir` is read by the cost-governance persistence tasks and by
+        // the protocol-revision window saver.
         let BuiltMetaMcp {
             meta_mcp,
             tool_policy,
@@ -547,6 +547,27 @@ impl Gateway {
                 )
             });
 
+        // RFC-0060 U1 (MIK-7211): with `record`, this process's window
+        // segment opens before anything is served (bounded), and seals on the
+        // shutdown broadcast. `None` with `off`.
+        let window_saver = {
+            #[allow(unused_mut)]
+            let mut settings = window_saver::SaverSettings::production();
+            #[cfg(test)]
+            if let Some(every) = self.test_seams.window_save_every() {
+                settings.every = every;
+            }
+            window_saver::start_window_saver(
+                self.config.server.protocol_revision_window,
+                data_dir.clone(),
+                listener.local_addr().unwrap_or(addr),
+                window_saver::global_counts(Arc::clone(&meta_mcp_for_shutdown.window_seal)),
+                shutdown_tx.subscribe(),
+                settings,
+            )
+            .await
+        };
+
         // Plain HTTP or mTLS: one path, one shutdown bound (#2147).
         // A test may start the same shutdown without a signal (MIK-8156).
         #[cfg(test)]
@@ -574,6 +595,11 @@ impl Gateway {
         let (ranker, tracker) = (ranker_for_shutdown, tracker_for_shutdown);
         let paths = (ranker_path.clone(), transition_path.clone());
         persistence::save_state_on_shutdown(ranker, paths.0, tracker, paths.1, cost).await;
+        // Awaited after the state saves, not before: its own deadline runs
+        // from the broadcast, so a stalled window disk never delays them.
+        if let Some(saver) = window_saver {
+            drop(saver.await);
+        }
 
         let drain_timeout = self.config.server.shutdown_timeout;
         Self::drain_inflight(&inflight, drain_timeout).await;

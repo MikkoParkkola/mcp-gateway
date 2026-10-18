@@ -57,7 +57,7 @@ mod tests {
     /// the verb every webhook sender uses (MIK-7758).
     #[test]
     fn a_route_without_a_method_accepts_post() {
-        let route: WebhookDefinition = serde_yaml::from_str("path: /acme/hook").unwrap();
+        let route: WebhookDefinition = crate::yaml::from_str("path: /acme/hook").unwrap();
         assert_eq!(route.method, "POST");
     }
 }

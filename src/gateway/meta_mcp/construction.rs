@@ -81,6 +81,7 @@ impl MetaMcp {
             prompts_resources_fetch_timeout: std::time::Duration::from_secs(10),
             #[cfg(feature = "spec-preview")]
             session_promoted: Arc::new(DashMap::new()),
+            window_seal: Arc::default(),
             session_state: SessionStateStore::new(),
             message_signer: None,
             nonce_store: None,
