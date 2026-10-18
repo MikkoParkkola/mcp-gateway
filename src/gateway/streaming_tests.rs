@@ -197,15 +197,16 @@ async fn spawn_reaper_on_reaps_sessions_automatically() {
 
     assert_eq!(multiplexer.session_count(), 1);
 
-    // WHEN: wait for the reaper to fire (TTL=50ms, interval=20ms)
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    // THEN
-    assert_eq!(
-        multiplexer.session_count(),
-        0,
-        "reaper must have cleaned up expired session"
-    );
+    // WHEN / THEN: the reaper fires (TTL=50ms, interval=20ms), waited on the
+    // reap itself rather than a window (MIK-8486).
+    crate::test_wait::wait_until(crate::test_wait::HANG_BOUND, || {
+        std::future::ready(match multiplexer.session_count() {
+            0 => std::ops::ControlFlow::Break(()),
+            n => std::ops::ControlFlow::Continue(format!("{n} sessions left")),
+        })
+    })
+    .await
+    .expect("reaper must have cleaned up expired session");
     assert!(!multiplexer.has_session(&id));
 }
 
@@ -232,14 +233,17 @@ async fn spawn_reaper_on_sweeps_the_session_lifecycle() {
 
     // WHEN: the host tick runs.
     multiplexer.spawn_reaper_on(Arc::clone(&lifecycle));
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // THEN: the tick reclaimed it.
-    assert_eq!(
-        lifecycle.tracked_count(),
-        0,
-        "the reaper tick must sweep the lifecycle, not only the session map"
-    );
+    // THEN: the tick reclaimed it, waited on the reclaim rather than a
+    // window (MIK-8486).
+    crate::test_wait::wait_until(crate::test_wait::HANG_BOUND, || {
+        std::future::ready(match lifecycle.tracked_count() {
+            0 => std::ops::ControlFlow::Break(()),
+            n => std::ops::ControlFlow::Continue(format!("{n} keys tracked")),
+        })
+    })
+    .await
+    .expect("the reaper tick must sweep the lifecycle, not only the session map");
 }
 
 /// MIK-7215.CONTROL.5, gap G2: a session the reaper removes is a real end,
@@ -264,7 +268,17 @@ async fn the_reaper_fires_session_end_handlers_for_a_reaped_session() {
     drop(receiver);
 
     multiplexer.spawn_reaper_on(Arc::clone(&lifecycle));
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Waited on the handler call, not a window: the reaper removes the
+    // session before it announces the end (MIK-8486).
+    crate::test_wait::wait_until(crate::test_wait::HANG_BOUND, || {
+        std::future::ready(if ended.lock().is_empty() {
+            std::ops::ControlFlow::Continue("no end announced".to_owned())
+        } else {
+            std::ops::ControlFlow::Break(())
+        })
+    })
+    .await
+    .expect("the reaper announced the end");
 
     assert!(!multiplexer.has_session(&id), "the session was reaped");
     assert_eq!(ended.lock().as_slice(), [id], "its end was announced once");

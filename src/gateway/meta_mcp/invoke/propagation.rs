@@ -502,3 +502,11 @@ pub(crate) struct ResolvedDispatch {
     /// The dispatch binding: whichever of the two names a per-caller binding.
     pub(super) binding: Option<String>,
 }
+
+impl ResolvedDispatch {
+    /// Whether the credential step may have reached an issuer: a failed
+    /// optional mint counts too.
+    pub(super) fn minted(&self) -> bool {
+        self.caller_credential.cache_binding.is_some() || self.caller_credential.attempted
+    }
+}

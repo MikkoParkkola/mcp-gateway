@@ -260,8 +260,8 @@ mod tests {
             default_params: serde_json::Value::Null,
         };
 
-        let yaml = serde_yaml::to_string(&config).unwrap();
-        let restored: JsonRpcConfig = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = crate::yaml::to_string(&config).unwrap();
+        let restored: JsonRpcConfig = crate::yaml::from_str(&yaml).unwrap();
 
         assert_eq!(restored.endpoint, "http://localhost:8080/rpc");
         assert_eq!(restored.method, "system.listMethods");

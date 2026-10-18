@@ -38,7 +38,7 @@
 //!         description: The item identifier
 //! "#;
 //!
-//! let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+//! let cap: CapabilityDefinition = mcp_gateway::capability::parse_capability(yaml).unwrap();
 //! let issues = validate_capability_definition(&cap, None);
 //! assert!(issues.iter().all(|i| i.severity == IssueSeverity::Warning));
 //! ```

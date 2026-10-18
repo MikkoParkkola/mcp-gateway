@@ -164,6 +164,25 @@ impl MetaMcp {
         self.admit_backend_wide(server)
     }
 
+    /// MIK-8475: whether `server`'s `tool` is a target whose error-rate check
+    /// waits for the credential step (MIK-8439): a per-user backend, or a
+    /// capability on an account that is not a declared `shared` descriptor.
+    /// A caller with no view meets the account's answer first, so the
+    /// cooldown cannot say the tool exists.
+    ///
+    /// MIK-8387: read through the caller's view. A target outside it is not
+    /// a deferred one, so the cooldown cannot meet that caller first.
+    pub(in crate::gateway::meta_mcp) fn defers_error_rate_cooldown(
+        &self,
+        view: &crate::gateway::meta_mcp::scoped_backends::ScopedBackends<'_>,
+        server: &str,
+        tool: &str,
+    ) -> bool {
+        view.scoped_get(server)
+            .is_some_and(|backend| backend.keeps_per_user_catalogues())
+            || self.account_mints_per_caller(view, server, tool)
+    }
+
     /// MIK-8439: [`Self::admit_target`] after the credential step, for every
     /// backend, a profile refusal answered as the policy answers it. The
     /// policy skips the error-rate check on a per-user backend; a shared one
@@ -204,7 +223,11 @@ impl MetaMcp {
     /// so it is met only at dispatch, by a caller who can see the tool, and on
     /// a per-user backend only after the credential step (MIK-8439); a caller
     /// who cannot see it gets the missing name's answer (#3872 review C).
-    fn admit_enabled_capability(&self, server: &str, tool: &str) -> Result<()> {
+    pub(in crate::gateway::meta_mcp) fn admit_enabled_capability(
+        &self,
+        server: &str,
+        tool: &str,
+    ) -> Result<()> {
         let cooldown = self.capability_budget_config.read().cooldown;
         if self
             .kill_switch
