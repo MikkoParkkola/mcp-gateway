@@ -44,6 +44,9 @@ const MAIN_STACK_BYTES: usize = 8 * 1024 * 1024;
 
 #[path = "main_runtime.rs"]
 mod runtime;
+/// The one YAML seam (MIK-8425): the binary compiles `commands` and
+/// `runtime` itself, so they reach it as `crate::yaml` here too.
+mod yaml;
 use runtime::RuntimeShutdown;
 fn main() -> ExitCode {
     on_main_stack(|| {
