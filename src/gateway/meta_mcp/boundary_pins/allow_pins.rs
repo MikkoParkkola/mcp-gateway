@@ -43,7 +43,9 @@ fn crate_root() -> &'static Path {
 fn ban_allow(attrs: &[syn::Attribute]) -> Option<String> {
     for attr in attrs {
         let text = attr.meta.to_token_stream_string();
-        if text.contains("disallowed_methods") && (text.contains("allow") || text.contains("expect")) {
+        if text.contains("disallowed_methods")
+            && (text.contains("allow") || text.contains("expect"))
+        {
             let class = text
                 .split("reason")
                 .nth(1)
@@ -72,7 +74,11 @@ impl TokenText for syn::Meta {
 }
 
 fn path_text(path: &syn::Path) -> String {
-    path.segments.iter().map(|s| s.ident.to_string()).collect::<Vec<_>>().join("::")
+    path.segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect::<Vec<_>>()
+        .join("::")
 }
 
 /// The banned names a node references, as calls or as paths, with counts:
@@ -93,7 +99,12 @@ impl<'ast> Visit<'ast> for Names {
     fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
         // A path names a banned method only on its own type: `Cell::get` is not
         // `BackendRegistry::get`.
-        let segs: Vec<String> = path.path.segments.iter().map(|s| s.ident.to_string()).collect();
+        let segs: Vec<String> = path
+            .path
+            .segments
+            .iter()
+            .map(|s| s.ident.to_string())
+            .collect();
         if let [.., owner, name] = segs.as_slice()
             && BANNED.contains(&name.as_str())
             && ["BackendRegistry", "MetaMcp", "Self"].contains(&owner.as_str())
@@ -111,7 +122,11 @@ struct Allows(Vec<String>);
 
 impl Allows {
     fn row(&mut self, at: &Place, kind: &str, class: &str, names: Names) {
-        let names: Vec<String> = names.0.into_iter().map(|(n, c)| format!("{n}x{c}")).collect();
+        let names: Vec<String> = names
+            .0
+            .into_iter()
+            .map(|(n, c)| format!("{n}x{c}"))
+            .collect();
         self.0.push(format!(
             "{}\t{}\t{kind}\t{class}\t{}",
             at.file,
@@ -184,7 +199,13 @@ fn t1b_every_production_allow_of_the_ban_is_pinned() {
         actual.len(),
         actual.join("\n")
     );
-    let classes = ["Visibility", "Discovery", "Background", "Admin", "Lifecycle"];
+    let classes = [
+        "Visibility",
+        "Discovery",
+        "Background",
+        "Admin",
+        "Lifecycle",
+    ];
     for row in &actual {
         let fields: Vec<&str> = row.split('\t').collect();
         if !fields[4].is_empty() {
@@ -192,7 +213,10 @@ fn t1b_every_production_allow_of_the_ban_is_pinned() {
                 classes.contains(&fields[3]),
                 "an allow covering a banned name has no Unscoped class: {row}"
             );
-            assert_eq!(fields[2], "statement", "an allow covering a banned name is not on a statement: {row}");
+            assert_eq!(
+                fields[2], "statement",
+                "an allow covering a banned name is not on a statement: {row}"
+            );
         }
     }
 }
@@ -215,9 +239,12 @@ fn t2a_the_router_holds_no_allow_of_the_ban() {
 /// (pre-push's path changed).
 #[test]
 fn t1f_the_ban_config_and_its_wiring_are_pinned() {
-    let config = std::fs::read_to_string(crate_root().join("scripts/lint/registry-ban/clippy.toml"))
-        .expect("config not found");
-    let (before, rest) = config.split_once("# MIK-8387 begin\n").expect("begin marker");
+    let config =
+        std::fs::read_to_string(crate_root().join("scripts/lint/registry-ban/clippy.toml"))
+            .expect("config not found");
+    let (before, rest) = config
+        .split_once("# MIK-8387 begin\n")
+        .expect("begin marker");
     let (span, after) = rest.split_once("# MIK-8387 end\n").expect("end marker");
     for line in before.lines().chain(after.lines()) {
         assert!(
@@ -226,7 +253,8 @@ fn t1f_the_ban_config_and_its_wiring_are_pinned() {
         );
     }
     assert_eq!(span, include_str!("registry_ban_span.toml"), "span differs");
-    let pre_push = std::fs::read_to_string(crate_root().join("scripts/dev/pre-push.sh")).expect("pre-push");
+    let pre_push =
+        std::fs::read_to_string(crate_root().join("scripts/dev/pre-push.sh")).expect("pre-push");
     assert!(
         pre_push.contains("export CLIPPY_CONF_DIR=\"$REPO_ROOT/scripts/lint/registry-ban\""),
         "pre-push does not name scripts/lint/registry-ban"
@@ -270,18 +298,31 @@ impl Sink for Ops {
                             .map(|s| s.ident.to_string())
                             .unwrap_or_default(),
                         _ => {
-                            self.bad.push(format!("{}::{func}: {op} with a non-literal class", at.file));
+                            self.bad.push(format!(
+                                "{}::{func}: {op} with a non-literal class",
+                                at.file
+                            ));
                             return;
                         }
                     }
                 };
-                self.rows.push(format!("{}\t{func}\t{op}\t{class}", at.file));
+                self.rows
+                    .push(format!("{}\t{func}\t{op}\t{class}", at.file));
             }
             syn::Expr::Path(p) => {
-                let segs: Vec<String> = p.path.segments.iter().map(|s| s.ident.to_string()).collect();
+                let segs: Vec<String> = p
+                    .path
+                    .segments
+                    .iter()
+                    .map(|s| s.ident.to_string())
+                    .collect();
                 if let Some(last) = segs.last() {
                     if OPS.contains(&last.as_str()) && segs.len() > 1 {
-                        self.bad.push(format!("{}::{func}: {} referenced outside a call", at.file, segs.join("::")));
+                        self.bad.push(format!(
+                            "{}::{func}: {} referenced outside a call",
+                            at.file,
+                            segs.join("::")
+                        ));
                     }
                     // `Registry` is gateway-private: a `Registry::new` outside
                     // the gateway is another type of that name.
@@ -325,7 +366,11 @@ fn pinned(text: &str) -> Vec<String> {
 #[test]
 fn t1a_every_classed_read_is_pinned() {
     let found = ops();
-    assert!(found.bad.is_empty(), "unclassifiable operation use: {:?}", found.bad);
+    assert!(
+        found.bad.is_empty(),
+        "unclassifiable operation use: {:?}",
+        found.bad
+    );
     let want = pinned(include_str!("scoped_backends_classes.tsv"));
     assert!(
         found.rows == want,
@@ -342,7 +387,9 @@ fn t1d_registry_construction_sites_are_pinned() {
     let found = ops();
     assert_eq!(
         found.news,
-        pinned("src/gateway/meta_mcp/construction.rs\tbuild\nsrc/gateway/meta_mcp/upstream.rs\tnew"),
+        pinned(
+            "src/gateway/meta_mcp/construction.rs\tbuild\nsrc/gateway/meta_mcp/upstream.rs\tnew"
+        ),
         "unpinned Registry::new"
     );
 }

@@ -85,7 +85,10 @@ impl Gateway {
         // F24: this mode delivers tools/list_changed, so it may advertise it.
         meta_mcp.set_change_feed(crate::gateway::ChangeFeed::Http);
         let (tools_changed_tx, tools_changed_rx) = tokio::sync::mpsc::unbounded_channel();
-        #[allow(clippy::disallowed_methods, reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request")]
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
+        )]
         self.backends.set_change_feed(tools_changed_tx);
 
         self.log_feature_states();
@@ -596,7 +599,10 @@ impl Gateway {
         // Stop all backends, after their warmers can no longer start one.
         info!("Shutting down backends...");
         warmer.cancel().await;
-        #[allow(clippy::disallowed_methods, reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request")]
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
+        )]
         self.backends.stop_all().await;
 
         Ok(())

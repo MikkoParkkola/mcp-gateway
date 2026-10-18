@@ -348,7 +348,10 @@ pub(super) fn build_warm_start_list(
     configured: &[String],
     announce_selection: bool,
 ) -> Vec<String> {
-    #[allow(clippy::disallowed_methods, reason = "Background: background work over the registered backends; no caller request")]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "Background: background work over the registered backends; no caller request"
+    )]
     resolve_warm_start_names(
         configured,
         backends
@@ -449,7 +452,10 @@ impl ReloadWarmer {
         }
         let mut scheduled = Vec::new();
         for (name, shutdown) in names.into_iter().zip(receivers) {
-            #[allow(clippy::disallowed_methods, reason = "Background: background work over the registered backends; no caller request")]
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "Background: background work over the registered backends; no caller request"
+            )]
             let Some(instance) = self.backends.get(&name) else {
                 if matches!(self.mode, WarmStartMode::Http) {
                     warn!(backend = %name, "Backend not found for warm-start");
@@ -622,7 +628,10 @@ async fn warm_start_until_cached(
     // attempt that cannot produce tools would otherwise retry forever against a
     // condition it can never satisfy.
     if !warm_start_prefetches_tools(mode) {
-        #[allow(clippy::disallowed_methods, reason = "Background: background work over the registered backends; no caller request")]
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Background: background work over the registered backends; no caller request"
+        )]
         if let Some(backend) = backends.get(name)
             && let Err(e) = backend.ensure_started().await
         {

@@ -344,7 +344,10 @@ async fn revive_backend(
         return admin_auth_required().into_response();
     }
 
-    #[allow(clippy::disallowed_methods, reason = "Admin: the operator dashboard behind admin auth; not a tenant read")]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "Admin: the operator dashboard behind admin auth; not a tenant read"
+    )]
     let Some(backend) = state.backends.get(&name) else {
         return flat_error(StatusCode::NOT_FOUND, format!("Backend '{name}' not found"))
             .into_response();

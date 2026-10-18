@@ -22,7 +22,10 @@ impl MetaMcp {
         server: &str,
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> Result<Vec<(String, String)>> {
-        #[allow(clippy::disallowed_methods, reason = "Discovery: the headers API forwards to the credential API (design §2.6)")]
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Discovery: the headers API forwards to the credential API (design §2.6)"
+        )]
         Ok(self
             .resolve_propagation_credential(server, verified_identity)
             .await?

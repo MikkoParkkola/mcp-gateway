@@ -222,7 +222,10 @@ fn decide_on(
             instance,
             kind,
         } => {
-            #[allow(clippy::disallowed_methods, reason = "Background: background work over the registered backends; no caller request")]
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "Background: background work over the registered backends; no caller request"
+            )]
             let backend = backends.get(&name);
             // Cleared BEFORE any read of this backend, shared slot included: a
             // store or verdict from now on queues a fresh nudge, so none is
@@ -269,7 +272,10 @@ fn decide_on(
             prefix,
         } => {
             // A replaced instance's late nudge: its successor's own follow.
-            #[allow(clippy::disallowed_methods, reason = "Background: background work over the registered backends; no caller request")]
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "Background: background work over the registered backends; no caller request"
+            )]
             backends.get(&name).filter(|b| b.instance() == instance)?;
             if !announced.lock().revoked(&name, instance, &prefix) {
                 return None;

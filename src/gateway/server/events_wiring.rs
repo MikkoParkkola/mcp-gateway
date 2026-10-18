@@ -46,7 +46,10 @@ pub(super) fn install(
             Arc::new({
                 let registry = Arc::clone(&registry);
                 move || {
-                    #[allow(clippy::disallowed_methods, reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request")]
+                    #[allow(
+                        clippy::disallowed_methods,
+                        reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
+                    )]
                     let mut names: Vec<String> =
                         registry.all().iter().map(|b| b.name.clone()).collect();
                     names.extend(capability.clone());

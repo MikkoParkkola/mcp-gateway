@@ -356,7 +356,10 @@ pub async fn apply_patch(
             cache_ttl,
             runtime_plan,
         ));
-        #[allow(clippy::disallowed_methods, reason = "Lifecycle: config reload applies the operator's backend set; no caller request")]
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Lifecycle: config reload applies the operator's backend set; no caller request"
+        )]
         if registry.register(Arc::clone(&backend)) {
             info!(backend = %name, transport = %cfg.transport.transport_type(), "Config reload: backend added");
         } else {
@@ -369,20 +372,29 @@ pub async fn apply_patch(
     }
 
     for name in &patch.backends_removed {
-        #[allow(clippy::disallowed_methods, reason = "Lifecycle: config reload applies the operator's backend set; no caller request")]
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Lifecycle: config reload applies the operator's backend set; no caller request"
+        )]
         if let Some(backend) = registry.get(name)
             && let Err(e) = backend.stop().await
         {
             warn!(backend = %name, error = %e, "Config reload: error stopping removed backend");
         }
-        #[allow(clippy::disallowed_methods, reason = "Lifecycle: config reload applies the operator's backend set; no caller request")]
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Lifecycle: config reload applies the operator's backend set; no caller request"
+        )]
         registry.remove(name);
         info!(backend = %name, "Config reload: backend removed");
     }
 
     for (name, cfg) in &patch.backends_modified {
         // Stop old instance (waits for transport close).
-        #[allow(clippy::disallowed_methods, reason = "Lifecycle: config reload applies the operator's backend set; no caller request")]
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Lifecycle: config reload applies the operator's backend set; no caller request"
+        )]
         if let Some(old) = registry.get(name)
             && let Err(e) = old.stop().await
         {
@@ -397,7 +409,10 @@ pub async fn apply_patch(
             cache_ttl,
             runtime_plan,
         ));
-        #[allow(clippy::disallowed_methods, reason = "Lifecycle: config reload applies the operator's backend set; no caller request")]
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Lifecycle: config reload applies the operator's backend set; no caller request"
+        )]
         if registry.register(Arc::clone(&backend)) {
             info!(backend = %name, transport = %cfg.transport.transport_type(), "Config reload: backend updated");
         } else {

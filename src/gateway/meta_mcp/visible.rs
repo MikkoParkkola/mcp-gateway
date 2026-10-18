@@ -11,8 +11,7 @@
 use crate::capability::validator::input_schema_is_structurally_valid;
 use crate::protocol::Tool;
 
-use super::{InvokeScope, MetaMcp};
-use super::scoped_backends::Unscoped;
+use super::{InvokeScope, MetaMcp, scoped_backends::Unscoped};
 #[path = "visible_absent.rs"]
 mod absent;
 #[path = "visible_deferred.rs"]
@@ -85,7 +84,10 @@ impl MetaMcp {
         // loads, and a webhook-only one carries a null schema by design, so
         // only a tool from a registry backend is judged here, as
         // `surfaced_schema_withheld` judges it.
-        if self.backends.get_for(Unscoped::Visibility, server).is_some()
+        if self
+            .backends
+            .get_for(Unscoped::Visibility, server)
+            .is_some()
             && !input_schema_is_structurally_valid(&tool.input_schema)
         {
             return Visibility::Withheld(Withholding::Schema);

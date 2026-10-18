@@ -218,7 +218,10 @@ impl ReloadContext {
     ) -> Result<Self> {
         // A registry built by the caller still serves this config's posture.
         let running = live_config.running();
-        #[allow(clippy::disallowed_methods, reason = "Lifecycle: config reload applies the operator's backend set; no caller request")]
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Lifecycle: config reload applies the operator's backend set; no caller request"
+        )]
         registry.enforce_destinations(
             DestinationPolicy::for_posture(running.security.posture),
             &running.security.hardened.private_backends,
@@ -367,7 +370,10 @@ impl ReloadContext {
         // `gateway_reload_config` meta-tool, the admin UI reload, every admin UI
         // backend edit, and the config-file watcher. See `apply_patch` for why
         // the lock cannot live one level down.
-        #[allow(clippy::disallowed_methods, reason = "Lifecycle: config reload applies the operator's backend set; no caller request")]
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Lifecycle: config reload applies the operator's backend set; no caller request"
+        )]
         let lock = self.registry.lock_reload();
         let _reload_guard = tokio::select! {
             biased;
@@ -414,7 +420,10 @@ impl ReloadContext {
         &self,
         wait: Duration,
     ) -> std::result::Result<tokio::sync::MutexGuard<'_, ()>, ConfigWriteError> {
-        #[allow(clippy::disallowed_methods, reason = "Lifecycle: config reload applies the operator's backend set; no caller request")]
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Lifecycle: config reload applies the operator's backend set; no caller request"
+        )]
         tokio::time::timeout(wait, self.registry.lock_reload())
             .await
             .map_err(|_| ConfigWriteError::Busy)
@@ -435,7 +444,10 @@ impl ReloadContext {
         // is dropped (a client that disconnects, a caller's timeout) releases
         // the lock while its read is still stalled. The permit travels into the
         // thread and is released only when that read returns.
-        #[allow(clippy::disallowed_methods, reason = "Lifecycle: config reload applies the operator's backend set; no caller request")]
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Lifecycle: config reload applies the operator's backend set; no caller request"
+        )]
         let read_slot = self.registry.reload_read_slot();
         let slot = tokio::select! {
             biased;

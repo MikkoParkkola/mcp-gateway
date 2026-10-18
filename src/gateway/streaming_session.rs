@@ -117,7 +117,10 @@ impl super::NotificationMultiplexer {
     #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)] // async for future streaming implementation
     pub async fn subscribe_backend(&self, session_id: &str, backend_name: &str) -> Result<()> {
         // Verify backend exists
-        #[allow(clippy::disallowed_methods, reason = "Background: auto-subscribe over the operator's configured names; logged, never answered to a caller")]
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Background: auto-subscribe over the operator's configured names; logged, never answered to a caller"
+        )]
         let _backend = self
             .backends
             .get(backend_name)

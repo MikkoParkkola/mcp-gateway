@@ -285,7 +285,10 @@ pub(super) fn spawn_idle_reaper(
                 tick.await;
             }
 
-            #[allow(clippy::disallowed_methods, reason = "Background: background work over the registered backends; no caller request")]
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "Background: background work over the registered backends; no caller request"
+            )]
             for backend in backends.all() {
                 let closed = backend.evict_idle_per_user_entries(PER_USER_IDLE_TTL);
                 if closed > 0 {

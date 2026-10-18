@@ -335,7 +335,10 @@ impl EventsHub {
         // which every register and remove takes for writing: no backend added
         // between them loses its rows (MIK-7897 LIFE.2). Order: catalogue gate,
         // then membership; the registry never takes the catalogue gate.
-        #[allow(clippy::disallowed_methods, reason = "Background: the events source watches backends; no caller request")]
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Background: the events source watches backends; no caller request"
+        )]
         let withdrawn = match self.runtime.backends.get() {
             Some(registry) => registry.with_membership(judge),
             None => judge(0),
