@@ -33,7 +33,8 @@ jobs:
         include:
           - { os: ubuntu-latest, kind: linux }
           - { os: windows-2025, kind: windows }
-          - { os: macos-latest, kind: macos }
+          # The macOS baseline runs as a macos-compile variant, so all macOS
+          # work stays under one 2-runner cap (the account has 5 macOS slots).
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -77,8 +78,12 @@ jobs:
     timeout-minutes: 120
     strategy:
       fail-fast: false
+      # Every macOS job of this probe shares the cap of 2 by being serial:
+      # this matrix (2 at a time), then shard-macos (2 at a time) after it.
+      max-parallel: 2
       matrix:
         include:
+          - { os: macos-latest, variant: baseline, args: "", jobs: "" }
           - { os: macos-latest, variant: cold-lib, args: "--lib", jobs: "" }
           - { os: macos-latest, variant: jobs2, args: "", jobs: "2" }
           - { os: macos-15-intel, variant: intel, args: "", jobs: "" }
@@ -87,7 +92,19 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - name: Baseline (macOS) with memory sampling
+        if: matrix.variant == 'baseline'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          ( while true; do date -u +%FT%TZ; sysctl vm.swapusage; vm_stat | head -8
+            ps -axo rss,comm | awk '/rustc|ld$/{s+=$1} END{print "rustc+ld rss KB", s}'
+            sleep 30; done ) > out/mem.log 2>&1 &
+          python3 scripts/ci/mik_8482_shard_probe.py baseline macos out/baseline-macos.json
+          cp -r target/cargo-timings out/
       - name: Compile with memory sampling
+        if: matrix.variant != 'baseline'
         shell: bash
         env:
           ARGS: ${{ matrix.args }}
@@ -120,15 +137,14 @@ jobs:
     timeout-minutes: 120
     strategy:
       fail-fast: false
-      max-parallel: 20
+      # Throttled so real PRs keep runners: Linux 6 at a time.
+      max-parallel: 6
       matrix:
         run: [1, 2, 3, 4, 5]
-        os: [ubuntu-latest, windows-2025, macos-latest]
+        os: [ubuntu-latest]
         shard: [liba, libb, inta, intb]
         include:
           - { os: ubuntu-latest, kind: linux }
-          - { os: windows-2025, kind: windows }
-          - { os: macos-latest, kind: macos }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -153,5 +169,68 @@ jobs:
         if: always()
         with:
           name: probe-${{ matrix.kind }}-${{ matrix.shard }}-${{ matrix.run }}
+          path: out/*.json
+          retention-days: 7
+
+  shard-windows:
+    name: Probe ${{ matrix.os }} ${{ matrix.shard }} run ${{ matrix.run }}
+    if: startsWith(github.head_ref, 'throwaway/mik-8482')
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      # Throttled so real PRs keep runners: Windows 6 at a time.
+      max-parallel: 6
+      matrix:
+        run: [1, 2, 3, 4, 5]
+        os: [windows-2025]
+        shard: [liba, libb, inta, intb]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      # As ci.yml's Windows check: W-T6 no-follow rows need symlink creation.
+      - name: Allow symlink creation
+        shell: pwsh
+        run: >-
+          New-ItemProperty -Force -PropertyType DWORD -Value 1 -Name AllowDevelopmentWithoutDevLicense
+          -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock
+      - name: Shard (pwsh as ci.yml runs its tests)
+        shell: pwsh
+        run: python scripts/ci/mik_8482_shard_probe.py shard windows ${{ matrix.shard }} out/windows-${{ matrix.shard }}-${{ matrix.run }}.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: probe-windows-${{ matrix.shard }}-${{ matrix.run }}
+          path: out/*.json
+          retention-days: 7
+
+  # After macos-compile, so the probe never holds more than 2 macOS runners.
+  shard-macos:
+    name: Probe ${{ matrix.os }} ${{ matrix.shard }} run ${{ matrix.run }}
+    needs: macos-compile
+    if: ${{ !cancelled() && startsWith(github.head_ref, 'throwaway/mik-8482') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        run: [1, 2, 3, 4, 5]
+        os: [macos-latest]
+        shard: [liba, libb, inta, intb]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - name: Shard
+        shell: bash
+        run: python3 scripts/ci/mik_8482_shard_probe.py shard macos ${{ matrix.shard }} out/macos-${{ matrix.shard }}-${{ matrix.run }}.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: probe-macos-${{ matrix.shard }}-${{ matrix.run }}
           path: out/*.json
           retention-days: 7
