@@ -371,7 +371,7 @@ pub(super) async fn read_active_fixture_spec(
         )
     })?;
     let spec = serde_json::from_str::<TrustLabActiveFixtureSpec>(&content)
-        .or_else(|_| serde_yaml::from_str::<TrustLabActiveFixtureSpec>(&content))
+        .or_else(|_| crate::yaml::from_str::<TrustLabActiveFixtureSpec>(&content))
         .map_err(|e| {
             format!(
                 "failed to parse TrustLab active fixtures {}: {e}",

@@ -200,7 +200,7 @@ async fn read_card_file(path: &Path) -> Result<TrustCard, String> {
         .await
         .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
     serde_json::from_str::<TrustCard>(&content)
-        .or_else(|_| serde_yaml::from_str::<TrustCard>(&content))
+        .or_else(|_| crate::yaml::from_str::<TrustCard>(&content))
         .map_err(|e| format!("failed to parse TrustCard {}: {e}", path.display()))
 }
 

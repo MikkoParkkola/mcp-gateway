@@ -23,7 +23,7 @@ impl SpecDetector {
             return Self::detect_from_value(&json);
         }
         // Try YAML (also covers JSON-subset YAML)
-        if let Ok(val) = serde_yaml::from_str::<Value>(content) {
+        if let Ok(val) = crate::yaml::from_str::<Value>(content) {
             return Self::detect_from_value(&val);
         }
         // GraphQL check on raw string (in case JSON parse fails partially)

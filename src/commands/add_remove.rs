@@ -298,7 +298,7 @@ mod tests {
                     .is_ok(),
                 "the CLI writer never waited for the config lock"
             );
-            let x = serde_yaml::from_str("command: x\n").expect("backend");
+            let x = crate::yaml::from_str("command: x\n").expect("backend");
             config.backends.insert("x".into(), x);
             Ok::<_, String>(cli)
         })
@@ -386,7 +386,7 @@ mod tests {
                     .is_ok(),
                 "remove never waited for the config lock"
             );
-            let x = serde_yaml::from_str("command: x\n").expect("backend");
+            let x = crate::yaml::from_str("command: x\n").expect("backend");
             config.backends.insert("x".into(), x);
             Ok::<_, String>(cli)
         })
