@@ -1,0 +1,3 @@
+src/gateway/input_bridge/channel.rs	new	1	DeliveryCommit::new only boxes the caller's closure; what it does and when it may run are decided where it is built and where commit is called.
+src/gateway/input_bridge/channel.rs	commit	1	DeliveryCommit::commit runs the boxed closure once by consuming self; the receipt it carries and the decision to send it are made by the caller that built it.
+src/gateway/input_bridge/channel.rs	fmt	1	DeliveryCommit's Debug prints the type name only; the boxed closure is never formatted, so nothing it captured reaches a log.
