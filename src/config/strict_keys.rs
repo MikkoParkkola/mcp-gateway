@@ -345,17 +345,17 @@ fn unread_backend_keys(raw: &str, ignored: &mut IgnoredKeys) -> BackendFindings 
     // A repeated key fails the strict parse but loads, last value winning; the
     // loader's own reading is the fallback, so a repeat elsewhere in the file
     // cannot switch this check off (MIK-8044, B1).
-    let Some(doc) = serde_yaml::from_str::<serde_yaml::Value>(raw)
+    let Some(doc) = crate::yaml::from_str::<crate::yaml::Value>(raw)
         .ok()
         .or_else(|| {
-            serde_yaml::from_str::<figment::value::Dict>(raw)
+            crate::yaml::from_str_loose(raw)
                 .ok()
-                .and_then(|dict| serde_yaml::to_value(dict).ok())
+                .and_then(|dict| crate::yaml::to_value(dict).ok())
         })
     else {
         return BackendFindings::new();
     };
-    let Some(backends) = doc.get("backends").and_then(serde_yaml::Value::as_mapping) else {
+    let Some(backends) = doc.get("backends").and_then(crate::yaml::Value::as_mapping) else {
         return BackendFindings::new();
     };
     let mut found = BackendFindings::new();
@@ -374,12 +374,12 @@ fn unread_backend_keys(raw: &str, ignored: &mut IgnoredKeys) -> BackendFindings 
         }
         let keys: Vec<&str> = fields
             .keys()
-            .filter_map(serde_yaml::Value::as_str)
+            .filter_map(crate::yaml::Value::as_str)
             .collect();
         // `url` selects what its scheme stands for, as the loader resolves it.
         let by_url = fields
             .get("url")
-            .and_then(serde_yaml::Value::as_str)
+            .and_then(crate::yaml::Value::as_str)
             .and_then(super::backend_transport::transport_key_for);
         let selected = TRANSPORTS
             .iter()
@@ -407,8 +407,8 @@ fn unread_backend_keys(raw: &str, ignored: &mut IgnoredKeys) -> BackendFindings 
 }
 
 /// A non-string mapping key as the file spells it.
-fn rendered(key: &serde_yaml::Value) -> String {
-    serde_yaml::to_string(key).map_or_else(|_| "?".to_owned(), |text| text.trim_end().to_owned())
+fn rendered(key: &crate::yaml::Value) -> String {
+    crate::yaml::to_string(key).map_or_else(|_| "?".to_owned(), |text| text.trim_end().to_owned())
 }
 
 fn is_backend_key(key: &str) -> bool {

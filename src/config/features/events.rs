@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn delivery_timing_keys_parse_and_refuse_zero() {
-        let config: EventsConfig = serde_yaml::from_str(
+        let config: EventsConfig = crate::yaml::from_str(
             "retry_base: 200ms\nretry_max_attempts: 3\nretry_window: 5s\n\
              suspend_window: 2s\nsuspend_min_attempts: 4\n",
         )
