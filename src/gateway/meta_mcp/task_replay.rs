@@ -345,9 +345,9 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
     ) -> bool {
+        let view = self.scoped(caller.scope().authorizer.backend_grant());
         stored.targets.iter().any(|target| {
-            self.backends
-                .get(&target.server)
+            view.scoped_get(&target.server)
                 .is_some_and(|backend| backend.keeps_per_user_catalogues())
                 && self
                     .admit_target(&super::invoke::dispatch_guards::BackendCall {
