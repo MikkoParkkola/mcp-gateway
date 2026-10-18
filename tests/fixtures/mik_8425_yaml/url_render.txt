@@ -1,0 +1,676 @@
+== fresh
+env_files: []
+server:
+  modern_protocol: true
+  host: 127.0.0.1
+  port: 39400
+  shutdown_timeout: 30s
+  protocol_revision_window: off
+  max_body_size: 10485760
+  idempotency_key: optional
+  replicas: 1
+auth:
+  enabled: false
+  bearer_token: null
+  api_keys: []
+  public_paths:
+  - /health
+  client_circuit_breaker: null
+  single_user: false
+  dashboard_session:
+    idle_timeout_secs: 1800
+    absolute_timeout_secs: 28800
+meta_mcp:
+  enabled: true
+  cache_ttl: 300s
+  prompts_resources_fetch_timeout: 10s
+  warm_start: []
+  surfaced_tools: []
+  projection_mode: off
+  exposed_meta_tools: []
+  expose_stats_tool: false
+streaming:
+  enabled: true
+  buffer_size: 100
+  keep_alive_interval: 15s
+  auto_subscribe: []
+  session_ttl: 1800s
+  session_reaper_interval: 60s
+failsafe:
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5
+    success_threshold: 3
+    reset_timeout: 30s
+  retry:
+    enabled: true
+    max_attempts: 3
+    initial_backoff: 100ms
+    max_backoff: 10s
+    multiplier: 2.0
+  rate_limit:
+    enabled: true
+    requests_per_second: 100
+    burst_size: 50
+  health_check:
+    enabled: true
+    interval: 10s
+    timeout: 5s
+error_budget:
+  threshold: null
+  window_size: null
+  window_duration: null
+  min_samples: null
+  capability:
+    threshold: null
+    window_size: null
+    window_duration: null
+    min_samples: null
+    cooldown: null
+backends:
+  svc:
+    description: ''
+    enabled: true
+    chain_signer: null
+    protocol_version: null
+    stop_when_idle_for: null
+    max_frame_bytes: null
+    timeout: 30s
+    env: {}
+    headers: {}
+    oauth: null
+    secrets: []
+    passthrough: false
+    allow_flagged_tools: {}
+    input_schema_enforcement: closed
+    allow_cleartext_credentials: false
+    signature_chain: off
+    chain_origins: []
+    url: https://api.example.test/mcp
+capabilities:
+  enabled: true
+  name: gateway
+  directories:
+  - capabilities
+  egress_proxy: null
+  process_execution: enabled
+  process_commands: null
+  files:
+    uploads: null
+    projects: null
+    downloads: null
+    downloads_quota_bytes: 1073741824
+cache:
+  enabled: true
+  default_ttl: 60s
+  max_entries: 10000
+idempotency:
+  read_only_tools: []
+playbooks:
+  enabled: false
+  directories:
+  - playbooks
+security:
+  posture: standard
+  hardened:
+    private_backends: []
+  sanitize_input: true
+  ssrf_protection: true
+  trust_configured_backends: true
+  tool_policy:
+    enabled: true
+    default_action: allow
+    allow: []
+    deny: []
+    use_default_deny: true
+    log_denied: true
+  firewall:
+    enabled: true
+    scan_requests: true
+    scan_responses: true
+    prompt_injection_detection: true
+    credential_redaction: true
+    anomaly_detection: false
+    audit_log: null
+    rules: []
+    memory_poisoning:
+      enabled: true
+      max_entry_size_bytes: 10240
+      scan_tools:
+      - remember
+      - batch_remember
+      - store
+      - kv_set
+      - kv_search
+    anomaly_threshold: 0.7
+    anomaly_block_threshold: null
+    anomaly_min_observations: 20
+    tenant_guard:
+      enabled: false
+      max_tenants_per_window: 3
+      window_secs: 300
+      arg_keys: []
+      cross_tenant_reads: observe
+    budget:
+      enabled: false
+      max_calls_per_window: 600
+      window_secs: 60
+    collusion:
+      action: off
+      window_secs: 600
+      min_matches: 2
+      common_principals: 5
+      sources: []
+      non_egress: []
+      allowed_flows: []
+  message_signing:
+    enabled: false
+    shared_secret: ''
+    previous_secret: ''
+    require_nonce: false
+    replay_window: 300
+    key_id: default
+  agent_identity:
+    enabled: false
+    require_id: false
+    known_agents: []
+    allow_unverified_agent_identity: false
+    principal_labels: []
+    incomparable_proof_sources: []
+  transparency_log:
+    path: ~/.mcp-gateway/transparency/transparency.jsonl
+    key_id: default
+    shared_secret: ''
+    rotation:
+      max_segment_bytes: 67108864
+      max_segment_age_secs: 0
+      retain_segments: 12
+      on_disk_full: expire_oldest
+  response_inspection:
+    enabled: true
+    action_mode: false
+  response_contract:
+    enabled: false
+    action_mode: false
+    default_max_bytes: null
+    fail_closed: false
+    tools: {}
+  identity_grants:
+    enabled: false
+    path: ~/.mcp-gateway/identity-grants.yaml
+    fail_on_error: true
+  caller_identity:
+    mode: off
+    trusted_proxies: []
+    authority: ''
+    cloudflare_access:
+      team_domain: ''
+      audiences: []
+  context_integrity:
+    preset: monitor_only
+    non_bypassable: false
+  remote_server_signing:
+    require_for_remote_backends: false
+    trusted_keys: {}
+    backends: {}
+  provenance_stamping: false
+  claim_capture:
+    enabled: false
+    path: ~/.mcp-gateway/claim-capture/claims.jsonl
+  signature_chain: null
+webhooks:
+  enabled: true
+  base_path: /webhooks
+  require_signature: true
+  rate_limit: 100
+routing_profiles: {}
+default_routing_profile: ''
+code_mode:
+  enabled: false
+mtls:
+  enabled: false
+  server_cert: ''
+  server_key: ''
+  ca_cert: ''
+  require_client_cert: false
+  crl_path: null
+  policies: []
+key_server:
+  enabled: false
+  token_ttl_secs: 3600
+  max_tokens_per_identity: 5
+  max_oidc_token_age_secs: 300
+  cleanup_interval_secs: 60
+  oidc: []
+  policies: []
+  admin_token: null
+  delegated_bearer: false
+agent_auth:
+  enabled: false
+  agents: []
+runtime:
+  default_provider: local_process
+  availability:
+    local_process: true
+    docker: false
+    podman: false
+    systemd: false
+    launchd: false
+    kubernetes: false
+  profiles: {}
+control_plane:
+  role_mapping:
+    rules: []
+  export:
+    enabled: false
+    sink_path: ~/.mcp-gateway/export/siem.ndjson
+    poll_interval_secs: 15
+    max_batch: 1024
+cost_governance:
+  enabled: false
+  budgets:
+    daily: null
+    per_tool: {}
+    per_key: {}
+  alerts:
+  - at_percent: 50
+    action: log
+  - at_percent: 80
+    action: notify
+  - at_percent: 100
+    action: block
+  tool_costs: {}
+  default_cost: 0.0
+  alternatives: null
+tasks:
+  store_dir: ~/.mcp-gateway/tasks
+  default_ttl_ms: 86400000
+  poll_interval_ms: 1000
+  max_records: 256
+  max_per_principal: 32
+  max_workers: 16
+  max_record_bytes: 524288
+  logical_budget_bytes: 134217728
+  expiry_interval: 60s
+events:
+  enabled: false
+  store_dir: ~/.mcp-gateway/events
+  default_ttl: 3600s
+  min_ttl: 60s
+  max_ttl: 86400s
+  allow_no_expiry: false
+  max_subscriptions: 10000
+  max_subscriptions_per_principal: 100
+  queue_depth: 1024
+  max_in_flight: 32
+  max_outbox: 50000
+  max_outbox_per_subscription: 1000
+  seen_max_per_route: 100000
+  max_verified_tail: 10000
+  max_verified_tail_per_principal: 100
+  verified_tail_ttl: 86400s
+  rate_limit_per_subscription:
+    per_minute: 60
+    burst: 10
+  cost_per_delivery_usd: 0.0
+  secret_rotation_grace: 600s
+  dead_letter_retention: 604800s
+  dead_letter_max_records: 10000
+  dead_letter_max_bytes: 268435456
+  verification_per_host_per_minute: 10
+  callback_allow_private: []
+  sources:
+    operational: false
+    backend_notifications: true
+    task_settled: true
+    rest_watch: false
+    schedule: false
+  watch:
+    max_pollers: 100
+    max_pollers_per_principal: 10
+  schedule:
+    max_timers: 1000
+    max_timers_per_principal: 20
+  retry_base: 10s
+  retry_max_attempts: 5
+  retry_window: 900s
+  suspend_window: 3600s
+  suspend_min_attempts: 100
+== keeps-http_url
+env_files: []
+server:
+  modern_protocol: true
+  host: 127.0.0.1
+  port: 39400
+  shutdown_timeout: 30s
+  protocol_revision_window: off
+  max_body_size: 10485760
+  idempotency_key: optional
+  replicas: 1
+auth:
+  enabled: false
+  bearer_token: null
+  api_keys: []
+  public_paths:
+  - /health
+  client_circuit_breaker: null
+  single_user: false
+  dashboard_session:
+    idle_timeout_secs: 1800
+    absolute_timeout_secs: 28800
+meta_mcp:
+  enabled: true
+  cache_ttl: 300s
+  prompts_resources_fetch_timeout: 10s
+  warm_start: []
+  surfaced_tools: []
+  projection_mode: off
+  exposed_meta_tools: []
+  expose_stats_tool: false
+streaming:
+  enabled: true
+  buffer_size: 100
+  keep_alive_interval: 15s
+  auto_subscribe: []
+  session_ttl: 1800s
+  session_reaper_interval: 60s
+failsafe:
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5
+    success_threshold: 3
+    reset_timeout: 30s
+  retry:
+    enabled: true
+    max_attempts: 3
+    initial_backoff: 100ms
+    max_backoff: 10s
+    multiplier: 2.0
+  rate_limit:
+    enabled: true
+    requests_per_second: 100
+    burst_size: 50
+  health_check:
+    enabled: true
+    interval: 10s
+    timeout: 5s
+error_budget:
+  threshold: null
+  window_size: null
+  window_duration: null
+  min_samples: null
+  capability:
+    threshold: null
+    window_size: null
+    window_duration: null
+    min_samples: null
+    cooldown: null
+backends:
+  svc:
+    description: ''
+    enabled: true
+    http_url: https://api.example.test/mcp
+    protocol_version: null
+    stop_when_idle_for: null
+    max_frame_bytes: null
+    timeout: 30s
+    env: {}
+    headers: {}
+    oauth: null
+    secrets: []
+    passthrough: false
+    allow_flagged_tools: {}
+    input_schema_enforcement: closed
+    allow_cleartext_credentials: false
+    signature_chain: off
+    chain_origins: []
+    chain_signer: null
+capabilities:
+  enabled: true
+  name: gateway
+  directories:
+  - capabilities
+  egress_proxy: null
+  process_execution: enabled
+  process_commands: null
+  files:
+    uploads: null
+    projects: null
+    downloads: null
+    downloads_quota_bytes: 1073741824
+cache:
+  enabled: true
+  default_ttl: 60s
+  max_entries: 10000
+idempotency:
+  read_only_tools: []
+playbooks:
+  enabled: false
+  directories:
+  - playbooks
+security:
+  posture: standard
+  hardened:
+    private_backends: []
+  sanitize_input: true
+  ssrf_protection: true
+  trust_configured_backends: true
+  tool_policy:
+    enabled: true
+    default_action: allow
+    allow: []
+    deny: []
+    use_default_deny: true
+    log_denied: true
+  firewall:
+    enabled: true
+    scan_requests: true
+    scan_responses: true
+    prompt_injection_detection: true
+    credential_redaction: true
+    anomaly_detection: false
+    audit_log: null
+    rules: []
+    memory_poisoning:
+      enabled: true
+      max_entry_size_bytes: 10240
+      scan_tools:
+      - remember
+      - batch_remember
+      - store
+      - kv_set
+      - kv_search
+    anomaly_threshold: 0.7
+    anomaly_block_threshold: null
+    anomaly_min_observations: 20
+    tenant_guard:
+      enabled: false
+      max_tenants_per_window: 3
+      window_secs: 300
+      arg_keys: []
+      cross_tenant_reads: observe
+    budget:
+      enabled: false
+      max_calls_per_window: 600
+      window_secs: 60
+    collusion:
+      action: off
+      window_secs: 600
+      min_matches: 2
+      common_principals: 5
+      sources: []
+      non_egress: []
+      allowed_flows: []
+  message_signing:
+    enabled: false
+    shared_secret: ''
+    previous_secret: ''
+    require_nonce: false
+    replay_window: 300
+    key_id: default
+  agent_identity:
+    enabled: false
+    require_id: false
+    known_agents: []
+    allow_unverified_agent_identity: false
+    principal_labels: []
+    incomparable_proof_sources: []
+  transparency_log:
+    path: ~/.mcp-gateway/transparency/transparency.jsonl
+    key_id: default
+    shared_secret: ''
+    rotation:
+      max_segment_bytes: 67108864
+      max_segment_age_secs: 0
+      retain_segments: 12
+      on_disk_full: expire_oldest
+  response_inspection:
+    enabled: true
+    action_mode: false
+  response_contract:
+    enabled: false
+    action_mode: false
+    default_max_bytes: null
+    fail_closed: false
+    tools: {}
+  identity_grants:
+    enabled: false
+    path: ~/.mcp-gateway/identity-grants.yaml
+    fail_on_error: true
+  caller_identity:
+    mode: off
+    trusted_proxies: []
+    authority: ''
+    cloudflare_access:
+      team_domain: ''
+      audiences: []
+  context_integrity:
+    preset: monitor_only
+    non_bypassable: false
+  remote_server_signing:
+    require_for_remote_backends: false
+    trusted_keys: {}
+    backends: {}
+  provenance_stamping: false
+  claim_capture:
+    enabled: false
+    path: ~/.mcp-gateway/claim-capture/claims.jsonl
+  signature_chain: null
+webhooks:
+  enabled: true
+  base_path: /webhooks
+  require_signature: true
+  rate_limit: 100
+routing_profiles: {}
+default_routing_profile: ''
+code_mode:
+  enabled: false
+mtls:
+  enabled: false
+  server_cert: ''
+  server_key: ''
+  ca_cert: ''
+  require_client_cert: false
+  crl_path: null
+  policies: []
+key_server:
+  enabled: false
+  token_ttl_secs: 3600
+  max_tokens_per_identity: 5
+  max_oidc_token_age_secs: 300
+  cleanup_interval_secs: 60
+  oidc: []
+  policies: []
+  admin_token: null
+  delegated_bearer: false
+agent_auth:
+  enabled: false
+  agents: []
+runtime:
+  default_provider: local_process
+  availability:
+    local_process: true
+    docker: false
+    podman: false
+    systemd: false
+    launchd: false
+    kubernetes: false
+  profiles: {}
+control_plane:
+  role_mapping:
+    rules: []
+  export:
+    enabled: false
+    sink_path: ~/.mcp-gateway/export/siem.ndjson
+    poll_interval_secs: 15
+    max_batch: 1024
+cost_governance:
+  enabled: false
+  budgets:
+    daily: null
+    per_tool: {}
+    per_key: {}
+  alerts:
+  - at_percent: 50
+    action: log
+  - at_percent: 80
+    action: notify
+  - at_percent: 100
+    action: block
+  tool_costs: {}
+  default_cost: 0.0
+  alternatives: null
+tasks:
+  store_dir: ~/.mcp-gateway/tasks
+  default_ttl_ms: 86400000
+  poll_interval_ms: 1000
+  max_records: 256
+  max_per_principal: 32
+  max_workers: 16
+  max_record_bytes: 524288
+  logical_budget_bytes: 134217728
+  expiry_interval: 60s
+events:
+  enabled: false
+  store_dir: ~/.mcp-gateway/events
+  default_ttl: 3600s
+  min_ttl: 60s
+  max_ttl: 86400s
+  allow_no_expiry: false
+  max_subscriptions: 10000
+  max_subscriptions_per_principal: 100
+  queue_depth: 1024
+  max_in_flight: 32
+  max_outbox: 50000
+  max_outbox_per_subscription: 1000
+  seen_max_per_route: 100000
+  max_verified_tail: 10000
+  max_verified_tail_per_principal: 100
+  verified_tail_ttl: 86400s
+  rate_limit_per_subscription:
+    per_minute: 60
+    burst: 10
+  cost_per_delivery_usd: 0.0
+  secret_rotation_grace: 600s
+  dead_letter_retention: 604800s
+  dead_letter_max_records: 10000
+  dead_letter_max_bytes: 268435456
+  verification_per_host_per_minute: 10
+  callback_allow_private: []
+  sources:
+    operational: false
+    backend_notifications: true
+    task_settled: true
+    rest_watch: false
+    schedule: false
+  watch:
+    max_pollers: 100
+    max_pollers_per_principal: 10
+  schedule:
+    max_timers: 1000
+    max_timers_per_principal: 20
+  retry_base: 10s
+  retry_max_attempts: 5
+  retry_window: 900s
+  suspend_window: 3600s
+  suspend_min_attempts: 100

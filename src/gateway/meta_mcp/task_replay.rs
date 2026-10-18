@@ -319,8 +319,38 @@ impl MetaMcp {
                 trace_id: "",
                 caller_key: None,
             };
-            self.admit_target(&call).is_err()
+            // MIK-8475: an account-bearing capability waits for the
+            // credential step too.
+            if self.defers_error_rate_cooldown(server, tool) {
+                self.admit_named_target(&call).is_err()
+            } else {
+                self.admit_target(&call).is_err()
+            }
         }
+    }
+
+    /// Whether a recorded target whose cooldown waits for the credential
+    /// step is refused by the dispatch admission (the error-rate cooldown
+    /// included, auto-recovery with it).
+    fn deferred_cooldown_refuses(
+        &self,
+        stored: &CommittedTask,
+        session_id: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> bool {
+        stored.targets.iter().any(|target| {
+            self.defers_error_rate_cooldown(&target.server, &target.tool)
+                && self
+                    .admit_target(&super::invoke::dispatch_guards::BackendCall {
+                        server: &target.server,
+                        tool: &target.tool,
+                        session_id,
+                        api_key_name: caller.api_key_name,
+                        trace_id: "",
+                        caller_key: None,
+                    })
+                    .is_err()
+        })
     }
 
     /// MIK-8392 F4: whether `server`'s `tool` is refused for this caller
@@ -349,7 +379,16 @@ impl MetaMcp {
             trace_id: "",
             caller_key: None,
         };
-        self.admit_target(&call).is_err()
+        // MIK-8474: on a per-user backend the error-rate cooldown waits for
+        // the credential step, as the live call's policy has it (MIK-8439).
+        // Skipping the target for it left it unfilled, so a caller with no
+        // view got "retry" where a missing name gets "absent". The read
+        // answers the cooldown last (`deferred_cooldown_refuses`).
+        if self.defers_error_rate_cooldown(server, tool) {
+            self.admit_named_target(&call).is_err()
+        } else {
+            self.admit_target(&call).is_err()
+        }
     }
 
     /// A stored read found no account outcome for `server`'s target: every
@@ -448,6 +487,14 @@ impl MetaMcp {
         }
         if let Some(after) = cold {
             return Some(retry_later(id, after));
+        }
+        // MIK-8474: the error-rate cooldown of a per-user tool is met last,
+        // as on the live call (it waits for the credential step): a caller
+        // with no view of the tool has already been answered as a missing
+        // name above, so the cooldown cannot tell it the tool exists. A
+        // repeat never judges accounts and is answered by site 5.
+        if read == StoredRead::Read && self.deferred_cooldown_refuses(stored, session, caller) {
+            return Some(retry_later(id, None));
         }
         // COLLUDE.1 §13.3: a stored result or pending prompt delivered again
         // renews the reader's receipt; the delivery owner commits it.

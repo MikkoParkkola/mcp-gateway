@@ -478,7 +478,7 @@ pub fn import_openapi_from_file(
 
     caps.into_iter()
         .map(|cap| {
-            serde_yaml::to_string(&cap)
+            crate::yaml::to_string(&cap)
                 .map(|yaml| (cap.name.clone(), yaml))
                 .map_err(|e| format!("Failed to serialize capability '{}': {e}", cap.name))
         })

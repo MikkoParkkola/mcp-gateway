@@ -320,8 +320,8 @@ mod tests {
             response_path: None,
         };
 
-        let yaml = serde_yaml::to_string(&config).unwrap();
-        let restored: GraphqlConfig = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = crate::yaml::to_string(&config).unwrap();
+        let restored: GraphqlConfig = crate::yaml::from_str(&yaml).unwrap();
 
         assert_eq!(restored.endpoint, "https://api.example.com/graphql");
         assert_eq!(restored.query.as_deref(), Some("{ users { id name } }"));

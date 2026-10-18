@@ -92,7 +92,7 @@ mod tests {
     #[test]
     fn serialize_shows_keys_never_values() {
         let json = serde_json::to_string(&map()).unwrap();
-        let yaml = serde_yaml::to_string(&map()).unwrap();
+        let yaml = crate::yaml::to_string(&map()).unwrap();
         for text in [json, yaml] {
             assert!(text.contains("API_KEY"), "{text}");
             assert!(!text.contains(SENTINEL), "{text}");

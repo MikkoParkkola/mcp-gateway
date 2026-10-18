@@ -519,7 +519,7 @@ mod tests {
             "names the rule and the discriminator: {text}"
         );
 
-        let config: crate::config::Config = serde_yaml::from_str(
+        let config: crate::config::Config = crate::yaml::from_str(
             "control_plane:\n  role_mapping:\n    rules:\n      \
              - { issuer: \"https://idp.corp\", domain: \"corp.com\", role: admin }\n",
         )

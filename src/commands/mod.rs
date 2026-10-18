@@ -613,8 +613,8 @@ mod admin_credential_tests {
             config.contains("/mcp"),
             "the MCP endpoint must stay reachable without a credential: {config}"
         );
-        let parsed: serde_yaml::Value =
-            serde_yaml::from_str(&config).expect("the starter config must parse");
+        let parsed: crate::yaml::Value =
+            crate::yaml::from_str(&config).expect("the starter config must parse");
         let paths = parsed["auth"]["public_paths"]
             .as_sequence()
             .expect("public_paths must be a list");

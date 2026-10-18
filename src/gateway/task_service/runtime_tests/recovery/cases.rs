@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::*;
+use std::ops::ControlFlow;
 
 #[tokio::test]
 async fn startup_settles_every_interrupted_row_by_what_its_record_can_prove() {
@@ -424,24 +425,31 @@ async fn recovery_beside_a_sealed_row_settles_and_keeps_keys() {
         .start_expiry(std::time::Duration::from_millis(50))
         .expect("the sweep starts");
     std::fs::remove_file(&record).unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while restored.skipped_records().sealed != 0 {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the expiry sweep never re-read the sealed row"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
-    assert!(
-        matches!(
-            admission.admit(Request {
+    // Waited on admission itself: the store forgets the row before the
+    // service lifts the seal, so a zero sealed count can precede the lift
+    // (MIK-8486). A sealed refusal changes nothing, so asking again is safe.
+    let admitted = crate::test_wait::wait_until(crate::test_wait::HANG_BOUND, || {
+        std::future::ready(
+            match admission.admit(Request {
                 key: "unclaimed-key",
                 mode: Mode::Sync,
                 ..request(row.key, &operation, &representation)
-            }),
-            Ok(Admission::Owned(_))
-        ),
+            }) {
+                Ok(Admission::Sealed) => ControlFlow::Continue("the seal still holds".to_owned()),
+                other => ControlFlow::Break(other),
+            },
+        )
+    })
+    .await
+    .expect("the expiry sweep never lifted the seal");
+    assert!(
+        matches!(admitted, Ok(Admission::Owned(_))),
         "the seal lifted without a restart"
+    );
+    assert_eq!(
+        restored.skipped_records().sealed,
+        0,
+        "the expiry sweep re-read the sealed row"
     );
     timeout(BUDGET, sweep.shutdown())
         .await

@@ -90,7 +90,7 @@ mod tests {
 
     fn load(anomaly: &str) -> crate::Result<()> {
         let yaml = format!("security:\n  firewall:\n{anomaly}");
-        let config: Config = serde_yaml::from_str(&yaml).expect("the YAML parses");
+        let config: Config = crate::yaml::from_str(&yaml).expect("the YAML parses");
         config.validate()
     }
 
