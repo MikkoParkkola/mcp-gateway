@@ -472,6 +472,32 @@ async fn f4_a_cold_descriptor_blocked_read_resolves_nothing() {
     assert_eq!(gw.caller.lists(), before_lists, "F4: no backend traffic");
 }
 
+/// MIK-8474: F2 with the withdrawn tool in error-rate cooldown. A Live
+/// account whose catalogue lost the tool must still learn it is absent: the
+/// cooldown may not stop the cold claim that refreshes the catalogue, or the
+/// read stays retryable and tells the caller the name is a real tool. Red
+/// while the cold-claim guard applies the name-keyed cooldown.
+#[tokio::test]
+async fn a_withdrawn_cooling_tool_still_answers_absent_after_the_refresh() {
+    let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await;
+    let id = finished(&gw, "8474-f2").await;
+    backend(&gw).age_tools_cache_for_test(Some(BINDING), 400);
+    let _ = serve_alpha_empty(&gw.meta);
+    let cfg = crate::kill_switch::budget::CapabilityErrorBudgetConfig::default();
+    for _ in 0..cfg.min_samples.max(cfg.window_size) {
+        gw.meta
+            .kill_switch()
+            .record_capability_failure(BACKEND, TOOL, &cfg);
+    }
+    let _ = task_get(&gw, &id).await;
+    let second = task_get(&gw, &id).await;
+    assert_eq!(
+        second.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "MIK-8474: the withdrawn cooling tool is absent after the refresh: {second}"
+    );
+}
+
 #[path = "stored_read_lease_tests.rs"]
 mod lease;
 
