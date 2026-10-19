@@ -319,3 +319,28 @@ error.
   fold point (2); M3 always map (3); M4 never map (4); M5 `attempted` on
   success only (2); M6 Busy by text (1); M7 no `isError` classification (7);
   M8 string `"true"` (1); M9 invoker keeps failed notes (1).
+
+## Operator hold (2026-10-19): D1 and D3
+
+The operator held the merge for two fixes; the design was reviewed by the
+lead before the tests, and the tests were red before the code.
+
+- D1: a step whose tool reported an error (`isError: true`) is never re-sent,
+  under any `on_error`, keyed or not. The tool ran and answered, so a second
+  call could repeat its side effect. Under `retry` the step is handled as
+  under `continue` after one call; only a transport failure is retried, as
+  before (STEP.2). No idempotent-step marker: that would be a new playbook key.
+- D3: the step failure's message is fixed, `step '<name>' failed: the tool
+  reported an error`, so the tool's text never reaches a log line that prints
+  the error. The text, capped at 256 characters and marked when cut, travels
+  in the error's `data.tool_text`, and `step_errors` carries it capped the
+  same way (caller output, not a log). The cap was 2,048.
+- D4: a busy custody is `Err` inside a playbook and the folded `isError` value
+  on a direct call, as documented above (unchanged).
+
+Rows, red on the code before this change: `a_tool_error_step_is_not_resent_under_retry`,
+`a_long_tool_text_is_capped_and_kept_out_of_the_message`,
+`a_tool_error_step_aborts_an_abort_plan` (now checks the message and data),
+`a_tool_error_step_is_sent_once_under_retry_keyed_or_not`. Controls, green
+throughout: `a_transport_failure_then_a_served_retry_completes_the_step`,
+`a_busy_retry_after_a_transport_failure_ends_the_plan_as_possibly_sent`.

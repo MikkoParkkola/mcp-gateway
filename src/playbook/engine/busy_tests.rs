@@ -5,7 +5,9 @@
 //! Rows STEP.1 (the Busy ends the plan, under every policy, with no null fill
 //! and no successor), STEP.2/STEP.3 (an ordinary error, a look-alike of the
 //! Busy's text included, keeps today's policy) and PBERR.1 (an `isError`
-//! result follows `on_error`).
+//! result follows `on_error`, but is never re-sent: the tool ran, so its side
+//! effect may be done; the MIK-8429 hold, D1). D3: the tool's text never
+//! reaches an error message (so no log line), only the error's data, capped.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -22,10 +24,12 @@ enum Answer {
     LookAlike,
     /// A tool that failed in the success channel: `{"isError": true}`.
     ToolError,
-    /// [`Self::ToolError`] on the first call, [`Self::Busy`] after it.
-    ToolErrorThenBusy,
-    /// [`Self::ToolError`] on the first call, [`Self::Served`] after it.
-    ToolErrorThenServed,
+    /// A tool error whose text is 10,000 characters long (D3).
+    LongToolError,
+    /// A transport failure on the first call, [`Self::Busy`] after it.
+    TransportThenBusy,
+    /// A transport failure on the first call, [`Self::Served`] after it.
+    TransportThenServed,
 }
 
 fn look_alike() -> crate::Error {
@@ -68,24 +72,28 @@ impl ToolInvoker for Scripted {
         };
         self.total.fetch_add(1, Ordering::SeqCst);
         let answer = match self.script.get(tool).copied().unwrap_or(Answer::Served) {
-            Answer::ToolErrorThenBusy | Answer::ToolErrorThenServed if call == 1 => {
-                Answer::ToolError
+            Answer::TransportThenBusy | Answer::TransportThenServed if call == 1 => {
+                return Err(crate::Error::Transport("connection reset".to_owned()));
             }
-            Answer::ToolErrorThenBusy => Answer::Busy,
-            Answer::ToolErrorThenServed => Answer::Served,
+            Answer::TransportThenBusy => Answer::Busy,
+            Answer::TransportThenServed => Answer::Served,
             other => other,
         };
         match answer {
-            // `ToolErrorThenServed` after its first call (resolved above).
-            Answer::Served | Answer::ToolErrorThenServed => Ok(json!({"served": tool})),
-            // `ToolErrorThenBusy` after its first call (resolved above).
-            Answer::Busy | Answer::ToolErrorThenBusy => Err(
+            // `TransportThenServed` after its first call (resolved above).
+            Answer::Served | Answer::TransportThenServed => Ok(json!({"served": tool})),
+            // `TransportThenBusy` after its first call (resolved above).
+            Answer::Busy | Answer::TransportThenBusy => Err(
                 crate::personal_accounts::refusal::transient_retry_error(None),
             ),
             Answer::LookAlike => Err(look_alike()),
             Answer::ToolError => Ok(json!({
                 "isError": true,
                 "content": [{"type": "text", "text": format!("{tool} failed upstream")}],
+            })),
+            Answer::LongToolError => Ok(json!({
+                "isError": true,
+                "content": [{"type": "text", "text": "q".repeat(10_000)}],
             })),
         }
     }
@@ -128,6 +136,16 @@ async fn run(
         timeout: 60,
     });
     engine.execute("busy", json!({}), invoker).await
+}
+
+/// The tool's text a step failure carries in its data (D3), if any.
+fn tool_text(error: &crate::Error) -> Option<&str> {
+    match error {
+        crate::Error::JsonRpc {
+            data: Some(data), ..
+        } => data["tool_text"].as_str(),
+        _ => None,
+    }
 }
 
 fn is_sealed_transient(error: &crate::Error) -> bool {
@@ -271,8 +289,14 @@ async fn a_tool_error_step_aborts_an_abort_plan() {
         panic!("PBERR.1 abort: an isError step was recorded completed");
     };
     assert!(
-        error.to_string().contains("first failed upstream"),
-        "PBERR.1 abort: the tool's own text is the reason: {error}"
+        !error.to_string().contains("first failed upstream")
+            && error.to_string().contains("the tool reported an error"),
+        "D3 abort: the tool's text is in the message, so in every log line: {error}"
+    );
+    assert_eq!(
+        tool_text(&error),
+        Some("first failed upstream"),
+        "D3 abort: the caller still gets the tool's text, as data"
     );
     assert!(!error.is_pre_dispatch(), "PBERR.1 abort: {error}");
     assert_eq!(
@@ -308,21 +332,62 @@ async fn a_tool_error_step_is_null_filled_under_continue() {
     );
 }
 
-/// PBERR.1, retry: the step is re-invoked to `max_retries`, then handled as
-/// under continue. Red on the line: called once and recorded completed.
+/// D1, retry: a tool error is never re-sent. The tool ran and answered, so
+/// its side effect (an email, a row) may be done; the step is handled as under
+/// continue after one call. Red before the hold fix: called 3 times.
 #[tokio::test]
-async fn a_tool_error_step_is_retried_under_retry() {
+async fn a_tool_error_step_is_not_resent_under_retry() {
     let invoker = Scripted::new(&[("first", Answer::ToolError)]);
     let result = run(ErrorStrategy::Retry, &["first", "second"], &invoker)
         .await
-        .expect("PBERR.1 retry: the plan carries on");
+        .expect("D1 retry: the plan carries on");
     assert_eq!(
         invoker.calls("first"),
-        3,
-        "PBERR.1 retry: retried to the cap"
+        1,
+        "D1 retry: a tool error was re-sent"
     );
-    assert_eq!(result.steps_failed, vec!["first"], "PBERR.1 retry");
-    assert_eq!(result.steps_completed, vec!["second"], "PBERR.1 retry");
+    assert_eq!(result.steps_failed, vec!["first"], "D1 retry");
+    assert_eq!(result.steps_completed, vec!["second"], "D1 retry");
+    assert!(
+        result
+            .step_errors
+            .get("first")
+            .is_some_and(|reason| reason.contains("first failed upstream")),
+        "D1 retry: the reason is recorded: {:?}",
+        result.step_errors
+    );
+}
+
+/// D3: a long tool text is capped at 256 characters in the error's data and
+/// in `step_errors`, and never reaches the message. Red before the hold fix:
+/// 2,048 characters of it are in the message.
+#[tokio::test]
+async fn a_long_tool_text_is_capped_and_kept_out_of_the_message() {
+    let invoker = Scripted::new(&[("first", Answer::LongToolError)]);
+    let Err(error) = run(ErrorStrategy::Abort, &["first"], &invoker).await else {
+        panic!("D3: an isError step was recorded completed");
+    };
+    assert_eq!(
+        error.to_string().matches('q').count(),
+        0,
+        "D3: the tool's text is in the message: {error}"
+    );
+    let text = tool_text(&error).expect("D3: the tool's text is in the data");
+    assert!(
+        text.chars().count() <= 257 && text.ends_with('…'),
+        "D3: the data is not capped at 256 characters and marked cut: {} chars",
+        text.chars().count()
+    );
+    let invoker = Scripted::new(&[("first", Answer::LongToolError)]);
+    let result = run(ErrorStrategy::Continue, &["first"], &invoker)
+        .await
+        .expect("D3 continue: the plan carries on");
+    let reason = &result.step_errors["first"];
+    assert!(
+        reason.matches('q').count() <= 256,
+        "D3 continue: step_errors is not capped: {} chars",
+        reason.chars().count()
+    );
 }
 
 /// PBERR.1 control: `isError: false` and a result with no `isError` are
@@ -366,12 +431,11 @@ async fn a_result_without_is_error_true_is_a_completed_step() {
 }
 
 /// STEP.1 partial run within one step (C1b): under `retry`, the first attempt
-/// of `first` reached its tool and failed there; the retry meets Busy. The
-/// plan ends, and its error must not read as unsent. Red on the line: the
-/// tool error is recorded completed and `second` runs.
+/// of `first` failed in transport, so may have reached its backend; the retry
+/// meets Busy. The plan ends, and its error must not read as unsent.
 #[tokio::test]
-async fn a_busy_retry_after_a_tool_error_attempt_ends_the_plan_as_possibly_sent() {
-    let invoker = Scripted::new(&[("first", Answer::ToolErrorThenBusy)]);
+async fn a_busy_retry_after_a_transport_failure_ends_the_plan_as_possibly_sent() {
+    let invoker = Scripted::new(&[("first", Answer::TransportThenBusy)]);
     let outcome = run(ErrorStrategy::Retry, &["first", "second"], &invoker).await;
     let Err(error) = outcome else {
         panic!("STEP.1 retry: the plan carried on past a busy attempt");
@@ -392,12 +456,11 @@ async fn a_busy_retry_after_a_tool_error_attempt_ends_the_plan_as_possibly_sent(
     );
 }
 
-/// PBERR.1, retry then success: the first attempt's tool error is retried and
-/// the second attempt's result is the step's. Red on the line: the first
-/// attempt's error value is recorded as the result, after one call.
+/// D1 control: a transport failure is still retried (STEP.2: ordinary step
+/// errors keep today's policy), and the served retry is the step's result.
 #[tokio::test]
-async fn a_tool_error_attempt_then_a_served_retry_completes_the_step() {
-    let invoker = Scripted::new(&[("first", Answer::ToolErrorThenServed)]);
+async fn a_transport_failure_then_a_served_retry_completes_the_step() {
+    let invoker = Scripted::new(&[("first", Answer::TransportThenServed)]);
     let result = run(ErrorStrategy::Retry, &["first", "second"], &invoker)
         .await
         .expect("PBERR.1 retry: the plan completes");

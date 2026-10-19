@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use tracing::{debug, warn};
 
 use super::{
@@ -235,7 +235,7 @@ impl PlaybookEngine {
                             // Both arms null-fill and carry on, so both must say
                             // why: a null with no reason is how a caller ends up
                             // with a partial result that reads like a success.
-                            step_errors.insert(step.name.clone(), e.to_string());
+                            step_errors.insert(step.name.clone(), step_reason(&e));
                             // Already retried if Retry; continue to next step.
                             ctx.step_results.insert(step.name.clone(), Value::Null);
                         }
@@ -298,9 +298,10 @@ fn checked_arguments(
 }
 
 /// Invoke `step` up to `max_attempts` times; the last error when none succeeds.
-/// A result whose tool reported failure (`isError: true`) is a failed attempt
-/// (MIK-8429 PBERR.1). `attempted` is set by every outcome that is not a busy
-/// custody.
+/// A result whose tool reported failure (`isError: true`) fails the step
+/// (MIK-8429 PBERR.1) and is never re-sent: the tool ran and answered, so its
+/// side effect may be done (the hold, D1). `attempted` is set by every outcome
+/// that is not a busy custody.
 async fn dispatch(
     step: &PlaybookStep,
     label: u32,
@@ -319,12 +320,17 @@ async fn dispatch(
                 label,
                 invoker.invoke(&step.server, &step.tool, arguments.clone()),
             )
-            .await
-            .and_then(|result| tool_error(step, result));
+            .await;
         if !matches!(&outcome, Err(e) if is_busy(e)) {
             *attempted = true;
         }
         match outcome {
+            // Final under every policy, keyed or not: a retry cannot be told
+            // apart from a second send of whatever the first one did (D1).
+            Ok(result) if is_tool_error(&result) => {
+                warn!(step = %step.name, "Step failed: the tool reported an error");
+                return Err(tool_error(step, &result));
+            }
             Ok(result) => return Ok(result),
             // Nothing was sent, and an immediate re-send meets the same held
             // custody: the plan ends at the caller (STEP.1).
@@ -363,22 +369,42 @@ pub(crate) fn is_tool_error(result: &Value) -> bool {
     result.get("isError").and_then(Value::as_bool) == Some(true)
 }
 
-/// `result`, or the step failure for a tool error, spelled as a chain step
-/// failure is: -32603 with the tool's first text, at most 2048 characters.
-fn tool_error(step: &PlaybookStep, result: Value) -> crate::Result<Value> {
-    if !is_tool_error(&result) {
-        return Ok(result);
-    }
-    let detail: String = result["content"][0]["text"]
+/// The most of a tool's text a step failure carries (the hold, D3).
+const TOOL_TEXT_CAP: usize = 256;
+
+/// The step failure for a tool error: -32603 with a fixed message, so the
+/// tool's text never reaches a log line that prints the error (the hold,
+/// D3). The caller still gets the tool's first text, at most
+/// [`TOOL_TEXT_CAP`] characters and marked when cut, as `data.tool_text`.
+fn tool_error(step: &PlaybookStep, result: &Value) -> crate::Error {
+    let text = result["content"][0]["text"]
         .as_str()
-        .map_or_else(|| result.to_string(), str::to_owned)
-        .chars()
-        .take(2048)
-        .collect();
-    Err(crate::Error::json_rpc(
-        -32603,
-        format!("step '{}' failed: {detail}", step.name),
-    ))
+        .map_or_else(|| result.to_string(), str::to_owned);
+    let mut capped: String = text.chars().take(TOOL_TEXT_CAP).collect();
+    if text.chars().nth(TOOL_TEXT_CAP).is_some() {
+        capped.push('…');
+    }
+    crate::Error::JsonRpc {
+        code: -32603,
+        message: format!("step '{}' failed: the tool reported an error", step.name),
+        data: Some(json!({ "tool_text": capped })),
+    }
+}
+
+/// A failed step's entry in `step_errors`, caller output, not a log: the
+/// error and, for a tool error, its capped text.
+fn step_reason(error: &crate::Error) -> String {
+    match error {
+        crate::Error::JsonRpc {
+            data: Some(data), ..
+        } if data["tool_text"].is_string() => {
+            format!(
+                "{error}: {}",
+                data["tool_text"].as_str().unwrap_or_default()
+            )
+        }
+        _ => error.to_string(),
+    }
 }
 
 /// The gateway-sealed transient a busy custody raises before any send,

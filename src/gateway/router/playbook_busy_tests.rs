@@ -288,13 +288,13 @@ async fn a_busy_step_after_a_served_one_ends_the_plan_without_a_retry_label() {
     );
 }
 
-/// PBERR.1 under `retry`, the exposure C4 names: the vendor answers 500 to
-/// every request. Unkeyed, the failed step is re-sent up to `max_retries`;
-/// keyed, the step's stored failure is replayed and the vendor sees it once.
-/// Red on the line (unkeyed): the step is recorded completed after one send.
+/// D1 under `retry`: the vendor answers 500 to every request, which the
+/// gateway answers as a tool error. The vendor may have acted, so the step is
+/// sent once, keyed or not, and recorded failed. Red before the hold fix
+/// (unkeyed): the vendor saw 3 requests.
 #[tokio::test]
-async fn a_retried_tool_error_step_is_resent_only_when_unkeyed() {
-    for (key, sends) in [(None, 3), (Some("pb-8429-retry"), 1)] {
+async fn a_tool_error_step_is_sent_once_under_retry_keyed_or_not() {
+    for (key, sends) in [(None, 1), (Some("pb-8429-retry"), 1)] {
         let harness = harness(
             CapabilityAccount::start_answering(&[500, 500, 500, 500]).await,
             "retry",
@@ -305,7 +305,7 @@ async fn a_retried_tool_error_step_is_resent_only_when_unkeyed() {
         assert_eq!(
             harness.account.peer_requests(),
             sends,
-            "PBERR.1 retry key={key:?}: vendor requests: {reply}"
+            "D1 retry key={key:?}: vendor requests: {reply}"
         );
         let result = plan_result(&reply);
         assert_eq!(
