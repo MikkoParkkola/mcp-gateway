@@ -3,7 +3,7 @@
 //! Each target account's liveness for this caller, judged without a mint and
 //! recorded once per request (MIK-8392). The async pre-pass fills the memo's
 //! account outcomes; the synchronous sites after it only read them
-//! ([`visible::account_outcome`]), and fail closed when one is missing.
+//! ([`visible::memo::account_outcome`]), and fail closed when one is missing.
 //!
 //! The account is the one the dispatch would use: an identity-propagation
 //! backend's managed `account`, or a capability's `auth.account`. A target
@@ -13,7 +13,7 @@ use crate::identity_propagation::CallerProof;
 use crate::personal_accounts::ViewBinding;
 
 use super::MetaMcp;
-use super::visible::{self, AccountKey, AccountOutcome};
+use super::visible::{self, memo::AccountKey, memo::AccountOutcome};
 
 /// What a mint-free account judgement writes besides its outcome.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -75,7 +75,7 @@ impl MetaMcp {
             let Some(account) = self.target_account(view, server, tool) else {
                 continue;
             };
-            if visible::account_outcome(server, &account).is_some() {
+            if visible::memo::account_outcome(server, &account).is_some() {
                 continue;
             }
             // s2-d3 E5: a CLEAN resolution this request already holds (the
@@ -83,16 +83,16 @@ impl MetaMcp {
             // the account live; reading custody again would be a second read.
             // A carried resolution whose fill failed is no proof (E4): the
             // account is judged by its own read below.
-            if visible::with_carried(server, tool, |carried| carried.fill_error.is_none())
+            if visible::memo::with_carried(server, tool, |carried| carried.fill_error.is_none())
                 == Some(true)
             {
-                visible::record_account_outcome(server, &account, AccountOutcome::Live);
+                visible::memo::record_account_outcome(server, &account, AccountOutcome::Live);
                 continue;
             }
             let outcome = self
                 .judge_account(view, (server, tool), &account, caller, writes)
                 .await;
-            visible::record_account_outcome(server, &account, outcome);
+            visible::memo::record_account_outcome(server, &account, outcome);
         }
     }
 
@@ -135,7 +135,7 @@ impl MetaMcp {
             else {
                 continue;
             };
-            if visible::account_outcome(server, &account).is_some() {
+            if visible::memo::account_outcome(server, &account).is_some() {
                 continue;
             }
             let outcome = self
@@ -147,7 +147,7 @@ impl MetaMcp {
                     AccountWrites::AllAndCarry,
                 )
                 .await;
-            visible::record_account_outcome(server, &account, outcome);
+            visible::memo::record_account_outcome(server, &account, outcome);
         }
     }
 
@@ -172,7 +172,7 @@ impl MetaMcp {
             return AccountOutcome::Unjudged;
         };
         if let ViewBinding::Bound(binding) = &view {
-            visible::record_account_binding(server, account, binding);
+            visible::memo::record_account_binding(server, account, binding);
         }
         let outcome = view_outcome(&view, |binding| {
             // A binding the isolation guard or the per-user slot rule would
@@ -192,7 +192,7 @@ impl MetaMcp {
             && let ViewBinding::Transient(error) = &view
         {
             if writes == AccountWrites::AllAndCarry {
-                visible::record_account_transient(server, tool, error.to_string());
+                visible::memo::record_account_transient(server, tool, error.to_string());
             }
             self.account_strategies
                 .audit_transient_refusal(

@@ -36,7 +36,7 @@ pub(crate) use meta_mcp::publish_identity_grants;
 pub(crate) use meta_mcp::sealed_hold;
 /// The send point's check that an exempt call is sent by the backend instance
 /// intake judged it on (MIK-8154 F2), for `backend::ops`.
-pub(crate) use meta_mcp::visible::changed_instance;
+pub(crate) use meta_mcp::visible::memo::changed_instance;
 /// How a tool call's own `arguments` are read, resolved once (MIK-8154).
 pub(crate) use meta_mcp::{ArgsPolicy, args_policy};
 /// The notes scope and the gateway, for the CLI process audit rows

@@ -56,7 +56,7 @@ pub(crate) fn sanitize_exempt(
         let Some((servers, digest)) = meta_mcp.playbook_step_servers(playbook) else {
             return false;
         };
-        crate::gateway::meta_mcp::visible::record_judged_playbook(digest);
+        crate::gateway::meta_mcp::visible::memo::record_judged_playbook(digest);
         let explicit = |server| (server, TargetNaming::ExplicitBackend);
         servers.into_iter().map(explicit).collect()
     } else {
@@ -81,7 +81,7 @@ pub(crate) fn sanitize_exempt(
         .collect();
     match instances {
         Some(instances) if !instances.is_empty() => {
-            crate::gateway::meta_mcp::visible::record_exempt_instances(&instances);
+            crate::gateway::meta_mcp::visible::memo::record_exempt_instances(&instances);
             true
         }
         _ => false,

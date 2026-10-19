@@ -95,7 +95,7 @@ pub(super) async fn guard_before_credential(
             .and_then(|params| params.get("name"))
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
-        let absent = crate::gateway::meta_mcp::visible::absent_name(tool);
+        let absent = crate::gateway::meta_mcp::visible::absent::absent_name(tool);
         let response =
             crate::gateway::meta_mcp::response_security::error_response_preserving_status(
                 scope.id.clone(),

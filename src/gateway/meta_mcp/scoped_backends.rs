@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::MetaMcp;
-use super::visible::{Visibility, Withholding, recorded_visibility};
+use super::visible::{Visibility, Withholding, memo::recorded_visibility};
 use crate::backend::{Backend, BackendRegistry, BackendStatus};
 use crate::gateway::authz::BackendGrant;
 

@@ -180,7 +180,7 @@ fn authorize_targets(
                 .authorize_requested_target(scope, server_tool, arguments, Some(session_id))
                 .map(|withheld| {
                     if let Some(withheld) = withheld {
-                        crate::gateway::meta_mcp::visible::note_denial_code(
+                        crate::gateway::meta_mcp::visible::memo::note_denial_code(
                             checked.server,
                             checked.tool,
                             withheld.to_rpc_code(),

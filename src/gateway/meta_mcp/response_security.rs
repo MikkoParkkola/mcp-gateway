@@ -131,7 +131,7 @@ pub(crate) fn without_withheld(
     let before = targets.len();
     targets.retain(|target| {
         !matches!(
-            super::visible::recorded_visibility(&target.server, &target.tool),
+            super::visible::memo::recorded_visibility(&target.server, &target.tool),
             Some(super::visible::Visibility::Withheld(_))
         )
     });

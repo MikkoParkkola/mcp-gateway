@@ -166,7 +166,7 @@ async fn r11_a_resolving_cooldown_refusal_leaves_the_witness_spent() {
     signing.keep_witness(RefundWitness::at_capture());
     caller.signing = Some(&signing);
     assert!(
-        crate::gateway::meta_mcp::visible::take_carried(BACKEND, TOOL).is_none(),
+        crate::gateway::meta_mcp::visible::memo::take_carried(BACKEND, TOOL).is_none(),
         "premise: no verdict is carried"
     );
     let releases = gateway.releases();

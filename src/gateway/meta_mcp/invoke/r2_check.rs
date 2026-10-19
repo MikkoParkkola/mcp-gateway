@@ -126,7 +126,7 @@ impl MetaMcp {
         let candidates = self.miss_hint_pool((&names, &tools), server, (scope, session_id));
         match did_you_mean(tool, &candidates, 3, 3) {
             Some(hint) => Error::json_rpc(-32601, format!("Unknown tool: {tool}. {hint}")),
-            None => super::super::visible::absent_name(tool),
+            None => super::super::visible::absent::absent_name(tool),
         }
     }
 

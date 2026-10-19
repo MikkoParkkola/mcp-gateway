@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::view_outcome;
-use crate::gateway::meta_mcp::visible::AccountOutcome;
+use crate::gateway::meta_mcp::visible::memo::AccountOutcome;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::personal_accounts::identity::{AccountDescriptor, Principal};
 use crate::personal_accounts::{

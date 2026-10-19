@@ -188,7 +188,7 @@ async fn audited_call_judged(
     // One memo spans the guard and the record, so a withheld call's one
     // record names its refusal (MIK-8361).
     let ((status, Json(body)), hidden) =
-        crate::gateway::meta_mcp::visible::with_visibility_memo(async {
+        crate::gateway::meta_mcp::visible::memo::with_visibility_memo(async {
             let inner = Box::pin(crate::gateway::outbound::read_scoped(
                 guard.clone(),
                 super::backend_handler_inner(
@@ -292,7 +292,7 @@ pub(super) async fn record(
     let outcome = call
         .tool
         .as_deref()
-        .and_then(|tool| crate::gateway::meta_mcp::visible::denial_code(server, tool))
+        .and_then(|tool| crate::gateway::meta_mcp::visible::memo::denial_code(server, tool))
         .map_or_else(|| direct_outcome(*status, body), AuditOutcome::Denied);
     // D4: counted before the log check, so auth off still counts.
     let firewall = body

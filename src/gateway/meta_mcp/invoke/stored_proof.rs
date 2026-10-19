@@ -84,8 +84,8 @@ impl crate::gateway::meta_mcp::MetaMcp {
     ) -> std::ops::ControlFlow<crate::protocol::JsonRpcResponse, Option<UnprovenReplay>> {
         use crate::gateway::meta_mcp::visible;
         use std::ops::ControlFlow::{Break, Continue};
-        let Some(deferred) = visible::deferred_replay_key(server, tool, caller.retry)
-            .and_then(|key| visible::take_deferred_replay(&key))
+        let Some(deferred) = visible::deferred::deferred_replay_key(server, tool, caller.retry)
+            .and_then(|key| visible::memo::take_deferred_replay(&key))
         else {
             return Continue(None);
         };
@@ -128,7 +128,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
             server,
             tool,
         ) && let Some(refusal) =
-            crate::gateway::meta_mcp::visible::take_account_refusal(server, &account)
+            crate::gateway::meta_mcp::visible::memo::take_account_refusal(server, &account)
         {
             return Err(refusal);
         }
@@ -186,7 +186,9 @@ impl crate::gateway::meta_mcp::MetaMcp {
         (tool_name, session): (&str, Option<&str>),
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
     ) -> Option<crate::protocol::JsonRpcResponse> {
-        use crate::gateway::meta_mcp::visible::{self, AccountOutcome, Visibility, Withholding};
+        use crate::gateway::meta_mcp::visible::{
+            self, Visibility, Withholding, memo::AccountOutcome,
+        };
         let targets = crate::gateway::task_service::Target::pairs(&stored.targets);
         let proof = CallerProof::new(caller.verified_identity, caller.provenance());
         // A repeat's fill (#3892): outcomes recorded, a busy custody writes
@@ -206,7 +208,8 @@ impl crate::gateway::meta_mcp::MetaMcp {
             ) else {
                 continue;
             };
-            if visible::account_outcome(server, &account) != Some(AccountOutcome::Unavailable) {
+            if visible::memo::account_outcome(server, &account) != Some(AccountOutcome::Unavailable)
+            {
                 continue;
             }
             if self.stored_target_view(server, tool, caller.scope(), session)

@@ -14,7 +14,7 @@ use crate::identity_propagation::CallerProof;
 
 use super::super::refund_witness::RefundWitness;
 
-use super::super::visible::{self, Visibility, Withholding};
+use super::super::visible::{self, Visibility, Withholding, memo};
 use super::super::{MetaMcp, MetaMcpCallerContext};
 
 /// What a caller verdict decided.
@@ -162,7 +162,7 @@ impl MetaMcp {
         else {
             return Ok((CallerVerdict::Proceed, witness));
         };
-        match visible::recorded_visibility(server, tool) {
+        match memo::recorded_visibility(server, tool) {
             Some(Visibility::Visible) => return Ok((CallerVerdict::Proceed, witness)),
             Some(Visibility::Withheld(_)) => return Ok((CallerVerdict::Absent, witness)),
             None => {}
@@ -178,7 +178,7 @@ impl MetaMcp {
         // catalogue, so it lacks the tool, answered before any resolution.
         if self.lacks_principal_on_required(&backend, proof) {
             self.warn_lacked_principal(server, caller.caller_key);
-            visible::record_visibility(server, tool, Visibility::Withheld(Withholding::Lacked));
+            memo::record_visibility(server, tool, Visibility::Withheld(Withholding::Lacked));
             return Ok((CallerVerdict::Absent, witness));
         }
         // A managed account with no current grant has no view (R3.7). Nothing
@@ -192,13 +192,13 @@ impl MetaMcp {
         // target in this request (MIK-8392 G1a twin): a memo hit. The
         // dispatch answers the carried error; resolving here would read
         // custody and audit a second time.
-        if visible::has_resolution_error(server, tool) {
+        if memo::has_resolution_error(server, tool) {
             return Ok((CallerVerdict::Proceed, witness));
         }
         // A busy custody already met in this request (the route stage's
         // verdict, read again on a surfaced route): no second custody read
         // and no second audit record (MIK-8392 Busy parity).
-        if visible::account_transient(server, tool).is_some() {
+        if memo::account_transient(server, tool).is_some() {
             return Ok((CallerVerdict::Transient, witness));
         }
         let no_view = match self.has_no_view_for_classified(&backend, proof).await {
@@ -213,17 +213,13 @@ impl MetaMcp {
                 // would repeat. The busy is carried request-local and
                 // consumed once at the dispatch.
                 let reason = error.to_string();
-                visible::record_account_transient(server, tool, reason.clone());
+                memo::record_account_transient(server, tool, reason.clone());
                 if let Some(account) = self.target_account(
                     &self.scoped(caller.scope().authorizer.backend_grant()),
                     server,
                     tool,
                 ) {
-                    visible::record_account_outcome(
-                        server,
-                        &account,
-                        visible::AccountOutcome::Transient,
-                    );
+                    memo::record_account_outcome(server, &account, memo::AccountOutcome::Transient);
                 }
                 if let Some(descriptor) = backend.account_descriptor_id() {
                     self.account_strategies
@@ -244,7 +240,7 @@ impl MetaMcp {
             }
             let verdict = match naming {
                 TargetNaming::SurfacedName => {
-                    visible::record_visibility(
+                    memo::record_visibility(
                         server,
                         tool,
                         Visibility::Withheld(Withholding::Lacked),
@@ -284,7 +280,7 @@ impl MetaMcp {
             // carried to the dispatch here, witness unspent, so the call
             // is answered once and its nonce refunded like a view Busy.
             Err(error) if crate::personal_accounts::refusal::transient_data(&error).is_some() => {
-                visible::record_resolution_error(server, tool, error);
+                memo::record_resolution_error(server, tool, error);
                 Ok((CallerVerdict::Proceed, witness))
             }
             Err(error) => {
@@ -322,7 +318,7 @@ impl MetaMcp {
                     // resolving (and auditing) again in this request.
                     // The witness stays spent, as the verdict spent it:
                     // the resolution may have minted.
-                    visible::record_resolution_error(server, tool, error);
+                    memo::record_resolution_error(server, tool, error);
                     None
                 }
             };
@@ -363,7 +359,7 @@ impl MetaMcp {
         // The witness is kept: nothing reached the backend, so the nonce
         // is given back (`nonce_settle.rs:27-31`); the invoke asks for the
         // refund as it returns this error.
-        if visible::take_account_transient(server, tool).is_some() {
+        if memo::take_account_transient(server, tool).is_some() {
             return Err(crate::personal_accounts::refusal::transient_retry_error(
                 None,
             ));
@@ -374,16 +370,16 @@ impl MetaMcp {
         // resolution's failure: that resolution may have minted. A sealed
         // transient is the one exception (MIK-8428): its mint-time Busy
         // released nothing, so the witness stays for the nonce refund.
-        if let Some(error) = visible::take_resolution_error(server, tool) {
+        if let Some(error) = memo::take_resolution_error(server, tool) {
             if crate::personal_accounts::refusal::transient_data(&error).is_none() {
                 witness.spend();
             }
             return Err(error);
         }
-        match visible::take_carried(server, tool) {
+        match memo::take_carried(server, tool) {
             // The verdict's fill failed: answered as a failed dispatch is,
             // with nothing filled or sent again (F13, A11-c).
-            Some(visible::Carried {
+            Some(memo::Carried {
                 fill_error: Some(error),
                 ..
             }) => {
@@ -408,7 +404,7 @@ impl MetaMcp {
                     .is_some_and(|b| self.lacks_principal_on_required(b, caller_proof))
                 {
                     self.warn_lacked_principal(server, caller_key);
-                    return Err(visible::absent_name(tool));
+                    return Err(visible::absent::absent_name(tool));
                 }
                 let resolved = self
                     .resolve_dispatch(
@@ -476,10 +472,10 @@ impl MetaMcp {
                 (CallerVerdict::Unavailable, Some(error))
             }
         };
-        visible::carry_dispatch(
+        memo::carry_dispatch(
             server,
             tool,
-            visible::Carried {
+            memo::Carried {
                 backend,
                 resolved,
                 fill_error,
@@ -523,7 +519,7 @@ impl MetaMcp {
         };
         // First judgement wins: an answer recorded meanwhile stands.
         Ok(
-            match recorded.map(|judged| visible::record_visibility(server, tool, judged)) {
+            match recorded.map(|judged| memo::record_visibility(server, tool, judged)) {
                 Some(Visibility::Visible) => SlotJudgement::Offered,
                 Some(Visibility::Withheld(_)) => SlotJudgement::Absent,
                 None => judgement,

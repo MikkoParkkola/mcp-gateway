@@ -12,7 +12,7 @@ use crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::{
 };
 use crate::gateway::meta_mcp::authz_tests::ctx;
 use crate::gateway::meta_mcp::sealed_hold::{CarriedHolds, Held};
-use crate::gateway::meta_mcp::visible::{self, AccountOutcome, Carried};
+use crate::gateway::meta_mcp::visible::{self, memo::AccountOutcome, memo::Carried};
 use crate::gateway::task_service::CommittedTask;
 use crate::gateway::task_service::Target;
 use crate::identity_propagation::{CallerProof, CallerProvenance};
@@ -60,7 +60,7 @@ async fn carry(meta: &MetaMcp, fill_error: Option<crate::Error>) {
         )
         .await
         .expect("premise: the operator's live grant resolves");
-    visible::carry_dispatch(
+    visible::memo::carry_dispatch(
         BACKEND,
         TOOL,
         Carried {
@@ -117,7 +117,7 @@ fn finished() -> Task {
 async fn t6u_a_carried_failed_fill_answers_the_failed_dispatch() {
     let (_gateway, meta) = connected();
     let task = finished();
-    let answer = visible::with_visibility_memo(async {
+    let answer = visible::memo::with_visibility_memo(async {
         carry(
             &meta,
             Some(crate::Error::Transport("t6u fill refused".into())),
@@ -152,7 +152,7 @@ async fn t6u_a_carried_failed_fill_answers_the_failed_dispatch() {
 async fn d5_one_account_proves_once_per_repeat() {
     let (_gateway, meta) = connected();
     let task = finished();
-    let answer = visible::with_visibility_memo(async {
+    let answer = visible::memo::with_visibility_memo(async {
         carry(&meta, None).await;
         meta.defer_or_serve_existing(
             RequestId::Number(7),
@@ -188,9 +188,9 @@ async fn e9u_an_unavailable_repeat_answers_only_a_lacked_target() {
     let stored = stored_on(&task, vec![target()]);
     let run = |lacked: bool, fill_error: Option<crate::Error>| {
         let (meta, account, stored) = (&meta, account.clone(), &stored);
-        visible::with_visibility_memo(async move {
+        visible::memo::with_visibility_memo(async move {
             shared_tools(meta, if lacked { "other" } else { TOOL });
-            visible::record_account_outcome(BACKEND, &account, AccountOutcome::Unavailable);
+            visible::memo::record_account_outcome(BACKEND, &account, AccountOutcome::Unavailable);
             carry(meta, fill_error).await;
             meta.unavailable_repeat_answer(
                 &RequestId::Number(8),
@@ -228,31 +228,37 @@ async fn e9u_an_unavailable_repeat_answers_only_a_lacked_target() {
 #[tokio::test]
 async fn a_second_carry_replaces_the_first_and_a_take_consumes_it() {
     let (_gateway, meta) = connected();
-    visible::with_visibility_memo(async {
+    visible::memo::with_visibility_memo(async {
         carry(&meta, None).await;
         carry(&meta, Some(crate::Error::Transport("second".into()))).await;
         let failed = |carried: &Carried| carried.fill_error.is_some();
-        assert_eq!(visible::with_carried(BACKEND, TOOL, failed), Some(true));
         assert_eq!(
-            visible::with_carried(BACKEND, TOOL, failed),
+            visible::memo::with_carried(BACKEND, TOOL, failed),
+            Some(true)
+        );
+        assert_eq!(
+            visible::memo::with_carried(BACKEND, TOOL, failed),
             Some(true),
             "a read keeps it"
         );
         for (server, tool) in [("other", TOOL), (BACKEND, "other")] {
-            assert_eq!(visible::with_carried(server, tool, failed), None);
-            assert!(visible::take_carried(server, tool).is_none());
+            assert_eq!(visible::memo::with_carried(server, tool, failed), None);
+            assert!(visible::memo::take_carried(server, tool).is_none());
         }
-        assert!(visible::take_carried(BACKEND, TOOL).is_some_and(|c| c.fill_error.is_some()));
-        assert!(visible::take_carried(BACKEND, TOOL).is_none(), "taken once");
+        assert!(visible::memo::take_carried(BACKEND, TOOL).is_some_and(|c| c.fill_error.is_some()));
+        assert!(
+            visible::memo::take_carried(BACKEND, TOOL).is_none(),
+            "taken once"
+        );
     })
     .await;
     // Outside a memo a carry is dropped: nothing to read or take, here or in
     // a scope opened after it.
     carry(&meta, None).await;
-    assert!(visible::with_carried(BACKEND, TOOL, |_| ()).is_none());
-    assert!(visible::take_carried(BACKEND, TOOL).is_none());
-    visible::with_visibility_memo(async {
-        assert!(visible::take_carried(BACKEND, TOOL).is_none());
+    assert!(visible::memo::with_carried(BACKEND, TOOL, |_| ()).is_none());
+    assert!(visible::memo::take_carried(BACKEND, TOOL).is_none());
+    visible::memo::with_visibility_memo(async {
+        assert!(visible::memo::take_carried(BACKEND, TOOL).is_none());
     })
     .await;
 }

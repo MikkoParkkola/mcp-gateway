@@ -16,7 +16,7 @@ use crate::gateway::authz::{
     Decision, ToolAuthorizer, ToolPolicyAuthorizer, ToolTarget, Transport,
 };
 use crate::gateway::meta_mcp::MetaMcp;
-use crate::gateway::meta_mcp::visible::Judged;
+use crate::gateway::meta_mcp::visible::memo::Judged;
 use crate::gateway::router::{AppState, OwnedRouterAuthorizer, RouterAuthorizer};
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::ToolPolicy;
@@ -101,11 +101,11 @@ impl LiveHost {
         let view =
             crate::gateway::meta_mcp::visible::TargetView::Caller(caller.scope(), session_id);
         // A memo for the judgement alone: the round's dispatch judges live.
-        crate::gateway::meta_mcp::visible::with_visibility_memo(async {
+        crate::gateway::meta_mcp::visible::memo::with_visibility_memo(async {
             if crate::gateway::router::sanitize_exempt(self.meta_mcp(), &request, view) {
                 return Ok((
                     call.arguments.clone(),
-                    crate::gateway::meta_mcp::visible::judged(),
+                    crate::gateway::meta_mcp::visible::memo::judged(),
                 ));
             }
             crate::security::sanitize::sanitize_request(&request, route)

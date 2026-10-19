@@ -412,8 +412,8 @@ async fn s4_outage_replay_answers_as_the_live_call() {
 #[tokio::test]
 async fn l3_a_deferred_replay_is_taken_only_by_its_own_key_once() {
     use crate::gateway::meta_mcp::visible::{
-        DeferredReplay, deferred_replay_key, record_deferred_replay, take_deferred_replay,
-        with_visibility_memo,
+        deferred::DeferredReplay, deferred::deferred_replay_key, memo::record_deferred_replay,
+        memo::take_deferred_replay, memo::with_visibility_memo,
     };
     let retry = |key: &str| crate::protocol::mrtr::RetryFields {
         input_responses: None,

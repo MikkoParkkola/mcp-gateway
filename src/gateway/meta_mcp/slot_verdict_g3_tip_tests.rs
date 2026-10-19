@@ -11,7 +11,7 @@ use super::invoke::CallerVerdict;
 use super::slot_verdict_fixture::{
     BACKEND, CallerSlot, Surfaced, TOOL, Warmth, per_user, per_user_backend, valid,
 };
-use super::visible::with_visibility_memo;
+use super::visible::memo::with_visibility_memo;
 use crate::config::InputSchemaEnforcement;
 
 const CLOSED: InputSchemaEnforcement = InputSchemaEnforcement::Closed;

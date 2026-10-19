@@ -23,7 +23,7 @@ impl MetaMcp {
     ) -> Result<Option<String>> {
         // A resolution the caller verdict carried for this step is the one
         // its dispatch will use: derive from it, with no second mint (fold F6).
-        if let Some(binding) = super::super::visible::with_carried(server, tool, |carried| {
+        if let Some(binding) = super::super::visible::memo::with_carried(server, tool, |carried| {
             carried.resolved.binding.clone()
         }) {
             return Ok(crate::protocol::mrtr::source_fingerprint(
@@ -33,7 +33,7 @@ impl MetaMcp {
         // So is any resolution ERROR it carried (a mint-time Busy among
         // them): request-local, taken once, after the step's policy check,
         // and answered here with no second mint or audit (MIK-8428 Case E).
-        if let Some(error) = super::super::visible::take_resolution_error(server, tool) {
+        if let Some(error) = super::super::visible::memo::take_resolution_error(server, tool) {
             return Err(error);
         }
         let backend = self
@@ -55,10 +55,10 @@ impl MetaMcp {
         // time): this resolution is the step's, carried to its invocation so
         // the resume resolves once (MIK-8356 C13).
         if let Some(backend) = backend {
-            super::super::visible::carry_dispatch(
+            super::super::visible::memo::carry_dispatch(
                 server,
                 tool,
-                super::super::visible::Carried {
+                super::super::visible::memo::Carried {
                     backend,
                     resolved,
                     fill_error: None,

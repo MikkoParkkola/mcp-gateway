@@ -1,0 +1,558 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! The per-request visibility memo (MIK-8340, MIK-8392): its maps, the one
+//! way to read or write them, and every accessor the rest of the gateway uses.
+//! A task worker's judgement ([`Judged`]) lives beside it.
+
+use super::absent::absent_name;
+use super::deferred::{DeferredReplay, DeferredReplayKey};
+use super::{Visibility, Withholding};
+
+/// One visibility judgement per request (MIK-8340, perflane MIK-8356 R3.1):
+/// the first answer [`MetaMcp::tool_visible_to`](crate::gateway::meta_mcp::MetaMcp::tool_visible_to) gives for a `(server, tool)`
+/// within a request, kept for the rest of that request.
+///
+/// It also carries the caller verdict's credential resolution to the
+/// dispatch (MIK-8356 R5.2): one resolution per call, on the same backend
+/// instance the verdict judged; and it keeps what intake judged the sanitize
+/// exemption on ([`Judged`], MIK-8154).
+#[derive(Default)]
+struct VisibilityMemo {
+    visibility: Keyed<TargetKey, Visibility>,
+    carried_credential: Keyed<TargetKey, Carried>,
+    /// MIK-8361: the route stage's refusal code, for the call's one record.
+    denial_code: Keyed<TargetKey, i32>,
+    judged: parking_lot::Mutex<Judged>,
+    /// MIK-8392: each target account's liveness, filled once per request by
+    /// the async pre-pass and only read after it. Never a [`Visibility`]: an
+    /// account outcome and a caller-view judgement are kept apart.
+    offer_pending: Keyed<AccountSlot, AccountOutcome>,
+    /// MIK-8392 d0 warm path: the binding the pre-pass's view read gave each
+    /// account, so a warm read revalidates its indexed slot without a second
+    /// vault read.
+    account_binding: Keyed<AccountSlot, String>,
+    /// MIK-8392 (lead ruling 2026-10-12): the live call's own refusal for an
+    /// account that can never bind this caller, so a stored read answers what
+    /// the live call answers instead of "retry" forever.
+    account_refusal: Keyed<AccountSlot, crate::Error>,
+    deferred_replay: Keyed<DeferredReplayKey, DeferredReplay>,
+    /// MIK-8392 Busy parity: a transient busy custody met by this request's
+    /// mint-free view read, carried to the dispatch and consumed once there,
+    /// so nothing in the request reads custody a second time.
+    account_transient: Keyed<TargetKey, String>,
+    /// The route verdict's resolution error for a target (MIK-8392 G1a),
+    /// carried to that target's dispatch so it answers without resolving
+    /// (and auditing) a second time in one request.
+    resolution_error: Keyed<TargetKey, crate::Error>,
+}
+
+/// A memo map's key for one `(server, tool)` target.
+type TargetKey = (String, String);
+/// A memo map's key for one `(server, account)` pair.
+type AccountSlot = (String, AccountKey);
+
+fn target_key(server: &str, tool: &str) -> TargetKey {
+    (server.to_owned(), tool.to_owned())
+}
+
+fn account_slot(server: &str, account: &AccountKey) -> AccountSlot {
+    (server.to_owned(), account.clone())
+}
+
+/// One map in the open request's memo (MIK-8498 VISIBLE.2). Every memo map
+/// is this type, so each accessor states only which operation it uses:
+/// first-wins, overwrite, read, take, or take the first that matches.
+struct Keyed<K, V>(parking_lot::Mutex<std::collections::HashMap<K, V>>);
+
+impl<K, V> Default for Keyed<K, V> {
+    fn default() -> Self {
+        Self(parking_lot::Mutex::new(std::collections::HashMap::new()))
+    }
+}
+
+impl<K: std::hash::Hash + Eq, V> Keyed<K, V> {
+    /// Keep `value` unless an answer is recorded; returns the recorded one.
+    fn first(&self, key: K, value: V) -> V
+    where
+        V: Clone,
+    {
+        self.0.lock().entry(key).or_insert(value).clone()
+    }
+
+    /// Record `value`, replacing any earlier one.
+    fn set(&self, key: K, value: V) {
+        self.0.lock().insert(key, value);
+    }
+
+    fn get(&self, key: &K) -> Option<V>
+    where
+        V: Clone,
+    {
+        self.0.lock().get(key).cloned()
+    }
+
+    /// Read the entry in place, without cloning or consuming it.
+    fn with<R>(&self, key: &K, read: impl FnOnce(&V) -> R) -> Option<R> {
+        self.0.lock().get(key).map(read)
+    }
+
+    fn take(&self, key: &K) -> Option<V> {
+        self.0.lock().remove(key)
+    }
+
+    fn contains(&self, key: &K) -> bool {
+        self.0.lock().contains_key(key)
+    }
+
+    /// Take the first entry, in the map's own iteration order, whose value
+    /// matches; the rest stay.
+    fn take_first_where(&self, matches: impl Fn(&V) -> bool) -> Option<V>
+    where
+        K: Clone,
+    {
+        let mut held = self.0.lock();
+        let key = held
+            .iter()
+            .find(|(_, value)| matches(value))
+            .map(|(key, _)| key.clone())?;
+        held.remove(&key)
+    }
+}
+
+impl Keyed<TargetKey, Visibility> {
+    /// Record `key` absent unless it is already withheld (MIK-8387): an
+    /// empty or `Visible` entry becomes `Absent`; any withholding keeps its
+    /// reason. Nothing ever writes `Visible` over it, since `first` keeps it.
+    fn upgrade_to_absent(&self, key: TargetKey) {
+        let mut judged = self.0.lock();
+        let entry = judged.entry(key).or_insert(Visibility::Visible);
+        if *entry == Visibility::Visible {
+            *entry = Visibility::Withheld(Withholding::Absent);
+        }
+    }
+}
+
+/// Run `read` on the open request's memo; `None` outside one. The one place
+/// the memo's task-local is opened for a read or write.
+fn in_memo<R>(read: impl FnOnce(&VisibilityMemo) -> R) -> Option<R> {
+    VISIBILITY_MEMO.try_with(read).ok()
+}
+
+/// The account a target's dispatch would use (MIK-8392): a managed
+/// descriptor's id, from an identity-propagation backend's `account` or a
+/// capability's `auth.account`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct AccountKey(pub(crate) String);
+
+/// Whether a target's account is live for this caller, judged without a
+/// mint (MIK-8392).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AccountOutcome {
+    /// The caller's grant yields a binding now.
+    Live,
+    /// No grant: absent, revoked, reconnect-required, or no principal.
+    NoView,
+    /// The account kind has no mint-free view (an external or token-exchange
+    /// descriptor): visibility is judged on the catalogue only (stated
+    /// residual).
+    Unjudged,
+    /// Custody could not be read (shutting down, store failure): not a
+    /// finding about the grant, so a reader answers retryable.
+    Unavailable,
+    /// Custody is at its in-flight bound (MIK-8392 Busy parity): transient,
+    /// audited once as such, and answered exactly as a live call answers it.
+    Transient,
+}
+
+/// Record `outcome` for `(server, account)` in the open request's memo unless
+/// one is recorded; outside a memo nothing is kept.
+pub(crate) fn record_account_outcome(server: &str, account: &AccountKey, outcome: AccountOutcome) {
+    in_memo(|memo| {
+        memo.offer_pending
+            .first(account_slot(server, account), outcome)
+    });
+}
+
+/// The outcome recorded for `(server, account)` in the open request. Reads
+/// the memo only: outside an open memo, or before the pre-pass ran, it is
+/// `None`, and the caller fails closed. It never judges afresh (unlike the
+/// visibility fallback in [`MetaMcp::tool_visible_to`](crate::gateway::meta_mcp::MetaMcp::tool_visible_to)).
+pub(crate) fn account_outcome(server: &str, account: &AccountKey) -> Option<AccountOutcome> {
+    in_memo(|memo| memo.offer_pending.get(&account_slot(server, account))).flatten()
+}
+
+/// A caller verdict's resolution, waiting for the first invocation on its
+/// server in the same request.
+pub(crate) struct Carried {
+    /// The backend instance the verdict judged; the dispatch uses it, never
+    /// a second lookup by name (a reload in between keeps the old instance).
+    pub(crate) backend: std::sync::Arc<crate::backend::Backend>,
+    /// The credential the verdict resolved.
+    pub(crate) resolved: super::super::invoke::ResolvedDispatch,
+    /// The verdict's fill failed with this error (after any managed-401
+    /// recovery): the dispatch answers it as a failed dispatch, unfilled.
+    pub(crate) fill_error: Option<crate::Error>,
+}
+
+/// What intake judged a request's sanitize exemption on (MIK-8154): the digest
+/// of the playbook definition (C2e), and, for an exempt call, the backend
+/// instance each target was judged passthrough on (F2). A run or a send that
+/// meets a different definition or instance (a reload since) is refused.
+/// `Weak` keeps each judged allocation, so a new instance never shares its
+/// address.
+#[derive(Clone, Default)]
+pub(crate) struct Judged {
+    playbook: Option<String>,
+    instances: Vec<(String, std::sync::Weak<crate::backend::Backend>)>,
+}
+
+impl VisibilityMemo {
+    fn recorded(&self, server: &str, tool: &str) -> Option<Visibility> {
+        self.visibility.get(&target_key(server, tool))
+    }
+
+    /// Record `judged` unless an answer is already recorded; returns the
+    /// recorded answer, so the first judgement wins.
+    fn record(&self, server: &str, tool: &str, judged: Visibility) -> Visibility {
+        self.visibility.first(target_key(server, tool), judged)
+    }
+}
+
+tokio::task_local! {
+    /// The open request's memo; see [`with_visibility_memo`].
+    static VISIBILITY_MEMO: VisibilityMemo;
+    /// A task worker's judgement; see [`with_judged`].
+    static WORKER_JUDGED: Judged;
+}
+
+/// Record the digest of the playbook definition intake judged, in the open
+/// request's memo. Outside a memo there is no request to bind it to.
+pub(crate) fn record_judged_playbook(digest: String) {
+    in_memo(|memo| memo.judged.lock().playbook = Some(digest));
+}
+
+/// Record the backend instances an exempt call's targets were judged on.
+pub(crate) fn record_exempt_instances(instances: &[std::sync::Arc<crate::backend::Backend>]) {
+    let judged: Vec<_> = instances
+        .iter()
+        .map(|backend| (backend.name.clone(), std::sync::Arc::downgrade(backend)))
+        .collect();
+    in_memo(|memo| memo.judged.lock().instances = judged);
+}
+
+/// What this request's intake judged, or what a task worker carries from its
+/// submit ([`with_judged`]); empty outside both.
+pub(crate) fn judged() -> Judged {
+    // An empty memo (one a worker's dispatch opened) defers to the worker's.
+    let memo = in_memo(|memo| memo.judged.lock().clone()).unwrap_or_default();
+    if memo.playbook.is_some() || !memo.instances.is_empty() {
+        return memo;
+    }
+    WORKER_JUDGED.try_with(Clone::clone).unwrap_or_default()
+}
+
+/// The playbook digest [`judged`] holds, if any.
+pub(crate) fn judged_playbook() -> Option<String> {
+    judged().playbook
+}
+
+/// The refusal of a `tools/call` sent by a backend instance other than the
+/// one intake judged the call exempt on (MIK-8154 F2); `None` when the call
+/// was not judged exempt on this backend's name, or on this very instance.
+pub(crate) fn changed_instance(backend: &crate::backend::Backend) -> Option<String> {
+    // Looked up in place: this runs on every send.
+    let differs = |judged: &Judged| {
+        judged
+            .instances
+            .iter()
+            .find(|(name, _)| *name == backend.name)
+            .map(|(_, instance)| !std::ptr::eq(instance.as_ptr(), backend))
+    };
+    let differs = in_memo(|memo| differs(&memo.judged.lock()))
+        .flatten()
+        .or_else(|| WORKER_JUDGED.try_with(differs).ok().flatten())?;
+    differs.then(|| "The backend changed after this call was admitted; retry the call".to_owned())
+}
+
+/// Run a task's dispatch with what its submit judged (MIK-8154 C2e, F2), so
+/// the run refuses a playbook or backend reloaded between submit and run. Not
+/// a memo: a task's visibility is judged live, however long it runs.
+pub(crate) fn with_judged<F: std::future::Future>(
+    judged: Judged,
+    dispatch: F,
+) -> impl std::future::Future<Output = F::Output> {
+    WORKER_JUDGED.scope(judged, dispatch)
+}
+
+/// Record `judged` for `(server, tool)` in the open request's memo unless an
+/// answer is already recorded; returns the recorded answer (first judgement
+/// wins). Outside a request scope nothing is kept and `judged` is returned.
+pub(crate) fn record_visibility(server: &str, tool: &str, judged: Visibility) -> Visibility {
+    in_memo(|memo| memo.record(server, tool, judged)).unwrap_or(judged)
+}
+
+/// Hand `carried` to the next invocation on `server` in the open request.
+/// Outside a request scope it is dropped, and the dispatch resolves itself.
+pub(crate) fn carry_dispatch(server: &str, tool: &str, carried: Carried) {
+    in_memo(|memo| {
+        memo.carried_credential
+            .set(target_key(server, tool), carried);
+    });
+}
+
+/// Read the resolution carried for `server` without consuming it: the step
+/// resume fingerprint derives from the same resolution its dispatch will
+/// use (MIK-8356 fold F6).
+pub(crate) fn with_carried<R>(
+    server: &str,
+    tool: &str,
+    read: impl FnOnce(&Carried) -> R,
+) -> Option<R> {
+    in_memo(|memo| {
+        memo.carried_credential
+            .with(&target_key(server, tool), read)
+    })
+    .flatten()
+}
+
+/// Take the resolution carried for `server`, consuming it: a later
+/// invocation on the same server resolves again.
+pub(crate) fn take_carried(server: &str, tool: &str) -> Option<Carried> {
+    in_memo(|memo| memo.carried_credential.take(&target_key(server, tool))).flatten()
+}
+
+/// MIK-8361: keep the route stage's refusal code for `(server, tool)`, so the
+/// answer's one record names it; dropped outside a request scope.
+pub(crate) fn note_denial_code(server: &str, tool: &str, code: i32) {
+    in_memo(|memo| memo.denial_code.first(target_key(server, tool), code));
+}
+
+/// The code [`note_denial_code`] kept for `(server, tool)`, if any.
+pub(crate) fn denial_code(server: &str, tool: &str) -> Option<i32> {
+    in_memo(|memo| memo.denial_code.get(&target_key(server, tool))).flatten()
+}
+
+/// The answer already recorded for `(server, tool)` in the open request, if
+/// any.
+pub(crate) fn recorded_visibility(server: &str, tool: &str) -> Option<Visibility> {
+    in_memo(|memo| memo.recorded(server, tool)).flatten()
+}
+
+/// Run `request` with one visibility memo for its whole lifetime (the HTTP
+/// `tools/call` handler and each stdio request). A request already inside
+/// one keeps it, so nested entry points share the outer request's memo.
+pub(crate) async fn with_visibility_memo<F: std::future::Future>(request: F) -> F::Output {
+    if VISIBILITY_MEMO.try_with(|_| ()).is_ok() {
+        return request.await;
+    }
+    VISIBILITY_MEMO
+        .scope(VisibilityMemo::default(), request)
+        .await
+}
+
+/// A name this request's caller verdict withheld answers as absent at every
+/// layer that can serve a stored result for it: the invocation policy, and
+/// the two layers that skip that policy for a target signing already prepared
+/// (MIK-8356). On stdio, signing prepares before the route stage records the
+/// verdict, so a check made only inside the policy would come too early.
+///
+/// # Errors
+///
+/// [`absent_name`] when the memo records `server`'s `tool` as withheld.
+pub(crate) fn refuse_withheld(server: &str, tool: &str) -> crate::Result<()> {
+    absent_if_withheld(recorded_visibility(server, tool), tool)
+}
+
+/// The absent answer for an already-judged [`Visibility`] (MIK-8392.STORED.3):
+/// the one withheld-name guard, over the memo or over a judgement made where
+/// no request memo is open. No second predicate.
+///
+/// # Errors
+///
+/// [`absent_name`] when `judged` is withheld.
+pub(crate) fn absent_if_withheld(judged: Option<Visibility>, tool: &str) -> crate::Result<()> {
+    match judged {
+        Some(Visibility::Withheld(_)) => Err(absent_name(tool)),
+        _ => Ok(()),
+    }
+}
+
+/// Keep the binding the pre-pass's view read gave `(server, account)`.
+pub(crate) fn record_account_binding(server: &str, account: &AccountKey, binding: &str) {
+    in_memo(|memo| {
+        memo.account_binding
+            .set(account_slot(server, account), binding.to_owned());
+    });
+}
+
+/// The binding the pre-pass's view read gave `(server, account)`, if any.
+pub(crate) fn account_binding(server: &str, account: &AccountKey) -> Option<String> {
+    in_memo(|memo| memo.account_binding.get(&account_slot(server, account))).flatten()
+}
+
+/// Keep the live call's refusal for `(server, account)` in the open request;
+/// outside one it is dropped.
+pub(crate) fn record_account_refusal(server: &str, account: &AccountKey, refusal: crate::Error) {
+    in_memo(|memo| {
+        memo.account_refusal
+            .set(account_slot(server, account), refusal);
+    });
+}
+
+/// Keep this request's transient busy custody for `(server, tool)`, with
+/// the busy reason; outside a request nothing is kept.
+pub(crate) fn record_account_transient(server: &str, tool: &str, reason: String) {
+    in_memo(|memo| memo.account_transient.set(target_key(server, tool), reason));
+}
+
+/// The transient kept for `(server, tool)`, without consuming it.
+pub(crate) fn account_transient(server: &str, tool: &str) -> Option<String> {
+    in_memo(|memo| memo.account_transient.get(&target_key(server, tool))).flatten()
+}
+
+/// Take any one transient this request holds, consuming it: the task
+/// intake trigger, which answers for the whole call.
+pub(crate) fn take_any_account_transient() -> Option<String> {
+    in_memo(|memo| memo.account_transient.take_first_where(|_| true)).flatten()
+}
+
+/// Take any one sealed-transient resolution error this request holds (a
+/// busy custody at the route stage's mint, MIK-8428 Case B), consuming it:
+/// the task intake trigger beside [`take_any_account_transient`]. Any other
+/// carried error is left for its own dispatch.
+pub(crate) fn take_any_transient_resolution_error() -> Option<crate::Error> {
+    in_memo(|memo| {
+        memo.resolution_error.take_first_where(|error| {
+            crate::personal_accounts::refusal::transient_data(error).is_some()
+        })
+    })
+    .flatten()
+}
+
+/// Take the transient kept for `(server, tool)`, consuming it once.
+pub(crate) fn take_account_transient(server: &str, tool: &str) -> Option<String> {
+    in_memo(|memo| memo.account_transient.take(&target_key(server, tool))).flatten()
+}
+
+/// Keep the route verdict's resolution error for `(server, tool)` in the
+/// open request; outside one it is dropped.
+pub(crate) fn record_resolution_error(server: &str, tool: &str, error: crate::Error) {
+    in_memo(|memo| memo.resolution_error.set(target_key(server, tool), error));
+}
+
+/// Whether a resolution error is kept for `(server, tool)`, without
+/// consuming it: a repeated verdict reads it as a memo hit (G1a twin).
+pub(crate) fn has_resolution_error(server: &str, tool: &str) -> bool {
+    in_memo(|memo| memo.resolution_error.contains(&target_key(server, tool))).unwrap_or(false)
+}
+
+/// Take the resolution error kept for `(server, tool)`, consuming it once.
+pub(crate) fn take_resolution_error(server: &str, tool: &str) -> Option<crate::Error> {
+    in_memo(|memo| memo.resolution_error.take(&target_key(server, tool))).flatten()
+}
+
+/// Take the refusal kept for `(server, account)`, if any.
+pub(crate) fn take_account_refusal(server: &str, account: &AccountKey) -> Option<crate::Error> {
+    in_memo(|memo| memo.account_refusal.take(&account_slot(server, account))).flatten()
+}
+
+/// Record `(server, tool)` absent for the rest of the request (MIK-8387).
+/// Upgrade-only, unlike the first-judgement-wins record: an absence that lets
+/// the call take the early path (past signing and admission) must hold even
+/// over an earlier `Visible`, or a backend restored before the per-target
+/// gate would be dispatched unadmitted. Nothing ever writes `Visible` over it.
+pub(crate) fn record_absent(server: &str, tool: &str) {
+    in_memo(|memo| memo.visibility.upgrade_to_absent(target_key(server, tool)));
+}
+
+/// Record `entry` for `key` in the open request's memo. `false` outside a
+/// memo: nothing was recorded, so no lift can serve it, and the caller must
+/// not proceed as though it were deferred.
+pub(crate) fn record_deferred_replay(key: DeferredReplayKey, entry: DeferredReplay) -> bool {
+    in_memo(|memo| memo.deferred_replay.set(key, entry)).is_some()
+}
+
+/// Take the entry recorded for `key`, consuming it: a second take returns
+/// `None`, and a nested invocation's key never matches. `None` outside a memo.
+pub(crate) fn take_deferred_replay(key: &DeferredReplayKey) -> Option<DeferredReplay> {
+    in_memo(|memo| memo.deferred_replay.take(key)).flatten()
+}
+
+/// Whether a request memo is open, and what it holds there (MIK-8498): "no
+/// memo" and "a memo with nothing recorded" are different answers.
+pub(super) enum Scoped<T> {
+    NoMemo,
+    InMemo(T),
+}
+
+/// The visibility recorded for `(server, tool)` in the open request, told
+/// apart from there being no open request at all.
+pub(super) fn recorded_in_scope(server: &str, tool: &str) -> Scoped<Option<Visibility>> {
+    in_memo(|memo| memo.recorded(server, tool)).map_or(Scoped::NoMemo, Scoped::InMemo)
+}
+
+/// MIK-8340 memo semantics (seats gpt-20261011T084206Z-14299 and
+/// kimi-20261011T084206Z-14300): first judgement wins within a scope, a
+/// nested scope reuses the outer memo, and outside any scope every read
+/// judges fresh.
+#[cfg(test)]
+mod memo_tests {
+    use super::{VISIBILITY_MEMO, Visibility, VisibilityMemo, Withholding, with_visibility_memo};
+
+    const WITHHELD: Visibility = Visibility::Withheld(Withholding::Schema);
+
+    /// What the open scope's memo holds for `(server, tool)`; panics outside
+    /// a scope (the rows below check that separately).
+    fn recorded(server: &str, tool: &str) -> Option<Visibility> {
+        VISIBILITY_MEMO
+            .try_with(|memo| memo.recorded(server, tool))
+            .expect("inside a visibility memo scope")
+    }
+
+    fn in_scope() -> bool {
+        VISIBILITY_MEMO.try_with(|_| ()).is_ok()
+    }
+
+    #[test]
+    fn the_first_judgement_wins() {
+        let memo = VisibilityMemo::default();
+        assert_eq!(memo.record("alpha", "read", WITHHELD), WITHHELD);
+        assert_eq!(memo.record("alpha", "read", Visibility::Visible), WITHHELD);
+        assert_eq!(memo.recorded("alpha", "read"), Some(WITHHELD));
+        assert_eq!(memo.recorded("alpha", "note"), None);
+    }
+
+    #[tokio::test]
+    async fn a_nested_scope_reuses_the_outer_memo() {
+        with_visibility_memo(async {
+            VISIBILITY_MEMO.with(|memo| memo.record("alpha", "read", WITHHELD));
+            with_visibility_memo(async {
+                assert_eq!(recorded("alpha", "read"), Some(WITHHELD));
+            })
+            .await;
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn outside_a_scope_there_is_no_memo_and_scopes_do_not_leak() {
+        assert!(!in_scope(), "a memo outside any request scope");
+        with_visibility_memo(async {
+            VISIBILITY_MEMO.with(|memo| memo.record("alpha", "read", WITHHELD));
+        })
+        .await;
+        with_visibility_memo(async {
+            assert_eq!(
+                recorded("alpha", "read"),
+                None,
+                "a second request saw the first's memo"
+            );
+        })
+        .await;
+    }
+}
+
+#[cfg(test)]
+mod account_tests;
+#[cfg(test)]
+mod semantics_tests;

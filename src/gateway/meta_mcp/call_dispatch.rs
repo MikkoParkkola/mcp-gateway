@@ -44,7 +44,8 @@ impl MetaMcp {
                     )
                     .await;
                 if matches!(verdict, Ok((super::invoke::CallerVerdict::Absent, _))) {
-                    let reason = match super::visible::recorded_visibility(server, tool_name) {
+                    let reason = match super::visible::memo::recorded_visibility(server, tool_name)
+                    {
                         Some(super::visible::Visibility::Withheld(reason)) => reason,
                         _ => super::visible::Withholding::Lacked,
                     };
@@ -227,7 +228,7 @@ impl MetaMcp {
         // scope of its own (a task worker, an in-process caller) still takes
         // one caller verdict and carries its resolution to dispatch. Inside
         // a transport's scope this reuses it.
-        let response = super::visible::with_visibility_memo(Box::pin(
+        let response = super::visible::memo::with_visibility_memo(Box::pin(
             self.handle_tools_call_unsettled(id, tool_name, arguments, session_id, caller),
         ))
         .await;
