@@ -249,8 +249,9 @@ async fn a_live_backend_answer_is_delivered_as_the_backends() {
 }
 
 /// The files the send path of `invoke_tool_traced` lives in.
-const SEND_PATH: [(&str, &str); 2] = [
+const SEND_PATH: [(&str, &str); 3] = [
     ("invoke.rs", include_str!("../invoke.rs")),
+    ("send.rs", include_str!("send.rs")),
     ("post_dispatch.rs", include_str!("post_dispatch.rs")),
 ];
 
