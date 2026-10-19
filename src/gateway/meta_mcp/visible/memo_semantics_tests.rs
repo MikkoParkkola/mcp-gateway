@@ -40,6 +40,13 @@ async fn first_wins_maps_keep_the_first_answer_and_reads_do_not_consume() {
     with_visibility_memo(async {
         assert_eq!(record_visibility("s", "t", SCHEMA), SCHEMA);
         assert_eq!(record_visibility("s", "t", Visibility::Visible), SCHEMA);
+        // The other order too: first wins, not "withheld wins".
+        assert_eq!(
+            record_visibility("s", "v", Visibility::Visible),
+            Visibility::Visible
+        );
+        assert_eq!(record_visibility("s", "v", SCHEMA), Visibility::Visible);
+        assert_eq!(recorded_visibility("s", "v"), Some(Visibility::Visible));
         assert_eq!(recorded_visibility("s", "t"), Some(SCHEMA));
         assert_eq!(
             recorded_visibility("s", "t"),
@@ -165,7 +172,10 @@ async fn keys_are_isolated_by_server_tool_and_account() {
         assert!(has_resolution_error("s1", "t1"));
         assert_eq!(account_outcome("s1", &a1), Some(AccountOutcome::NoView));
         assert_eq!(account_binding("s1", &a1).as_deref(), Some("bound"));
-        assert!(take_account_refusal("s1", &a1).is_some());
+        assert_eq!(
+            shape(take_account_refusal("s1", &a1)),
+            shape(Some(error(-32002, "refused")))
+        );
     })
     .await;
 }

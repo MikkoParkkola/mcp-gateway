@@ -156,5 +156,12 @@ mod tests {
         .await;
         assert!(!record_deferred_replay(own.clone(), named("outside")));
         assert!(take_deferred_replay(&own).is_none());
+        super::super::with_visibility_memo(async {
+            assert!(
+                take_deferred_replay(&own).is_none(),
+                "a later scope sees nothing"
+            );
+        })
+        .await;
     }
 }

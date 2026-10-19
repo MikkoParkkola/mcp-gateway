@@ -238,9 +238,21 @@ async fn a_second_carry_replaces_the_first_and_a_take_consumes_it() {
             Some(true),
             "a read keeps it"
         );
+        for (server, tool) in [("other", TOOL), (BACKEND, "other")] {
+            assert_eq!(visible::with_carried(server, tool, failed), None);
+            assert!(visible::take_carried(server, tool).is_none());
+        }
         assert!(visible::take_carried(BACKEND, TOOL).is_some_and(|c| c.fill_error.is_some()));
         assert!(visible::take_carried(BACKEND, TOOL).is_none(), "taken once");
-        assert_eq!(visible::with_carried("other", TOOL, failed), None);
+    })
+    .await;
+    // Outside a memo a carry is dropped: nothing to read or take, here or in
+    // a scope opened after it.
+    carry(&meta, None).await;
+    assert!(visible::with_carried(BACKEND, TOOL, |_| ()).is_none());
+    assert!(visible::take_carried(BACKEND, TOOL).is_none());
+    visible::with_visibility_memo(async {
+        assert!(visible::take_carried(BACKEND, TOOL).is_none());
     })
     .await;
 }
