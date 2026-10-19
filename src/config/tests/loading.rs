@@ -151,7 +151,7 @@ server:
   host: "127.0.0.1"
   port: 39401
 "#;
-    let config: Config = serde_yaml::from_str(yaml).unwrap();
+    let config: Config = crate::yaml::from_str(yaml).unwrap();
     assert_eq!(config.env_files.len(), 2);
     assert_eq!(config.env_files[0], "~/.config/mcp-gateway/secrets.env");
 }
@@ -182,7 +182,7 @@ runtime:
         max_restarts: 3
         backoff_secs: 10
 ";
-    let config: Config = serde_yaml::from_str(yaml).unwrap();
+    let config: Config = crate::yaml::from_str(yaml).unwrap();
 
     let plan = config
         .runtime
@@ -209,7 +209,7 @@ runtime:
       restart:
         max_restarts: 4
 ";
-    let config: Config = serde_yaml::from_str(yaml).unwrap();
+    let config: Config = crate::yaml::from_str(yaml).unwrap();
 
     let plan = config
         .runtime
@@ -236,7 +236,7 @@ backends:
     command: "node server.js"
     runtime_profile: local_safe
 "#;
-    let config: Config = serde_yaml::from_str(yaml).expect("config");
+    let config: Config = crate::yaml::from_str(yaml).expect("config");
     let backend = config.backends.get("docs").expect("backend");
     assert_eq!(backend.runtime_profile.as_deref(), Some("local_safe"));
     assert!(config.validate().is_ok());
@@ -250,7 +250,7 @@ backends:
     command: "node server.js"
     runtime_profile: missing
 "#;
-    let config: Config = serde_yaml::from_str(yaml).expect("config");
+    let config: Config = crate::yaml::from_str(yaml).expect("config");
     let result = config.validate();
     assert!(matches!(result, Err(crate::Error::ConfigValidation(_))));
     let msg = result.unwrap_err().to_string();
@@ -268,7 +268,7 @@ runtime:
     missing_image:
       provider: docker
 ";
-    let config: Config = serde_yaml::from_str(yaml).unwrap();
+    let config: Config = crate::yaml::from_str(yaml).unwrap();
 
     let result = config.validate();
 
@@ -290,7 +290,7 @@ runtime:
       env_keys:
         - BAD-KEY
 ";
-    let config: Config = serde_yaml::from_str(yaml).unwrap();
+    let config: Config = crate::yaml::from_str(yaml).unwrap();
 
     let result = config.validate();
 
@@ -316,7 +316,7 @@ meta_mcp:
       tool: another_tool
 ";
     // WHEN: parsing as Config
-    let config: Config = serde_yaml::from_str(yaml).unwrap();
+    let config: Config = crate::yaml::from_str(yaml).unwrap();
     // THEN: both entries are present with correct fields
     let tools = &config.meta_mcp.surfaced_tools;
     assert_eq!(tools.len(), 2);
@@ -344,7 +344,7 @@ meta_mcp:
     - my_backend
 ";
     // WHEN: parsing
-    let config: Config = serde_yaml::from_str(yaml).unwrap();
+    let config: Config = crate::yaml::from_str(yaml).unwrap();
     // THEN: surfaced_tools is empty (default applied)
     assert!(config.meta_mcp.surfaced_tools.is_empty());
 }
@@ -359,7 +359,7 @@ meta_mcp:
   prompts_resources_fetch_timeout: 5s
 ";
     // WHEN: parsing as Config
-    let config: Config = serde_yaml::from_str(yaml).unwrap();
+    let config: Config = crate::yaml::from_str(yaml).unwrap();
     // THEN: the timeout is read as a humantime Duration
     assert_eq!(
         config.meta_mcp.prompts_resources_fetch_timeout,
@@ -387,7 +387,7 @@ meta_mcp:
   cache_ttl: 60s
 ";
     // WHEN: parsing
-    let config: Config = serde_yaml::from_str(yaml).unwrap();
+    let config: Config = crate::yaml::from_str(yaml).unwrap();
     // THEN: the default is applied
     assert_eq!(
         config.meta_mcp.prompts_resources_fetch_timeout,

@@ -50,7 +50,7 @@ fn defaults_are_thirty_minutes_and_eight_hours() {
 
 #[test]
 fn a_misspelled_limit_is_refused() {
-    let parsed: Result<DashboardSessionConfig, _> = serde_yaml::from_str("idle_timeout: 60\n");
+    let parsed: Result<DashboardSessionConfig, _> = crate::yaml::from_str("idle_timeout: 60\n");
     assert!(
         parsed.is_err(),
         "an unknown key must not silently keep the default"
