@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8425 MIG.0: identity grants as the gateway reads and writes them with
-//! `serde_yaml` 0.9.34, recorded before the parser is replaced (gate G1).
+//! `serde-yaml` 0.9.34, recorded before the parser is replaced (gate G1).
 //!
 //! A grants file the gateway writes must stay readable by a gateway rolled
-//! back to `serde_yaml`. So the YAML writer's exact bytes are the golden: the
+//! back to `serde-yaml`. So the YAML writer's exact bytes are the golden: the
 //! `!exact` tag form, never the map form. The JSON writer and
 //! `grant_digest` (over the JSON form) must not move at all, because stored
 //! journals carry those digests.
@@ -14,6 +14,9 @@
 
 #[path = "common/mik_8425_golden.rs"]
 mod golden;
+
+#[path = "common/yaml.rs"]
+mod yaml;
 
 use mcp_gateway::identity_grants::journal::grant_digest;
 use mcp_gateway::identity_grants::{read_identity_grants_file, write_identity_grants_file};
@@ -123,7 +126,7 @@ async fn grants_read_and_write_as_recorded() {
     let report = report().await;
     assert!(
         report.contains("agent: !exact"),
-        "the YAML writer must emit the tag form serde_yaml reads: {report}"
+        "the YAML writer must emit the tag form serde-yaml reads: {report}"
     );
     golden::assert_golden("grants.txt", &report);
 }

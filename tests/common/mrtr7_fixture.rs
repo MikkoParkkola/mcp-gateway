@@ -9,6 +9,9 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+#[path = "yaml.rs"]
+mod yaml;
+
 /// The revision this suite's client speaks. Matches the fixture backend's.
 pub const CLIENT_PROTOCOL_VERSION: &str = "2025-06-18";
 /// Config name for the backend the child dials.
@@ -184,8 +187,7 @@ pub fn write_config(home: &Path, backend_url: &str) {
     );
     // The top-level config ignores keys it does not know, so a misnested
     // budget would load silently and bring the cascade back. Fail here instead.
-    let parsed: mcp_gateway::config::Config =
-        serde_yaml::from_str(&yaml).expect("gateway.yaml parses");
+    let parsed: mcp_gateway::config::Config = yaml::from_str(&yaml).expect("gateway.yaml parses");
     assert_eq!(
         (
             parsed.error_budget.min_samples,
@@ -209,8 +211,7 @@ pub fn write_config_without_rate_limit(home: &Path, backend_url: &str) {
     let path = home.join("gateway.yaml");
     let mut yaml = std::fs::read_to_string(&path).expect("read gateway.yaml");
     yaml.push_str("failsafe:\n  rate_limit:\n    enabled: false\n");
-    let parsed: mcp_gateway::config::Config =
-        serde_yaml::from_str(&yaml).expect("gateway.yaml parses");
+    let parsed: mcp_gateway::config::Config = yaml::from_str(&yaml).expect("gateway.yaml parses");
     assert!(
         !parsed.failsafe.rate_limit.enabled,
         "the rate limiter switch did not bind where the child reads it"

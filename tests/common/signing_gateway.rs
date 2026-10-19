@@ -14,6 +14,9 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use serde_json::{Value, json};
+
+#[path = "yaml.rs"]
+mod yaml;
 use tempfile::TempDir;
 use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
@@ -187,7 +190,7 @@ impl HttpGateway {
         let config_path = directory.path().join("gateway.yaml");
         mcp_gateway::gateway::test_helpers::write_owner_only(
             &config_path,
-            serde_yaml::to_string(&config).expect("config YAML"),
+            yaml::to_string(&config).expect("config YAML"),
         )
         .expect("write gateway config");
         let log = std::fs::File::create(directory.path().join("gateway.log")).expect("gateway log");

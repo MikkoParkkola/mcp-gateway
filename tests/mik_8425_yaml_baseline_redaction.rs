@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8425 MIG.0, gate G2 "before": where a YAML error prints the value
-//! that caused it today (CWE-532), recorded with `serde_yaml` 0.9.34.
+//! that caused it today (CWE-532), recorded with `serde-yaml` 0.9.34.
 //!
 //! The config load path removes values (`config/load_error.rs`, MIK-8375).
 //! The direct capability path does not: `capability/parser.rs` formats the
-//! whole `serde_yaml` error, so a value in a wrongly typed field reaches the
+//! whole `serde-yaml` error, so a value in a wrongly typed field reaches the
 //! log. That leak is recorded here as the current state, as a fact this test
 //! pins, not as an endorsement. After the backend swap, G2 requires the
 //! sentinel to be absent on every path; this golden is then updated in the
@@ -13,6 +13,9 @@
 
 #[path = "common/mik_8425_golden.rs"]
 mod golden;
+
+#[path = "common/yaml.rs"]
+mod yaml;
 
 use mcp_gateway::capability::parse_capability;
 use mcp_gateway::config::Config;

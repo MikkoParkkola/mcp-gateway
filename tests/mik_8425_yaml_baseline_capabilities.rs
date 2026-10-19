@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8425 MIG.0: the typed capability definition `serde_yaml` 0.9.34 builds
+//! MIK-8425 MIG.0: the typed capability definition `serde-yaml` 0.9.34 builds
 //! from every file in `capabilities/`, recorded before the parser is
 //! replaced.
 //!
@@ -17,6 +17,9 @@
 
 #[path = "common/mik_8425_golden.rs"]
 mod golden;
+
+#[path = "common/yaml.rs"]
+mod yaml;
 
 use mcp_gateway::capability::parse_capability;
 
@@ -35,7 +38,7 @@ fn reading(text: &str) -> String {
 }
 
 /// Every unchanged capability file parses to the definition recorded with
-/// `serde_yaml` 0.9.34.
+/// `serde-yaml` 0.9.34.
 #[test]
 fn every_capability_parses_as_recorded() {
     golden::assert_keyed_golden("capabilities.tsv", MIN_COMPARED, reading);
