@@ -40,6 +40,10 @@ PATHS = [
         [
             "src/gateway/task_service/",
             "src/gateway/router/handlers/tasks.rs",
+            # Its owner family, split out of tasks.rs (MIK-8102 P8b): the same
+            # lines, graded where they now live. Named as a file, not tasks/,
+            # so the test children under tasks/ are not graded as product.
+            "src/gateway/router/handlers/tasks/owner.rs",
             "src/gateway/meta_mcp/task_confirmation",
         ],
         94.73,
