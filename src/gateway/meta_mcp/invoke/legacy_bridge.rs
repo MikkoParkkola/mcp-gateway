@@ -43,9 +43,7 @@ impl MetaMcp {
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
         caller_credential: &CallerCredential,
         dispatch_binding: Option<&str>,
-        bridge_account_credential: &mut Option<
-            Arc<crate::identity_propagation::PreparedAccountCredential>,
-        >,
+        bridge_account_credential: &mut super::propagation::DispatchAccount,
         (policy_epoch, protocol_revision): (u64, Option<&'static str>),
         routing_profile: &str,
         backend: Option<&Arc<crate::backend::Backend>>,

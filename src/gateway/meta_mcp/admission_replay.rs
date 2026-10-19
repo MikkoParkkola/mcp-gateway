@@ -174,16 +174,28 @@ impl MetaMcp {
     ///
     /// `dispatched` is the stored record's executed steps; `None` (a record
     /// from before they were kept) judges the call's declared targets, fail
-    /// closed.
+    /// closed. `bindings` is what each step ran under (MIK-8407): judged
+    /// before anything is deferred or proven, and again just before a plan
+    /// is served, so a reload between the two cannot slip through.
     pub(crate) async fn defer_or_serve_replay(
         &self,
         tool_name: &str,
         arguments: &Value,
         caller: &super::super::MetaMcpCallerContext<'_>,
         target: Option<ReplayTarget>,
-        dispatched: Option<Vec<(String, String)>>,
+        (dispatched, bindings): (
+            Option<Vec<(String, String)>>,
+            Vec<super::super::admission::StepBinding>,
+        ),
         (response, audit): (JsonRpcResponse, Option<ReplayAudit>),
     ) -> Option<(JsonRpcResponse, Option<ReplayAudit>)> {
+        let view = self.scoped(caller.scope().authorizer.backend_grant());
+        if let Err(error) = self.judge_bindings(&view, &bindings) {
+            return Some((
+                JsonRpcResponse::error(response.id.clone(), error.to_rpc_code(), error.to_string()),
+                None,
+            ));
+        }
         // A replay with no target is a plan or a read-only meta tool. A plan
         // proves every account its steps used before it is served; the rest
         // are served as today. `?` would answer `None` here, which the caller
@@ -198,8 +210,22 @@ impl MetaMcp {
             let walk = Box::pin(
                 self.first_unproven_plan_step(tool_name, arguments, caller, dispatched, &response),
             );
-            return Some(match walk.await {
-                None => (response, audit),
+            let unproven = walk.await;
+            #[cfg(test)]
+            walk_seam::plan_walk_ended();
+            return Some(match unproven {
+                // Judged again at the serving point: the walk resolved live.
+                None => match self.judge_bindings(&view, &bindings) {
+                    Ok(()) => (response, audit),
+                    Err(error) => (
+                        JsonRpcResponse::error(
+                            response.id.clone(),
+                            error.to_rpc_code(),
+                            error.to_string(),
+                        ),
+                        None,
+                    ),
+                },
                 Some(answer) => (answer, None),
             });
         };
@@ -225,6 +251,7 @@ impl MetaMcp {
                 audit,
                 tool_name: tool_name.to_owned(),
                 arguments: arguments.clone(),
+                bindings,
             },
         );
         // Fail closed: with no request memo nothing was deferred, and
@@ -282,6 +309,44 @@ impl MetaMcp {
             self.settle_nonce_refund(context, super::super::signing::nonce_principal(caller));
         }
         Some(answer)
+    }
+}
+
+/// Test-only: a hook run once when a plan replay's proof walk ends, before
+/// the bindings are judged again (MIK-8407), so a row can re-bind a step in
+/// that window. Compiled out of non-test builds. Thread-local, so its rows run
+/// on the default current-thread tokio runtime.
+#[cfg(test)]
+mod walk_seam {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static AFTER_PLAN_WALK: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    /// Clears an unfired hook when dropped, so it cannot fire in a later
+    /// test on the same thread.
+    pub(super) struct Armed;
+
+    impl Drop for Armed {
+        fn drop(&mut self) {
+            AFTER_PLAN_WALK.with(|slot| slot.borrow_mut().take());
+        }
+    }
+
+    /// Run `hook` once, the next time a plan walk on this thread ends, until
+    /// the returned guard drops.
+    #[must_use]
+    pub(super) fn after_plan_walk(hook: impl FnOnce() + 'static) -> Armed {
+        AFTER_PLAN_WALK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+        Armed
+    }
+
+    /// Called where a plan walk ends.
+    pub(super) fn plan_walk_ended() {
+        if let Some(hook) = AFTER_PLAN_WALK.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
     }
 }
 

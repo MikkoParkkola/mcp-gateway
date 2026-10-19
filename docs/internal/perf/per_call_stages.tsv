@@ -287,6 +287,7 @@ src/gateway/meta_mcp/invoke/nonce_settle.rs	carry	http_invoke_tiny	on the HTTP g
 src/gateway/meta_mcp/invoke/nonce_settle.rs	drop	http_invoke_tiny	on the HTTP gateway_invoke path (the witness is taken and dropped per invoke)
 src/gateway/meta_mcp/invoke/nonce_settle.rs	give_back_unsent	-	on-path, untimed: pre-dispatch refusals (redeem, chokepoint) only; the timed rows dispatch
 src/gateway/meta_mcp/invoke/nonce_settle.rs	mark_dispatched	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/nonce_settle.rs	note_binding	http_invoke_tiny	on the HTTP gateway_invoke path, once per dispatch (MIK-8407): an unkeyed call outside a task worker pays an Option check and a task-local lookup, no allocation; a keyed call or a task worker adds one uncontended lock and up to three short string copies per distinct binding, the shape of note_served's note_step
 src/gateway/meta_mcp/invoke/nonce_settle.rs	note_served	http_invoke_tiny	on the HTTP gateway_invoke path (every live dispatch via mark_dispatched); also stored or cached results
 src/gateway/meta_mcp/invoke/nonce_settle.rs	refused_submit_answer	-	on-path, untimed: task submits refused before their task begins only; the timed rows carry no task member
 src/gateway/meta_mcp/invoke/nonce_settle.rs	spend	http_invoke_tiny	on the HTTP gateway_invoke path
@@ -332,6 +333,7 @@ src/gateway/meta_mcp/invoke/projection.rs	principal_source	http_invoke_tiny	on t
 src/gateway/meta_mcp/invoke/projection.rs	quota_key	-	on-path, untimed: interim continuation mints only; the timed backend answers at once
 src/gateway/meta_mcp/invoke/propagation.rs	audit_minted_credential	-	on-path, untimed: minted propagation credentials only; the timed backend has no propagation config
 src/gateway/meta_mcp/invoke/propagation.rs	caller_principal	-	on-path, untimed: identity-propagation backends only; the timed backend has no propagation config
+src/gateway/meta_mcp/invoke/propagation.rs	into_parts	http_invoke_tiny	on the HTTP gateway_invoke path, once per dispatch: moves the resolved fields into a tuple, no allocation and no lock (MIK-8407)
 src/gateway/meta_mcp/invoke/propagation.rs	minted	http_invoke_tiny	whether the credential step may have reached an issuer, once per dispatch
 src/gateway/meta_mcp/invoke/propagation.rs	refuse_unbound_account_backend	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_caller_credential	-	test-only helper (cfg(test))
@@ -342,6 +344,7 @@ src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_credential	-	dire
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_credential_attempted_for	-	direct /mcp/{backend} route only, not the meta tools/call path
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_credential_held_for	-	direct /mcp/{backend} route only, not the meta tools/call path
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_headers	-	direct /mcp/{backend} route only, not the meta tools/call path
+src/gateway/meta_mcp/invoke/propagation.rs	take	-	on-path, untimed: legacy elicitation bridge rounds only (one Option take and one clone of the account-reference string); the timed rows bridge nothing (MIK-8407)
 src/gateway/meta_mcp/invoke/provenance_stamp.rs	maybe_stamp_provenance	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/provenance_stamp.rs	stamp_direct_result	-	direct /mcp/{backend} route only, not the meta tools/call path
 src/gateway/meta_mcp/invoke/provenance_stamp.rs	stamp_recovered_result	-	upstream task recovery (tasks/get) only, not a live dispatch

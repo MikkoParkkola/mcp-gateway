@@ -88,6 +88,8 @@ fn stored_on(task: &Task, targets: Vec<Target>) -> CommittedTask {
         error_author: None,
         owner_digest: String::new(),
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
+        bindings: Vec::new(),
+        bindings_recorded: true,
     }
 }
 
@@ -255,4 +257,133 @@ async fn a_second_carry_replaces_the_first_and_a_take_consumes_it() {
         assert!(visible::take_carried(BACKEND, TOOL).is_none());
     })
     .await;
+}
+
+/// Lift `(BACKEND, TOOL)`'s deferred entry, recorded under `recorded` behind
+/// a step on another backend recorded as unbound, for a resolution that
+/// proved `proved` (`None`: the account it really proved). Returns the
+/// answer (panicking if the lift neither served nor refused the entry), the
+/// requests the backend received, the target's binding now, and the binding
+/// recorded for it, so each row can pin which half of the judgement fails.
+async fn lift_recorded(recorded: Option<String>, proved: Option<String>) -> Lifted {
+    use crate::gateway::meta_mcp::MetaMcpCallerContext;
+    use crate::gateway::meta_mcp::visible::{
+        DeferredReplay, deferred_replay_key, record_deferred_replay,
+    };
+    use std::ops::ControlFlow;
+    let (gateway, meta) = connected();
+    let backend = meta.backends.for_test().get(BACKEND).expect("the backend");
+    let mut resolved = meta
+        .resolve_dispatch(
+            (BACKEND, TOOL),
+            Some(&backend),
+            CallerProof::new(None, CallerProvenance::Credential),
+            None,
+        )
+        .await
+        .expect("premise: the operator's live grant resolves");
+    let current = resolved.account.clone();
+    assert!(
+        current.is_some(),
+        "premise: the resolution names its account"
+    );
+    if proved.is_some() {
+        resolved.account = proved;
+    }
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some("lift-key".to_owned()),
+        ..crate::protocol::mrtr::RetryFields::default()
+    };
+    let caller = MetaMcpCallerContext {
+        retry: &retry,
+        ..ctx(&AllowAll)
+    };
+    let now = meta.current_binding(
+        &meta.scoped(caller.scope().authorizer.backend_grant()),
+        BACKEND,
+        TOOL,
+    );
+    let recorded = recorded.or(current);
+    let key = deferred_replay_key(BACKEND, TOOL, &retry).expect("a keyed call");
+    let deferred = DeferredReplay {
+        response: crate::protocol::JsonRpcResponse::success(
+            RequestId::Number(9),
+            serde_json::json!({"content": [{"type": "text", "text": "lift-stored"}]}),
+        ),
+        audit: None,
+        tool_name: "gateway_invoke".to_owned(),
+        arguments: serde_json::json!({}),
+        bindings: vec![
+            ("another-backend".to_owned(), TOOL.to_owned(), None),
+            (BACKEND.to_owned(), TOOL.to_owned(), recorded.clone()),
+        ],
+    };
+    let flow = visible::with_visibility_memo(async {
+        assert!(record_deferred_replay(key, deferred), "premise: deferred");
+        let mut witness = super::super::nonce_settle::Witnessed::take(&caller);
+        meta.lift_deferred((BACKEND, TOOL), &resolved, &mut witness, None, &caller)
+            .await
+    })
+    .await;
+    let ControlFlow::Break(answer) = flow else {
+        panic!("the lift neither served nor refused the deferred entry");
+    };
+    Lifted {
+        text: serde_json::to_string(&answer).expect("JSON"),
+        dispatched: gateway.dispatched(),
+        now,
+        recorded,
+    }
+}
+
+/// What [`lift_recorded`] observed.
+struct Lifted {
+    text: String,
+    dispatched: usize,
+    now: Option<String>,
+    recorded: Option<String>,
+}
+
+/// The refusal both lift rows expect: the re-bind error, no stored output,
+/// nothing sent.
+fn assert_lift_refused(row: &str, lifted: &Lifted) {
+    let (text, dispatched) = (&lifted.text, lifted.dispatched);
+    assert!(
+        text.contains("produced under a different account"),
+        "{row}: the lift did not refuse the re-bound entry: {text}"
+    );
+    assert!(!text.contains("lift-stored"), "{row}: served: {text}");
+    assert_eq!(dispatched, 0, "{row}: the lift sent the call");
+}
+
+/// MIK-8407 lift judgement, the resolution half (mutant: the lift ignores
+/// the account its resolution proved). The entry was recorded under the
+/// target's current binding, but this resolution proved another account, as
+/// when a reload lands between deferral and dispatch. Only the comparison
+/// against the proved account fails; the current-binding judgement passes.
+/// The other backend's step is judged against its binding now, which still
+/// matches.
+#[tokio::test]
+async fn a_deferred_replay_under_another_binding_is_refused_at_the_lift() {
+    let lifted = lift_recorded(None, Some("not-this-account#0".to_owned())).await;
+    assert_eq!(
+        lifted.now, lifted.recorded,
+        "premise: the binding now matches the record, so only the proved half refuses"
+    );
+    assert_lift_refused("lift, proved", &lifted);
+}
+
+/// MIK-8407 lift judgement, the current-binding half (mutant: the lift
+/// skips the judgement against the target's binding now). The resolution
+/// proved the recorded account, but the target is bound to another one now.
+/// Only the current-binding judgement fails.
+#[tokio::test]
+async fn a_deferred_replay_whose_target_is_bound_elsewhere_now_is_refused_at_the_lift() {
+    let recorded = Some("recorded-account#0".to_owned());
+    let lifted = lift_recorded(recorded.clone(), recorded).await;
+    assert_ne!(
+        lifted.now, lifted.recorded,
+        "premise: the binding now differs from the record the resolution proved"
+    );
+    assert_lift_refused("lift, current", &lifted);
 }

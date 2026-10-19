@@ -23,6 +23,8 @@
 mod dispatch_and_refusals;
 mod multi_user;
 mod warm_cache;
+// MIK-8407: the meta route's recorded account choice, held at execution.
+mod resolution_choice;
 
 use std::sync::Arc;
 

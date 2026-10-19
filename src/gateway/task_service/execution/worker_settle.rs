@@ -10,7 +10,8 @@ use tokio::sync::watch;
 use super::super::input_round::{ClockWait, readable_now};
 use super::super::{CommitFailure, CommittedTask, TaskExecutor, TransitionWrite};
 use crate::gateway::gateway_writes::WriteRecord;
-use crate::gateway::task_service::{ErrorAuthor, Target};
+use crate::gateway::task_service::ErrorAuthor;
+use crate::gateway::task_service::record::Provenance;
 use crate::protocol::tasks::{TaskStatus, TaskTransition};
 
 /// What one settle attempt came to, and what the rule does next.
@@ -34,7 +35,7 @@ impl TaskExecutor {
         // The gateway's own outcome: nothing in it is a member it noted.
         self.settle_cas_by(
             (principal, id, revision),
-            (event, None),
+            (event, Provenance::default()),
             ErrorAuthor::Gateway,
             WriteRecord::default(),
             cancel_rx,
@@ -51,7 +52,7 @@ impl TaskExecutor {
     pub(in crate::gateway::task_service::execution) async fn settle_cas_with(
         &self,
         ids: (&str, &str, u64),
-        outcome: (TaskTransition, Option<Vec<Target>>),
+        outcome: (TaskTransition, Provenance),
         writes: WriteRecord,
         cancel_rx: &mut watch::Receiver<bool>,
     ) -> bool {
@@ -74,7 +75,7 @@ impl TaskExecutor {
     pub(in crate::gateway::task_service::execution) async fn settle_cas_by(
         &self,
         (principal, id, revision): (&str, &str, u64),
-        (event, targets): (TaskTransition, Option<Vec<Target>>),
+        (event, targets): (TaskTransition, Provenance),
         author: ErrorAuthor,
         writes: WriteRecord,
         cancel_rx: &mut watch::Receiver<bool>,
@@ -160,7 +161,7 @@ impl TaskExecutor {
         &self,
         principal: &str,
         id: &str,
-        (event, targets): (TaskTransition, Option<Vec<Target>>),
+        (event, targets): (TaskTransition, Provenance),
         author: ErrorAuthor,
         writes: WriteRecord,
     ) -> bool {

@@ -164,12 +164,15 @@ async fn seed_capturable_task(
                 OWNER,
                 &id,
                 task.revision,
-                UpstreamCapture {
-                    backend: BACKEND.to_owned(),
-                    tool: TOOL.to_owned(),
-                    arguments: json!({}),
-                    handle: "upstream-handle-1".to_owned(),
-                },
+                (
+                    UpstreamCapture {
+                        backend: BACKEND.to_owned(),
+                        tool: TOOL.to_owned(),
+                        arguments: json!({}),
+                        handle: "upstream-handle-1".to_owned(),
+                    },
+                    Vec::new(),
+                ),
             )
             .await,
         "the row is recoverable only once its handle is durable"
