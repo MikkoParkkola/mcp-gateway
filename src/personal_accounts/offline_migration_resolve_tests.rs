@@ -34,7 +34,7 @@ fn config(backends: &[(&str, &str)]) -> crate::config::Config {
          authority_dir: /unused/authority\n  current_key_id: primary\n  keys:\n    \
          primary: env:UNUSED\n  descriptors:\n{described}"
     );
-    serde_yaml::from_str(&yaml).expect("config parses")
+    crate::yaml::from_str(&yaml).expect("config parses")
 }
 
 /// Mutant: with no bound backend, or two, the migration guesses a 3.x file and

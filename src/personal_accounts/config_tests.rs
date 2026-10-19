@@ -638,12 +638,12 @@ mod adapter_tests;
 #[test]
 fn an_omitted_schema_version_defaults_to_accounts_v1() {
     let dir = root();
-    let mut value = serde_yaml::to_value(valid(dir.path())).expect("serialise");
+    let mut value = crate::yaml::to_value(valid(dir.path())).expect("serialise");
     value
         .as_mapping_mut()
         .expect("a mapping")
         .remove("schema_version");
-    let parsed: AccountsConfig = serde_yaml::from_value(value).expect("loads without the key");
+    let parsed: AccountsConfig = crate::yaml::from_value(value).expect("loads without the key");
     assert_eq!(parsed.schema_version, SCHEMA_VERSION);
     // The production gate accepts it too; a written `accounts.v2` is still
     // refused (the `schema_version` case of the refusal table above).

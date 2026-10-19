@@ -458,7 +458,7 @@ jobs:
       tool: health_check
       arguments: {}
 "#;
-    let cfg: SchedulerConfig = serde_yaml::from_str(yaml).expect("valid yaml");
+    let cfg: SchedulerConfig = crate::yaml::from_str(yaml).expect("valid yaml");
     assert!(cfg.enabled);
     assert_eq!(cfg.jobs.len(), 2);
     assert_eq!(cfg.jobs[0].name, "daily-sync");

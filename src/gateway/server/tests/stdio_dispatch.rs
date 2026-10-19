@@ -404,7 +404,7 @@ fn meta_with_step(server: &str, tool: &str) -> Arc<MetaMcp> {
         "name: p\ndescription: one step\non_error: abort\nsteps:\n  - name: s\n    server: {server}\n    tool: {tool}\n"
     );
     let definition: crate::playbook::PlaybookDefinition =
-        serde_yaml::from_str(&yaml).expect("playbook fixture must parse");
+        crate::yaml::from_str(&yaml).expect("playbook fixture must parse");
     let mut engine = crate::playbook::PlaybookEngine::new();
     engine.register(definition);
     meta.set_playbook_engine(engine);

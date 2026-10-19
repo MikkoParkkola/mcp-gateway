@@ -279,7 +279,7 @@ fn recommendation_requires_confirmation_for_sensitive_or_destructive_workflow() 
 async fn load_identity_grants_file_reads_yaml_and_allows_matching_personal_request() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("identity-grants.yaml");
-    let body = serde_yaml::to_string(&IdentityGrantFile::new(vec![grant()])).unwrap();
+    let body = crate::yaml::to_string(&IdentityGrantFile::new(vec![grant()])).unwrap();
     crate::gateway::test_helpers::write_owner_only(&path, body).unwrap();
 
     let store = load_identity_grants_file(&path).await.unwrap();
