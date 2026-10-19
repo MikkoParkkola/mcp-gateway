@@ -271,7 +271,8 @@ fn oidc_client(actor: &str, token: &str) -> AuthenticatedClient {
     AuthenticatedClient {
         quota_principal: Some(QuotaPrincipal::oidc_identity(actor)),
         name: actor.to_string(),
-        // As `runtime_principal(RuntimeIssuer::KeyServerToken, token)`.
+        // MIK-6704.IDENT.1a: a test fixture minting the key-server shape,
+        // `runtime_principal(RuntimeIssuer::KeyServerToken, token)`, which is private.
         principal: format!("kst:{}", crate::hashing::sha256_hex(token.as_bytes())),
         rate_limit: 1,
         backends: vec!["*".to_string()],
