@@ -40,12 +40,13 @@ impl MetaMcp {
     pub(super) fn admit_spend(
         &self,
         tool: &str,
-        api_key_name: Option<&str>,
+        // The per-key cost name (`BackendCall::cost_key`), never a display name.
+        cost_key: Option<&str>,
     ) -> Result<dispatch_guards::Admission> {
         let Some(ref enforcer) = self.budget_enforcer else {
             return Ok(dispatch_guards::Admission::default());
         };
-        let result = enforcer.check(tool, api_key_name);
+        let result = enforcer.check(tool, cost_key);
         if !result.allowed {
             return Err(Error::json_rpc(
                 -32003,

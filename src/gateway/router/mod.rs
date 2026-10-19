@@ -83,8 +83,6 @@ mod callback_admin_denial_tests;
 mod chokepoint_direct_tests;
 #[cfg(test)]
 mod chokepoint_tests;
-#[cfg(test)]
-mod cost_key_tests;
 /// MIK-8202 P2: task creation on a clock before 1970.
 #[cfg(test)]
 mod clock_p2_tests;
@@ -95,6 +93,8 @@ mod continuation_instance_tests;
 /// MIK-8202 P2: the control-plane grant display on a clock before 1970.
 #[cfg(all(test, feature = "webui"))]
 mod control_plane_grant_clock_tests;
+#[cfg(test)]
+mod cost_key_tests;
 #[cfg(test)]
 mod direct_audit_tests;
 #[cfg(test)]
