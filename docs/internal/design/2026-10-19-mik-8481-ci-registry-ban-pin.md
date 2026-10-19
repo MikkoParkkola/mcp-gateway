@@ -97,7 +97,14 @@ through the helper), so there is no allowlist.
 
 Limits, accepted: a literal is not proof of a read, and a path built at run time
 (`format!`, `concat!`) is not seen; the guarded failure is the plain
-`root.join("literal")` read. The guard is checkout-only (it asks whether files
+`root.join("literal")` read. A file that reaches the crate root only through
+another module's helper (it never spells `CARGO_MANIFEST_DIR`) is not scanned:
+widening the trigger to `crate_root()`-style calls was measured and finds one
+file, `tests/mik_8425_yaml_baseline_trees.rs`, which walks whole directory trees
+and was green in the packaged run, so it needs its own look, not an allowlist
+row. A literal handed to the helper through a `const` is not seen as covered.
+The exemption of `packaged.rs` compares slash-form paths and normalises
+Windows backslashes first. The guard is checkout-only (it asks whether files
 exist). Falsifiers, on a scratch root: an unshipped file and an unshipped path
 with a directory part are flagged; the helper exempts a file; a shipped file, a
 directory with a shipped file under it, a name that is not a path and a path

@@ -100,7 +100,8 @@ const NOT_REPO: [&str; 3] = ["target", ".git", ".worktrees"];
 /// The unshipped repo paths a source file names directly (`rel_file` is its
 /// path from the crate root).
 fn offenders(root: &Path, patterns: &[String], rel_file: &str, source: &str) -> Vec<String> {
-    if rel_file == HELPER_FILE || !source.contains("CARGO_MANIFEST_DIR") {
+    // Windows hands in backslashes; the exemption names the slash form.
+    if rel_file.replace('\\', "/") == HELPER_FILE || !source.contains("CARGO_MANIFEST_DIR") {
         return Vec::new();
     }
     let Ok(parsed) = syn::parse_file(source) else {
@@ -297,6 +298,16 @@ fn the_helper_module_is_exempt_by_path() {
 }
 
 /// Build and VCS directories are not repository files.
+/// The same exemption on a Windows-form path (the seat's catch: `strip_prefix`
+/// there yields backslashes, and the guard would flag the helper module).
+#[test]
+fn the_helper_module_exemption_holds_for_a_windows_path() {
+    let (root, patterns) = scratch();
+    let windows = HELPER_FILE.replace('/', "\\");
+    assert_ne!(windows, HELPER_FILE);
+    assert!(offenders(root.path(), &patterns, &windows, &reading("tools/run.sh")).is_empty());
+}
+
 #[test]
 fn a_build_directory_literal_is_not_flagged() {
     let (root, patterns) = scratch();
@@ -338,5 +349,5 @@ fn glob_and_directory_entries_count_as_shipped() {
     assert!(shipped(&patterns, "src"));
     assert!(shipped(&patterns, "upgrading.d/1.md"));
     assert!(shipped(&patterns, "upgrading.d"));
-    assert!(!shipped(&patterns, "scripts/dev/pre-push.sh"));
+    assert!(!shipped(&patterns, "scripts/never/shipped.sh"));
 }
