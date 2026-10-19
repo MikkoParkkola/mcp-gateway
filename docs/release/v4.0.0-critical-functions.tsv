@@ -131,21 +131,21 @@ src/gateway/router/handlers/sse.rs	get_era_refusal	1	standard	d	get_era_refusal	
 src/gateway/router/handlers/request_facts.rs	reaches_tasks_extension	1	standard	borderline	reaches_tasks_extension	Hand-maintained list that gates the tasks extension; a missing arm is unguarded.
 src/gateway/router/handlers/request_facts.rs	catalogue_caller	1	standard	borderline	catalogue_caller	Keys a catalogue read's caller as its tools/call is keyed
 src/gateway/router/handlers/events.rs	api_key	1	critical	a	api_key	Selects the API key the live events re-check reads; None admits without a key check, so a wrong answer keeps a removed or expired key receiving events
-src/gateway/router/handlers/tasks.rs	session_owner_key	1	standard	borderline	session_owner_key	Task owner key; empty for unauthenticated callers.
+src/gateway/router/handlers/tasks/owner.rs	session_owner_key	1	standard	borderline	session_owner_key	Task owner key; empty for unauthenticated callers.
 src/gateway/router/handlers/owner.rs	request_session_owner	1	critical	a,c	request_session_owner	Resolves the grant subject, refuses bad identity headers, applies the hardened refusal.
 src/gateway/router/handlers/owner.rs	owner_of	1	standard	borderline	owner_of	Session owner rule (subject plus held-credential digest) used by both routes.
 src/gateway/router/handlers/owner.rs	session_owner	1	standard	borderline	session_owner	Owner from the validated principal, not the display name.
 src/gateway/router/handlers/request_checks.rs	request_check_refusal	1	critical	b,d	request_check_refusal	Refuses a declared revision this build does not serve and a header that contradicts the body's revision
 src/gateway/router/handlers/tasks.rs	recover_from_upstream	1	critical	a	recover_from_upstream	Re-authorizes the original target against the current caller before any upstream recovery query
-src/gateway/router/handlers/tasks.rs	route_task_owner	1	critical	c	route_task_owner	Picks the one owner string for every task arm; never derived from request data
+src/gateway/router/handlers/tasks/owner.rs	route_task_owner	1	critical	c	route_task_owner	Picks the one owner string for every task arm; never derived from request data
 src/gateway/router/handlers/tasks.rs	task_intent_for_call	1	critical	a	task_intent_for_call	Refuses task creation without a verified identity when auth is on, or without an idempotency key
-src/gateway/router/handlers/tasks.rs	task_principal	1	standard	borderline	task_principal	Principal derivation; wrong value mis-scopes task ownership
+src/gateway/router/handlers/tasks/owner.rs	task_principal	1	standard	borderline	task_principal	Principal derivation; wrong value mis-scopes task ownership
 src/gateway/router/handlers/tasks.rs	tasks_cancel	1	standard	borderline	tasks_cancel	Owner scoping comes only from the owner string passed to TaskRoute
 src/gateway/router/handlers/tasks.rs	tasks_get	1	standard	borderline	tasks_get	Wires the recovery authz and refuse_stored_delivery checks into the read path
 src/gateway/router/handlers/tasks.rs	update_caller	1	standard	borderline	update_caller	Resume caller must be the live update requester, not the creator
 src/gateway/router/handlers/tasks.rs	with_policy_caller	1	standard	borderline	with_policy_caller	Builds the live policy context; carrying signing would skip the policy recheck
-src/gateway/router/handlers/tasks.rs	task_owner_key	1	critical	c	task_owner_key	Task owner key: a proven subject splits a shared credential; no credential owns nothing (MIK-7967)
-src/gateway/router/handlers/tasks.rs	agent_task_owner	1	critical	c	agent_task_owner	Derives an agent's task owner from the SHA-256 of its client_id, prefixed apart from every other owner kind, so no client_id spells another's owner
+src/gateway/router/handlers/tasks/owner.rs	task_owner_key	1	critical	c	task_owner_key	Task owner key: a proven subject splits a shared credential; no credential owns nothing (MIK-7967)
+src/gateway/router/handlers/tasks/owner.rs	agent_task_owner	1	critical	c	agent_task_owner	Derives an agent's task owner from the SHA-256 of its client_id, prefixed apart from every other owner kind, so no client_id spells another's owner
 src/gateway/router/hardened_elicitation.rs	declares_elicitation	1	critical	a	declares_elicitation	Decides whether an initialize declares elicitation, the condition the hardened refusal rests on
 src/gateway/router/hardened_elicitation.rs	direct_refusal	1	critical	a,d	direct_refusal	Hardened posture: refuses on the direct route any legacy request but a declaring initialize
 src/gateway/router/hardened_elicitation.rs	is_hardened	1	standard	borderline	is_hardened	Reads the hardened posture; a wrong answer silently disables the elicitation refusal
@@ -746,7 +746,7 @@ src/gateway/router/handlers/modern_response.rs	shape_modern_response	1	standard	
 src/gateway/router/handlers/tasks.rs	delivered	1	standard	borderline	FrameDelivery::delivered	Passes the reader's caller name, session and subject into the delivery audit record and commit, so a mistake would silently misattribute or commit an undelivered task frame.
 src/gateway/router/handlers/tasks.rs	frame	1	critical	a,c	TaskFrameSource::frame	Reads the stored task only for its owner when the reader is not status-only and is still the principal the stream opened as, and re-runs delivery refusal under the reader's live credential.
 src/gateway/router/handlers/tasks.rs	route	1	standard	borderline	route	Binds the caller's owner into the task route every task read, update and cancel is scoped by, so a mistake would silently scope them to the wrong owner.
-src/gateway/router/handlers/tasks.rs	route_owners	1	critical	c	route_owners	Decides the task owner and the events owner a request is scoped to, keeping the agent arm out of the events owner so an agent-only caller gets no events principal.
+src/gateway/router/handlers/tasks/owner.rs	route_owners	1	critical	c	route_owners	Decides the task owner and the events owner a request is scoped to, keeping the agent arm out of the events owner so an agent-only caller gets no events principal.
 src/gateway/router/handlers/tasks.rs	task_frames	1	critical	a	task_frames	Decides whether a task listener is status-only, because its identity came from an agent token or an asserted subject nothing re-validates, and pins the principal and owner later frames are checked against.
 src/gateway/router/handlers/tasks.rs	tasks_update	1	standard	borderline	tasks_update	Wires a task update to the caller's owner and this request's live identity for re-authorization, so a mistake would silently resume a task under the wrong owner or stale credentials [standard vs critical].
 src/gateway/router/hardened_elicitation.rs	is_initialize	1	critical	d	is_initialize	Decides whether a request is an initialize, which under the hardened posture is the only legacy request that may open a session.

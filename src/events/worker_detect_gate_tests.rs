@@ -29,7 +29,7 @@ fn hub_over_detected_backend(
     services: &super::super::Services,
 ) -> (Arc<EventsHub>, Arc<crate::transport::HttpTransport>) {
     let backend_config: BackendConfig =
-        serde_yaml::from_str("http_url: http://127.0.0.1:9/mcp").expect("config");
+        crate::yaml::from_str("http_url: http://127.0.0.1:9/mcp").expect("config");
     let mut config = Config::default();
     config
         .backends

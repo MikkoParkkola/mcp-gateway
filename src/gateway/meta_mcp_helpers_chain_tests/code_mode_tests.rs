@@ -370,7 +370,7 @@ fn code_mode_config_defaults_to_disabled() {
     // GIVEN: empty config YAML
     // WHEN: deserializing
     // THEN: code_mode.enabled defaults to false
-    let config: crate::config::Config = serde_yaml::from_str("{}").unwrap();
+    let config: crate::config::Config = crate::yaml::from_str("{}").unwrap();
     assert!(!config.code_mode.enabled);
 }
 
@@ -379,7 +379,7 @@ fn code_mode_config_can_be_enabled_via_yaml() {
     // GIVEN: YAML with code_mode.enabled: true
     let yaml = "code_mode:\n  enabled: true\n";
     // WHEN: deserializing
-    let config: crate::config::Config = serde_yaml::from_str(yaml).unwrap();
+    let config: crate::config::Config = crate::yaml::from_str(yaml).unwrap();
     // THEN: code_mode.enabled is true
     assert!(config.code_mode.enabled);
 }
@@ -389,7 +389,7 @@ fn code_mode_config_can_be_explicitly_disabled_via_yaml() {
     // GIVEN: YAML with code_mode.enabled: false
     let yaml = "code_mode:\n  enabled: false\n";
     // WHEN: deserializing
-    let config: crate::config::Config = serde_yaml::from_str(yaml).unwrap();
+    let config: crate::config::Config = crate::yaml::from_str(yaml).unwrap();
     // THEN: code_mode.enabled is false
     assert!(!config.code_mode.enabled);
 }
