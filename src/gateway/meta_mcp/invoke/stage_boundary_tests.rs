@@ -417,8 +417,8 @@ async fn served_on_the_replay(meta: &MetaMcp, key: &str) -> Vec<(String, String)
 }
 
 /// S4, site 11 (mutant s11): a keyed call answered from its stored result is
-/// noted on the execution as served, so a replay of that execution past a
-/// revocation of the step still meets the refusal (#3872).
+/// noted on its execution as served (`SyncLease::note_step`, the note #3872's
+/// replay rule reads). The row pins the note on the lease, not a later replay.
 #[tokio::test]
 async fn an_idempotency_hit_is_noted_as_served() {
     let probe = probe();
@@ -528,9 +528,11 @@ fn an_undeclared_key_refusal_releases_its_key_at_the_refusal() {
             with_idempotency(&mut meta);
             let key = retry("k-8488-undeclared");
             let args = json!({"server": "svc", "tool": "act", "arguments": {"undeclared": 1}});
-            let _refused = meta
+            let refused = meta
                 .invoke_tool(&args, Some("session-8488"), &keyed(&key))
-                .await;
+                .await
+                .expect("the key check answers, it does not fail");
+            assert_eq!(refused["isError"], true, "premise: the refusal: {refused}");
             assert_eq!(
                 probe.calls.load(Ordering::SeqCst),
                 0,
@@ -538,6 +540,13 @@ fn an_undeclared_key_refusal_releases_its_key_at_the_refusal() {
             );
         });
     });
+    // The call reserved a key, so a release was owed (else the row is vacuous).
+    let reserved = crate::test_log_capture::count(
+        &records,
+        "DEBUG",
+        "Idempotency key registered as in-flight",
+    );
+    assert_eq!(reserved, 1, "premise: the call reserved its key");
     let abandoned = crate::test_log_capture::count(
         &records,
         "DEBUG",

@@ -59,6 +59,13 @@ fn a_keyed_relay_refusal_releases_its_key_at_the_refusal() {
             );
         });
     });
+    // The relayed call reserved a key, so a release was owed (else vacuous).
+    let reserved = crate::test_log_capture::count(
+        &records,
+        "DEBUG",
+        "Idempotency key registered as in-flight",
+    );
+    assert!(reserved >= 1, "premise: the relayed call reserved its key");
     let abandoned = crate::test_log_capture::count(
         &records,
         "DEBUG",

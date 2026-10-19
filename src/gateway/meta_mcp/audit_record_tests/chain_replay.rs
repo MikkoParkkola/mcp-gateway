@@ -114,8 +114,9 @@ async fn a_replayed_chain_refusal_keeps_its_uninspected_attribution() {
 
 /// MIK-8488 PR-A, site 10 (mutant s10): the stored failure a keyed replay is
 /// served (here, a chain refusal stored as the key's terminal answer) is noted
-/// on the replaying execution as served, so a later replay of that execution
-/// past a revocation of the step still meets the refusal (#3872).
+/// on the replaying execution as served (`SyncLease::note_step`, the note
+/// #3872's replay rule reads). The row pins the note on the lease, not a later
+/// replay.
 #[tokio::test]
 async fn a_replayed_stored_failure_is_noted_as_served() {
     let dir = tempfile::tempdir().unwrap();
