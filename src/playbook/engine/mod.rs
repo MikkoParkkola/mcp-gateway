@@ -369,8 +369,12 @@ pub(crate) fn is_tool_error(result: &Value) -> bool {
     result.get("isError").and_then(Value::as_bool) == Some(true)
 }
 
-/// The most of a tool's text a step failure carries (the hold, D3).
-const TOOL_TEXT_CAP: usize = 256;
+/// The most of a tool's text a step failure carries (the hold, D3). The
+/// JSON-RPC renderer forwards [`TOOL_TEXT_DATA_KEY`] only within it.
+pub(crate) const TOOL_TEXT_CAP: usize = 256;
+
+/// The error `data` key a step failure carries the tool's capped text under.
+pub(crate) const TOOL_TEXT_DATA_KEY: &str = "tool_text";
 
 /// The step failure for a tool error: -32603 with a fixed message, so the
 /// tool's text never reaches a log line that prints the error (the hold,
@@ -387,7 +391,7 @@ fn tool_error(step: &PlaybookStep, result: &Value) -> crate::Error {
     crate::Error::JsonRpc {
         code: -32603,
         message: format!("step '{}' failed: the tool reported an error", step.name),
-        data: Some(json!({ "tool_text": capped })),
+        data: Some(json!({ TOOL_TEXT_DATA_KEY: capped })),
     }
 }
 
@@ -397,10 +401,10 @@ fn step_reason(error: &crate::Error) -> String {
     match error {
         crate::Error::JsonRpc {
             data: Some(data), ..
-        } if data["tool_text"].is_string() => {
+        } if data[TOOL_TEXT_DATA_KEY].is_string() => {
             format!(
                 "{error}: {}",
-                data["tool_text"].as_str().unwrap_or_default()
+                data[TOOL_TEXT_DATA_KEY].as_str().unwrap_or_default()
             )
         }
         _ => error.to_string(),

@@ -220,6 +220,32 @@ async fn a_vendor_error_step_is_a_failed_step() {
     );
 }
 
+/// D3 end to end: under `abort` a vendor tool error ends the plan with the
+/// fixed message, and the tool's text reaches the caller only as the error's
+/// `data.tool_text`, capped. Red before the renderer forwarded the key: the
+/// answer's `data` was absent, so the caller lost the reason.
+#[tokio::test]
+async fn an_aborted_tool_error_answer_carries_the_capped_tool_text() {
+    let harness = harness(CapabilityAccount::start_answering(&[400]).await, "abort", 2).await;
+    let reply = run_playbook(&harness).await;
+    let message = reply
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("D3: the abort is not an error: {reply}"));
+    assert!(
+        message.contains("the tool reported an error"),
+        "D3: not the fixed message: {reply}"
+    );
+    let text = reply
+        .pointer("/error/data/tool_text")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("D3: the caller lost the tool's text: {reply}"));
+    assert!(
+        !text.is_empty() && text.chars().count() <= 257 && !message.contains(text),
+        "D3: the tool's text is empty, uncapped, or in the message: {reply}"
+    );
+}
+
 /// STEP.1 partial run, keyed: `s0` is served, then `s1`'s in-backend
 /// recheck meets Busy. The plan ends there, and its answer must not read as
 /// retryable or unsent, because `s0` reached the vendor. The same key sent
