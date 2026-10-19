@@ -64,10 +64,14 @@ review):
 
 - **sequential-thinking:** the tool's annotations change from `readOnlyHint:
   true, idempotentHint: true` to `readOnlyHint: false, idempotentHint: false`.
-  The gateway reads `read_only_hint` in role-filtered search
-  (`src/gateway/meta_mcp/search.rs`) and in the backend pool, so a read-only
-  role no longer surfaces this tool and it is no longer treated as a safe
-  read. That is the accurate annotation for a tool that keeps thought-history
+  The gateway reads `read_only_hint` in two places: the optional
+  `role` filter of `gateway_list_tools` (`src/gateway/meta_mcp/search.rs`,
+  `infer_role`: read-only tools are selectors or extractors, the rest actions)
+  and the response-cache eligibility test in the backend
+  (`Backend::is_read_only_for`). So a `role: selector` or `role: extractor`
+  listing no longer includes this tool, and its results are no longer
+  cacheable. The `role` filter is a caller-supplied argument, not configuration:
+  no shipped default config sets a role. That is the accurate annotation for a tool that keeps thought-history
   state; it is a change, not a regression.
 - **memory:** `createRelations` now throws `Entity with name <x> not found` when
   a relation names an entity that does not exist (1.0 accepted it); reads and
