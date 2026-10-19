@@ -442,8 +442,10 @@ async fn marker_05_the_loader_accepts_supported_versions_and_fails_closed_on_oth
             // One past the highest supported version: v4 carries the input
             // round (MIK-7311.LIFECYCLE.1), v5 the task targets (#2450), v6
             // the error's author (MIK-7887), v7 the upstream cancel claim
-            // (MIK-7642) and v8 the pending upstream cancel (MIK-8347), so v9
-            // is the first unsupported.
+            // (MIK-7642), v8 the pending upstream cancel (MIK-8347) and v9 the
+            // bindings (MIK-8407), so v10 is the first unsupported. This is also
+            // what an older gateway meets in a v9 row: it refuses the store and
+            // keeps every file, which the rollback note relies on.
             _ => {
                 let mut seed = record.clone();
                 seed["version"] =

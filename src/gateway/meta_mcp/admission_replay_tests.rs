@@ -247,10 +247,14 @@ async fn p8_noid_a_stored_plan_replay_with_no_request_id_fails_closed() {
 /// judgement made again at the serving point refuses it: nothing stored is
 /// served and no replay is audited. Serving on the first judgement alone
 /// fails this row.
-#[tokio::test]
+// The hook is thread-local: the row must run on a current-thread runtime.
+#[tokio::test(flavor = "current_thread")]
 async fn p8_rebind_a_step_rebound_while_the_plan_walk_runs_is_refused() {
     let (meta, registry) = per_caller();
     let (arguments, stored) = plan_replay();
+    // A real stored audit, so a refusal that carried it through would show.
+    let audit: super::super::ReplayAudit =
+        serde_json::from_value(json!({"outcome": "ok"})).expect("an audit");
     let rebind = Arc::clone(&registry);
     let _armed = super::walk_seam::after_plan_walk(move || {
         assert!(rebind.register(idp_backend(Some("rebound-account"))));
@@ -265,7 +269,7 @@ async fn p8_rebind_a_step_rebound_while_the_plan_walk_runs_is_refused() {
                 Some(Vec::new()),
                 vec![("idp".to_owned(), "read".to_owned(), None)],
             ),
-            (stored.clone(), None),
+            (stored.clone(), Some(audit)),
         )
         .await
     })
