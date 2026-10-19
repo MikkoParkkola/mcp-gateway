@@ -129,7 +129,7 @@ pub(super) fn build_error_response_with_data(
 /// (MIK-8504): JSON-RPC -32603 with `data.reason` `session_capacity`, HTTP 503,
 /// and a `Retry-After` of the provisional idle limit, when slots free up. It is
 /// answered before anything runs.
-pub(crate) fn session_capacity_refusal(id: Option<RequestId>) -> axum::response::Response {
+pub(super) fn session_capacity_refusal(id: Option<RequestId>) -> axum::response::Response {
     let mut response = build_error_response_with_data(
         id,
         -32603,

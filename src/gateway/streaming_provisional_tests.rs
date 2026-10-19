@@ -193,9 +193,8 @@ fn the_reaper_uncounts_what_it_reaps() {
         .open_request_session_scoped(None, &owner(), None, MintKind::Provisional)
         .expect("under the cap");
     drop(hold);
-    // A zero configured TTL does not shorten the provisional limit, so
-    // nothing idle for under a minute goes.
-    assert!(m.reap_expired_sessions(Duration::ZERO).is_empty());
+    // Under the provisional limit nothing goes.
+    assert!(m.reap_expired_sessions(HOUR).is_empty());
     for s in m.sessions.read().values() {
         *s.last_active.write() = Instant::now() - PROVISIONAL_SESSION_TTL;
     }
@@ -319,4 +318,60 @@ fn a_request_ending_mid_sweep_is_not_reaped() {
         HOUR,
         || drop(hold)
     ));
+}
+
+/// A configured `session_ttl` shorter than the provisional limit shortens it
+/// too: a provisional session never outlives an ordinary one (review G3).
+#[test]
+fn a_short_session_ttl_shortens_the_provisional_limit() {
+    let m = mux();
+    let (id, hold) = m
+        .open_request_session_scoped(None, &owner(), None, MintKind::Provisional)
+        .expect("under the cap");
+    drop(hold);
+    let s = session(&m, &id);
+    let short = Duration::from_secs(10);
+    let now = *s.last_active.read();
+    assert!(!NotificationMultiplexer::reapable(
+        &s,
+        now + short - Duration::from_millis(1),
+        short
+    ));
+    assert!(NotificationMultiplexer::reapable(&s, now + short, short));
+}
+
+/// A zero `session_ttl` reaps an idle provisional session at once and frees
+/// its slot (review round 3).
+#[test]
+fn a_zero_session_ttl_reaps_an_idle_provisional_session_and_frees_its_slot() {
+    let m = mux();
+    let (id, hold) = m
+        .open_request_session_scoped(None, &owner(), None, MintKind::Provisional)
+        .expect("under the cap");
+    drop(hold);
+    assert_eq!(live(&m), 1);
+    assert_eq!(
+        m.reap_expired_sessions(Duration::ZERO),
+        vec![id.expose_secret().to_string()]
+    );
+    assert_eq!(live(&m), 0);
+    assert_eq!(m.session_count(), 0);
+}
+
+/// A zero `session_ttl` still never reaps a provisional session under an
+/// open stream or a running request (review round 3).
+#[test]
+fn a_zero_session_ttl_keeps_a_provisional_session_with_a_stream_or_a_request() {
+    let m = mux();
+    let (streamed, stream_hold) = m
+        .open_request_session_scoped(None, &owner(), None, MintKind::Provisional)
+        .expect("under the cap");
+    drop(stream_hold);
+    let receiver = session(&m, &streamed).subscribe();
+    let (_running, _request_hold) = m
+        .open_request_session_scoped(None, &owner(), None, MintKind::Provisional)
+        .expect("under the cap");
+    assert!(m.reap_expired_sessions(Duration::ZERO).is_empty());
+    assert_eq!(live(&m), 2);
+    drop(receiver);
 }

@@ -6,8 +6,9 @@
 //! its own still gets one, because a 2025 client may adopt the id from the
 //! answer (MIK-7215.STATELESS.3a). Kept for `session_ttl`, a session minted per
 //! sessionless call made the store grow with the request rate. Such a session
-//! is now provisional: reaped once idle for [`PROVISIONAL_SESSION_TTL`] with no
-//! request in flight and no open stream, and counted against
+//! is now provisional: reaped once idle for [`PROVISIONAL_SESSION_TTL`], or
+//! for `session_ttl` if that is shorter, with no request in flight and no open
+//! stream, and counted against
 //! [`MAX_PROVISIONAL_SESSIONS`] until it is presented again (promoted) or
 //! leaves the store. At the cap a new provisional session is refused.
 
@@ -20,8 +21,10 @@ use tokio::time::Instant;
 use super::{ClientSession, NotificationMultiplexer};
 use crate::gateway::session_id::SessionOwner;
 
-/// Idle time after which a provisional session with nothing in flight and
-/// no open stream is reaped: the window a client has to adopt the id.
+/// The longest a provisional session with nothing in flight and no open
+/// stream stays idle before it is reaped: the window a client has to adopt
+/// the id. A configured `session_ttl` below it shortens it (the reaper takes
+/// the smaller); it is also the `Retry-After` a capacity refusal names.
 pub(crate) const PROVISIONAL_SESSION_TTL: Duration = Duration::from_secs(60);
 
 /// Live provisional sessions at most; a new one past it is refused.
@@ -129,7 +132,9 @@ impl NotificationMultiplexer {
         let quiet = session.in_flight.load(Ordering::SeqCst) == 0;
         between();
         let idle = now.duration_since(*session.last_active.read());
-        no_stream && quiet && idle >= PROVISIONAL_SESSION_TTL
+        // Never longer than an ordinary session: a configured `session_ttl`
+        // below the provisional limit shortens it too.
+        no_stream && quiet && idle >= PROVISIONAL_SESSION_TTL.min(ttl)
     }
 }
 
