@@ -494,6 +494,11 @@ jobs:
       # first (MIK-7678).
       - name: Trait-recursion margin
         run: scripts/ci/check-recursion-margin.sh
+      # MIK-8490: codeql.yml skips test-only paths by name. Fail if a file the
+      # product build compiles (rustc dep-info, lib and bins, three feature
+      # sets) matches one of those globs, so no product code leaves the scan.
+      - name: CodeQL paths-ignore hides no product file (MIK-8490)
+        run: python3 scripts/ci/check-codeql-ignore.py
 
   # Feature combinations run post-merge only: see feature-combos.yml.
 
