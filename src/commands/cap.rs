@@ -404,7 +404,11 @@ async fn cap_discover_shadow(
 
     let registered_names: std::collections::HashSet<String> =
         if let Ok(config) = mcp_gateway::config::Config::load(Some(&compare_config_path)) {
-            config.backends.into_keys().collect()
+            // `capabilities.name` is the gateway's own backend: an entry of
+            // that name is never unmanaged, and the writer skips it (MIK-8358).
+            std::iter::once(config.capabilities.name)
+                .chain(config.backends.into_keys())
+                .collect()
         } else {
             // Config not found or unreadable — all discovered servers are unregistered.
             eprintln!(

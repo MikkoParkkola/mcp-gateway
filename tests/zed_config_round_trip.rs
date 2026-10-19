@@ -92,9 +92,14 @@ fn ok(output: &Output, what: &str) -> String {
     stdout
 }
 
+/// The exported entry's name. Not `gateway`: that is the default
+/// `capabilities.name`, which discovery skips (see
+/// `the_default_entry_name_is_skipped_on_import`).
+const ENTRY: &str = "zed-gateway";
+
 /// Export the gateway entry for Zed in `mode`, then return the entry as it
 /// sits in the settings file Zed reads.
-fn export(home: &Home, mode: &str) -> (PathBuf, Value) {
+fn export(home: &Home, mode: &str, name: &str) -> (PathBuf, Value) {
     std::fs::create_dir_all(home.zed_dir()).expect("zed config dir");
     let gateway = home.root.join("gateway.yaml");
     write(&gateway, "server:\n  host: 127.0.0.1\n  port: 39481\n");
@@ -108,7 +113,7 @@ fn export(home: &Home, mode: &str) -> (PathBuf, Value) {
             "--mode",
             mode,
             "--name",
-            "gateway",
+            name,
             "-c",
             gateway_arg,
         ]),
@@ -122,16 +127,16 @@ fn export(home: &Home, mode: &str) -> (PathBuf, Value) {
         )
     });
     let doc: Value = serde_json::from_str(&text).expect("settings.json is JSON");
-    let entry = doc["context_servers"]["gateway"].clone();
+    let entry = doc["context_servers"][name].clone();
     assert!(
         entry.is_object(),
-        "no context_servers.gateway entry in {text}"
+        "no context_servers.{name} entry in {text}"
     );
     (gateway, entry)
 }
 
 /// Discover servers in this home: the JSON listing and the backend written
-/// by `--write-config` for `gateway`.
+/// by `--write-config` for [`ENTRY`].
 fn import(home: &Home) -> (Value, TransportConfig) {
     let listing = ok(
         &home.run(&["cap", "discover", "--format", "json"]),
@@ -144,7 +149,7 @@ fn import(home: &Home) -> (Value, TransportConfig) {
         .as_array()
         .into_iter()
         .flatten()
-        .find(|s| s["name"] == "gateway")
+        .find(|s| s["name"] == ENTRY)
         .cloned()
         .unwrap_or_else(|| panic!("discover did not import the exported entry: {listing}"));
     let out = home.root.join("discovered.yaml");
@@ -162,15 +167,15 @@ fn import(home: &Home) -> (Value, TransportConfig) {
     let config = Config::load(Some(&out)).expect("discovered config loads");
     let backend = config
         .backends
-        .get("gateway")
-        .expect("discovered config has the gateway backend");
+        .get(ENTRY)
+        .expect("discovered config has the exported backend");
     (found, backend.transport.clone())
 }
 
 #[test]
 fn zed_stdio_entry_round_trips() {
     let home = Home::new();
-    let (gateway, entry) = export(&home, "stdio");
+    let (gateway, entry) = export(&home, "stdio", ENTRY);
     assert_eq!(
         entry["command"], "mcp-gateway",
         "Zed reads `command` as a string"
@@ -198,7 +203,7 @@ fn zed_stdio_entry_round_trips() {
 #[test]
 fn zed_http_entry_round_trips() {
     let home = Home::new();
-    let (_, entry) = export(&home, "proxy");
+    let (_, entry) = export(&home, "proxy", ENTRY);
     assert_eq!(entry["url"], "http://127.0.0.1:39481/mcp");
 
     let (found, transport) = import(&home);
@@ -212,4 +217,34 @@ fn zed_http_entry_round_trips() {
         }
         other => panic!("expected an HTTP backend, got {other:?}"),
     }
+}
+
+/// MIK-8358: the default export name is `gateway`, the default
+/// `capabilities.name`. Importing it would give the gateway a backend that
+/// config validation refuses (and that is usually the gateway itself), so
+/// `--write-config` skips it, says so, and still succeeds.
+#[test]
+fn the_default_entry_name_is_skipped_on_import() {
+    let home = Home::new();
+    export(&home, "stdio", "gateway");
+    let out = home.root.join("discovered.yaml");
+    let run = home.run(&[
+        "cap",
+        "discover",
+        "--write-config",
+        "--config-path",
+        out.to_str().unwrap(),
+    ]);
+    ok(&run, "cap discover --write-config");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("Skipped discovered server \"gateway\""),
+        "the skip is not reported: {stderr}"
+    );
+    let config = Config::load(Some(&out)).expect("discovered config loads");
+    assert!(
+        !config.backends.contains_key("gateway"),
+        "the capabilities name was written as a backend: {:?}",
+        config.backends.keys().collect::<Vec<_>>()
+    );
 }

@@ -776,6 +776,19 @@ pub fn write_discovered_to_config(
 
     commands::config_write::write(&path, mode, |config| {
         for server in servers {
+            // The capabilities backend owns `capabilities.name`, and config
+            // validation refuses a backend of the same name (MIK-8358). The
+            // default `setup export` entry is named `gateway`, so a discovered
+            // entry of that name is usually this gateway: importing it would
+            // proxy the gateway to itself. It is skipped, never renamed.
+            if server.name == config.capabilities.name {
+                eprintln!(
+                    "⚠️  Skipped discovered server {:?} ({:?}): the name is capabilities.name. \
+                     Add it under another name with `mcp-gateway add` if it is not this gateway.",
+                    server.name, server.source
+                );
+                continue;
+            }
             let backend_config = server.to_backend_config();
             config.backends.insert(server.name.clone(), backend_config);
         }
