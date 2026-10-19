@@ -248,3 +248,51 @@ fn the_default_entry_name_is_skipped_on_import() {
         config.backends.keys().collect::<Vec<_>>()
     );
 }
+
+/// MIK-8358: shadow adoption reports what it wrote. Of two adoptable Zed
+/// entries, the one named like `capabilities.name` is skipped, so one is
+/// adopted and the line says 1, not 2. The report still lists both.
+#[test]
+fn shadow_adoption_counts_only_what_it_wrote() {
+    let home = Home::new();
+    std::fs::create_dir_all(home.zed_dir()).expect("zed config dir");
+    write(
+        &home.zed_dir().join("settings.json"),
+        r#"{"context_servers": {
+            "gateway": {"command": "echo", "args": ["gateway"]},
+            "plain": {"command": "echo", "args": ["plain"]}
+        }}"#,
+    );
+    let gateway = home.root.join("gateway.yaml");
+    write(&gateway, "server:\n  host: 127.0.0.1\n  port: 39481\n");
+    let run = home.run(&[
+        "cap",
+        "discover",
+        "--shadow",
+        "--format",
+        "json",
+        "--write-config",
+        "--gateway-config",
+        gateway.to_str().unwrap(),
+    ]);
+    let report = ok(&run, "cap discover --shadow --write-config");
+    let report: Value = serde_json::from_str(&report).expect("the shadow report is JSON");
+    let listed: Vec<&str> = report["assets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|asset| asset["name"].as_str())
+        .collect();
+    assert!(
+        listed.contains(&"gateway") && listed.contains(&"plain"),
+        "the shadow report hides an entry: {listed:?}"
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("Adopted 1 local shadow server(s)"),
+        "the adoption count is not what was written: {stderr}"
+    );
+    let config = Config::load(Some(&gateway)).expect("adopted config loads");
+    assert!(config.backends.contains_key("plain"), "{stderr}");
+    assert!(!config.backends.contains_key("gateway"), "{stderr}");
+}

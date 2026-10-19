@@ -763,17 +763,19 @@ async fn run_server(cli: Cli) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Write discovered servers to a config file.
+/// Write discovered servers to a config file. Returns the file and how many
+/// servers were written: a server named like `capabilities.name` is skipped.
 pub fn write_discovered_to_config(
     servers: &[mcp_gateway::discovery::DiscoveredServer],
     config_path: Option<&Path>,
     mode: crate::commands::config_write::CommentLoss,
-) -> mcp_gateway::Result<std::path::PathBuf> {
+) -> mcp_gateway::Result<(std::path::PathBuf, usize)> {
     let path = config_path.map_or_else(
         || std::path::PathBuf::from("mcp-gateway-discovered.yaml"),
         std::path::Path::to_path_buf,
     );
 
+    let mut written = 0;
     commands::config_write::write(&path, mode, |config| {
         for server in servers {
             // The capabilities backend owns `capabilities.name`, and config
@@ -791,12 +793,13 @@ pub fn write_discovered_to_config(
             }
             let backend_config = server.to_backend_config();
             config.backends.insert(server.name.clone(), backend_config);
+            written += 1;
         }
         Ok(())
     })
     .map_err(mcp_gateway::Error::Config)?;
 
-    Ok(path)
+    Ok((path, written))
 }
 
 #[path = "main_discovered_config.rs"]

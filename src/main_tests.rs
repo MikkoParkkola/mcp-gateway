@@ -216,7 +216,7 @@ fn write_discovered_to_config_creates_file_when_missing() {
     let written = write_discovered_to_config(&[server], Some(&output), CommentLoss::Refuse)
         .expect("write should succeed");
 
-    assert_eq!(written, output);
+    assert_eq!(written, (output.clone(), 1));
     let loaded = Config::load(Some(&output)).expect("must reload");
     assert!(loaded.backends.contains_key("tavily"));
 }
@@ -260,11 +260,16 @@ fn write_discovered_to_config_skips_the_capabilities_name() {
         make_discovered_server("tavily"),
     ];
 
-    write_discovered_to_config(&servers, Some(&output), CommentLoss::Refuse)
+    let (_, written) = write_discovered_to_config(&servers, Some(&output), CommentLoss::Refuse)
         .expect("a batch holding the capabilities name still writes");
+    assert_eq!(written, 1, "the skipped server was counted as written");
 
     let loaded = Config::load(Some(&output)).expect("must reload");
-    assert!(!loaded.backends.contains_key("gateway"), "{:?}", loaded.backends.keys());
+    assert!(
+        !loaded.backends.contains_key("gateway"),
+        "{:?}",
+        loaded.backends.keys()
+    );
     assert!(loaded.backends.contains_key("tavily"));
 }
 
@@ -277,12 +282,19 @@ fn write_discovered_to_config_skips_a_custom_capabilities_name() {
     existing.capabilities.name = "caps".to_string();
     write_config_fixture(&output, &existing).expect("initial write should succeed");
 
-    let servers = [make_discovered_server("caps"), make_discovered_server("gateway")];
+    let servers = [
+        make_discovered_server("caps"),
+        make_discovered_server("gateway"),
+    ];
     write_discovered_to_config(&servers, Some(&output), CommentLoss::Refuse)
         .expect("write should succeed");
 
     let loaded = Config::load(Some(&output)).expect("must reload");
-    assert!(!loaded.backends.contains_key("caps"), "{:?}", loaded.backends.keys());
+    assert!(
+        !loaded.backends.contains_key("caps"),
+        "{:?}",
+        loaded.backends.keys()
+    );
     assert!(loaded.backends.contains_key("gateway"));
 }
 
