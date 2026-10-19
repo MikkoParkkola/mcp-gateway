@@ -3,12 +3,16 @@ name: Registry packages
 # MIK-7787: `mcp-gateway add <name>` writes what src/registry/server_registry.rs
 # says, and 30 of its 45 npm packages had become 404 with nothing failing.
 # This workflow looks every entry up live (npm, PyPI, or an HTTP probe of the
-# hosted URL). It runs only where the answer can change because of this repo
-# (a pull request touching the registry or the check) and on a daily schedule
-# for changes upstream, so a third-party deprecation never turns an unrelated
-# pull request red. GitHub fires `schedule` from the default branch's copy of
-# this file. No workflow holds Linear credentials, so a scheduled failure is
-# reported by this run failing, not by filing an issue.
+# hosted URL). On a pull request it runs only where the answer can change
+# because of this repo (a pull request touching the registry or the check), so
+# a third-party deprecation never turns an unrelated pull request red. It also
+# runs after every merge to a listed branch, whatever the merge touched: drift
+# upstream then shows up on the next merge, on a branch that gates nothing,
+# instead of on gate day (MIK-8510). GitHub fires `schedule` only from the
+# default branch's copy of this file, so the daily run below stays inert until
+# the release line is merged into `main`; the push run is what catches drift
+# before then. No workflow holds Linear credentials, so a failure is reported
+# by this run failing, not by filing an issue.
 # The offline half (pin and launcher rules, no network) runs on every pull
 # request in ci.yml, job registry-packages.
 
@@ -22,10 +26,6 @@ on:
       - ".github/workflows/registry-packages.yml"
   push:
     branches: [main, docs/ranking-1-release-line]
-    paths:
-      - "src/registry/**"
-      - "scripts/dev/check-registry-packages.py"
-      - ".github/workflows/registry-packages.yml"
   schedule:
     - cron: "41 5 * * *"
   workflow_dispatch:
