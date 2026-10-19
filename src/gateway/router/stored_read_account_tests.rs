@@ -713,3 +713,5 @@ mod busy_parity;
 
 #[path = "stored_read_capability_busy_tests.rs"]
 mod capability_busy;
+/// MIK-8412: what the caller verdict adds to a signed nonce refusal on `/mcp`.
+mod http_nonce_alloc;
