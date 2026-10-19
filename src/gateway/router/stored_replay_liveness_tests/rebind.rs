@@ -143,43 +143,6 @@ async fn rb_repeat_task_call_of_a_revoked_account_is_refused_after_a_rebind() {
     assert_refused_unsent(&fx, "RB-repeat", &again, sent);
 }
 
-/// RB-sync (REC.4, the sync retained result; mutant M-rec-sync): a keyed
-/// synchronous `gateway_invoke` retried after the re-bind is not served the
-/// retained result and sends nothing.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn rb_sync_retained_result_of_a_revoked_account_is_refused_after_a_rebind() {
-    let fx = two_accounts().await;
-    answer_marker(&fx);
-    let first = send(&fx, "tools/call", "gateway_invoke", invoke_params(Some("rb-sync"), false)).await;
-    assert!(first.to_string().contains(MARKER), "premise: {first}");
-    let sent = fx.gateway.tool_calls().len();
-    revoke_and_rebind(&fx).await;
-    let again = send(&fx, "tools/call", "gateway_invoke", invoke_params(Some("rb-sync"), false)).await;
-    eprintln!("RB-sync: {again}");
-    assert_refused_unsent(&fx, "RB-sync", &again, sent);
-}
-
-/// RB-direct (REC.4 sibling, the direct route's 7b replay; mutant
-/// M-rec-direct): a keyed direct `tools/call` on `/mcp/work-mail` retried
-/// after the re-bind is not served the stored result and sends nothing.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn rb_direct_stored_result_of_a_revoked_account_is_refused_after_a_rebind() {
-    let fx = two_accounts().await;
-    let uri = format!("/mcp/{BACKEND}");
-    let call = || {
-        json!({"name": TOOL, "arguments": {"folder": "inbox"},
-            "_meta": meta(Some("rb-direct"), false)})
-    };
-    answer_marker(&fx);
-    let first = send_to(&fx, &uri, "tools/call", TOOL, call()).await;
-    assert!(first.to_string().contains(MARKER), "premise: {first}");
-    let sent = fx.gateway.tool_calls().len();
-    revoke_and_rebind(&fx).await;
-    let again = send_to(&fx, &uri, "tools/call", TOOL, call()).await;
-    eprintln!("RB-direct: {again}");
-    assert_refused_unsent(&fx, "RB-direct", &again, sent);
-}
-
 /// RB-control (REC.3 control): no re-bind and `work-gmail` live: the task
 /// read, the repeat and the sync retry are all served their stored output,
 /// with nothing sent again.

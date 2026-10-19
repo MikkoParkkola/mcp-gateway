@@ -456,38 +456,44 @@ const PASSTHROUGH_B: (&str, &str) = (
     r6m_token_exchange::PASSTHROUGH_CREDENTIAL_B,
 );
 
-/// PT-B (MIK-8440 PTBIND.1; mutant M-ptb): the same caller retries key K
-/// forwarding a DIFFERENT passthrough credential. The output stored under
-/// the first credential is not served to it: the call runs live under its
-/// own credential (one more send). Each credential's own retry is then
-/// replayed from its own entry, with no further send (PTBIND.3).
+/// PT-B (MIK-8440 PTBIND.1, .3; mutant M-ptb): the same caller retries key
+/// K forwarding a DIFFERENT passthrough credential. The output stored under
+/// the first credential is not served to it, and nothing is sent: the key's
+/// one execution is settled, so running it again would be a second send. B's
+/// second retry is refused the same way. A's own retry is still served from
+/// 7b (PTBIND.3), with one send in all.
 #[tokio::test]
-async fn pt_b_a_retry_under_another_forwarded_credential_runs_live() {
+async fn pt_b_a_retry_under_another_forwarded_credential_is_refused() {
     let (router, sends, _dirs, alice) = passthrough_after_forwarded().await;
-    let other = r6m_token_exchange::send_direct_as(
-        &router,
-        &alice,
-        direct_call("dpt", None),
-        &[PASSTHROUGH_B],
-    )
-    .await;
-    assert_served("PT-B: the other credential's own call", &other);
-    assert_eq!(
-        sends.load(Ordering::SeqCst),
-        2,
-        "PT-B: served the first credential's stored output: {other:?}"
-    );
-    for (row, header) in [("PT-B A again", PASSTHROUGH), ("PT-B B again", PASSTHROUGH_B)] {
-        let again = r6m_token_exchange::send_direct_as(
+    for row in ["PT-B", "PT-B again"] {
+        let (status, other) = r6m_token_exchange::send_direct_as(
             &router,
             &alice,
             direct_call("dpt", None),
-            &[header],
+            &[PASSTHROUGH_B],
         )
         .await;
-        assert_served(row, &again);
-        assert_eq!(sends.load(Ordering::SeqCst), 2, "{row}: sent again");
+        eprintln!("{row} answer ({status}): {other}");
+        assert!(
+            !other.to_string().contains(MARKER),
+            "{row}: served the first credential's stored output: {other}"
+        );
+        assert_eq!(
+            other.pointer("/error/code").and_then(Value::as_i64),
+            Some(-32603),
+            "{row}: not the binding refusal: {other}"
+        );
+        assert_eq!(sends.load(Ordering::SeqCst), 1, "{row}: sent: {other}");
     }
+    let again = r6m_token_exchange::send_direct_as(
+        &router,
+        &alice,
+        direct_call("dpt", None),
+        &[PASSTHROUGH],
+    )
+    .await;
+    assert_served("PT-B A again", &again);
+    assert_eq!(sends.load(Ordering::SeqCst), 1, "PT-B A again: sent again");
 }
 
 /// PT-anon (MIK-8440 design question; mutant M-anon): with authentication

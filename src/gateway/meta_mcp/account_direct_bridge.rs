@@ -10,6 +10,9 @@
 
 use super::*;
 
+// MIK-8407: the re-bind helpers, kept apart for the 800-line ceiling.
+mod account_bridge_rebind;
+
 /// The backend every direct-route case calls.
 pub(crate) const BACKEND: &str = "work-mail";
 
@@ -243,30 +246,6 @@ impl DirectAccountGateway {
             .expect("the seeded grant must revoke through real custody");
     }
 
-    /// Re-bind [`BACKEND`] from its `work-gmail` account to `personal-gmail`
-    /// (MIK-8407), as an operator's reload does: a replacement instance under
-    /// the same name, registered over the old one. Built by
-    /// [`Self::with_second`]`(.., Second::PersonalAccount)`, which installs
-    /// both accounts' strategies; the sole operator's per-user slot on each
-    /// account is seeded on the replacement, so a dispatch under either
-    /// stays in process. Its catalogue starts empty, as a reload's does.
-    pub(crate) fn rebind_backend_to_personal_for_test(&self) {
-        let slots: Vec<String> = [WORK, PERSONAL]
-            .iter()
-            .map(|id| expected_identity_key_for(&operator_key_for(id), SEEDED_REVISION))
-            .collect();
-        let replacement = super::gateway::rebound_backend(
-            (BACKEND, PERSONAL),
-            &[WORK, PERSONAL],
-            &self.dispatches,
-            &slots,
-        );
-        assert!(
-            self.backends.register(replacement),
-            "the re-bound backend must register"
-        );
-    }
-
     /// The `tools/call` requests sent to `backend`.
     pub(crate) fn tool_calls_to(&self, backend: &str) -> usize {
         self.dispatches
@@ -443,6 +422,8 @@ pub(crate) struct CapabilityAccount {
     log_dir: tempfile::TempDir,
     /// Test-only (MIK-8428 Case A): see [`ReleaseBudget`].
     release_budget: Arc<Mutex<Option<usize>>>,
+    /// MIK-8407: `PERSONAL` is installed too, for a capability re-bind.
+    second: bool,
 }
 
 /// What the capability's account reference names (MIK-8451).
@@ -512,6 +493,7 @@ impl CapabilityAccount {
             personal: false,
             log_dir: dir,
             release_budget: Arc::new(Mutex::new(None)),
+            second: false,
         }
     }
 
@@ -579,8 +561,12 @@ impl CapabilityAccount {
             inner: self.custody.installed(),
             allowed: Arc::clone(&self.release_budget),
         });
+        let mut descriptors = vec![(WORK, descriptor)];
+        if self.second {
+            descriptors.push((PERSONAL, super::super::account_rest_fixture::managed(PERSONAL)));
+        }
         install_account_strategies(
-            &rest_config(&[(WORK, descriptor)]),
+            &rest_config(&descriptors),
             Some(&custody),
             &key,
             &meta,
