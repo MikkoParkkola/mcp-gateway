@@ -43,6 +43,25 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: none
+          # Test code is not shipped. Its signed-request fixtures build nonces
+          # and keys from literals, which the Rust queries report as hard-coded
+          # cryptographic values one alert per literal (MIK-8490). These globs
+          # match only files no non-test build compiles (checked against
+          # rustc's dep-info for the lib and bin, default, all and no-default
+          # features). Secret scanning still covers these paths. The `src/*`
+          # rows are not redundant with `src/**/`: they name files directly
+          # under src/, which a `**/` pattern may not match.
+          config: |
+            paths-ignore:
+              - tests/**
+              - src/*_tests.rs
+              - src/test_*.rs
+              - src/tests.rs
+              - src/**/*_tests.rs
+              - src/**/*_tests/**
+              - src/**/tests/**
+              - src/**/tests.rs
+              - src/**/test_*.rs
       - name: Analyze
         uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
