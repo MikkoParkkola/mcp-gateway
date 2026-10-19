@@ -20,7 +20,7 @@ use super::settlement::{
 use super::worker::inspect_settled;
 use super::{CommitStage, OwnedCallerContext, TaskCall, TaskExecutor};
 use crate::gateway::task_service::host::LiveHost;
-use crate::gateway::task_service::record::{CONTINUATION_DEADLINE_MARGIN_SECS, InputRound, Target};
+use crate::gateway::task_service::record::{CONTINUATION_DEADLINE_MARGIN_SECS, InputRound};
 use crate::gateway::task_service::store::StoreError;
 use crate::gateway::task_service::store::input::{ProvideOutcome, RoundClosed};
 use crate::protocol::mrtr::{InputRequired, RetryFields};
@@ -29,6 +29,8 @@ use crate::protocol::{JsonRpcError, JsonRpcResponse, RequestId};
 
 #[path = "input_round_clock.rs"]
 mod clock;
+// MIK-8407: what a settle and a park record about how an outcome was produced.
+mod provenance;
 pub(super) use clock::{ClockWait, readable_now};
 use clock::{Resealed, readable_or_fail, redeeming_dispatch};
 
@@ -153,32 +155,6 @@ impl<'a> Settling<'a> {
         }
     }
 
-    /// The calls a plan actually dispatched, for the settlement to commit with
-    /// its outcome. `None` for a call whose one target was recorded at creation.
-    fn plan_targets(&self) -> Option<Vec<Target>> {
-        matches!(
-            self.call.tool.as_str(),
-            "gateway_execute" | "gateway_run_playbook"
-        )
-        .then(|| {
-            self.owned
-                .dispatch_log()
-                .snapshot()
-                .into_iter()
-                .map(|(server, tool)| Target { server, tool })
-                .collect()
-        })
-    }
-
-    /// What a settle records with its outcome: the plan's targets and the
-    /// binding every call so far ran under (MIK-8407), from the dispatch log.
-    pub(super) fn provenance(&self) -> crate::gateway::task_service::record::Provenance {
-        crate::gateway::task_service::record::Provenance {
-            targets: self.plan_targets(),
-            bindings: self.owned.dispatch_log().bindings(),
-        }
-    }
-
     /// Settle `event`. Staged relay receipts are recorded only when it is
     /// the dispatched result (`dispatched`) and the store kept it as such.
     async fn settle(
@@ -209,41 +185,6 @@ impl<'a> Settling<'a> {
         self.state
             .meta_mcp()
             .commit_staged_relay(dispatched && stored);
-    }
-
-    /// Record a parked plan's calls so far; the resume's log starts empty.
-    /// `false` means they are NOT durable, and the round must not be parked.
-    async fn park_targets(&self) -> bool {
-        // Every parked row records its bindings (MIK-8407), a single call's
-        // too: its pending input requests are backend output.
-        let crate::gateway::task_service::record::Provenance { targets, bindings } =
-            self.provenance();
-        // A plan's calls must be durable before it parks; a single call's one
-        // target was recorded at creation.
-        let plan = targets.is_some();
-        let targets = targets.unwrap_or_default();
-        let Ok(owner) = self.executor.service.owner(self.principal) else {
-            return false;
-        };
-        let stored = self
-            .executor
-            .service
-            .store
-            .add_targets(
-                owner.as_digest(),
-                self.id,
-                self.revision,
-                (targets, bindings),
-            )
-            .await;
-        // A row a cancel already moved is not parked either way. For a single
-        // call a closed store refuses the park write too, which logs its cause
-        // and writes nothing, so no row parks without its bindings (MIK-8407).
-        match stored {
-            Ok(()) | Err(StoreError::RevisionConflict) => true,
-            Err(StoreError::Unavailable) => !plan,
-            Err(_) => false,
-        }
     }
 
     /// Commit `input_required` with the continuation, then release: the worker
