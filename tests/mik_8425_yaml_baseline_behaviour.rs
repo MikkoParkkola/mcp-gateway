@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8425 MIG.0: `serde_yaml` 0.9.34's behaviour on the cases where the
+//! MIK-8425 MIG.0: `serde-yaml` 0.9.34's behaviour on the cases where the
 //! replacement parser is known or suspected to differ, recorded before the
 //! swap. One golden, `behaviour.txt`, one row per case:
-//! `case \t OK <reading>` or `case \t ERR <serde_yaml text>`.
+//! `case \t OK <reading>` or `case \t ERR <serde-yaml text>`.
 //!
 //! The destinations matter as much as the input. A repeated key is refused
 //! in a struct and in the tree, but keeps the last value in any map,
@@ -13,10 +13,12 @@
 #[path = "common/mik_8425_golden.rs"]
 mod golden;
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use figment::providers::Format as _;
 use mcp_gateway::identity_grants::IdentityGrantFile;
 use serde::{Deserialize, Serialize};
 
@@ -50,7 +52,7 @@ fn ok_json<T: Serialize, E: std::fmt::Display>(result: Result<T, E>) -> String {
 
 /// A tree reading as its structure (kinds, tags, key types), which JSON
 /// cannot carry: a tagged node and a one-key map serialize alike there.
-fn ok_tree(result: Result<serde_yaml::Value, serde_yaml::Error>) -> String {
+fn ok_tree(result: Result<yaml::Value, yaml::Error>) -> String {
     match result {
         Ok(value) => format!("OK {}", golden::yaml_structure(&value)),
         Err(error) => format!("ERR {}", golden::one_line(&error.to_string())),
@@ -58,16 +60,16 @@ fn ok_tree(result: Result<serde_yaml::Value, serde_yaml::Error>) -> String {
 }
 
 /// A tree scalar by kind, so `.inf` and `.nan` do not both read as JSON null.
-fn scalar_kind(value: &serde_yaml::Value) -> String {
+fn scalar_kind(value: &yaml::Value) -> String {
     match value {
-        serde_yaml::Value::Null => "null".to_owned(),
-        serde_yaml::Value::Bool(b) => format!("bool:{b}"),
-        serde_yaml::Value::Number(n) => n
+        yaml::Value::Null => "null".to_owned(),
+        yaml::Value::Bool(b) => format!("bool:{b}"),
+        yaml::Value::Number(n) => n
             .as_i64()
             .map(|i| format!("int:{i}"))
             .or_else(|| n.as_u64().map(|u| format!("uint:{u}")))
             .unwrap_or_else(|| format!("float:{}", n.as_f64().unwrap_or(f64::NAN))),
-        serde_yaml::Value::String(s) => format!("str:{s:?}"),
+        yaml::Value::String(s) => format!("str:{s:?}"),
         other => format!("other:{}", golden::yaml_structure(other)),
     }
 }
@@ -81,42 +83,26 @@ fn row(out: &mut String, case: &str, outcome: &str) {
 
 fn duplicates(out: &mut String) {
     let top = "a: 1\na: 2\n";
-    row(
-        out,
-        "dup/struct",
-        &ok_json(serde_yaml::from_str::<Field>(top)),
-    );
+    row(out, "dup/struct", &ok_json(yaml::from_str::<Field>(top)));
     row(
         out,
         "dup/map",
-        &ok_json(serde_yaml::from_str::<BTreeMap<String, u8>>(top)),
+        &ok_json(yaml::from_str::<BTreeMap<String, u8>>(top)),
     );
     row(
         out,
         "dup/tree",
-        &ok_tree(serde_yaml::from_str::<serde_yaml::Value>(top)),
+        &ok_tree(yaml::from_str::<yaml::Value>(top)),
     );
-    row(
-        out,
-        "dup/dict",
-        &ok_json(figment::providers::Yaml::from_str::<figment::value::Dict>(
-            top,
-        )),
-    );
+    row(out, "dup/dict", &ok_json(yaml::from_str_loose(top)));
     let nested = "m:\n  a: 1\n  a: 2\n";
     row(
         out,
         "dup/map-in-struct",
-        &ok_json(serde_yaml::from_str::<Holder>(nested)),
+        &ok_json(yaml::from_str::<Holder>(nested)),
     );
     let deep = "x:\n  a: 1\n  a: 2\n";
-    row(
-        out,
-        "dup/nested-dict",
-        &ok_json(figment::providers::Yaml::from_str::<figment::value::Dict>(
-            deep,
-        )),
-    );
+    row(out, "dup/nested-dict", &ok_json(yaml::from_str_loose(deep)));
 }
 
 fn merge_keys(out: &mut String) {
@@ -124,20 +110,14 @@ fn merge_keys(out: &mut String) {
     row(
         out,
         "merge/tree",
-        &ok_tree(serde_yaml::from_str::<serde_yaml::Value>(merge)),
+        &ok_tree(yaml::from_str::<yaml::Value>(merge)),
     );
-    row(
-        out,
-        "merge/dict",
-        &ok_json(figment::providers::Yaml::from_str::<figment::value::Dict>(
-            merge,
-        )),
-    );
+    row(out, "merge/dict", &ok_json(yaml::from_str_loose(merge)));
     let tagged = "m:\n  !!merge <<: {x: 1}\n";
     row(
         out,
         "merge/tagged-tree",
-        &ok_tree(serde_yaml::from_str::<serde_yaml::Value>(tagged)),
+        &ok_tree(yaml::from_str::<yaml::Value>(tagged)),
     );
 }
 
@@ -149,16 +129,16 @@ const SCALARS: &[&str] = &[
 fn scalars(out: &mut String) {
     for s in SCALARS {
         let doc = format!("v: {s}\n");
-        let tree = serde_yaml::from_str::<BTreeMap<String, serde_yaml::Value>>(&doc)
+        let tree = yaml::from_str::<BTreeMap<String, yaml::Value>>(&doc)
             .map(|m| m.get("v").map_or_else(|| "absent".to_owned(), scalar_kind));
         let tree = tree.map_or_else(
             |e| format!("ERR {}", golden::one_line(&e.to_string())),
             |k| format!("OK {k}"),
         );
         row(out, &format!("scalar/tree {s:?}"), &tree);
-        let text = serde_yaml::from_str::<BTreeMap<String, String>>(&doc);
+        let text = yaml::from_str::<BTreeMap<String, String>>(&doc);
         row(out, &format!("scalar/string {s:?}"), &ok_json(text));
-        let flag = serde_yaml::from_str::<BTreeMap<String, bool>>(&doc);
+        let flag = yaml::from_str::<BTreeMap<String, bool>>(&doc);
         row(out, &format!("scalar/bool {s:?}"), &ok_json(flag));
     }
 }
@@ -169,11 +149,7 @@ fn documents(out: &mut String) {
         ("doc/explicit-start", "---\na: 1\n"),
         ("doc/two", "a: 1\n---\nb: 2\n"),
     ] {
-        row(
-            out,
-            case,
-            &ok_tree(serde_yaml::from_str::<serde_yaml::Value>(doc)),
-        );
+        row(out, case, &ok_tree(yaml::from_str::<yaml::Value>(doc)));
     }
     for (case, doc) in [
         ("stream/two", "a: 1\n---\nb: 2\n"),
@@ -183,8 +159,8 @@ fn documents(out: &mut String) {
         // Stop at the first refusal, and never read more than 16 documents:
         // after a malformed document the stream may keep yielding errors.
         let mut readings = Vec::new();
-        for document in serde_yaml::Deserializer::from_str(doc).take(16) {
-            let reading = ok_tree(serde_yaml::Value::deserialize(document));
+        for document in yaml::documents(doc).take(16) {
+            let reading = ok_tree(document);
             let refused = reading.starts_with("ERR");
             readings.push(reading);
             if refused {
@@ -202,7 +178,7 @@ fn documents(out: &mut String) {
 /// Refusal text, or the digest of the expanded tree's structure, so a
 /// replacement that parses but expands differently cannot match.
 fn parsed_or_refused(doc: &str) -> String {
-    serde_yaml::from_str::<serde_yaml::Value>(doc).map_or_else(
+    yaml::from_str::<yaml::Value>(doc).map_or_else(
         |e| format!("ERR {}", golden::one_line(&e.to_string())),
         |value| {
             format!(
@@ -223,7 +199,7 @@ fn limits(out: &mut String) {
         );
     }
     // Fan-out 10 per level over a 10-item base, so level n alone expands to
-    // 10^(n+1) nodes and the document holds every level. serde_yaml 0.9.34
+    // 10^(n+1) nodes and the document holds every level. serde-yaml 0.9.34
     // bounds expansion: it refuses with "repetition limit exceeded" from
     // level 4 (about 10^5 nodes) on, and parses levels 2 and 3. That refusal
     // point is the baseline the replacement parser's budget may not loosen
@@ -268,7 +244,7 @@ fn enums(out: &mut String) {
         ),
         ("grant/map-bare", "{exact: runner}"),
     ] {
-        let parsed = serde_yaml::from_str::<IdentityGrantFile>(&grant_file(agent));
+        let parsed = yaml::from_str::<IdentityGrantFile>(&grant_file(agent));
         row(out, case, &ok_json(parsed));
     }
     for (case, doc) in [
@@ -278,7 +254,7 @@ fn enums(out: &mut String) {
         ("enum/struct-tag", "!pair {x: 1, y: 2}"),
         ("enum/struct-map", "{pair: {x: 1, y: 2}}"),
     ] {
-        row(out, case, &ok_json(serde_yaml::from_str::<Shape>(doc)));
+        row(out, case, &ok_json(yaml::from_str::<Shape>(doc)));
     }
 }
 
@@ -293,16 +269,16 @@ fn writes(out: &mut String) {
         Shape::Newtype("hi".into()),
         Shape::Pair { x: 1, y: 2 },
     ];
-    let written = serde_yaml::to_string(&shapes).expect("shapes serialise");
+    let written = yaml::to_string(&shapes).expect("shapes serialise");
     row(out, "write/enums", &golden::one_line(&written));
     let ambiguous: BTreeMap<String, String> = AMBIGUOUS
         .iter()
         .enumerate()
         .map(|(i, s)| (format!("k{i:02}"), (*s).to_owned()))
         .collect();
-    let written = serde_yaml::to_string(&ambiguous).expect("strings serialise");
+    let written = yaml::to_string(&ambiguous).expect("strings serialise");
     row(out, "write/ambiguous-strings", &golden::one_line(&written));
-    let back = serde_yaml::from_str::<BTreeMap<String, String>>(&written);
+    let back = yaml::from_str::<BTreeMap<String, String>>(&written);
     let equal = back.as_ref().is_ok_and(|b| *b == ambiguous);
     row(
         out,
@@ -323,7 +299,7 @@ fn report() -> String {
     out
 }
 
-/// `serde_yaml` 0.9.34's outcome on every recorded case is unchanged.
+/// `serde-yaml` 0.9.34's outcome on every recorded case is unchanged.
 #[test]
 fn yaml_behaviour_matches_the_recording() {
     golden::assert_golden("behaviour.txt", &report());
@@ -334,9 +310,8 @@ fn yaml_behaviour_matches_the_recording() {
 /// digests could not tell those readings apart.
 #[test]
 fn the_structural_form_separates_tags_from_maps_and_key_types() {
-    let structure = |doc: &str| {
-        golden::yaml_structure(&serde_yaml::from_str::<serde_yaml::Value>(doc).expect("parses"))
-    };
+    let structure =
+        |doc: &str| golden::yaml_structure(&yaml::from_str::<yaml::Value>(doc).expect("parses"));
     assert_ne!(structure("a: !exact x\n"), structure("a: {'!exact': x}\n"));
     assert_ne!(structure("1: x\n"), structure("'1': x\n"));
     assert_ne!(structure("a: 1\n"), structure("a: '1'\n"));

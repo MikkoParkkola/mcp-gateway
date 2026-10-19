@@ -16,7 +16,9 @@
     dead_code,
     unused_imports,
     reason = "MIK-8425: consumers are routed through this seam in MIG.1b to MIG.1f; \
-              until then parts of it have no caller. Delete this allow in MIG.1f."
+              until then parts of it have no caller. Integration-test crates compile their \
+              own copy through tests/common/yaml.rs and never call all of it. Delete this \
+              allow in MIG.2, when the swap re-examines the surface."
 )]
 
 use figment::Provider as _;

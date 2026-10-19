@@ -1,15 +1,7 @@
 src/yaml.rs
-tests/common/mik_8425_golden.rs
-tests/common/mrtr7_fixture.rs
-tests/common/signing_gateway.rs
 tests/gh462_config_preservation.rs
 tests/mik_7272_owner2_stdio_tasks/helper.rs
 tests/mik_8425_yaml_adapter.rs
-tests/mik_8425_yaml_baseline_behaviour.rs
-tests/mik_8425_yaml_baseline_capabilities.rs
-tests/mik_8425_yaml_baseline_grants.rs
-tests/mik_8425_yaml_baseline_redaction.rs
-tests/mik_8425_yaml_baseline_trees.rs
 tests/nfr_perf_4_meta_tool_band.rs
 tests/openwebui_adapter_config.rs
 tests/openwebui_adapter_config/acceptance.rs
