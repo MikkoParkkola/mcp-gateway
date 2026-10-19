@@ -203,7 +203,7 @@ fn rewrite_keeps_file_ref_text() {
     let tok = secret(dir.path(), "tok", b"c9-material\n", 0o600);
     let path = config_file(dir.path(), &bearer_yaml(&tok));
     let cfg = Config::load_literal(Some(&path)).expect("literal load");
-    let saved = serde_yaml::to_string(&cfg).expect("serialise");
+    let saved = crate::yaml::to_string(&cfg).expect("serialise");
     assert!(
         saved.contains(&format!("file:{}", tok.display())),
         "reference text lost: {saved}"

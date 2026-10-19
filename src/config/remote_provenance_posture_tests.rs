@@ -8,7 +8,7 @@ use super::super::{Config, RemoteServerSigningConfig};
 /// block; not validated, so metadata presence is what is tested here.
 fn config(backends: &str, signing: &str) -> Config {
     let yaml = format!("{signing}\nbackends:\n{backends}");
-    serde_yaml::from_str(&yaml).expect("test config parses")
+    crate::yaml::from_str(&yaml).expect("test config parses")
 }
 
 const METADATA: &str = r#"

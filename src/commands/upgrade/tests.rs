@@ -353,7 +353,7 @@ fn no_backup_when_zero_migrations() {
 #[test]
 fn posture_auth_disabled_when_auth_section_absent() {
     // GIVEN: a config with no `auth` section at all
-    let yaml: serde_yaml::Value = serde_yaml::from_str("server:\n  port: 39400\n").unwrap();
+    let yaml: crate::yaml::Value = crate::yaml::from_str("server:\n  port: 39400\n").unwrap();
     // WHEN/THEN: treated as auth-disabled (default `auth.enabled` is false)
     assert_eq!(
         detect_multi_user_posture(&yaml),
@@ -364,7 +364,7 @@ fn posture_auth_disabled_when_auth_section_absent() {
 #[test]
 fn posture_auth_disabled_when_enabled_false() {
     // GIVEN: auth explicitly disabled
-    let yaml: serde_yaml::Value = serde_yaml::from_str("auth:\n  enabled: false\n").unwrap();
+    let yaml: crate::yaml::Value = crate::yaml::from_str("auth:\n  enabled: false\n").unwrap();
     // WHEN/THEN
     assert_eq!(
         detect_multi_user_posture(&yaml),
@@ -375,7 +375,7 @@ fn posture_auth_disabled_when_enabled_false() {
 #[test]
 fn posture_undeclared_when_auth_enabled_without_single_user_or_shared_account() {
     // GIVEN: auth enabled, no single_user flag, no backend shared_account
-    let yaml: serde_yaml::Value = serde_yaml::from_str(
+    let yaml: crate::yaml::Value = crate::yaml::from_str(
         "auth:\n  enabled: true\nbackends:\n  jira:\n    oauth:\n      enabled: true\n",
     )
     .unwrap();
@@ -389,8 +389,8 @@ fn posture_undeclared_when_auth_enabled_without_single_user_or_shared_account() 
 #[test]
 fn posture_already_declared_when_single_user_true() {
     // GIVEN: auth enabled and single_user explicitly declared
-    let yaml: serde_yaml::Value =
-        serde_yaml::from_str("auth:\n  enabled: true\n  single_user: true\n").unwrap();
+    let yaml: crate::yaml::Value =
+        crate::yaml::from_str("auth:\n  enabled: true\n  single_user: true\n").unwrap();
     // WHEN/THEN
     assert_eq!(
         detect_multi_user_posture(&yaml),
@@ -401,7 +401,7 @@ fn posture_already_declared_when_single_user_true() {
 #[test]
 fn posture_already_declared_when_backend_shared_account_true() {
     // GIVEN: auth enabled, single_user unset, but one backend opts in to shared_account
-    let yaml: serde_yaml::Value = serde_yaml::from_str(
+    let yaml: crate::yaml::Value = crate::yaml::from_str(
         "auth:\n  enabled: true\nbackends:\n  jira:\n    oauth:\n      enabled: true\n      shared_account: true\n",
     )
     .unwrap();
@@ -415,7 +415,7 @@ fn posture_already_declared_when_backend_shared_account_true() {
 #[test]
 fn posture_undeclared_ignores_shared_account_false() {
     // GIVEN: a backend that explicitly sets shared_account: false (still fail-closed)
-    let yaml: serde_yaml::Value = serde_yaml::from_str(
+    let yaml: crate::yaml::Value = crate::yaml::from_str(
         "auth:\n  enabled: true\nbackends:\n  jira:\n    oauth:\n      shared_account: false\n",
     )
     .unwrap();

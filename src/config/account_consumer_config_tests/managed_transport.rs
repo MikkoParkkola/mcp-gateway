@@ -46,7 +46,7 @@ fn an_external_descriptor_without_a_strategy_cannot_be_bound() {
          instance_id: unit\n  store_dir: /unused/store\n  authority_dir: /unused/authority\n  \
          current_key_id: primary\n  keys:\n    primary: env:UNUSED\n  descriptors:\n    \
          partner-api:\n      mode: external\n      provider: partner\n";
-    let config: Config = serde_yaml::from_str(yaml).expect("parses");
+    let config: Config = crate::yaml::from_str(yaml).expect("parses");
     let Err(error) = crate::config::account_bindings::compile(&config) else {
         panic!("a strategy-less external descriptor must refuse to bind");
     };

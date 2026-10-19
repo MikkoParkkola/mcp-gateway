@@ -31,7 +31,7 @@ providers:
 ";
 
 fn cap011(yaml: &str) -> Vec<Issue> {
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).expect("parses");
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).expect("parses");
     validate_capability_definition(&cap, None)
         .into_iter()
         .filter(|i| i.code == "CAP-011")
@@ -68,7 +68,7 @@ fn a_malformed_fallback_entry_is_a_parse_error() {
         "\n    - null",
     ] {
         let yaml = format!("{WITHOUT_FALLBACK}  fallback:{fallback}\n");
-        let parsed = serde_yaml::from_str::<CapabilityDefinition>(&yaml);
+        let parsed = crate::yaml::from_str::<CapabilityDefinition>(&yaml);
         assert!(parsed.is_err(), "must not parse: {yaml}");
     }
 }
