@@ -542,3 +542,38 @@ async fn an_offered_claim_on_a_legacy_row_keeps_its_call_as_a_target() {
     assert!(record.get("upstream").is_none(), "{record}");
     store.close().await.unwrap();
 }
+
+/// MIK-8407 (final round-2 finding: the handle was durable before its
+/// bindings): `mark_upstream` writes the handle and the bindings the dispatch
+/// ran under in one write, and a reopened store reads both back. Mutant: the
+/// bindings dropped from, or deferred past, that write.
+#[tokio::test]
+async fn a_durable_handle_carries_its_bindings_across_a_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let store = open(&path).await;
+    let (row, binding) = admitted(&store, &services(), "handle-bindings").await;
+    let owner = binding.principal_digest().to_owned();
+    let id = row.id().to_owned();
+    let ran_under = vec![(
+        "orders".to_owned(),
+        "create".to_owned(),
+        Some("work#f1".to_owned()),
+    )];
+    store
+        .mark_upstream(
+            &owner,
+            &id,
+            1,
+            (descriptor(&binding, "job-bound"), ran_under.clone()),
+        )
+        .await
+        .unwrap();
+    store.close().await.unwrap();
+
+    let reopened = open(&path).await;
+    let read = reopened.get(&owner, &id).unwrap();
+    assert!(read.bindings_recorded, "handle row not at BINDING_VERSION");
+    assert_eq!(read.bindings, ran_under, "bindings lost with the handle");
+    reopened.close().await.unwrap();
+}
