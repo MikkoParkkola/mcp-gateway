@@ -63,6 +63,17 @@ pub(crate) struct Target {
     pub(crate) tool: String,
 }
 
+impl Target {
+    /// Each target's `(server, tool)` names, borrowed, in recorded order:
+    /// the form every stored-result walk reads.
+    pub(crate) fn pairs(targets: &[Self]) -> Vec<(&str, &str)> {
+        targets
+            .iter()
+            .map(|target| (target.server.as_str(), target.tool.as_str()))
+            .collect()
+    }
+}
+
 /// How far before the stored continuation's own expiry a round stops taking
 /// answers: room for an accepted answer to reach redemption (#2429).
 pub(crate) const CONTINUATION_DEADLINE_MARGIN_SECS: u64 = 10;
@@ -532,3 +543,24 @@ fn legacy_targets(task: &Task, record: &Record) -> Vec<Target> {
 #[cfg(test)]
 #[path = "record_legacy_tests.rs"]
 mod legacy_tests;
+
+/// `Target::pairs` keeps the recorded order, duplicates included, and the
+/// names exactly as recorded: every stored-result walk reads it (MIK-8498).
+#[cfg(test)]
+mod pairs_tests {
+    use super::Target;
+
+    #[test]
+    fn pairs_keep_the_recorded_order_and_names() {
+        let target = |server: &str, tool: &str| Target {
+            server: server.to_owned(),
+            tool: tool.to_owned(),
+        };
+        let targets = [target("b", "two"), target("a", "one"), target("b", "two")];
+        assert_eq!(
+            Target::pairs(&targets),
+            [("b", "two"), ("a", "one"), ("b", "two")]
+        );
+        assert!(Target::pairs(&[]).is_empty());
+    }
+}
