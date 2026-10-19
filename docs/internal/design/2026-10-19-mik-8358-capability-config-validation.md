@@ -1,9 +1,11 @@
 # MIK-8358: capability config validation (CAPCFG)
 
 Status: P1a ratified 2026-10-19 (gpt-20261018T235959Z-89345 SHIP,
-agy-20261018T235959Z-89347 SHIP). P1b under review.
-Class B3 (lead triage 2026-10-19): refusing configs that load today ships
-only with the major version. Base: origin/docs/ranking-1-release-line b51f53140.
+agy-20261018T235959Z-89347 SHIP); P1b and the final rounds reviewed (see the
+last two sections); in PR #3964.
+Class B3: refusing configs that load today ships only with the major
+version. The ticket set v4.0.1; the operator ruled it ships in v4.0.0
+(2026-10-19). Base: origin/docs/ranking-1-release-line b51f53140.
 
 ## P1a: problem
 
@@ -118,3 +120,33 @@ Declined from the P1a round, with reasons:
   and `Registry::build_index` both call. Row
   `registry::tests::the_index_leaves_out_a_file_the_loader_skips`: red with
   the index on the legacy check alone, green with the shared check.
+
+## Discovery writes, after CI (2026-10-19)
+
+CI found `tests/zed_config_round_trip.rs` failing: `setup export` names its
+entry `gateway` by default, the default `capabilities.name`, so `cap discover
+--write-config` wrote a backend CAPCFG.1 refuses. Both seats said the writer
+is the wrong side, not the rule (gpt-20261019T071119Z-412,
+agy-20261019T071119Z-415). Decisions, each reviewed or ruled:
+
+- The writer skips a discovered server whose name is `capabilities.name`,
+  warns on stderr and still exits 0. It does not rename (rename needs batch
+  collisions, alias persistence and shadow reconciliation) and does not fail
+  (lead accepted, G2).
+- `cap discover --shadow` still lists such a server (gpt finding: hiding it
+  from an inventory is worse); adopting it goes through the writer, which
+  skips it.
+- The writer reports how many servers it wrote, and shadow adoption prints
+  that number (lead ruling).
+- The default round trip is pinned: a default-name export followed by
+  discover warns and exits 0 (lead, G3); the transport round trips export
+  as `zed-gateway`.
+- The search index runs the loader's check quietly. A real run of `cap
+  search mail` printed 24 warning lines from the shipped catalogue once the
+  index used the loader's logging check, so the index passes
+  `IssueLog::Quiet` and logs one debug line per build (lead, G6). The loader
+  still logs each issue.
+
+Rows: `the_default_entry_name_is_skipped_on_import`,
+`shadow_adoption_counts_only_what_it_wrote`, and two writer unit rows in
+`src/main_tests.rs`.

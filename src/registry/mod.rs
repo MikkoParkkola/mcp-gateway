@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::capability::{parse_capability_file, refuse_unloadable};
+use crate::capability::{IssueLog, parse_capability_file, refuse_unloadable};
 use crate::{Error, Result};
 
 /// Registry entry describing a capability
@@ -180,10 +180,11 @@ impl Registry {
             // Parse capability file
             // Validated as loading validates, structural errors included, so
             // search never offers a definition the gateway would refuse
-            // (MIK-7926.FIX.3, MIK-8358).
+            // (MIK-7926.FIX.3, MIK-8358). Quiet: structural warnings belong to
+            // `cap validate` and the loader's log, not every search.
             match parse_capability_file(path)
                 .await
-                .and_then(|c| refuse_unloadable(&c, path).map(|()| c))
+                .and_then(|c| refuse_unloadable(&c, path, IssueLog::Quiet).map(|()| c))
             {
                 Ok(capability) => {
                     // Calculate relative path from capabilities directory
@@ -215,6 +216,11 @@ impl Registry {
             }
         }
 
+        tracing::debug!(
+            listed = capabilities.len(),
+            "search index built; structural warnings are not shown here, \
+             `mcp-gateway cap validate <file>` lists them"
+        );
         Ok(RegistryIndex::new(capabilities))
     }
 

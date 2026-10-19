@@ -117,7 +117,7 @@ impl CapabilityLoader {
     /// is still loaded.
     async fn load_capability_file(path: &Path) -> Result<CapabilityDefinition> {
         let capability = parse_capability_file(path).await?;
-        refuse_unloadable(&capability, path)?;
+        refuse_unloadable(&capability, path, IssueLog::EachIssue)?;
         Ok(capability)
     }
 
@@ -142,20 +142,36 @@ impl CapabilityLoader {
     }
 }
 
+/// Whether [`refuse_unloadable`] logs each structural issue it finds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IssueLog {
+    /// One warning line per issue: the loader, whose log is the operator's
+    /// record of what was served.
+    EachIssue,
+    /// Nothing: the search index, which a CLI user runs interactively, where
+    /// one line per catalogue warning buries the answer (MIK-8358 G6).
+    Quiet,
+}
+
 /// The checks a parsed capability file must pass to be served: the legacy
-/// `validate_capability` and the structural validator's errors. Warnings are
-/// logged and do not refuse. The loader and the registry's search index both
-/// ask this, so search never lists a file the loader skips (MIK-8358).
+/// `validate_capability` and the structural validator's errors. Warnings do
+/// not refuse; `log` says whether each issue is logged. The loader and the
+/// registry's search index both ask this, so search never lists a file the
+/// loader skips (MIK-8358).
 ///
 /// # Errors
 ///
 /// The legacy check's error, or `Error::Config` counting the structural
 /// errors when there are any.
-pub(crate) fn refuse_unloadable(capability: &CapabilityDefinition, path: &Path) -> Result<()> {
+pub(crate) fn refuse_unloadable(
+    capability: &CapabilityDefinition,
+    path: &Path,
+    log: IssueLog,
+) -> Result<()> {
     validate_capability(capability)?;
     let path_str = path.to_string_lossy();
     let issues = validate_capability_definition(capability, Some(&path_str));
-    for issue in &issues {
+    for issue in issues.iter().filter(|_| log == IssueLog::EachIssue) {
         let kind = if issue.severity == IssueSeverity::Error {
             "error"
         } else {

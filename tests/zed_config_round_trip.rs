@@ -97,28 +97,22 @@ fn ok(output: &Output, what: &str) -> String {
 /// `the_default_entry_name_is_skipped_on_import`).
 const ENTRY: &str = "zed-gateway";
 
-/// Export the gateway entry for Zed in `mode`, then return the entry as it
-/// sits in the settings file Zed reads.
-fn export(home: &Home, mode: &str, name: &str) -> (PathBuf, Value) {
+/// Export the gateway entry for Zed in `mode`, under `name` or, for `None`,
+/// the CLI's own default name, then return the entry as it sits in the
+/// settings file Zed reads.
+fn export(home: &Home, mode: &str, name: Option<&str>) -> (PathBuf, Value) {
     std::fs::create_dir_all(home.zed_dir()).expect("zed config dir");
     let gateway = home.root.join("gateway.yaml");
     write(&gateway, "server:\n  host: 127.0.0.1\n  port: 39481\n");
     let gateway_arg = gateway.to_str().unwrap();
-    ok(
-        &home.run(&[
-            "setup",
-            "export",
-            "--target",
-            "zed",
-            "--mode",
-            mode,
-            "--name",
-            name,
-            "-c",
-            gateway_arg,
-        ]),
-        "setup export",
-    );
+    let mut args = vec!["setup", "export", "--target", "zed", "--mode", mode];
+    if let Some(name) = name {
+        args.extend(["--name", name]);
+    }
+    args.extend(["-c", gateway_arg]);
+    ok(&home.run(&args), "setup export");
+    // The CLI's default entry name (`setup export --name`).
+    let name = name.unwrap_or("gateway");
     let settings = home.zed_dir().join("settings.json");
     let text = std::fs::read_to_string(&settings).unwrap_or_else(|_| {
         panic!(
@@ -175,7 +169,7 @@ fn import(home: &Home) -> (Value, TransportConfig) {
 #[test]
 fn zed_stdio_entry_round_trips() {
     let home = Home::new();
-    let (gateway, entry) = export(&home, "stdio", ENTRY);
+    let (gateway, entry) = export(&home, "stdio", Some(ENTRY));
     assert_eq!(
         entry["command"], "mcp-gateway",
         "Zed reads `command` as a string"
@@ -203,7 +197,7 @@ fn zed_stdio_entry_round_trips() {
 #[test]
 fn zed_http_entry_round_trips() {
     let home = Home::new();
-    let (_, entry) = export(&home, "proxy", ENTRY);
+    let (_, entry) = export(&home, "proxy", Some(ENTRY));
     assert_eq!(entry["url"], "http://127.0.0.1:39481/mcp");
 
     let (found, transport) = import(&home);
@@ -226,7 +220,10 @@ fn zed_http_entry_round_trips() {
 #[test]
 fn the_default_entry_name_is_skipped_on_import() {
     let home = Home::new();
-    export(&home, "stdio", "gateway");
+    // No `--name`: the export takes its own default, which is the default
+    // `capabilities.name`, so this pins the round trip an operator gets with
+    // neither name set.
+    export(&home, "stdio", None);
     let out = home.root.join("discovered.yaml");
     let run = home.run(&[
         "cap",
