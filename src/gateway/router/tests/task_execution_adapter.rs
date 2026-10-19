@@ -84,6 +84,8 @@ mod grant_decisions;
 mod grant_slot_release;
 pub(crate) mod submit_authz;
 mod submit_authz_audit;
+/// MIK-8407: a followed job whose handle was refused settles its bindings.
+mod upstream_bindings;
 pub(crate) mod x14_authorize_order;
 
 mod admission_identity;
