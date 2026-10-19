@@ -645,3 +645,6 @@ mod memo_tests {
         .await;
     }
 }
+
+#[cfg(test)]
+mod memo_semantics_tests;
