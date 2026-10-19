@@ -82,12 +82,18 @@ async fn durable_handle(root: &std::path::Path, task_id: &str) -> String {
     }
 
     let record = durable_record(root, task_id);
-    // Version 5: a direct task records its target at creation (#2450), which
-    // raises the row past the v3 that introduced the upstream handle.
+    // Version 9: every row is created at BINDING_VERSION, recording its target
+    // (#2450) and the bindings its dispatch ran under (MIK-8407).
     assert_eq!(
         record["version"],
-        json!(5),
-        "a recoverable row with a recorded target is a v5 row: {record}"
+        json!(9),
+        "a recoverable row with a recorded target and bindings is a v9 row: {record}"
+    );
+    assert!(
+        record["bindings"]
+            .as_array()
+            .is_some_and(|bindings| !bindings.is_empty()),
+        "the dispatch's bindings are recorded, not an empty list: {record}"
     );
     assert_eq!(
         record["dispatched"],
@@ -462,12 +468,36 @@ async fn a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result() {
     last.terminate().await;
 }
 
+/// Rewrite `task_id`'s durable row as an older build wrote it: no `targets`,
+/// no `outputFree`, no `bindings`, version 3. The record carries no checksum,
+/// so a JSON round-trip of the same fields is a genuine v3 row. Returns the
+/// row's upstream handle, which must be present.
+fn rewrite_as_v3(root: &std::path::Path, task_id: &str) -> Option<Value> {
+    let path = helper::store_dir(root).join(format!("{task_id}.json"));
+    let mut row = durable_record(root, task_id);
+    let handle = row.pointer("/upstream/handle").cloned();
+    assert!(handle.is_some(), "precondition: a durable handle: {row}");
+    let object = row.as_object_mut().expect("a record is an object");
+    object.remove("targets");
+    object.remove("outputFree");
+    object.remove("bindings");
+    object.insert("version".into(), json!(3));
+    std::fs::write(&path, serde_json::to_vec(&row).expect("the row serializes"))
+        .expect("the v3 row is written back");
+    handle
+}
+
 /// Upgrade compatibility: a row written by a build before task targets (version
-/// 3, no `targets`) still recovers. The same journey as above, shortened: a
-/// real SDK job, a durable handle, the gateway stopped, the row rewritten to
-/// the exact v3 form while it is down, and the owner reading the result after
-/// a restart. A legacy row's upstream descriptor names its one call, which
-/// current policy still admits, so the result is delivered (MIK-7686).
+/// 3, no `targets`) is still read, and its output is refused rather than served.
+/// The same journey as above, shortened: a real SDK job, a durable handle, the
+/// gateway stopped, the row rewritten to the exact v3 form while it is down,
+/// and the owner reading it after a restart. A v3 row predates credential
+/// binding: it records no account its call ran under, so no current binding
+/// can be judged against it. Its backend output is refused with its own typed
+/// answer, and nothing the SDK produced reaches the owner (MIK-8407, design r4
+/// E4, lead ruling; this test delivered the result before that ruling,
+/// MIK-7686). The test name keeps its prefix, which coverage-probe's `--skip`
+/// matches.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result_from_a_version_3_row() {
     pins::require_supported_trust_override();
@@ -518,47 +548,59 @@ async fn a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result_from
     durable_handle(root, &task_id).await;
     first.kill().await;
 
-    // The row as an older build wrote it: no `targets`, no `outputFree`,
-    // version 3. The record carries no checksum, so a JSON round-trip of the
-    // same fields is a genuine v3 row.
-    let path = helper::store_dir(root).join(format!("{task_id}.json"));
-    let mut row = durable_record(root, &task_id);
-    let object = row.as_object_mut().expect("a record is an object");
-    object.remove("targets");
-    object.remove("outputFree");
-    object.insert("version".into(), json!(3));
-    std::fs::write(&path, serde_json::to_vec(&row).expect("the row serializes"))
-        .expect("the v3 row is written back");
+    let handle = rewrite_as_v3(root, &task_id);
 
     let mut second = Gateway::start_with_env(root, &granted, "second.log", &trust);
     second.wait_until_ready(&client).await;
     sdk.release().await;
     let deadline = tokio::time::Instant::now() + PEER_BOUND;
     let mut id = 200;
+    let get = |id| helper::tasks_get(id, &task_id);
+    let bearer = Some(alice.token.as_str());
+    let refused = |body: &Value| {
+        body.get("result").is_none()
+            && body["error"]["code"] == json!(-32603)
+            && body["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("predates credential binding"))
+    };
     let answer = loop {
-        let body = second
-            .post_as(
-                &client,
-                &helper::tasks_get(id, &task_id),
-                Some(alice.token.as_str()),
-            )
-            .await;
+        let body = second.post_as(&client, &get(id), bearer).await;
         id += 1;
-        if status_of(&body) == Some("completed") {
+        // Either outcome ends the wait; the asserts after the loop judge it.
+        if refused(&body) || body.to_string().contains(SDK_MARKER) {
             break body;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "the v3 row never recovered within {PEER_BOUND:?}: {body}\n{}",
+            "the v3 row was never refused within {PEER_BOUND:?}: {body}\n{}",
             second.logs()
         );
         tokio::time::sleep(POLL_GAP).await;
     };
     assert!(
-        serde_json::to_string(&answer)
+        !answer.to_string().contains(SDK_MARKER),
+        "a v3 row served the SDK's result: {answer}"
+    );
+    assert!(refused(&answer), "{answer}");
+    // The refusal is the row's answer, not a moment in its recovery: the next
+    // read is refused the same way and still carries nothing the SDK produced.
+    let again = second.post_as(&client, &get(id), bearer).await;
+    assert!(refused(&again), "{answer} then {again}");
+    assert!(
+        !serde_json::to_string(&again)
             .expect("the answer serializes")
             .contains(SDK_MARKER),
-        "a legacy row delivers the SDK's exact result: {answer}"
+        "{again}"
     );
     second.terminate().await;
+    // Upgrade safety: the refused row is kept, not deleted or rewritten as a
+    // recorded one. It is still a v3 row naming the same upstream handle.
+    let kept = durable_record(root, &task_id);
+    assert_eq!(kept["version"], json!(3), "the v3 row was raised: {kept}");
+    assert_eq!(
+        kept.pointer("/upstream/handle").cloned(),
+        handle,
+        "the v3 row lost its handle: {kept}"
+    );
 }
