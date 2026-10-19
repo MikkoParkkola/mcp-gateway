@@ -11,6 +11,7 @@ use super::super::*;
 use super::support::*;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crate::gateway::task_service::{
@@ -77,8 +78,9 @@ impl Transport for Peer {
     }
 }
 
-/// Claims the fixture backend and answers the follow with a completed result.
-struct Recovery;
+/// Claims the fixture backend, answers the follow with a completed result,
+/// and counts the queries that named the oversized handle.
+struct Recovery(Arc<AtomicUsize>);
 
 #[async_trait::async_trait]
 impl UpstreamRecovery for Recovery {
@@ -90,7 +92,10 @@ impl UpstreamRecovery for Recovery {
         backend == BACKEND
     }
 
-    async fn query(&self, _handle: &UpstreamHandle, _deadline: Duration) -> UpstreamAnswer {
+    async fn query(&self, handle: &UpstreamHandle, _deadline: Duration) -> UpstreamAnswer {
+        if handle.handle == oversized_handle() {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
         UpstreamAnswer::Completed(json!({ "content": [{ "type": "text", "text": "done" }] }))
     }
 }
@@ -111,7 +116,12 @@ async fn a_refused_capture_still_settles_the_dispatch_bindings() {
     ));
     backend.set_transport_for_test(Arc::new(Peer));
     std::assert!(state.backends.register(backend));
-    std::assert!(state.task_executor.install_recovery(Arc::new(Recovery)));
+    let followed = Arc::new(AtomicUsize::new(0));
+    std::assert!(
+        state
+            .task_executor
+            .install_recovery(Arc::new(Recovery(Arc::clone(&followed))))
+    );
 
     let created = post(
         &state,
@@ -122,6 +132,18 @@ async fn a_refused_capture_still_settles_the_dispatch_bindings() {
     let task = task_id(&created);
     let settled = poll_until_terminal(&state, "key-a", &task).await;
     std::assert_eq!(status_of(&settled), "completed", "{settled}");
+    // Settled by the follow (the only caller of `settle_followed`): the
+    // peer was queried with the refused handle, and the row holds the
+    // follow's answer, not the submission's working stub.
+    std::assert!(
+        followed.load(Ordering::SeqCst) >= 1,
+        "the follow never queried the held handle"
+    );
+    std::assert_eq!(
+        settled.pointer("/result/result/content/0/text"),
+        Some(&json!("done")),
+        "{settled}"
+    );
     std::assert!(
         state
             .task_executor

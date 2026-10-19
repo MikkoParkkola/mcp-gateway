@@ -575,5 +575,12 @@ async fn a_durable_handle_carries_its_bindings_across_a_reopen() {
     let read = reopened.get(&owner, &id).unwrap();
     assert!(read.bindings_recorded, "handle row not at BINDING_VERSION");
     assert_eq!(read.bindings, ran_under, "bindings lost with the handle");
+    assert_eq!(
+        reopened
+            .upstream_for_test(&id)
+            .map(|upstream| upstream.handle),
+        Some("job-bound".to_owned()),
+        "the handle is not on the reopened row"
+    );
     reopened.close().await.unwrap();
 }
