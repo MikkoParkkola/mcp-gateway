@@ -163,7 +163,7 @@ fn the_resolved_credentials_are_checked_at_startup() {
     // The startup path is where an `auto` bearer first exists; a literal one
     // proves the same check runs there.
     let bearer_prefix = bearer_prefix();
-    let config: crate::config::AuthConfig = serde_yaml::from_str(&format!(
+    let config: crate::config::AuthConfig = crate::yaml::from_str(&format!(
         "enabled: true\nbearer_token: \"{BEARER}\"\napi_keys:\n  - name: alpha\n    key_sha256: \"{}\"\n    backends: [\"*\"]\n",
         colliding(&bearer_prefix, 'f')
     ))
@@ -182,7 +182,7 @@ fn the_principal_encoding_is_unchanged() {
     // (first 12 hex characters of SHA-256 of the token).
     const TOKEN: &str = "mik7973-known-answer";
     assert_eq!(principal_of(TOKEN), "07635921daa7");
-    let config: crate::config::AuthConfig = serde_yaml::from_str(&format!(
+    let config: crate::config::AuthConfig = crate::yaml::from_str(&format!(
         "enabled: true\napi_keys:\n  - name: alpha\n    key_sha256: \"{}\"\n    backends: [\"*\"]\n",
         digest_of(TOKEN)
     ))
