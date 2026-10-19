@@ -211,27 +211,89 @@ fn assert_refused(wire: &str, what: &str) {
 async fn oracle_accepts(wire: &str, id: &Value, nonce: &str) -> bool {
     let verifier =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/common/signing_verifier.mjs");
-    let mut child = tokio::process::Command::new("node")
-        .arg(verifier)
+    let mut command = tokio::process::Command::new("node");
+    command.arg(verifier);
+    let input = json!({"wire": wire, "options": {"key": KEY, "keyId": "signing-test-current",
+        "expectedId": id, "expectedNonce": nonce, "now": chrono::Utc::now().timestamp()}});
+    let run = run_oracle(command, input.to_string().as_bytes(), ORACLE_LIMIT).await;
+    match run.status {
+        Some(status) => status.success(),
+        None => panic!("{}", run.timeout_message()),
+    }
+}
+
+/// How long one oracle run may take. Twelve tests each start `node` at once,
+/// and a loaded Windows runner has taken more than 30 s to finish one
+/// (MIK-8381), so the bound is generous; a run that still exceeds it is killed
+/// and reported, never left waiting.
+const ORACLE_LIMIT: Duration = Duration::from_secs(120);
+
+/// One oracle run: its exit status (`None` if it was killed at the limit),
+/// whatever it wrote to stderr, and how long it ran.
+struct OracleRun {
+    status: Option<std::process::ExitStatus>,
+    stderr: String,
+    elapsed: Duration,
+    limit: Duration,
+}
+
+impl OracleRun {
+    /// The panic text for a run killed at the limit, carrying what it wrote.
+    fn timeout_message(&self) -> String {
+        format!(
+            "signing oracle did not exit within {:?} (elapsed {:?}); killed it; stderr: {:?}",
+            self.limit, self.elapsed, self.stderr
+        )
+    }
+}
+
+/// Run `command` with `input` on stdin and at most `limit` to exit. Stderr is
+/// read by its own task, so a full pipe cannot stall the child, and what it
+/// wrote is kept even when the child is killed at the limit.
+async fn run_oracle(
+    mut command: tokio::process::Command,
+    input: &[u8],
+    limit: Duration,
+) -> OracleRun {
+    use tokio::io::AsyncReadExt as _;
+    let started = std::time::Instant::now();
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .expect("node is required for the independent signing oracle");
-    let input = json!({"wire": wire, "options": {"key": KEY, "keyId": "signing-test-current",
-        "expectedId": id, "expectedNonce": nonce, "now": chrono::Utc::now().timestamp()}});
+    let mut stderr = child.stderr.take().expect("oracle stderr");
+    let reader = tokio::spawn(async move {
+        let mut text = Vec::new();
+        let _ = stderr.read_to_end(&mut text).await;
+        String::from_utf8_lossy(&text).into_owned()
+    });
     let mut stdin = child.stdin.take().expect("oracle stdin");
-    stdin
-        .write_all(input.to_string().as_bytes())
-        .await
-        .expect("write oracle stdin");
+    // A child that exits before reading closes the pipe; its status says why.
+    let _ = stdin.write_all(input).await;
     drop(stdin);
-    tokio::time::timeout(Duration::from_secs(30), child.wait())
+    let status = match tokio::time::timeout(limit, child.wait()).await {
+        Ok(status) => Some(status.expect("oracle process")),
+        Err(_) => {
+            child.kill().await.expect("kill the oracle at its limit");
+            None
+        }
+    };
+    let elapsed = started.elapsed();
+    // Bounded too: a grandchild that inherited stderr could keep it open.
+    let stderr = tokio::time::timeout(Duration::from_secs(5), reader)
         .await
-        .expect("bounded oracle")
-        .expect("oracle process")
-        .success()
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default();
+    OracleRun {
+        status,
+        stderr,
+        elapsed,
+        limit,
+    }
 }
 
 /// Row 7: a non-invoke meta `tools/call` and a direct-route `tools/call` are
@@ -649,4 +711,66 @@ async fn a_direct_call_refused_by_its_key_leaves_its_nonce_unspent() {
     assert_refused(&refused, "a key reused for a different request");
     let later = post(&stack, &path, &direct_call(97, Some("unspent-reused"))).await;
     assert_signed(&later, "unspent-reused", "a call after a key refusal");
+}
+
+/// A stand-in oracle: `node -e <script>`, the same runtime the real one needs.
+fn fake_oracle(script: &str) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new("node");
+    command.arg("-e").arg(script);
+    command
+}
+
+/// MIK-8381: an oracle that never exits is killed at the limit, and the
+/// report carries what it wrote to stderr and how long it ran, so a CI timeout
+/// says why instead of only "bounded oracle".
+#[tokio::test]
+async fn an_oracle_past_its_limit_is_killed_and_reports_stderr() {
+    let limit = Duration::from_secs(5);
+    let run = run_oracle(
+        fake_oracle("process.stderr.write('oracle-stalled-marker'); setInterval(() => {}, 1000);"),
+        b"{}",
+        limit,
+    )
+    .await;
+    assert!(
+        run.status.is_none(),
+        "a stalled oracle must be killed: {:?}",
+        run.status
+    );
+    assert!(
+        run.elapsed >= limit,
+        "killed before its limit: {:?}",
+        run.elapsed
+    );
+    let message = run.timeout_message();
+    assert!(
+        message.contains("oracle-stalled-marker"),
+        "stderr is lost: {message}"
+    );
+    assert!(
+        message.contains("elapsed"),
+        "elapsed time is missing: {message}"
+    );
+}
+
+/// MIK-8381: an oracle that refuses exits with its own status, and its stderr
+/// comes back with it.
+#[tokio::test]
+async fn an_oracle_that_exits_reports_its_status_and_stderr() {
+    let run = run_oracle(
+        fake_oracle("process.stderr.write('oracle-refused-marker'); process.exit(3);"),
+        b"{}",
+        ORACLE_LIMIT,
+    )
+    .await;
+    assert_eq!(
+        run.status.and_then(|status| status.code()),
+        Some(3),
+        "exit status is lost"
+    );
+    assert!(
+        run.stderr.contains("oracle-refused-marker"),
+        "stderr is lost: {:?}",
+        run.stderr
+    );
 }
