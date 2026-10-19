@@ -63,7 +63,7 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
     RegistryEntry {
         name: "filesystem",
         description: "Read, write, and navigate the local file system (append the allowed directories)",
-        command: "npx -y @modelcontextprotocol/server-filesystem@2026.8.31",
+        command: "npx -y @modelcontextprotocol/server-filesystem@1.0.0",
         required_env: &[],
         optional_env: &[],
         transport: Transport::Stdio,
@@ -257,7 +257,7 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
     RegistryEntry {
         name: "memory",
         description: "Persistent knowledge-graph memory for agents",
-        command: "npx -y @modelcontextprotocol/server-memory@2026.8.31",
+        command: "npx -y @modelcontextprotocol/server-memory@1.0.0",
         required_env: &[],
         optional_env: &[],
         transport: Transport::Stdio,
@@ -317,7 +317,7 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
     RegistryEntry {
         name: "sequential-thinking",
         description: "Structured multi-step reasoning and problem decomposition",
-        command: "npx -y @modelcontextprotocol/server-sequential-thinking@2026.8.31",
+        command: "npx -y @modelcontextprotocol/server-sequential-thinking@1.0.0",
         required_env: &[],
         optional_env: &[],
         transport: Transport::Stdio,
