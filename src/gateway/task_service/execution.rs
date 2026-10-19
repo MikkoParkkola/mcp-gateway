@@ -156,7 +156,7 @@ pub(crate) enum TransitionWrite<'a> {
         event: TaskTransition,
         /// A plan's dispatched calls, committed in the same write as its
         /// outcome. `None` for a call whose target was recorded at creation.
-        targets: Option<Vec<Target>>,
+        targets: crate::gateway::task_service::record::Provenance,
         /// Who wrote a `Fail` event's error (MIK-7887.RECEIPT.1).
         author: ErrorAuthor,
         /// The members of a `Complete` result the gateway wrote (MIK-7993).

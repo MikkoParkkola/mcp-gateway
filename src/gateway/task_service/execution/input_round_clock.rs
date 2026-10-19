@@ -119,7 +119,10 @@ pub(super) async fn readable_or_fail(
         // Never through a settle that reads the clock: it would wait again
         // (MIK-8202 P4a r4, `settle_dated_last_known`).
         ClockWait::Expired => {
-            let event = (TaskTransition::Fail(clock_expired()), None);
+            let event = (
+                TaskTransition::Fail(clock_expired()),
+                crate::gateway::task_service::record::Provenance::default(),
+            );
             let writes = crate::gateway::gateway_writes::WriteRecord::default();
             executor
                 .settle_dated_last_known(principal, id, event, ErrorAuthor::Gateway, writes)
@@ -172,7 +175,7 @@ impl Settling<'_> {
     /// dated at the record's own `last_updated_at` and never waiting again
     /// (MIK-8202 P4a r4: P2's Expired sites share the worker's fallback).
     pub(super) async fn settle_expired(&self) {
-        let event = (TaskTransition::Fail(clock_expired()), self.plan_targets());
+        let event = (TaskTransition::Fail(clock_expired()), self.provenance());
         let writes = crate::gateway::gateway_writes::WriteRecord::default();
         self.executor
             .settle_dated_last_known(self.principal, self.id, event, ErrorAuthor::Gateway, writes)

@@ -45,6 +45,9 @@ pub(super) struct FollowedJob<'a> {
     pub(super) id: &'a str,
     pub(super) principal: &'a str,
     pub(super) revision: u64,
+    /// The bindings the dispatch ran under (MIK-8407), settled with the
+    /// outcome even when the handle never became durable.
+    pub(super) bindings: &'a [crate::gateway::meta_mcp::admission::StepBinding],
 }
 
 /// Audit, attribute and settle a followed job's outcome. `screened` says who
@@ -83,7 +86,13 @@ pub(super) async fn settle_followed(
     let stored = executor
         .settle_cas_by(
             (followed.principal, id, followed.revision),
-            (event, None),
+            (
+                event,
+                crate::gateway::task_service::record::Provenance {
+                    targets: None,
+                    bindings: followed.bindings.to_vec(),
+                },
+            ),
             author,
             writes,
             cancel_rx,

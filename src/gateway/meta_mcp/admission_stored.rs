@@ -36,6 +36,36 @@ pub(super) struct StoredDelivery {
     /// every step counts as served.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) dispatched: Option<Vec<(String, String)>>,
+    /// MIK-8407: the binding each dispatched step ran under, which a replay
+    /// is judged against. Every entry is new: this store does not outlive the
+    /// process.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) bindings: Vec<StepBinding>,
+}
+
+/// One dispatched step and the binding it ran under: `(server, tool,
+/// token)`, the token an account's `binding_token` or a passthrough
+/// credential's charged binding, `None` when the step bound neither
+/// (MIK-8407).
+pub(crate) type StepBinding = (String, String, Option<String>);
+
+/// Add `(server, tool, binding)` to `bindings` unless it is there: one entry
+/// per distinct binding, so a step seen under two keeps both (MIK-8407).
+pub(crate) fn note_distinct(
+    bindings: &mut Vec<StepBinding>,
+    (server, tool): (&str, &str),
+    binding: Option<&str>,
+) {
+    if !bindings
+        .iter()
+        .any(|(s, t, b)| s == server && t == tool && b.as_deref() == binding)
+    {
+        bindings.push((
+            server.to_owned(),
+            tool.to_owned(),
+            binding.map(str::to_owned),
+        ));
+    }
 }
 
 /// #2472: the first execution's invocation-record outcome and response hash,
@@ -132,6 +162,14 @@ pub(super) fn refusal_to_meet(
 }
 
 /// The steps a stored execution was served, if its record lists them.
+/// The bindings a stored delivery recorded (MIK-8407); none for a record
+/// that cannot be decoded, which then has no response to serve either.
+pub(super) fn stored_bindings(bytes: &[u8]) -> Vec<StepBinding> {
+    serde_json::from_slice::<StoredDelivery>(bytes)
+        .map(|stored| stored.bindings)
+        .unwrap_or_default()
+}
+
 pub(super) fn dispatched_steps(bytes: &[u8]) -> Option<Vec<(String, String)>> {
     serde_json::from_slice::<StoredDelivery>(bytes)
         .ok()

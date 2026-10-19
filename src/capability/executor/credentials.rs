@@ -100,6 +100,14 @@ impl CapabilityExecutor {
         mut context: CapabilityExecutionContext,
     ) -> Result<CapabilityExecutionContext> {
         let auth = &capability.auth;
+        // MIK-8407: the account the meta route resolved and recorded is the
+        // one this execution runs under, none and shared included: a
+        // definition reloaded since then is refused before anything resolves.
+        if let super::super::AccountResolution::ByCaller(resolved) = &context.account_resolution
+            && resolved.as_deref() != auth.account.as_deref()
+        {
+            return Err(crate::gateway::StoredBindingRefusal::Rebound.error(&capability.name));
+        }
         let Some(account) = auth.account.as_deref() else {
             return Ok(context);
         };

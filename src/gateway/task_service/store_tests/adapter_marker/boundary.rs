@@ -155,7 +155,7 @@ async fn upstream_01_a_descriptor_is_attached_only_to_the_owners_live_matching_r
     for (why, who, id, revision, upstream, expected) in refusals {
         assert_eq!(
             store
-                .mark_upstream(who, id, revision, upstream)
+                .mark_upstream(who, id, revision, (upstream, Vec::new()))
                 .await
                 .unwrap_err(),
             expected,
@@ -169,11 +169,14 @@ async fn upstream_01_a_descriptor_is_attached_only_to_the_owners_live_matching_r
     // the upstream version, and moves no revision.
     let widest = upstream_for(&binding, &"h".repeat(MAX_UPSTREAM_HANDLE_BYTES));
     store
-        .mark_upstream(&owner, mine.id(), 1, widest.clone())
+        .mark_upstream(&owner, mine.id(), 1, (widest.clone(), Vec::new()))
         .await
         .unwrap();
     let record = record_json(&path, mine.id());
-    assert_eq!(record["version"], json!(3));
+    assert_eq!(
+        record["version"],
+        json!(crate::gateway::task_service::record::BINDING_VERSION)
+    );
     assert_eq!(record["revision"], json!(1));
     let (held, revision, status) = store.upstream_of(&owner, mine.id()).unwrap();
     assert_eq!(
@@ -207,7 +210,12 @@ async fn upstream_02_a_descriptor_that_overflows_the_record_cap_is_refused_unwri
     let before = files(&path);
     assert_eq!(
         store
-            .mark_upstream(&owner, task.id(), 1, upstream_for(&binding, "handle-1"))
+            .mark_upstream(
+                &owner,
+                task.id(),
+                1,
+                (upstream_for(&binding, "handle-1"), Vec::new())
+            )
             .await
             .unwrap_err(),
         StoreError::Capacity
@@ -223,7 +231,12 @@ async fn upstream_02_a_descriptor_that_overflows_the_record_cap_is_refused_unwri
     // Positive control: with room, the same descriptor is persisted.
     let store = open(&path).await;
     store
-        .mark_upstream(&owner, task.id(), 1, upstream_for(&binding, "handle-1"))
+        .mark_upstream(
+            &owner,
+            task.id(),
+            1,
+            (upstream_for(&binding, "handle-1"), Vec::new()),
+        )
         .await
         .unwrap();
     assert!(store.upstream_of(&owner, task.id()).unwrap().0.is_some());
@@ -272,7 +285,12 @@ async fn assert_unserved(reader: &TaskStore, owner: &str, id: &str, binding: &Ta
     );
     assert_eq!(
         reader
-            .mark_upstream(owner, id, 1, upstream_for(binding, "handle-1"))
+            .mark_upstream(
+                owner,
+                id,
+                1,
+                (upstream_for(binding, "handle-1"), Vec::new())
+            )
             .await
             .unwrap_err(),
         StoreError::Unavailable

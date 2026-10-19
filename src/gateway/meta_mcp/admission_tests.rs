@@ -628,6 +628,7 @@ fn replay_facts_round_trip_and_older_records_decode() {
             read: None,
             writes: crate::gateway::gateway_writes::WriteRecord::default(),
             dispatched: None,
+            bindings: Vec::new(),
         };
         let bytes = serde_json::to_vec(&stored).unwrap();
         let (_, audit) = stored_response(&bytes).expect("decodes");
@@ -666,6 +667,7 @@ fn a_stored_delivery_with_any_write_record_still_decodes() {
         read: None,
         writes: crate::gateway::gateway_writes::WriteRecord::default(),
         dispatched: None,
+        bindings: Vec::new(),
     };
     for writes in [
         json!([{"layer": "value", "path": ["trace_id"], "digest": 17}]),
@@ -718,6 +720,7 @@ async fn a_replay_restores_the_stored_reading() {
         read: Some(b.clone()),
         writes: crate::gateway::gateway_writes::WriteRecord::default(),
         dispatched: None,
+        bindings: Vec::new(),
     };
     let bytes = serde_json::to_vec(&stored).unwrap();
     let (_, restored) = with_read_scope(std::sync::Arc::clone(&fw), async {

@@ -19,6 +19,9 @@ use serde_json::Value;
 #[derive(Default)]
 pub(crate) struct DispatchLog {
     calls: Mutex<Vec<(String, String)>>,
+    /// The binding each call was dispatched under, once per distinct binding
+    /// (MIK-8407).
+    bindings: Mutex<Vec<crate::gateway::meta_mcp::admission::StepBinding>>,
     /// The worker-only clock channel (MIK-8202 AC12, AC13).
     worker: super::invoke::worker_clock::WorkerChannel,
 }
@@ -28,6 +31,11 @@ impl DispatchLog {
     /// the same task adds to it, and the store merges.
     pub(crate) fn snapshot(&self) -> Vec<(String, String)> {
         self.calls.lock().clone()
+    }
+
+    /// Every binding noted so far, as [`Self::snapshot`] keeps its calls.
+    pub(crate) fn bindings(&self) -> Vec<crate::gateway::meta_mcp::admission::StepBinding> {
+        self.bindings.lock().clone()
     }
 
     /// The clock channel the invoke funnel and this log's worker share.
@@ -57,6 +65,18 @@ pub(crate) async fn with_dispatch_log<F: Future>(log: Arc<DispatchLog>, future: 
 /// it: the request thread has none, and so never waits or withholds.
 pub(super) fn current_worker() -> Option<Arc<DispatchLog>> {
     DISPATCH_LOG.try_with(Arc::clone).ok()
+}
+
+/// Note the binding `(server, tool)` is dispatched under (MIK-8407). A no-op
+/// outside a worker's scope.
+pub(crate) fn note_binding((server, tool): (&str, &str), binding: Option<&str>) {
+    let _ = DISPATCH_LOG.try_with(|log| {
+        crate::gateway::meta_mcp::admission::note_distinct(
+            &mut log.bindings.lock(),
+            (server, tool),
+            binding,
+        );
+    });
 }
 
 /// Note the step `args` (a `{server, tool, ..}` envelope) completed. A no-op

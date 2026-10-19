@@ -1,0 +1,2 @@
+src/gateway/router/handlers/sse.rs	held_body	1	Keeps a session hold alive for the life of a response body so a provisional session is not reaped under an open stream; decides nothing about access (MIK-8504)
+src/gateway/router/helpers.rs	session_capacity_refusal	1	Formats the 503 session_capacity answer; the cap decision is made by the caller before it is called (MIK-8504)

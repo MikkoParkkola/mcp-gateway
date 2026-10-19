@@ -190,12 +190,15 @@ pub(super) async fn fixture_with(ttl_ms: Option<u64>, handle: Handle) -> Fixture
                     OWNER,
                     &id,
                     task.revision,
-                    UpstreamCapture {
-                        backend: BACKEND.to_owned(),
-                        tool: TOOL.to_owned(),
-                        arguments: json!({}),
-                        handle: HANDLE.to_owned(),
-                    },
+                    (
+                        UpstreamCapture {
+                            backend: BACKEND.to_owned(),
+                            tool: TOOL.to_owned(),
+                            arguments: json!({}),
+                            handle: HANDLE.to_owned(),
+                        },
+                        Vec::new(),
+                    ),
                 )
                 .await,
         "the fixture handle is durable"

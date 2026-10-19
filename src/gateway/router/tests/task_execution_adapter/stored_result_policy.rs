@@ -269,8 +269,9 @@ async fn a_legacy_single_backend_row_is_refused_though_nothing_is_withheld() {
     );
 }
 
-/// A legacy row whose upstream descriptor names its call is delivered while
-/// current policy admits that call, and refused once it is withheld.
+/// A legacy row whose upstream descriptor names its call is checked against
+/// that call: withheld, it answers as absent. While policy admits the call it
+/// is still not delivered, as it records no binding (MIK-8407 design r4 E4).
 #[tokio::test]
 async fn a_legacy_row_with_a_descriptor_is_checked_against_its_call() {
     let mock = MockBackend::answering(Answer::ok());
@@ -279,7 +280,10 @@ async fn a_legacy_row_with_a_descriptor_is_checked_against_its_call() {
     strip_targets(&state, &id);
     let store = &state.task_executor.service.store;
     store.set_upstream_for_test(&id, (BACKEND, TOOL));
-    assert_carries_the_backend_result(&get_task(&state, "key-a", &id).await);
+    assert_refused(
+        &get_task(&state, "key-a", &id).await,
+        "predates credential binding",
+    );
     withhold(&state, TOOL);
     assert_answers_as_absent(&state, &get_task(&state, "key-a", &id).await).await;
 }

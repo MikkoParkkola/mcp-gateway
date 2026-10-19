@@ -28,6 +28,9 @@ pub(crate) struct DeferredReplay {
     pub(crate) audit: Option<super::super::admission::ReplayAudit>,
     pub(crate) tool_name: String,
     pub(crate) arguments: serde_json::Value,
+    /// The binding each step of the stored result ran under, which the lift
+    /// judges against the resolution it just made (MIK-8407).
+    pub(crate) bindings: Vec<super::super::admission::StepBinding>,
 }
 
 /// The deferred-replay key for `(server, tool)` under `retry`, or `None` for
@@ -74,6 +77,7 @@ mod tests {
             audit: None,
             tool_name: "gateway_invoke".to_string(),
             arguments: serde_json::json!({}),
+            bindings: Vec::new(),
         }
     }
 

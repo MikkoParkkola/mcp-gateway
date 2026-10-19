@@ -20,6 +20,8 @@ fn a_retry_that_finds_a_completed_task_delivers_its_result_private() {
         error_author: None,
         owner_digest: String::new(),
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
+        bindings: Vec::new(),
+        bindings_recorded: true,
     };
 
     // No sealed question in this task, so no holds to carry.

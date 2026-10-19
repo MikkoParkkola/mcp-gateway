@@ -271,7 +271,7 @@ async fn retention_removes_a_sent_cancel_and_a_completed_row_past_their_ttl() {
             id: &completed.id,
             revision,
             event: TaskTransition::Complete(json!({ "content": [] })),
-            targets: None,
+            targets: crate::gateway::task_service::record::Provenance::default(),
             author: ErrorAuthor::Gateway,
             writes: crate::gateway::gateway_writes::WriteRecord::default(),
         })

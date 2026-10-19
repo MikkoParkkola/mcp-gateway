@@ -275,12 +275,15 @@ impl TaskStore {
         owner: &str,
         id: &str,
         expected_revision: u64,
-        upstream: UpstreamRecord,
+        (upstream, bindings): (
+            UpstreamRecord,
+            Vec<crate::gateway::meta_mcp::admission::StepBinding>,
+        ),
     ) -> Result<(), StoreError> {
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
         tokio::task::spawn_blocking(move || {
-            shared.mark_upstream_blocking(&owner, &id, expected_revision, upstream)
+            shared.mark_upstream_blocking(&owner, &id, expected_revision, (upstream, bindings))
         })
         .await
         .map_err(|_| StoreError::Storage)?
@@ -574,7 +577,10 @@ impl Shared {
         owner: &str,
         id: &str,
         expected_revision: u64,
-        upstream: UpstreamRecord,
+        (upstream, bindings): (
+            UpstreamRecord,
+            Vec<crate::gateway::meta_mcp::admission::StepBinding>,
+        ),
     ) -> Result<(), StoreError> {
         // Bounded before anything is read or written: an over-long handle is
         // refused rather than persisted or truncated, and the row stays
@@ -606,6 +612,15 @@ impl Shared {
         }
         record.upstream = Some(upstream);
         record.version = record.version.max(UPSTREAM_VERSION);
+        // MIK-8407: the bindings the dispatch ran under, in the same write as
+        // the handle, so no recoverable row exists without them.
+        for (server, tool, binding) in &bindings {
+            crate::gateway::meta_mcp::admission::note_distinct(
+                &mut record.bindings,
+                (server, tool),
+                binding.as_deref(),
+            );
+        }
         let bytes = serialize(&record)?;
         // The descriptor counts against the record budget. Refused BEFORE the
         // write, so an oversized recovery descriptor is never silently omitted

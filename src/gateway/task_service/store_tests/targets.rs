@@ -52,7 +52,7 @@ async fn a_version_5_row_with_targets_round_trips() {
         .await
         .unwrap();
     store
-        .add_targets(OWNER, task.id(), 1, vec![target(), target()])
+        .add_targets(OWNER, task.id(), 1, (vec![target(), target()], Vec::new()))
         .await
         .unwrap();
     store.close().await.unwrap();
@@ -130,7 +130,9 @@ async fn targets_that_overflow_the_record_budget_are_refused_not_truncated() {
             tool: "echo".into(),
         })
         .collect();
-    let refused = store.add_targets(OWNER, task.id(), 1, many).await;
+    let refused = store
+        .add_targets(OWNER, task.id(), 1, (many, Vec::new()))
+        .await;
     assert!(matches!(refused, Err(StoreError::Capacity)), "{refused:?}");
     assert!(store.get(OWNER, task.id()).unwrap().targets.is_empty());
     store.close().await.unwrap();
@@ -160,7 +162,7 @@ async fn a_settlement_that_overflows_beside_parked_targets_still_ends_failed() {
         })
         .collect();
     store
-        .add_targets(OWNER, task.id(), 1, parked)
+        .add_targets(OWNER, task.id(), 1, (parked, Vec::new()))
         .await
         .unwrap();
     let big = json!({ "content": [{ "type": "text", "text": "q".repeat(3_000) }] });
@@ -235,7 +237,7 @@ async fn add_targets_refuses_a_foreign_owner_a_moved_row_a_settled_row_and_a_clo
     ] {
         assert_eq!(
             store
-                .add_targets(owner, id, revision, vec![target()])
+                .add_targets(owner, id, revision, (vec![target()], Vec::new()))
                 .await
                 .unwrap_err(),
             expected,
@@ -246,7 +248,7 @@ async fn add_targets_refuses_a_foreign_owner_a_moved_row_a_settled_row_and_a_clo
 
     // Positive control: the owner's live row at its revision takes the target.
     store
-        .add_targets(OWNER, live.id(), 1, vec![target()])
+        .add_targets(OWNER, live.id(), 1, (vec![target()], Vec::new()))
         .await
         .unwrap();
     let file = path.join(format!("{}.json", live.id()));
@@ -260,7 +262,7 @@ async fn add_targets_refuses_a_foreign_owner_a_moved_row_a_settled_row_and_a_clo
     store.close().await.unwrap();
     assert_eq!(
         reader
-            .add_targets(OWNER, live.id(), 1, vec![target()])
+            .add_targets(OWNER, live.id(), 1, (vec![target()], Vec::new()))
             .await
             .unwrap_err(),
         StoreError::Unavailable
@@ -322,7 +324,7 @@ async fn a_peer_failure_on_a_row_with_calls_is_version_6() {
         .await
         .unwrap();
     store
-        .add_targets(OWNER, task.id(), 1, vec![target()])
+        .add_targets(OWNER, task.id(), 1, (vec![target()], Vec::new()))
         .await
         .unwrap();
     let settled = store
@@ -332,7 +334,7 @@ async fn a_peer_failure_on_a_row_with_calls_is_version_6() {
             1,
             (
                 peer_failure(),
-                None,
+                crate::gateway::task_service::record::Provenance::default(),
                 crate::gateway::gateway_writes::WriteRecord::default(),
             ),
             ErrorAuthor::Peer,
@@ -367,7 +369,7 @@ async fn a_legacy_row_without_calls_records_no_peer_authorship() {
             1,
             (
                 peer_failure(),
-                None,
+                crate::gateway::task_service::record::Provenance::default(),
                 crate::gateway::gateway_writes::WriteRecord::default(),
             ),
             ErrorAuthor::Peer,

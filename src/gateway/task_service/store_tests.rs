@@ -39,6 +39,8 @@ mod skipped;
 mod stop_serving;
 mod support;
 mod targets;
+// MIK-8407: recorded bindings, across a reopen, and legacy rows.
+mod bindings;
 #[cfg(windows)]
 mod windows;
 use support::*;

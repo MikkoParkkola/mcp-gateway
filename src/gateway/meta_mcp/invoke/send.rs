@@ -220,7 +220,7 @@ impl MetaMcp {
         &self,
         call: &Call<'_, '_>,
         sent: Sent,
-        account_credential: Option<Arc<crate::identity_propagation::PreparedAccountCredential>>,
+        account_credential: super::propagation::DispatchAccount,
         idem_reservation: &mut Option<IdempotencyReservation>,
         witness: &mut nonce_settle::Witnessed<'_, '_>,
     ) -> Result<Dispatched> {

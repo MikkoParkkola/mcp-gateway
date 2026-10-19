@@ -251,11 +251,7 @@ impl MetaMcp {
             std::ops::ControlFlow::Continue(unproven) => unproven,
         };
         let target = (server, backend.as_ref().map(|backend| backend.instance()));
-        let propagation::ResolvedDispatch {
-            caller_credential,
-            account_credential,
-            binding: dispatch_binding,
-        } = resolved;
+        let (caller_credential, account_credential, dispatch_binding) = resolved.into_parts();
         // Who the response cache keys on, in one place and one namespace per
         // source (`support::caller_cache_principal`). The binding when identity
         // propagation is minting per-user credentials, then the verified OIDC

@@ -285,9 +285,7 @@ impl MetaMcp {
         &self,
         call: &Call<'_, '_>,
         dispatched: &mut Dispatched,
-        bridge_account_credential: &mut Option<
-            std::sync::Arc<crate::identity_propagation::PreparedAccountCredential>,
-        >,
+        bridge_account_credential: &mut super::propagation::DispatchAccount,
         idem_reservation: &mut Option<IdempotencyReservation>,
     ) -> Result<ControlFlow<GuardedValue, Settled>> {
         let &Call {

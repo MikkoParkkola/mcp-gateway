@@ -55,6 +55,13 @@ pub(super) struct ClientSession {
     /// One record per distinct view held on this session (MIK-8350): what
     /// each was last told, keyed by the subject its stream opened under.
     pub(super) records: RwLock<Vec<told::ViewEntry>>,
+    /// Minted by a request that is not `initialize` and not yet presented
+    /// again: reaped after the short provisional idle limit, and counted
+    /// against the provisional cap until promoted or removed (MIK-8504).
+    pub(super) provisional: std::sync::atomic::AtomicBool,
+    /// Requests running under this session now. A provisional session with
+    /// one in flight is never reaped (MIK-8504).
+    pub(super) in_flight: std::sync::atomic::AtomicUsize,
 }
 
 impl ClientSession {

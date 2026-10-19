@@ -54,6 +54,21 @@ pub(crate) fn refused_submit_answer(
     crate::gateway::meta_mcp::response_security::error_response_preserving_status(id, error)
 }
 
+/// Note the binding `step` is dispatched under (MIK-8407), on the execution
+/// lease and on a task worker's dispatch log: the one noting point, so a
+/// synchronous result and a task row record the same thing. Called with the
+/// resolution the dispatch uses, never a second read of the target.
+pub(crate) fn note_binding(
+    caller: &MetaMcpCallerContext<'_>,
+    step: (&str, &str),
+    binding: Option<&str>,
+) {
+    if let Some(execution) = caller.execution {
+        execution.note_binding(step, binding);
+    }
+    crate::gateway::meta_mcp::dispatch_log::note_binding(step, binding);
+}
+
 /// Note `step` on the execution lease as served to this execution: sent, or
 /// answered from a stored or cached result. Retained data from it is in the
 /// stored response, so a replay past its revocation meets its refusal

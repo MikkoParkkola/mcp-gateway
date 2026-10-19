@@ -721,6 +721,8 @@ mod withheld_catalogue_tests;
 mod account_outcome;
 mod listing_view;
 mod session_end;
+/// MIK-8407 / MIK-8440: a stored result's recorded bindings, judged.
+pub(crate) mod stored_binding;
 
 #[cfg(test)]
 #[path = "session_bound_tests.rs"]
