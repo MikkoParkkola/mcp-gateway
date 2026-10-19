@@ -48,10 +48,15 @@ jobs:
           # cryptographic values one alert per literal (MIK-8490). These globs
           # match only files no non-test build compiles (checked against
           # rustc's dep-info for the lib and bin, default, all and no-default
-          # features). Secret scanning still covers these paths.
+          # features). Secret scanning still covers these paths. The `src/*`
+          # rows are not redundant with `src/**/`: they name files directly
+          # under src/, which a `**/` pattern may not match.
           config: |
             paths-ignore:
               - tests/**
+              - src/*_tests.rs
+              - src/test_*.rs
+              - src/tests.rs
               - src/**/*_tests.rs
               - src/**/*_tests/**
               - src/**/tests/**
