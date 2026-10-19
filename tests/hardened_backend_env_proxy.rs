@@ -16,6 +16,9 @@
 
 #![allow(unsafe_code)] // set_var is unsafe in edition 2024
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -86,7 +89,7 @@ async fn start_probe(posture: &str) -> mcp_gateway::Result<()> {
     });
     mcp_gateway::gateway::test_helpers::write_owner_only(
         &path,
-        serde_yaml::to_string(&document).unwrap(),
+        yaml::to_string(&document).unwrap(),
     )
     .unwrap();
     let evaluated = Config::load_evaluated(Some(&path)).expect("valid fixture");

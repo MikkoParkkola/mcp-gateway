@@ -12,6 +12,9 @@
 
 #![cfg(unix)]
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
 #[path = "common/journey.rs"]
@@ -295,8 +298,7 @@ async fn a_three_x_config_is_refused_then_serves_after_upgrade() {
 /// The upgraded file, read as YAML: no removed path is left, `auth` is still
 /// on, and the plaintext key became its digest (#3824).
 fn assert_upgraded(upgraded: &str, backend: &str) {
-    let yaml: serde_yaml::Value =
-        serde_yaml::from_str(upgraded).expect("the upgraded file is YAML");
+    let yaml: yaml::Value = yaml::from_str(upgraded).expect("the upgraded file is YAML");
     let at = |path: &[&str]| path.iter().try_fold(&yaml, |v, k| v.get(*k));
     for path in [
         &["server", "ws_port"][..],
@@ -311,7 +313,7 @@ fn assert_upgraded(upgraded: &str, backend: &str) {
     }
     assert_eq!(
         at(&["auth", "enabled"]),
-        Some(&serde_yaml::Value::Bool(true)),
+        Some(&yaml::Value::Bool(true)),
         "{upgraded}"
     );
     let key = &at(&["auth", "api_keys"]).expect("api_keys")[0];
@@ -321,7 +323,7 @@ fn assert_upgraded(upgraded: &str, backend: &str) {
     );
     assert!(
         key.get("key_sha256")
-            .and_then(serde_yaml::Value::as_str)
+            .and_then(yaml::Value::as_str)
             .is_some_and(|d| d.starts_with("sha256:")),
         "no digest:\n{upgraded}"
     );

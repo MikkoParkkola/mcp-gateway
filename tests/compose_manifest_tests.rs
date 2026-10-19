@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-use serde_yaml::Value;
+#[path = "common/yaml.rs"]
+mod yaml;
+
+use yaml::Value;
 
 const COMPOSE: &str = include_str!("../deploy/single-node/docker-compose.yaml");
 
@@ -13,7 +16,7 @@ const COMPOSE: &str = include_str!("../deploy/single-node/docker-compose.yaml");
 /// while the port stays open.
 #[test]
 fn the_compose_service_declares_the_name_clients_dial() {
-    let compose: Value = serde_yaml::from_str(COMPOSE).expect("compose yaml must parse");
+    let compose: Value = yaml::from_str(COMPOSE).expect("compose yaml must parse");
     let service = &compose["services"]["mcp-gateway"];
 
     let command = service["command"]
@@ -41,7 +44,7 @@ fn the_compose_service_declares_the_name_clients_dial() {
 /// network, which is what `host_local_publish` asserts.
 #[test]
 fn the_compose_service_names_its_loopback_publish_as_the_cleartext_boundary() {
-    let compose: Value = serde_yaml::from_str(COMPOSE).expect("compose yaml must parse");
+    let compose: Value = yaml::from_str(COMPOSE).expect("compose yaml must parse");
     let service = &compose["services"]["mcp-gateway"];
     assert_eq!(
         service["environment"]["MCP_GATEWAY_SERVER__CLEARTEXT_HTTP"].as_str(),
@@ -81,7 +84,7 @@ fn both_port_syntaxes_are_judged() {
         ),
         ("{target: 39400, published: 39400}", false),
     ] {
-        let port: Value = serde_yaml::from_str(yaml).expect("yaml");
+        let port: Value = yaml::from_str(yaml).expect("yaml");
         assert_eq!(is_loopback_publish(&port), loopback, "{yaml}");
     }
 }
