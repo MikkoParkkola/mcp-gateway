@@ -195,16 +195,10 @@ impl<'a> Settling<'a> {
         minted_at: Option<(chrono::DateTime<chrono::Utc>, u64)>,
         cancel_rx: &mut watch::Receiver<bool>,
     ) {
-        if !self.park_targets().await {
-            return self
-                .settle(
-                    TaskTransition::Complete(abandoned_input_round()),
-                    false,
-                    cancel_rx,
-                )
-                .await;
-        }
-        let Ok(owner) = self.executor.service.owner(self.principal) else {
+        // The owner is resolved once, by the write that makes the round's
+        // calls and bindings durable; a round that cannot record them is
+        // settled now, never parked.
+        let Some(owner) = self.park_targets().await else {
             return self
                 .settle(
                     TaskTransition::Complete(abandoned_input_round()),

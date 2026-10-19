@@ -258,3 +258,79 @@ async fn a_second_carry_replaces_the_first_and_a_take_consumes_it() {
     })
     .await;
 }
+
+/// MIK-8407 lift judgement (mutant: the lift serves without judging): an
+/// entry the route stage deferred under one binding meets a resolution that
+/// proved another, as when a reload lands between deferral and dispatch. The
+/// lift refuses it: no stored output is served, and nothing is sent. Every
+/// recorded step is judged: the first one, on another backend, is judged
+/// against its binding now, which still matches.
+#[tokio::test]
+async fn a_deferred_replay_under_another_binding_is_refused_at_the_lift() {
+    use crate::gateway::meta_mcp::MetaMcpCallerContext;
+    use crate::gateway::meta_mcp::visible::{
+        DeferredReplay, deferred_replay_key, record_deferred_replay,
+    };
+    use std::ops::ControlFlow;
+    let (gateway, meta) = connected();
+    let backend = meta.backends.for_test().get(BACKEND).expect("the backend");
+    let resolved = meta
+        .resolve_dispatch(
+            (BACKEND, TOOL),
+            Some(&backend),
+            CallerProof::new(None, CallerProvenance::Credential),
+            None,
+        )
+        .await
+        .expect("premise: the operator's live grant resolves");
+    assert!(
+        resolved.account.is_some(),
+        "premise: the resolution names the account it proved"
+    );
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some("lift-key".to_owned()),
+        ..crate::protocol::mrtr::RetryFields::default()
+    };
+    let caller = MetaMcpCallerContext {
+        retry: &retry,
+        ..ctx(&AllowAll)
+    };
+    let key = deferred_replay_key(BACKEND, TOOL, &retry).expect("a keyed call");
+    let deferred = DeferredReplay {
+        response: crate::protocol::JsonRpcResponse::success(
+            RequestId::Number(9),
+            serde_json::json!({"content": [{"type": "text", "text": "lift-stored"}]}),
+        ),
+        audit: None,
+        tool_name: "gateway_invoke".to_owned(),
+        arguments: serde_json::json!({}),
+        bindings: vec![
+            ("another-backend".to_owned(), TOOL.to_owned(), None),
+            (
+                BACKEND.to_owned(),
+                TOOL.to_owned(),
+                Some("not-this-account#0".to_owned()),
+            ),
+        ],
+    };
+    let flow = visible::with_visibility_memo(async {
+        assert!(record_deferred_replay(key, deferred), "premise: deferred");
+        let mut witness = super::super::nonce_settle::Witnessed::take(&caller);
+        meta.lift_deferred((BACKEND, TOOL), &resolved, &mut witness, None, &caller)
+            .await
+    })
+    .await;
+    let ControlFlow::Break(answer) = flow else {
+        panic!("the lift neither served nor refused the deferred entry");
+    };
+    let text = serde_json::to_string(&answer).expect("JSON");
+    assert!(
+        text.contains("produced under a different account"),
+        "the lift did not refuse the re-bound entry: {text}"
+    );
+    assert!(
+        !text.contains("lift-stored"),
+        "the stored output was served: {text}"
+    );
+    assert_eq!(gateway.dispatched(), 0, "the lift sent the call");
+}

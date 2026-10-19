@@ -6,6 +6,7 @@
 //! backend swap below stands in for. A capability's `auth.account` changes
 //! live: its hot reload checks only that the account resolves.
 
+use super::direct_bridge::*;
 use super::*;
 
 impl DirectAccountGateway {
@@ -21,7 +22,7 @@ impl DirectAccountGateway {
             .iter()
             .map(|id| expected_identity_key_for(&operator_key_for(id), SEEDED_REVISION))
             .collect();
-        let replacement = super::super::gateway::rebound_backend(
+        let replacement = super::gateway::rebound_backend(
             (BACKEND, PERSONAL),
             &[WORK, PERSONAL],
             &self.dispatches,

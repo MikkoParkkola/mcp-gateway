@@ -812,3 +812,4 @@ mod tool_discovery_required_tests;
 #[cfg(feature = "cost-governance")]
 #[path = "account_signed_budget_tests.rs"]
 mod signed_budget_tests;
+mod stored_rebind_helpers;

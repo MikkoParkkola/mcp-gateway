@@ -36,8 +36,9 @@ impl Settling<'_> {
     }
 
     /// Record a parked plan's calls so far; the resume's log starts empty.
-    /// `false` means they are NOT durable, and the round must not be parked.
-    pub(super) async fn park_targets(&self) -> bool {
+    /// The owner the round parks under, or `None` when they are NOT durable
+    /// (or the principal cannot be hashed) and the round must not be parked.
+    pub(super) async fn park_targets(&self) -> Option<crate::idempotency::admission::TaskOwner> {
         // Every parked row records its bindings (MIK-8407), a single call's
         // too: its pending input requests are backend output.
         let crate::gateway::task_service::record::Provenance { targets, bindings } =
@@ -46,9 +47,7 @@ impl Settling<'_> {
         // target was recorded at creation.
         let plan = targets.is_some();
         let targets = targets.unwrap_or_default();
-        let Ok(owner) = self.executor.service.owner(self.principal) else {
-            return false;
-        };
+        let owner = self.executor.service.owner(self.principal).ok()?;
         let stored = self
             .executor
             .service
@@ -63,10 +62,11 @@ impl Settling<'_> {
         // A row a cancel already moved is not parked either way. For a single
         // call a closed store refuses the park write too, which logs its cause
         // and writes nothing, so no row parks without its bindings (MIK-8407).
-        match stored {
+        let parks = match stored {
             Ok(()) | Err(StoreError::RevisionConflict) => true,
             Err(StoreError::Unavailable) => !plan,
             Err(_) => false,
-        }
+        };
+        parks.then_some(owner)
     }
 }

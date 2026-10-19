@@ -210,7 +210,10 @@ impl MetaMcp {
             let walk = Box::pin(
                 self.first_unproven_plan_step(tool_name, arguments, caller, dispatched, &response),
             );
-            return Some(match walk.await {
+            let unproven = walk.await;
+            #[cfg(test)]
+            walk_seam::plan_walk_ended();
+            return Some(match unproven {
                 // Judged again at the serving point: the walk resolved live.
                 None => match self.judge_bindings(&view, &bindings) {
                     Ok(()) => (response, audit),
@@ -306,6 +309,44 @@ impl MetaMcp {
             self.settle_nonce_refund(context, super::super::signing::nonce_principal(caller));
         }
         Some(answer)
+    }
+}
+
+/// Test-only: a hook run once when a plan replay's proof walk ends, before
+/// the bindings are judged again (MIK-8407), so a row can re-bind a step in
+/// that window. Compiled out of non-test builds. Thread-local, so its rows run
+/// on the default current-thread tokio runtime.
+#[cfg(test)]
+mod walk_seam {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static AFTER_PLAN_WALK: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    /// Clears an unfired hook when dropped, so it cannot fire in a later
+    /// test on the same thread.
+    pub(super) struct Armed;
+
+    impl Drop for Armed {
+        fn drop(&mut self) {
+            AFTER_PLAN_WALK.with(|slot| slot.borrow_mut().take());
+        }
+    }
+
+    /// Run `hook` once, the next time a plan walk on this thread ends, until
+    /// the returned guard drops.
+    #[must_use]
+    pub(super) fn after_plan_walk(hook: impl FnOnce() + 'static) -> Armed {
+        AFTER_PLAN_WALK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+        Armed
+    }
+
+    /// Called where a plan walk ends.
+    pub(super) fn plan_walk_ended() {
+        if let Some(hook) = AFTER_PLAN_WALK.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
     }
 }
 

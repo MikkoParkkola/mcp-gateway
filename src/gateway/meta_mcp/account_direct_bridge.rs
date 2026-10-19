@@ -10,10 +10,6 @@
 
 use super::*;
 
-// MIK-8407: the re-bind helpers, kept apart for the 800-line ceiling.
-#[path = "account_bridge_rebind.rs"]
-mod account_bridge_rebind;
-
 /// The backend every direct-route case calls.
 pub(crate) const BACKEND: &str = "work-mail";
 
@@ -55,8 +51,8 @@ pub(crate) enum Binding {
 /// A compiled and installed gateway serving `BACKEND`.
 pub(crate) struct DirectAccountGateway {
     meta: Option<MetaMcp>,
-    backends: Arc<BackendRegistry>,
-    dispatches: Arc<Dispatches>,
+    pub(super) backends: Arc<BackendRegistry>,
+    pub(super) dispatches: Arc<Dispatches>,
     /// Kept alive: its store directory lives as long as the gateway.
     custody: Custody,
 }
@@ -391,7 +387,7 @@ pub(super) fn operator_key() -> AccountKey {
 }
 
 /// The sole operator's key for account `id`.
-fn operator_key_for(id: &str) -> AccountKey {
+pub(super) fn operator_key_for(id: &str) -> AccountKey {
     crate::personal_accounts::identity::account_key(
         Some(crate::personal_accounts::identity::Principal::SoleOperator),
         &key_descriptor(id),
@@ -412,8 +408,8 @@ fn operator_token(id: &str) -> &'static str {
 /// account `WORK` (`auth.account`), served by a loopback capture endpoint,
 /// for the router's stored-read rows. Real custody, the production installer.
 pub(crate) struct CapabilityAccount {
-    custody: Custody,
-    port: u16,
+    pub(super) custody: Custody,
+    pub(super) port: u16,
     /// What the loopback capture peer received (#3892: a served call is
     /// proved by the peer seeing it, not by an outer "completed").
     captured: Arc<super::super::account_rest_fixture::Captured>,
@@ -424,7 +420,7 @@ pub(crate) struct CapabilityAccount {
     /// Test-only (MIK-8428 Case A): see [`ReleaseBudget`].
     release_budget: Arc<Mutex<Option<usize>>>,
     /// MIK-8407: `PERSONAL` is installed too, for a capability re-bind.
-    second: bool,
+    pub(super) second: bool,
 }
 
 /// What the capability's account reference names (MIK-8451).
