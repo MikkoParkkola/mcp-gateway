@@ -595,7 +595,7 @@ fn every_pre_send_settlement_goes_through_the_mapping() {
         files.len()
     );
     let mut direct = Vec::new();
-    let mut mapped = 0;
+    let mut mapped = Vec::new();
     for file in &files {
         let source = std::fs::read_to_string(file).expect("a readable source file");
         for primitive in PRIMITIVES {
@@ -603,19 +603,25 @@ fn every_pre_send_settlement_goes_through_the_mapping() {
                 direct.push(format!("{}: {primitive}", file.display()));
             }
         }
-        mapped += source.matches("settle_pre_send(").count();
+        let calls = source.matches("settle_pre_send(").count();
+        if calls > 0 {
+            mapped.push((file.display().to_string(), calls));
+        }
     }
     assert!(direct.is_empty(), "settled outside the mapping: {direct:?}");
     // Exactly the inventory (design r11 section 4): a site added or removed
     // updates this count and its row together.
-    assert_eq!(
-        mapped, 15,
-        "the invoke path calls the mapping {mapped} times"
-    );
+    let total: usize = mapped.iter().map(|(_, calls)| calls).sum();
+    assert_eq!(total, 15, "the invoke path calls the mapping: {mapped:?}");
 }
 
 /// The text of one pairing arm: from `start` to the first `end` after it.
 fn arm<'s>(source: &'s str, start: &str, end: &str) -> &'s str {
+    assert_eq!(
+        source.matches(start).count(),
+        1,
+        "one arm starts at {start}"
+    );
     let from = source.find(start).expect("the arm's start is in the file");
     let to = from + source[from..].find(end).expect("the arm's end follows it");
     &source[from..to]
@@ -639,15 +645,24 @@ fn the_pairing_refusals_release_their_key_through_the_mapping() {
     let sealed = arm(
         include_str!("pre_dispatch.rs"),
         "if let Some(refusal) = refusal {",
-        "content_refuses_value",
+        "Ok(None)",
     );
     assert!(releases_through_the_mapping(relay), "refuse_relay: {relay}");
     assert!(
         releases_through_the_mapping(sealed),
         "the sealed refusal: {sealed}"
     );
-    // The check bites: a direct release beside a no-op mapping call fails it.
-    let direct = "settle_pre_send(caller, PreSendExit::ReleaseKey(None));\n\
-                  if let Some(r) = reservation { r.release(); }";
-    assert!(!releases_through_the_mapping(direct));
+    // The check bites: a direct release after the arm's last check, cut out
+    // by the same slicing, fails it.
+    let planted = include_str!("pre_dispatch.rs").replacen(
+        "return Ok(Some(GuardedValue::sealed_by_guard(refusal)));",
+        "reservation.release();\n            return Ok(Some(GuardedValue::sealed_by_guard(refusal)));",
+        1,
+    );
+    let planted = arm(&planted, "if let Some(refusal) = refusal {", "Ok(None)");
+    assert!(
+        planted.contains("reservation.release();"),
+        "premise: {planted}"
+    );
+    assert!(!releases_through_the_mapping(planted));
 }
