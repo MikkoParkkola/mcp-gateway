@@ -68,9 +68,19 @@ ALLOC.2 (lead ruling 2026-10-19): the stdio caps (2 large, 8 KiB small) do
 not apply literally: they bound a whole refusal after parse, while the
 verdict's share is fixed per refused call, with no payload term. The HTTP
 cap is asserted on the per-user minus plain delta: equal at 1 and 3 MiB
-within 1 KiB; at most 4 large allocations, 16 KiB large and 96 KiB small
-(the small cap re-proposed after the all-threads measurement below; the
-first ruling's 16 KiB was set on an undercount).
+within 1 KiB with the same large count; exactly 1 large allocation (3 -> 2
+after merges #3954/#3965/#3974/#3973/#3977/#3956, then 2 -> 1 after #3976:
+measured 3 / 11,096 B at d81ff886e, 2 / 8,632 B and 63,540 to 63,740 B small
+after the first batch, 1 / 4,920 B and 63,013 to 63,379 B small on line tip
+849cb805c; the plain target unchanged at 7,197,148 B throughout), at
+most 16 KiB large and 96 KiB small. The small cap is re-ruled at 96 KiB
+(lead, 2026-10-19). The first ruling's 16 KiB small was set on 13,458 B
+measured with the per-thread meter, an undercount: custody work runs in
+`spawn_blocking` (`personal_accounts/worker.rs:179`), off the request's
+thread. Counting every thread, the small share is 62,210 to 62,260 B. The
+real guards are payload independence and the exact large count, not the
+small cap. The process-wide meter mode is test-only, armed only inside an
+isolated child, and a row shows it off by default.
 Rows for missing, malformed and replayed nonces at 1 and 3 MiB, plus the
 positive meter control. ALLOC.3 is not needed; moving the nonce check
 before the verdict is declined (the MIK-8353 witness ordering is worth more
