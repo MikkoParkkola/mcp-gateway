@@ -437,7 +437,7 @@ impl MetaMcp {
         // Cloned before `accounted_dispatch` takes it: a bridged round must reach
         // the backend with the credential the first round used, and an `Arc` clone
         // is that same credential rather than a second resolution of it.
-        let mut bridge_account_credential = account_credential.clone();
+        let mut bridge_account_credential = account_credential.credential.clone();
         let source = (
             caller.principal_source(dispatch_binding.as_deref()),
             caller.retry,

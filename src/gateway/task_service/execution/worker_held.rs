@@ -30,10 +30,17 @@ pub(super) async fn follow_upstream_job(
         String,
         crate::gateway::meta_mcp::invoke::relay::RelayKey<'_>,
     ),
+    bindings: Vec<crate::gateway::meta_mcp::admission::StepBinding>,
     cancel_rx: &mut watch::Receiver<bool>,
 ) {
     let (job, handle, relay) = dispatched;
-    let captured = capture_handle(executor, (principal, id, revision), &job, &handle).await;
+    let captured = capture_handle(
+        executor,
+        (principal, id, revision),
+        (&job, &handle),
+        bindings,
+    )
+    .await;
     let followed = (&job, handle.clone(), relay, captured);
     follow_handle(
         executor,
@@ -60,8 +67,8 @@ pub(super) async fn follow_upstream_job(
 async fn capture_handle(
     executor: &Arc<TaskExecutor>,
     (principal, id, revision): (&str, &str, u64),
-    job: &crate::gateway::meta_mcp::upstream::DirectJob,
-    handle: &str,
+    (job, handle): (&crate::gateway::meta_mcp::upstream::DirectJob, &str),
+    bindings: Vec<crate::gateway::meta_mcp::admission::StepBinding>,
 ) -> bool {
     executor
         .notify_observer(super::super::CommitStage::BeforeCapture, id)
@@ -73,7 +80,7 @@ async fn capture_handle(
         handle: handle.to_owned(),
     };
     executor
-        .capture_upstream(principal, id, revision, capture)
+        .capture_upstream(principal, id, revision, (capture, bindings))
         .await
 }
 

@@ -109,16 +109,16 @@ pub struct CapabilityExecutionContext {
 }
 
 /// Who resolved a capability dispatch's account (MIK-8407).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) enum AccountResolution {
     /// The executor resolves it, before its own cache lookup.
     #[default]
     InExecutor,
-    /// The meta route resolved it above the response cache and recorded the
-    /// binding the dispatch runs under. A context carrying no credential then
-    /// means it resolved none (no per-caller account): an account the
-    /// executor would mint for now was bound after that, and is refused.
-    ByCaller,
+    /// The meta route resolved it above the response cache, for this
+    /// `auth.account` reference (`None`: the capability named none), and
+    /// recorded the binding the dispatch runs under. The executor refuses a
+    /// definition that now names another, before anything is resolved.
+    ByCaller(Option<String>),
 }
 
 impl PartialEq for CapabilityExecutionContext {
@@ -140,6 +140,7 @@ impl PartialEq for CapabilityExecutionContext {
             // else above, and treating them as equal would let one stand in for
             // the other wherever this comparison decides reuse.
             && self.caller_provenance == other.caller_provenance
+            && self.account_resolution == other.account_resolution
     }
 }
 

@@ -11,7 +11,7 @@ use super::*;
 /// per-caller account: no credential, resolved by the caller.
 fn resolved_none(subject: &str) -> crate::capability::CapabilityExecutionContext {
     let mut context = context(Some(subject));
-    context.account_resolution = crate::capability::AccountResolution::ByCaller;
+    context.account_resolution = crate::capability::AccountResolution::ByCaller(None);
     context
 }
 

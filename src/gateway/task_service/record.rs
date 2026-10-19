@@ -51,11 +51,12 @@ pub(super) const UPSTREAM_CANCEL_VERSION: u32 = 7;
 pub(super) const PENDING_CANCEL_VERSION: u32 = UPSTREAM_CANCEL_VERSION + 1;
 
 /// The record version that introduced [`Record::bindings`] (MIK-8407). Unlike
-/// the versions above it is written on EVERY row this gateway settles or
-/// parks, bindings or none: it is what tells a row whose provenance was
-/// recorded from one written before it was, whose backend output is then
-/// not served. An older loader refuses every such row, so a rollback past it
-/// is unsupported, which the upgrade note states.
+/// the versions above it is written at CREATION on every row this gateway
+/// admits, and nothing raises a row to it later: it tells a row whose
+/// provenance this gateway recorded from its first dispatch apart from one an
+/// older gateway wrote, whose backend output is then not served, even after
+/// this gateway recovers, parks or settles it. An older loader refuses every
+/// such row, so a rollback past it is unsupported (upgrade note).
 pub(super) const BINDING_VERSION: u32 = PENDING_CANCEL_VERSION + 1;
 
 /// The highest record version the loader accepts: the newest field's version.
@@ -349,11 +350,8 @@ impl PreparedTask {
         backend: &str,
         targets: Vec<Target>,
     ) -> Self {
-        let version = if targets.is_empty() {
-            RECORD_VERSION
-        } else {
-            TARGET_VERSION
-        };
+        // Every row this gateway admits records its bindings (MIK-8407).
+        let version = BINDING_VERSION;
         Self {
             record: Record {
                 version,

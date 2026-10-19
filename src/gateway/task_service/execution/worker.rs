@@ -287,6 +287,8 @@ async fn run_dispatched(
             &id,
             revision,
             (job, handle, caller.relay_caller(session_id.as_deref())),
+            // MIK-8407: the bindings the dispatch ran under, from its own log.
+            intent.owned.dispatch_log().bindings(),
             &mut cancel_rx,
         )
         .await;

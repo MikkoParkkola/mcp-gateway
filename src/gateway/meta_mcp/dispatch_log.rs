@@ -67,14 +67,6 @@ pub(super) fn current_worker() -> Option<Arc<DispatchLog>> {
     DISPATCH_LOG.try_with(Arc::clone).ok()
 }
 
-/// The bindings the dispatch being awaited noted so far; none outside a
-/// worker's scope (MIK-8407).
-pub(crate) fn noted_bindings() -> Vec<crate::gateway::meta_mcp::admission::StepBinding> {
-    DISPATCH_LOG
-        .try_with(|log| log.bindings())
-        .unwrap_or_default()
-}
-
 /// Note the binding `(server, tool)` is dispatched under (MIK-8407). A no-op
 /// outside a worker's scope.
 pub(crate) fn note_binding((server, tool): (&str, &str), binding: Option<&str>) {

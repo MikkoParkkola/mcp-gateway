@@ -509,6 +509,7 @@ impl MetaMcp {
             account_credential,
             binding,
             account,
+            account_reference: capability_account,
         })
     }
 }
@@ -526,14 +527,22 @@ pub(crate) struct ResolvedDispatch {
     /// (`AccountStrategyRegistry::binding_token`), shared accounts included;
     /// `None` when the target names no account (MIK-8407).
     pub(super) account: Option<String>,
+    /// The capability's `auth.account` this resolution read (`None` when it
+    /// names none), which its execution must still name (MIK-8407).
+    pub(super) account_reference: Option<String>,
+}
+
+/// The account a dispatch resolved (MIK-8407): the prepared credential, and
+/// the capability's `auth.account` reference it was resolved for, which the
+/// executor refuses to run under any other.
+#[derive(Clone)]
+pub(super) struct DispatchAccount {
+    pub(super) credential: Option<Arc<crate::identity_propagation::PreparedAccountCredential>>,
+    pub(super) reference: Option<String>,
 }
 
 /// [`ResolvedDispatch::into_parts`]: what a dispatch sends with.
-pub(super) type DispatchParts = (
-    CallerCredential,
-    Option<Arc<crate::identity_propagation::PreparedAccountCredential>>,
-    Option<String>,
-);
+pub(super) type DispatchParts = (CallerCredential, DispatchAccount, Option<String>);
 
 /// A capability tool's `auth.account` and the credential resolved for it.
 type CapabilityAccount = (
@@ -546,11 +555,11 @@ impl ResolvedDispatch {
     /// binding the dispatch consumes; the account token stays with the
     /// lift's judgement (MIK-8407).
     pub(super) fn into_parts(self) -> DispatchParts {
-        (
-            self.caller_credential,
-            self.account_credential,
-            self.binding,
-        )
+        let account = DispatchAccount {
+            credential: self.account_credential,
+            reference: self.account_reference,
+        };
+        (self.caller_credential, account, self.binding)
     }
 
     /// Whether the credential step may have reached an issuer: a failed

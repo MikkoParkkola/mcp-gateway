@@ -40,10 +40,10 @@ async fn rb_restart_bindings_survive_a_reopen_of_the_store() {
     let path = dir.path().join("tasks");
     let store = open(&path).await;
     let task = task();
-    store
-        .create(PreparedTask::for_test(&task, OWNER, 1))
-        .await
-        .unwrap();
+    // Admitted by this gateway: a row recording its bindings from creation.
+    let mut prepared = PreparedTask::for_test(&task, OWNER, 1);
+    prepared.record.version = BINDING_VERSION;
+    store.create(prepared).await.unwrap();
     store
         .settle_bounded_by(
             OWNER,
@@ -74,9 +74,9 @@ async fn rb_restart_bindings_survive_a_reopen_of_the_store() {
     reopened.close().await.unwrap();
 }
 
-/// RB-legacy-held (lead condition): a row written before bindings were
-/// recorded reads as unrecorded, and the store still reads it after it is
-/// refused: nothing about it is deleted.
+/// RB-legacy-held (lead condition; gpt final F2): a row written before
+/// bindings were recorded reads as unrecorded, even after this gateway
+/// settles it, and the store still reads it: nothing about it is deleted.
 #[tokio::test]
 async fn rb_legacy_a_pre_binding_row_reads_unrecorded_and_stays_held() {
     let dir = tempfile::tempdir().unwrap();

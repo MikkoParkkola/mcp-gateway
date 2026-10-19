@@ -123,7 +123,10 @@ impl TaskExecutor {
         principal: &str,
         id: &str,
         revision: u64,
-        capture: UpstreamCapture,
+        (capture, bindings): (
+            UpstreamCapture,
+            Vec<crate::gateway::meta_mcp::admission::StepBinding>,
+        ),
     ) -> bool {
         let Ok(owner) = self.service.owner(principal) else {
             return false;
@@ -151,12 +154,11 @@ impl TaskExecutor {
             .store
             .mark_upstream(owner.as_digest(), id, revision, record)
             .await;
-        // MIK-8407: an upstream job may settle later, outside this dispatch's
-        // log (`settle_followed`), so the bindings it ran under are made
-        // durable with its handle. Not durable, it is not followed either.
+        // MIK-8407: an upstream job settles later (`settle_followed`), so the
+        // bindings its dispatch ran under, from the worker's own log, are made
+        // durable with its handle.
         let marked = match marked {
             Ok(()) => {
-                let bindings = crate::gateway::meta_mcp::dispatch_log::noted_bindings();
                 self.service
                     .store
                     .add_targets(owner.as_digest(), id, revision, (Vec::new(), bindings))

@@ -23,7 +23,7 @@ impl TaskStore {
     ///
     /// The `mark_upstream` idiom: same ordering lock, no revision bump (so the
     /// settle compare-and-set is untouched), the row raised to
-    /// [`BINDING_VERSION`]. The targets count against the record budget and a
+    /// [`TARGET_VERSION`]. The targets count against the record budget and a
     /// list that does not fit is refused with `Capacity`, never truncated.
     ///
     /// # Errors
@@ -214,7 +214,6 @@ impl Shared {
                 binding.as_deref(),
             );
         }
-        record.version = record.version.max(BINDING_VERSION);
         let bytes = serialize(&record)?;
         if bytes.len() > self.limits.record_bytes {
             return Err(StoreError::Capacity);
@@ -413,8 +412,9 @@ fn settled(
     if let Some(targets) = targets.targets {
         merge_targets(&mut record, targets);
     }
-    // Every settle this gateway writes records its provenance, bindings or
-    // none (MIK-8407): only an older row reads as unrecorded.
+    // The bindings a settle carries (MIK-8407). The row's version is not
+    // raised for them: only creation marks a row as recording bindings, so a
+    // row an older gateway wrote stays unrecorded however it is settled.
     if !discard {
         for (server, tool, binding) in &targets.bindings {
             crate::gateway::meta_mcp::admission::note_distinct(
@@ -424,7 +424,6 @@ fn settled(
             );
         }
     }
-    record.version = record.version.max(BINDING_VERSION);
     Ok(Some((task, record)))
 }
 
