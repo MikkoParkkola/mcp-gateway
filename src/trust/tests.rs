@@ -193,7 +193,7 @@ fn destructive_open_world_tool_degrades_risk() {
 
 #[test]
 fn capability_generation_infers_transport_and_auth_mode() {
-    let capability: CapabilityDefinition = serde_yaml::from_str(
+    let capability: CapabilityDefinition = crate::yaml::from_str(
         "
 name: weather_lookup
 description: Read weather forecasts

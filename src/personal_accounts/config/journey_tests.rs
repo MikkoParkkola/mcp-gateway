@@ -129,7 +129,7 @@ fn check(yaml: &str) -> Result<(), String> {
 
 /// `check` without the Windows fixture rewrite.
 fn check_raw(yaml: &str) -> Result<(), String> {
-    let accounts: AccountsConfig = serde_yaml::from_str(yaml).map_err(|e| e.to_string())?;
+    let accounts: AccountsConfig = crate::yaml::from_str(yaml).map_err(|e| e.to_string())?;
     validate_descriptors(Some(&accounts)).map_err(|e| e.to_string())?;
     resolve(Some(&accounts), &Overlay)
         .map(|_| ())
@@ -188,8 +188,8 @@ fn a_block_without_hosted_is_accepted_and_rewrites_without_the_new_fields() {
     }
     // THEN it validates, and a rewrite does not grow lines it never carried.
     assert_eq!(check(&yaml), Ok(()));
-    let accounts: AccountsConfig = serde_yaml::from_str(&yaml).expect("parses");
-    let rewritten = serde_yaml::to_string(&accounts).expect("serializes");
+    let accounts: AccountsConfig = crate::yaml::from_str(&yaml).expect("parses");
+    let rewritten = crate::yaml::to_string(&accounts).expect("serializes");
     for absent in ["hosted", "session", "authorize_extra"] {
         assert!(!rewritten.contains(absent), "rewrite grew {absent}");
     }

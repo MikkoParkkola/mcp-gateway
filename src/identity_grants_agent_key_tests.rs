@@ -203,7 +203,7 @@ async fn hand_edited(name: &str, rewrites: [(&str, &str); 2]) -> IdentityGrantFi
 }
 
 /// The rewrites UPGRADING tells an operator to make by hand load as the key:
-/// the YAML tag form (a YAML `{exact: ...}` map is refused by `serde_yaml`, in
+/// the YAML tag form (a YAML `{exact: ...}` map is refused by the YAML parser, in
 /// 3.x as now) and the JSON map form.
 #[tokio::test]
 async fn hand_rewritten_3x_rows_load_as_qualified_keys() {

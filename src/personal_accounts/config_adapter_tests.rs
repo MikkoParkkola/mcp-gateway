@@ -151,7 +151,7 @@ fn resolve_refuses_an_unresolvable_adapter_secret_after_the_store_keys() {
 
 fn with_descriptor(id: &str, yaml: &str) -> AccountsConfig {
     let tmp = root();
-    let descriptor: AccountDescriptor = serde_yaml::from_str(yaml).expect("descriptor parses");
+    let descriptor: AccountDescriptor = crate::yaml::from_str(yaml).expect("descriptor parses");
     AccountsConfig {
         descriptors: Some(BTreeMap::from([(id.to_owned(), descriptor)])),
         ..valid(tmp.path())
