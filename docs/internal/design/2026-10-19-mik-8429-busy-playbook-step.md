@@ -105,6 +105,8 @@ assignment for this release.
   vendor side effect. A keyed run should replay the step's stored failure
   instead (the step key is scoped per step and the failure is committed after
   the fold): inferred, pinned by a row. The UPGRADING note says both.
+  **Superseded by the operator hold (D1, last section): an `isError` step is
+  never re-sent, keyed or not; this exposure no longer exists.**
 - C4b. (Derived reading; approved by the lead 2026-10-19, and the ticket's
   PBERR.1 text now says STEP.1 narrows it.) PBERR.1 says a Busy
   "fails the step retryably"; STEP.1 says it "ends the plan as a retryable
@@ -129,10 +131,12 @@ assignment for this release.
   (abort stops; continue null-fills with its reason in `step_errors` and runs
   the successor; retry re-invokes up to `max_retries`, then as continue),
   each with a red-first row; a Busy fails the step retryably (C4b).
-- PBERR.2: the UPGRADING note names the change for existing playbooks,
-  including C4's re-send under `retry` for unkeyed runs.
-- Keyed `retry` run whose step answers `isError` after its send: the vendor
-  receives the step once (C4, row).
+  **Superseded for retry by the operator hold (D1): an `isError` step is not
+  re-invoked; under retry it is handled as under continue after one call.**
+- PBERR.2: the UPGRADING note names the change for existing playbooks
+  (after the hold: that `retry` does not re-send a tool-reported error).
+- After the hold (D1): a `retry` step whose tool answers `isError` reaches the
+  vendor once, keyed or not (row).
 - A completed step's gateway write notes are still carried onto the
   playbook's answer when another step, or an earlier attempt, failed with
   `isError`; notes of failed attempts are discarded (row).
@@ -232,6 +236,8 @@ new `Error` variant or trait (STEP.3).
      <first text content, at most 2048 chars>")`. It then follows `on_error`
      like any other ordinary error: retried under `retry`, null-filled with
      its reason under `continue`/`retry`, returned under `abort` (PBERR.1).
+     *Superseded by the hold: the message is fixed and the text, capped at
+     256, is in the error's data (D3); the step is never retried (D1).*
    - A sealed transient returns at once, as a refusal does (no in-plan
      retry: an immediate re-send meets the same held lock, and each attempt
      writes an `idp_refuse` record).
@@ -284,7 +290,7 @@ new `Error` variant or trait (STEP.3).
 | AC | Rows (engine `busy_tests.rs`; router `playbook_busy_tests.rs`) |
 |---|---|
 | STEP.1 first attempt | `a_busy_first_step_*` (3 policies); `a_recheck_busy_step_ends_an_abort_plan_retryable`; `a_view_busy_step_ends_a_continue_plan_before_its_successor` |
-| STEP.1 partial run (C1, C1b) | `a_busy_step_after_a_completed_one_*`, `a_busy_step_after_a_failed_one_*`, `a_busy_retry_after_a_tool_error_attempt_*`; router keyed `a_busy_step_after_a_served_one_*` (no retry label, same key does not re-send `s0`) |
+| STEP.1 partial run (C1, C1b) | `a_busy_step_after_a_completed_one_*`, `a_busy_step_after_a_failed_one_*`, `a_busy_retry_after_a_transport_failure_*` (pre-hold: `..._after_a_tool_error_attempt_*`); router keyed `a_busy_step_after_a_served_one_*` (no retry label, same key does not re-send `s0`) |
 | STEP.2 | `an_ordinary_step_error_keeps_its_policy` (unsealed look-alike, 3 policies) |
 | STEP.3 | the look-alike row (same code, text, data; no seal) |
 
@@ -294,9 +300,10 @@ keyed recovery asserts the replayed answer; direct-invoke exclusion control
 added; write row reclassified red-first; first-step row asserts
 `is_pre_dispatch()`. Declined: one shared chain/playbook text extractor (the
 engine sits below `gateway`, so sharing would invert the dependency; the
-2048-char rule is copied with a comment naming its twin).
+2048-char rule is copied with a comment naming its twin). *Superseded by
+the hold (D3): the cap is 256, and the text is kept out of the message.*
 
-| PBERR.1 | `a_tool_error_step_*` (abort, continue, retry); `a_tool_error_attempt_then_a_served_retry_*`; control `a_result_without_is_error_true_*`; router `a_vendor_error_step_is_a_failed_step`, `a_retried_tool_error_step_is_resent_only_when_unkeyed` (C4, keyed replay); writes `a_failed_tool_error_step_leaves_the_completed_steps_notes_carried` (red on the line at its `steps_failed` premise, then a guard for the invoker filter: red under its mutant); exclusion control `a_direct_invoke_recheck_busy_keeps_its_folded_answer` |
+| PBERR.1 | `a_tool_error_step_*` (abort, continue, retry); `a_tool_error_step_is_not_resent_under_retry` and control `a_transport_failure_then_a_served_retry_*` (pre-hold: `a_tool_error_attempt_then_a_served_retry_*`); control `a_result_without_is_error_true_*`; router `a_vendor_error_step_is_a_failed_step`, `a_tool_error_step_is_sent_once_under_retry_keyed_or_not` (D1; it replaced the pre-hold `..._resent_only_when_unkeyed`); writes `a_failed_tool_error_step_leaves_the_completed_steps_notes_carried` (red on the line at its `steps_failed` premise, then a guard for the invoker filter: red under its mutant); exclusion control `a_direct_invoke_recheck_busy_keeps_its_folded_answer` |
 | PBERR.2 | `upgrading.d/8429.md` |
 
 Mutants, each shown red on Spark before the PR: drop the loop's Busy check;
@@ -313,8 +320,9 @@ error.
   after one pre-existing row, `sub4_playbook_dispatch_uses_admitted_definition`,
   was moved to `on_error: continue`: its absent backend's answer is now a
   failed step, and the row observes the second step's target.
-- Keyed `retry` replay verified: the vendor receives a failed keyed step once,
-  an unkeyed one three times.
+- Keyed `retry` replay verified before the hold: the vendor received a
+  failed keyed step once and an unkeyed one three times. After the hold (D1)
+  both receive it once.
 - Mutants, each killed: M1 drop the loop's Busy stop (6 rows); M2 drop the
   fold point (2); M3 always map (3); M4 never map (4); M5 `attempted` on
   success only (2); M6 Busy by text (1); M7 no `isError` classification (7);
@@ -328,11 +336,24 @@ lead before the tests, and the tests were red before the code.
 - D1: a step whose tool reported an error (`isError: true`) is never re-sent,
   under any `on_error`, keyed or not. The tool ran and answered, so a second
   call could repeat its side effect. Under `retry` the step is handled as
-  under `continue` after one call; only a transport failure is retried, as
-  before (STEP.2). No idempotent-step marker: that would be a new playbook key.
+  under `continue` after one call. A step whose call ended in an error the
+  gateway raised is still re-sent, as before (STEP.2); a keyed call replays
+  its stored failure (ADR-012). The unkeyed re-send after a send is the
+  remaining exposure, filed as MIK-8532 (v4.1.0; gap-finder G3, lead ruling
+  2026-10-19: retrying only pre-dispatch errors here would rewrite STEPFW.2b,
+  the route-matrix flaky driver and ADR-012's rows). No idempotent-step
+  marker: that would be a new playbook key.
+- G8 (gap-finder), kept: the invoker drops a failed step's `gateway_writes`
+  notes. Those notes mark fields the gateway itself wrote into the answer
+  value (`_cost_warnings`, `trace_id`), not writes a backend made; a failed
+  step's output is null, so they have nothing to attach to (lead ruling).
+- G4 (gap-finder), accepted: the JSON-RPC renderer forwards `tool_text` from
+  any error's data, a backend's on a direct call included, only as a string
+  of at most 256 characters plus a cut marker. Row
+  `a_backend_tool_text_is_forwarded_only_within_the_cap`.
 - D3: the step failure's message is fixed, `step '<name>' failed: the tool
   reported an error`, so the tool's text never reaches a log line that prints
-  the error. The text, capped at 256 characters and marked when cut, travels
+  the error. The text, capped at 256 characters plus a cut marker, travels
   in the error's `data.tool_text`, and `step_errors` carries it capped the
   same way (caller output, not a log). The cap was 2,048.
 - D4: a busy custody is `Err` inside a playbook and the folded `isError` value
