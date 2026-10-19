@@ -176,6 +176,30 @@ async fn the_full_directive_never_reaches_the_backend() {
     assert_eq!(sent, Some(json!({"q": 1})), "the backend received {sent:?}");
 }
 
+/// S10 (mutant m17): a live MCP backend's own answer that every gate passed
+/// through is delivered as the backend's, so it is eligible for the response
+/// chain (A3). Delivered as the gateway's, it would silently lose that.
+#[tokio::test]
+async fn a_live_backend_answer_is_delivered_as_the_backends() {
+    let probe = Arc::new(Probe {
+        signing: None,
+        witness_at_dispatch: AtomicBool::new(false),
+        calls: AtomicUsize::new(0),
+        sent: std::sync::Mutex::new(None),
+    });
+    let meta = gateway(&probe);
+    let caller = crate::gateway::meta_mcp::anonymous_caller();
+    let args = json!({"server": "svc", "tool": "act", "arguments": {}});
+    let outcome = meta
+        .invoke_tool_traced(&args, Some("session-8488"), &caller, "trace-8488")
+        .await;
+    let Ok(super::TracedOutcome::Live(guarded)) = outcome else {
+        panic!("a live call was not answered live");
+    };
+    let (_, source, _) = guarded.into_parts();
+    assert_eq!(source, crate::protocol::ChainSource::Backend);
+}
+
 /// The files the send path of `invoke_tool_traced` lives in.
 const SEND_PATH: [&str; 2] = [include_str!("../invoke.rs"), include_str!("post_dispatch.rs")];
 
