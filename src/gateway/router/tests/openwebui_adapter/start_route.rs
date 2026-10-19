@@ -75,7 +75,7 @@ fn unix_now() -> u64 {
 }
 
 fn config(env: &std::path::Path, user_endpoint: &str, starts: u32) -> crate::config::Config {
-    serde_yaml::from_str(&format!(
+    crate::yaml::from_str(&format!(
         r#"
 env_files: ['{env}']
 auth:

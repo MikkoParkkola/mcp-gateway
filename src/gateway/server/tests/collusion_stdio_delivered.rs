@@ -99,7 +99,7 @@ fn stdio_meta(answer: Value) -> (Arc<MetaMcp>, Arc<Firewall>) {
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {
-                rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                rules: crate::yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
                 collusion: CollusionConfig {
                     action: CollusionAction::Block,
                     sources: vec!["alpha:*".to_string()],

@@ -65,7 +65,7 @@ fn config(env: &std::path::Path, shape: Shape) -> crate::config::Config {
         ),
         Shape::NotHosted => ("", ""),
     };
-    serde_yaml::from_str(&format!(
+    crate::yaml::from_str(&format!(
         r#"
 env_files: ['{env}']
 auth:

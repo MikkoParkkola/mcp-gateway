@@ -51,7 +51,7 @@ fn config(env: &std::path::Path, hosted: bool) -> crate::config::Config {
     } else {
         ""
     };
-    serde_yaml::from_str(&format!(
+    crate::yaml::from_str(&format!(
         r#"
 env_files: ['{env}']
 backends:
