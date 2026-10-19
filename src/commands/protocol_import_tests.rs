@@ -7,7 +7,7 @@ use super::*;
 #[test]
 fn guard_rejects_yaml_alias_bomb() {
     // A billion-laughs-style alias amplification must be rejected before
-    // serde_yaml expands it.
+    // the YAML parser expands it.
     use std::fmt::Write as _;
     let mut bomb = String::from("a: &a [x, x, x, x, x, x, x, x, x]\n");
     for (i, prev) in ('b'..='z').zip('a'..='y') {
@@ -243,7 +243,7 @@ operations:
     let draft_yaml = tokio::fs::read_to_string(&report.written[0].path)
         .await
         .expect("graphql draft yaml");
-    let value: serde_json::Value = serde_yaml::from_str(&draft_yaml).expect("graphql yaml");
+    let value: serde_json::Value = crate::yaml::from_str(&draft_yaml).expect("graphql yaml");
     assert_eq!(value["providers"]["primary"]["service"], "graphql");
     assert_eq!(
         value["providers"]["primary"]["config"]["endpoint"],
@@ -309,7 +309,7 @@ async fn apply_postman_file_writes_inactive_draft_and_manifest() {
     let draft_yaml = tokio::fs::read_to_string(&report.written[0].path)
         .await
         .expect("postman draft yaml");
-    let value: serde_json::Value = serde_yaml::from_str(&draft_yaml).expect("postman yaml");
+    let value: serde_json::Value = crate::yaml::from_str(&draft_yaml).expect("postman yaml");
     assert_eq!(value["providers"]["primary"]["service"], "rest");
     assert_eq!(value["providers"]["primary"]["config"]["method"], "DELETE");
     assert_eq!(

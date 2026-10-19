@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! YAML round-trip tests — parse a YAML string and validate the result.
 //!
-//! These tests exercise the full `serde_yaml` → `CapabilityDefinition` →
+//! These tests exercise the full YAML parser → `CapabilityDefinition` →
 //! `validate_capability_definition` pipeline, matching real-world capability files.
 
 use super::*;
@@ -35,7 +35,7 @@ providers:
       params:
         q: "{query}"
 "#;
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     let errors: Vec<_> = errors_of(&issues);
     assert!(errors.is_empty(), "unexpected errors: {errors:?}");
@@ -61,7 +61,7 @@ providers:
     config:
       command: /usr/local/bin/verify
 ";
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         !has_code(&errors_of(&issues), "CAP-005"),
@@ -93,7 +93,7 @@ providers:
         paths:
           current: /feeds/{missing_input}
 ";
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         issues
@@ -125,7 +125,7 @@ providers:
         paths:
           current: /feeds/{city}
 ";
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         issues.iter().any(|issue| {
@@ -159,7 +159,7 @@ providers:
         paths:
           archive: /feeds/archive
 ";
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         issues
@@ -193,7 +193,7 @@ providers:
         paths:
           current: feeds/current
 ";
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         issues.iter().any(|issue| {
@@ -229,7 +229,7 @@ providers:
         paths:
           current: /feeds/current
 ";
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         issues.iter().any(|issue| {
@@ -264,7 +264,7 @@ providers:
           one: /feeds/one
           two: /feeds/two
 ";
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         issues
@@ -299,7 +299,7 @@ providers:
           current: /feeds/current
           hidden: /feeds/hidden
 ";
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         issues
@@ -334,7 +334,7 @@ providers:
           current: /feeds/current
           archive: /feeds/archive
 ";
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         issues.iter().any(|issue| {
@@ -375,7 +375,7 @@ providers:
           current: /feeds/current
 "
         );
-        let cap: CapabilityDefinition = serde_yaml::from_str(&yaml).unwrap();
+        let cap: CapabilityDefinition = crate::yaml::from_str(&yaml).unwrap();
         let issues = validate_capability_definition(&cap, None);
         assert!(
             issues.iter().any(|issue| {
@@ -412,7 +412,7 @@ providers:
           current: /feeds/{category}
           archive: /archive/{category}
 ";
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         errors_of(&issues).is_empty(),
@@ -444,7 +444,7 @@ providers:
         paths:
           current: /feeds/current
 ";
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         issues.iter().any(|issue| {
@@ -474,7 +474,7 @@ providers:
     config:
       model: face_recognition
 ";
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         !has_code(&errors_of(&issues), "CAP-005"),
@@ -507,7 +507,7 @@ providers:
       params:
         symbol: "{symbols[0]}"
 "#;
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         !has_code(&errors_of(&issues), "CAP-006"),
@@ -545,7 +545,7 @@ providers:
       params:
         symbol: "{holdings[0].symbol}"
 "#;
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         !has_code(&errors_of(&issues), "CAP-006"),
@@ -580,7 +580,7 @@ providers:
       headers:
         Prefer: "{{input.wait ? 'wait' : ''}}"
 "#;
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         !has_code(&errors_of(&issues), "CAP-006"),
@@ -613,7 +613,7 @@ providers:
       params:
         q: "{query}"
 "#;
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         !has_code(&errors_of(&issues), "CAP-006"),
@@ -646,7 +646,7 @@ providers:
       params:
         q: "{query}"
 "#;
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         !has_code(&errors_of(&issues), "CAP-006"),
@@ -671,7 +671,7 @@ providers:
       base_url: ""
       path: /v1/search
 "#;
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         has_code(&errors_of(&issues), "CAP-005"),
@@ -701,7 +701,7 @@ providers:
       base_url: https://api.example.com
       path: /v1/items/{item_id}
 ";
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         has_code(&errors_of(&issues), "CAP-006"),
@@ -723,7 +723,7 @@ providers:
     config:
       path: /v1/items
 ";
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).unwrap();
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).unwrap();
     let issues = validate_capability_definition(&cap, None);
     assert!(
         has_code(&errors_of(&issues), "CAP-005"),

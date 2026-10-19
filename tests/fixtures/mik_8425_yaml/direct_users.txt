@@ -1,15 +1,3 @@
-src/capability/validator/tests/fallback.rs
-src/capability/validator/tests/unread_keys.rs
-src/capability/validator/tests/yaml_roundtrip.rs
-src/commands/protocol_import_tests.rs
-src/commands/upgrade/tests.rs
-src/config/account_consumer_config_tests/managed_transport.rs
-src/config/features/auth_dashboard_session_tests.rs
-src/config/log_once_tests.rs
-src/config/remote_provenance_posture_tests.rs
-src/config/secret_file_ref_tests.rs
-src/config/tests/error_budget.rs
-src/config/tests/loading.rs
 src/gateway/meta_mcp/audit_record_tests/tenants.rs
 src/gateway/router/accounts/journeys_tests.rs
 src/gateway/router/chokepoint_tests.rs
