@@ -3,7 +3,7 @@
 //! MIK-8498 VISIBLE characterisation: what every memo accessor answers today,
 //! inside a request scope and outside one. Written before the accessors share
 //! one keyed map, and unchanged by it. `Carried` is pinned by its users'
-//! rows (stored_proof_tests, caller_verdict_outcome_tests), which need a live
+//! rows (`stored_proof_tests`, `caller_verdict_outcome_tests`), which need a live
 //! resolution to build one.
 
 use super::{

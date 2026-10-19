@@ -5,12 +5,13 @@
 
 use super::{
     Carried, Judged, VISIBILITY_MEMO, Visibility, VisibilityMemo, WORKER_JUDGED, absent_name,
+    in_memo, target_key,
 };
 
 /// Record the digest of the playbook definition intake judged, in the open
 /// request's memo. Outside a memo there is no request to bind it to.
 pub(crate) fn record_judged_playbook(digest: String) {
-    let _ = VISIBILITY_MEMO.try_with(|memo| memo.judged.lock().playbook = Some(digest));
+    in_memo(|memo| memo.judged.lock().playbook = Some(digest));
 }
 
 /// Record the backend instances an exempt call's targets were judged on.
@@ -19,16 +20,14 @@ pub(crate) fn record_exempt_instances(instances: &[std::sync::Arc<crate::backend
         .iter()
         .map(|backend| (backend.name.clone(), std::sync::Arc::downgrade(backend)))
         .collect();
-    let _ = VISIBILITY_MEMO.try_with(|memo| memo.judged.lock().instances = judged);
+    in_memo(|memo| memo.judged.lock().instances = judged);
 }
 
 /// What this request's intake judged, or what a task worker carries from its
 /// submit ([`with_judged`]); empty outside both.
 pub(crate) fn judged() -> Judged {
     // An empty memo (one a worker's dispatch opened) defers to the worker's.
-    let memo = VISIBILITY_MEMO
-        .try_with(|memo| memo.judged.lock().clone())
-        .unwrap_or_default();
+    let memo = in_memo(|memo| memo.judged.lock().clone()).unwrap_or_default();
     if memo.playbook.is_some() || !memo.instances.is_empty() {
         return memo;
     }
@@ -52,9 +51,7 @@ pub(crate) fn changed_instance(backend: &crate::backend::Backend) -> Option<Stri
             .find(|(name, _)| *name == backend.name)
             .map(|(_, instance)| !std::ptr::eq(instance.as_ptr(), backend))
     };
-    let request = VISIBILITY_MEMO.try_with(|memo| differs(&memo.judged.lock()));
-    let differs = request
-        .ok()
+    let differs = in_memo(|memo| differs(&memo.judged.lock()))
         .flatten()
         .or_else(|| WORKER_JUDGED.try_with(differs).ok().flatten())?;
     differs.then(|| "The backend changed after this call was admitted; retry the call".to_owned())
@@ -74,16 +71,16 @@ pub(crate) fn with_judged<F: std::future::Future>(
 /// answer is already recorded; returns the recorded answer (first judgement
 /// wins). Outside a request scope nothing is kept and `judged` is returned.
 pub(crate) fn record_visibility(server: &str, tool: &str, judged: Visibility) -> Visibility {
-    VISIBILITY_MEMO
-        .try_with(|memo| memo.record(server, tool, judged))
-        .unwrap_or(judged)
+    in_memo(|memo| memo.record(server, tool, judged)).unwrap_or(judged)
 }
 
 /// Hand `carried` to the next invocation on `server` in the open request.
 /// Outside a request scope it is dropped, and the dispatch resolves itself.
 pub(crate) fn carry_dispatch(server: &str, tool: &str, carried: Carried) {
-    let key = (server.to_owned(), tool.to_owned());
-    let _ = VISIBILITY_MEMO.try_with(|memo| memo.carried_credential.lock().insert(key, carried));
+    in_memo(|memo| {
+        memo.carried_credential
+            .set(target_key(server, tool), carried);
+    });
 }
 
 /// Read the resolution carried for `server` without consuming it: the step
@@ -94,46 +91,34 @@ pub(crate) fn with_carried<R>(
     tool: &str,
     read: impl FnOnce(&Carried) -> R,
 ) -> Option<R> {
-    let key = (server.to_owned(), tool.to_owned());
-    VISIBILITY_MEMO
-        .try_with(|memo| memo.carried_credential.lock().get(&key).map(read))
-        .ok()
-        .flatten()
+    in_memo(|memo| {
+        memo.carried_credential
+            .with(&target_key(server, tool), read)
+    })
+    .flatten()
 }
 
 /// Take the resolution carried for `server`, consuming it: a later
 /// invocation on the same server resolves again.
 pub(crate) fn take_carried(server: &str, tool: &str) -> Option<Carried> {
-    let key = (server.to_owned(), tool.to_owned());
-    VISIBILITY_MEMO
-        .try_with(|memo| memo.carried_credential.lock().remove(&key))
-        .ok()
-        .flatten()
+    in_memo(|memo| memo.carried_credential.take(&target_key(server, tool))).flatten()
 }
 
 /// MIK-8361: keep the route stage's refusal code for `(server, tool)`, so the
 /// answer's one record names it; dropped outside a request scope.
 pub(crate) fn note_denial_code(server: &str, tool: &str, code: i32) {
-    let key = (server.to_owned(), tool.to_owned());
-    let _ = VISIBILITY_MEMO.try_with(|memo| _ = memo.denial_code.lock().entry(key).or_insert(code));
+    in_memo(|memo| memo.denial_code.first(target_key(server, tool), code));
 }
 
 /// The code [`note_denial_code`] kept for `(server, tool)`, if any.
 pub(crate) fn denial_code(server: &str, tool: &str) -> Option<i32> {
-    let key = (server.to_owned(), tool.to_owned());
-    VISIBILITY_MEMO
-        .try_with(|memo| memo.denial_code.lock().get(&key).copied())
-        .ok()
-        .flatten()
+    in_memo(|memo| memo.denial_code.get(&target_key(server, tool))).flatten()
 }
 
 /// The answer already recorded for `(server, tool)` in the open request, if
 /// any.
 pub(crate) fn recorded_visibility(server: &str, tool: &str) -> Option<Visibility> {
-    VISIBILITY_MEMO
-        .try_with(|memo| memo.recorded(server, tool))
-        .ok()
-        .flatten()
+    in_memo(|memo| memo.recorded(server, tool)).flatten()
 }
 
 /// Run `request` with one visibility memo for its whole lifetime (the HTTP
