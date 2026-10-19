@@ -176,7 +176,7 @@ impl MetaMcp {
                 session_id,
                 // `account_dispatch` reads only `cost_key`.
                 api_key_name: None,
-                cost_key: cost_key,
+                cost_key,
                 trace_id,
                 // On a session-less call `arm_key` is the non-empty caller key or None
                 // (`experiment_key`): the key the caller's own report reads.
