@@ -449,3 +449,95 @@ async fn d_pt_fwd_a_retry_that_forwards_the_credential_is_replayed() {
     assert_served("D-pt-fwd", &again);
     assert_eq!(sends.load(Ordering::SeqCst), 1, "D-pt-fwd: sent again");
 }
+
+/// The second credential's passthrough header (MIK-8440).
+const PASSTHROUGH_B: (&str, &str) = (
+    "x-mcp-passthrough-authorization",
+    r6m_token_exchange::PASSTHROUGH_CREDENTIAL_B,
+);
+
+/// PT-B (MIK-8440 PTBIND.1, .3; mutant M-ptb): the same caller retries key
+/// K forwarding a DIFFERENT passthrough credential. The output stored under
+/// the first credential is not served to it, and nothing is sent: the key's
+/// one execution is settled, so running it again would be a second send. B's
+/// second retry is refused the same way. A's own retry is still served from
+/// 7b (PTBIND.3), with one send in all.
+#[tokio::test]
+async fn pt_b_a_retry_under_another_forwarded_credential_is_refused() {
+    let (router, sends, _dirs, alice) = passthrough_after_forwarded().await;
+    for row in ["PT-B", "PT-B again"] {
+        let (status, other) = r6m_token_exchange::send_direct_as(
+            &router,
+            &alice,
+            direct_call("dpt", None),
+            &[PASSTHROUGH_B],
+        )
+        .await;
+        eprintln!("{row} answer ({status}): {other}");
+        assert!(
+            !other.to_string().contains(MARKER),
+            "{row}: served the first credential's stored output: {other}"
+        );
+        assert_eq!(
+            other.pointer("/error/code").and_then(Value::as_i64),
+            Some(-32603),
+            "{row}: not the binding refusal: {other}"
+        );
+        assert_eq!(sends.load(Ordering::SeqCst), 1, "{row}: sent: {other}");
+    }
+    let again = r6m_token_exchange::send_direct_as(
+        &router,
+        &alice,
+        direct_call("dpt", None),
+        &[PASSTHROUGH],
+    )
+    .await;
+    assert_served("PT-B A again", &again);
+    assert_eq!(sends.load(Ordering::SeqCst), 1, "PT-B A again: sent again");
+}
+
+/// PT-anon (MIK-8440 design question; mutant M-anon): with authentication
+/// off, a caller with no identity has no execution principal, so a keyed
+/// direct call is refused at intake (-32003) whichever credential it
+/// forwards. Two anonymous credentials therefore never share one 7b owner:
+/// neither call is sent, and no stored output exists to cross between them.
+#[tokio::test]
+async fn pt_anon_keyed_anonymous_calls_never_share_an_owner() {
+    use tower::ServiceExt;
+
+    let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
+    let alice = r6m_token_exchange::alice();
+    let shape = (
+        r6m_token_exchange::Requirement::Optional,
+        PropagationStrategyKind::Passthrough,
+        SecurityPosture::Standard,
+    );
+    let unused = "http://127.0.0.1:9/auth/token".to_string();
+    let (router, sends, _dirs) =
+        r6m_token_exchange::gateway_shaped(&key, unused, &alice, shape, |m| m).await;
+    for (row, header) in [("PT-anon A", PASSTHROUGH), ("PT-anon B", PASSTHROUGH_B)] {
+        let body = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": direct_call("anon", None)});
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri(format!("/mcp/{}", r6m_token_exchange::TX))
+            .header("content-type", "application/json")
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("mcp-method", "tools/call")
+            .header("mcp-name", TOOL)
+            .header(header.0, header.1)
+            .body(axum::body::Body::from(body.to_string()))
+            .expect("a request");
+        let response = router.clone().oneshot(request).await.expect("an answer");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("a body");
+        let answer: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        assert_eq!(
+            answer.pointer("/error/code").and_then(Value::as_i64),
+            Some(-32003),
+            "{row}: an anonymous keyed call was admitted: {answer}"
+        );
+        assert_eq!(sends.load(Ordering::SeqCst), 0, "{row}: sent: {answer}");
+    }
+}

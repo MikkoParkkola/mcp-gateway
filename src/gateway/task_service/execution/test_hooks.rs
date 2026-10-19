@@ -33,6 +33,19 @@ impl TaskExecutor {
             .expect("the produce-seam wait is set once");
     }
 
+    /// Test-only: whether `id`'s row records bindings, and the bindings it
+    /// records (MIK-8407).
+    pub(crate) fn bindings_for_test(
+        &self,
+        id: &str,
+    ) -> (bool, Vec<crate::gateway::meta_mcp::admission::StepBinding>) {
+        let owner = (self.service.store)
+            .owner_digest_for_test(id)
+            .expect("the task exists");
+        let row = self.service.store.get(&owner, id).expect("readable");
+        (row.bindings_recorded, row.bindings)
+    }
+
     /// Test-only: the recovery descriptor a dispatch made durable for `id`.
     ///
     /// The one seam through which a route-level regression can tell "the
@@ -64,7 +77,7 @@ impl TaskExecutor {
             revision,
             (
                 TaskTransition::Cancel,
-                None,
+                crate::gateway::task_service::record::Provenance::default(),
                 crate::gateway::gateway_writes::WriteRecord::default(),
             ),
             ErrorAuthor::Gateway,

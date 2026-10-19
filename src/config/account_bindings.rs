@@ -333,6 +333,20 @@ pub(crate) struct CompiledDescriptor {
     /// strategy can never be installed without the revision it fences on
     /// (#2249).
     pub(crate) account: Option<(AccountKeyDescriptor, String)>,
+    /// [`account_fingerprint`] of the declared descriptor (MIK-8407).
+    pub(crate) fingerprint: String,
+}
+
+/// What a stored result records as the account it was produced under
+/// (MIK-8407): a digest of the WHOLE declared descriptor, the exact value
+/// [`reload_binding_refusal`] compares with `==`. Two descriptors that a
+/// reload would refuse to swap live (another issuer, resource, client, scope
+/// set or mode under the same id) never share a fingerprint, so output made
+/// under one is never served as the other's. `client_secret_ref` enters as
+/// the reference it is, never resolved.
+pub(crate) fn account_fingerprint(descriptor: &AccountDescriptor) -> String {
+    let value = serde_json::to_value(descriptor).unwrap_or(serde_json::Value::Null);
+    crate::hashing::canonical_json_sha256(&value)
 }
 
 /// Compile every declared descriptor, or refuse.
@@ -403,6 +417,7 @@ fn compile_descriptor(id: &str, descriptor: &AccountDescriptor) -> Result<Compil
         mode: descriptor.mode,
         propagation,
         account,
+        fingerprint: account_fingerprint(descriptor),
     })
 }
 

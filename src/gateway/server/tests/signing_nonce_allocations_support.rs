@@ -29,45 +29,11 @@ pub(in crate::gateway::server) const BACKEND: &str = "nonce_backend";
 pub(in crate::gateway::server) const TOOL: &str = "echo";
 pub(in crate::gateway::server) const SESSION: &str = "stdio-session";
 
-/// Set in the re-executed child. Its presence is what tells a test body it is
-/// the one that must actually measure.
-const CHILD_ENV: &str = "MCPGW_ALLOC_METER_CHILD";
-
 // ── Child-process isolation ──────────────────────────────────────────────────
 
-/// Returns `true` in the PARENT, after running this one test in a child that
-/// did the measuring. Returns `false` in the child, meaning "you are the
-/// measurement, proceed".
-///
-/// Why a child at all: the totals are per-process-thread and the lib-test
-/// binary runs many unrelated tests. A shared process would let another
-/// test's allocations land in a total that claims to be one dispatch's.
-///
-/// `--exact` plus the assertion on `1 passed` is load-bearing. A child that
-/// matched zero tests exits 0, and the parent would go green on a test that
-/// never ran — a case that can never fail is not a test.
-pub(super) fn isolate(test_path: &str) -> bool {
-    if std::env::var_os(CHILD_ENV).is_some() {
-        return false;
-    }
-    let exe = std::env::current_exe().expect("the running test binary must be locatable");
-    let output = std::process::Command::new(exe)
-        .args([test_path, "--exact", "--nocapture", "--test-threads=1"])
-        .env(CHILD_ENV, "1")
-        .output()
-        .expect("re-executing the test binary must succeed");
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    assert!(
-        output.status.success(),
-        "isolated child failed for {test_path}\n--- child stdout ---\n{stdout}\n--- child stderr ---\n{stderr}"
-    );
-    assert!(
-        stdout.contains("1 passed"),
-        "isolated child for {test_path} did not run exactly one test\n--- child stdout ---\n{stdout}"
-    );
-    true
-}
+/// Moved into the meter (MIK-8412), where the process-wide mode that needs it
+/// lives; re-exported so the rows here keep their import.
+pub(super) use super::alloc_meter::isolate;
 
 /// One thread, so the meter's thread-local totals cover the whole dispatch.
 pub(in crate::gateway::server) fn runtime() -> tokio::runtime::Runtime {

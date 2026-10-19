@@ -358,7 +358,7 @@ impl Shared {
                     &record,
                     (
                         event,
-                        None,
+                        crate::gateway::task_service::record::Provenance::default(),
                         ErrorAuthor::Gateway,
                         crate::gateway::gateway_writes::WriteRecord::default(),
                     ),

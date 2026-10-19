@@ -3,7 +3,7 @@
 //! MIK-8425 MIG.0 golden comparison shared by the `mik_8425_yaml_baseline_*`
 //! tests.
 //!
-//! A golden is a text report recorded with `serde_yaml` 0.9.34, the parser
+//! A golden is a text report recorded with `serde-yaml` 0.9.34, the parser
 //! being replaced. Each later stage (adapter, backend swap) must reproduce
 //! it. A test only compares; recording is a separate `#[ignore]`d
 //! `record_*` test that prints the report for a reviewer to commit under
@@ -31,14 +31,14 @@ pub fn digest(bytes: &[u8]) -> String {
 /// mapping key's type, in document order. JSON cannot carry this: a tagged
 /// node and a one-key map serialize alike there, and so do `1` and `"1"` as
 /// keys. The replacement parser's tree must produce the same text.
-pub fn yaml_structure(value: &serde_yaml::Value) -> String {
+pub fn yaml_structure(value: &crate::yaml::Value) -> String {
     let mut out = String::new();
     write_structure(value, &mut out);
     out
 }
 
-fn write_structure(value: &serde_yaml::Value, out: &mut String) {
-    use serde_yaml::Value;
+fn write_structure(value: &crate::yaml::Value, out: &mut String) {
+    use crate::yaml::Value;
     match value {
         Value::Null => out.push('~'),
         Value::Bool(b) => {
@@ -193,7 +193,7 @@ pub fn assert_keyed_golden(name: &str, min_compared: usize, read: impl Fn(&str) 
     assert!(
         compared >= min_compared,
         "golden {name}: only {compared} row(s) comparable (need {min_compared}); \
-         re-record it on a commit that still has serde_yaml"
+         re-record it on a commit that still has serde-yaml"
     );
 }
 

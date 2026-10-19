@@ -12,6 +12,9 @@
 //! gate file, `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN`, #2376), so that answer
 //! does not depend on the load being slower than the first probe.
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
 
@@ -55,7 +58,7 @@ fn spawn(directory: &Path, scan_gate: &Path) -> Child {
     let config_path = directory.join("gateway.yaml");
     mcp_gateway::gateway::test_helpers::write_owner_only(
         &config_path,
-        serde_yaml::to_string(&config).expect("config YAML"),
+        yaml::to_string(&config).expect("config YAML"),
     )
     .expect("write gateway config");
     let log = std::fs::File::create(directory.join("gateway.log")).expect("gateway log");

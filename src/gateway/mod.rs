@@ -100,6 +100,8 @@ pub(crate) use server::STDIO_CREDENTIAL_PRINCIPAL;
 pub(crate) use server::StdioNonce;
 /// The declared account catalogue, for `cap list`'s readiness answer; crate-only.
 pub(crate) use server::account_bindings::declare_account_descriptors;
+// MIK-8407: the capability executor answers a changed account choice with it.
+pub(crate) use meta_mcp::stored_binding::Refusal as StoredBindingRefusal;
 pub(crate) use server::account_bindings::{ServeMode, sole_operator_asserted};
 /// The test-only allocation meter, for allocation rows outside `gateway`
 /// (`MIK-8201`), without `server` becoming crate-visible. The meter needs

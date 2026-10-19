@@ -19,9 +19,12 @@ use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use crate::gateway::outbound::{OutboundReply, gateway_reply, stream_reply};
 use crate::gateway::router::AppState;
 use crate::gateway::router::helpers::{
-    attach_session_header, build_http_error_response, build_http_response,
+    attach_session_header, build_http_error_response, build_http_response, session_capacity_refusal,
 };
-use crate::gateway::streaming::create_sse_response_with_view;
+use crate::gateway::session_id::SessionId;
+use crate::gateway::streaming::{
+    MintKind, SessionCapacity, SessionHold, create_sse_response_with_view,
+};
 use crate::mtls::CertIdentity;
 
 pub(super) use crate::protocol::modern_refusal::unsupported_version_error;
@@ -116,6 +119,48 @@ fn stream_request_refusal(
     })
 }
 
+/// The session a GET streams under, and what holds it. Hardened (row 10):
+/// a stream only resumes a session a declaring `initialize` opened. Otherwise
+/// a GET is not `initialize`, so a session it mints is provisional and refused
+/// at the cap before anything else happens (MIK-8504).
+fn open_stream_session(
+    state: &AppState,
+    existing: Option<&str>,
+    owner: &crate::gateway::session_id::SessionOwner,
+    credential: Option<crate::gateway::auth::live::HeldCredential>,
+) -> Result<(SessionId, Option<SessionHold>), Box<axum::response::Response>> {
+    if crate::gateway::router::hardened_elicitation::is_hardened(state) {
+        return state
+            .multiplexer
+            .resume_session_id_scoped(existing, owner, credential)
+            .map(|resumed| (resumed, None))
+            .ok_or_else(|| {
+                Box::new(crate::gateway::router::hardened_elicitation::refusal().into_response())
+            });
+    }
+    match state.multiplexer.open_request_session_scoped(
+        existing,
+        owner,
+        credential,
+        MintKind::Provisional,
+    ) {
+        Ok((opened, request_hold)) => Ok((opened, Some(request_hold))),
+        Err(SessionCapacity) => Err(Box::new(session_capacity_refusal(None))),
+    }
+}
+
+/// `body`, holding `hold` until it is dropped: a provisional session is never
+/// reaped under an open stream, and the drop starts its idle clock (MIK-8504).
+fn held_body(body: axum::body::Body, hold: Option<SessionHold>) -> axum::body::Body {
+    axum::body::Body::from_stream(futures::StreamExt::map(
+        body.into_data_stream(),
+        move |chunk| {
+            let _ = &hold;
+            chunk
+        },
+    ))
+}
+
 /// GET /mcp handler - SSE stream for server→client notifications
 /// Per MCP spec 2025-03-26, servers MAY return SSE stream or 405 Method Not Allowed.
 /// We implement the full streaming support.
@@ -183,24 +228,11 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
         .and_then(|v| v.to_str().ok())
         .map(String::from);
 
-    let opened = if crate::gateway::router::hardened_elicitation::is_hardened(&state) {
-        // Hardened (row 10): a stream only resumes a session a declaring
-        // `initialize` opened; it never opens one.
-        match state.multiplexer.resume_session_id_scoped(
-            existing_session_id.as_deref(),
-            &owner,
-            held,
-        ) {
-            Some(resumed) => resumed,
-            None => return gateway_reply(crate::gateway::router::hardened_elicitation::refusal()),
-        }
-    } else {
-        state.multiplexer.get_or_create_session_id_scoped(
-            existing_session_id.as_deref(),
-            &owner,
-            held,
-        )
-    };
+    let (opened, session_hold) =
+        match open_stream_session(&state, existing_session_id.as_deref(), &owner, held) {
+            Ok(opened) => opened,
+            Err(refusal) => return gateway_reply(*refusal),
+        };
     let session_id = opened.expose_secret().to_owned();
 
     if let Some(key) = read_key {
@@ -238,6 +270,7 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
             // Add session ID header to response
             let mut response = sse.into_response();
             attach_session_header(response.headers_mut(), &session_id);
+            let response = response.map(|body| held_body(body, session_hold));
             stream_reply(response)
         }
         None => gateway_reply(build_http_error_response(

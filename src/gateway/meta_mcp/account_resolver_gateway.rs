@@ -239,27 +239,7 @@ pub(in super::super) fn gateway_in_with(
             .get(*name)
             .map_or_else(|| declared.clone(), |bound| bound.effective(&declared));
         global_minting |= matches!(bind, Bind::Propagation(_));
-
-        let backend = Arc::new(Backend::new(
-            name,
-            effective,
-            &crate::config::FailsafeConfig::default(),
-            std::time::Duration::from_secs(60),
-        ));
-        let transport = Arc::new(CapturingTransport {
-            dispatches: Arc::clone(&dispatches),
-            server: (*name).to_string(),
-        });
-        backend
-            .set_transport_for_test(Arc::clone(&transport) as Arc<dyn crate::transport::Transport>);
-        for binding in identity_slots {
-            backend.set_pooled_transport_for_test(
-                &PoolKey::PerUser {
-                    binding: binding.clone(),
-                },
-                Arc::clone(&transport) as Arc<dyn crate::transport::Transport>,
-            );
-        }
+        let backend = capturing_backend(name, effective, &dispatches, identity_slots);
         assert!(registry.register(backend), "fixture registry must accept");
     }
 
@@ -288,6 +268,56 @@ pub(in super::super) fn gateway_in_with(
     )
     .expect("the shared installer must accept the fixture configuration");
     (meta, dispatches)
+}
+
+/// One fixture backend over the capturing transport: its shared slot and
+/// every per-user slot in `identity_slots` reach `dispatches`.
+fn capturing_backend(
+    name: &str,
+    effective: BackendConfig,
+    dispatches: &Arc<Dispatches>,
+    identity_slots: &[String],
+) -> Arc<Backend> {
+    let backend = Arc::new(Backend::new(
+        name,
+        effective,
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    ));
+    let transport: Arc<dyn crate::transport::Transport> = Arc::new(CapturingTransport {
+        dispatches: Arc::clone(dispatches),
+        server: name.to_string(),
+    });
+    backend.set_transport_for_test(Arc::clone(&transport));
+    for binding in identity_slots {
+        backend.set_pooled_transport_for_test(
+            &PoolKey::PerUser {
+                binding: binding.clone(),
+            },
+            Arc::clone(&transport),
+        );
+    }
+    backend
+}
+
+/// `name` compiled again bound to managed account `account`, as a reload
+/// that re-binds a backend builds its replacement (MIK-8407): the
+/// production compilation over the same declared descriptors, served by the
+/// same capturing transport. Registering it replaces the old instance.
+pub(in super::super) fn rebound_backend(
+    (name, account): (&str, &str),
+    declared: &[&str],
+    dispatches: &Arc<Dispatches>,
+    identity_slots: &[String],
+) -> Arc<Backend> {
+    let config = fixture_config(&[(name, Bind::Account(account))], declared);
+    let bound = compile(&config).expect("the re-bound configuration must compile");
+    let declared_backend = config.backends.get(name).expect("the re-bound backend");
+    let effective = bound.get(name).map_or_else(
+        || declared_backend.clone(),
+        |bound| bound.effective(declared_backend),
+    );
+    capturing_backend(name, effective, dispatches, identity_slots)
 }
 
 /// The permissive authorizer the dispatch entry needs.

@@ -130,13 +130,20 @@ async fn fixture() -> Fixture {
     }
 }
 
-fn capture(handle: &str) -> UpstreamCapture {
-    UpstreamCapture {
+/// A capture of `handle`, dispatched under no binding (MIK-8407).
+fn capture(
+    handle: &str,
+) -> (
+    UpstreamCapture,
+    Vec<crate::gateway::meta_mcp::admission::StepBinding>,
+) {
+    let capture = UpstreamCapture {
         backend: BACKEND.to_owned(),
         tool: TOOL.to_owned(),
         arguments: json!({}),
         handle: handle.to_owned(),
-    }
+    };
+    (capture, Vec::new())
 }
 
 /// Move the fixture row to a terminal state through the real cancel path.

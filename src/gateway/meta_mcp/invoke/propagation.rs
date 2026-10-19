@@ -391,9 +391,12 @@ impl MetaMcp {
     }
 
     /// Resolve the account credential a CAPABILITY tool needs, before any
-    /// cache is consulted.
+    /// cache is consulted, with the `auth.account` it was read from (`None`
+    /// when the capability names none): the one read of that reference, so
+    /// what the dispatch records as its account (MIK-8407) is what it
+    /// resolved, never a second read a reload could change.
     ///
-    /// `Ok(None)` means there is nothing to resolve on this route: the target
+    /// No credential means there is nothing to resolve on this route: the target
     /// is not the capability backend, the tool is not one of its capabilities,
     /// the capability names no account, or the account is an explicit `shared`
     /// descriptor whose static credential path is preserved unchanged. Every
@@ -414,29 +417,30 @@ impl MetaMcp {
         server: &str,
         tool: &str,
         caller: CallerProof<'_>,
-    ) -> Result<Option<Arc<crate::identity_propagation::PreparedAccountCredential>>> {
+    ) -> Result<CapabilityAccount> {
         use crate::identity_propagation::AccountCredential;
 
         let Some(capabilities) = self.get_capabilities() else {
-            return Ok(None);
+            return Ok((None, None));
         };
         if server != capabilities.name {
-            return Ok(None);
+            return Ok((None, None));
         }
         let Some(definition) = capabilities.get(tool) else {
-            return Ok(None);
+            return Ok((None, None));
         };
         let Some(account) = definition.auth.account.as_deref() else {
-            return Ok(None);
+            return Ok((None, None));
         };
-        match self
+        let credential = match self
             .account_strategies
             .resolve(account, &definition.auth.key, caller)
             .await?
         {
-            AccountCredential::Legacy => Ok(None),
-            AccountCredential::Prepared(prepared) => Ok(Some(prepared)),
-        }
+            AccountCredential::Legacy => None,
+            AccountCredential::Prepared(prepared) => Some(prepared),
+        };
+        Ok((Some(account.to_owned()), credential))
     }
 
     /// The credentials a call to `server:tool` dispatches under, and the one
@@ -471,9 +475,25 @@ impl MetaMcp {
             };
         self.refuse_shared_oauth_login(server, tool, &caller_credential, backend)?;
         let resolving = self.resolve_capability_account_credential(server, tool, caller_proof);
-        let account_credential = self
+        let (capability_account, account_credential) = self
             .with_connect_offer(resolving.await, verified_identity)
             .await?;
+        // The account this dispatch runs under, from the instance and the
+        // reference resolved above (MIK-8407): a stored result records it,
+        // and a replay is served only while it is still the target's.
+        let account = backend
+            .and_then(|backend| {
+                backend
+                    .identity_propagation_config()
+                    .and(backend.account_descriptor_id())
+            })
+            .or(capability_account.as_deref())
+            .map(|id| {
+                crate::gateway::meta_mcp::stored_binding::binding_token(
+                    &self.account_strategies,
+                    id,
+                )
+            });
         // ONE binding for both cache layers and for the transport's session
         // partitioning. The MCP route's propagation binding when there is one,
         // otherwise the account credential's — they are never both present,
@@ -488,6 +508,8 @@ impl MetaMcp {
             caller_credential,
             account_credential,
             binding,
+            account,
+            account_reference: capability_account,
         })
     }
 }
@@ -501,9 +523,56 @@ pub(crate) struct ResolvedDispatch {
         Option<Arc<crate::identity_propagation::PreparedAccountCredential>>,
     /// The dispatch binding: whichever of the two names a per-caller binding.
     pub(super) binding: Option<String>,
+    /// The account token this dispatch runs under
+    /// (`AccountStrategyRegistry::binding_token`), shared accounts included;
+    /// `None` when the target names no account (MIK-8407).
+    pub(super) account: Option<String>,
+    /// The capability's `auth.account` this resolution read (`None` when it
+    /// names none), which its execution must still name (MIK-8407).
+    pub(super) account_reference: Option<String>,
 }
 
+/// The account a dispatch resolved (MIK-8407): the prepared credential, and
+/// the capability's `auth.account` reference it was resolved for, which the
+/// executor refuses to run under any other.
+#[derive(Clone, Default)]
+pub(super) struct DispatchAccount {
+    pub(super) credential: Option<Arc<crate::identity_propagation::PreparedAccountCredential>>,
+    pub(super) reference: Option<String>,
+}
+
+impl DispatchAccount {
+    /// The credential, handed over once (a bridged round reuses it, never a
+    /// second resolution), with the reference kept for every round.
+    pub(super) fn take(&mut self) -> Self {
+        Self {
+            credential: self.credential.take(),
+            reference: self.reference.clone(),
+        }
+    }
+}
+
+/// [`ResolvedDispatch::into_parts`]: what a dispatch sends with.
+pub(super) type DispatchParts = (CallerCredential, DispatchAccount, Option<String>);
+
+/// A capability tool's `auth.account` and the credential resolved for it.
+type CapabilityAccount = (
+    Option<String>,
+    Option<Arc<crate::identity_propagation::PreparedAccountCredential>>,
+);
+
 impl ResolvedDispatch {
+    /// The caller credential, the account credential and the dispatch
+    /// binding the dispatch consumes; the account token stays with the
+    /// lift's judgement (MIK-8407).
+    pub(super) fn into_parts(self) -> DispatchParts {
+        let account = DispatchAccount {
+            credential: self.account_credential,
+            reference: self.account_reference,
+        };
+        (self.caller_credential, account, self.binding)
+    }
+
     /// Whether the credential step may have reached an issuer: a failed
     /// optional mint counts too.
     pub(super) fn minted(&self) -> bool {

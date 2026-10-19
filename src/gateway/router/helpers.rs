@@ -125,6 +125,27 @@ pub(super) fn build_error_response_with_data(
     )
 }
 
+/// The refusal of a request whose new provisional session would pass the cap
+/// (MIK-8504): JSON-RPC -32603 with `data.reason` `session_capacity`, HTTP 503,
+/// and a `Retry-After` of the provisional idle limit, when slots free up. It is
+/// answered before anything runs.
+pub(super) fn session_capacity_refusal(id: Option<RequestId>) -> axum::response::Response {
+    let mut response = build_error_response_with_data(
+        id,
+        -32603,
+        "session capacity reached; retry later",
+        serde_json::json!({"reason": "session_capacity"}),
+        "",
+        StatusCode::SERVICE_UNAVAILABLE,
+    );
+    let retry = crate::gateway::streaming::PROVISIONAL_SESSION_TTL.as_secs();
+    response.headers_mut().insert(
+        axum::http::header::RETRY_AFTER,
+        axum::http::HeaderValue::from(retry),
+    );
+    response
+}
+
 /// Build a JSON-RPC HTTP response body without attaching a session header.
 pub(super) fn build_http_response(rpc: &Egressed, status: StatusCode) -> (StatusCode, Json<Value>) {
     let body = rpc.frame().to_value_lossy();

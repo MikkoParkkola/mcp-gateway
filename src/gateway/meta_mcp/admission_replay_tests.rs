@@ -12,13 +12,14 @@ use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::authz_tests::ctx;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
-/// A per-caller backend: identity propagation, so a replay to it defers.
-fn per_caller_meta() -> MetaMcp {
+/// The per-caller `idp` backend: identity propagation, so a replay to it
+/// defers. `account` names an account descriptor, as a re-bind would.
+fn idp_backend(account: Option<&str>) -> Arc<crate::backend::Backend> {
     use crate::config::{BackendConfig, FailsafeConfig};
     use crate::identity_propagation::{
         IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
     };
-    let backend = Arc::new(crate::backend::Backend::new(
+    Arc::new(crate::backend::Backend::new(
         "idp",
         BackendConfig {
             identity_propagation: Some(IdentityPropagationConfig {
@@ -29,14 +30,27 @@ fn per_caller_meta() -> MetaMcp {
                 token_exchange_endpoint: None,
                 token_exchange_scope: None,
             }),
+            account: account.map(str::to_owned),
             ..Default::default()
         },
         &FailsafeConfig::default(),
         std::time::Duration::from_secs(60),
-    ));
+    ))
+}
+
+/// A Meta-MCP over the per-caller [`idp_backend`], with its registry.
+fn per_caller() -> (MetaMcp, Arc<crate::backend::BackendRegistry>) {
     let registry = Arc::new(crate::backend::BackendRegistry::new());
-    assert!(registry.register(backend), "the backend registers");
-    MetaMcp::new(registry)
+    assert!(
+        registry.register(idp_backend(None)),
+        "the backend registers"
+    );
+    (MetaMcp::new(Arc::clone(&registry)), registry)
+}
+
+/// A per-caller backend: identity propagation, so a replay to it defers.
+fn per_caller_meta() -> MetaMcp {
+    per_caller().0
 }
 
 /// R-closed (product seat finding 3; mutant M-closed): outside a request
@@ -69,7 +83,7 @@ async fn an_unrecorded_deferral_fails_closed() {
                 server: "idp".to_string(),
                 tool: "read".to_string(),
             }),
-            None,
+            (None, Vec::new()),
             (stored, None),
         )
         .await;
@@ -131,7 +145,7 @@ async fn p8_legacy_a_plan_record_with_no_step_list_judges_its_declared_targets()
             &arguments,
             &ctx(&AllowAll),
             None,
-            None,
+            (None, Vec::new()),
             (stored.clone(), None),
         )
         .await
@@ -164,7 +178,7 @@ async fn p8_empty_a_plan_record_that_dispatched_nothing_is_served() {
             &arguments,
             &ctx(&AllowAll),
             None,
-            Some(Vec::new()),
+            (Some(Vec::new()), Vec::new()),
             (stored.clone(), None),
         )
         .await
@@ -194,7 +208,7 @@ async fn p8_noid_a_stored_plan_replay_with_no_request_id_fails_closed() {
             &arguments,
             &ctx(&AllowAll),
             None,
-            Some(Vec::new()),
+            (Some(Vec::new()), Vec::new()),
             (stored, None),
         )
         .await
@@ -224,5 +238,58 @@ async fn p8_noid_a_stored_plan_replay_with_no_request_id_fails_closed() {
     assert!(
         audit.is_none(),
         "P8-noid: stored facts travelled with the refusal"
+    );
+}
+
+/// P8-rebind (MIK-8407; mutant: no judgement after the walk): a plan whose
+/// recorded step ran under no account passes the judgement made before the
+/// walk. Its backend is re-bound to an account while the walk runs, so the
+/// judgement made again at the serving point refuses it: nothing stored is
+/// served and no replay is audited. Serving on the first judgement alone
+/// fails this row.
+// The hook is thread-local: the row must run on a current-thread runtime.
+#[tokio::test(flavor = "current_thread")]
+async fn p8_rebind_a_step_rebound_while_the_plan_walk_runs_is_refused() {
+    let (meta, registry) = per_caller();
+    let (arguments, stored) = plan_replay();
+    // A real stored audit, so a refusal that carried it through would show.
+    let audit: super::super::ReplayAudit =
+        serde_json::from_value(json!({"outcome": "ok"})).expect("an audit");
+    let rebind = Arc::clone(&registry);
+    let _armed = super::walk_seam::after_plan_walk(move || {
+        assert!(rebind.register(idp_backend(Some("rebound-account"))));
+    });
+    let answer = crate::gateway::meta_mcp::visible::memo::with_visibility_memo(async {
+        meta.defer_or_serve_replay(
+            "gateway_execute",
+            &arguments,
+            &ctx(&AllowAll),
+            None,
+            (
+                Some(Vec::new()),
+                vec![("idp".to_owned(), "read".to_owned(), None)],
+            ),
+            (stored.clone(), Some(audit)),
+        )
+        .await
+    })
+    .await;
+    assert_eq!(
+        registry
+            .get("idp")
+            .and_then(|backend| backend.account_descriptor_id().map(str::to_owned)),
+        Some("rebound-account".to_owned()),
+        "premise: the walk ended and the hook re-bound idp"
+    );
+    let (response, audit) = answer.expect("P8-rebind: a plan replay is answered, never deferred");
+    assert!(audit.is_none(), "P8-rebind: a refused replay was audited");
+    let text = serde_json::to_string(&response).expect("serialises");
+    assert!(
+        text.contains("produced under a different account"),
+        "P8-rebind: not refused at the serving point: {text}"
+    );
+    assert!(
+        !text.contains("stored-plan-output"),
+        "P8-rebind: the stored plan was served: {text}"
     );
 }

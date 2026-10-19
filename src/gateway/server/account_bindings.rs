@@ -41,7 +41,8 @@ pub(crate) fn declare_account_descriptors(config: &Config, registry: &AccountStr
         return;
     };
     for (id, descriptor) in descriptors {
-        registry.declare(id, &descriptor.provider, descriptor.mode);
+        let fingerprint = crate::config::account_bindings::account_fingerprint(descriptor);
+        registry.declare(id, &descriptor.provider, descriptor.mode, &fingerprint);
     }
 }
 
@@ -274,6 +275,7 @@ fn install_descriptor(
             required: propagation.required,
             token_exchange_endpoint: propagation.token_exchange_endpoint.clone(),
             token_exchange_scope: propagation.token_exchange_scope.clone(),
+            fingerprint: compiled.fingerprint.clone(),
             minter,
         },
         compiled.mode,

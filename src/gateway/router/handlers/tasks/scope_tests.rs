@@ -22,6 +22,8 @@ fn tasks_get_envelope_carries_a_retained_public_scope_as_private() {
         error_author: None,
         owner_digest: String::new(),
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
+        bindings: Vec::new(),
+        bindings_recorded: true,
     };
     let held = crate::gateway::meta_mcp::sealed_hold::Held::new(
         committed,

@@ -6,9 +6,12 @@
 //! it, or every call fails (as `linear_create_issue` did before #165).
 //! `displayIconUrl` carries the same OAuth-only constraint (#165 removed both).
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 use std::path::Path;
 
-use serde_yaml::Value;
+use yaml::Value;
 
 #[test]
 fn api_key_linear_capabilities_never_send_oauth_only_fields() {
@@ -19,7 +22,7 @@ fn api_key_linear_capabilities_never_send_oauth_only_fields() {
         if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
             continue;
         }
-        let cap: Value = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap())
+        let cap: Value = yaml::from_str(&std::fs::read_to_string(&path).unwrap())
             .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         if cap["auth"]["type"].as_str() != Some("api_key") {
             continue;
@@ -34,7 +37,7 @@ fn api_key_linear_capabilities_never_send_oauth_only_fields() {
             if body.is_null() {
                 continue;
             }
-            let body = serde_yaml::to_string(body).unwrap();
+            let body = yaml::to_string(body).unwrap();
             for field in ["createAsUser", "displayIconUrl"] {
                 assert!(
                     !body.contains(field),

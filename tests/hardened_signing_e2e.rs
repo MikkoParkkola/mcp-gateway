@@ -14,6 +14,9 @@
     clippy::disallowed_methods,
     reason = "test code reads the host clock (MIK-8202 AC.14)"
 )]
+#[path = "common/yaml.rs"]
+mod yaml;
+
 use signing_gateway::gateway_bin;
 
 #[path = "common/signing_gateway.rs"]
@@ -48,7 +51,7 @@ fn inner_config(directory: &std::path::Path, backend_url: &str) -> std::path::Pa
     let path = directory.join("inner.yaml");
     mcp_gateway::gateway::test_helpers::write_owner_only(
         &path,
-        serde_yaml::to_string(&config).expect("inner config YAML"),
+        yaml::to_string(&config).expect("inner config YAML"),
     )
     .expect("write inner config");
     path

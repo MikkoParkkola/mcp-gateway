@@ -430,6 +430,7 @@ async fn l3_a_deferred_replay_is_taken_only_by_its_own_key_once() {
         audit: None,
         tool_name: "gateway_invoke".to_string(),
         arguments: json!({}),
+        bindings: Vec::new(),
     };
     with_visibility_memo(async {
         let a = deferred_replay_key(BACKEND, TOOL, &retry("l3-a")).expect("keyed");

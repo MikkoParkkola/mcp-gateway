@@ -20,7 +20,7 @@ use super::settlement::{
 use super::worker::inspect_settled;
 use super::{CommitStage, OwnedCallerContext, TaskCall, TaskExecutor};
 use crate::gateway::task_service::host::LiveHost;
-use crate::gateway::task_service::record::{CONTINUATION_DEADLINE_MARGIN_SECS, InputRound, Target};
+use crate::gateway::task_service::record::{CONTINUATION_DEADLINE_MARGIN_SECS, InputRound};
 use crate::gateway::task_service::store::StoreError;
 use crate::gateway::task_service::store::input::{ProvideOutcome, RoundClosed};
 use crate::protocol::mrtr::{InputRequired, RetryFields};
@@ -29,6 +29,8 @@ use crate::protocol::{JsonRpcError, JsonRpcResponse, RequestId};
 
 #[path = "input_round_clock.rs"]
 mod clock;
+// MIK-8407: what a settle and a park record about how an outcome was produced.
+mod provenance;
 pub(super) use clock::{ClockWait, readable_now};
 use clock::{Resealed, readable_or_fail, redeeming_dispatch};
 
@@ -153,23 +155,6 @@ impl<'a> Settling<'a> {
         }
     }
 
-    /// The calls a plan actually dispatched, for the settlement to commit with
-    /// its outcome. `None` for a call whose one target was recorded at creation.
-    fn plan_targets(&self) -> Option<Vec<Target>> {
-        matches!(
-            self.call.tool.as_str(),
-            "gateway_execute" | "gateway_run_playbook"
-        )
-        .then(|| {
-            self.owned
-                .dispatch_log()
-                .snapshot()
-                .into_iter()
-                .map(|(server, tool)| Target { server, tool })
-                .collect()
-        })
-    }
-
     /// Settle `event`. Staged relay receipts are recorded only when it is
     /// the dispatched result (`dispatched`) and the store kept it as such.
     async fn settle(
@@ -192,7 +177,7 @@ impl<'a> Settling<'a> {
         cancel_rx: &mut watch::Receiver<bool>,
     ) {
         let ids = (self.principal, self.id, self.revision);
-        let outcome = (event, self.plan_targets());
+        let outcome = (event, self.provenance());
         let stored = self
             .executor
             .settle_cas_with(ids, outcome, writes, cancel_rx)
@@ -200,25 +185,6 @@ impl<'a> Settling<'a> {
         self.state
             .meta_mcp()
             .commit_staged_relay(dispatched && stored);
-    }
-
-    /// Record a parked plan's calls so far; the resume's log starts empty.
-    /// `false` means they are NOT durable, and the round must not be parked.
-    async fn park_targets(&self) -> bool {
-        let Some(targets) = self.plan_targets() else {
-            return true;
-        };
-        let Ok(owner) = self.executor.service.owner(self.principal) else {
-            return false;
-        };
-        let stored = self
-            .executor
-            .service
-            .store
-            .add_targets(owner.as_digest(), self.id, self.revision, targets)
-            .await;
-        // A row a cancel already moved is not parked either way.
-        matches!(stored, Ok(()) | Err(StoreError::RevisionConflict))
     }
 
     /// Commit `input_required` with the continuation, then release: the worker
@@ -229,16 +195,10 @@ impl<'a> Settling<'a> {
         minted_at: Option<(chrono::DateTime<chrono::Utc>, u64)>,
         cancel_rx: &mut watch::Receiver<bool>,
     ) {
-        if !self.park_targets().await {
-            return self
-                .settle(
-                    TaskTransition::Complete(abandoned_input_round()),
-                    false,
-                    cancel_rx,
-                )
-                .await;
-        }
-        let Ok(owner) = self.executor.service.owner(self.principal) else {
+        // The owner is resolved once, by the write that makes the round's
+        // calls and bindings durable; a round that cannot record them is
+        // settled now, never parked.
+        let Some(owner) = self.park_targets().await else {
             return self
                 .settle(
                     TaskTransition::Complete(abandoned_input_round()),

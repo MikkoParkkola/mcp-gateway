@@ -146,6 +146,10 @@ pub(super) const TX: &str = "tx";
 /// `x-mcp-passthrough-authorization`.
 pub(super) const PASSTHROUGH_CREDENTIAL: &str = "Bearer alice-pt";
 
+/// A second credential the same caller forwards (MIK-8440): another upstream
+/// account behind the one gateway caller.
+pub(super) const PASSTHROUGH_CREDENTIAL_B: &str = "Bearer alice-pt-other";
+
 /// A backend with no account beside [`TX`] (MIK-8406 mFirst).
 pub(super) const PLAIN: &str = "plain";
 
@@ -433,9 +437,14 @@ fn install_counting(
     );
     // A forwarded passthrough credential dispatches on the slot its digest
     // binds, charged to the caller (`charged_binding`).
-    let digest = crate::hashing::sha256_hex(PASSTHROUGH_CREDENTIAL.as_bytes());
-    let binding = crate::backend::passthrough_binding(&subject, &digest);
-    backend.set_pooled_transport_for_test(&crate::backend::PoolKey::PerUser { binding }, counting);
+    for credential in [PASSTHROUGH_CREDENTIAL, PASSTHROUGH_CREDENTIAL_B] {
+        let digest = crate::hashing::sha256_hex(credential.as_bytes());
+        let binding = crate::backend::passthrough_binding(&subject, &digest);
+        backend.set_pooled_transport_for_test(
+            &crate::backend::PoolKey::PerUser { binding },
+            Arc::clone(&counting),
+        );
+    }
 }
 
 /// A `tools/call` as `alice`, whose verified identity rides the request.

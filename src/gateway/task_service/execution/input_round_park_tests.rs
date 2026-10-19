@@ -205,6 +205,7 @@ async fn park_targets(fx: &Fixture, ids: Ids<'_>, tool: &str) -> bool {
     )
     .park_targets()
     .await
+    .is_some()
 }
 
 /// The time a late close is judged at.

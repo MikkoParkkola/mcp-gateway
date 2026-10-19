@@ -84,6 +84,10 @@ impl crate::gateway::meta_mcp::MetaMcp {
     ) -> std::ops::ControlFlow<crate::protocol::JsonRpcResponse, Option<UnprovenReplay>> {
         use crate::gateway::meta_mcp::visible;
         use std::ops::ControlFlow::{Break, Continue};
+        // MIK-8407: every dispatch passes here once its credential is
+        // resolved, so the binding it runs under is noted here, from the
+        // resolution it uses, before anything is replayed or sent.
+        super::nonce_settle::note_binding(caller, (server, tool), resolved.account.as_deref());
         let Some(deferred) = visible::deferred::deferred_replay_key(server, tool, caller.retry)
             .and_then(|key| visible::memo::take_deferred_replay(&key))
         else {
@@ -91,6 +95,28 @@ impl crate::gateway::meta_mcp::MetaMcp {
         };
         if !minted_proof(resolved) {
             return Continue(Some(UnprovenReplay));
+        }
+        // MIK-8407: judged again at the serving point, against the account
+        // this resolution just proved, so a reload since admission cannot
+        // pass another account's proof off as the recorded one's. Nothing is
+        // sent; the stored output never goes out.
+        // Both the account this resolution proved and the target's account
+        // now must be the recorded one.
+        let view = self.scoped(caller.scope().authorizer.backend_grant());
+        let judged = crate::gateway::meta_mcp::stored_binding::judge(&deferred.bindings, |s, t| {
+            if (s, t) == (server, tool) {
+                resolved.account.clone()
+            } else {
+                self.current_binding(&view, s, t)
+            }
+        })
+        .and_then(|()| self.judge_bindings(&view, &deferred.bindings));
+        if let Err(error) = judged {
+            return Break(crate::protocol::JsonRpcResponse::error(
+                deferred.response.id.clone(),
+                error.to_rpc_code(),
+                error.to_string(),
+            ));
         }
         witness.spend();
         super::nonce_settle::mark_dispatched(caller, (server, tool));

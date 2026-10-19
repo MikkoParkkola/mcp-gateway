@@ -6,6 +6,9 @@
 //! now means on, so an authenticated config no longer needs the line. Writing
 //! `enabled: false` with auth on still fails the load: D1-a is unchanged.
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
 
@@ -160,11 +163,11 @@ fn a_rewrite_does_not_write_the_derived_audit_default() {
     )
     .expect("the rewrite succeeds");
     let text = std::fs::read_to_string(&path).expect("read back");
-    let written: serde_yaml::Value = serde_yaml::from_str(&text).expect("valid YAML");
+    let written: yaml::Value = yaml::from_str(&text).expect("valid YAML");
     let log = &written["security"]["transparency_log"];
     assert!(
         log.as_mapping()
-            .is_none_or(|m| !m.contains_key(serde_yaml::Value::from("enabled"))),
+            .is_none_or(|m| !m.contains_key(yaml::Value::from("enabled"))),
         "the rewrite wrote an `enabled` key (null counts too):\n{text}"
     );
     let reloaded = mcp_gateway::config::Config::load(Some(&path)).expect("the rewrite loads");

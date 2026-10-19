@@ -11,14 +11,15 @@ use chrono::{DateTime, Timelike as _, Utc};
 use super::{Shared, StoreError, TaskStore, owned, record_name, serialize};
 use crate::gateway::gateway_writes::WriteRecord;
 use crate::gateway::task_service::record::{
-    CommittedTask, ERROR_AUTHOR_VERSION, ErrorAuthor, MAX_UPSTREAM_HANDLE_BYTES, Record,
-    TARGET_VERSION, Target, UpstreamRecord,
+    CommittedTask, ERROR_AUTHOR_VERSION, ErrorAuthor, MAX_UPSTREAM_HANDLE_BYTES, Provenance,
+    Record, TARGET_VERSION, Target, UpstreamRecord,
 };
 use crate::protocol::JsonRpcError;
 use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
 
 impl TaskStore {
-    /// Merge `targets` into a non-terminal row at `expected_revision`.
+    /// Merge `targets`, and the binding each ran under (MIK-8407), into a
+    /// non-terminal row at `expected_revision`.
     ///
     /// The `mark_upstream` idiom: same ordering lock, no revision bump (so the
     /// settle compare-and-set is untouched), the row raised to
@@ -33,12 +34,15 @@ impl TaskStore {
         owner: &str,
         id: &str,
         expected_revision: u64,
-        targets: Vec<Target>,
+        (targets, bindings): (
+            Vec<Target>,
+            Vec<crate::gateway::meta_mcp::admission::StepBinding>,
+        ),
     ) -> Result<(), StoreError> {
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
         tokio::task::spawn_blocking(move || {
-            shared.add_targets_blocking(&owner, &id, expected_revision, targets)
+            shared.add_targets_blocking(&owner, &id, expected_revision, (targets, bindings))
         })
         .await
         .map_err(|_| StoreError::Storage)?
@@ -59,7 +63,7 @@ impl TaskStore {
             owner,
             id,
             revision,
-            (event, targets, WriteRecord::default()),
+            (event, targets.into(), WriteRecord::default()),
             ErrorAuthor::Gateway,
             at,
         )
@@ -87,7 +91,7 @@ impl TaskStore {
         owner: &str,
         id: &str,
         revision: u64,
-        (event, targets, writes): (TaskTransition, Option<Vec<Target>>, WriteRecord),
+        (event, targets, writes): (TaskTransition, Provenance, WriteRecord),
         author: ErrorAuthor,
         at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
@@ -137,6 +141,16 @@ impl TaskStore {
         entry.record.version = entry.record.version.min(3);
     }
 
+    /// Test-only: turn `id` into a row a 4.0 beta wrote: its calls kept, no
+    /// bindings, the version before them (MIK-8407).
+    #[cfg(test)]
+    pub(crate) fn unrecord_bindings_for_test(&self, id: &str) {
+        let mut state = self.0.state();
+        let entry = state.entries.get_mut(id).expect("the fixture task exists");
+        entry.record.bindings.clear();
+        entry.record.version = crate::gateway::task_service::record::BINDING_VERSION - 1;
+    }
+
     /// Test-only: turn `id` into a row whose run dispatched nothing: no
     /// targets, its version kept, so the empty list still counts as recorded
     /// (MIK-8406 P9g).
@@ -169,7 +183,10 @@ impl Shared {
         owner: &str,
         id: &str,
         expected_revision: u64,
-        targets: Vec<Target>,
+        (targets, bindings): (
+            Vec<Target>,
+            Vec<crate::gateway::meta_mcp::admission::StepBinding>,
+        ),
     ) -> Result<(), StoreError> {
         let _order = self.order();
         let (task, mut record): (Task, Record) = {
@@ -189,12 +206,14 @@ impl Shared {
             }
             (entry.task.clone(), entry.record.clone())
         };
-        for target in targets {
-            if !record.targets.contains(&target) {
-                record.targets.push(target);
-            }
+        merge_targets(&mut record, targets);
+        for (server, tool, binding) in &bindings {
+            crate::gateway::meta_mcp::admission::note_distinct(
+                &mut record.bindings,
+                (server, tool),
+                binding.as_deref(),
+            );
         }
-        record.version = record.version.max(TARGET_VERSION);
         let bytes = serialize(&record)?;
         if bytes.len() > self.limits.record_bytes {
             return Err(StoreError::Capacity);
@@ -209,12 +228,7 @@ impl Shared {
         owner: &str,
         id: &str,
         revision: u64,
-        (event, targets, author, writes): (
-            TaskTransition,
-            Option<Vec<Target>>,
-            ErrorAuthor,
-            WriteRecord,
-        ),
+        (event, targets, author, writes): (TaskTransition, Provenance, ErrorAuthor, WriteRecord),
         (at, offered): (
             DateTime<Utc>,
             crate::gateway::meta_mcp::sealed_hold::CarriedHolds,
@@ -258,12 +272,7 @@ impl Shared {
         &self,
         task: &Task,
         record: &Record,
-        (event, targets, author, writes): (
-            TaskTransition,
-            Option<Vec<Target>>,
-            ErrorAuthor,
-            WriteRecord,
-        ),
+        (event, targets, author, writes): (TaskTransition, Provenance, ErrorAuthor, WriteRecord),
         at: DateTime<Utc>,
     ) -> Result<Option<(Task, Record)>, StoreError> {
         // Last resort: an output-free record. It discards the targets and the
@@ -315,7 +324,7 @@ impl Shared {
             record,
             (
                 bounded(),
-                None,
+                Provenance::default(),
                 true,
                 ErrorAuthor::Gateway,
                 WriteRecord::default(),
@@ -328,13 +337,7 @@ impl Shared {
         &self,
         task: &Task,
         record: &Record,
-        settlement: (
-            TaskTransition,
-            Option<Vec<Target>>,
-            bool,
-            ErrorAuthor,
-            WriteRecord,
-        ),
+        settlement: (TaskTransition, Provenance, bool, ErrorAuthor, WriteRecord),
         at: DateTime<Utc>,
     ) -> Result<Option<(Task, Record)>, StoreError> {
         let Some((task, record)) = settled(task, record, settlement, at)? else {
@@ -366,7 +369,7 @@ fn settled(
     record: &Record,
     (event, targets, discard, author, writes): (
         TaskTransition,
-        Option<Vec<Target>>,
+        Provenance,
         bool,
         ErrorAuthor,
         WriteRecord,
@@ -401,17 +404,25 @@ fn settled(
     }
     if discard {
         record.targets.clear();
+        record.bindings.clear();
         record.upstream = None;
         record.output_free = true;
         record.version = record.version.max(TARGET_VERSION);
     }
-    if let Some(targets) = targets {
-        for target in targets {
-            if !record.targets.contains(&target) {
-                record.targets.push(target);
-            }
+    if let Some(targets) = targets.targets {
+        merge_targets(&mut record, targets);
+    }
+    // The bindings a settle carries (MIK-8407). The row's version is not
+    // raised for them: only creation marks a row as recording bindings, so a
+    // row an older gateway wrote stays unrecorded however it is settled.
+    if !discard {
+        for (server, tool, binding) in &targets.bindings {
+            crate::gateway::meta_mcp::admission::note_distinct(
+                &mut record.bindings,
+                (server, tool),
+                binding.as_deref(),
+            );
         }
-        record.version = record.version.max(TARGET_VERSION);
     }
     Ok(Some((task, record)))
 }
@@ -434,7 +445,7 @@ pub(super) fn cancelled_bytes(
         record,
         (
             TaskTransition::Cancel,
-            None,
+            Provenance::default(),
             false,
             ErrorAuthor::Gateway,
             WriteRecord::default(),
@@ -478,7 +489,7 @@ pub(super) fn fallback_bytes(task: &Task, record: &Record) -> Result<usize, Stor
         record,
         (
             bounded(),
-            None,
+            Provenance::default(),
             true,
             ErrorAuthor::Gateway,
             WriteRecord::default(),
@@ -660,6 +671,17 @@ impl Shared {
         self.publish(task, record, super::HoldUpdate::Drop);
         Ok(CancelClaim::Claimed(descriptor))
     }
+}
+
+/// Add each target `record` does not hold yet, raising it to
+/// [`TARGET_VERSION`]: the one merge `add_targets` and a settle share.
+fn merge_targets(record: &mut Record, targets: Vec<Target>) {
+    for target in targets {
+        if !record.targets.contains(&target) {
+            record.targets.push(target);
+        }
+    }
+    record.version = record.version.max(TARGET_VERSION);
 }
 
 #[cfg(test)]

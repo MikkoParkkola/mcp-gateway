@@ -41,6 +41,9 @@
 //! gateway says so itself: `pending_restart_fields` (`:545-557`) declares the
 //! whole `server` section — `modern_protocol` included — restart-required.
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use mcp_gateway::backend::BackendRegistry;
@@ -454,7 +457,7 @@ async fn a_default_gateway_negotiates_down_to_each_supported_revision() {
 #[test]
 fn a_config_file_that_omits_the_flag_still_serves_modern() {
     let parsed: ServerConfig =
-        serde_yaml::from_str("port: 9999\n").expect("a partial server section must parse");
+        yaml::from_str("port: 9999\n").expect("a partial server section must parse");
 
     assert_eq!(
         parsed.port, 9999,

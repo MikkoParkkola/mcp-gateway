@@ -40,6 +40,7 @@ fn installed(minter: Minter) -> InstalledAccount {
         required: false,
         token_exchange_endpoint: None,
         token_exchange_scope: None,
+        fingerprint: String::new(),
         minter,
     }
 }
@@ -110,7 +111,7 @@ fn a_reinstalled_minter_of_either_kind_refuses_the_earlier_credential() {
         };
         let released = vault(&custody);
         let registry = AccountStrategyRegistry::default();
-        registry.declare(DESCRIPTOR_ID, "google", DescriptorMode::PersonalManaged);
+        registry.declare(DESCRIPTOR_ID, "google", DescriptorMode::PersonalManaged, "");
         let install = |minter| registry.install(installed(minter), DescriptorMode::PersonalManaged);
 
         install(Minter::Managed(Arc::clone(&released)));
@@ -178,7 +179,7 @@ fn a_revoke_after_the_mint_refuses_the_credential_at_the_durable_recheck() {
             false,
         ));
         let registry = AccountStrategyRegistry::default();
-        registry.declare(DESCRIPTOR_ID, "google", DescriptorMode::PersonalManaged);
+        registry.declare(DESCRIPTOR_ID, "google", DescriptorMode::PersonalManaged, "");
         registry.install(
             installed(Minter::Managed(vault)),
             DescriptorMode::PersonalManaged,
@@ -240,7 +241,7 @@ fn the_registry_view_reads_fail_closed_at_each_early_exit() {
             "an uninstalled descriptor is not a permanent refusal"
         );
 
-        registry.declare(DESCRIPTOR_ID, "google", DescriptorMode::PersonalManaged);
+        registry.declare(DESCRIPTOR_ID, "google", DescriptorMode::PersonalManaged, "");
         registry.install(
             installed(Minter::Managed(Arc::new(VaultStrategy::new(
                 custody,
@@ -270,7 +271,7 @@ fn the_registry_view_reads_fail_closed_at_each_early_exit() {
             "control: alice's grant is a view: {verified:?}"
         );
 
-        registry.declare(DESCRIPTOR_ID, "google", DescriptorMode::External);
+        registry.declare(DESCRIPTOR_ID, "google", DescriptorMode::External, "");
         registry.install(
             installed(Minter::External(Arc::new(External))),
             DescriptorMode::External,
