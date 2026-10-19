@@ -10,12 +10,31 @@
 use super::packaged::repo_file;
 use crate::yaml::Value;
 
+/// What the pin requires of one CI step.
+struct Expect {
+    /// The step's `name`.
+    name: &'static str,
+    /// The job that must hold it, when the job is part of the guarantee.
+    job: Option<&'static str>,
+    /// Whether its `run` script chains several native commands, so every one
+    /// needs its own exit-status guard (PowerShell reports only the last).
+    guarded: bool,
+}
+
 /// The CI steps this pin reads: the Linux registry-ban step (MIK-8387) and the
 /// Windows one (MIK-8449), which lints the `cfg(windows)` code no other job
 /// compiles.
-const STEPS: [&str; 2] = [
-    "Registry ban (MIK-8387)",
-    "Registry ban, Windows (MIK-8449)",
+const STEPS: [Expect; 2] = [
+    Expect {
+        name: "Registry ban (MIK-8387)",
+        job: None,
+        guarded: false,
+    },
+    Expect {
+        name: "Registry ban, Windows (MIK-8449)",
+        job: Some("windows-clippy"),
+        guarded: true,
+    },
 ];
 /// What each step's `CLIPPY_CONF_DIR` must be.
 const CONF_DIR: &str = "${{ github.workspace }}/scripts/lint/registry-ban";
@@ -27,16 +46,18 @@ pub(super) fn checked_in_workflow() -> Option<String> {
 }
 
 /// Panics unless, for each of [`STEPS`], exactly one step of that name exists
-/// under `jobs` and its own `env` sets `CLIPPY_CONF_DIR` to [`CONF_DIR`]. The
-/// workflow is parsed with the repo's adapter, so quoting, comments and key
-/// order are the parser's concern.
+/// under `jobs`, its own `env` sets `CLIPPY_CONF_DIR` to [`CONF_DIR`], it sits
+/// in the job the table names, and a chained script guards every native
+/// command's exit status. The workflow is parsed with the repo's adapter, so
+/// quoting, comments and key order are the parser's concern.
 pub(super) fn assert_ci_registry_ban_conf_dir(workflow: &str) {
     let doc: Value = crate::yaml::from_str(workflow).expect("the CI workflow parses");
     let jobs = doc
         .get("jobs")
         .and_then(Value::as_mapping)
         .expect("the CI workflow has jobs");
-    for name in STEPS {
+    for expect in STEPS {
+        let name = expect.name;
         let mut found = Vec::new();
         for (job, def) in jobs {
             let Some(steps) = def.get("steps").and_then(Value::as_sequence) else {
@@ -64,6 +85,21 @@ pub(super) fn assert_ci_registry_ban_conf_dir(workflow: &str) {
             Some(CONF_DIR),
             "CLIPPY_CONF_DIR in the env of the {name:?} step of job {job}"
         );
+        if let Some(want) = expect.job {
+            assert_eq!(job, want, "the job holding the {name:?} step");
+        }
+        if expect.guarded {
+            let run = step.get("run").and_then(Value::as_str).unwrap_or_default();
+            let commands = run
+                .lines()
+                .filter(|l| l.trim_start().starts_with("cargo "))
+                .count();
+            let guards = run.matches("exit $LASTEXITCODE").count();
+            assert!(
+                commands >= 1 && guards == commands,
+                "exit-status guards in the {name:?} step: {guards} guards for {commands} cargo commands"
+            );
+        }
     }
 }
 
@@ -90,7 +126,10 @@ jobs:
         run: |
           cargo clippy --lib --bins --all-features -- -D warnings
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --lib --bins --no-default-features -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 ";
+const GUARD: &str = "          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n";
 const ENV_LINE: &str =
     "          CLIPPY_CONF_DIR: ${{ github.workspace }}/scripts/lint/registry-ban\n";
 const LINUX_HEAD: &str = "      - name: Registry ban (MIK-8387)\n";
@@ -199,29 +238,35 @@ fn duplicating_a_step_turns_the_pin_red() {
 /// the wrong step.
 #[test]
 fn moving_the_variable_to_another_step_turns_the_pin_red() {
-    let linux_gone = mutate(FIXTURE, &with_env(LINUX_HEAD), LINUX_HEAD);
-    let moved = mutate(
-        &linux_gone,
-        NEXT_HEAD,
-        &format!("{NEXT_HEAD}        env:\n{ENV_LINE}"),
-    );
-    assert_eq!(
-        moved.matches("CLIPPY_CONF_DIR").count(),
-        2,
-        "moved, not lost"
-    );
-    must_panic("move", &moved, NO_ENV);
+    for (label, head) in each_step() {
+        let gone = mutate(FIXTURE, &with_env(head), head);
+        let moved = mutate(
+            &gone,
+            NEXT_HEAD,
+            &format!("{NEXT_HEAD}        env:\n{ENV_LINE}"),
+        );
+        assert_eq!(
+            moved.matches("CLIPPY_CONF_DIR").count(),
+            2,
+            "moved, not lost"
+        );
+        must_panic(label, &moved, NO_ENV);
+    }
 }
 
 /// The name appearing only inside a `run:` script is not an env entry.
 #[test]
 fn a_variable_only_in_the_run_script_turns_the_pin_red() {
-    let without = mutate(FIXTURE, &with_env(LINUX_HEAD), LINUX_HEAD);
-    let from = "          cargo clippy --lib --bins --all-features -- -D warnings\n      - name: The registry lint still bites";
-    let to = "          export CLIPPY_CONF_DIR=${{ github.workspace }}/scripts/lint/registry-ban\n          cargo clippy --lib --bins --all-features -- -D warnings\n      - name: The registry lint still bites";
-    let run_only = mutate(&without, from, to);
-    assert!(run_only.contains("export CLIPPY_CONF_DIR"), "still present");
-    must_panic("run-only", &run_only, NO_ENV);
+    for (label, head) in each_step() {
+        let without = mutate(FIXTURE, &with_env(head), head);
+        let run = format!("{head}        run: |\n");
+        let to = format!(
+            "{run}          export CLIPPY_CONF_DIR=${{{{ github.workspace }}}}/scripts/lint/registry-ban\n"
+        );
+        let run_only = mutate(&without, &run, &to);
+        assert!(run_only.contains("export CLIPPY_CONF_DIR"), "still present");
+        must_panic(label, &run_only, NO_ENV);
+    }
 }
 
 /// The Windows step is required, not optional: removing it leaves the Linux
@@ -235,4 +280,31 @@ fn removing_the_windows_step_turns_the_pin_red() {
         "      - name: other\n        run: x\n"
     );
     must_panic("windows removed", &removed, "found 0");
+}
+
+/// PowerShell reports only the last native command's status, so a missing
+/// guard after the first `cargo` lets its failure pass: dropping either guard,
+/// or both, turns the pin red.
+#[test]
+fn a_missing_exit_guard_in_the_windows_step_turns_the_pin_red() {
+    assert_eq!(
+        FIXTURE.matches(GUARD).count(),
+        2,
+        "two guards in the fixture"
+    );
+    // the first guard only
+    let first = FIXTURE.find(GUARD).expect("first guard");
+    let without_first = format!("{}{}", &FIXTURE[..first], &FIXTURE[first + GUARD.len()..]);
+    must_panic("first guard", &without_first, "exit-status guards");
+    // both
+    let without_both = FIXTURE.replace(GUARD, "");
+    must_panic("both guards", &without_both, "exit-status guards");
+}
+
+/// The step must sit in the gated `windows-clippy` job: the same step in
+/// another job is not the Windows lint.
+#[test]
+fn the_windows_step_in_another_job_turns_the_pin_red() {
+    let moved = mutate(FIXTURE, "  windows-clippy:\n", "  somewhere-else:\n");
+    must_panic("job", &moved, "the job holding the");
 }

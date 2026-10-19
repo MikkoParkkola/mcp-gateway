@@ -145,13 +145,26 @@ call under `#[cfg(windows)]` (code no other job compiles) is not linted.
   nothing for cfg coverage). Each native command's exit status is checked
   explicitly, because PowerShell would otherwise report only the last one.
 - The pin from this ticket covers it: `assert_ci_registry_ban_conf_dir` now
-  requires both steps, each exactly once with its own `env`. The falsifiers run
-  against each step (delete, comment out, redirect, rename, duplicate, move,
-  run-only) and one removes the Windows step, which must turn the pin red.
-- Windows proof (COV.2), which Linux cannot give: a throwaway branch with
+  requires both steps, each exactly once with its own `env`. For the Windows
+  step it also requires the job to be `windows-clippy` and one
+  `exit $LASTEXITCODE` guard per `cargo` command (without them a failure of the
+  first command is lost to the second). The falsifiers run against each step
+  (delete, comment out, redirect, rename, duplicate, move, run-only), and
+  further ones remove the Windows step, drop either guard, and move the step to
+  another job.
+- A review asked whether cargo's reuse of compiled artifacts from the ordinary
+  clippy step could hide a banned call from this step. Observed, not derived:
+  on the plant tree the ordinary step (same features, repo config) was green
+  and this step then reported the call, so the first command re-lints under
+  the ban config. The proof below is that evidence.
+- Windows proof (COV.2), which Linux cannot give: a scratch branch with
   `#[cfg(windows)] fn plant(r: &BackendRegistry) { let _ = r.get("x"); }` in a
-  production module must turn the `Windows clippy` job red; the same tree
-  without the plant is the control and is green. Never merged.
+  production module of the library must turn the `Windows clippy` job red in
+  this step; the same tree without the plant is the control and is green. The
+  job is skipped for head branches named `throwaway/*`, so the scratch branch
+  must not use that prefix. Never merged. (A plant in a file the binary crate
+  also compiles fails the ordinary step at compile time instead and proves
+  nothing; the first attempt did exactly that.)
 - Not decided here: whether the ban pass should also run `--release` on
   Windows (no cfg difference), and the `--all-targets` test code (the ban
   config exempts test modules by design).
