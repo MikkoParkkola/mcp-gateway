@@ -48,7 +48,7 @@ impl MetaMcp {
         {
             return None;
         }
-        caller.signing.inspect(|signing| signing.want_refund());
+        invoke::ask_refund(caller);
         Some(error_response_preserving_status(
             id.clone(),
             &crate::personal_accounts::refusal::transient_retry_error(None),
@@ -239,13 +239,7 @@ impl MetaMcp {
         value: Value,
         caller: &MetaMcpCallerContext<'_>,
     ) -> JsonRpcResponse {
-        let shape = if tool_name == "gateway_invoke"
-            || self.surfaced_tools_map.unscoped(tool_name).is_none()
-        {
-            ResultShape::Wrapped
-        } else {
-            ResultShape::Native
-        };
+        let shape = ResultShape::of_presented(tool_name, &self.surfaced_tools_map);
         response_security::shape_meta_result(
             id,
             tool_name,

@@ -469,6 +469,23 @@ impl crate::transport::Transport for AsksThenAnswers {
     }
 }
 
+/// MIK-8498 characterisation: a retry routed to its origin backend answers
+/// with the backend's own envelope (native), though `dispatch_below_gate`
+/// asked for the wrapped meta reply; wrapping would stringify that envelope
+/// into the text block.
+#[cfg(feature = "firewall")]
+fn assert_answers_native(response: &crate::protocol::JsonRpcResponse) {
+    let text = response
+        .result
+        .as_ref()
+        .and_then(|r| r["content"][0]["text"].as_str())
+        .unwrap_or_default();
+    assert!(
+        !text.contains("\"content\""),
+        "a retry to its origin backend answers native: {response:?}"
+    );
+}
+
 /// MIK-7707.GH2431.1: a retry minted for a backend tool that shares a
 /// discovery name takes the direct-backend route, so the Meta-MCP never marks
 /// its response as already inspected and the delivery pass inspects it once.
@@ -541,18 +558,7 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
             .is_some_and(|r| r.to_string().contains("answered")),
         "the retry reached the backend and completed: {response:?}"
     );
-    // MIK-8498 characterisation: the retry answers with the backend's own
-    // envelope (native), though `dispatch_below_gate` asked for the wrapped
-    // meta reply; wrapping would stringify that envelope into the text block.
-    let text = response
-        .result
-        .as_ref()
-        .and_then(|r| r["content"][0]["text"].as_str())
-        .unwrap_or_default();
-    assert!(
-        !text.contains("\"content\""),
-        "a retry to its origin backend answers native: {response:?}"
-    );
+    assert_answers_native(&response);
     assert!(
         !response.egress_scanned,
         "a retry routed to its origin backend is never marked inspected"
