@@ -126,11 +126,11 @@ pub struct ResolvedAuthConfig {
     pub api_keys: Vec<ResolvedApiKey>,
     /// Public paths
     pub public_paths: Vec<String>,
-    /// Rate limiters per client (keyed by resolved authenticated identity).
+    /// Rate limiters per client, keyed by credential (`client_state_key`).
     rate_limiters: DashMap<String, Arc<ClientRateLimiter>>,
     /// Optional client circuit-breaker policy shared across per-client breaker instances.
     client_circuit_breaker: Option<CircuitBreakerConfig>,
-    /// Circuit breakers per authenticated client (keyed by resolved authenticated identity).
+    /// Circuit breakers per client, keyed by credential (`client_state_key`).
     client_circuit_breakers: DashMap<String, Arc<CircuitBreaker>>,
 }
 
@@ -640,7 +640,7 @@ fn client_preflight(
             client.name
         )));
     }
-    if !auth_config.check_client_circuit_breaker(&client.name) {
+    if !auth_config.check_client_circuit_breaker(client) {
         warn!(client = %client.name, path = %path, "Client circuit breaker open");
         return Some(circuit_open_response(format!(
             "Client '{}' circuit breaker is open. Try again later.",
@@ -684,6 +684,10 @@ mod tests;
 #[cfg(test)]
 #[path = "auth_clock_tests.rs"]
 mod clock_tests;
+
+#[cfg(test)]
+#[path = "auth_client_state_tests.rs"]
+mod client_state_tests;
 
 /// SIGNING.5 row 44: which nonce-quota authority a dashboard session carries.
 ///

@@ -327,6 +327,65 @@ async fn a_link_minted_by_an_expiring_key_ends_with_the_key() {
     );
 }
 
+/// MIK-8489: the expiry is the authenticating key's, found by credential.
+/// Two admin keys share one name (a config that skipped load validation);
+/// the one listed first never expires. A link minted with the expiring one
+/// still ends with it, whichever order the keys are listed in.
+#[tokio::test]
+async fn a_link_takes_the_expiry_of_the_key_that_minted_it_not_its_namesake() {
+    const OTHER_KEY: &str = "namesake-admin-key";
+    for expiring_first in [false, true] {
+        let mut expiring = api_key(ADMIN_KEY, true);
+        expiring.expires_at = Some(chrono::Utc::now() + crate::duration_bound::delta!(hours, 1));
+        let namesake = ApiKeyConfig {
+            name: expiring.name.clone(),
+            ..api_key(OTHER_KEY, true)
+        };
+        let api_keys = if expiring_first {
+            vec![expiring, namesake]
+        } else {
+            vec![namesake, expiring]
+        };
+        let auth = AuthConfig {
+            enabled: true,
+            bearer_token: Some(BEARER.to_string()),
+            api_keys,
+            public_paths: vec!["/health".to_string()],
+            ..AuthConfig::default()
+        };
+        let (state, _dir) = test_router_app_state_with_auth_and_key_server(&auth, None).await;
+        let minted = mint(&state, Some(ADMIN_KEY), None).await;
+        assert_eq!(minted.status, StatusCode::OK, "{}", minted.body);
+        let value = bootstrap_value(minted.json()["link"].as_str().unwrap_or_default());
+        let out = send(&state, redeem(&value, None)).await;
+        assert_eq!(out.status, StatusCode::SEE_OTHER, "{}", out.body);
+        let handle = session_handle(&out);
+        let limits = limits(&state);
+        let now = Now::read();
+        let at = |secs| Now {
+            mono: now.mono + Duration::from_secs(secs),
+            wall: now.wall + Duration::from_secs(secs),
+        };
+        // Kept active, so only the key's expiry can end it.
+        for secs in [1700, 3400] {
+            assert_eq!(
+                state
+                    .dashboard_bootstrap
+                    .check_session(&handle, at(secs), &limits, Touch::Yes),
+                SessionCheck::Valid,
+                "expiring key listed first: {expiring_first}"
+            );
+        }
+        assert_eq!(
+            state
+                .dashboard_bootstrap
+                .check_session(&handle, at(3700), &limits, Touch::No),
+            SessionCheck::Expired,
+            "the minting key expired at one hour (expiring key listed first: {expiring_first})"
+        );
+    }
+}
+
 /// On `server.port: 0` the minted link names the port the listener bound.
 #[tokio::test]
 async fn a_minted_link_names_the_bound_port() {

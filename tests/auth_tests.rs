@@ -163,15 +163,20 @@ fn test_rate_limiting() {
 
     let resolved = ResolvedAuthConfig::from_config(&auth_config);
 
+    let client = resolved
+        .validate_token("rate-limited-key")
+        .expect("the configured key validates");
+
     // First requests should succeed (within limit)
-    assert!(resolved.check_rate_limit("Rate Limited"));
-    assert!(resolved.check_rate_limit("Rate Limited"));
+    assert!(resolved.check_authenticated_client_rate_limit(&client));
+    assert!(resolved.check_authenticated_client_rate_limit(&client));
 
     // Third request should be rate limited
-    assert!(!resolved.check_rate_limit("Rate Limited"));
+    assert!(!resolved.check_authenticated_client_rate_limit(&client));
 
-    // Unknown client should not be rate limited
-    assert!(resolved.check_rate_limit("Unknown Client"));
+    // A client with no limit is never rate limited
+    let unlimited = mcp_gateway::gateway::auth::anonymous_client();
+    assert!(resolved.check_authenticated_client_rate_limit(&unlimited));
 }
 
 #[test]
@@ -378,21 +383,23 @@ fn test_client_circuit_breaker_is_per_client() {
     };
 
     let resolved = ResolvedAuthConfig::from_config(&auth_config);
+    let client_a = resolved.validate_token("client-a-key").expect("client-a");
+    let client_b = resolved.validate_token("client-b-key").expect("client-b");
 
-    assert!(resolved.check_client_circuit_breaker("client-a"));
-    resolved.record_client_failure("client-a");
+    assert!(resolved.check_client_circuit_breaker(&client_a));
+    resolved.record_client_failure(&client_a);
     assert_eq!(
-        resolved.client_circuit_state("client-a"),
+        resolved.client_circuit_state(&client_a),
         Some(CircuitState::Closed)
     );
-    resolved.record_client_failure("client-a");
+    resolved.record_client_failure(&client_a);
 
     assert_eq!(
-        resolved.client_circuit_state("client-a"),
+        resolved.client_circuit_state(&client_a),
         Some(CircuitState::Open)
     );
-    assert!(!resolved.check_client_circuit_breaker("client-a"));
-    assert!(resolved.check_client_circuit_breaker("client-b"));
+    assert!(!resolved.check_client_circuit_breaker(&client_a));
+    assert!(resolved.check_client_circuit_breaker(&client_b));
 }
 
 #[test]
@@ -419,30 +426,35 @@ fn test_client_circuit_breaker_recovers_after_successful_probe() {
             enabled: true,
             failure_threshold: 1,
             success_threshold: 1,
-            reset_timeout: Duration::from_millis(1),
+            // Zero: the next check is the half-open probe, with no real time
+            // to wait out.
+            // timing: fixture
+            reset_timeout: Duration::ZERO,
         }),
         single_user: false,
         dashboard_session: mcp_gateway::config::DashboardSessionConfig::default(),
     };
 
     let resolved = ResolvedAuthConfig::from_config(&auth_config);
+    let client = resolved
+        .validate_token("client-key")
+        .expect("the configured key");
 
-    resolved.record_client_failure("recovering-client");
+    resolved.record_client_failure(&client);
     assert_eq!(
-        resolved.client_circuit_state("recovering-client"),
+        resolved.client_circuit_state(&client),
         Some(CircuitState::Open)
     );
-    std::thread::sleep(Duration::from_millis(2));
-    assert!(resolved.check_client_circuit_breaker("recovering-client"));
+    assert!(resolved.check_client_circuit_breaker(&client));
     assert_eq!(
-        resolved.client_circuit_state("recovering-client"),
+        resolved.client_circuit_state(&client),
         Some(CircuitState::HalfOpen)
     );
 
-    resolved.record_client_success("recovering-client");
+    resolved.record_client_success(&client);
 
     assert_eq!(
-        resolved.client_circuit_state("recovering-client"),
+        resolved.client_circuit_state(&client),
         Some(CircuitState::Closed)
     );
 }

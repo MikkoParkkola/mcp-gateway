@@ -144,7 +144,9 @@ pub(super) async fn dashboard_link(
             .auth_config
             .api_keys
             .iter()
-            .find(|k| k.name == client.name)
+            // By the credential, not the name: two keys may share a name
+            // when a config skipped load validation (MIK-8489).
+            .find(|k| crate::gateway::auth::principal_of_digest(&k.digest) == client.principal)
         else {
             return admin_auth_required().into_response();
         };
