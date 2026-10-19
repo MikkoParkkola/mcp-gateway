@@ -221,3 +221,26 @@ async fn e9u_an_unavailable_repeat_answers_only_a_lacked_target() {
         "E9u: not the fill's answer: {text}"
     );
 }
+
+/// MIK-8498 VISIBLE characterisation: a second carry for one target replaces
+/// the first; a read leaves it in place; a take consumes it once. Two live
+/// resolutions, told apart by their fill result.
+#[tokio::test]
+async fn a_second_carry_replaces_the_first_and_a_take_consumes_it() {
+    let (_gateway, meta) = connected();
+    visible::with_visibility_memo(async {
+        carry(&meta, None).await;
+        carry(&meta, Some(crate::Error::Transport("second".into()))).await;
+        let failed = |carried: &Carried| carried.fill_error.is_some();
+        assert_eq!(visible::with_carried(BACKEND, TOOL, failed), Some(true));
+        assert_eq!(
+            visible::with_carried(BACKEND, TOOL, failed),
+            Some(true),
+            "a read keeps it"
+        );
+        assert!(visible::take_carried(BACKEND, TOOL).is_some_and(|c| c.fill_error.is_some()));
+        assert!(visible::take_carried(BACKEND, TOOL).is_none(), "taken once");
+        assert_eq!(visible::with_carried("other", TOOL, failed), None);
+    })
+    .await;
+}

@@ -136,4 +136,25 @@ mod tests {
         })
         .await;
     }
+
+    /// MIK-8498 VISIBLE characterisation: a second record under one key
+    /// replaces the first, and outside a memo a record reports `false` and a
+    /// take finds nothing.
+    #[tokio::test]
+    async fn a_second_record_replaces_the_first_and_outside_a_memo_nothing_is_kept() {
+        let own = deferred_replay_key("alpha", "read", &keyed("l3r")).expect("a keyed call");
+        let named = |tool: &str| DeferredReplay {
+            tool_name: tool.to_string(),
+            ..entry()
+        };
+        super::super::with_visibility_memo(async {
+            assert!(record_deferred_replay(own.clone(), named("first")));
+            assert!(record_deferred_replay(own.clone(), named("second")));
+            let taken = take_deferred_replay(&own).map(|entry| entry.tool_name);
+            assert_eq!(taken.as_deref(), Some("second"));
+        })
+        .await;
+        assert!(!record_deferred_replay(own.clone(), named("outside")));
+        assert!(take_deferred_replay(&own).is_none());
+    }
 }

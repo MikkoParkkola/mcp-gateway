@@ -22,29 +22,42 @@ fn account(name: &str) -> AccountKey {
     AccountKey(name.to_owned())
 }
 
-fn error(text: &str) -> crate::Error {
-    crate::Error::Config(text.to_owned())
+fn error(code: i32, text: &str) -> crate::Error {
+    crate::Error::JsonRpc {
+        code,
+        message: text.to_owned(),
+        data: Some(serde_json::json!({ "case": text })),
+    }
 }
 
-fn text(error: Option<crate::Error>) -> Option<String> {
-    error.map(|error| error.to_string())
+/// The whole error, variant and fields, not only its message.
+fn shape(error: Option<crate::Error>) -> Option<String> {
+    error.map(|error| format!("{error:?}"))
 }
 
 #[tokio::test]
-async fn first_wins_maps_keep_the_first_answer() {
+async fn first_wins_maps_keep_the_first_answer_and_reads_do_not_consume() {
     with_visibility_memo(async {
         assert_eq!(record_visibility("s", "t", SCHEMA), SCHEMA);
         assert_eq!(record_visibility("s", "t", Visibility::Visible), SCHEMA);
         assert_eq!(recorded_visibility("s", "t"), Some(SCHEMA));
+        assert_eq!(
+            recorded_visibility("s", "t"),
+            Some(SCHEMA),
+            "a read keeps it"
+        );
         note_denial_code("s", "t", -32003);
         note_denial_code("s", "t", -32601);
         assert_eq!(denial_code("s", "t"), Some(-32003));
+        assert_eq!(denial_code("s", "t"), Some(-32003), "a read keeps it");
         record_account_outcome("s", &account("a"), AccountOutcome::NoView);
         record_account_outcome("s", &account("a"), AccountOutcome::Live);
-        assert_eq!(
-            account_outcome("s", &account("a")),
-            Some(AccountOutcome::NoView)
-        );
+        for _ in 0..2 {
+            assert_eq!(
+                account_outcome("s", &account("a")),
+                Some(AccountOutcome::NoView)
+            );
+        }
     })
     .await;
 }
@@ -54,25 +67,30 @@ async fn overwrite_maps_keep_the_last_answer_and_takes_consume_once() {
     with_visibility_memo(async {
         record_account_binding("s", &account("a"), "one");
         record_account_binding("s", &account("a"), "two");
-        assert_eq!(account_binding("s", &account("a")).as_deref(), Some("two"));
-        record_account_refusal("s", &account("a"), error("first"));
-        record_account_refusal("s", &account("a"), error("second"));
+        for _ in 0..2 {
+            assert_eq!(account_binding("s", &account("a")).as_deref(), Some("two"));
+        }
+        record_account_refusal("s", &account("a"), error(-32001, "first"));
+        record_account_refusal("s", &account("a"), error(-32002, "second"));
         assert_eq!(
-            text(take_account_refusal("s", &account("a"))),
-            Some(error("second").to_string())
+            shape(take_account_refusal("s", &account("a"))),
+            shape(Some(error(-32002, "second")))
         );
         assert!(take_account_refusal("s", &account("a")).is_none());
         record_account_transient("s", "t", "one".to_owned());
         record_account_transient("s", "t", "two".to_owned());
-        assert_eq!(account_transient("s", "t").as_deref(), Some("two"));
+        for _ in 0..2 {
+            assert_eq!(account_transient("s", "t").as_deref(), Some("two"));
+        }
         assert_eq!(take_account_transient("s", "t").as_deref(), Some("two"));
         assert!(take_account_transient("s", "t").is_none());
-        record_resolution_error("s", "t", error("first"));
-        record_resolution_error("s", "t", error("second"));
+        record_resolution_error("s", "t", error(-32001, "first"));
+        record_resolution_error("s", "t", error(-32002, "second"));
         assert!(has_resolution_error("s", "t"));
+        assert!(has_resolution_error("s", "t"), "a check keeps it");
         assert_eq!(
-            text(take_resolution_error("s", "t")),
-            Some(error("second").to_string())
+            shape(take_resolution_error("s", "t")),
+            shape(Some(error(-32002, "second")))
         );
         assert!(!has_resolution_error("s", "t"));
         assert!(take_resolution_error("s", "t").is_none());
@@ -85,6 +103,7 @@ async fn take_any_transient_takes_each_held_one_once() {
     with_visibility_memo(async {
         record_account_transient("s", "t1", "one".to_owned());
         record_account_transient("s", "t2", "two".to_owned());
+        // HashMap order is arbitrary today: which one comes first is not pinned.
         let mut taken = [take_any_account_transient(), take_any_account_transient()];
         taken.sort();
         assert_eq!(taken, [Some("one".to_owned()), Some("two".to_owned())]);
@@ -113,24 +132,48 @@ async fn an_absence_only_upgrades() {
     .await;
 }
 
+/// Every map is keyed by its whole key: an entry under (s1, t1) or
+/// (s1, a1) is invisible under a key that differs in one part, and is still
+/// there afterwards.
 #[tokio::test]
 async fn keys_are_isolated_by_server_tool_and_account() {
     with_visibility_memo(async {
+        let (a1, a2) = (account("a1"), account("a2"));
         record_visibility("s1", "t1", SCHEMA);
         note_denial_code("s1", "t1", -32003);
-        record_account_binding("s1", &account("a1"), "bound");
+        record_account_transient("s1", "t1", "busy".to_owned());
+        record_resolution_error("s1", "t1", error(-32001, "down"));
+        record_account_outcome("s1", &a1, AccountOutcome::NoView);
+        record_account_binding("s1", &a1, "bound");
+        record_account_refusal("s1", &a1, error(-32002, "refused"));
         for (server, tool) in [("s1", "t2"), ("s2", "t1")] {
             assert_eq!(recorded_visibility(server, tool), None);
             assert_eq!(denial_code(server, tool), None);
+            assert_eq!(account_transient(server, tool), None);
+            assert_eq!(take_account_transient(server, tool), None);
+            assert!(!has_resolution_error(server, tool));
+            assert!(take_resolution_error(server, tool).is_none());
         }
-        assert_eq!(account_binding("s1", &account("a2")), None);
-        assert_eq!(account_binding("s2", &account("a1")), None);
+        for (server, key) in [("s1", &a2), ("s2", &a1)] {
+            assert_eq!(account_outcome(server, key), None);
+            assert_eq!(account_binding(server, key), None);
+            assert!(take_account_refusal(server, key).is_none());
+        }
+        assert_eq!(recorded_visibility("s1", "t1"), Some(SCHEMA));
+        assert_eq!(denial_code("s1", "t1"), Some(-32003));
+        assert_eq!(account_transient("s1", "t1").as_deref(), Some("busy"));
+        assert!(has_resolution_error("s1", "t1"));
+        assert_eq!(account_outcome("s1", &a1), Some(AccountOutcome::NoView));
+        assert_eq!(account_binding("s1", &a1).as_deref(), Some("bound"));
+        assert!(take_account_refusal("s1", &a1).is_some());
     })
     .await;
 }
 
-#[test]
-fn outside_a_memo_every_accessor_is_inert() {
+/// Outside a request scope nothing is kept: every record is a no-op, every
+/// read answers its empty value, and a scope opened afterwards sees none of it.
+#[tokio::test]
+async fn outside_a_memo_every_accessor_is_inert() {
     assert_eq!(
         record_visibility("s", "t", SCHEMA),
         SCHEMA,
@@ -138,19 +181,20 @@ fn outside_a_memo_every_accessor_is_inert() {
     );
     assert_eq!(recorded_visibility("s", "t"), None);
     record_absent("s", "t");
+    assert_eq!(recorded_visibility("s", "t"), None);
     note_denial_code("s", "t", -32003);
     assert_eq!(denial_code("s", "t"), None);
     record_account_outcome("s", &account("a"), AccountOutcome::Live);
     assert_eq!(account_outcome("s", &account("a")), None);
     record_account_binding("s", &account("a"), "bound");
     assert_eq!(account_binding("s", &account("a")), None);
-    record_account_refusal("s", &account("a"), error("refused"));
+    record_account_refusal("s", &account("a"), error(-32002, "refused"));
     assert!(take_account_refusal("s", &account("a")).is_none());
     record_account_transient("s", "t", "busy".to_owned());
     assert_eq!(account_transient("s", "t"), None);
     assert_eq!(take_account_transient("s", "t"), None);
     assert_eq!(take_any_account_transient(), None);
-    record_resolution_error("s", "t", error("down"));
+    record_resolution_error("s", "t", error(-32001, "down"));
     assert!(!has_resolution_error("s", "t"));
     assert!(take_resolution_error("s", "t").is_none());
     assert_eq!(
@@ -158,6 +202,16 @@ fn outside_a_memo_every_accessor_is_inert() {
         None,
         "no request and no worker judgement"
     );
+    with_visibility_memo(async {
+        assert_eq!(recorded_visibility("s", "t"), None);
+        assert_eq!(denial_code("s", "t"), None);
+        assert_eq!(account_outcome("s", &account("a")), None);
+        assert_eq!(account_binding("s", &account("a")), None);
+        assert!(take_account_refusal("s", &account("a")).is_none());
+        assert_eq!(account_transient("s", "t"), None);
+        assert!(!has_resolution_error("s", "t"));
+    })
+    .await;
 }
 
 /// A task worker runs its dispatch inside `with_judged`, and that dispatch
