@@ -35,7 +35,7 @@ async fn relay_state_with_firewall(
     window_secs: u64,
 ) -> (Arc<AppState>, tempfile::TempDir, Arc<Firewall>) {
     let config = FirewallConfig {
-        rules: serde_yaml::from_str("[{match: echo, action: block}]").unwrap(),
+        rules: crate::yaml::from_str("[{match: echo, action: block}]").unwrap(),
         collusion: CollusionConfig {
             action: CollusionAction::Block,
             sources: vec![format!("{BACKEND}:{TOOL}")],

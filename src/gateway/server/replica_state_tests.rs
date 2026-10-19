@@ -36,7 +36,7 @@ fn config(replicas: u32, key_server: bool, accounts: bool, modern: bool) -> Conf
     c.server.modern_protocol = modern;
     c.key_server.enabled = key_server;
     if accounts {
-        c.accounts = Some(serde_yaml::from_str(ACCOUNTS_BLOCK).expect("accounts fixture"));
+        c.accounts = Some(crate::yaml::from_str(ACCOUNTS_BLOCK).expect("accounts fixture"));
     }
     c
 }

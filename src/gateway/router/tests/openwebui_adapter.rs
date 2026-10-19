@@ -29,7 +29,7 @@ async fn openwebui_assertion_is_checked_after_real_gateway_authentication() {
     crate::gateway::test_helpers::write_owner_only(&env_path, format!(
         "OWUI_ROUTE_HMAC={secret}\nOWUI_ROUTE_STORE=UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=\n"
     )).unwrap();
-    let config: crate::config::Config = serde_yaml::from_str(&format!(
+    let config: crate::config::Config = crate::yaml::from_str(&format!(
         r#"
 env_files: ['{}']
 auth:
@@ -202,7 +202,7 @@ async fn installations_sharing_one_header_each_verify_with_their_own_key() {
         ),
     )
     .unwrap();
-    let config: crate::config::Config = serde_yaml::from_str(&format!(
+    let config: crate::config::Config = crate::yaml::from_str(&format!(
         r#"
 env_files: ['{}']
 auth:

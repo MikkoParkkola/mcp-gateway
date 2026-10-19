@@ -349,7 +349,7 @@ async fn set_state_visible_tools_counts_admitted() {
 #[tokio::test]
 async fn playbook_step_refusal_names_nothing_withheld() {
     let f = fixture(Auth::Keys).await;
-    let definition: crate::playbook::PlaybookDefinition = serde_yaml::from_str(
+    let definition: crate::playbook::PlaybookDefinition = crate::yaml::from_str(
         "name: probe\ndescription: probe\non_error: continue\nsteps:\n  \
          - name: hidden\n    server: beta\n    tool: beta_tool\n    arguments: {}\n  \
          - name: open\n    server: alpha\n    tool: alpha_read\n    arguments: {}\n",

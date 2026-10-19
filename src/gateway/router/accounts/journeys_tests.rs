@@ -13,7 +13,7 @@ fn config(session: bool) -> crate::config::Config {
     } else {
         ""
     };
-    serde_yaml::from_str(&format!(
+    crate::yaml::from_str(&format!(
         r"
 accounts:
   schema_version: accounts.v1
@@ -99,7 +99,7 @@ fn a_create_body_is_capped_and_its_return_path_matched_exactly() {
          current_key_id: primary\n  keys:\n    primary: env:UNUSED\n  hosted:\n    \
          public_origin: https://chat.fixture.test\n    return_paths: [\"/\", \"{at_cap}\", \"{over_cap}\"]\n"
     );
-    let config: crate::config::Config = serde_yaml::from_str(&yaml).expect("config");
+    let config: crate::config::Config = crate::yaml::from_str(&yaml).expect("config");
     let body = |value: serde_json::Value| axum::body::Bytes::from(value.to_string());
     let ok = serde_json::json!({"account_id": "work", "return_path": "/"});
     assert!(admissible(&config, &body(ok.clone())).is_some(), "control");

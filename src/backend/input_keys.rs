@@ -91,17 +91,12 @@ impl Backend {
         binding: Option<&str>,
         tool: &str,
     ) -> super::CatalogueVerdict {
-        use crate::capability::validator::input_schema_is_structurally_valid;
         if self.blocked_tool_refusal(binding, tool).is_some() {
             return super::CatalogueVerdict::Withholds;
         }
-        match self.get_cached_tool_for(binding, tool) {
-            Some(held) if input_schema_is_structurally_valid(&held.input_schema) => {
-                super::CatalogueVerdict::Offers
-            }
-            Some(_) => super::CatalogueVerdict::Withholds,
-            None => super::CatalogueVerdict::Unknown,
-        }
+        // Judged in place, as `catalogue_verdict_inner` does (MIK-8014 PERF.10).
+        self.with_cached_tool_for(binding, tool, super::catalogue_verdict::judged)
+            .unwrap_or(super::CatalogueVerdict::Unknown)
     }
 
     /// Whether calls to this backend carry the caller's own credential; see
