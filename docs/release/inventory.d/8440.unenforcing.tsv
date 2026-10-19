@@ -1,0 +1,3 @@
+src/gateway/task_service/record.rs	from	1	Provenance::from wraps an Option of targets with no bindings; decides nothing, every binding judgement reads the recorded list
+src/identity_propagation/account_strategies/minter.rs	strategy	1	Minter::strategy coerces the held Arc into the trait object (same allocation); moved unchanged from account_strategies.rs (MIK-8407 file-size split)
+src/identity_propagation/account_strategies/minter.rs	managed	1	Minter::managed is a plain variant getter returning the vault if any; moved unchanged from account_strategies.rs (MIK-8407 file-size split)
