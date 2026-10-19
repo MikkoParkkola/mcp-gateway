@@ -719,7 +719,7 @@ type Presented<'r> = (
 /// except a task submit on a gateway with authentication off.
 /// The routed owner and caller key are the ones admission reads
 /// (`route_owners`, `identity::caller_key`), through the shared function.
-fn intake_judgement(
+pub(super) fn intake_judgement(
     state: &AppState,
     request: &Value,
     (verified_identity, oauth_agent_identity, cert_identity): Proven<'_>,

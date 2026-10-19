@@ -448,3 +448,7 @@ mod tests {
         assert_eq!(args_policy("github_search"), ArgsPolicy::BackendWhole);
     }
 }
+
+#[cfg(test)]
+#[path = "protocol_alloc_tests.rs"]
+mod alloc_tests;
