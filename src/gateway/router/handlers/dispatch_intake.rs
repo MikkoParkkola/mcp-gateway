@@ -136,5 +136,7 @@ mod presented_tests;
 #[path = "dispatch_intake_run.rs"]
 mod run;
 pub(super) use run::intake;
+#[path = "dispatch_intake_session.rs"]
+mod session;
 #[path = "dispatch_intake_view_facts.rs"]
 mod view_facts;
