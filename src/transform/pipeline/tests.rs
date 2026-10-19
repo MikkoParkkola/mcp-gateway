@@ -613,7 +613,7 @@ redact:
 format:
   type: flat
 ";
-    let config: TransformConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: TransformConfig = crate::yaml::from_str(yaml).unwrap();
     assert_eq!(config.project.len(), 2);
     assert_eq!(config.rename.len(), 1);
     assert_eq!(config.redact.len(), 1);
@@ -622,7 +622,7 @@ format:
 
 #[test]
 fn deserialize_empty_yaml_produces_default() {
-    let config: TransformConfig = serde_yaml::from_str("{}").unwrap();
+    let config: TransformConfig = crate::yaml::from_str("{}").unwrap();
     assert!(config.project.is_empty());
     assert!(config.rename.is_empty());
     assert!(config.redact.is_empty());

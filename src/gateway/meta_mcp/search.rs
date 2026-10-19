@@ -75,9 +75,7 @@ fn tool_matches_role(tool: &Tool, want: Option<Role>) -> bool {
 /// A meta tool's own refusal of its arguments, before it collects or sends
 /// anything: it asks for the nonce back, and the witness decides (MIK-8353 3d).
 pub(super) fn asking<T>(caller: &super::MetaMcpCallerContext<'_>, parsed: Result<T>) -> Result<T> {
-    parsed.inspect_err(|_| {
-        caller.signing.inspect(|signing| signing.want_refund());
-    })
+    parsed.inspect_err(|_| super::invoke::ask_refund(caller))
 }
 
 /// Parse a role filter argument (case-insensitive). Absent / null means no

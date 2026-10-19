@@ -3,6 +3,7 @@
 //! `MetaMcp` `tools/call` routing and the dispatch below the gate.
 
 use std::borrow::Cow;
+use std::ops::ControlFlow;
 
 use super::{
     Arc, CallerStanding, ChainSource, DispatchTarget, GateOutcome, JsonRpcResponse, MetaMcp,
@@ -20,12 +21,9 @@ impl MetaMcp {
     /// it, or the call is a retry whose origin the sealed envelope names.
     pub(super) async fn route_direct_backend_call(
         &self,
-        id: RequestId,
-        tool_name: &str,
-        arguments: &Value,
-        session_id: Option<&str>,
-        caller: &MetaMcpCallerContext<'_>,
+        target: &DispatchTarget<'_>,
     ) -> Option<JsonRpcResponse> {
+        let (tool_name, session_id, caller) = (target.tool_name, target.session_id, target.caller);
         match self.surfaced_for(tool_name, caller.scope(), session_id) {
             super::visible::Surfaced::Visible(server) => {
                 // MIK-8356: on a per-user backend the caller's own catalogue
@@ -51,22 +49,10 @@ impl MetaMcp {
                     };
                     self.record_withheld(server, tool_name, reason, caller, session_id)
                         .await;
-                    return self
-                        .route_retry_to_origin_backend(id, tool_name, arguments, session_id, caller)
-                        .await;
+                    return self.route_retry_to_origin_backend(target).await;
                 }
                 let server_name = server.to_owned();
-                return Some(
-                    self.invoke_named_backend_tool(
-                        id,
-                        &server_name,
-                        tool_name,
-                        arguments.clone(),
-                        session_id,
-                        caller,
-                    )
-                    .await,
-                );
+                return Some(self.invoke_named_backend_tool(target, &server_name).await);
             }
             // A surfaced tool withheld from this caller answers exactly as a
             // name that matches no tool: the absent-name path below produces
@@ -78,8 +64,7 @@ impl MetaMcp {
             }
             super::visible::Surfaced::Absent => {}
         }
-        self.route_retry_to_origin_backend(id, tool_name, arguments, session_id, caller)
-            .await
+        self.route_retry_to_origin_backend(target).await
     }
 
     /// Route a retry to the backend that opened the exchange, or `None` when
@@ -108,30 +93,19 @@ impl MetaMcp {
     /// // that backend's tool, and the digest check refuses it downstream.
     pub(super) async fn route_retry_to_origin_backend(
         &self,
-        id: RequestId,
-        tool_name: &str,
-        arguments: &Value,
-        session_id: Option<&str>,
-        caller: &MetaMcpCallerContext<'_>,
+        target: &DispatchTarget<'_>,
     ) -> Option<JsonRpcResponse> {
-        if matches!(tool_name, "gateway_invoke" | "gateway_execute") {
+        if matches!(target.tool_name, "gateway_invoke" | "gateway_execute") {
             return None;
         }
-        let server_name = match invoke::retry_origin_backend(&self.continuation, caller.retry)? {
-            Ok(server) => server,
-            Err(error) => return Some(error_response_preserving_status(id, &error)),
-        };
-        Some(
-            self.invoke_named_backend_tool(
-                id,
-                &server_name,
-                tool_name,
-                arguments.clone(),
-                session_id,
-                caller,
-            )
-            .await,
-        )
+        let server_name =
+            match invoke::retry_origin_backend(&self.continuation, target.caller.retry)? {
+                Ok(server) => server,
+                Err(error) => {
+                    return Some(error_response_preserving_status(target.id.clone(), &error));
+                }
+            };
+        Some(self.invoke_named_backend_tool(target, &server_name).await)
     }
 
     /// Dispatch a backend tool the client named directly, returning the
@@ -146,33 +120,24 @@ impl MetaMcp {
     /// such as Open `WebUI` require when a tool advertises an `outputSchema`.
     pub(super) async fn invoke_named_backend_tool(
         &self,
-        id: RequestId,
+        target: &DispatchTarget<'_>,
         server_name: &str,
-        tool_name: &str,
-        arguments: Value,
-        session_id: Option<&str>,
-        caller: &MetaMcpCallerContext<'_>,
     ) -> JsonRpcResponse {
+        let (tool_name, caller) = (target.tool_name, target.caller);
         let invoke_args =
-            admission::named_tool_envelope(server_name, tool_name, &arguments, caller);
-        let mut chain = (ChainSource::NotEligible, None);
-        let result = match self
-            .invoke_tool_with_source(&invoke_args, session_id, caller)
-            .await
-        {
-            Ok(invoke::SourcedOutcome::Live((content, source, upstream))) => {
-                chain = (source, upstream);
-                Ok(content)
-            }
-            // The lift's already-shaped answer: delivered unchanged (D8).
-            Ok(invoke::SourcedOutcome::Stored(response)) => return response,
-            Err(error) => Err(error),
+            admission::named_tool_envelope(server_name, tool_name, &target.arguments, caller);
+        let sourced = self
+            .invoke_tool_with_source(&invoke_args, target.session_id, caller)
+            .await;
+        let (result, chain) = match live_or_stored(sourced) {
+            ControlFlow::Continue(live) => live,
+            ControlFlow::Break(stored) => return stored,
         };
         // Native: the envelope verbatim. The dispatch's chain source rides on
         // a success only, as on `gateway_invoke` (A3 R5, MIK-8159).
         let declared = caller.input_capabilities;
         response_security::shape_meta_result(
-            id,
+            target.id.clone(),
             tool_name,
             result,
             ResultShape::Native,
@@ -302,7 +267,7 @@ impl MetaMcp {
             {
                 GateOutcome::Refuse(response) => return *response,
                 GateOutcome::RefuseUnasked(response) => {
-                    caller.signing.inspect(|signing| signing.want_refund()); // MIK-8353 3d
+                    invoke::ask_refund(&caller); // MIK-8353 3d
                     return *response;
                 }
                 GateOutcome::Proceed => false,
@@ -354,13 +319,7 @@ impl MetaMcp {
         // Straight to the shaped tail (MIK-8014 design item 2): the
         // `dispatch_below_gate` layer only builds this target.
         self.dispatch_below_gate_shaped(
-            DispatchTarget {
-                id,
-                tool_name,
-                arguments,
-                session_id,
-                caller: &caller,
-            },
+            DispatchTarget::new(id, tool_name, arguments, session_id, &caller),
             ResultShape::Wrapped,
             confirmed_in_band,
         )
@@ -380,13 +339,7 @@ impl MetaMcp {
         confirmed_in_band: bool,
     ) -> JsonRpcResponse {
         self.dispatch_below_gate_shaped(
-            DispatchTarget {
-                id,
-                tool_name,
-                arguments,
-                session_id,
-                caller,
-            },
+            DispatchTarget::new(id, tool_name, arguments, session_id, caller),
             ResultShape::Wrapped,
             confirmed_in_band,
         )
@@ -419,13 +372,7 @@ impl MetaMcp {
         caller: &MetaMcpCallerContext<'_>,
     ) -> JsonRpcResponse {
         self.dispatch_below_gate_shaped(
-            DispatchTarget {
-                id,
-                tool_name,
-                arguments: Cow::Owned(arguments),
-                session_id,
-                caller,
-            },
+            DispatchTarget::new(id, tool_name, Cow::Owned(arguments), session_id, caller),
             ResultShape::Native,
             // A task worker dispatches what was admitted on the request
             // thread; the confirmation, if there was one, was spent there and
@@ -441,13 +388,6 @@ impl MetaMcp {
         shape: ResultShape,
         confirmed_in_band: bool,
     ) -> JsonRpcResponse {
-        let DispatchTarget {
-            id,
-            tool_name,
-            arguments,
-            session_id,
-            caller,
-        } = target;
         // T2.4: a call naming a backend tool directly — because an operator
         // surfaced it, or because it is a retry of an exchange this gateway
         // opened — is routed BEFORE the meta-tool match.
@@ -457,13 +397,17 @@ impl MetaMcp {
         // `requestState` would present an already-spent continuation to a
         // second consumer and the approved action would die as a stale retry.
         // A retry that reaches here confirmed is, by construction, ours.
-        if !confirmed_in_band
-            && let Some(response) = self
-                .route_direct_backend_call(id.clone(), tool_name, &arguments, session_id, caller)
-                .await
+        if !confirmed_in_band && let Some(response) = self.route_direct_backend_call(&target).await
         {
             return response;
         }
+        let DispatchTarget {
+            id,
+            tool_name,
+            arguments,
+            session_id,
+            caller,
+        } = target;
 
         if let Some(execution) = caller.execution
             && let Err(error) =
@@ -487,14 +431,12 @@ impl MetaMcp {
                 let sourced = self
                     .invoke_tool_sourced(&arguments, session_id, caller)
                     .await;
-                match sourced {
-                    Ok(invoke::SourcedOutcome::Live((value, origin, chain))) => {
-                        (source, upstream) = (origin, chain);
-                        Ok(value)
+                match live_or_stored(sourced) {
+                    ControlFlow::Continue((result, chain)) => {
+                        (source, upstream) = chain;
+                        result
                     }
-                    // The lift's already-shaped answer: delivered unchanged (D8).
-                    Ok(invoke::SourcedOutcome::Stored(response)) => return response,
-                    Err(error) => Err(error),
+                    ControlFlow::Break(stored) => return stored,
                 }
             }
             "gateway_get_stats" => self.get_stats(&arguments, caller.is_admin).await,
@@ -517,8 +459,8 @@ impl MetaMcp {
             // gives its signing nonce back (MIK-8340 A4, MIK-8150's rule). A
             // withheld surfaced name ends here too, so both answer alike.
             _ => {
-                // `invoke::nonce_settle::ask_refund`, settled when the call returns.
-                caller.signing.inspect(|signing| signing.want_refund());
+                // Settled when the call returns.
+                invoke::ask_refund(caller);
                 Err(self.no_such_meta_tool(tool_name, caller))
             }
         };
@@ -531,5 +473,24 @@ impl MetaMcp {
             response_security::shape_meta_result(id, tool_name, result, shape, declared, chain);
         response.egress_scanned = inspected;
         response
+    }
+}
+
+/// A dispatch's result and the chain it may carry.
+type Chain = (ChainSource, Option<Arc<crate::protocol::UpstreamChain>>);
+
+/// Split a sourced invocation (MIK-8498 DISPATCH.2): a live result goes on to
+/// be shaped with its chain source, which only a success carries (A3 R5); an
+/// error keeps the default, ineligible chain; a lift's stored answer is
+/// already shaped and is delivered unchanged (D8).
+fn live_or_stored(
+    sourced: crate::Result<invoke::SourcedOutcome>,
+) -> ControlFlow<JsonRpcResponse, (crate::Result<Value>, Chain)> {
+    match sourced {
+        Ok(invoke::SourcedOutcome::Live((value, source, upstream))) => {
+            ControlFlow::Continue((Ok(value), (source, upstream)))
+        }
+        Ok(invoke::SourcedOutcome::Stored(response)) => ControlFlow::Break(response),
+        Err(error) => ControlFlow::Continue((Err(error), (ChainSource::NotEligible, None))),
     }
 }
