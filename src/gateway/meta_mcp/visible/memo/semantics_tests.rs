@@ -287,3 +287,22 @@ async fn changed_instance_prefers_the_request_and_falls_back_to_the_worker() {
     )
     .await;
 }
+
+/// MIK-8498 VISIBLE.1: `recorded_in_scope` tells "no memo" apart from "a
+/// memo with nothing recorded", the distinction `tool_visible_to`'s three
+/// branches read.
+#[tokio::test]
+async fn recorded_in_scope_tells_no_memo_from_an_empty_one() {
+    use super::{Scoped, recorded_in_scope};
+    assert!(matches!(recorded_in_scope("s", "t"), Scoped::NoMemo));
+    with_visibility_memo(async {
+        assert!(matches!(recorded_in_scope("s", "t"), Scoped::InMemo(None)));
+        record_visibility("s", "t", SCHEMA);
+        assert!(matches!(
+            recorded_in_scope("s", "t"),
+            Scoped::InMemo(Some(SCHEMA))
+        ));
+        assert!(matches!(recorded_in_scope("s", "u"), Scoped::InMemo(None)));
+    })
+    .await;
+}

@@ -291,7 +291,8 @@ pub(crate) fn record_visibility(server: &str, tool: &str, judged: Visibility) ->
     in_memo(|memo| memo.record(server, tool, judged)).unwrap_or(judged)
 }
 
-/// Hand `carried` to the next invocation on `server` in the open request.
+/// Hand `carried` to the next invocation of `tool` on `server` in the open
+/// request; a later carry for the same `(server, tool)` replaces it.
 /// Outside a request scope it is dropped, and the dispatch resolves itself.
 pub(crate) fn carry_dispatch(server: &str, tool: &str, carried: Carried) {
     in_memo(|memo| {
@@ -300,7 +301,7 @@ pub(crate) fn carry_dispatch(server: &str, tool: &str, carried: Carried) {
     });
 }
 
-/// Read the resolution carried for `server` without consuming it: the step
+/// Read the resolution carried for `(server, tool)` without consuming it: the step
 /// resume fingerprint derives from the same resolution its dispatch will
 /// use (MIK-8356 fold F6).
 pub(crate) fn with_carried<R>(
@@ -315,8 +316,8 @@ pub(crate) fn with_carried<R>(
     .flatten()
 }
 
-/// Take the resolution carried for `server`, consuming it: a later
-/// invocation on the same server resolves again.
+/// Take the resolution carried for `(server, tool)`, consuming it: a later
+/// invocation of the same `(server, tool)` resolves again.
 pub(crate) fn take_carried(server: &str, tool: &str) -> Option<Carried> {
     in_memo(|memo| memo.carried_credential.take(&target_key(server, tool))).flatten()
 }
