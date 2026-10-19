@@ -224,7 +224,7 @@ impl DirectRouteGuards {
             && !response.excludes_client_accounting()
             && let Some(client) = client
         {
-            state.auth_config.record_client_success(&client.name);
+            state.auth_config.record_client_success(client);
         }
         Ok(response)
     }
