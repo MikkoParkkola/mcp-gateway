@@ -113,3 +113,11 @@ impl MetaMcp {
         self.profile_registry.get_shared(&name)
     }
 }
+
+// SCRATCH PLANT (MIK-8449), never merged: a raw registry read that only a
+// Windows build compiles. The ban pass must report it.
+#[cfg(windows)]
+#[allow(dead_code)]
+fn plant(r: &crate::backend::BackendRegistry) {
+    let _ = r.get("x");
+}
