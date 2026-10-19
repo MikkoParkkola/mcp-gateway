@@ -482,19 +482,19 @@ src/gateway/router/handlers/session_end.rs	sse_deprecated_handler	-	the retired 
 src/gateway/router/handlers/sse.rs	get_era_refusal	-	GET /mcp only, not the POST tools/call path
 src/gateway/router/handlers/sse.rs	mcp_sse_handler	-	GET /mcp SSE stream only, not the POST tools/call path
 src/gateway/router/handlers/sse.rs	stream_request_refusal	-	GET event-stream opens only, not the tools/call path
-src/gateway/router/handlers/tasks.rs	agent_task_owner	-	on-path, untimed: the validated-agent arm of route_task_owner at intake; the timed rows present no agent identity
+src/gateway/router/handlers/tasks/owner.rs	agent_task_owner	-	on-path, untimed: the validated-agent arm of route_task_owner at intake; the timed rows present no agent identity
 src/gateway/router/handlers/tasks.rs	delivered	-	subscriptions/listen task notifications only, not the tools/call path
 src/gateway/router/handlers/tasks.rs	frame	-	subscriptions/listen task notifications only, not the tools/call path
 src/gateway/router/handlers/tasks.rs	policy_context	-	tasks/* methods and task-notification delivery only, not the tools/call path
 src/gateway/router/handlers/tasks.rs	recover_from_upstream	-	tasks/get upstream recovery only, not a live tools/call
 src/gateway/router/handlers/tasks.rs	route	-	tasks/* methods only, not the tools/call path
-src/gateway/router/handlers/tasks.rs	route_owners	http_invoke_tiny	resolved at intake on every HTTP request
-src/gateway/router/handlers/tasks.rs	route_task_owner	http_invoke_tiny	resolved at intake on every HTTP request (via route_owners)
-src/gateway/router/handlers/tasks.rs	session_owner_key	http_invoke_tiny	resolved at intake on every HTTP request (via task_owner_key)
+src/gateway/router/handlers/tasks/owner.rs	route_owners	http_invoke_tiny	resolved at intake on every HTTP request
+src/gateway/router/handlers/tasks/owner.rs	route_task_owner	http_invoke_tiny	resolved at intake on every HTTP request (via route_owners)
+src/gateway/router/handlers/tasks/owner.rs	session_owner_key	http_invoke_tiny	resolved at intake on every HTTP request (via task_owner_key)
 src/gateway/router/handlers/tasks.rs	task_frames	-	subscriptions/listen task notifications only, not the tools/call path
 src/gateway/router/handlers/tasks.rs	task_intent_for_call	-	on-path, untimed: task-augmented calls only (a task member in params); the timed rows carry none
-src/gateway/router/handlers/tasks.rs	task_owner_key	http_invoke_tiny	resolved at intake on every HTTP request (via route_owners)
-src/gateway/router/handlers/tasks.rs	task_principal	-	on-path, untimed: the owner-key arm of route_task_owner (authenticated callers with an owner key); the timed anonymous caller takes another arm
+src/gateway/router/handlers/tasks/owner.rs	task_owner_key	http_invoke_tiny	resolved at intake on every HTTP request (via route_owners)
+src/gateway/router/handlers/tasks/owner.rs	task_principal	-	on-path, untimed: the owner-key arm of route_task_owner (authenticated callers with an owner key); the timed anonymous caller takes another arm
 src/gateway/router/handlers/tasks.rs	tasks_cancel	-	tasks/cancel only, not the tools/call path
 src/gateway/router/handlers/tasks.rs	tasks_get	-	tasks/get only, not the tools/call path
 src/gateway/router/handlers/tasks.rs	tasks_get_judged	-	tasks/* methods only, not the tools/call path

@@ -129,6 +129,18 @@ class CriticalPathCoverage(unittest.TestCase):
         )
         self.assertIn("below the 80% floor", result["HTTP dispatch"])
 
+    def test_the_split_owner_file_still_grades_as_tasks(self):
+        # MIK-8102 P8b moved the task owner family to tasks/owner.rs; its lines
+        # stay in the tasks grade. 50/100 + 100/100 = 75%: dropping owner.rs
+        # from the path would read 100% and pass. A test child beside it is
+        # not product: a `tasks/` prefix would also count its 0/100.
+        owner = entry("src/gateway/router/handlers/tasks/owner.rs", 50, 100)
+        rest = entry("src/gateway/task_service/a.rs", 100, 100)
+        child = entry("src/gateway/router/handlers/tasks/intent_tests.rs", 0, 100)
+        rows = {row[0]: row for row in cpc.grade(report({"tasks": [owner, rest, child]}))}
+        self.assertEqual((2, 150, 200), rows["tasks"][1:4])
+        self.assertIn("below the 80% floor", rows["tasks"][5])
+
     def test_a_path_with_no_measured_file_fails(self):
         self.assertIn("no measured file", failures(report({"OAuth": []}))["OAuth"])
 

@@ -16,7 +16,7 @@ providers:
 ";
 
 fn cap012(yaml: &str) -> Vec<Issue> {
-    let cap: CapabilityDefinition = serde_yaml::from_str(yaml).expect("parses");
+    let cap: CapabilityDefinition = crate::yaml::from_str(yaml).expect("parses");
     validate_capability_definition(&cap, None)
         .into_iter()
         .filter(|i| i.code == "CAP-012")
@@ -134,7 +134,7 @@ fn the_shipped_catalog_reports_only_keys_no_field_reads() {
             let yaml = std::fs::read_to_string(&path).expect("read capability");
             // MIK-7782: a cli/mcp config is parsed strictly, so a shipped file
             // still in the old shape is refused, by name, until it is migrated.
-            if serde_yaml::from_str::<CapabilityDefinition>(&yaml).is_err() {
+            if crate::yaml::from_str::<CapabilityDefinition>(&yaml).is_err() {
                 let stem = path.file_stem().unwrap_or_default().to_string_lossy();
                 assert!(
                     UNMIGRATED.contains(&stem.as_ref()),
