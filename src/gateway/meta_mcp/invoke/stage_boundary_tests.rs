@@ -25,9 +25,11 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 /// refund witness. The probe puts a witness it finds back, so it observes
 /// without changing what the call settles.
 struct Probe {
-    signing: Arc<SigningInvocationContext>,
+    signing: Option<Arc<SigningInvocationContext>>,
     witness_at_dispatch: AtomicBool,
     calls: AtomicUsize,
+    /// The arguments of the last `tools/call` the backend received.
+    sent: std::sync::Mutex<Option<Value>>,
 }
 
 #[async_trait::async_trait]
@@ -35,13 +37,17 @@ impl crate::transport::Transport for Probe {
     async fn request(
         &self,
         method: &str,
-        _params: Option<Value>,
+        params: Option<Value>,
     ) -> crate::Result<JsonRpcResponse> {
         if method == "tools/call" {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            if let Some(witness) = self.signing.take_witness() {
+            *self.sent.lock().expect("probe lock") =
+                params.and_then(|params| params.get("arguments").cloned());
+            if let Some(signing) = &self.signing
+                && let Some(witness) = signing.take_witness()
+            {
                 self.witness_at_dispatch.store(true, Ordering::SeqCst);
-                self.signing.keep_witness(witness);
+                signing.keep_witness(witness);
             }
         }
         Ok(JsonRpcResponse::success(
@@ -86,9 +92,10 @@ async fn the_signing_context_holds_no_witness_while_the_backend_runs() {
     let signing = Arc::new(SigningInvocationContext::external_for_test(Some("n-8488")));
     signing.keep_witness(RefundWitness::at_capture());
     let probe = Arc::new(Probe {
-        signing: Arc::clone(&signing),
+        signing: Some(Arc::clone(&signing)),
         witness_at_dispatch: AtomicBool::new(false),
         calls: AtomicUsize::new(0),
+        sent: std::sync::Mutex::new(None),
     });
     let meta = gateway(&probe);
     let caller = MetaMcpCallerContext {
@@ -103,6 +110,70 @@ async fn the_signing_context_holds_no_witness_while_the_backend_runs() {
         !probe.witness_at_dispatch.load(Ordering::SeqCst),
         "the signing context held a refund witness while the backend ran"
     );
+}
+
+/// S8 (mutant m11): an answer the backend gave and a post-dispatch gate then
+/// refused settles the call's key as executed. A same-key retry is told the
+/// side effect ran, and the backend is not called a second time. Released
+/// instead, the key would readmit the retry and run the side effect again.
+#[tokio::test]
+async fn a_refused_answer_settles_its_key_so_a_retry_does_not_run_again() {
+    let probe = Arc::new(Probe {
+        signing: None,
+        witness_at_dispatch: AtomicBool::new(false),
+        calls: AtomicUsize::new(0),
+        sent: std::sync::Mutex::new(None),
+    });
+    let mut meta = gateway(&probe);
+    meta.enable_idempotency(
+        Arc::new(crate::idempotency::IdempotencyCache::new()),
+        Duration::from_secs(300),
+    );
+    // Every answer is refused after the dispatch: no contract is declared.
+    meta.set_response_contract(crate::config::ResponseContractConfig {
+        enabled: true,
+        action_mode: true,
+        fail_closed: true,
+        ..Default::default()
+    });
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some("k-8488".to_owned()),
+        ..Default::default()
+    };
+    let caller = MetaMcpCallerContext {
+        retry: &retry,
+        ..crate::gateway::meta_mcp::anonymous_caller()
+    };
+    let args = json!({"server": "svc", "tool": "act", "arguments": {}});
+    let first = meta.invoke_tool(&args, Some("session-8488"), &caller).await;
+    assert!(first.is_err(), "the contract gate did not refuse: {first:?}");
+    let second = meta.invoke_tool(&args, Some("session-8488"), &caller).await;
+    assert_eq!(probe.calls.load(Ordering::SeqCst), 1, "the retry ran the call again");
+    let served = format!("{second:?}");
+    assert!(
+        served.contains("will not re-execute"),
+        "the retry was not told the side effect ran: {served}"
+    );
+}
+
+/// S2 (mutant m20): `_full` is a gateway directive. It is stripped before the
+/// keys and the dispatch, so the backend receives the caller's own arguments
+/// and never the directive (MIK-3533).
+#[tokio::test]
+async fn the_full_directive_never_reaches_the_backend() {
+    let probe = Arc::new(Probe {
+        signing: None,
+        witness_at_dispatch: AtomicBool::new(false),
+        calls: AtomicUsize::new(0),
+        sent: std::sync::Mutex::new(None),
+    });
+    let meta = gateway(&probe);
+    let caller = crate::gateway::meta_mcp::anonymous_caller();
+    let args = json!({"server": "svc", "tool": "act", "arguments": {"q": 1, "_full": true}});
+    let outcome = meta.invoke_tool(&args, Some("session-8488"), &caller).await;
+    assert!(outcome.is_ok(), "the control call failed: {outcome:?}");
+    let sent = probe.sent.lock().expect("probe lock").clone();
+    assert_eq!(sent, Some(json!({"q": 1})), "the backend received {sent:?}");
 }
 
 /// The files the send path of `invoke_tool_traced` lives in.
