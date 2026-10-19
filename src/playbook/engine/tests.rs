@@ -606,7 +606,7 @@ on_error: continue
 max_retries: 2
 timeout: 30
 "#;
-    let def: PlaybookDefinition = serde_yaml::from_str(yaml).unwrap();
+    let def: PlaybookDefinition = crate::yaml::from_str(yaml).unwrap();
     assert_eq!(def.name, "research_topic");
     assert_eq!(def.steps.len(), 2);
     assert_eq!(def.steps[0].name, "search");
@@ -629,7 +629,7 @@ steps:
   - name: step1
     tool: some_tool
 ";
-    let def: PlaybookDefinition = serde_yaml::from_str(yaml).unwrap();
+    let def: PlaybookDefinition = crate::yaml::from_str(yaml).unwrap();
     assert_eq!(def.name, "minimal");
     assert_eq!(def.playbook, "1.0");
     assert_eq!(def.on_error, ErrorStrategy::Abort);

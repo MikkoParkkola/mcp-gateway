@@ -29,7 +29,7 @@ fn policies(rules: &str) -> String {
 }
 
 fn engine(rules: &str) -> PolicyEngine {
-    let rules: Vec<KeyServerPolicyConfig> = serde_yaml::from_str(rules).expect("rules parse");
+    let rules: Vec<KeyServerPolicyConfig> = crate::yaml::from_str(rules).expect("rules parse");
     PolicyEngine::new(rules)
 }
 
@@ -133,7 +133,7 @@ async fn verified_email_matches() {
 #[tokio::test]
 async fn role_mapping_ignores_unverified_email() {
     let h = Harness::start(&config_yaml("[]", "")).await;
-    let mapping: ControlPlaneRoleMappingConfig = serde_yaml::from_str(&format!(
+    let mapping: ControlPlaneRoleMappingConfig = crate::yaml::from_str(&format!(
         "rules:\n  - {{ issuer: \"{ISS_A}\", domain: \"corp.com\", role: auditor }}\n"
     ))
     .expect("mapping parses");
@@ -185,7 +185,7 @@ async fn allowed_domains_compare_case_insensitively() {
 
 #[test]
 fn role_mapping_email_domain_case_insensitive() {
-    let mapping: ControlPlaneRoleMappingConfig = serde_yaml::from_str(&format!(
+    let mapping: ControlPlaneRoleMappingConfig = crate::yaml::from_str(&format!(
         "rules:\n  - {{ issuer: \"{ISS_A}\", domain: \"corp.com\", role: admin }}\n  \
          - {{ issuer: \"{ISS_B}\", email: \"a@corp.com\", role: auditor }}\n"
     ))
