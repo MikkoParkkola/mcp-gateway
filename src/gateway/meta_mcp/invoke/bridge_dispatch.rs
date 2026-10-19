@@ -224,6 +224,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 tool: self.tool,
                 session_id: None,
                 api_key_name: self.api_key_name,
+                cost_key: self.caller.cost_key(),
                 trace_id: "",
                 caller_key: None,
             })
@@ -317,7 +318,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 self.headers,
                 self.cache_binding,
                 self.account_credential.clone(),
-                self.api_key_name,
+                self.caller.cost_key(),
                 self.trace_id,
                 self.policy_epoch,
                 self.protocol_revision,

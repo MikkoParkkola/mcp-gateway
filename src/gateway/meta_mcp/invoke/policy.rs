@@ -47,6 +47,7 @@ impl MetaMcp {
             tool,
             session_id,
             api_key_name: None,
+            cost_key: None,
             trace_id: "",
             caller_key: None,
         };

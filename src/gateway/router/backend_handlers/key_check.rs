@@ -54,6 +54,7 @@ pub(super) async fn key_refusal(
         tool,
         session_id: None,
         api_key_name: None,
+        cost_key: None,
         trace_id: tool,
         caller_key: None,
     };

@@ -99,7 +99,9 @@ impl MetaMcp {
         // response cache and carried down unchanged. `None` for every MCP
         // backend and for a capability with no account reference.
         account_credential: Option<Arc<crate::identity_propagation::PreparedAccountCredential>>,
-        api_key_name: Option<&str>,
+        // The per-key cost name (`MetaMcpCallerContext::cost_key`): the
+        // only name this function uses, for the spend it settles (MIK-8507).
+        cost_key: Option<&str>,
         trace_id: &str,
         policy_epoch: u64,
         protocol_revision: Option<&str>,
@@ -172,7 +174,9 @@ impl MetaMcp {
                 server,
                 tool,
                 session_id,
-                api_key_name,
+                // `account_dispatch` reads only `cost_key`.
+                api_key_name: None,
+                cost_key: cost_key,
                 trace_id,
                 // On a session-less call `arm_key` is the non-empty caller key or None
                 // (`experiment_key`): the key the caller's own report reads.
