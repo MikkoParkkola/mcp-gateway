@@ -218,6 +218,9 @@ impl<'a> Settling<'a> {
         // too: its pending input requests are backend output.
         let crate::gateway::task_service::record::Provenance { targets, bindings } =
             self.provenance();
+        // A plan's calls must be durable before it parks; a single call's one
+        // target was recorded at creation.
+        let plan = targets.is_some();
         let targets = targets.unwrap_or_default();
         let Ok(owner) = self.executor.service.owner(self.principal) else {
             return false;
@@ -233,8 +236,14 @@ impl<'a> Settling<'a> {
                 (targets, bindings),
             )
             .await;
-        // A row a cancel already moved is not parked either way.
-        matches!(stored, Ok(()) | Err(StoreError::RevisionConflict))
+        // A row a cancel already moved is not parked either way. For a single
+        // call a closed store refuses the park write too, which logs its cause
+        // and writes nothing, so no row parks without its bindings (MIK-8407).
+        match stored {
+            Ok(()) | Err(StoreError::RevisionConflict) => true,
+            Err(StoreError::Unavailable) => !plan,
+            Err(_) => false,
+        }
     }
 
     /// Commit `input_required` with the continuation, then release: the worker

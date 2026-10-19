@@ -66,20 +66,46 @@ async fn admitted_with(
     key: &str,
     targets: Vec<Target>,
 ) -> (Task, TaskBinding) {
+    admitted_at(store, admission, key, (targets, None)).await
+}
+
+/// [`admitted`] as a 4.0 beta wrote it: `RECORD_VERSION`, no targets, its call
+/// named only through the descriptor (MIK-8407: this binary admits every row
+/// at `BINDING_VERSION`).
+async fn admitted_legacy(
+    store: &TaskStore,
+    admission: &Arc<ExecutionAdmission>,
+    key: &str,
+) -> (Task, TaskBinding) {
+    let legacy = Some(crate::gateway::task_service::record::RECORD_VERSION);
+    admitted_at(store, admission, key, (Vec::new(), legacy)).await
+}
+
+/// [`admitted_with`] at `version` when one is given.
+async fn admitted_at(
+    store: &TaskStore,
+    admission: &Arc<ExecutionAdmission>,
+    key: &str,
+    (targets, version): (Vec<Target>, Option<u32>),
+) -> (Task, TaskBinding) {
     let lease = match admission.admit_task(task_request(ALICE, key)) {
         Ok(TaskAdmission::Owned(lease)) => lease,
         other => panic!("the fixture needs a real admitted binding, got {other:?}"),
     };
     let binding = lease.binding().clone();
     let task = task();
+    let mut prepared = PreparedTask::admitted_with_targets(
+        &task,
+        &binding,
+        lease.into_publication(),
+        "fixture",
+        targets,
+    );
+    if let Some(version) = version {
+        prepared.record.version = version;
+    }
     store
-        .create(PreparedTask::admitted_with_targets(
-            &task,
-            &binding,
-            lease.into_publication(),
-            "fixture",
-            targets,
-        ))
+        .create(prepared)
         .await
         .expect("the fixture's own creation must commit before anything is asserted about it");
     (task, binding)
@@ -124,7 +150,7 @@ async fn marker_01_a_new_record_is_version_two_and_claims_no_dispatch() {
     let record = record_json(&path, task.id());
     assert_eq!(
         record["version"],
-        json!(3),
+        json!(crate::gateway::task_service::record::BINDING_VERSION),
         "the current format retains the dispatch marker introduced in version two"
     );
     assert_eq!(
@@ -393,7 +419,10 @@ async fn marker_05_the_loader_accepts_supported_versions_and_fails_closed_on_oth
         assert!(wire["ttlMs"].as_u64().is_some_and(|ttl| ttl > 0));
         assert!(wire["pollIntervalMs"].as_u64().is_some_and(|poll| poll > 0));
         let record = record_json(&path, task.id());
-        assert_eq!(record["version"], json!(3));
+        assert_eq!(
+            record["version"],
+            json!(crate::gateway::task_service::record::BINDING_VERSION)
+        );
         store.close().await.unwrap();
 
         match version {
@@ -518,7 +547,10 @@ async fn marker_06_a_legacy_working_row_is_not_evidence_of_a_missing_dispatch() 
     let live_store = open(&live_path).await;
     let (live_task, _) = admitted(&live_store, &admission, "k-live").await;
     let never_dispatched = record_json(&live_path, live_task.id());
-    assert_eq!(never_dispatched["version"], json!(3));
+    assert_eq!(
+        never_dispatched["version"],
+        json!(crate::gateway::task_service::record::BINDING_VERSION)
+    );
     assert_eq!(never_dispatched["dispatched"], json!(false));
 
     // The distinction I3's split consumes: both rows are `working` with no

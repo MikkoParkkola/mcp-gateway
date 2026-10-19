@@ -10,22 +10,25 @@ use serde_json::{Map, Value};
 /// rewrites a supported legacy row. Bumped to 3 in the SAME increment that
 /// widened the loader and added [`UpstreamRecord`]: a `version: 3` write
 /// reaching a binary whose loader still hard-refuses 3 bricks the store.
+/// The base format. Rows are admitted at [`BINDING_VERSION`] since MIK-8407;
+/// this names the version a fixture row starts at.
+#[cfg(test)]
 pub(super) const RECORD_VERSION: u32 = 3;
 
 /// The record version that introduced `dispatched`. Spelled separately from
-/// [`RECORD_VERSION`] because it is a fact about one field: a later format bump
+/// `RECORD_VERSION` because it is a fact about one field: a later format bump
 /// must not silently reclassify a v2 row that did record its marker.
 pub(super) const MARKER_VERSION: u32 = 2;
 
 /// The record version that introduced [`Record::upstream`]. Spelled separately
-/// from [`RECORD_VERSION`] for the same reason [`MARKER_VERSION`] is: a later
+/// from `RECORD_VERSION` for the same reason [`MARKER_VERSION`] is: a later
 /// bump must not reclassify a v3 row that did record its handle.
 pub(super) const UPSTREAM_VERSION: u32 = 3;
 
 /// The record version that introduced [`Record::input_round`], and the
 /// highest the loader accepts. Written only on a row that opens a round, the
 /// way `mark_upstream` raises a row to [`UPSTREAM_VERSION`]: every other row
-/// stays at [`RECORD_VERSION`], byte-identical, and an older loader refuses
+/// stays at `RECORD_VERSION`, byte-identical, and an older loader refuses
 /// only a row that holds a continuation it could not honour.
 pub(super) const INPUT_ROUND_VERSION: u32 = 4;
 

@@ -25,20 +25,22 @@ pub(super) async fn follow_upstream_job(
     principal: &str,
     id: &str,
     revision: u64,
+    // The job, its handle, the relay key and the bindings the dispatch ran
+    // under (MIK-8407).
     dispatched: (
         crate::gateway::meta_mcp::upstream::DirectJob,
         String,
         crate::gateway::meta_mcp::invoke::relay::RelayKey<'_>,
+        Vec<crate::gateway::meta_mcp::admission::StepBinding>,
     ),
-    bindings: Vec<crate::gateway::meta_mcp::admission::StepBinding>,
     cancel_rx: &mut watch::Receiver<bool>,
 ) {
-    let (job, handle, relay) = dispatched;
+    let (job, handle, relay, bindings) = dispatched;
     let captured = capture_handle(
         executor,
         (principal, id, revision),
         (&job, &handle),
-        bindings,
+        bindings.clone(),
     )
     .await;
     let followed = (&job, handle.clone(), relay, captured);
@@ -47,6 +49,7 @@ pub(super) async fn follow_upstream_job(
         state,
         (principal, id, revision),
         followed,
+        &bindings,
         cancel_rx,
     )
     .await;

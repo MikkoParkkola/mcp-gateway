@@ -11,8 +11,8 @@ use chrono::{DateTime, Timelike as _, Utc};
 use super::{Shared, StoreError, TaskStore, owned, record_name, serialize};
 use crate::gateway::gateway_writes::WriteRecord;
 use crate::gateway::task_service::record::{
-    BINDING_VERSION, CommittedTask, ERROR_AUTHOR_VERSION, ErrorAuthor, MAX_UPSTREAM_HANDLE_BYTES,
-    Provenance, Record, TARGET_VERSION, Target, UpstreamRecord,
+    CommittedTask, ERROR_AUTHOR_VERSION, ErrorAuthor, MAX_UPSTREAM_HANDLE_BYTES, Provenance,
+    Record, TARGET_VERSION, Target, UpstreamRecord,
 };
 use crate::protocol::JsonRpcError;
 use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
@@ -148,7 +148,7 @@ impl TaskStore {
         let mut state = self.0.state();
         let entry = state.entries.get_mut(id).expect("the fixture task exists");
         entry.record.bindings.clear();
-        entry.record.version = BINDING_VERSION - 1;
+        entry.record.version = crate::gateway::task_service::record::BINDING_VERSION - 1;
     }
 
     /// Test-only: turn `id` into a row whose run dispatched nothing: no

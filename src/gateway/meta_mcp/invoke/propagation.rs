@@ -535,10 +535,21 @@ pub(crate) struct ResolvedDispatch {
 /// The account a dispatch resolved (MIK-8407): the prepared credential, and
 /// the capability's `auth.account` reference it was resolved for, which the
 /// executor refuses to run under any other.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(super) struct DispatchAccount {
     pub(super) credential: Option<Arc<crate::identity_propagation::PreparedAccountCredential>>,
     pub(super) reference: Option<String>,
+}
+
+impl DispatchAccount {
+    /// The credential, handed over once (a bridged round reuses it, never a
+    /// second resolution), with the reference kept for every round.
+    pub(super) fn take(&mut self) -> Self {
+        Self {
+            credential: self.credential.take(),
+            reference: self.reference.clone(),
+        }
+    }
 }
 
 /// [`ResolvedDispatch::into_parts`]: what a dispatch sends with.

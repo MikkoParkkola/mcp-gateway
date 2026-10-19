@@ -74,29 +74,39 @@ async fn rb_restart_bindings_survive_a_reopen_of_the_store() {
     reopened.close().await.unwrap();
 }
 
-/// RB-legacy-held (lead condition; gpt final F2): a row written before
-/// bindings were recorded reads as unrecorded, even after this gateway
-/// settles it, and the store still reads it: nothing about it is deleted.
+/// RB-legacy-held (lead condition; gpt and grok final F2): a row written
+/// before bindings were recorded reads as unrecorded, stays so after this
+/// gateway settles it, and the store still reads it: nothing is deleted.
 #[tokio::test]
 async fn rb_legacy_a_pre_binding_row_reads_unrecorded_and_stays_held() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tasks");
     let store = open(&path).await;
     let task = task();
+    // The row as a 4.0 beta admitted it: the version before bindings.
+    let mut prepared = PreparedTask::for_test(&task, OWNER, 1);
+    prepared.record.version = BINDING_VERSION - 1;
+    store.create(prepared).await.unwrap();
+    // Settled by this gateway, with bindings: it must not become recorded.
     store
-        .create(PreparedTask::for_test(&task, OWNER, 1))
-        .await
-        .unwrap();
-    store
-        .settle_bounded(OWNER, task.id(), 1, (complete(), None), Utc::now())
+        .settle_bounded_by(
+            OWNER,
+            task.id(),
+            1,
+            (
+                complete(),
+                Provenance {
+                    targets: None,
+                    bindings: bound(),
+                },
+                crate::gateway::gateway_writes::WriteRecord::default(),
+            ),
+            crate::gateway::task_service::ErrorAuthor::Gateway,
+            Utc::now(),
+        )
         .await
         .unwrap();
     store.close().await.unwrap();
-    // The row as a 4.0 beta wrote it: the version before bindings.
-    let file = path.join(format!("{}.json", task.id()));
-    let mut value: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
-    value["version"] = json!(BINDING_VERSION - 1);
-    fs::write(&file, serde_json::to_vec(&value).unwrap()).unwrap();
 
     let reopened = open(&path).await;
     for read in 0..2 {

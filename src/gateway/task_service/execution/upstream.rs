@@ -149,23 +149,13 @@ impl TaskExecutor {
             arguments: capture.arguments,
             operation_digest,
         };
+        // MIK-8407: the bindings the dispatch ran under, from the worker's
+        // own log, go durable in the same write as the handle.
         let marked = self
             .service
             .store
-            .mark_upstream(owner.as_digest(), id, revision, record)
+            .mark_upstream(owner.as_digest(), id, revision, (record, bindings))
             .await;
-        // MIK-8407: an upstream job settles later (`settle_followed`), so the
-        // bindings its dispatch ran under, from the worker's own log, are made
-        // durable with its handle.
-        let marked = match marked {
-            Ok(()) => {
-                self.service
-                    .store
-                    .add_targets(owner.as_digest(), id, revision, (Vec::new(), bindings))
-                    .await
-            }
-            error => error,
-        };
         match marked {
             Ok(()) => true,
             Err(error) => {
