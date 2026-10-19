@@ -71,8 +71,8 @@ fn removing_the_last_entry_leaves_an_empty_mapping() {
     );
 }
 
-fn map(yaml: &str) -> serde_yaml::Mapping {
-    serde_yaml::from_str(yaml).expect("mapping")
+fn map(yaml: &str) -> crate::yaml::Mapping {
+    crate::yaml::from_str(yaml).expect("mapping")
 }
 
 fn edited(original: &str, old: &str, new: &str) -> Option<String> {
@@ -206,7 +206,7 @@ fn a_web_ui_write_after_a_concurrent_removal_is_refused() {
     let path = dir.path().join("gateway.yaml");
     let current = "backends:\n  a:  # kept by hand\n    command: a\n";
     crate::gateway::test_helpers::write_owner_only(&path, current).expect("write");
-    let stale: Config = serde_yaml::from_str(
+    let stale: Config = crate::yaml::from_str(
         "backends:\n  a: {command: a}\n  b: {command: b}\n  c: {command: c}\n",
     )
     .expect("config");
@@ -238,7 +238,7 @@ fn the_preserving_writer_reports_each_outcome() {
     let flow = "backends: {a: {command: a}}  # kept by hand\n";
     write(&path, flow).expect("write");
     let two: Config =
-        serde_yaml::from_str("backends:\n  a: {command: a}\n  b: {command: b}\n").expect("config");
+        crate::yaml::from_str("backends:\n  a: {command: a}\n  b: {command: b}\n").expect("config");
     let refusal = edit_config(&path, crate::config_persistence::CommentLoss::Refuse, |c| {
         *c = two.clone();
         Ok(())

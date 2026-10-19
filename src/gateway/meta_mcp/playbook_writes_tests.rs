@@ -41,7 +41,7 @@ async fn dests_after(playbook: &str, name: &str) -> Vec<Value> {
     let (registry, _calls) = counted_backend("alpha");
     let meta = MetaMcp::new(registry);
     let definition: crate::playbook::PlaybookDefinition =
-        serde_yaml::from_str(playbook).expect("the playbook fixture parses");
+        crate::yaml::from_str(playbook).expect("the playbook fixture parses");
     let mut engine = crate::playbook::PlaybookEngine::new();
     engine.register(definition);
     meta.set_playbook_engine(engine);

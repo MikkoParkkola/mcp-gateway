@@ -621,6 +621,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
       - run: cargo clippy --all-targets --all-features -- -D warnings
+      # MIK-8449: the registry-ban pass (MIK-8387) over the Windows build, so
+      # `cfg(windows)` production code is linted like the Linux job's; only
+      # the dedicated config carries the ban, and no other job compiles that
+      # code. Both feature sets, debug profile (the cfg tree is the same in
+      # release). Each native command's status is checked: PowerShell would
+      # otherwise report only the last one.
+      - name: Registry ban, Windows (MIK-8449)
+        env:
+          CLIPPY_CONF_DIR: ${{ github.workspace }}/scripts/lint/registry-ban
+        run: |
+          cargo clippy --lib --bins --all-features -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --lib --bins --no-default-features -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   # The required name. Green only when every Windows shard and the clippy job
   # succeeded: a skipped or cancelled one is red (scripts/ci/check_needs.py).

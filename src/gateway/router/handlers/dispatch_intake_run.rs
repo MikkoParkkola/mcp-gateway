@@ -719,7 +719,7 @@ type Presented<'r> = (
 /// except a task submit on a gateway with authentication off.
 /// The routed owner and caller key are the ones admission reads
 /// (`route_owners`, `identity::caller_key`), through the shared function.
-fn intake_judgement(
+pub(super) fn intake_judgement(
     state: &AppState,
     request: &Value,
     (verified_identity, oauth_agent_identity, cert_identity): Proven<'_>,
@@ -730,7 +730,9 @@ fn intake_judgement(
     // so a task submit there is left to the task path, which admits it under
     // the pooled owner. A submit the task path declines runs as a sync call,
     // whose admission still refuses it -32003.
-    if !state.auth_config.enabled && request.pointer("/params/task").is_some() {
+    // `params.task` by key, not by JSON pointer (MIK-8014 PERF.11).
+    let task = request.get("params").and_then(|params| params.get("task"));
+    if !state.auth_config.enabled && task.is_some() {
         return None;
     }
     let (_, _, owner) = tasks::route_owners(

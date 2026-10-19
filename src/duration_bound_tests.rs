@@ -59,9 +59,9 @@ fn a_human_duration_above_the_bound_is_refused_at_load() {
 fn a_duration_above_the_bound_is_never_written() {
     let mut cache = Config::default().cache;
     cache.default_ttl = MAX_DURATION + Duration::from_secs(1);
-    assert!(serde_yaml::to_string(&cache).is_err());
+    assert!(crate::yaml::to_string(&cache).is_err());
     cache.default_ttl = MAX_DURATION;
-    let written = serde_yaml::to_string(&cache).expect("at the bound");
+    let written = crate::yaml::to_string(&cache).expect("at the bound");
     assert!(written.contains("3155760000s"), "{written}");
 }
 

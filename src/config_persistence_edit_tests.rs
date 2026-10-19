@@ -13,7 +13,7 @@ use super::{CommentLoss, edit_config, edit_config_text, when_waiting_for_lock};
 use crate::config::{BackendConfig, Config};
 
 fn backend(command: &str) -> BackendConfig {
-    serde_yaml::from_str(&format!("command: {command}\n")).expect("backend")
+    crate::yaml::from_str(&format!("command: {command}\n")).expect("backend")
 }
 
 fn names(path: &Path) -> Vec<String> {

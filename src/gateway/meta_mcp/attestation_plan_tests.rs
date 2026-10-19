@@ -41,7 +41,7 @@ fn meta_in(mode: AttestationMode) -> (MetaMcp, Arc<std::sync::atomic::AtomicUsiz
         .with_code_mode(true)
         .with_attestation(validator, mode);
     let definition: crate::playbook::PlaybookDefinition =
-        serde_yaml::from_str(PLAYBOOK).expect("playbook fixture must parse");
+        crate::yaml::from_str(PLAYBOOK).expect("playbook fixture must parse");
     let mut engine = crate::playbook::PlaybookEngine::new();
     engine.register(definition);
     meta.set_playbook_engine(engine);

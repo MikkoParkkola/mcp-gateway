@@ -45,7 +45,7 @@ fn refusal(backend: BackendConfig) -> String {
 
 #[test]
 fn t1_ws_url_parses_to_the_websocket_variant() {
-    let backend: BackendConfig = serde_yaml::from_str(
+    let backend: BackendConfig = crate::yaml::from_str(
         "ws_url: wss://rt.example.com/mcp\n\
          protocol_version: \"2025-11-25\"\n\
          headers: { Authorization: \"Bearer x\" }\n\
@@ -135,7 +135,7 @@ fn oauth() -> OAuthConfig {
 }
 
 fn secret(inject_as: &str) -> CredentialRule {
-    serde_yaml::from_str(&format!(
+    crate::yaml::from_str(&format!(
         "{{name: k, value: \"env:K\", inject_as: {inject_as}, inject_key: \"X-Key\"}}"
     ))
     .expect("credential rule sample parses")
@@ -153,7 +153,7 @@ fn t5_oauth_on_ws_url_is_refused() {
 fn t5_identity_propagation_on_ws_url_is_refused() {
     let mut backend = ws("wss://rt.example.com/mcp");
     backend.identity_propagation = Some(
-        serde_yaml::from_str::<IdentityPropagationConfig>(
+        crate::yaml::from_str::<IdentityPropagationConfig>(
             "{strategy: token_exchange, audience: a, session_mode: stateless}",
         )
         .unwrap(),

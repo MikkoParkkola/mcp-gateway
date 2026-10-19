@@ -186,7 +186,7 @@ fn set_rules(state: &AppState, rules: &[&str]) {
         format!("rules: [{}]", rules.join(", "))
     };
     let mut config = (*state.live_config.get()).clone();
-    config.control_plane.role_mapping = serde_yaml::from_str(&yaml).expect("rules parse");
+    config.control_plane.role_mapping = crate::yaml::from_str(&yaml).expect("rules parse");
     config
         .control_plane
         .role_mapping

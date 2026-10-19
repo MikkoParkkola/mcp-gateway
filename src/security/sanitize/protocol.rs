@@ -28,7 +28,12 @@ pub(crate) fn validate_protocol_fields(
     if let Some(Value::String(id)) = request.get("id") {
         validate_protocol_text(id)?;
     }
-    let meta = request.pointer("/params/_meta");
+    // `params` members are read by key: a JSON pointer unescapes every segment
+    // into a new string, on every call (MIK-8014 PERF.11). None of the keys is
+    // numeric or escaped, so `get` answers exactly as `pointer` did.
+    let params = request.get("params");
+    let member = |key: &str| params.and_then(|params| params.get(key));
+    let meta = member("_meta");
     // The idempotency key too: stripped, two keys could become one.
     let key = crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
     for field in nonces.iter().chain(std::iter::once(&key)) {
@@ -46,10 +51,10 @@ pub(crate) fn validate_protocol_fields(
     // another field (an alias of `id`, `name` or the idempotency key): the
     // envelope's, `params`' own, and every key under `_meta`.
     own_keys(request)?;
-    request.get("params").map_or(Ok(()), own_keys)?;
+    params.map_or(Ok(()), own_keys)?;
     meta.map_or(Ok(()), validate_keys)?;
     let client_capabilities = meta.and_then(|meta| meta.get(KEY_CLIENT_CAPABILITIES));
-    for capabilities in [request.pointer("/params/capabilities"), client_capabilities] {
+    for capabilities in [member("capabilities"), client_capabilities] {
         capabilities.map_or(Ok(()), validate_keys)?;
     }
     // A tool call's arguments, read where the meta route reads them: the
@@ -58,9 +63,9 @@ pub(crate) fn validate_protocol_fields(
     // or nonce. A name off the META_TOOLS roster is a surfaced backend tool,
     // whose arguments `invoke_tool` reads directives from.
     if route == ProtocolRoute::Meta
-        && let Some(Value::String(name)) = request.pointer("/params/name")
+        && let Some(Value::String(name)) = member("name")
         && let Ok(name) = sanitize_string(name)
-        && let Some(arguments) = decoded(request.pointer("/params/arguments"))
+        && let Some(arguments) = decoded(member("arguments"))
     {
         match args_policy(&name) {
             ArgsPolicy::BackendWhole => directive_keys(Some(&*arguments))?,
@@ -448,3 +453,7 @@ mod tests {
         assert_eq!(args_policy("github_search"), ArgsPolicy::BackendWhole);
     }
 }
+
+#[cfg(test)]
+#[path = "protocol_alloc_tests.rs"]
+mod alloc_tests;

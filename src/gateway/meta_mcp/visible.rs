@@ -113,14 +113,14 @@ impl MetaMcp {
         session_id: Option<&str>,
     ) -> Visibility {
         let judge = || self.judge_name(server, tool, scope, session_id);
-        let recorded = VISIBILITY_MEMO.try_with(|memo| memo.recorded(server, tool));
+        let recorded = in_memo(|memo| memo.recorded(server, tool));
         match recorded {
-            Ok(Some(recorded)) => recorded,
+            Some(Some(recorded)) => recorded,
             // A per-user backend's shared-slot verdict is never memoised
             // (MIK-8356 R5.4): the caller verdict records the first one.
-            Ok(None) if self.keeps_per_user_catalogues(server) => judge(),
-            Ok(None) => record_visibility(server, tool, judge()),
-            Err(_) => judge(),
+            Some(None) if self.keeps_per_user_catalogues(server) => judge(),
+            Some(None) => record_visibility(server, tool, judge()),
+            None => judge(),
         }
     }
 
@@ -376,34 +376,124 @@ impl MetaMcp {
 /// exemption on ([`Judged`], MIK-8154).
 #[derive(Default)]
 pub(crate) struct VisibilityMemo {
-    visibility: parking_lot::Mutex<std::collections::HashMap<(String, String), Visibility>>,
-    carried_credential: parking_lot::Mutex<std::collections::HashMap<(String, String), Carried>>,
+    visibility: Keyed<TargetKey, Visibility>,
+    carried_credential: Keyed<TargetKey, Carried>,
     /// MIK-8361: the route stage's refusal code, for the call's one record.
-    denial_code: parking_lot::Mutex<std::collections::HashMap<(String, String), i32>>,
+    denial_code: Keyed<TargetKey, i32>,
     judged: parking_lot::Mutex<Judged>,
     /// MIK-8392: each target account's liveness, filled once per request by
     /// the async pre-pass and only read after it. Never a [`Visibility`]: an
     /// account outcome and a caller-view judgement are kept apart.
-    offer_pending:
-        parking_lot::Mutex<std::collections::HashMap<(String, AccountKey), AccountOutcome>>,
+    offer_pending: Keyed<AccountSlot, AccountOutcome>,
     /// MIK-8392 d0 warm path: the binding the pre-pass's view read gave each
     /// account, so a warm read revalidates its indexed slot without a second
     /// vault read.
-    account_binding: parking_lot::Mutex<std::collections::HashMap<(String, AccountKey), String>>,
+    account_binding: Keyed<AccountSlot, String>,
     /// MIK-8392 (lead ruling 2026-10-12): the live call's own refusal for an
     /// account that can never bind this caller, so a stored read answers what
     /// the live call answers instead of "retry" forever.
-    account_refusal:
-        parking_lot::Mutex<std::collections::HashMap<(String, AccountKey), crate::Error>>,
-    deferred_replay: deferred::Slot,
+    account_refusal: Keyed<AccountSlot, crate::Error>,
+    deferred_replay: Keyed<deferred::DeferredReplayKey, deferred::DeferredReplay>,
     /// MIK-8392 Busy parity: a transient busy custody met by this request's
     /// mint-free view read, carried to the dispatch and consumed once there,
     /// so nothing in the request reads custody a second time.
-    account_transient: parking_lot::Mutex<std::collections::HashMap<(String, String), String>>,
+    account_transient: Keyed<TargetKey, String>,
     /// The route verdict's resolution error for a target (MIK-8392 G1a),
     /// carried to that target's dispatch so it answers without resolving
     /// (and auditing) a second time in one request.
-    resolution_error: parking_lot::Mutex<std::collections::HashMap<(String, String), crate::Error>>,
+    resolution_error: Keyed<TargetKey, crate::Error>,
+}
+
+/// A memo map's key for one `(server, tool)` target.
+type TargetKey = (String, String);
+/// A memo map's key for one `(server, account)` pair.
+type AccountSlot = (String, AccountKey);
+
+fn target_key(server: &str, tool: &str) -> TargetKey {
+    (server.to_owned(), tool.to_owned())
+}
+
+fn account_slot(server: &str, account: &AccountKey) -> AccountSlot {
+    (server.to_owned(), account.clone())
+}
+
+/// One map in the open request's memo (MIK-8498 VISIBLE.2). Every memo map
+/// is this type, so each accessor states only which operation it uses:
+/// first-wins, overwrite, read, take, or take the first that matches.
+struct Keyed<K, V>(parking_lot::Mutex<std::collections::HashMap<K, V>>);
+
+impl<K, V> Default for Keyed<K, V> {
+    fn default() -> Self {
+        Self(parking_lot::Mutex::new(std::collections::HashMap::new()))
+    }
+}
+
+impl<K: std::hash::Hash + Eq, V> Keyed<K, V> {
+    /// Keep `value` unless an answer is recorded; returns the recorded one.
+    fn first(&self, key: K, value: V) -> V
+    where
+        V: Clone,
+    {
+        self.0.lock().entry(key).or_insert(value).clone()
+    }
+
+    /// Record `value`, replacing any earlier one.
+    fn set(&self, key: K, value: V) {
+        self.0.lock().insert(key, value);
+    }
+
+    fn get(&self, key: &K) -> Option<V>
+    where
+        V: Clone,
+    {
+        self.0.lock().get(key).cloned()
+    }
+
+    /// Read the entry in place, without cloning or consuming it.
+    fn with<R>(&self, key: &K, read: impl FnOnce(&V) -> R) -> Option<R> {
+        self.0.lock().get(key).map(read)
+    }
+
+    fn take(&self, key: &K) -> Option<V> {
+        self.0.lock().remove(key)
+    }
+
+    fn contains(&self, key: &K) -> bool {
+        self.0.lock().contains_key(key)
+    }
+
+    /// Take the first entry, in the map's own iteration order, whose value
+    /// matches; the rest stay.
+    fn take_first_where(&self, matches: impl Fn(&V) -> bool) -> Option<V>
+    where
+        K: Clone,
+    {
+        let mut held = self.0.lock();
+        let key = held
+            .iter()
+            .find(|(_, value)| matches(value))
+            .map(|(key, _)| key.clone())?;
+        held.remove(&key)
+    }
+}
+
+impl Keyed<TargetKey, Visibility> {
+    /// Record `key` absent unless it is already withheld (MIK-8387): an
+    /// empty or `Visible` entry becomes `Absent`; any withholding keeps its
+    /// reason. Nothing ever writes `Visible` over it, since `first` keeps it.
+    fn upgrade_to_absent(&self, key: TargetKey) {
+        let mut judged = self.0.lock();
+        let entry = judged.entry(key).or_insert(Visibility::Visible);
+        if *entry == Visibility::Visible {
+            *entry = Visibility::Withheld(Withholding::Absent);
+        }
+    }
+}
+
+/// Run `read` on the open request's memo; `None` outside one. The one place
+/// the memo's task-local is opened for a read or write.
+fn in_memo<R>(read: impl FnOnce(&VisibilityMemo) -> R) -> Option<R> {
+    VISIBILITY_MEMO.try_with(read).ok()
 }
 
 /// The account a target's dispatch would use (MIK-8392): a managed
@@ -435,11 +525,9 @@ pub(crate) enum AccountOutcome {
 /// Record `outcome` for `(server, account)` in the open request's memo unless
 /// one is recorded; outside a memo nothing is kept.
 pub(crate) fn record_account_outcome(server: &str, account: &AccountKey, outcome: AccountOutcome) {
-    let _ = VISIBILITY_MEMO.try_with(|memo| {
+    in_memo(|memo| {
         memo.offer_pending
-            .lock()
-            .entry((server.to_owned(), account.clone()))
-            .or_insert(outcome);
+            .first(account_slot(server, account), outcome)
     });
 }
 
@@ -457,15 +545,7 @@ pub(crate) use account_memo::{
 /// `None`, and the caller fails closed. It never judges afresh (unlike the
 /// visibility fallback in [`MetaMcp::tool_visible_to`]).
 pub(crate) fn account_outcome(server: &str, account: &AccountKey) -> Option<AccountOutcome> {
-    VISIBILITY_MEMO
-        .try_with(|memo| {
-            memo.offer_pending
-                .lock()
-                .get(&(server.to_owned(), account.clone()))
-                .copied()
-        })
-        .ok()
-        .flatten()
+    in_memo(|memo| memo.offer_pending.get(&account_slot(server, account))).flatten()
 }
 
 /// A caller verdict's resolution, waiting for the first invocation on its
@@ -495,20 +575,13 @@ pub(crate) struct Judged {
 
 impl VisibilityMemo {
     fn recorded(&self, server: &str, tool: &str) -> Option<Visibility> {
-        self.visibility
-            .lock()
-            .get(&(server.to_owned(), tool.to_owned()))
-            .copied()
+        self.visibility.get(&target_key(server, tool))
     }
 
     /// Record `judged` unless an answer is already recorded; returns the
     /// recorded answer, so the first judgement wins.
     fn record(&self, server: &str, tool: &str, judged: Visibility) -> Visibility {
-        *self
-            .visibility
-            .lock()
-            .entry((server.to_owned(), tool.to_owned()))
-            .or_insert(judged)
+        self.visibility.first(target_key(server, tool), judged)
     }
 }
 
@@ -645,3 +718,6 @@ mod memo_tests {
         .await;
     }
 }
+
+#[cfg(test)]
+mod memo_semantics_tests;
