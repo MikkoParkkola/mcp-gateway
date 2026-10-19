@@ -564,35 +564,90 @@ fn an_undeclared_key_refusal_releases_its_key_at_the_refusal() {
 /// would bypass `settle_pre_send` and fail here.
 #[test]
 fn every_pre_send_settlement_goes_through_the_mapping() {
-    const PATH: [(&str, &str); 8] = [
-        ("invoke.rs", include_str!("../invoke.rs")),
-        ("gate.rs", include_str!("gate.rs")),
-        ("pre_dispatch.rs", include_str!("pre_dispatch.rs")),
-        ("stored_proof.rs", include_str!("stored_proof.rs")),
-        ("relay.rs", include_str!("relay.rs")),
-        ("send.rs", include_str!("send.rs")),
-        ("post_dispatch.rs", include_str!("post_dispatch.rs")),
-        ("legacy_bridge.rs", include_str!("legacy_bridge.rs")),
-    ];
     const PRIMITIVES: [&str; 4] = [
         "ask_refund(",
         "give_back_unsent(",
         "note_served(",
         "want_refund(",
     ];
-    let mut direct = Vec::new();
-    for (file, source) in PATH {
-        for primitive in PRIMITIVES {
-            if source.contains(primitive) {
-                direct.push(format!("{file}: {primitive}"));
-            }
+    // Every production file on the invoke path, read at run time so a new
+    // sibling module is scanned the day it lands (final review): `invoke.rs`
+    // and each `invoke/*.rs` that is not a test file, less the mapping itself.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway/meta_mcp");
+    let mut files = vec![root.join("invoke.rs")];
+    for entry in std::fs::read_dir(root.join("invoke")).expect("the invoke directory") {
+        let path = entry.expect("a directory entry").path();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if path.extension().is_some_and(|e| e == "rs")
+            && !name.ends_with("_tests.rs")
+            && !name.contains("test_support")
+            && name != "nonce_settle.rs"
+        {
+            files.push(path);
         }
     }
+    assert!(
+        files.len() > 30,
+        "premise: the scan found {} files",
+        files.len()
+    );
+    let mut direct = Vec::new();
+    let mut mapped = 0;
+    for file in &files {
+        let source = std::fs::read_to_string(file).expect("a readable source file");
+        for primitive in PRIMITIVES {
+            if source.contains(primitive) {
+                direct.push(format!("{}: {primitive}", file.display()));
+            }
+        }
+        mapped += source.matches("settle_pre_send(").count();
+    }
     assert!(direct.is_empty(), "settled outside the mapping: {direct:?}");
-    // The scan reads what it claims to: the mapping is in use on the path.
-    let mapped: usize = PATH
-        .iter()
-        .map(|(_, source)| source.matches("settle_pre_send(").count())
-        .sum();
-    assert!(mapped >= 15, "the path calls the mapping {mapped} times");
+    // Exactly the inventory (design r11 section 4): a site added or removed
+    // updates this count and its row together.
+    assert_eq!(
+        mapped, 15,
+        "the invoke path calls the mapping {mapped} times"
+    );
+}
+
+/// The text of one pairing arm: from `start` to the first `end` after it.
+fn arm<'s>(source: &'s str, start: &str, end: &str) -> &'s str {
+    let from = source.find(start).expect("the arm's start is in the file");
+    let to = from + source[from..].find(end).expect("the arm's end follows it");
+    &source[from..to]
+}
+
+/// The pairing arm releases its key through the mapping only, never directly.
+fn releases_through_the_mapping(arm: &str) -> bool {
+    arm.contains("PreSendExit::ReleaseKey(") && !arm.contains(".release()")
+}
+
+/// INVOKE.6's pairing rule (final review): the two refusals whose key and
+/// nonce halves are split release the key through `ReleaseKey`, never with a
+/// direct `.release()`. Key-only releases elsewhere are out of its scope.
+#[test]
+fn the_pairing_refusals_release_their_key_through_the_mapping() {
+    let relay = arm(
+        include_str!("relay.rs"),
+        "pub(super) fn refuse_relay(",
+        "Err(refused)",
+    );
+    let sealed = arm(
+        include_str!("pre_dispatch.rs"),
+        "if let Some(refusal) = refusal {",
+        "content_refuses_value",
+    );
+    assert!(releases_through_the_mapping(relay), "refuse_relay: {relay}");
+    assert!(
+        releases_through_the_mapping(sealed),
+        "the sealed refusal: {sealed}"
+    );
+    // The check bites: a direct release beside a no-op mapping call fails it.
+    let direct = "settle_pre_send(caller, PreSendExit::ReleaseKey(None));\n\
+                  if let Some(r) = reservation { r.release(); }";
+    assert!(!releases_through_the_mapping(direct));
 }
