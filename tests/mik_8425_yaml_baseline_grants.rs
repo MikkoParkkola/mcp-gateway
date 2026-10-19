@@ -15,6 +15,8 @@
 #[path = "common/mik_8425_golden.rs"]
 mod golden;
 
+// Not called here: `golden` names `crate::yaml::Value`, so this crate
+// declares the module it resolves.
 #[path = "common/yaml.rs"]
 mod yaml;
 
