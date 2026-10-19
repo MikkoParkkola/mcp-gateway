@@ -11,6 +11,7 @@
 use super::*;
 
 // MIK-8407: the re-bind helpers, kept apart for the 800-line ceiling.
+#[path = "account_bridge_rebind.rs"]
 mod account_bridge_rebind;
 
 /// The backend every direct-route case calls.
