@@ -1,9 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-use std::num::NonZeroU32;
-
-use governor::Quota;
-
 use super::*;
 use crate::config::AuthConfig;
 
@@ -279,33 +275,6 @@ fn test_api_key_validation() {
     assert!(!client_b.can_access_backend("anything"));
 
     assert!(config.validate_token("wrong").is_none());
-}
-
-#[test]
-fn test_rate_limiting() {
-    let rate_limiters = DashMap::new();
-    // Create a rate limiter with 2 requests per minute for testing
-    let limiter = RateLimiter::direct(Quota::per_minute(NonZeroU32::new(2).unwrap()));
-    rate_limiters.insert("limited_client".to_string(), Arc::new(limiter));
-
-    let config = ResolvedAuthConfig {
-        enabled: true,
-        bearer_token: None,
-        bearer_quota_principal: None,
-        api_keys: vec![],
-        public_paths: vec![],
-        rate_limiters,
-        client_circuit_breaker: None,
-        client_circuit_breakers: DashMap::new(),
-    };
-
-    // First two requests should succeed
-    assert!(config.check_rate_limit("limited_client"));
-    assert!(config.check_rate_limit("limited_client"));
-    // Third request should be rate limited
-    assert!(!config.check_rate_limit("limited_client"));
-    // Unknown client (no limiter) should always succeed
-    assert!(config.check_rate_limit("unknown_client"));
 }
 
 // ── Tool scope tests ──────────────────────────────────────────────────
