@@ -84,9 +84,9 @@ fn posture_defaults_to_standard_and_round_trips() {
         (SecurityPosture::Standard, "standard"),
         (SecurityPosture::Hardened, "hardened"),
     ] {
-        assert_eq!(serde_yaml::to_string(&value).unwrap().trim(), text);
+        assert_eq!(crate::yaml::to_string(&value).unwrap().trim(), text);
         assert_eq!(
-            serde_yaml::from_str::<SecurityPosture>(text).unwrap(),
+            crate::yaml::from_str::<SecurityPosture>(text).unwrap(),
             value
         );
     }

@@ -73,7 +73,7 @@ fn a_relay_block_is_an_anomaly_block_and_a_mixed_one_is_not() {
 
 fn load(firewall: &str) -> crate::Result<()> {
     let yaml = format!("security:\n  firewall:\n{firewall}");
-    let config: Config = serde_yaml::from_str(&yaml).expect("the YAML parses");
+    let config: Config = crate::yaml::from_str(&yaml).expect("the YAML parses");
     config.validate()
 }
 

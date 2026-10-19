@@ -33,7 +33,7 @@ pub(crate) struct Harness {
 
 /// Parse a `key_server` YAML document, then run load-time validation.
 pub(crate) fn load(yaml: &str) -> Result<KeyServerConfig, String> {
-    let cfg: KeyServerConfig = serde_yaml::from_str(yaml).map_err(|e| e.to_string())?;
+    let cfg: KeyServerConfig = crate::yaml::from_str(yaml).map_err(|e| e.to_string())?;
     cfg.validate().map_err(|e| e.to_string())?;
     Ok(cfg)
 }

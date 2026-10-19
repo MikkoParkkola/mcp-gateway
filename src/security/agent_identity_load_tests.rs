@@ -12,9 +12,10 @@ use crate::config::Config;
 #[test]
 fn a_bare_string_known_agent_names_the_source_it_must_declare() {
     let sentinel = "cfgleak-sentinel-agent";
-    let error = serde_yaml::from_str::<AgentIdentityConfig>(&format!("known_agents: [{sentinel}]"))
-        .expect_err("a bare known_agents entry must not parse")
-        .to_string();
+    let error =
+        crate::yaml::from_str::<AgentIdentityConfig>(&format!("known_agents: [{sentinel}]"))
+            .expect_err("a bare known_agents entry must not parse")
+            .to_string();
     for needle in ["mtls", "jwt"] {
         assert!(error.contains(needle), "missing {needle}: {error}");
     }
@@ -26,7 +27,7 @@ fn a_bare_string_known_agent_names_the_source_it_must_declare() {
 #[test]
 fn a_qualified_known_agent_parses_and_a_bad_source_says_why() {
     let config: AgentIdentityConfig =
-        serde_yaml::from_str("known_agents: [{source: mtls, id: runner}]").unwrap();
+        crate::yaml::from_str("known_agents: [{source: mtls, id: runner}]").unwrap();
     assert_eq!(
         config.known_agents,
         vec![KnownAgent {
@@ -35,7 +36,7 @@ fn a_qualified_known_agent_parses_and_a_bad_source_says_why() {
         }]
     );
     let sentinel = "cfgleak-sentinel-source";
-    let error = serde_yaml::from_str::<AgentIdentityConfig>(&format!(
+    let error = crate::yaml::from_str::<AgentIdentityConfig>(&format!(
         "known_agents: [{{source: {sentinel}, id: x}}]"
     ))
     .unwrap_err()

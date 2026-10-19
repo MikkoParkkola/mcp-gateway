@@ -166,7 +166,7 @@ fn graphql_mutation_and_unbounded_query_are_gated() {
             .any(|gate| { gate.kind == ImportReviewGateKind::DestructiveAction })
     );
     let viewer_yaml: serde_json::Value =
-        serde_yaml::from_str(viewer.generated_yaml.as_deref().expect("viewer yaml")).unwrap();
+        crate::yaml::from_str(viewer.generated_yaml.as_deref().expect("viewer yaml")).unwrap();
     assert_eq!(
         viewer_yaml["providers"]["primary"]["service"],
         json!("graphql")
@@ -181,7 +181,7 @@ fn graphql_mutation_and_unbounded_query_are_gated() {
     );
     assert_eq!(viewer_yaml["metadata"]["read_only"], json!(true));
 
-    let mutation_yaml: serde_json::Value = serde_yaml::from_str(
+    let mutation_yaml: serde_json::Value = crate::yaml::from_str(
         delete_project
             .generated_yaml
             .as_deref()
@@ -225,7 +225,7 @@ fn postman_collection_imports_requests_as_disabled_drafts() {
         "string"
     );
     let generated_yaml: serde_json::Value =
-        serde_yaml::from_str(draft.generated_yaml.as_deref().expect("postman yaml")).unwrap();
+        crate::yaml::from_str(draft.generated_yaml.as_deref().expect("postman yaml")).unwrap();
     assert_eq!(
         generated_yaml["providers"]["primary"]["service"],
         json!("rest")

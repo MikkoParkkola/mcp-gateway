@@ -350,7 +350,7 @@ impl World {
             ),
         )
         .expect("write env");
-        let config: crate::config::Config = serde_yaml::from_str(&format!(
+        let config: crate::config::Config = crate::yaml::from_str(&format!(
             "env_files: ['{}']\naccounts:\n  schema_version: accounts.v1\n  enabled: false\n  \
              deployment: single_process\n  instance_id: audience\n  \
              store_dir: /unused/audience-store\n  authority_dir: /unused/audience-authority\n  \
