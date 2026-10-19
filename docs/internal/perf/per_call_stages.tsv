@@ -12,6 +12,7 @@ src/gateway/meta_mcp/call_dispatch.rs	handle_tools_call	-	by-value wrapper kept 
 src/gateway/meta_mcp/call_dispatch.rs	handle_tools_call_ref	http_invoke_tiny	the tools/call entry both transports call
 src/gateway/meta_mcp/call_dispatch.rs	handle_tools_call_unsettled	http_invoke_tiny	the tools/call gates before dispatch
 src/gateway/meta_mcp/call_dispatch.rs	invoke_named_backend_tool	-	direct and retry-to-origin routes only
+src/gateway/meta_mcp/call_dispatch.rs	live_or_stored	http_invoke_tiny	on the HTTP gateway_invoke path (the gateway_invoke arm splits its sourced outcome)
 src/gateway/meta_mcp/call_dispatch.rs	route_direct_backend_call	-	direct /mcp/{backend} route, not the meta tools/call path
 src/gateway/meta_mcp/call_dispatch.rs	route_retry_to_origin_backend	-	retry-to-origin path only
 src/gateway/meta_mcp/call_dispatch/task_intake.rs	shape_repeat_fill	-	on-path, untimed: a repeated task call or plan replay (admission_replay) whose account fill failed only; the timed rows carry no task member
