@@ -383,7 +383,7 @@ async fn c2_a_cancel_behind_a_non_terminal_move_is_retried_at_the_current_revisi
             id: &id,
             revision: captured,
             event: TaskTransition::StatusMessage(Some("moved".into())),
-            targets: None,
+            targets: crate::gateway::task_service::Provenance::default(),
             author: crate::gateway::task_service::ErrorAuthor::Gateway,
             writes: crate::gateway::gateway_writes::WriteRecord::default(),
         })
@@ -439,7 +439,7 @@ impl crate::gateway::task_service::CommitObserver for MoveOnRetry {
                 id,
                 revision: current.revision,
                 event,
-                targets: None,
+                targets: crate::gateway::task_service::Provenance::default(),
                 author: crate::gateway::task_service::ErrorAuthor::Gateway,
                 writes: crate::gateway::gateway_writes::WriteRecord::default(),
             })
@@ -480,7 +480,7 @@ async fn cancel_that_loses_twice(
             id: &id,
             revision: captured,
             event: TaskTransition::StatusMessage(Some("moved".into())),
-            targets: None,
+            targets: crate::gateway::task_service::Provenance::default(),
             author: crate::gateway::task_service::ErrorAuthor::Gateway,
             writes: crate::gateway::gateway_writes::WriteRecord::default(),
         })

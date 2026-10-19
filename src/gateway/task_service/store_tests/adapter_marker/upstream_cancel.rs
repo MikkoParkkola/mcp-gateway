@@ -270,10 +270,13 @@ async fn a_row_without_a_naming_target_copies_the_backend_and_still_fits() {
             &owner,
             &id,
             1,
-            vec![Target {
-                server: "elsewhere".into(),
-                tool: "other".into(),
-            }],
+            (
+                vec![Target {
+                    server: "elsewhere".into(),
+                    tool: "other".into(),
+                }],
+                Vec::new(),
+            ),
         )
         .await
         .unwrap();

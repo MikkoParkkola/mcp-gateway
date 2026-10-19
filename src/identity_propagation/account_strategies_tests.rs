@@ -209,6 +209,7 @@ fn installed(
         required: true,
         token_exchange_endpoint: None,
         token_exchange_scope: None,
+        fingerprint: String::new(),
         minter: Minter::External(strategy),
     }
 }
@@ -248,7 +249,7 @@ async fn revalidate_refuses_each_way_the_world_moved_since_the_mint() {
         check(&registry, &prepared, CallerProof::Verified(&alice)).await,
         "no longer declared",
     );
-    registry.declare("acct", "google", DescriptorMode::External);
+    registry.declare("acct", "google", DescriptorMode::External, "");
     refused(
         check(&registry, &prepared, CallerProof::Verified(&alice)).await,
         "no account strategy is installed",
@@ -263,7 +264,7 @@ async fn revalidate_refuses_each_way_the_world_moved_since_the_mint() {
         None,
         "control: the same world revalidates while declared external"
     );
-    registry.declare("acct", "google", DescriptorMode::Shared);
+    registry.declare("acct", "google", DescriptorMode::Shared, "");
     refused(
         check(&registry, &prepared, CallerProof::Verified(&alice)).await,
         "declared shared",

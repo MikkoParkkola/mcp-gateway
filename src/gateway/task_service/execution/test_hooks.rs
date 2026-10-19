@@ -64,7 +64,7 @@ impl TaskExecutor {
             revision,
             (
                 TaskTransition::Cancel,
-                None,
+                crate::gateway::task_service::record::Provenance::default(),
                 crate::gateway::gateway_writes::WriteRecord::default(),
             ),
             ErrorAuthor::Gateway,

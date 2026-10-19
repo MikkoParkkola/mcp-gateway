@@ -15,8 +15,11 @@ use crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::Second;
 /// `work-gmail`.
 async fn two_accounts() -> Fx {
     let auth = sole_operator();
-    let mut gateway =
-        DirectAccountGateway::with_second(auth.clone(), &Binding::Connected, Second::PersonalAccount);
+    let mut gateway = DirectAccountGateway::with_second(
+        auth.clone(),
+        &Binding::Connected,
+        Second::PersonalAccount,
+    );
     let (mut state, store) = super::super::tests::test_router_app_state_with_auth(&auth).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.backends = gateway.backends();
@@ -79,7 +82,13 @@ async fn revoke_and_rebind(fx: &Fx) {
 /// its task id.
 async fn completed_task(fx: &Fx, key: &str) -> String {
     answer_marker(fx);
-    let made = send(fx, "tools/call", "gateway_invoke", invoke_params(Some(key), true)).await;
+    let made = send(
+        fx,
+        "tools/call",
+        "gateway_invoke",
+        invoke_params(Some(key), true),
+    )
+    .await;
     let id = made
         .pointer("/result/taskId")
         .and_then(Value::as_str)
@@ -112,7 +121,10 @@ async fn rb_read_task_output_of_a_revoked_account_is_refused_after_a_rebind() {
     let fx = two_accounts().await;
     let id = completed_task(&fx, "rb-read").await;
     let before = task_result(&fx, &id).await;
-    assert!(before.to_string().contains(MARKER), "premise: read serves: {before}");
+    assert!(
+        before.to_string().contains(MARKER),
+        "premise: read serves: {before}"
+    );
     let sent = fx.gateway.tool_calls().len();
     revoke_and_rebind(&fx).await;
     let read = task_result(&fx, &id).await;
@@ -129,7 +141,13 @@ async fn rb_repeat_task_call_of_a_revoked_account_is_refused_after_a_rebind() {
     let id = completed_task(&fx, "rb-repeat").await;
     let sent = fx.gateway.tool_calls().len();
     revoke_and_rebind(&fx).await;
-    let again = send(&fx, "tools/call", "gateway_invoke", invoke_params(Some("rb-repeat"), true)).await;
+    let again = send(
+        &fx,
+        "tools/call",
+        "gateway_invoke",
+        invoke_params(Some("rb-repeat"), true),
+    )
+    .await;
     eprintln!("RB-repeat: {again}");
     assert_ne!(
         again.pointer("/result/taskId").and_then(Value::as_str),
@@ -151,18 +169,81 @@ async fn rb_control_without_a_rebind_the_stored_output_is_served() {
     let fx = two_accounts().await;
     let id = completed_task(&fx, "rb-control").await;
     answer_marker(&fx);
-    let first = send(&fx, "tools/call", "gateway_invoke", invoke_params(Some("rb-c-sync"), false)).await;
+    let first = send(
+        &fx,
+        "tools/call",
+        "gateway_invoke",
+        invoke_params(Some("rb-c-sync"), false),
+    )
+    .await;
     assert!(first.to_string().contains(MARKER), "premise: {first}");
     let sent = fx.gateway.tool_calls().len();
     let read = task_result(&fx, &id).await;
     assert!(read.to_string().contains(MARKER), "RB-control read: {read}");
-    let again = send(&fx, "tools/call", "gateway_invoke", invoke_params(Some("rb-control"), true)).await;
+    let again = send(
+        &fx,
+        "tools/call",
+        "gateway_invoke",
+        invoke_params(Some("rb-control"), true),
+    )
+    .await;
     assert_eq!(
         again.pointer("/result/taskId").and_then(Value::as_str),
         Some(id.as_str()),
         "RB-control repeat: {again}"
     );
-    let sync = send(&fx, "tools/call", "gateway_invoke", invoke_params(Some("rb-c-sync"), false)).await;
+    let sync = send(
+        &fx,
+        "tools/call",
+        "gateway_invoke",
+        invoke_params(Some("rb-c-sync"), false),
+    )
+    .await;
     assert!(sync.to_string().contains(MARKER), "RB-control sync: {sync}");
-    assert_eq!(fx.gateway.tool_calls().len(), sent, "RB-control: sent again");
+    assert_eq!(
+        fx.gateway.tool_calls().len(),
+        sent,
+        "RB-control: sent again"
+    );
+}
+
+/// RB-legacy (design r4 E4; mutant M-legacy): a row written before bindings
+/// were recorded is refused on a read and on a repeat, with the legacy text.
+/// Its key stays held (the repeat makes no new task) and the row stays
+/// readable by the store.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rb_legacy_a_pre_binding_row_is_refused_and_kept() {
+    let fx = two_accounts().await;
+    let id = completed_task(&fx, "rb-legacy").await;
+    let sent = fx.gateway.tool_calls().len();
+    fx.tasks.service.store.unrecord_bindings_for_test(&id);
+    let read = task_result(&fx, &id).await;
+    eprintln!("RB-legacy read: {read}");
+    assert_refused_unsent(&fx, "RB-legacy read", &read, sent);
+    assert!(
+        read.to_string().contains("predates credential binding"),
+        "RB-legacy: not the legacy refusal: {read}"
+    );
+    let again = send(
+        &fx,
+        "tools/call",
+        "gateway_invoke",
+        invoke_params(Some("rb-legacy"), true),
+    )
+    .await;
+    assert!(
+        again.pointer("/result/taskId").is_none(),
+        "RB-legacy: a new task: {again}"
+    );
+    assert_refused_unsent(&fx, "RB-legacy repeat", &again, sent);
+    let owner = fx
+        .tasks
+        .service
+        .store
+        .owner_digest_for_test(&id)
+        .expect("RB-legacy: the row was deleted");
+    assert!(
+        fx.tasks.service.store.get(&owner, &id).is_ok(),
+        "RB-legacy: unreadable"
+    );
 }

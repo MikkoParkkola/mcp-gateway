@@ -748,8 +748,8 @@ async fn s6_retained_gateway_execute_is_served_not_rerun() {
 
 #[path = "stored_replay_liveness_plan_tests.rs"]
 mod plan;
+mod rebind;
 #[path = "stored_replay_liveness_site5_tests.rs"]
 mod site5;
 #[path = "stored_replay_liveness_token_exchange_tests.rs"]
 mod token_exchange;
-mod rebind;

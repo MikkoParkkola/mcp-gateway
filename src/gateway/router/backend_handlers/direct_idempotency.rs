@@ -88,10 +88,9 @@ pub(super) fn idempotency_outcome(
 /// back: nothing dispatched under it.
 pub(super) fn execution_lease(
     scope: Scope<'_>,
-    envelope: &Envelope,
-    preflight: &Preflight,
+    (envelope, preflight, propagation): (&Envelope, &Preflight, &Propagation),
     guarded: &mut Option<GuardOutcome>,
-) -> Result<(Option<SyncLease>, Option<JsonRpcResponse>), Rejection> {
+) -> Result<(Option<SyncLease>, Option<StoredReplay>), Rejection> {
     let hit = matches!(
         guarded,
         Some(GuardOutcome::CachedResult(_) | GuardOutcome::CachedError(_))
@@ -135,21 +134,47 @@ pub(super) fn execution_lease(
     );
     match admitted {
         Ok(SyncAdmission::Unprotected) => Ok((None, None)),
-        Ok(SyncAdmission::Owned(lease)) => Ok((Some(lease), None)),
+        Ok(SyncAdmission::Owned(lease)) => {
+            // MIK-8440: the forwarded credential this execution runs under.
+            if binds_passthrough(scope) {
+                lease.note_binding((scope.name, tool), propagation.identity_key.as_deref());
+            }
+            Ok((Some(lease), None))
+        }
         // Released before the replay's delivery begins, not when it ends.
         // The second element is the replayed execution's record facts, which
         // `/mcp` writes into its invocation record. The direct route records a
         // replay as it records a cache hit (`note_cached`), so it sets them aside.
-        Ok(SyncAdmission::Replay(response, ..)) => {
+        Ok(SyncAdmission::Replay(response, _, _, _, bindings)) => {
             if let Some(GuardOutcome::Proceed(mut reservation)) = guarded.take() {
                 reservation.release();
             }
-            Ok((None, Some(response)))
+            Ok((None, Some((response, bindings))))
         }
         // The caller's `?` drops the undispatched 7a reservation, which
         // releases it (`IdempotencyReservation`'s drop, OnDrop::Release).
         Err(e) => Err(lease_refused(scope, &e)),
     }
+}
+
+/// A 7b replay: the stored answer and the binding each step ran under.
+pub(super) type StoredReplay = (
+    JsonRpcResponse,
+    Vec<crate::gateway::meta_mcp::admission::StepBinding>,
+);
+
+/// Whether this route binds its stored results (MIK-8440): only a
+/// passthrough backend, whose binding is the forwarded credential's charged
+/// binding (`Propagation::identity_key`, none when it forwarded none). Every
+/// other backend's account re-bind needs a restart, which empties this store.
+fn binds_passthrough(scope: Scope<'_>) -> bool {
+    scope
+        .route
+        .backend
+        .identity_propagation_config()
+        .is_some_and(|config| {
+            config.strategy == crate::identity_propagation::PropagationStrategyKind::Passthrough
+        })
 }
 
 /// A 7a hit, else a 7b replay (whose 7a reservation is already given back),
@@ -160,16 +185,18 @@ pub(super) fn execution_lease(
 /// under the owner's per-user credential, and running the call again under
 /// the static one would send a write twice. The 7b execution-store key is
 /// the owner and the operation, and deliberately not the per-caller binding,
-/// which is why an unminted retry reaches the owner's entry at all; a retry
-/// under a different forwarded credential reaching it too is MIK-8440. A 7a
-/// hit is keyed on the same principal it was stored under, so it is served.
+/// which is why an unminted retry reaches the owner's entry at all. A retry
+/// under a different forwarded credential reaches it too: the entry records
+/// the credential it ran under, and that retry is refused (MIK-8440), never
+/// re-run, so the key keeps its one execution. A 7a hit is keyed on the same
+/// principal it was stored under, so it is served.
 /// The refusal comes after nonce admission, and an admitted nonce is given
 /// back only by `release_nonce`, so the refused nonce stays spent.
 pub(super) fn deliver_replay(
     scope: Scope<'_>,
     (envelope, preflight, propagation): (&Envelope, &Preflight, &Propagation),
     admitted: &mut Admitted<'_>,
-    (guarded, replay): (Option<GuardOutcome>, Option<JsonRpcResponse>),
+    (guarded, replay): (Option<GuardOutcome>, Option<StoredReplay>),
 ) -> Result<(), Rejection> {
     let (state, id, client) = (scope.state, scope.id, scope.caller.client.as_ref());
     if replay.is_some()
@@ -181,6 +208,27 @@ pub(super) fn deliver_replay(
             StatusCode::OK,
         ));
     }
+    // MIK-8440: a replay is served only under the forwarded credential that
+    // produced it; another credential's retry is refused, never re-run.
+    let replay = match replay {
+        Some((response, bindings)) => {
+            let current = propagation
+                .identity_key
+                .as_deref()
+                .filter(|_| binds_passthrough(scope));
+            if let Err(e) = crate::gateway::meta_mcp::stored_binding::judge(&bindings, |_, _| {
+                current.map(str::to_owned)
+            }) {
+                let refused = super::super::direct_guards::refusal(Some(id.clone()), &e);
+                return Err(build_http_response(
+                    &Egressed::gateway_own(refused),
+                    StatusCode::OK,
+                ));
+            }
+            Some(response)
+        }
+        None => None,
+    };
     let replay = match guarded {
         Some(GuardOutcome::CachedResult(cached)) => {
             Some(JsonRpcResponse::success(id.clone(), cached))

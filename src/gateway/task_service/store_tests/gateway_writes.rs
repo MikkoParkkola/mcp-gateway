@@ -52,7 +52,11 @@ async fn settled(root: &Path, limits: StoreLimits, notes: usize) -> (std::path::
             OWNER,
             one.id(),
             created.revision,
-            (TaskTransition::Complete(result()), None, writes(notes)),
+            (
+                TaskTransition::Complete(result()),
+                crate::gateway::task_service::record::Provenance::default(),
+                writes(notes),
+            ),
             ErrorAuthor::Gateway,
             at(5),
         )
@@ -128,7 +132,11 @@ async fn settled_with(
             OWNER,
             one.id(),
             created.revision,
-            (TaskTransition::Complete(result()), None, writes),
+            (
+                TaskTransition::Complete(result()),
+                crate::gateway::task_service::record::Provenance::default(),
+                writes,
+            ),
             ErrorAuthor::Gateway,
             at(5),
         )

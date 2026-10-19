@@ -563,7 +563,10 @@ impl CapabilityAccount {
         });
         let mut descriptors = vec![(WORK, descriptor)];
         if self.second {
-            descriptors.push((PERSONAL, super::super::account_rest_fixture::managed(PERSONAL)));
+            descriptors.push((
+                PERSONAL,
+                super::super::account_rest_fixture::managed(PERSONAL),
+            ));
         }
         install_account_strategies(
             &rest_config(&descriptors),

@@ -170,6 +170,15 @@ impl<'a> Settling<'a> {
         })
     }
 
+    /// What a settle records with its outcome: the plan's targets and the
+    /// binding every call so far ran under (MIK-8407), from the dispatch log.
+    pub(super) fn provenance(&self) -> crate::gateway::task_service::record::Provenance {
+        crate::gateway::task_service::record::Provenance {
+            targets: self.plan_targets(),
+            bindings: self.owned.dispatch_log().bindings(),
+        }
+    }
+
     /// Settle `event`. Staged relay receipts are recorded only when it is
     /// the dispatched result (`dispatched`) and the store kept it as such.
     async fn settle(
@@ -192,7 +201,7 @@ impl<'a> Settling<'a> {
         cancel_rx: &mut watch::Receiver<bool>,
     ) {
         let ids = (self.principal, self.id, self.revision);
-        let outcome = (event, self.plan_targets());
+        let outcome = (event, self.provenance());
         let stored = self
             .executor
             .settle_cas_with(ids, outcome, writes, cancel_rx)
@@ -205,9 +214,11 @@ impl<'a> Settling<'a> {
     /// Record a parked plan's calls so far; the resume's log starts empty.
     /// `false` means they are NOT durable, and the round must not be parked.
     async fn park_targets(&self) -> bool {
-        let Some(targets) = self.plan_targets() else {
-            return true;
-        };
+        // Every parked row records its bindings (MIK-8407), a single call's
+        // too: its pending input requests are backend output.
+        let crate::gateway::task_service::record::Provenance { targets, bindings } =
+            self.provenance();
+        let targets = targets.unwrap_or_default();
         let Ok(owner) = self.executor.service.owner(self.principal) else {
             return false;
         };
@@ -215,7 +226,12 @@ impl<'a> Settling<'a> {
             .executor
             .service
             .store
-            .add_targets(owner.as_digest(), self.id, self.revision, targets)
+            .add_targets(
+                owner.as_digest(),
+                self.id,
+                self.revision,
+                (targets, bindings),
+            )
             .await;
         // A row a cancel already moved is not parked either way.
         matches!(stored, Ok(()) | Err(StoreError::RevisionConflict))

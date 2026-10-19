@@ -40,7 +40,10 @@ impl CapabilityAccount {
     pub(crate) async fn start_two_accounts() -> Self {
         let mut account = Self::start(false).await;
         account.custody = custody_with(&[
-            (account_key("alice", WORK), grant(ALICE_WORK_TOKEN, u64::MAX)),
+            (
+                account_key("alice", WORK),
+                grant(ALICE_WORK_TOKEN, u64::MAX),
+            ),
             (
                 account_key("alice", PERSONAL),
                 grant(ALICE_PERSONAL_TOKEN, u64::MAX),

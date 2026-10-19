@@ -270,6 +270,7 @@ impl MetaMcp {
                     // against the same registry before its own cache lookup
                     // and again before egress.
                     account_credential,
+                    account_resolution: crate::capability::AccountResolution::ByCaller,
                     mcp_generation: None,
                     credential_principal: credential_owner.map(str::to_owned),
                 },

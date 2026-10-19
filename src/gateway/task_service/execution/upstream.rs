@@ -146,12 +146,25 @@ impl TaskExecutor {
             arguments: capture.arguments,
             operation_digest,
         };
-        match self
+        let marked = self
             .service
             .store
             .mark_upstream(owner.as_digest(), id, revision, record)
-            .await
-        {
+            .await;
+        // MIK-8407: an upstream job may settle later, outside this dispatch's
+        // log (`settle_followed`), so the bindings it ran under are made
+        // durable with its handle. Not durable, it is not followed either.
+        let marked = match marked {
+            Ok(()) => {
+                let bindings = crate::gateway::meta_mcp::dispatch_log::noted_bindings();
+                self.service
+                    .store
+                    .add_targets(owner.as_digest(), id, revision, (Vec::new(), bindings))
+                    .await
+            }
+            error => error,
+        };
+        match marked {
             Ok(()) => true,
             Err(error) => {
                 tracing::warn!(

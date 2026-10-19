@@ -365,7 +365,10 @@ async fn p4a_a_fallback_reread_that_fails_stores_nothing() {
         .settle_dated_last_known(
             OWNER,
             missing,
-            (complete(), None),
+            (
+                complete(),
+                crate::gateway::task_service::record::Provenance::default(),
+            ),
             ErrorAuthor::Gateway,
             WriteRecord::default(),
         )

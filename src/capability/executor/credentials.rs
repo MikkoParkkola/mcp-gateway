@@ -124,6 +124,14 @@ impl CapabilityExecutor {
             // deployment already serves it statically, and its cache namespace
             // must stay exactly what it was.
             AccountCredential::Legacy => Ok(context),
+            // MIK-8407: the meta route resolved this dispatch's account and
+            // found none to mint for; one that mints now was bound since, and
+            // the dispatch it recorded is not the one that would run.
+            AccountCredential::Prepared(_)
+                if context.account_resolution == super::super::AccountResolution::ByCaller =>
+            {
+                Err(crate::gateway::StoredBindingRefusal::Rebound.error(&capability.name))
+            }
             AccountCredential::Prepared(prepared) => {
                 // The strategy's own opaque binding — the five-field account
                 // digest widened with the grant generation, authorization

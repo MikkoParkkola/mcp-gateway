@@ -118,6 +118,8 @@ async fn a_frame_carries_the_task_as_it_is_at_delivery() {
         error_author: None,
         owner_digest: String::new(),
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
+        bindings: Vec::new(),
+        bindings_recorded: true,
     };
 
     let mut expected = serde_json::to_value(stored.task.wire()).expect("the task serializes");

@@ -83,7 +83,10 @@ pub(super) async fn settle_followed(
     let stored = executor
         .settle_cas_by(
             (followed.principal, id, followed.revision),
-            (event, None),
+            (
+                event,
+                crate::gateway::task_service::record::Provenance::default(),
+            ),
             author,
             writes,
             cancel_rx,

@@ -50,8 +50,16 @@ pub(super) const UPSTREAM_CANCEL_VERSION: u32 = 7;
 /// then on; a row claimed by a v7 gateway keeps its version and its bytes.
 pub(super) const PENDING_CANCEL_VERSION: u32 = UPSTREAM_CANCEL_VERSION + 1;
 
+/// The record version that introduced [`Record::bindings`] (MIK-8407). Unlike
+/// the versions above it is written on EVERY row this gateway settles or
+/// parks, bindings or none: it is what tells a row whose provenance was
+/// recorded from one written before it was, whose backend output is then
+/// not served. An older loader refuses every such row, so a rollback past it
+/// is unsupported, which the upgrade note states.
+pub(super) const BINDING_VERSION: u32 = PENDING_CANCEL_VERSION + 1;
+
 /// The highest record version the loader accepts: the newest field's version.
-pub(super) const MAX_LOADABLE_VERSION: u32 = PENDING_CANCEL_VERSION;
+pub(super) const MAX_LOADABLE_VERSION: u32 = BINDING_VERSION;
 
 /// One backend call a task's result was produced by: names only, never
 /// arguments. No current invocation policy reads `ToolTarget.arguments`; a
@@ -280,6 +288,30 @@ pub(super) struct Record {
         skip_serializing_if = "crate::gateway::gateway_writes::WriteRecord::is_empty"
     )]
     pub(super) gateway_writes: crate::gateway::gateway_writes::WriteRecord,
+    /// MIK-8407: the binding each dispatched call ran under (`(server, tool,
+    /// token)`, the account token or none), which a stored delivery is judged
+    /// against. Last, after `admission`, as `gateway_writes` is. Absent when
+    /// none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) bindings: Vec<crate::gateway::meta_mcp::admission::StepBinding>,
+}
+
+/// What a settlement records about how its outcome was produced: the plan's
+/// dispatched targets (`None` for a call whose one target was recorded at
+/// creation) and the binding each call ran under (MIK-8407).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Provenance {
+    pub(crate) targets: Option<Vec<Target>>,
+    pub(crate) bindings: Vec<crate::gateway::meta_mcp::admission::StepBinding>,
+}
+
+impl From<Option<Vec<Target>>> for Provenance {
+    fn from(targets: Option<Vec<Target>>) -> Self {
+        Self {
+            targets,
+            bindings: Vec::new(),
+        }
+    }
 }
 
 impl Record {
@@ -344,6 +376,7 @@ impl PreparedTask {
                 revision: 1,
                 model: task.snapshot(),
                 gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
+                bindings: Vec::new(),
             },
             publication: Some(publication),
         }
@@ -385,6 +418,7 @@ impl PreparedTask {
                 revision: 1,
                 model: task.snapshot(),
                 gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
+                bindings: Vec::new(),
             },
         }
     }
@@ -435,6 +469,12 @@ pub(crate) struct CommittedTask {
     /// The members of the stored result the gateway wrote (MIK-7993): a read
     /// restores them into its own record, so its receipt leaves them out.
     pub(crate) gateway_writes: crate::gateway::gateway_writes::WriteRecord,
+    /// The binding each dispatched call ran under (MIK-8407).
+    pub(crate) bindings: Vec<crate::gateway::meta_mcp::admission::StepBinding>,
+    /// Whether the row was written by a gateway that records bindings. On an
+    /// older row the provenance cannot be established, so its backend output
+    /// is not served.
+    pub(crate) bindings_recorded: bool,
 }
 
 impl CommittedTask {
@@ -467,6 +507,8 @@ impl CommittedTask {
             error_author: record.error_author,
             owner_digest: record.admission.principal_digest.clone(),
             gateway_writes: record.gateway_writes.clone(),
+            bindings: record.bindings.clone(),
+            bindings_recorded: record.version >= BINDING_VERSION,
         }
     }
 

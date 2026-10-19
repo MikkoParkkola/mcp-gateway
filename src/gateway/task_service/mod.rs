@@ -48,6 +48,9 @@ pub(crate) use execution::{
     UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
 };
 pub(crate) use record::{CommittedTask, ErrorAuthor, Target};
+// The router's settle rows name it; production stays inside the service.
+#[cfg(test)]
+pub(crate) use record::Provenance;
 /// Re-exported at crate-public visibility for the same reason as
 /// [`TaskExecutor`]: [`open_runtime`] is `pub` and returns this error, so its
 /// name has to be reachable from outside the crate.

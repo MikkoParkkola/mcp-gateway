@@ -74,6 +74,8 @@ pub struct CapabilityExecutionContext {
     /// [`crate::identity_propagation::AccountStrategyRegistry::resolve`].
     // ci-allow-secret-debug: PreparedAccountCredential redacts header values; execution_context_debug_redacts_prepared_credential_headers verifies the enclosing formatter.
     pub(crate) account_credential: Option<Arc<PreparedAccountCredential>>,
+    /// Who resolved the capability's account for this dispatch (MIK-8407).
+    pub(crate) account_resolution: AccountResolution,
     /// How THIS request established its caller, apart from any verified
     /// identity.
     ///
@@ -104,6 +106,19 @@ pub struct CapabilityExecutionContext {
     /// Crate-visible: an embedder must not assert it.
     // ci-allow-secret-debug: a truncated digest of the validated secret, never the secret; task owners record the same string.
     pub(crate) credential_principal: Option<String>,
+}
+
+/// Who resolved a capability dispatch's account (MIK-8407).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum AccountResolution {
+    /// The executor resolves it, before its own cache lookup.
+    #[default]
+    InExecutor,
+    /// The meta route resolved it above the response cache and recorded the
+    /// binding the dispatch runs under. A context carrying no credential then
+    /// means it resolved none (no per-caller account): an account the
+    /// executor would mint for now was bound after that, and is refused.
+    ByCaller,
 }
 
 impl PartialEq for CapabilityExecutionContext {
@@ -162,6 +177,7 @@ impl CapabilityExecutionContext {
             cache_binding: None,
             verified_identity: None,
             account_credential: None,
+            account_resolution: AccountResolution::InExecutor,
             // A `GrantSubject` is an authorization handle, not evidence that a
             // credential validated on this request. Fail closed.
             caller_provenance: crate::identity_propagation::CallerProvenance::Anonymous,

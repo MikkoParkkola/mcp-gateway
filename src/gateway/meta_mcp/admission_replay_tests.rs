@@ -69,7 +69,7 @@ async fn an_unrecorded_deferral_fails_closed() {
                 server: "idp".to_string(),
                 tool: "read".to_string(),
             }),
-            None,
+            (None, Vec::new()),
             (stored, None),
         )
         .await;
@@ -131,7 +131,7 @@ async fn p8_legacy_a_plan_record_with_no_step_list_judges_its_declared_targets()
             &arguments,
             &ctx(&AllowAll),
             None,
-            None,
+            (None, Vec::new()),
             (stored.clone(), None),
         )
         .await
@@ -164,7 +164,7 @@ async fn p8_empty_a_plan_record_that_dispatched_nothing_is_served() {
             &arguments,
             &ctx(&AllowAll),
             None,
-            Some(Vec::new()),
+            (Some(Vec::new()), Vec::new()),
             (stored.clone(), None),
         )
         .await
@@ -194,7 +194,7 @@ async fn p8_noid_a_stored_plan_replay_with_no_request_id_fails_closed() {
             &arguments,
             &ctx(&AllowAll),
             None,
-            Some(Vec::new()),
+            (Some(Vec::new()), Vec::new()),
             (stored, None),
         )
         .await

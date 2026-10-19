@@ -481,6 +481,8 @@ fn stored_task(
         error_author: None,
         owner_digest: String::new(),
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
+        bindings: Vec::new(),
+        bindings_recorded: true,
     }
 }
 

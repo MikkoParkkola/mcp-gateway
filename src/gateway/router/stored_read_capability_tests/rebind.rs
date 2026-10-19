@@ -31,7 +31,11 @@ async fn served(
     )
     .await;
     let meta = Arc::clone(&state.meta_mcp);
-    (super::super::create_router(Arc::clone(&state)), meta, (state, store))
+    (
+        super::super::create_router(Arc::clone(&state)),
+        meta,
+        (state, store),
+    )
 }
 
 fn single() -> Value {
@@ -98,7 +102,10 @@ async fn rb_cap_task_read_is_refused_after_a_capability_rebind() {
         if got.pointer("/result/status") == Some(&json!("completed")) {
             break got;
         }
-        assert!(std::time::Instant::now() < bound, "premise: completes: {got}");
+        assert!(
+            std::time::Instant::now() < bound,
+            "premise: completes: {got}"
+        );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     };
     assert!(done.get("error").is_none(), "premise: delivered: {done}");

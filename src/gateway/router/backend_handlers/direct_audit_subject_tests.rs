@@ -107,6 +107,7 @@ async fn state_with(
             required: false,
             token_exchange_endpoint: None,
             token_exchange_scope: None,
+            fingerprint: String::new(),
             minter: Minter::Managed(operator_vault()),
         },
         DescriptorMode::PersonalManaged,
