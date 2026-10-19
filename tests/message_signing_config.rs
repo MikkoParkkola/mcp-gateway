@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-7406 / SIGNING.2: effective signing configuration and literal persistence.
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
@@ -70,7 +73,7 @@ impl ConfigFixture {
         });
         mcp_gateway::gateway::test_helpers::write_owner_only(
             &self.path,
-            serde_yaml::to_string(&value).expect("fixture YAML"),
+            yaml::to_string(&value).expect("fixture YAML"),
         )
         .expect("write config fixture");
     }

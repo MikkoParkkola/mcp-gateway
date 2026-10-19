@@ -10,6 +10,9 @@
 //! that proves its notification arrives (`DELIVERY_PROBES`). Turning a flag on
 //! without a producer and a probe fails `every_advertised_flag_has_a_delivery_probe`.
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 #[path = "common/signing_gateway.rs"]
 pub mod signing_gateway;
 
@@ -96,7 +99,7 @@ async fn stdio_capabilities() -> (Value, Value) {
     let config_path = dir.path().join("gateway.yaml");
     mcp_gateway::gateway::test_helpers::write_owner_only(
         &config_path,
-        serde_yaml::to_string(&config()).expect("yaml"),
+        yaml::to_string(&config()).expect("yaml"),
     )
     .expect("config");
     let mut command = signing_gateway::child_command(dir.path(), &config_path);

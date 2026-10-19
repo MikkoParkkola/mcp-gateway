@@ -6,6 +6,9 @@
 //! out of this slice. A missing nonce property is the intended red; a fixture
 //! that cannot start or list tools is a broken harness, not behavioral evidence.
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 #[path = "common/signing_gateway.rs"]
 pub mod signing_gateway;
 
@@ -234,7 +237,7 @@ impl StdioGateway {
         let config_path = directory.path().join("gateway.yaml");
         mcp_gateway::gateway::test_helpers::write_owner_only(
             &config_path,
-            serde_yaml::to_string(&config).expect("config YAML"),
+            yaml::to_string(&config).expect("config YAML"),
         )
         .expect("write gateway config");
         let mut command = child_command(directory.path(), &config_path);

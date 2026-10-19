@@ -11,6 +11,10 @@
 )]
 #[path = "common/signing_gateway.rs"]
 mod signing_gateway;
+// `common/signing_gateway.rs` names `crate::yaml`, so every crate that
+// includes it declares the module once, here.
+#[path = "common/yaml.rs"]
+mod yaml;
 
 use std::process::Stdio;
 use std::time::Duration;
