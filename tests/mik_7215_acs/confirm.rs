@@ -288,6 +288,9 @@ async fn ac_confirm_1a_a_refusal_is_excluded_from_both_accounting_arms() {
     };
     let (state, _store_dir) = state_with(true, auth).await;
     let accounting = Arc::clone(&state.auth_config);
+    let row17 = accounting
+        .validate_token("admin-key")
+        .expect("row17-client's key");
 
     // Control: one genuine failure over this path, as this client.
     let mut unknown = modern_tools_list(1701);
@@ -299,7 +302,7 @@ async fn ac_confirm_1a_a_refusal_is_excluded_from_both_accounting_arms() {
         "the control must be an ordinary error, or it is not exercising the failure arm: {body}"
     );
     assert_eq!(
-        accounting.client_circuit_state("row17-client"),
+        accounting.client_circuit_state(&row17),
         Some(mcp_gateway::failsafe::CircuitState::Closed),
         "one failure of two must leave the breaker closed, or the fixture's threshold is wrong"
     );
@@ -337,7 +340,7 @@ async fn ac_confirm_1a_a_refusal_is_excluded_from_both_accounting_arms() {
         "this row observes the unconfirmed branch; another exit proves nothing about it: {refusal}"
     );
     assert_eq!(
-        accounting.client_circuit_state("row17-client"),
+        accounting.client_circuit_state(&row17),
         Some(mcp_gateway::failsafe::CircuitState::Closed),
         "a refusal counted as a failure takes the count to two and trips the breaker: {refusal}"
     );
@@ -354,7 +357,7 @@ async fn ac_confirm_1a_a_refusal_is_excluded_from_both_accounting_arms() {
         "{body}"
     );
     assert_eq!(
-        accounting.client_circuit_state("row17-client"),
+        accounting.client_circuit_state(&row17),
         Some(mcp_gateway::failsafe::CircuitState::Open),
         "a refusal booked as a success reset the count, so this failure is the first of two, not the second"
     );
