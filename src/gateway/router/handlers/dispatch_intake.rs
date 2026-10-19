@@ -79,6 +79,9 @@ pub(super) struct Intake<'r> {
     // returns. The dispatcher binds `Intake` after `JudgeInputs`, so the
     // permit drops before the read guard, as the two locals did.
     _inflight_permit: Result<tokio::sync::SemaphorePermit<'r>, tokio::sync::AcquireError>,
+    // Held, never read: while the request runs its provisional session is
+    // not reaped, and the drop starts its idle clock (MIK-8504).
+    _session_hold: Option<crate::gateway::streaming::SessionHold>,
 }
 
 impl Intake<'_> {
@@ -136,5 +139,7 @@ mod presented_tests;
 #[path = "dispatch_intake_run.rs"]
 mod run;
 pub(super) use run::intake;
+#[path = "dispatch_intake_session.rs"]
+mod session;
 #[path = "dispatch_intake_view_facts.rs"]
 mod view_facts;

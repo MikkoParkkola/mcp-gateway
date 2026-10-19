@@ -458,6 +458,7 @@ src/gateway/router/handlers/dispatch_intake.rs	params	http_invoke_tiny	the reque
 src/gateway/router/handlers/dispatch_intake_run.rs	answer_intake	-	on-path, untimed: refused /mcp intakes only; the timed rows are admitted
 src/gateway/router/handlers/dispatch_intake_run.rs	intake	http_invoke_tiny	the HTTP request prelude
 src/gateway/router/handlers/dispatch_intake_run.rs	intake_judgement	http_invoke_tiny	the HTTP request prelude
+src/gateway/router/handlers/dispatch_intake_session.rs	open_request_session	http_invoke_tiny	the HTTP request prelude: opens or resumes the session the request runs under (MIK-8504)
 src/gateway/router/handlers/dispatch_intake_view_facts.rs	capture	http_invoke_tiny	the HTTP request prelude
 src/gateway/router/handlers/dispatch_intake_view_facts.rs	view_subject	http_invoke_tiny	on the HTTP gateway_invoke path (the successful tools/call arm); also tools/list and subscriptions/listen
 src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	http_invoke_tiny	the HTTP tools/call arm
@@ -485,7 +486,9 @@ src/gateway/router/handlers/request_facts.rs	session_id_header	http_invoke_tiny	
 src/gateway/router/handlers/session_end.rs	mcp_delete_handler	-	DELETE /mcp session termination only, not the tools/call path
 src/gateway/router/handlers/session_end.rs	sse_deprecated_handler	-	the retired /sse endpoint only, not the tools/call path
 src/gateway/router/handlers/sse.rs	get_era_refusal	-	GET /mcp only, not the POST tools/call path
+src/gateway/router/handlers/sse.rs	held_body	-	GET /mcp only, not the POST tools/call path: holds the stream's session for its body (MIK-8504)
 src/gateway/router/handlers/sse.rs	mcp_sse_handler	-	GET /mcp SSE stream only, not the POST tools/call path
+src/gateway/router/handlers/sse.rs	open_stream_session	-	GET /mcp only, not the POST tools/call path: opens the stream's session (MIK-8504)
 src/gateway/router/handlers/sse.rs	stream_request_refusal	-	GET event-stream opens only, not the tools/call path
 src/gateway/router/handlers/tasks/owner.rs	agent_task_owner	-	on-path, untimed: the validated-agent arm of route_task_owner at intake; the timed rows present no agent identity
 src/gateway/router/handlers/tasks.rs	delivered	-	subscriptions/listen task notifications only, not the tools/call path

@@ -188,50 +188,15 @@ pub(in crate::gateway::router::handlers) async fn intake(
     }
     // Not a stream reader, so no branch subscribes: a held subscription
     // fakes a deliverable prompt.
-    let opened = if declares_modern_by_header {
-        // No session, and none minted. Minting one per request grew a table of
-        // sessions nothing could reach, and handed the sequence-anomaly
-        // detector a fresh identity every call — a detector that sees a first
-        // request every time keeps running and stops protecting.
-        None
-    } else {
-        // The identity that owns the session. A caller with neither a subject
-        // nor a credential is "anonymous", so a single-user gateway behaves
-        // exactly as before.
-        let held = crate::gateway::auth::live::held_credential(&headers);
-        let existing = existing_session_id.as_deref();
-        Some(
-            if !crate::gateway::router::hardened_elicitation::is_hardened(state) {
-                state
-                    .multiplexer
-                    .get_or_create_session_id_scoped(existing, &caller_owner, held)
-            } else if crate::gateway::router::hardened_elicitation::is_initialize(&request) {
-                // Hardened (row 10): refused before anything is minted.
-                if !crate::gateway::router::hardened_elicitation::declares_elicitation(&request) {
-                    return Err(
-                        crate::gateway::router::hardened_elicitation::refusal().into_response()
-                    );
-                }
-                state
-                    .multiplexer
-                    .get_or_create_session_id_scoped(existing, &caller_owner, held)
-            } else {
-                // Hardened: only a declaring `initialize` opens a legacy session.
-                match state
-                    .multiplexer
-                    .resume_session_id_scoped(existing, &caller_owner, held)
-                {
-                    Some(id) => id,
-                    None => {
-                        return Err(crate::gateway::router::hardened_elicitation::refuse(
-                            &request,
-                            declared_version,
-                        ));
-                    }
-                }
-            },
-        )
-    };
+    let (opened, session_hold) = super::session::open_request_session(
+        state,
+        &request,
+        &headers,
+        existing_session_id.as_deref(),
+        &caller_owner,
+        (declared_version, declares_modern_by_header),
+    )
+    .map_err(|refusal| *refusal)?;
     // The empty id is the router's "no session"; its fingerprint is empty too.
     let session_id = opened
         .as_ref()
@@ -697,6 +662,7 @@ pub(in crate::gateway::router::handlers) async fn intake(
             events_owner,
             admission_owner,
             _inflight_permit: inflight_permit,
+            _session_hold: session_hold,
         },
     ))
 }

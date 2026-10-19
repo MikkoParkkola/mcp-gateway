@@ -156,6 +156,14 @@ async fn meta_mcp_dispatch(
         "subscriptions/listen" => {
             // The single long-lived stream that replaces the GET endpoint.
             //
+            // No provisional session needs holding for this stream (MIK-8504):
+            // only a request declaring 2026 reaches here, and one that declares it
+            // by header mints no session, while one that declares it only in the
+            // body is refused by the mirrored-header check (`protocol::headers`,
+            // `HeaderCheck::validate`) before dispatch. A change that lets a
+            // header-less 2026 request through must hold the session for the
+            // stream, as the GET stream does (`sse::held_body`).
+            //
             // Returns EARLY with an SSE body rather than falling through to the
             // ordinary response builder: the specification's response to this
             // method is a stream that stays open, and an acknowledgement that

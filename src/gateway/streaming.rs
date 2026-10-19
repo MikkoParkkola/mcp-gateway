@@ -32,8 +32,11 @@ use crate::gateway::auth::live::HeldCredential;
 use crate::gateway::session_id::{SessionId, SessionOwner, session_fp};
 use crate::gateway::session_lifecycle::{SessionLifecycle, now_unix};
 
+#[path = "streaming_provisional.rs"]
+mod provisional;
 #[path = "streaming_session.rs"]
 mod session;
+pub(crate) use provisional::{MintKind, PROVISIONAL_SESSION_TTL, SessionCapacity, SessionHold};
 use session::ClientSession;
 #[path = "streaming_copy.rs"]
 mod copy;
@@ -204,6 +207,8 @@ pub struct NotificationMultiplexer {
     config: StreamingConfig,
     /// Event ID counter (global, for uniqueness)
     event_counter: std::sync::atomic::AtomicU64,
+    /// Live provisional sessions, against `provisional::MAX_PROVISIONAL_SESSIONS`.
+    provisional_live: std::sync::atomic::AtomicUsize,
     /// The live authorizer scoped delivery asks; unset means no delivery.
     authorizer: RwLock<Option<AuthState>>,
     /// The cross-tenant read judge of every session stream (MIK-7116.MIN.2);
@@ -231,6 +236,7 @@ impl NotificationMultiplexer {
             backends,
             config,
             event_counter: std::sync::atomic::AtomicU64::new(1),
+            provisional_live: std::sync::atomic::AtomicUsize::new(0),
             authorizer: RwLock::new(None),
             reads: std::sync::OnceLock::new(),
             #[cfg(test)]
@@ -366,10 +372,8 @@ impl NotificationMultiplexer {
 
         let mut reaped_ids = Vec::new();
         sessions.retain(|id, session| {
-            let expired = now.duration_since(*session.last_active.read()) >= ttl;
-            let abandoned = session.receiver_count() == 0;
-
-            if expired && abandoned {
+            if Self::reapable(session, now, ttl) {
+                self.forget_provisional(session);
                 info!(session_id = %id, "Reaping expired streaming session (no active receivers)");
                 reaped_ids.push(id.expose_secret().to_string());
                 false
@@ -422,14 +426,36 @@ impl NotificationMultiplexer {
         owner: &SessionOwner,
     ) -> Arc<ClientSession> {
         let mut sessions = self.sessions.write();
-        if let Some(session) = session_id.and_then(|id| sessions.get(id))
-            && session.owner == *owner
-        {
-            *session.last_active.write() = Instant::now();
-            return Arc::clone(session);
+        if let Some(session) = self.resume_live(&sessions, session_id, owner) {
+            return session;
         }
+        self.mint(&mut sessions, owner)
+    }
+
+    /// `owner`'s live session named `session_id`, resumed: its idle clock
+    /// restarts, and a provisional one is promoted (MIK-8504).
+    fn resume_live(
+        &self,
+        sessions: &HashMap<SessionId, Arc<ClientSession>>,
+        session_id: Option<&str>,
+        owner: &SessionOwner,
+    ) -> Option<Arc<ClientSession>> {
+        let session = sessions
+            .get(session_id?)
+            .filter(|session| session.owner == *owner)?;
+        *session.last_active.write() = Instant::now();
+        self.promote(session);
+        Some(Arc::clone(session))
+    }
+
+    /// A new session under a freshly minted id; a presented id is never adopted.
+    fn mint(
+        &self,
+        sessions: &mut HashMap<SessionId, Arc<ClientSession>>,
+        owner: &SessionOwner,
+    ) -> Arc<ClientSession> {
         let id = format!("gw-{}", Uuid::new_v4());
-        let session = self.insert_session(&mut sessions, &id, owner.clone());
+        let session = self.insert_session(sessions, &id, owner.clone());
         // The id's fingerprint, made once when it was inserted (PERF.2a).
         let fp = session.id.fp();
         info!(session_id = %fp, "Created new streaming session");
@@ -455,6 +481,8 @@ impl NotificationMultiplexer {
             owner,
             credential: RwLock::new(None),
             records: RwLock::new(Vec::new()),
+            provisional: std::sync::atomic::AtomicBool::new(false),
+            in_flight: std::sync::atomic::AtomicUsize::new(0),
         });
         sessions.insert(id, Arc::clone(&session));
         session
@@ -474,20 +502,46 @@ impl NotificationMultiplexer {
         (session.id.expose_secret().to_string(), session.subscribe())
     }
 
-    /// As [`Self::get_or_create_session_scoped`], for a caller that only needs
-    /// the id: it opens no notification channel (`NFR.WORKLOAD.1`). The held id
-    /// carries its fingerprint, so the caller logs it without hashing again.
+    /// The session a request runs under, held for the request, for a caller
+    /// that only needs the id: it opens no notification channel
+    /// (`NFR.WORKLOAD.1`). An `Ordinary` mint (`initialize`) is never refused;
+    /// a `Provisional` one is refused at the cap (MIK-8504). Resuming the
+    /// caller's live session is never refused and promotes a provisional one.
+    /// The held id carries its fingerprint, so the caller logs it without
+    /// hashing again.
+    pub(crate) fn open_request_session_scoped(
+        &self,
+        session_id: Option<&str>,
+        owner: &SessionOwner,
+        credential: Option<HeldCredential>,
+        kind: MintKind,
+    ) -> std::result::Result<(SessionId, SessionHold), SessionCapacity> {
+        let (session, hold) = match kind {
+            MintKind::Ordinary => {
+                let session = self.open_session_for(session_id, owner);
+                let hold = Self::hold(&session);
+                (session, hold)
+            }
+            MintKind::Provisional => self.open_provisional_for(session_id, owner)?,
+        };
+        session.replace_credential(credential);
+        Ok((session.id.clone(), hold))
+    }
+
+    /// The pre-MIK-8504 entry the tests still open sessions through: an
+    /// `Ordinary` mint, released at once.
+    #[cfg(test)]
     pub(crate) fn get_or_create_session_id_scoped(
         &self,
         session_id: Option<&str>,
         owner: &SessionOwner,
         credential: Option<HeldCredential>,
     ) -> SessionId {
-        self.open_session_scoped(session_id, owner, credential)
-            .id
-            .clone()
+        let session = self.open_session_scoped(session_id, owner, credential);
+        session.id.clone()
     }
 
+    #[cfg(test)]
     fn open_session_scoped(
         &self,
         session_id: Option<&str>,
@@ -503,7 +557,8 @@ impl NotificationMultiplexer {
     pub fn remove_session(&self, session_id: &str) {
         let mut sessions = self.sessions.write();
         // The removed key carries its fingerprint (PERF.2a).
-        if let Some((id, _)) = sessions.remove_entry(session_id) {
+        if let Some((id, session)) = sessions.remove_entry(session_id) {
+            self.forget_provisional(&session);
             info!(session_id = %id, "Removed streaming session");
         }
     }
@@ -521,7 +576,9 @@ impl NotificationMultiplexer {
         if sessions.get(session_id)?.owner != *owner {
             return None;
         }
-        sessions.remove_entry(session_id).map(|(id, _)| id)
+        let (id, session) = sessions.remove_entry(session_id)?;
+        self.forget_provisional(&session);
+        Some(id)
     }
 
     /// Check if a session exists
