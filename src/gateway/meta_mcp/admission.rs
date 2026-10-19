@@ -66,6 +66,12 @@ impl SyncLease {
         stored::note_distinct(&mut self.bindings.lock(), (server, tool), binding);
     }
 
+    /// The steps noted so far, for the invoke stage rows (MIK-8488).
+    #[cfg(test)]
+    pub(crate) fn served_steps_for_test(&self) -> Vec<(String, String)> {
+        self.steps.lock().clone()
+    }
+
     pub(crate) fn mark_dispatched(&self) {
         let mut state = self.state.lock();
         state.0.mark_dispatched();

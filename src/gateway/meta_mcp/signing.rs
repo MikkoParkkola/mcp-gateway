@@ -798,6 +798,9 @@ mod nonce_metrics_tests;
 #[cfg(test)]
 #[path = "signing_unspent_tests.rs"]
 mod unspent_tests;
+#[cfg(test)]
+#[path = "signing_test_access.rs"]
+mod test_access;
 
 /// The nonce store key of `caller`'s principal.
 pub(crate) fn nonce_principal<'a>(caller: &super::MetaMcpCallerContext<'a>) -> &'a str {

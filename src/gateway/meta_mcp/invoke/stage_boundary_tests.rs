@@ -66,13 +66,25 @@ impl crate::transport::Transport for Probe {
 }
 
 fn gateway(probe: &Arc<Probe>) -> MetaMcp {
+    gateway_on(
+        Arc::clone(probe) as Arc<dyn crate::transport::Transport>,
+        BackendConfig::r2_off(),
+    )
+}
+
+/// A gateway whose one backend, `svc`, talks over `transport` with `config`.
+fn gateway_on(transport: Arc<dyn crate::transport::Transport>, config: BackendConfig) -> MetaMcp {
     let backend = Arc::new(Backend::new(
         "svc",
-        BackendConfig::r2_off(),
+        config,
         &FailsafeConfig::default(),
         Duration::from_secs(60),
     ));
-    backend.set_transport_for_test(Arc::clone(probe) as Arc<dyn crate::transport::Transport>);
+    gateway_with(backend, transport)
+}
+
+fn gateway_with(backend: Arc<Backend>, transport: Arc<dyn crate::transport::Transport>) -> MetaMcp {
+    backend.set_transport_for_test(transport);
     let registry = Arc::new(BackendRegistry::new());
     assert!(registry.register(backend));
     MetaMcp::new(registry)
@@ -300,5 +312,238 @@ fn the_send_path_boxes_one_dispatch_and_drops_the_admission_right_after_it() {
     assert!(
         only_comments,
         "code runs between the dispatch's await and the admission's drop"
+    );
+}
+
+// ---- MIK-8488 PR-A (INVOKE.6): one row per pre-send settlement site that no
+// earlier row catches. Each is red against its settlement-only mutant (the
+// site's settlement removed, its exit kept) and green on the code it pins.
+
+/// A backend that answers every `tools/call` with its own JSON-RPC error.
+struct Failing(AtomicUsize);
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for Failing {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<JsonRpcResponse> {
+        if method == "tools/call" {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            return Ok(JsonRpcResponse::error(
+                Some(RequestId::Number(1)),
+                -32050,
+                "backend refused",
+            ));
+        }
+        Ok(JsonRpcResponse::success(RequestId::Number(1), json!({})))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+fn probe() -> Arc<Probe> {
+    Arc::new(Probe {
+        signing: None,
+        witness_at_dispatch: AtomicBool::new(false),
+        calls: AtomicUsize::new(0),
+        sent: std::sync::Mutex::new(None),
+    })
+}
+
+fn keyed(retry: &crate::protocol::mrtr::RetryFields) -> MetaMcpCallerContext<'_> {
+    MetaMcpCallerContext {
+        retry,
+        ..crate::gateway::meta_mcp::anonymous_caller()
+    }
+}
+
+fn retry(key: &str) -> crate::protocol::mrtr::RetryFields {
+    crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some(key.to_owned()),
+        ..Default::default()
+    }
+}
+
+fn with_idempotency(meta: &mut MetaMcp) {
+    meta.enable_idempotency(
+        Arc::new(crate::idempotency::IdempotencyCache::new()),
+        Duration::from_secs(300),
+    );
+}
+
+/// Run the keyed call once, then again under an execution lease of its own,
+/// and return the steps the lease noted as served by the second call.
+async fn served_on_the_replay(meta: &MetaMcp, key: &str) -> Vec<(String, String)> {
+    let args = json!({"server": "svc", "tool": "act", "arguments": {}});
+    let session = Some("session-8488");
+    let inner = retry(key);
+    let _first = meta.invoke_tool(&args, session, &keyed(&inner)).await;
+    let outer = retry(&format!("{key}-outer"));
+    // An owned lease needs an owner principal, as #3872's rows give it.
+    let lease_owner = MetaMcpCallerContext {
+        is_modern: true,
+        credential_principal: Some("verified-credential-owner"),
+        ..keyed(&outer)
+    };
+    let admitted = meta.admit_meta_sync_for_test(
+        crate::gateway::meta_mcp::AdmissionOwner::for_test(lease_owner.owner_principal()),
+        &lease_owner,
+        "gateway_invoke",
+        &args,
+        session,
+        &RequestId::Number(1),
+    );
+    let Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Owned(lease)) = admitted else {
+        panic!("premise: the replaying execution owns its own lease");
+    };
+    let caller = MetaMcpCallerContext {
+        execution: Some(&lease),
+        ..keyed(&inner)
+    };
+    let _second = meta.invoke_tool(&args, session, &caller).await;
+    lease.served_steps_for_test()
+}
+
+/// S4, site 11 (mutant s11): a keyed call answered from its stored result is
+/// noted on the execution as served, so a replay of that execution past a
+/// revocation of the step still meets the refusal (#3872).
+#[tokio::test]
+async fn an_idempotency_hit_is_noted_as_served() {
+    let probe = probe();
+    let mut meta = gateway(&probe);
+    with_idempotency(&mut meta);
+    let served = served_on_the_replay(&meta, "k-8488-hit").await;
+    assert_eq!(
+        probe.calls.load(Ordering::SeqCst),
+        1,
+        "premise: the replay was served, not sent"
+    );
+    assert_eq!(served, vec![("svc".to_owned(), "act".to_owned())]);
+}
+
+/// S4, site 10 (mutant s10): a keyed call whose stored result is the
+/// backend's own error is served that error and noted as served too.
+#[tokio::test]
+async fn a_stored_failure_is_noted_as_served() {
+    let failing = Arc::new(Failing(AtomicUsize::new(0)));
+    let mut meta = gateway_on(
+        Arc::clone(&failing) as Arc<dyn crate::transport::Transport>,
+        BackendConfig::r2_off(),
+    );
+    with_idempotency(&mut meta);
+    let served = served_on_the_replay(&meta, "k-8488-fail").await;
+    assert_eq!(
+        failing.0.load(Ordering::SeqCst),
+        1,
+        "premise: the replay was served, not sent"
+    );
+    assert_eq!(served, vec![("svc".to_owned(), "act".to_owned())]);
+}
+
+/// S1, site 3 (mutant s03): a target the gate let past (test seam) that the
+/// dispatch-time policy check refuses is answered as the gate would answer
+/// it, and that answer asks for the signing nonce back.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_backstop_answer_asks_for_the_nonce_back() {
+    static DENY: crate::gateway::authz::DenyAll = crate::gateway::authz::DenyAll;
+    let probe = probe();
+    let meta = gateway(&probe);
+    let signing = SigningInvocationContext::external_for_test(Some("n-8488-backstop"));
+    signing.keep_witness(RefundWitness::at_capture());
+    let caller = MetaMcpCallerContext {
+        signing: Some(&signing),
+        authorizer: &DENY,
+        ..crate::gateway::meta_mcp::anonymous_caller()
+    };
+    let _skip = crate::gateway::meta_mcp::withheld_gate::seams::skip_gate_for_test();
+    let args = json!({"server": "svc", "tool": "act", "arguments": {}});
+    let outcome = meta.invoke_tool(&args, Some("session-8488"), &caller).await;
+    let answer = outcome.expect("the backstop answers, it does not fail");
+    assert_eq!(
+        answer["isError"], true,
+        "premise: the backstop's answer: {answer}"
+    );
+    assert_eq!(
+        probe.calls.load(Ordering::SeqCst),
+        0,
+        "premise: nothing was sent"
+    );
+    assert!(
+        signing.refund_due_for_test(),
+        "the backstop's answer did not ask for the nonce back"
+    );
+}
+
+/// S5, site 14's key half (mutant s14a): a keyed call refused for an
+/// undeclared argument key releases its key at the refusal, so the
+/// reservation's drop never releases it as abandoned.
+#[test]
+fn an_undeclared_key_refusal_releases_its_key_at_the_refusal() {
+    let records = crate::test_log_capture::records(|| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let probe = probe();
+            let backend = Arc::new(Backend::new(
+                "svc",
+                BackendConfig {
+                    input_schema_enforcement: crate::config::InputSchemaEnforcement::Closed,
+                    ..BackendConfig::r2_off()
+                },
+                &FailsafeConfig::default(),
+                Duration::from_secs(60),
+            ));
+            backend.remember_listed_tools(
+                None,
+                false,
+                &[json!({
+                    "name": "act",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {"q": {"type": "string"}},
+                        "additionalProperties": false
+                    }
+                })],
+            );
+            let mut meta = gateway_with(
+                backend,
+                Arc::clone(&probe) as Arc<dyn crate::transport::Transport>,
+            );
+            with_idempotency(&mut meta);
+            let key = retry("k-8488-undeclared");
+            let args = json!({"server": "svc", "tool": "act", "arguments": {"undeclared": 1}});
+            let _refused = meta
+                .invoke_tool(&args, Some("session-8488"), &keyed(&key))
+                .await;
+            assert_eq!(
+                probe.calls.load(Ordering::SeqCst),
+                0,
+                "premise: the key check refused"
+            );
+        });
+    });
+    let abandoned = crate::test_log_capture::count(
+        &records,
+        "DEBUG",
+        "Released abandoned idempotency reservation",
+    );
+    assert_eq!(
+        abandoned, 0,
+        "the refusal left its key for the drop to release"
     );
 }

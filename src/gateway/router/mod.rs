@@ -165,6 +165,8 @@ mod mcp_nonce_tests;
 mod mcp_nonce_witness_tests;
 #[cfg(test)]
 mod mcp_refusal_kind_tests; // MIK-8353 3d-1: refusal kinds on the invoke path
+#[cfg(all(test, feature = "firewall"))]
+mod relay_key_settlement_tests; // MIK-8488 PR-A: site 18's key release
 #[cfg(test)]
 mod meta_fingerprint_tests;
 /// MIK-8154.LEASE.1 rows: the direct route takes the shared execution lease.
