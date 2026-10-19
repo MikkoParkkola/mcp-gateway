@@ -130,9 +130,36 @@ Declined, with reasons: replacing the helper by an early return in `t1f` (the
 CI pin and the guard both use the helper); dropping the checkout vacuity guard
 (asked for, and it is the only proof the skip was not taken in a checkout).
 
+## MIK-8449: the Windows pass (same mechanism)
+
+The registry ban lives in a dedicated clippy config, read only when
+`CLIPPY_CONF_DIR` names it. Pre-push and the Linux step run it; the Windows
+job runs `cargo clippy --all-targets --all-features` with the repo
+`clippy.toml`, which does not carry the ban. So an unannotated raw registry
+call under `#[cfg(windows)]` (code no other job compiles) is not linted.
+
+- One step is added to the `windows-clippy` job, `Registry ban, Windows
+  (MIK-8449)`: `CLIPPY_CONF_DIR` set to the same directory, `cargo clippy
+  --lib --bins` on both feature sets, `-D warnings`, debug profile (the cfg
+  tree is the same in release; the Linux step also runs release, which adds
+  nothing for cfg coverage). Each native command's exit status is checked
+  explicitly, because PowerShell would otherwise report only the last one.
+- The pin from this ticket covers it: `assert_ci_registry_ban_conf_dir` now
+  requires both steps, each exactly once with its own `env`. The falsifiers run
+  against each step (delete, comment out, redirect, rename, duplicate, move,
+  run-only) and one removes the Windows step, which must turn the pin red.
+- Windows proof (COV.2), which Linux cannot give: a throwaway branch with
+  `#[cfg(windows)] fn plant(r: &BackendRegistry) { let _ = r.get("x"); }` in a
+  production module must turn the `Windows clippy` job red; the same tree
+  without the plant is the control and is green. Never merged.
+- Not decided here: whether the ban pass should also run `--release` on
+  Windows (no cfg difference), and the `--all-targets` test code (the ban
+  config exempts test modules by design).
+
 ## Not changed
 
-No product code, no `Cargo.toml`, nothing under the workflows directory.
+No product code and no `Cargo.toml`. The MIK-8481 PRs touch no workflow file;
+MIK-8449 adds the one Windows step described above and nothing else there.
 
 ## Rollback
 
