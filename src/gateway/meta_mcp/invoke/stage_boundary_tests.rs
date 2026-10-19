@@ -557,3 +557,42 @@ fn an_undeclared_key_refusal_releases_its_key_at_the_refusal() {
         "the refusal left its key for the drop to release"
     );
 }
+
+/// INVOKE.6's check, kept as a row: on the invoke path, no settlement
+/// primitive is called outside the one mapping (`nonce_settle.rs`). A refusal
+/// that asks for its nonce, gives back its key or notes a served step directly
+/// would bypass `settle_pre_send` and fail here.
+#[test]
+fn every_pre_send_settlement_goes_through_the_mapping() {
+    const PATH: [(&str, &str); 8] = [
+        ("invoke.rs", include_str!("../invoke.rs")),
+        ("gate.rs", include_str!("gate.rs")),
+        ("pre_dispatch.rs", include_str!("pre_dispatch.rs")),
+        ("stored_proof.rs", include_str!("stored_proof.rs")),
+        ("relay.rs", include_str!("relay.rs")),
+        ("send.rs", include_str!("send.rs")),
+        ("post_dispatch.rs", include_str!("post_dispatch.rs")),
+        ("legacy_bridge.rs", include_str!("legacy_bridge.rs")),
+    ];
+    const PRIMITIVES: [&str; 4] = [
+        "ask_refund(",
+        "give_back_unsent(",
+        "note_served(",
+        "want_refund(",
+    ];
+    let mut direct = Vec::new();
+    for (file, source) in PATH {
+        for primitive in PRIMITIVES {
+            if source.contains(primitive) {
+                direct.push(format!("{file}: {primitive}"));
+            }
+        }
+    }
+    assert!(direct.is_empty(), "settled outside the mapping: {direct:?}");
+    // The scan reads what it claims to: the mapping is in use on the path.
+    let mapped: usize = PATH
+        .iter()
+        .map(|(_, source)| source.matches("settle_pre_send(").count())
+        .sum();
+    assert!(mapped >= 15, "the path calls the mapping {mapped} times");
+}

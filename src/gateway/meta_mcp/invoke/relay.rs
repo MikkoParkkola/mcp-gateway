@@ -164,9 +164,10 @@ impl MetaMcp {
         let Some(refused) = self.relay_refusal(who, audit, target, egress) else {
             return Ok(());
         };
-        if let Some(reservation) = reservation {
-            reservation.release();
-        }
+        super::nonce_settle::settle_pre_send(
+            caller,
+            super::nonce_settle::PreSendExit::ReleaseKey(reservation),
+        );
         Err(refused)
     }
 

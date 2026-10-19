@@ -135,7 +135,7 @@ impl MetaMcp {
             Err(error) => {
                 // The refusal records nothing outside the gateway; whatever
                 // witness survived the steps above decides the refund.
-                nonce_settle::ask_refund(caller);
+                nonce_settle::settle_pre_send(caller, nonce_settle::PreSendExit::AskRefund);
                 return Err(error);
             }
         };
@@ -164,7 +164,10 @@ impl MetaMcp {
                     // would answer an honest retry with a side effect nothing
                     // performed), and the signing nonce is asked back. A
                     // refused redeem consumed nothing, so the witness stands.
-                    nonce_settle::give_back_unsent(caller, idem_reservation);
+                    nonce_settle::settle_pre_send(
+                        caller,
+                        nonce_settle::PreSendExit::GiveBackUnsent(idem_reservation),
+                    );
                     return Err(error);
                 }
             };
@@ -184,7 +187,7 @@ impl MetaMcp {
         {
             // Refused before anything is sent: the witness that survived the
             // steps above decides the refund (MIK-8353 3b, NONCEFX.3).
-            nonce_settle::ask_refund(caller);
+            nonce_settle::settle_pre_send(caller, nonce_settle::PreSendExit::AskRefund);
             return Err(error);
         }
         // MIK-8137 b1: the chokepoint, before anything marks this send.
@@ -200,7 +203,10 @@ impl MetaMcp {
         ) {
             Ok(permit) => permit,
             Err(error) => {
-                nonce_settle::give_back_unsent(caller, idem_reservation);
+                nonce_settle::settle_pre_send(
+                    caller,
+                    nonce_settle::PreSendExit::GiveBackUnsent(idem_reservation),
+                );
                 return Err(error);
             }
         };

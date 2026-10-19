@@ -122,8 +122,12 @@ impl MetaMcp {
             // The guard's own refusals (mismatch, in flight, at capacity)
             // reserve nothing: they ask for the nonce back, and the witness
             // decides (MIK-8353 3d). A stored failure below is an answer.
-            let admitted = enforce(idem_cache, key, fingerprint)
-                .inspect_err(|_| super::nonce_settle::ask_refund(caller))?;
+            let admitted = enforce(idem_cache, key, fingerprint).inspect_err(|_| {
+                super::nonce_settle::settle_pre_send(
+                    caller,
+                    super::nonce_settle::PreSendExit::AskRefund,
+                );
+            })?;
             match admitted {
                 // A dispatched call that failed is terminal: serving the stored
                 // error is what stops the retry re-running a side effect that
@@ -131,7 +135,10 @@ impl MetaMcp {
                 GuardOutcome::CachedError(error) => {
                     // A stored failure is served too: a replay past its
                     // revocation meets its refusal (#3872 review, round 4).
-                    super::nonce_settle::note_served(caller, (server, tool));
+                    super::nonce_settle::settle_pre_send(
+                        caller,
+                        super::nonce_settle::PreSendExit::Served((server, tool)),
+                    );
                     audit::note_cached_failure(&error);
                     // A refusal keeps its provenance across the replay as well
                     // as across the bridge boundary. Served as a generic error
@@ -342,9 +349,10 @@ impl MetaMcp {
             }
         };
         if let Some(refusal) = refusal {
-            if let Some(reservation) = idem_reservation.as_mut() {
-                reservation.release();
-            }
+            super::nonce_settle::settle_pre_send(
+                caller,
+                super::nonce_settle::PreSendExit::ReleaseKey(idem_reservation.as_mut()),
+            );
             // The text lists the backend's own parameter names, which no
             // dispatch gate read: the content checks meet it before it is sealed.
             if self.content_refuses_value((server, tool), session_id, &refusal) {

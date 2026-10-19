@@ -453,7 +453,7 @@ impl MetaMcp {
         let answer = self.gate_answer((server, tool), caller, session_id).await?;
         // Answered before anything acted: the signing nonce is given back, as
         // for a name that matches no tool (MIK-8340 A4).
-        caller.signing.inspect(|signing| signing.want_refund());
+        super::nonce_settle::settle_pre_send(caller, super::nonce_settle::PreSendExit::AskRefund);
         Some(answer)
     }
 
@@ -486,16 +486,25 @@ impl MetaMcp {
         if crate::playbook::current_step().is_some() {
             // A playbook step keeps its neutral refusal (A3) and asks, as a
             // chain step does: the witness decides (MIK-8353 3d-2).
-            super::nonce_settle::ask_refund(caller);
+            super::nonce_settle::settle_pre_send(
+                caller,
+                super::nonce_settle::PreSendExit::AskRefund,
+            );
             return Err(refusal);
         }
         if let Some(answer) = self.gate_answer((server, tool), caller, session_id).await {
-            caller.signing.inspect(|signing| signing.want_refund());
+            super::nonce_settle::settle_pre_send(
+                caller,
+                super::nonce_settle::PreSendExit::AskRefund,
+            );
             answer
         } else {
             // The policy's own refusal at dispatch, before anything this
             // step does acts: the witness decides (MIK-8353 3d).
-            super::nonce_settle::ask_refund(caller);
+            super::nonce_settle::settle_pre_send(
+                caller,
+                super::nonce_settle::PreSendExit::AskRefund,
+            );
             Err(refusal)
         }
     }

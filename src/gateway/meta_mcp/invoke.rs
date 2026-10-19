@@ -229,9 +229,7 @@ impl MetaMcp {
                 // A busy custody refused this call before its backend, with
                 // its witness kept: ask for the nonce back, settled when
                 // the call returns (MIK-8392 Busy parity).
-                if crate::personal_accounts::refusal::transient_data(&error).is_some() {
-                    nonce_settle::ask_refund(caller);
-                }
+                nonce_settle::ask_if_transient(caller, &error);
                 return Err(error);
             }
         };
@@ -315,7 +313,10 @@ impl MetaMcp {
             client_claim.as_ref(),
             &mut idem_reservation,
         )? {
-            nonce_settle::note_served(caller, (server, tool));
+            nonce_settle::settle_pre_send(
+                caller,
+                nonce_settle::PreSendExit::Served((server, tool)),
+            );
             return Ok(TracedOutcome::Live(stored));
         }
         stored_proof::refuse_unproven(unproven, server)?; // FIX 1b: at most once
@@ -350,7 +351,7 @@ impl MetaMcp {
         // the check's fill spent.
         witness.carry(rw::schema_effect(fills() != fills_before));
         if let Some(refusal) = checked? {
-            nonce_settle::ask_refund(caller); // MIK-8353 3d: the witness decides
+            nonce_settle::settle_pre_send(caller, nonce_settle::PreSendExit::AskRefund); // MIK-8353 3d: the witness decides
             return Ok(TracedOutcome::Live(refusal));
         }
 
@@ -388,7 +389,10 @@ impl MetaMcp {
                 &mut idem_reservation,
             )
         {
-            nonce_settle::note_served(caller, (server, tool));
+            nonce_settle::settle_pre_send(
+                caller,
+                nonce_settle::PreSendExit::Served((server, tool)),
+            );
             return Ok(TracedOutcome::Live(cached));
         }
 

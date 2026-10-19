@@ -90,19 +90,56 @@ pub(crate) fn mark_dispatched(caller: &MetaMcpCallerContext<'_>, step: (&str, &s
     caller.signing.inspect(|signing| signing.mark_dispatched());
 }
 
-/// A call refused before its backend was reached gives back what it took:
-/// its idempotency key (released, not settled: nothing acted) and, once the
-/// call returns with no step dispatched, the signing nonce it admitted, so the
-/// honest call re-sent under that nonce is judged on its merits, not refused as
-/// a replay (MIK-8150, as the direct route does since #3451).
-pub(crate) fn give_back_unsent(
-    caller: &MetaMcpCallerContext<'_>,
-    reservation: &mut Option<crate::idempotency::IdempotencyReservation>,
-) {
-    if let Some(reservation) = reservation.as_mut() {
-        reservation.release();
+/// How an exit before the send settles the call's nonce, and its key where
+/// the exit pairs the two (MIK-8488 INVOKE.6). Every such exit on the invoke
+/// path goes through [`settle_pre_send`]; a key-only transition keeps
+/// `IdempotencyReservation`'s own methods at its point.
+pub(super) enum PreSendExit<'r> {
+    /// Refused before anything this step does acted: ask for the nonce back;
+    /// the witness decides.
+    AskRefund,
+    /// Refused before the backend was reached: give back what it took, its
+    /// key (released, not settled: nothing acted) and, once the call returns
+    /// with no step dispatched, the signing nonce it admitted, so the honest
+    /// call re-sent under that nonce is judged on its merits, not refused as
+    /// a replay (MIK-8150, as the direct route does since #3451).
+    GiveBackUnsent(&'r mut Option<crate::idempotency::IdempotencyReservation>),
+    /// The key half of a refusal whose nonce half is asked at the stage's
+    /// exit: released here, at the refusal, so its drop never releases it as
+    /// abandoned.
+    ReleaseKey(Option<&'r mut crate::idempotency::IdempotencyReservation>),
+    /// Answered from a stored or cached result: note `(server, tool)` on the
+    /// execution as served.
+    Served((&'r str, &'r str)),
+}
+
+/// Settle one pre-send exit: the one place the invoke path decides what a
+/// refusal or an early answer before the send gives back.
+pub(super) fn settle_pre_send(caller: &MetaMcpCallerContext<'_>, exit: PreSendExit<'_>) {
+    match exit {
+        PreSendExit::AskRefund => ask_refund(caller),
+        PreSendExit::GiveBackUnsent(reservation) => {
+            if let Some(reservation) = reservation.as_mut() {
+                reservation.release();
+            }
+            ask_refund(caller);
+        }
+        PreSendExit::ReleaseKey(reservation) => {
+            if let Some(reservation) = reservation {
+                reservation.release();
+            }
+        }
+        PreSendExit::Served(step) => note_served(caller, step),
     }
-    ask_refund(caller);
+}
+
+/// A busy custody refused this call before its backend: ask for the nonce
+/// back, so the same signed repeat is judged on its merits after recovery
+/// (MIK-8392 Busy parity, R5n). Any other error asks for nothing.
+pub(super) fn ask_if_transient(caller: &MetaMcpCallerContext<'_>, error: &crate::Error) {
+    if crate::personal_accounts::refusal::transient_data(error).is_some() {
+        settle_pre_send(caller, PreSendExit::AskRefund);
+    }
 }
 
 /// The refund witness one invoke carries through its may-effect steps

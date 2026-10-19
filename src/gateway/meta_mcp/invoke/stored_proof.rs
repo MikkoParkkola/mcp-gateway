@@ -172,10 +172,8 @@ impl crate::gateway::meta_mcp::MetaMcp {
         // A busy custody refused this call before its backend: ask for the
         // nonce back, as the live call's busy answer does (invoke.rs), so the
         // same signed repeat is judged on its merits after recovery (R5n).
-        if let Err(error) = &proven
-            && crate::personal_accounts::refusal::transient_data(error).is_some()
-        {
-            super::nonce_settle::ask_refund(caller);
+        if let Err(error) = &proven {
+            super::nonce_settle::ask_if_transient(caller, error);
         }
         Ok(match proven? {
             // A task repeat has no live path (its row holds the key), so an
