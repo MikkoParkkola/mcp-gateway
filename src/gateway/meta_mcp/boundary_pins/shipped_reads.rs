@@ -58,20 +58,49 @@ fn shipped(patterns: &[String], rel: &str) -> bool {
     })
 }
 
+/// Every string literal of a file, and those that are arguments of a call to
+/// the packaged-aware helper (a literal read through the helper is covered; a
+/// second, direct use of the same text is not).
 #[derive(Default)]
-struct Literals(Vec<String>);
+struct Literals {
+    all: Vec<String>,
+    covered: Vec<String>,
+}
+
+fn is_helper_call(call: &syn::ExprCall) -> bool {
+    matches!(&*call.func, syn::Expr::Path(p)
+        if p.path.segments.last().is_some_and(|s| s.ident == "repo_file" || s.ident == "read_or_skip"))
+}
 
 impl<'ast> Visit<'ast> for Literals {
     fn visit_lit_str(&mut self, lit: &'ast syn::LitStr) {
-        self.0.push(lit.value());
+        self.all.push(lit.value());
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if is_helper_call(call) {
+            let mut inner = Literals::default();
+            for arg in &call.args {
+                inner.visit_expr(arg);
+            }
+            self.covered.extend(inner.all);
+        }
+        syn::visit::visit_expr_call(self, call);
     }
 }
 
-/// The unshipped repo paths a source file names directly.
-fn offenders(root: &Path, patterns: &[String], source: &str) -> Vec<String> {
-    let reads_the_root = source.contains("CARGO_MANIFEST_DIR");
-    let packaged_aware = source.contains("repo_file") || source.contains("read_or_skip");
-    if !reads_the_root || packaged_aware {
+/// The helper module is the sanctioned reader: it names the pinned files in
+/// its own vacuity guard, which asks whether they exist.
+const HELPER_FILE: &str = "src/gateway/meta_mcp/boundary_pins/packaged.rs";
+
+/// Untracked or tool-owned directories: a literal starting there names no
+/// repository file.
+const NOT_REPO: [&str; 3] = ["target", ".git", ".worktrees"];
+
+/// The unshipped repo paths a source file names directly (`rel_file` is its
+/// path from the crate root).
+fn offenders(root: &Path, patterns: &[String], rel_file: &str, source: &str) -> Vec<String> {
+    if rel_file == HELPER_FILE || !source.contains("CARGO_MANIFEST_DIR") {
         return Vec::new();
     }
     let Ok(parsed) = syn::parse_file(source) else {
@@ -79,9 +108,15 @@ fn offenders(root: &Path, patterns: &[String], source: &str) -> Vec<String> {
     };
     let mut literals = Literals::default();
     literals.visit_file(&parsed);
+    let norm = |l: &str| l.trim_end_matches('/').to_owned();
+    let direct = |lit: &str| {
+        let used = literals.all.iter().filter(|l| norm(l) == lit).count();
+        let through_helper = literals.covered.iter().filter(|l| norm(l) == lit).count();
+        used > through_helper
+    };
     let mut found: Vec<String> = literals
-        .0
-        .into_iter()
+        .all
+        .iter()
         .filter(|lit| {
             lit.len() >= 3
                 && !lit.starts_with('/')
@@ -90,11 +125,13 @@ fn offenders(root: &Path, patterns: &[String], source: &str) -> Vec<String> {
                     .all(|c| c.is_ascii_alphanumeric() || "_./-".contains(c))
         })
         .map(|lit| lit.trim_end_matches('/').to_owned())
+        .filter(|lit| !NOT_REPO.contains(&lit.split('/').next().unwrap_or("")))
         .filter(|lit| {
             let path = root.join(lit);
             path.is_file() || (lit.contains('/') && path.exists())
         })
         .filter(|lit| !shipped(patterns, lit))
+        .filter(|lit| direct(lit))
         .collect();
     found.sort();
     found.dedup();
@@ -139,11 +176,13 @@ fn packed_2_no_test_reads_an_unshipped_repo_file_directly() {
     let mut violations = Vec::new();
     for file in &files {
         let source = std::fs::read_to_string(file).expect("source");
-        for lit in offenders(root, &patterns, &source) {
-            violations.push(format!(
-                "{}: {lit}",
-                file.strip_prefix(root).unwrap().display()
-            ));
+        let rel = file
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        for lit in offenders(root, &patterns, &rel, &source) {
+            violations.push(format!("{rel}: {lit}"));
         }
     }
     assert!(
@@ -192,24 +231,82 @@ fn an_unshipped_file_read_directly_is_flagged() {
     let (root, patterns) = scratch();
     for lit in ["tools/run.sh", "top.sh"] {
         assert_eq!(
-            offenders(root.path(), &patterns, &reading(lit)),
+            offenders(root.path(), &patterns, FILE, &reading(lit)),
             [lit.to_owned()],
             "{lit}"
         );
     }
 }
 
+/// A scratch source file's path.
+const FILE: &str = "tests/scratch.rs";
+
+/// A literal passed to the helper is covered.
 #[test]
-fn the_packaged_aware_helper_exempts_a_file() {
+fn a_literal_read_through_the_helper_is_exempt() {
     let (root, patterns) = scratch();
     for helper in ["repo_file", "read_or_skip"] {
         let source = format!(
-            "{}\nfn g() {{ {helper}(\"tools/run.sh\"); }}",
-            reading("tools/run.sh")
+            "fn f() {{ let _ = env!(\"CARGO_MANIFEST_DIR\"); {helper}(\"tools/run.sh\"); }}"
         );
         assert!(
-            offenders(root.path(), &patterns, &source).is_empty(),
+            offenders(root.path(), &patterns, FILE, &source).is_empty(),
             "{helper}"
+        );
+    }
+}
+
+/// Falsifier: the helper in a file exempts only the literals it is called
+/// with; a direct read of the same path, or of another one, is still flagged.
+#[test]
+fn the_helper_does_not_exempt_a_whole_file() {
+    let (root, patterns) = scratch();
+    let same = format!(
+        "{}\nfn g() {{ repo_file(\"tools/run.sh\"); }}",
+        reading("tools/run.sh")
+    );
+    assert_eq!(
+        offenders(root.path(), &patterns, FILE, &same),
+        ["tools/run.sh"],
+        "the same path, read directly as well"
+    );
+    let other = format!(
+        "{}\nfn g() {{ repo_file(\"top.sh\"); }}",
+        reading("tools/run.sh")
+    );
+    assert_eq!(
+        offenders(root.path(), &patterns, FILE, &other),
+        ["tools/run.sh"],
+        "another path"
+    );
+}
+
+/// The helper module is the sanctioned reader.
+#[test]
+fn the_helper_module_is_exempt_by_path() {
+    let (root, patterns) = scratch();
+    assert!(
+        offenders(
+            root.path(),
+            &patterns,
+            HELPER_FILE,
+            &reading("tools/run.sh")
+        )
+        .is_empty()
+    );
+}
+
+/// Build and VCS directories are not repository files.
+#[test]
+fn a_build_directory_literal_is_not_flagged() {
+    let (root, patterns) = scratch();
+    std::fs::create_dir_all(root.path().join("target/debug")).expect("mkdir");
+    for lit in ["target/debug", ".git/config", ".worktrees/x/y"] {
+        std::fs::create_dir_all(root.path().join(lit).parent().unwrap()).expect("mkdir");
+        std::fs::write(root.path().join(lit), "x").ok();
+        assert!(
+            offenders(root.path(), &patterns, FILE, &reading(lit)).is_empty(),
+            "{lit}"
         );
     }
 }
@@ -221,7 +318,7 @@ fn shipped_paths_and_non_paths_are_not_flagged() {
     // not a path, and a path that does not exist
     for lit in ["shipped.txt", "docs", "tools", "no/such/file.txt", "probe"] {
         assert!(
-            offenders(root.path(), &patterns, &reading(lit)).is_empty(),
+            offenders(root.path(), &patterns, FILE, &reading(lit)).is_empty(),
             "{lit}"
         );
     }
@@ -231,7 +328,7 @@ fn shipped_paths_and_non_paths_are_not_flagged() {
 fn a_file_that_never_reads_the_crate_root_is_not_scanned() {
     let (root, patterns) = scratch();
     let source = "fn f() { let _ = \"tools/run.sh\"; }";
-    assert!(offenders(root.path(), &patterns, source).is_empty());
+    assert!(offenders(root.path(), &patterns, FILE, source).is_empty());
 }
 
 #[test]

@@ -7,7 +7,7 @@ use std::path::Path;
 
 use syn::visit::Visit;
 
-use super::ci_wiring::{CI_WORKFLOW, assert_ci_registry_ban_conf_dir};
+use super::ci_wiring::{assert_ci_registry_ban_conf_dir, checked_in_workflow};
 use super::packaged::repo_file;
 use super::scan::{Place, Sink, expr_attrs, item_attrs, walk};
 
@@ -266,7 +266,7 @@ fn t1f_the_ban_config_and_its_wiring_are_pinned() {
         "pre-push does not name scripts/lint/registry-ban"
     );
     // MIK-8481: the Linux CI step, the required check, names it too.
-    let Some(ci) = repo_file(CI_WORKFLOW) else {
+    let Some(ci) = checked_in_workflow() else {
         return;
     };
     assert_ci_registry_ban_conf_dir(&ci);
