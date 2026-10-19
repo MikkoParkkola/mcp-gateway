@@ -117,44 +117,7 @@ impl CapabilityLoader {
     /// is still loaded.
     async fn load_capability_file(path: &Path) -> Result<CapabilityDefinition> {
         let capability = parse_capability_file(path).await?;
-        validate_capability(&capability)?;
-
-        let path_str = path.to_string_lossy();
-        let issues = validate_capability_definition(&capability, Some(&path_str));
-
-        let has_errors = issues.iter().any(|i| i.severity == IssueSeverity::Error);
-
-        for issue in &issues {
-            if issue.severity == IssueSeverity::Error {
-                warn!(
-                    code = issue.code,
-                    field = ?issue.field,
-                    path = %path_str,
-                    "Structural validation error: {}",
-                    issue.message,
-                );
-            } else {
-                warn!(
-                    code = issue.code,
-                    field = ?issue.field,
-                    path = %path_str,
-                    "Structural validation warning: {}",
-                    issue.message,
-                );
-            }
-        }
-
-        if has_errors {
-            return Err(Error::Config(format!(
-                "Capability '{}' has {} structural error(s); skipping",
-                path_str,
-                issues
-                    .iter()
-                    .filter(|i| i.severity == IssueSeverity::Error)
-                    .count(),
-            )));
-        }
-
+        refuse_unloadable(&capability, path)?;
         Ok(capability)
     }
 
@@ -177,6 +140,45 @@ impl CapabilityLoader {
 
         Ok(all_capabilities)
     }
+}
+
+/// The checks a parsed capability file must pass to be served: the legacy
+/// `validate_capability` and the structural validator's errors. Warnings are
+/// logged and do not refuse. The loader and the registry's search index both
+/// ask this, so search never lists a file the loader skips (MIK-8358).
+///
+/// # Errors
+///
+/// The legacy check's error, or `Error::Config` counting the structural
+/// errors when there are any.
+pub(crate) fn refuse_unloadable(capability: &CapabilityDefinition, path: &Path) -> Result<()> {
+    validate_capability(capability)?;
+    let path_str = path.to_string_lossy();
+    let issues = validate_capability_definition(capability, Some(&path_str));
+    for issue in &issues {
+        let kind = if issue.severity == IssueSeverity::Error {
+            "error"
+        } else {
+            "warning"
+        };
+        warn!(
+            code = issue.code,
+            field = ?issue.field,
+            path = %path_str,
+            "Structural validation {kind}: {}",
+            issue.message,
+        );
+    }
+    let errors = issues
+        .iter()
+        .filter(|i| i.severity == IssueSeverity::Error)
+        .count();
+    if errors > 0 {
+        return Err(Error::Config(format!(
+            "Capability '{path_str}' has {errors} structural error(s); skipping"
+        )));
+    }
+    Ok(())
 }
 
 /// Count how many `capabilities` have no `sha256:` pin.

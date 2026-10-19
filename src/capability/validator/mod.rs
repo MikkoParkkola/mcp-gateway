@@ -164,11 +164,10 @@ pub fn validate_capability_definition(
 /// already ran, spelled once so the two cannot drift.
 #[must_use]
 pub(crate) fn input_schema_is_structurally_valid(input: &serde_json::Value) -> bool {
-    // The shared check tolerates a null or empty schema for webhook-only
-    // capabilities loaded off disk, and says nothing at all about a string,
-    // number, boolean or array -- none of those carry a `type` or `properties`
-    // to object to, so every one of them passed as structurally valid. Over the
-    // wire a non-object is exactly the shape this gate exists to withhold.
+    // The shared check tolerates a null schema for webhook-only capabilities
+    // loaded off disk; over the wire a null schema is exactly the shape this
+    // gate exists to withhold. Scalars and arrays the shared check now refuses
+    // itself (MIK-8358); this keeps null out as well.
     if !input.is_object() {
         return false;
     }

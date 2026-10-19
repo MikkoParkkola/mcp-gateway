@@ -364,6 +364,17 @@ impl Config {
                 )));
             }
         }
+        // The capabilities backend is registered under `capabilities.name`
+        // beside the registry backends, and readers tell the two apart by
+        // registry membership, so one name may not mean both
+        // (MIK-8358.CAPCFG.1). Checked whatever `enabled` says (MIK-8298).
+        let capabilities = &self.capabilities.name;
+        if self.backends.contains_key(capabilities) {
+            return Err(Error::ConfigValidation(format!(
+                "capabilities.name = {capabilities:?} is also backends.{capabilities}; the \
+                 capabilities backend shares the backend name space. Rename one of them."
+            )));
+        }
         Ok(())
     }
 
