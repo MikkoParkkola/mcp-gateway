@@ -111,3 +111,53 @@ async fn a_replayed_chain_refusal_keeps_its_uninspected_attribution() {
         );
     }
 }
+
+/// MIK-8488 PR-A, site 10 (mutant s10): the stored failure a keyed replay is
+/// served (here, a chain refusal stored as the key's terminal answer) is noted
+/// on the replaying execution as served, so a later replay of that execution
+/// past a revocation of the step still meets the refusal (#3872).
+#[tokio::test]
+async fn a_replayed_stored_failure_is_noted_as_served() {
+    let dir = tempfile::tempdir().unwrap();
+    let meta = chained_meta(&dir);
+    let who = api_key_caller();
+    let retry = RetryFields {
+        idempotency_key: Some("key-8488-stored-failure".into()),
+        ..RetryFields::default()
+    };
+    let mut caller = context(&AllowAll, &who);
+    caller.retry = &retry;
+    let args = json!({"server": "alpha", "tool": "read", "arguments": {}});
+    let _first = meta
+        .invoke_tool(&args, None, &caller)
+        .await
+        .expect_err("premise: the chain check refuses the unchained answer");
+    // A replaying execution of its own: an owned lease needs a modern owner.
+    let outer = RetryFields {
+        idempotency_key: Some("key-8488-stored-failure-outer".into()),
+        ..RetryFields::default()
+    };
+    let mut owner = context(&AllowAll, &who);
+    owner.retry = &outer;
+    owner.is_modern = true;
+    let admitted = meta.admit_meta_sync_for_test(
+        crate::gateway::meta_mcp::AdmissionOwner::for_test(owner.owner_principal()),
+        &owner,
+        "gateway_invoke",
+        &args,
+        None,
+        &crate::protocol::RequestId::Number(1),
+    );
+    let Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Owned(lease)) = admitted else {
+        panic!("premise: the replaying execution owns its own lease");
+    };
+    caller.execution = Some(&lease);
+    let _second = meta
+        .invoke_tool(&args, None, &caller)
+        .await
+        .expect_err("premise: the replay is served the stored refusal");
+    assert_eq!(
+        lease.served_steps_for_test(),
+        vec![("alpha".to_owned(), "read".to_owned())]
+    );
+}

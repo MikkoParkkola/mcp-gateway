@@ -433,10 +433,11 @@ async fn an_idempotency_hit_is_noted_as_served() {
     assert_eq!(served, vec![("svc".to_owned(), "act".to_owned())]);
 }
 
-/// S4, site 10 (mutant s10): a keyed call whose stored result is the
-/// backend's own error is served that error and noted as served too.
+/// S4, site 11, second shape (mutant s11): a keyed call whose stored result
+/// is the backend's own error answer (completed as a tool error, not stored as
+/// a failure) is served that answer and noted as served too.
 #[tokio::test]
-async fn a_stored_failure_is_noted_as_served() {
+async fn a_replayed_backend_error_answer_is_noted_as_served() {
     let failing = Arc::new(Failing(AtomicUsize::new(0)));
     let mut meta = gateway_on(
         Arc::clone(&failing) as Arc<dyn crate::transport::Transport>,
