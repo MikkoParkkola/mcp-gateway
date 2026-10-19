@@ -62,8 +62,23 @@ impl Transport for CountingTransport {
 pub(in crate::gateway::meta_mcp) fn counted_backend(
     name: &str,
 ) -> (Arc<BackendRegistry>, Arc<AtomicUsize>) {
-    let calls = Arc::new(AtomicUsize::new(0));
     let registry = Arc::new(BackendRegistry::new());
+    let calls = register_answering(
+        &registry,
+        name,
+        json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+    );
+    (registry, calls)
+}
+
+/// Register on `registry` a counted backend `name` whose every `tools/call`
+/// answers `result` (a tool error, for the MIK-8429 rows).
+pub(in crate::gateway::meta_mcp) fn register_answering(
+    registry: &BackendRegistry,
+    name: &str,
+    result: Value,
+) -> Arc<AtomicUsize> {
+    let calls = Arc::new(AtomicUsize::new(0));
     let backend = Arc::new(Backend::new(
         name,
         BackendConfig::r2_off(),
@@ -72,14 +87,14 @@ pub(in crate::gateway::meta_mcp) fn counted_backend(
     ));
     backend.set_transport_for_test(Arc::new(CountingTransport {
         calls: Arc::clone(&calls),
-        result: json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+        result,
         tools: None,
     }));
     // MIK-8393: only a declared read is cached; this fixture's subject is
     // the cache's keying, so `read` is declared read-only here.
     backend.set_read_only_declared_for_test(&["read"]);
     let _ = registry.register(backend);
-    (registry, calls)
+    calls
 }
 
 /// [`counted_backend`] whose catalogue is checked (`standard`): its
