@@ -61,7 +61,7 @@ async fn seam_state_with(
         .keeping_every_kgram(),
     );
     let definition: crate::playbook::PlaybookDefinition =
-        serde_yaml::from_str(playbook).expect("playbook fixture must parse");
+        crate::yaml::from_str(playbook).expect("playbook fixture must parse");
     let mut auth = two_principal_auth();
     for key in &mut auth.api_keys {
         key.backends.extend(more.iter().map(ToString::to_string));
@@ -487,7 +487,7 @@ async fn a_redacted_field_is_no_steps_text() {
         .with_continuations(router.continuations_for_test().expect("keyed"))
         .keeping_every_kgram(),
     );
-    let definition: crate::playbook::PlaybookDefinition = serde_yaml::from_str(&playbook(
+    let definition: crate::playbook::PlaybookDefinition = crate::yaml::from_str(&playbook(
         "    a:\n      path: $s1.content[0].text\n    b:\n      path: $s2.content[0].text\n",
     ))
     .expect("playbook fixture must parse");

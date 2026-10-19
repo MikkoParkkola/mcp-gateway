@@ -14,7 +14,7 @@ use super::route;
 use crate::personal_accounts::revoke_fixture::StoreDown;
 
 fn session_config() -> crate::config::Config {
-    serde_yaml::from_str(
+    crate::yaml::from_str(
         r"
 accounts:
   schema_version: accounts.v1

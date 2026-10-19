@@ -72,7 +72,7 @@ async fn relay_audit_has_no_injected_secret() {
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {
-                rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                rules: crate::yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
                 collusion: CollusionConfig {
                     action: CollusionAction::Block,
                     sources: vec!["alpha:*".to_string()],
@@ -130,7 +130,7 @@ async fn relay_check_skips_a_caller_value_the_injector_overwrites() {
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {
-                rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                rules: crate::yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
                 collusion: CollusionConfig {
                     action: CollusionAction::Block,
                     sources: vec!["alpha:*".to_string()],
@@ -184,7 +184,7 @@ async fn meta_observe_reports_a_relay_and_sends_it() {
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {
-                rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                rules: crate::yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
                 audit_log: Some(dir.path().join("audit.ndjson")),
                 collusion: CollusionConfig {
                     action: CollusionAction::Observe,

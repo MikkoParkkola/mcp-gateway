@@ -40,7 +40,7 @@ pub(super) fn guard_tenants(
         ..crate::security::firewall::FirewallConfig::default()
     };
     if let Some(rules) = rules {
-        config.rules = serde_yaml::from_str(rules).expect("rules parse");
+        config.rules = crate::yaml::from_str(rules).expect("rules parse");
     }
     // Both carry the keyring the gateway mints continuations with, as the
     // gateway's own do (#2210, MIK-8276).

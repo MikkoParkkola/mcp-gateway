@@ -40,7 +40,7 @@ fn doc_yaml_block(first_line: &str) -> &'static str {
 /// A grant refusal is an `Err` from the authorization chokepoint; a call that
 /// passed it comes back `Ok` as a result envelope.
 async fn dispatch_doc_example(scope: &str, read_only: bool) -> Result<serde_json::Value, String> {
-    let grants: IdentityGrantFile = serde_yaml::from_str(
+    let grants: IdentityGrantFile = crate::yaml::from_str(
         &doc_yaml_block("schema_version:").replace("scope: read", &format!("scope: {scope}")),
     )
     .expect("doc grant file parses");

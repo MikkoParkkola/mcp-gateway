@@ -41,7 +41,7 @@ async fn dests_after(playbook: &str, name: &str) -> Vec<Value> {
     let (registry, _calls) = counted_backend("alpha");
     let meta = MetaMcp::new(registry);
     let definition: crate::playbook::PlaybookDefinition =
-        serde_yaml::from_str(playbook).expect("the playbook fixture parses");
+        crate::yaml::from_str(playbook).expect("the playbook fixture parses");
     let mut engine = crate::playbook::PlaybookEngine::new();
     engine.register(definition);
     meta.set_playbook_engine(engine);
@@ -224,7 +224,7 @@ async fn a_failed_tool_error_step_leaves_the_completed_steps_notes_carried() {
         json!({"content": [{"type": "text", "text": "upstream failed"}], "isError": true}),
     );
     let meta = MetaMcp::new(registry);
-    let definition: crate::playbook::PlaybookDefinition = serde_yaml::from_str(
+    let definition: crate::playbook::PlaybookDefinition = crate::yaml::from_str(
         r"
 name: partly
 description: a failing step, then a served one

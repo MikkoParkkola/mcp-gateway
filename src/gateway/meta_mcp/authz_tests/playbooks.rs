@@ -19,7 +19,7 @@ async fn run_playbook_yaml(
     caller: &MetaMcpCallerContext<'_>,
 ) -> crate::Result<Value> {
     let definition: crate::playbook::PlaybookDefinition =
-        serde_yaml::from_str(yaml).expect("playbook fixture must parse");
+        crate::yaml::from_str(yaml).expect("playbook fixture must parse");
     let name = definition.name.clone();
     // Registered through the same public entry point an operator's config uses,
     // so the test drives the production path rather than a test-only seam.
@@ -476,7 +476,7 @@ fn mik_8341_admission_refuses_a_playbook_retry_before_reserving() {
     let meta = MetaMcp::new(registry);
     let mut engine = crate::playbook::PlaybookEngine::new();
     engine.register(
-        serde_yaml::from_str(
+        crate::yaml::from_str(
             "name: any\ndescription: d\nsteps:\n  - {name: read, server: alpha, tool: read}\n",
         )
         .expect("playbook fixture must parse"),

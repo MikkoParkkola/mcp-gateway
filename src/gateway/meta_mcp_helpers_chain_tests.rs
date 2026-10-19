@@ -315,7 +315,7 @@ produces: [teamId, issueId]
 consumes: [teamId]
 chains_with: [linear_create_issue, linear_update_issue]
 ";
-    let meta: crate::capability::CapabilityMetadata = serde_yaml::from_str(yaml).unwrap();
+    let meta: crate::capability::CapabilityMetadata = crate::yaml::from_str(yaml).unwrap();
     assert_eq!(meta.produces, vec!["teamId", "issueId"]);
     assert_eq!(meta.consumes, vec!["teamId"]);
     assert_eq!(
@@ -331,7 +331,7 @@ fn capability_metadata_defaults_composition_fields_to_empty() {
     // THEN: produces, consumes, chains_with default to empty Vec
     let yaml = "category: search
 ";
-    let meta: crate::capability::CapabilityMetadata = serde_yaml::from_str(yaml).unwrap();
+    let meta: crate::capability::CapabilityMetadata = crate::yaml::from_str(yaml).unwrap();
     assert!(meta.produces.is_empty());
     assert!(meta.consumes.is_empty());
     assert!(meta.chains_with.is_empty());

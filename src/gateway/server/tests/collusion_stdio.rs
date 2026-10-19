@@ -126,7 +126,7 @@ async fn stdio_operator_is_one_principal() {
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {
-                rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                rules: crate::yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
                 collusion: CollusionConfig {
                     action: CollusionAction::Block,
                     sources: vec!["alpha:read".to_string()],
@@ -192,7 +192,7 @@ fn judged_stdio(
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {
-                rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                rules: crate::yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
                 collusion: CollusionConfig {
                     action: CollusionAction::Block,
                     sources: vec!["alpha:*".to_string()],

@@ -227,7 +227,7 @@ async fn gateway_reload_config_surfaces_restart_required_fields() {
     new_config.server.port += 1;
     crate::gateway::test_helpers::write_owner_only(
         &config_path,
-        serde_yaml::to_string(&new_config).unwrap(),
+        crate::yaml::to_string(&new_config).unwrap(),
     )
     .unwrap();
 

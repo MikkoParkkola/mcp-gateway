@@ -194,7 +194,7 @@ backends:
 
 #[test]
 fn validate_accepts_signed_remote_backend_provenance() {
-    let config: Config = serde_yaml::from_str(&signed_remote_provenance_yaml()).unwrap();
+    let config: Config = crate::yaml::from_str(&signed_remote_provenance_yaml()).unwrap();
 
     assert!(config.validate().is_ok());
 }
@@ -206,7 +206,7 @@ security:
   context_integrity:
     preset: team_shared
 ";
-    let config: Config = serde_yaml::from_str(yaml).unwrap();
+    let config: Config = crate::yaml::from_str(yaml).unwrap();
 
     assert_eq!(
         config.security.context_integrity.preset,
@@ -237,7 +237,7 @@ backends:
     http_url: https://unsigned.example.com/mcp
     streamable_http: true
 ";
-    let config: Config = serde_yaml::from_str(yaml).unwrap();
+    let config: Config = crate::yaml::from_str(yaml).unwrap();
 
     let result = config.validate();
 
@@ -255,7 +255,7 @@ fn validate_rejects_tampered_remote_backend_provenance_signature() {
         "https://signed.example.com/mcp",
         "https://tampered.example.com/mcp",
     );
-    let config: Config = serde_yaml::from_str(&yaml).unwrap();
+    let config: Config = crate::yaml::from_str(&yaml).unwrap();
 
     let result = config.validate();
 

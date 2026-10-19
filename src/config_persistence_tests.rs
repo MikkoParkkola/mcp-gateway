@@ -396,7 +396,7 @@ fn a_write_through_a_symlinked_config_keeps_the_link() {
     let link = dir.path().join("gateway.yaml");
     std::os::unix::fs::symlink(&target, &link).expect("link");
     let mut config = load_existing_or_default(&link).expect("load");
-    let backend = serde_yaml::from_str("command: echo\n").expect("backend");
+    let backend = crate::yaml::from_str("command: echo\n").expect("backend");
     config.backends.insert("b".into(), backend);
 
     edit_config(&link, crate::config_persistence::CommentLoss::Refuse, |c| {
@@ -431,7 +431,7 @@ fn spliced(text: &str, edit: impl FnOnce(&mut Config)) -> String {
 const MIXED: &str = "backends:\n  a:\n    command: x\r\n  b:\r\n    command: y\r\n";
 
 fn backend(yaml: &str) -> crate::config::BackendConfig {
-    serde_yaml::from_str(yaml).expect("backend")
+    crate::yaml::from_str(yaml).expect("backend")
 }
 
 /// `MIK-8029.EOL.1`: editing one field leaves every other line's ending as it
@@ -583,7 +583,7 @@ fn a_removal_at_an_unbroken_end_keeps_it_unbroken() {
 #[test]
 fn a_file_changed_since_it_was_loaded_is_not_spliced() {
     use super::splice::with_backend_edited;
-    let config_of = |yaml: &str| serde_yaml::from_str::<Config>(yaml).expect("config");
+    let config_of = |yaml: &str| crate::yaml::from_str::<Config>(yaml).expect("config");
     let before = config_of("backends: {}\n");
     let config = config_of("backends:\n  new:\n    command: echo\n");
     assert!(
