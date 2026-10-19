@@ -5,10 +5,15 @@
 use serde_json::Value;
 
 use super::{AppState, IntoResponse, SessionId};
+use crate::gateway::router::hardened_elicitation;
+use crate::gateway::router::helpers::session_capacity_refusal;
 use crate::gateway::session_id::SessionOwner;
+use crate::gateway::streaming::{MintKind, SessionCapacity, SessionHold};
 
-/// Open or resume the request's session. `None` for a request of the 2026
-/// era by header, which opens none. `Err` is a finished answer.
+/// Open or resume the request's session, held while the request runs. A
+/// 2026-era request by header opens none. `initialize` mints an ordinary
+/// session; any other request mints a provisional one, refused at the cap
+/// (MIK-8504). `Err` is a finished answer: nothing was minted.
 pub(super) fn open_request_session(
     state: &AppState,
     request: &Value,
@@ -16,51 +21,50 @@ pub(super) fn open_request_session(
     existing: Option<&str>,
     caller_owner: &SessionOwner,
     (declared_version, declares_modern_by_header): (Option<&str>, bool),
-) -> Result<Option<SessionId>, Box<axum::response::Response>> {
-    let opened = if declares_modern_by_header {
+) -> Result<(Option<SessionId>, Option<SessionHold>), Box<axum::response::Response>> {
+    if declares_modern_by_header {
         // No session, and none minted. Minting one per request grew a table of
         // sessions nothing could reach, and handed the sequence-anomaly
         // detector a fresh identity every call — a detector that sees a first
         // request every time keeps running and stops protecting.
-        None
+        return Ok((None, None));
+    }
+    // The identity that owns the session. A caller with neither a subject
+    // nor a credential is "anonymous", so a single-user gateway behaves
+    // exactly as before.
+    let held = crate::gateway::auth::live::held_credential(headers);
+    let initialize = hardened_elicitation::is_initialize(request);
+    if hardened_elicitation::is_hardened(state) && !initialize {
+        // Hardened: only a declaring `initialize` opens a legacy session.
+        return match state
+            .multiplexer
+            .resume_session_id_scoped(existing, caller_owner, held)
+        {
+            Some(id) => Ok((Some(id), None)),
+            None => Err(Box::new(hardened_elicitation::refuse(
+                request,
+                declared_version,
+            ))),
+        };
+    }
+    if hardened_elicitation::is_hardened(state)
+        && !hardened_elicitation::declares_elicitation(request)
+    {
+        // Hardened (row 10): refused before anything is minted.
+        return Err(Box::new(hardened_elicitation::refusal().into_response()));
+    }
+    let kind = if initialize {
+        MintKind::Ordinary
     } else {
-        // The identity that owns the session. A caller with neither a subject
-        // nor a credential is "anonymous", so a single-user gateway behaves
-        // exactly as before.
-        let held = crate::gateway::auth::live::held_credential(headers);
-        Some(
-            if !crate::gateway::router::hardened_elicitation::is_hardened(state) {
-                state
-                    .multiplexer
-                    .get_or_create_session_id_scoped(existing, caller_owner, held)
-            } else if crate::gateway::router::hardened_elicitation::is_initialize(request) {
-                // Hardened (row 10): refused before anything is minted.
-                if !crate::gateway::router::hardened_elicitation::declares_elicitation(request) {
-                    return Err(Box::new(
-                        crate::gateway::router::hardened_elicitation::refusal().into_response(),
-                    ));
-                }
-                state
-                    .multiplexer
-                    .get_or_create_session_id_scoped(existing, caller_owner, held)
-            } else {
-                // Hardened: only a declaring `initialize` opens a legacy session.
-                match state
-                    .multiplexer
-                    .resume_session_id_scoped(existing, caller_owner, held)
-                {
-                    Some(id) => id,
-                    None => {
-                        return Err(Box::new(
-                            crate::gateway::router::hardened_elicitation::refuse(
-                                request,
-                                declared_version,
-                            ),
-                        ));
-                    }
-                }
-            },
-        )
+        MintKind::Provisional
     };
-    Ok(opened)
+    match state
+        .multiplexer
+        .open_request_session_scoped(existing, caller_owner, held, kind)
+    {
+        Ok((id, request_hold)) => Ok((Some(id), Some(request_hold))),
+        Err(SessionCapacity) => Err(Box::new(session_capacity_refusal(
+            crate::protocol::mrtr::raw_request_id(request),
+        ))),
+    }
 }
