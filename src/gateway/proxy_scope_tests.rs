@@ -36,7 +36,7 @@ api_keys:
 ";
 
 fn authorizer(yaml: &str, key_server: Option<Arc<KeyServer>>) -> AuthState {
-    let config: AuthConfig = serde_yaml::from_str(yaml).unwrap();
+    let config: AuthConfig = crate::yaml::from_str(yaml).unwrap();
     AuthState {
         auth_config: Arc::new(ResolvedAuthConfig::from_config(&config)),
         key_server,

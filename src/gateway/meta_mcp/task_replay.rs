@@ -101,11 +101,7 @@ impl MetaMcp {
             return;
         }
         let caller = scope.caller;
-        let targets: Vec<(&str, &str)> = stored
-            .targets
-            .iter()
-            .map(|target| (target.server.as_str(), target.tool.as_str()))
-            .collect();
+        let targets = crate::gateway::task_service::Target::pairs(&stored.targets);
         #[cfg(test)]
         let targets: Vec<(&str, &str)> = targets
             .into_iter()

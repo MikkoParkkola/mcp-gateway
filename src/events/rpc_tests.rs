@@ -291,7 +291,7 @@ async fn t16_hub() -> (
     use crate::backend::{Backend, BackendRegistry};
     use crate::config::{Config, EventsConfig, FailsafeConfig};
 
-    let config: Config = serde_yaml::from_str(
+    let config: Config = crate::yaml::from_str(
         "backends:\n  u:\n    http_url: http://127.0.0.1:9/mcp\n  \
          s:\n    http_url: http://127.0.0.1:9/sse\n    streamable_http: false\n  \
          c:\n    command: echo\n",

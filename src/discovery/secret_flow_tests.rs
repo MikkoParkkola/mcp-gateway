@@ -62,7 +62,7 @@ fn no_other_output_shows_a_value() {
             format!("{server:?}"),
             format!("{server:#?}"),
             serde_json::to_string(&server).unwrap(),
-            serde_yaml::to_string(&server).unwrap(),
+            crate::yaml::to_string(&server).unwrap(),
             serde_json::to_string(&server.redacted_for_diagnostics()).unwrap(),
             server.diagnostic_value().to_string(),
         ];

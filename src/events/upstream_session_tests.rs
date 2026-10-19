@@ -463,7 +463,7 @@ fn a_tick_sees_an_in_place_switch_through_the_live_read() {
     use super::{OnTick, on_tick};
     let backend = crate::backend::Backend::new(
         "b",
-        serde_yaml::from_str("http_url: http://127.0.0.1:9/mcp").expect("config"),
+        crate::yaml::from_str("http_url: http://127.0.0.1:9/mcp").expect("config"),
         &crate::config::FailsafeConfig::default(),
         Duration::from_secs(60),
     );

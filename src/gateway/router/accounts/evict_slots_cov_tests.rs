@@ -69,7 +69,7 @@ fn key() -> AccountKey {
 /// Two managed descriptors, `ledger` bound to `work` and `diary` to `home`,
 /// plus any `extra` backend lines (already indented under `backends:`).
 fn config(extra: &str) -> Config {
-    serde_yaml::from_str(&format!(
+    crate::yaml::from_str(&format!(
         r"
 backends:
   {BOUND}:

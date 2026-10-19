@@ -213,11 +213,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
     ) -> Option<crate::protocol::JsonRpcResponse> {
         use crate::gateway::meta_mcp::visible::{self, AccountOutcome, Visibility, Withholding};
-        let targets: Vec<(&str, &str)> = stored
-            .targets
-            .iter()
-            .map(|target| (target.server.as_str(), target.tool.as_str()))
-            .collect();
+        let targets = crate::gateway::task_service::Target::pairs(&stored.targets);
         let proof = CallerProof::new(caller.verified_identity, caller.provenance());
         // A repeat's fill (#3892): outcomes recorded, a busy custody writes
         // no transient `idp_refuse` (R5).

@@ -67,7 +67,7 @@ fn wildcard_and_list_scoping() {
 #[test]
 fn api_key_with_backends_omitted_from_yaml_reaches_no_backend() {
     // The field left out entirely, not `[]`: serde's default must also be none.
-    let auth: AuthConfig = serde_yaml::from_str(
+    let auth: AuthConfig = crate::yaml::from_str(
         "enabled: true\napi_keys:\n  - key_sha256: sha256:411525617cc97c2811e4b9cf0ce326619095bec63da7ef4d342d18de8c3ef086\n    name: omitted\n",
     )
     .expect("auth YAML parses");
