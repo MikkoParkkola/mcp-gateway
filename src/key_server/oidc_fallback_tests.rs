@@ -143,7 +143,7 @@ fn verifier(fx: &Fixture, extra: &str) -> OidcVerifier {
          audiences: [\"{AUD}\"]\n{extra}",
         fx.issuer
     );
-    let cfg: KeyServerConfig = serde_yaml::from_str(&yaml).expect("key server yaml");
+    let cfg: KeyServerConfig = crate::yaml::from_str(&yaml).expect("key server yaml");
     cfg.validate().expect("valid key server config");
     OidcVerifier::with_http_client(cfg.oidc, reqwest::Client::new())
 }
@@ -289,7 +289,7 @@ fn verifier_ttls(fx: &Fixture, ttl: Duration, fallback_ttl: Duration) -> OidcVer
          audiences: [\"{AUD}\"]\n",
         fx.issuer
     );
-    let cfg: KeyServerConfig = serde_yaml::from_str(&yaml).expect("key server yaml");
+    let cfg: KeyServerConfig = crate::yaml::from_str(&yaml).expect("key server yaml");
     cfg.validate().expect("valid key server config");
     OidcVerifier::with_ttls(cfg.oidc, reqwest::Client::new(), ttl, fallback_ttl)
 }
@@ -469,7 +469,7 @@ async fn a_discovery_timeout_falls_back() {
          audiences: [\"{AUD}\"]\n",
         fx.issuer
     );
-    let cfg: KeyServerConfig = serde_yaml::from_str(&yaml).expect("key server yaml");
+    let cfg: KeyServerConfig = crate::yaml::from_str(&yaml).expect("key server yaml");
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(2))
         .build()

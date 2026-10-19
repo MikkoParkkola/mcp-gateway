@@ -229,3 +229,30 @@ fn chrome_devtools_names_its_chrome_prerequisite() {
         entry.setup
     );
 }
+
+/// What the gateway acts on in a pinned upstream package, read from the
+/// package itself at review time (MIK-8510): the version, and the
+/// `readOnlyHint` / `idempotentHint` of its one tool. The gateway reads the
+/// read-only hint for the `role` filter of `gateway_list_tools` and for
+/// response-cache eligibility, so a
+/// bump that flips it changes visible behaviour (it did, between the date-based
+/// `2026.8.31`, `true` / `true`, and `1.0.0`, `false` / `false`).
+const SEQUENTIAL_THINKING_REVIEWED: (&str, bool, bool) = ("1.0.0", false, false);
+
+/// A later bump of the `sequential-thinking` pin must come with a fresh read of
+/// the tool annotations in the new package (`dist/index.js`, the `annotations`
+/// block) and an update of the row above; changing the pin alone fails here.
+#[test]
+fn the_sequential_thinking_hints_are_reviewed_for_the_pinned_version() {
+    let (version, read_only, idempotent) = SEQUENTIAL_THINKING_REVIEWED;
+    let entry = lookup("sequential-thinking").expect("sequential-thinking is in the registry");
+    assert!(
+        entry
+            .command
+            .ends_with(&format!("server-sequential-thinking@{version}")),
+        "the pin moved from {version}: read readOnlyHint ({read_only}) and idempotentHint \
+         ({idempotent}) in the new package's dist/index.js, then update \
+         SEQUENTIAL_THINKING_REVIEWED. Command: {}",
+        entry.command
+    );
+}

@@ -551,7 +551,7 @@ api_keys:
 fn authorizer(
     key_server: Option<Arc<crate::key_server::KeyServer>>,
 ) -> crate::gateway::auth::AuthState {
-    let config: crate::config::AuthConfig = serde_yaml::from_str(AUTH_YAML).unwrap();
+    let config: crate::config::AuthConfig = crate::yaml::from_str(AUTH_YAML).unwrap();
     crate::gateway::auth::AuthState {
         auth_config: Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
             &config,
@@ -604,7 +604,7 @@ async fn post_webhook(state: WebhookHandlerState) -> Value {
 #[test]
 fn a_webhook_that_does_not_ask_to_notify_does_not() {
     // Opting in is the only way a webhook payload reaches a session.
-    let def: WebhookDefinition = serde_yaml::from_str("path: /linear/webhook").unwrap();
+    let def: WebhookDefinition = crate::yaml::from_str("path: /linear/webhook").unwrap();
     assert!(!def.notify, "notify must default to false");
 }
 
