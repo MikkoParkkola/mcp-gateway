@@ -292,7 +292,7 @@ async fn fixture(setup: Setup) -> Fixture {
     let config = FirewallConfig {
         audit_log: setup.audit_log,
         // A rule may not soften a relay block.
-        rules: serde_yaml::from_str(setup.rules).unwrap(),
+        rules: crate::yaml::from_str(setup.rules).unwrap(),
         collusion: CollusionConfig {
             action: setup.action,
             window_secs: setup.window_secs,

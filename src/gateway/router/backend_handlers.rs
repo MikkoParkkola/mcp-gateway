@@ -681,7 +681,7 @@ fn cached_error_response(id: Option<RequestId>, error: &Value) -> JsonRpcRespons
 
 fn record_client_success(state: &AppState, client: Option<&AuthenticatedClient>) {
     if let Some(client) = client {
-        state.auth_config.record_client_success(&client.name);
+        state.auth_config.record_client_success(client);
     }
 }
 
@@ -718,7 +718,7 @@ fn stamp_direct_provenance(
 
 fn record_client_failure(state: &AppState, client: Option<&AuthenticatedClient>) {
     if let Some(client) = client {
-        state.auth_config.record_client_failure(&client.name);
+        state.auth_config.record_client_failure(client);
     }
 }
 

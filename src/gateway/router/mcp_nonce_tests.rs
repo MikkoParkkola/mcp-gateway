@@ -172,7 +172,7 @@ steps:
             let fx = fixture_hardened_signed_built(Answer::WithNote, true, |meta| {
                 let meta = budget(meta);
                 let mut engine = crate::playbook::PlaybookEngine::new();
-                engine.register(serde_yaml::from_str(PLAYBOOK).expect("the playbook parses"));
+                engine.register(crate::yaml::from_str(PLAYBOOK).expect("the playbook parses"));
                 meta.set_playbook_engine(engine);
                 meta
             })

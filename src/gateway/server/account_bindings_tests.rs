@@ -250,7 +250,7 @@ fn bound_config(enabled: bool) -> Config {
          redirect_uri: https://gateway.fixture.test/callback\n      \
          scopes: [read]\n      send_resource_parameter: true\n"
     );
-    serde_yaml::from_str(&yaml).expect("config parses")
+    crate::yaml::from_str(&yaml).expect("config parses")
 }
 
 fn install(config: &Config) -> crate::Result<()> {
@@ -286,7 +286,7 @@ fn a_disabled_backend_binding_is_skipped() {
 /// binding installs nothing and is first discovered at dispatch.
 #[test]
 fn a_binding_to_a_strategy_that_mints_nothing_is_refused_at_install() {
-    let config: Config = serde_yaml::from_str(
+    let config: Config = crate::yaml::from_str(
         r"
 accounts:
   schema_version: accounts.v1
