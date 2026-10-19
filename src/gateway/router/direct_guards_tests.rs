@@ -216,6 +216,8 @@ async fn t3c_an_admission_holds_its_cost_until_it_is_dropped() {
         tool: "read",
         session_id: None,
         api_key_name: Some("k-budget"),
+        // An API key: the budget below is charged to it.
+        cost_key: Some("k-budget"),
         trace_id: "",
         caller_key: None,
     };
