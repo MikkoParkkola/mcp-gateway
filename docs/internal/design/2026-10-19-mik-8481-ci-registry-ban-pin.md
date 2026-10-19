@@ -36,8 +36,12 @@ directory.
 
 The falsifiers call the same `assert_ci_registry_ban_conf_dir` that `t1f` calls
 (one shared path, so a refactor that detaches `t1f` from it is a test failure,
-not a silent pass), on text mutated from the checked-in file in memory; no
-workflow file is edited. Each is a `catch_unwind` test that must panic, and the
+not a silent pass), on an in-memory fixture of the two CI steps written with
+the workflow's own indentation (so they also run in the packaged crate); the
+checked-in workflow itself is checked by `t1f` and by
+`the_checked_in_workflow_satisfies_the_pin`, and no workflow file is edited.
+Keeping the fixture equal to the real step is MIK-8502 (DRIFT.1). Each is a
+`catch_unwind` test that must panic for the stated reason, and the
 unmodified text must not:
 
 - delete the `CLIPPY_CONF_DIR` line of the step;
@@ -111,6 +115,20 @@ directory with a shipped file under it, a name that is not a path and a path
 that does not exist are not flagged; a file that never mentions the crate root is
 not scanned. On the real tree, a scratch test file reading an unshipped file
 turns the guard red (run once, not committed).
+
+## Follow-up tickets (review items not folded here)
+
+- MIK-8501: PACKED.2 scan coverage (crate-root helper callers, const-bound
+  helper arguments, `include_str!` / `concat!` / backslash literals, and the
+  decision on `tests/mik_8425_yaml_baseline_trees.rs`).
+- MIK-8502: drift lanes (fixture equals the real step, one source for the
+  vacuity guard's file list, one-line `include` array).
+- MIK-8503: the pinned step must be able to fail (`continue-on-error`, `if:`)
+  and sit in the required Linux job; assert the checked-in workflow once.
+
+Declined, with reasons: replacing the helper by an early return in `t1f` (the
+CI pin and the guard both use the helper); dropping the checkout vacuity guard
+(asked for, and it is the only proof the skip was not taken in a checkout).
 
 ## Not changed
 
