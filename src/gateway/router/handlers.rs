@@ -607,9 +607,9 @@ async fn meta_mcp_dispatch(
         && !response.excludes_client_accounting()
     {
         if response.error.is_some() {
-            state.auth_config.record_client_failure(&client.name);
+            state.auth_config.record_client_failure(client);
         } else {
-            state.auth_config.record_client_success(&client.name);
+            state.auth_config.record_client_success(client);
         }
     }
 
