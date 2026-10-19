@@ -4,6 +4,9 @@
 
 #![allow(unsafe_code)] // Tests use set_var/remove_var which are unsafe in edition 2024
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 use std::collections::HashMap;
 
 use mcp_gateway::secret_injection::{
@@ -407,15 +410,15 @@ inject_key: api_key
 tools: ["get_*", "search_*"]
 "#;
 
-    let rule: CredentialRule = serde_yaml::from_str(yaml).unwrap();
+    let rule: CredentialRule = yaml::from_str(yaml).unwrap();
     assert_eq!(rule.name, "weather_key");
     assert_eq!(rule.credential_type, CredentialType::ApiKey);
     assert_eq!(rule.inject_as, InjectTarget::Argument);
     assert_eq!(rule.tools, vec!["get_*", "search_*"]);
 
     // Roundtrip
-    let serialized = serde_yaml::to_string(&rule).unwrap();
-    let deserialized: CredentialRule = serde_yaml::from_str(&serialized).unwrap();
+    let serialized = yaml::to_string(&rule).unwrap();
+    let deserialized: CredentialRule = yaml::from_str(&serialized).unwrap();
     assert_eq!(deserialized.name, "weather_key");
 }
 
@@ -427,7 +430,7 @@ value: "literal-secret"
 inject_key: token
 "#;
 
-    let rule: CredentialRule = serde_yaml::from_str(yaml).unwrap();
+    let rule: CredentialRule = yaml::from_str(yaml).unwrap();
     assert_eq!(rule.credential_type, CredentialType::ApiKey); // default
     assert_eq!(rule.inject_as, InjectTarget::Argument); // default
     assert_eq!(rule.tools, vec!["*"]); // default

@@ -13,6 +13,11 @@
 // Unix-only: the crash is a SIGKILL whose death by signal the helper asserts (helper.rs:523-542).
 #![cfg(unix)]
 
+// `task_upstream_recovery/helper.rs` names `crate::yaml`, so this crate declares the
+// module once, here.
+#[path = "common/yaml.rs"]
+mod yaml;
+
 #[path = "task_upstream_recovery/helper.rs"]
 mod helper;
 

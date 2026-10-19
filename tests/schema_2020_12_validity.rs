@@ -9,6 +9,9 @@
 //! validates each one against the JSON Schema 2020-12 meta-schema using the
 //! `jsonschema` crate (a real validator, not a hand-rolled key check).
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use mcp_gateway::{
@@ -47,7 +50,7 @@ fn make_reload_context(backends: Arc<BackendRegistry>) -> Arc<ReloadContext> {
 /// A one-step playbook, enough to make the engine non-empty.
 fn one_playbook() -> PlaybookEngine {
     let definition: PlaybookDefinition =
-        serde_yaml::from_str("name: probe\ndescription: makes the engine non-empty\nsteps: []\n")
+        yaml::from_str("name: probe\ndescription: makes the engine non-empty\nsteps: []\n")
             .expect("playbook fixture must parse");
     let mut engine = PlaybookEngine::new();
     engine.register(definition);

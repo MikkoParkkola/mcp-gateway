@@ -22,6 +22,9 @@
 //! `MCP_GATEWAY_TEST_TRUST_CA` (every platform; MIK-8188).
 #![cfg(unix)]
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 #[path = "task_upstream_recovery/helper.rs"]
 #[allow(
     dead_code,
@@ -126,7 +129,7 @@ fn config_with_two_principals(root: &Path, peer: &PeerGuard, principals: &Princi
     );
     let yaml = std::fs::read_to_string(&path).expect("the fixture config reads back");
     let mut config: Config =
-        serde_yaml::from_str(&yaml).expect("the gateway's own config type reloads its own YAML");
+        yaml::from_str(&yaml).expect("the gateway's own config type reloads its own YAML");
     config.auth.enabled = true;
     // `/health` only, so `/mcp` demands a credential.
     config.auth.public_paths = vec!["/health".to_string()];
@@ -167,7 +170,7 @@ fn config_with_two_principals(root: &Path, peer: &PeerGuard, principals: &Princi
         .collect();
     mcp_gateway::gateway::test_helpers::write_owner_only(
         &path,
-        serde_yaml::to_string(&config).expect("the patched config serializes"),
+        yaml::to_string(&config).expect("the patched config serializes"),
     )
     .expect("the patched config is written inside the test's own temp root");
     path

@@ -101,7 +101,7 @@ fn different_references_holding_the_same_material_are_refused_by_validate_with_e
     let yaml = enabled_store_yaml(dir.path(), &shared, &shared);
 
     let config: Config =
-        serde_yaml::from_str(&yaml).unwrap_or_else(|error| panic!("fixture must parse: {error}"));
+        crate::yaml::from_str(&yaml).unwrap_or_else(|error| panic!("fixture must parse: {error}"));
     let error = config
         .validate_with_env(&config.env_overlay())
         .expect_err("an adapter secret equal to a gateway api key must be refused");
@@ -134,7 +134,7 @@ fn distinct_adapter_and_gateway_material_is_accepted_by_validate_with_env() {
     let yaml = enabled_store_yaml(dir.path(), &filler_32('a'), &filler_32('b'));
 
     let config: Config =
-        serde_yaml::from_str(&yaml).unwrap_or_else(|error| panic!("fixture must parse: {error}"));
+        crate::yaml::from_str(&yaml).unwrap_or_else(|error| panic!("fixture must parse: {error}"));
     config
         .validate_with_env(&config.env_overlay())
         .unwrap_or_else(|error| {
@@ -190,7 +190,7 @@ auth:
     );
 
     let config: Config =
-        serde_yaml::from_str(&yaml).unwrap_or_else(|error| panic!("fixture must parse: {error}"));
+        crate::yaml::from_str(&yaml).unwrap_or_else(|error| panic!("fixture must parse: {error}"));
     let error = config
         .validate_with_env(&config.env_overlay())
         .expect_err("one variable named in both places is one secret");
@@ -204,7 +204,7 @@ auth:
 
 // ── The SHIPPED load path, not just the validation entry point ────────────────
 //
-// The three cases above drive `serde_yaml::from_str` + `validate_with_env`
+// The three cases above drive `crate::yaml::from_str` + `validate_with_env`
 // directly. That composition is NOT what a gateway runs: `Config::load_evaluated`
 // resolves `env:` secret references INTO the config — inlining
 // `auth.bearer_token` and `auth.api_keys[].key_sha256` — and only then validates. On
@@ -349,8 +349,8 @@ fn load_evaluated_accepts_distinct_references_and_reports_the_adapter_variable()
         evaluated.secret_refs
     );
 
-    let dumped: serde_yaml::Value =
-        serde_yaml::to_value(&evaluated.config).expect("loaded config must re-serialize");
+    let dumped: crate::yaml::Value =
+        crate::yaml::to_value(&evaluated.config).expect("loaded config must re-serialize");
     let hmac_ref = dumped["accounts"]["adapters"][0]["hmac_secret_ref"]
         .as_str()
         .expect("adapter reference must survive the load");
@@ -359,7 +359,7 @@ fn load_evaluated_accepts_distinct_references_and_reports_the_adapter_variable()
         "an adapter secret reference must stay a reference, never be inlined"
     );
     assert!(
-        !serde_yaml::to_string(&dumped)
+        !crate::yaml::to_string(&dumped)
             .expect("re-serialize")
             .contains(&filler_32('a')),
         "a rewrite must not carry adapter signing material"

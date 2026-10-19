@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! GH462 regression-first checks for real config loaders, mutations and CLI writes.
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
 
@@ -215,7 +218,7 @@ fn reference_config(home: &Path) -> Config {
 
 fn assert_references(path: &Path) {
     let saved = std::fs::read_to_string(path).unwrap();
-    let parsed: serde_yaml::Value = serde_yaml::from_str(&saved).unwrap();
+    let parsed: yaml::Value = yaml::from_str(&saved).unwrap();
     assert_eq!(
         parsed["auth"]["bearer_token"].as_str(),
         Some("env:GH462_REFERENCE_TOKEN")

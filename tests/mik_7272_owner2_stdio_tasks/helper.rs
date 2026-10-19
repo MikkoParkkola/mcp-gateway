@@ -12,6 +12,9 @@
     reason = "shared by two test targets that each use a subset"
 )]
 
+#[path = "../common/yaml.rs"]
+mod yaml;
+
 #[path = "../common/gateway_bin.rs"]
 mod gateway_bin;
 
@@ -256,7 +259,7 @@ pub fn write_config(
             ..BackendConfig::default()
         },
     );
-    let yaml = serde_yaml::to_string(&config).expect("config serializes");
+    let yaml = yaml::to_string(&config).expect("config serializes");
     let path = root.join(name);
     mcp_gateway::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
     path

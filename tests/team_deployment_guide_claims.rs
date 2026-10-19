@@ -10,6 +10,9 @@
 //! - its `mcp-gateway` commands parse;
 //! - its relative links and anchors resolve.
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -135,11 +138,11 @@ fn gateway_reads(dotted: &str) -> bool {
     }
 }
 
-fn values() -> serde_yaml::Value {
-    serde_yaml::from_str(VALUES).expect("values.yaml parses")
+fn values() -> yaml::Value {
+    yaml::from_str(VALUES).expect("values.yaml parses")
 }
 
-fn helm_value<'v>(root: &'v serde_yaml::Value, dotted: &str) -> Option<&'v serde_yaml::Value> {
+fn helm_value<'v>(root: &'v yaml::Value, dotted: &str) -> Option<&'v yaml::Value> {
     dotted.split('.').try_fold(root, |node, key| node.get(key))
 }
 
@@ -296,8 +299,8 @@ fn helm_values_block_names_real_chart_values() {
 
 /// Every leaf of one Helm values block is a chart value (inside the schema's
 /// enum where it has one), and its `config` subtree loads as gateway config.
-fn check_helm_block(chart: &serde_yaml::Value, block: &str, with_config: &mut usize) {
-    let block: serde_yaml::Value = serde_yaml::from_str(block).expect("block parses");
+fn check_helm_block(chart: &yaml::Value, block: &str, with_config: &mut usize) {
+    let block: yaml::Value = yaml::from_str(block).expect("block parses");
     let mut leaves = Vec::new();
     collect_leaves(&block, String::new(), &mut leaves);
     assert!(leaves.len() >= 3, "the Helm block has only {leaves:?}");
@@ -305,7 +308,7 @@ fn check_helm_block(chart: &serde_yaml::Value, block: &str, with_config: &mut us
     // must load as written.
     if let Some(config) = block.get("config") {
         *with_config += 1;
-        let config = serde_yaml::to_string(config).expect("serialize config");
+        let config = yaml::to_string(config).expect("serialize config");
         if let Err(e) = load(&config, "TEAM_GUIDE_UNUSED=1\n") {
             panic!("the Helm block's `config` does not load: {e}");
         }
@@ -331,7 +334,7 @@ fn check_helm_block(chart: &serde_yaml::Value, block: &str, with_config: &mut us
     }
 }
 
-fn collect_leaves(node: &serde_yaml::Value, prefix: String, out: &mut Vec<(String, String)>) {
+fn collect_leaves(node: &yaml::Value, prefix: String, out: &mut Vec<(String, String)>) {
     if let Some(map) = node.as_mapping() {
         for (k, v) in map {
             let k = k.as_str().expect("string key");
@@ -345,8 +348,8 @@ fn collect_leaves(node: &serde_yaml::Value, prefix: String, out: &mut Vec<(Strin
         return;
     }
     let value = match node {
-        serde_yaml::Value::String(s) => s.clone(),
-        other => serde_yaml::to_string(other)
+        yaml::Value::String(s) => s.clone(),
+        other => yaml::to_string(other)
             .expect("serialize")
             .trim()
             .to_string(),
@@ -384,7 +387,7 @@ fn cleartext_table_lists_every_variant() {
     let (rows, _) = table(DOC, "`server.cleartext_http`");
     let mut seen = BTreeSet::new();
     for (value, _) in rows {
-        let parsed: CleartextHttp = serde_yaml::from_str(&value)
+        let parsed: CleartextHttp = yaml::from_str(&value)
             .unwrap_or_else(|e| panic!("`{value}` is not a server.cleartext_http value: {e}"));
         // A new variant fails to compile here until the guide is updated.
         match parsed {

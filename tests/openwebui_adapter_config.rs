@@ -75,6 +75,9 @@
 //!     owed by a separate env-backed test that enables the store; this file
 //!     must not be read as evidence that they hold.
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 #[path = "openwebui_adapter_config/acceptance.rs"]
 mod acceptance;
 #[path = "openwebui_adapter_config/auth_separation.rs"]
@@ -106,7 +109,7 @@ accounts:
 {adapters}"
     );
     if !adapters.is_empty() {
-        let tree: serde_yaml::Value = serde_yaml::from_str(&yaml).expect("syntactic YAML fixture");
+        let tree: yaml::Value = yaml::from_str(&yaml).expect("syntactic YAML fixture");
         assert!(
             tree["accounts"].get("adapters").is_some(),
             "adapter fixture must be nested under accounts"
@@ -141,7 +144,7 @@ const VALID_ADAPTERS: &str = "\
 /// a test that demanded a particular stage would be pinning an implementation
 /// choice rather than the configuration contract.
 fn refusal_reason(yaml: &str) -> String {
-    match serde_yaml::from_str::<Config>(yaml) {
+    match yaml::from_str::<Config>(yaml) {
         Err(error) => error.to_string(),
         Ok(config) => match config.validate_with_env(&config.env_overlay()) {
             Err(error) => error.to_string(),
@@ -170,14 +173,13 @@ fn assert_refused_naming(yaml: &str, needles: &[&str]) {
 }
 
 /// Round-trip a config and hand back the `accounts` subtree as a value.
-fn accounts_roundtrip(yaml: &str) -> serde_yaml::Value {
-    let config: Config = serde_yaml::from_str(yaml)
+fn accounts_roundtrip(yaml: &str) -> yaml::Value {
+    let config: Config = yaml::from_str(yaml)
         .unwrap_or_else(|error| panic!("valid configuration was refused: {error}\n{yaml}"));
     config
         .validate_with_env(&config.env_overlay())
         .unwrap_or_else(|error| panic!("valid configuration failed validation: {error}"));
-    let value: serde_yaml::Value =
-        serde_yaml::to_value(&config).expect("configuration must re-serialize");
+    let value: yaml::Value = yaml::to_value(&config).expect("configuration must re-serialize");
     value
         .get("accounts")
         .cloned()
@@ -185,10 +187,10 @@ fn accounts_roundtrip(yaml: &str) -> serde_yaml::Value {
 }
 
 /// The `adapters` value as a sequence, which is the approved shape.
-fn adapters_sequence(accounts: &serde_yaml::Value) -> Vec<serde_yaml::Value> {
+fn adapters_sequence(accounts: &yaml::Value) -> Vec<yaml::Value> {
     accounts
         .get("adapters")
-        .and_then(serde_yaml::Value::as_sequence)
+        .and_then(yaml::Value::as_sequence)
         .unwrap_or_else(|| {
             panic!("`accounts.adapters` must round-trip as a LIST, got: {accounts:?}")
         })

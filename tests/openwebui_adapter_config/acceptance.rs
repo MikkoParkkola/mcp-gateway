@@ -24,7 +24,7 @@ fn a_valid_adapter_entry_is_accepted_and_preserved_through_a_round_trip() {
     );
     let adapter = &adapters[0];
 
-    let expected: serde_yaml::Value = serde_yaml::from_str(
+    let expected: crate::yaml::Value = crate::yaml::from_str(
         "\
 kind: openwebui_signed_header
 installation_id: owui-prod-1
@@ -74,14 +74,14 @@ fn omitted_lifetime_and_skew_take_the_approved_defaults() {
     assert_eq!(
         adapter
             .get("max_lifetime_seconds")
-            .and_then(serde_yaml::Value::as_u64),
+            .and_then(crate::yaml::Value::as_u64),
         Some(300),
         "`max_lifetime_seconds` must default to the approved 300 seconds"
     );
     assert_eq!(
         adapter
             .get("clock_skew_seconds")
-            .and_then(serde_yaml::Value::as_u64),
+            .and_then(crate::yaml::Value::as_u64),
         Some(30),
         "`clock_skew_seconds` must default to the approved 30 seconds"
     );
@@ -109,7 +109,7 @@ fn the_configured_assertion_header_name_is_carried_verbatim() {
     let accounts = accounts_roundtrip(&yaml);
     let header = adapters_sequence(&accounts)[0]
         .get("header")
-        .and_then(serde_yaml::Value::as_str)
+        .and_then(crate::yaml::Value::as_str)
         .map(str::to_owned)
         .expect("configured header name must survive a round-trip");
     assert_eq!(
@@ -141,7 +141,7 @@ fn a_multi_entry_api_key_allowlist_is_preserved_in_order() {
     let accounts = accounts_roundtrip(&yaml);
     let names = adapters_sequence(&accounts)[0]
         .get("allowed_api_key_names")
-        .and_then(serde_yaml::Value::as_sequence)
+        .and_then(crate::yaml::Value::as_sequence)
         .expect("allowlist must survive a round-trip")
         .iter()
         .map(|value| {
@@ -184,7 +184,7 @@ fn two_distinct_installations_are_accepted_side_by_side() {
         .map(|adapter| {
             adapter
                 .get("installation_id")
-                .and_then(serde_yaml::Value::as_str)
+                .and_then(crate::yaml::Value::as_str)
                 .expect("installation_id survives")
                 .to_owned()
         })
@@ -219,7 +219,7 @@ fn an_absent_adapter_block_leaves_the_legacy_accounts_config_untouched() {
     assert!(
         adapters.is_none()
             || adapters
-                .and_then(serde_yaml::Value::as_sequence)
+                .and_then(crate::yaml::Value::as_sequence)
                 .is_some_and(std::vec::Vec::is_empty),
         "an absent adapters block must default to nothing, not to a populated \
          entry: {accounts:?}"
@@ -227,7 +227,7 @@ fn an_absent_adapter_block_leaves_the_legacy_accounts_config_untouched() {
     assert_eq!(
         accounts
             .get("instance_id")
-            .and_then(serde_yaml::Value::as_str),
+            .and_then(crate::yaml::Value::as_str),
         Some("openwebui-adapter-config-red"),
         "legacy accounts fields must be preserved unchanged"
     );
@@ -235,7 +235,7 @@ fn an_absent_adapter_block_leaves_the_legacy_accounts_config_untouched() {
         accounts
             .get("keys")
             .and_then(|keys| keys.get("primary"))
-            .and_then(serde_yaml::Value::as_str),
+            .and_then(crate::yaml::Value::as_str),
         Some("env:OPENWEBUI_ADAPTER_CONFIG_RED_KEY"),
         "a key reference must stay a reference through a rewrite"
     );
