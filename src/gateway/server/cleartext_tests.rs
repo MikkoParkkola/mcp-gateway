@@ -207,14 +207,14 @@ fn no_credential_is_not_this_check() {
 /// auth and no mTLS, so it starts only through `cluster_internal`.
 #[test]
 fn the_enterprise_alpha_configmap_starts() {
-    let manifest: serde_yaml::Value = serde_yaml::from_str(include_str!(
+    let manifest: crate::yaml::Value = crate::yaml::from_str(include_str!(
         "../../../deploy/kubernetes/enterprise-alpha/base/configmap.yaml"
     ))
     .expect("configmap yaml");
     let body = manifest["data"]["gateway.yaml"]
         .as_str()
         .expect("gateway.yaml");
-    let c: Config = serde_yaml::from_str(body).expect("gateway.yaml is a Config");
+    let c: Config = crate::yaml::from_str(body).expect("gateway.yaml is a Config");
     assert!(
         c.auth.enabled && !c.mtls.enabled,
         "the shape this test is about"

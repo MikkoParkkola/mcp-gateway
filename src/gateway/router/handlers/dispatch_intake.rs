@@ -126,6 +126,10 @@ pub(super) fn mcp_cancel_key(
 mod cancel_key_tests;
 
 #[cfg(test)]
+#[path = "dispatch_intake_judgement_tests.rs"]
+mod judgement_tests;
+
+#[cfg(test)]
 #[path = "dispatch_intake_presented_tests.rs"]
 mod presented_tests;
 

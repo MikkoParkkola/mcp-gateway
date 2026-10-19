@@ -30,7 +30,7 @@ async fn run_step_with_identity(
         "name: scoped\ndescription: one step\non_error: abort\nsteps:\n  - name: step\n    server: {server}\n    tool: {tool}\n"
     );
     let definition: crate::playbook::PlaybookDefinition =
-        serde_yaml::from_str(&yaml).expect("playbook fixture must parse");
+        crate::yaml::from_str(&yaml).expect("playbook fixture must parse");
     let mut engine = crate::playbook::PlaybookEngine::new();
     engine.register(definition);
     state.meta_mcp.set_playbook_engine(engine);

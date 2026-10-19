@@ -3,17 +3,13 @@
 //! The site-1 replays a request deferred to its live dispatch (MIK-8392
 //! STORED.2), kept in the request's visibility memo and taken once.
 
-/// The memo's deferred replays: a retained single-call result the route
-/// stage deferred to a live dispatch, keyed by the owning invocation. The
-/// lift consumes it once; an untaken entry ends with the request.
-pub(super) type Slot =
-    parking_lot::Mutex<std::collections::HashMap<DeferredReplayKey, DeferredReplay>>;
-
 /// Key of a deferred site-1 replay (MIK-8392 STORED.2): the owning
 /// invocation. The server and presented tool are the replay's target (the
 /// target-branch target, or a continuation retry's origin); the key and
 /// discriminator are the client's, so a nested invocation's take never
-/// matches another invocation's entry.
+/// matches another invocation's entry. The memo's `deferred_replay` map holds
+/// one entry per key: the lift consumes it once, and an untaken entry ends
+/// with the request.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct DeferredReplayKey {
     server: String,
@@ -55,20 +51,13 @@ pub(crate) fn deferred_replay_key(
 /// memo: nothing was recorded, so no lift can serve it, and the caller must
 /// not proceed as though it were deferred.
 pub(crate) fn record_deferred_replay(key: DeferredReplayKey, entry: DeferredReplay) -> bool {
-    super::VISIBILITY_MEMO
-        .try_with(|memo| {
-            memo.deferred_replay.lock().insert(key, entry);
-        })
-        .is_ok()
+    super::in_memo(|memo| memo.deferred_replay.set(key, entry)).is_some()
 }
 
 /// Take the entry recorded for `key`, consuming it: a second take returns
 /// `None`, and a nested invocation's key never matches. `None` outside a memo.
 pub(crate) fn take_deferred_replay(key: &DeferredReplayKey) -> Option<DeferredReplay> {
-    super::VISIBILITY_MEMO
-        .try_with(|memo| memo.deferred_replay.lock().remove(key))
-        .ok()
-        .flatten()
+    super::in_memo(|memo| memo.deferred_replay.take(key)).flatten()
 }
 
 #[cfg(test)]
@@ -133,6 +122,34 @@ mod tests {
                 "L3k: the own key did not take it"
             );
             assert!(take_deferred_replay(&own).is_none(), "L3k: taken twice");
+        })
+        .await;
+    }
+
+    /// MIK-8498 VISIBLE characterisation: a second record under one key
+    /// replaces the first, and outside a memo a record reports `false` and a
+    /// take finds nothing.
+    #[tokio::test]
+    async fn a_second_record_replaces_the_first_and_outside_a_memo_nothing_is_kept() {
+        let own = deferred_replay_key("alpha", "read", &keyed("l3r")).expect("a keyed call");
+        let named = |tool: &str| DeferredReplay {
+            tool_name: tool.to_string(),
+            ..entry()
+        };
+        super::super::with_visibility_memo(async {
+            assert!(record_deferred_replay(own.clone(), named("first")));
+            assert!(record_deferred_replay(own.clone(), named("second")));
+            let taken = take_deferred_replay(&own).map(|entry| entry.tool_name);
+            assert_eq!(taken.as_deref(), Some("second"));
+        })
+        .await;
+        assert!(!record_deferred_replay(own.clone(), named("outside")));
+        assert!(take_deferred_replay(&own).is_none());
+        super::super::with_visibility_memo(async {
+            assert!(
+                take_deferred_replay(&own).is_none(),
+                "a later scope sees nothing"
+            );
         })
         .await;
     }
