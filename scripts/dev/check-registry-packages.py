@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Fail when a built-in registry entry points at something that does not exist.
 
-`mcp-gateway add <name>` writes whatever src/registry/server_registry.rs says.
+`mcp-gateway add <name>` writes whatever src/registry/server_registry_entries.rs says.
 On 2026-10-02, 30 of its 45 npx packages were 404 on npm and 7 more were
 deprecated, and nothing noticed. Every entry must now be one of:
 
@@ -18,7 +18,7 @@ Anything else, including an unpinned package or an unknown launcher, fails.
 Network: one request per entry, retried; a registry outage fails the job
 rather than passing it.
 
-Usage: check-registry-packages.py [--offline] [path-to-server_registry.rs]
+Usage: check-registry-packages.py [--offline] [path-to-server_registry_entries.rs]
 
 --offline applies the pin and launcher rules without any network lookup; it
 runs on every pull request. The live lookups run where the registry changes,
