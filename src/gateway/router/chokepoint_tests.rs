@@ -97,7 +97,7 @@ async fn f6_a_playbook_step_carrying_a_blocked_pattern_is_refused_at_dispatch() 
     let audit = dir.path().join("audit.jsonl");
     let fx = fixture_firewalled_audited(Answer::Ok, audit.clone()).await;
     let mut engine = crate::playbook::PlaybookEngine::new();
-    engine.register(serde_yaml::from_str(playbook).expect("the playbook parses"));
+    engine.register(crate::yaml::from_str(playbook).expect("the playbook parses"));
     fx.state.meta_mcp.set_playbook_engine(engine);
     // The blocked text arrives through interpolation, so the route-stage scan of
     // the step's template (MIK-8362) sees nothing; only the dispatch rescan of

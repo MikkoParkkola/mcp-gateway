@@ -18,7 +18,7 @@ use crate::gateway::streaming::TaggedNotification;
 
 #[tokio::test]
 async fn a_session_created_by_the_mcp_handler_receives_in_scope_webhook_events() {
-    let auth: crate::config::AuthConfig = serde_yaml::from_str(
+    let auth: crate::config::AuthConfig = crate::yaml::from_str(
         "enabled: true\napi_keys:\n  - key_sha256: sha256:45baf1c9d0b3c9df3823645cac52658a917f44f89b9fef643c4dcfc7c4729198\n    name: scoped\n    backends: [capabilities]\n",
     )
     .unwrap();

@@ -480,8 +480,8 @@ async fn documented_caller_identity_examples_load_and_resolve() {
         .map(|block| textwrap_dedent(block.split("```").next().unwrap()))
         .filter(|block| block.starts_with("security:\n  caller_identity:"))
         .map(|block| {
-            let root: serde_yaml::Value = serde_yaml::from_str(&block).unwrap();
-            serde_yaml::from_value(root["security"].clone()).expect("doc example parses")
+            let root: crate::yaml::Value = crate::yaml::from_str(&block).unwrap();
+            crate::yaml::from_value(root["security"].clone()).expect("doc example parses")
         })
         .collect();
     assert_eq!(
