@@ -406,7 +406,8 @@ async fn a_refused_notification_leaves_the_client_breaker_untouched() {
         auth,
     )
     .await;
-    gw.auth.record_client_failure("probe"); // 1 of 2
+    let probe = gw.auth.validate_token("k-probe").expect("the probe key");
+    gw.auth.record_client_failure(&probe); // 1 of 2
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp/ledger")
@@ -423,12 +424,12 @@ async fn a_refused_notification_leaves_the_client_breaker_untouched() {
     // recorded a success would have reset the count, so this one leaves it
     // closed.
     assert_eq!(
-        gw.auth.client_circuit_state("probe"),
+        gw.auth.client_circuit_state(&probe),
         Some(crate::failsafe::CircuitState::Closed)
     );
-    gw.auth.record_client_failure("probe"); // 2 of 2
+    gw.auth.record_client_failure(&probe); // 2 of 2
     assert_eq!(
-        gw.auth.client_circuit_state("probe"),
+        gw.auth.client_circuit_state(&probe),
         Some(crate::failsafe::CircuitState::Open)
     );
 }
