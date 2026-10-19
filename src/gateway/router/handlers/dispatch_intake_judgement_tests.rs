@@ -22,7 +22,10 @@ async fn an_anonymous_task_submit_is_judged_without_allocating() {
     });
     let (verdict, measured) =
         measure(|| intake_judgement(&state, &request, (None, None, None), (None, None)));
-    assert!(verdict.is_none(), "a task submit with auth off is left to the task path");
+    assert!(
+        verdict.is_none(),
+        "a task submit with auth off is left to the task path"
+    );
     assert_eq!(
         measured.calls, 0,
         "judging an anonymous task submit allocated {} times ({} B) (MIK-8014 PERF.11)",

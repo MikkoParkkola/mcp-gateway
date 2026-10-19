@@ -53,7 +53,9 @@ fn refused_fill(
     }
 }
 
-fn judged(tool: &Tool) -> CatalogueVerdict {
+/// The verdict a held entry earns. `catalogue_verdict_inner` and
+/// `held_verdict` judge the entry in place with it (MIK-8014 PERF.10).
+pub(super) fn judged(tool: &Tool) -> CatalogueVerdict {
     if input_schema_is_structurally_valid(&tool.input_schema) {
         CatalogueVerdict::Offers
     } else {
@@ -91,11 +93,13 @@ impl Backend {
         }
         // A fresh slot, or a stale one inside its refresh cooldown, is served
         // by the fill without a fetch (`get_cached_list_for`).
-        let cached = self.get_cached_tool_for(binding, tool);
+        // Judged in place, under the slot's read guard: a deep copy of the
+        // whole tool used to be made for this one read (MIK-8014 PERF.10).
+        let cached = self.with_cached_tool_for(binding, tool, judged);
         // A3: a shared slot is never fetched for a caller that sent its own
         // credential (the fill runs under the gateway's login).
         if !self.fetch_carries_caller_identity(binding) && !headers.is_empty() {
-            return Ok(cached.as_ref().map_or(CatalogueVerdict::Unknown, judged));
+            return Ok(cached.unwrap_or(CatalogueVerdict::Unknown));
         }
         let (tools, completeness) = match self
             .tools_for_check(binding, headers, cached.is_some())
@@ -105,7 +109,7 @@ impl Backend {
             // A stale hit falls back to what the slot holds now.
             Err(_) if cached.is_some() => match self.held_tools_for(binding) {
                 Some(now) => now,
-                None => return Ok(cached.as_ref().map_or(CatalogueVerdict::Unknown, judged)),
+                None => return Ok(cached.unwrap_or(CatalogueVerdict::Unknown)),
             },
             Err(e) => return refused_fill(self.config.input_schema_enforcement, e),
         };

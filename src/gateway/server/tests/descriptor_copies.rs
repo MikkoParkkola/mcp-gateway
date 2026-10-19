@@ -159,7 +159,11 @@ fn held_verdict_copies_no_descriptor() {
         let verdict_bytes = |state: &Arc<AppState>| {
             let backend = state.backends.get("demo").expect("fixture backend");
             let (verdict, measured) = measure(|| backend.held_verdict(None, "search"));
-            assert_eq!(verdict, CatalogueVerdict::Offers, "the padded tool is offered");
+            assert_eq!(
+                verdict,
+                CatalogueVerdict::Offers,
+                "the padded tool is offered"
+            );
             measured.bytes
         };
         let held = exact(verdict_bytes(&large)) - exact(verdict_bytes(&small));
