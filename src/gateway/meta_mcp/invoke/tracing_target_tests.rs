@@ -5,8 +5,9 @@
 //! dashboard keyed on the invoke module still sees them. A new event written
 //! without the pin would silently move to the child module's own target.
 
-const STEPS: [(&str, &str); 3] = [
+const STEPS: [(&str, &str); 4] = [
     ("pre_dispatch.rs", include_str!("pre_dispatch.rs")),
+    ("send.rs", include_str!("send.rs")),
     ("post_dispatch.rs", include_str!("post_dispatch.rs")),
     ("legacy_bridge.rs", include_str!("legacy_bridge.rs")),
 ];

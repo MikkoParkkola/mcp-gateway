@@ -4,6 +4,9 @@
 //! registry-ban lint cannot see, read from the crate's own source with `syn`.
 
 mod allow_pins;
+mod ci_wiring;
 mod guard_tests;
+mod packaged;
 mod scan;
 mod scan_tests;
+mod shipped_reads;

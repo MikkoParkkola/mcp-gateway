@@ -136,8 +136,12 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "writability probe",
     ),
     (
-        "src/gateway/meta_mcp/boundary_pins/allow_pins.rs",
-        "cfg(test) pin reading the registry-ban clippy.toml and pre-push.sh for the MIK-8387 boundary pins; no secret",
+        "src/gateway/meta_mcp/boundary_pins/packaged.rs",
+        "cfg(test) helper reading the repo files the MIK-8387/MIK-8481 pins check (registry-ban clippy.toml, pre-push.sh, the CI workflow); no secret",
+    ),
+    (
+        "src/gateway/meta_mcp/boundary_pins/shipped_reads.rs",
+        "cfg(test) source scanner reading Cargo.toml and the crate's own sources for the MIK-8481 unshipped-read guard; no secret",
     ),
     (
         "src/gateway/meta_mcp/boundary_pins/scan.rs",

@@ -108,6 +108,7 @@ fn t8_no_control_primitive_runs_outside_the_shared_stages() {
             "pre_dispatch.rs",
             include_str!("../meta_mcp/invoke/pre_dispatch.rs"),
         ),
+        ("send.rs", include_str!("../meta_mcp/invoke/send.rs")),
         (
             "post_dispatch.rs",
             include_str!("../meta_mcp/invoke/post_dispatch.rs"),
