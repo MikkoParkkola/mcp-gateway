@@ -158,7 +158,7 @@ async fn a_refused_answer_settles_its_key_so_a_retry_does_not_run_again() {
     );
     let served = format!("{second:?}");
     assert!(
-        served.contains("will not re-execute"),
+        served.contains("Side effect executed"),
         "the retry was not told the side effect ran: {served}"
     );
 }
@@ -181,6 +181,47 @@ async fn the_full_directive_never_reaches_the_backend() {
     assert!(outcome.is_ok(), "the control call failed: {outcome:?}");
     let sent = probe.sent.lock().expect("probe lock").clone();
     assert_eq!(sent, Some(json!({"q": 1})), "the backend received {sent:?}");
+}
+
+/// S2 (mutant m20): `_full` is stripped before the key's fingerprint is taken,
+/// so a same-key retry that drops the directive is the same request: it is
+/// served the first answer and the backend runs once.
+#[tokio::test]
+async fn toggling_full_under_one_key_replays_the_first_answer() {
+    let probe = Arc::new(Probe {
+        signing: None,
+        witness_at_dispatch: AtomicBool::new(false),
+        calls: AtomicUsize::new(0),
+        sent: std::sync::Mutex::new(None),
+    });
+    let mut meta = gateway(&probe);
+    meta.enable_idempotency(
+        Arc::new(crate::idempotency::IdempotencyCache::new()),
+        Duration::from_secs(300),
+    );
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some("k-8488-full".to_owned()),
+        ..Default::default()
+    };
+    let caller = MetaMcpCallerContext {
+        retry: &retry,
+        ..crate::gateway::meta_mcp::anonymous_caller()
+    };
+    let with_full = json!({"server": "svc", "tool": "act", "arguments": {"q": 1, "_full": true}});
+    let without = json!({"server": "svc", "tool": "act", "arguments": {"q": 1}});
+    let first = meta
+        .invoke_tool(&with_full, Some("session-8488"), &caller)
+        .await;
+    assert!(first.is_ok(), "the first call failed: {first:?}");
+    let second = meta
+        .invoke_tool(&without, Some("session-8488"), &caller)
+        .await;
+    assert!(second.is_ok(), "the same-key retry was refused: {second:?}");
+    assert_eq!(
+        probe.calls.load(Ordering::SeqCst),
+        1,
+        "the retry ran the call again"
+    );
 }
 
 /// S10 (mutant m17): a live MCP backend's own answer that every gate passed
@@ -208,9 +249,9 @@ async fn a_live_backend_answer_is_delivered_as_the_backends() {
 }
 
 /// The files the send path of `invoke_tool_traced` lives in.
-const SEND_PATH: [&str; 2] = [
-    include_str!("../invoke.rs"),
-    include_str!("post_dispatch.rs"),
+const SEND_PATH: [(&str, &str); 2] = [
+    ("invoke.rs", include_str!("../invoke.rs")),
+    ("post_dispatch.rs", include_str!("post_dispatch.rs")),
 ];
 
 /// S7 (design r3 item 5): the dispatch is boxed once, and the spend admission
@@ -219,25 +260,29 @@ const SEND_PATH: [&str; 2] = [
 /// would hold the spend reservation across the dispatch error's settlement.
 #[test]
 fn the_send_path_boxes_one_dispatch_and_drops_the_admission_right_after_it() {
-    let count = |needle: &str| -> usize {
+    // Per file, so a failure names where the extra or missing site is.
+    let sites = |needle: &str| -> Vec<(&str, usize)> {
         SEND_PATH
             .iter()
-            .map(|source| source.matches(needle).count())
-            .sum()
+            .map(|(file, source)| (*file, source.matches(needle).count()))
+            .filter(|(_, n)| *n > 0)
+            .collect()
     };
+    let box_sites = sites("Box::pin(");
     assert_eq!(
-        count("Box::pin("),
+        box_sites.iter().map(|(_, n)| n).sum::<usize>(),
         1,
-        "the send path boxes other than one dispatch"
+        "boxes: {box_sites:?}"
     );
+    let drop_sites = sites("drop(admission);");
     assert_eq!(
-        count("drop(admission);"),
+        drop_sites.iter().map(|(_, n)| n).sum::<usize>(),
         1,
-        "the spend admission is not dropped exactly once"
+        "drops: {drop_sites:?}"
     );
-    let source = SEND_PATH
+    let (_, source) = SEND_PATH
         .iter()
-        .find(|source| source.contains("Box::pin("))
+        .find(|(_, source)| source.contains("Box::pin("))
         .expect("counted above");
     let boxed = source.find("Box::pin(").expect("counted above");
     let awaited = boxed
