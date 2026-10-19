@@ -54,7 +54,7 @@ fn config(env: &std::path::Path, shape: Shape) -> crate::config::Config {
             "  hosted:\n    public_origin: https://chat.fixture.test\n    return_paths: [/]\n"
         }
     };
-    serde_yaml::from_str(&format!(
+    crate::yaml::from_str(&format!(
         r#"
 env_files: ['{env}']
 auth:

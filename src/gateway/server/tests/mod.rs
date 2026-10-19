@@ -13,6 +13,7 @@
 
 mod admission_allocations;
 pub(crate) mod alloc_meter;
+mod descriptor_copies;
 mod fresh_slot_verdict;
 mod input_key_allocations;
 mod invoke_argument_copies;

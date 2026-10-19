@@ -171,7 +171,7 @@ steps:
 /// for a keyed call). Red on base at send 2. Mutant mK8-playbook.
 #[tokio::test]
 async fn a_playbook_setup_refusal_gives_the_nonce_back() {
-    let definition = serde_yaml::from_str(ONE_STEP).expect("the playbook parses");
+    let definition = crate::yaml::from_str(ONE_STEP).expect("the playbook parses");
     let fx = fixture_hardened_signed_built(Answer::Ok, true, |meta| {
         let mut engine = crate::playbook::PlaybookEngine::new();
         engine.register(definition);
@@ -337,8 +337,8 @@ steps:
 
 /// The hardened fixture with the `one` and `two` playbooks, both backends warm.
 async fn with_playbooks() -> Fx {
-    let one = serde_yaml::from_str(ONE_STEP).expect("one parses");
-    let two = serde_yaml::from_str(TWO_STEPS).expect("two parses");
+    let one = crate::yaml::from_str(ONE_STEP).expect("one parses");
+    let two = crate::yaml::from_str(TWO_STEPS).expect("two parses");
     let fx = fixture_hardened_signed_built(Answer::Ok, true, |meta| {
         let mut engine = crate::playbook::PlaybookEngine::new();
         engine.register(one);

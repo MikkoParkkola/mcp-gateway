@@ -49,7 +49,7 @@ fn warnings_while_building(config: Config) -> String {
 }
 
 fn config(yaml: &str) -> Config {
-    serde_yaml::from_str(yaml).expect("test config parses")
+    crate::yaml::from_str(yaml).expect("test config parses")
 }
 
 #[test]
