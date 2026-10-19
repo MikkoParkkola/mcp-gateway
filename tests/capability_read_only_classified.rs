@@ -6,9 +6,12 @@
 //! `metadata.read_only` defaults to `false` when omitted, so an omission reads
 //! as "side-effecting" by accident. The catalogue must say it on purpose.
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 use std::path::Path;
 
-use serde_yaml::Value;
+use yaml::Value;
 
 #[test]
 fn every_capability_yaml_declares_an_explicit_boolean_read_only() {
@@ -27,7 +30,7 @@ fn every_capability_yaml_declares_an_explicit_boolean_read_only() {
     {
         checked += 1;
         let text = std::fs::read_to_string(entry.path()).expect("capability file is readable");
-        let doc: Value = serde_yaml::from_str(&text).expect("capability file is valid YAML");
+        let doc: Value = yaml::from_str(&text).expect("capability file is valid YAML");
         let declared = doc
             .get("metadata")
             .and_then(|m| m.get("read_only"))

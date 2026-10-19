@@ -6,6 +6,9 @@
     clippy::disallowed_methods,
     reason = "test code reads the host clock (MIK-8202 AC.14)"
 )]
+#[path = "common/yaml.rs"]
+mod yaml;
+
 use signing_gateway::gateway_bin;
 
 #[path = "common/signing_gateway.rs"]
@@ -250,7 +253,7 @@ async fn stdio_enabled_optional_nonce_omitted_is_signed() {
 fn write_yaml(path: &Path, config: &Value) {
     mcp_gateway::gateway::test_helpers::write_owner_only(
         path,
-        serde_yaml::to_string(config).expect("config YAML"),
+        yaml::to_string(config).expect("config YAML"),
     )
     .expect("write gateway config");
 }

@@ -9,6 +9,9 @@
 //! removing and reviving a backend), and each must reach both listeners
 //! exactly once. The UI calls need an admin, so auth is on with a bearer.
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 #[path = "common/signing_gateway.rs"]
 pub mod signing_gateway;
 
@@ -182,7 +185,7 @@ async fn listeners_after_boot(gateway: &HttpGateway) -> (Events, Events) {
 fn write_config(gateway: &HttpGateway, config: &Value) {
     mcp_gateway::gateway::test_helpers::write_owner_only(
         gateway.config_path(),
-        serde_yaml::to_string(config).expect("yaml"),
+        yaml::to_string(config).expect("yaml"),
     )
     .expect("rewrite config");
 }
@@ -215,11 +218,10 @@ async fn every_tool_set_change_reaches_both_eras_once() {
     // Copy the file's port into the rewrite so a reload never sees a port
     // change. The harness writes 0 and reads the bound port from the banner
     // (#2513); 0 in both files keeps the live listener.
-    config["server"]["port"] = serde_yaml::from_str::<Value>(
-        &std::fs::read_to_string(gateway.config_path()).expect("config"),
-    )
-    .expect("yaml")["server"]["port"]
-        .clone();
+    config["server"]["port"] =
+        yaml::from_str::<Value>(&std::fs::read_to_string(gateway.config_path()).expect("config"))
+            .expect("yaml")["server"]["port"]
+            .clone();
     let (mut modern, mut legacy) = listeners_after_boot(&gateway).await;
 
     // MIK-8127: one announcement per change of the tool set discovery shows,

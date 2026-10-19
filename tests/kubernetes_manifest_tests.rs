@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-use serde::Deserialize;
-use serde_yaml::Value;
+#[path = "common/yaml.rs"]
+mod yaml;
+
+use yaml::Value;
 
 const CRDS: &str = include_str!("../deploy/kubernetes/enterprise-alpha/crds/mcpgateway.io.yaml");
 const RBAC: &str = include_str!("../deploy/kubernetes/enterprise-alpha/base/rbac.yaml");
@@ -24,8 +26,7 @@ const KIND_SMOKE: &str =
     include_str!("../deploy/kubernetes/enterprise-alpha/scripts/kind-smoke.sh");
 
 fn docs(input: &str) -> Vec<Value> {
-    serde_yaml::Deserializer::from_str(input)
-        .map(Value::deserialize)
+    yaml::documents(input)
         .collect::<Result<Vec<_>, _>>()
         .expect("kubernetes yaml must parse")
 }
@@ -149,7 +150,7 @@ fn network_policy_has_ingress_and_egress_defaults() {
 
 #[test]
 fn values_expose_enterprise_boundary_human_gates_and_protected_value_provider() {
-    let values: Value = serde_yaml::from_str(VALUES).expect("values parse");
+    let values: Value = yaml::from_str(VALUES).expect("values parse");
     assert_eq!(values["licenseTier"].as_str(), Some("enterprise"));
     assert_eq!(values["replicaCount"].as_i64(), Some(1));
     assert_eq!(values["policy"]["networkEgress"].as_str(), Some("deny_all"));
@@ -402,7 +403,7 @@ fn shipped_kubernetes_configs_declare_the_name_clients_dial() {
         .next()
         .expect("configmap document");
     let gateway: Value =
-        serde_yaml::from_str(str_at(&config, &["data", "gateway.yaml"])).expect("gateway.yaml");
+        yaml::from_str(str_at(&config, &["data", "gateway.yaml"])).expect("gateway.yaml");
     let public_url = gateway["server"]["public_url"]
         .as_str()
         .expect("a 0.0.0.0 bind must declare the name clients dial");
@@ -425,7 +426,7 @@ fn shipped_kubernetes_configs_declare_the_name_clients_dial() {
 fn enterprise_alpha_cleartext_http_is_cluster_internal_behind_a_cluster_ip() {
     let config = &docs(BASE_CONFIGMAP)[0];
     let gateway: Value =
-        serde_yaml::from_str(str_at(config, &["data", "gateway.yaml"])).expect("gateway.yaml");
+        yaml::from_str(str_at(config, &["data", "gateway.yaml"])).expect("gateway.yaml");
     assert_eq!(
         gateway["server"]["cleartext_http"].as_str(),
         Some("cluster_internal")
@@ -636,7 +637,7 @@ fn enterprise_alpha_declared_replicas_match_manifest() {
         .next()
         .expect("configmap document");
     let gateway: Value =
-        serde_yaml::from_str(str_at(&config, &["data", "gateway.yaml"])).expect("gateway.yaml");
+        yaml::from_str(str_at(&config, &["data", "gateway.yaml"])).expect("gateway.yaml");
     let declared = gateway["server"]["replicas"]
         .as_i64()
         .expect("base/configmap.yaml must declare server.replicas");
@@ -661,7 +662,7 @@ fn enterprise_alpha_ships_writable_audit_log_with_fsgroup() {
         .next()
         .expect("configmap document");
     let gateway: Value =
-        serde_yaml::from_str(str_at(&config, &["data", "gateway.yaml"])).expect("gateway.yaml");
+        yaml::from_str(str_at(&config, &["data", "gateway.yaml"])).expect("gateway.yaml");
     assert_eq!(
         gateway["security"]["transparency_log"]["enabled"].as_bool(),
         Some(true),

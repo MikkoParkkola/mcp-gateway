@@ -14,10 +14,13 @@
 //! `docs/capability-pin-policy.md`; this file is their single machine-readable
 //! source of truth.
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 use std::path::{Path, PathBuf};
 
 use mcp_gateway::capability::compute_capability_hash;
-use serde_yaml::Value;
+use yaml::Value;
 
 /// Catalogue subtree holding copy-and-edit templates rather than shipped
 /// capabilities. `capabilities/README.md` and the frozen ranking baseline use
@@ -109,7 +112,7 @@ fn providers(doc: &Value) -> Vec<&Value> {
 /// Classify one capability document. Fails closed: anything that does not
 /// parse, or that omits the fields the rule reads, is [`Privilege::High`].
 fn classify(content: &str) -> Privilege {
-    let Ok(doc) = serde_yaml::from_str::<Value>(content) else {
+    let Ok(doc) = yaml::from_str::<Value>(content) else {
         return Privilege::High;
     };
 

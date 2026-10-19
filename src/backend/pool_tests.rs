@@ -17,6 +17,7 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::{Error, Result, transport::Transport};
 
 mod close_timeouts;
+mod fill_lease;
 mod idle_clock;
 mod idle_stop;
 mod recovery_and_shutdown;
