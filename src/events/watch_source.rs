@@ -294,7 +294,6 @@ impl EventSource for WatchSource {
             WatchClass::Keyed
         };
         let options = options(arguments)?;
-        let shared = class == WatchClass::Free;
         let mut pollers = self.pollers.lock();
         // An entry whose poller ended on its own is replaced, not joined.
         pollers.retain(|_, p| !p.stop.load(Ordering::Acquire));
@@ -319,11 +318,7 @@ impl EventSource for WatchSource {
             key: key.to_owned(),
             name: name.to_owned(),
             options,
-            charge: if shared {
-                Charge::Global
-            } else {
-                Charge::Holder
-            },
+            charge: Charge::of(class),
         };
         pollers.insert(
             key.to_owned(),
