@@ -87,13 +87,19 @@ pub struct ImportedSkill {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub code_blocks: Vec<SkillCodeBlock>,
 
-    /// Other frontmatter fields kept verbatim (e.g. `metadata`).
+    /// Other frontmatter fields, converted to JSON values (e.g. `metadata`).
     ///
-    /// The value type is still the YAML parser's own tree type, named here
-    /// through the crate's YAML adapter, so this release does not change it.
-    /// 4.0.0 changes it to `serde_json::Value` (MIK-8425 MIG.2).
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, crate::yaml::Value>,
+    /// MIK-8425, 4.0.0: this field type changes here on its own, not as part
+    /// of the later YAML backend swap. A YAML tag `!t v` becomes the one-entry
+    /// map `{"!t": v}` and cannot be told from a map keyed `"!t"`. Scalar keys
+    /// become strings and other keys are dropped; see `crate::yaml::to_json`
+    /// for the full rules.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "extra_via_yaml_tree"
+    )]
+    pub extra: BTreeMap<String, serde_json::Value>,
 
     /// Absolute path to the source SKILL.md file, if parsed from disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -157,7 +163,7 @@ pub fn parse_skill_md(content: &str) -> Result<ImportedSkill> {
         if let Some(key) = k.as_str()
             && !reserved.contains(&key)
         {
-            extra.insert(key.to_owned(), v.clone());
+            extra.insert(key.to_owned(), crate::yaml::to_json(v));
         }
     }
 
@@ -260,6 +266,20 @@ pub fn read_auxiliary_file(skill: &ImportedSkill, relative: &str) -> Result<Stri
 }
 
 // ── internals ────────────────────────────────────────────────────────────────
+
+/// Deserialize `extra` through the YAML tree, so one conversion rule covers
+/// every input, and serde_json's `raw_value` magic key
+/// (`$serde_json::private::RawValue`, live because the crate enables that
+/// feature) stays an ordinary map key instead of being interpreted.
+fn extra_via_yaml_tree<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<BTreeMap<String, serde_json::Value>, D::Error> {
+    let raw = BTreeMap::<String, crate::yaml::Value>::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .map(|(key, value)| (key, crate::yaml::to_json(&value)))
+        .collect())
+}
 
 /// Split a SKILL.md document into (frontmatter, body).
 ///

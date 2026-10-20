@@ -68,6 +68,75 @@ pub(crate) fn from_value<T: DeserializeOwned>(value: Value) -> Result<T, Error> 
     serde_yaml::from_value(value)
 }
 
+/// Convert a YAML tree value to a JSON value (MIK-8425).
+///
+/// Null, bool and string map to themselves. An integer stays a JSON integer
+/// over the full `i64` and `u64` range. A finite float stays a JSON float
+/// (`1.0` stays `1.0`, not `1`); a non-finite float maps to null. A sequence
+/// maps element by element. A tagged node `!t v` maps to the one-entry object
+/// `{"!t": v}`, keeping the tag (with its leading `!`) as the key. A mapping
+/// maps entry by entry in document order, so a later key that stringifies the
+/// same overwrites an earlier one: a string key is kept, a bool key becomes
+/// `"true"` or `"false"`, an integer key becomes its decimal string, a finite
+/// float key becomes serde_json's float text (`1.0` to `"1.0"`, `1e3` to
+/// `"1000.0"`, `-0.0` to `"-0.0"`), and any other key (null, non-finite
+/// float, sequence, mapping, tagged) drops its entry.
+///
+/// MIG.2 re-implements this function over its own tree against the
+/// parser/registry tests.
+pub(crate) fn to_json(value: &Value) -> serde_json::Value {
+    match value {
+        Value::Null => serde_json::Value::Null,
+        Value::Bool(b) => serde_json::Value::Bool(*b),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                serde_json::Value::Number(i.into())
+            } else if let Some(u) = n.as_u64() {
+                serde_json::Value::Number(u.into())
+            } else {
+                n.as_f64()
+                    .and_then(serde_json::Number::from_f64)
+                    .map_or(serde_json::Value::Null, serde_json::Value::Number)
+            }
+        }
+        Value::String(s) => serde_json::Value::String(s.clone()),
+        Value::Sequence(seq) => serde_json::Value::Array(seq.iter().map(to_json).collect()),
+        Value::Tagged(tagged) => {
+            let mut map = serde_json::Map::new();
+            map.insert(tagged.tag.to_string(), to_json(&tagged.value));
+            serde_json::Value::Object(map)
+        }
+        Value::Mapping(mapping) => {
+            let mut map = serde_json::Map::new();
+            for (key, val) in mapping {
+                if let Some(key) = json_key(key) {
+                    map.insert(key, to_json(val));
+                }
+            }
+            serde_json::Value::Object(map)
+        }
+    }
+}
+
+/// Stringify a YAML mapping key for `to_json`; `None` drops the entry.
+fn json_key(key: &Value) -> Option<String> {
+    match key {
+        Value::String(s) => Some(s.clone()),
+        Value::Bool(b) => Some(b.to_string()),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Some(i.to_string())
+            } else if let Some(u) = n.as_u64() {
+                Some(u.to_string())
+            } else {
+                let f = n.as_f64()?;
+                serde_json::Number::from_f64(f).map(|j| j.to_string())
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Every document of a multi-document stream, in order, ending after the
 /// first refusal. `serde_yaml`'s own stream can keep yielding after a
 /// malformed document, so a caller that does not stop grows without bound;
