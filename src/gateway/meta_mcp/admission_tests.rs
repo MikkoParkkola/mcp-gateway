@@ -438,7 +438,10 @@ fn sub4_preflight_preserves_legacy_unkeyed_per_step_authorization() {
 #[tokio::test]
 async fn sub4_playbook_dispatch_uses_admitted_definition() {
     let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
-    let original = original_plan();
+    let mut original = original_plan();
+    // The absent backend's answer is a failed step (MIK-8429), so `continue`
+    // lets the invoker reach the second step, whose target this row observes.
+    original.on_error = crate::playbook::ErrorStrategy::Continue;
     install_plan(&meta, original.clone());
     let policy = MutablePolicy::new(SECOND);
     let retry = RetryFields {

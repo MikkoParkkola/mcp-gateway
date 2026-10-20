@@ -160,9 +160,13 @@ impl ToolInvoker for MetaMcpInvoker<'_, '_> {
             }
             other => other,
         };
-        // A failed attempt's notes describe nothing the playbook keeps.
+        // A failed attempt's notes describe nothing the playbook keeps; a tool
+        // error is a failed attempt too (MIK-8429), so the kept notes pair
+        // with the engine's completed steps.
         let taken = crate::gateway::gateway_writes::take_since(writes_mark);
-        if let Ok(value) = &answered {
+        if let Ok(value) = &answered
+            && !crate::playbook::is_tool_error(value)
+        {
             self.steps.lock().push((taken, value.clone()));
         }
         answered

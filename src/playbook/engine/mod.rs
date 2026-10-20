@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Instant;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use tracing::{debug, warn};
 
 use super::{
@@ -158,6 +158,10 @@ impl PlaybookEngine {
 
         // Each completed step's label, its index in `steps` (MIK-8113).
         let mut labels: HashMap<String, u32> = HashMap::new();
+        // Whether any attempt so far had an outcome other than a busy custody,
+        // so may have reached a backend (MIK-8429 C1b). Conservative: a
+        // refusal before its send counts too.
+        let mut attempted = false;
         for (index, step) in definition.steps.iter().enumerate() {
             let label = u32::try_from(index).unwrap_or(u32::MAX);
             // Check timeout
@@ -185,7 +189,17 @@ impl PlaybookEngine {
             // Checked and interpolated once, outside the retry loop: a retry
             // re-sends the same arguments and must not refill the probe budget.
             let outcome = match checked_arguments(&ctx, step, invoker) {
-                Ok(arguments) => dispatch(step, label, arguments, max_attempts, invoker).await,
+                Ok(arguments) => {
+                    dispatch(
+                        step,
+                        label,
+                        arguments,
+                        max_attempts,
+                        invoker,
+                        &mut attempted,
+                    )
+                    .await
+                }
                 Err(refusal) => {
                     warn!(step = %step.name, error = %refusal, refused = true, "Step failed");
                     Err(refusal)
@@ -199,6 +213,20 @@ impl PlaybookEngine {
                     ctx.step_results.insert(step.name.clone(), result);
                     steps_completed.push(step.name.clone());
                 }
+                // A busy custody refused the step before its send: the plan
+                // ends here under every policy, no null fill and no successor
+                // (MIK-8429 STEP.1). Retryable only while nothing in the plan
+                // may have reached a backend; after that, a retry label would
+                // invite a re-run of what already ran.
+                Err(e) if is_busy(&e) => {
+                    warn!(step = %step.name, error = %e, "Step met a busy custody; plan ends");
+                    if attempted {
+                        return Err(crate::Error::Transport(format!(
+                            "after an earlier step ran: {e}"
+                        )));
+                    }
+                    return Err(e);
+                }
                 Err(e) => {
                     steps_failed.push(step.name.clone());
                     match definition.on_error {
@@ -207,7 +235,7 @@ impl PlaybookEngine {
                             // Both arms null-fill and carry on, so both must say
                             // why: a null with no reason is how a caller ends up
                             // with a partial result that reads like a success.
-                            step_errors.insert(step.name.clone(), e.to_string());
+                            step_errors.insert(step.name.clone(), step_reason(&e));
                             // Already retried if Retry; continue to next step.
                             ctx.step_results.insert(step.name.clone(), Value::Null);
                         }
@@ -270,26 +298,43 @@ fn checked_arguments(
 }
 
 /// Invoke `step` up to `max_attempts` times; the last error when none succeeds.
+/// A result whose tool reported failure (`isError: true`) fails the step
+/// (MIK-8429 PBERR.1) and is never re-sent: the tool ran and answered, so its
+/// side effect may be done (the hold, D1). `attempted` is set by every outcome
+/// that is not a busy custody.
 async fn dispatch(
     step: &PlaybookStep,
     label: u32,
     arguments: Value,
     max_attempts: u32,
     invoker: &dyn ToolInvoker,
+    attempted: &mut bool,
 ) -> crate::Result<Value> {
     let mut last_error = None;
     for attempt in 0..max_attempts.max(1) {
         if attempt > 0 {
             debug!(step = %step.name, attempt, "Retrying step");
         }
-        match STEP
+        let outcome = STEP
             .scope(
                 label,
                 invoker.invoke(&step.server, &step.tool, arguments.clone()),
             )
-            .await
-        {
+            .await;
+        if !matches!(&outcome, Err(e) if is_busy(e)) {
+            *attempted = true;
+        }
+        match outcome {
+            // Final under every policy, keyed or not: a retry cannot be told
+            // apart from a second send of whatever the first one did (D1).
+            Ok(result) if is_tool_error(&result) => {
+                warn!(step = %step.name, "Step failed: the tool reported an error");
+                return Err(tool_error(step, &result));
+            }
             Ok(result) => return Ok(result),
+            // Nothing was sent, and an immediate re-send meets the same held
+            // custody: the plan ends at the caller (STEP.1).
+            Err(e) if is_busy(&e) => return Err(e),
             Err(e) => {
                 // A refusal is not a flaky backend. Retrying it cannot change
                 // the answer, and `max_retries` would turn one denial into N
@@ -315,6 +360,61 @@ async fn dispatch(
     Err(last_error.unwrap_or_else(|| {
         crate::Error::Internal(format!("Step '{}' was never attempted", step.name))
     }))
+}
+
+/// Whether a tool reported failure in the success channel: `isError` is the
+/// JSON boolean `true` (the rule `gateway_execute` chains apply,
+/// `chain_exec::chain_step_result`).
+pub(crate) fn is_tool_error(result: &Value) -> bool {
+    result.get("isError").and_then(Value::as_bool) == Some(true)
+}
+
+/// The most of a tool's text a step failure carries (the hold, D3). The
+/// JSON-RPC renderer forwards [`TOOL_TEXT_DATA_KEY`] only within it.
+pub(crate) const TOOL_TEXT_CAP: usize = 256;
+
+/// The error `data` key a step failure carries the tool's capped text under.
+pub(crate) const TOOL_TEXT_DATA_KEY: &str = "tool_text";
+
+/// The step failure for a tool error: -32603 with a fixed message, so the
+/// tool's text never reaches a log line that prints the error (the hold,
+/// D3). The caller still gets the tool's first text, at most
+/// [`TOOL_TEXT_CAP`] characters and marked when cut, as `data.tool_text`.
+fn tool_error(step: &PlaybookStep, result: &Value) -> crate::Error {
+    let text = result["content"][0]["text"]
+        .as_str()
+        .map_or_else(|| result.to_string(), str::to_owned);
+    let mut capped: String = text.chars().take(TOOL_TEXT_CAP).collect();
+    if text.chars().nth(TOOL_TEXT_CAP).is_some() {
+        capped.push('…');
+    }
+    crate::Error::JsonRpc {
+        code: -32603,
+        message: format!("step '{}' failed: the tool reported an error", step.name),
+        data: Some(json!({ TOOL_TEXT_DATA_KEY: capped })),
+    }
+}
+
+/// A failed step's entry in `step_errors`, caller output, not a log: the
+/// error and, for a tool error, its capped text.
+fn step_reason(error: &crate::Error) -> String {
+    match error {
+        crate::Error::JsonRpc {
+            data: Some(data), ..
+        } if data[TOOL_TEXT_DATA_KEY].is_string() => {
+            format!(
+                "{error}: {}",
+                data[TOOL_TEXT_DATA_KEY].as_str().unwrap_or_default()
+            )
+        }
+        _ => error.to_string(),
+    }
+}
+
+/// The gateway-sealed transient a busy custody raises before any send,
+/// recognised by its seal, never by its text (MIK-8429 STEP.3).
+fn is_busy(error: &crate::Error) -> bool {
+    crate::personal_accounts::refusal::transient_data(error).is_some()
 }
 
 impl Default for PlaybookEngine {
@@ -393,6 +493,8 @@ fn build_output(
 // Tests
 // ============================================================================
 
+#[cfg(test)]
+mod busy_tests;
 #[cfg(test)]
 mod envelope_tests;
 #[cfg(test)]

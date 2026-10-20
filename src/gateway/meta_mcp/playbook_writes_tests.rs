@@ -209,3 +209,77 @@ async fn a_carry_follows_the_engines_reading_of_its_mappings() {
     .await;
     assert!(dests.is_empty(), "{dests:?}");
 }
+
+/// MIK-8429 PBERR.1: a step whose tool answers `isError` is a failed step
+/// under `continue`, so it is not one of the completed steps the notes are
+/// paired with. The completed step's notes are still carried under its name.
+/// Mutant: the invoker keeps the failed step's notes too, the counts differ,
+/// and nothing is carried.
+#[tokio::test]
+async fn a_failed_tool_error_step_leaves_the_completed_steps_notes_carried() {
+    let (registry, _calls) = counted_backend("alpha");
+    let _failing = crate::gateway::meta_mcp::authz_tests::register_answering(
+        &registry,
+        "beta",
+        json!({"content": [{"type": "text", "text": "upstream failed"}], "isError": true}),
+    );
+    let meta = MetaMcp::new(registry);
+    let definition: crate::playbook::PlaybookDefinition = crate::yaml::from_str(
+        r"
+name: partly
+description: a failing step, then a served one
+on_error: continue
+steps:
+  - name: bad
+    server: beta
+    tool: read
+  - name: read
+    server: alpha
+    tool: read
+",
+    )
+    .expect("the playbook fixture parses");
+    let mut engine = crate::playbook::PlaybookEngine::new();
+    engine.register(definition);
+    meta.set_playbook_engine(engine);
+    let (stored, answer) = crate::gateway::meta_mcp::invoke::relay::collecting(async {
+        let response = Box::pin(meta.handle_tools_call(
+            RequestId::Number(1),
+            "gateway_run_playbook",
+            json!({"name": "partly"}),
+            None,
+            ctx(&AllowAll),
+        ))
+        .await;
+        (
+            serde_json::to_value(crate::gateway::gateway_writes::recorded())
+                .expect("the record serializes"),
+            serde_json::to_value(&response).expect("the response serializes"),
+        )
+    })
+    .await;
+    let result: Value = answer
+        .pointer("/result/content/0/text")
+        .and_then(Value::as_str)
+        .and_then(|text| serde_json::from_str(text).ok())
+        .unwrap_or_else(|| panic!("premise: a playbook result: {answer}"));
+    assert_eq!(
+        (&result["steps_failed"], &result["steps_completed"]),
+        (&json!(["bad"]), &json!(["read"])),
+        "PBERR.1: {result}"
+    );
+    let dests: Vec<Value> = stored
+        .as_array()
+        .expect("a list")
+        .iter()
+        .map(|entry| entry["dest"].clone())
+        .collect();
+    assert!(
+        dests.contains(&json!(["output", "read", "trace_id"])),
+        "PBERR.1: the completed step's notes were not carried: {dests:?}"
+    );
+    assert!(
+        !dests.iter().any(|dest| dest.get(1) == Some(&json!("bad"))),
+        "PBERR.1: the failed step's notes were carried onto its null: {dests:?}"
+    );
+}

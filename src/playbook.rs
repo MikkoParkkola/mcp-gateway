@@ -469,6 +469,6 @@ pub trait ToolInvoker: Send + Sync {
 
 pub mod engine;
 pub use engine::PlaybookEngine;
-pub(crate) use engine::current_step;
 #[cfg(test)]
 pub(crate) use engine::in_step;
+pub(crate) use engine::{TOOL_TEXT_CAP, TOOL_TEXT_DATA_KEY, current_step, is_tool_error};

@@ -190,6 +190,9 @@ mod oracle_response_targets_tests;
 /// MIK-8406: a stored plan replay needs every plan account live.
 #[cfg(test)]
 mod plan_replay_liveness_tests;
+/// MIK-8429: a busy custody on a playbook step ends the plan, retryable.
+#[cfg(test)]
+mod playbook_busy_tests;
 #[cfg(test)]
 mod playbook_envelope_tests;
 #[cfg(test)]
