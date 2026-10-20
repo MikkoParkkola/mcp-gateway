@@ -292,26 +292,24 @@ pub(in crate::gateway::router::handlers) async fn intake(
     // Intake has judged; the window a catalogue change must not reach (NP3).
     #[cfg(test)]
     crate::gateway::meta_mcp::visible::seams::intake_judged();
-    let mut request = if state.sanitize_input && !exempt {
-        match crate::security::sanitize::sanitize_request(
-            &request,
+    // In place (MIK-8499): a clean request is not copied. On an error the
+    // request is refused here, so a partly rewritten tree is never used.
+    if state.sanitize_input
+        && !exempt
+        && let Err(e) = crate::security::sanitize::sanitize_request_in_place(
+            &mut request,
             crate::security::sanitize::ProtocolRoute::Meta,
-        ) {
-            Ok(sanitized) => sanitized,
-            // The protocol fields passed validation, so the id is answered.
-            Err(e) => {
-                return Err(build_error_response(
-                    raw_id.clone(),
-                    e.to_rpc_code(),
-                    e.to_string(),
-                    &session_id,
-                    StatusCode::BAD_REQUEST,
-                ));
-            }
-        }
-    } else {
-        request
-    };
+        )
+    {
+        // The protocol fields passed validation, so the id is answered.
+        return Err(build_error_response(
+            raw_id.clone(),
+            e.to_rpc_code(),
+            e.to_string(),
+            &session_id,
+            StatusCode::BAD_REQUEST,
+        ));
+    }
 
     if let Some(context) = signing_context.as_mut()
         && let Err(error) = context.restore(&mut request)

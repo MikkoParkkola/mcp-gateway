@@ -6,7 +6,7 @@
 
 use serde_json::Value;
 
-use super::{sanitize_json_value, sanitize_string, validate_protocol_text};
+use super::{sanitize_json_value_in_place, sanitize_string, validate_protocol_text};
 use crate::Result;
 use crate::gateway::{ArgsPolicy, EXECUTION_DIRECTIVES, args_policy};
 use crate::protocol::meta::KEY_CLIENT_CAPABILITIES;
@@ -177,24 +177,30 @@ enum Slot {
     Inner,
 }
 
-/// [`sanitize_json_value`] for one top-level request member, reaching into
-/// the `arguments` slots the gateway decodes after this step when a client
-/// sends them as a JSON string (MIK-8154 F1): there they are decoded,
-/// sanitized and re-encoded, so an escaped NUL is refused before the decode
-/// can produce it. Keys are matched as sent: every key reaching a match was
-/// validated first, and a valid key sanitizes to itself (`sanitize_object`),
-/// so a dirty `arguments` key is refused before it could get around it. No other string is decoded or re-encoded.
+/// [`super::sanitize_json_value`] for one top-level request member, in place
+/// (MIK-8499), reaching into the `arguments` slots the gateway decodes after
+/// this step when a client sends them as a JSON string (MIK-8154 F1): there
+/// they are decoded, sanitized and put in place of the string, so an escaped
+/// NUL is refused before the decode can produce it. Keys are matched as sent:
+/// every key reaching a match was validated first, and a valid key sanitizes
+/// to itself (`sanitize_object`), so a dirty `arguments` key is refused before
+/// it could get around it. No other string is decoded or re-encoded.
 ///
 /// # Errors
 ///
-/// `Error::Protocol` for a NUL anywhere, the encoded arguments included.
-pub(super) fn sanitize_value(key: &str, value: &Value, route: ProtocolRoute) -> Result<Value> {
-    let Value::Object(params) = value else {
-        return sanitize_json_value(value);
-    };
-    if key != "params" {
-        return sanitize_json_value(value);
+/// `Error::Protocol` for a NUL anywhere, the encoded arguments included. The
+/// value may be partly rewritten on error; every caller refuses it then.
+pub(super) fn sanitize_value_in_place(
+    key: &str,
+    value: &mut Value,
+    route: ProtocolRoute,
+) -> Result<()> {
+    if key != "params" || !value.is_object() {
+        return sanitize_json_value_in_place(value);
     }
+    let Value::Object(params) = value else {
+        return Ok(());
+    };
     // Judged on the name as sanitized: the name dispatch will route on.
     let name = params
         .get("name")
@@ -227,67 +233,85 @@ pub(super) fn sanitize_value(key: &str, value: &Value, route: ProtocolRoute) -> 
     })
 }
 
-/// `map` sanitized member by member; `special` handles a member itself when
-/// it returns `Some`. Every key here was validated first: each admission
-/// point runs [`validate_protocol_fields`] before [`super::sanitize_request`]
-/// (intake, stdio, the direct route, a task's re-admission), and a key that
-/// passes validation sanitizes to itself (`sanitize_string` strips only what
-/// validation refuses, and its NFC step is the identity). So a key is matched
-/// and kept as sent (MIK-8378).
+/// `map` sanitized member by member, in place and in order; `special`
+/// handles a member itself when it returns `Some`. Every key here was
+/// validated first: each admission point runs [`validate_protocol_fields`]
+/// before [`super::sanitize_request_in_place`] (intake, stdio, the direct
+/// route, a task's re-admission), and a key that passes validation sanitizes
+/// to itself (`sanitize_string` strips only what validation refuses, and its
+/// NFC step is the identity). So a key is matched and kept as sent (MIK-8378).
 fn sanitize_object(
-    map: &serde_json::Map<String, Value>,
-    special: impl Fn(&str, &Value) -> Option<Result<Value>>,
-) -> Result<Value> {
-    let mut sanitized = serde_json::Map::with_capacity(map.len());
-    for (key, member) in map {
-        let clean = match special(key, member) {
+    map: &mut serde_json::Map<String, Value>,
+    special: impl Fn(&str, &mut Value) -> Option<Result<()>>,
+) -> Result<()> {
+    for (key, member) in map.iter_mut() {
+        match special(key, member) {
             Some(handled) => handled?,
-            None => sanitize_json_value(member)?,
-        };
-        sanitized.insert(key.clone(), clean);
+            None => sanitize_json_value_in_place(member)?,
+        }
     }
-    Ok(Value::Object(sanitized))
+    Ok(())
 }
 
-/// An `arguments` slot. Where the gateway decodes a JSON string here (a
-/// backend tool's own, a meta tool's inner, a chain step's), it is decoded by
-/// the gateway's own decoder, once, on the bytes the client sent, and the
-/// decoded object is sanitized and handed onward in place of the string:
-/// dispatch then takes the object as it is, so what was checked is what is
-/// used. A meta tool's own `arguments` are not decoded (dispatch does not
-/// decode them either). Anything else is sanitized as it is.
+/// An `arguments` slot, in place. Where the gateway decodes a JSON string here
+/// (a backend tool's own, a meta tool's inner, a chain step's), it is decoded
+/// by the gateway's own decoder, once, on the bytes the client sent, and the
+/// decoded object is sanitized and put in place of the string: dispatch then
+/// takes the object as it is, so what was checked is what is used. The string
+/// is moved into the decoder's holder, not copied (MIK-8499). A meta tool's
+/// own `arguments` are not decoded (dispatch does not decode them either).
+/// Anything else is sanitized as it is.
 ///
 /// # Errors
 ///
 /// The decoder's own -32602 for a string that is not a JSON object, as
 /// dispatch would answer it; `Error::Protocol` for a NUL.
-fn sanitize_slot(value: &Value, slot: Slot) -> Result<Value> {
-    match (value, slot) {
+fn sanitize_slot(value: &mut Value, slot: Slot) -> Result<()> {
+    match (&*value, slot) {
         (Value::String(_), Slot::Tool | Slot::Inner) => {
-            let holder = serde_json::json!({ "arguments": value });
-            let decoded = crate::gateway::parse_tool_arguments_cow(&holder)?;
-            match decoded.as_ref() {
+            let holder = serde_json::json!({ "arguments": std::mem::take(value) });
+            let mut decoded = crate::gateway::parse_tool_arguments_cow(&holder)?.into_owned();
+            let result = match &mut decoded {
                 Value::Object(map) => sanitize_arguments(map, slot),
-                other => sanitize_json_value(other),
-            }
+                other => sanitize_json_value_in_place(other),
+            };
+            *value = decoded;
+            result
         }
-        (Value::Object(map), _) => sanitize_arguments(map, slot),
-        _ => sanitize_json_value(value),
+        (Value::Object(_), _) => {
+            let Value::Object(map) = value else {
+                return Ok(());
+            };
+            sanitize_arguments(map, slot)
+        }
+        _ => sanitize_json_value_in_place(value),
     }
 }
 
-/// A meta call's arguments: its inner `arguments` is a slot too and, for a
-/// chained meta tool (`gateway_execute`, dispatched through the invoke funnel,
-/// which decodes them), each `chain` step's `arguments`. Another meta tool's
-/// `chain` is not read by its handler, so it is sanitized as plain values,
-/// never decoded (MIK-8378). An inner slot holds a tool's own arguments,
-/// sanitized as plain values.
-fn sanitize_arguments(map: &serde_json::Map<String, Value>, slot: Slot) -> Result<Value> {
+/// A meta call's arguments, in place: its inner `arguments` is a slot too
+/// and, for a chained meta tool (`gateway_execute`, dispatched through the
+/// invoke funnel, which decodes them), each `chain` step's `arguments`.
+/// Another meta tool's `chain` is not read by its handler, so it is sanitized
+/// as plain values, never decoded (MIK-8378). An inner slot holds a tool's own
+/// arguments, sanitized as plain values, where they are (no copy, MIK-8499).
+fn sanitize_arguments(map: &mut serde_json::Map<String, Value>, slot: Slot) -> Result<()> {
     match slot {
-        Slot::Tool | Slot::Inner => sanitize_json_value(&Value::Object(map.clone())),
-        Slot::Meta | Slot::MetaChain => sanitize_object(map, |key, member| match (key, member) {
+        Slot::Tool | Slot::Inner => {
+            // Through the value walker, so a dirty key rebuilds the map as
+            // `sanitize_json_value` always did.
+            let mut whole = Value::Object(std::mem::take(map));
+            let result = sanitize_json_value_in_place(&mut whole);
+            if let Value::Object(back) = whole {
+                *map = back;
+            }
+            result
+        }
+        Slot::Meta | Slot::MetaChain => sanitize_object(map, |key, member| match (key, &*member) {
             ("arguments", _) => Some(sanitize_slot(member, Slot::Inner)),
-            ("chain", Value::Array(steps)) if matches!(slot, Slot::MetaChain) => {
+            ("chain", Value::Array(_)) if matches!(slot, Slot::MetaChain) => {
+                let Value::Array(steps) = member else {
+                    return None;
+                };
                 Some(sanitize_steps(steps))
             }
             _ => None,
@@ -295,18 +319,14 @@ fn sanitize_arguments(map: &serde_json::Map<String, Value>, slot: Slot) -> Resul
     }
 }
 
-/// A `chain`'s steps, each step's `arguments` an inner slot.
-fn sanitize_steps(steps: &[Value]) -> Result<Value> {
-    steps
-        .iter()
-        .map(|step| match step {
-            Value::Object(map) => sanitize_object(map, |key, member| {
-                (key == "arguments").then(|| sanitize_slot(member, Slot::Inner))
-            }),
-            other => sanitize_json_value(other),
-        })
-        .collect::<Result<Vec<_>>>()
-        .map(Value::Array)
+/// A `chain`'s steps, in place, each step's `arguments` an inner slot.
+fn sanitize_steps(steps: &mut [Value]) -> Result<()> {
+    steps.iter_mut().try_for_each(|step| match step {
+        Value::Object(map) => sanitize_object(map, |key, member| {
+            (key == "arguments").then(|| sanitize_slot(member, Slot::Inner))
+        }),
+        other => sanitize_json_value_in_place(other),
+    })
 }
 
 #[cfg(test)]

@@ -272,7 +272,9 @@ impl Gateway {
         if sanitize == InputSanitizing::On
             && !super::super::router::sanitize_exempt(meta_mcp, request, view)
         {
-            *request = crate::security::sanitize::sanitize_request(
+            // In place (MIK-8499): refused on an error, so a partly
+            // rewritten tree is never used.
+            crate::security::sanitize::sanitize_request_in_place(
                 request,
                 crate::security::sanitize::ProtocolRoute::Meta,
             )
