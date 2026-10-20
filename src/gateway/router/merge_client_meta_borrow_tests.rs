@@ -5,7 +5,7 @@
 //! No-insertion results must be `Cow::Borrowed` aliasing `arguments`.
 //! Insertion must still match [`super::merge_client_meta`] without mutating inputs.
 
-use super::{merge_client_meta, merge_client_meta_ref};
+use super::{merge_client_meta, merge_client_meta_ref, move_client_meta_into_arguments};
 use serde_json::{Value, json};
 use std::borrow::Cow;
 
@@ -143,4 +143,86 @@ fn insertion_required_matches_owned_merge_without_mutating_inputs() {
     assert_eq!(owned_null["payload"], args_before["payload"]);
     assert_eq!(arguments, args_before);
     assert_eq!(params_null, params_null_before);
+}
+
+/// MIK-8499: the in-place move gives the meta tool the same arguments the
+/// merge would have, after which the merge borrows (no copy).
+#[test]
+fn the_in_place_move_matches_the_merge_and_then_the_merge_borrows() {
+    let meta = json!({"progressToken": "p"});
+    let mut request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "gateway_invoke", "arguments": nested_payload(), "_meta": meta}});
+    let expected = merge_client_meta(nested_payload(), request.get("params"), true);
+    move_client_meta_into_arguments(&mut request, |name| name == "gateway_invoke");
+    let params = request.get("params").expect("params");
+    let arguments = params.get("arguments").expect("arguments");
+    assert_eq!(
+        arguments, &expected,
+        "MIK-8499: the moved arguments differ from the merge's"
+    );
+    assert!(
+        matches!(
+            merge_client_meta_ref(arguments, Some(params), true),
+            Cow::Borrowed(_)
+        ),
+        "MIK-8499: the merge still copies after the move"
+    );
+    assert_eq!(
+        params.get("_meta"),
+        Some(&meta),
+        "params._meta stays for its other readers"
+    );
+}
+
+/// MIK-8499 controls: the move leaves the request untouched where the merge
+/// inserts nothing, or where there are no arguments to move into.
+#[test]
+fn the_in_place_move_leaves_other_requests_untouched() {
+    let meta = json!({"progressToken": "p"});
+    let cases = [
+        // Not a tool call.
+        json!({"method": "resources/read", "params": {"name": "gateway_invoke",
+            "arguments": {"a": 1}, "_meta": meta}}),
+        // Not a meta tool.
+        json!({"method": "tools/call", "params": {"name": "backend_tool",
+            "arguments": {"a": 1}, "_meta": meta}}),
+        // The client's own `arguments._meta` wins.
+        json!({"method": "tools/call", "params": {"name": "gateway_invoke",
+            "arguments": {"a": 1, "_meta": {"mine": true}}, "_meta": meta}}),
+        // No arguments: the merge copies an empty object, nothing to move.
+        json!({"method": "tools/call", "params": {"name": "gateway_invoke", "_meta": meta}}),
+        // No `params._meta` to carry.
+        json!({"method": "tools/call", "params": {"name": "gateway_invoke",
+            "arguments": {"a": 1}}}),
+        // A client's own `arguments._meta` set to null still wins.
+        json!({"method": "tools/call", "params": {"name": "gateway_invoke",
+            "arguments": {"a": 1, "_meta": null}, "_meta": meta}}),
+        // Arguments that are not an object: the merge leaves them as sent.
+        json!({"method": "tools/call", "params": {"name": "gateway_invoke",
+            "arguments": null, "_meta": meta}}),
+        json!({"method": "tools/call", "params": {"name": "gateway_invoke",
+            "arguments": "{\"a\": 1}", "_meta": meta}}),
+        json!({"method": "tools/call", "params": {"name": "gateway_invoke",
+            "arguments": [1, 2], "_meta": meta}}),
+    ];
+    for case in cases {
+        let mut request = case.clone();
+        move_client_meta_into_arguments(&mut request, |name| name == "gateway_invoke");
+        assert_eq!(
+            request, case,
+            "MIK-8499: the move changed a request it must leave alone"
+        );
+    }
+}
+
+/// MIK-8499: the move is idempotent: a second application changes nothing,
+/// as a second merge would insert nothing (the client's `_meta` is now there).
+#[test]
+fn the_in_place_move_applied_twice_changes_nothing_more() {
+    let mut request = json!({"method": "tools/call", "params": {"name": "gateway_invoke",
+        "arguments": nested_payload(), "_meta": {"progressToken": "p"}}});
+    move_client_meta_into_arguments(&mut request, |name| name == "gateway_invoke");
+    let once = request.clone();
+    move_client_meta_into_arguments(&mut request, |name| name == "gateway_invoke");
+    assert_eq!(request, once, "MIK-8499: a second move changed the request");
 }

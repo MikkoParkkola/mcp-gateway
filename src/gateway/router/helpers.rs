@@ -435,6 +435,40 @@ pub(crate) fn merge_client_meta_ref<'a>(
     std::borrow::Cow::Owned(merge_client_meta(arguments.clone(), params, is_meta_tool))
 }
 
+/// [`merge_client_meta`] done in place on a request the caller owns
+/// (MIK-8499): the meta tool's own `arguments` gain the client's
+/// `params._meta`, so a later [`merge_client_meta_ref`] on them borrows
+/// instead of copying the whole argument tree. [`client_meta_insert_required`]
+/// decides both, so they cannot drift. Only arguments the client sent are
+/// touched; with none, the merge copies an empty object. `_meta` itself is
+/// still copied once, as the merge copies it.
+pub(crate) fn move_client_meta_into_arguments(
+    request: &mut Value,
+    is_meta_tool: impl Fn(&str) -> bool,
+) {
+    if request.get("method").and_then(Value::as_str) != Some("tools/call") {
+        return;
+    }
+    let Some(params) = request.get_mut("params") else {
+        return;
+    };
+    let meta_tool = params
+        .get("name")
+        .and_then(Value::as_str)
+        .is_some_and(&is_meta_tool);
+    if !client_meta_insert_required(params.get("arguments"), Some(params), meta_tool)
+        || params.get("arguments").is_none()
+    {
+        return;
+    }
+    let Some(client_meta) = params.get("_meta").cloned() else {
+        return;
+    };
+    if let Some(arguments) = params.get_mut("arguments") {
+        *arguments = insert_client_meta(std::mem::take(arguments), client_meta);
+    }
+}
+
 /// Parse JSON-RPC request or notification.
 ///
 /// Returns `(Option<RequestId>, method, params)` where `id` is `None` for
