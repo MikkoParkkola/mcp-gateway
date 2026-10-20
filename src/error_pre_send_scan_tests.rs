@@ -313,6 +313,19 @@ fn module_path(file: &str) -> String {
     stem.replace('/', "::")
 }
 
+/// Byte offsets of `word` in `clean` where it stands as a whole keyword: not preceded by an identifier byte, followed by whitespace or `<`.
+fn keyword<'a>(clean: &'a str, word: &'a str) -> impl Iterator<Item = usize> + 'a {
+    let b = clean.as_bytes();
+    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    clean.match_indices(word).filter_map(move |(k, _)| {
+        let end = k + word.len();
+        let bounded = (k == 0 || !ident(b[k - 1]))
+            && b.get(end)
+                .is_some_and(|c| c.is_ascii_whitespace() || *c == b'<');
+        bounded.then_some(k)
+    })
+}
+
 /// The item `at` sits in, in sanitized source: `Type::method` inside an
 /// `impl`, `function` outside one, or `<module>` for a construction outside
 /// any function (an import). This is the item part of the key
@@ -343,17 +356,6 @@ fn enclosing_item(clean: &str, at: usize) -> String {
         }
         None
     };
-    fn keyword<'a>(clean: &'a str, word: &'a str) -> impl Iterator<Item = usize> + 'a {
-        let b = clean.as_bytes();
-        let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
-        clean.match_indices(word).filter_map(move |(k, _)| {
-            let end = k + word.len();
-            let bounded = (k == 0 || !ident(b[k - 1]))
-                && b.get(end)
-                    .is_some_and(|c| c.is_ascii_whitespace() || *c == b'<');
-            bounded.then_some(k)
-        })
-    }
     // The innermost `fn` whose span holds `at`, and its name.
     let function = keyword(clean, "fn")
         .filter_map(|k| Some((k, block(k)?)))
