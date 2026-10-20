@@ -155,6 +155,11 @@ impl Gateway {
         // entry that can never limit anyone rather than ignore it silently.
         #[cfg(feature = "cost-governance")]
         if self.config.cost_governance.enabled {
+            let why = if self.config.auth.enabled {
+                "names no configured API key"
+            } else {
+                "limits no caller while auth is off"
+            };
             for entry in self
                 .config
                 .cost_governance
@@ -163,9 +168,8 @@ impl Gateway {
             {
                 warn!(
                     entry,
-                    "budgets.per_key entry names no configured API key, so it limits no caller: \
-                     only API keys are charged per key. Cap other callers with budgets.daily \
-                     or budgets.per_tool"
+                    "budgets.per_key entry {why}: only API keys are charged per key. \
+                     budgets.daily and budgets.per_tool cap every caller"
                 );
             }
         }

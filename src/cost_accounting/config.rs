@@ -204,5 +204,17 @@ mod tests {
                 .unmatched_per_key(&auth(true))
                 .is_empty()
         );
+        // An API key that happens to be named `bearer` is matched: its entry
+        // limits that key, so it is no warning.
+        let with_bearer_key: crate::config::AuthConfig =
+            serde_json::from_value(serde_json::json!({
+                "enabled": true,
+                "api_keys": [
+                    {"name": "ci", "key": "secret-ci"},
+                    {"name": "bearer", "key": "secret-bearer"},
+                ],
+            }))
+            .expect("an auth config");
+        assert_eq!(budgets.unmatched_per_key(&with_bearer_key), ["anonymous"]);
     }
 }
