@@ -225,7 +225,7 @@ fn sanitize_json_value_in_place(value: &mut Value) -> Result<()> {
     if let Value::Object(map) = value
         && map.keys().any(|key| string_needs_work(key))
     {
-        return rebuild_keys_in_place(map, |_, _, member| sanitize_json_value_in_place(member));
+        return rebuild_keys_in_place(map, None, |_, member| sanitize_json_value_in_place(member));
     }
     match value {
         Value::String(s) => sanitize_string_in_place(s),
@@ -239,24 +239,29 @@ fn sanitize_json_value_in_place(value: &mut Value) -> Result<()> {
 /// `map` rebuilt with every key sanitized, its members moved, never copied
 /// (MIK-8499). The rule is the copying rebuild's: member by member, in order,
 /// the key is sanitized first (a NUL refuses), then `member` sanitizes the
-/// value, given the key as sent and as cleaned, then the pair is inserted, so
-/// a later key that cleans to an earlier one overwrites it and the first
-/// error wins. Allocates the new map's index and nothing for a member.
+/// value under the cleaned key, then the pair is inserted, so a later key
+/// that cleans to an earlier one overwrites it and the first error wins. A
+/// member whose key as sent is `keep_as_sent` keeps its value as sent.
+/// Allocates the new map's index and nothing per member: no key is copied,
+/// however long.
 ///
 /// # Errors
 ///
-/// The first error, a key's or `member`'s. `map` is left partly rebuilt;
-/// every caller refuses the request then.
+/// The first error, a key's or `member`'s. `map` is left empty; every
+/// caller refuses the request then.
 fn rebuild_keys_in_place(
     map: &mut serde_json::Map<String, Value>,
-    mut member: impl FnMut(&str, &str, &mut Value) -> Result<()>,
+    keep_as_sent: Option<&str>,
+    mut member: impl FnMut(&str, &mut Value) -> Result<()>,
 ) -> Result<()> {
     let mut rebuilt = serde_json::Map::with_capacity(map.len());
     for (mut key, mut value) in std::mem::take(map) {
-        // The key as sent, kept only when cleaning changes it (a few bytes).
-        let sent = string_needs_work(&key).then(|| key.clone());
+        // Judged on the key as sent, before cleaning, so nothing is copied.
+        let kept = keep_as_sent == Some(key.as_str());
         sanitize_string_in_place(&mut key)?;
-        member(sent.as_deref().unwrap_or(&key), &key, &mut value)?;
+        if !kept {
+            member(&key, &mut value)?;
+        }
         rebuilt.insert(key, value);
     }
     *map = rebuilt;
@@ -341,12 +346,8 @@ pub(crate) fn sanitize_request_in_place(request: &mut Value, route: ProtocolRout
     if map.keys().any(|key| string_needs_work(key)) {
         // `id` as sent is kept as sent; every other member is walked under
         // its cleaned key.
-        return rebuild_keys_in_place(map, |sent, clean, member| {
-            if sent == "id" {
-                Ok(())
-            } else {
-                protocol::sanitize_value_in_place(clean, member, route)
-            }
+        return rebuild_keys_in_place(map, Some("id"), |clean, member| {
+            protocol::sanitize_value_in_place(clean, member, route)
         });
     }
     for (key, value) in map.iter_mut() {
