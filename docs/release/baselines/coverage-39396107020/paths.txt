@@ -1,0 +1,8 @@
+startup         files= 49 8171/8571  95.33%  ok
+OAuth           files= 18 3314/3428  96.67%  ok
+HTTP dispatch   files=135 23632/24087  98.11%  ok
+stdio dispatch  files=  3 725/736  98.51%  ok
+bridge          files=  1 228/249  91.57%  ok
+tasks           files= 67 14844/15141  98.04%  ok
+account paths   files= 57 8018/8208  97.69%  ok
+paths failing: 0
