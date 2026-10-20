@@ -421,7 +421,7 @@ async fn allow_no_expiry_still_grants_a_time_unless_ttl_is_null() {
     let gw = start(
         root.path(),
         &rx,
-        json!({"min_ttl": "1s", "default_ttl": "1h", "allow_no_expiry": true}),
+        json!({"min_ttl": "1s", "default_ttl": "2h", "max_ttl": "12h", "allow_no_expiry": true}),
     )
     .await;
     let sub = |repo: &str, ttl: Option<Value>| {
@@ -438,8 +438,8 @@ async fn allow_no_expiry_still_grants_a_time_unless_ttl_is_null() {
     assert!(absent["result"]["id"].is_string(), "{absent}");
     about(
         refresh_before(&absent),
-        3600,
-        "absent ttlMs with allow_no_expiry",
+        7200,
+        "absent ttlMs with allow_no_expiry gets default_ttl",
     );
     let long = gw
         .rpc(
@@ -451,7 +451,7 @@ async fn allow_no_expiry_still_grants_a_time_unless_ttl_is_null() {
     assert!(long["result"]["id"].is_string(), "{long}");
     about(
         refresh_before(&long),
-        86_400,
+        43_200,
         "numeric ttlMs is clamped to max_ttl with allow_no_expiry",
     );
     let none = gw
@@ -462,9 +462,16 @@ async fn allow_no_expiry_still_grants_a_time_unless_ttl_is_null() {
         )
         .await;
     assert!(none["result"]["id"].is_string(), "{none}");
-    assert!(
-        refresh_before(&none).is_none(),
+    assert_eq!(
+        none["result"]["refreshBefore"],
+        Value::Null,
         "null with allow_no_expiry means no expiry"
+    );
+    assert!(
+        none["result"]
+            .as_object()
+            .is_some_and(|o| o.contains_key("refreshBefore")),
+        "refreshBefore must be present as null"
     );
 }
 

@@ -479,7 +479,7 @@ fn the_verify_challenge_compare_is_ct_eq_source_check() {
         }
 
         fn visit_expr_binary(&mut self, node: &'ast syn::ExprBinary) {
-            if matches!(node.op, syn::BinOp::Eq | syn::BinOp::Ne)
+            if matches!(node.op, syn::BinOp::Eq(_) | syn::BinOp::Ne(_))
                 && (mentions_target(&node.left) || mentions_target(&node.right))
             {
                 self.plain += 1;
@@ -491,34 +491,33 @@ fn the_verify_challenge_compare_is_ct_eq_source_check() {
     let source = std::fs::read_to_string(&path)
         .expect("read src/events/client.rs for the verify source check");
     let file = syn::parse_file(&source).expect("parse src/events/client.rs");
-    let implementation = file
-        .items
-        .iter()
-        .find_map(|item| {
-            if let syn::Item::Impl(item_impl) = item
-                && let syn::Type::Path(type_path) = &*item_impl.self_ty
-                && type_path.qself.is_none()
-                && type_path.path.is_ident("CallbackClient")
-            {
-                return Some(item_impl);
+    let mut verifies: Vec<&syn::ImplItemFn> = Vec::new();
+    for item in &file.items {
+        if let syn::Item::Impl(item_impl) = item
+            && let syn::Type::Path(type_path) = &*item_impl.self_ty
+            && type_path.qself.is_none()
+            && type_path.path.is_ident("CallbackClient")
+        {
+            for impl_item in &item_impl.items {
+                if let syn::ImplItem::Fn(item_fn) = impl_item
+                    && item_fn.sig.ident == "verify"
+                {
+                    verifies.push(item_fn);
+                }
             }
-            None
-        })
-        .expect(
-            "CallbackClient impl not found in src/events/client.rs; a rename must fail this test",
-        );
-    let verify = implementation
-        .items
-        .iter()
-        .find_map(|item| {
-            if let syn::ImplItem::Fn(item_fn) = item && item_fn.sig.ident == "verify" {
-                return Some(item_fn);
-            }
-            None
-        })
-        .expect(
-            "CallbackClient::verify not found in src/events/client.rs; a rename must fail this test",
-        );
+        }
+    }
+    assert!(
+        !verifies.is_empty(),
+        "CallbackClient::verify not found in src/events/client.rs; a rename must fail this test",
+    );
+    assert_eq!(
+        verifies.len(),
+        1,
+        "expected exactly one CallbackClient::verify across CallbackClient impls, found {}",
+        verifies.len(),
+    );
+    let verify = verifies[0];
     assert!(
         !verify.block.stmts.is_empty(),
         "CallbackClient::verify has no statements; fixture broken"
