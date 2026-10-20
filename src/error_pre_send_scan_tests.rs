@@ -301,10 +301,24 @@ mod tests { fn t() { let _ = Error::BackendUnavailable("test".into()); } }
     );
 }
 
+/// The module path of `file` (relative to `src/`, as
+/// [`construction_counts`] gives it): `.rs` stripped, a trailing `/mod`
+/// dropped, `/` read as `::`. `lib.rs` and `main.rs` are the crate root, "".
+fn module_path(file: &str) -> String {
+    if file == "lib.rs" || file == "main.rs" {
+        return String::new();
+    }
+    let stem = file.strip_suffix(".rs").unwrap_or(file);
+    let stem = stem.strip_suffix("/mod").unwrap_or(stem);
+    stem.replace('/', "::")
+}
+
 /// The item `at` sits in, in sanitized source: `Type::method` inside an
 /// `impl`, `function` outside one, or `<module>` for a construction outside
-/// any function (an import). Keyed by item, not file, so a function moved to
-/// another file keeps its reviewed row (MIK-8498 DISPATCH.3).
+/// any function (an import). This is the item part of the key
+/// [`construction_sites`] builds: the module path from the file plus this
+/// `Type::method` or `fn`. A move to another module changes the row, but a
+/// row never names a file name (MIK-8498 DISPATCH.3).
 fn enclosing_item(clean: &str, at: usize) -> String {
     let b = clean.as_bytes();
     // The span of the block a keyword opens: from the keyword to its matching
@@ -390,8 +404,12 @@ fn enclosing_item(clean: &str, at: usize) -> String {
 }
 
 /// How many times each non-test item under `src/` constructs `name`, keyed
-/// by [`enclosing_item`]. Two files with an item of the same key is an error:
-/// a key must name one reviewed site.
+/// by the module-qualified function: the module path from the file plus
+/// [`enclosing_item`] (`Type::method` or `fn`), with just the item at the
+/// crate root. A move to another module changes the row, but a row never
+/// names a file name. Two different files producing the same qualified key
+/// is an error, as that can only happen through `#[path]` or a bug: a
+/// qualified key must name one reviewed site.
 fn construction_sites(name: &str) -> BTreeMap<String, usize> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut found: BTreeMap<String, usize> = BTreeMap::new();
@@ -399,14 +417,20 @@ fn construction_sites(name: &str) -> BTreeMap<String, usize> {
     for file in construction_counts(name).into_keys() {
         let src = std::fs::read_to_string(root.join(&file)).expect("readable source");
         let clean = strip_test_items(&sanitize(&src));
+        let module = module_path(&file);
         for at in construction_offsets(&clean, name) {
             let item = enclosing_item(&clean, at);
-            let first = owner.entry(item.clone()).or_insert_with(|| file.clone());
+            let key = if module.is_empty() {
+                item
+            } else {
+                format!("{module}::{item}")
+            };
+            let first = owner.entry(key.clone()).or_insert_with(|| file.clone());
             assert_eq!(
                 *first, file,
-                "{item} constructs {name} in two files: the key must name one site"
+                "{key} constructs {name} in two files: the qualified key must name one site"
             );
-            *found.entry(item).or_default() += 1;
+            *found.entry(key).or_default() += 1;
         }
     }
     found
@@ -414,27 +438,46 @@ fn construction_sites(name: &str) -> BTreeMap<String, usize> {
 
 /// The items allowed to build the sealed transient, each only before
 /// anything reaches the backend (MIK-8428): `is_pre_dispatch` reads its seal,
-/// so it frees an idempotency key. Keyed by the item that builds it
-/// (`Type::method` or `function`, [`enclosing_item`]), not by file, so a move
-/// keeps its row and a new call in any item fails the scan. A builder's own
-/// definition counts as one.
+/// so it frees an idempotency key. Keyed by the module path from the file
+/// plus the item that builds it (`Type::method` or `function`,
+/// [`enclosing_item`]), so a move to another module changes the row, but a
+/// row never names a file name, and a new call in any item fails the scan.
+/// A builder's own definition counts as one.
 const TRANSIENT_SITES: &[(&str, usize)] = &[
     // `transient_retry_error`'s definition.
-    ("transient_retry_error", 1),
+    ("personal_accounts::refusal::transient_retry_error", 1),
     // `transient_mint_refusal`'s definition and its one build.
-    ("AccountStrategyRegistry::transient_mint_refusal", 2),
+    (
+        "identity_propagation::account_strategies_view::AccountStrategyRegistry::transient_mint_refusal",
+        2,
+    ),
     // A capability mint's resolve or refresh admission.
-    ("AccountStrategyRegistry::resolve", 1),
+    (
+        "identity_propagation::account_strategies::AccountStrategyRegistry::resolve",
+        1,
+    ),
     // The lease recheck before the send, from three callers.
-    ("AccountStrategyRegistry::revalidate", 1),
+    (
+        "identity_propagation::account_strategies::AccountStrategyRegistry::revalidate",
+        1,
+    ),
     // A per-user mint's admission, before the dispatch.
-    ("MetaMcp::resolve_caller_credential_as", 1),
+    (
+        "gateway::meta_mcp::invoke::propagation::MetaMcp::resolve_caller_credential_as",
+        1,
+    ),
     // The task intake answer: no task, nothing dispatched.
-    ("MetaMcp::task_intake_transient", 1),
+    (
+        "gateway::meta_mcp::call_dispatch::task_intake::MetaMcp::task_intake_transient",
+        1,
+    ),
     // The caller verdict's view Busy, answered before the backend.
-    ("MetaMcp::dispatch_resolution", 1),
+    (
+        "gateway::meta_mcp::invoke::caller_verdict::MetaMcp::dispatch_resolution",
+        1,
+    ),
     // A stored task read: no dispatch at all.
-    ("retry_later", 1),
+    ("gateway::meta_mcp::task_replay::retry_later", 1),
 ];
 
 #[test]
@@ -468,4 +511,15 @@ fn a_construction_is_keyed_by_its_enclosing_item() {
         items,
         ["<module>", "Holder::build", "Wrapper::show", "free"]
     );
+}
+
+#[test]
+fn module_path_follows_the_module_tree() {
+    assert_eq!(
+        module_path("gateway/meta_mcp/task_replay.rs"),
+        "gateway::meta_mcp::task_replay"
+    );
+    assert_eq!(module_path("gateway/meta_mcp/mod.rs"), "gateway::meta_mcp");
+    assert_eq!(module_path("error.rs"), "error");
+    assert_eq!(module_path("lib.rs"), "");
 }
