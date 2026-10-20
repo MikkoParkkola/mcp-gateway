@@ -1,6 +1,6 @@
-# MIK-8499: HTTP intake copies a refused request body (design v3, for review before tests)
+# MIK-8499: HTTP intake copies a refused request body (design v3, ratified)
 
-Status: design for gpt + agy review, round 2. Round 1 (gpt-20261020T012011Z-82698 SHIP-WITH-FIXES, agy-20261020T012012Z-83613 DO-NOT-SHIP) found a wrong attribution in v1. v3 corrects it. Base: origin/docs/ranking-1-release-line 7b555372b. Ticket: MIK-8499 (v4.0.0, Family http-intake-alloc).
+Status: ratified. v3 reviewed before code: gpt SHIP gpt-20261020T013223Z-22579, agy SHIP-WITH-FIXES agy-20261020T013224Z-23297. The lead approved the split into PR-A (#3990) and PR-B (#3992) and the INTAKE.2 wording below (2026-10-20). Round 1 (gpt-20261020T012011Z-82698 SHIP-WITH-FIXES, agy-20261020T012012Z-83613 DO-NOT-SHIP) found a wrong attribution in v1. v3 corrects it. Base: origin/docs/ranking-1-release-line 7b555372b. Ticket: MIK-8499 (v4.0.0, Family http-intake-alloc).
 
 ## P1a: problem (INTAKE.1, Spark, per-thread allocation meter, the MIK-8412 bodies)
 
@@ -44,9 +44,9 @@ Readers of `params.arguments` between that point and the merge, checked:
   - planted bugs M1 (skip a dirty string), M2 (skip a key rewrite), M3 (strip a NUL instead of refusing it) and M4 (skip the slot decode), each caught by a named row.
 - INTAKE.1 is completed in PR-B's probe: the body read and the firewall at 3 MiB, with the probe's body limit raised past axum's 2 MB default.
 
-## INTAKE.2, re-proposed (the lead's earlier narrowing rested on v1's wrong numbers)
+## INTAKE.2, as ruled (re-proposed from the corrected numbers; the lead's earlier narrowing rested on v1's wrong numbers)
 
-On the MIK-8412 router fixture (one-chunk body, firewall off), a refused 1 and 3 MiB `/mcp` call's total is at most parse plus a fixed, lead-ruled cap, with no second payload-proportional term, **with the sanitizer off (PR-A) and on (PR-B)**. Both PRs together meet the original wording on that fixture. Outside the fixture, and stated as not closed: the body read of a streamed upload (one buffer, inherent) and the request firewall scan (MIK-8535, v4.1.0).
+On the MIK-8412 router fixture (one-chunk body, firewall off), a refused 1 and 3 MiB `/mcp` call's total is at most parse plus a fixed, lead-ruled cap (2026-10-20: 64 KiB fixed, 65,536 B, at both sizes), with no second payload-proportional term, **with the sanitizer off (PR-A) and on (PR-B)**. Both PRs together meet the original wording on that fixture. Outside the fixture, and stated as not closed: the body read of a streamed upload (one buffer, inherent) and the request firewall scan (MIK-8535, v4.1.0).
 
 ## Questions for both seats
 
@@ -56,3 +56,5 @@ On the MIK-8412 router fixture (one-chunk body, firewall off), a refused 1 and 3
 ## Impact analysis note
 
 GitNexus could not resolve `sanitize_request` (stale index). The callers were found by search (`rg "sanitize_request\\("` and `rg "merge_client_meta_ref\\("` over `src`, outside tests). The brief says so.
+
+Stated limit (lead ruling 2026-10-20): PR-A still copies `params._meta` once (`helpers.rs`, `move_client_meta_into_arguments`), so a client that puts its bulk in `_meta` still pays that copy. Follow-up MIK-8536 (v4.1.0).

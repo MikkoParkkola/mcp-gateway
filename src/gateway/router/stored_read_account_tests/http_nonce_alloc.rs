@@ -394,6 +394,7 @@ fn test_path(name: &str) -> String {
 /// MIK-8499 INTAKE.2(a): what a refused call may cost beyond parsing its
 /// body. Measured 46,792 B at both 1 and 3 MiB after the fix (it was
 /// 3,216,360 B at 1 MiB, the `_meta` merge's copy of the arguments).
+/// Lead-ruled 2026-10-20: 64 KiB fixed, tightened only on new evidence.
 const OVER_PARSE: u64 = 64 * 1024;
 /// How much that excess may grow from 1 to 3 MiB: no payload term (measured
 /// 0 B).
