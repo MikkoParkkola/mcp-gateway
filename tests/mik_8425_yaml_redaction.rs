@@ -312,7 +312,7 @@ fn the_location_is_kept() {
         "location lost: {display:?}"
     );
     assert!(
-        display.contains(format!("at line {} column {}", loc.line(), loc.column())),
+        display.contains(&format!("at line {} column {}", loc.line(), loc.column())),
         "location lost: {display:?}"
     );
 }
@@ -715,7 +715,7 @@ fn the_guard_catches_the_tricky_forms() {
         r#"Error::custom(format! ("{x}"))"#,
         r##"Error::custom(format!(r#"v {}"#, x))"##,
         r#"Error::custom(too_long(&format!("{}s", n)))"#,
-        r#"Error::custom(too_long(&name))"#,
+        "Error::custom(too_long(&name))",
         r#"Error::custom(format!("a ) b {}", x))"#,
     ] {
         let Some(at) = text.find("::custom(") else {
