@@ -91,9 +91,10 @@ pub struct ImportedSkill {
     ///
     /// MIK-8425, 4.0.0: this field type changes here on its own, not as part
     /// of the later YAML backend swap. A YAML tag `!t v` becomes the one-entry
-    /// map `{"!t": v}` and cannot be told from a map keyed `"!t"`. Scalar keys
-    /// become strings and other keys are dropped; see `crate::yaml::to_json`
-    /// for the full rules.
+    /// map `{"!t": v}` and cannot be told from a map keyed `"!t"`. Boolean,
+    /// integer and finite float keys become strings; null, non-finite float,
+    /// sequence, mapping and tagged keys drop their entry. The full rules are
+    /// in the 4.0.0 upgrade notes (`UPGRADING`, MIK-8425).
     #[serde(
         default,
         skip_serializing_if = "BTreeMap::is_empty",
@@ -268,7 +269,7 @@ pub fn read_auxiliary_file(skill: &ImportedSkill, relative: &str) -> Result<Stri
 // ── internals ────────────────────────────────────────────────────────────────
 
 /// Deserialize `extra` through the YAML tree, so one conversion rule covers
-/// every input, and serde_json's `raw_value` magic key
+/// every input, and `serde_json`'s `raw_value` magic key
 /// (`$serde_json::private::RawValue`, live because the crate enables that
 /// feature) stays an ordinary map key instead of being interpreted.
 fn extra_via_yaml_tree<'de, D: serde::Deserializer<'de>>(
@@ -703,8 +704,8 @@ mod tests {
                 null,
                 1.5,
                 1.0,
-                18446744073709551615u64,
-                -9223372036854775808i64
+                18_446_744_073_709_551_615_u64,
+                -9_223_372_036_854_775_808_i64
             ])
         );
         assert!(skill.extra["f"][4].is_f64());
@@ -751,5 +752,31 @@ mod tests {
         )
         .expect("fixture skill deserializes");
         assert_eq!(skill.extra["x"], serde_json::json!({"!t": 1}));
+    }
+
+    // E1b
+    #[test]
+    fn extra_null_and_bool_values_map_to_json() {
+        let content = "---\nname: n\ndescription: d\nv: {n: ~, t: true, f: false}\n---\nBody\n";
+        let skill = parse_skill_md(content).expect("fixture skill parses");
+        assert_eq!(
+            skill.extra["v"],
+            serde_json::json!({"n": null, "t": true, "f": false})
+        );
+    }
+
+    // E3b
+    #[test]
+    fn extra_negative_and_max_u64_keys_stringify() {
+        let content = concat!(
+            "---\nname: n\ndescription: d\n",
+            "m: {-5: neg, 18446744073709551615: max}\n",
+            "---\nBody\n",
+        );
+        let skill = parse_skill_md(content).expect("fixture skill parses");
+        assert_eq!(
+            skill.extra["m"],
+            serde_json::json!({"-5": "neg", "18446744073709551615": "max"})
+        );
     }
 }

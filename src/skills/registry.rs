@@ -350,10 +350,7 @@ mod tests {
         assert_eq!(hits.len(), 1);
     }
 
-    // E6
-    #[test]
-    fn old_registry_loads_with_same_values_and_resaves_equal_after_parsing() {
-        const OLD_REGISTRY: &str = r#"{
+    const OLD_REGISTRY: &str = r#"{
   "schema": 1,
   "skills": {
     "legacy": {
@@ -383,6 +380,10 @@ mod tests {
     }
   }
 }"#;
+
+    // E6
+    #[test]
+    fn old_registry_loads_with_same_values_and_resaves_equal_after_parsing() {
         let tmp = tempfile::tempdir().expect("fixture tempdir creates");
         let path = tmp.path().join("skills.json");
         std::fs::write(&path, OLD_REGISTRY).expect("fixture registry writes");
@@ -422,5 +423,64 @@ mod tests {
         let loaded = SkillRegistry::load(&path).expect("registry loads");
         let skill = loaded.get("n").expect("registry contains skill");
         assert_eq!(skill.extra["meta"], serde_json::json!({"ok": 1}));
+    }
+
+    // E8c
+    #[test]
+    fn loading_registry_keeps_raw_value_magic_key_as_plain_map() {
+        let text = concat!(
+            r#"{"schema":1,"skills":{"r":{"name":"r","#,
+            r#""description":"d","body":"b","extra":{"x":{"#,
+            r#""$serde_json::private::RawValue":"0"}}}}}"#,
+        );
+        let tmp = tempfile::tempdir().expect("fixture tempdir creates");
+        let path = tmp.path().join("skills.json");
+        std::fs::write(&path, text).expect("fixture registry writes");
+        let loaded = SkillRegistry::load(&path).expect("fixture registry loads");
+        let skill = loaded.get("r").expect("registry contains skill");
+        assert_eq!(
+            skill.extra["x"],
+            serde_json::json!({"$serde_json::private::RawValue": "0"})
+        );
+    }
+
+    // E6b
+    #[test]
+    fn resaved_registry_writes_extra_keys_in_sorted_order() {
+        let tmp = tempfile::tempdir().expect("fixture tempdir creates");
+        let path = tmp.path().join("skills.json");
+        std::fs::write(&path, OLD_REGISTRY).expect("fixture registry writes");
+        let loaded = SkillRegistry::load(&path).expect("fixture registry loads");
+        let second = tmp.path().join("resaved.json");
+        loaded.save(&second).expect("registry saves");
+        let saved = std::fs::read_to_string(&second).expect("saved registry reads");
+        let keys = [
+            "\"1\"",
+            "\"1.5\"",
+            "\"alpha\"",
+            "\"list\"",
+            "\"ratio\"",
+            "\"true\"",
+            "\"zeta\"",
+        ];
+        let mut positions = Vec::new();
+        for key in keys {
+            positions.push(saved.find(key).expect("saved registry holds key"));
+        }
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    // E9
+    #[test]
+    fn registry_with_duplicate_extra_key_refuses_to_load() {
+        let text = concat!(
+            r#"{"schema":1,"skills":{"d":{"name":"d","#,
+            r#""description":"d","body":"b","extra":{"m":{"#,
+            r#""1":"a","1":"b"}}}}}"#,
+        );
+        let tmp = tempfile::tempdir().expect("fixture tempdir creates");
+        let path = tmp.path().join("skills.json");
+        std::fs::write(&path, text).expect("fixture registry writes");
+        assert!(SkillRegistry::load(&path).is_err());
     }
 }

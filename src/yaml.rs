@@ -78,7 +78,7 @@ pub(crate) fn from_value<T: DeserializeOwned>(value: Value) -> Result<T, Error> 
 /// maps entry by entry in document order, so a later key that stringifies the
 /// same overwrites an earlier one: a string key is kept, a bool key becomes
 /// `"true"` or `"false"`, an integer key becomes its decimal string, a finite
-/// float key becomes serde_json's float text (`1.0` to `"1.0"`, `1e3` to
+/// float key becomes `serde_json`'s float text (`1.0` to `"1.0"`, `1e3` to
 /// `"1000.0"`, `-0.0` to `"-0.0"`), and any other key (null, non-finite
 /// float, sequence, mapping, tagged) drops its entry.
 ///
