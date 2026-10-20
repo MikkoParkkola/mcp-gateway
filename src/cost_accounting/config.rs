@@ -82,8 +82,18 @@ impl BudgetLimits {
     /// configured API key is charged per key (MIK-8507), so with auth off every
     /// entry is one, and with auth on so is an entry naming no `api_keys` key
     /// (the static bearer, the dashboard, an OIDC or key-server identity).
-    pub(crate) fn unmatched_per_key<'a>(&'a self, _auth: &crate::config::AuthConfig) -> Vec<&'a str> {
-        Vec::new()
+    pub(crate) fn unmatched_per_key<'a>(
+        &'a self,
+        auth: &crate::config::AuthConfig,
+    ) -> Vec<&'a str> {
+        let mut unmatched: Vec<&str> = self
+            .per_key
+            .keys()
+            .map(String::as_str)
+            .filter(|name| !auth.enabled || !auth.api_keys.iter().any(|key| key.name == *name))
+            .collect();
+        unmatched.sort_unstable();
+        unmatched
     }
 }
 
@@ -181,11 +191,18 @@ mod tests {
             }))
             .expect("an auth config")
         };
-        assert_eq!(budgets.unmatched_per_key(&auth(true)), ["anonymous", "bearer"]);
+        assert_eq!(
+            budgets.unmatched_per_key(&auth(true)),
+            ["anonymous", "bearer"]
+        );
         assert_eq!(
             budgets.unmatched_per_key(&auth(false)),
             ["anonymous", "bearer", "ci"]
         );
-        assert!(BudgetLimits::default().unmatched_per_key(&auth(true)).is_empty());
+        assert!(
+            BudgetLimits::default()
+                .unmatched_per_key(&auth(true))
+                .is_empty()
+        );
     }
 }
