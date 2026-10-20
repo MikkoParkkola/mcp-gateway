@@ -526,13 +526,24 @@ fn authorize_extra_accepts_only_the_closed_values() {
         check(&with(from, "authorize_extra: { prompt: none }")),
         Ok(())
     );
-    for (value, variant) in [
-        ("{ access_type: forever }", "unknown variant `forever`"),
-        ("{ prompt: login }", "unknown variant `login`"),
-        ("{ include_granted_scopes: maybe }", "expected a boolean"),
+    for (value, secret) in [
+        ("{ access_type: forever }", "forever"),
+        ("{ prompt: login }", "login"),
     ] {
-        refused(&with(from, &format!("authorize_extra: {value}")), variant);
+        let yaml = with(from, &format!("authorize_extra: {value}"));
+        refused(&yaml, "unknown variant");
+        match check(&yaml) {
+            Ok(()) => panic!("accepted; expected a refusal for {value}"),
+            Err(message) => assert!(
+                !message.contains(secret),
+                "refusal prints the value: {message:?} contains {secret:?}"
+            ),
+        }
     }
+    refused(
+        &with(from, "authorize_extra: { include_granted_scopes: maybe }"),
+        "expected a boolean",
+    );
 }
 
 #[test]
