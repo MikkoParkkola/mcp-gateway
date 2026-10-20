@@ -27,16 +27,27 @@ use crate::gateway::session_id::SessionOwner;
 /// the smaller); it is also the `Retry-After` a capacity refusal names.
 pub(crate) const PROVISIONAL_SESSION_TTL: Duration = Duration::from_secs(60);
 
-/// Live provisional sessions at most; a new one past it is refused.
+/// Live provisional sessions minted by POST at most. Past it a POST is
+/// served without a session rather than refused (MIK-8533). A POST mint
+/// opens no notification channel, so each costs about 1.1 KB.
 pub(crate) const MAX_PROVISIONAL_SESSIONS: usize = 10_000;
+
+/// Live provisional sessions minted by a sessionless GET stream at most;
+/// a stream past it is refused, since a stream cannot run without one.
+/// Lower than the POST share because a subscribed stream opens its
+/// broadcast channel: about 30 KB at the default buffer size (MIK-8533).
+pub(crate) const MAX_PROVISIONAL_STREAM_SESSIONS: usize = 1_000;
 
 /// What kind of session a request may mint when it resumes none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MintKind {
     /// `initialize`: kept for `session_ttl`, never refused by the cap.
     Ordinary,
-    /// Any other request: provisional, counted against the cap.
+    /// Any other POST: provisional, counted against the POST share.
     Provisional,
+    /// A sessionless GET stream: provisional, counted against the stream
+    /// share (MIK-8533).
+    ProvisionalStream,
 }
 
 /// The provisional cap is full: the request is refused before it runs.
@@ -63,13 +74,16 @@ impl Drop for SessionHold {
 
 impl NotificationMultiplexer {
     /// Resume `owner`'s live session named `session_id`, or open a provisional
-    /// one under a fresh id, holding it for the request. `Err` when a new
-    /// provisional session would pass the cap; nothing is inserted then.
+    /// one under a fresh id, holding it for the request. `kind` picks the
+    /// share it counts against. `Err` when a new provisional session would
+    /// pass that share's cap; nothing is inserted then.
     pub(super) fn open_provisional_for(
         &self,
         session_id: Option<&str>,
         owner: &SessionOwner,
+        kind: MintKind,
     ) -> Result<(Arc<ClientSession>, SessionHold), SessionCapacity> {
+        let stream = kind == MintKind::ProvisionalStream;
         let mut sessions = self.sessions.write();
         if let Some(session) = self.resume_live(&sessions, session_id, owner) {
             let hold = SessionHold::take(&session);
@@ -77,12 +91,14 @@ impl NotificationMultiplexer {
         }
         // Checked and counted under the write lock that inserts, so
         // concurrent admissions cannot pass the cap together.
-        if self.provisional_live.load(Ordering::SeqCst) >= MAX_PROVISIONAL_SESSIONS {
+        let (live, cap) = self.provisional_share(stream);
+        if live.load(Ordering::SeqCst) >= cap {
             return Err(SessionCapacity);
         }
         let session = self.mint(&mut sessions, owner);
+        session.provisional_stream.store(stream, Ordering::SeqCst);
         session.provisional.store(true, Ordering::SeqCst);
-        self.provisional_live.fetch_add(1, Ordering::SeqCst);
+        live.fetch_add(1, Ordering::SeqCst);
         let hold = SessionHold::take(&session);
         Ok((session, hold))
     }
@@ -101,7 +117,21 @@ impl NotificationMultiplexer {
     /// leaves the store.
     pub(super) fn forget_provisional(&self, session: &ClientSession) {
         if session.provisional.swap(false, Ordering::SeqCst) {
-            self.provisional_live.fetch_sub(1, Ordering::SeqCst);
+            let (live, _) =
+                self.provisional_share(session.provisional_stream.load(Ordering::SeqCst));
+            live.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    /// The counter and cap of the POST share, or of the stream share.
+    fn provisional_share(&self, stream: bool) -> (&std::sync::atomic::AtomicUsize, usize) {
+        if stream {
+            (
+                &self.provisional_stream_live,
+                MAX_PROVISIONAL_STREAM_SESSIONS,
+            )
+        } else {
+            (&self.provisional_live, MAX_PROVISIONAL_SESSIONS)
         }
     }
 
@@ -148,6 +178,20 @@ impl NotificationMultiplexer {
     pub(crate) fn fill_provisional_cap_for_test(&self) {
         self.provisional_live
             .store(MAX_PROVISIONAL_SESSIONS, Ordering::SeqCst);
+    }
+
+    /// Count the stream share as full.
+    pub(crate) fn fill_stream_cap_for_test(&self) {
+        self.provisional_stream_live
+            .store(MAX_PROVISIONAL_STREAM_SESSIONS, Ordering::SeqCst);
+    }
+
+    /// Live provisional sessions in the POST share and the stream share.
+    pub(crate) fn provisional_shares_for_test(&self) -> (usize, usize) {
+        (
+            self.provisional_live.load(Ordering::SeqCst),
+            self.provisional_stream_live.load(Ordering::SeqCst),
+        )
     }
 
     /// Requests and streams holding session `id` now; `None` when it is gone.

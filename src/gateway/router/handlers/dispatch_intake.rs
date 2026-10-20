@@ -82,6 +82,10 @@ pub(super) struct Intake<'r> {
     // Held, never read: while the request runs its provisional session is
     // not reaped, and the drop starts its idle clock (MIK-8504).
     _session_hold: Option<crate::gateway::streaming::SessionHold>,
+    /// Served without a session because the provisional POST cap was
+    /// full (MIK-8533). A keyless legacy caller still scores under the
+    /// shared anonymous key, never as an unattributed modern request.
+    pub(super) session_degraded: bool,
 }
 
 impl Intake<'_> {
@@ -91,6 +95,29 @@ impl Intake<'_> {
         self.narrowed_listen
             .as_ref()
             .or_else(|| self.request.get("params"))
+    }
+
+    /// The refusal a session tool gets on a request served without a session
+    /// at the provisional cap (MIK-8533). Decided here, where the degrade is
+    /// known: the meta layer sees only "no session" and answers in the 2026
+    /// era's terms, which tell a 2025-era caller nothing it can act on.
+    pub(super) fn degraded_session_tool_refusal(&self) -> Option<&'static str> {
+        if !self.session_degraded {
+            return None;
+        }
+        match self.external_tool() {
+            "gateway_set_state" => Some(
+                "Protocol error: The workflow state is per-session, and this request has no \
+                 session because the gateway's provisional-session capacity is full. Send \
+                 initialize to open a session, then retry with its id.",
+            ),
+            "gateway_set_profile" | "gateway_get_profile" => Some(
+                "Protocol error: Routing profiles are per-session, and this request has no \
+                 session because the gateway's provisional-session capacity is full. Send \
+                 initialize to open a session, then retry with its id.",
+            ),
+            _ => None,
+        }
     }
 
     /// The name the response policy and answer shape key on: the tool for a
