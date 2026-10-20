@@ -867,6 +867,42 @@ fn every_watch_class_maps_to_one_charge_and_back() {
     }
 }
 
+/// Pins the charge -> class inverse inside `Run::judge_rows`
+/// (watch_source/hold.rs:65-68) through its public effect: a poller
+/// whose capability is watchable records its own class, derived from
+/// its charge, on a live row of its type that has none.
+#[tokio::test]
+async fn a_poller_records_its_own_class_on_a_row_without_one() {
+    {
+        let dir = tempfile::tempdir().expect("dir");
+        let hub = hub(dir.path());
+        let host = fake(vec![target("weather", true, CredentialUse::Free)]);
+        admit(&hub, "p", "watch.weather.changed", &json!({}));
+        assert_eq!(hub.store.subscriptions()[0].watch_class, None);
+        let poller = run(&hub, &host, "p", "watch.weather.changed", &json!({}));
+        assert_eq!(poller.charge, Charge::Global);
+        poller.once(&hub, &mut None).await;
+        assert_eq!(
+            hub.store.subscriptions()[0].watch_class,
+            Some(WatchClass::Free)
+        );
+    }
+    {
+        let dir = tempfile::tempdir().expect("dir");
+        let hub = hub(dir.path());
+        let host = fake(vec![target("weather", true, CredentialUse::Keyed)]);
+        admit(&hub, "p", "watch.weather.changed", &json!({}));
+        assert_eq!(hub.store.subscriptions()[0].watch_class, None);
+        let poller = run(&hub, &host, "p", "watch.weather.changed", &json!({}));
+        assert_eq!(poller.charge, Charge::Holder);
+        poller.once(&hub, &mut None).await;
+        assert_eq!(
+            hub.store.subscriptions()[0].watch_class,
+            Some(WatchClass::Keyed)
+        );
+    }
+}
+
 #[path = "watch_source_partial_tests.rs"]
 mod partial;
 
