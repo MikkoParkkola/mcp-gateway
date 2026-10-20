@@ -421,15 +421,25 @@ pub(super) const ANONYMOUS_SESSION_LESS_CALLER: &str = "local:anonymous:session-
 /// key, the session id when the request resumed it (`presented`); else, for a
 /// legacy request on a session minted just now, [`ANONYMOUS_SESSION_LESS_CALLER`].
 /// A modern request has no session (`session_id` empty) and stays empty:
-/// refused unattributed.
+/// refused unattributed. A legacy request served without a session because
+/// the provisional cap was full (`degraded`, MIK-8533) is a keyless legacy
+/// caller like any other: it takes the same shared key, never the empty one.
 #[cfg(feature = "firewall")]
 pub(super) fn control_identity(
     caller_key: String,
     session_id: &str,
     presented: Option<&str>,
+    degraded: bool,
 ) -> String {
-    if !caller_key.is_empty() || session_id.is_empty() {
+    if !caller_key.is_empty() {
         return caller_key;
+    }
+    if session_id.is_empty() {
+        return if degraded {
+            ANONYMOUS_SESSION_LESS_CALLER.to_owned()
+        } else {
+            caller_key
+        };
     }
     if presented == Some(session_id) {
         return session_id.to_owned();

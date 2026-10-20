@@ -375,3 +375,144 @@ fn a_zero_session_ttl_keeps_a_provisional_session_with_a_stream_or_a_request() {
     assert_eq!(live(&m), 2);
     drop(receiver);
 }
+
+/// MIK-8533: a stream mint counts in the stream share, never the POST share,
+/// and the stream share refuses at its own cap while POST still mints.
+#[test]
+fn a_stream_mint_counts_in_the_stream_share_and_caps_there() {
+    let m = mux();
+    let (_post, _hold) = m
+        .open_request_session_scoped(None, &owner(), None, MintKind::Provisional)
+        .expect("post");
+    let (_stream, _stream_hold) = m
+        .open_request_session_scoped(None, &owner(), None, MintKind::ProvisionalStream)
+        .expect("stream");
+    assert_eq!(m.provisional_shares_for_test(), (1, 1));
+    m.fill_stream_cap_for_test();
+    assert!(
+        m.open_request_session_scoped(None, &owner(), None, MintKind::ProvisionalStream)
+            .is_err()
+    );
+    assert!(
+        m.open_request_session_scoped(None, &owner(), None, MintKind::Provisional)
+            .is_ok(),
+        "the POST share is apart"
+    );
+}
+
+/// MIK-8533: promotion, removal and reaping each release only their own
+/// share's slot, once, for both shares.
+#[test]
+fn each_way_out_releases_only_its_own_share_once() {
+    for kind in [MintKind::Provisional, MintKind::ProvisionalStream] {
+        let m = mux();
+        let mint = |m: &NotificationMultiplexer| {
+            m.open_request_session_scoped(None, &owner(), None, kind)
+                .map(|(id, _hold)| id)
+                .expect("under the cap")
+        };
+        let (promoted, removed, reaped) = (mint(&m), mint(&m), mint(&m));
+        let share = |m: &NotificationMultiplexer| {
+            let (post, stream) = m.provisional_shares_for_test();
+            if kind == MintKind::Provisional {
+                assert_eq!(stream, 0, "{kind:?} never touches the stream share");
+                post
+            } else {
+                assert_eq!(post, 0, "{kind:?} never touches the POST share");
+                stream
+            }
+        };
+        assert_eq!(share(&m), 3);
+        for _ in 0..2 {
+            assert!(m.touch_if_owned(promoted.expose_secret(), &owner()));
+        }
+        assert_eq!(share(&m), 2, "{kind:?}: promoted once");
+        m.remove_session(removed.expose_secret());
+        assert_eq!(share(&m), 1, "{kind:?}: removed");
+        *session(&m, &reaped).last_active.write() = Instant::now() - PROVISIONAL_SESSION_TTL;
+        assert_eq!(
+            m.reap_expired_sessions(HOUR),
+            vec![reaped.expose_secret().to_string()]
+        );
+        assert_eq!(share(&m), 0, "{kind:?}: reaped");
+    }
+}
+
+/// MIK-8533 LOAD.2/LOAD.3: both shares full, no further provisional mint of
+/// either kind lands; the combined bound is 11,000.
+#[test]
+fn both_shares_full_bound_provisional_sessions_at_eleven_thousand() {
+    let m = mux();
+    m.fill_provisional_cap_for_test();
+    m.fill_stream_cap_for_test();
+    for kind in [MintKind::Provisional, MintKind::ProvisionalStream] {
+        assert!(
+            m.open_request_session_scoped(None, &owner(), None, kind)
+                .is_err()
+        );
+    }
+    let (post, stream) = m.provisional_shares_for_test();
+    assert_eq!(post + stream, 11_000);
+    assert_eq!(m.session_count(), 0);
+}
+
+/// MIK-8533: the stream cap is sized on a subscribed stream's broadcast
+/// buffer, 128 slots of one frame each at the default buffer size. A frame
+/// growing past 256 bytes means the cap must be revisited.
+#[test]
+fn a_session_frame_stays_within_the_stream_cap_sizing() {
+    let frame = std::mem::size_of::<crate::gateway::streaming::SessionFrame>();
+    assert!(
+        frame <= 256,
+        "SessionFrame is {frame} bytes; revisit MAX_PROVISIONAL_STREAM_SESSIONS"
+    );
+}
+
+/// MIK-8533: real mints in both shares, then concurrent promotions and
+/// removals; each counter always equals the provisional sessions of its share
+/// still in the store.
+#[test]
+fn concurrent_mixed_mints_and_releases_keep_each_counter_exact() {
+    let m = mux();
+    let minted: Vec<(SessionId, bool)> = (0..200)
+        .map(|i| {
+            let stream = i % 2 == 1;
+            let kind = if stream {
+                MintKind::ProvisionalStream
+            } else {
+                MintKind::Provisional
+            };
+            let (id, _hold) = m
+                .open_request_session_scoped(None, &owner(), None, kind)
+                .expect("under the cap");
+            (id, stream)
+        })
+        .collect();
+    std::thread::scope(|scope| {
+        for (i, (id, _)) in minted.iter().enumerate() {
+            let m = &m;
+            scope.spawn(move || match i % 4 {
+                0 => {
+                    m.touch_if_owned(id.expose_secret(), &owner());
+                }
+                1 => m.remove_session(id.expose_secret()),
+                _ => {}
+            });
+        }
+    });
+    let stored = |stream: bool| {
+        m.sessions
+            .read()
+            .values()
+            .filter(|s| {
+                s.provisional.load(Ordering::SeqCst)
+                    && s.provisional_stream.load(Ordering::SeqCst) == stream
+            })
+            .count()
+    };
+    assert_eq!(
+        m.provisional_shares_for_test(),
+        (stored(false), stored(true))
+    );
+    assert_eq!(m.provisional_shares_for_test(), (50, 50));
+}

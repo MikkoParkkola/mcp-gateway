@@ -88,23 +88,36 @@ async fn assert_capacity_refusal(response: axum::response::Response, id: Value) 
     assert_eq!(body["id"], id);
 }
 
+/// MIK-8533: the POST share full does not lock streams out. A sessionless
+/// GET still opens its stream, counted in the stream share.
 #[tokio::test]
-async fn at_the_cap_a_sessionless_post_is_refused_before_it_runs() {
+async fn with_the_post_share_full_a_sessionless_get_still_streams() {
     let (state, _dir) = gateway().await;
     state.multiplexer.fill_provisional_cap_for_test();
-    let before = state.multiplexer.session_count();
     let response = create_router(Arc::clone(&state))
+        .oneshot(get(None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().get("mcp-session-id").is_some());
+    assert_eq!(state.multiplexer.provisional_shares_for_test().1, 1);
+}
+
+/// At the stream share's cap a sessionless GET is refused: a stream cannot
+/// run without a session. A POST is unaffected by the stream share.
+#[tokio::test]
+async fn at_the_stream_cap_a_sessionless_get_is_refused() {
+    let (state, _dir) = gateway().await;
+    state.multiplexer.fill_stream_cap_for_test();
+    let served = create_router(Arc::clone(&state))
         .oneshot(post(&tools_list(), None))
         .await
         .unwrap();
-    assert_capacity_refusal(response, json!(7)).await;
-    assert_eq!(state.multiplexer.session_count(), before);
-}
-
-#[tokio::test]
-async fn at_the_cap_a_sessionless_get_is_refused() {
-    let (state, _dir) = gateway().await;
-    state.multiplexer.fill_provisional_cap_for_test();
+    assert_eq!(served.status(), StatusCode::OK);
+    assert!(
+        served.headers().get("mcp-session-id").is_some(),
+        "POST share has room"
+    );
     let response = create_router(Arc::clone(&state))
         .oneshot(get(None))
         .await
