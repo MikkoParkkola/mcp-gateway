@@ -157,7 +157,7 @@ async fn guard_tool_call(
         withheld_code.is_some() || backend.blocked_tool_refusal(None, tool_name).is_some();
     if let Some(code) = withheld_code {
         // The call's one record names it (MIK-8361).
-        crate::gateway::meta_mcp::visible::note_denial_code(backend_name, tool_name, code);
+        crate::gateway::meta_mcp::visible::memo::note_denial_code(backend_name, tool_name, code);
         warn!(backend = %backend_name, tool = %tool_name, "Tool withheld by authorization; answered as absent");
     }
 
@@ -448,11 +448,9 @@ pub(super) async fn backend_handler(
 
     // The request's scope for what intake judges (MIK-8154 F2: the exempt
     // instance the send compares), boxed so the scope wraps a pointer.
-    crate::gateway::meta_mcp::visible::with_visibility_memo(Box::pin(direct_audit::audited_call(
-        Arc::clone(&state),
-        name,
-        request,
-    )))
+    crate::gateway::meta_mcp::visible::memo::with_visibility_memo(Box::pin(
+        direct_audit::audited_call(Arc::clone(&state), name, request),
+    ))
     .await
 }
 

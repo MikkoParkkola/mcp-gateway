@@ -115,10 +115,10 @@ async fn carry(
         )
         .await
         .expect("premise: the external target resolves for the caller");
-    crate::gateway::meta_mcp::visible::carry_dispatch(
+    crate::gateway::meta_mcp::visible::memo::carry_dispatch(
         server,
         TOOL,
-        crate::gateway::meta_mcp::visible::Carried {
+        crate::gateway::meta_mcp::visible::memo::Carried {
             backend,
             resolved,
             fill_error: None,
@@ -158,7 +158,7 @@ async fn walk_then_settle(
     );
     signing.keep_witness(RefundWitness::at_capture());
     caller.signing = Some(&signing);
-    let answer = crate::gateway::meta_mcp::visible::with_visibility_memo(async {
+    let answer = crate::gateway::meta_mcp::visible::memo::with_visibility_memo(async {
         if matches!(first, First::Carried) {
             carry(meta, EXTERNAL_BACKEND, &caller).await;
         }

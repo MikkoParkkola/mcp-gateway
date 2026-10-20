@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use super::MetaMcp;
 use super::scoped_backends::{Absence, Registry, ScopedBackends, Unscoped};
-use super::visible::{record_absent, with_visibility_memo};
+use super::visible::{memo::record_absent, memo::with_visibility_memo};
 use crate::backend::{Backend, BackendRegistry};
 use crate::gateway::authz::BackendGrant;
 

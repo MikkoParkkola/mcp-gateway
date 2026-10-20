@@ -18,7 +18,8 @@ use crate::gateway::meta_mcp::MetaMcpCallerContext;
 use crate::gateway::meta_mcp::refund_witness::{RefundWitness, schema_effect};
 use crate::gateway::meta_mcp::scoped_backends::Absence;
 use crate::gateway::meta_mcp::visible::{
-    Visibility, Withholding, absent_name, note_denial_code, record_visibility, recorded_visibility,
+    Visibility, Withholding, absent::absent_name, memo::note_denial_code, memo::record_visibility,
+    memo::recorded_visibility,
 };
 use crate::{Error, Result};
 
@@ -359,7 +360,7 @@ impl MetaMcp {
             .scoped(caller.scope().authorizer.backend_grant())
             .absent_step(server, tool)
         {
-            crate::gateway::meta_mcp::visible::record_absent(server, tool);
+            crate::gateway::meta_mcp::visible::memo::record_absent(server, tool);
             return true;
         }
         let Some(backend) = self
@@ -510,7 +511,7 @@ impl MetaMcp {
         caller: &MetaMcpCallerContext<'_>,
         session_id: Option<&str>,
     ) -> Result<GuardedValue> {
-        crate::gateway::meta_mcp::visible::record_absent(server, tool);
+        crate::gateway::meta_mcp::visible::memo::record_absent(server, tool);
         let scoped = self.scoped(caller.scope().authorizer.backend_grant());
         if scoped.absence(server) == Some(Absence::OutOfScope) {
             note_denial_code(server, tool, -32003);
@@ -701,7 +702,9 @@ pub(super) fn count_meta_denial(
         .get("server")
         .and_then(Value::as_str)
         .zip(args.get("tool").and_then(Value::as_str))
-        .and_then(|(server, tool)| crate::gateway::meta_mcp::visible::denial_code(server, tool));
+        .and_then(|(server, tool)| {
+            crate::gateway::meta_mcp::visible::memo::denial_code(server, tool)
+        });
     if let Some(code) = code {
         meta_refused(code);
         return Some(crate::security::audit::AuditOutcome::Denied(code));

@@ -10,7 +10,7 @@ mod receipts;
 
 use serde_json::json;
 
-use super::visible::{self, AccountOutcome};
+use super::visible::{self, memo::AccountOutcome};
 use super::{MetaMcp, MetaMcpCallerContext, error_response_preserving_status};
 use crate::gateway::task_service::CommittedTask;
 use crate::protocol::{JsonRpcResponse, RequestId};
@@ -160,13 +160,13 @@ impl MetaMcp {
         let Some(account) = self.target_account(view, server, tool) else {
             return;
         };
-        if visible::account_outcome(server, &account) != Some(AccountOutcome::Unavailable)
+        if visible::memo::account_outcome(server, &account) != Some(AccountOutcome::Unavailable)
             || !self.account_strategies.unbindable(&account.0, caller)
         {
             return;
         }
         if let Some(refusal) = self.live_refusal(view, (server, tool), caller).await {
-            visible::record_account_refusal(server, &account, refusal);
+            visible::memo::record_account_refusal(server, &account, refusal);
         }
     }
 
@@ -214,7 +214,7 @@ impl MetaMcp {
             // seen here, so a lease claimed meanwhile survives.
             let current = self
                 .target_account(&self.scoped(scope.authorizer.backend_grant()), server, tool)
-                .and_then(|account| visible::account_binding(server, &account));
+                .and_then(|account| visible::memo::account_binding(server, &account));
             if current.is_none_or(|current| current == held.binding()) {
                 // MIK-8392 F2: a held catalogue past its TTL is stale, by
                 // the same rule the live fill uses. Treat the view as cold:
@@ -235,7 +235,7 @@ impl MetaMcp {
         }
         let account = self
             .target_account(&self.scoped(scope.authorizer.backend_grant()), server, tool)
-            .map(|account| visible::account_outcome(server, &account));
+            .map(|account| visible::memo::account_outcome(server, &account));
         // Only a live grant may re-establish a view (d1): a NoView entry is
         // reclaimed only on Live, and nothing is claimed while the account
         // is not proven (NoView, Unavailable, unfilled).
@@ -540,7 +540,7 @@ impl MetaMcp {
 
     /// Each recorded target against this caller's current catalogue (MIK-8392):
     /// through the one judgement [`MetaMcp::stored_target_view`], refused
-    /// through the one guard [`visible::absent_if_withheld`], except a Refused
+    /// through the one guard [`visible::memo::absent_if_withheld`], except a Refused
     /// view, which falls through to [`Self::authorize_stored`]. A cold view
     /// defers its retry until after policy and accounts; the first cold lease,
     /// if any, is returned for the caller to answer then.
@@ -581,11 +581,11 @@ impl MetaMcp {
                 );
             if own_catalogue {
                 if caller_catalogue.is_none() {
-                    caller_catalogue = visible::absent_if_withheld(Some(judged), tool).err();
+                    caller_catalogue = visible::memo::absent_if_withheld(Some(judged), tool).err();
                 }
                 continue;
             }
-            visible::absent_if_withheld(Some(judged), tool)?;
+            visible::memo::absent_if_withheld(Some(judged), tool)?;
         }
         Ok((cold, caller_catalogue))
     }
@@ -636,7 +636,7 @@ impl MetaMcp {
             let Some(account) = self.target_account(view, server, tool) else {
                 continue;
             };
-            let outcome = visible::account_outcome(server, &account);
+            let outcome = visible::memo::account_outcome(server, &account);
             if outcome.is_none() {
                 self.unfilled_outcome_read(server);
             }
@@ -644,7 +644,7 @@ impl MetaMcp {
                 // Unfilled: the pre-pass never ran for it. Fail closed,
                 // and retryable: nothing about the grant was learned.
                 None | Some(AccountOutcome::Unavailable) => {
-                    return Err(visible::take_account_refusal(server, &account)
+                    return Err(visible::memo::take_account_refusal(server, &account)
                         .map_or(StoredWithheld::Retry(None), StoredWithheld::Refused));
                 }
                 // A busy custody: the same retryable answer the live call
@@ -653,7 +653,7 @@ impl MetaMcp {
                     return Err(StoredWithheld::Retry(None));
                 }
                 Some(AccountOutcome::NoView) => {
-                    return Err(StoredWithheld::Refused(visible::absent_name(tool)));
+                    return Err(StoredWithheld::Refused(visible::absent::absent_name(tool)));
                 }
                 Some(AccountOutcome::Live | AccountOutcome::Unjudged) => {}
             }

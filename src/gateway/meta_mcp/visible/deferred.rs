@@ -50,24 +50,10 @@ pub(crate) fn deferred_replay_key(
     })
 }
 
-/// Record `entry` for `key` in the open request's memo. `false` outside a
-/// memo: nothing was recorded, so no lift can serve it, and the caller must
-/// not proceed as though it were deferred.
-pub(crate) fn record_deferred_replay(key: DeferredReplayKey, entry: DeferredReplay) -> bool {
-    super::in_memo(|memo| memo.deferred_replay.set(key, entry)).is_some()
-}
-
-/// Take the entry recorded for `key`, consuming it: a second take returns
-/// `None`, and a nested invocation's key never matches. `None` outside a memo.
-pub(crate) fn take_deferred_replay(key: &DeferredReplayKey) -> Option<DeferredReplay> {
-    super::in_memo(|memo| memo.deferred_replay.take(key)).flatten()
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        DeferredReplay, deferred_replay_key, record_deferred_replay, take_deferred_replay,
-    };
+    use super::super::memo::{record_deferred_replay, take_deferred_replay, with_visibility_memo};
+    use super::{DeferredReplay, deferred_replay_key};
     use crate::protocol::mrtr::RetryFields;
     use crate::protocol::{JsonRpcResponse, RequestId};
 
@@ -94,7 +80,7 @@ mod tests {
     /// sibling invocation cannot surface it; the recording key takes it once.
     #[tokio::test]
     async fn l3k_only_the_recording_key_takes_a_deferred_entry() {
-        super::super::with_visibility_memo(async {
+        with_visibility_memo(async {
             let plain = keyed("l3k");
             let continued = RetryFields {
                 request_state: Some("state".to_string()),
@@ -140,7 +126,7 @@ mod tests {
             tool_name: tool.to_string(),
             ..entry()
         };
-        super::super::with_visibility_memo(async {
+        with_visibility_memo(async {
             assert!(record_deferred_replay(own.clone(), named("first")));
             assert!(record_deferred_replay(own.clone(), named("second")));
             let taken = take_deferred_replay(&own).map(|entry| entry.tool_name);
@@ -149,7 +135,7 @@ mod tests {
         .await;
         assert!(!record_deferred_replay(own.clone(), named("outside")));
         assert!(take_deferred_replay(&own).is_none());
-        super::super::with_visibility_memo(async {
+        with_visibility_memo(async {
             assert!(
                 take_deferred_replay(&own).is_none(),
                 "a later scope sees nothing"

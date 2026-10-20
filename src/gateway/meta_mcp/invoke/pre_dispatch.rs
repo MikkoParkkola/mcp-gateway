@@ -238,31 +238,31 @@ impl MetaMcp {
         // no second fill.
         let mut failed_fill = None;
         if let Some(backend) = backend.filter(|backend| backend.keeps_per_user_catalogues()) {
-            let absent = match crate::gateway::meta_mcp::visible::recorded_visibility(server, tool)
-            {
-                Some(crate::gateway::meta_mcp::visible::Visibility::Visible) => false,
-                Some(crate::gateway::meta_mcp::visible::Visibility::Withheld(_)) => true,
-                None => {
-                    let proof = crate::identity_propagation::CallerProof::new(
-                        verified_identity,
-                        caller.provenance(),
-                    );
-                    let judged = self.judge_caller_slot(
-                        (server, tool),
-                        backend,
-                        dispatch_binding,
-                        &caller_credential.headers,
-                        proof,
-                    );
-                    match judged.await {
-                        Ok(judged) => judged == super::caller_verdict::SlotJudgement::Absent,
-                        Err(e) => {
-                            failed_fill = Some(e);
-                            false
+            let absent =
+                match crate::gateway::meta_mcp::visible::memo::recorded_visibility(server, tool) {
+                    Some(crate::gateway::meta_mcp::visible::Visibility::Visible) => false,
+                    Some(crate::gateway::meta_mcp::visible::Visibility::Withheld(_)) => true,
+                    None => {
+                        let proof = crate::identity_propagation::CallerProof::new(
+                            verified_identity,
+                            caller.provenance(),
+                        );
+                        let judged = self.judge_caller_slot(
+                            (server, tool),
+                            backend,
+                            dispatch_binding,
+                            &caller_credential.headers,
+                            proof,
+                        );
+                        match judged.await {
+                            Ok(judged) => judged == super::caller_verdict::SlotJudgement::Absent,
+                            Err(e) => {
+                                failed_fill = Some(e);
+                                false
+                            }
                         }
                     }
-                }
-            };
+                };
             if absent {
                 if let Some(reservation) = idem_reservation.as_mut() {
                     reservation.release();

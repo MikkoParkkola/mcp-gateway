@@ -43,8 +43,8 @@ impl MetaMcp {
         // A view Busy is held as an account transient; a mint Busy at the
         // route stage as a sealed-transient resolution error (#3892 gpt F1).
         // Either one answers here, before any task or key exists.
-        if super::super::visible::take_any_account_transient().is_none()
-            && super::super::visible::take_any_transient_resolution_error().is_none()
+        if super::super::visible::memo::take_any_account_transient().is_none()
+            && super::super::visible::memo::take_any_transient_resolution_error().is_none()
         {
             return None;
         }

@@ -342,7 +342,7 @@ fn e5_playbook_step_warns_once_per_caller_key() {
         (CallerSlot::Valid, Warmth::Warm, "other"),
         |meta| meta.set_playbook_engine(one_step_playbook()),
     ));
-    let absent = crate::gateway::meta_mcp::visible::absent_name(TOOL).to_string();
+    let absent = crate::gateway::meta_mcp::visible::absent::absent_name(TOOL).to_string();
     let mut cells = Vec::new();
     for (bearer, want) in [("k1", 1), ("k2", 1), ("k1", 0)] {
         let ((status, answer), log) =

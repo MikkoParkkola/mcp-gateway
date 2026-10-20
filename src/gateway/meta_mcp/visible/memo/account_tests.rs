@@ -5,7 +5,7 @@
 //! from its own request's memo.
 
 use super::{record_resolution_error, take_any_transient_resolution_error, take_resolution_error};
-use crate::gateway::meta_mcp::visible::with_visibility_memo;
+use crate::gateway::meta_mcp::visible::memo::with_visibility_memo;
 
 fn sealed() -> crate::Error {
     crate::personal_accounts::refusal::transient_retry_error(None)

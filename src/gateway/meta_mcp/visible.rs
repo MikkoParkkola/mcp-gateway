@@ -12,12 +12,9 @@ use crate::capability::validator::input_schema_is_structurally_valid;
 use crate::protocol::Tool;
 
 use super::{InvokeScope, MetaMcp, scoped_backends::Unscoped};
-#[path = "visible_absent.rs"]
-mod absent;
-#[path = "visible_deferred.rs"]
-mod deferred;
-pub(crate) use absent::{absent_name, record_absent};
-pub(crate) use deferred::*;
+pub(crate) mod absent;
+pub(crate) mod deferred;
+pub(crate) mod memo;
 
 /// Why a tool is withheld from a caller. Read only by the audit owner; every
 /// decision reader treats a withheld tool exactly as an absent one.
@@ -99,7 +96,7 @@ impl MetaMcp {
     /// judged from the shared catalogue. A cold cache is not a reason: a tool
     /// not yet listed is judged on the other two reasons only.
     ///
-    /// Judged once per request: inside [`with_visibility_memo`] the first
+    /// Judged once per request: inside [`with_visibility_memo`](memo::with_visibility_memo) the first
     /// answer for `(server, tool)` is recorded and every later read in the
     /// same request gets it, so the route stage and the dispatch can never
     /// disagree (a catalogue refill between them cannot let a name withheld
@@ -113,14 +110,13 @@ impl MetaMcp {
         session_id: Option<&str>,
     ) -> Visibility {
         let judge = || self.judge_name(server, tool, scope, session_id);
-        let recorded = in_memo(|memo| memo.recorded(server, tool));
-        match recorded {
-            Some(Some(recorded)) => recorded,
+        match memo::recorded_in_scope(server, tool) {
+            memo::Scoped::InMemo(Some(recorded)) => recorded,
             // A per-user backend's shared-slot verdict is never memoised
             // (MIK-8356 R5.4): the caller verdict records the first one.
-            Some(None) if self.keeps_per_user_catalogues(server) => judge(),
-            Some(None) => record_visibility(server, tool, judge()),
-            None => judge(),
+            memo::Scoped::InMemo(None) if self.keeps_per_user_catalogues(server) => judge(),
+            memo::Scoped::InMemo(None) => memo::record_visibility(server, tool, judge()),
+            memo::Scoped::NoMemo => judge(),
         }
     }
 
@@ -366,241 +362,6 @@ impl MetaMcp {
     }
 }
 
-/// One visibility judgement per request (MIK-8340, perflane MIK-8356 R3.1):
-/// the first answer [`MetaMcp::tool_visible_to`] gives for a `(server, tool)`
-/// within a request, kept for the rest of that request.
-///
-/// It also carries the caller verdict's credential resolution to the
-/// dispatch (MIK-8356 R5.2): one resolution per call, on the same backend
-/// instance the verdict judged; and it keeps what intake judged the sanitize
-/// exemption on ([`Judged`], MIK-8154).
-#[derive(Default)]
-pub(crate) struct VisibilityMemo {
-    visibility: Keyed<TargetKey, Visibility>,
-    carried_credential: Keyed<TargetKey, Carried>,
-    /// MIK-8361: the route stage's refusal code, for the call's one record.
-    denial_code: Keyed<TargetKey, i32>,
-    judged: parking_lot::Mutex<Judged>,
-    /// MIK-8392: each target account's liveness, filled once per request by
-    /// the async pre-pass and only read after it. Never a [`Visibility`]: an
-    /// account outcome and a caller-view judgement are kept apart.
-    offer_pending: Keyed<AccountSlot, AccountOutcome>,
-    /// MIK-8392 d0 warm path: the binding the pre-pass's view read gave each
-    /// account, so a warm read revalidates its indexed slot without a second
-    /// vault read.
-    account_binding: Keyed<AccountSlot, String>,
-    /// MIK-8392 (lead ruling 2026-10-12): the live call's own refusal for an
-    /// account that can never bind this caller, so a stored read answers what
-    /// the live call answers instead of "retry" forever.
-    account_refusal: Keyed<AccountSlot, crate::Error>,
-    deferred_replay: Keyed<deferred::DeferredReplayKey, deferred::DeferredReplay>,
-    /// MIK-8392 Busy parity: a transient busy custody met by this request's
-    /// mint-free view read, carried to the dispatch and consumed once there,
-    /// so nothing in the request reads custody a second time.
-    account_transient: Keyed<TargetKey, String>,
-    /// The route verdict's resolution error for a target (MIK-8392 G1a),
-    /// carried to that target's dispatch so it answers without resolving
-    /// (and auditing) a second time in one request.
-    resolution_error: Keyed<TargetKey, crate::Error>,
-}
-
-/// A memo map's key for one `(server, tool)` target.
-type TargetKey = (String, String);
-/// A memo map's key for one `(server, account)` pair.
-type AccountSlot = (String, AccountKey);
-
-fn target_key(server: &str, tool: &str) -> TargetKey {
-    (server.to_owned(), tool.to_owned())
-}
-
-fn account_slot(server: &str, account: &AccountKey) -> AccountSlot {
-    (server.to_owned(), account.clone())
-}
-
-/// One map in the open request's memo (MIK-8498 VISIBLE.2). Every memo map
-/// is this type, so each accessor states only which operation it uses:
-/// first-wins, overwrite, read, take, or take the first that matches.
-struct Keyed<K, V>(parking_lot::Mutex<std::collections::HashMap<K, V>>);
-
-impl<K, V> Default for Keyed<K, V> {
-    fn default() -> Self {
-        Self(parking_lot::Mutex::new(std::collections::HashMap::new()))
-    }
-}
-
-impl<K: std::hash::Hash + Eq, V> Keyed<K, V> {
-    /// Keep `value` unless an answer is recorded; returns the recorded one.
-    fn first(&self, key: K, value: V) -> V
-    where
-        V: Clone,
-    {
-        self.0.lock().entry(key).or_insert(value).clone()
-    }
-
-    /// Record `value`, replacing any earlier one.
-    fn set(&self, key: K, value: V) {
-        self.0.lock().insert(key, value);
-    }
-
-    fn get(&self, key: &K) -> Option<V>
-    where
-        V: Clone,
-    {
-        self.0.lock().get(key).cloned()
-    }
-
-    /// Read the entry in place, without cloning or consuming it.
-    fn with<R>(&self, key: &K, read: impl FnOnce(&V) -> R) -> Option<R> {
-        self.0.lock().get(key).map(read)
-    }
-
-    fn take(&self, key: &K) -> Option<V> {
-        self.0.lock().remove(key)
-    }
-
-    fn contains(&self, key: &K) -> bool {
-        self.0.lock().contains_key(key)
-    }
-
-    /// Take the first entry, in the map's own iteration order, whose value
-    /// matches; the rest stay.
-    fn take_first_where(&self, matches: impl Fn(&V) -> bool) -> Option<V>
-    where
-        K: Clone,
-    {
-        let mut held = self.0.lock();
-        let key = held
-            .iter()
-            .find(|(_, value)| matches(value))
-            .map(|(key, _)| key.clone())?;
-        held.remove(&key)
-    }
-}
-
-impl Keyed<TargetKey, Visibility> {
-    /// Record `key` absent unless it is already withheld (MIK-8387): an
-    /// empty or `Visible` entry becomes `Absent`; any withholding keeps its
-    /// reason. Nothing ever writes `Visible` over it, since `first` keeps it.
-    fn upgrade_to_absent(&self, key: TargetKey) {
-        let mut judged = self.0.lock();
-        let entry = judged.entry(key).or_insert(Visibility::Visible);
-        if *entry == Visibility::Visible {
-            *entry = Visibility::Withheld(Withholding::Absent);
-        }
-    }
-}
-
-/// Run `read` on the open request's memo; `None` outside one. The one place
-/// the memo's task-local is opened for a read or write.
-fn in_memo<R>(read: impl FnOnce(&VisibilityMemo) -> R) -> Option<R> {
-    VISIBILITY_MEMO.try_with(read).ok()
-}
-
-/// The account a target's dispatch would use (MIK-8392): a managed
-/// descriptor's id, from an identity-propagation backend's `account` or a
-/// capability's `auth.account`.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct AccountKey(pub(crate) String);
-
-/// Whether a target's account is live for this caller, judged without a
-/// mint (MIK-8392).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AccountOutcome {
-    /// The caller's grant yields a binding now.
-    Live,
-    /// No grant: absent, revoked, reconnect-required, or no principal.
-    NoView,
-    /// The account kind has no mint-free view (an external or token-exchange
-    /// descriptor): visibility is judged on the catalogue only (stated
-    /// residual).
-    Unjudged,
-    /// Custody could not be read (shutting down, store failure): not a
-    /// finding about the grant, so a reader answers retryable.
-    Unavailable,
-    /// Custody is at its in-flight bound (MIK-8392 Busy parity): transient,
-    /// audited once as such, and answered exactly as a live call answers it.
-    Transient,
-}
-
-/// Record `outcome` for `(server, account)` in the open request's memo unless
-/// one is recorded; outside a memo nothing is kept.
-pub(crate) fn record_account_outcome(server: &str, account: &AccountKey, outcome: AccountOutcome) {
-    in_memo(|memo| {
-        memo.offer_pending
-            .first(account_slot(server, account), outcome)
-    });
-}
-
-#[path = "visible_account_memo.rs"]
-mod account_memo;
-pub(crate) use account_memo::{
-    account_binding, account_transient, has_resolution_error, record_account_binding,
-    record_account_refusal, record_account_transient, record_resolution_error,
-    take_account_refusal, take_account_transient, take_any_account_transient,
-    take_any_transient_resolution_error, take_resolution_error,
-};
-
-/// The outcome recorded for `(server, account)` in the open request. Reads
-/// the memo only: outside an open memo, or before the pre-pass ran, it is
-/// `None`, and the caller fails closed. It never judges afresh (unlike the
-/// visibility fallback in [`MetaMcp::tool_visible_to`]).
-pub(crate) fn account_outcome(server: &str, account: &AccountKey) -> Option<AccountOutcome> {
-    in_memo(|memo| memo.offer_pending.get(&account_slot(server, account))).flatten()
-}
-
-/// A caller verdict's resolution, waiting for the first invocation on its
-/// server in the same request.
-pub(crate) struct Carried {
-    /// The backend instance the verdict judged; the dispatch uses it, never
-    /// a second lookup by name (a reload in between keeps the old instance).
-    pub(crate) backend: std::sync::Arc<crate::backend::Backend>,
-    /// The credential the verdict resolved.
-    pub(crate) resolved: super::invoke::ResolvedDispatch,
-    /// The verdict's fill failed with this error (after any managed-401
-    /// recovery): the dispatch answers it as a failed dispatch, unfilled.
-    pub(crate) fill_error: Option<crate::Error>,
-}
-
-/// What intake judged a request's sanitize exemption on (MIK-8154): the digest
-/// of the playbook definition (C2e), and, for an exempt call, the backend
-/// instance each target was judged passthrough on (F2). A run or a send that
-/// meets a different definition or instance (a reload since) is refused.
-/// `Weak` keeps each judged allocation, so a new instance never shares its
-/// address.
-#[derive(Clone, Default)]
-pub(crate) struct Judged {
-    playbook: Option<String>,
-    instances: Vec<(String, std::sync::Weak<crate::backend::Backend>)>,
-}
-
-impl VisibilityMemo {
-    fn recorded(&self, server: &str, tool: &str) -> Option<Visibility> {
-        self.visibility.get(&target_key(server, tool))
-    }
-
-    /// Record `judged` unless an answer is already recorded; returns the
-    /// recorded answer, so the first judgement wins.
-    fn record(&self, server: &str, tool: &str, judged: Visibility) -> Visibility {
-        self.visibility.first(target_key(server, tool), judged)
-    }
-}
-
-#[path = "visible_memo.rs"]
-mod memo;
-pub(crate) use memo::{
-    absent_if_withheld, carry_dispatch, changed_instance, denial_code, judged, judged_playbook,
-    note_denial_code, record_exempt_instances, record_judged_playbook, record_visibility,
-    recorded_visibility, refuse_withheld, take_carried, with_carried, with_judged,
-    with_visibility_memo,
-};
-
-tokio::task_local! {
-    /// The open request's memo; see [`with_visibility_memo`].
-    static VISIBILITY_MEMO: VisibilityMemo;
-    /// A task worker's judgement; see [`with_judged`].
-    static WORKER_JUDGED: Judged;
-}
-
 /// Test-only hook between the route stage and the dispatch, for the row that
 /// changes the catalogue in that window (MIK-8340 R3.1 row). Compiled out of
 /// non-test builds.
@@ -657,67 +418,3 @@ pub(crate) mod seams {
         }
     }
 }
-
-/// MIK-8340 memo semantics (seats gpt-20261011T084206Z-14299 and
-/// kimi-20261011T084206Z-14300): first judgement wins within a scope, a
-/// nested scope reuses the outer memo, and outside any scope every read
-/// judges fresh.
-#[cfg(test)]
-mod memo_tests {
-    use super::{VISIBILITY_MEMO, Visibility, VisibilityMemo, Withholding, with_visibility_memo};
-
-    const WITHHELD: Visibility = Visibility::Withheld(Withholding::Schema);
-
-    /// What the open scope's memo holds for `(server, tool)`; panics outside
-    /// a scope (the rows below check that separately).
-    fn recorded(server: &str, tool: &str) -> Option<Visibility> {
-        VISIBILITY_MEMO
-            .try_with(|memo| memo.recorded(server, tool))
-            .expect("inside a visibility memo scope")
-    }
-
-    fn in_scope() -> bool {
-        VISIBILITY_MEMO.try_with(|_| ()).is_ok()
-    }
-
-    #[test]
-    fn the_first_judgement_wins() {
-        let memo = VisibilityMemo::default();
-        assert_eq!(memo.record("alpha", "read", WITHHELD), WITHHELD);
-        assert_eq!(memo.record("alpha", "read", Visibility::Visible), WITHHELD);
-        assert_eq!(memo.recorded("alpha", "read"), Some(WITHHELD));
-        assert_eq!(memo.recorded("alpha", "note"), None);
-    }
-
-    #[tokio::test]
-    async fn a_nested_scope_reuses_the_outer_memo() {
-        with_visibility_memo(async {
-            VISIBILITY_MEMO.with(|memo| memo.record("alpha", "read", WITHHELD));
-            with_visibility_memo(async {
-                assert_eq!(recorded("alpha", "read"), Some(WITHHELD));
-            })
-            .await;
-        })
-        .await;
-    }
-
-    #[tokio::test]
-    async fn outside_a_scope_there_is_no_memo_and_scopes_do_not_leak() {
-        assert!(!in_scope(), "a memo outside any request scope");
-        with_visibility_memo(async {
-            VISIBILITY_MEMO.with(|memo| memo.record("alpha", "read", WITHHELD));
-        })
-        .await;
-        with_visibility_memo(async {
-            assert_eq!(
-                recorded("alpha", "read"),
-                None,
-                "a second request saw the first's memo"
-            );
-        })
-        .await;
-    }
-}
-
-#[cfg(test)]
-mod memo_semantics_tests;

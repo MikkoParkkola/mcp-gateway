@@ -8,7 +8,7 @@ use crate::gateway::meta_mcp::slot_verdict_fixture::{
     BACKEND, BINDING, CallerSlot, Surfaced, TOOL, Warmth, per_user, valid,
 };
 use crate::gateway::meta_mcp::visible::{
-    Visibility, Withholding, recorded_visibility, with_visibility_memo,
+    Visibility, Withholding, memo::recorded_visibility, memo::with_visibility_memo,
 };
 
 /// M1: a tool blocked for its description is recorded as a descriptor
@@ -75,7 +75,7 @@ async fn with_prepared_withheld<R>(
     };
     let _ = &fx.meta;
     with_visibility_memo(async {
-        crate::gateway::meta_mcp::visible::record_visibility(
+        crate::gateway::meta_mcp::visible::memo::record_visibility(
             BACKEND,
             TOOL,
             Visibility::Withheld(Withholding::Schema),
@@ -91,7 +91,7 @@ fn invoke_args() -> serde_json::Value {
 
 fn is_absent<T>(answer: &crate::Result<T>) -> bool {
     matches!(answer, Err(e) if e.to_string()
-        == crate::gateway::meta_mcp::visible::absent_name(TOOL).to_string())
+        == crate::gateway::meta_mcp::visible::absent::absent_name(TOOL).to_string())
 }
 
 /// R1-signed, idempotent replay half: a signed call whose target signing

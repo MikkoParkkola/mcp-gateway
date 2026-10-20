@@ -54,7 +54,7 @@ pub(in crate::gateway::router) async fn meta_mcp_handler(
                         // handler returns still reads the same answers.
                         // Boxed first: the memo then wraps a pointer, so no
                         // frame polled through the dispatch holds a copy of it.
-                        crate::gateway::meta_mcp::visible::with_visibility_memo(Box::pin(
+                        crate::gateway::meta_mcp::visible::memo::with_visibility_memo(Box::pin(
                             meta_mcp_dispatch(state, http_request),
                         )),
                     )),

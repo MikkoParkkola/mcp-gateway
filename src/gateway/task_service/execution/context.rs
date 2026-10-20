@@ -68,7 +68,7 @@ pub(crate) struct OwnedCallerContext {
     /// (MIK-8154 C2e, F2: the playbook digest, the exempt backend instances),
     /// taken from that request's memo when this context is built. In memory
     /// only: a restart settles a task rather than running it again.
-    judged: crate::gateway::meta_mcp::visible::Judged,
+    judged: crate::gateway::meta_mcp::visible::memo::Judged,
 }
 
 impl OwnedCallerContext {
@@ -115,7 +115,7 @@ impl OwnedCallerContext {
                 ..RetryFields::default()
             },
             dispatch_log: std::sync::Arc::default(),
-            judged: crate::gateway::meta_mcp::visible::judged(),
+            judged: crate::gateway::meta_mcp::visible::memo::judged(),
         }
     }
 
@@ -145,7 +145,7 @@ impl OwnedCallerContext {
     }
 
     /// What the creating request judged (MIK-8154 C2e, F2).
-    pub(crate) fn judged(&self) -> crate::gateway::meta_mcp::visible::Judged {
+    pub(crate) fn judged(&self) -> crate::gateway::meta_mcp::visible::memo::Judged {
         self.judged.clone()
     }
 

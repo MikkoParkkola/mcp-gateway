@@ -250,12 +250,12 @@ pub(super) async fn tasks_get(
     // MIK-8392: one request memo, filled by the async pre-pass, then read by
     // the synchronous delivery check inside the route. Boxed: the stored
     // read's checks make the future too large to hold inline.
-    Box::pin(crate::gateway::meta_mcp::visible::with_visibility_memo(
-        async {
+    Box::pin(
+        crate::gateway::meta_mcp::visible::memo::with_visibility_memo(async {
             prepare_stored_read(state, owner, params, caller).await;
             tasks_get_judged(state, owner, id, params, caller).await
-        },
-    ))
+        }),
+    )
     .await
 }
 
@@ -606,8 +606,8 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
         });
         // Boxed: the stored-read pre-pass and the frame together pass the
         // large-future limit once the reader's view is threaded (MIK-8387).
-        let mut pending = Box::pin(crate::gateway::meta_mcp::visible::with_visibility_memo(
-            async {
+        let mut pending = Box::pin(
+            crate::gateway::meta_mcp::visible::memo::with_visibility_memo(async {
                 if let Some(Some(task)) = prepared.as_ref() {
                     prepare_stored_read_with_policy(&self.state, task, &live).await;
                 }
@@ -615,8 +615,8 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
                     .meta_mcp
                     .task_notification_frame(notification, stored, refused, subscription)
                     .await
-            },
-        ))
+            }),
+        )
         .await?;
         let holds = std::mem::take(&mut pending.holds);
         Some(crate::gateway::streaming::TaskFrame {
