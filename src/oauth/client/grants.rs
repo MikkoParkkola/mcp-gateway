@@ -20,6 +20,25 @@ pub(crate) const OAUTH_AUTHORIZATION_WINDOW: std::time::Duration =
     std::time::Duration::from_secs(300);
 
 mod authorize;
+
+/// Build a token from a token endpoint's answer, first refusing an
+/// oversized `expires_in` (MIK-8207).
+fn token_from_answer(
+    token_endpoint: &str,
+    token_response: TokenResponse,
+    now: u64,
+) -> Result<TokenInfo> {
+    super::refuse_oversized_expires_in(token_endpoint, token_response.expires_in)?;
+    Ok(TokenInfo::from_response_at(
+        token_response.access_token,
+        token_response.token_type,
+        token_response.refresh_token,
+        token_response.expires_in,
+        token_response.scope,
+        now,
+    ))
+}
+
 impl OAuthClient {
     /// Attempt client-credentials grant (headless re-auth, no browser required).
     ///
@@ -84,15 +103,7 @@ impl OAuthClient {
             ))
         })?;
 
-        super::refuse_oversized_expires_in(&auth_meta.token_endpoint, token_response.expires_in)?;
-        let token = TokenInfo::from_response_at(
-            token_response.access_token,
-            token_response.token_type,
-            token_response.refresh_token,
-            token_response.expires_in,
-            token_response.scope,
-            now,
-        );
+        let token = token_from_answer(&auth_meta.token_endpoint, token_response, now)?;
 
         self.save_issued(&token).await?;
         *self.current_token.write() = Some(token.clone());
@@ -248,15 +259,7 @@ impl OAuthClient {
             "OAuth token exchange succeeded"
         );
 
-        super::refuse_oversized_expires_in(&auth_meta.token_endpoint, token_response.expires_in)?;
-        Ok(TokenInfo::from_response_at(
-            token_response.access_token,
-            token_response.token_type,
-            token_response.refresh_token,
-            token_response.expires_in,
-            token_response.scope,
-            now,
-        ))
+        token_from_answer(&auth_meta.token_endpoint, token_response, now)
     }
 
     /// Refresh an access token: at most one exchange per stored credential in
