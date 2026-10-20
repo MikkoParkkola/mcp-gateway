@@ -6,6 +6,9 @@
 //! reads its output, on every host, and no second copy of a helper, nor a
 //! second way of spelling a path for a capability child, may appear.
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 #[path = "common/windows_paths.rs"]
 mod windows_paths;
 
@@ -62,7 +65,7 @@ fn every_windows_sensitive_helper_round_trips_a_hostile_path() {
             "Windows split: {command}"
         );
         let yaml = format!("command: {}", yaml_single_quoted(&command));
-        let read: serde_yaml::Value = serde_yaml::from_str(&yaml).expect("valid YAML");
+        let read: yaml::Value = yaml::from_str(&yaml).expect("valid YAML");
         assert_eq!(read["command"].as_str(), Some(command.as_str()), "{yaml}");
         let printed = std::process::Command::new("sh")
             .arg("-c")

@@ -3,6 +3,9 @@
 //! `security.posture` is restart-only: a reload that changes it is refused
 //! before any live state is published.
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -75,11 +78,8 @@ impl Fixture {
 }
 
 fn write(path: &std::path::Path, document: &Value) {
-    mcp_gateway::gateway::test_helpers::write_owner_only(
-        path,
-        serde_yaml::to_string(document).unwrap(),
-    )
-    .unwrap();
+    mcp_gateway::gateway::test_helpers::write_owner_only(path, yaml::to_string(document).unwrap())
+        .unwrap();
 }
 
 #[tokio::test]

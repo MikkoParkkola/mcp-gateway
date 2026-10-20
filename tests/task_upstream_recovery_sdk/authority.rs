@@ -58,7 +58,7 @@ pub fn write_authenticated_config(
 ) -> PathBuf {
     let yaml = std::fs::read_to_string(base).expect("the shared fixture wrote a base config");
     let mut config: Config =
-        serde_yaml::from_str(&yaml).expect("the gateway's own config type reloads its own YAML");
+        crate::yaml::from_str(&yaml).expect("the gateway's own config type reloads its own YAML");
 
     let backend = config
         .backends
@@ -115,7 +115,7 @@ pub fn write_authenticated_config(
         .collect();
 
     let path = root.join(name);
-    let rendered = serde_yaml::to_string(&config).expect("the amended config serializes");
+    let rendered = crate::yaml::to_string(&config).expect("the amended config serializes");
     mcp_gateway::gateway::test_helpers::write_owner_only(&path, rendered)
         .expect("the config is written inside the test's own temp root");
     path

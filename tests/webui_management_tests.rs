@@ -22,6 +22,11 @@
 //!   POST /ui/api/import/openapi/preview — preview tools from inline spec
 //!   POST /ui/api/import/openapi         — import tools from inline spec
 
+// `webui_management_tests/backend_mutation.rs` and `internal_routes_served.rs`
+// name `crate::yaml`, so this crate declares the module once, here.
+#[path = "common/yaml.rs"]
+mod yaml;
+
 use std::sync::Arc;
 use std::time::Duration;
 

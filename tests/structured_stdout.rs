@@ -3,6 +3,9 @@
 //! #1909: a command asked for a machine-readable format writes exactly one
 //! document to stdout. Hints, progress and empty-state text go to stderr.
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
 
@@ -51,7 +54,7 @@ impl Home {
 fn parse_whole(format: &str, stdout: &str) -> Result<serde_json::Value, String> {
     match format {
         "json" => serde_json::from_str(stdout).map_err(|e| e.to_string()),
-        "yaml" => serde_yaml::from_str(stdout).map_err(|e| e.to_string()),
+        "yaml" => yaml::from_str(stdout).map_err(|e| e.to_string()),
         other => unreachable!("not a machine-readable format: {other}"),
     }
 }

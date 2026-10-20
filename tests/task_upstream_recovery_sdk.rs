@@ -16,6 +16,11 @@
 // Unix-only: the crash is a SIGKILL (helper.rs:235) and the child trusts the issuer CA through SSL_CERT_FILE.
 #![cfg(unix)]
 
+// `task_upstream_recovery_sdk/authority.rs` and `helper.rs`
+// name `crate::yaml`, so this crate declares the module once, here.
+#[path = "common/yaml.rs"]
+mod yaml;
+
 #[path = "task_upstream_recovery_sdk/authority.rs"]
 mod authority;
 #[path = "task_upstream_recovery_sdk/helper.rs"]

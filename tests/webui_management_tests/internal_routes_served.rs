@@ -140,7 +140,7 @@ async fn writable() -> (
         serde_json::from_value(json!({"http_url": "http://127.0.0.1:9/docs"}))
             .expect("docs backend"),
     );
-    write_owner_only(&config_path, serde_yaml::to_string(&initial).unwrap()).unwrap();
+    write_owner_only(&config_path, crate::yaml::to_string(&initial).unwrap()).unwrap();
     let (mut state, live, _store) =
         make_app_state_with_reload(initial, None, config_path.clone()).await;
     Arc::get_mut(&mut state)
@@ -173,7 +173,7 @@ fn stage(config_path: &std::path::Path) {
         serde_json::from_value(json!({"http_url": "http://127.0.0.1:9/staged"}))
             .expect("staged backend"),
     );
-    write_owner_only(config_path, serde_yaml::to_string(&staged).unwrap()).unwrap();
+    write_owner_only(config_path, crate::yaml::to_string(&staged).unwrap()).unwrap();
 }
 
 const WRITES: [(Method, &str, Payload); 4] = [

@@ -40,7 +40,7 @@ async fn test_add_backend_persists_and_duplicate_returns_409() {
 
     // Write a minimal config
     let cfg = Config::default();
-    let yaml = serde_yaml::to_string(&cfg).unwrap();
+    let yaml = crate::yaml::to_string(&cfg).unwrap();
     write_owner_only(&config_path, &yaml).unwrap();
 
     let (state, _store) = make_app_state(None, Some(config_path.clone())).await;
@@ -103,7 +103,7 @@ async fn test_remove_backend_not_found_returns_404() {
     let tmp = TempDir::new().unwrap();
     let config_path = tmp.path().join("gateway.yaml");
     let cfg = Config::default();
-    let yaml = serde_yaml::to_string(&cfg).unwrap();
+    let yaml = crate::yaml::to_string(&cfg).unwrap();
     write_owner_only(&config_path, &yaml).unwrap();
 
     let (state, _store) = make_app_state(None, Some(config_path)).await;
@@ -132,7 +132,7 @@ async fn test_add_remove_backend_lifecycle() {
     let tmp = TempDir::new().unwrap();
     let config_path = tmp.path().join("gateway.yaml");
     let cfg = Config::default();
-    let yaml = serde_yaml::to_string(&cfg).unwrap();
+    let yaml = crate::yaml::to_string(&cfg).unwrap();
     write_owner_only(&config_path, &yaml).unwrap();
 
     let (state, _store) = make_app_state(None, Some(config_path.clone())).await;
@@ -189,7 +189,7 @@ async fn test_patch_backend_updates_description() {
             ..Default::default()
         },
     );
-    let yaml = serde_yaml::to_string(&cfg).unwrap();
+    let yaml = crate::yaml::to_string(&cfg).unwrap();
     write_owner_only(&config_path, &yaml).unwrap();
 
     let (state, _store) = make_app_state(None, Some(config_path.clone())).await;
@@ -228,7 +228,7 @@ async fn test_add_backend_returns_reload_outcome_when_context_available() {
     let tmp = TempDir::new().unwrap();
     let config_path = tmp.path().join("gateway.yaml");
     let cfg = Config::default();
-    write_owner_only(&config_path, serde_yaml::to_string(&cfg).unwrap()).unwrap();
+    write_owner_only(&config_path, crate::yaml::to_string(&cfg).unwrap()).unwrap();
 
     let (state, _, _store) = make_app_state_with_reload(cfg, None, config_path.clone()).await;
     let router = create_router(Arc::clone(&state));
@@ -284,7 +284,7 @@ async fn test_reload_endpoint_returns_structured_outcome_for_profile_change() {
     let tmp = TempDir::new().unwrap();
     let config_path = tmp.path().join("gateway.yaml");
     let initial = Config::default();
-    write_owner_only(&config_path, serde_yaml::to_string(&initial).unwrap()).unwrap();
+    write_owner_only(&config_path, crate::yaml::to_string(&initial).unwrap()).unwrap();
 
     let (state, live_config, _store) =
         make_app_state_with_reload(initial.clone(), None, config_path.clone()).await;
@@ -300,7 +300,7 @@ async fn test_reload_endpoint_returns_structured_outcome_for_profile_change() {
         },
     );
     updated.default_routing_profile = "research".to_string();
-    write_owner_only(&config_path, serde_yaml::to_string(&updated).unwrap()).unwrap();
+    write_owner_only(&config_path, crate::yaml::to_string(&updated).unwrap()).unwrap();
 
     let (status, body) = send_json(&router, Method::POST, "/ui/api/reload", None).await;
 
@@ -330,7 +330,7 @@ async fn test_reload_endpoint_reports_restart_required_for_server_change() {
     let tmp = TempDir::new().unwrap();
     let config_path = tmp.path().join("gateway.yaml");
     let initial = Config::default();
-    write_owner_only(&config_path, serde_yaml::to_string(&initial).unwrap()).unwrap();
+    write_owner_only(&config_path, crate::yaml::to_string(&initial).unwrap()).unwrap();
 
     let (state, _, _store) =
         make_app_state_with_reload(initial.clone(), None, config_path.clone()).await;
@@ -338,7 +338,7 @@ async fn test_reload_endpoint_reports_restart_required_for_server_change() {
 
     let mut updated = initial;
     updated.server.port += 1;
-    write_owner_only(&config_path, serde_yaml::to_string(&updated).unwrap()).unwrap();
+    write_owner_only(&config_path, crate::yaml::to_string(&updated).unwrap()).unwrap();
 
     let (status, body) = send_json(&router, Method::POST, "/ui/api/reload", None).await;
 
