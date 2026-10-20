@@ -632,7 +632,6 @@ pub(crate) fn file_identity(file: &File) -> io::Result<(u64, u128)> {
     ))
 }
 
-#[path = "win_acl_shapes.rs"]
 mod shapes;
 pub(crate) use shapes::{Ace, Inspection, ObjectKind, Share, Sid};
 use shapes::{aligned, wide};

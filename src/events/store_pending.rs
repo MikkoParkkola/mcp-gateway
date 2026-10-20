@@ -524,10 +524,8 @@ impl Store {
     }
 }
 
-#[path = "store_dead.rs"]
 mod dead;
 
-#[path = "store_expiry.rs"]
 mod expiry;
 pub(super) use expiry::load;
 

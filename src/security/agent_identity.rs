@@ -368,11 +368,9 @@ pub enum IdentityAudit {
 
 // ── Private helpers (agent_identity_extract.rs) ───────────────────────────────
 
-#[path = "agent_identity_validate.rs"]
 mod validate;
 pub(crate) use validate::validate_agent_identity;
 
-#[path = "agent_identity_extract.rs"]
 mod extract;
 #[cfg(test)]
 use extract::percent_decode;
