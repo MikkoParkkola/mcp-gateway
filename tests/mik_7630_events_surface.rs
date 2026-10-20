@@ -425,10 +425,21 @@ webhooks:
 #[test]
 fn challenge_comparison_uses_the_constant_time_primitive() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/events");
-    let mut sources = String::new();
-    for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-        sources.push_str(&std::fs::read_to_string(entry.path()).unwrap_or_default());
+    fn walk(dir: &std::path::Path, sources: &mut String) {
+        for entry in std::fs::read_dir(dir).expect("read a src/events directory") {
+            let entry = entry.expect("a directory entry");
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, sources);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                sources.push_str(
+                    &std::fs::read_to_string(&path).expect("read a src/events source file"),
+                );
+            }
+        }
     }
+    let mut sources = String::new();
+    walk(&dir, &mut sources);
     assert!(
         sources.contains("ct_eq(") || sources.contains("ConstantTimeEq"),
         "src/events must compare the challenge with subtle::ConstantTimeEq"
