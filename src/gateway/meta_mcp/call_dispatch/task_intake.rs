@@ -20,14 +20,17 @@ impl MetaMcp {
     /// Any transient held here is this call's own, so no target parsing
     /// is needed to own it. `with_visibility_memo` opens a fresh memo
     /// unless the future already runs inside this request's one
-    /// (visible.rs:623-630). On HTTP that scope wraps one POST's
-    /// dispatch (router/handlers.rs:149-151). A stdio batch loop does not
-    /// open a batch memo (server/stdio_loop.rs:460-485); each item goes
-    /// through `dispatch_single_staged`, which opens its own
-    /// (server/stdio_single.rs:334-338), awaited before the next item
-    /// (server/stdio_notify.rs:100-144). Chain and playbook steps and
-    /// nested relay rounds run inside this one `tools/call`, so their
-    /// transient is this call's by definition.
+    /// (`visible::memo::with_visibility_memo`). On HTTP that scope wraps
+    /// one POST's dispatch (`meta_mcp_handler` in
+    /// `router/handlers/meta_handler.rs`). A stdio batch loop does not
+    /// open a batch memo (the batch arm of `run_stdio_on` in
+    /// `server/stdio_loop.rs`); each item goes through
+    /// `dispatch_single_staged`, which opens its own
+    /// (in `server/stdio_single.rs`), awaited
+    /// before the next item (`dispatch_batch_read` in
+    /// `server/stdio_notify.rs`). Chain and playbook steps and nested
+    /// relay rounds run inside this one `tools/call`, so their transient
+    /// is this call's by definition.
     pub(super) fn task_intake_transient(
         caller: &MetaMcpCallerContext<'_>,
         id: &RequestId,

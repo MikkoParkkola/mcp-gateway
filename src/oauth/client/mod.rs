@@ -330,15 +330,7 @@ impl OAuthClient {
         Ok(storage_key(&self.backend_name, &meta.issuer))
     }
 
-    /// Load a previously-registered dynamic `client_id` from storage into
-    /// memory, tagging its provenance as [`ClientIdSource::Registered`].
-    ///
-    /// A no-op when a `client_id` is already set: that only happens when
-    /// `OAuthClientConfig.client_id` was supplied, i.e. operator config that
-    /// must never be overwritten by (or conflated with) a stale disk record. Because of that guard,
-    /// any id loaded here is necessarily a prior Dynamic Client Registration, never operator config
-    /// (Defect 2, MIK-6750 r7) — safe to mark `Registered` so a later `invalid_client` rejection
-    /// may purge it. Drop in-memory credentials when re-initializing lands on a different
+    /// Drop in-memory credentials when re-initializing lands on a different
     /// authorization server.
     ///
     /// Keying storage by issuer stops the *disk* from crossing that line. In-memory state crosses
@@ -363,6 +355,16 @@ impl OAuthClient {
         }
     }
 
+    /// Load a previously-registered dynamic `client_id` from storage into
+    /// memory, tagging its provenance as [`ClientIdSource::Registered`].
+    ///
+    /// A no-op when a `client_id` is already set: that only happens when
+    /// `OAuthClientConfig.client_id` was supplied, i.e. operator config that
+    /// must never be overwritten by (or conflated with) a stale disk record.
+    /// Because of that guard, any id loaded here is necessarily a prior
+    /// Dynamic Client Registration, never operator config (Defect 2,
+    /// MIK-6750 r7) — safe to mark `Registered` so a later `invalid_client`
+    /// rejection may purge it.
     fn restore_persisted_client_id(&self) {
         if self.client_id.read().is_some() {
             return;
