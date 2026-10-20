@@ -424,7 +424,6 @@ webhooks:
 /// T53 (EVENTS.3): the challenge compare uses the constant-time primitive.
 #[test]
 fn challenge_comparison_uses_the_constant_time_primitive() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/events");
     fn walk(dir: &std::path::Path, sources: &mut String) {
         for entry in std::fs::read_dir(dir).expect("read a src/events directory") {
             let entry = entry.expect("a directory entry");
@@ -438,6 +437,7 @@ fn challenge_comparison_uses_the_constant_time_primitive() {
             }
         }
     }
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/events");
     let mut sources = String::new();
     walk(&dir, &mut sources);
     assert!(
