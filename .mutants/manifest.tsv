@@ -1,0 +1,24 @@
+head_sha	e312bcc08ab8124d0a9715171e718ca273c23bf7
+HTTP_01	linux	http_1_admits_host.patch	--lib gateway::router::tests::openwebui_adapter::hosted_routes::guard_a_foreign_host_under_the_accounts_prefix_is_refused
+HTTP_04	linux	http_4_require_admin_log_level.patch	--lib gateway::router::log_level_admin_tests::a_non_admin_key_cannot_set_the_gateway_log_level
+HTTP_07	linux	http_7_evaluate_redirect_for.patch	--lib transport::http::tests::evaluate_redirect_cross_origin_public_host_rejected
+HTTP_10	linux	http_10_sole_cookie.patch	--lib gateway::router::accounts::bridge::bridge_tests::only_one_nonempty_session_cookie_yields_a_token
+HTTP_13	linux	http_13_request_check_refusal.patch	--test mik_7214_acs http::ac_header_3_a_disagreeing_method_header_is_refused_over_http
+HTTP_16	linux	http_16_journeys_status.patch	--lib gateway::router::tests::openwebui_adapter::hosted_routes::status_with_a_key_but_no_assertion_is_unauthenticated
+ACCT_03	linux	acct_3_scope_missing.patch	--lib gateway::router::tests::openwebui_adapter::start_route::callback::abort::t_c05c_invalid_grants_are_refused_and_revoked
+ACCT_06	linux	acct_6_require_empty.patch	--lib personal_accounts::tests::s03_explicit_initialization_creates_encrypted_authority_and_reopens
+ACCT_09	linux	acct_9_required_audit.patch	--lib identity_propagation::account_strategies::lifetime_tests::a_minted_credential_is_validated_and_audited_before_it_is_used
+ACCT_12	linux	acct_12_consumed_replay.patch	--lib personal_accounts::storage::journey::tests_commit::t_c03d_admit_then_consume_is_durable_so_a_replay_after_restart_is_refused
+ACCT_15	linux	acct_15_external_strategy.patch	--lib personal_accounts::config::config_tests::adapter_tests::descriptor_identity_and_strategy_placement_are_refused
+OAUTH_02	linux	oauth_2_has_valid_token.patch	--lib oauth::client::tests::client_with_expired_token_returns_false
+OAUTH_05	linux	oauth_5_handle_callback.patch	--lib oauth::callback::tests::callback_flow_state_mismatch
+OAUTH_08	linux	oauth_8_authorize.patch	--lib oauth::client::authorize_tests::authorize_refuses_a_code_from_another_issuer_without_redeeming_it
+BRIDGE_03	linux	bridge_3_prompt_slice.patch	--test mik_7212_mrtr7_bridge_acs ac_mrtr_7a_an_undeclared_variant_is_not_asked_under_an_empty_slice
+STARTUP_02	linux	startup_2_startup_startrefusal.patch	--lib gateway::server::cleartext::tests::reload_restart_advice_counts_the_replica_refusal
+STARTUP_05	linux	startup_5_startup_auditstartup.patch	--lib gateway::server::identity_grants::tests::t3cd_failed_snapshot_append_serves_nothing
+STARTUP_08	linux	startup_8_startup_servetls.patch	--lib gateway::server::support::tests::mtls_listener::serve_tls_refuses_a_client_without_a_trusted_certificate
+STDIO_03	linux	stdio_3_stdio_tokencollide.patch	--lib transport::stdio::tests::stdio_refuses_to_reroute_a_progress_token_that_is_already_live
+STDIO_06	linux	stdio_6_stdio_replymethod.patch	--lib gateway::server::stdio_channel::tests::a_frame_with_a_null_method_is_not_a_reply
+TASKS_01	linux	tasks_1_tasks_ownerfilter.patch	--lib gateway::task_service::store_tests::adapter_marker::boundary::upstream_02_the_descriptor_probe_answers_a_foreign_owner_not_found
+TASKS_04	linux	tasks_4_add_targets.patch	--lib gateway::task_service::store_tests::targets::add_targets_refuses_a_foreign_owner_a_moved_row_a_settled_row_and_a_closed_store
+TASKS_07	linux	tasks_7_get.patch	--lib gateway::task_service::service_tests::get_without_an_owner_identity_reads_nothing

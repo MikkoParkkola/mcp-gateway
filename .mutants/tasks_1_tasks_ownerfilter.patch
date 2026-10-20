@@ -1,0 +1,14 @@
+diff --git a/src/gateway/task_service/store.rs b/src/gateway/task_service/store.rs
+index 091cd7c..97550d4 100644
+--- a/src/gateway/task_service/store.rs
++++ b/src/gateway/task_service/store.rs
+@@ -347,7 +347,8 @@ impl TaskStore {
+             if !state.ready {
+                 return Err(StoreError::Unavailable);
+             }
+-            let entry = owned(&state, owner, id)?;
++            let _ = owner;
++            let entry = state.entries.get(id).ok_or(StoreError::NotFound)?;
+             (entry.task.clone(), entry.record.clone())
+         };
+         // The record's OWN admitted digest, exactly as `capture_upstream` binds

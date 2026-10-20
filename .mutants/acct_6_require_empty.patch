@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/storage.rs b/src/personal_accounts/storage.rs
+index 68fb5af87..bcb8aa849 100644
+--- a/src/personal_accounts/storage.rs
++++ b/src/personal_accounts/storage.rs
+@@ -438,7 +438,7 @@ fn authority_aad(key_id: &str, instance_id: &str) -> Result<Vec<u8>, AccountErro
+ fn require_empty(path: &Path) -> Result<(), AccountError> {
+     for entry in fs::read_dir(path).map_err(|_| AccountError::StorageUnavailable)? {
+         let entry = entry.map_err(|_| AccountError::StorageUnavailable)?;
+-        if entry.file_name() != LOCK_FILE {
++        if false && entry.file_name() != LOCK_FILE {
+             return Err(AccountError::StorageUnavailable);
+         }
+     }

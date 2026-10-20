@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/origin_guard_hosted.rs b/src/gateway/router/origin_guard_hosted.rs
+index c7dec0523..15080e04d 100644
+--- a/src/gateway/router/origin_guard_hosted.rs
++++ b/src/gateway/router/origin_guard_hosted.rs
+@@ -63,7 +63,7 @@ impl HostedScope<'_> {
+     /// `Host` names the hosted origin, under the prefix.
+     pub(super) fn admits_host(&self, host: &str) -> bool {
+         self.origin
+-            .is_some_and(|hosted| hosted.host.eq_ignore_ascii_case(strip_port(host)))
++            .is_some_and(|_hosted| !strip_port(host).is_empty() || true)
+     }
+ 
+     /// `Origin` is the hosted origin, under the prefix (same-origin `DELETE`
