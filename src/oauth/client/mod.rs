@@ -108,12 +108,15 @@ struct TokenResponse {
     scope: Option<String>,
 }
 
+fn redact_opt(v: &Option<String>) -> &'static str {
+    if v.is_some() { "<redacted>" } else { "None" }
+}
+
 // Manual `Debug` that redacts the OAuth tokens (CWE-532, mirrors PR #323). A
 // derived `Debug` would print `access_token` / `refresh_token` verbatim into
 // any trace or error context.
 impl std::fmt::Debug for TokenResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let redact_opt = |v: &Option<String>| if v.is_some() { "<redacted>" } else { "None" };
         f.debug_struct("TokenResponse")
             .field("access_token", &"<redacted>")
             .field("token_type", &self.token_type)
@@ -137,7 +140,6 @@ struct ClientRegistrationResponse {
 // or error context; only its presence is surfaced.
 impl std::fmt::Debug for ClientRegistrationResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let redact_opt = |v: &Option<String>| if v.is_some() { "<redacted>" } else { "None" };
         f.debug_struct("ClientRegistrationResponse")
             .field("client_id", &self.client_id)
             .field("client_secret", &redact_opt(&self.client_secret))
@@ -171,7 +173,6 @@ pub struct OAuthClientConfig {
 // trace or error context; only its presence is surfaced.
 impl std::fmt::Debug for OAuthClientConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let redact_opt = |v: &Option<String>| if v.is_some() { "<redacted>" } else { "None" };
         f.debug_struct("OAuthClientConfig")
             .field("client_id", &self.client_id)
             .field("client_secret", &redact_opt(&self.client_secret))
