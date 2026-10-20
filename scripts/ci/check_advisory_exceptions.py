@@ -14,12 +14,15 @@ instead time-boxes exceptions with `[[IgnoredVulns]]` entries carrying
 
 This check requires every id ignored in `.cargo/audit.toml` to appear
 in `.github/osv-scanner.toml` with an `ignoreUntil` that has not
-passed. An id in more than one `[[IgnoredVulns]]` entry fails whether
-or not cargo-audit ignores it, so a duplicate cannot silently extend
-an exception. The check also requires the 1.x line of webpki-roots in
-`Cargo.lock` to stay at or above the patched floor below. Any
-webpki-roots version outside that floored line must be an exact
-version in the shim list below; any other version fails, since it
+passed. Every `[[IgnoredVulns]]` entry must likewise carry a parseable
+`ignoreUntil` that has not passed, whether or not cargo-audit ignores
+its id, because osv-scanner treats an entry with no `ignoreUntil` as
+ignored forever. An id in more than one `[[IgnoredVulns]]` entry fails
+whether or not cargo-audit ignores it, so a duplicate cannot silently
+extend an exception. The check also requires the 1.x line of
+webpki-roots in `Cargo.lock` to stay at or above the patched floor
+below. Any webpki-roots version outside that floored line must be an
+exact version in the shim list below; any other version fails, since it
 could bundle its own unpatched certificate list hidden by the
 per-advisory ignore.
 
@@ -107,13 +110,12 @@ def exception_problems(audit: dict, osv: dict, today: datetime.date) -> list[str
                 f".github/osv-scanner.toml; keep one dated entry"
             )
     for vuln_id in ignores or []:
-        entry = entries.get(vuln_id)
-        if entry is None:
+        if vuln_id not in entries:
             problems.append(
                 f"{vuln_id}: ignored in .cargo/audit.toml but missing "
                 f"from .github/osv-scanner.toml [[IgnoredVulns]]"
             )
-            continue
+    for vuln_id, entry in entries.items():
         raw_until = entry.get("ignoreUntil")
         if raw_until is None:
             problems.append(
@@ -157,13 +159,14 @@ def self_test() -> int:
     future = today + datetime.timedelta(days=30)
     yesterday = today - datetime.timedelta(days=1)
     vuln = "RUSTSEC-2026-0381"
+    osv_only = "RUSTSEC-2024-0449"
     audit = {"advisories": {"ignore": [vuln]}}
 
     def lock(version: str) -> dict:
         return {"package": [{"name": "webpki-roots", "version": version}]}
 
-    def osv(until: object) -> dict:
-        return {"IgnoredVulns": [{"id": vuln, "ignoreUntil": until, "reason": "shim"}]}
+    def osv(until: object, vuln_id: str = vuln) -> dict:
+        return {"IgnoredVulns": [{"id": vuln_id, "ignoreUntil": until, "reason": "shim"}]}
 
     floor_cases: list[tuple[str, dict, bool]] = [
         ("webpki-roots 1.0.10 passes", lock("1.0.10"), True),
@@ -193,6 +196,10 @@ def self_test() -> int:
         ("ignored id absent from the osv config fails", audit, {"IgnoredVulns": []}, False),
         ("ignored id without ignoreUntil fails", audit, {"IgnoredVulns": [{"id": vuln, "reason": "shim"}]}, False),
         ("empty audit config passes", {}, {}, True),
+        ("osv-only id with a future date passes", {}, osv(future, osv_only), True),
+        ("osv-only id without ignoreUntil fails", {}, {"IgnoredVulns": [{"id": osv_only, "reason": "shim"}]}, False),
+        ("osv-only id with an unparseable ignoreUntil fails", {}, osv("soon", osv_only), False),
+        ("osv-only id with yesterday fails", {}, osv(yesterday, osv_only), False),
         ("duplicated id with future dates fails", audit, duplicated, False),
         ("duplicated id not ignored by cargo-audit fails", {}, duplicated, False),
     ]
