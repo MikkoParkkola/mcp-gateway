@@ -10,6 +10,89 @@ use super::{MetaMcp, MetaMcpCallerContext};
 use crate::Error;
 use crate::gateway::router::CallerStanding;
 
+/// One meta-tool the dispatch answers by name (MIK-8498 DISPATCH.3). The
+/// meta match dispatches on this, so the names it routes are data: `ALL`
+/// is checked against `surfaced::META_TOOLS` by a test, and a variant left
+/// out of `ALL` is never built (`parse` reads only `ALL`), which the
+/// dead-code lint refuses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MetaArm {
+    Search,
+    Execute,
+    ListServers,
+    ListTools,
+    SearchTools,
+    Invoke,
+    GetStats,
+    CostReport,
+    WebhookStatus,
+    RunPlaybook,
+    KillServer,
+    ReviveServer,
+    ListDisabledCapabilities,
+    SetProfile,
+    GetProfile,
+    ListProfiles,
+    SetState,
+    ReloadConfig,
+    ReloadCapabilities,
+}
+
+impl MetaArm {
+    /// Every meta-tool, in the order a did-you-mean hint ranks them.
+    pub(super) const ALL: [Self; 19] = [
+        Self::Search,
+        Self::Execute,
+        Self::ListServers,
+        Self::ListTools,
+        Self::SearchTools,
+        Self::Invoke,
+        Self::GetStats,
+        Self::CostReport,
+        Self::WebhookStatus,
+        Self::RunPlaybook,
+        Self::KillServer,
+        Self::ReviveServer,
+        Self::ListDisabledCapabilities,
+        Self::SetProfile,
+        Self::GetProfile,
+        Self::ListProfiles,
+        Self::SetState,
+        Self::ReloadConfig,
+        Self::ReloadCapabilities,
+    ];
+
+    /// The tool name a client calls this meta-tool by.
+    pub(super) const fn name(self) -> &'static str {
+        match self {
+            Self::Search => "gateway_search",
+            Self::Execute => "gateway_execute",
+            Self::ListServers => "gateway_list_servers",
+            Self::ListTools => "gateway_list_tools",
+            Self::SearchTools => "gateway_search_tools",
+            Self::Invoke => "gateway_invoke",
+            Self::GetStats => "gateway_get_stats",
+            Self::CostReport => "gateway_cost_report",
+            Self::WebhookStatus => "gateway_webhook_status",
+            Self::RunPlaybook => "gateway_run_playbook",
+            Self::KillServer => "gateway_kill_server",
+            Self::ReviveServer => "gateway_revive_server",
+            Self::ListDisabledCapabilities => "gateway_list_disabled_capabilities",
+            Self::SetProfile => "gateway_set_profile",
+            Self::GetProfile => "gateway_get_profile",
+            Self::ListProfiles => "gateway_list_profiles",
+            Self::SetState => "gateway_set_state",
+            Self::ReloadConfig => "gateway_reload_config",
+            Self::ReloadCapabilities => "gateway_reload_capabilities",
+        }
+    }
+
+    /// The meta-tool `tool_name` names, or `None` for any other name.
+    pub(super) fn parse(tool_name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|arm| arm.name() == tool_name)
+    }
+}
+
 impl MetaMcp {
     /// The refusal for a name no meta-tool answers, with a suggestion drawn
     /// only from the tools this caller may see.
@@ -18,27 +101,6 @@ impl MetaMcp {
         tool_name: &str,
         caller: &MetaMcpCallerContext<'_>,
     ) -> Error {
-        const META_TOOLS: &[&str] = &[
-            "gateway_search",
-            "gateway_execute",
-            "gateway_list_servers",
-            "gateway_list_tools",
-            "gateway_search_tools",
-            "gateway_invoke",
-            "gateway_get_stats",
-            "gateway_cost_report",
-            "gateway_webhook_status",
-            "gateway_run_playbook",
-            "gateway_kill_server",
-            "gateway_revive_server",
-            "gateway_list_disabled_capabilities",
-            "gateway_set_profile",
-            "gateway_get_profile",
-            "gateway_list_profiles",
-            "gateway_set_state",
-            "gateway_reload_config",
-            "gateway_reload_capabilities",
-        ];
         // The candidate pool is the EXPOSED set, not the static list.
         // The early return above keeps a hidden tool's exact name from
         // being confirmed; a near miss of that name reached here and
@@ -47,9 +109,9 @@ impl MetaMcp {
         // the pool removes the route -- there is no longer a spelling
         // that makes this branch name an unexposed tool -- rather than
         // wording the hint more carefully and leaving the route open.
-        let exposed: Vec<&str> = META_TOOLS
+        let exposed: Vec<&str> = MetaArm::ALL
             .iter()
-            .copied()
+            .map(|arm| arm.name())
             .filter(|name| self.meta_tool_exposure.is_exposed(name))
             // Nor a tool this caller's standing withholds (A3).
             .filter(|name| CallerStanding::from(caller.scope()).permits(name))

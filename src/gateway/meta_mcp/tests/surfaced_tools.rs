@@ -553,39 +553,44 @@ fn inspect_discovery_value_redacts_credentials_when_not_blocking() {
     assert!(!description.contains("ghp_"), "{description}");
 }
 
-/// MIK-8154 (lead, on review finding muse 3): the meta-tool names surfacing
-/// refuses are exactly the names dispatch's meta match routes on, one source
-/// checked against the other. A new meta tool added to the match but not to
-/// the list (or the reverse) fails here, before a surfaced backend tool could
-/// shadow it and receive the gateway's meta decoding.
+/// MIK-8154 (lead, on review finding muse 3), data-driven since MIK-8498
+/// DISPATCH.3: the meta-tool names surfacing refuses are exactly the names
+/// the meta match dispatches on (`MetaArm::ALL`), one source checked against
+/// the other, with no read of any file's text. A meta tool added to one and
+/// not the other fails here, before a surfaced backend tool could shadow it
+/// and receive the gateway's meta decoding. A `MetaArm` variant left out of
+/// `ALL` is never built, which the dead-code lint refuses.
 #[test]
 fn meta_tool_names_are_the_dispatch_arms() {
-    let source = include_str!("../call_dispatch.rs");
-    // Each arm's pattern must be one string literal, with no guard: one name,
-    // one handler, so two names of different policies cannot share an arm.
-    // Anything else (an `|`, a constant, a guard) fails here rather than
-    // reading as a name the arm may not route.
+    use super::super::dispatch_names::MetaArm;
     let mut arms = std::collections::BTreeSet::new();
-    for pattern in match_arm_patterns(source, "let result = match tool_name {") {
-        if pattern == "_" {
-            continue;
-        }
-        let name = pattern
-            .strip_prefix('"')
-            .and_then(|rest| rest.strip_suffix('"'))
-            .filter(|name| !name.contains('"'))
-            .unwrap_or_else(|| panic!("a meta arm that is not one literal: {pattern}"));
-        assert!(arms.insert(name), "a meta name with two arms: {name}");
+    for arm in MetaArm::ALL {
+        assert!(
+            arms.insert(arm.name()),
+            "a meta name with two arms: {}",
+            arm.name()
+        );
+        assert_eq!(
+            MetaArm::parse(arm.name()),
+            Some(arm),
+            "{} round-trips",
+            arm.name()
+        );
     }
     let listed: std::collections::BTreeSet<&str> = super::super::surfaced::META_TOOLS
         .iter()
         .map(|(name, _)| *name)
         .collect();
     assert_eq!(arms, listed, "the dispatch arms and META_TOOLS differ");
-    assert!(
-        arms.contains("gateway_invoke"),
-        "the meta match was not read: {arms:?}"
-    );
+    for name in [
+        "gateway_invoke_",
+        "Gateway_invoke",
+        "",
+        "invoke",
+        "my_custom_tool",
+    ] {
+        assert_eq!(MetaArm::parse(name), None, "{name:?} is no meta arm");
+    }
 }
 
 /// Exactly three meta tools decode an inner `arguments` (MIK-8154), and only
@@ -614,54 +619,4 @@ fn exactly_the_three_parsing_meta_tools_decode_inside() {
         .map(|(name, _)| *name)
         .collect();
     assert_eq!(chained, ["gateway_execute"]);
-}
-
-/// The pattern of every arm of the `match` that opens with `head` in
-/// `source`, whitespace-trimmed, read by depth: an arm ends at a comma or a
-/// block body's closing brace at the match's own depth, so a pattern split
-/// across lines is still one pattern. String literals and line comments are
-/// skipped, and a comment before an arm is left out of its pattern. Limit: a
-/// char literal holding a bracket would skew the depth; the meta match has
-/// none, and a skew fails the comparison rather than passing it.
-fn match_arm_patterns<'a>(source: &'a str, head: &str) -> Vec<&'a str> {
-    let open = source.find(head).expect("the match") + head.len();
-    let bytes = source.as_bytes();
-    let (mut patterns, mut depth, mut start, mut i) = (Vec::new(), 0usize, Some(open), open);
-    while i < bytes.len() {
-        match bytes[i] {
-            b'"' => {
-                i += 1;
-                while bytes[i] != b'"' {
-                    i += if bytes[i] == b'\\' { 2 } else { 1 };
-                }
-            }
-            b'/' if bytes.get(i + 1) == Some(&b'/') => {
-                let eol = source[i..].find('\n').map_or(bytes.len(), |n| i + n);
-                // A comment before an arm is not part of its pattern.
-                if start.is_some_and(|from| source[from..i].trim().is_empty()) {
-                    start = Some(eol);
-                }
-                i = eol;
-            }
-            b'(' | b'[' | b'{' => depth += 1,
-            b')' | b']' => depth -= 1,
-            b'}' if depth == 0 => break,
-            b'}' => {
-                depth -= 1;
-                if depth == 0 && start.is_none() {
-                    start = Some(i + 1);
-                }
-            }
-            b',' if depth == 0 => start = Some(i + 1),
-            b'=' if depth == 0 && bytes.get(i + 1) == Some(&b'>') => {
-                if let Some(from) = start.take() {
-                    patterns.push(source[from..i].trim());
-                }
-                i += 1;
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    patterns
 }

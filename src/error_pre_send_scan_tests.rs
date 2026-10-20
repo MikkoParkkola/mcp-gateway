@@ -162,11 +162,16 @@ fn constructions(src: &str) -> usize {
 /// [`constructions`] for any `NAME`: a variant, or a function whose result
 /// `is_pre_dispatch` trusts.
 fn constructions_of(src: &str, name: &str) -> usize {
-    let clean = strip_test_items(&sanitize(src));
+    construction_offsets(&strip_test_items(&sanitize(src)), name).len()
+}
+
+/// Where `clean` (sanitized, test items stripped) constructs `name`: the byte
+/// offset of each construction, by the rules [`constructions`] states.
+fn construction_offsets(clean: &str, name: &str) -> Vec<usize> {
     let b = clean.as_bytes();
     let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
     let next_non_ws = |from: usize| b[from..].iter().position(|c| !c.is_ascii_whitespace());
-    let mut count = 0;
+    let mut found = Vec::new();
     for (at, _) in clean.match_indices(name) {
         let end = at + name.len();
         if (at > 0 && ident(b[at - 1])) || b.get(end).copied().is_some_and(ident) {
@@ -182,7 +187,7 @@ fn constructions_of(src: &str, name: &str) -> usize {
         let after_alt = before.is_some_and(|p| b[p] == b'|' && (p == 0 || b[p - 1] != b'|'));
         let open = next_non_ws(end).map(|p| end + p);
         let Some(open) = open.filter(|p| b[*p] == b'(') else {
-            count += 1;
+            found.push(at);
             continue;
         };
         let mut depth = 0usize;
@@ -208,10 +213,10 @@ fn constructions_of(src: &str, name: &str) -> usize {
             || alt_after
             || after_alt;
         if !pattern {
-            count += 1;
+            found.push(at);
         }
     }
-    count
+    found
 }
 
 /// The non-test files under `src/` that construct `name`.
@@ -296,43 +301,170 @@ mod tests { fn t() { let _ = Error::BackendUnavailable("test".into()); } }
     );
 }
 
-/// Call sites (per file, relative to `src/`) allowed to build the sealed
-/// transient, each only before anything reaches the backend (MIK-8428):
-/// `is_pre_dispatch` reads its seal, so it frees an idempotency key. Counted
-/// per file, so a new call in a listed file fails the scan too. A builder's
-/// own definition counts as one.
+/// The item `at` sits in, in sanitized source: `Type::method` inside an
+/// `impl`, `function` outside one, or `<module>` for a construction outside
+/// any function (an import). Keyed by item, not file, so a function moved to
+/// another file keeps its reviewed row (MIK-8498 DISPATCH.3).
+fn enclosing_item(clean: &str, at: usize) -> String {
+    let b = clean.as_bytes();
+    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    // The span of the block a keyword opens: from the keyword to its matching
+    // `}`, or `None` for a body-less item (`;` before any `{`).
+    let block = |from: usize| -> Option<usize> {
+        let open = from + b[from..].iter().position(|c| *c == b'{' || *c == b';')?;
+        if b[open] == b';' {
+            return None;
+        }
+        let mut depth = 0usize;
+        for (j, c) in b.iter().enumerate().skip(open) {
+            match c {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(j);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    };
+    let keyword = |word: &str| {
+        clean.match_indices(word).filter_map(move |(k, _)| {
+            let end = k + word.len();
+            let bounded = (k == 0 || !ident(b[k - 1]))
+                && b.get(end)
+                    .is_some_and(|c| c.is_ascii_whitespace() || *c == b'<');
+            bounded.then_some(k)
+        })
+    };
+    // The innermost `fn` whose span holds `at`, and its name.
+    let function = keyword("fn")
+        .filter_map(|k| Some((k, block(k)?)))
+        .filter(|(k, end)| *k <= at && at <= *end)
+        .max_by_key(|(k, _)| *k)
+        .map(|(k, _)| {
+            let rest = clean[k + 2..].trim_start();
+            rest[..rest
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(rest.len())]
+                .to_owned()
+        });
+    let Some(function) = function else {
+        return "<module>".to_owned();
+    };
+    // The innermost `impl` whose span holds `at`: its self type's last segment.
+    let owner = keyword("impl")
+        .filter_map(|k| Some((k, block(k)?)))
+        .filter(|(k, end)| *k <= at && at <= *end)
+        .max_by_key(|(k, _)| *k)
+        .map(|(k, _)| {
+            let header =
+                &clean[k + 4..k + 4 + b[k + 4..].iter().position(|c| *c == b'{').unwrap_or(0)];
+            let header = header.trim_start();
+            let header = header.strip_prefix('<').map_or(header, |rest| {
+                let mut depth = 1usize;
+                let close = rest
+                    .char_indices()
+                    .find(|(_, c)| {
+                        depth = match c {
+                            '<' => depth + 1,
+                            '>' => depth - 1,
+                            _ => depth,
+                        };
+                        depth == 0
+                    })
+                    .map_or(rest.len(), |(i, _)| i + 1);
+                &rest[close..]
+            });
+            let self_type = header
+                .rsplit_once(" for ")
+                .map_or(header, |(_, ty)| ty)
+                .trim();
+            let path = self_type.split(['<', ' ', '\n']).next().unwrap_or_default();
+            path.rsplit("::").next().unwrap_or(path).to_owned()
+        });
+    owner.map_or(function.clone(), |owner| format!("{owner}::{function}"))
+}
+
+/// How many times each non-test item under `src/` constructs `name`, keyed
+/// by [`enclosing_item`]. Two files with an item of the same key is an error:
+/// a key must name one reviewed site.
+fn construction_sites(name: &str) -> BTreeMap<String, usize> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut found: BTreeMap<String, usize> = BTreeMap::new();
+    let mut owner: BTreeMap<String, String> = BTreeMap::new();
+    for file in construction_counts(name).into_keys() {
+        let src = std::fs::read_to_string(root.join(&file)).expect("readable source");
+        let clean = strip_test_items(&sanitize(&src));
+        for at in construction_offsets(&clean, name) {
+            let item = enclosing_item(&clean, at);
+            let first = owner.entry(item.clone()).or_insert_with(|| file.clone());
+            assert_eq!(
+                *first, file,
+                "{item} constructs {name} in two files: the key must name one site"
+            );
+            *found.entry(item).or_default() += 1;
+        }
+    }
+    found
+}
+
+/// The items allowed to build the sealed transient, each only before
+/// anything reaches the backend (MIK-8428): `is_pre_dispatch` reads its seal,
+/// so it frees an idempotency key. Keyed by the item that builds it
+/// (`Type::method` or `function`, [`enclosing_item`]), not by file, so a move
+/// keeps its row and a new call in any item fails the scan. A builder's own
+/// definition counts as one.
 const TRANSIENT_SITES: &[(&str, usize)] = &[
     // `transient_retry_error`'s definition.
-    ("personal_accounts/refusal.rs", 1),
+    ("transient_retry_error", 1),
     // `transient_mint_refusal`'s definition and its one build.
-    ("identity_propagation/account_strategies_view.rs", 2),
-    // A capability mint's resolve or refresh admission (`resolve`), and the
-    // lease recheck before the send (`revalidate`, from three callers).
-    ("identity_propagation/account_strategies.rs", 2),
+    ("AccountStrategyRegistry::transient_mint_refusal", 2),
+    // A capability mint's resolve or refresh admission.
+    ("AccountStrategyRegistry::resolve", 1),
+    // The lease recheck before the send, from three callers.
+    ("AccountStrategyRegistry::revalidate", 1),
     // A per-user mint's admission, before the dispatch.
-    ("gateway/meta_mcp/invoke/propagation.rs", 1),
+    ("MetaMcp::resolve_caller_credential_as", 1),
     // The task intake answer: no task, nothing dispatched.
-    ("gateway/meta_mcp/call_dispatch/task_intake.rs", 1),
+    ("MetaMcp::task_intake_transient", 1),
     // The caller verdict's view Busy, answered before the backend.
-    ("gateway/meta_mcp/invoke/caller_verdict.rs", 1),
+    ("MetaMcp::dispatch_resolution", 1),
     // A stored task read: no dispatch at all.
-    ("gateway/meta_mcp/task_replay.rs", 1),
+    ("retry_later", 1),
 ];
 
 #[test]
 fn the_sealed_transient_is_built_only_at_reviewed_pre_send_sites() {
-    let mut found = construction_counts("transient_retry_error");
-    for (file, count) in construction_counts("transient_mint_refusal") {
-        *found.entry(file).or_default() += count;
+    let mut found = construction_sites("transient_retry_error");
+    for (item, count) in construction_sites("transient_mint_refusal") {
+        *found.entry(item).or_default() += count;
     }
     let allowed: BTreeMap<String, usize> = TRANSIENT_SITES
         .iter()
-        .map(|(file, count)| ((*file).to_string(), *count))
+        .map(|(item, count)| ((*item).to_string(), *count))
         .collect();
     assert_eq!(
         found, allowed,
         "the sealed transient frees an idempotency key, so it may be built only \
          before anything reaches the backend: review every new or removed call \
          site (left: found, right: reviewed)"
+    );
+}
+
+/// The item key is the enclosing method or function, whatever file holds it.
+#[test]
+fn a_construction_is_keyed_by_its_enclosing_item() {
+    let src = "use a::make;\nimpl<T: Clone> Holder<T> {\n    fn build(&self) { make(); }\n}\nimpl Show for Wrapper {\n    fn show() { make(); }\n}\nfn free() { make(); }\n";
+    let clean = sanitize(src);
+    let items: Vec<String> = construction_offsets(&clean, "make")
+        .into_iter()
+        .map(|at| enclosing_item(&clean, at))
+        .collect();
+    assert_eq!(
+        items,
+        ["<module>", "Holder::build", "Wrapper::show", "free"]
     );
 }

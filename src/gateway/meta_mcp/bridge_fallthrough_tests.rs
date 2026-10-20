@@ -470,18 +470,14 @@ impl crate::transport::Transport for AsksThenAnswers {
 }
 
 /// MIK-8498 characterisation: a retry routed to its origin backend answers
-/// with the backend's own envelope (native), though `dispatch_below_gate`
-/// asked for the wrapped meta reply; wrapping would stringify that envelope
-/// into the text block.
+/// with the backend's own envelope (native), byte for byte, though
+/// `dispatch_below_gate` asked for the wrapped meta reply; wrapping would
+/// stringify that envelope into a text block.
 #[cfg(feature = "firewall")]
 fn assert_answers_native(response: &crate::protocol::JsonRpcResponse) {
-    let text = response
-        .result
-        .as_ref()
-        .and_then(|r| r["content"][0]["text"].as_str())
-        .unwrap_or_default();
-    assert!(
-        !text.contains("\"content\""),
+    assert_eq!(
+        response.result,
+        Some(json!({"content": [{"type": "text", "text": "answered"}], "isError": false})),
         "a retry to its origin backend answers native: {response:?}"
     );
 }
