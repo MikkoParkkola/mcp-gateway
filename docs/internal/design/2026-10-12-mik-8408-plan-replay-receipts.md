@@ -304,3 +304,64 @@ These supersede the d3 body and the delta wherever they conflict.
 - G31 setup includes a seam and a cut, and asserts that the replay records (the detector holds the reader).
 
 Process next: test plan (gpt + muse) → red rows on the release line → implementation after STORED.2 merges (plan path after MIK-8406).
+
+---
+
+# MIK-8408 d4 delta (2026-10-20, lane bind-8440): no record bump; nested steps renew
+
+Why a delta: d3 and its binding text were frozen on 2026-10-12, before MIK-8392 STORED.2, MIK-8406, #3979 (MIK-8440/8407: per-step `bindings` at task record version 9) and #3980 (the `visible/` module). d3 planned to persist plan steps as "task record v9", and #3979 now owns version 9. This delta settles what 8408 persists after those landed, and takes in the folded MIK-8409 criteria (operator ruling 2026-10-17: one change in 4.0.0). These sections supersede d3 and the binding text wherever they conflict.
+
+## H1. Nothing new is persisted; the task record stays at version 9
+
+E3 kept one persisted field, `PlanProvenance.steps`, for two uses. Neither still needs it:
+
+| use of `steps` (E3, D4) | covered on the line by |
+|---|---|
+| the task-path targets check (E2 step 3, G3, G35): a replayed receipt's source, or each constituent of a seam's composite source, must be a call this task made | `Record.targets` (TARGET_VERSION 5). It is noted at the same dispatch point (`dispatch_log::note_completed`, under the worker's `DispatchLog`) under the same rule d3 D1(i) asked of `steps`: every step past the authorization chokepoint, success or failure; it is cumulative across a resume (`store_targets::merge_targets` adds and deduplicates). The label `steps` added is not read by the check. |
+| `executed_steps` for MIK-8406 (D4) | not needed. MIK-8406 merged judging every declared step (`Declared`), and D4 already said 8408 "uses `steps` only for the targets check". No `executed_steps` and no second parser are built. |
+
+The one remaining use of labels is telling which calls ran under a label (H2). That is needed only when replay receipts exist, and those live in the process-local store (E1): after a restart there is nothing to stage whatever the disk holds (stated limit E4). So the label-to-call list moves into the in-memory entry beside the receipts (H2), and nothing reaches disk.
+
+Consequences:
+- No record version bump. `BINDING_VERSION` (9) stays the newest format; `MAX_LOADABLE_VERSION` is unchanged.
+- No rollback change: the v9 data-wipe procedure in `upgrading.d/8440.md` covers this release as written. d3 §4's rollback bullet and its UPGRADING edit are withdrawn.
+- `StoredDelivery` (sync, in memory) gains nothing: its `plan.steps` (E3) is withdrawn too; the in-memory entry carries the list.
+- The account check is already done before staging: #3979 judges every stored step's recorded binding (`stored_binding::judge`) in `authorize_stored` and at the sync replay, and 8408 stages only after that authorization (D7, E2 step 1). 8408 adds no binding logic.
+
+## H2. The in-memory entry carries its calls
+
+`ReplayReceipts` entry = the F2 snapshot plus `calls: Vec<(label: Option<u32>, server, tool)>`, taken at the same commit point from the live run (the labels `plan_step` gave each dispatch). Bounded with the entry (the 1 MiB entry cap and the 32 MiB total, E1); an entry over the cap is not stored and counted, as before (G34). This is the d3 D1(i) list, kept in memory instead of on disk.
+
+## H3. A nested step renews one receipt per inner call (MIK-8409.NESTED.1-3)
+
+d3 E2 step 4 and F5 staged nothing for a label with more than one distinct call, because d2/d3 rebuilt receipts from stored text: the stored provenance had only the outer member's text, and staging it under each inner call would have given an undue same-source excuse (MIK-8409 context). Under E1/F2 that reconstruction is gone: the snapshot is each receipt exactly as live committed it.
+
+Live already keeps one receipt per inner call over that call's own text:
+- retention keeps a leaf in a receipt only when it carries the step's label **and** is in that receipt's own output (`collusion_runs.rs`, `delivered.label(i) == step && whole.contains(..)`), so an inner call's receipt never holds another inner call's text, unless the two outputs contain the same text, in which case live grants the same;
+- subset seams are attributed only when exactly one receipt of the step keeps every piece (`relay_seams_record.rs`, `add_subset_seams`, #3726 p1).
+
+So replay stages a nested step's receipts like any other: each snapshot receipt under its own source and its own label. E2 step 4 is withdrawn. F5 is narrowed: seam receipts (`step: None`, composite sources) of an entry whose `calls` show a nested label are still dropped and counted (`reason=nested_seam`), because a composite seam over nested text was never reviewed for exact-source excuses; this is the one remaining nested limit, stated in the changelog.
+
+NESTED.3's bound and drop-whole-and-count policy are the entry's: every inner receipt counts against the 1 MiB entry cap and the 32 MiB total; an entry over the cap drops whole, counted.
+
+The MIK-8409 fail-fast still applies: the NESTED.1 row must be red on the line first. If an inner answer is projected into the outer output with no member boundary, live keeps nothing for it, and replay copies that: renewal for that shape stays out, as live.
+
+## H4. Rows
+
+Withdrawn (they test persisted steps, a version bump or `executed_steps`): G5, G7a-c and the steps bounds, G8, G14, G15-G17 and G15b-e, G19, G28, G43's provenance tier, and G32's "steps still loads" clause. G9 stays as a guard that no new version is written: a fresh row is created at version 9 (`BINDING_VERSION`).
+
+Retargeted to the in-memory `calls` (same setup, same expectation, the list read from the entry): G18, G20, G21, G44.
+
+New or rewritten:
+- N1 (NESTED.1, red first): alice runs a playbook whose step 1 runs a two-call chain (S1 sensitive, S2 plain); relay window lapses; alice re-reads; bob relaying S1's text → -32002. Task path and keyed sync.
+- N2 (NESTED.2, guard): in that replay, S2's staged receipt holds no fingerprint of S1's text and S1's none of S2's. Mutant: stage the label's whole text under each inner call.
+- N3 (NESTED.3): an entry whose inner receipts push it past the 1 MiB cap is not stored, counted; the other entries still renew.
+- G6/G40 (rewritten): a nested label's inner receipts are staged under their own sources; a seam receipt touching the nested label is not staged, counted `reason=nested_seam`. Mutant: stage the seam.
+- G45: no version change. A plan task row created on this branch loads in a build with `MAX_LOADABLE_VERSION = BINDING_VERSION` and is written at version 9. Mutant: bump the version.
+
+R1-R9, C1, G1-G4, G10-G13, G25-G27, G29-G31, G33-G42 stand.
+
+## H5. Changelog and upgrade note
+
+- Changelog: replayed plans renew relay receipts per step, nested steps included; limits: restart, eviction, detection off at delivery, nested seams.
+- Upgrade note: no format change, no new rollback step (the v9 procedure of `upgrading.d/8440.md` applies).
