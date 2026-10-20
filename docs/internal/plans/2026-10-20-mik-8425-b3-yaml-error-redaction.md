@@ -1,6 +1,6 @@
 # MIK-8425 B3: YAML errors never print the offending value
 
-Status: plan for review, 2026-10-20. Refs MIK-8425. Lead ruling 2026-10-20:
+Status: frozen 2026-10-20 (see the end of "Behaviour change"). Refs MIK-8425. Lead ruling 2026-10-20:
 approved on both paths (swap in 4.0.0 or the dated extension). Redact
 offending values in YAML errors in `src/yaml.rs`, with the G2 sentinel test;
 rewrite the exact-text tests it breaks. This is a CWE-532 leak fix.
@@ -189,6 +189,7 @@ grok SHIP-WITH-FIXES grok-20261020T032620Z-67157):
 - fixed-text pins;
 - the MIG.0 goldens are retargeted;
 - the upgrade note.
+- Second fold (code review): the guard is built on syn (comments, escapes and macro delimiters), the location pin refuses the scalar, the duration writers use assert_redacted with a passing control. Not in scope, noted: a bad duration read names neither its field nor a line, because serde_yaml attaches no path to a custom error (pre-existing).
 
 ## Out of scope
 
@@ -205,5 +206,4 @@ grok SHIP-WITH-FIXES grok-20261020T032620Z-67157):
 - Spark runs the targeted tests, clippy on both feature sets, and the gate.
 - The seats review the code. The gap-finder runs, then the brief goes to
   the lead.
-- Cut from the line once #3993 (B2) merges, because both touch
-  `src/yaml.rs`.
+- Cut from the line after #3993 (B2) merged (d7a40d52b).

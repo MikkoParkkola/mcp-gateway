@@ -315,6 +315,10 @@ fn the_location_is_kept() {
         display.contains(&format!("at line {} column {}", loc.line(), loc.column())),
         "location lost: {display:?}"
     );
+    assert!(
+        !display.contains("abc"),
+        "location pin prints the scalar: {display:?}"
+    );
 }
 
 #[test]
@@ -326,42 +330,28 @@ fn a_too_long_duration_write_does_not_print_its_seconds() {
         Ok(s) => panic!("accepted a too-long duration; wrote {s:?}"),
         Err(e) => e,
     };
-    let display = err.to_string();
-    let debug = format!("{err:?}");
-    assert!(
-        !display.contains("4242424242420"),
-        "Display prints the seconds: {display:?}"
-    );
-    assert!(
-        !debug.contains("4242424242420"),
-        "Debug prints the seconds: {debug:?}"
-    );
-    assert!(
-        display.contains("this duration is longer than 100 years"),
-        "wrong reason: {display:?}"
+    assert_redacted(
+        "to_string",
+        &err,
+        "4242424242420",
+        "this duration is longer than 100 years",
     );
     let Err(value_err) = yaml::to_value(&w) else {
         panic!("accepted a too-long duration via to_value");
     };
-    let value_display = value_err.to_string();
-    let value_debug = format!("{value_err:?}");
-    assert!(
-        !value_display.contains("4242424242420"),
-        "Display prints the seconds: {value_display:?}"
-    );
-    assert!(
-        !value_debug.contains("4242424242420"),
-        "Debug prints the seconds: {value_debug:?}"
-    );
-    assert!(
-        value_display.contains("this duration is longer than 100 years"),
-        "wrong reason: {value_display:?}"
+    assert_redacted(
+        "to_value",
+        &value_err,
+        "4242424242420",
+        "this duration is longer than 100 years",
     );
     let ok = Wait {
         d: std::time::Duration::from_secs(30),
     };
     let text = yaml::to_string(&ok).expect("control writes");
     assert!(text.contains("30s"), "control writes 30s: {text:?}");
+    let tree = yaml::to_value(&ok).expect("control value writes");
+    assert_eq!(tree.get("d").and_then(yaml::Value::as_str), Some("30s"));
 }
 
 fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
@@ -377,308 +367,141 @@ fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-fn is_ident_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_'
-}
-
-fn normal_string_end(bytes: &[u8], start: usize) -> Option<usize> {
-    let mut i = start + 1;
-    while i < bytes.len() {
-        if bytes[i] == b'\\' {
-            i += 1;
-            if i < bytes.len() {
-                i += 1;
-            } else {
-                return None;
-            }
-        } else if bytes[i] == b'"' {
-            return Some(i + 1);
-        } else {
-            i += 1;
-        }
-    }
-    None
-}
-
-fn raw_open_hashes(bytes: &[u8], start: usize) -> Option<usize> {
-    if bytes.get(start) != Some(&b'r') {
-        return None;
-    }
-    let mut i = start + 1;
-    let mut hashes = 0usize;
-    while i < bytes.len() && bytes[i] == b'#' {
-        hashes += 1;
-        i += 1;
-    }
-    if i < bytes.len() && bytes[i] == b'"' {
-        Some(hashes)
-    } else {
-        None
-    }
-}
-
-fn raw_string_end(bytes: &[u8], start: usize, hashes: usize) -> Option<usize> {
-    let mut i = start + 1 + hashes + 1;
-    while i < bytes.len() {
-        if bytes[i] == b'"' {
-            let mut j = i + 1;
-            let mut count = 0usize;
-            while count < hashes && j < bytes.len() && bytes[j] == b'#' {
-                count += 1;
-                j += 1;
-            }
-            if count == hashes {
-                return Some(j);
-            }
-        }
-        i += 1;
-    }
-    None
-}
-
-fn char_literal_end(bytes: &[u8], start: usize) -> Option<usize> {
-    if bytes.get(start) != Some(&b'\'') {
-        return None;
-    }
-    if bytes.get(start + 1) != Some(&b'\\') {
-        if bytes.get(start + 2) == Some(&b'\'') {
-            return Some(start + 3);
-        }
-        return None;
-    }
-    if bytes.get(start + 2) == Some(&b'u') {
-        let mut i = start + 3;
-        while i < bytes.len() {
-            if bytes[i] == b'\'' {
-                return Some(i + 1);
-            }
-            i += 1;
-        }
-        return None;
-    }
-    if bytes.get(start + 2) == Some(&b'x') {
-        if bytes.get(start + 5) == Some(&b'\'') {
-            return Some(start + 6);
-        }
-        return None;
-    }
-    if bytes.get(start + 3) == Some(&b'\'') {
-        return Some(start + 4);
-    }
-    None
-}
-
-fn raw_skip(bytes: &[u8], i: usize) -> Option<usize> {
-    if bytes.get(i) != Some(&b'r') {
-        return None;
-    }
-    if i > 0 && is_ident_byte(bytes[i - 1]) {
-        return None;
-    }
-    let hashes = raw_open_hashes(bytes, i)?;
-    raw_string_end(bytes, i, hashes)
-}
-
-fn normal_skip(bytes: &[u8], i: usize) -> Option<usize> {
-    if bytes.get(i) != Some(&b'"') {
-        return None;
-    }
-    normal_string_end(bytes, i)
-}
-
-fn char_skip(bytes: &[u8], i: usize) -> Option<usize> {
-    if bytes.get(i) != Some(&b'\'') {
-        return None;
-    }
-    char_literal_end(bytes, i)
-}
-
-fn matching_paren(text: &str, open: usize) -> Option<usize> {
+/// Whether `text` holds a format placeholder: a `{` not doubled as `{{`.
+fn has_placeholder(text: &str) -> bool {
     let bytes = text.as_bytes();
-    if bytes.get(open) != Some(&b'(') {
-        return None;
-    }
-    let mut depth = 0usize;
-    let mut i = open;
-    while i < bytes.len() {
-        if let Some(end) = raw_skip(bytes, i) {
-            i = end;
-            continue;
-        }
-        if let Some(end) = normal_skip(bytes, i) {
-            i = end;
-            continue;
-        }
-        if let Some(end) = char_skip(bytes, i) {
-            i = end;
-            continue;
-        }
-        if bytes[i] == b'(' {
-            depth += 1;
-        } else if bytes[i] == b')' {
-            depth = depth.checked_sub(1)?;
-            if depth == 0 {
-                return Some(i);
-            }
-        }
-        i += 1;
-    }
-    None
-}
-
-fn custom_argument(text: &str, at: usize) -> Option<&str> {
-    let open = at + "::custom".len();
-    if text.as_bytes().get(open) != Some(&b'(') {
-        return None;
-    }
-    let close = matching_paren(text, open)?;
-    Some(&text[open + 1..close])
-}
-
-fn has_single_brace(content: &str) -> bool {
-    let bytes = content.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'{' {
-            if i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-                i += 2;
-            } else {
+            if bytes.get(i + 1) != Some(&b'{') {
                 return true;
             }
-        } else {
             i += 1;
         }
+        i += 1;
     }
     false
 }
 
-fn first_literal_content(arg: &str, paren: usize) -> Option<&str> {
-    let bytes = arg.as_bytes();
-    let mut i = paren + 1;
-    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    if i >= bytes.len() {
-        return None;
-    }
-    if let Some(hashes) = raw_open_hashes(bytes, i) {
-        let end = raw_string_end(bytes, i, hashes)?;
-        let content_start = i + 1 + hashes + 1;
-        let content_end = end - 1 - hashes;
-        return Some(&arg[content_start..content_end]);
-    }
-    if bytes[i] == b'"' {
-        let end = normal_string_end(bytes, i)?;
-        return Some(&arg[i + 1..end - 1]);
-    }
-    None
-}
-
-fn is_single_plain_string_literal(inner: &str) -> bool {
-    let trimmed = inner.trim();
-    let core = trimmed.strip_suffix(',').map_or(trimmed, str::trim);
-    if core.is_empty() {
+/// Whether `func` calls a `...::custom` error constructor.
+fn is_custom_call(func: &syn::Expr) -> bool {
+    let syn::Expr::Path(called) = func else {
+        return false;
+    };
+    let mut segments = called.path.segments.iter().rev();
+    let Some(last) = segments.next() else {
+        return false;
+    };
+    if last.ident != "custom" {
         return false;
     }
-    let bytes = core.as_bytes();
-    if let Some(hashes) = raw_open_hashes(bytes, 0) {
-        let Some(end) = raw_string_end(bytes, 0, hashes) else {
-            return false;
-        };
-        return core[end..].trim().is_empty();
-    }
-    if bytes[0] == b'"' {
-        let Some(end) = normal_string_end(bytes, 0) else {
-            return false;
-        };
-        return core[end..].trim().is_empty();
-    }
-    false
+    // `Policy::custom` takes a closure, not a message (reqwest redirect).
+    !segments.next().is_some_and(|prev| prev.ident == "Policy")
 }
 
-fn macro_paren(bytes: &[u8], i: usize, name: &str) -> Option<usize> {
-    let name_bytes = name.as_bytes();
-    if bytes.len() < i + name_bytes.len() + 1 {
-        return None;
+/// Whether a `format!`/`format_args!` macro formats a value into its message:
+/// its first argument is a string literal holding a placeholder. Tokens that
+/// do not parse flag too (fail closed).
+fn macro_formats_a_value(mac: &syn::Macro) -> bool {
+    let is_format = mac
+        .path
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == "format" || segment.ident == "format_args");
+    if !is_format {
+        return false;
     }
-    if &bytes[i..i + name_bytes.len()] != name_bytes {
-        return None;
-    }
-    if i > 0 && is_ident_byte(bytes[i - 1]) {
-        return None;
-    }
-    if bytes[i + name_bytes.len()] != b'!' {
-        return None;
-    }
-    let mut j = i + name_bytes.len() + 1;
-    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-        j += 1;
-    }
-    if j < bytes.len() && bytes[j] == b'(' {
-        Some(j)
-    } else {
-        None
+    let parsed = syn::parse::Parser::parse2(
+        syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated,
+        mac.tokens.clone(),
+    );
+    let Ok(args) = parsed else {
+        return true;
+    };
+    match args.first() {
+        Some(syn::Expr::Lit(literal)) => match &literal.lit {
+            syn::Lit::Str(text) => has_placeholder(&text.value()),
+            _ => false,
+        },
+        _ => false,
     }
 }
 
-fn call_paren(bytes: &[u8], i: usize, name: &str) -> Option<usize> {
-    let name_bytes = name.as_bytes();
-    if bytes.len() < i + name_bytes.len() + 1 {
-        return None;
+/// Whether a `too_long(...)` call carries anything but one plain string literal.
+fn too_long_formats_a_value(call: &syn::ExprCall) -> bool {
+    let syn::Expr::Path(called) = call.func.as_ref() else {
+        return false;
+    };
+    let is_too_long = called
+        .path
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == "too_long");
+    if !is_too_long {
+        return false;
     }
-    if &bytes[i..i + name_bytes.len()] != name_bytes {
-        return None;
+    let mut args = call.args.iter();
+    !matches!(
+        (args.next(), args.next()),
+        (Some(syn::Expr::Lit(literal)), None) if matches!(literal.lit, syn::Lit::Str(_))
+    )
+}
+
+/// Flags any value formatting inside one `custom` argument, walking into
+/// nested expressions (closures, blocks, method calls) to find it.
+struct FormatsAValue {
+    hit: bool,
+}
+
+impl<'ast> syn::visit::Visit<'ast> for FormatsAValue {
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        if macro_formats_a_value(mac) {
+            self.hit = true;
+        }
+        syn::visit::visit_macro(self, mac);
     }
-    if i > 0 && is_ident_byte(bytes[i - 1]) {
-        return None;
-    }
-    let mut j = i + name_bytes.len();
-    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-        j += 1;
-    }
-    if j < bytes.len() && bytes[j] == b'(' {
-        Some(j)
-    } else {
-        None
+
+    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+        if too_long_formats_a_value(node) {
+            self.hit = true;
+        }
+        syn::visit::visit_expr_call(self, node);
     }
 }
 
-fn formats_a_value(arg: &str) -> bool {
-    let bytes = arg.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if let Some(end) = raw_skip(bytes, i) {
-            i = end;
-            continue;
-        }
-        if let Some(end) = normal_skip(bytes, i) {
-            i = end;
-            continue;
-        }
-        if let Some(end) = char_skip(bytes, i) {
-            i = end;
-            continue;
-        }
-        if let Some(paren) =
-            macro_paren(bytes, i, "format_args").or_else(|| macro_paren(bytes, i, "format"))
-        {
-            if let Some(content) = first_literal_content(arg, paren)
-                && has_single_brace(content)
-            {
-                return true;
+/// The `...::custom(` calls in `file` that format a value into the message.
+///
+/// Covers every `...::custom(` call in `src/` parsed by syn, including
+/// inside closures and nested calls. Boundary: a `custom` reached through
+/// a `use` alias with another name, or a call generated inside a macro
+/// body other than `format!`, is not seen.
+///
+/// One entry per hit. Spans carry no line here (`span-locations` is not
+/// enabled, and the guard adds no features), so the caller reports the
+/// file path only.
+fn value_formatting_custom_calls(file: &syn::File) -> Vec<usize> {
+    struct CustomCalls {
+        hits: Vec<usize>,
+    }
+
+    impl<'ast> syn::visit::Visit<'ast> for CustomCalls {
+        fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+            if is_custom_call(&node.func) {
+                let mut argument = FormatsAValue { hit: false };
+                for arg in &node.args {
+                    syn::visit::Visit::visit_expr(&mut argument, arg);
+                }
+                if argument.hit {
+                    self.hits.push(0);
+                }
             }
-        } else if let Some(paren) = call_paren(bytes, i, "too_long") {
-            let Some(close) = matching_paren(arg, paren) else {
-                return true;
-            };
-            let inner = &arg[paren + 1..close];
-            if !is_single_plain_string_literal(inner) {
-                return true;
-            }
+            syn::visit::visit_expr_call(self, node);
         }
-        i += 1;
     }
-    false
+
+    let mut calls = CustomCalls { hits: Vec::new() };
+    syn::visit::Visit::visit_file(&mut calls, file);
+    calls.hits
 }
 
 #[test]
@@ -688,21 +511,19 @@ fn custom_errors_never_format_a_value() {
     collect_rs(&manifest.join("src"), &mut files);
     let mut hits = Vec::new();
     for path in &files {
-        let text = std::fs::read_to_string(path).expect("test reads src files");
-        for (at, _) in text.match_indices("::custom(") {
-            if text[..at].ends_with("Policy") {
-                continue;
-            }
-            let Some(arg) = custom_argument(&text, at) else {
-                panic!("unbalanced ::custom( in {}", path.display());
-            };
-            if formats_a_value(arg) {
-                let line = text[..at].matches('\n').count() + 1;
-                let rel = path
-                    .strip_prefix(&manifest)
-                    .map_or_else(|_| path.clone(), std::path::Path::to_path_buf);
-                hits.push(format!("{}:{}", rel.display(), line));
-            }
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) => panic!("cannot read {}: {error}", path.display()),
+        };
+        let parsed = match syn::parse_file(&text) {
+            Ok(parsed) => parsed,
+            Err(error) => panic!("cannot parse {}: {error}", path.display()),
+        };
+        let rel = path
+            .strip_prefix(&manifest)
+            .map_or_else(|_| path.clone(), std::path::Path::to_path_buf);
+        for _hit in value_formatting_custom_calls(&parsed) {
+            hits.push(rel.display().to_string());
         }
     }
     assert!(hits.is_empty(), "custom errors formatting values: {hits:?}");
@@ -717,16 +538,20 @@ fn the_guard_catches_the_tricky_forms() {
         r#"Error::custom(too_long(&format!("{}s", n)))"#,
         "Error::custom(too_long(&name))",
         r#"Error::custom(format!("a ) b {}", x))"#,
+        r#"Error::custom(format!(/* why */ "bad {x}"))"#,
+        r#"Error::custom(format!("bad {}", /* ) */ x))"#,
+        r#"Error::custom(format!("bad \x7b}", x))"#,
+        r#"Error::custom(format![ "bad {}", x ])"#,
+        r#"Error::custom(format!{ "bad {}", x })"#,
     ] {
-        let Some(at) = text.find("::custom(") else {
-            panic!("fixture lacks ::custom(: {text:?}");
-        };
-        let Some(arg) = custom_argument(text, at) else {
-            panic!("unbalanced ::custom( in fixture: {text:?}");
+        let source = format!("fn f() {{ {text}; }}");
+        let parsed = match syn::parse_file(&source) {
+            Ok(parsed) => parsed,
+            Err(error) => panic!("fixture does not parse: {text:?}: {error}"),
         };
         assert!(
-            formats_a_value(arg),
-            "guard missed a value: {text:?} -> {arg:?}"
+            !value_formatting_custom_calls(&parsed).is_empty(),
+            "guard missed a value: {text:?}"
         );
     }
     for text in [
@@ -735,15 +560,14 @@ fn the_guard_catches_the_tricky_forms() {
         r#"Error::custom(format!("{{literal}}"))"#,
         r#"Error::custom("a ( b")"#,
     ] {
-        let Some(at) = text.find("::custom(") else {
-            panic!("fixture lacks ::custom(: {text:?}");
-        };
-        let Some(arg) = custom_argument(text, at) else {
-            panic!("unbalanced ::custom( in fixture: {text:?}");
+        let source = format!("fn f() {{ {text}; }}");
+        let parsed = match syn::parse_file(&source) {
+            Ok(parsed) => parsed,
+            Err(error) => panic!("fixture does not parse: {text:?}: {error}"),
         };
         assert!(
-            !formats_a_value(arg),
-            "guard flagged a fixed string: {text:?} -> {arg:?}"
+            value_formatting_custom_calls(&parsed).is_empty(),
+            "guard flagged a fixed string: {text:?}"
         );
     }
 }

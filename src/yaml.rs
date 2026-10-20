@@ -10,7 +10,10 @@
 //! A later stage swaps the backend behind this same surface.
 //! `tests/fixtures/mik_8425_yaml/` records what the delegating functions must
 //! reproduce, and the skills parser and registry tests pin `to_json`.
-//! Errors from this seam never print the value that caused them (MIK-8425 B3).
+//! The seam's own `Error` (every function here except `figment_data`)
+//! never prints the value that caused it (MIK-8425 B3); `figment_data`
+//! returns figment's error, which `config/load_error.rs` (`from_figment`)
+//! redacts.
 //!
 //! This file names nothing under `crate::`. Integration tests compile it
 //! directly (`tests/common/yaml.rs`), so tests and the gateway always share

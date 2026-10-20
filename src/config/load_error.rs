@@ -11,7 +11,8 @@
 //! are kept, which is what an operator needs to find and fix the line.
 //!
 //! The message redactor lives in the YAML adapter
-//! (`crate::yaml::redact_message`) since B3, shared by every YAML read.
+//! (`crate::yaml::redact_message`) since B3 and is shared by the adapter's
+//! own `Error` and by this module's `from_figment`.
 
 pub(crate) use crate::yaml::redact_message;
 use figment::error::{Actual, Kind, OneOf};
