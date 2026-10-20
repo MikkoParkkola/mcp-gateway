@@ -95,25 +95,18 @@ impl BudgetEnforcer {
     }
 
     fn snapshot_at(&self, taken_at: Option<u64>) -> EnforcerSnapshot {
-        #[allow(clippy::cast_precision_loss)]
-        let global_daily_usd = self.global_daily.current() as f64 / 1_000_000.0;
+        let global_daily_usd = usd(self.global_daily.current());
 
         let tool_daily: HashMap<String, f64> = self
             .tool_daily
             .iter()
-            .map(|e| {
-                #[allow(clippy::cast_precision_loss)]
-                (e.key().clone(), e.value().current() as f64 / 1_000_000.0)
-            })
+            .map(|e| (e.key().clone(), usd(e.value().current())))
             .collect();
 
         let key_daily: HashMap<String, f64> = self
             .key_daily
             .iter()
-            .map(|e| {
-                #[allow(clippy::cast_precision_loss)]
-                (e.key().clone(), e.value().current() as f64 / 1_000_000.0)
-            })
+            .map(|e| (e.key().clone(), usd(e.value().current())))
             .collect();
 
         EnforcerSnapshot {
