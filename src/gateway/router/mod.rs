@@ -199,6 +199,8 @@ mod playbook_busy_tests;
 mod playbook_envelope_tests;
 #[cfg(test)]
 mod playbook_key_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod relay_key_settlement_tests; // MIK-8488 PR-A: site 18's key release
 /// MIK-8058: a failed reload's status says whose fault it is.
 #[cfg(all(test, feature = "webui"))]
 mod reload_status_tests;

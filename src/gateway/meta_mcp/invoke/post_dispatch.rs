@@ -411,12 +411,7 @@ impl MetaMcp {
             // The caller the slot is charged to (MIK-8293); a caller no
             // quota key names is refused like an unbindable one.
             let Some(quota) = caller.quota_key() else {
-                warn!(
-                    target: INVOKE_TARGET,
-                    server,
-                    tool, trace_id, "Cannot mint a continuation for this caller; refusing"
-                );
-                return Err(unbindable_continuation(server, tool));
+                return Err(refuse_unbindable(server, tool, trace_id));
             };
             match worker_clock::mint_or_withhold(
                 &self.continuation,
@@ -448,12 +443,7 @@ impl MetaMcp {
                     withheld = Some((binding, state));
                 }
                 worker_clock::Minted::Refused => {
-                    warn!(
-                        target: INVOKE_TARGET,
-                        server,
-                        tool, trace_id, "Cannot mint a continuation for this caller; refusing"
-                    );
-                    return Err(unbindable_continuation(server, tool));
+                    return Err(refuse_unbindable(server, tool, trace_id));
                 }
             }
         } else {
@@ -615,4 +605,19 @@ impl MetaMcp {
             sealed
         }))
     }
+}
+
+/// The refusal for a continuation the gateway cannot bind to this caller,
+/// logged once at the refusal (MIK-8488 INVOKE.6: the post-dispatch side's one
+/// copied refusal). The worker hand-off's own refusal does not log and does not
+/// use it.
+fn refuse_unbindable(server: &str, tool: &str, trace_id: &str) -> crate::Error {
+    warn!(
+        target: INVOKE_TARGET,
+        server,
+        tool,
+        trace_id,
+        "Cannot mint a continuation for this caller; refusing"
+    );
+    unbindable_continuation(server, tool)
 }

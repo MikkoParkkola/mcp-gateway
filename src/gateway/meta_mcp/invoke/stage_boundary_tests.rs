@@ -66,13 +66,25 @@ impl crate::transport::Transport for Probe {
 }
 
 fn gateway(probe: &Arc<Probe>) -> MetaMcp {
+    gateway_on(
+        Arc::clone(probe) as Arc<dyn crate::transport::Transport>,
+        BackendConfig::r2_off(),
+    )
+}
+
+/// A gateway whose one backend, `svc`, talks over `transport` with `config`.
+fn gateway_on(transport: Arc<dyn crate::transport::Transport>, config: BackendConfig) -> MetaMcp {
     let backend = Arc::new(Backend::new(
         "svc",
-        BackendConfig::r2_off(),
+        config,
         &FailsafeConfig::default(),
         Duration::from_secs(60),
     ));
-    backend.set_transport_for_test(Arc::clone(probe) as Arc<dyn crate::transport::Transport>);
+    gateway_with(backend, transport)
+}
+
+fn gateway_with(backend: Arc<Backend>, transport: Arc<dyn crate::transport::Transport>) -> MetaMcp {
+    backend.set_transport_for_test(transport);
     let registry = Arc::new(BackendRegistry::new());
     assert!(registry.register(backend));
     MetaMcp::new(registry)
@@ -301,4 +313,356 @@ fn the_send_path_boxes_one_dispatch_and_drops_the_admission_right_after_it() {
         only_comments,
         "code runs between the dispatch's await and the admission's drop"
     );
+}
+
+// ---- MIK-8488 PR-A (INVOKE.6): one row per pre-send settlement site that no
+// earlier row catches. Each is red against its settlement-only mutant (the
+// site's settlement removed, its exit kept) and green on the code it pins.
+
+/// A backend that answers every `tools/call` with its own JSON-RPC error.
+struct Failing(AtomicUsize);
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for Failing {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<JsonRpcResponse> {
+        if method == "tools/call" {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            return Ok(JsonRpcResponse::error(
+                Some(RequestId::Number(1)),
+                -32050,
+                "backend refused",
+            ));
+        }
+        Ok(JsonRpcResponse::success(RequestId::Number(1), json!({})))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+fn probe() -> Arc<Probe> {
+    Arc::new(Probe {
+        signing: None,
+        witness_at_dispatch: AtomicBool::new(false),
+        calls: AtomicUsize::new(0),
+        sent: std::sync::Mutex::new(None),
+    })
+}
+
+fn keyed(retry: &crate::protocol::mrtr::RetryFields) -> MetaMcpCallerContext<'_> {
+    MetaMcpCallerContext {
+        retry,
+        ..crate::gateway::meta_mcp::anonymous_caller()
+    }
+}
+
+fn retry(key: &str) -> crate::protocol::mrtr::RetryFields {
+    crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some(key.to_owned()),
+        ..Default::default()
+    }
+}
+
+fn with_idempotency(meta: &mut MetaMcp) {
+    meta.enable_idempotency(
+        Arc::new(crate::idempotency::IdempotencyCache::new()),
+        Duration::from_secs(300),
+    );
+}
+
+/// Run the keyed call once, then again under an execution lease of its own,
+/// and return the steps the lease noted as served by the second call.
+async fn served_on_the_replay(meta: &MetaMcp, key: &str) -> Vec<(String, String)> {
+    let args = json!({"server": "svc", "tool": "act", "arguments": {}});
+    let session = Some("session-8488");
+    let inner = retry(key);
+    let _first = meta.invoke_tool(&args, session, &keyed(&inner)).await;
+    let outer = retry(&format!("{key}-outer"));
+    // An owned lease needs an owner principal, as #3872's rows give it.
+    let lease_owner = MetaMcpCallerContext {
+        is_modern: true,
+        credential_principal: Some("verified-credential-owner"),
+        ..keyed(&outer)
+    };
+    let admitted = meta.admit_meta_sync_for_test(
+        crate::gateway::meta_mcp::AdmissionOwner::for_test(lease_owner.owner_principal()),
+        &lease_owner,
+        "gateway_invoke",
+        &args,
+        session,
+        &RequestId::Number(1),
+    );
+    let Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Owned(lease)) = admitted else {
+        panic!("premise: the replaying execution owns its own lease");
+    };
+    let caller = MetaMcpCallerContext {
+        execution: Some(&lease),
+        ..keyed(&inner)
+    };
+    let _second = meta.invoke_tool(&args, session, &caller).await;
+    lease.served_steps_for_test()
+}
+
+/// S4, site 11 (mutant s11): a keyed call answered from its stored result is
+/// noted on its execution as served (`SyncLease::note_step`, the note #3872's
+/// replay rule reads). The row pins the note on the lease, not a later replay.
+#[tokio::test]
+async fn an_idempotency_hit_is_noted_as_served() {
+    let probe = probe();
+    let mut meta = gateway(&probe);
+    with_idempotency(&mut meta);
+    let served = served_on_the_replay(&meta, "k-8488-hit").await;
+    assert_eq!(
+        probe.calls.load(Ordering::SeqCst),
+        1,
+        "premise: the replay was served, not sent"
+    );
+    assert_eq!(served, vec![("svc".to_owned(), "act".to_owned())]);
+}
+
+/// S4, site 11, second shape (mutant s11): a keyed call whose stored result
+/// is the backend's own error answer (completed as a tool error, not stored as
+/// a failure) is served that answer and noted as served too.
+#[tokio::test]
+async fn a_replayed_backend_error_answer_is_noted_as_served() {
+    let failing = Arc::new(Failing(AtomicUsize::new(0)));
+    let mut meta = gateway_on(
+        Arc::clone(&failing) as Arc<dyn crate::transport::Transport>,
+        BackendConfig::r2_off(),
+    );
+    with_idempotency(&mut meta);
+    let served = served_on_the_replay(&meta, "k-8488-fail").await;
+    assert_eq!(
+        failing.0.load(Ordering::SeqCst),
+        1,
+        "premise: the replay was served, not sent"
+    );
+    assert_eq!(served, vec![("svc".to_owned(), "act".to_owned())]);
+}
+
+/// S1, site 3 (mutant s03): a target the gate let past (test seam) that the
+/// dispatch-time policy check refuses is answered as the gate would answer
+/// it, and that answer asks for the signing nonce back.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_backstop_answer_asks_for_the_nonce_back() {
+    static DENY: crate::gateway::authz::DenyAll = crate::gateway::authz::DenyAll;
+    let probe = probe();
+    let meta = gateway(&probe);
+    let signing = SigningInvocationContext::external_for_test(Some("n-8488-backstop"));
+    signing.keep_witness(RefundWitness::at_capture());
+    let caller = MetaMcpCallerContext {
+        signing: Some(&signing),
+        authorizer: &DENY,
+        ..crate::gateway::meta_mcp::anonymous_caller()
+    };
+    let _skip = crate::gateway::meta_mcp::withheld_gate::seams::skip_gate_for_test();
+    let args = json!({"server": "svc", "tool": "act", "arguments": {}});
+    let outcome = meta.invoke_tool(&args, Some("session-8488"), &caller).await;
+    let answer = outcome.expect("the backstop answers, it does not fail");
+    assert_eq!(
+        answer["isError"], true,
+        "premise: the backstop's answer: {answer}"
+    );
+    assert_eq!(
+        probe.calls.load(Ordering::SeqCst),
+        0,
+        "premise: nothing was sent"
+    );
+    assert!(
+        signing.refund_due_for_test(),
+        "the backstop's answer did not ask for the nonce back"
+    );
+}
+
+/// S5, site 14's key half (mutant s14a): a keyed call refused for an
+/// undeclared argument key releases its key at the refusal, so the
+/// reservation's drop never releases it as abandoned.
+#[test]
+fn an_undeclared_key_refusal_releases_its_key_at_the_refusal() {
+    let records = crate::test_log_capture::records(|| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let probe = probe();
+            let backend = Arc::new(Backend::new(
+                "svc",
+                BackendConfig {
+                    input_schema_enforcement: crate::config::InputSchemaEnforcement::Closed,
+                    ..BackendConfig::r2_off()
+                },
+                &FailsafeConfig::default(),
+                Duration::from_secs(60),
+            ));
+            backend.remember_listed_tools(
+                None,
+                false,
+                &[json!({
+                    "name": "act",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {"q": {"type": "string"}},
+                        "additionalProperties": false
+                    }
+                })],
+            );
+            let mut meta = gateway_with(
+                backend,
+                Arc::clone(&probe) as Arc<dyn crate::transport::Transport>,
+            );
+            with_idempotency(&mut meta);
+            let key = retry("k-8488-undeclared");
+            let args = json!({"server": "svc", "tool": "act", "arguments": {"undeclared": 1}});
+            let refused = meta
+                .invoke_tool(&args, Some("session-8488"), &keyed(&key))
+                .await
+                .expect("the key check answers, it does not fail");
+            assert_eq!(refused["isError"], true, "premise: the refusal: {refused}");
+            assert_eq!(
+                probe.calls.load(Ordering::SeqCst),
+                0,
+                "premise: the key check refused"
+            );
+        });
+    });
+    // The call reserved a key, so a release was owed (else the row is vacuous).
+    let reserved = crate::test_log_capture::count(
+        &records,
+        "DEBUG",
+        "Idempotency key registered as in-flight",
+    );
+    assert_eq!(reserved, 1, "premise: the call reserved its key");
+    let abandoned = crate::test_log_capture::count(
+        &records,
+        "DEBUG",
+        "Released abandoned idempotency reservation",
+    );
+    assert_eq!(
+        abandoned, 0,
+        "the refusal left its key for the drop to release"
+    );
+}
+
+/// INVOKE.6's check, kept as a row: on the invoke path, no settlement
+/// primitive is called outside the one mapping (`nonce_settle.rs`). A refusal
+/// that asks for its nonce, gives back its key or notes a served step directly
+/// would bypass `settle_pre_send` and fail here.
+#[test]
+fn every_pre_send_settlement_goes_through_the_mapping() {
+    const PRIMITIVES: [&str; 4] = [
+        "ask_refund(",
+        "give_back_unsent(",
+        "note_served(",
+        "want_refund(",
+    ];
+    // Every production file on the invoke path, read at run time so a new
+    // sibling module is scanned the day it lands (final review): `invoke.rs`
+    // and each `invoke/*.rs` that is not a test file, less the mapping itself.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway/meta_mcp");
+    let mut files = vec![root.join("invoke.rs")];
+    for entry in std::fs::read_dir(root.join("invoke")).expect("the invoke directory") {
+        let path = entry.expect("a directory entry").path();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if path.extension().is_some_and(|e| e == "rs")
+            && !name.ends_with("_tests.rs")
+            && !name.contains("test_support")
+            && name != "nonce_settle.rs"
+        {
+            files.push(path);
+        }
+    }
+    assert!(
+        files.len() > 30,
+        "premise: the scan found {} files",
+        files.len()
+    );
+    let mut direct = Vec::new();
+    let mut mapped = Vec::new();
+    for file in &files {
+        let source = std::fs::read_to_string(file).expect("a readable source file");
+        for primitive in PRIMITIVES {
+            if source.contains(primitive) {
+                direct.push(format!("{}: {primitive}", file.display()));
+            }
+        }
+        let calls = source.matches("settle_pre_send(").count();
+        if calls > 0 {
+            mapped.push((file.display().to_string(), calls));
+        }
+    }
+    assert!(direct.is_empty(), "settled outside the mapping: {direct:?}");
+    // Exactly the inventory (design r11 section 4): a site added or removed
+    // updates this count and its row together.
+    let total: usize = mapped.iter().map(|(_, calls)| calls).sum();
+    assert_eq!(total, 15, "the invoke path calls the mapping: {mapped:?}");
+}
+
+/// The text of one pairing arm: from `start` to the first `end` after it.
+fn arm<'s>(source: &'s str, start: &str, end: &str) -> &'s str {
+    assert_eq!(
+        source.matches(start).count(),
+        1,
+        "one arm starts at {start}"
+    );
+    let from = source.find(start).expect("the arm's start is in the file");
+    let to = from + source[from..].find(end).expect("the arm's end follows it");
+    &source[from..to]
+}
+
+/// The pairing arm releases its key through the mapping only, never directly.
+fn releases_through_the_mapping(arm: &str) -> bool {
+    arm.contains("PreSendExit::ReleaseKey(") && !arm.contains(".release()")
+}
+
+/// INVOKE.6's pairing rule (final review): the two refusals whose key and
+/// nonce halves are split release the key through `ReleaseKey`, never with a
+/// direct `.release()`. Key-only releases elsewhere are out of its scope.
+#[test]
+fn the_pairing_refusals_release_their_key_through_the_mapping() {
+    let relay = arm(
+        include_str!("relay.rs"),
+        "pub(super) fn refuse_relay(",
+        "Err(refused)",
+    );
+    let sealed = arm(
+        include_str!("pre_dispatch.rs"),
+        "if let Some(refusal) = refusal {",
+        "Ok(None)",
+    );
+    assert!(releases_through_the_mapping(relay), "refuse_relay: {relay}");
+    assert!(
+        releases_through_the_mapping(sealed),
+        "the sealed refusal: {sealed}"
+    );
+    // The check bites: a direct release after the arm's last check, cut out
+    // by the same slicing, fails it.
+    let planted = include_str!("pre_dispatch.rs").replacen(
+        "return Ok(Some(GuardedValue::sealed_by_guard(refusal)));",
+        "reservation.release();\n            return Ok(Some(GuardedValue::sealed_by_guard(refusal)));",
+        1,
+    );
+    let planted = arm(&planted, "if let Some(refusal) = refusal {", "Ok(None)");
+    assert!(
+        planted.contains("reservation.release();"),
+        "premise: {planted}"
+    );
+    assert!(!releases_through_the_mapping(planted));
 }

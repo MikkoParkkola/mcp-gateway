@@ -795,6 +795,9 @@ mod scope_tests;
 mod nonce_metrics_tests;
 
 // MIK-7698: a call refused before the tool acts leaves its nonce unspent.
+#[cfg(all(test, feature = "firewall"))]
+#[path = "signing_test_access.rs"]
+mod test_access;
 #[cfg(test)]
 #[path = "signing_unspent_tests.rs"]
 mod unspent_tests;
