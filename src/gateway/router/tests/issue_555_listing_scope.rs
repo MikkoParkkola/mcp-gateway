@@ -464,3 +464,66 @@ async fn list_equals_invoke_surfaced() {
         }
     }
 }
+
+/// T6 (C6 HTTP_02, MIK-8589): the direct route's `tools/list` is filtered by the key's
+/// per-tool allowlist (`decide_tool_target`), not only by backend scope. `read-key` may
+/// reach every backend but call only `alpha_read`, so the direct list of `beta` drops
+/// `beta_tool`, which no global policy denies. The meta-route T3 cannot see this filter.
+#[tokio::test]
+async fn direct_tools_list_drops_a_tool_outside_the_key_allowlist() {
+    let f = fixture(Auth::Keys).await;
+    let names_of = |body: &Value| -> Vec<String> {
+        match body["result"]["tools"].as_array() {
+            Some(tools) => tools
+                .iter()
+                .filter_map(|t| t["name"].as_str().map(str::to_string))
+                .collect(),
+            None => panic!("tools/list must succeed: {body}"),
+        }
+    };
+
+    let (status, body) = post(
+        &f.router,
+        "/mcp/alpha",
+        Some("read-key"),
+        "tools/list",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "direct list must succeed: {body}");
+    let names = names_of(&body);
+    assert!(
+        names.iter().any(|n| n == "alpha_read"),
+        "alpha_read must stay listed for read-key: {names:?}"
+    );
+
+    let (status, body) = post(
+        &f.router,
+        "/mcp/beta",
+        Some("read-key"),
+        "tools/list",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "direct list must succeed: {body}");
+    let names = names_of(&body);
+    assert!(
+        !names.iter().any(|n| n == "beta_tool"),
+        "beta_tool is outside read-key's allowlist but the direct list kept it: {names:?}"
+    );
+
+    let (status, body) = post(
+        &f.router,
+        "/mcp/beta",
+        Some("open-key"),
+        "tools/list",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "direct list must succeed: {body}");
+    let names = names_of(&body);
+    assert!(
+        names.iter().any(|n| n == "beta_tool"),
+        "beta_tool must be served on the direct route: {names:?}"
+    );
+}
