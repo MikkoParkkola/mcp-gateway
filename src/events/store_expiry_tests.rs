@@ -515,3 +515,42 @@ fn a_lapsed_hold_buries_its_records_and_starts_the_tail_at_its_bound() {
         "the tail started at the hold's bound"
     );
 }
+
+/// MIK-8498 pin (P3.1, the expiry copy): an older dead letter under the
+/// same id is not this occurrence's expiry burial already in place: the
+/// newer tried occurrence is buried and receipted at expiry, replacing
+/// the older letter.
+#[test]
+fn an_older_dead_letter_under_the_same_id_is_replaced_by_the_expiry_burial() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let old = now - crate::duration_bound::delta!(days, 1);
+    store
+        .dead_letter(record("e1", "s1", old), DeadReason::Gone, old, ROOMY)
+        .expect("io");
+    let tried = OutboxRecord {
+        attempt: 1,
+        ..record("e1", "s1", now)
+    };
+    store.enqueue(tried, OUTBOX).expect("io");
+    let later = past_expiry(now);
+    let due = store.due(later, &HashSet::new(), ROOMY).expect("io");
+    assert_eq!(due.buried.len(), 1, "the newer occurrence is receipted");
+    assert_eq!(
+        due.buried[0].created_at, now,
+        "the newer occurrence, not the older letter"
+    );
+    assert_eq!(
+        dead_reason(&store, "e1").as_deref(),
+        Some("subscription_expired")
+    );
+    assert_eq!(
+        store
+            .dead_letter_by_id("e1")
+            .map(|dead| dead.record.created_at),
+        Some(now),
+        "the expiry burial replaced the older letter"
+    );
+    assert!(!store.has_due("s1", later), "the outbox copy is gone");
+}

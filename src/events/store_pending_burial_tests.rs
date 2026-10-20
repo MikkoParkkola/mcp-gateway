@@ -139,3 +139,29 @@ fn an_eviction_that_fails_part_way_still_reports_the_ones_it_made() {
         "x went before y failed"
     );
 }
+
+/// MIK-8498 pin (P3.1, the `bury` copy): a fan-out burial whose dead
+/// letter cannot be written is an error when the dead letter in place
+/// under the same id is an older occurrence: it is not this burial, so
+/// no receipt stands and the older letter stays.
+#[test]
+fn a_fan_out_burial_that_cannot_write_ignores_an_older_dead_letter_under_the_same_id() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let old = now - crate::duration_bound::delta!(days, 1);
+    store
+        .dead_letter(record("a", "s1", old), DeadReason::Gone, old, ROOMY)
+        .expect("io");
+    // The newer occurrence's own dead letter cannot be written.
+    std::fs::remove_dir_all(dir.path().join("dead")).expect("rm");
+    let refused = store.dead_letter(record("a", "s1", now), DeadReason::Gone, now, ROOMY);
+    assert!(refused.is_err(), "the newer occurrence was not buried");
+    assert_eq!(
+        store
+            .dead_letter_by_id("a")
+            .map(|dead| dead.record.created_at),
+        Some(old),
+        "still the older occurrence in place"
+    );
+}
