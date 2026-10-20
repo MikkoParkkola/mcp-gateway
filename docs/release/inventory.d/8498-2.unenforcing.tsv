@@ -1,0 +1,2 @@
+src/oauth/client/mod.rs	redact_opt	1	Redaction for the three Debug impls; hides a secret from logs but makes no allow/deny decision.
+src/oauth/client/token_access.rs	has_refresh_token	1	Reports whether the cached token holds a refresh token; chooses refresh over re-authorization and gates no access.

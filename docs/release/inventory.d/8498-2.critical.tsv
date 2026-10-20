@@ -1,0 +1,2 @@
+src/oauth/client/grants.rs	token_from_answer	1	standard	borderline	token_from_answer	Builds a granted token from the token endpoint answer; the oversized expires_in refusal lives in refuse_oversized_expires_in
+src/oauth/client/grants.rs	auth_meta	1	standard	borderline	OAuthClient::auth_meta	Returns the discovered metadata or the not-initialized error every grant gives before initialize; decides no access
