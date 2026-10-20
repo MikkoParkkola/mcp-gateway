@@ -73,6 +73,13 @@ fn poll_key(principal: Option<&str>, name: &str, arguments: &Value) -> String {
     .to_string()
 }
 
+impl WatchClass {
+    /// The principal a poller keys on: named only for a keyed watch.
+    fn principal_for(self, principal: &str) -> Option<&str> {
+        (self == WatchClass::Keyed).then_some(principal)
+    }
+}
+
 /// A running poller and the principal that opened it, against whose cap it
 /// counts (shared or not). Stopped by its flag, not aborted: the stop can
 /// come from inside the poller's own task (it revoked its last holder), and
@@ -248,11 +255,7 @@ impl EventSource for WatchSource {
         now: chrono::DateTime<chrono::Utc>,
     ) -> String {
         let class = self.class_for(principal, name, arguments, now);
-        poll_key(
-            (class == WatchClass::Keyed).then_some(principal),
-            name,
-            arguments,
-        )
+        poll_key(class.principal_for(principal), name, arguments)
     }
 
     fn row_key(&self, sub: &Subscription) -> Option<String> {
@@ -263,7 +266,7 @@ impl EventSource for WatchSource {
         // names its class: a guess would key it under the wrong class for
         // good (MIK-8151).
         let class = sub.watch_class.or_else(|| self.watch_class(&sub.name))?;
-        let alone = (class == WatchClass::Keyed).then_some(sub.principal.as_str());
+        let alone = class.principal_for(sub.principal.as_str());
         Some(poll_key(alone, &sub.name, &sub.arguments))
     }
 
