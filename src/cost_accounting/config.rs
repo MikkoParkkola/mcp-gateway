@@ -76,6 +76,17 @@ pub struct BudgetLimits {
     pub per_key: HashMap<String, f64>,
 }
 
+#[cfg(feature = "cost-governance")]
+impl BudgetLimits {
+    /// The `per_key` entries no caller is ever charged under, sorted: only a
+    /// configured API key is charged per key (MIK-8507), so with auth off every
+    /// entry is one, and with auth on so is an entry naming no `api_keys` key
+    /// (the static bearer, the dashboard, an OIDC or key-server identity).
+    pub(crate) fn unmatched_per_key<'a>(&'a self, _auth: &crate::config::AuthConfig) -> Vec<&'a str> {
+        Vec::new()
+    }
+}
+
 /// An alert rule triggered at a budget consumption threshold.
 #[cfg(feature = "cost-governance")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,5 +161,31 @@ mod tests {
         assert!(back.enabled);
         assert_eq!(back.budgets.daily, Some(10.0));
         assert_eq!(back.tool_costs.get("brave_search"), Some(&0.005));
+    }
+
+    /// MIK-8507: a `per_key` entry that names no configured API key can never
+    /// limit anyone, so startup names it. With auth off, no entry can.
+    #[test]
+    fn a_per_key_entry_naming_no_api_key_is_unmatched() {
+        let budgets = BudgetLimits {
+            per_key: [("ci", 1.0), ("bearer", 1.0), ("anonymous", 1.0)]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
+            ..BudgetLimits::default()
+        };
+        let auth = |enabled: bool| -> crate::config::AuthConfig {
+            serde_json::from_value(serde_json::json!({
+                "enabled": enabled,
+                "api_keys": [{"name": "ci", "key": "secret-ci"}],
+            }))
+            .expect("an auth config")
+        };
+        assert_eq!(budgets.unmatched_per_key(&auth(true)), ["anonymous", "bearer"]);
+        assert_eq!(
+            budgets.unmatched_per_key(&auth(false)),
+            ["anonymous", "bearer", "ci"]
+        );
+        assert!(BudgetLimits::default().unmatched_per_key(&auth(true)).is_empty());
     }
 }
