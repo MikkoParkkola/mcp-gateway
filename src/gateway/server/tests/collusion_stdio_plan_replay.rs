@@ -19,20 +19,20 @@ use crate::security::firewall::{
 };
 
 /// What `alpha:a` delivers.
-const PROSE: &str = "The orchard ledger for the north slope records seven rows of late pears, \
+pub(super) const PROSE: &str = "The orchard ledger for the north slope records seven rows of late pears, \
     the grafting dates for each rootstock, the hours the drip lines ran during the dry weeks of \
     August, and which crew pruned the older trees after the second frost.";
 
 /// What `alpha:b` delivers.
-const OTHER_PROSE: &str = "Minutes of the harbour committee: the dredging contract moves to the \
+pub(super) const OTHER_PROSE: &str = "Minutes of the harbour committee: the dredging contract moves to the \
     spring tender, the ferry timetable keeps its Sunday gap, and the pilot boat needs a new \
     engine mount before the first autumn gale.";
 
-const WINDOW_SECS: u64 = 1;
+pub(super) const WINDOW_SECS: u64 = 1;
 
 /// Backend `alpha`: `a` answers [`PROSE`], `b` answers [`OTHER_PROSE`]; every
 /// `tools/call` is counted.
-struct Alpha(Arc<AtomicUsize>);
+pub(super) struct Alpha(pub(super) Arc<AtomicUsize>);
 
 #[async_trait::async_trait]
 impl crate::transport::Transport for Alpha {
@@ -68,7 +68,7 @@ impl crate::transport::Transport for Alpha {
 }
 
 /// Whether `bob` sending `text` through `alpha:a` is refused as a relay.
-fn relayed_by_bob(firewall: &Firewall, text: &str) -> bool {
+pub(super) fn relayed_by_bob(firewall: &Firewall, text: &str) -> bool {
     let params = json!({"name": "a", "arguments": {"text": text}});
     !firewall
         .check_relay(
@@ -84,7 +84,9 @@ fn relayed_by_bob(firewall: &Firewall, text: &str) -> bool {
 /// The stdio Meta-MCP over `alpha`, the relay firewall (every k-gram kept,
 /// one fingerprint enough), the backend's call counter, and `playbook`
 /// registered when given.
-fn stdio_meta(playbook: Option<&str>) -> (Arc<MetaMcp>, Arc<Firewall>, Arc<AtomicUsize>) {
+pub(super) fn stdio_meta(
+    playbook: Option<&str>,
+) -> (Arc<MetaMcp>, Arc<Firewall>, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
@@ -128,13 +130,13 @@ fn stdio_meta(playbook: Option<&str>) -> (Arc<MetaMcp>, Arc<Firewall>, Arc<Atomi
 }
 
 /// A keyed stdio `tools/call` of `name(arguments)`.
-fn keyed_request(id: i64, name: &str, arguments: Value) -> Value {
+pub(super) fn keyed_request(id: i64, name: &str, arguments: &Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
            "params": {"name": name, "arguments": arguments,
                       "_meta": {"io.mcp-gateway/idempotency-key": "stdio-replay"}}})
 }
 
-async fn dispatch(meta: &Arc<MetaMcp>, request: &Value) -> Value {
+pub(super) async fn dispatch(meta: &Arc<MetaMcp>, request: &Value) -> Value {
     let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
@@ -148,7 +150,7 @@ async fn dispatch(meta: &Arc<MetaMcp>, request: &Value) -> Value {
 /// bob relaying step A's text must be refused again.
 async fn keyed_plan_replay_renews(playbook: Option<&str>, name: &str, arguments: &Value) {
     let (meta, firewall, calls) = stdio_meta(playbook);
-    let first = dispatch(&meta, &keyed_request(1, name, arguments.clone())).await;
+    let first = dispatch(&meta, &keyed_request(1, name, arguments)).await;
     assert!(first.get("error").is_none(), "base: delivered: {first}");
     assert_eq!(
         calls.load(Ordering::SeqCst),
@@ -168,7 +170,7 @@ async fn keyed_plan_replay_renews(playbook: Option<&str>, name: &str, arguments:
             "premise P1: the live receipt lapsed for {text:.40}"
         );
     }
-    let replay = dispatch(&meta, &keyed_request(2, name, arguments.clone())).await;
+    let replay = dispatch(&meta, &keyed_request(2, name, arguments)).await;
     assert!(replay.get("error").is_none(), "base: replayed: {replay}");
     assert_eq!(
         calls.load(Ordering::SeqCst),
@@ -270,7 +272,7 @@ async fn a_detection_off_answer_replayed_on_never_receipts_gateway_text_over_std
     assert!(registry.register(backend));
     let off = Arc::new(MetaMcp::new(Arc::clone(&registry)));
     let call = json!({"server": "alpha", "tool": "a", "arguments": {}});
-    let first = dispatch(&off, &keyed_request(1, "gateway_invoke", call.clone())).await;
+    let first = dispatch(&off, &keyed_request(1, "gateway_invoke", &call)).await;
     assert!(
         first.to_string().contains(SUGGEST),
         "premise: the gateway wrote its advice into the answer: {first}"
@@ -305,7 +307,7 @@ async fn a_detection_off_answer_replayed_on_never_receipts_gateway_text_over_std
         !relayed_by_bob(&firewall, PROSE),
         "premise P1: nothing is receipted on the new gateway yet"
     );
-    let replay = dispatch(&on, &keyed_request(2, "gateway_invoke", call)).await;
+    let replay = dispatch(&on, &keyed_request(2, "gateway_invoke", &call)).await;
     assert!(
         replay.to_string().contains(SUGGEST),
         "premise: the retained answer, advice included, was replayed: {replay}"

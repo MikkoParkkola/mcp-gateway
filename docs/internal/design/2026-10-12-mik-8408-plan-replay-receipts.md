@@ -361,7 +361,7 @@ New or rewritten:
 - G6/G40 (rewritten): a nested label's inner receipts are staged under their own sources; every seam receipt of that entry is not staged, counted `reason=nested_seam`, including a seam lying entirely outside the nested label (between two plain steps). Mutants: stage the seams; drop only seams touching the nested label.
 - G48: no version change. A plan task row created on this branch loads in a build with `MAX_LOADABLE_VERSION = BINDING_VERSION` and is written at version 9. Mutant: bump the version.
 
-R1-R9, C1, G1-G4, G10-G13, G25-G27, G29-G31, G32 (as amended above), G33-G39, G41, G42, G45-G47 and G9 (as the version guard) stand. G6/G40 is rewritten above.
+R1-R9, C1, G1-G4, G10-G13, G25-G27, G29-G31, G32 (as amended above), G33-G39, G41, G42, G46, G47 and G9 (as the version guard) stand. G6/G40 is rewritten above.
 
 ## H5. Changelog and upgrade note
 

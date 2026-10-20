@@ -20,6 +20,10 @@ use crate::gateway::task_service::CommittedTask;
 /// The stored entry a delivery's answer is retained under, or a replay
 /// serves (`MIK-8408` F1): carried beside the receipts so a commit
 /// captures them under it, without changing `SyncAdmission::Replay`.
+/// Only the firewall build reads a key (at capture and at replay), so
+/// without it the key is the unit placeholder the `Staging` alias in
+/// `relay` uses for the same split, and the notes below discard theirs.
+#[cfg(feature = "firewall")]
 #[derive(Clone)]
 pub(super) enum CaptureKey {
     /// A retained sync delivery: admission identity, round, operation.
@@ -31,13 +35,18 @@ pub(super) enum CaptureKey {
     /// A stored task row, at one revision of it.
     Task { id: String, revision: u64 },
 }
+#[cfg(not(feature = "firewall"))]
+pub(super) type CaptureKey = ();
 
 /// A stored entry to capture this delivery's in-plan receipts under,
 /// live for `retention` (the stored entry's own retention).
+#[cfg(feature = "firewall")]
 pub(super) struct Capture {
     key: CaptureKey,
     retention: Duration,
 }
+#[cfg(not(feature = "firewall"))]
+pub(super) type Capture = ();
 
 /// The calls one delivery dispatched, `(label, server, tool)` each (H2).
 pub(super) type ReplayCallList = Vec<(Option<u32>, String, String)>;
@@ -117,47 +126,62 @@ pub(crate) fn note_sync_lookup_key(key: Option<&(String, String)>, round: &str) 
 /// first note wins: an inner keyed call never takes the outer
 /// delivery's key.
 pub(crate) fn note_sync_capture(identity: String, round: String, operation: String) {
-    let capture = Capture {
-        key: CaptureKey::Sync {
-            identity,
-            round,
-            operation,
-        },
-        retention: Duration::from_secs(crate::idempotency::admission::RETENTION_SECS),
-    };
-    let _ = super::REPLAY_CAPTURE.try_with(|slot| {
-        let mut slot = slot.borrow_mut();
-        if slot.is_none() {
-            *slot = Some(capture);
-        }
-    });
+    #[cfg(feature = "firewall")]
+    {
+        let capture = Capture {
+            key: CaptureKey::Sync {
+                identity,
+                round,
+                operation,
+            },
+            retention: Duration::from_secs(crate::idempotency::admission::RETENTION_SECS),
+        };
+        let _ = super::REPLAY_CAPTURE.try_with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(capture);
+            }
+        });
+    }
+    #[cfg(not(feature = "firewall"))]
+    let _ = (identity, round, operation);
 }
 
 /// Note that this delivery serves the retained sync answer stored under
 /// `(identity, round, operation)`: a plan replay stages its entry.
 pub(crate) fn note_sync_lookup(identity: String, round: String, operation: String) {
-    let key = CaptureKey::Sync {
-        identity,
-        round,
-        operation,
-    };
-    let _ = super::REPLAY_LOOKUP.try_with(|slot| {
-        let mut slot = slot.borrow_mut();
-        if slot.is_none() {
-            *slot = Some(key);
-        }
-    });
+    #[cfg(feature = "firewall")]
+    {
+        let key = CaptureKey::Sync {
+            identity,
+            round,
+            operation,
+        };
+        let _ = super::REPLAY_LOOKUP.try_with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(key);
+            }
+        });
+    }
+    #[cfg(not(feature = "firewall"))]
+    let _ = (identity, round, operation);
 }
 
 /// Note that this delivery settles task `id` at `revision`: its committed
 /// in-plan receipts are captured under that key at commit, live for
 /// `retention` (the task's remaining retention).
 pub(crate) fn note_task_capture(id: String, revision: u64, retention: Duration) {
-    let capture = Capture {
-        key: CaptureKey::Task { id, revision },
-        retention,
-    };
-    let _ = super::REPLAY_CAPTURE.try_with(|slot| *slot.borrow_mut() = Some(capture));
+    #[cfg(feature = "firewall")]
+    {
+        let capture = Capture {
+            key: CaptureKey::Task { id, revision },
+            retention,
+        };
+        let _ = super::REPLAY_CAPTURE.try_with(|slot| *slot.borrow_mut() = Some(capture));
+    }
+    #[cfg(not(feature = "firewall"))]
+    let _ = (id, revision, retention);
 }
 
 /// This delivery's answer was not retained: nothing is captured for it.
@@ -360,3 +384,7 @@ fn has_nested_label(calls: &ReplayCallList) -> bool {
     }
     by_label.values().any(|seen| seen.len() > 1)
 }
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "relay_replay_tests.rs"]
+mod tests;

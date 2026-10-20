@@ -173,6 +173,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
     /// Serve from `admission`, another Meta-MCP's store: a row that replays,
     /// on a gateway configured differently, what a first one retained
     /// (MIK-8408 R9).
+    #[cfg(all(test, feature = "firewall"))]
     pub(crate) fn share_execution_admission_for_test(
         &mut self,
         admission: std::sync::Arc<crate::idempotency::admission::ExecutionAdmission>,

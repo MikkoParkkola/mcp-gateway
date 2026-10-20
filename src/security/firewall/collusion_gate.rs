@@ -541,7 +541,7 @@ mod answer;
 mod receipts;
 #[path = "collusion_gate_replay.rs"]
 mod replay_gate;
-pub(crate) use replay_gate::{ReplayCalls, ReplaySource, ReplayedDigest};
+pub(crate) use replay_gate::{ReplaySource, ReplayedDigest};
 #[path = "collusion_gate_seams.rs"]
 mod seams;
 #[path = "collusion_staging.rs"]

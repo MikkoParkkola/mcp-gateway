@@ -232,4 +232,4 @@ pub(crate) mod test_clock {
 
 #[cfg(test)]
 #[path = "clock_tests.rs"]
-mod tests;
+pub(crate) mod tests;

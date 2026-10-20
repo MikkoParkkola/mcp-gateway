@@ -347,6 +347,64 @@ fn g39_the_sync_key_separates_identity_round_and_operation() {
     );
 }
 
+/// N3 (MIK-8409.NESTED.3): a nested label's inner receipts count
+/// against the entry cap like any other receipt. One inner receipt
+/// (64 fingerprints, about 578 accounted bytes) fits the 1 KiB test
+/// cap; the same entry with both inner calls' receipts under the one
+/// label passes it, so the whole entry is not stored — and another
+/// key's entry is untouched and still reads back (still renews).
+/// Mutants killed: leave inner receipts out of the entry's byte count
+/// (the two-receipt entry would be stored and hit); truncate the entry
+/// to fit instead of dropping it whole (a truncated entry would hit).
+#[test]
+fn n3_inner_receipts_count_against_the_entry_cap() {
+    let store = ReplayReceipts::with_budget_for_test(4 * 1024, 1024);
+    let now = Instant::now();
+    let other = sync_key("id", "r", "other");
+    store.insert(
+        other.clone(),
+        vec![receipt(9, 8, Some(0))],
+        Vec::new(),
+        now,
+        hour(),
+    );
+    let nested = sync_key("id", "r", "nested");
+    let calls: Vec<(Option<u32>, String, String)> = vec![
+        (Some(1), "s".to_owned(), "t".to_owned()),
+        (Some(1), "u".to_owned(), "v".to_owned()),
+    ];
+    store.insert(
+        nested.clone(),
+        vec![receipt(1, 64, Some(1))],
+        calls.clone(),
+        now,
+        hour(),
+    );
+    assert!(
+        store.lookup(&nested, now).is_some(),
+        "premise: one inner receipt fits the entry cap"
+    );
+    store.insert(
+        nested.clone(),
+        vec![receipt(1, 64, Some(1)), receipt(2, 64, Some(1))],
+        calls,
+        now,
+        hour(),
+    );
+    assert!(
+        store.lookup(&nested, now).is_none(),
+        "both inner receipts push the entry past the cap: dropped whole, not stored"
+    );
+    let surviving = store
+        .lookup(&other, now)
+        .expect("the other entry is unaffected: fixture");
+    assert_eq!(
+        surviving.receipts.len(),
+        1,
+        "the other entry still holds its receipt and renews"
+    );
+}
+
 /// G42: two firewalls built with `sharing_relay_with` share the replay
 /// store exactly as they share the detector: an insert through one is
 /// found through the other.
@@ -373,4 +431,51 @@ fn g42_firewalls_sharing_the_detector_share_the_replay_store() {
         .lookup(&key, now)
         .expect("inserted through the other firewall: fixture");
     assert_eq!(found.receipts[0].label, Some(3));
+}
+
+/// G47: two firewalls sharing the detector and the replay store,
+/// with parallel commits (inserts through one) and replays
+/// (lookups through the other) from several threads. Every
+/// thread's replay finds its own entry — its own label comes
+/// back — and the exercise completes: the store's lock is its
+/// own and is never held while the detector's state lock is
+/// taken (F6), so no thread's commit or replay can deadlock
+/// against another's.
+/// Mutant killed: a store lock held across a detector call (or
+/// entries keyed loosely enough that a thread reads another's
+/// back): the scope would hang, or a label would mismatch.
+#[test]
+fn g47_parallel_commits_and_replays_on_a_shared_store_each_find_their_own_entry() {
+    let first = std::sync::Arc::new(firewall());
+    let second = std::sync::Arc::new(firewall().sharing_relay_with(Some(&first)));
+    let now = Instant::now();
+    std::thread::scope(|scope| {
+        let mut threads = Vec::new();
+        for i in 0..8_u32 {
+            let first = std::sync::Arc::clone(&first);
+            let second = std::sync::Arc::clone(&second);
+            threads.push(scope.spawn(move || {
+                let key = sync_key("id", "r", &format!("g47-op{i}"));
+                for _ in 0..25 {
+                    first.replay_receipts().insert(
+                        key.clone(),
+                        vec![receipt(u64::from(i) + 1, 8, Some(i))],
+                        Vec::new(),
+                        now,
+                        hour(),
+                    );
+                    let found = second.replay_receipts().lookup(&key, now);
+                    let found = found.expect("the thread's own entry: fixture");
+                    assert_eq!(
+                        found.receipts[0].label,
+                        Some(i),
+                        "thread {i} read another thread's entry back"
+                    );
+                }
+            }));
+        }
+        for thread in threads {
+            assert!(thread.join().is_ok(), "a worker thread panicked");
+        }
+    });
 }

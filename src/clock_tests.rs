@@ -172,7 +172,7 @@ fn clock_rs_holds_no_shared_mutable_state() {
 
 /// Test-only by the repo's naming (as `error_pre_send_scan_tests.rs` reads it):
 /// `*tests.rs`, `*_test.rs`, or under a `tests`/`*_tests` directory.
-fn a_test_file(rel: &std::path::Path) -> bool {
+pub(crate) fn a_test_file(rel: &std::path::Path) -> bool {
     let name = rel.file_name().and_then(|n| n.to_str()).unwrap_or_default();
     let in_test_dir = rel.parent().is_some_and(|dir| {
         dir.components()
@@ -185,7 +185,7 @@ fn a_test_file(rel: &std::path::Path) -> bool {
 /// item (its attributes, then a `;` line or a brace-balanced block) removed.
 /// ponytail: braces inside string literals are counted too; no src file
 /// opens a test item with one today, and a miss only widens what is scanned.
-fn product_code(src: &str) -> String {
+pub(crate) fn product_code(src: &str) -> String {
     let lines: Vec<&str> = src
         .lines()
         .filter(|line| !line.trim_start().starts_with("//"))
