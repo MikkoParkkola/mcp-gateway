@@ -1,4 +1,4 @@
-capability/type-error	refused names=true leaks=true control=loads
+capability/type-error	refused names=true leaks=false control=loads
 capability/syntax-error	refused names=true leaks=false control=loads
 config/type-error	refused names=true leaks=false control=loads
 config/key-name-control	refused names=true leaks=true control=loads
