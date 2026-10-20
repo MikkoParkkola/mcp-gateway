@@ -254,7 +254,6 @@ impl MetaMcp {
             outbound_retry,
             permit,
         } = sent;
-        let api_key_name = caller.api_key_name;
         let caller_identity = caller.grant_subject.as_ref();
         let verified_identity = caller.verified_identity;
         // Dispatch: the witness goes with the send (the nonce stays spent).
