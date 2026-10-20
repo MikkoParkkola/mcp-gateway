@@ -273,8 +273,15 @@ async fn a_bare_row_refusal_also_names_a_second_parse_error() {
         ),
     ] {
         let error = edited_refusal(name, &[(from, to)]).await;
-        for needle in ["g-runner", "g-bot", "sometimes"] {
-            assert!(error.contains(needle), "{name}: missing {needle}: {error}");
+        if name.ends_with(".yaml") {
+            for needle in ["g-runner", "g-bot", "unknown variant"] {
+                assert!(error.contains(needle), "{name}: missing {needle}: {error}");
+            }
+            assert!(!error.contains("sometimes"), "{name}: {error}");
+        } else {
+            for needle in ["g-runner", "g-bot", "sometimes"] {
+                assert!(error.contains(needle), "{name}: missing {needle}: {error}");
+            }
         }
     }
 }
@@ -325,7 +332,15 @@ async fn a_type_error_keeps_its_line_and_column() {
     ];
     for (name, rewrites) in [("grants-3.4.0.yaml", yaml), ("grants-3.4.0.json", json)] {
         let error = edited_refusal(name, &rewrites).await;
-        assert!(error.contains("sometimes"), "{name}: {error}");
+        if name.ends_with(".yaml") {
+            assert!(
+                error.contains("grants[0].scope: unknown variant"),
+                "{name}: {error}"
+            );
+            assert!(!error.contains("sometimes"), "{name}: {error}");
+        } else {
+            assert!(error.contains("sometimes"), "{name}: {error}");
+        }
         assert!(
             error.contains("line") && error.contains("column"),
             "{name}: {error}"
