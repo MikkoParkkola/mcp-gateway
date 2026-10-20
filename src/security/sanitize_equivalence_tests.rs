@@ -376,3 +376,25 @@ fn a_string_slot_is_decoded_and_its_encoded_nul_refused() {
     let mut nul = call("backend_tool", json!("{\"q\": \"\\u0000\"}"));
     assert!(sanitize_request_in_place(&mut nul, ProtocolRoute::Meta).is_err());
 }
+
+/// A refused string-encoded slot is left as the client sent it, whether the
+/// decoder refuses it (not JSON) or the sanitizer refuses what it decodes to
+/// (an encoded NUL), with the same error as the reference.
+#[test]
+fn a_refused_string_slot_is_left_as_the_client_sent_it() {
+    for slot in [json!("not json"), json!("{\"q\": \"\\u0000\"}")] {
+        let mut request = call("backend_tool", slot.clone());
+        let expected = outcome(ref_request(&request, ProtocolRoute::Meta));
+        let got = sanitize_request_in_place(&mut request, ProtocolRoute::Meta);
+        assert!(expected.is_err(), "premise: the reference refuses {slot}");
+        assert_eq!(
+            outcome(got.map(|()| Value::Null)),
+            expected,
+            "the same refusal for {slot}"
+        );
+        assert_eq!(
+            request["params"]["arguments"], slot,
+            "the refused slot is put back as sent"
+        );
+    }
+}

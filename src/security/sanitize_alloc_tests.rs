@@ -55,3 +55,45 @@ fn sanitizing_a_clean_request_in_place_costs_a_fixed_amount() {
         );
     }
 }
+
+/// A key to rewrite that is itself the bulk: one 1 or 3 MiB argument key with
+/// a control character in it. It is cleaned where it lies and never copied,
+/// so the cost stays fixed (a copy of the key as sent would be the payload).
+#[test]
+fn a_dirty_key_as_long_as_the_payload_costs_a_fixed_amount() {
+    for (route, label) in [
+        (ProtocolRoute::Meta, "Meta"),
+        (ProtocolRoute::Direct, "Direct"),
+    ] {
+        let mut readings = Vec::new();
+        for size in [1usize << 20, 3 << 20] {
+            let mut key = "k".repeat(size);
+            key.insert(1, '\u{1}');
+            let mut arguments = serde_json::Map::new();
+            arguments.insert(key, json!(1));
+            let mut req = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+                "params": {"name": "backend_tool"}});
+            req["params"]["arguments"] = Value::Object(arguments);
+            let ((), cost) = measure(|| {
+                sanitize_request_in_place(&mut req, route).expect("a key to strip");
+            });
+            assert_eq!(
+                req["params"]["arguments"]
+                    .as_object()
+                    .and_then(|map| map.keys().next())
+                    .map(String::len),
+                Some(size),
+                "premise: the control character was stripped"
+            );
+            assert!(
+                cost.bytes <= CLEAN_BUDGET,
+                "{label} {size}: sanitizing one dirty bulk key allocated {cost}, above {CLEAN_BUDGET} B"
+            );
+            readings.push(cost.bytes);
+        }
+        assert!(
+            readings[1].abs_diff(readings[0]) <= SIZE_SLACK,
+            "{label}: the dirty-key cost grows with the payload: {readings:?}"
+        );
+    }
+}
