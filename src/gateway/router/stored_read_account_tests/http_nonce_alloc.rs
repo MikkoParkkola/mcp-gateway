@@ -145,7 +145,12 @@ async fn refused(
     nonce: Option<Value>,
     size: usize,
 ) -> (Value, Measured) {
-    let req = request(body(target, nonce, size));
+    refused_body(fx, body(target, nonce, size)).await
+}
+
+/// [`refused`] for a body built by the caller.
+async fn refused_body(fx: &super::Fx, bytes: bytes::Bytes) -> (Value, Measured) {
+    let req = request(bytes);
     let (reply, measured) = measure_async_process_wide(|| async {
         let response = fx.router.clone().oneshot(req).await.expect("an answer");
         to_bytes(response.into_body(), usize::MAX)
@@ -512,6 +517,67 @@ fn a_refused_call_pays_no_payload_term_for_the_sanitizer() {
         assert!(
             shares[1].abs_diff(shares[0]) <= SIZE_SLACK,
             "INTAKE.2(b): the sanitizer's share grows with the payload: {shares:?}"
+        );
+    });
+}
+
+/// [`body`] with one key to strip, `"k\u{1}ey"`, at the top of the backend
+/// tool's own `arguments`, beside the bulk: business data, so validation
+/// passes it and the sanitizer rewrites it (S9c).
+fn dirty_key_body(target: Option<(&str, &str)>, size: usize) -> bytes::Bytes {
+    let mut request: Value = serde_json::from_slice(&body(target, None, size)).expect("JSON");
+    request["params"]["arguments"]["arguments"]["k\u{1}ey"] = json!(1);
+    bytes::Bytes::from(request.to_string())
+}
+
+/// MIK-8499 INTAKE.2(b), a key to rewrite: one dirty key in a tool's
+/// arguments does not buy a copy of everything beside it. The sanitizer's
+/// share of the same refused 1 and 3 MiB call stays within the fixed cap.
+/// Red before the move: the object holding the dirty key was rebuilt by the
+/// copying walker, bulk and all.
+#[test]
+fn a_dirty_argument_key_buys_no_copy_of_the_payload() {
+    if isolate(&test_path(
+        "a_dirty_argument_key_buys_no_copy_of_the_payload",
+    )) {
+        return;
+    }
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    rt.block_on(async {
+        let plain = Some(("plain", "echo"));
+        let mut cost = std::collections::HashMap::new();
+        for sanitizing in [InputSanitizing::Off, InputSanitizing::On] {
+            let fx = prepared_with("missing", &|_| None, sanitizing).await;
+            let _ = refused_body(&fx, dirty_key_body(plain, 1 << 10)).await;
+            for size in [1usize << 20, 3 << 20] {
+                let (reply, measured) = refused_body(&fx, dirty_key_body(plain, size)).await;
+                assert_eq!(
+                    reply.pointer("/error/message").and_then(Value::as_str),
+                    Some("Nonce required when message signing is enforced"),
+                    "dirty key {sanitizing:?} {size}: premise, the same refusal: {reply}"
+                );
+                cost.insert((sanitizing == InputSanitizing::On, size), measured.bytes);
+            }
+        }
+        let mut shares = Vec::new();
+        for size in [1usize << 20, 3 << 20] {
+            let share = cost[&(true, size)].saturating_sub(cost[&(false, size)]);
+            println!("INTAKE.2(b) dirty key size={size} sanitizer_share={share}");
+            assert!(
+                share <= SANITIZER_SHARE,
+                "INTAKE.2(b) dirty key {size}: the sanitizer added {share} B to a refused call, \
+                 above {SANITIZER_SHARE} (on {}, off {})",
+                cost[&(true, size)],
+                cost[&(false, size)]
+            );
+            shares.push(share);
+        }
+        assert!(
+            shares[1].abs_diff(shares[0]) <= SIZE_SLACK,
+            "INTAKE.2(b) dirty key: the sanitizer's share grows with the payload: {shares:?}"
         );
     });
 }
