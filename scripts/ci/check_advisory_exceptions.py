@@ -14,11 +14,14 @@ instead time-boxes exceptions with `[[IgnoredVulns]]` entries carrying
 
 This check requires every id ignored in `.cargo/audit.toml` to appear
 in `.github/osv-scanner.toml` with an `ignoreUntil` that has not
-passed, and requires the 1.x line of webpki-roots in `Cargo.lock` to
-stay at or above the patched floor below. Any webpki-roots version
-outside that floored line must be an exact version in the shim list
-below; any other version fails, since it could bundle its own
-unpatched certificate list hidden by the per-advisory ignore.
+passed. An id in more than one `[[IgnoredVulns]]` entry fails whether
+or not cargo-audit ignores it, so a duplicate cannot silently extend
+an exception. The check also requires the 1.x line of webpki-roots in
+`Cargo.lock` to stay at or above the patched floor below. Any
+webpki-roots version outside that floored line must be an exact
+version in the shim list below; any other version fails, since it
+could bundle its own unpatched certificate list hidden by the
+per-advisory ignore.
 
   check_advisory_exceptions.py
   check_advisory_exceptions.py --self-test
@@ -91,10 +94,18 @@ def exception_problems(audit: dict, osv: dict, today: datetime.date) -> list[str
     advisories = audit.get("advisories")
     ignores = advisories.get("ignore") if isinstance(advisories, dict) else None
     entries: dict = {}
+    counts: dict = {}
     for entry in osv.get("IgnoredVulns") or []:
         if isinstance(entry, dict) and entry.get("id") is not None:
             entries[entry["id"]] = entry
+            counts[entry["id"]] = counts.get(entry["id"], 0) + 1
     problems: list[str] = []
+    for vuln_id, count in counts.items():
+        if count > 1:
+            problems.append(
+                f"{vuln_id}: {count} [[IgnoredVulns]] entries in "
+                f".github/osv-scanner.toml; keep one dated entry"
+            )
     for vuln_id in ignores or []:
         entry = entries.get(vuln_id)
         if entry is None:
@@ -165,6 +176,16 @@ def self_test() -> int:
         ("webpki-roots 1.0.10-alpha fails", lock("1.0.10-alpha"), False),
         ("no webpki-roots passes", {"package": [{"name": "other", "version": "0.1.0"}]}, True),
     ]
+    duplicated = {
+        "IgnoredVulns": [
+            {"id": vuln, "ignoreUntil": future, "reason": "shim"},
+            {
+                "id": vuln,
+                "ignoreUntil": future + datetime.timedelta(days=30),
+                "reason": "shim",
+            },
+        ]
+    }
     exception_cases: list[tuple[str, dict, dict, bool]] = [
         ("ignored id with a future date passes", audit, osv(future), True),
         ("ignored id with today's date passes", audit, osv(today), True),
@@ -172,6 +193,8 @@ def self_test() -> int:
         ("ignored id absent from the osv config fails", audit, {"IgnoredVulns": []}, False),
         ("ignored id without ignoreUntil fails", audit, {"IgnoredVulns": [{"id": vuln, "reason": "shim"}]}, False),
         ("empty audit config passes", {}, {}, True),
+        ("duplicated id with future dates fails", audit, duplicated, False),
+        ("duplicated id not ignored by cargo-audit fails", {}, duplicated, False),
     ]
     failures: list[str] = []
     for label, data, passes in floor_cases:
