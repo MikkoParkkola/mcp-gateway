@@ -1,0 +1,16 @@
+diff --git a/src/gateway/router/backend_handlers/notification_key.rs b/src/gateway/router/backend_handlers/notification_key.rs
+index ccff4314e..f762d5171 100644
+--- a/src/gateway/router/backend_handlers/notification_key.rs
++++ b/src/gateway/router/backend_handlers/notification_key.rs
+@@ -38,10 +38,7 @@ pub(super) async fn resolve(
+                 headers,
+                 super::charged_binding(state, backend, caller, proven, digest),
+             ),
+-            Err(reason) => {
+-                refuse_audited(state, (name, backend), caller, audience, &reason).await;
+-                return Err(());
+-            }
++            Err(_reason) => (Vec::new(), None),
+         }
+     } else {
+         // A credential the transport cannot carry is refused before it is

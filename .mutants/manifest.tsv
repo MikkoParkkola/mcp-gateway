@@ -1,0 +1,24 @@
+head_sha	e312bcc08ab8124d0a9715171e718ca273c23bf7
+HTTP_02	linux	http_2_decide_tool_target.patch	--lib gateway::router::tests::responses::backend_handler_tools_call_enforces_api_key_tool_scope
+HTTP_05	linux	http_5_authorize_tool_target.patch	--lib gateway::router::tests::authz_and_sse::authorize_tool_target_blocks_ssrf_when_protection_enabled
+HTTP_08	linux	http_8_resolve_passthrough_headers.patch	--lib gateway::router::backend_handlers::tests::passthrough::required_and_absent_refuses
+HTTP_11	linux	http_11_response_blocked.patch	--lib gateway::router::dispatch_parity_tests::t12_response_firewall_block_refuses_on_both_routes
+HTTP_14	linux	http_14_notification_key_resolve.patch	--lib gateway::router::direct_notification_refusal_tests::a_required_passthrough_backend_refuses_without_a_credential
+ACCT_01	linux	acct_1_audience.patch	--lib identity_propagation::account_strategies::lifetime_tests::revalidate_refuses_each_way_the_world_moved_since_the_mint
+ACCT_04	linux	acct_4_scope_broaden.patch	--lib personal_accounts::service::service_tests::service_refresh_tests::narrower_scopes_advance_epoch_and_retire_lease_but_broader_scopes_are_refused
+ACCT_07	linux	acct_7_protocol_relative.patch	--lib personal_accounts::config::journey::journey_tests::a_return_path_that_is_not_single_slash_absolute_is_refused
+ACCT_10	linux	acct_10_consent_fence.patch	--lib personal_accounts::service::service_tests::service_consent_tests::the_guarded_store_entrypoint_fences_a_stale_expectation_without_writing
+ACCT_13	linux	acct_13_symlink_precheck.patch	--lib personal_accounts::storage::migration_source::migration_source_tests::a_symlink_at_the_resolved_path_refuses_even_to_a_valid_record
+ACCT_16	linux	acct_16_start_rate.patch	--lib personal_accounts::storage::journey::tests_gaps::start_rate_n_plus_one_within_a_minute_is_429_then_admitted_after_the_window
+OAUTH_03	linux	oauth_3_is_expired.patch	--lib oauth::storage::tests::is_expired_with_60_second_buffer
+OAUTH_06	linux	oauth_6_discover.patch	--lib oauth::metadata::tests::discovery_refuses_metadata_claiming_another_issuer
+BRIDGE_01	linux	bridge_1_plan_undeclared.patch	--test mik_7212_mrtr7_bridge_acs first_round::ac_mrtr_7a_an_undeclared_opening_entry_is_refused_without_a_slice
+BRIDGE_04	linux	bridge_4_run_gate_rounds.patch	--test mik_7212_mrtr7_bridge_acs ac_mrtr_7a_the_gate_inspects_every_round_not_only_the_first
+STARTUP_03	linux	startup_3_startup_preparesigning.patch	--lib gateway::server::signing_allocation_tests::stdio_chain_nonce_refusal::a_malformed_chain_nonce_on_another_method_is_refused
+STARTUP_06	linux	startup_6_startup_networkbind.patch	--lib gateway::server::support::network_bind_tests::auth_enabled_is_not_enough_when_tools_are_public
+STDIO_01	linux	stdio_1_stdio_misdeliver.patch	--lib transport::stdio::tests::a_response_for_an_id_nobody_waits_on_reaches_no_other_caller
+STDIO_04	linux	stdio_4_stdio_progressonly.patch	--lib transport::stdio::tests::a_message_stamped_with_a_registered_progress_token_is_not_delivered
+STDIO_07	linux	stdio_7_stdio_quoting.patch	--lib transport::stdio::start_refusal_tests::an_unterminated_quote_is_a_config_error
+TASKS_02	linux	tasks_2_owns_all.patch	--lib gateway::task_service::service_tests::service_07_owns_all_is_all_or_nothing
+TASKS_05	linux	tasks_5_owner.patch	--lib gateway::task_service::service_tests::service_07b_an_unattributable_principal_owns_nothing_even_the_empty_set
+TASKS_08	linux	tasks_8_consistent_with.patch	--lib gateway::task_service::record::legacy_tests::a_legacy_row_without_a_consistent_descriptor_names_nothing

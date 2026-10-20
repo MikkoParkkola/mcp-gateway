@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/direct_guards.rs b/src/gateway/router/direct_guards.rs
+index 0000000..0000000 100644
+--- a/src/gateway/router/direct_guards.rs
++++ b/src/gateway/router/direct_guards.rs
+@@ -303,7 +303,7 @@ pub(super) fn scan_direct_egress(
+     };
+     // The router's own instance judges the direct route (MIK-7669).
+     #[cfg(feature = "firewall")]
+-    let firewall = state.firewall.as_deref();
++    let firewall = None;
+     #[cfg(not(feature = "firewall"))]
+     let firewall = None;
+     let at = Egress {

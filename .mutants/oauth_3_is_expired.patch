@@ -1,0 +1,13 @@
+diff --git a/src/oauth/storage.rs b/src/oauth/storage.rs
+index 8d039f27e..29351dda8 100644
+--- a/src/oauth/storage.rs
++++ b/src/oauth/storage.rs
+@@ -198,7 +198,7 @@ impl TokenInfo {
+             // so the caller refreshes or refuses (MIK-8202).
+             use crate::clock::{Validity, expired_by};
+             expired_by(|now| {
+-                if now.saturating_add(60) >= expires_at {
++                if now >= expires_at {
+                     Validity::Expired
+                 } else {
+                     Validity::Live
