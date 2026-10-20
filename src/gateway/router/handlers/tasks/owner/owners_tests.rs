@@ -6,8 +6,10 @@ use super::{AUTH_DISABLED_TASK_OWNER, TaskCaller, TaskOwners, agent_task_owner};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::identity_grants::GrantSubject;
 use crate::key_server::oidc::VerifiedIdentity;
+use crate::mtls::CertIdentity;
 
 const SUBJECT_KEY: &str = "subject:5:proxy:5:alice";
+const MTLS_SUBJECT_KEY: &str = "subject:4:mtls:10:spiffe://a";
 
 fn agent(client_id: &str) -> crate::gateway::oauth::AgentIdentity {
     crate::gateway::oauth::AgentIdentity {
@@ -62,6 +64,36 @@ fn verified() -> VerifiedIdentity {
         name: None,
         groups: Vec::new(),
         issuer: "https://issuer.example".to_string(),
+    }
+}
+
+fn mtls_subject(subject: &str) -> GrantSubject {
+    GrantSubject {
+        authority: "mtls".to_string(),
+        subject: subject.to_string(),
+        label: None,
+    }
+}
+
+fn spiffe_cert() -> CertIdentity {
+    CertIdentity {
+        common_name: None,
+        organizational_unit: None,
+        san_uris: vec!["spiffe://a".to_string()],
+        san_dns_names: Vec::new(),
+        display_name: String::new(),
+        quota_principal: None,
+    }
+}
+
+fn nameless_cert() -> CertIdentity {
+    CertIdentity {
+        common_name: None,
+        organizational_unit: None,
+        san_uris: Vec::new(),
+        san_dns_names: Vec::new(),
+        display_name: "Display".to_string(),
+        quota_principal: None,
     }
 }
 
@@ -150,6 +182,14 @@ async fn route_owners_with_auth_off() {
         &super::route_owners(&off, &caller(Some(&fx.verified), None, None, None)),
         (&fx.actor, &fx.actor, &fx.actor),
     );
+    check(
+        "auth off, verified identity and proven subject",
+        &super::route_owners(
+            &off,
+            &caller(Some(&fx.verified), None, Some(&fx.subject), None),
+        ),
+        (&fx.actor, &fx.actor, &fx.actor),
+    );
 }
 
 #[tokio::test]
@@ -200,6 +240,42 @@ async fn route_owners_with_auth_on() {
     check(
         "auth on, client and agent",
         &super::route_owners(&on, &caller(None, Some(&fx.agent), None, Some(&fx.client))),
+        (
+            &fx.credential_owner,
+            &fx.credential_owner,
+            &fx.credential_owner,
+        ),
+    );
+    let cert_subject = mtls_subject("spiffe://a");
+    let cert = spiffe_cert();
+    check(
+        "auth on, client and certificate subject",
+        &super::route_owners(
+            &on,
+            &TaskCaller {
+                verified_identity: None,
+                agent: None,
+                subject: Some(&cert_subject),
+                cert: Some(&cert),
+                client: Some(&fx.client),
+            },
+        ),
+        (MTLS_SUBJECT_KEY, MTLS_SUBJECT_KEY, MTLS_SUBJECT_KEY),
+    );
+    let placeholder_subject = mtls_subject("Display");
+    let nameless = nameless_cert();
+    check(
+        "auth on, client and placeholder subject of a certificate naming nobody",
+        &super::route_owners(
+            &on,
+            &TaskCaller {
+                verified_identity: None,
+                agent: None,
+                subject: Some(&placeholder_subject),
+                cert: Some(&nameless),
+                client: Some(&fx.client),
+            },
+        ),
         (
             &fx.credential_owner,
             &fx.credential_owner,
