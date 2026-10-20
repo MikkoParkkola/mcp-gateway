@@ -261,3 +261,37 @@ pub mod test_helpers {
         }
     }
 }
+
+/// Run `measured` under a per-test Prometheus recorder and count the
+/// plan-replay-skipped samples it emitted for `reason`: an exact count
+/// from this test's own recorder, never a delta on the process-wide
+/// registry a parallel test could satisfy. The pattern is
+/// `router::security_metrics_tests::scrape`'s, so callers run on a
+/// multi-thread tokio runtime. Here because `crate::gateway` is the
+/// common ancestor of the three test trees that assert this counter
+/// (router route guards, stdio guards, `meta_mcp` unit rows): a
+/// private `#[cfg(test)]` item here reaches exactly those descendants
+/// and nothing outside `gateway`.
+#[cfg(all(test, feature = "metrics", feature = "firewall"))]
+fn count_plan_replay_skipped<F: std::future::Future>(
+    reason: &str,
+    measured: F,
+) -> (F::Output, u64) {
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let handle = recorder.handle();
+    let out = telemetry_metrics::with_local_recorder(&recorder, || {
+        tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(measured))
+    });
+    let count = handle
+        .render()
+        .lines()
+        .find(|line| {
+            line.starts_with("mcp_gateway_collusion_plan_replay_skipped_total")
+                && line.contains(&format!("reason=\"{reason}\""))
+        })
+        .and_then(|line| line.rsplit(' ').next())
+        .and_then(|n| n.split('.').next())
+        .and_then(|n| n.parse::<u64>().ok())
+        .unwrap_or(0);
+    (out, count)
+}

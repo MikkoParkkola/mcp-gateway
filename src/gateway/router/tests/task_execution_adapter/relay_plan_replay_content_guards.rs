@@ -8,69 +8,51 @@
 //! `relay_plan_replay`'s.
 use super::super::*;
 use super::relay_plan_replay::{
-    ALPHA, BETA, OTHER_PROSE, PROSE, Rig, Sensitivity, answering, chain, keyed_call, playbook,
-    playbook_args, rig, rig_with, rig_with_mocks, task_call, text,
+    ALPHA, BETA, OTHER_PROSE, PROSE, Rig, SUGGEST, Sensitivity, answering, chain, erring_step,
+    keyed_call, playbook, playbook_args, rig, rig_with_mocks, task_call, text,
 };
-#[cfg(feature = "metrics")]
-use super::relay_plan_replay_guards::skipped_count;
 use super::relay_plan_replay_guards::{committed, delist, live_invoke, plan_auth, probe_refused};
 use super::support::*;
 use pretty_assertions::assert_eq;
 
 use crate::security::firewall::{Firewall, FirewallAction, FirewallConfig, FirewallRule};
 
-/// The first string value of member `key` anywhere in `value`. A
-/// wrapped answer carries its JSON in a text block, so a string
-/// that parses as JSON is searched inside too: that is where a
-/// keyed chain answer carries its step verdicts.
-fn find_member(value: &Value, key: &str) -> Option<String> {
-    match value {
-        Value::Object(map) => match map.get(key) {
-            Some(Value::String(found)) => Some(found.clone()),
-            _ => map.values().find_map(|inner| find_member(inner, key)),
-        },
-        Value::Array(items) => items.iter().find_map(|inner| find_member(inner, key)),
-        Value::String(inner_text) => serde_json::from_str::<Value>(inner_text)
-            .ok()
-            .and_then(|inner| find_member(&inner, key)),
-        _ => None,
-    }
+/// G1's rig: the `on_error: continue` playbook over alpha delivering
+/// sensitive [`PROSE`] and beta answering the parameter-style tool
+/// error R9 uses, so the gateway writes [`SUGGEST`] into beta's step
+/// result and the stored answer carries it (asserted as a premise by
+/// each row, R9's style). Every k-gram is kept (`min_matches: 1`), so
+/// the 77-char advice flags whenever receipted (test plan §10).
+async fn suggest_rig() -> Rig {
+    rig_with_mocks(
+        answering(PROSE),
+        erring_step(),
+        Some(&playbook()),
+        Sensitivity::Rule,
+    )
+    .await
 }
 
-/// The gateway-written member of a verdict-bearing step result: the
-/// `content_sha256` in its `_context_integrity` verdict. 64 chars,
-/// past a k-gram; this rig keeps every k-gram (`min_matches: 1`), so
-/// it flags whenever receipted (test plan §10 on R9's 77-char advice).
-fn gateway_member(answer: &Value) -> String {
-    let member =
-        find_member(answer, "content_sha256").expect("stored answer carries the verdict: fixture");
-    assert!(
-        member.len() >= 48,
-        "premise: member longer than a k-gram: {member}"
-    );
-    member
-}
-
-/// G1's control: `member` as alpha's backend text on a fresh rig flags.
-async fn flags_as_backend_text(member: &str) {
-    let control = rig(member, OTHER_PROSE, None).await;
+/// G1's control: `text` as alpha's backend text on a fresh rig flags.
+async fn flags_as_backend_text(text: &str) {
+    let control = rig(text, OTHER_PROSE, None).await;
     let delivered = live_invoke(&control.state, 10, ALPHA).await;
     assert!(
-        delivered.get("error").is_none() && delivered.to_string().contains(member),
-        "control premise: alice delivered the member as backend text: {delivered}"
+        delivered.get("error").is_none() && delivered.to_string().contains(text),
+        "control premise: alice delivered the text as backend text: {delivered}"
     );
     assert!(
-        control.refused("key-b", 11, member).await,
+        control.refused("key-b", 11, text).await,
         "control: identical string as backend text flags"
     );
 }
 
-/// G1's shared tail: on a verdict rig, live and after `reread`, alpha's
-/// text is refused for bob and the gateway member never is.
-async fn gateway_member_never_receipted(
+/// G1's shared tail: live and after `reread`, alpha's text is refused
+/// for bob and the gateway's own advice never is.
+async fn gateway_text_never_receipted(
     rig: &Rig,
     text: &str,
-    member: &str,
+    advice: &str,
     base: i64,
     reread: impl std::future::Future<Output = Value>,
 ) {
@@ -79,8 +61,8 @@ async fn gateway_member_never_receipted(
         "P0: live receipt holds for alpha's text"
     );
     assert!(
-        !rig.refused("key-b", base + 1, member).await,
-        "premise: live receipt never held the member"
+        !rig.refused("key-b", base + 1, advice).await,
+        "premise: live receipt never held the advice"
     );
     rig.lapse().await;
     assert!(!rig.refused("key-b", base + 2, text).await, "P1: lapsed");
@@ -94,58 +76,64 @@ async fn gateway_member_never_receipted(
         "control: the re-read renewed alpha's text"
     );
     assert!(
-        !rig.refused("key-b", base + 4, member).await,
-        "the replay receipted the gateway's own member"
+        !rig.refused("key-b", base + 4, advice).await,
+        "the replay receipted the gateway's own advice"
     );
 }
 
-/// G1 (T): the gateway's own member in alpha's stored result is never
+/// G1 (T): the gateway's own advice in a step's stored result is never
 /// receipted on a task re-read; the identical string as backend text
-/// flags (control rig).
+/// flags (control rig), and alpha's prose renews as usual.
 /// Mutant: snapshot built from the stored answer.
 #[tokio::test]
-async fn g1_a_task_reread_never_receipts_the_gateways_own_member() {
-    let text = format!("{PROSE} Contact: keeper@orchardcoop.fi");
-    let rig = rig_with(&text, OTHER_PROSE, None, Sensitivity::Verdict).await;
-    let task = rig.settle_task("g1-t", "gateway_execute", chain()).await;
+async fn g1_a_task_reread_never_receipts_the_gateways_own_advice() {
+    let rig = suggest_rig().await;
+    let task = rig
+        .settle_task("g1-t", "gateway_run_playbook", playbook_args())
+        .await;
     let shown = get_task(&rig.state, "key-a", &task).await;
     assert!(
         shown.to_string().contains(PROSE),
         "premise: stored answer carries alpha's text: {shown}"
     );
-    let member = gateway_member(&shown);
-    flags_as_backend_text(&member).await;
-    gateway_member_never_receipted(
+    assert!(
+        shown.to_string().contains(SUGGEST),
+        "premise: stored answer carries the gateway's advice: {shown}"
+    );
+    flags_as_backend_text(SUGGEST).await;
+    gateway_text_never_receipted(
         &rig,
-        &text,
-        &member,
+        PROSE,
+        SUGGEST,
         10,
         get_task(&rig.state, "key-a", &task),
     )
     .await;
 }
 
-/// G1 (H): the same on a keyed synchronous chain replay.
+/// G1 (H): the same on a keyed synchronous playbook replay.
 /// Mutant: snapshot built from the stored answer.
 #[tokio::test]
-async fn g1_a_keyed_replay_never_receipts_the_gateways_own_member() {
-    let text = format!("{PROSE} Contact: keeper@orchardcoop.fi");
-    let rig = rig_with(&text, OTHER_PROSE, None, Sensitivity::Verdict).await;
+async fn g1_a_keyed_replay_never_receipts_the_gateways_own_advice() {
+    let rig = suggest_rig().await;
     let first = post(
         &rig.state,
         "key-a",
-        keyed_call(1, "g1-h", "gateway_execute", &chain()),
+        keyed_call(1, "g1-h", "gateway_run_playbook", &playbook_args()),
     )
     .await;
     assert!(first.get("error").is_none(), "base: delivered: {first}");
-    let member = gateway_member(&first);
-    flags_as_backend_text(&member).await;
+    assert!(
+        first.to_string().contains(SUGGEST),
+        "premise: stored answer carries the gateway's advice: {first}"
+    );
+    flags_as_backend_text(SUGGEST).await;
     let replay = post(
         &rig.state,
         "key-a",
-        keyed_call(2, "g1-h", "gateway_execute", &chain()),
+        keyed_call(2, "g1-h", "gateway_run_playbook", &playbook_args()),
     );
-    gateway_member_never_receipted(&rig, &text, &member, 20, async move {
+    gateway_text_never_receipted(&rig, PROSE, SUGGEST, 20, async move {
         let replay = replay.await;
         assert_eq!(
             replay["result"], first["result"],
@@ -304,7 +292,7 @@ async fn g26_a_step_refused_before_dispatch_gets_no_receipt() {
         .barrier_on_publication(Arc::new(move || {
             if !swapped.swap(true, std::sync::atomic::Ordering::SeqCst) {
                 let definition: crate::playbook::PlaybookDefinition =
-                    serde_yaml::from_str(&scoped_playbook(FORBIDDEN_BACKEND))
+                    crate::yaml::from_str(&scoped_playbook(FORBIDDEN_BACKEND))
                         .expect("playbook fixture must parse");
                 let mut engine = crate::playbook::PlaybookEngine::new();
                 engine.register(definition);
@@ -466,7 +454,7 @@ async fn redacting_gateway(rig: &Rig) -> (Arc<AppState>, tempfile::TempDir) {
 /// and the filtered drop is counted `reason=filtered` (F4's counter
 /// for the cut and seam-excuse sets dropped against a changed answer).
 /// Mutant: skip filtering on a changed answer.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn g11_a_replay_time_redaction_renews_only_what_it_delivers() {
     let removed = removed_run();
     assert!(
@@ -509,14 +497,15 @@ async fn g11_a_replay_time_redaction_renews_only_what_it_delivers() {
     );
 
     let (on, _on_store) = redacting_gateway(&rig).await;
-    #[cfg(feature = "metrics")]
-    let filtered_before = skipped_count("filtered");
-    let replay = post(
+    let measured = post(
         &on,
         "key-a",
         keyed_call(2, "g11", "gateway_execute", &chain()),
-    )
-    .await;
+    );
+    #[cfg(feature = "metrics")]
+    let (replay, filtered) = crate::gateway::count_plan_replay_skipped("filtered", measured);
+    #[cfg(not(feature = "metrics"))]
+    let replay = measured.await;
     assert!(replay.get("error").is_none(), "base: replayed: {replay}");
     assert_ne!(
         replay["result"], first["result"],
@@ -536,9 +525,9 @@ async fn g11_a_replay_time_redaction_renews_only_what_it_delivers() {
         "control: the delivered rest is refused"
     );
     #[cfg(feature = "metrics")]
-    assert!(
-        skipped_count("filtered") > filtered_before,
-        "the filtered drop was not counted"
+    assert_eq!(
+        filtered, 1,
+        "the filtered drop was not counted exactly once reason=filtered"
     );
 }
 

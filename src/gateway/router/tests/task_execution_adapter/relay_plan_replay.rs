@@ -122,7 +122,7 @@ pub(super) async fn rig_with_mocks(
         key.backends.extend([ALPHA.to_string(), BETA.to_string()]);
     }
     let definition: Option<crate::playbook::PlaybookDefinition> =
-        playbook.map(|p| serde_yaml::from_str(p).expect("playbook fixture must parse"));
+        playbook.map(|p| crate::yaml::from_str(p).expect("playbook fixture must parse"));
     let handle = Arc::clone(&relay);
     let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
         &auth,
@@ -548,6 +548,17 @@ async fn a_verdict_sensitive_playbook_step_renews() {
 /// problem: the gateway's own text, longer than a k-gram.
 pub(super) const SUGGEST: &str =
     "Check the tool's input schema, correct the offending parameter(s), and retry.";
+
+/// A step backend whose every answer is a tool error with no text block,
+/// as R9's erring mock answers in kind: the gateway reads it as a
+/// parameter problem and writes [`SUGGEST`] into the step result's
+/// recovery advice, which a playbook under `on_error: continue` carries
+/// into its stored answer's step reason.
+pub(super) fn erring_step() -> Arc<MockBackend> {
+    MockBackend::answering(Answer::Sequence(vec![json!({
+        "content": [], "isError": true
+    })]))
+}
 
 /// R9's second gateway: the first gateway's retained answers
 /// (`admission`) with relay detection on, over the same backends.
