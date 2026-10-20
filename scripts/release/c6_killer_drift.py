@@ -13,10 +13,11 @@ For each row the test function ``fn <name>`` is found at ``--base`` and at
 ``--head`` with ``git grep -n -w "fn <name>" <rev> -- '*.rs'``; there must be
 exactly one match per rev, else the row is MISSING (none) or AMBIGUOUS (more
 than one). Its body is extracted with a brace-matching scanner starting at the
-first ``{`` after the match, ignoring braces in string literals, raw strings,
-char literals and comments, including attribute lines and doc comments directly
-above it. Base and head text are compared with trailing whitespace stripped per
-line.
+first ``{`` after the match, ignoring braces in string literals (including
+byte, raw byte, C and raw C strings), char literals (including byte chars)
+and comments, including attribute lines and doc comments directly
+above it. Base and head text are compared exactly, up to ``\r\n`` versus
+``\n`` line endings.
 
 Prints one line per row (``<id>\\t<STATUS>\\t<file>``) and a summary line.
 Exits 0 only when every row is UNCHANGED, else 1, so the operator re-runs those
@@ -26,24 +27,16 @@ rows. Standard library only.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
 
-_CHAR_RE = re.compile(r"'(?:\\(?:u\{[0-9a-fA-F]{1,6}\}|x[0-9a-fA-F]{2}|.)|[^\\'\n])'")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from c6_resolve import Unsupported as _Unsupported  # noqa: E402
+from c6_resolve import blank as _blank_rust  # noqa: E402
+
 _FN_RE = re.compile(r"\bfn\b")
-
-
-def _is_raw_start(text: str, i: int) -> bool:
-    """True when a raw string opens at i: ``r"..."`` or ``r#"..."#`` etc."""
-    if text[i] != "r":
-        return False
-    if i and (text[i - 1].isalnum() or text[i - 1] == "_"):
-        return False
-    j = i + 1
-    while j < len(text) and text[j] == "#":
-        j += 1
-    return j < len(text) and text[j] == '"'
 
 
 def extract_fn(text: str, start_index: int) -> str:
@@ -52,8 +45,10 @@ def extract_fn(text: str, start_index: int) -> str:
     Starts at the first ``{`` after ``start_index`` and returns the text from any
     attribute lines and doc comments directly above the ``fn`` line to the
     matching closing brace, inclusive. Braces inside string literals (``"..."``
-    with escapes), raw strings (``r"..."``, ``r#"..."#``), char literals and
-    ``//`` and ``/* */`` comments do not count.
+    with escapes, byte ``b"..."`` and C ``c"..."`` strings, raw ``r"..."``,
+    ``br"..."`` and ``cr"..."`` strings with any number of ``#``), char and
+    byte-char literals and ``//`` and ``/* */`` comments do not count; the
+    lexing is ``c6_resolve.blank``.
     """
     brace_open = text.find("{", start_index)
     if brace_open < 0:
@@ -81,67 +76,21 @@ def extract_fn(text: str, start_index: int) -> str:
             break
     result_start = sum(len(ln) for ln in lines[:start_line])
 
+    try:
+        code = _blank_rust(text)
+    except _Unsupported as exc:
+        raise ValueError(str(exc)) from exc
     depth = 0
-    i, n = brace_open, len(text)
-    while i < n:
-        if text.startswith("//", i):
-            j = text.find("\n", i)
-            if j < 0:
-                raise ValueError("unterminated function body")
-            i = j + 1
-            continue
-        if text.startswith("/*", i):
-            level, j = 1, i + 2
-            while j < n and level:
-                if text.startswith("/*", j):
-                    level, j = level + 1, j + 2
-                elif text.startswith("*/", j):
-                    level, j = level - 1, j + 2
-                else:
-                    j += 1
-            if level:
-                raise ValueError("unterminated block comment")
-            i = j
-            continue
-        c = text[i]
-        if c == '"':
-            j = i + 1
-            while j < n and text[j] != '"':
-                j += 2 if text[j] == "\\" else 1
-            if j >= n:
-                raise ValueError("unterminated string")
-            i = j + 1
-            continue
-        if c == "r" and _is_raw_start(text, i):
-            k = i + 1
-            while text[k] == "#":
-                k += 1
-            close = '"' + text[i + 1:k]
-            j = text.find(close, k + 1)
-            if j < 0:
-                raise ValueError("unterminated raw string")
-            i = j + len(close)
-            continue
-        if c == "'":
-            m = _CHAR_RE.match(text, i)
-            if m:
-                i = m.end()
-                continue
-            i += 1
-            continue
+    for i in range(brace_open, len(code)):
+        c = code[i]
         if c == "{":
             depth += 1
-            i += 1
-            continue
-        if c == "}":
+        elif c == "}":
             depth -= 1
-            i += 1
             if depth == 0:
-                return text[result_start:i]
+                return text[result_start : i + 1]
             if depth < 0:
                 raise ValueError("unbalanced closing brace")
-            continue
-        i += 1
     raise ValueError("unterminated function body")
 
 
@@ -187,7 +136,7 @@ def _fn_start(text: str, lineno: int, name: str) -> int:
 
 
 def _normalize(body: str) -> str:
-    return "\n".join(line.rstrip() for line in body.splitlines())
+    return body.replace("\r\n", "\n")
 
 
 def main(argv: list[str] | None = None) -> int:

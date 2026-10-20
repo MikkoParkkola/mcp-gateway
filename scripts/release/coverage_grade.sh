@@ -46,12 +46,12 @@ self_check() {
   xz -dc "$SELF_DIR/windows.lcov.xz" > "$tmp/windows.lcov"
   xz -dc "$SELF_DIR/cov.json.xz" > "$tmp/cov.json"
   rev="$(git rev-parse "$SELF_REV^{commit}")"
-  git archive "$rev" src docs/release scripts/release | tar -x -C "$tmp/src"
+  git archive "$rev" src docs/release | tar -x -C "$tmp/src"
   functions=0; paths=0
-  (cd "$tmp/src" && python3 scripts/release/critical_function_coverage.py \
+  (cd "$tmp/src" && python3 "$HERE/critical_function_coverage.py" \
     --lcov "$tmp/linux.lcov" --lcov "$tmp/windows.lcov") \
     > "$tmp/functions.txt" || functions=$?
-  python3 "$tmp/src/scripts/release/critical_path_coverage.py" "$tmp/cov.json" \
+  (cd "$tmp/src" && python3 "$HERE/critical_path_coverage.py" "$tmp/cov.json") \
     > "$tmp/paths.txt" || paths=$?
   if [[ "$functions" != 0 || "$paths" != 0 ]] \
     || ! cmp -s "$tmp/functions.txt" "$SELF_DIR/functions.txt" \
@@ -93,7 +93,7 @@ for path in sys.argv[1:]:
         f.writelines(out)
 EOF
   neg=0
-  (cd "$tmp/src" && python3 scripts/release/critical_function_coverage.py \
+  (cd "$tmp/src" && python3 "$HERE/critical_function_coverage.py" \
     --lcov "$tmp/linux-zero.lcov" --lcov "$tmp/windows-zero.lcov") \
     > "$tmp/neg.txt" || neg=$?
   if [[ "$neg" == 0 ]] \
