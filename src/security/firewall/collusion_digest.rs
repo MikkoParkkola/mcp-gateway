@@ -29,6 +29,8 @@ pub(super) mod view;
 #[path = "collusion_walk.rs"]
 mod walk;
 pub(crate) use judged::{Judged, UnreadReceipt};
+mod replay;
+pub(crate) use replay::ReplayReceipt;
 
 /// Reference-list walks built on this thread (tests only, `MIK-8066` D2).
 #[cfg(test)]

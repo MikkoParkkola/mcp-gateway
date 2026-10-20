@@ -251,6 +251,10 @@ enum Kind {
     /// The seam fingerprints of a plan's answer, rebuilt each time the step
     /// receipts are kept to it (`MIK-8113`).
     Seam,
+    /// A stored plan receipt staged again for a re-read's reader
+    /// (`MIK-8408`): kept only to the answer as delivered now, never
+    /// rebuilt and never re-seamed.
+    Replayed,
 }
 
 /// A delivery's plan staging state (`MIK-8066.BIG.3`); a bare counter when
@@ -268,6 +272,13 @@ tokio::task_local! {
     /// Set while one step of a plan dispatches, with the step's label. Also
     /// turns off the task worker's clock deferral (`worker_clock::armed`).
     static PLAN_STEP: Option<u32>;
+    /// The stored key this delivery's in-plan receipts are captured under
+    /// at commit, when its answer is being stored (`MIK-8408` E1).
+    static REPLAY_CAPTURE: RefCell<Option<replay::Capture>>;
+    /// The stored key this delivery's replayed answer was retained under.
+    static REPLAY_LOOKUP: RefCell<Option<replay::CaptureKey>>;
+    /// The calls this delivery dispatched, with their plan step labels.
+    static REPLAY_CALLS: RefCell<replay::ReplayCallList>;
 }
 
 /// Run one plan step's dispatch: the receipts it stages are a plan's, under
@@ -296,7 +307,7 @@ pub(crate) async fn collecting<F: std::future::Future>(delivery: F) -> F::Output
             RefCell::new(Vec::new()),
             RELAY_STAGED.scope(
                 Staging::default(),
-                super::gateway_writes::scope(seams::scope(delivery)),
+                super::gateway_writes::scope(seams::scope(replay::scope(delivery))),
             ),
         )
         .await
@@ -310,6 +321,11 @@ pub(crate) struct StagedReceipts {
     #[cfg(feature = "firewall")]
     fw: Option<std::sync::Arc<crate::security::firewall::Firewall>>,
     receipts: Vec<Receipt>,
+    /// The stored key the delivery's in-plan receipts are captured under
+    /// at commit (`MIK-8408` E1), taken from its collector.
+    capture: Option<replay::Capture>,
+    /// The calls the delivery dispatched, with their labels (H2).
+    calls: replay::ReplayCallList,
 }
 
 impl StagedReceipts {
@@ -319,7 +335,14 @@ impl StagedReceipts {
             #[cfg(feature = "firewall")]
             fw: None,
             receipts: Vec::new(),
+            capture: None,
+            calls: Vec::new(),
         }
+    }
+
+    /// The delivery's answer was not retained: capture nothing for it.
+    pub(crate) fn drop_replay_capture(&mut self) {
+        self.capture = None;
     }
 
     /// Record what was staged when the answer that was written `delivered` a
@@ -331,6 +354,9 @@ impl StagedReceipts {
     pub(crate) fn commit(self, delivered: bool) {
         #[cfg(feature = "firewall")]
         if delivered && let Some(fw) = self.fw.as_deref() {
+            // `MIK-8408` E1: snapshot before recording, exactly what
+            // `record_digest` gets below.
+            replay::capture_commit(fw, self.capture, &self.receipts, self.calls);
             for r in self.receipts.into_iter().filter(|r| !r.pending_retain) {
                 let caller = crate::security::firewall::RelayCaller::new(&r.key, r.keyed);
                 fw.record_digest(caller, &r.server, &r.tool, &r.digest);
@@ -359,7 +385,9 @@ where
     R: axum::response::IntoResponse,
 {
     if !meta.relay_active() {
-        return delivery.await.into_response();
+        // `MIK-8408` D5: no receipts are collected, but what the gateway
+        // writes into a stored answer is still noted for its replay.
+        return super::gateway_writes::scope(delivery).await.into_response();
     }
     let ((mut response, answered), staged) = meta
         .collecting_staged(RELAY_DELIVERS.scope(std::cell::Cell::new(false), async {
@@ -407,18 +435,24 @@ impl MetaMcp {
         &self,
         delivery: F,
     ) -> (F::Output, StagedReceipts) {
-        let (output, receipts) = RELAY_RECEIPTS
-            .scope(RefCell::new(Vec::new()), async {
-                let writes = super::gateway_writes::scope(seams::scope(delivery));
-                let output = RELAY_STAGED.scope(Staging::default(), writes).await;
-                let staged = RELAY_RECEIPTS.with(|r| std::mem::take(&mut *r.borrow_mut()));
-                (output, staged)
-            })
+        let (output, receipts, capture, calls) = RELAY_RECEIPTS
+            .scope(
+                RefCell::new(Vec::new()),
+                replay::scope(async {
+                    let writes = super::gateway_writes::scope(seams::scope(delivery));
+                    let output = RELAY_STAGED.scope(Staging::default(), writes).await;
+                    let staged = RELAY_RECEIPTS.with(|r| std::mem::take(&mut *r.borrow_mut()));
+                    let (capture, calls) = replay::take_capture();
+                    (output, staged, capture, calls)
+                }),
+            )
             .await;
         let staged = StagedReceipts {
             #[cfg(feature = "firewall")]
             fw: self.firewall.clone(),
             receipts,
+            capture,
+            calls,
         };
         (output, staged)
     }
@@ -512,7 +546,8 @@ impl MetaMcp {
 
     /// A replayed single-target call (`gateway_invoke`, a surfaced tool) is
     /// delivered again: stage the delivered value under its own target, so
-    /// the replay renews the caller's receipt. Multi-step calls renew nothing.
+    /// the replay renews the caller's receipt. A plan call stages its
+    /// stored entry's snapshot receipts instead (`MIK-8408`).
     pub(super) fn stage_replay(
         &self,
         tool_name: &str,
@@ -532,6 +567,10 @@ impl MetaMcp {
         let Some(result) = replay.result.as_ref() else {
             return;
         };
+        if matches!(tool_name, "gateway_execute" | "gateway_run_playbook") {
+            replay::stage_plan_replay(self, caller.relay_caller(session_id));
+            return;
+        }
         // A `gateway_invoke` answer wraps the tool's value as JSON text: stage
         // that value, verdict slot included, as a live call stages it.
         let unwrapped = if tool_name == "gateway_invoke" {
@@ -655,9 +694,13 @@ pub(crate) fn commit_with(fw: &crate::security::firewall::Firewall, delivered: b
     let receipts = RELAY_RECEIPTS
         .try_with(|receipts| std::mem::take(&mut *receipts.borrow_mut()))
         .unwrap_or_default();
+    let (capture, calls) = replay::take_capture();
     if !delivered {
         return;
     }
+    // `MIK-8408` E1: snapshot before recording, exactly what
+    // `record_digest` gets below.
+    replay::capture_commit(fw, capture, &receipts, calls);
     for r in receipts.into_iter().filter(|r| !r.pending_retain) {
         let caller = crate::security::firewall::RelayCaller::new(&r.key, r.keyed);
         fw.record_digest(caller, &r.server, &r.tool, &r.digest);
@@ -729,6 +772,12 @@ impl crate::gateway::input_bridge::ClientChannel for RecordingChannel<'_> {
 mod catalogue;
 #[path = "relay_delivered.rs"]
 mod delivered;
+#[path = "relay_replay.rs"]
+mod replay;
+pub(crate) use replay::{
+    cancel_replay_capture, collecting_writes, note_replay_call, note_sync_capture_key,
+    note_sync_lookup_key, note_task_capture, stage_task_replay, sync_replay_key,
+};
 #[path = "relay_seams.rs"]
 mod seams;
 #[cfg(test)]

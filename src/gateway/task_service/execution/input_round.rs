@@ -182,6 +182,23 @@ impl<'a> Settling<'a> {
             .executor
             .settle_cas_with(ids, outcome, writes, cancel_rx)
             .await;
+        // `MIK-8408` E1: the settled row's own key and retention, read
+        // back because a lost compare-and-set settles at a later
+        // revision than this worker read.
+        if dispatched
+            && stored
+            && let Ok(settled) = self.executor.service.get(self.principal, self.id)
+        {
+            let retention = settled.task.ttl_ms().map_or(
+                Duration::from_secs(crate::idempotency::admission::RETENTION_SECS),
+                Duration::from_millis,
+            );
+            crate::gateway::meta_mcp::invoke::relay::note_task_capture(
+                self.id.to_owned(),
+                settled.revision,
+                retention,
+            );
+        }
         self.state
             .meta_mcp()
             .commit_staged_relay(dispatched && stored);

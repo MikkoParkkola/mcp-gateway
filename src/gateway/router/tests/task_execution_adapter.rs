@@ -61,6 +61,9 @@ mod egress_task;
 /// MIK-7887.RECEIPT.4: the POST route receipts the answer it delivered.
 #[cfg(feature = "firewall")]
 mod relay_delivered_route;
+/// MIK-8408: a plan's stored answer read again renews its step receipts.
+#[cfg(feature = "firewall")]
+mod relay_plan_replay;
 /// MIK-7887.RECEIPT.2: a redacted plan answer keeps each step's delivered text.
 #[cfg(feature = "firewall")]
 mod relay_plan_route;
@@ -70,9 +73,6 @@ mod relay_plan_seam_route;
 /// MIK-7934.PLANRCPT.1: a task plan redacted at settlement keeps step receipts.
 #[cfg(feature = "firewall")]
 mod relay_plan_task;
-/// MIK-8408: a plan's stored answer read again renews its step receipts.
-#[cfg(feature = "firewall")]
-mod relay_plan_replay;
 /// COLLUDE.1 M9: a task's relay receipt is committed at settlement.
 #[cfg(feature = "firewall")]
 mod relay_settlement;

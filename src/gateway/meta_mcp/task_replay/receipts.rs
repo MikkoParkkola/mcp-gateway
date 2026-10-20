@@ -10,8 +10,9 @@ use crate::protocol::tasks::TaskStatus;
 
 impl MetaMcp {
     /// Stage the receipt a read of `stored` renews: its result, its pending
-    /// input requests, or (MIK-7887) the peer's own error of a failed task. A
-    /// multi-target task, an error the gateway wrote or whose author is not
+    /// input requests, or (MIK-7887) the peer's own error of a failed task.
+    /// A completed multi-target task stages its stored plan receipts
+    /// (`MIK-8408`); an error the gateway wrote or whose author is not
     /// established, and a working or cancelled task stage nothing.
     pub(crate) fn stage_stored_receipt(
         &self,
@@ -19,12 +20,19 @@ impl MetaMcp {
         api_key_name: Option<&str>,
         stored: &CommittedTask,
     ) {
-        let [target] = stored.targets.as_slice() else {
-            return;
-        };
         if !self.relay_active() || !stored.serves_backend_output() {
             return;
         }
+        let [target] = stored.targets.as_slice() else {
+            if stored.task.status() == TaskStatus::Completed {
+                // As the single-target arm: the stored result's gateway
+                // members are restored, so the final pass keeps each
+                // replayed receipt to the backend text only.
+                super::super::invoke::gateway_writes::restore(&stored.gateway_writes);
+                super::super::invoke::relay::stage_task_replay(self, who, stored);
+            }
+            return;
+        };
         let to = (target.server.as_str(), target.tool.as_str());
         match stored.task.status() {
             TaskStatus::Completed => {
