@@ -37,12 +37,31 @@ replace it.
    that caused it, and each keeps the key path, the expected type and the
    line and column". Any test edit in that file is a guard change and goes
    to the seats.
+
+   The suite pins these fixed refusal texts:
+   - `while scanning a quoted scalar`;
+   - `duplicate entry with key`;
+   - `recursion limit exceeded`;
+   - `repetition limit exceeded`;
+   - `this duration is longer than 100 years`.
+
+   A backend that words any of them differently has to map it back to
+   this text. Changing the pin instead is a seat-reviewed guard change.
 2. **G1, rollback:** the new code writes grants and config byte-equal to
    the MIG.0 goldens, and the old parser reads them back to the same value.
-3. **G2:** the sentinel is absent on every path. This is now the same suite
-   as point 1.
+3. **G2:** the sentinel is absent on every path. Point 1 is necessary but
+   not sufficient. MIG.2 adds G2 cases that the B3 suite does not have,
+   each checking Display and Debug:
+   - an undefined alias;
+   - figment `ConfigFile::data` and the full `Config::load` extract;
+   - `doctor/hidden_keys` and `commands/backend_url_keys`;
+   - a multi-document refusal.
 4. **G3, read-side enum parity:** the map form `agent: {exact: ...}` is
-   still refused in YAML.
+   still refused in YAML. This applies to the externally tagged enums. The
+   untagged and internally tagged enums (for example `TransportConfig` and
+   `ProtocolConfig`) keep accepting maps, as they do today. The MIG.2 plan
+   lists each class with its count, from a census of `#[serde(untagged)]`
+   and `#[serde(tag = ...)]`.
 5. **Duplicate-key parity** in all four destinations: struct, nested map,
    tree, and figment `Dict`.
 6. **Resource limits:**
@@ -82,9 +101,13 @@ docs.rs, or "unverified" (the spike must confirm it).
 | D14 | Syntax-error wording | libyaml's (`did not find expected ',' or ']'`) | its own (`unclosed bracket '['`) | probe | pin new wording or map it. A test-text change goes to the seats |
 | D15 | Depth limit | 128 loads, 129 refused (`recursion limit exceeded`) | `Budget` setting | MIG.0 behaviour.txt, docs.rs | set the same limits explicitly |
 | D16 | Alias expansion limit | level 3 loads, level 4 refused (`repetition limit exceeded`) | `Budget` and alias limits | MIG.0 behaviour.txt | set the same limits explicitly |
-| D17 | Unknown tags on plain values | kept in `Value::Tagged` | "preserve unsupported tags" option, default off | docs.rs, unverified | keep tags in the adapter tree |
+| D17 | Custom tags on plain values | kept in `Value::Tagged` | `reject_unsupported_tags` defaults to false, so they are kept | docs.rs (corrected in review) | custom tags become `Tagged`; standard tags (`!!str`, `!!int`, `!!float`, `!!bool`, `!!null`, `!!map`, `!!seq`) resolve as serde_yaml does; `!!merge <<` is an ordinary string key (MIG.0 fixture) |
 | D18 | Non-string keys, tags and non-finite numbers in the tree | `Value` holds them | no `Value` type | code | the adapter's own tree holds them; `to_json` rules unchanged (B2) |
-| D19 | Multi-document stream | `Deserializer::from_str` iterator, which can keep yielding after an error | unverified | code, unverified | keep "stop at the first refusal" (`documents`) |
+| D19 | Multi-document stream | `from_str`, `from_str_loose` and figment refuse a second document with serde_yaml's multi-document error; the `Deserializer` iterator yields each document, an empty one as null | unverified | code, `behaviour.txt:85-90` | the single-document entry points return the same multi-document refusal; `documents()` yields every document, empty as null, and stops at the first refusal |
+| D23 | Leading-zero plain decimal (`0755`) into a String or the tree | the string `"0755"` | unverified | `behaviour.txt:40` | string |
+| D24 | Underscored integer (`1_000`) | string | unverified | `behaviour.txt:49` | string |
+| D25 | `.inf`, `-.inf`, `.nan` into a float or the tree | accepted as floats | unverified | `behaviour.txt:55-63` | accepted |
+| D26 | A scalar's spelling into a `String` target (`0o755`, `True`, `1e3`, `null`) | the original text | unverified | MIG.0 fixtures | the original text: resolve only when the target asks for a non-string |
 | D20 | Writer formatting (quoting, indent, `---`, sequence style) | libyaml's emitter | its own emitter | unverified | byte-equal to the MIG.0 goldens (G1, MIG.5) |
 | D21 | figment provider | figment's `yaml` feature (serde_yaml) | optional `figment` feature in serde-saphyr | crates.io deps | drop figment's `yaml`; feed `Dict` from the adapter |
 | D22 | Error API | `location()`, `Display`, `Debug` | own error type | code | the adapter's `Error`/`Location` contract unchanged |
@@ -114,43 +137,66 @@ Its accessors match the MIG.1a inventory of the `Value` and `Mapping` API in
 use (indexing, `get`, `as_*`, `is_*`, tag access, `Number`), so call sites
 do not change. `to_json` keeps its B2 rules.
 
-### 2. Reading: events into the tree
+### 2. Reading: events into a parse representation, policy at the destination
 
-The tree is built from the parser's event stream. That is either
-serde-saphyr's event-level API or `granit-parser` directly, whichever the
-spike shows exposes events, tags and positions; open decision O1. The
-builder applies the gateway's rules itself:
-- duplicate keys are refused in the tree (D3);
-- merge keys stay ordinary keys (D8);
-- scalars are resolved with YAML 1.2 core rules, as serde_yaml does, so
-  `yes` stays a string (D9);
-- every tag is kept (D17);
-- the explicit depth and alias budgets come from D15 and D16. The builder
-  counts expanded nodes itself, so the limit does not depend on a library
-  default;
-- a multi-document stream stops at the first refusal (D19).
+The parser's event stream is turned into an internal **parse
+representation**, not straight into `Value`. The event stream comes from
+serde-saphyr's event-level API or from `granit-parser` directly, whichever
+S1 shows exposes events, tags and positions; open decision O1. The parse
+representation keeps what the destinations disagree on:
+- **Mappings are ordered multimaps.** A repeated key is kept with both
+  entries, and each destination applies its own rule when it materializes
+  (D2 to D4):
+  - `Value` and struct targets refuse;
+  - map targets and figment `Dict` keep the last value.
+- **Scalars stay unresolved.** Each keeps its decoded text, its style
+  (plain or quoted) and any explicit tag. Resolution happens only when the
+  destination asks for a type, with the rules of D9 and D23 to D26:
+  - a `String` target gets the original text;
+  - the tree resolves YAML 1.2 core plain scalars as serde_yaml does.
+- **Tags** follow D17: standard tags resolve, custom tags become `Tagged`,
+  and `!!merge <<` stays an ordinary key (D8).
+- **Positions:** every node keeps its `Location`.
+- **Budgets are explicit (D15, D16).** Depth is counted while events
+  arrive. Alias expansion is counted before a node is copied, so the budget
+  refuses a document before it allocates past the limit.
+- **Documents:** the builder records document boundaries. The
+  single-document entry points refuse a second document with the
+  multi-document error. `documents()` yields each document, an empty one as
+  null, and stops at the first refusal (D19).
 
-### 3. Typed reads: a serde `Deserializer` over the tree
+### 3. Typed reads: a serde `Deserializer` over the parse representation
 
-`from_str::<T>` builds the tree, then deserializes `T` from it with the
-adapter's own `Deserializer`. That deserializer reproduces serde_yaml's
-rules:
-- a unit variant is read from a plain scalar, and a non-unit variant only
-  from a tag, so the map form is refused (G3, D6). This covers all 184
-  `Deserialize` enums at once;
-- a map target keeps the last value of a repeated key, and a struct target
-  refuses it (D2);
-- the key path is tracked through the walk, so errors read
-  `<key path>: <serde message> at line L column C` (D11), and the node's
-  `Location` gives the line and column;
-- error messages are built by the adapter, never copied from the parser.
-  `redact_message` still runs on every `Display`/`Debug` (B3), and no
-  snippet ever exists (D12).
+`from_str::<T>` parses, then deserializes `T` from the parse representation
+with the adapter's own `Deserializer`, which reproduces serde_yaml's rules:
+- **Enums:** for an externally tagged enum, a unit variant is read from a
+  plain scalar and a non-unit variant only from a tag, so the map form is
+  refused (G3, D6). Untagged and internally tagged enums are deserialized
+  through serde's buffered `Content` path and keep accepting maps, as they
+  do today. The class census is in the MIG.2 plan.
+- **Repeated keys:** a map target keeps the last value, and a struct target
+  refuses (D2).
+- **Errors:**
+  - the key path is tracked through the walk, so errors read
+    `<key path>: <serde message> at line L column C` (D11), with the line
+    and column from the node's `Location`;
+  - messages are built by the adapter and never copied from the parser.
+    `redact_message` still runs on every `Display`/`Debug` (B3), and no
+    snippet ever exists (D12);
+  - a parser error, such as a syntax error, is converted into the
+    adapter's error with only its kind and position kept. Parser text never
+    reaches `Display`. S1 demonstrates this.
 
-`from_str_loose` builds `figment::value::Dict` from the tree with last-wins
-at every level (D4). `figment_data` wraps it in figment's `Provider`, so
-figment's `yaml` feature can go (D21). `from_value` is the same
-deserializer started on a tree the caller already has.
+`from_str::<Value>` materializes the tree from the parse representation
+(D3: it refuses duplicates). `from_value` deserializes from a tree the
+caller already has; it is a second `Deserializer`, over `Value`, with the
+same enum and error rules.
+
+`from_str_loose` materializes figment `Dict` with last-wins at every level
+(D4). `figment_data` wraps it as figment's `Provider`, so figment's `yaml`
+feature can go (D21). Before figment's `yaml` is removed, the current
+`figment_data` output on the T2b cases is recorded as a golden: profiles,
+last-wins, and the error kind and message. MIG.2 must match it.
 
 ### 4. Writing: a serde `Serializer` into the tree, and an emitter
 
@@ -191,31 +237,76 @@ change a user can see goes in `upgrading.d`.
 
 ## Spikes before any MIG.2 code (throwaway Spark harness, outside the repository)
 
-- **S1, O1:** does serde-saphyr 2.0.0 expose a parse event stream with
-  tags, anchors and aliases, and positions? If not, does granit-parser 2.0.0
-  alone? Output: a 30-line event dump for the MIG.0 behaviour inputs.
-- **S2, O2:** can either emitter write the MIG.0 golden bytes for the
-  config writers and the grants writer, with no diff? Output: the diff
-  count per golden.
+- **S0, the typed-API alternative, bounded:** before committing to a full
+  serde implementation, try serde-saphyr's typed API with its options on
+  the MIG.0 behaviour inputs:
+  - `DuplicateKeyPolicy`;
+  - `MergeKeyPolicy::AsOrdinary`;
+  - `strict_booleans`;
+  - `reject_unsupported_tags`;
+  - `with_snippet: false`;
+  - `Budget`.
+
+  Count the rows that differ from the goldens, and check whether any key
+  path can be recovered. If S0 matches every row and every error property,
+  the event design is dropped for it.
+- **S1, O1:** the event source passes only if its dump, for the MIG.0
+  behaviour inputs, shows all of these:
+  - raw plain-scalar text with style;
+  - explicit tags;
+  - anchors, with an alias resolved to its value and `<<` still present as
+    a key;
+  - repeated keys, both entries;
+  - `.inf` accepted;
+  - a following document as its own boundary;
+  - positions for every node.
+
+  S1 also converts a parser syntax error into the adapter's error and shows
+  that no parser text reaches `Display`. It shows the budget refusing the
+  level-4 alias document before allocation passes the limit (peak memory
+  measured).
+- **S2, O2:** the emitter must reach zero byte diffs on each of these:
+  - every MIG.0 writer golden: config splice, URL persistence, `upgrade`,
+    `cap`, `config_write`, grants;
+  - the `behaviour.txt` write rows;
+  - a round trip of tags, non-string keys and non-finite numbers;
+  - generated round trips: a property test over the tree that writes,
+    reads back with the old parser, and compares.
+
+  Output: the diff count per golden.
 - **S3:** the G3 and duplicate-key spike that the parent design scheduled
   beside MIG.0, and that has no result in the tree yet. Run it with the
-  tree and deserializer sketch: does every enum refuse the map form, and is
-  the duplicate-key behaviour right in all four destinations?
-- **Kill gate:** if S1 finds no usable event stream, or S2 cannot reach
-  byte-equality, or S3 finds a parity gap, stop. Take the result to the
-  lead. The fallback is the dated exception, decided by the operator.
+  representation and deserializer sketch:
+  - every externally tagged enum refuses the map form and accepts the tag
+    form;
+  - untagged and internally tagged enums keep accepting maps (positive
+    controls);
+  - duplicate keys behave right in all four destinations.
+- **Kill gate:** stop and take the result to the lead if any of these
+  holds. The fallback is the dated exception, decided by the operator.
+  - S0 does not match and S1 finds no usable event stream;
+  - S2 cannot reach byte-equality;
+  - S3 finds a parity gap.
 
 ## Size and order
 
-- About 1,000 to 1,500 lines of product code: the tree, the builder, the
-  deserializer, the serializer, the emitter and errors. Split across
-  `src/yaml/` under the 800-line file cap.
-- About as much again in tests: MIG.3 to MIG.5 inside the same PR, plus the
-  existing suites, which run unchanged.
-- muse writes it, two seats review, and it goes through the full gate and
-  exact-head CI.
-- Order: spikes S1 to S3, then a reviewed MIG.2 plan with a file list and a
-  red-first test plan, then the code.
+- **Size:** this is not small. The data model alone is a parse
+  representation, a tree, two `Deserializer`s, a `Serializer` and the
+  errors. That is about 1,500 to 2,500 lines of product code, before the
+  emitter.
+- **The emitter is priced separately.** Under O2a it is a libyaml-matched
+  writer: quoting of scalars that look like other types, flow and block
+  choice, tag placement and line breaks. The `behaviour.txt:110-112` write
+  rows show the edge cases. Expect another 500 to 1,000 lines, pinned by
+  the goldens. S2 replaces this estimate with a measured one.
+- **Layout:** split across `src/yaml/` under the 800-line file cap.
+- **Tests:** at least as much again. MIG.3 to MIG.5 and the extra G2 cases
+  go inside the same PR, and the existing suites run unchanged.
+- **Process:** muse writes it, two seats review, and it goes through the
+  full gate and exact-head CI. This is days of work, not hours, which is
+  why the swap is a 4.x-minor candidate.
+- **Order:** spikes S0 to S3, then a reviewed MIG.2 plan with a file list,
+  the enum-class census and a red-first test plan, then the code.
 
 ## Rollback
 
@@ -241,3 +332,25 @@ MIG.2 reverts as one commit:
 - **O2:** the emitter, the adapter's own or serde-saphyr's. Decided by S2.
 - **O3:** the release. The operator rules on the exception (4.0.0 swap or
   a 4.x minor). This note's design does not depend on the answer.
+
+## Review record
+
+The first round, 2026-10-20: gpt SHIP-WITH-FIXES (gpt-20261020T082305Z-76661)
+and grok SHIP-WITH-FIXES (grok-20261020T082306Z-76794). Folded:
+- duplicates are kept in an ordered multimap and the policy is applied per
+  destination, so maps and `Dict` keep the last value. Both seats flagged
+  this;
+- scalars stay unresolved until the target is known (D23 to D26);
+- standard tags resolve, and the D17 default is corrected;
+- the multi-document contract (D19);
+- G2 is widened beyond the B3 suite, and the frozen refusal substrings
+  are listed;
+- the enum classes: map-form refusal applies to externally tagged enums
+  only;
+- the `figment_data` golden is recorded before figment's `yaml` is
+  removed;
+- S0, a bounded typed-API alternative, comes first;
+- S1 gets pass criteria, safe error conversion and budget-before-allocation;
+- S2 diffs every writer golden and adds generated round trips;
+- S3 adds positive controls;
+- the size estimate is redone, with the emitter priced on its own.
