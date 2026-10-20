@@ -14,8 +14,13 @@ impl OAuthClient {
     /// Returns an error if token refresh and re-authorization both fail.
     pub async fn get_token(&self) -> Result<String> {
         // Check if we have a valid cached token
-        if let Some(access) = self.live_token() {
-            return Ok(access);
+        {
+            let token = self.current_token.read();
+            if let Some(ref t) = *token
+                && !t.is_expired()
+            {
+                return Ok(t.access_token.clone());
+            }
         }
 
         // Try to refresh if we have a refresh token
