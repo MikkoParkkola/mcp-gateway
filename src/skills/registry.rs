@@ -349,4 +349,78 @@ mod tests {
         // THEN
         assert_eq!(hits.len(), 1);
     }
+
+    // E6
+    #[test]
+    fn old_registry_loads_with_same_values_and_resaves_equal_after_parsing() {
+        const OLD_REGISTRY: &str = r#"{
+  "schema": 1,
+  "skills": {
+    "legacy": {
+      "name": "legacy",
+      "description": "a skill from before 4.0.0",
+      "body": "Body\n",
+      "extra": {
+        "metadata": {
+          "zeta": "last",
+          "alpha": {
+            "!custom": {
+              "a": 1
+            }
+          },
+          "1": "one",
+          "true": "t",
+          "1.5": "f",
+          "ratio": 1.0,
+          "list": [
+            {
+              "!t": 1
+            },
+            "plain"
+          ]
+        }
+      }
+    }
+  }
+}"#;
+        let tmp = tempfile::tempdir().expect("fixture tempdir creates");
+        let path = tmp.path().join("skills.json");
+        std::fs::write(&path, OLD_REGISTRY).expect("fixture registry writes");
+        let loaded = SkillRegistry::load(&path).expect("fixture registry loads");
+        let skill = loaded.get("legacy").expect("fixture contains legacy skill");
+        assert_eq!(
+            skill.extra["metadata"],
+            serde_json::json!({"zeta": "last", "alpha": {"!custom": {"a": 1}}, "1": "one", "true": "t", "1.5": "f", "ratio": 1.0, "list": [{"!t": 1}, "plain"]})
+        );
+        assert!(skill.extra["metadata"]["ratio"].is_f64());
+        let second = tmp.path().join("resaved.json");
+        loaded.save(&second).expect("registry saves");
+        let reloaded = SkillRegistry::load(&second).expect("resaved registry loads");
+        let reskill = reloaded
+            .get("legacy")
+            .expect("resaved contains legacy skill");
+        assert_eq!(reskill.extra, skill.extra);
+        let saved_text = std::fs::read_to_string(&second).expect("saved registry reads");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&saved_text)
+                .expect("saved registry parses as JSON"),
+            serde_json::from_str::<serde_json::Value>(OLD_REGISTRY)
+                .expect("fixture parses as JSON")
+        );
+    }
+
+    // E7
+    #[test]
+    fn skill_with_sequence_key_registers_with_entry_dropped() {
+        let content = "---\nname: n\ndescription: d\nmeta: {[a]: z, ok: 1}\n---\nBody\n";
+        let skill = super::super::parser::parse_skill_md(content).expect("fixture skill parses");
+        let tmp = tempfile::tempdir().expect("fixture tempdir creates");
+        let path = tmp.path().join("skills.json");
+        let mut reg = SkillRegistry::new();
+        reg.insert(skill);
+        reg.save(&path).expect("registry saves");
+        let loaded = SkillRegistry::load(&path).expect("registry loads");
+        let skill = loaded.get("n").expect("registry contains skill");
+        assert_eq!(skill.extra["meta"], serde_json::json!({"ok": 1}));
+    }
 }

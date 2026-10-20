@@ -636,4 +636,100 @@ mod tests {
         // THEN
         assert_eq!(content, "Reference content");
     }
+
+    // E1
+    #[test]
+    fn extra_nested_metadata_maps_to_json_values() {
+        let content = "---\nname: n\ndescription: d\nmetadata:\n  openclaw:\n    category: productivity\n---\nBody\n";
+        let skill = parse_skill_md(content).expect("fixture skill parses");
+        let extra: &BTreeMap<String, serde_json::Value> = &skill.extra;
+        assert_eq!(
+            extra["metadata"],
+            serde_json::json!({"openclaw": {"category": "productivity"}})
+        );
+    }
+
+    // E2
+    #[test]
+    fn extra_keeps_yaml_tags_as_one_entry_maps() {
+        let content =
+            "---\nname: n\ndescription: d\nx: !custom {a: 1}\ns: [!t 1, plain]\n---\nBody\n";
+        let skill = parse_skill_md(content).expect("fixture skill parses");
+        assert_eq!(skill.extra["x"], serde_json::json!({"!custom": {"a": 1}}));
+        assert_eq!(skill.extra["s"], serde_json::json!([{"!t": 1}, "plain"]));
+    }
+
+    // E3
+    #[test]
+    fn extra_stringifies_scalar_keys_and_drops_other_keys() {
+        let content = "---\nname: n\ndescription: d\nm: {1: one, true: t, 1.5: f, 1.0: g, 1e3: h, -0.0: z0, two: 2, [a]: z, ~: n, {k: v}: w, !t k: x, .inf: i}\n---\nBody\n";
+        let skill = parse_skill_md(content).expect("fixture skill parses");
+        assert_eq!(
+            skill.extra["m"],
+            serde_json::json!({"1": "one", "true": "t", "1.5": "f", "1.0": "g", "1000.0": "h", "-0.0": "z0", "two": 2})
+        );
+    }
+
+    // E4
+    #[test]
+    fn extra_maps_non_finite_floats_to_null_and_keeps_number_kinds() {
+        let content = "---\nname: n\ndescription: d\nf: [.inf, -.inf, .nan, 1.5, 1.0, 18446744073709551615, -9223372036854775808]\n---\nBody\n";
+        let skill = parse_skill_md(content).expect("fixture skill parses");
+        assert_eq!(
+            skill.extra["f"],
+            serde_json::json!([
+                null,
+                null,
+                null,
+                1.5,
+                1.0,
+                18446744073709551615u64,
+                -9223372036854775808i64
+            ])
+        );
+        assert!(skill.extra["f"][4].is_f64());
+    }
+
+    // E5
+    #[test]
+    fn extra_later_stringified_key_wins_when_int_comes_first() {
+        let content = "---\nname: n\ndescription: d\nm: {1: a, \"1\": b}\n---\nBody\n";
+        let skill = parse_skill_md(content).expect("fixture skill parses");
+        assert_eq!(skill.extra["m"], serde_json::json!({"1": "b"}));
+    }
+
+    // E5
+    #[test]
+    fn extra_later_stringified_key_wins_when_string_comes_first() {
+        let content = "---\nname: n\ndescription: d\nm: {\"1\": a, 1: b}\n---\nBody\n";
+        let skill = parse_skill_md(content).expect("fixture skill parses");
+        assert_eq!(skill.extra["m"], serde_json::json!({"1": "b"}));
+    }
+
+    // E5
+    #[test]
+    fn extra_duplicate_yaml_keys_are_still_refused() {
+        let content = "---\nname: n\ndescription: d\nm: {a: 1, a: 2}\n---\nBody\n";
+        assert!(parse_skill_md(content).is_err());
+    }
+
+    // E8
+    #[test]
+    fn extra_deserializing_from_json_keeps_raw_value_magic_key_as_plain_map() {
+        let skill: ImportedSkill = serde_json::from_value(serde_json::json!({"name": "n", "description": "d", "body": "b", "extra": {"x": {"$serde_json::private::RawValue": "0"}}})).expect("fixture skill deserializes");
+        assert_eq!(
+            skill.extra["x"],
+            serde_json::json!({"$serde_json::private::RawValue": "0"})
+        );
+    }
+
+    // E8
+    #[test]
+    fn extra_deserializing_from_yaml_applies_tag_rule() {
+        let skill: ImportedSkill = crate::yaml::from_str::<ImportedSkill>(
+            "name: n\ndescription: d\nbody: b\nextra:\n  x: !t 1\n",
+        )
+        .expect("fixture skill deserializes");
+        assert_eq!(skill.extra["x"], serde_json::json!({"!t": 1}));
+    }
 }
