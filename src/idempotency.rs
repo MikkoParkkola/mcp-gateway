@@ -27,7 +27,6 @@ use crate::gateway::gateway_writes::WriteRecord;
 use crate::security::tenant_reads::ReadAttribution;
 use crate::{Error, Result};
 
-#[path = "idempotency/admission.rs"]
 pub(crate) mod admission;
 mod guard;
 mod key;

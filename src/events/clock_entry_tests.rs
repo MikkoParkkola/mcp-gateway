@@ -16,7 +16,8 @@
 
 use std::collections::BTreeMap;
 
-/// `(file, function, reads)`: every decision point and its one read (two
+/// `(file, function, reads)`, file relative to `src/events`,
+/// subdirectories included: every decision point and its one read (two
 /// where one function holds two decisions, named in the inventory).
 const DECISION_POINTS: &[(&str, &str, usize)] = &[
     ("admin.rs", "replay_dead", 2),
@@ -50,8 +51,8 @@ const DECISION_POINTS: &[(&str, &str, usize)] = &[
     ("watch_source.rs", "audit_backoff", 1),
     ("watch_source.rs", "authorize", 1),
     ("watch_source.rs", "once", 1),
-    ("watch_source_hold.rs", "judge_rows", 1),
-    ("watch_source_hold.rs", "pin_classes", 1),
+    ("watch_source/hold.rs", "judge_rows", 1),
+    ("watch_source/hold.rs", "pin_classes", 1),
     ("webhook_source.rs", "webhook_received", 1),
     ("worker.rs", "attempt_once", 2),
     ("worker.rs", "record_and_send", 1),
@@ -135,20 +136,61 @@ fn reads_in(source: &str) -> BTreeMap<String, usize> {
     found
 }
 
+/// Every `.rs` product file under `root`, recursively, keyed by its
+/// path relative to `root` with `/` separators. A file whose file name
+/// contains "test", or under a directory named "tests" or ending in
+/// "_tests", is skipped.
+fn scanned_files(root: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
+    fn walk(
+        dir: &std::path::Path,
+        rel: &std::path::Path,
+        out: &mut Vec<(String, std::path::PathBuf)>,
+    ) {
+        let entries = std::fs::read_dir(dir).expect("read a src/events directory");
+        for entry in entries {
+            let entry = entry.expect("a directory entry");
+            let path = entry.path();
+            let name_owned = entry.file_name();
+            let name = name_owned.to_str().expect("a UTF-8 file name");
+            let child_rel = if rel.as_os_str().is_empty() {
+                std::path::PathBuf::from(name)
+            } else {
+                rel.join(name)
+            };
+            if path.is_dir() {
+                if !(name == "tests" || name.ends_with("_tests")) {
+                    walk(&path, &child_rel, out);
+                }
+            } else if path.extension().is_some_and(|e| e == "rs")
+                && !name.contains("test")
+                && !rel.components().any(|c| {
+                    c.as_os_str()
+                        .to_str()
+                        .is_some_and(|s| s == "tests" || s.ends_with("_tests"))
+                })
+            {
+                let key = child_rel
+                    .components()
+                    .filter_map(|c| c.as_os_str().to_str())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                out.push((key, path));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, std::path::Path::new(""), &mut out);
+    out.sort();
+    out
+}
+
+/// `(file, function, reads)`, file relative to `src/events`,
+/// subdirectories included.
 #[test]
 fn the_events_clock_is_read_only_at_its_decision_points() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/events");
     let mut found = BTreeMap::new();
-    for entry in std::fs::read_dir(&dir).expect("src/events") {
-        let path = entry.expect("entry").path();
-        let file = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .expect("name")
-            .to_owned();
-        if path.extension().is_none_or(|e| e != "rs") || file.contains("test") {
-            continue;
-        }
+    for (file, path) in scanned_files(&dir) {
         let source = std::fs::read_to_string(&path).expect("read");
         for (function, n) in reads_in(&source) {
             found.insert((file.clone(), function), n);
@@ -176,4 +218,31 @@ fn the_scanner_finds_a_read_and_skips_test_code() {
     assert_eq!(found.get("decide"), Some(&1));
     assert_eq!(found.get("helper"), Some(&1));
     assert_eq!(found.get("t"), None);
+}
+
+#[test]
+fn the_scanner_walks_subdirectories() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let sub = root.path().join("sub");
+    std::fs::create_dir_all(&sub).expect("create temp subdir");
+    let latest = root.path().join("latest");
+    std::fs::create_dir_all(&latest).expect("create temp latest dir");
+    let tests = root.path().join("tests");
+    std::fs::create_dir_all(&tests).expect("create temp tests dir");
+    let body = "fn decide() {\n    let now = crate::clock::utc_now();\n}\n";
+    std::fs::write(root.path().join("a.rs"), body).expect("write a.rs");
+    std::fs::write(sub.join("b.rs"), body).expect("write sub/b.rs");
+    std::fs::write(sub.join("c_tests.rs"), body).expect("write sub/c_tests.rs");
+    std::fs::write(latest.join("d.rs"), body).expect("write latest/d.rs");
+    std::fs::write(tests.join("e.rs"), body).expect("write tests/e.rs");
+    let files = scanned_files(root.path());
+    let keys: Vec<&str> = files.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(keys, vec!["a.rs", "latest/d.rs", "sub/b.rs"]);
+    assert!(keys.contains(&"latest/d.rs"));
+    assert!(!keys.contains(&"tests/e.rs"));
+    assert!(!keys.contains(&"sub/c_tests.rs"));
+    for (_, path) in &files {
+        let source = std::fs::read_to_string(path).expect("read scanned file");
+        assert_eq!(reads_in(&source).get("decide"), Some(&1));
+    }
 }

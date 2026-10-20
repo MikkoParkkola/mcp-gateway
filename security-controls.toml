@@ -80,9 +80,7 @@ reason = "show_session_entries: reads one session's entries across the segments 
 module = "src/security/transparency_log_rotation_seams.rs"
 reason = "test-only fault injection and hooks for transparency-log rotation, compiled only under cfg(test); nothing in it ships"
 
-[[coverage.not_a_control]]
-module = "src/security/agent_identity_extract.rs"
-reason = "reads the declared agent label from the x-agent-id header and the agent_id query parameter; a label never authorizes anything (agent-identity-proof-rank) and this refuses no call; the control rows name agent_identity.rs"
+# src/security/agent_identity/extract.rs (the declared x-agent-id / agent_id label reader) is not a control: a label never authorizes anything (agent-identity-proof-rank). It is part of the src/security/agent_identity module, which the controls below cover.
 
 [[coverage.not_a_control]]
 module = "src/security/security_metrics.rs"
@@ -142,7 +140,7 @@ reason = "tripping the breaker means driving repeated backend failures against a
 id = "agent-identity-allowlist"
 description = "a caller that proved no agent identity is refused under require_id, and a proven principal outside known_agents is refused"
 authority = "nfr-sec1:6"
-source = "src/security/agent_identity_validate.rs"
+source = "src/security/agent_identity/validate.rs"
 probe = "none"
 reason = "config-gated on `agent_identity.require_id` / `known_agents`; enforcement is off by default, so absence on the wire is not drift"
 

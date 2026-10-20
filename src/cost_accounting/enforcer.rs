@@ -25,12 +25,9 @@ use super::config::{AlertAction, CostGovernanceConfig};
 use super::registry::CostRegistry;
 
 #[cfg(feature = "cost-governance")]
-#[path = "enforcer_crossings.rs"]
 pub(crate) mod crossings;
 #[cfg(feature = "cost-governance")]
-#[path = "enforcer_rows.rs"]
 mod rows;
-#[path = "enforcer_snapshot.rs"]
 mod snapshot;
 #[cfg(all(feature = "cost-governance", test))]
 use rows::MAX_UNBUDGETED_ROWS;
@@ -656,5 +653,4 @@ mod tests;
 mod atomic_tests;
 
 #[cfg(test)]
-#[path = "enforcer_settle_seam.rs"]
 pub(crate) mod settle_seam;

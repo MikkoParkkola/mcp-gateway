@@ -610,19 +610,15 @@ impl EventsHub {
     }
 }
 
-#[path = "watch_source_host.rs"]
 mod host;
 pub(crate) use host::{Catalogue, Charge, CredentialUse, Holder, PollFailed, Target, WatchHost};
 
-#[path = "watch_source_shape.rs"]
 mod shape;
 use shape::{Options, changed, digest, options, projection};
 
-#[path = "watch_source_hold.rs"]
 mod hold;
 use hold::class_of_target;
 
-#[path = "watch_source_live.rs"]
 mod live;
 
 #[cfg(test)]
