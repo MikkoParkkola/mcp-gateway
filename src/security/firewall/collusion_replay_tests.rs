@@ -10,10 +10,10 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use super::super::collusion_digest::{DeliveryDigest, Judged, ReplayReceipt};
+use super::super::collusion_digest::{DeliveryDigest, Judged, ReplayReceipt, UnreadReceipt};
 use super::super::collusion_gate::{CollusionAction, CollusionConfig, RelayCaller};
-use super::big::KeptStep;
-use super::replay::{ReplayReceipts, StoredKey};
+use super::big::{BigStep, KeptStep};
+use super::replay::{REPLAY_ITEM_OVERHEAD, ReplayReceipts, StoredKey};
 use crate::security::firewall::{Firewall, FirewallConfig, FirewallVerdict, PlanStaging};
 
 const PROSE: &str = "The orchard ledger for the north slope records seven rows of late pears, \
@@ -182,6 +182,7 @@ fn g33_entries_past_the_total_evict_the_oldest() {
             sync_key("id", "r", &format!("op{i}")),
             vec![receipt(i + 1, 64, Some(0))],
             Vec::new(),
+            String::new(),
             now,
             hour(),
         );
@@ -209,6 +210,7 @@ fn g34_an_entry_over_the_entry_cap_is_not_stored() {
         key.clone(),
         vec![receipt(1, 8, Some(0))],
         Vec::new(),
+        String::new(),
         now,
         hour(),
     );
@@ -221,6 +223,7 @@ fn g34_an_entry_over_the_entry_cap_is_not_stored() {
         key.clone(),
         vec![receipt(2, 200, Some(0))],
         Vec::new(),
+        String::new(),
         now,
         hour(),
     );
@@ -247,6 +250,7 @@ fn g36_expiry_removes_overwrite_replaces_and_remove_deletes() {
         key.clone(),
         vec![receipt(1, 8, Some(1))],
         vec![(Some(1), "s".to_owned(), "t".to_owned())],
+        String::new(),
         now,
         Duration::from_secs(60),
     );
@@ -263,6 +267,7 @@ fn g36_expiry_removes_overwrite_replaces_and_remove_deletes() {
         key.clone(),
         vec![receipt(2, 8, Some(2))],
         Vec::new(),
+        String::new(),
         now,
         hour(),
     );
@@ -318,6 +323,7 @@ fn g39_the_sync_key_separates_identity_round_and_operation() {
         sync_key("identity-a", "round-1", "op-1"),
         vec![receipt(1, 8, Some(0))],
         Vec::new(),
+        String::new(),
         now,
         hour(),
     );
@@ -365,6 +371,7 @@ fn n3_inner_receipts_count_against_the_entry_cap() {
         other.clone(),
         vec![receipt(9, 8, Some(0))],
         Vec::new(),
+        String::new(),
         now,
         hour(),
     );
@@ -377,6 +384,7 @@ fn n3_inner_receipts_count_against_the_entry_cap() {
         nested.clone(),
         vec![receipt(1, 64, Some(1))],
         calls.clone(),
+        String::new(),
         now,
         hour(),
     );
@@ -388,6 +396,7 @@ fn n3_inner_receipts_count_against_the_entry_cap() {
         nested.clone(),
         vec![receipt(1, 64, Some(1)), receipt(2, 64, Some(1))],
         calls,
+        String::new(),
         now,
         hour(),
     );
@@ -423,6 +432,7 @@ fn g42_firewalls_sharing_the_detector_share_the_replay_store() {
         key.clone(),
         vec![receipt(1, 8, Some(3))],
         Vec::new(),
+        String::new(),
         now,
         hour(),
     );
@@ -431,6 +441,159 @@ fn g42_firewalls_sharing_the_detector_share_the_replay_store() {
         .lookup(&key, now)
         .expect("inserted through the other firewall: fixture");
     assert_eq!(found.receipts[0].label, Some(3));
+}
+
+/// D10/D11: a snapshot carrying both a cut set and seam excuses,
+/// replayed against a changed answer (`identical == false` while every
+/// kept segment is still delivered, so retention's verbatim and unread
+/// paths are the ones taken), comes back with both sets `None` and
+/// `dropped == true`, through the Unread branch and the ordinary one.
+/// Mutants killed: the original `self.cut_fps.take().is_some() ||
+/// self.seam_excuses.take().is_some()` (with a cut present the seam
+/// excuses are never taken and survive); leaving the sets to
+/// `retaining_for` (its verbatim early return hands them back).
+#[test]
+fn d11_a_changed_answer_drops_both_excuse_sets_in_both_branches() {
+    let fw = firewall();
+    let detector = fw
+        .collusion_detector()
+        .expect("relay detection is on: fixture");
+    let answer = json!({"body": PROSE});
+    let delivered = fw
+        .delivered_for_plan(&answer, None)
+        .expect("the answer is under the bound: fixture");
+    for unread in [false, true] {
+        let (mut digest, _) = DeliveryDigest::of_leaves(&[PROSE], true);
+        digest.cut_fps = Some(vec![11, 22].into());
+        digest.seam_excuses = Some(vec![33].into());
+        if unread {
+            digest.judged = Judged::Unread {
+                receipt: UnreadReceipt {
+                    fps: Vec::new(),
+                    cut: Some(vec![44].into()),
+                },
+                step: None,
+            };
+        }
+        let (kept, dropped) = digest.kept_to_replay_answer(detector, &delivered, false, None);
+        assert!(
+            dropped,
+            "the drop was not reported (unread: {unread}), so no count is taken"
+        );
+        assert!(
+            kept.cut_fps.is_none(),
+            "the cut set survived a changed answer (unread: {unread})"
+        );
+        assert!(
+            kept.seam_excuses.is_none(),
+            "the seam excuses survived a changed answer (unread: {unread})"
+        );
+        if unread {
+            let Judged::Unread { receipt, .. } = &kept.judged else {
+                panic!("premise: the unread judgement is kept");
+            };
+            assert!(
+                receipt.cut.is_none(),
+                "the unread receipt's cut survived a changed answer"
+            );
+        }
+    }
+}
+
+/// The 64 B per-item overhead: a seam snapshot of ten retained
+/// fingerprints, no segments, joins or sources, under one-byte source
+/// names counts exactly its fingerprint bytes plus one item's overhead
+/// plus its two name bytes, so the 1 MiB entry cap it is summed against
+/// is exact at this accounting.
+/// Mutant killed: charge no overhead (the size would read 82, and an
+/// entry could hold past the cap it was admitted under).
+#[test]
+fn a_snapshots_counted_size_is_fingerprint_bytes_plus_64_bytes_per_item() {
+    assert_eq!(
+        REPLAY_ITEM_OVERHEAD, 64,
+        "premise: the per-item overhead is the accepted 64 B"
+    );
+    let snapshot = receipt(7, 10, Some(0));
+    assert_eq!(
+        snapshot.bytes(),
+        10 * 8 + 64 + 2,
+        "ten fingerprints (8 B each), one item's 64 B overhead, two one-byte names"
+    );
+}
+
+/// D25: a step still `Staged` at capture yields no snapshot and stores
+/// no entry, counted `staged` at `store_replay` (its live reservation
+/// is the original caller's and its exits consume it, so no snapshot
+/// taken by reference can carry it).
+/// Mutant killed: snapshot a staged step as an ordinary receipt (the
+/// snapshot would be `Some`, and an entry would be stored).
+#[test]
+fn d25_a_still_staged_step_yields_no_snapshot_and_no_entry() {
+    let fw = firewall();
+    let detector = fw
+        .collusion_detector()
+        .expect("relay detection is on: fixture");
+    let fps: Vec<u64> = (0..64_u64).collect();
+    let big = BigStep::new(detector, ("alpha:read", "alice"), &fps, usize::MAX)
+        .expect("a big step with room is admitted: fixture");
+    let (mut digest, _) = DeliveryDigest::of_leaves(&[PROSE], true);
+    digest.judged = Judged::Staged(Box::new(big));
+    assert!(
+        digest.is_staged_step(),
+        "premise: the step is still staged, never retained"
+    );
+    assert!(
+        digest.replay_snapshot(Some(0), "alpha", "read").is_none(),
+        "a still-staged step yielded a snapshot"
+    );
+    fw.store_task_replay(
+        "task-d25",
+        1,
+        &[(&digest, Some(0), "alpha", "read")],
+        Vec::new(),
+        "",
+        hour(),
+    );
+    assert!(
+        fw.task_replay_digests("task-d25", 1).is_none(),
+        "a still-staged step alone stored a replay entry"
+    );
+}
+
+/// The 24 h retention fallback for a task with no TTL (`RETENTION_SECS`,
+/// applied at `note_task_capture`): an entry stored for that retention
+/// is live just before 24 h on the relay (receipt) clock and expired
+/// just after it.
+/// Mutants killed: a shorter fallback (the just-before lookup would
+/// miss); expiry on the wall clock (advancing only the relay clock
+/// would never expire it).
+#[test]
+fn a_ttl_less_tasks_entry_expires_after_24h_on_the_relay_clock_not_before() {
+    let fw = firewall();
+    fw.advance_collusion_clock_for_test(Duration::ZERO);
+    let digest = DeliveryDigest::of_seam(vec![1, 2, 3], true, None);
+    fw.store_task_replay(
+        "task-24h",
+        3,
+        &[(&digest, Some(0), "s", "t")],
+        Vec::new(),
+        "",
+        Duration::from_secs(crate::idempotency::admission::RETENTION_SECS),
+    );
+    assert!(
+        fw.task_replay_digests("task-24h", 3).is_some(),
+        "premise: the entry is stored"
+    );
+    fw.advance_collusion_clock_for_test(Duration::from_secs(86_399));
+    assert!(
+        fw.task_replay_digests("task-24h", 3).is_some(),
+        "the entry expired before 24 h on the relay clock"
+    );
+    fw.advance_collusion_clock_for_test(Duration::from_secs(2));
+    assert!(
+        fw.task_replay_digests("task-24h", 3).is_none(),
+        "the entry is still live past 24 h on the relay clock"
+    );
 }
 
 /// G47: two firewalls sharing the detector and the replay store,
@@ -461,6 +624,7 @@ fn g47_parallel_commits_and_replays_on_a_shared_store_each_find_their_own_entry(
                         key.clone(),
                         vec![receipt(u64::from(i) + 1, 8, Some(i))],
                         Vec::new(),
+                        String::new(),
                         now,
                         hour(),
                     );

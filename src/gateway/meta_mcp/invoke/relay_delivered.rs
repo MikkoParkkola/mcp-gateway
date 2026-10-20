@@ -210,6 +210,9 @@ impl MetaMcp {
                 {
                     let answer = plan_answer(copy);
                     if receipts.iter().any(|r| r.in_plan) {
+                        // `MIK-8408` F4: the answer these receipts are
+                        // committed against, for the replay capture.
+                        super::replay::note_capture_answer(&answer);
                         keep_plan_receipts(fw, &mut receipts, &answer);
                     }
                     // `MIK-8408` F4: a replayed receipt is kept only to
@@ -302,21 +305,24 @@ fn keep_plan_receipts(
 }
 
 /// Keep each replayed receipt to `answer` as delivered now (`MIK-8408`
-/// F4): unchanged when the answer still delivers all of it, filtered
-/// against it otherwise, and dropped when the answer is over the bound
-/// a receipt is kept against. A replayed receipt inside a live plan
-/// step was already kept with that plan's receipts and is left alone.
+/// F4): unchanged only when the answer is byte-identical to the stored
+/// one (the staged entry's noted digest), filtered against it
+/// otherwise, and dropped when the answer is over the bound a receipt
+/// is kept against. A replayed receipt inside a live plan step was
+/// already kept with that plan's receipts and is left alone.
 #[cfg(feature = "firewall")]
 fn keep_replayed_receipts(
     fw: &crate::security::firewall::Firewall,
     receipts: &mut Vec<super::Receipt>,
     answer: &Value,
 ) {
+    let stored = super::replay::stored_answer_digest();
     let mut kept: Vec<super::Receipt> = Vec::with_capacity(receipts.len());
     for mut r in receipts.drain(..) {
         if r.kind == super::Kind::Replayed && !r.in_plan {
             let digest = std::mem::take(&mut r.digest);
-            let Some(digest) = fw.keep_replayed_digest(digest, answer, r.step) else {
+            let Some(digest) = fw.keep_replayed_digest(digest, answer, stored.as_deref(), r.step)
+            else {
                 continue;
             };
             r.digest = digest;

@@ -15,8 +15,8 @@
 //!
 //! Mutants killed: a third product-code `plan_step(` call (the scan's
 //! file map gains a file, or a count); naming `gateway_execute` (or
-//! any other listed plan entry point) in `grant_audit.rs`, the step
-//! dispatch path's own file (the second row names it).
+//! any other listed plan entry point) in any scanned file of the step
+//! dispatch callee chain (the second row names them).
 //!
 //! The scan mirrors
 //! `clock_tests::no_disallowed_methods_allow_or_clock_alias_hides_a_clock_read`:
@@ -107,34 +107,43 @@ fn only_the_two_plan_engines_call_plan_step() {
     );
 }
 
-/// (b) The step dispatch bodies do not reach a plan: `grant_audit.rs`
-/// holds `invoke_tool` and `invoke_tool_with_source` (and calls
-/// `invoke_tool_sourced`, in `invoke/policy.rs`), and its product
-/// code names no plan entry point. Read and confirmed for this row:
-/// none of these names occurs there today.
+/// (b) The step dispatch bodies do not reach a plan. Scanned files,
+/// the callee chain a step dispatch goes through before the backend:
+/// `src/gateway/meta_mcp/grant_audit.rs` (`invoke_tool`,
+/// `invoke_tool_with_source`), `src/gateway/meta_mcp/invoke/policy.rs`
+/// (`invoke_tool_sourced`, which the step dispatch calls and which
+/// calls on into the traced dispatch), and
+/// `src/gateway/meta_mcp/invoke.rs` (`invoke_tool_traced`, the traced
+/// dispatch itself, down to the backend call). No scanned file's
+/// product code names a plan entry point. Read and confirmed for this
+/// row: none of these names occurs in any of them today (the
+/// `gateway_run_playbook` in `invoke.rs`'s module doc is a comment,
+/// which `product_code` drops).
 #[test]
 fn the_step_dispatch_path_names_no_plan_entry_point() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let path = root.join("src/gateway/meta_mcp/grant_audit.rs");
-    let src = std::fs::read_to_string(&path).expect("readable source: fixture");
-    let code = product_code(&src);
-    assert!(
-        !code.is_empty(),
-        "the scan read no product code from grant_audit.rs"
-    );
-    for name in [
-        "gateway_execute",
-        "gateway_run_playbook",
-        "execute_chain",
-        "chain_exec",
-        "PlaybookEngine",
-        "playbook_invoker",
+    for rel in [
+        "src/gateway/meta_mcp/grant_audit.rs",
+        "src/gateway/meta_mcp/invoke/policy.rs",
+        "src/gateway/meta_mcp/invoke.rs",
     ] {
-        assert!(
-            !code.contains(name),
-            "grant_audit.rs names {name}: a step dispatch can reach a plan, \
-             so nested plans are reachable and MIK-8409.NESTED.1 must reopen"
-        );
+        let src = std::fs::read_to_string(root.join(rel)).expect("readable source: fixture");
+        let code = product_code(&src);
+        assert!(!code.is_empty(), "the scan read no product code from {rel}");
+        for name in [
+            "gateway_execute",
+            "gateway_run_playbook",
+            "execute_chain",
+            "chain_exec",
+            "PlaybookEngine",
+            "playbook_invoker",
+        ] {
+            assert!(
+                !code.contains(name),
+                "{rel} names {name}: a step dispatch can reach a plan, \
+                 so nested plans are reachable and MIK-8409.NESTED.1 must reopen"
+            );
+        }
     }
 }
 
@@ -169,28 +178,58 @@ fn declared_fn(line: &str) -> Option<&str> {
 /// file, enclosing fn)`, plus how many files were read. The enclosing
 /// fn is the nearest preceding line in the same file that declares a
 /// `fn`; a staging entry point's own `fn <name>(` definition line is
-/// not a call.
+/// not a call. A call split across lines is still seen: the scan
+/// finds the entry name wherever it occurs and then requires `(` as
+/// the next non-whitespace character, across line breaks, so
+/// `stage_stored_receipt\n(...)` counts exactly as the one-line
+/// spelling does. A name that is the tail of a longer identifier
+/// does not count.
 fn staging_call_sites() -> (BTreeSet<(String, String, String)>, usize) {
     let files = product_files();
     let read = files.len();
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
     let mut sites = BTreeSet::new();
     for (rel, code) in &files {
-        let mut enclosing: Option<&str> = None;
-        for line in code.lines() {
-            let declared = declared_fn(line);
-            if let Some(name) = declared {
-                enclosing = Some(name);
-            }
-            for entry in STAGING_ENTRIES {
-                let bare = entry.trim_start_matches('.').trim_end_matches('(');
-                if declared == Some(bare) || !line.contains(entry) {
+        // Each line's start offset and the fn it declares, so a match
+        // at any byte offset reads its own line and enclosing fn.
+        let mut lines: Vec<(usize, &str, Option<&str>)> = Vec::new();
+        let mut offset = 0_usize;
+        for line in code.split_inclusive('\n') {
+            lines.push((offset, line, declared_fn(line)));
+            offset += line.len();
+        }
+        let enclosing_at = |at: usize| {
+            lines
+                .iter()
+                .take_while(|(start, _, _)| *start <= at)
+                .filter_map(|(_, _, declared)| *declared)
+                .last()
+                .unwrap_or_default()
+        };
+        let line_at = |at: usize| {
+            lines
+                .iter()
+                .take_while(|(start, _, _)| *start <= at)
+                .last()
+                .map_or("", |(_, line, _)| line)
+        };
+        for entry in STAGING_ENTRIES {
+            let token = entry.trim_end_matches('(');
+            let bare = token.trim_start_matches('.');
+            for (at, _) in code.match_indices(token) {
+                // A leading-`.` token carries its own boundary; a bare
+                // name must not be the tail of a longer identifier.
+                if !token.starts_with('.') && code[..at].chars().next_back().is_some_and(is_ident) {
                     continue;
                 }
-                sites.insert((
-                    entry.to_owned(),
-                    rel.clone(),
-                    enclosing.unwrap_or_default().to_owned(),
-                ));
+                let after = code[at + token.len()..].trim_start();
+                if !after.starts_with('(') {
+                    continue;
+                }
+                if declared_fn(line_at(at)) == Some(bare) {
+                    continue;
+                }
+                sites.insert((entry.to_owned(), rel.clone(), enclosing_at(at).to_owned()));
             }
         }
     }

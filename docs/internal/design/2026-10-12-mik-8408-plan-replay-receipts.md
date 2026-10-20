@@ -90,6 +90,8 @@ Merge order (muse M-7): 8408 is expected to merge first and writes `executed_ste
 
 `collecting_http` returns early when detection is off (relay.rs:361-363), and so does stdio (stdio_single.rs:339). A new `provenance_scope` (PLAN_MEMBERS, steps, gateway_writes) opens on both transports regardless, and receipt collection stays inside it, gated as today. This also closes an existing gap of the same cause: a record written with detection off and replayed with it on would receipt the gateway's own text today, single-target included (row G25).
 
+As built (2026-10-20). With detection off, only the gateway-writes record opens, because no receipts or replay entries exist to collect: HTTP `collecting_http` (relay.rs:379, detection-off branch) and stdio `collecting_writes` (relay_replay.rs:77, called from stdio_single.rs:345) wrap the delivery in `gateway_writes::scope`. With detection on, the full replay scope opens inside the relay collectors (`collecting`, relay.rs:304; `collecting_staged`; the detection-on branch of `collecting_http`). Entries are written only through `capture_commit` (relay_replay.rs:278). A synchronous capture is armed by admission's Owned arm (meta_mcp/admission.rs:379 `note_sync_capture_key`). A task capture is armed inside the task worker's own scope, at settlement (input_round.rs:200 and settle_followed.rs:110, `note_task_capture`). Measured cost of the detection-off scope: +3 allocations and about 735 B per tiny HTTP `gateway_invoke` (371 to 374 allocations; PR evidence).
+
 ### D6. Detection off at delivery
 
 No receipts exist, so no masks are stored, and renewals for that record never start. After detection is turned on, renewal begins with plans delivered from then on. This is a known limit, stated in the changelog and in upgrading.d. `steps` is still recorded, so 8406 is unaffected.
@@ -270,7 +272,7 @@ Removed: G22 (sampling boundary), G23 (version header), G24 (restart equality).
 | G33 | T,H | fill past 32 MiB: the oldest entry is evicted and counted; its replay stages nothing; a newer entry still renews | mutant: never evict / evict newest |
 | G34 | T | entry over 1 MiB: not stored, counted; replay stages nothing | mutant: store it |
 | G35 | T | composite seam: all constituents in `stored.targets` → renewed (R6 holds); one constituent missing → that seam stages nothing | mutant: compare the composite string to the targets |
-| G36 | T,H | stored entry expires or is removed → its side entry goes; a later key reuse cannot pick up the old receipts | mutant: keep the side entry past retention |
+| G36 | T,H | stored entry expires → its side entry goes; a later key reuse cannot pick up the old receipts. Amended 2026-10-20 (lead ruling on D3): removal happens only by TTL expiry, since no task delete path exists; the entry is evicted lazily at lookup on the relay clock, bounded by the task TTL or the 24 h fallback (test plan, Amendments) | mutant: keep the side entry past retention |
 
 R1-R8, C1 and G1-G21, G25-G30 stand. G1 and G26's mutants now read "re-derive from the stored answer".
 

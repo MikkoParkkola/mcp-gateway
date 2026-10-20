@@ -370,6 +370,7 @@ src/gateway/meta_mcp/invoke/relay.rs	commit_staged_relay	-	task-executor executi
 src/gateway/meta_mcp/invoke/relay.rs	commit_with	-	direct-route and task-executor receipt commits only
 src/gateway/meta_mcp/invoke/relay.rs	delivered_form	-	on-path, untimed: bridged prompts and their records only; the timed backend asks nothing
 src/gateway/meta_mcp/invoke/relay.rs	discard_staged	-	task executions and task replays only, not a live tools/call
+src/gateway/meta_mcp/invoke/relay.rs	drop_replay_capture	stdio_invoke_tiny	every stdio delivery admission did not retain (every unkeyed call): clears one Option field; no allocation
 src/gateway/meta_mcp/invoke/relay.rs	in_plan_step	-	on-path, untimed: read on interim and task-worker clock checks only
 src/gateway/meta_mcp/invoke/relay.rs	new	-	on-path, untimed: relay-detection constructions (a relay key, deferred receipts) only; relay detection is off in the harness
 src/gateway/meta_mcp/invoke/relay.rs	none	stdio_invoke_tiny	the no-receipts staged value each stdio dispatch returns with relay detection off
@@ -403,6 +404,7 @@ src/gateway/meta_mcp/invoke/relay_delivered.rs	delivery_commit	-	on-path, untime
 src/gateway/meta_mcp/invoke/relay_delivered.rs	escape_at	-	on-path, untimed: relay receipts for wrappers a final pass rewrote only
 src/gateway/meta_mcp/invoke/relay_delivered.rs	hex4	-	on-path, untimed: relay receipts for wrappers a final pass rewrote only
 src/gateway/meta_mcp/invoke/relay_delivered.rs	keep_plan_receipts	-	gateway_execute and playbook plan answers only, not a single gateway_invoke
+src/gateway/meta_mcp/invoke/relay_delivered.rs	keep_replayed_receipts	-	on-path, untimed: MIK-8408 plan replays under relay detection only (keeps replayed receipts to the delivered answer); the harness stages no receipt
 src/gateway/meta_mcp/invoke/relay_delivered.rs	keep_to_rewritten	-	on-path, untimed: relay receipts for wrappers a final pass rewrote only
 src/gateway/meta_mcp/invoke/relay_delivered.rs	last_open_quote	-	on-path, untimed: relay receipts for wrappers a final pass rewrote only
 src/gateway/meta_mcp/invoke/relay_delivered.rs	line_literals	-	on-path, untimed: relay receipts for wrappers a final pass rewrote only
@@ -416,6 +418,25 @@ src/gateway/meta_mcp/invoke/relay_delivered.rs	strip_gateway_stamps	-	on-path, u
 src/gateway/meta_mcp/invoke/relay_delivered.rs	task_slot	-	on-path, untimed: task-envelope answers under relay detection only; the timed rows carry no task member
 src/gateway/meta_mcp/invoke/relay_delivered.rs	tool_value	-	on-path, untimed: relay-active receipt rebuilds only; the harness stages no receipt
 src/gateway/meta_mcp/invoke/relay_delivered.rs	unescape	-	on-path, untimed: relay receipts for wrappers a final pass rewrote only
+src/gateway/meta_mcp/invoke/relay_replay.rs	cancel_replay_capture	-	on-path, untimed: keyed synchronous calls that settle without a retained answer; one task-local lookup, a no-op unless relay detection opened a capture scope; the timed rows send no idempotency key
+src/gateway/meta_mcp/invoke/relay_replay.rs	capture_commit	-	on-path, untimed: every receipt commit, but returns at once without a capture (relay detection off, or an unkeyed call); with relay detection on, a keyed answer stores or removes its replay entry (one store lock); the harness stages no receipt
+src/gateway/meta_mcp/invoke/relay_replay.rs	collecting_writes	stdio_invoke_tiny	every stdio call with relay detection OFF (MIK-8408 D5): opens the gateway-writes task-local scope, so the gateway's own notes are recorded for a later replay; cost measured base vs head in the PR evidence
+src/gateway/meta_mcp/invoke/relay_replay.rs	has_nested_label	-	on-path, untimed: MIK-8408 plan replay staging only (relay detection on and a stored replay entry)
+src/gateway/meta_mcp/invoke/relay_replay.rs	note_capture_answer	-	on-path, untimed: relay detection on and a delivery with in-plan receipts only (relay_delivered.rs keep); one canonical-JSON sha256 of the plan answer per such delivery, keyed or not (MIK-8408 F4); the timed rows run no firewall
+src/gateway/meta_mcp/invoke/relay_replay.rs	note_replay_call	http_invoke_tiny	every backend dispatch (beside note_completed): two task-local lookups, then returns unless relay detection opened a replay scope; records (label, server, tool) only inside one
+src/gateway/meta_mcp/invoke/relay_replay.rs	note_sync_capture	-	on-path, untimed: keyed synchronous calls with relay detection on only (the key is taken only then); the timed rows send no key and run no firewall
+src/gateway/meta_mcp/invoke/relay_replay.rs	note_sync_capture_key	-	on-path, untimed: keyed synchronous calls only; a None key (relay detection off) returns at once
+src/gateway/meta_mcp/invoke/relay_replay.rs	note_sync_lookup	-	on-path, untimed: keyed synchronous replays with relay detection on only
+src/gateway/meta_mcp/invoke/relay_replay.rs	note_sync_lookup_key	-	on-path, untimed: keyed synchronous replays only; a None key (relay detection off) returns at once
+src/gateway/meta_mcp/invoke/relay_replay.rs	note_task_capture	-	on-path, untimed: task settlement in the task executor, not a request-thread call; a no-op outside a relay-active capture scope
+src/gateway/meta_mcp/invoke/relay_replay.rs	scope	-	on-path, untimed: opened inside the relay-active delivery collectors only (collecting, collecting_staged, the relay-on branch of collecting_http); the harness runs no firewall
+src/gateway/meta_mcp/invoke/relay_replay.rs	source_in_targets	-	on-path, untimed: MIK-8408 task plan replay staging only
+src/gateway/meta_mcp/invoke/relay_replay.rs	stage_entries	-	on-path, untimed: MIK-8408 plan replay staging only (relay detection on and a stored replay entry)
+src/gateway/meta_mcp/invoke/relay_replay.rs	stage_plan_replay	-	on-path, untimed: keyed synchronous plan replays with relay detection on only
+src/gateway/meta_mcp/invoke/relay_replay.rs	stage_task_replay	-	on-path, untimed: multi-target task re-reads with relay detection on only
+src/gateway/meta_mcp/invoke/relay_replay.rs	stored_answer_digest	-	on-path, untimed: relay detection on, in the replayed-receipt keep only; one task-local read and a clone of the staged entry's digest when a replay staged
+src/gateway/meta_mcp/invoke/relay_replay.rs	sync_replay_key	-	on-path, untimed: keyed synchronous calls with relay detection on only (two canonical-JSON sha256 hashes); skipped entirely when relay detection is off (admission.rs relay_active().then)
+src/gateway/meta_mcp/invoke/relay_replay.rs	take_capture	-	on-path, untimed: every receipt commit; two task-local takes that return empty without a relay-active scope; the harness stages no receipt
 src/gateway/meta_mcp/invoke/relay_seams.rs	note_plan_member	-	gateway_execute and playbook plan deliveries only, not a single gateway_invoke
 src/gateway/meta_mcp/invoke/relay_seams.rs	noting_plan_members	-	test-only helper (cfg(test))
 src/gateway/meta_mcp/invoke/relay_seams.rs	pointer_token	-	gateway_execute and playbook plan deliveries only, not a single gateway_invoke

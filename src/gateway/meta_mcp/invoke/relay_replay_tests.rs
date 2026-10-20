@@ -153,6 +153,7 @@ fn store_entry(
         stored.revision,
         sources,
         calls,
+        "",
         Duration::from_secs(3600),
     );
 }
@@ -752,3 +753,6 @@ async fn g48_a_plan_task_row_is_written_at_version_9_and_loads() {
         .await
         .expect("the reopened store closes: fixture");
 }
+
+#[path = "relay_replay_capture_tests.rs"]
+mod capture;

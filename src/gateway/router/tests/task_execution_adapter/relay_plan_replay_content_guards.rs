@@ -11,7 +11,7 @@ use super::relay_plan_replay::{
     ALPHA, BETA, OTHER_PROSE, PROSE, Rig, SUGGEST, Sensitivity, answering, chain, erring_step,
     keyed_call, playbook, playbook_args, rig, rig_with_mocks, task_call, text,
 };
-use super::relay_plan_replay_guards::{committed, delist, live_invoke, plan_auth, probe_refused};
+use super::relay_plan_replay_guards::{committed, live_invoke, plan_auth, probe_refused};
 use super::support::*;
 use pretty_assertions::assert_eq;
 
@@ -531,157 +531,124 @@ async fn g11_a_replay_time_redaction_renews_only_what_it_delivers() {
     );
 }
 
-/// An open listen stream's frames, read one SSE block at a time
-/// (`notifications_helpers` is private to `notifications`, so the
-/// minimal reader is local; the request is support's own).
-struct Frames {
-    body: axum::body::BodyDataStream,
-    buffer: Vec<u8>,
-    ended: bool,
-}
-
-impl Frames {
-    fn take_frame(&mut self) -> Option<Value> {
-        loop {
-            let end = self.buffer.windows(2).position(|pair| pair == b"\n\n")?;
-            let block: Vec<u8> = self.buffer.drain(..end + 2).collect();
-            let text = String::from_utf8(block).expect("a subscription frame is UTF-8: fixture");
-            let data: Vec<&str> = text
-                .lines()
-                .filter_map(|l| l.strip_prefix("data: "))
-                .collect();
-            if data.is_empty() {
-                continue;
-            }
-            let payload = data.join("\n");
-            return Some(
-                serde_json::from_str(&payload).expect("a subscription frame is JSON: fixture"),
-            );
-        }
-    }
-
-    async fn next_frame(&mut self, what: &str) -> Value {
-        use futures::StreamExt as _;
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-        loop {
-            if let Some(frame) = self.take_frame() {
-                return frame;
-            }
-            assert!(!self.ended, "the listen stream ended before {what} arrived");
-            match tokio::time::timeout_at(deadline, self.body.next()).await {
-                Err(elapsed) => panic!("{what} never arrived on the listen stream: {elapsed}"),
-                Ok(None) => self.ended = true,
-                Ok(Some(Ok(chunk))) => self.buffer.extend_from_slice(&chunk),
-                Ok(Some(Err(error))) => panic!("the listen body failed mid-stream: {error}"),
-            }
-        }
-    }
-
-    /// Frames until one reports `task` completed; that frame.
-    async fn completed_frame(&mut self, task: &str) -> Value {
-        for _ in 0..8 {
-            let frame = self.next_frame("the completed task frame").await;
-            if frame["params"]["taskId"] == task && frame["params"]["status"] == "completed" {
-                return frame;
-            }
-        }
-        panic!("no completed frame for {task} arrived on the listen stream");
-    }
-}
-
-/// Open alice's listen stream over `task`, consuming its acknowledgement.
-async fn open_listen(state: &Arc<AppState>, id: i64, task: &str) -> Frames {
-    let body = task_method(id, "subscriptions/listen", json!({"taskIds": [task]}));
-    let response = create_router(Arc::clone(state))
-        .oneshot(http_request(Some("key-a"), &body))
-        .await
-        .expect("the router must answer: fixture");
-    assert_eq!(
-        response.status(),
-        StatusCode::OK,
-        "premise: the listen is admitted"
-    );
-    let mut frames = Frames {
-        body: response.into_body().into_data_stream(),
-        buffer: Vec::new(),
-        ended: false,
+/// G11b (H): as G11, but the replay-time redaction removes text only
+/// from inside the live receipt's cut middle. Alpha's step text runs
+/// past the record cap with the credential run past the kept head
+/// (half the 6 KiB cap) and before the kept tail (premise), so the
+/// stored snapshot carries the cut's `cut_fps` excuse for it (premise,
+/// via the cut counter) while no kept segment holds it. Carol holds a
+/// fresh whole copy after the lapse, so alice's excuse is what stands
+/// between her and refusal. After the re-read on the redacting
+/// gateway, alice relaying the removed middle run is refused — her
+/// renewed receipt carries no excuse for text the replay did not
+/// deliver — while the delivered head still renews (alice excused for
+/// it, bob refused), and the filtered drop is counted exactly once.
+/// Mutant: the old fast path (keep the snapshot whenever every kept
+/// segment is present) — it would keep `cut_fps`, alice would stay
+/// excused for the removed run, and nothing would count `filtered`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn g11b_a_redaction_inside_the_cut_middle_drops_its_excuse() {
+    let removed = removed_run();
+    let filler = |tag: &str| {
+        (0..450)
+            .map(|i| format!("{tag}{i:04}"))
+            .collect::<Vec<_>>()
+            .join(" ")
     };
-    let ack = frames.next_frame("the listen acknowledgement").await;
-    assert_eq!(
-        ack["method"], "notifications/subscriptions/acknowledged",
-        "premise ack: {ack}"
+    let alpha_text = format!("{PROSE} {} {removed} {}", filler("head"), filler("tail"));
+    let at = alpha_text
+        .find(&removed)
+        .expect("the run is in alpha's text: fixture");
+    assert!(
+        at > 3 * 1024 && at + removed.len() < alpha_text.len() - 3 * 1024,
+        "premise: the run lies in the cut middle, past the kept head and before the kept tail"
     );
-    frames
-}
-
-/// A chain task held at step B, its listen stream open, then released
-/// and settled: the shared setup of G27a/G27b. The frame is left
-/// unread, so it is built and committed only when the row pulls it.
-async fn settled_with_listener(key: &str) -> (Rig, String, Frames) {
-    let (beta, mut gate) = MockBackend::holding(Answer::Sequence(vec![text(OTHER_PROSE)]));
-    let rig = rig_with_mocks(answering(PROSE), beta, None, Sensitivity::Rule).await;
-    let created = post(
+    let rig = with_unredacted_router(rig(&alpha_text, OTHER_PROSE, None).await);
+    let cuts_before = rig.relay.relay_text_cuts();
+    let first = post(
         &rig.state,
         "key-a",
-        task_call(1, key, "gateway_execute", &chain()),
+        keyed_call(1, "g11m", "gateway_execute", &chain()),
     )
     .await;
-    let task = task_id(&created);
-    gate.wait_for_dispatch().await;
-    let frames = open_listen(&rig.state, 7001, &task).await;
-    gate.release_all();
-    let settled = poll_until_terminal(&rig.state, "key-a", &task).await;
-    assert_eq!(status_of(&settled), "completed", "premise: {settled}");
-    (rig, task, frames)
-}
-
-/// G27a (T): a notify subscriber's frame of the completed plan task
-/// stages and commits the replayed receipts: past the lapse, bob is
-/// refused only after the frame is delivered.
-/// Mutant: commit on a withheld frame (its inverse, never committing
-/// on a delivered frame, leaves bob unrefused here).
-#[tokio::test]
-async fn g27a_a_delivered_notify_frame_commits_the_replayed_receipts() {
-    let (rig, task, mut frames) = settled_with_listener("g27a").await;
+    assert!(
+        first.get("error").is_none()
+            && first.to_string().contains(&removed)
+            && first.to_string().contains("tail0449"),
+        "base: first delivery carries the run and the tail unredacted: {first}"
+    );
+    assert!(
+        rig.relay.relay_text_cuts() > cuts_before,
+        "premise: live retention cut alpha's over-cap step, so its stored snapshot carries cut_fps"
+    );
     rig.lapse().await;
     assert!(
-        !rig.refused("key-b", 270, PROSE).await,
-        "P1: lapsed before the frame"
+        !rig.refused("key-b", 120, &removed).await,
+        "P1: lapsed (run)"
     );
-    let frame = frames.completed_frame(&task).await;
+    let carol = post(
+        &rig.state,
+        "key-c",
+        modern(
+            121,
+            "tools/call",
+            json!({"name": "gateway_invoke",
+                   "arguments": {"server": ALPHA, "tool": TOOL, "arguments": {}}}),
+            false,
+        ),
+    )
+    .await;
     assert!(
-        frame.to_string().contains(PROSE),
-        "premise: the frame carries the full task: {frame}"
+        carol.get("error").is_none() && carol.to_string().contains(&removed),
+        "premise: carol was delivered alpha's whole text: {carol}"
     );
     assert!(
-        rig.refused("key-b", 271, PROSE).await,
-        "the delivered frame committed no receipt (step A)"
+        rig.refused("key-a", 122, &removed).await,
+        "premise: carol is a live witness for the run and alice holds no live copy"
     );
     assert!(
-        rig.refused("key-b", 272, OTHER_PROSE).await,
-        "the delivered frame committed no receipt (step B)"
+        rig.refused("key-a", 123, PROSE).await,
+        "premise: carol is a live witness for the head and alice holds no live copy"
     );
-}
 
-/// G27b (T): a frame the stored-read gate withholds (alpha delisted
-/// after settlement, so the frame goes out minimal) commits none.
-/// Mutant: commit on a withheld frame.
-#[tokio::test]
-async fn g27b_a_withheld_notify_frame_commits_nothing() {
-    let (rig, task, mut frames) = settled_with_listener("g27b").await;
-    rig.lapse().await;
-    assert!(
-        !rig.refused("key-b", 280, PROSE).await,
-        "P1: lapsed before the frame"
+    let (on, _on_store) = redacting_gateway(&rig).await;
+    let before = rig.calls();
+    let measured = post(
+        &on,
+        "key-a",
+        keyed_call(2, "g11m", "gateway_execute", &chain()),
     );
-    delist(&rig.state, ALPHA);
-    let frame = frames.completed_frame(&task).await;
-    assert!(
-        !frame.to_string().contains(PROSE),
-        "premise: the withheld frame carries no output: {frame}"
+    #[cfg(feature = "metrics")]
+    let (replay, filtered) = crate::gateway::count_plan_replay_skipped("filtered", measured);
+    #[cfg(not(feature = "metrics"))]
+    let replay = measured.await;
+    assert!(replay.get("error").is_none(), "base: replayed: {replay}");
+    assert_ne!(
+        replay["result"], first["result"],
+        "premise: stored and delivered answers differ"
     );
     assert!(
-        !rig.refused("key-b", 281, PROSE).await,
-        "the withheld frame committed a receipt"
+        replay.to_string().contains(PROSE)
+            && replay.to_string().contains("tail0449")
+            && !replay.to_string().contains(&removed),
+        "premise: the redaction touched only the cut middle; head and tail still deliver: {replay}"
+    );
+    assert_eq!(rig.calls(), before, "P2: the replay dispatched nothing");
+    assert!(
+        probe_refused(&on, "key-a", 124, &removed).await,
+        "the reader kept an excuse for the removed middle text"
+    );
+    assert!(
+        !probe_refused(&on, "key-a", 125, PROSE).await,
+        "control: the delivered head renewed the reader's excuse"
+    );
+    assert!(
+        probe_refused(&on, "key-b", 126, PROSE).await,
+        "control: bob, who never held the head, is refused"
+    );
+    #[cfg(feature = "metrics")]
+    assert_eq!(
+        filtered, 1,
+        "the filtered drop was not counted exactly once reason=filtered"
     );
 }

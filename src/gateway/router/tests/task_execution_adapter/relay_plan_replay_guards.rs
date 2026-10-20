@@ -70,6 +70,16 @@ pub(super) fn delist(state: &Arc<AppState>, server: &str) {
     let _ = backend.remember_listed_tools(None, false, &[other]);
 }
 
+/// `server`'s listing names its tool again (undoes [`delist`]).
+pub(super) fn relist(state: &Arc<AppState>, server: &str) {
+    let tool = json!({"name": TOOL, "description": "Reads.", "inputSchema": {"type": "object"}});
+    let backend = state
+        .backends
+        .get(server)
+        .expect("step backend registered: fixture");
+    let _ = backend.remember_listed_tools(None, false, &[tool]);
+}
+
 /// The three principals, each allowed alpha and beta beside the probe.
 pub(super) fn plan_auth() -> AuthConfig {
     let mut auth = three_principal_auth();
@@ -364,6 +374,105 @@ async fn g46_a_stored_read_refusal_stages_nothing() {
     assert!(
         !rig.refused("key-b", 462, PROSE).await,
         "the refused plan replay staged a receipt"
+    );
+}
+
+/// G46b (absent): staging before the authorization gate is observable
+/// through the replay-skip counter. With the task's replay entry
+/// removed, alice's refused re-read (the MIK-8392 delist refusal of
+/// G46) counts `absent == 0` exactly: no lookup ran on the refused
+/// read. Mutant (planted bug) killed: "stage before the gate inside
+/// refuse_stored" — a call to `stage_stored_receipt` at the top of
+/// `refuse_stored` would look the entry up on the refused read and
+/// count `absent == 1`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn g46b_a_refused_read_with_an_absent_entry_counts_no_absent_lookup() {
+    let rig = rig(PROSE, OTHER_PROSE, None).await;
+    let task = rig.settle_task("g46b-a", "gateway_execute", chain()).await;
+    let row = committed(&rig.state, &task);
+    assert!(
+        rig.relay.task_replay_digests(&task, row.revision).is_some(),
+        "premise: the settled task captured a replay entry"
+    );
+    rig.relay.remove_task_replay(&task, row.revision);
+    delist(&rig.state, ALPHA);
+    let measured = get_task(&rig.state, "key-a", &task);
+    #[cfg(feature = "metrics")]
+    let (refused, absent) = crate::gateway::count_plan_replay_skipped("absent", measured);
+    #[cfg(not(feature = "metrics"))]
+    let refused = measured.await;
+    assert_eq!(
+        refused.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "premise: absent answer, read refused before staging: {refused}"
+    );
+    #[cfg(feature = "metrics")]
+    assert_eq!(
+        absent, 0,
+        "the refused read looked up a replay entry: staging ran before the gate"
+    );
+}
+
+/// G46b (expired): the same refused read with the task's replay entry
+/// expired counts `expired == 0` exactly and leaves the entry in
+/// place (expiry is lazy, on an authorized lookup): alice's later
+/// authorized re-read of the same task counts `expired == 1`
+/// exactly, and renews nothing. Mutant (planted bug) killed: "stage
+/// before the gate inside refuse_stored" — a call to
+/// `stage_stored_receipt` at the top of `refuse_stored` would count
+/// the expiry on the refused read and evict the entry there, so the
+/// authorized read would count `absent`, not `expired == 1`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn g46b_a_refused_read_with_an_expired_entry_leaves_it_for_the_authorized_read() {
+    let rig = rig(PROSE, OTHER_PROSE, None).await;
+    let task = rig.settle_task("g46b-x", "gateway_execute", chain()).await;
+    let row = committed(&rig.state, &task);
+    assert_eq!(
+        row.task.ttl_ms(),
+        Some(86_400_000),
+        "premise: the row's TTL is the entry's 24 h retention"
+    );
+    assert!(
+        rig.relay.task_replay_digests(&task, row.revision).is_some(),
+        "premise: the settled task captured a replay entry"
+    );
+    rig.relay
+        .advance_collusion_clock_for_test(std::time::Duration::from_secs(86_400 + 1));
+    delist(&rig.state, ALPHA);
+    let measured = get_task(&rig.state, "key-a", &task);
+    #[cfg(feature = "metrics")]
+    let (refused, expired) = crate::gateway::count_plan_replay_skipped("expired", measured);
+    #[cfg(not(feature = "metrics"))]
+    let refused = measured.await;
+    assert_eq!(
+        refused.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "premise: absent answer, read refused before staging: {refused}"
+    );
+    #[cfg(feature = "metrics")]
+    assert_eq!(
+        expired, 0,
+        "the refused read judged the entry expired: staging ran before the gate"
+    );
+    relist(&rig.state, ALPHA);
+    let measured = get_task(&rig.state, "key-a", &task);
+    #[cfg(feature = "metrics")]
+    let (read, expired) = crate::gateway::count_plan_replay_skipped("expired", measured);
+    #[cfg(not(feature = "metrics"))]
+    let read = measured.await;
+    assert_eq!(status_of(&read), "completed", "base: {read}");
+    assert!(
+        read.to_string().contains(PROSE),
+        "premise: the authorized re-read serves the stored answer: {read}"
+    );
+    #[cfg(feature = "metrics")]
+    assert_eq!(
+        expired, 1,
+        "the authorized re-read did not count the lazy expiry exactly once"
+    );
+    assert!(
+        !rig.refused("key-b", 463, PROSE).await,
+        "the expired entry renewed a receipt"
     );
 }
 

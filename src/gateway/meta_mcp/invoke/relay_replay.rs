@@ -44,9 +44,28 @@ pub(super) type CaptureKey = ();
 pub(super) struct Capture {
     key: CaptureKey,
     retention: Duration,
+    /// Digest of the delivered answer the captured receipts were kept
+    /// against (F4), folded in at [`take_capture`] from the answer the
+    /// final pass noted; `None` when it noted none.
+    answer_digest: Option<String>,
 }
 #[cfg(not(feature = "firewall"))]
 pub(super) type Capture = ();
+
+tokio::task_local! {
+    /// `canonical_json_sha256` of the plan answer this delivery's in-plan
+    /// receipts were last kept against, for the capture (F4). Noted by
+    /// the final pass, which holds the answer; the capture key may be
+    /// noted only later (a task settles after its receipt pass), so it
+    /// travels in its own slot and is folded into the capture when the
+    /// collector takes it.
+    static CAPTURE_ANSWER: RefCell<Option<String>>;
+    /// The answer digest of the stored entry this delivery staged its
+    /// replayed receipts from, for the final pass to gate each kept
+    /// receipt on (F4). One stored entry stages into one delivery, as
+    /// the lookup key beside it already assumes.
+    static STORED_ANSWER: RefCell<Option<String>>;
+}
 
 /// The calls one delivery dispatched, `(label, server, tool)` each (H2).
 pub(super) type ReplayCallList = Vec<(Option<u32>, String, String)>;
@@ -66,9 +85,37 @@ pub(super) fn scope<F: Future>(delivery: F) -> impl Future<Output = F::Output> {
         RefCell::new(None),
         super::REPLAY_LOOKUP.scope(
             RefCell::new(None),
-            super::REPLAY_CALLS.scope(RefCell::new(Vec::new()), delivery),
+            super::REPLAY_CALLS.scope(
+                RefCell::new(Vec::new()),
+                CAPTURE_ANSWER.scope(
+                    RefCell::new(None),
+                    STORED_ANSWER.scope(RefCell::new(None), delivery),
+                ),
+            ),
         ),
     )
+}
+
+/// Note `answer`, the plan answer this delivery's in-plan receipts were
+/// kept against, by its `canonical_json_sha256`: the digest the capture
+/// stores beside the receipts (F4). The last note wins, as the final
+/// pass is the last keep. Hashes on every call (relay detection on, a
+/// delivery with in-plan receipts); the digest is kept only inside a
+/// collector.
+#[cfg(feature = "firewall")]
+pub(super) fn note_capture_answer(answer: &Value) {
+    let digest = crate::hashing::canonical_json_sha256(answer);
+    let _ = CAPTURE_ANSWER.try_with(|slot| *slot.borrow_mut() = Some(digest));
+}
+
+/// The answer digest of the stored entry whose replayed receipts this
+/// delivery staged, when one staged (F4).
+#[cfg(feature = "firewall")]
+pub(super) fn stored_answer_digest() -> Option<String> {
+    STORED_ANSWER
+        .try_with(|slot| slot.borrow().clone())
+        .ok()
+        .flatten()
 }
 
 /// Note the call `args` (a `{server, tool, ..}` envelope) completed, under
@@ -95,13 +142,14 @@ pub(crate) fn note_replay_call(args: &Value) {
 
 /// The stored entry's replay key parts for a sync admission (F1): the
 /// admission identity and operation hashes, recomputed from the same
-/// request exactly as `Request::prepare` computes them.
+/// request exactly as `Request::prepare` computes them — the identity
+/// through admission's own [`admission_identity`], never a second
+/// spelling of its domain or hash, so an admission change cannot make
+/// every sync replay silently miss.
+///
+/// [`admission_identity`]: crate::idempotency::admission::admission_identity
 pub(crate) fn sync_replay_key(principal: &str, key: &str, operation: &Value) -> (String, String) {
-    let identity = crate::hashing::canonical_json_sha256(&serde_json::json!([
-        "mcp-gateway.execution-admission.v1",
-        principal,
-        key
-    ]));
+    let identity = crate::idempotency::admission::admission_identity(principal, key);
     (identity, crate::hashing::canonical_json_sha256(operation))
 }
 
@@ -135,6 +183,7 @@ pub(crate) fn note_sync_capture(identity: String, round: String, operation: Stri
                 operation,
             },
             retention: Duration::from_secs(crate::idempotency::admission::RETENTION_SECS),
+            answer_digest: None,
         };
         let _ = super::REPLAY_CAPTURE.try_with(|slot| {
             let mut slot = slot.borrow_mut();
@@ -169,19 +218,28 @@ pub(crate) fn note_sync_lookup(identity: String, round: String, operation: Strin
 }
 
 /// Note that this delivery settles task `id` at `revision`: its committed
-/// in-plan receipts are captured under that key at commit, live for
-/// `retention` (the task's remaining retention).
-pub(crate) fn note_task_capture(id: String, revision: u64, retention: Duration) {
+/// in-plan receipts are captured under that key at commit, live for the
+/// task's own TTL (`ttl_ms`). A task with no TTL falls back to 24 h
+/// ([`RETENTION_SECS`], the retained sync answer's retention): the bound
+/// is stated here, at the one place both settlement paths compute it.
+///
+/// [`RETENTION_SECS`]: crate::idempotency::admission::RETENTION_SECS
+pub(crate) fn note_task_capture(id: String, revision: u64, ttl_ms: Option<u64>) {
     #[cfg(feature = "firewall")]
     {
+        let retention = ttl_ms.map_or(
+            Duration::from_secs(crate::idempotency::admission::RETENTION_SECS),
+            Duration::from_millis,
+        );
         let capture = Capture {
             key: CaptureKey::Task { id, revision },
             retention,
+            answer_digest: None,
         };
         let _ = super::REPLAY_CAPTURE.try_with(|slot| *slot.borrow_mut() = Some(capture));
     }
     #[cfg(not(feature = "firewall"))]
-    let _ = (id, revision, retention);
+    let _ = (id, revision, ttl_ms);
 }
 
 /// This delivery's answer was not retained: nothing is captured for it.
@@ -198,6 +256,16 @@ pub(super) fn take_capture() -> (Option<Capture>, ReplayCallList) {
     let calls = super::REPLAY_CALLS
         .try_with(|calls| std::mem::take(&mut *calls.borrow_mut()))
         .unwrap_or_default();
+    let answer = CAPTURE_ANSWER
+        .try_with(|slot| slot.borrow_mut().take())
+        .unwrap_or(None);
+    #[cfg(feature = "firewall")]
+    let capture = capture.map(|mut capture| {
+        capture.answer_digest = answer;
+        capture
+    });
+    #[cfg(not(feature = "firewall"))]
+    let _ = answer;
     (capture, calls)
 }
 
@@ -223,6 +291,7 @@ pub(super) fn capture_commit(
         })
         .map(|r| (&r.digest, r.step, r.server.as_str(), r.tool.as_str()))
         .collect();
+    let answer_digest = capture.answer_digest.as_deref().unwrap_or("");
     match &capture.key {
         CaptureKey::Sync {
             identity,
@@ -238,6 +307,7 @@ pub(super) fn capture_commit(
                     operation,
                     &sources,
                     calls,
+                    answer_digest,
                     capture.retention,
                 );
             }
@@ -246,7 +316,14 @@ pub(super) fn capture_commit(
             if sources.is_empty() {
                 fw.remove_task_replay(id, *revision);
             } else {
-                fw.store_task_replay(id, *revision, &sources, calls, capture.retention);
+                fw.store_task_replay(
+                    id,
+                    *revision,
+                    &sources,
+                    calls,
+                    answer_digest,
+                    capture.retention,
+                );
             }
         }
     }
@@ -321,6 +398,10 @@ fn stage_entries(
     if RELAY_RECEIPTS.try_with(|_| ()).is_err() {
         return;
     }
+    if let Some(first) = digests.first() {
+        let _ =
+            STORED_ANSWER.try_with(|slot| *slot.borrow_mut() = Some(first.answer_digest.clone()));
+    }
     let nested = has_nested_label(calls);
     let in_plan = PLAN_STEP.try_with(|_| ()).is_ok();
     for entry in digests {
@@ -370,19 +451,22 @@ fn source_in_targets(
 /// nested plan under one step label).
 #[cfg(feature = "firewall")]
 fn has_nested_label(calls: &ReplayCallList) -> bool {
-    let mut by_label: std::collections::HashMap<u32, Vec<(&str, &str)>> =
+    let mut by_label: std::collections::HashMap<u32, (&str, &str)> =
         std::collections::HashMap::new();
     for (label, server, tool) in calls {
         let Some(label) = label else {
             continue;
         };
-        let seen = by_label.entry(*label).or_default();
         let call = (server.as_str(), tool.as_str());
-        if !seen.contains(&call) {
-            seen.push(call);
+        match by_label.get(label) {
+            Some(first) if *first != call => return true,
+            Some(_) => {}
+            None => {
+                by_label.insert(*label, call);
+            }
         }
     }
-    by_label.values().any(|seen| seen.len() > 1)
+    false
 }
 
 #[cfg(all(test, feature = "firewall"))]

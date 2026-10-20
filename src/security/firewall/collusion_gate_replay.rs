@@ -28,12 +28,17 @@ pub(crate) struct ReplayedDigest {
     pub(crate) server: String,
     pub(crate) tool: String,
     pub(crate) seam_sources: Option<Box<[String]>>,
+    /// The stored entry's answer digest (F4), the same on every digest
+    /// of one entry: [`Firewall::keep_replayed_digest`] compares the
+    /// replayed answer against it.
+    pub(crate) answer_digest: String,
 }
 
 impl Firewall {
     /// Store the committed in-plan `receipts` of a retained sync plan
-    /// delivery under its admission key (F1), with its `calls`, live for
-    /// `retention` (the retained result's own retention).
+    /// delivery under its admission key (F1), with its `calls` and the
+    /// digest of the delivered answer they were committed against (F4),
+    /// live for `retention` (the retained result's own retention).
     pub(crate) fn store_sync_replay(
         &self,
         identity: &str,
@@ -41,6 +46,7 @@ impl Firewall {
         operation: &str,
         receipts: &[ReplaySource<'_>],
         calls: ReplayCalls,
+        answer_digest: &str,
         retention: Duration,
     ) {
         let key = StoredKey::Sync {
@@ -48,7 +54,7 @@ impl Firewall {
             round: round.to_owned(),
             operation: operation.to_owned(),
         };
-        self.store_replay(key, receipts, calls, retention);
+        self.store_replay(key, receipts, calls, answer_digest, retention);
     }
 
     /// [`Self::store_sync_replay`] for a task's settled result, under
@@ -59,22 +65,29 @@ impl Firewall {
         revision: u64,
         receipts: &[ReplaySource<'_>],
         calls: ReplayCalls,
+        answer_digest: &str,
         retention: Duration,
     ) {
         let key = StoredKey::Task {
             id: id.to_owned(),
             revision,
         };
-        self.store_replay(key, receipts, calls, retention);
+        self.store_replay(key, receipts, calls, answer_digest, retention);
     }
 
     /// Snapshot each of `receipts` (F2), counting a `big_step` drop for
-    /// each one that yields no snapshot (F3), and insert the entry.
+    /// each judged big-step receipt that yields no snapshot (F3) and a
+    /// `staged` drop for a step still staged at capture, and insert the
+    /// entry. When
+    /// every candidate yielded no snapshot there is nothing to replay:
+    /// no entry is inserted and any previous entry under the key goes,
+    /// as an overwrite would take it.
     fn store_replay(
         &self,
         key: StoredKey,
         receipts: &[ReplaySource<'_>],
         calls: ReplayCalls,
+        answer_digest: &str,
         retention: Duration,
     ) {
         if self.relay_detector().is_none() {
@@ -84,12 +97,22 @@ impl Firewall {
         for (digest, label, server, tool) in receipts {
             match digest.replay_snapshot(*label, server, tool) {
                 Some(snapshot) => snapshots.push(snapshot),
+                None if digest.is_staged_step() => count_replay_skipped("staged"),
                 None => count_replay_skipped("big_step"),
             }
         }
-        self.relay
-            .replay
-            .insert(key, snapshots, calls, self.relay.now(), retention);
+        if snapshots.is_empty() {
+            self.relay.replay.remove(&key);
+            return;
+        }
+        self.relay.replay.insert(
+            key,
+            snapshots,
+            calls,
+            answer_digest.to_owned(),
+            self.relay.now(),
+            retention,
+        );
     }
 
     /// Drop a retained sync delivery's entry: a non-plan commit under the
@@ -150,6 +173,7 @@ impl Firewall {
                 server: receipt.server.clone(),
                 tool: receipt.tool.clone(),
                 seam_sources: receipt.seam_sources.clone(),
+                answer_digest: entry.answer_digest.clone(),
             })
             .collect();
         Some((digests, entry.calls.clone()))
@@ -164,21 +188,34 @@ impl Firewall {
     }
 
     /// `digest`, a replayed receipt, kept to `answer` as delivered now
-    /// (F4): unchanged when the answer still delivers all of it, else
+    /// (F4): unchanged only when `answer` is byte-identical to the stored
+    /// answer its entry's receipts were committed against — its
+    /// `canonical_json_sha256` equals `stored_digest` (the canonical
+    /// JSON hash, not the detector's keyed one: the gate is a whole-answer
+    /// equality test, and the keyed hash exists only as sampled k-grams
+    /// of leaf forms, which cannot certify that nothing outside the kept
+    /// segments changed) — and the answer still delivers all of it. Else
     /// filtered against it, dropping what cannot be filtered safely
     /// (counted). `None` when the answer is over the bound a receipt is
-    /// kept against: the receipt stages nothing, never text the replay
-    /// did not deliver.
+    /// kept against, counted `over_bound`: the receipt stages nothing,
+    /// never text the replay did not deliver.
     pub(crate) fn keep_replayed_digest(
         &self,
         digest: DeliveryDigest,
         answer: &Value,
+        stored_digest: Option<&str>,
         step: Option<u32>,
     ) -> Option<DeliveryDigest> {
         let detector = self.relay_detector()?;
         let (leaves, values) = delivery_parts(answer);
-        let delivered = Delivered::of_parts(leaves, values)?.with_answer(answer);
-        let (kept, dropped) = digest.kept_to_replay_answer(detector, &delivered, step);
+        let Some(delivered) = Delivered::of_parts(leaves, values) else {
+            count_replay_skipped("over_bound");
+            return None;
+        };
+        let delivered = delivered.with_answer(answer);
+        let identical = stored_digest
+            .is_some_and(|stored| stored == crate::hashing::canonical_json_sha256(answer));
+        let (kept, dropped) = digest.kept_to_replay_answer(detector, &delivered, identical, step);
         if dropped {
             count_replay_skipped("filtered");
         }

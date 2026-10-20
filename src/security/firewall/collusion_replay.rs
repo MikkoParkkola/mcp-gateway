@@ -9,6 +9,9 @@
 //! stored entry, immutable [`ReplayReceipt`] snapshots of the committed
 //! in-plan receipts, in memory only: the fingerprints in them are keyed per
 //! process and are worthless after a restart, so nothing here reaches disk.
+//! A snapshot's segments hold the raw delivered text; that text is bounded
+//! by the per-entry cap ([`REPLAY_ENTRY_BYTES`], 1 MiB) and the total
+//! budget ([`REPLAY_RECEIPT_BYTES`], 32 MiB), and is never persisted.
 //!
 //! One store sits beside each relay detector and is shared wherever the
 //! detector is shared (F6). Its lock is its own: nothing in here calls the
@@ -42,13 +45,17 @@ pub(in super::super) const REPLAY_ITEM_OVERHEAD: usize = 64;
 /// One entry evicted for the total byte budget.
 const REPLAY_EVICTED_METRIC: &str = "mcp_gateway_collusion_plan_replay_evicted_total";
 /// One replay that staged nothing, by `reason` (`absent`, `too_large`,
-/// `big_step`, `nested_seam`, `expired`).
+/// `big_step`, `staged`, `nested_seam`, `expired`, `filtered`,
+/// `over_bound`).
 const REPLAY_SKIPPED_METRIC: &str = "mcp_gateway_collusion_plan_replay_skipped_total";
 
 /// Count one replay that staged nothing, for `reason`. The store itself
 /// counts `absent`, `expired` and `too_large`; the caller counts `big_step`
-/// (a snapshot the digest refused) and `nested_seam` (design F5 as kept
-/// by d4 H3) at its own drop points.
+/// (a snapshot a judged big-step digest refused), `staged` (a step still
+/// staged at capture), `nested_seam` (design F5 as kept by d4 H3),
+/// `filtered` (excuse sets dropped against a changed answer, F4) and
+/// `over_bound` (a replayed answer over the keep bound) at its own drop
+/// points.
 pub(in super::super) fn count_replay_skipped(reason: &'static str) {
     telemetry_metrics::counter!(REPLAY_SKIPPED_METRIC, "reason" => reason).increment(1);
 }
@@ -79,6 +86,12 @@ pub(crate) enum StoredKey {
 pub(in super::super) struct ReplayEntry {
     pub(in super::super) receipts: Vec<ReplayReceipt>,
     pub(in super::super) calls: Vec<(Option<u32>, String, String)>,
+    /// Digest of the delivered answer the receipts were committed against
+    /// (`canonical_json_sha256` of the plan answer, as the gateway kept
+    /// them to it): the unfiltered replay path is allowed only for a
+    /// replayed answer with the same digest (F4). Empty when no answer
+    /// was noted at capture, which never matches and always filters.
+    pub(in super::super) answer_digest: String,
     pub(in super::super) expires: Instant,
 }
 
@@ -164,49 +177,62 @@ impl ReplayReceipts {
         key: StoredKey,
         receipts: Vec<ReplayReceipt>,
         calls: Vec<(Option<u32>, String, String)>,
+        answer_digest: String,
         now: Instant,
         retention: Duration,
     ) {
         let mut bytes = receipts
             .iter()
             .map(ReplayReceipt::bytes)
-            .fold(0_usize, usize::saturating_add);
+            .fold(0_usize, usize::saturating_add)
+            .saturating_add(answer_digest.len());
         for (_, server, tool) in &calls {
             bytes = bytes
                 .saturating_add(server.len())
                 .saturating_add(tool.len())
                 .saturating_add(REPLAY_ITEM_OVERHEAD);
         }
-        let mut inner = self.inner.lock();
-        // Overwrite or refusal, the previous entry under the key goes first.
-        inner.take(&key);
-        if bytes > self.entry_cap || bytes > self.total_cap {
-            count_replay_skipped("too_large");
-            return;
-        }
-        while inner.bytes.saturating_add(bytes) > self.total_cap {
-            if inner.take_oldest().is_none() {
-                break;
+        // What to count is decided under the lock and counted after it
+        // is dropped: no counter increment runs with the lock held.
+        let mut evicted_now = 0_u64;
+        let too_large = bytes > self.entry_cap || bytes > self.total_cap;
+        {
+            let mut inner = self.inner.lock();
+            // Overwrite or refusal, the previous entry under the key goes first.
+            inner.take(&key);
+            if !too_large {
+                while inner.bytes.saturating_add(bytes) > self.total_cap {
+                    if inner.take_oldest().is_none() {
+                        break;
+                    }
+                    evicted_now = evicted_now.saturating_add(1);
+                }
+                let seq = inner.next;
+                inner.next = inner.next.saturating_add(1);
+                inner.bytes = inner.bytes.saturating_add(bytes);
+                inner.order.insert(seq, key.clone());
+                inner.by_key.insert(
+                    key,
+                    Held {
+                        entry: Arc::new(ReplayEntry {
+                            receipts,
+                            calls,
+                            answer_digest,
+                            expires: now.checked_add(retention).unwrap_or(now),
+                        }),
+                        seq,
+                        bytes,
+                    },
+                );
             }
-            self.evicted.fetch_add(1, Ordering::Relaxed);
-            telemetry_metrics::counter!(REPLAY_EVICTED_METRIC).increment(1);
         }
-        let seq = inner.next;
-        inner.next = inner.next.saturating_add(1);
-        inner.bytes = inner.bytes.saturating_add(bytes);
-        inner.order.insert(seq, key.clone());
-        inner.by_key.insert(
-            key,
-            Held {
-                entry: Arc::new(ReplayEntry {
-                    receipts,
-                    calls,
-                    expires: now.checked_add(retention).unwrap_or(now),
-                }),
-                seq,
-                bytes,
-            },
-        );
+        if too_large {
+            count_replay_skipped("too_large");
+        }
+        if evicted_now > 0 {
+            self.evicted.fetch_add(evicted_now, Ordering::Relaxed);
+            telemetry_metrics::counter!(REPLAY_EVICTED_METRIC).increment(evicted_now);
+        }
     }
 
     /// Drop `key`'s entry: a non-plan commit under the key, or its stored
@@ -223,20 +249,24 @@ impl ReplayReceipts {
         key: &StoredKey,
         now: Instant,
     ) -> Option<Arc<ReplayEntry>> {
-        let mut inner = self.inner.lock();
-        let entry = inner.by_key.get(key).map(|held| Arc::clone(&held.entry));
-        match entry {
-            None => {
-                count_replay_skipped("absent");
-                None
+        // The miss reason is decided under the lock and counted after
+        // it is dropped: no counter increment runs with the lock held.
+        let (found, skipped) = {
+            let mut inner = self.inner.lock();
+            let entry = inner.by_key.get(key).map(|held| Arc::clone(&held.entry));
+            match entry {
+                None => (None, Some("absent")),
+                Some(entry) if now >= entry.expires => {
+                    inner.take(key);
+                    (None, Some("expired"))
+                }
+                Some(entry) => (Some(entry), None),
             }
-            Some(entry) if now >= entry.expires => {
-                inner.take(key);
-                count_replay_skipped("expired");
-                None
-            }
-            Some(entry) => Some(entry),
+        };
+        if let Some(reason) = skipped {
+            count_replay_skipped(reason);
         }
+        found
     }
 
     /// Entries evicted for the total budget so far (tests only).

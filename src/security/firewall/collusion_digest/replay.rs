@@ -35,9 +35,14 @@ pub(in super::super) enum ReplayJoins {
 
 /// The judged state a snapshot may carry (F2/F3): every state whose
 /// recording needs no big-step reservation. A receipt judged `Kept(Some)`
-/// or `Unread { step: Some }`, or still `Staged`, holds evidence and an
-/// excuse bound to the original caller's reserved sketch position, so it
-/// yields no snapshot at all and never reaches this enum.
+/// or `Unread { step: Some }` holds evidence and an excuse bound to the
+/// original caller's reserved sketch position, so it yields no snapshot
+/// at all and never reaches this enum. A step still `Staged` at capture
+/// holds that reservation live — its exits consume it, so a snapshot
+/// taken by reference cannot carry it, and re-reserving one for the
+/// reader at replay would be a new per-call cost with new semantics —
+/// so it too yields no snapshot; the caller counts that drop `staged`,
+/// separately from the judged big-step drops (`big_step`).
 #[derive(Clone)]
 pub(in super::super) enum ReplayJudged {
     /// Not judged: an ordinary delivery, or a receipt not yet retained.
@@ -143,8 +148,9 @@ impl DeliveryDigest {
     /// leaf hashes recording never reads, or a big-step reservation.
     /// `None` for a receipt whose judged state is a big-step excuse bound
     /// to the original caller (F3: `Kept(Some)` and
-    /// `Unread { step: Some }`, and a step still `Staged`, whose
-    /// reservation is that same caller's): the caller counts the drop.
+    /// `Unread { step: Some }`), and for a step still `Staged`, whose
+    /// live reservation is that same caller's: the caller counts the
+    /// drop, `staged` for the still-staged step (see [`ReplayJudged`]).
     pub(in super::super) fn replay_snapshot(
         &self,
         label: Option<u32>,
@@ -241,9 +247,14 @@ impl DeliveryDigest {
     }
 
     /// This replayed digest kept to the answer as delivered now (F4).
-    /// Unchanged when every component is still delivered: each segment
-    /// whole or inside a delivered leaf of its kind, and every recorded
-    /// fingerprint among the answer's k-grams. Otherwise it is retained
+    /// Unchanged only when the replayed answer is byte-identical to the
+    /// stored one (`identical`, the caller's digest comparison) and every
+    /// component is still delivered: each segment whole or inside a
+    /// delivered leaf of its kind, and every recorded fingerprint among
+    /// the answer's k-grams. The delivered-components check alone must
+    /// never take the unfiltered path: text removed from inside a cut
+    /// middle leaves every kept segment present, yet the `cut_fps` set
+    /// would go on excusing that removed text. Otherwise it is retained
     /// against the answer as a live receipt is, its seam sources restored
     /// (retention strips them), and the excuse-only sets that cannot be
     /// filtered safely (`cut_fps`, `seam_excuses`, an unread receipt's
@@ -253,6 +264,7 @@ impl DeliveryDigest {
         mut self,
         detector: &CollusionDetector,
         delivered: &Delivered<'_>,
+        identical: bool,
         step: Option<u32>,
     ) -> (Self, bool) {
         let found = delivered.kgrams(detector);
@@ -286,13 +298,18 @@ impl DeliveryDigest {
                 .iter()
                 .all(|fp| found.contains(fp) || across.contains(fp))
             && unread_fps.iter().all(|fp| found.contains(fp));
-        if fully {
+        if identical && fully {
             return (self, false);
         }
         // An unread receipt's evidence lives in its judgement, not its
         // segments: filter it there, and drop its cut.
         if matches!(self.judged, Judged::Unread { .. }) {
-            let mut dropped = self.cut_fps.take().is_some() || self.seam_excuses.take().is_some();
+            // Both taken unconditionally: a `||` between the takes
+            // would leave `seam_excuses` in place whenever a cut was
+            // present, excusing text a changed answer no longer holds.
+            let cut = self.cut_fps.take();
+            let seams = self.seam_excuses.take();
+            let mut dropped = cut.is_some() || seams.is_some();
             if let Judged::Unread { receipt, .. } = &mut self.judged {
                 receipt.fps.retain(|fp| found.contains(fp));
                 dropped = dropped || receipt.cut.take().is_some();
@@ -305,6 +322,12 @@ impl DeliveryDigest {
         let seam_sources = self.seam_sources.clone();
         let mut kept = self.retaining_for(detector, delivered, step);
         kept.seam_sources = seam_sources;
+        // F4: on a changed answer the excuse-only sets are dropped,
+        // explicitly here: retention's early exits (an unread answer,
+        // a verbatim receipt with no joins) return the digest with
+        // both sets still in place.
+        kept.cut_fps = None;
+        kept.seam_excuses = None;
         (kept, dropped)
     }
 }
