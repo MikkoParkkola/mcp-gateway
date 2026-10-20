@@ -60,7 +60,7 @@ where
     // MIK-8207: what is written must load again; the parser refuses more.
     if *duration > crate::duration_bound::MAX_DURATION {
         return Err(serde::ser::Error::custom(crate::duration_bound::too_long(
-            &format!("{}s", duration.as_secs()),
+            "this duration",
         )));
     }
     if duration.subsec_nanos() == 0 {

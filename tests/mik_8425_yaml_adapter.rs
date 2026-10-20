@@ -242,7 +242,7 @@ fn adapter_writes_and_converts_like_serde_yaml() {
     let bad = serde_yaml::Value::String("no_such_variant".to_owned());
     assert_eq!(
         yaml::from_value::<Shape>(bad.clone()).map_err(|e| e.to_string()),
-        serde_yaml::from_value::<Shape>(bad).map_err(|e| e.to_string()),
+        serde_yaml::from_value::<Shape>(bad).map_err(|e| yaml::redact_message(&e.to_string())),
         "from_value refuses exactly as serde_yaml does"
     );
 }

@@ -10,6 +10,7 @@
 //! A later stage swaps the backend behind this same surface.
 //! `tests/fixtures/mik_8425_yaml/` records what the delegating functions must
 //! reproduce, and the skills parser and registry tests pin `to_json`.
+//! Errors from this seam never print the value that caused them (MIK-8425 B3).
 //!
 //! This file names nothing under `crate::`. Integration tests compile it
 //! directly (`tests/common/yaml.rs`), so tests and the gateway always share
@@ -29,20 +30,168 @@ use figment::value::{Dict, Map};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-/// The YAML tree, its mapping and the parse error. They stay `serde_yaml`'s
-/// own until the backend swap, which keeps routing a pure path rename.
-pub(crate) use serde_yaml::{Error, Mapping, Value};
+/// The YAML tree and its mapping. They stay `serde_yaml`'s own until the
+/// backend swap, which keeps routing a pure path rename.
+pub(crate) use serde_yaml::{Mapping, Value};
+
+/// The adapter's YAML error; its text never carries the value that caused it
+/// (MIK-8425 B3, CWE-532), keeps the key path, expected type and line/column.
+pub(crate) struct Error(serde_yaml::Error);
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&redact_message(&self.0.to_string()))
+    }
+}
+
+impl std::fmt::Debug for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Error")
+            .field(&redact_message(&self.0.to_string()))
+            .finish()
+    }
+}
+
+// No `source()`: a chain printer must not reach serde_yaml's unredacted text.
+impl std::error::Error for Error {}
+
+impl Error {
+    /// Where the refusal points in the document, if the parser knows.
+    pub(crate) fn location(&self) -> Option<Location> {
+        self.0.location().map(|at| Location {
+            line: at.line(),
+            column: at.column(),
+        })
+    }
+}
+
+/// Where in a YAML document a refusal points.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Location {
+    line: usize,
+    column: usize,
+}
+
+impl Location {
+    /// The line of the refusal.
+    pub(crate) fn line(&self) -> usize {
+        self.line
+    }
+
+    /// The column of the refusal.
+    pub(crate) fn column(&self) -> usize {
+        self.column
+    }
+}
+
+/// What serde puts between a quoted value and the type it wanted.
+const EXPECTED: &str = ", expected ";
+
+/// serde's marker before a variant name it did not recognise.
+const VARIANT: &str = "unknown variant `";
+
+/// `message` with any value serde quoted in it removed.
+///
+/// serde's own messages put the value between a fixed marker and the LAST
+/// `, expected ` after it; a value may itself contain `, expected `, so the
+/// first one is not the end of it. Every other message passes through:
+/// libyaml's syntax problems are fixed strings, and the gateway's own refusals
+/// name keys, never values.
+pub(crate) fn redact_message(message: &str) -> String {
+    // The EARLIEST marker is serde's own: a later one can only sit inside the
+    // value, so choosing by marker kind first would cut at text the value
+    // supplied and keep the value before it.
+    let earliest = ["invalid type: ", "invalid value: ", VARIANT]
+        .into_iter()
+        .filter_map(|marker| message.find(marker).map(|at| (at, marker)))
+        .min_by_key(|(at, _)| *at);
+    let Some((start, marker)) = earliest else {
+        return message.to_owned();
+    };
+    let from = start + marker.len();
+    let tail = &message[from..];
+    if marker == VARIANT {
+        let rest = tail
+            .rfind(EXPECTED)
+            .map_or_else(|| location(tail), |cut| &tail[cut..]);
+        return format!(
+            "{}{}{rest}",
+            &message[..start],
+            VARIANT.trim_end_matches(" `")
+        );
+    }
+    match tail.rfind(EXPECTED) {
+        Some(cut) => format!(
+            "{}{}{}",
+            &message[..from],
+            kind_word(&tail[..cut]),
+            &tail[cut..]
+        ),
+        None => format!("{}a value{}", &message[..from], location(tail)),
+    }
+}
+
+/// serde's description of a value, cut before the value: `string "x"` is
+/// `string`. Only serde's own type words are kept; anything else is
+/// verbatim input (serde's `Other`), so it becomes `a value`.
+fn kind_word(unexpected: &str) -> &str {
+    const SERDE_WORDS: [&str; 16] = [
+        "boolean",
+        "integer",
+        "floating point",
+        "character",
+        "string",
+        "byte array",
+        "unit value",
+        "Option value",
+        "newtype struct",
+        "sequence",
+        "map",
+        "enum",
+        "unit variant",
+        "newtype variant",
+        "tuple variant",
+        "struct variant",
+    ];
+    let word = unexpected
+        .find(['"', '`', '[', '\''])
+        .map_or(unexpected, |at| &unexpected[..at])
+        .trim();
+    SERDE_WORDS
+        .into_iter()
+        .find(|known| *known == word)
+        .unwrap_or("a value")
+}
+
+/// The YAML parser's trailing ` at line L column C`, kept only when it is exactly
+/// that, so no part of a value can ride along.
+fn location(tail: &str) -> &str {
+    let Some(at) = tail.rfind(" at line ") else {
+        return "";
+    };
+    let suffix = &tail[at..];
+    let mut words = suffix.split(' ').skip(1);
+    let exact = matches!(
+        (words.next(), words.next(), words.next(), words.next(), words.next()),
+        (Some("at"), Some("line"), Some(line), Some("column"), Some(column))
+            if line.bytes().all(|b| b.is_ascii_digit())
+                && column.bytes().all(|b| b.is_ascii_digit())
+                && !line.is_empty()
+                && !column.is_empty()
+    ) && words.next().is_none();
+    if exact { suffix } else { "" }
+}
 
 /// Parse `text` into `T`. A key repeated in a struct or in a `Value` is
 /// refused; a key repeated in a map keeps its last value.
 pub(crate) fn from_str<T: DeserializeOwned>(text: &str) -> Result<T, Error> {
-    serde_yaml::from_str(text)
+    serde_yaml::from_str(text).map_err(Error)
 }
 
 /// Parse `text` as figment's `Dict`, the way the config loader reads it: a
 /// repeated key keeps its last value at every level.
 pub(crate) fn from_str_loose(text: &str) -> Result<Dict, Error> {
-    Yaml::from_str(text)
+    Yaml::from_str(text).map_err(Error)
 }
 
 /// The config file's data as figment's YAML provider gives it: the
@@ -57,17 +206,17 @@ pub(crate) fn figment_data(text: &str) -> figment::Result<Map<figment::Profile, 
 
 /// Write `value` as YAML.
 pub(crate) fn to_string<T: Serialize + ?Sized>(value: &T) -> Result<String, Error> {
-    serde_yaml::to_string(value)
+    serde_yaml::to_string(value).map_err(Error)
 }
 
 /// Convert `value` to a YAML tree.
 pub(crate) fn to_value<T: Serialize>(value: T) -> Result<Value, Error> {
-    serde_yaml::to_value(value)
+    serde_yaml::to_value(value).map_err(Error)
 }
 
 /// Read `T` out of a YAML tree.
 pub(crate) fn from_value<T: DeserializeOwned>(value: Value) -> Result<T, Error> {
-    serde_yaml::from_value(value)
+    serde_yaml::from_value(value).map_err(Error)
 }
 
 /// Convert a YAML tree value to a JSON value (MIK-8425).
@@ -152,7 +301,7 @@ pub(crate) fn documents(text: &str) -> impl Iterator<Item = Result<Value, Error>
             return None;
         }
         let document = stream.next()?;
-        let reading = <Value as serde::Deserialize>::deserialize(document);
+        let reading = <Value as serde::Deserialize>::deserialize(document).map_err(Error);
         refused = reading.is_err();
         Some(reading)
     })
