@@ -794,10 +794,12 @@ mod scope_tests;
 #[path = "signing_nonce_metrics_tests.rs"]
 mod nonce_metrics_tests;
 
-// MIK-7698: a call refused before the tool acts leaves its nonce unspent.
+// MIK-8488: test-only reads of the settlement state, for the invoke rows.
 #[cfg(all(test, feature = "firewall"))]
 #[path = "signing_test_access.rs"]
 mod test_access;
+
+// MIK-7698: a call refused before the tool acts leaves its nonce unspent.
 #[cfg(test)]
 #[path = "signing_unspent_tests.rs"]
 mod unspent_tests;
