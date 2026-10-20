@@ -269,8 +269,18 @@ fn sanitize_object(
 fn sanitize_slot(value: &mut Value, slot: Slot) -> Result<()> {
     match (&*value, slot) {
         (Value::String(_), Slot::Tool | Slot::Inner) => {
-            let holder = serde_json::json!({ "arguments": std::mem::take(value) });
-            let mut decoded = crate::gateway::parse_tool_arguments_cow(&holder)?.into_owned();
+            let mut holder = serde_json::json!({ "arguments": std::mem::take(value) });
+            let parsed =
+                crate::gateway::parse_tool_arguments_cow(&holder).map(std::borrow::Cow::into_owned);
+            let mut decoded = match parsed {
+                Ok(decoded) => decoded,
+                Err(e) => {
+                    // The client's string goes back where it was: the request
+                    // is refused, with the decoder's error, as before.
+                    *value = holder["arguments"].take();
+                    return Err(e);
+                }
+            };
             let result = match &mut decoded {
                 Value::Object(map) => sanitize_arguments(map, slot),
                 other => sanitize_json_value_in_place(other),

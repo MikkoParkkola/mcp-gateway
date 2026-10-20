@@ -213,20 +213,19 @@ fn sanitize_string_in_place(s: &mut String) -> Result<()> {
 /// [`sanitize_json_value`] in place (MIK-8499): the same result, copying only
 /// what changes. An object whose keys are all clean keeps its map and has its
 /// members sanitized where they are, in order; one with a key to rewrite or
-/// refuse (rare: admission validates keys first) is rebuilt by
-/// `sanitize_json_value` itself, so key collisions and error order are
-/// exactly as before.
+/// refuse is rebuilt by [`rebuild_keys_in_place`], its members moved, never
+/// copied. A tool's arguments are business data, so a client can send such a
+/// key there (S9c).
 ///
 /// # Errors
 ///
 /// `Error::Protocol` if any string contains null bytes. The value may be
 /// partly rewritten on error; every caller refuses the request then.
-pub(crate) fn sanitize_json_value_in_place(value: &mut Value) -> Result<()> {
-    if let Value::Object(map) = &*value
+fn sanitize_json_value_in_place(value: &mut Value) -> Result<()> {
+    if let Value::Object(map) = value
         && map.keys().any(|key| string_needs_work(key))
     {
-        *value = sanitize_json_value(value)?;
-        return Ok(());
+        return rebuild_keys_in_place(map, |_, _, member| sanitize_json_value_in_place(member));
     }
     match value {
         Value::String(s) => sanitize_string_in_place(s),
@@ -235,6 +234,33 @@ pub(crate) fn sanitize_json_value_in_place(value: &mut Value) -> Result<()> {
         // Numbers, booleans, and null pass through unchanged.
         _ => Ok(()),
     }
+}
+
+/// `map` rebuilt with every key sanitized, its members moved, never copied
+/// (MIK-8499). The rule is the copying rebuild's: member by member, in order,
+/// the key is sanitized first (a NUL refuses), then `member` sanitizes the
+/// value, given the key as sent and as cleaned, then the pair is inserted, so
+/// a later key that cleans to an earlier one overwrites it and the first
+/// error wins. Allocates the new map's index and nothing for a member.
+///
+/// # Errors
+///
+/// The first error, a key's or `member`'s. `map` is left partly rebuilt;
+/// every caller refuses the request then.
+fn rebuild_keys_in_place(
+    map: &mut serde_json::Map<String, Value>,
+    mut member: impl FnMut(&str, &str, &mut Value) -> Result<()>,
+) -> Result<()> {
+    let mut rebuilt = serde_json::Map::with_capacity(map.len());
+    for (mut key, mut value) in std::mem::take(map) {
+        // The key as sent, kept only when cleaning changes it (a few bytes).
+        let sent = string_needs_work(&key).then(|| key.clone());
+        sanitize_string_in_place(&mut key)?;
+        member(sent.as_deref().unwrap_or(&key), &key, &mut value)?;
+        rebuilt.insert(key, value);
+    }
+    *map = rebuilt;
+    Ok(())
 }
 
 /// Whether `security.sanitize_input` sanitizes requests: the one switch every
@@ -298,7 +324,7 @@ pub(crate) fn sanitize_request(request: &Value, route: ProtocolRoute) -> Result<
 
 /// [`sanitize_request`] on a request the caller owns (MIK-8499): the same
 /// result, copying only what changes. A request with a top-level key to
-/// rewrite is rebuilt the way it always was; otherwise each member is
+/// rewrite is rebuilt by [`rebuild_keys_in_place`]; otherwise each member is
 /// sanitized where it lies, in order, `id` left as sent.
 ///
 /// # Errors
@@ -313,9 +339,15 @@ pub(crate) fn sanitize_request_in_place(request: &mut Value, route: ProtocolRout
         validate_protocol_text(id)?;
     }
     if map.keys().any(|key| string_needs_work(key)) {
-        let rebuilt = sanitize_request_rebuilt(map, route)?;
-        *request = rebuilt;
-        return Ok(());
+        // `id` as sent is kept as sent; every other member is walked under
+        // its cleaned key.
+        return rebuild_keys_in_place(map, |sent, clean, member| {
+            if sent == "id" {
+                Ok(())
+            } else {
+                protocol::sanitize_value_in_place(clean, member, route)
+            }
+        });
     }
     for (key, value) in map.iter_mut() {
         if key != "id" {
@@ -323,24 +355,6 @@ pub(crate) fn sanitize_request_in_place(request: &mut Value, route: ProtocolRout
         }
     }
     Ok(())
-}
-
-/// The original rebuild, for a request whose top-level keys need rewriting:
-/// each key sanitized, `id` kept as sent, members inserted in order.
-fn sanitize_request_rebuilt(
-    map: &serde_json::Map<String, Value>,
-    route: ProtocolRoute,
-) -> Result<Value> {
-    let mut sanitized = serde_json::Map::with_capacity(map.len());
-    for (key, value) in map {
-        let clean_key = sanitize_string(key)?;
-        let mut clean = value.clone();
-        if key != "id" {
-            protocol::sanitize_value_in_place(&clean_key, &mut clean, route)?;
-        }
-        sanitized.insert(clean_key, clean);
-    }
-    Ok(Value::Object(sanitized))
 }
 
 /// Sanitize an optional JSON value, returning `None` unchanged.
