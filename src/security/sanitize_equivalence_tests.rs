@@ -379,22 +379,62 @@ fn a_string_slot_is_decoded_and_its_encoded_nul_refused() {
 
 /// A refused string-encoded slot is left as the client sent it, whether the
 /// decoder refuses it (not JSON) or the sanitizer refuses what it decodes to
-/// (an encoded NUL), with the same error as the reference.
+/// (an encoded NUL in a value or a key), with the reference's error. On every
+/// slot the gateway decodes: a backend tool's own, on both routes, a meta
+/// tool's inner `arguments` and a chain step's.
 #[test]
 fn a_refused_string_slot_is_left_as_the_client_sent_it() {
-    for slot in [json!("not json"), json!("{\"q\": \"\\u0000\"}")] {
-        let mut request = call("backend_tool", slot.clone());
-        let expected = outcome(ref_request(&request, ProtocolRoute::Meta));
-        let got = sanitize_request_in_place(&mut request, ProtocolRoute::Meta);
-        assert!(expected.is_err(), "premise: the reference refuses {slot}");
-        assert_eq!(
-            outcome(got.map(|()| Value::Null)),
-            expected,
-            "the same refusal for {slot}"
-        );
-        assert_eq!(
-            request["params"]["arguments"], slot,
-            "the refused slot is put back as sent"
-        );
+    let slots = [
+        json!("not json"),
+        json!("{\"q\": \"\\u0000\"}"),
+        json!("{\"k\\u0000\": 1}"),
+    ];
+    for slot in slots {
+        let cases = [
+            (
+                call("backend_tool", slot.clone()),
+                ProtocolRoute::Meta,
+                "/params/arguments",
+            ),
+            (
+                call("backend_tool", slot.clone()),
+                ProtocolRoute::Direct,
+                "/params/arguments",
+            ),
+            (
+                call(
+                    "gateway_invoke",
+                    json!({"server": "s", "tool": "t", "arguments": slot.clone()}),
+                ),
+                ProtocolRoute::Meta,
+                "/params/arguments/arguments",
+            ),
+            (
+                call(
+                    "gateway_execute",
+                    json!({"chain": [{"server": "s", "tool": "t", "arguments": slot.clone()}]}),
+                ),
+                ProtocolRoute::Meta,
+                "/params/arguments/chain/0/arguments",
+            ),
+        ];
+        for (mut request, route, at) in cases {
+            let expected = outcome(ref_request(&request, route));
+            let got = sanitize_request_in_place(&mut request, route);
+            assert!(
+                expected.is_err(),
+                "premise: the reference refuses {slot} at {at}"
+            );
+            assert_eq!(
+                outcome(got.map(|()| Value::Null)),
+                expected,
+                "the same refusal for {slot} at {at}"
+            );
+            assert_eq!(
+                request.pointer(at),
+                Some(&slot),
+                "the refused slot at {at} is put back as sent"
+            );
+        }
     }
 }
