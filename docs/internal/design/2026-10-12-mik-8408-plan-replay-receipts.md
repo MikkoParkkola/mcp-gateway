@@ -348,20 +348,20 @@ The MIK-8409 fail-fast still applies: the NESTED.1 row must be red on the line f
 
 ## H4. Rows
 
-Withdrawn (they test persisted steps, a version bump or `executed_steps`): G5, G7a-c and the steps bounds, G8, G14, G15-G17 and G15b-e, G19, G28, G43's provenance tier, and G32's "steps still loads" clause. G9 stays as a guard that no new version is written: a fresh row is created at version 9 (`BINDING_VERSION`).
+Withdrawn (they test persisted steps, a version bump or `executed_steps`): G5, G7a-c and the steps bounds, G8, G14, G15-G17 and G15b-e, G19, G28, G43 (below), and G32's "steps still loads" clause. G9 stays as a guard that no new version is written: a fresh row is created at version 9 (`BINDING_VERSION`).
 
 G43 is withdrawn whole: its only new tier was provenance; the other tiers (writes-stripped, bounded) are existing `settle_durable` behaviour with their own store tests. G32 stands without its "steps still loads" clause: a restart stages nothing, counted `reason=absent`. G20 is withdrawn: with detection off there is no entry (E1), and G25 already pins that a detection-off plan renews nothing.
 
 Retargeted to the in-memory `calls` (same setup, same expectation, the list read from the entry, detection on): G18, G21, G44.
 
 New or rewritten:
-- N1 (NESTED.1, red first): alice runs a playbook whose step 1 runs a two-call chain (S1 sensitive, S2 plain); relay window lapses; alice re-reads; bob relaying S1's text → -32002, and alice relaying S2's text to S2's source keeps her same-source excuse (both inner receipts renew). Task path, keyed sync over HTTP and over stdio. Mutants: skip staging for a nested label (the withdrawn E2 step 4); stage only the first inner receipt of a label.
+- N1 (NESTED.1, red first): alice runs a playbook whose step 1 runs a two-call chain (S1 sensitive, S2 plain); relay window lapses; alice re-reads; bob relaying S1's text → -32002, and the replay records S2's fingerprints for alice under S2's source (`take_replayed_for_test()` holds a receipt with source S2 carrying S2's text, beside S1's): both inner receipts renew. Plain text needs no excuse, so S2's renewal is asserted directly, not through a relay. Task path, keyed sync over HTTP and over stdio. Mutants: skip staging for a nested label (the withdrawn E2 step 4); stage only the first inner receipt of a label.
 - N2 (NESTED.2, guard): in that replay, S2's staged receipt holds no fingerprint of S1's text and S1's none of S2's. Mutant: stage the label's whole text under each inner call.
 - N3 (NESTED.3): an entry whose inner receipts push it past the 1 MiB cap is not stored, counted; the other entries still renew. Mutants: leave inner receipts out of the entry's byte count; truncate the entry instead of dropping it whole.
-- G6/G40 (rewritten): a nested label's inner receipts are staged under their own sources; a seam receipt touching the nested label is not staged, counted `reason=nested_seam`. Mutant: stage the seam.
+- G6/G40 (rewritten): a nested label's inner receipts are staged under their own sources; every seam receipt of that entry is not staged, counted `reason=nested_seam`, including a seam lying entirely outside the nested label (between two plain steps). Mutants: stage the seams; drop only seams touching the nested label.
 - G48: no version change. A plan task row created on this branch loads in a build with `MAX_LOADABLE_VERSION = BINDING_VERSION` and is written at version 9. Mutant: bump the version.
 
-R1-R9, C1, G1-G4, G10-G13, G25-G27, G29-G31, G32 (as amended above), G33-G42 and G45-G47 stand.
+R1-R9, C1, G1-G4, G10-G13, G25-G27, G29-G31, G32 (as amended above), G33-G39, G41, G42, G45-G47 and G9 (as the version guard) stand. G6/G40 is rewritten above.
 
 ## H5. Changelog and upgrade note
 
