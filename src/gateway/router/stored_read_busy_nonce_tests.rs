@@ -32,6 +32,14 @@ use crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::{
 /// The parent fixture with message signing armed (nonce required), a
 /// local copy so the shared fixture keeps no signing config.
 pub(super) async fn signed_fixture() -> Fx {
+    signed_fixture_with(crate::security::sanitize::InputSanitizing::Off).await
+}
+
+/// [`signed_fixture`] with `security.sanitize_input` set as `sanitizing` says
+/// (MIK-8499: the sanitizer's share of a refusal is measured with it on).
+pub(super) async fn signed_fixture_with(
+    sanitizing: crate::security::sanitize::InputSanitizing,
+) -> Fx {
     let auth = sole_operator();
     let mut gateway = DirectAccountGateway::new(auth.clone(), &Binding::Connected);
     let (mut state, store) = super::super::tests::test_router_app_state_with_auth(&auth).await;
@@ -68,6 +76,7 @@ pub(super) async fn signed_fixture() -> Fx {
     );
     state_mut.meta_mcp = Arc::new(meta);
     state_mut.transparency_log = Some(log);
+    state_mut.sanitize_input = sanitizing == crate::security::sanitize::InputSanitizing::On;
     let tool: crate::protocol::Tool = serde_json::from_value(json!({
         "name": TOOL, "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}}
     }))

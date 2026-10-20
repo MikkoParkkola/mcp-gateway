@@ -21,11 +21,12 @@ use axum::body::to_bytes;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use super::busy_nonce::signed_fixture;
+use super::busy_nonce::signed_fixture_with;
 use super::{BACKEND, KEY, TOOL, modern_meta};
 use crate::gateway::alloc_meter::{
     LARGE_BYTES, Measured, isolate, measure_async, measure_async_process_wide,
 };
+use crate::security::sanitize::InputSanitizing;
 
 /// Exactly this many more large allocations on the per-user target
 /// (all threads; the lead's ruling keeps the count exact). Measured 3 at
@@ -165,7 +166,16 @@ const TARGETS: [Option<(&str, &str)>; 2] = [None, Some(("plain", "echo"))];
 /// The signed fixture with the plain backend registered beside it, both
 /// targets warmed unmetered, and each nonce a replayed row reuses spent once.
 async fn prepared(kind: &str, nonce: &impl Fn(&str) -> Option<Value>) -> super::Fx {
-    let fx = signed_fixture().await;
+    prepared_with(kind, nonce, InputSanitizing::Off).await
+}
+
+/// [`prepared`] with `security.sanitize_input` as `sanitizing` says.
+async fn prepared_with(
+    kind: &str,
+    nonce: &impl Fn(&str) -> Option<Value>,
+    sanitizing: InputSanitizing,
+) -> super::Fx {
+    let fx = signed_fixture_with(sanitizing).await;
     let plain = std::sync::Arc::new(crate::backend::Backend::new(
         "plain",
         crate::config::BackendConfig::r2_off(),
@@ -389,4 +399,59 @@ fn test_path(name: &str) -> String {
         .split_once("::")
         .map_or(module, |(_crate, rest)| rest);
     format!("{module}::{name}")
+}
+
+/// MIK-8499 INTAKE.2(b): what the input sanitizer adds to a refused call.
+const SANITIZER_SHARE: u64 = 64 * 1024;
+
+/// MIK-8499 INTAKE.2(b): the input sanitizer's share of a refused 1 and 3 MiB
+/// `gateway_invoke` (the same call with `security.sanitize_input` on minus
+/// off, the production default being on) is a fixed cap, the same at both
+/// sizes. Red before the fix: the sanitizer rebuilt the whole request, about
+/// 9 MB at 1 MiB.
+#[test]
+fn a_refused_call_pays_no_payload_term_for_the_sanitizer() {
+    if isolate(&test_path(
+        "a_refused_call_pays_no_payload_term_for_the_sanitizer",
+    )) {
+        return;
+    }
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    rt.block_on(async {
+        let plain = Some(("plain", "echo"));
+        let mut cost = std::collections::HashMap::new();
+        for sanitizing in [InputSanitizing::Off, InputSanitizing::On] {
+            let fx = prepared_with("missing", &|_| None, sanitizing).await;
+            let _ = refused(&fx, plain, None, 1 << 10).await;
+            for size in [1usize << 20, 3 << 20] {
+                let (reply, measured) = refused(&fx, plain, None, size).await;
+                assert_eq!(
+                    reply.pointer("/error/message").and_then(Value::as_str),
+                    Some("Nonce required when message signing is enforced"),
+                    "INTAKE.2(b) {sanitizing:?} {size}: premise, the same refusal: {reply}"
+                );
+                cost.insert((sanitizing == InputSanitizing::On, size), measured.bytes);
+            }
+        }
+        let mut shares = Vec::new();
+        for size in [1usize << 20, 3 << 20] {
+            let share = cost[&(true, size)].saturating_sub(cost[&(false, size)]);
+            println!("INTAKE.2(b) size={size} sanitizer_share={share}");
+            assert!(
+                share <= SANITIZER_SHARE,
+                "INTAKE.2(b) {size}: the sanitizer added {share} B to a refused call, above \
+                 {SANITIZER_SHARE} (on {}, off {})",
+                cost[&(true, size)],
+                cost[&(false, size)]
+            );
+            shares.push(share);
+        }
+        assert!(
+            shares[1].abs_diff(shares[0]) <= SIZE_SLACK,
+            "INTAKE.2(b): the sanitizer's share grows with the payload: {shares:?}"
+        );
+    });
 }
