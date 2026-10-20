@@ -92,28 +92,27 @@ fn ok(output: &Output, what: &str) -> String {
     stdout
 }
 
-/// Export the gateway entry for Zed in `mode`, then return the entry as it
-/// sits in the settings file Zed reads.
-fn export(home: &Home, mode: &str) -> (PathBuf, Value) {
+/// The exported entry's name. Not `gateway`: that is the default
+/// `capabilities.name`, which discovery skips (see
+/// `the_default_entry_name_is_skipped_on_import`).
+const ENTRY: &str = "zed-gateway";
+
+/// Export the gateway entry for Zed in `mode`, under `name` or, for `None`,
+/// the CLI's own default name, then return the entry as it sits in the
+/// settings file Zed reads.
+fn export(home: &Home, mode: &str, name: Option<&str>) -> (PathBuf, Value) {
     std::fs::create_dir_all(home.zed_dir()).expect("zed config dir");
     let gateway = home.root.join("gateway.yaml");
     write(&gateway, "server:\n  host: 127.0.0.1\n  port: 39481\n");
     let gateway_arg = gateway.to_str().unwrap();
-    ok(
-        &home.run(&[
-            "setup",
-            "export",
-            "--target",
-            "zed",
-            "--mode",
-            mode,
-            "--name",
-            "gateway",
-            "-c",
-            gateway_arg,
-        ]),
-        "setup export",
-    );
+    let mut args = vec!["setup", "export", "--target", "zed", "--mode", mode];
+    if let Some(name) = name {
+        args.extend(["--name", name]);
+    }
+    args.extend(["-c", gateway_arg]);
+    ok(&home.run(&args), "setup export");
+    // The CLI's default entry name (`setup export --name`).
+    let name = name.unwrap_or("gateway");
     let settings = home.zed_dir().join("settings.json");
     let text = std::fs::read_to_string(&settings).unwrap_or_else(|_| {
         panic!(
@@ -122,16 +121,16 @@ fn export(home: &Home, mode: &str) -> (PathBuf, Value) {
         )
     });
     let doc: Value = serde_json::from_str(&text).expect("settings.json is JSON");
-    let entry = doc["context_servers"]["gateway"].clone();
+    let entry = doc["context_servers"][name].clone();
     assert!(
         entry.is_object(),
-        "no context_servers.gateway entry in {text}"
+        "no context_servers.{name} entry in {text}"
     );
     (gateway, entry)
 }
 
 /// Discover servers in this home: the JSON listing and the backend written
-/// by `--write-config` for `gateway`.
+/// by `--write-config` for [`ENTRY`].
 fn import(home: &Home) -> (Value, TransportConfig) {
     let listing = ok(
         &home.run(&["cap", "discover", "--format", "json"]),
@@ -144,7 +143,7 @@ fn import(home: &Home) -> (Value, TransportConfig) {
         .as_array()
         .into_iter()
         .flatten()
-        .find(|s| s["name"] == "gateway")
+        .find(|s| s["name"] == ENTRY)
         .cloned()
         .unwrap_or_else(|| panic!("discover did not import the exported entry: {listing}"));
     let out = home.root.join("discovered.yaml");
@@ -162,15 +161,15 @@ fn import(home: &Home) -> (Value, TransportConfig) {
     let config = Config::load(Some(&out)).expect("discovered config loads");
     let backend = config
         .backends
-        .get("gateway")
-        .expect("discovered config has the gateway backend");
+        .get(ENTRY)
+        .expect("discovered config has the exported backend");
     (found, backend.transport.clone())
 }
 
 #[test]
 fn zed_stdio_entry_round_trips() {
     let home = Home::new();
-    let (gateway, entry) = export(&home, "stdio");
+    let (gateway, entry) = export(&home, "stdio", Some(ENTRY));
     assert_eq!(
         entry["command"], "mcp-gateway",
         "Zed reads `command` as a string"
@@ -198,7 +197,7 @@ fn zed_stdio_entry_round_trips() {
 #[test]
 fn zed_http_entry_round_trips() {
     let home = Home::new();
-    let (_, entry) = export(&home, "proxy");
+    let (_, entry) = export(&home, "proxy", Some(ENTRY));
     assert_eq!(entry["url"], "http://127.0.0.1:39481/mcp");
 
     let (found, transport) = import(&home);
@@ -212,4 +211,85 @@ fn zed_http_entry_round_trips() {
         }
         other => panic!("expected an HTTP backend, got {other:?}"),
     }
+}
+
+/// MIK-8358: the default export name is `gateway`, the default
+/// `capabilities.name`. Importing it would give the gateway a backend that
+/// config validation refuses (and that is usually the gateway itself), so
+/// `--write-config` skips it, says so, and still succeeds.
+#[test]
+fn the_default_entry_name_is_skipped_on_import() {
+    let home = Home::new();
+    // No `--name`: the export takes its own default, which is the default
+    // `capabilities.name`, so this pins the round trip an operator gets with
+    // neither name set.
+    export(&home, "stdio", None);
+    let out = home.root.join("discovered.yaml");
+    let run = home.run(&[
+        "cap",
+        "discover",
+        "--write-config",
+        "--config-path",
+        out.to_str().unwrap(),
+    ]);
+    ok(&run, "cap discover --write-config");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("Skipped discovered server \"gateway\""),
+        "the skip is not reported: {stderr}"
+    );
+    let config = Config::load(Some(&out)).expect("discovered config loads");
+    assert!(
+        !config.backends.contains_key("gateway"),
+        "the capabilities name was written as a backend: {:?}",
+        config.backends.keys().collect::<Vec<_>>()
+    );
+}
+
+/// MIK-8358: shadow adoption reports what it wrote. Of two adoptable Zed
+/// entries, the one named like `capabilities.name` is skipped, so one is
+/// adopted and the line says 1, not 2. The report still lists both.
+#[test]
+fn shadow_adoption_counts_only_what_it_wrote() {
+    let home = Home::new();
+    std::fs::create_dir_all(home.zed_dir()).expect("zed config dir");
+    write(
+        &home.zed_dir().join("settings.json"),
+        r#"{"context_servers": {
+            "gateway": {"command": "echo", "args": ["gateway"]},
+            "plain": {"command": "echo", "args": ["plain"]}
+        }}"#,
+    );
+    let gateway = home.root.join("gateway.yaml");
+    write(&gateway, "server:\n  host: 127.0.0.1\n  port: 39481\n");
+    let run = home.run(&[
+        "cap",
+        "discover",
+        "--shadow",
+        "--format",
+        "json",
+        "--write-config",
+        "--gateway-config",
+        gateway.to_str().unwrap(),
+    ]);
+    let report = ok(&run, "cap discover --shadow --write-config");
+    let report: Value = serde_json::from_str(&report).expect("the shadow report is JSON");
+    let listed: Vec<&str> = report["assets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|asset| asset["name"].as_str())
+        .collect();
+    assert!(
+        listed.contains(&"gateway") && listed.contains(&"plain"),
+        "the shadow report hides an entry: {listed:?}"
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("Adopted 1 local shadow server(s)"),
+        "the adoption count is not what was written: {stderr}"
+    );
+    let config = Config::load(Some(&gateway)).expect("adopted config loads");
+    assert!(config.backends.contains_key("plain"), "{stderr}");
+    assert!(!config.backends.contains_key("gateway"), "{stderr}");
 }

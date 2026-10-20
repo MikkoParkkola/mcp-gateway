@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::capability::{parse_capability_file, validate_capability};
+use crate::capability::{IssueLog, parse_capability_file, refuse_unloadable};
 use crate::{Error, Result};
 
 /// Registry entry describing a capability
@@ -178,11 +178,13 @@ impl Registry {
             }
 
             // Parse capability file
-            // Validated as loading validates, so search never offers a
-            // definition the gateway would refuse (MIK-7926.FIX.3).
+            // Validated as loading validates, structural errors included, so
+            // search never offers a definition the gateway would refuse
+            // (MIK-7926.FIX.3, MIK-8358). Quiet: structural warnings belong to
+            // `cap validate` and the loader's log, not every search.
             match parse_capability_file(path)
                 .await
-                .and_then(|c| validate_capability(&c).map(|()| c))
+                .and_then(|c| refuse_unloadable(&c, path, IssueLog::Quiet).map(|()| c))
             {
                 Ok(capability) => {
                     // Calculate relative path from capabilities directory
@@ -214,6 +216,11 @@ impl Registry {
             }
         }
 
+        tracing::debug!(
+            listed = capabilities.len(),
+            "search index built; structural warnings are not shown here, \
+             `mcp-gateway cap validate <file>` lists them"
+        );
         Ok(RegistryIndex::new(capabilities))
     }
 
@@ -300,6 +307,34 @@ impl Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// MIK-8358: a file the loader skips for a structural error (here a
+    /// scalar `schema.input`, CAP-003) is not listed by search either.
+    #[tokio::test]
+    async fn the_index_leaves_out_a_file_the_loader_skips() {
+        let dir = tempfile::TempDir::new().expect("a temp dir");
+        for (name, input) in [("listed", "{}"), ("skipped", "\"text\"")] {
+            std::fs::write(
+                dir.path().join(format!("{name}.yaml")),
+                format!(
+                    "name: {name}\ndescription: index row\nschema:\n  input: {input}\n\
+                     providers:\n  primary:\n    service: rest\n    config:\n      \
+                     base_url: https://api.invalid\n      path: /x\n"
+                ),
+            )
+            .expect("written");
+        }
+        let index = Registry::new(dir.path())
+            .build_index()
+            .await
+            .expect("an index");
+        let names: Vec<&str> = index.capabilities.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["listed"],
+            "MIK-8358: search lists what the loader skips"
+        );
+    }
 
     #[test]
     fn test_registry_entry_serialization() {
