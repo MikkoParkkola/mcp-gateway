@@ -237,6 +237,22 @@ fn a_stored_token_equal_to_the_live_cached_one_is_not_adopted() {
 // try_client_credentials
 // ---------------------------------------------------------------------------
 
+/// A grant before `initialize` has discovered any metadata is refused as
+/// not initialized, before anything is sent.
+#[tokio::test]
+async fn a_grant_before_initialize_is_refused_as_not_initialized() {
+    let dir = tempfile::tempdir().expect("the test temp dir is created");
+    let mut client = client(dir.path(), "https://as.example", &["client_credentials"]);
+    client.auth_metadata = None;
+
+    let refused = client.try_client_credentials().await;
+
+    let Err(error) = refused else {
+        panic!("a refusal: {refused:?}");
+    };
+    assert_eq!(error.to_string(), "OAuth error: OAuth not initialized");
+}
+
 /// A server that does not advertise `client_credentials` is never sent one.
 #[tokio::test]
 async fn client_credentials_is_refused_when_the_server_does_not_advertise_it() {

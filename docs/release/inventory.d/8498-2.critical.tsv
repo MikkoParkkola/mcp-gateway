@@ -1,3 +1,3 @@
 src/oauth/client/grants.rs	token_from_answer	1	standard	borderline	token_from_answer	Builds a granted token from the token endpoint answer; the oversized expires_in refusal lives in refuse_oversized_expires_in
-src/oauth/client/grants.rs	auth_meta	1	standard	borderline	OAuthClient::auth_meta	Returns the discovered metadata or the not-initialized error every grant gives before initialize; decides no access
+src/oauth/client/grants.rs	auth_meta	1	critical	a	OAuthClient::auth_meta	Refuses every grant before discovery has run (no authorization-server metadata); the refusal try_client_credentials and exchange_code make, pinned by a_grant_before_initialize_is_refused_as_not_initialized
 src/oauth/client/mod.rs	redact_opt	1	standard	borderline	redact_opt	Returns "<redacted>" or "None" for an optional secret in three Debug impls; a mistake would silently leak the OAuth token or client secret into logs
