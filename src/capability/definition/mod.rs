@@ -506,6 +506,18 @@ pub struct CapabilityMetadata {
     pub chains_with: Vec<String>,
 }
 
+/// Push `token` onto `fields` unless an equal token was already pushed,
+/// preserving first-occurrence order.
+fn push_unique_token(
+    seen: &mut std::collections::HashSet<String>,
+    fields: &mut Vec<String>,
+    token: String,
+) {
+    if seen.insert(token.clone()) {
+        fields.push(token);
+    }
+}
+
 impl CapabilityDefinition {
     /// SHA-256 of the whole definition as JSON with every object's keys
     /// sorted, providers with their typed process configs included and the
@@ -559,9 +571,7 @@ impl CapabilityDefinition {
             .into_iter()
             .chain(extract_schema_fields(&self.schema.output))
         {
-            if seen.insert(token.clone()) {
-                fields.push(token);
-            }
+            push_unique_token(&mut seen, &mut fields, token);
         }
 
         fields

@@ -34,8 +34,8 @@ pub fn extract_schema_fields(schema: &serde_json::Value) -> Vec<String> {
     // Collect a token, deduplicating across the whole result set.
     let mut push = |token: &str| {
         let token = token.trim().to_lowercase();
-        if !token.is_empty() && seen.insert(token.clone()) {
-            fields.push(token);
+        if !token.is_empty() {
+            super::push_unique_token(&mut seen, &mut fields, token);
         }
     };
 
