@@ -43,7 +43,7 @@ pub fn extract_schema_fields(schema: &serde_json::Value) -> Vec<String> {
     fields
 }
 
-/// Recursively collect tokens from a JSON Schema node.
+/// Collect tokens from a JSON Schema node (one level of `properties`).
 fn collect_schema_tokens(schema: &serde_json::Value, push: &mut impl FnMut(&str)) {
     // Top-level description words
     if let Some(desc) = schema.get("description").and_then(|v| v.as_str()) {
