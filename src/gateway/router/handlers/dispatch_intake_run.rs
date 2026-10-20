@@ -188,7 +188,7 @@ pub(in crate::gateway::router::handlers) async fn intake(
     }
     // Not a stream reader, so no branch subscribes: a held subscription
     // fakes a deliverable prompt.
-    let (opened, session_hold) = super::session::open_request_session(
+    let (opened, session_hold, session_degraded) = super::session::open_request_session(
         state,
         &request,
         &headers,
@@ -663,6 +663,7 @@ pub(in crate::gateway::router::handlers) async fn intake(
             admission_owner,
             _inflight_permit: inflight_permit,
             _session_hold: session_hold,
+            session_degraded,
         },
     ))
 }

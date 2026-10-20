@@ -36,6 +36,8 @@ use crate::gateway::session_lifecycle::{SessionLifecycle, now_unix};
 mod provisional;
 #[path = "streaming_session.rs"]
 mod session;
+#[cfg(test)]
+pub(crate) use provisional::MAX_PROVISIONAL_SESSIONS;
 pub(crate) use provisional::{MintKind, PROVISIONAL_SESSION_TTL, SessionCapacity, SessionHold};
 use session::ClientSession;
 #[path = "streaming_copy.rs"]
@@ -209,6 +211,10 @@ pub struct NotificationMultiplexer {
     event_counter: std::sync::atomic::AtomicU64,
     /// Live provisional sessions, against `provisional::MAX_PROVISIONAL_SESSIONS`.
     provisional_live: std::sync::atomic::AtomicUsize,
+    /// Live provisional sessions a sessionless GET stream minted, counted
+    /// apart from POST mints so a POST flood cannot lock streams out
+    /// (MIK-8533).
+    provisional_stream_live: std::sync::atomic::AtomicUsize,
     /// The live authorizer scoped delivery asks; unset means no delivery.
     authorizer: RwLock<Option<AuthState>>,
     /// The cross-tenant read judge of every session stream (MIK-7116.MIN.2);
@@ -237,6 +243,7 @@ impl NotificationMultiplexer {
             config,
             event_counter: std::sync::atomic::AtomicU64::new(1),
             provisional_live: std::sync::atomic::AtomicUsize::new(0),
+            provisional_stream_live: std::sync::atomic::AtomicUsize::new(0),
             authorizer: RwLock::new(None),
             reads: std::sync::OnceLock::new(),
             #[cfg(test)]
@@ -482,6 +489,7 @@ impl NotificationMultiplexer {
             credential: RwLock::new(None),
             records: RwLock::new(Vec::new()),
             provisional: std::sync::atomic::AtomicBool::new(false),
+            provisional_stream: std::sync::atomic::AtomicBool::new(false),
             in_flight: std::sync::atomic::AtomicUsize::new(0),
         });
         sessions.insert(id, Arc::clone(&session));
@@ -522,7 +530,9 @@ impl NotificationMultiplexer {
                 let hold = Self::hold(&session);
                 (session, hold)
             }
-            MintKind::Provisional => self.open_provisional_for(session_id, owner)?,
+            MintKind::Provisional | MintKind::ProvisionalStream => {
+                self.open_provisional_for(session_id, owner, kind)?
+            }
         };
         session.replace_credential(credential);
         Ok((session.id.clone(), hold))

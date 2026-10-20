@@ -58,6 +58,19 @@ pub(super) async fn tools_call(
         &intake.verified_identity,
         &intake.agent_identity,
     );
+    // Only for a tool this gateway exposes: a hidden one keeps the ordinary
+    // unknown-tool answer, so the refusal reveals nothing.
+    if let Some(refusal) = intake
+        .degraded_session_tool_refusal()
+        .filter(|_| state.meta_mcp.exposes_meta_tool(intake.external_tool()))
+    {
+        // Same code and shape the meta layer's no-session refusal uses.
+        return Ok(JsonRpcResponse::error(
+            Some(id),
+            -32600,
+            refusal.to_string(),
+        ));
+    }
     let (session_id, owner, admission_owner) =
         (&intake.session_id, &intake.owner, &intake.admission_owner);
     #[cfg(feature = "firewall")]
@@ -272,6 +285,7 @@ pub(super) async fn tools_call(
                 caller_key.clone(),
                 session_id,
                 existing_session_id.as_deref(),
+                intake.session_degraded,
             );
             // Renew the reclaim deadline on every call (`IDLE_TTL`). An
             // empty identity holds no per-identity state: not tracked.
