@@ -795,12 +795,12 @@ mod scope_tests;
 mod nonce_metrics_tests;
 
 // MIK-7698: a call refused before the tool acts leaves its nonce unspent.
-#[cfg(test)]
-#[path = "signing_unspent_tests.rs"]
-mod unspent_tests;
 #[cfg(all(test, feature = "firewall"))]
 #[path = "signing_test_access.rs"]
 mod test_access;
+#[cfg(test)]
+#[path = "signing_unspent_tests.rs"]
+mod unspent_tests;
 
 /// The nonce store key of `caller`'s principal.
 pub(crate) fn nonce_principal<'a>(caller: &super::MetaMcpCallerContext<'a>) -> &'a str {
