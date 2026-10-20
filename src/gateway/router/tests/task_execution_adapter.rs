@@ -156,3 +156,6 @@ mod upstream_descriptor;
 mod x1_dispatch;
 
 mod notifications;
+
+#[cfg(feature = "firewall")]
+mod zz_replay_ab;

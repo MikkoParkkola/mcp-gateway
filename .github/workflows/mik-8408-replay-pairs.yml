@@ -1,0 +1,66 @@
+name: MIK-8408 replay pairs
+
+# Throwaway, never merged. MIK-8408 finding 2: the per-step cost of
+# keep_replayed_digest (re-parse, re-hash and re-fingerprint of the delivered
+# answer for every replayed step) on task re-reads of N-step plans.
+# A = the code as committed; B = the same tree with the parse and hash done
+# once per replay (scripts/ci/mik8408_hoist_b.py). Both binaries are built
+# here, then run as alternating A,B pairs on this one runner, load logged.
+on:
+  push:
+    branches: [throwaway/mik-8408-replay-pairs]
+
+concurrency:
+  group: mik-8408-replay-pairs
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  pairs:
+    name: Replay A/B pairs
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - name: Build A (as committed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bins" out
+          cargo test --release --lib --all-features \
+            --config profile.release.lto=false --config profile.release.codegen-units=16 \
+            --config 'profile.release.panic="unwind"' --no-run --message-format=json \
+            | python3 -c 'import json,sys; [print(m["executable"]) for m in map(json.loads, sys.stdin) if m.get("reason")=="compiler-artifact" and m.get("executable") and m["target"]["kind"]==["lib"] and m["profile"]["test"]]' \
+            | tail -1 > "$RUNNER_TEMP/a.path"
+          cp "$(cat "$RUNNER_TEMP/a.path")" "$RUNNER_TEMP/bins/A.bin"
+      - name: Build B (parse and hash once per replay)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/mik8408_hoist_b.py
+          cargo test --release --lib --all-features \
+            --config profile.release.lto=false --config profile.release.codegen-units=16 \
+            --config 'profile.release.panic="unwind"' --no-run --message-format=json \
+            | python3 -c 'import json,sys; [print(m["executable"]) for m in map(json.loads, sys.stdin) if m.get("reason")=="compiler-artifact" and m.get("executable") and m["target"]["kind"]==["lib"] and m["profile"]["test"]]' \
+            | tail -1 > "$RUNNER_TEMP/b.path"
+          cp "$(cat "$RUNNER_TEMP/b.path")" "$RUNNER_TEMP/bins/B.bin"
+          cmp -s "$RUNNER_TEMP/bins/A.bin" "$RUNNER_TEMP/bins/B.bin" && { echo "A and B are identical"; exit 1; } || true
+      - name: Run 7 alternating pairs
+        shell: bash
+        run: |
+          nproc
+          scripts/ci/mik8408_pairs.sh "$RUNNER_TEMP/bins" 7 | tee out/pairs.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: mik-8408-replay-pairs
+          path: out
+          retention-days: 7
