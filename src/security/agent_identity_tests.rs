@@ -563,8 +563,8 @@ fn the_hatch_does_not_restore_header_over_proof() {
 
 #[test]
 fn percent_decode_handles_encoded_chars() {
-    assert_eq!(percent_decode("a%20b"), "a b");
-    assert_eq!(percent_decode("plain"), "plain");
+    assert_eq!(percent_decode("a%20b"), Some("a b".to_string()));
+    assert_eq!(percent_decode("plain"), Some("plain".to_string()));
 }
 
 #[test]

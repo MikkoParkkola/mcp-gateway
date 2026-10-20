@@ -12,6 +12,7 @@ pub(super) fn extract_from_header(headers: &axum::http::HeaderMap) -> Option<Str
         .map(String::from)
 }
 
+/// An invalid UTF-8 value yields no label.
 pub(super) fn extract_from_query(query: &str) -> Option<String> {
     query
         .split('&')
@@ -20,27 +21,28 @@ pub(super) fn extract_from_query(query: &str) -> Option<String> {
             (k == "agent_id").then_some(v)
         })
         .filter(|s| !s.is_empty())
-        .map(percent_decode)
+        .and_then(percent_decode)
 }
 
 /// Percent-decode a query parameter value (`%XX` sequences only; `+` kept as-is).
-pub(super) fn percent_decode(s: &str) -> String {
+/// Returns `None` when the decoded bytes are not valid UTF-8.
+pub(super) fn percent_decode(s: &str) -> Option<String> {
     let bytes = s.as_bytes();
-    let mut out = String::with_capacity(s.len());
+    let mut out = Vec::with_capacity(s.len());
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%'
             && i + 2 < bytes.len()
             && let (Some(hi), Some(lo)) = (hex_digit(bytes[i + 1]), hex_digit(bytes[i + 2]))
         {
-            out.push((hi << 4 | lo) as char);
+            out.push(hi << 4 | lo);
             i += 3;
             continue;
         }
-        out.push(bytes[i] as char);
+        out.push(bytes[i]);
         i += 1;
     }
-    out
+    String::from_utf8(out).ok()
 }
 
 fn hex_digit(b: u8) -> Option<u8> {
