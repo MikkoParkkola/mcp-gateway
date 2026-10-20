@@ -273,7 +273,10 @@ async fn a_bare_row_refusal_also_names_a_second_parse_error() {
         ),
     ] {
         let error = edited_refusal(name, &[(from, to)]).await;
-        if name.ends_with(".yaml") {
+        if std::path::Path::new(name)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("yaml"))
+        {
             for needle in ["g-runner", "g-bot", "unknown variant"] {
                 assert!(error.contains(needle), "{name}: missing {needle}: {error}");
             }
@@ -332,7 +335,10 @@ async fn a_type_error_keeps_its_line_and_column() {
     ];
     for (name, rewrites) in [("grants-3.4.0.yaml", yaml), ("grants-3.4.0.json", json)] {
         let error = edited_refusal(name, &rewrites).await;
-        if name.ends_with(".yaml") {
+        if std::path::Path::new(name)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("yaml"))
+        {
             assert!(
                 error.contains("grants[0].scope: unknown variant"),
                 "{name}: {error}"

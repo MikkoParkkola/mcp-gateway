@@ -396,7 +396,7 @@ fn is_custom_call(func: &syn::Expr) -> bool {
         return false;
     }
     // `Policy::custom` takes a closure, not a message (reqwest redirect).
-    !segments.next().is_some_and(|prev| prev.ident == "Policy")
+    segments.next().is_none_or(|prev| prev.ident != "Policy")
 }
 
 /// Whether a `format!`/`format_args!` macro formats a value into its message:
