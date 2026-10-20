@@ -5,6 +5,7 @@
 #![deny(clippy::print_stdout)]
 
 use super::super::callback;
+use super::super::metadata::AuthorizationServerMetadata;
 use super::super::storage::TokenInfo;
 use crate::security::http_diagnostics::oauth_request_error;
 use crate::security::{safe_oauth_http_error, safe_reqwest_message};
@@ -40,16 +41,21 @@ fn token_from_answer(
 }
 
 impl OAuthClient {
+    /// The discovered authorization-server metadata, or the error every
+    /// grant gives before `initialize` has run.
+    fn auth_meta(&self) -> Result<&AuthorizationServerMetadata> {
+        self.auth_metadata
+            .as_ref()
+            .ok_or_else(|| Error::OAuth("OAuth not initialized".to_string()))
+    }
+
     /// Attempt client-credentials grant (headless re-auth, no browser required).
     ///
     /// Returns `Ok(token)` only when the authorization server explicitly lists
     /// `"client_credentials"` in `grant_types_supported` — so we never try it
     /// against a server that won't accept it.
     pub(super) async fn try_client_credentials(&self) -> Result<String> {
-        let auth_meta = self
-            .auth_metadata
-            .as_ref()
-            .ok_or_else(|| Error::OAuth("OAuth not initialized".to_string()))?;
+        let auth_meta = self.auth_meta()?;
 
         if !auth_meta
             .grant_types_supported
@@ -202,10 +208,7 @@ impl OAuthClient {
         redirect_uri: &str,
         code_verifier: &str,
     ) -> Result<TokenInfo> {
-        let auth_meta = self
-            .auth_metadata
-            .as_ref()
-            .ok_or_else(|| Error::OAuth("OAuth not initialized".to_string()))?;
+        let auth_meta = self.auth_meta()?;
 
         let client_id = self
             .client_id
@@ -443,10 +446,7 @@ impl OAuthClient {
         listeners: Option<tokio_util::sync::DropGuard>,
         deadline: Option<tokio::time::Instant>,
     ) -> Result<String> {
-        let auth_meta = self
-            .auth_metadata
-            .as_ref()
-            .ok_or_else(|| Error::OAuth("OAuth not initialized".to_string()))?;
+        let auth_meta = self.auth_meta()?;
 
         // Generate PKCE parameters
         let (code_verifier, code_challenge) = generate_pkce();
@@ -578,10 +578,7 @@ impl super::refresh_flight::RefreshCaller for OAuthClient {
         _stored: &TokenInfo,
         sent: &str,
     ) -> Result<super::refresh_flight::RefreshRequest> {
-        let auth_meta = self
-            .auth_metadata
-            .as_ref()
-            .ok_or_else(|| Error::OAuth("OAuth not initialized".to_string()))?;
+        let auth_meta = self.auth_meta()?;
         let key = self.credential_key()?;
         self.reload_registered_client_id(&key);
         let client_id = self
