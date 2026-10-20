@@ -470,14 +470,26 @@ impl crate::transport::Transport for AsksThenAnswers {
 }
 
 /// MIK-8498 characterisation: a retry routed to its origin backend answers
-/// with the backend's own envelope (native), byte for byte, though
-/// `dispatch_below_gate` asked for the wrapped meta reply; wrapping would
-/// stringify that envelope into a text block.
+/// with the backend's own envelope (native), byte for byte apart from the
+/// gateway's `trace_id`, though `dispatch_below_gate` asked for the wrapped
+/// meta reply; wrapping would stringify that envelope into a text block.
 #[cfg(feature = "firewall")]
 fn assert_answers_native(response: &crate::protocol::JsonRpcResponse) {
+    let mut result = response
+        .result
+        .clone()
+        .unwrap_or_else(|| panic!("a retry to its origin backend answers native: {response:?}"));
+    let object = result
+        .as_object_mut()
+        .unwrap_or_else(|| panic!("a retry to its origin backend answers native: {response:?}"));
+    let trace_id = object.remove("trace_id");
+    assert!(
+        matches!(&trace_id, Some(Value::String(id)) if id.starts_with("gw-")),
+        "a retry to its origin backend answers native: {response:?}"
+    );
     assert_eq!(
-        response.result,
-        Some(json!({"content": [{"type": "text", "text": "answered"}], "isError": false})),
+        result,
+        json!({"content": [{"type": "text", "text": "answered"}], "isError": false}),
         "a retry to its origin backend answers native: {response:?}"
     );
 }
