@@ -421,9 +421,9 @@ fn macro_formats_a_value(mac: &syn::Macro) -> bool {
     match args.first() {
         Some(syn::Expr::Lit(literal)) => match &literal.lit {
             syn::Lit::Str(text) => has_placeholder(&text.value()),
-            _ => false,
+            _ => true,
         },
-        _ => false,
+        _ => true,
     }
 }
 
@@ -472,9 +472,10 @@ impl<'ast> syn::visit::Visit<'ast> for FormatsAValue {
 /// The `...::custom(` calls in `file` that format a value into the message.
 ///
 /// Covers every `...::custom(` call in `src/` parsed by syn, including
-/// inside closures and nested calls. Boundary: a `custom` reached through
-/// a `use` alias with another name, or a call generated inside a macro
-/// body other than `format!`, is not seen.
+/// inside closures and nested calls. Fails closed on any `format!`/`format_args!`
+/// whose format string is not a literal. Boundary: only what cannot be decided
+/// statically from the parsed source is not seen: a `custom` reached through
+/// a `use` alias under another name, or a call generated inside another macro's body.
 ///
 /// One entry per hit. Spans carry no line here (`span-locations` is not
 /// enabled, and the guard adds no features), so the caller reports the
@@ -492,6 +493,8 @@ fn value_formatting_custom_calls(file: &syn::File) -> Vec<usize> {
                     syn::visit::Visit::visit_expr(&mut argument, arg);
                 }
                 if argument.hit {
+                    // Hits name the file only: proc-macro2's `span-locations` is off,
+                    // and the guard adds no features.
                     self.hits.push(0);
                 }
             }
@@ -543,6 +546,8 @@ fn the_guard_catches_the_tricky_forms() {
         r#"Error::custom(format!("bad \x7b}", x))"#,
         r#"Error::custom(format![ "bad {}", x ])"#,
         r#"Error::custom(format!{ "bad {}", x })"#,
+        r#"Error::custom(format!(concat!("bad ", "{}"), x))"#,
+        "Error::custom(format!(TEMPLATE, x))",
     ] {
         let source = format!("fn f() {{ {text}; }}");
         let parsed = match syn::parse_file(&source) {
