@@ -33,8 +33,9 @@ history.txt
 .tiers/
 /dist/
 
-# Local cargo config
-.cargo/
+# Local cargo config (the shared cargo-audit config is tracked, MIK-8577)
+.cargo/*
+!.cargo/audit.toml
 
 # Internal planning docs, strategic positioning, and competitive intelligence
 docs/plans/

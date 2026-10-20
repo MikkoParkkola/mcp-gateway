@@ -1092,6 +1092,13 @@ jobs:
         env:
           RUSTFLAGS: ""
         run: cargo install cargo-audit --locked
+      # Every cargo-audit ignore (.cargo/audit.toml) carries a dated osv-scanner
+      # entry and expires with it, and the patched floors an ignore relies on
+      # hold in Cargo.lock (MIK-8577).
+      - name: Advisory exceptions are dated and floored
+        run: |
+          python3 scripts/ci/check_advisory_exceptions.py --self-test
+          python3 scripts/ci/check_advisory_exceptions.py
       - run: cargo audit
 
   kani:
