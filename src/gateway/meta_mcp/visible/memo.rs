@@ -556,4 +556,6 @@ mod memo_tests {
 #[cfg(test)]
 mod account_tests;
 #[cfg(test)]
+mod alloc_tests;
+#[cfg(test)]
 mod semantics_tests;
