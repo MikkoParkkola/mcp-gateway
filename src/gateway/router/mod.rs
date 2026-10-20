@@ -202,6 +202,9 @@ pub(super) mod route_matrix_driver_tests;
 #[cfg(all(test, feature = "firewall"))]
 pub(super) mod route_matrix_x14_nonce_tests;
 /// MIK-8504: the provisional-session cap refuses before anything runs.
+/// MIK-8533: past the POST cap a sessionless legacy call is served without a session.
+#[cfg(test)]
+mod session_capacity_degrade_tests;
 #[cfg(test)]
 mod session_capacity_tests;
 #[cfg(test)]
