@@ -275,7 +275,7 @@ pub(super) async fn read_envelope(
             && method == "tools/call"
             && let Some(tool) = tool
         {
-            crate::gateway::meta_mcp::visible::note_denial_code(name, tool, -32003);
+            crate::gateway::meta_mcp::visible::memo::note_denial_code(name, tool, -32003);
         }
         return Err(backend_not_found(name));
     }
@@ -582,7 +582,9 @@ fn sanitized(
     use crate::security::sanitize::{ProtocolRoute, sanitize_request};
     let exempt = state.meta_mcp.passthrough_instance(grant, name);
     if let Some(instance) = &exempt {
-        crate::gateway::meta_mcp::visible::record_exempt_instances(std::slice::from_ref(instance));
+        crate::gateway::meta_mcp::visible::memo::record_exempt_instances(std::slice::from_ref(
+            instance,
+        ));
     }
     // Intake has judged; the window a reload must not reach (MIK-8154 F2).
     #[cfg(test)]

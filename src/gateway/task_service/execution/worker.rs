@@ -241,7 +241,8 @@ async fn run_dispatched(
         .arm(&executor.service.store);
     // MIK-8154 C2e, F2: the run and its sends compare against what the
     // submit's intake judged, as a synchronous call does.
-    let dispatch = crate::gateway::meta_mcp::visible::with_judged(intent.owned.judged(), dispatch);
+    let dispatch =
+        crate::gateway::meta_mcp::visible::memo::with_judged(intent.owned.judged(), dispatch);
     let mut dispatch = Box::pin(crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
         Arc::clone(intent.owned.dispatch_log()),
         dispatch,

@@ -119,7 +119,7 @@ impl MetaMcp {
         (server, tool): (&str, &str),
         session: Option<&str>,
     ) -> bool {
-        use crate::gateway::meta_mcp::visible::{Visibility, recorded_visibility};
+        use crate::gateway::meta_mcp::visible::{Visibility, memo::recorded_visibility};
         matches!(
             recorded_visibility(server, tool),
             Some(Visibility::Withheld(_))

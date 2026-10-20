@@ -319,7 +319,7 @@ async fn dispatch(
     );
     let dispatched = crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
         Arc::clone(owned.dispatch_log()),
-        crate::gateway::meta_mcp::visible::with_judged(judged, dispatched),
+        crate::gateway::meta_mcp::visible::memo::with_judged(judged, dispatched),
     );
     tokio::select! {
         biased;

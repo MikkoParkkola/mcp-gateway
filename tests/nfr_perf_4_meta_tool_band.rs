@@ -6,6 +6,9 @@
 //! served path appends surfaced tools and applies the operator allow-list, so
 //! a count derived from `build_meta_tools` answers a different question than
 //! the requirement asks.
+#[path = "common/yaml.rs"]
+mod yaml;
+
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 
 use mcp_gateway::{
@@ -53,7 +56,7 @@ fn make_reload_context(backends: Arc<BackendRegistry>) -> Arc<ReloadContext> {
 /// A one-step playbook, enough to make the engine non-empty.
 fn one_playbook() -> PlaybookEngine {
     let definition: PlaybookDefinition =
-        serde_yaml::from_str("name: probe\ndescription: makes the engine non-empty\nsteps: []\n")
+        yaml::from_str("name: probe\ndescription: makes the engine non-empty\nsteps: []\n")
             .expect("playbook fixture must parse");
     let mut engine = PlaybookEngine::new();
     engine.register(definition);

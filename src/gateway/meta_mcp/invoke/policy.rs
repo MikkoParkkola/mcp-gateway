@@ -25,7 +25,7 @@ impl MetaMcp {
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
         self.authorize_invocation(args, caller)?;
-        crate::gateway::meta_mcp::visible::refuse_withheld(server, tool)?;
+        crate::gateway::meta_mcp::visible::memo::refuse_withheld(server, tool)?;
         if let Err(reason) = validate_tool_name(tool) {
             return Err(Error::Protocol(format!(
                 "Invalid tool name '{tool}': {reason}"
@@ -293,7 +293,7 @@ impl MetaMcp {
             }
             audited.map(|value| super::SourcedOutcome::Live((value, source, upstream)))
         });
-        crate::gateway::meta_mcp::visible::with_visibility_memo(traced).await
+        crate::gateway::meta_mcp::visible::memo::with_visibility_memo(traced).await
     }
 
     /// The one invocation record for a chain resume refused because its
@@ -321,7 +321,7 @@ impl MetaMcp {
         let recorded_trace = trace_id.clone();
         let recorded = trace::with_trace_id(trace_id, async move {
             if absence == Some(crate::gateway::meta_mcp::scoped_backends::Absence::OutOfScope) {
-                crate::gateway::meta_mcp::visible::note_denial_code(server, tool, -32003);
+                crate::gateway::meta_mcp::visible::memo::note_denial_code(server, tool, -32003);
             }
             let missing = Err(Error::BackendNotFound(server.to_owned()));
             self.audit_invocation(
@@ -334,7 +334,7 @@ impl MetaMcp {
             )
             .await
         });
-        match crate::gateway::meta_mcp::visible::with_visibility_memo(recorded).await {
+        match crate::gateway::meta_mcp::visible::memo::with_visibility_memo(recorded).await {
             Err(error) => error,
             Ok(_) => Error::BackendNotFound(server.to_owned()),
         }

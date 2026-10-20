@@ -346,7 +346,7 @@ async fn u1_a_per_user_target_without_a_visible_verdict_is_withheld() {
     let (fx, alpha) = per_user_alpha();
     cool(&fx.meta, BACKEND, TOOL);
     let caller = crate::gateway::meta_mcp::identified_caller(&alpha);
-    let withheld = crate::gateway::meta_mcp::visible::with_visibility_memo(async {
+    let withheld = crate::gateway::meta_mcp::visible::memo::with_visibility_memo(async {
         fx.meta
             .withheld_invoke_target(&per_user_invoke(), None, &caller)
     })
@@ -363,7 +363,7 @@ async fn u1_a_per_user_target_without_a_visible_verdict_is_withheld() {
 async fn u2_a_per_user_target_the_request_judged_visible_is_not_withheld() {
     use crate::gateway::meta_mcp::slot_verdict_fixture::{BACKEND, TOOL};
     use crate::gateway::meta_mcp::visible::{
-        Visibility, record_visibility, recorded_visibility, with_visibility_memo,
+        Visibility, memo::record_visibility, memo::recorded_visibility, memo::with_visibility_memo,
     };
     let (fx, alpha) = per_user_alpha();
     cool(&fx.meta, BACKEND, TOOL);
@@ -392,7 +392,7 @@ async fn u3_a_shared_target_in_cooldown_is_not_withheld() {
     cool(&meta, "alpha", "read");
     let caller = ctx(&AllowAll);
     let arguments = json!({"server": "alpha", "tool": "read", "arguments": {}});
-    let withheld = crate::gateway::meta_mcp::visible::with_visibility_memo(async {
+    let withheld = crate::gateway::meta_mcp::visible::memo::with_visibility_memo(async {
         meta.withheld_invoke_target(&arguments, None, &caller)
     })
     .await;
@@ -406,7 +406,7 @@ async fn u3_a_shared_target_in_cooldown_is_not_withheld() {
 #[tokio::test]
 async fn u4_the_withheld_predicate_ignores_the_cooldown() {
     use crate::gateway::meta_mcp::slot_verdict_fixture::{BACKEND, TOOL};
-    use crate::gateway::meta_mcp::visible::with_visibility_memo;
+    use crate::gateway::meta_mcp::visible::memo::with_visibility_memo;
     let (fx, alpha) = per_user_alpha();
     let caller = crate::gateway::meta_mcp::identified_caller(&alpha);
     let cold = with_visibility_memo(async {

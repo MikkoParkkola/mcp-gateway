@@ -214,7 +214,7 @@ impl MetaMcp {
         if self.tool_visible_to(server, tool, caller.scope(), session_id)
             != crate::gateway::meta_mcp::visible::Visibility::Visible
         {
-            return Err(crate::gateway::meta_mcp::visible::absent_name(tool));
+            return Err(crate::gateway::meta_mcp::visible::absent::absent_name(tool));
         }
         self.check_invocation_policy(
             &json!({ "server": server, "tool": tool, "arguments": arguments }),

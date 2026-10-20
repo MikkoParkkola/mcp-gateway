@@ -139,7 +139,7 @@ fn plan_replay() -> (serde_json::Value, JsonRpcResponse) {
 async fn p8_legacy_a_plan_record_with_no_step_list_judges_its_declared_targets() {
     let meta = per_caller_meta();
     let (arguments, stored) = plan_replay();
-    let answer = crate::gateway::meta_mcp::visible::with_visibility_memo(async {
+    let answer = crate::gateway::meta_mcp::visible::memo::with_visibility_memo(async {
         meta.defer_or_serve_replay(
             "gateway_execute",
             &arguments,
@@ -172,7 +172,7 @@ async fn p8_legacy_a_plan_record_with_no_step_list_judges_its_declared_targets()
 async fn p8_empty_a_plan_record_that_dispatched_nothing_is_served() {
     let meta = per_caller_meta();
     let (arguments, stored) = plan_replay();
-    let answer = crate::gateway::meta_mcp::visible::with_visibility_memo(async {
+    let answer = crate::gateway::meta_mcp::visible::memo::with_visibility_memo(async {
         meta.defer_or_serve_replay(
             "gateway_execute",
             &arguments,
@@ -202,7 +202,7 @@ async fn p8_noid_a_stored_plan_replay_with_no_request_id_fails_closed() {
     let meta = per_caller_meta();
     let (arguments, mut stored) = plan_replay();
     stored.id = None;
-    let answer = crate::gateway::meta_mcp::visible::with_visibility_memo(async {
+    let answer = crate::gateway::meta_mcp::visible::memo::with_visibility_memo(async {
         meta.defer_or_serve_replay(
             "gateway_execute",
             &arguments,
@@ -259,7 +259,7 @@ async fn p8_rebind_a_step_rebound_while_the_plan_walk_runs_is_refused() {
     let _armed = super::walk_seam::after_plan_walk(move || {
         assert!(rebind.register(idp_backend(Some("rebound-account"))));
     });
-    let answer = crate::gateway::meta_mcp::visible::with_visibility_memo(async {
+    let answer = crate::gateway::meta_mcp::visible::memo::with_visibility_memo(async {
         meta.defer_or_serve_replay(
             "gateway_execute",
             &arguments,

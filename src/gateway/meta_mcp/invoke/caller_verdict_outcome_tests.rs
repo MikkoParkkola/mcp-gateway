@@ -13,7 +13,7 @@ use crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::{
     BACKEND, Binding, DirectAccountGateway,
 };
 use crate::gateway::meta_mcp::account_rest_fixture::{external, installed_gateway};
-use crate::gateway::meta_mcp::visible::{self, AccountOutcome, Carried};
+use crate::gateway::meta_mcp::visible::{self, memo::AccountOutcome, memo::Carried};
 use crate::identity_propagation::{CallerProof, CallerProvenance};
 
 const TOOL: &str = "read";
@@ -52,7 +52,7 @@ fn connected() -> (DirectAccountGateway, MetaMcp) {
 
 /// Run `body` inside one request's memo.
 async fn in_request<F: std::future::Future>(body: F) -> F::Output {
-    visible::with_visibility_memo(body).await
+    visible::memo::with_visibility_memo(body).await
 }
 
 /// Carry a real resolution for `(BACKEND, TOOL)`, as the caller verdict
@@ -63,7 +63,7 @@ async fn carry(meta: &MetaMcp, fill_error: Option<crate::Error>) {
         .resolve_dispatch((BACKEND, TOOL), Some(&backend), operator(), None)
         .await
         .expect("premise: the operator's live grant resolves");
-    visible::carry_dispatch(
+    visible::memo::carry_dispatch(
         BACKEND,
         TOOL,
         Carried {
@@ -99,7 +99,7 @@ async fn o3_two_fills_in_one_request_read_custody_once() {
         .await;
         assert_eq!(gateway.resolves() - before, 1, "O3: one custody read");
         assert_eq!(
-            visible::account_outcome(BACKEND, &account),
+            visible::memo::account_outcome(BACKEND, &account),
             Some(AccountOutcome::Live)
         );
     })
@@ -115,7 +115,7 @@ async fn o6_outside_a_request_no_outcome_is_judged_or_kept() {
         .target_account(&meta.unscoped_for_test(), BACKEND, TOOL)
         .expect("a managed account");
     let before = gateway.resolves();
-    assert_eq!(visible::account_outcome(BACKEND, &account), None);
+    assert_eq!(visible::memo::account_outcome(BACKEND, &account), None);
     assert_eq!(gateway.resolves(), before, "O6: no custody read");
 }
 
@@ -156,7 +156,7 @@ async fn e5a_a_clean_carried_resolution_is_reused_as_live() {
         .await;
         assert_eq!(gateway.resolves() - before, 0, "E5a: no second read");
         assert_eq!(
-            visible::account_outcome(BACKEND, &account),
+            visible::memo::account_outcome(BACKEND, &account),
             Some(AccountOutcome::Live)
         );
     })
@@ -187,7 +187,7 @@ async fn e5b_a_carried_resolution_whose_fill_failed_is_read_again() {
             "E5b: judged by its own read"
         );
         assert_eq!(
-            visible::account_outcome(BACKEND, &account),
+            visible::memo::account_outcome(BACKEND, &account),
             Some(AccountOutcome::Live)
         );
     })

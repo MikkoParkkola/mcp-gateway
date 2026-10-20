@@ -690,7 +690,7 @@ impl super::MetaMcp {
         {
             // Signing ran the policy before the route stage could record this
             // request's verdict (stdio): refuse a withheld name here.
-            super::visible::refuse_withheld(server, tool)?;
+            super::visible::memo::refuse_withheld(server, tool)?;
             stamp_prepared(server, tool);
             Ok(())
         } else {

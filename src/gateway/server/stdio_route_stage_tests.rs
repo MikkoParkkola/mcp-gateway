@@ -14,7 +14,7 @@ use crate::gateway::authz::{
     AllowAll, AuthorizationError, CallTarget, Decision, ToolAuthorizer, ToolTarget, Transport,
 };
 use crate::gateway::meta_mcp::MetaMcp;
-use crate::gateway::meta_mcp::visible::{denial_code, with_visibility_memo};
+use crate::gateway::meta_mcp::visible::{memo::denial_code, memo::with_visibility_memo};
 use crate::protocol::RequestId;
 
 /// A code no other refusal uses, so the record can only have it from here.

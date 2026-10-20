@@ -248,3 +248,61 @@ async fn judged_falls_back_to_the_worker_and_the_request_wins() {
     )
     .await;
 }
+
+/// MIK-8498 VISIBLE.1a: which judgement `changed_instance` reads. The
+/// request's own wins wherever it names the backend; a request that judged
+/// nothing for the name defers to the task worker's; neither means unchanged.
+#[tokio::test]
+async fn changed_instance_prefers_the_request_and_falls_back_to_the_worker() {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig};
+    let instance = || {
+        std::sync::Arc::new(Backend::new(
+            "b",
+            BackendConfig::default(),
+            &FailsafeConfig::default(),
+            std::time::Duration::from_secs(300),
+        ))
+    };
+    let (a, b) = (instance(), instance());
+    assert_eq!(super::changed_instance(&a), None, "no judgement: unchanged");
+    let worker_on_b = with_visibility_memo(async {
+        super::record_exempt_instances(&[std::sync::Arc::clone(&b)]);
+        super::judged()
+    })
+    .await;
+    super::with_judged(
+        worker_on_b,
+        with_visibility_memo(async {
+            assert!(super::changed_instance(&a).is_some(), "the worker judged b");
+            assert_eq!(super::changed_instance(&b), None);
+            super::record_exempt_instances(&[std::sync::Arc::clone(&a)]);
+            assert_eq!(
+                super::changed_instance(&a),
+                None,
+                "the request judged a: its own judgement wins over the worker's b"
+            );
+            assert!(super::changed_instance(&b).is_some());
+        }),
+    )
+    .await;
+}
+
+/// MIK-8498 VISIBLE.1: `recorded_in_scope` tells "no memo" apart from "a
+/// memo with nothing recorded", the distinction `tool_visible_to`'s three
+/// branches read.
+#[tokio::test]
+async fn recorded_in_scope_tells_no_memo_from_an_empty_one() {
+    use super::{Scoped, recorded_in_scope};
+    assert!(matches!(recorded_in_scope("s", "t"), Scoped::NoMemo));
+    with_visibility_memo(async {
+        assert!(matches!(recorded_in_scope("s", "t"), Scoped::InMemo(None)));
+        record_visibility("s", "t", SCHEMA);
+        assert!(matches!(
+            recorded_in_scope("s", "t"),
+            Scoped::InMemo(Some(SCHEMA))
+        ));
+        assert!(matches!(recorded_in_scope("s", "u"), Scoped::InMemo(None)));
+    })
+    .await;
+}

@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Bounded HTTP/backend fixtures and owned gateway child processes.
 
+#[path = "../common/yaml.rs"]
+mod yaml;
+
 #[path = "../common/gateway_bin.rs"]
 mod gateway_bin;
 
@@ -183,7 +186,7 @@ pub fn write_config(root: &Path, backend_url: &str) -> PathBuf {
     let path = root.join("gateway.yaml");
     mcp_gateway::gateway::test_helpers::write_owner_only(
         &path,
-        serde_yaml::to_string(&config).expect("the gateway's own config type serializes to YAML"),
+        yaml::to_string(&config).expect("the gateway's own config type serializes to YAML"),
     )
     .expect("the config is written inside the test's own temp root");
     path

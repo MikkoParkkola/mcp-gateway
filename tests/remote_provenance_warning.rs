@@ -4,6 +4,9 @@
 //! startup WARN and in `doctor`. The config leaves `remote_server_signing` out
 //! entirely, so what loads is the shipped default.
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 use stdio_session::gateway_bin;
 
 use std::path::Path;
@@ -21,7 +24,7 @@ use stdio_session::StdioSession;
 const CONFIG: &str = "backends:\n  api:\n    http_url: \"http://127.0.0.1:9/mcp\"\n";
 
 fn expected_warning() -> String {
-    let config: Config = serde_yaml::from_str(CONFIG).expect("config parses");
+    let config: Config = yaml::from_str(CONFIG).expect("config parses");
     config
         .remote_provenance_warning()
         .expect("the backend runs unverified")

@@ -336,7 +336,7 @@ impl StdioChild {
         let config_path = directory.path().join("gateway.yaml");
         mcp_gateway::gateway::test_helpers::write_owner_only(
             &config_path,
-            serde_yaml::to_string(config).expect("config YAML"),
+            yaml::to_string(config).expect("config YAML"),
         )
         .expect("write config");
         let mut command = signing_gateway::child_command(directory.path(), &config_path);

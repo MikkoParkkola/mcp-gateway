@@ -203,7 +203,7 @@ impl MetaMcp {
             .scoped(scope.authorizer.backend_grant())
             .absence(server)
         {
-            crate::gateway::meta_mcp::visible::record_absent(server, tool);
+            crate::gateway::meta_mcp::visible::memo::record_absent(server, tool);
             return Ok(match absence {
                 Absence::OutOfScope => self
                     .authorize_route_target(scope, (server, tool), arguments)
@@ -249,7 +249,7 @@ impl MetaMcp {
                 let withheld = crate::gateway::meta_mcp::visible::Visibility::Withheld(
                     crate::gateway::meta_mcp::visible::Withholding::Refused,
                 );
-                crate::gateway::meta_mcp::visible::record_visibility(server, tool, withheld);
+                crate::gateway::meta_mcp::visible::memo::record_visibility(server, tool, withheld);
                 Ok(Some(refusal))
             }
         }

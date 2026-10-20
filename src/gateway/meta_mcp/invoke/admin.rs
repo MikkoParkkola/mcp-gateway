@@ -390,7 +390,7 @@ impl MetaMcp {
         };
         // MIK-8154 C2e: intake judged the sanitize exemption on one definition;
         // a different one (reloaded since) is refused, never run under it.
-        if crate::gateway::meta_mcp::visible::judged_playbook().is_some_and(|judged| {
+        if crate::gateway::meta_mcp::visible::memo::judged_playbook().is_some_and(|judged| {
             judged != crate::gateway::meta_mcp::passthrough::playbook_digest(&definition)
         }) {
             return Err(Error::json_rpc(-32000, PLAYBOOK_CHANGED));

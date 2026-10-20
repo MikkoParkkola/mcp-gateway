@@ -231,9 +231,11 @@ impl MetaMcp {
         };
         // Unkeyed likewise: admission never replays one, so the lift could
         // never meet it either.
-        let Some(key) =
-            super::super::visible::deferred_replay_key(&target.server, &target.tool, caller.retry)
-        else {
+        let Some(key) = super::super::visible::deferred::deferred_replay_key(
+            &target.server,
+            &target.tool,
+            caller.retry,
+        ) else {
             return Some((response, audit));
         };
         if !self.stored_replay_defers(
@@ -244,9 +246,9 @@ impl MetaMcp {
             return Some((response, audit));
         }
         let id = response.id.clone();
-        let recorded = super::super::visible::record_deferred_replay(
+        let recorded = super::super::visible::memo::record_deferred_replay(
             key,
-            super::super::visible::DeferredReplay {
+            super::super::visible::deferred::DeferredReplay {
                 response,
                 audit,
                 tool_name: tool_name.to_owned(),
