@@ -175,7 +175,7 @@ pub struct ProviderConfig {
 
 fn resolved_endpoint(endpoint: &str, base_url: &str, path: &str) -> String {
     if endpoint.is_empty() {
-        format!("{}{}", base_url, path)
+        format!("{base_url}{path}")
     } else {
         endpoint.to_string()
     }
