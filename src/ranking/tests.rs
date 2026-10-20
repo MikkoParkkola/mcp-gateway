@@ -566,3 +566,52 @@ fn the_safety_signal_is_zero_for_every_label_the_risk_signal_zeroes() {
         }
     }
 }
+
+#[test]
+fn the_other_risk_and_safety_arms_are_unchanged() {
+    assert_eq!(
+        parse_risk_signal(&serde_json::json!({"risk_level": "Medium"})),
+        0.65
+    );
+    assert_eq!(
+        parse_risk_signal(&serde_json::json!({"risk": "elevated"})),
+        0.65
+    );
+    assert_eq!(
+        parse_risk_signal(&serde_json::json!({"risk_level": "LOW"})),
+        0.9
+    );
+    assert_eq!(
+        parse_risk_signal(&serde_json::json!({"risk_level": "unknown"})),
+        1.0
+    );
+    assert_eq!(
+        parse_risk_signal(&serde_json::json!({"risk_level": 3})),
+        1.0
+    );
+    assert_eq!(
+        parse_risk_signal(&serde_json::json!({"risk_fit": 0.4})),
+        0.4
+    );
+    assert!((parse_risk_signal(&serde_json::json!({"risk_score": 0.3})) - 0.7).abs() < 1e-9);
+    assert_eq!(
+        parse_safety_signal(&serde_json::json!({"unsafe": true})),
+        0.0
+    );
+    assert_eq!(
+        parse_safety_signal(&serde_json::json!({"safety_score": 0.4})),
+        0.4
+    );
+    assert_eq!(
+        parse_safety_signal(&serde_json::json!({"risk_level": "Medium", "safety_score": 0.4})),
+        0.4
+    );
+    assert_eq!(
+        parse_safety_signal(&serde_json::json!({"risk_level": "HIGH", "safety_score": 0.9})),
+        0.0
+    );
+    assert_eq!(
+        parse_safety_signal(&serde_json::json!({"risk_level": 3})),
+        1.0
+    );
+}
