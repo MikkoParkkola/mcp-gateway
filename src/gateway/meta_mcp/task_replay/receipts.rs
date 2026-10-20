@@ -10,25 +10,53 @@ use crate::protocol::tasks::TaskStatus;
 
 impl MetaMcp {
     /// Stage the receipt a read of `stored` renews: its result, its pending
-    /// input requests, or (MIK-7887) the peer's own error of a failed task. A
-    /// multi-target task, an error the gateway wrote or whose author is not
-    /// established, and a working or cancelled task stage nothing.
+    /// input requests, or (MIK-7887) the peer's own error of a failed task.
+    /// A completed multi-target task, and a completed plan task on one
+    /// distinct target, stage their stored plan receipts (`MIK-8408`); an
+    /// error the gateway wrote or whose author is not established, and a
+    /// working or cancelled task stage nothing.
     pub(crate) fn stage_stored_receipt(
         &self,
         who: super::super::invoke::relay::RelayKey<'_>,
         api_key_name: Option<&str>,
         stored: &CommittedTask,
     ) {
-        let [target] = stored.targets.as_slice() else {
-            return;
-        };
         if !self.relay_active() || !stored.serves_backend_output() {
             return;
         }
+        let [target] = stored.targets.as_slice() else {
+            if stored.task.status() == TaskStatus::Completed {
+                // As the single-target arm: the stored result's gateway
+                // members are restored, so the final pass keeps each
+                // replayed receipt to the backend text only.
+                super::super::invoke::gateway_writes::restore(&stored.gateway_writes);
+                super::super::invoke::relay::stage_task_replay(self, who, stored);
+            }
+            return;
+        };
         let to = (target.server.as_str(), target.tool.as_str());
         match stored.task.status() {
             TaskStatus::Completed => {
-                if let Some(result) = stored.backend_result() {
+                if matches!(
+                    stored.task.tool(),
+                    "gateway_execute" | "gateway_run_playbook"
+                ) {
+                    // A plan whose steps all ran on one distinct target:
+                    // the deduplicated targets record a single target, but
+                    // the task is still a plan, so it takes the plan replay
+                    // as the multi-target arm does. Only a missing replay
+                    // entry (a restart, an eviction, a detection-off
+                    // delivery) falls back to the single-target receipt,
+                    // which the writes restored above it already serve, so
+                    // it renews exactly what it renewed before.
+                    super::super::invoke::gateway_writes::restore(&stored.gateway_writes);
+                    if super::super::invoke::relay::stage_task_replay(self, who, stored) {
+                        return;
+                    }
+                    if let Some(result) = stored.backend_result() {
+                        self.stage_relay_receipt(who, to, result);
+                    }
+                } else if let Some(result) = stored.backend_result() {
                     // MIK-7993.STORE.1: the members the gateway wrote into the
                     // stored result are its own text; restored into this
                     // read's record, the receipt (and its rebuild from what

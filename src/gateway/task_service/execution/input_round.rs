@@ -182,6 +182,27 @@ impl<'a> Settling<'a> {
             .executor
             .settle_cas_with(ids, outcome, writes, cancel_rx)
             .await;
+        // `MIK-8408` E1: the settled row's own key, read back because a
+        // lost compare-and-set settles at a later revision than this
+        // worker read (the settle API returns only whether backend
+        // output was stored, never the settled revision). Only with
+        // relay detection on: the detection-off path does no extra
+        // store read. The re-read is safe against a concurrent
+        // cancel/delete/resume: the row just settled is terminal, the
+        // first terminal commit wins and no later transition moves it,
+        // so its revision cannot advance under different content (an
+        // expiry removal only makes the read fail, capturing nothing).
+        if dispatched
+            && stored
+            && self.state.meta_mcp().relay_active()
+            && let Ok(settled) = self.executor.service.get(self.principal, self.id)
+        {
+            crate::gateway::meta_mcp::invoke::relay::note_task_capture(
+                self.id.to_owned(),
+                settled.revision,
+                settled.task.ttl_ms(),
+            );
+        }
         self.state
             .meta_mcp()
             .commit_staged_relay(dispatched && stored);

@@ -70,7 +70,7 @@ impl StdioAnswer {
             Self::Finalized(answer) => {
                 let (response, settle) = answer.split();
                 let frame = crate::gateway::outbound::answer(None, None, response, None, None);
-                deliver(meta, frame, session_id, settle, None).await
+                deliver(meta, frame, session_id, settle, None).await.0
             }
         }
     }
@@ -111,10 +111,12 @@ impl super::Gateway {
         reads: &StdioReads,
         session_id: &str,
         (answer, params, hidden): (StdioAnswer, Option<&Value>, Option<&ReadAttribution>),
-        staged: StagedReceipts,
+        mut staged: StagedReceipts,
     ) -> OutboundFrame {
-        let frame = match answer {
-            StdioAnswer::Built(value) => reads.answer(value, params, hidden).await,
+        let (frame, retained) = match answer {
+            // Built by the gateway before anything ran: admission
+            // retained no answer for it, so it captures nothing (E1).
+            StdioAnswer::Built(value) => (reads.answer(value, params, hidden).await, false),
             StdioAnswer::Finalized(answer) => {
                 let (response, settle) = answer.split();
                 let frame = reads.judge(response, params, hidden);
@@ -123,6 +125,11 @@ impl super::Gateway {
                 deliver(meta, frame, session_id, settle, hidden.cloned()).await
             }
         };
+        // `MIK-8408` E1: an answer admission did not retain captures no
+        // replay receipts; its live receipts still record below.
+        if !retained {
+            staged.drop_replay_capture();
+        }
         staged.commit(frame.delivers_result());
         frame
     }
@@ -130,14 +137,17 @@ impl super::Gateway {
 
 /// Record the delivery of the judged `frame` (`POST /mcp`'s recorder), then
 /// settle the execution on the answer the record left: the finalized one, or
-/// the audit-unavailable refusal when the log refused the record.
+/// the audit-unavailable refusal when the log refused the record. The second
+/// value is whether admission retained the delivery — `true` only when a
+/// lease settled `Retained` (E1: only a stored answer captures replay
+/// receipts), never for a delivery with no execution to settle.
 async fn deliver(
     meta: &MetaMcp,
     frame: OutboundFrame,
     session_id: &str,
     settle: Settle,
     read: Option<ReadAttribution>,
-) -> OutboundFrame {
+) -> (OutboundFrame, bool) {
     let correlation = ResponseCorrelation {
         session_id,
         caller: "stdio",
@@ -148,8 +158,50 @@ async fn deliver(
     let (frame, stored) =
         crate::gateway::router::record_judged_delivery(meta, frame, &correlation, settle.stored)
             .await;
-    if let (Some(execution), Some(stored)) = (settle.execution, stored) {
-        execution.complete_delivery_read(&stored, settle.signing.as_ref(), (read, settle.writes));
+    let retained = match (settle.execution, stored) {
+        (Some(execution), Some(stored)) => execution.complete_delivery_read(
+            &stored,
+            settle.signing.as_ref(),
+            (read, settle.writes),
+        ),
+        _ => false,
+    };
+    (frame, retained)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::protocol::RequestId;
+
+    /// D18 (`MIK-8408` E1): a stdio delivery with no execution to settle
+    /// was retained by no admission, so `deliver` reports it unretained
+    /// and `judge_and_commit` drops its replay capture: only an answer
+    /// admission actually stored captures replay receipts.
+    /// Mutant killed: `_ => true` (retained with no execution).
+    #[tokio::test]
+    async fn d18_a_delivery_with_no_execution_is_not_retained() {
+        let meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
+        let response = JsonRpcResponse::success(
+            RequestId::Number(1),
+            json!({"content": [{"type": "text", "text": "answer"}], "isError": false}),
+        );
+        let frame = crate::gateway::outbound::answer(None, None, response, None, None);
+        let settle = Settle {
+            tool: "gateway_execute".to_owned(),
+            execution: None,
+            signing: None,
+            stored: None,
+            writes: WriteRecord::default(),
+        };
+        let (_frame, retained) = deliver(&meta, frame, "stdio-d18", settle, None).await;
+        assert!(
+            !retained,
+            "a delivery admission did not retain must capture no replay entry"
+        );
     }
-    frame
 }

@@ -22,6 +22,19 @@ pub(crate) const RESULT_LIMIT: usize = 512 * 1_024;
 pub(crate) const TOTAL_RESULT_LIMIT: usize = 128 * 1_024 * 1_024;
 pub(crate) const RETENTION_SECS: u64 = 24 * 60 * 60;
 
+/// The domain separator of the admission identity hash: the one spelling
+/// every recomputation of an admission identity must use (a sync replay
+/// key recomputes the identity from the same request, `MIK-8408` F1), so
+/// the identity has exactly one definition.
+pub(crate) const ADMISSION_IDENTITY_DOMAIN: &str = "mcp-gateway.execution-admission.v1";
+
+/// The admission identity of `(principal, key)`: the canonical-JSON hash
+/// [`Request::prepare`] keys its entry under, shared by every caller that
+/// must recompute that identity from the same request.
+pub(crate) fn admission_identity(principal: &str, key: &str) -> String {
+    canonical_json_sha256(&json!([ADMISSION_IDENTITY_DOMAIN, principal, key]))
+}
+
 // MIK-7991: the invoke-path idempotency entry completes before this one and
 // may not outlive it, so a keyed re-issue is normally answered here first.
 // This clock counts whole wall-clock seconds, so its truncation or a forward
@@ -217,11 +230,7 @@ impl Request<'_> {
         }
         let operation = canonical_json_sha256(self.operation);
         let representation = canonical_json_sha256(self.representation);
-        let identity = canonical_json_sha256(&json!([
-            "mcp-gateway.execution-admission.v1",
-            self.principal,
-            self.key
-        ]));
+        let identity = admission_identity(self.principal, self.key);
         Ok((
             identity,
             Entry {

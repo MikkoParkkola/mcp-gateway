@@ -98,6 +98,21 @@ pub(super) async fn settle_followed(
             cancel_rx,
         )
         .await;
+    // `MIK-8408` E1: capture under the settled row's own key, as the
+    // input-round settlement does, and only with relay detection on:
+    // the detection-off path does no extra store read. A
+    // single-target followed result has no in-plan receipt, so its
+    // commit captures nothing.
+    if stored
+        && state.meta_mcp().relay_active()
+        && let Ok(settled) = executor.service.get(followed.principal, id)
+    {
+        crate::gateway::meta_mcp::invoke::relay::note_task_capture(
+            id.to_owned(),
+            settled.revision,
+            settled.task.ttl_ms(),
+        );
+    }
     state.meta_mcp().commit_staged_relay(stored);
 }
 

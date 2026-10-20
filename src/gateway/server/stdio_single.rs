@@ -339,8 +339,10 @@ impl Gateway {
         if meta_mcp.relay_active() {
             return meta_mcp.collecting_staged(Box::pin(dispatch)).await;
         }
+        // `MIK-8408` D5: with detection off nothing is staged, but what
+        // the gateway writes into a stored answer is still noted.
         (
-            dispatch.await,
+            crate::gateway::meta_mcp::invoke::relay::collecting_writes(dispatch).await,
             crate::gateway::meta_mcp::invoke::relay::StagedReceipts::none(),
         )
     }
