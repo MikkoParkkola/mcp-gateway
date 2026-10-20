@@ -565,6 +565,9 @@ fn the_hatch_does_not_restore_header_over_proof() {
 fn percent_decode_handles_encoded_chars() {
     assert_eq!(percent_decode("a%20b"), Some("a b".to_string()));
     assert_eq!(percent_decode("plain"), Some("plain".to_string()));
+    // `+` is not a space here, and a malformed escape stays literal text.
+    assert_eq!(percent_decode("a+b"), Some("a+b".to_string()));
+    assert_eq!(percent_decode("a%zz%2"), Some("a%zz%2".to_string()));
 }
 
 #[test]
