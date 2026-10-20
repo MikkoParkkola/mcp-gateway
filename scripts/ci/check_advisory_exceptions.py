@@ -15,7 +15,10 @@ instead time-boxes exceptions with `[[IgnoredVulns]]` entries carrying
 This check requires every id ignored in `.cargo/audit.toml` to appear
 in `.github/osv-scanner.toml` with an `ignoreUntil` that has not
 passed, and requires the 1.x line of webpki-roots in `Cargo.lock` to
-stay at or above the patched floor below.
+stay at or above the patched floor below. Any webpki-roots version
+outside that floored line must be an exact version in the shim list
+below; any other version fails, since it could bundle its own
+unpatched certificate list hidden by the per-advisory ignore.
 
   check_advisory_exceptions.py
   check_advisory_exceptions.py --self-test
@@ -31,6 +34,16 @@ from pathlib import Path
 # unpatched 1.0.x: cargo-audit ignores are per advisory id, so without
 # a floor the 0.26 shim exception would also hide a vulnerable 1.0.x.
 FLOORS = {"webpki-roots": (1, 0, 10)}
+
+# These are the only versions whose major is not the floor's major
+# (below it, for the entry listed) that the exception covers, because
+# they are verified re-export shims of the floored major with no
+# certificates of their own: webpki-roots 0.26.11, sha256
+# 521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9,
+# `pub use parent::TLS_SERVER_ROOTS;`, MIK-8577. Any other version
+# outside the floored line could bundle a real, unpatched certificate
+# list that the per-advisory ignore would hide, so it must fail.
+SHIMS = {"webpki-roots": {"0.26.11"}}
 
 
 def floor_problems(lock: dict) -> list[str]:
@@ -55,6 +68,11 @@ def floor_problems(lock: dict) -> list[str]:
             problems.append(f"{name} {version}: unparseable version")
             continue
         if not parsed or parsed[0] != floor[0]:
+            if version not in SHIMS.get(name, set()):
+                problems.append(
+                    f"{name} {version}: not the floored {floor[0]}.x line "
+                    f"and not a listed re-export shim"
+                )
             continue
         if "-" in core:
             problems.append(
@@ -140,6 +158,9 @@ def self_test() -> int:
         ("webpki-roots 1.0.10 passes", lock("1.0.10"), True),
         ("webpki-roots 1.0.11 passes", lock("1.0.11"), True),
         ("webpki-roots 0.26.11 passes", lock("0.26.11"), True),
+        ("webpki-roots 0.26.10 fails", lock("0.26.10"), False),
+        ("webpki-roots 0.25.4 fails", lock("0.25.4"), False),
+        ("webpki-roots 2.0.0 fails", lock("2.0.0"), False),
         ("webpki-roots 1.0.9 fails", lock("1.0.9"), False),
         ("webpki-roots 1.0.10-alpha fails", lock("1.0.10-alpha"), False),
         ("no webpki-roots passes", {"package": [{"name": "other", "version": "0.1.0"}]}, True),
