@@ -330,38 +330,40 @@ Consequences:
 
 ## H2. The in-memory entry carries its calls
 
-`ReplayReceipts` entry = the F2 snapshot plus `calls: Vec<(label: Option<u32>, server, tool)>`, taken at the same commit point from the live run (the labels `plan_step` gave each dispatch). Bounded with the entry (the 1 MiB entry cap and the 32 MiB total, E1); an entry over the cap is not stored and counted, as before (G34). This is the d3 D1(i) list, kept in memory instead of on disk.
+`ReplayReceipts` entry = the F2 snapshot plus `calls: Vec<(label: Option<u32>, server, tool)>`, taken at the same commit point from the live run. The label is captured where the call is dispatched: beside `dispatch_log::note_completed` (grant_audit.rs, under the same `Forbidden` rule), `PLAN_STEP`'s current label is noted with `(server, tool)` into a per-delivery list (on the request path as well as in a task worker, unlike `DispatchLog`, which is worker-only). `note_completed` itself and `Record.targets` are unchanged. Like the rest of the entry, `calls` exists only when relay detection was on at delivery (E1); with detection off there is no entry and nothing to stage. Bounded with the entry (the 1 MiB entry cap and the 32 MiB total, E1); an entry over the cap is not stored and counted, as before (G34). This is the d3 D1(i) list, kept in memory instead of on disk.
 
 ## H3. A nested step renews one receipt per inner call (MIK-8409.NESTED.1-3)
 
 d3 E2 step 4 and F5 staged nothing for a label with more than one distinct call, because d2/d3 rebuilt receipts from stored text: the stored provenance had only the outer member's text, and staging it under each inner call would have given an undue same-source excuse (MIK-8409 context). Under E1/F2 that reconstruction is gone: the snapshot is each receipt exactly as live committed it.
 
 Live already keeps one receipt per inner call over that call's own text:
-- retention keeps a leaf in a receipt only when it carries the step's label **and** is in that receipt's own output (`collusion_runs.rs`, `delivered.label(i) == step && whole.contains(..)`), so an inner call's receipt never holds another inner call's text, unless the two outputs contain the same text, in which case live grants the same;
+- retention keeps in a receipt only leaves equal to text that receipt's own call staged, each at most as often as the call staged it (`collusion_digest.rs` `retaining_deferred`: the `whole` set and the per-leaf `left` count; MIK-8251). The step's label sets the order (its own span first, then elsewhere, MIK-8209 K7); it is not a filter. Run fingerprints are taken only over leaves that are labelled and in the receipt's own output (`collusion_runs.rs`). So an inner call's receipt holds only text equal to what that call produced. When two inner calls produced equal text, live already keeps it under each, and replay grants exactly that, never more;
 - subset seams are attributed only when exactly one receipt of the step keeps every piece (`relay_seams_record.rs`, `add_subset_seams`, #3726 p1).
 
-So replay stages a nested step's receipts like any other: each snapshot receipt under its own source and its own label. E2 step 4 is withdrawn. F5 is narrowed: seam receipts (`step: None`, composite sources) of an entry whose `calls` show a nested label are still dropped and counted (`reason=nested_seam`), because a composite seam over nested text was never reviewed for exact-source excuses; this is the one remaining nested limit, stated in the changelog.
+So replay stages a nested step's receipts like any other: each snapshot receipt under its own source and its own label. E2 step 4 is withdrawn. F5 stands for seams, whole-entry, unchanged: if an entry's `calls` show any label with more than one distinct call, every seam receipt of that entry (`step: None`, composite sources) is dropped and counted (`reason=nested_seam`), not only seams touching the nested label. A composite seam over nested text was never reviewed for exact-source excuses, and seams carry no label to match against `calls`; this is the one remaining nested limit, stated in the changelog.
 
 NESTED.3's bound and drop-whole-and-count policy are the entry's: every inner receipt counts against the 1 MiB entry cap and the 32 MiB total; an entry over the cap drops whole, counted.
 
-The MIK-8409 fail-fast still applies: the NESTED.1 row must be red on the line first. If an inner answer is projected into the outer output with no member boundary, live keeps nothing for it, and replay copies that: renewal for that shape stays out, as live.
+The MIK-8409 fail-fast still applies: the NESTED.1 row must be red on the line first. Its second clause (an inner answer projected with no member boundary) no longer stops the design: the snapshot does not depend on member boundaries; whatever live kept for that shape, replay keeps, and no more.
 
 ## H4. Rows
 
 Withdrawn (they test persisted steps, a version bump or `executed_steps`): G5, G7a-c and the steps bounds, G8, G14, G15-G17 and G15b-e, G19, G28, G43's provenance tier, and G32's "steps still loads" clause. G9 stays as a guard that no new version is written: a fresh row is created at version 9 (`BINDING_VERSION`).
 
-Retargeted to the in-memory `calls` (same setup, same expectation, the list read from the entry): G18, G20, G21, G44.
+G43 is withdrawn whole: its only new tier was provenance; the other tiers (writes-stripped, bounded) are existing `settle_durable` behaviour with their own store tests. G32 stands without its "steps still loads" clause: a restart stages nothing, counted `reason=absent`. G20 is withdrawn: with detection off there is no entry (E1), and G25 already pins that a detection-off plan renews nothing.
+
+Retargeted to the in-memory `calls` (same setup, same expectation, the list read from the entry, detection on): G18, G21, G44.
 
 New or rewritten:
-- N1 (NESTED.1, red first): alice runs a playbook whose step 1 runs a two-call chain (S1 sensitive, S2 plain); relay window lapses; alice re-reads; bob relaying S1's text → -32002. Task path and keyed sync.
+- N1 (NESTED.1, red first): alice runs a playbook whose step 1 runs a two-call chain (S1 sensitive, S2 plain); relay window lapses; alice re-reads; bob relaying S1's text → -32002, and alice relaying S2's text to S2's source keeps her same-source excuse (both inner receipts renew). Task path, keyed sync over HTTP and over stdio. Mutants: skip staging for a nested label (the withdrawn E2 step 4); stage only the first inner receipt of a label.
 - N2 (NESTED.2, guard): in that replay, S2's staged receipt holds no fingerprint of S1's text and S1's none of S2's. Mutant: stage the label's whole text under each inner call.
-- N3 (NESTED.3): an entry whose inner receipts push it past the 1 MiB cap is not stored, counted; the other entries still renew.
+- N3 (NESTED.3): an entry whose inner receipts push it past the 1 MiB cap is not stored, counted; the other entries still renew. Mutants: leave inner receipts out of the entry's byte count; truncate the entry instead of dropping it whole.
 - G6/G40 (rewritten): a nested label's inner receipts are staged under their own sources; a seam receipt touching the nested label is not staged, counted `reason=nested_seam`. Mutant: stage the seam.
-- G45: no version change. A plan task row created on this branch loads in a build with `MAX_LOADABLE_VERSION = BINDING_VERSION` and is written at version 9. Mutant: bump the version.
+- G48: no version change. A plan task row created on this branch loads in a build with `MAX_LOADABLE_VERSION = BINDING_VERSION` and is written at version 9. Mutant: bump the version.
 
-R1-R9, C1, G1-G4, G10-G13, G25-G27, G29-G31, G33-G42 stand.
+R1-R9, C1, G1-G4, G10-G13, G25-G27, G29-G31, G32 (as amended above), G33-G42 and G45-G47 stand.
 
 ## H5. Changelog and upgrade note
 
-- Changelog: replayed plans renew relay receipts per step, nested steps included; limits: restart, eviction, detection off at delivery, nested seams.
+- Changelog: replayed plans renew relay receipts per step, nested steps included; limits: restart, eviction, detection off at delivery, and every seam of a plan that has a nested step.
 - Upgrade note: no format change, no new rollback step (the v9 procedure of `upgrading.d/8440.md` applies).
