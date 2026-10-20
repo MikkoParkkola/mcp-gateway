@@ -15,10 +15,11 @@
 //! budget counts fingerprint and text bytes plus a per-item estimate
 //! ([`REPLAY_ITEM_OVERHEAD`]); struct layout, spare capacity, the keys and
 //! the index are not counted, so actual memory can run somewhat above it
-//! (conservative accounting: MIK-8550). The entry cap is reached only by a
-//! task re-read with `tasks.max_record_bytes` raised: a keyed sync replay
-//! serves at most `RESULT_LIMIT` (512 KiB, fixed) and a task re-read at most
-//! `tasks.max_record_bytes` (default 512 KiB).
+//! (conservative accounting: MIK-8550). The entry cap bounds that counted
+//! size, not the answer: a keyed sync replay serves at most `RESULT_LIMIT`
+//! (512 KiB, fixed) and a task re-read at most `tasks.max_record_bytes`
+//! (default 512 KiB), yet an answer of many small segments can count past
+//! 1 MiB under those limits, and its entry is then not stored (`too_large`).
 //!
 //! One store sits beside each relay detector and is shared wherever the
 //! detector is shared (F6). Its lock is its own: nothing in here calls the
