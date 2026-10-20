@@ -41,6 +41,14 @@ def cpu_ticks(pid: int) -> int:
     return int(fields[11]) + int(fields[12])  # utime, stime: stat fields 14, 15
 
 
+def rss_kb(pid: int) -> int:
+    """The gateway's resident set size, from /proc/PID/status (VmRSS, kB)."""
+    for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+        if line.startswith("VmRSS:"):
+            return int(line.split()[1])
+    raise SystemExit(f"VOID: no VmRSS for pid {pid}")
+
+
 def drive(port: int, calls: int, rate: float) -> list[str]:
     """Send `calls` answered calls; any failure, raised or answered, is listed.
     A short count is a failure too: CPU is divided by `calls`, so a thread that
@@ -107,9 +115,11 @@ def measure(port: str, pid: str, warmup: str, calls: str, rate: str, out: str) -
         idle = (alloc_counts()[0] - before[0]) / 5
     time.sleep(0.2)  # two counter rewrites, so the start read is current
     counts0 = alloc_counts()
+    rss0 = rss_kb(pid_n)
     start, t0 = cpu_ticks(pid_n), time.monotonic()
     errors = drive(port_n, calls_n, rate_f)
     ticks, wall = cpu_ticks(pid_n) - start, time.monotonic() - t0
+    rss1 = rss_kb(pid_n)
     time.sleep(0.2)
     counts1 = alloc_counts()
     if errors:
@@ -119,7 +129,10 @@ def measure(port: str, pid: str, warmup: str, calls: str, rate: str, out: str) -
     row = {"calls": calls_n, "ticks": ticks, "clk_tck": clk, "wall_s": round(wall, 2),
            "achieved_rps": round(calls_n / wall, 1),
            "load1": float(Path("/proc/loadavg").read_text().split()[0]),
-           "us_per_call": ticks / clk * 1e6 / calls_n}
+           "us_per_call": ticks / clk * 1e6 / calls_n,
+           # MIK-8504.SESS.3: RSS growth over the measured calls.
+           "rss_kb_start": rss0, "rss_kb_end": rss1,
+           "rss_bytes_per_call": (rss1 - rss0) * 1024 / calls_n}
     if counts0 is not None:
         allocs, reallocs, nbytes = (b - a for a, b in zip(counts0, counts1))
         row.update({"idle_allocs_per_s": idle, "allocs_per_call": allocs / calls_n,
