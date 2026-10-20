@@ -210,16 +210,15 @@ pub(in crate::gateway::router::handlers) async fn intake(
     crate::gateway::meta_mcp::grant_audit::note_answer_id(raw_id.as_ref());
     // MIK-8382 intake: judged on the request as sent, before signing capture
     // takes its id off (restored later); answered after the chain nonce.
-    let intake_error = intake_judgement(
-        state,
-        &request,
-        (
-            verified_identity.as_ref(),
-            oauth_agent_identity.as_ref(),
-            cert_identity.as_ref(),
-        ),
-        (grant_subject.as_ref(), client.as_ref()),
-    );
+    let task_caller = tasks::owner::TaskCaller {
+        verified_identity: verified_identity.as_ref(),
+        agent: oauth_agent_identity.as_ref(),
+        subject: grant_subject.as_ref(),
+        cert: cert_identity.as_ref(),
+        client: client.as_ref(),
+    };
+    let owners = tasks::owner::route_owners(state, &task_caller);
+    let intake_error = intake_judgement(state, &request, &task_caller, &owners);
     // Hardened signs every `tools/call` here, not only `gateway_invoke`
     // (GH1942.HARDEN.1 row 7).
     let mut signing_context = state.meta_mcp.signing_enabled().then(|| {
@@ -551,18 +550,8 @@ pub(in crate::gateway::router::handlers) async fn intake(
         ));
     }
 
-    // Resolved ONCE, here, and reused by creation, retrieval, cancellation,
+    // Resolved ONCE, above, and reused by creation, retrieval, cancellation,
     // idempotent replay and subscription ownership below.
-    let (owner, events_owner, admission_owner) = tasks::route_owners(
-        state,
-        verified_identity.as_ref(),
-        oauth_agent_identity.as_ref(),
-        (
-            grant_subject.as_ref(),
-            cert_identity.as_ref(),
-            client.as_ref(),
-        ),
-    );
 
     // An empty owner key is not an identity (`task_owner_key`); the firewall
     // refuses on it too. On a gateway that HAS identities, every credential-less
@@ -572,7 +561,7 @@ pub(in crate::gateway::router::handlers) async fn intake(
     // Auth DISABLED is not a defect: a validated agent JWT owns its tasks apart
     // (`route_task_owner`) and every other caller shares one pool, the
     // operator's own choice (`anonymous_client`) that a refusal would break.
-    let unattributed = owner.is_empty() && state.auth_config.enabled;
+    let unattributed = owners.task.is_empty() && state.auth_config.enabled;
 
     // The refusal names nothing. An unattributed caller must not be able to
     // tell "no task here is yours" from "that task does not exist", which is
@@ -614,8 +603,10 @@ pub(in crate::gateway::router::handlers) async fn intake(
     if method == "subscriptions/listen" {
         let ids = listened_task_ids(params);
         if !ids.is_empty() {
-            let caller_holds_ids =
-                !unattributed && state.tasks.owns_all(&owner, ids.iter().map(String::as_str));
+            let caller_holds_ids = !unattributed
+                && state
+                    .tasks
+                    .owns_all(&owners.task, ids.iter().map(String::as_str));
             narrowed_listen = params.cloned();
             if let Some(map) = narrowed_listen.as_mut().and_then(Value::as_object_mut) {
                 map.entry("notifications").or_insert_with(|| json!({}));
@@ -665,28 +656,15 @@ pub(in crate::gateway::router::handlers) async fn intake(
             declared_capabilities,
             protocol_revision_owned,
             header_profile,
-            owner,
-            events_owner,
-            admission_owner,
+            owner: owners.task,
+            events_owner: owners.events,
+            admission_owner: owners.admission,
             _inflight_permit: inflight_permit,
             _session_hold: session_hold,
             session_degraded,
         },
     ))
 }
-
-/// The caller's proven identities, as the request carries them.
-type Proven<'r> = (
-    Option<&'r VerifiedIdentity>,
-    Option<&'r OAuthAgentIdentity>,
-    Option<&'r CertIdentity>,
-);
-
-/// What the caller presented: its grant subject and its credential.
-type Presented<'r> = (
-    Option<&'r crate::identity_grants::GrantSubject>,
-    Option<&'r AuthenticatedClient>,
-);
 
 /// MIK-8382 UNIFY.1a′: whether the `/mcp` intake refuses this request, a
 /// keyed `tools/call` with an id from a caller with no execution principal,
@@ -696,8 +674,8 @@ type Presented<'r> = (
 pub(super) fn intake_judgement(
     state: &AppState,
     request: &Value,
-    (verified_identity, oauth_agent_identity, cert_identity): Proven<'_>,
-    (grant_subject, client): Presented<'_>,
+    task_caller: &tasks::owner::TaskCaller<'_>,
+    owners: &tasks::owner::TaskOwners,
 ) -> Option<crate::Error> {
     // Lead ruling 2026-10-17 (B): a gateway with authentication off keeps
     // pooled anonymous task ownership (MIK-7272.TASK.1.20, design 2026-09-08),
@@ -709,19 +687,16 @@ pub(super) fn intake_judgement(
     if !state.auth_config.enabled && task.is_some() {
         return None;
     }
-    let (_, _, owner) = tasks::route_owners(
-        state,
-        verified_identity,
-        oauth_agent_identity,
-        (grant_subject, cert_identity, client),
+    let caller_key = crate::gateway::router::identity::caller_key(
+        task_caller.subject,
+        task_caller.cert,
+        task_caller.client,
     );
-    let caller_key =
-        crate::gateway::router::identity::caller_key(grant_subject, cert_identity, client);
     crate::gateway::meta_mcp::intake_refusal(
         request,
-        crate::gateway::meta_mcp::AdmissionOwner::routed(&owner),
-        client.map(|client| client.principal.as_str()),
-        grant_subject,
+        crate::gateway::meta_mcp::AdmissionOwner::routed(&owners.admission),
+        task_caller.client.map(|client| client.principal.as_str()),
+        task_caller.subject,
         Some(caller_key.as_str()).filter(|key| !key.is_empty()),
     )
 }

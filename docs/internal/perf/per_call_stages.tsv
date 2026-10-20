@@ -506,7 +506,6 @@ src/gateway/router/handlers/tasks/owner.rs	session_owner_key	http_invoke_tiny	re
 src/gateway/router/handlers/tasks.rs	task_frames	-	subscriptions/listen task notifications only, not the tools/call path
 src/gateway/router/handlers/tasks.rs	task_intent_for_call	-	on-path, untimed: task-augmented calls only (a task member in params); the timed rows carry none
 src/gateway/router/handlers/tasks/owner.rs	task_owner_key	http_invoke_tiny	resolved at intake on every HTTP request (via route_owners)
-src/gateway/router/handlers/tasks/owner.rs	task_principal	-	on-path, untimed: the owner-key arm of route_task_owner (authenticated callers with an owner key); the timed anonymous caller takes another arm
 src/gateway/router/handlers/tasks.rs	tasks_cancel	-	tasks/cancel only, not the tools/call path
 src/gateway/router/handlers/tasks.rs	tasks_get	-	tasks/get only, not the tools/call path
 src/gateway/router/handlers/tasks.rs	tasks_get_judged	-	tasks/* methods only, not the tools/call path

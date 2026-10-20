@@ -5,7 +5,8 @@
 
 use serde_json::json;
 
-use super::{TaskIntentRequest, task_intent_for_call, task_owner_key};
+use super::owner::task_owner_key;
+use super::{TaskIntentRequest, task_intent_for_call};
 use crate::config::AuthConfig;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::tests::test_router_app_state_with_auth;
@@ -175,21 +176,27 @@ fn named(subject: &str) -> GrantSubject {
 fn task_owner_key_separates_keys_and_subjects_but_never_stands_in_for_a_key() {
     let (alpha, bravo) = (key_holder("alpha"), key_holder("bravo"));
     let (alice, bob) = (named("alice"), named("bob"));
-    assert_eq!(task_owner_key(None, None, Some(&alpha)), "credential:alpha");
+    let no_subject = crate::gateway::router::identity::subject_key(None, None);
+    let alice_proven = crate::gateway::router::identity::subject_key(Some(&alice), None);
+    let bob_proven = crate::gateway::router::identity::subject_key(Some(&bob), None);
+    assert_eq!(
+        task_owner_key(no_subject.as_deref(), Some(&alpha)),
+        "credential:alpha"
+    );
     assert_ne!(
-        task_owner_key(None, None, Some(&alpha)),
-        task_owner_key(None, None, Some(&bravo)),
+        task_owner_key(no_subject.as_deref(), Some(&alpha)),
+        task_owner_key(no_subject.as_deref(), Some(&bravo)),
         "two keys own apart"
     );
-    let alices = task_owner_key(Some(&alice), None, Some(&alpha));
+    let alices = task_owner_key(alice_proven.as_deref(), Some(&alpha));
     assert!(alices.starts_with("subject:"), "{alices}");
     assert_ne!(
         alices,
-        task_owner_key(Some(&bob), None, Some(&alpha)),
+        task_owner_key(bob_proven.as_deref(), Some(&alpha)),
         "two subjects behind one key own apart"
     );
     assert_eq!(
-        task_owner_key(Some(&alice), None, None),
+        task_owner_key(alice_proven.as_deref(), None),
         "",
         "no key, no owner"
     );
@@ -205,7 +212,8 @@ async fn s3b1_premise_a_key_holders_task_worker_carries_the_prefixed_owner() {
     let state = state(true).await;
     let (args, retry) = (json!({}), keyed());
     let client = key_holder("digest-alice");
-    let owner = task_owner_key(None, None, Some(&client));
+    let proven = crate::gateway::router::identity::subject_key(None, None);
+    let owner = task_owner_key(proven.as_deref(), Some(&client));
     let api_key_caller = TaskIntentRequest {
         owner: &owner,
         client: Some(&client),

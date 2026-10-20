@@ -39,7 +39,7 @@ pub(super) mod request_checks;
 mod request_facts;
 mod session_end;
 mod sse;
-mod tasks;
+pub(super) mod tasks;
 
 #[cfg(test)]
 use health::backends_overall_healthy;
@@ -59,7 +59,6 @@ use request_facts::{
 pub(super) use session_end::{mcp_delete_handler, sse_deprecated_handler};
 pub(super) use sse::mcp_sse_handler;
 use sse::unsupported_version_error;
-pub(super) use tasks::route_owners;
 
 #[allow(clippy::too_many_lines)]
 async fn meta_mcp_dispatch(
@@ -503,7 +502,7 @@ async fn meta_mcp_dispatch(
                 .await
         }
 
-        // The owner is `task_principal`'s answer, not the raw session key: it is
+        // The owner is the routed task owner (`route_owners`), not the raw session key: it is
         // what admission was keyed on when the record was created, and reading
         // with anything else would miss a task the caller does own.
         // Both arms act for THIS request's live context: a recovery read

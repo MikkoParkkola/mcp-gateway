@@ -471,14 +471,9 @@ pub(super) async fn tasks_cancel(
     route(state, &owner_text).cancel(id, params).await
 }
 
-mod owner;
-pub(in crate::gateway::router) use owner::route_owners;
-#[cfg(test)]
-use owner::{AUTH_DISABLED_TASK_OWNER, agent_task_owner, route_task_owner, task_owner_key};
+pub(in crate::gateway::router) mod owner;
 mod stored_read;
 use stored_read::{prepare_stored_read, prepare_stored_read_with_policy};
-#[cfg(test)]
-mod agent_owner_tests;
 #[cfg(test)]
 mod frame_subject_tests;
 #[cfg(test)]
