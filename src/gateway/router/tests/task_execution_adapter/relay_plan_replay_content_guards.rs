@@ -573,9 +573,14 @@ async fn g11b_rig() -> (Rig, String) {
 /// renewed receipt carries no excuse for text the replay did not
 /// deliver — while the delivered head still renews (alice excused for
 /// it, bob refused), and the filtered drop is counted exactly once.
-/// Mutant: the old fast path (keep the snapshot whenever every kept
-/// segment is present) — it would keep `cut_fps`, alice would stay
-/// excused for the removed run, and nothing would count `filtered`.
+/// Measured on 7593703a6: the old fast path (keep the snapshot whenever
+/// every kept segment is present, without the `identical` gate) is
+/// equivalent here, since the receipt's retained fingerprints cover the
+/// cut middle, so the leaf check already fails and the filtering path
+/// runs either way. That mutant is killed at unit level by
+/// `d11_a_changed_answer_drops_both_excuse_sets_in_both_branches`. This
+/// row pins the route outcome. Mutant killed: skip filtering on a
+/// changed answer (G11).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn g11b_a_redaction_inside_the_cut_middle_drops_its_excuse() {
     let (rig, removed) = g11b_rig().await;
