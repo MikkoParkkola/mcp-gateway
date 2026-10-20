@@ -15,6 +15,20 @@ fn parse_optional_numeric_signal(value: &Value, keys: &[&str]) -> Option<f64> {
         .map(|score| score.clamp(0.0, 1.0))
 }
 
+/// Both parsers read the risk label only through this helper (MIK-8549).
+fn risk_label(value: &Value) -> Option<String> {
+    value
+        .get("risk_level")
+        .or_else(|| value.get("risk"))
+        .and_then(Value::as_str)
+        .map(str::to_ascii_lowercase)
+}
+
+/// The labels that zero both the safety and the risk signal.
+fn zeroes_risk(label: &str) -> bool {
+    matches!(label, "critical" | "high" | "unsafe" | "blocked")
+}
+
 pub(super) fn parse_safety_signal(value: &Value) -> f64 {
     if value
         .get("unsafe")
@@ -23,28 +37,22 @@ pub(super) fn parse_safety_signal(value: &Value) -> f64 {
     {
         return 0.0;
     }
-    if value
-        .get("risk_level")
-        .or_else(|| value.get("risk"))
-        .and_then(Value::as_str)
-        .is_some_and(|risk| matches!(risk, "high" | "critical" | "unsafe"))
-    {
+    if risk_label(value).is_some_and(|label| zeroes_risk(&label)) {
         return 0.0;
     }
     parse_numeric_signal(value, &["safety_score", "safety"], 1.0)
 }
 
 pub(super) fn parse_risk_signal(value: &Value) -> f64 {
-    if let Some(level) = value
-        .get("risk_level")
-        .or_else(|| value.get("risk"))
-        .and_then(Value::as_str)
-    {
-        return match level.to_ascii_lowercase().as_str() {
-            "critical" | "high" | "unsafe" | "blocked" => 0.0,
-            "medium" | "elevated" => 0.65,
-            "low" => 0.9,
-            _ => 1.0,
+    if let Some(label) = risk_label(value) {
+        return if zeroes_risk(&label) {
+            0.0
+        } else {
+            match label.as_str() {
+                "medium" | "elevated" => 0.65,
+                "low" => 0.9,
+                _ => 1.0,
+            }
         };
     }
     if let Some(fit) =
