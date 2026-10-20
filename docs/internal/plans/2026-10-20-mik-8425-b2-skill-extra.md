@@ -37,7 +37,8 @@ the serde_yaml tree gave:
 - `[.inf, -.inf, .nan]` as `[null,null,null]`;
 - the u64 maximum and i64 minimum unchanged;
 - `{1: a, "1": b}` as `{"1":"b"}` (`to_string` writes both keys, and reading
-  it back keeps the last).
+  it back with the old loader, which reads through the YAML tree, refused
+  the file with `duplicate entry`).
 
 ## Design
 
@@ -67,8 +68,8 @@ before, compared after parsing**:
    - an entry whose key is null, a non-finite float, a sequence, a mapping
      or tagged is dropped;
    - if two keys end up as the same string (`1:` and `"1":`, in either
-     order), the later one in the document wins, as reading the old JSON
-     back did. Keys that are identical in the YAML are still refused by the
+     order), the later one in the document wins. Before, `save` wrote both and
+     the next load refused the file. Keys that are identical in the YAML are still refused by the
      parser, as today.
 
 `parse_skill_md` keeps everything else: the whole frontmatter is still
@@ -116,13 +117,14 @@ Not chosen:
 - **CLI and registry users (a behaviour fix):** a skill whose frontmatter
   has a null, non-finite float, sequence, mapping or tagged key inside an
   extra field can now be registered, with that entry dropped. Before, `save`
-  failed with "key must be a string".
+  failed with "key must be a string" ("float key must be finite" for a
+  non-finite float key).
 - **`skills.json`:**
   - it holds the same JSON values as before, compared after parsing;
   - two textual differences: keys inside an `extra` value are now written
     in sorted order, where before they kept document order, and two keys
     that stringify the same are written once, where before both were
-    written and the last was kept on read;
+    written and the registry then failed to load (`duplicate entry`);
   - files written by earlier versions load with the same values.
 
 ## Tests (red first: they do not compile against the old field type)

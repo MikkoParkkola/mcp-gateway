@@ -454,6 +454,10 @@ mod tests {
         let second = tmp.path().join("resaved.json");
         loaded.save(&second).expect("registry saves");
         let saved = std::fs::read_to_string(&second).expect("saved registry reads");
+        let metadata_pos = saved
+            .find("\"metadata\"")
+            .expect("saved registry holds metadata");
+        let metadata_text = &saved[metadata_pos..];
         let keys = [
             "\"1\"",
             "\"1.5\"",
@@ -465,7 +469,7 @@ mod tests {
         ];
         let mut positions = Vec::new();
         for key in keys {
-            positions.push(saved.find(key).expect("saved registry holds key"));
+            positions.push(metadata_text.find(key).expect("saved registry holds key"));
         }
         assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
     }
@@ -481,6 +485,10 @@ mod tests {
         let tmp = tempfile::tempdir().expect("fixture tempdir creates");
         let path = tmp.path().join("skills.json");
         std::fs::write(&path, text).expect("fixture registry writes");
-        assert!(SkillRegistry::load(&path).is_err());
+        let err = SkillRegistry::load(&path).expect_err("a duplicate extra key is refused on load");
+        assert!(
+            err.to_string().contains("duplicate entry"),
+            "unexpected error: {err}"
+        );
     }
 }

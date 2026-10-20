@@ -3,11 +3,13 @@
 //! The gateway's one YAML seam (MIK-8425).
 //!
 //! Every YAML read and write goes through here, so the parser behind it can
-//! be replaced in one place. Today the backend is `serde_yaml` 0.9.34, and
-//! each item is that crate's own behaviour, unchanged: the tree types are
-//! re-exported and the functions delegate. A later stage swaps the backend
-//! behind this same surface; `tests/fixtures/mik_8425_yaml/` records what
-//! it must reproduce.
+//! be replaced in one place. Today the backend is `serde_yaml` 0.9.34. The
+//! tree types are re-exported and the parse and write functions delegate,
+//! keeping that crate's own behaviour. One function is the seam's own:
+//! `to_json`, the tree-to-JSON conversion that `ImportedSkill.extra` uses.
+//! A later stage swaps the backend behind this same surface.
+//! `tests/fixtures/mik_8425_yaml/` records what the delegating functions must
+//! reproduce, and the skills parser and registry tests pin `to_json`.
 //!
 //! This file names nothing under `crate::`. Integration tests compile it
 //! directly (`tests/common/yaml.rs`), so tests and the gateway always share
