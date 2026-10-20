@@ -615,3 +615,157 @@ fn the_other_risk_and_safety_arms_are_unchanged() {
         1.0
     );
 }
+
+#[test]
+fn explanation_lists_every_signal_reason_in_order() {
+    let make = |nine: f64| {
+        let mut result = SearchResult::new("s", "t", "d");
+        result.signals = RankingSignals {
+            relevance: 1.0,
+            safety: 1.0,
+            risk: nine,
+            trust: nine,
+            grant: 1.0,
+            policy_fit: nine,
+            permission_fit: nine,
+            runtime_health: 1.0,
+            cost_efficiency: nine,
+            latency: nine,
+            success_rate: nine,
+            freshness: 1.0,
+            user_preference: nine,
+            organization_preference: nine,
+            user_feedback: 1.0,
+            usage_count: 0,
+        };
+        result
+    };
+
+    // Every one of the nine signals at 1.0: every high arm.
+    let high = explanation_for(&make(1.0));
+    assert_eq!(
+        high.reasons
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<&str>>(),
+        vec![
+            "intent_match",
+            "safety_ok",
+            "grant_ok",
+            "risk_fit",
+            "policy_fit",
+            "permission_fit",
+            "trust_ok",
+            "cost_fit",
+            "latency_fit",
+            "success_rate_fit",
+            "user_preference_fit",
+            "organization_preference_fit",
+            "local_feedback_boost",
+        ]
+    );
+
+    // Every one of the nine signals at 0.0: every low arm.
+    let low = explanation_for(&make(0.0));
+    assert_eq!(
+        low.reasons
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<&str>>(),
+        vec![
+            "intent_match",
+            "safety_ok",
+            "grant_ok",
+            "risk_downgraded",
+            "policy_downgraded",
+            "permission_downgraded",
+            "trust_downgraded",
+            "cost_downgraded",
+            "latency_downgraded",
+            "success_rate_downgraded",
+            "user_preference_downgraded",
+            "organization_preference_downgraded",
+            "local_feedback_boost",
+        ]
+    );
+
+    // One of the nine at NaN: NaN < 0.75 is false, so it takes the high arm.
+    let mut nan_result = make(1.0);
+    nan_result.signals.latency = f64::NAN;
+    let nan = explanation_for(&nan_result);
+    assert_eq!(
+        nan.reasons
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<&str>>(),
+        vec![
+            "intent_match",
+            "safety_ok",
+            "grant_ok",
+            "risk_fit",
+            "policy_fit",
+            "permission_fit",
+            "trust_ok",
+            "cost_fit",
+            "latency_fit",
+            "success_rate_fit",
+            "user_preference_fit",
+            "organization_preference_fit",
+            "local_feedback_boost",
+        ]
+    );
+
+    // Boundary: exactly 0.75 is not < 0.75, so it takes the high arm.
+    let mut boundary_result = make(1.0);
+    boundary_result.signals.latency = 0.75;
+    let boundary = explanation_for(&boundary_result);
+    assert_eq!(
+        boundary
+            .reasons
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<&str>>(),
+        vec![
+            "intent_match",
+            "safety_ok",
+            "grant_ok",
+            "risk_fit",
+            "policy_fit",
+            "permission_fit",
+            "trust_ok",
+            "cost_fit",
+            "latency_fit",
+            "success_rate_fit",
+            "user_preference_fit",
+            "organization_preference_fit",
+            "local_feedback_boost",
+        ]
+    );
+
+    // Just below the boundary: 0.749 < 0.75, so it takes the low arm.
+    let mut below_result = make(1.0);
+    below_result.signals.latency = 0.749;
+    let below = explanation_for(&below_result);
+    assert_eq!(
+        below
+            .reasons
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<&str>>(),
+        vec![
+            "intent_match",
+            "safety_ok",
+            "grant_ok",
+            "risk_fit",
+            "policy_fit",
+            "permission_fit",
+            "trust_ok",
+            "cost_fit",
+            "latency_downgraded",
+            "success_rate_fit",
+            "user_preference_fit",
+            "organization_preference_fit",
+            "local_feedback_boost",
+        ]
+    );
+}
