@@ -73,6 +73,26 @@ fn poll_key(principal: Option<&str>, name: &str, arguments: &Value) -> String {
     .to_string()
 }
 
+/// The holder a stored row polls as: its API key, unless it is a legacy
+/// row whose bare key name binds no secret.
+fn holder_of(row: &Subscription) -> Option<Holder> {
+    let api_key = row
+        .api_key
+        .clone()
+        .filter(|_| row.legacy_api_key_name.is_none())?;
+    Some(Holder {
+        principal: row.principal.clone(),
+        api_key,
+    })
+}
+
+impl WatchClass {
+    /// The principal a poller keys on: named only for a keyed watch.
+    fn principal_for(self, principal: &str) -> Option<&str> {
+        (self == WatchClass::Keyed).then_some(principal)
+    }
+}
+
 /// A running poller and the principal that opened it, against whose cap it
 /// counts (shared or not). Stopped by its flag, not aborted: the stop can
 /// come from inside the poller's own task (it revoked its last holder), and
@@ -168,7 +188,7 @@ impl EventSource for WatchSource {
     }
 
     fn offers(&self, name: &str) -> bool {
-        name.starts_with(PREFIX) && name.ends_with(SUFFIX) && self.target(name).is_some()
+        is_watch(name) && self.target(name).is_some()
     }
 
     /// The capability must still be watchable and the options valid. Where
@@ -248,11 +268,7 @@ impl EventSource for WatchSource {
         now: chrono::DateTime<chrono::Utc>,
     ) -> String {
         let class = self.class_for(principal, name, arguments, now);
-        poll_key(
-            (class == WatchClass::Keyed).then_some(principal),
-            name,
-            arguments,
-        )
+        poll_key(class.principal_for(principal), name, arguments)
     }
 
     fn row_key(&self, sub: &Subscription) -> Option<String> {
@@ -263,7 +279,7 @@ impl EventSource for WatchSource {
         // names its class: a guess would key it under the wrong class for
         // good (MIK-8151).
         let class = sub.watch_class.or_else(|| self.watch_class(&sub.name))?;
-        let alone = (class == WatchClass::Keyed).then_some(sub.principal.as_str());
+        let alone = class.principal_for(sub.principal.as_str());
         Some(poll_key(alone, &sub.name, &sub.arguments))
     }
 
@@ -291,7 +307,6 @@ impl EventSource for WatchSource {
             WatchClass::Keyed
         };
         let options = options(arguments)?;
-        let shared = class == WatchClass::Free;
         let mut pollers = self.pollers.lock();
         // An entry whose poller ended on its own is replaced, not joined.
         pollers.retain(|_, p| !p.stop.load(Ordering::Acquire));
@@ -316,11 +331,7 @@ impl EventSource for WatchSource {
             key: key.to_owned(),
             name: name.to_owned(),
             options,
-            charge: if shared {
-                Charge::Global
-            } else {
-                Charge::Holder
-            },
+            charge: Charge::of(class),
         };
         pollers.insert(
             key.to_owned(),
@@ -504,18 +515,11 @@ impl Run {
                     continue;
                 }
             };
-            let api_key = row
-                .api_key
-                .clone()
-                .filter(|_| row.legacy_api_key_name.is_none());
             // A refused credential, or no key to call with, revokes. A key
             // the current capability definition refuses is about the
             // catalogue, which a mid-write read can change: kept, skipped,
             // and judged again next poll (MIK-8122).
-            let Some(holder) = api_key.filter(|_| passes).map(|api_key| Holder {
-                principal: row.principal.clone(),
-                api_key,
-            }) else {
+            let Some(holder) = passes.then(|| holder_of(&row)).flatten() else {
                 denied.push(row);
                 continue;
             };

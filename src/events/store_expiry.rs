@@ -47,10 +47,7 @@ pub(in crate::events::store) fn load(
     for (_, mut record) in load_records::<OutboxRecord>(outbox_dir) {
         // The same occurrence, not a later one re-admitted under the same id
         // once the inbound dedupe window passed: its fan-out time matches.
-        let settled = state
-            .dead
-            .get(&record.event_id)
-            .is_some_and(|(dead, _)| dead.record.created_at == record.created_at);
+        let settled = state.buried_occurrence(&record.event_id, record.created_at);
         if settled {
             remove_record(outbox_dir, &OutboxRecord::file(&record.event_id))?;
             continue;
@@ -152,12 +149,7 @@ impl Store {
                 record.callback_host = callback_host_of(&sub.url);
             }
             let bury = record.needs_burial_at_expiry();
-            let in_place = |state: &State| {
-                state
-                    .dead
-                    .get(&id)
-                    .is_some_and(|(dead, _)| dead.record.created_at == record.created_at)
-            };
+            let in_place = |state: &State| state.buried_occurrence(&id, record.created_at);
             // Receipted once, by the pass that puts its dead letter in place,
             // durable or not, as every burial is: the retry that finishes it
             // finds the letter already there and adds no receipt, and a

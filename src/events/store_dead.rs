@@ -169,10 +169,7 @@ impl Store {
         let (event_id, created_at) = (record.event_id.clone(), record.created_at);
         if let Err(error) = self.entomb(state, record, reason, now) {
             // In place but unsynced is still a burial: its receipt stands.
-            let in_place = state
-                .dead
-                .get(&event_id)
-                .is_some_and(|(dead, _)| dead.record.created_at == created_at);
+            let in_place = state.buried_occurrence(&event_id, created_at);
             if !in_place {
                 return Err(error);
             }

@@ -36,14 +36,7 @@ impl WatchSource {
         target: &Target,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Option<Holder> {
-        let api_key = row
-            .api_key
-            .clone()
-            .filter(|_| row.legacy_api_key_name.is_none())?;
-        let holder = Holder {
-            principal: row.principal.clone(),
-            api_key,
-        };
+        let holder = super::holder_of(row)?;
         self.host.may_invoke(&holder, target, now).then_some(holder)
     }
 }

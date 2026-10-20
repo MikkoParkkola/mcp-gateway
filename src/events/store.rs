@@ -214,6 +214,13 @@ impl State {
         now - ended < ttl
     }
 
+    /// Whether the dead letter of the same occurrence is in place.
+    fn buried_occurrence(&self, id: &str, created_at: DateTime<Utc>) -> bool {
+        self.dead
+            .get(id)
+            .is_some_and(|(dead, _)| dead.record.created_at == created_at)
+    }
+
     fn pair_live(&self, principal: &str, url: &str, now: DateTime<Utc>) -> bool {
         self.subs
             .values()

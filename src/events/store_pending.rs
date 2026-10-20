@@ -323,10 +323,7 @@ impl Store {
             // The claimed occurrence's own stamp: a dead letter left under the
             // same id by an earlier occurrence is not this burial. Reached when
             // the dead letter is in place but its directory sync failed.
-            let buried = state
-                .dead
-                .get(event_id)
-                .is_some_and(|(dead, _)| dead.record.created_at == created_at);
+            let buried = state.buried_occurrence(event_id, created_at);
             if buried {
                 // The dead letter is in place, if unsynced: never resend. The
                 // burial happened, so its receipt stands: only the cleanup after

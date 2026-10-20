@@ -789,3 +789,6 @@ mod reconcile_table;
 
 #[path = "watch_source_clock_tests.rs"]
 mod clock_rows;
+
+#[path = "watch_source_charge_tests.rs"]
+mod charge;
