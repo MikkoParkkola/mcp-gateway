@@ -73,6 +73,19 @@ fn poll_key(principal: Option<&str>, name: &str, arguments: &Value) -> String {
     .to_string()
 }
 
+/// The holder a stored row polls as: its API key, unless it is a legacy
+/// row whose bare key name binds no secret.
+fn holder_of(row: &Subscription) -> Option<Holder> {
+    let api_key = row
+        .api_key
+        .clone()
+        .filter(|_| row.legacy_api_key_name.is_none())?;
+    Some(Holder {
+        principal: row.principal.clone(),
+        api_key,
+    })
+}
+
 impl WatchClass {
     /// The principal a poller keys on: named only for a keyed watch.
     fn principal_for(self, principal: &str) -> Option<&str> {
@@ -502,18 +515,11 @@ impl Run {
                     continue;
                 }
             };
-            let api_key = row
-                .api_key
-                .clone()
-                .filter(|_| row.legacy_api_key_name.is_none());
             // A refused credential, or no key to call with, revokes. A key
             // the current capability definition refuses is about the
             // catalogue, which a mid-write read can change: kept, skipped,
             // and judged again next poll (MIK-8122).
-            let Some(holder) = api_key.filter(|_| passes).map(|api_key| Holder {
-                principal: row.principal.clone(),
-                api_key,
-            }) else {
+            let Some(holder) = passes.then(|| holder_of(&row)).flatten() else {
                 denied.push(row);
                 continue;
             };
