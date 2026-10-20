@@ -361,8 +361,8 @@ impl OAuthClient {
     /// A no-op when a `client_id` is already in memory: either
     /// `OAuthClientConfig.client_id` was supplied (operator config, which
     /// must never be overwritten by or conflated with a stale disk record),
-    /// or this client already registered or restored one. Because of that
-    /// guard, any id loaded here is necessarily a prior Dynamic Client
+    /// or this client already registered, generated or restored one. Because
+    /// of that guard, any id loaded here is necessarily a prior Dynamic Client
     /// Registration, never operator config (Defect 2, MIK-6750 r7) — safe
     /// to mark `Registered` so a later `invalid_client` rejection may purge
     /// it.
