@@ -122,7 +122,10 @@ fn adapter_reads_like_serde_yaml_on_the_behaviour_cases() {
     for text in BEHAVIOUR_INPUTS {
         assert_eq!(
             tree_or_refusal(yaml::from_str::<yaml::Value>(text)),
-            tree_or_refusal(serde_yaml::from_str::<serde_yaml::Value>(text)),
+            tree_or_refusal(
+                serde_yaml::from_str::<serde_yaml::Value>(text)
+                    .map_err(|e| yaml::redact_message(&e.to_string()))
+            ),
             "tree reading of {text:?}"
         );
         assert_eq!(
@@ -139,9 +142,10 @@ fn adapter_reads_like_serde_yaml_on_the_behaviour_cases() {
         let ours: Vec<String> = yaml::documents(text).map(tree_or_refusal).collect();
         let mut theirs = Vec::new();
         for document in serde_yaml::Deserializer::from_str(text) {
-            let reading = tree_or_refusal(<serde_yaml::Value as serde::Deserialize>::deserialize(
-                document,
-            ));
+            let reading = tree_or_refusal(
+                <serde_yaml::Value as serde::Deserialize>::deserialize(document)
+                    .map_err(|e| yaml::redact_message(&e.to_string())),
+            );
             let refused = reading.starts_with("ERR");
             theirs.push(reading);
             if refused {
@@ -156,7 +160,8 @@ fn adapter_reads_like_serde_yaml_on_the_behaviour_cases() {
             ),
             format!(
                 "{:?}",
-                serde_yaml::from_str::<BTreeMap<String, String>>(text).map_err(|e| e.to_string())
+                serde_yaml::from_str::<BTreeMap<String, String>>(text)
+                    .map_err(|e| yaml::redact_message(&e.to_string()))
             ),
             "typed reading of {text:?}"
         );
@@ -237,7 +242,7 @@ fn adapter_writes_and_converts_like_serde_yaml() {
     let bad = serde_yaml::Value::String("no_such_variant".to_owned());
     assert_eq!(
         yaml::from_value::<Shape>(bad.clone()).map_err(|e| e.to_string()),
-        serde_yaml::from_value::<Shape>(bad).map_err(|e| e.to_string()),
+        serde_yaml::from_value::<Shape>(bad).map_err(|e| yaml::redact_message(&e.to_string())),
         "from_value refuses exactly as serde_yaml does"
     );
 }

@@ -384,7 +384,9 @@ async fn a_write_scope_is_refused_at_load_rather_than_accepted_and_never_matched
 
     let err = load_identity_grants_file(&path).await.unwrap_err();
 
-    assert!(err.contains("write"), "{err}");
+    assert!(err.contains("grants[0].scope: unknown variant"), "{err}");
+    assert!(err.contains("expected one of"), "{err}");
+    assert!(!err.contains("write"), "{err}");
 }
 
 #[test]

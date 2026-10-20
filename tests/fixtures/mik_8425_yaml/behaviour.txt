@@ -9,22 +9,22 @@ merge/dict	OK {"b":{"x":1},"m":{"<<":{"x":1},"y":2}}
 merge/tagged-tree	OK {s:"m"=>{s:"<<"=>{s:"x"=>n:1}}}
 scalar/tree "yes"	OK str:"yes"
 scalar/string "yes"	OK {"v":"yes"}
-scalar/bool "yes"	ERR v: invalid type: string "yes", expected a boolean at line 1 column 4
+scalar/bool "yes"	ERR v: invalid type: string, expected a boolean at line 1 column 4
 scalar/tree "no"	OK str:"no"
 scalar/string "no"	OK {"v":"no"}
-scalar/bool "no"	ERR v: invalid type: string "no", expected a boolean at line 1 column 4
+scalar/bool "no"	ERR v: invalid type: string, expected a boolean at line 1 column 4
 scalar/tree "on"	OK str:"on"
 scalar/string "on"	OK {"v":"on"}
-scalar/bool "on"	ERR v: invalid type: string "on", expected a boolean at line 1 column 4
+scalar/bool "on"	ERR v: invalid type: string, expected a boolean at line 1 column 4
 scalar/tree "off"	OK str:"off"
 scalar/string "off"	OK {"v":"off"}
-scalar/bool "off"	ERR v: invalid type: string "off", expected a boolean at line 1 column 4
+scalar/bool "off"	ERR v: invalid type: string, expected a boolean at line 1 column 4
 scalar/tree "y"	OK str:"y"
 scalar/string "y"	OK {"v":"y"}
-scalar/bool "y"	ERR v: invalid type: string "y", expected a boolean at line 1 column 4
+scalar/bool "y"	ERR v: invalid type: string, expected a boolean at line 1 column 4
 scalar/tree "n"	OK str:"n"
 scalar/string "n"	OK {"v":"n"}
-scalar/bool "n"	ERR v: invalid type: string "n", expected a boolean at line 1 column 4
+scalar/bool "n"	ERR v: invalid type: string, expected a boolean at line 1 column 4
 scalar/tree "true"	OK bool:true
 scalar/string "true"	OK {"v":"true"}
 scalar/bool "true"	OK {"v":true}
@@ -39,28 +39,28 @@ scalar/string "false"	OK {"v":"false"}
 scalar/bool "false"	OK {"v":false}
 scalar/tree "0755"	OK str:"0755"
 scalar/string "0755"	OK {"v":"0755"}
-scalar/bool "0755"	ERR v: invalid type: string "0755", expected a boolean at line 1 column 4
+scalar/bool "0755"	ERR v: invalid type: string, expected a boolean at line 1 column 4
 scalar/tree "0o755"	OK int:493
 scalar/string "0o755"	OK {"v":"0o755"}
-scalar/bool "0o755"	ERR v: invalid type: integer `493`, expected a boolean at line 1 column 4
+scalar/bool "0o755"	ERR v: invalid type: integer, expected a boolean at line 1 column 4
 scalar/tree "0x1F"	OK int:31
 scalar/string "0x1F"	OK {"v":"0x1F"}
-scalar/bool "0x1F"	ERR v: invalid type: integer `31`, expected a boolean at line 1 column 4
+scalar/bool "0x1F"	ERR v: invalid type: integer, expected a boolean at line 1 column 4
 scalar/tree "1_000"	OK str:"1_000"
 scalar/string "1_000"	OK {"v":"1_000"}
-scalar/bool "1_000"	ERR v: invalid type: string "1_000", expected a boolean at line 1 column 4
+scalar/bool "1_000"	ERR v: invalid type: string, expected a boolean at line 1 column 4
 scalar/tree "1e3"	OK float:1000
 scalar/string "1e3"	OK {"v":"1e3"}
-scalar/bool "1e3"	ERR v: invalid type: floating point `1000.0`, expected a boolean at line 1 column 4
+scalar/bool "1e3"	ERR v: invalid type: floating point, expected a boolean at line 1 column 4
 scalar/tree ".inf"	OK float:inf
 scalar/string ".inf"	OK {"v":".inf"}
-scalar/bool ".inf"	ERR v: invalid type: floating point `inf`, expected a boolean at line 1 column 4
+scalar/bool ".inf"	ERR v: invalid type: floating point, expected a boolean at line 1 column 4
 scalar/tree "-.inf"	OK float:-inf
 scalar/string "-.inf"	OK {"v":"-.inf"}
-scalar/bool "-.inf"	ERR v: invalid type: floating point `-inf`, expected a boolean at line 1 column 4
+scalar/bool "-.inf"	ERR v: invalid type: floating point, expected a boolean at line 1 column 4
 scalar/tree ".nan"	OK float:NaN
 scalar/string ".nan"	OK {"v":".nan"}
-scalar/bool ".nan"	ERR v: invalid type: floating point `NaN`, expected a boolean at line 1 column 4
+scalar/bool ".nan"	ERR v: invalid type: floating point, expected a boolean at line 1 column 4
 scalar/tree "~"	OK null
 scalar/string "~"	OK {"v":"~"}
 scalar/bool "~"	ERR v: invalid type: unit value, expected a boolean at line 1 column 4
@@ -75,13 +75,13 @@ scalar/string ""	OK {"v":""}
 scalar/bool ""	ERR v: invalid type: unit value, expected a boolean at line 1 column 3
 scalar/tree "12:30"	OK str:"12:30"
 scalar/string "12:30"	OK {"v":"12:30"}
-scalar/bool "12:30"	ERR v: invalid type: string "12:30", expected a boolean at line 1 column 4
+scalar/bool "12:30"	ERR v: invalid type: string, expected a boolean at line 1 column 4
 scalar/tree "'yes'"	OK str:"yes"
 scalar/string "'yes'"	OK {"v":"yes"}
-scalar/bool "'yes'"	ERR v: invalid type: string "yes", expected a boolean at line 1 column 4
+scalar/bool "'yes'"	ERR v: invalid type: string, expected a boolean at line 1 column 4
 scalar/tree "\"0755\""	OK str:"0755"
 scalar/string "\"0755\""	OK {"v":"0755"}
-scalar/bool "\"0755\""	ERR v: invalid type: string "0755", expected a boolean at line 1 column 4
+scalar/bool "\"0755\""	ERR v: invalid type: string, expected a boolean at line 1 column 4
 doc/empty	OK ~
 doc/explicit-start	OK {s:"a"=>n:1}
 doc/two	ERR deserializing from YAML containing more than one document is not supported
@@ -99,7 +99,7 @@ limit/alias-fanout-10 levels 5	ERR repetition limit exceeded
 limit/alias-fanout-10 levels 6	ERR repetition limit exceeded
 grant/any	OK {"schema_version":"identity_grants.v1","grants":[{"grant_id":"g1","subject":{"authority":"api_key","subject":"alice"},"agent":"any","capability":"calendar_read","scope":"read","owner":{"authority":"api_key","subject":"alice"},"provenance":"mcp-gateway identity grants grant","reason":"r"}]}
 grant/tag-qualified	OK {"schema_version":"identity_grants.v1","grants":[{"grant_id":"g1","subject":{"authority":"api_key","subject":"alice"},"agent":{"exact":{"source":"mtls","id":"spiffe://x"}},"capability":"calendar_read","scope":"read","owner":{"authority":"api_key","subject":"alice"},"provenance":"mcp-gateway identity grants grant","reason":"r"}]}
-grant/tag-bare-3x	ERR grants[0].agent: invalid type: string "runner", expected struct GrantAgentKey at line 7 column 10
+grant/tag-bare-3x	ERR grants[0].agent: invalid type: string, expected struct GrantAgentKey at line 7 column 10
 grant/map-qualified	ERR grants[0].agent: invalid type: map, expected a YAML tag starting with '!' at line 7 column 10
 grant/map-bare	ERR grants[0].agent: invalid type: map, expected a YAML tag starting with '!' at line 7 column 10
 enum/unit	OK "unit"

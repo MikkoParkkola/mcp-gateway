@@ -9,14 +9,13 @@
 //! value is dropped everywhere figment or serde would have printed it, and
 //! the key path, the source file, the line and column and the expected type
 //! are kept, which is what an operator needs to find and fix the line.
+//!
+//! The message redactor lives in the YAML adapter
+//! (`crate::yaml::redact_message`) since B3 and is shared by the adapter's
+//! own `Error` and by this module's `from_figment`.
 
+pub(crate) use crate::yaml::redact_message;
 use figment::error::{Actual, Kind, OneOf};
-
-/// What serde puts between a quoted value and the type it wanted.
-const EXPECTED: &str = ", expected ";
-
-/// serde's marker before a variant name it did not recognise.
-const VARIANT: &str = "unknown variant `";
 
 /// The error every config extract reports: each error in figment's chain with
 /// its value removed, its key path and source kept.
@@ -66,96 +65,4 @@ fn kind_of(actual: &Actual) -> Actual {
         data_free => return data_free.clone(),
     };
     Actual::Other(word.to_owned())
-}
-
-/// `message` with any value serde quoted in it removed.
-///
-/// serde's own messages put the value between a fixed marker and the LAST
-/// `, expected ` after it; a value may itself contain `, expected `, so the
-/// first one is not the end of it. Every other message passes through:
-/// libyaml's syntax problems are fixed strings, and the gateway's own refusals
-/// name keys, never values.
-pub(crate) fn redact_message(message: &str) -> String {
-    // The EARLIEST marker is serde's own: a later one can only sit inside the
-    // value, so choosing by marker kind first would cut at text the value
-    // supplied and keep the value before it.
-    let earliest = ["invalid type: ", "invalid value: ", VARIANT]
-        .into_iter()
-        .filter_map(|marker| message.find(marker).map(|at| (at, marker)))
-        .min_by_key(|(at, _)| *at);
-    let Some((start, marker)) = earliest else {
-        return message.to_owned();
-    };
-    let from = start + marker.len();
-    let tail = &message[from..];
-    if marker == VARIANT {
-        let rest = tail
-            .rfind(EXPECTED)
-            .map_or_else(|| location(tail), |cut| &tail[cut..]);
-        return format!(
-            "{}{}{rest}",
-            &message[..start],
-            VARIANT.trim_end_matches(" `")
-        );
-    }
-    match tail.rfind(EXPECTED) {
-        Some(cut) => format!(
-            "{}{}{}",
-            &message[..from],
-            kind_word(&tail[..cut]),
-            &tail[cut..]
-        ),
-        None => format!("{}a value{}", &message[..from], location(tail)),
-    }
-}
-
-/// serde's description of a value, cut before the value: `string "x"` is
-/// `string`. Only serde's own type words are kept; anything else is
-/// verbatim input (serde's `Other`), so it becomes `a value`.
-fn kind_word(unexpected: &str) -> &str {
-    const SERDE_WORDS: [&str; 16] = [
-        "boolean",
-        "integer",
-        "floating point",
-        "character",
-        "string",
-        "byte array",
-        "unit value",
-        "Option value",
-        "newtype struct",
-        "sequence",
-        "map",
-        "enum",
-        "unit variant",
-        "newtype variant",
-        "tuple variant",
-        "struct variant",
-    ];
-    let word = unexpected
-        .find(['"', '`', '[', '\''])
-        .map_or(unexpected, |at| &unexpected[..at])
-        .trim();
-    SERDE_WORDS
-        .into_iter()
-        .find(|known| *known == word)
-        .unwrap_or("a value")
-}
-
-/// The YAML parser's trailing ` at line L column C`, kept only when it is exactly
-/// that, so no part of a value can ride along.
-fn location(tail: &str) -> &str {
-    let Some(at) = tail.rfind(" at line ") else {
-        return "";
-    };
-    let suffix = &tail[at..];
-    let mut words = suffix.split(' ').skip(1);
-    let exact = matches!(
-        (words.next(), words.next(), words.next(), words.next(), words.next()),
-        (Some("at"), Some("line"), Some(line), Some("column"), Some(column))
-            if line.bytes().all(|b| b.is_ascii_digit())
-                && column.bytes().all(|b| b.is_ascii_digit())
-                && !line.is_empty()
-                && !column.is_empty()
-    ) && words.next().is_none();
-    if exact { suffix } else { "" }
 }

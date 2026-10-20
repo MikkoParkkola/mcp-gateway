@@ -1,15 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8425 MIG.0, gate G2 "before": where a YAML error prints the value
-//! that caused it today (CWE-532), recorded with `serde-yaml` 0.9.34.
+//! MIK-8425 MIG.0 baseline, gate G2 "after" (B3): no YAML error prints
+//! the value that caused it (CWE-532), recorded with `serde-yaml` 0.9.34.
 //!
 //! The config load path removes values (`config/load_error.rs`, MIK-8375).
-//! The direct capability path does not: `capability/parser.rs` formats the
-//! whole `serde-yaml` error, so a value in a wrongly typed field reaches the
-//! log. That leak is recorded here as the current state, as a fact this test
-//! pins, not as an endorsement. After the backend swap, G2 requires the
-//! sentinel to be absent on every path; this golden is then updated in the
-//! swap PR, and the change shows as `leaks=true` turning to `leaks=false`.
+//! The direct capability path did not, until B3 moved the redaction into the
+//! adapter (`src/yaml.rs`), so a value in a wrongly typed field no longer
+//! reaches the log. The leak MIG.0 recorded as `leaks=true` is closed here;
+//! the golden shows `leaks=false` on every value row (the key-name control
+//! still prints its key by design).
 
 #[path = "common/mik_8425_golden.rs"]
 mod golden;
@@ -148,18 +147,30 @@ fn yaml_error_leaks_are_as_recorded() {
     golden::assert_golden("redaction.txt", &report());
 }
 
-/// The recording itself proves both halves of the baseline: the capability
-/// type error leaks today, and the config path does not.
+/// B3 closes the leak MIG.0 recorded: every value row refuses without
+/// printing the sentinel.
 #[test]
-fn the_baseline_shows_the_capability_leak_and_a_clean_config_path() {
+fn no_baseline_path_prints_the_value() {
     let report = report();
+    for name in [
+        "capability/type-error",
+        "capability/syntax-error",
+        "config/type-error",
+        "config/syntax-error",
+        "config/nested-type-error",
+    ] {
+        assert!(
+            report.contains(&format!(
+                "{name}\trefused names=true leaks=false control=loads"
+            )),
+            "B3: {name} must refuse without printing the value: {report}"
+        );
+    }
+    // The key-name control still prints the sentinel by design (key paths are
+    // kept): it proves the check can see the sentinel, not a leak.
     assert!(
-        report.contains("capability/type-error\trefused names=true leaks=true control=loads"),
-        "the recorded before-state is a leak on the capability path: {report}"
-    );
-    assert!(
-        report.contains("config/type-error\trefused names=true leaks=false control=loads"),
-        "the config path removes values today: {report}"
+        report.contains("config/key-name-control\trefused names=true leaks=true control=loads"),
+        "the key-name control still shows the key: {report}"
     );
 }
 
