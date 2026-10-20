@@ -169,8 +169,10 @@ fn ref_request(request: &Value, route: ProtocolRoute) -> Result<Value> {
 
 /// A `tools/call` for `name` with `arguments`.
 fn call(name: &str, arguments: Value) -> Value {
-    json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
-        "params": {"name": name, "arguments": arguments}})
+    let mut request = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+        "params": {"name": name}});
+    request["params"]["arguments"] = arguments;
+    request
 }
 
 /// The inputs both sanitizers must agree on. Unsafe control characters:
