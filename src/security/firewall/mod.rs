@@ -44,7 +44,7 @@ mod collusion_gate;
 pub(crate) use collusion_digest::{note_walk_for_test, walks_built};
 pub use collusion_gate::{AllowedFlow, CollusionAction, CollusionConfig};
 pub(crate) use collusion_gate::{
-    DeliveryDigest, PlanStaging, RelayCaller, ReplayCalls, ReplaySource, ReplayedDigest,
+    DeliveryDigest, PlanStaging, RelayCaller, ReplaySource, ReplayedDigest,
 };
 mod config;
 pub use config::{FirewallAction, FirewallConfig, FirewallRule, ScanType};

@@ -16,17 +16,17 @@ use pretty_assertions::assert_eq;
 use crate::security::firewall::{CollusionAction, CollusionConfig, Firewall, FirewallConfig};
 
 /// Step A's server: its text is sensitive (a `sources` rule).
-const ALPHA: &str = "alpha";
+pub(super) const ALPHA: &str = "alpha";
 /// Step B's server: plain text.
-const BETA: &str = "beta";
+pub(super) const BETA: &str = "beta";
 
 /// Step A's prose: longer than a k-gram many times over.
-const PROSE: &str = "The orchard ledger for the north slope records seven rows of late pears, \
+pub(super) const PROSE: &str = "The orchard ledger for the north slope records seven rows of late pears, \
     the grafting dates for each rootstock, the hours the drip lines ran during the dry weeks of \
     August, and which crew pruned the older trees after the second frost.";
 
 /// Step B's prose.
-const OTHER_PROSE: &str = "Minutes of the harbour committee: the dredging contract moves to the \
+pub(super) const OTHER_PROSE: &str = "Minutes of the harbour committee: the dredging contract moves to the \
     spring tender, the ferry timetable keeps its Sunday gap, and the pilot boat needs a new \
     engine mount before the first autumn gale.";
 
@@ -35,35 +35,35 @@ const FIELD_A: &str = "north slope rows seven to twelve, late pears";
 const FIELD_B: &str = "south terrace rows one to six, early quinces";
 
 /// The relay window, in seconds; the rows advance the frozen clock past it.
-const WINDOW_SECS: u64 = 1;
+pub(super) const WINDOW_SECS: u64 = 1;
 
-fn text(text: &str) -> Value {
+pub(super) fn text(text: &str) -> Value {
     json!({"content": [{"type": "text", "text": text}], "isError": false})
 }
 
 /// A backend that answers every call with `answer` (the last answer repeats).
-fn answering(answer: &str) -> Arc<MockBackend> {
+pub(super) fn answering(answer: &str) -> Arc<MockBackend> {
     MockBackend::answering(Answer::Sequence(vec![text(answer)]))
 }
 
 /// The row's gateway: three callers allowed `mock`, `alpha` and `beta`; the
 /// `block` relay detector over `alpha:*` with every k-gram kept and one shared
 /// fingerprint enough to refuse; and the handle that ages its receipts.
-struct Rig {
-    state: Arc<AppState>,
-    _store: tempfile::TempDir,
-    relay: Arc<Firewall>,
-    alpha: Arc<MockBackend>,
-    beta: Arc<MockBackend>,
+pub(super) struct Rig {
+    pub(super) state: Arc<AppState>,
+    pub(super) _store: tempfile::TempDir,
+    pub(super) relay: Arc<Firewall>,
+    pub(super) alpha: Arc<MockBackend>,
+    pub(super) beta: Arc<MockBackend>,
 }
 
-async fn rig(alpha_text: &str, beta_text: &str, playbook: Option<&str>) -> Rig {
+pub(super) async fn rig(alpha_text: &str, beta_text: &str, playbook: Option<&str>) -> Rig {
     rig_with(alpha_text, beta_text, playbook, Sensitivity::Rule).await
 }
 
 /// How step A's text is made sensitive.
 #[derive(Clone, Copy)]
-enum Sensitivity {
+pub(super) enum Sensitivity {
     /// A `sources` rule over `alpha:*`.
     Rule,
     /// No `sources` rule: a context-integrity verdict (personal data, monitor
@@ -71,9 +71,26 @@ enum Sensitivity {
     Verdict,
 }
 
-async fn rig_with(
+pub(super) async fn rig_with(
     alpha_text: &str,
     beta_text: &str,
+    playbook: Option<&str>,
+    sensitivity: Sensitivity,
+) -> Rig {
+    rig_with_mocks(
+        answering(alpha_text),
+        answering(beta_text),
+        playbook,
+        sensitivity,
+    )
+    .await
+}
+
+/// [`rig_with`] over caller-built step mocks (a sequence, a failure, a
+/// held dispatch): the guard rows' steps are not all plain answers.
+pub(super) async fn rig_with_mocks(
+    alpha: Arc<MockBackend>,
+    beta: Arc<MockBackend>,
     playbook: Option<&str>,
     sensitivity: Sensitivity,
 ) -> Rig {
@@ -146,8 +163,6 @@ async fn rig_with(
     // `mock` is the probe: bob's relays go to it, and it answers only "ok",
     // so a probe never hands bob a copy of the tested text.
     register(&state, BACKEND, &answering("ok"));
-    let alpha = answering(alpha_text);
-    let beta = answering(beta_text);
     register(&state, ALPHA, &alpha);
     register(&state, BETA, &beta);
     Rig {
@@ -161,7 +176,7 @@ async fn rig_with(
 
 impl Rig {
     /// `who` sends `relayed` to the probe; whether the relay was refused.
-    async fn refused(&self, who: &str, id: i64, relayed: &str) -> bool {
+    pub(super) async fn refused(&self, who: &str, id: i64, relayed: &str) -> bool {
         let reply = post(&self.state, who, sync_invoke(id, json!({"text": relayed}))).await;
         if reply["error"]["code"] == -32002 {
             return true;
@@ -180,7 +195,7 @@ impl Rig {
     }
 
     /// Join every task worker, then age the receipts past the window.
-    async fn lapse(&self) {
+    pub(super) async fn lapse(&self) {
         let joined = self
             .state
             .task_executor
@@ -192,13 +207,13 @@ impl Rig {
     }
 
     /// Both step backends' call counts.
-    fn calls(&self) -> (usize, usize) {
+    pub(super) fn calls(&self) -> (usize, usize) {
         (self.alpha.calls(), self.beta.calls())
     }
 }
 
 /// A two-step chain: A then B.
-fn chain() -> Value {
+pub(super) fn chain() -> Value {
     json!({"chain": [
         {"tool": format!("{ALPHA}:{TOOL}"), "arguments": {}},
         {"tool": format!("{BETA}:{TOOL}"), "arguments": {}},
@@ -207,7 +222,7 @@ fn chain() -> Value {
 
 /// A playbook of one step on each of `alpha` and `beta`, its output mapping
 /// both steps' text.
-fn playbook() -> String {
+pub(super) fn playbook() -> String {
     format!(
         "name: replay\ndescription: plan steps\non_error: continue\ninputs: {{}}\nsteps:\n\
          \x20 - name: s1\n    server: {ALPHA}\n    tool: {TOOL}\n\
@@ -218,12 +233,12 @@ fn playbook() -> String {
     )
 }
 
-fn playbook_args() -> Value {
+pub(super) fn playbook_args() -> Value {
     json!({"name": "replay", "arguments": {}})
 }
 
 /// A task-augmented `name` call with `arguments`, under idempotency `key`.
-fn task_call(id: i64, key: &str, name: &str, arguments: Value) -> Value {
+pub(super) fn task_call(id: i64, key: &str, name: &str, arguments: &Value) -> Value {
     keyed(
         modern(
             id,
@@ -237,7 +252,7 @@ fn task_call(id: i64, key: &str, name: &str, arguments: Value) -> Value {
 
 /// The same call synchronous, under idempotency `key`: a repeat is served
 /// from the retained answer.
-fn keyed_call(id: i64, key: &str, name: &str, arguments: Value) -> Value {
+pub(super) fn keyed_call(id: i64, key: &str, name: &str, arguments: &Value) -> Value {
     keyed(
         modern(
             id,
@@ -251,8 +266,8 @@ fn keyed_call(id: i64, key: &str, name: &str, arguments: Value) -> Value {
 
 impl Rig {
     /// Run `name(arguments)` as alice's task to its end; the task id.
-    async fn settle_task(&self, key: &str, name: &str, arguments: Value) -> String {
-        let created = post(&self.state, "key-a", task_call(1, key, name, arguments)).await;
+    pub(super) async fn settle_task(&self, key: &str, name: &str, arguments: Value) -> String {
+        let created = post(&self.state, "key-a", task_call(1, key, name, &arguments)).await;
         let task = task_id(&created);
         let settled = poll_until_terminal(&self.state, "key-a", &task).await;
         assert_eq!(status_of(&settled), "completed", "base: {settled}");
@@ -297,7 +312,7 @@ impl Rig {
     /// lapse, none is refused. P2: `reread` ran nothing, and when `expected`
     /// is given it delivered exactly that retained result. Then each is
     /// refused again: the re-read renewed it.
-    async fn renews_after(
+    pub(super) async fn renews_after(
         &self,
         texts: &[&str],
         expected: Option<&Value>,
@@ -379,7 +394,7 @@ async fn a_keyed_chain_replay_renews_each_step_receipt() {
     let first = post(
         &rig.state,
         "key-a",
-        keyed_call(1, "r3", "gateway_execute", chain()),
+        keyed_call(1, "r3", "gateway_execute", &chain()),
     )
     .await;
     assert!(first.get("error").is_none(), "base: delivered: {first}");
@@ -390,7 +405,7 @@ async fn a_keyed_chain_replay_renews_each_step_receipt() {
         post(
             &rig.state,
             "key-a",
-            keyed_call(2, "r3", "gateway_execute", chain()),
+            keyed_call(2, "r3", "gateway_execute", &chain()),
         ),
     )
     .await;
@@ -403,7 +418,7 @@ async fn a_keyed_playbook_replay_renews_each_step_receipt() {
     let first = post(
         &rig.state,
         "key-a",
-        keyed_call(1, "r4", "gateway_run_playbook", playbook_args()),
+        keyed_call(1, "r4", "gateway_run_playbook", &playbook_args()),
     )
     .await;
     assert!(first.get("error").is_none(), "base: delivered: {first}");
@@ -414,7 +429,7 @@ async fn a_keyed_playbook_replay_renews_each_step_receipt() {
         post(
             &rig.state,
             "key-a",
-            keyed_call(2, "r4", "gateway_run_playbook", playbook_args()),
+            keyed_call(2, "r4", "gateway_run_playbook", &playbook_args()),
         ),
     )
     .await;
@@ -433,7 +448,7 @@ async fn a_task_augmented_repeat_renews() {
         post(
             &rig.state,
             "key-a",
-            task_call(1, "g29", "gateway_execute", chain()),
+            task_call(1, "g29", "gateway_execute", &chain()),
         ),
     )
     .await;
@@ -531,8 +546,51 @@ async fn a_verdict_sensitive_playbook_step_renews() {
 
 /// The gateway's recovery advice for a tool error it reads as a parameter
 /// problem: the gateway's own text, longer than a k-gram.
-const SUGGEST: &str =
+pub(super) const SUGGEST: &str =
     "Check the tool's input schema, correct the offending parameter(s), and retry.";
+
+/// R9's second gateway: the first gateway's retained answers
+/// (`admission`) with relay detection on, over the same backends.
+async fn detection_on_gateway(
+    auth: &AuthConfig,
+    admission: Arc<crate::idempotency::admission::ExecutionAdmission>,
+    erring: &Arc<MockBackend>,
+) -> (Arc<AppState>, tempfile::TempDir) {
+    let relay_fw = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    min_matches: 1,
+                    sources: vec![format!("{ALPHA}:*")],
+                    window_secs: WINDOW_SECS,
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .keyed_for_test()
+        .keeping_every_kgram(),
+    );
+    relay_fw.advance_collusion_clock_for_test(std::time::Duration::ZERO);
+    let handle = Arc::clone(&relay_fw);
+    let (on, on_store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
+        auth,
+        None,
+        None,
+        move |mut meta| {
+            meta.share_execution_admission_for_test(admission);
+            meta.share_keyring_with_for_test(&handle);
+            meta.set_firewall(Some(handle));
+            meta
+        },
+    )
+    .await;
+    register(&on, BACKEND, &answering("ok"));
+    register(&on, ALPHA, erring);
+    (on, on_store)
+}
 
 /// R9 (REPLAY.3, D5): a keyed single-target call answered while relay
 /// detection was off is retained without the record of what the gateway
@@ -562,7 +620,12 @@ async fn a_detection_off_answer_replayed_on_never_receipts_gateway_text() {
     register(&off, BACKEND, &answering("ok"));
     register(&off, ALPHA, &erring);
     let call = || json!({"server": ALPHA, "tool": TOOL, "arguments": {}});
-    let first = post(&off, "key-a", keyed_call(1, "r9", "gateway_invoke", call())).await;
+    let first = post(
+        &off,
+        "key-a",
+        keyed_call(1, "r9", "gateway_invoke", &call()),
+    )
+    .await;
     assert!(
         first.to_string().contains(SUGGEST),
         "premise: the gateway wrote its advice into the answer: {first}"
@@ -570,40 +633,8 @@ async fn a_detection_off_answer_replayed_on_never_receipts_gateway_text() {
     assert_eq!(erring.calls(), 1, "premise: the call dispatched once");
 
     // Second gateway: the same retained answers, relay detection on.
-    let relay = Arc::new(
-        Firewall::from_config(
-            FirewallConfig {
-                collusion: CollusionConfig {
-                    action: CollusionAction::Block,
-                    min_matches: 1,
-                    sources: vec![format!("{ALPHA}:*")],
-                    window_secs: WINDOW_SECS,
-                    ..CollusionConfig::default()
-                },
-                ..FirewallConfig::default()
-            },
-            None,
-        )
-        .keyed_for_test()
-        .keeping_every_kgram(),
-    );
-    relay.advance_collusion_clock_for_test(std::time::Duration::ZERO);
     let admission = Arc::clone(off.meta_mcp.execution_admission());
-    let handle = Arc::clone(&relay);
-    let (on, _on_store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
-        &auth,
-        None,
-        None,
-        move |mut meta| {
-            meta.share_execution_admission_for_test(admission);
-            meta.share_keyring_with_for_test(&handle);
-            meta.set_firewall(Some(handle));
-            meta
-        },
-    )
-    .await;
-    register(&on, BACKEND, &answering("ok"));
-    register(&on, ALPHA, &erring);
+    let (on, _on_store) = detection_on_gateway(&auth, admission, &erring).await;
     let probe = |state: &Arc<AppState>, who: &'static str, id: i64, relayed: String| {
         let state = Arc::clone(state);
         async move {
@@ -629,10 +660,10 @@ async fn a_detection_off_answer_replayed_on_never_receipts_gateway_text() {
         !probe(&on, "key-b", 90, note.clone()).await,
         "premise P1: nothing is receipted on the new gateway yet"
     );
-    let replay = post(&on, "key-a", keyed_call(2, "r9", "gateway_invoke", call())).await;
+    let retained = post(&on, "key-a", keyed_call(2, "r9", "gateway_invoke", &call())).await;
     assert!(
-        replay.to_string().contains(SUGGEST),
-        "premise: the retained answer, advice included, was replayed: {replay}"
+        retained.to_string().contains(SUGGEST),
+        "premise: the retained answer, advice included, was replayed: {retained}"
     );
     assert_eq!(
         erring.calls(),

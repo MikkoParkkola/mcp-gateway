@@ -64,6 +64,13 @@ mod relay_delivered_route;
 /// MIK-8408: a plan's stored answer read again renews its step receipts.
 #[cfg(feature = "firewall")]
 mod relay_plan_replay;
+/// MIK-8408 stage 4: the content guard rows, split from
+/// `relay_plan_replay_guards` for the file-size ceiling.
+#[cfg(feature = "firewall")]
+mod relay_plan_replay_content_guards;
+/// MIK-8408 stage 4: the route-level guard rows (G1, G11-G47).
+#[cfg(feature = "firewall")]
+mod relay_plan_replay_guards;
 /// MIK-7887.RECEIPT.2: a redacted plan answer keeps each step's delivered text.
 #[cfg(feature = "firewall")]
 mod relay_plan_route;
