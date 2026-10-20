@@ -40,12 +40,13 @@ impl MetaMcp {
     pub(super) fn admit_spend(
         &self,
         tool: &str,
-        api_key_name: Option<&str>,
+        // The per-key cost name (`BackendCall::cost_key`), never a display name.
+        cost_key: Option<&str>,
     ) -> Result<dispatch_guards::Admission> {
         let Some(ref enforcer) = self.budget_enforcer else {
             return Ok(dispatch_guards::Admission::default());
         };
-        let result = enforcer.check(tool, api_key_name);
+        let result = enforcer.check(tool, cost_key);
         if !result.allowed {
             return Err(Error::json_rpc(
                 -32003,
@@ -99,7 +100,9 @@ impl MetaMcp {
         // response cache and carried down unchanged. `None` for every MCP
         // backend and for a capability with no account reference.
         account_credential: super::propagation::DispatchAccount,
-        api_key_name: Option<&str>,
+        // The per-key cost name (`MetaMcpCallerContext::cost_key`): the
+        // only name this function uses, for the spend it settles (MIK-8507).
+        cost_key: Option<&str>,
         trace_id: &str,
         policy_epoch: u64,
         protocol_revision: Option<&str>,
@@ -172,7 +175,9 @@ impl MetaMcp {
                 server,
                 tool,
                 session_id,
-                api_key_name,
+                // `account_dispatch` reads only `cost_key`.
+                api_key_name: None,
+                cost_key,
                 trace_id,
                 // On a session-less call `arm_key` is the non-empty caller key or None
                 // (`experiment_key`): the key the caller's own report reads.

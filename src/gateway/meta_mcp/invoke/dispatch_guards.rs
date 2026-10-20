@@ -19,7 +19,12 @@ pub(crate) struct BackendCall<'a> {
     pub server: &'a str,
     pub tool: &'a str,
     pub session_id: Option<&'a str>,
+    /// The caller's display name, for gates, audit and correlation.
     pub api_key_name: Option<&'a str>,
+    /// The name per-key spend and budgets are charged to: the configured API
+    /// key's name, and `None` for every other credential, whatever its display
+    /// name (MIK-8507). Never derived from `api_key_name` at a sink.
+    pub cost_key: Option<&'a str>,
     pub trace_id: &'a str,
     /// The router's caller key, for a session-less call's own spend record
     /// (MIK-7653). `None` where no spend is recorded, or the caller is keyless.
@@ -199,6 +204,7 @@ impl MetaMcp {
             tool,
             session_id,
             api_key_name: None,
+            cost_key: None,
             trace_id,
             caller_key: None,
         })
@@ -253,7 +259,7 @@ impl MetaMcp {
     )]
     pub(crate) fn admit_spend_for(&self, call: &BackendCall<'_>) -> Result<Admission> {
         #[cfg(feature = "cost-governance")]
-        return self.admit_spend(call.tool, call.api_key_name);
+        return self.admit_spend(call.tool, call.cost_key);
         #[cfg(not(feature = "cost-governance"))]
         {
             let _ = call;
@@ -284,7 +290,7 @@ impl MetaMcp {
         let session = call.session_id.unwrap_or_default();
         self.cost_tracker.record(
             session,
-            call.api_key_name,
+            call.cost_key,
             call.server,
             call.tool,
             0,
@@ -305,7 +311,7 @@ impl MetaMcp {
         #[cfg(feature = "cost-governance")]
         if let Some(ref enforcer) = self.budget_enforcer {
             let cost = enforcer.registry.cost_for(call.tool);
-            enforcer.settle(admission.hold(), call.tool, call.api_key_name, cost);
+            enforcer.settle(admission.hold(), call.tool, call.cost_key, cost);
         }
     }
 

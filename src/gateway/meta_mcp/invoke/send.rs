@@ -127,6 +127,7 @@ impl MetaMcp {
             tool,
             session_id,
             api_key_name,
+            cost_key: caller.cost_key(),
             trace_id,
             caller_key: None,
         }) {
@@ -253,7 +254,6 @@ impl MetaMcp {
             outbound_retry,
             permit,
         } = sent;
-        let api_key_name = caller.api_key_name;
         let caller_identity = caller.grant_subject.as_ref();
         let verified_identity = caller.verified_identity;
         // Dispatch: the witness goes with the send (the nonce stays spent).
@@ -283,7 +283,7 @@ impl MetaMcp {
             &caller_credential.headers,
             dispatch_binding.as_deref(),
             account_credential,
-            api_key_name,
+            caller.cost_key(),
             trace_id,
             policy_epoch,
             protocol_revision,

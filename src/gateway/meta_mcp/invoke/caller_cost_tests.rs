@@ -108,6 +108,7 @@ async fn a_caller_with_a_session_is_reported_under_its_session_only() {
 
 /// MIK-8000: an auth-off caller (the shared `anonymous` name, no caller key,
 /// no session) spending repeatedly keeps a bounded number of cost entries.
+/// MIK-8507: it is not an API key, so it holds no per-key entry at all.
 #[tokio::test]
 async fn an_unauthenticated_callers_repeated_spend_stays_bounded() {
     let meta = gateway();
@@ -120,16 +121,16 @@ async fn an_unauthenticated_callers_repeated_spend_stays_bounded() {
     for _ in 0..50 {
         spend(&meta, &anonymous, None, "read").await;
     }
-    // THEN: the key holds one hour bucket and one tool row, not one per call
-    let counted = meta
-        .cost_tracker
-        .key_snapshot("anonymous")
-        .expect("the key's spend");
-    assert_eq!(counted.by_tool[0].call_count, 50, "every call was counted");
-    // One tool row and an hour bucket, two if the calls crossed an hour
-    let held = meta.cost_tracker.key_retained("anonymous");
+    // THEN: no per-key entry is created for a caller that is no API key
     assert!(
-        held <= 3,
-        "the anonymous key holds {held} entries after 50 calls"
+        meta.cost_tracker.key_snapshot("anonymous").is_none(),
+        "an auth-off caller was charged as a key"
+    );
+    assert_eq!(meta.cost_tracker.key_retained("anonymous"), 0);
+    // The spend is still counted, in the gateway-wide total.
+    assert_eq!(
+        meta.cost_tracker.aggregate().total_calls,
+        50,
+        "every call was counted"
     );
 }

@@ -518,6 +518,7 @@ impl MetaMcp {
             tool,
             session_id,
             api_key_name,
+            cost_key: caller.cost_key(),
             trace_id,
             caller_key: None,
         };

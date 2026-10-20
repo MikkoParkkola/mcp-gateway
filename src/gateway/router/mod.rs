@@ -94,6 +94,8 @@ mod continuation_instance_tests;
 #[cfg(all(test, feature = "webui"))]
 mod control_plane_grant_clock_tests;
 #[cfg(test)]
+mod cost_key_tests;
+#[cfg(test)]
 mod direct_audit_tests;
 #[cfg(test)]
 mod direct_cache_guard_tests;

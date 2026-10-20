@@ -504,6 +504,7 @@ pub(super) async fn forward_notification(
                 tool: &envelope.method,
                 session_id: None,
                 api_key_name: None,
+                cost_key: None,
                 trace_id: &envelope.method,
                 caller_key: None,
             };

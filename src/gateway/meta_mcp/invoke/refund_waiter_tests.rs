@@ -126,6 +126,8 @@ async fn call_b(meta: &MetaMcp) -> Value {
     let allow = AllowAll;
     let mut caller = ctx(&allow);
     caller.api_key_name = Some("k-budget");
+    // An API key: only an API key is charged per key (MIK-8507).
+    caller.credential_kind = crate::security::audit::CredentialKind::ApiKey;
     let (mut signing, arguments) = signed("gateway_invoke", &invoke_args("alpha", "read"));
     meta.prepare_signing_for_call(&mut signing, "gateway_invoke", &arguments, None, &caller)
         .expect("the refusal is the dispatcher's");
