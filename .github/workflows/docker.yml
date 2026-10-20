@@ -194,6 +194,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The osv ignores below are per advisory id; this holds the patched
+      # floors and dates they rely on (MIK-8577).
+      - name: Advisory exceptions are dated and floored
+        run: python3 scripts/ci/check_advisory_exceptions.py
       - name: Scan Rust dependencies against OSV
         uses: google/osv-scanner-action/osv-scanner-action@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
         with:
