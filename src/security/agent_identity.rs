@@ -366,7 +366,7 @@ pub enum IdentityAudit {
     DeclaredLabelMismatch,
 }
 
-// ── Private helpers (agent_identity_extract.rs) ───────────────────────────────
+// ── Private helpers (agent_identity/extract.rs) ───────────────────────────────
 
 mod validate;
 pub(crate) use validate::validate_agent_identity;
