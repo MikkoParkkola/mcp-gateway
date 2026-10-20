@@ -10,6 +10,51 @@ use super::{MetaMcp, MetaMcpCallerContext};
 use crate::Error;
 use crate::gateway::router::CallerStanding;
 
+macro_rules! meta_arms {
+    ($($variant:ident => $name:literal,)*) => {
+        #[doc = "One meta-tool the dispatch answers by name (MIK-8498 DISPATCH.3)."]
+        #[doc = "The meta match dispatches on this, so the names it routes are data."]
+        #[doc = "The `meta_arms!` table below is the only list: the enum, `ALL`,"]
+        #[doc = "`name` and `parse` are generated from it, so a variant cannot"]
+        #[doc = "exist outside `ALL`. The test compares `ALL` with"]
+        #[doc = "`surfaced::META_TOOLS` and round-trips every name."]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub(super) enum MetaArm { $($variant,)* }
+        impl MetaArm {
+            #[doc = "Every meta-tool, in the order a did-you-mean hint ranks them."]
+            pub(super) const ALL: [Self; [$(stringify!($variant)),*].len()] = [$(Self::$variant,)*];
+            #[doc = "The tool name a client calls this meta-tool by."]
+            pub(super) const fn name(self) -> &'static str { match self { $(Self::$variant => $name,)* } }
+            #[doc = "The meta-tool `tool_name` names, or `None` for any other name."]
+            pub(super) fn parse(tool_name: &str) -> Option<Self> {
+                Some(match tool_name { $($name => Self::$variant,)* _ => return None })
+            }
+        }
+    };
+}
+
+meta_arms! {
+    Search => "gateway_search",
+    Execute => "gateway_execute",
+    ListServers => "gateway_list_servers",
+    ListTools => "gateway_list_tools",
+    SearchTools => "gateway_search_tools",
+    Invoke => "gateway_invoke",
+    GetStats => "gateway_get_stats",
+    CostReport => "gateway_cost_report",
+    WebhookStatus => "gateway_webhook_status",
+    RunPlaybook => "gateway_run_playbook",
+    KillServer => "gateway_kill_server",
+    ReviveServer => "gateway_revive_server",
+    ListDisabledCapabilities => "gateway_list_disabled_capabilities",
+    SetProfile => "gateway_set_profile",
+    GetProfile => "gateway_get_profile",
+    ListProfiles => "gateway_list_profiles",
+    SetState => "gateway_set_state",
+    ReloadConfig => "gateway_reload_config",
+    ReloadCapabilities => "gateway_reload_capabilities",
+}
+
 impl MetaMcp {
     /// The refusal for a name no meta-tool answers, with a suggestion drawn
     /// only from the tools this caller may see.
@@ -18,27 +63,6 @@ impl MetaMcp {
         tool_name: &str,
         caller: &MetaMcpCallerContext<'_>,
     ) -> Error {
-        const META_TOOLS: &[&str] = &[
-            "gateway_search",
-            "gateway_execute",
-            "gateway_list_servers",
-            "gateway_list_tools",
-            "gateway_search_tools",
-            "gateway_invoke",
-            "gateway_get_stats",
-            "gateway_cost_report",
-            "gateway_webhook_status",
-            "gateway_run_playbook",
-            "gateway_kill_server",
-            "gateway_revive_server",
-            "gateway_list_disabled_capabilities",
-            "gateway_set_profile",
-            "gateway_get_profile",
-            "gateway_list_profiles",
-            "gateway_set_state",
-            "gateway_reload_config",
-            "gateway_reload_capabilities",
-        ];
         // The candidate pool is the EXPOSED set, not the static list.
         // The early return above keeps a hidden tool's exact name from
         // being confirmed; a near miss of that name reached here and
@@ -47,9 +71,9 @@ impl MetaMcp {
         // the pool removes the route -- there is no longer a spelling
         // that makes this branch name an unexposed tool -- rather than
         // wording the hint more carefully and leaving the route open.
-        let exposed: Vec<&str> = META_TOOLS
+        let exposed: Vec<&str> = MetaArm::ALL
             .iter()
-            .copied()
+            .map(|arm| arm.name())
             .filter(|name| self.meta_tool_exposure.is_exposed(name))
             // Nor a tool this caller's standing withholds (A3).
             .filter(|name| CallerStanding::from(caller.scope()).permits(name))
@@ -76,8 +100,8 @@ impl MetaMcp {
         armed
             && scanned
             && matches!(
-                tool_name,
-                "gateway_search" | "gateway_list_tools" | "gateway_search_tools"
+                MetaArm::parse(tool_name),
+                Some(MetaArm::Search | MetaArm::ListTools | MetaArm::SearchTools)
             )
     }
 }

@@ -5,12 +5,16 @@
 use std::borrow::Cow;
 use std::ops::ControlFlow;
 
+use super::dispatch_names::MetaArm;
+
 use super::{
     Arc, CallerStanding, ChainSource, DispatchTarget, GateOutcome, JsonRpcResponse, MetaMcp,
     MetaMcpCallerContext, RequestId, ResultShape, Value, admission, destructive_confirmation_gate,
     error_response_preserving_status, invoke, response_security,
 };
 
+#[cfg(test)]
+mod outcome_tests;
 mod task_intake;
 
 impl MetaMcp {
@@ -418,16 +422,16 @@ impl MetaMcp {
 
         // Only gateway_invoke can be chain-eligible; composites stay NotEligible.
         let (mut source, mut upstream) = (ChainSource::NotEligible, None);
-        let result = match tool_name {
-            "gateway_search" => self.code_mode_search(&arguments, session_id, caller).await,
-            "gateway_execute" => self.code_mode_execute(&arguments, session_id, caller).await,
-            "gateway_list_servers" => {
+        let result = match MetaArm::parse(tool_name) {
+            Some(MetaArm::Search) => self.code_mode_search(&arguments, session_id, caller).await,
+            Some(MetaArm::Execute) => self.code_mode_execute(&arguments, session_id, caller).await,
+            Some(MetaArm::ListServers) => {
                 self.revalidate_caller_slots(Self::proof_of(caller)).await;
                 self.list_servers(caller, session_id).await
             }
-            "gateway_list_tools" => self.list_tools(&arguments, session_id, caller).await,
-            "gateway_search_tools" => self.search_tools(&arguments, session_id, caller).await,
-            "gateway_invoke" => {
+            Some(MetaArm::ListTools) => self.list_tools(&arguments, session_id, caller).await,
+            Some(MetaArm::SearchTools) => self.search_tools(&arguments, session_id, caller).await,
+            Some(MetaArm::Invoke) => {
                 let sourced = self
                     .invoke_tool_sourced(&arguments, session_id, caller)
                     .await;
@@ -439,26 +443,26 @@ impl MetaMcp {
                     ControlFlow::Break(stored) => return stored,
                 }
             }
-            "gateway_get_stats" => self.get_stats(&arguments, caller.is_admin).await,
-            "gateway_cost_report" => self.get_cost_report(&arguments, session_id, caller).await,
-            "gateway_webhook_status" => self.webhook_status(),
-            "gateway_run_playbook" => self.run_playbook(&arguments, caller).await,
-            "gateway_kill_server" => self.kill_server(&arguments),
-            "gateway_revive_server" => self.revive_server(&arguments),
-            "gateway_list_disabled_capabilities" => {
+            Some(MetaArm::GetStats) => self.get_stats(&arguments, caller.is_admin).await,
+            Some(MetaArm::CostReport) => self.get_cost_report(&arguments, session_id, caller).await,
+            Some(MetaArm::WebhookStatus) => self.webhook_status(),
+            Some(MetaArm::RunPlaybook) => self.run_playbook(&arguments, caller).await,
+            Some(MetaArm::KillServer) => self.kill_server(&arguments),
+            Some(MetaArm::ReviveServer) => self.revive_server(&arguments),
+            Some(MetaArm::ListDisabledCapabilities) => {
                 self.revalidate_caller_slots(Self::proof_of(caller)).await;
                 self.list_disabled_capabilities(caller.scope(), session_id)
             }
-            "gateway_set_profile" => self.set_profile(&arguments, session_id, caller.is_admin),
-            "gateway_get_profile" => self.get_profile(session_id, caller.is_admin),
-            "gateway_list_profiles" => self.list_profiles(),
-            "gateway_set_state" => self.set_state(&arguments, session_id, caller.scope()),
-            "gateway_reload_config" => self.reload_config().await,
-            "gateway_reload_capabilities" => self.reload_capabilities().await,
+            Some(MetaArm::SetProfile) => self.set_profile(&arguments, session_id, caller.is_admin),
+            Some(MetaArm::GetProfile) => self.get_profile(session_id, caller.is_admin),
+            Some(MetaArm::ListProfiles) => self.list_profiles(),
+            Some(MetaArm::SetState) => self.set_state(&arguments, session_id, caller.scope()),
+            Some(MetaArm::ReloadConfig) => self.reload_config().await,
+            Some(MetaArm::ReloadCapabilities) => self.reload_capabilities().await,
             // A name that matches no tool is refused before any backend, so it
             // gives its signing nonce back (MIK-8340 A4, MIK-8150's rule). A
             // withheld surfaced name ends here too, so both answer alike.
-            _ => {
+            None => {
                 // Settled when the call returns.
                 invoke::ask_refund(caller);
                 Err(self.no_such_meta_tool(tool_name, caller))

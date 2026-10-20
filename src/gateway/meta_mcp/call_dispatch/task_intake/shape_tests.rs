@@ -47,4 +47,21 @@ fn a_repeat_fill_answer_is_shaped_by_the_presented_name() {
         wrapped,
         "an unsurfaced name: wrapped"
     );
+    // The rule reads the operator's surfaced map, not the caller's view: a
+    // surfaced name withheld from this caller still answers native.
+    let denied = crate::gateway::authz::DenyOne {
+        tool: "my_custom_tool",
+    };
+    let withheld = crate::gateway::meta_mcp::authz_tests::ctx(&denied);
+    assert_eq!(
+        mm.shape_repeat_fill(
+            RequestId::Number(7),
+            "my_custom_tool",
+            value.clone(),
+            &withheld
+        )
+        .result,
+        Some(value.clone()),
+        "a surfaced name withheld from the caller: still native"
+    );
 }

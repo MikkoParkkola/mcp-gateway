@@ -162,11 +162,16 @@ fn constructions(src: &str) -> usize {
 /// [`constructions`] for any `NAME`: a variant, or a function whose result
 /// `is_pre_dispatch` trusts.
 fn constructions_of(src: &str, name: &str) -> usize {
-    let clean = strip_test_items(&sanitize(src));
+    construction_offsets(&strip_test_items(&sanitize(src)), name).len()
+}
+
+/// Where `clean` (sanitized, test items stripped) constructs `name`: the byte
+/// offset of each construction, by the rules [`constructions`] states.
+fn construction_offsets(clean: &str, name: &str) -> Vec<usize> {
     let b = clean.as_bytes();
     let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
     let next_non_ws = |from: usize| b[from..].iter().position(|c| !c.is_ascii_whitespace());
-    let mut count = 0;
+    let mut found = Vec::new();
     for (at, _) in clean.match_indices(name) {
         let end = at + name.len();
         if (at > 0 && ident(b[at - 1])) || b.get(end).copied().is_some_and(ident) {
@@ -182,7 +187,7 @@ fn constructions_of(src: &str, name: &str) -> usize {
         let after_alt = before.is_some_and(|p| b[p] == b'|' && (p == 0 || b[p - 1] != b'|'));
         let open = next_non_ws(end).map(|p| end + p);
         let Some(open) = open.filter(|p| b[*p] == b'(') else {
-            count += 1;
+            found.push(at);
             continue;
         };
         let mut depth = 0usize;
@@ -208,10 +213,10 @@ fn constructions_of(src: &str, name: &str) -> usize {
             || alt_after
             || after_alt;
         if !pattern {
-            count += 1;
+            found.push(at);
         }
     }
-    count
+    found
 }
 
 /// The non-test files under `src/` that construct `name`.
@@ -296,38 +301,234 @@ mod tests { fn t() { let _ = Error::BackendUnavailable("test".into()); } }
     );
 }
 
-/// Call sites (per file, relative to `src/`) allowed to build the sealed
-/// transient, each only before anything reaches the backend (MIK-8428):
-/// `is_pre_dispatch` reads its seal, so it frees an idempotency key. Counted
-/// per file, so a new call in a listed file fails the scan too. A builder's
-/// own definition counts as one.
+/// The module path of `file` (relative to `src/`, as
+/// [`construction_counts`] gives it): `.rs` stripped, a trailing `/mod`
+/// dropped, `/` read as `::`. `lib.rs` and `main.rs` are the crate root, "".
+fn module_path(file: &str) -> String {
+    if file == "lib.rs" || file == "main.rs" {
+        return String::new();
+    }
+    let stem = file.strip_suffix(".rs").unwrap_or(file);
+    let stem = stem.strip_suffix("/mod").unwrap_or(stem);
+    stem.replace('/', "::")
+}
+
+/// Byte offsets of `word` in `clean` where it stands as a whole keyword: not preceded by an identifier byte, followed by whitespace or `<`.
+fn keyword<'a>(clean: &'a str, word: &'a str) -> impl Iterator<Item = usize> + 'a {
+    let b = clean.as_bytes();
+    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    clean.match_indices(word).filter_map(move |(k, _)| {
+        let end = k + word.len();
+        let bounded = (k == 0 || !ident(b[k - 1]))
+            && b.get(end)
+                .is_some_and(|c| c.is_ascii_whitespace() || *c == b'<');
+        bounded.then_some(k)
+    })
+}
+
+/// The item `at` sits in, in sanitized source: `Type::method` inside an
+/// `impl`, `function` outside one, or `<module>` for a construction outside
+/// any function (an import), with the enclosing function's keyword offset
+/// (`None` for `<module>`). This is the item part of the key
+/// [`construction_sites`] builds: the module path from the file plus this
+/// `Type::method` or `fn`. A move to another module changes the row, but a
+/// row never names a file name (MIK-8498 DISPATCH.3).
+fn enclosing_item(clean: &str, at: usize) -> (String, Option<usize>) {
+    let b = clean.as_bytes();
+    // The span of the block a keyword opens: from the keyword to its matching
+    // `}`, or `None` for a body-less item (`;` before any `{`).
+    let block = |from: usize| -> Option<usize> {
+        let open = from + b[from..].iter().position(|c| *c == b'{' || *c == b';')?;
+        if b[open] == b';' {
+            return None;
+        }
+        let mut depth = 0usize;
+        for (j, c) in b.iter().enumerate().skip(open) {
+            match c {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(j);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    };
+    // The innermost `fn` whose span holds `at`, its offset and its name.
+    let function = keyword(clean, "fn")
+        .filter_map(|k| Some((k, block(k)?)))
+        .filter(|(k, end)| *k <= at && at <= *end)
+        .max_by_key(|(k, _)| *k)
+        .map(|(k, _)| {
+            let rest = clean[k + 2..].trim_start();
+            let name = rest[..rest
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(rest.len())]
+                .to_owned();
+            (k, name)
+        });
+    let Some((fn_at, function)) = function else {
+        return ("<module>".to_owned(), None);
+    };
+    // The innermost `impl` whose span holds `at` and whose keyword starts
+    // before the enclosing `fn` keyword: its self type's last segment. A
+    // signature `impl Trait` sits after the `fn` keyword, so it is not the
+    // owner.
+    let owner = keyword(clean, "impl")
+        .filter_map(|k| Some((k, block(k)?)))
+        .filter(|(k, end)| *k < fn_at && *k <= at && at <= *end)
+        .max_by_key(|(k, _)| *k)
+        .map(|(k, _)| {
+            let header =
+                &clean[k + 4..k + 4 + b[k + 4..].iter().position(|c| *c == b'{').unwrap_or(0)];
+            let header = header.trim_start();
+            let header = header.strip_prefix('<').map_or(header, |rest| {
+                let mut depth = 1usize;
+                let close = rest
+                    .char_indices()
+                    .find(|(_, c)| {
+                        depth = match c {
+                            '<' => depth + 1,
+                            '>' => depth - 1,
+                            _ => depth,
+                        };
+                        depth == 0
+                    })
+                    .map_or(rest.len(), |(i, _)| i + 1);
+                &rest[close..]
+            });
+            let self_type = header
+                .rsplit_once(" for ")
+                .map_or(header, |(_, ty)| ty)
+                .trim();
+            let path = self_type.split(['<', ' ', '\n']).next().unwrap_or_default();
+            path.rsplit("::").next().unwrap_or(path).to_owned()
+        });
+    (
+        owner.map_or(function.clone(), |owner| format!("{owner}::{function}")),
+        Some(fn_at),
+    )
+}
+
+/// One construction site's label for the two-functions message.
+fn site_label(file: &str, fn_at: Option<usize>) -> String {
+    match fn_at {
+        Some(at) => format!("{file}@{at}"),
+        None => file.to_owned(),
+    }
+}
+
+/// Record that `key` was produced by (`file`, `fn_at`). A later site with
+/// the same key from a different file or a different fn offset is an error:
+/// one key, one function. Several constructions inside one function record
+/// the same triple, so they are accepted.
+fn record_construction_site(
+    owners: &mut BTreeMap<String, (String, Option<usize>)>,
+    key: &str,
+    file: &str,
+    fn_at: Option<usize>,
+) -> Result<(), String> {
+    if let Some((first_file, first_fn)) = owners.get(key) {
+        if first_file != file || *first_fn != fn_at {
+            return Err(format!(
+                "{key} names two functions ({} and {}): a row must name one reviewed function",
+                site_label(first_file, *first_fn),
+                site_label(file, fn_at)
+            ));
+        }
+        return Ok(());
+    }
+    owners.insert(key.to_owned(), (file.to_owned(), fn_at));
+    Ok(())
+}
+
+/// How many times each non-test item under `src/` constructs `name`, keyed
+/// by the module-qualified function: the module path from the file plus
+/// [`enclosing_item`] (`Type::method` or `fn`), with just the item at the
+/// crate root. A move to another module changes the row, but a row never
+/// names a file name. The same qualified key from two files, or from two
+/// functions in one file, is an error: a row must name one reviewed
+/// function.
+fn construction_sites(name: &str) -> BTreeMap<String, usize> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut found: BTreeMap<String, usize> = BTreeMap::new();
+    let mut owners: BTreeMap<String, (String, Option<usize>)> = BTreeMap::new();
+    for file in construction_counts(name).into_keys() {
+        let src = std::fs::read_to_string(root.join(&file)).expect("readable source");
+        let clean = strip_test_items(&sanitize(&src));
+        let module = module_path(&file);
+        for at in construction_offsets(&clean, name) {
+            let (item, fn_at) = enclosing_item(&clean, at);
+            let key = if module.is_empty() {
+                item
+            } else {
+                format!("{module}::{item}")
+            };
+            if let Err(message) = record_construction_site(&mut owners, &key, &file, fn_at) {
+                panic!("{message}");
+            }
+            *found.entry(key).or_default() += 1;
+        }
+    }
+    found
+}
+
+/// The items allowed to build the sealed transient, each only before
+/// anything reaches the backend (MIK-8428): `is_pre_dispatch` reads its seal,
+/// so it frees an idempotency key. Keyed by the module path from the file
+/// plus the item that builds it (`Type::method` or `function`,
+/// [`enclosing_item`]), so a move to another module changes the row, but a
+/// row never names a file name, and a new call in any item fails the scan.
+/// A builder's own definition counts as one.
 const TRANSIENT_SITES: &[(&str, usize)] = &[
     // `transient_retry_error`'s definition.
-    ("personal_accounts/refusal.rs", 1),
+    ("personal_accounts::refusal::transient_retry_error", 1),
     // `transient_mint_refusal`'s definition and its one build.
-    ("identity_propagation/account_strategies_view.rs", 2),
-    // A capability mint's resolve or refresh admission (`resolve`), and the
-    // lease recheck before the send (`revalidate`, from three callers).
-    ("identity_propagation/account_strategies.rs", 2),
+    (
+        "identity_propagation::account_strategies_view::AccountStrategyRegistry::transient_mint_refusal",
+        2,
+    ),
+    // A capability mint's resolve or refresh admission.
+    (
+        "identity_propagation::account_strategies::AccountStrategyRegistry::resolve",
+        1,
+    ),
+    // The lease recheck before the send, from three callers.
+    (
+        "identity_propagation::account_strategies::AccountStrategyRegistry::revalidate",
+        1,
+    ),
     // A per-user mint's admission, before the dispatch.
-    ("gateway/meta_mcp/invoke/propagation.rs", 1),
+    (
+        "gateway::meta_mcp::invoke::propagation::MetaMcp::resolve_caller_credential_as",
+        1,
+    ),
     // The task intake answer: no task, nothing dispatched.
-    ("gateway/meta_mcp/call_dispatch/task_intake.rs", 1),
+    (
+        "gateway::meta_mcp::call_dispatch::task_intake::MetaMcp::task_intake_transient",
+        1,
+    ),
     // The caller verdict's view Busy, answered before the backend.
-    ("gateway/meta_mcp/invoke/caller_verdict.rs", 1),
+    (
+        "gateway::meta_mcp::invoke::caller_verdict::MetaMcp::dispatch_resolution",
+        1,
+    ),
     // A stored task read: no dispatch at all.
-    ("gateway/meta_mcp/task_replay.rs", 1),
+    ("gateway::meta_mcp::task_replay::retry_later", 1),
 ];
 
 #[test]
 fn the_sealed_transient_is_built_only_at_reviewed_pre_send_sites() {
-    let mut found = construction_counts("transient_retry_error");
-    for (file, count) in construction_counts("transient_mint_refusal") {
-        *found.entry(file).or_default() += count;
+    let mut found = construction_sites("transient_retry_error");
+    for (item, count) in construction_sites("transient_mint_refusal") {
+        *found.entry(item).or_default() += count;
     }
     let allowed: BTreeMap<String, usize> = TRANSIENT_SITES
         .iter()
-        .map(|(file, count)| ((*file).to_string(), *count))
+        .map(|(item, count)| ((*item).to_string(), *count))
         .collect();
     assert_eq!(
         found, allowed,
@@ -335,4 +536,63 @@ fn the_sealed_transient_is_built_only_at_reviewed_pre_send_sites() {
          before anything reaches the backend: review every new or removed call \
          site (left: found, right: reviewed)"
     );
+}
+
+/// The item key is the enclosing method or function, whatever file holds it.
+#[test]
+fn a_construction_is_keyed_by_its_enclosing_item() {
+    let src = "use a::make;\nimpl<T: Clone> Holder<T> {\n    fn build(&self) { make(); }\n}\nimpl Show for Wrapper {\n    fn show() { make(); }\n}\nfn free() { make(); }\n";
+    let clean = sanitize(src);
+    let items: Vec<String> = construction_offsets(&clean, "make")
+        .into_iter()
+        .map(|at| enclosing_item(&clean, at).0)
+        .collect();
+    assert_eq!(
+        items,
+        ["<module>", "Holder::build", "Wrapper::show", "free"]
+    );
+}
+
+#[test]
+fn a_signature_impl_trait_is_not_the_enclosing_owner() {
+    let src = "fn g(x: impl Clone) { make(); }\nfn h() -> impl Clone { make(); }\n";
+    let clean = sanitize(src);
+    let items: Vec<String> = construction_offsets(&clean, "make")
+        .into_iter()
+        .map(|at| enclosing_item(&clean, at).0)
+        .collect();
+    assert_eq!(items, ["g", "h"]);
+}
+
+#[test]
+fn one_key_names_one_function() {
+    let src = "impl A { fn f() { make(); } }\nimpl A { fn f() { make(); } }\n";
+    let clean = sanitize(src);
+    let sites: Vec<(String, Option<usize>)> = construction_offsets(&clean, "make")
+        .into_iter()
+        .map(|at| enclosing_item(&clean, at))
+        .collect();
+    assert_eq!(sites.len(), 2);
+    assert_eq!(sites[0].0.as_str(), "A::f");
+    assert_eq!(sites[0].0.as_str(), sites[1].0.as_str());
+    assert_ne!(sites[0].1, sites[1].1);
+    let mut owners: BTreeMap<String, (String, Option<usize>)> = BTreeMap::new();
+    assert!(record_construction_site(&mut owners, &sites[0].0, "snippet.rs", sites[0].1).is_ok());
+    assert!(record_construction_site(&mut owners, &sites[0].0, "snippet.rs", sites[0].1).is_ok());
+    let rejected = record_construction_site(&mut owners, &sites[1].0, "snippet.rs", sites[1].1);
+    assert!(
+        matches!(&rejected, Err(message) if message.contains("names two functions") && message.contains("a row must name one reviewed function")),
+        "{rejected:?}"
+    );
+}
+
+#[test]
+fn module_path_follows_the_module_tree() {
+    assert_eq!(
+        module_path("gateway/meta_mcp/task_replay.rs"),
+        "gateway::meta_mcp::task_replay"
+    );
+    assert_eq!(module_path("gateway/meta_mcp/mod.rs"), "gateway::meta_mcp");
+    assert_eq!(module_path("error.rs"), "error");
+    assert_eq!(module_path("lib.rs"), "");
 }
