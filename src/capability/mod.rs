@@ -50,6 +50,8 @@ mod openapi;
 mod parser;
 mod read_only_call;
 mod response_cache;
+#[cfg(test)]
+mod schema_shape_load_tests;
 mod schema_validator;
 // The tenant guard it drives is part of the `firewall` feature.
 #[cfg(all(test, feature = "firewall"))]
@@ -75,6 +77,7 @@ pub use executor::jsonrpc::JsonRpcExecutor;
 pub use executor::rest::{ExecutionContext, ProtocolExecutor};
 pub use hash::{compute_capability_hash, rewrite_with_pin, strip_sha256_line};
 pub use loader::CapabilityLoader;
+pub(crate) use loader::{IssueLog, refuse_unloadable};
 pub use openapi::{AuthTemplate, CacheTemplate, GeneratedCapability, OpenApiConverter};
 pub(crate) use parser::validate_cli_templates;
 pub use parser::{parse_capability, parse_capability_file, validate_capability};

@@ -72,6 +72,21 @@ pub(super) fn check_schema_input(input: &serde_json::Value, issues: &mut Vec<Iss
         // Empty schema is not an error for webhook-only capabilities, but worth warning.
         return;
     }
+    // A scalar or an array carries no `type` or `properties` to object to, so
+    // without this it passed as valid and was served (MIK-8358.CAPCFG.2).
+    if !input.is_object() {
+        issues.push(
+            Issue::error(
+                "CAP-003",
+                format!(
+                    "schema.input must be a YAML mapping (object), got {}",
+                    json_kind(input)
+                ),
+            )
+            .with_field("schema.input"),
+        );
+        return;
+    }
 
     if let Some(t) = input.get("type").and_then(|v| v.as_str()) {
         if t != "object" {
@@ -98,6 +113,18 @@ pub(super) fn check_schema_input(input: &serde_json::Value, issues: &mut Vec<Iss
             )
             .with_field("schema.input.properties"),
         );
+    }
+}
+
+/// The JSON kind of a non-object value, for a CAP-003 message.
+const fn json_kind(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "a boolean",
+        serde_json::Value::Number(_) => "a number",
+        serde_json::Value::String(_) => "a string",
+        serde_json::Value::Array(_) => "an array",
+        serde_json::Value::Object(_) => "an object",
     }
 }
 

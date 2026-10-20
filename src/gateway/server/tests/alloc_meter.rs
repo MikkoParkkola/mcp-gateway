@@ -312,3 +312,31 @@ where
         },
     )
 }
+
+/// MIK-8412: the process-wide mode is off unless an isolated child arms it.
+/// In this (parent) process nothing arms it, so an allocation lands in no
+/// process-wide counter.
+#[test]
+fn the_process_wide_mode_is_off_by_default() {
+    assert!(
+        std::env::var_os(CHILD_ENV).is_none() && !WIDE.load(Ordering::SeqCst),
+        "process-wide metering is armed outside an isolated child"
+    );
+    let before = WIDE_CALLS.load(Ordering::SeqCst);
+    drop(std::hint::black_box(vec![0_u8; 4 * LARGE_BYTES]));
+    assert_eq!(
+        WIDE_CALLS.load(Ordering::SeqCst),
+        before,
+        "an allocation was counted process-wide while the mode was off"
+    );
+}
+
+/// Outside an isolated child the process-wide meter refuses to start.
+#[test]
+#[should_panic(expected = "process-wide metering runs only in an isolated child")]
+fn the_process_wide_meter_refuses_outside_a_child() {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("runtime")
+        .block_on(measure_async_process_wide(|| async {}));
+}

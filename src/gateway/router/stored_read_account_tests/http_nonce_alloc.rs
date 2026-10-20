@@ -8,10 +8,10 @@
 //!
 //! Why not the stdio caps (2 large, 8 KiB small, MIK-8400): those bound a
 //! whole refusal after parse; this share is a fixed cost per refused call
-//! with no payload term, measured on every thread at 3 large / 11,096 B and
-//! 62,210 to 62,260 B small, the same at 1 and 3 MiB. The cap is on that share and on its staying
-//! payload-independent. HTTP intake's own cost is outside it (the plain
-//! target pays it too).
+//! with no payload term, the same at 1 and 3 MiB. The cap is on that share
+//! and on its staying payload-independent; the pinned large count and how it
+//! moved are at [`LARGE_ALLOCATIONS`]. HTTP intake's own cost is outside it
+//! (the plain target pays it too).
 //!
 //! Custody work runs in `spawn_blocking`, off the request's thread, so the
 //! rows meter every thread (`measure_async_process_wide`) inside an isolated
@@ -27,8 +27,12 @@ use crate::gateway::alloc_meter::{
     LARGE_BYTES, Measured, isolate, measure_async, measure_async_process_wide,
 };
 
-/// At most this many more large allocations on the per-user target.
-const LARGE_ALLOCATIONS: u64 = 4;
+/// Exactly this many more large allocations on the per-user target
+/// (all threads; the lead's ruling keeps the count exact). Measured 3 at
+/// first, 2 after merges #3954/#3965/#3974/#3973/#3977/#3956, 1 after #3976:
+/// a change in either direction must be re-measured and re-ruled, not
+/// absorbed.
+const LARGE_ALLOCATIONS: u64 = 1;
 /// At most this many more bytes in large allocations.
 const LARGE_BUDGET: u64 = 16 * 1024;
 /// At most this many more bytes in small allocations: measured 62,210 to
@@ -257,11 +261,11 @@ fn verdict_share_is_capped(kind: &str, nonce: impl Fn(&str) -> Option<Value>, ex
                  so the baseline is wrong: {share:?}"
             );
             assert!(
-                share.large <= i128::from(LARGE_ALLOCATIONS)
+                share.large == i128::from(LARGE_ALLOCATIONS)
                     && share.large_bytes <= i128::from(LARGE_BUDGET)
                     && share.small_bytes <= i128::from(SMALL_BUDGET),
-                "ALLOC.2 {kind} {size}: the verdict's share {share:?} is above \
-                 {LARGE_ALLOCATIONS} large / {LARGE_BUDGET} B and {SMALL_BUDGET} B small \
+                "ALLOC.2 {kind} {size}: the verdict's share {share:?} is not \
+                 {LARGE_ALLOCATIONS} large within {LARGE_BUDGET} B and {SMALL_BUDGET} B small \
                  (per-user {}, plain {})",
                 readings[0],
                 readings[1]

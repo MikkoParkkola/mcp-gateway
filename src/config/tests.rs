@@ -7,6 +7,7 @@ use std::env;
 use super::*;
 use crate::gateway::test_helpers::write_owner_only;
 
+mod capability_name;
 mod env_files;
 mod error_budget;
 mod idle_and_agents;

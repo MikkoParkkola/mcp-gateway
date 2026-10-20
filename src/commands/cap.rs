@@ -362,7 +362,7 @@ async fn cap_discover(
             if write_config {
                 say("\n📝 Writing discovered servers to config...");
                 match crate::write_discovered_to_config(&servers, config_path.as_deref(), mode) {
-                    Ok(path) => {
+                    Ok((path, _)) => {
                         say(&format!("✅ Config written to {}", path.display()));
                         say(&format!(
                             "\nTo use discovered servers, start gateway with: mcp-gateway -c {}",
@@ -455,10 +455,11 @@ async fn cap_discover_shadow(
 
         let apply_path = output_config_path.unwrap_or_else(|| compare_config_path.clone());
         match crate::write_discovered_to_config(&adoptable_servers, Some(&apply_path), mode) {
-            Ok(path) => {
+            // The count is what the writer wrote, not what was offered: it
+            // skips a server named like `capabilities.name` (MIK-8358).
+            Ok((path, adopted)) => {
                 eprintln!(
-                    "Adopted {} local shadow server(s) into {}",
-                    adoptable_servers.len(),
+                    "Adopted {adopted} local shadow server(s) into {}",
                     path.display()
                 );
                 let skipped = shadow_servers.len().saturating_sub(adoptable_servers.len());
