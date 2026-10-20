@@ -49,7 +49,7 @@ async fn a_keyed_watch_started_by_first_subscriber_polls_charged_to_its_holder()
 /// MIK-8498 merged it into `Charge::of` (kept below as written then),
 /// and the inverse in `judge_rows` (hold.rs). The class-keyed
 /// "principal only when Keyed" also agrees with the Charge-keyed one
-/// in `Run::key_of` (watch_source.rs:425).
+/// in `Run::key_of` (`watch_source.rs:425`).
 #[test]
 fn every_watch_class_maps_to_one_charge_and_back() {
     // Every variant, written out. The exhaustive match in the loop has
@@ -58,13 +58,14 @@ fn every_watch_class_maps_to_one_charge_and_back() {
     let classes = [WatchClass::Free, WatchClass::Keyed];
     let principal = "principal";
     for class in classes {
-        let () = match class {
-            WatchClass::Free => (),
-            WatchClass::Keyed => (),
+        let expected = match class {
+            WatchClass::Free => Charge::Global,
+            WatchClass::Keyed => Charge::Holder,
         };
         // (1) `Charge::of`, watch_source/hold.rs:14-22, which
         // `on_first_subscriber` calls (watch_source.rs:334).
         let charge = Charge::of(class);
+        assert_eq!(charge, expected, "Charge::of for {class:?}");
         // (2) The inline expression `on_first_subscriber` used before
         // MIK-8498, exactly as it was written: `let shared = class ==
         // WatchClass::Free;` feeding `if shared { Charge::Global } else
