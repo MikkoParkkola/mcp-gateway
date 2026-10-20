@@ -108,7 +108,7 @@ struct TokenResponse {
     scope: Option<String>,
 }
 
-fn redact_opt(v: &Option<String>) -> &'static str {
+fn redact_opt(v: Option<&String>) -> &'static str {
     if v.is_some() { "<redacted>" } else { "None" }
 }
 
@@ -121,7 +121,7 @@ impl std::fmt::Debug for TokenResponse {
             .field("access_token", &"<redacted>")
             .field("token_type", &self.token_type)
             .field("expires_in", &self.expires_in)
-            .field("refresh_token", &redact_opt(&self.refresh_token))
+            .field("refresh_token", &redact_opt(self.refresh_token.as_ref()))
             .field("scope", &self.scope)
             .finish()
     }
@@ -142,7 +142,7 @@ impl std::fmt::Debug for ClientRegistrationResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ClientRegistrationResponse")
             .field("client_id", &self.client_id)
-            .field("client_secret", &redact_opt(&self.client_secret))
+            .field("client_secret", &redact_opt(self.client_secret.as_ref()))
             .finish()
     }
 }
@@ -175,7 +175,7 @@ impl std::fmt::Debug for OAuthClientConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OAuthClientConfig")
             .field("client_id", &self.client_id)
-            .field("client_secret", &redact_opt(&self.client_secret))
+            .field("client_secret", &redact_opt(self.client_secret.as_ref()))
             .field("callback_host", &self.callback_host)
             .field("callback_port", &self.callback_port)
             .field("callback_path", &self.callback_path)
