@@ -562,4 +562,50 @@ mod cwe532_debug_redaction {
             "client_id should stay visible: {dbg}"
         );
     }
+
+    // The None branch of the redaction: an absent refresh token prints as
+    // the quoted string "None", not as a bare None.
+    #[test]
+    fn token_response_debug_shows_none_for_an_absent_refresh_token() {
+        let r = TokenResponse {
+            access_token: SENTINEL.to_string(),
+            token_type: Some("Bearer".to_string()),
+            expires_in: Some(3600),
+            refresh_token: None,
+            scope: Some("read".to_string()),
+        };
+        assert_eq!(
+            format!("{r:?}"),
+            "TokenResponse { access_token: \"<redacted>\", token_type: Some(\"Bearer\"), expires_in: Some(3600), refresh_token: \"None\", scope: Some(\"read\") }"
+        );
+    }
+
+    // The None branch of the redaction: an absent issued secret prints as
+    // the quoted string "None", not as a bare None.
+    #[test]
+    fn client_registration_response_debug_shows_none_for_an_absent_secret() {
+        let r = ClientRegistrationResponse {
+            client_id: "client-123".to_string(),
+            client_secret: None,
+        };
+        assert_eq!(
+            format!("{r:?}"),
+            "ClientRegistrationResponse { client_id: \"client-123\", client_secret: \"None\" }"
+        );
+    }
+
+    // The None branch of the redaction: an absent fixed secret prints as
+    // the quoted string "None", unlike the bare None of the other options.
+    #[test]
+    fn oauth_client_config_debug_shows_none_for_an_absent_client_secret() {
+        let cfg = OAuthClientConfig {
+            client_secret: None,
+            client_id: Some("client-123".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            format!("{cfg:?}"),
+            "OAuthClientConfig { client_id: Some(\"client-123\"), client_secret: \"None\", callback_host: None, callback_port: None, callback_path: None, token_refresh_buffer_secs: None }"
+        );
+    }
 }

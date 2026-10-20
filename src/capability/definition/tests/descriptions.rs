@@ -293,6 +293,7 @@ fn to_mcp_tool_with_schema_includes_schema_fields_in_description() {
     });
     let cap = make_capability_with_schema("market_data", "Fetch market data", vec![], schema);
     let tool = cap.to_mcp_tool();
+
     let desc = tool.description.unwrap();
     assert!(desc.contains("symbol"), "description must contain 'symbol'");
     assert!(
@@ -301,6 +302,40 @@ fn to_mcp_tool_with_schema_includes_schema_fields_in_description() {
     );
     assert!(desc.contains("price"), "description must contain 'price'");
     assert!(desc.contains("volume"), "description must contain 'volume'");
+}
+
+#[test]
+fn collect_all_schema_fields_deduplicates_across_input_and_output() {
+    // GIVEN: "shared" is a property of both the input and output schemas,
+    // with another property in each (listed alphabetically, so the order
+    // below does not depend on map iteration order)
+    // WHEN: collecting all schema fields
+    // THEN: input tokens come first, "shared" appears once, in its input
+    // position, and the output-only token follows
+    let input = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "alpha": { "type": "string" },
+            "shared": { "type": "string" }
+        }
+    });
+    let mut cap = make_capability_with_schema("cross_schema", "Cross schema", vec![], input);
+    cap.schema.output = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "beta": { "type": "string" },
+            "shared": { "type": "string" }
+        }
+    });
+
+    assert_eq!(
+        cap.collect_all_schema_fields(),
+        vec![
+            "alpha".to_string(),
+            "shared".to_string(),
+            "beta".to_string()
+        ]
+    );
 }
 
 #[test]
