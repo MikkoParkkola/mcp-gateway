@@ -22,7 +22,7 @@ impl BudgetEnforcer {
     pub fn restore(&self, persisted: &super::super::persistence::PersistedCosts) {
         // A clock it cannot read keeps the saved spend counting (MIK-8202):
         // discarding it would restart the budgets at zero.
-        let today = crate::clock::unix_secs().map(|now| now / 86_400);
+        let today = super::current_day();
         if today.is_ok_and(|today| persisted.saved_at / 86_400 != today) {
             tracing::info!(
                 // The pre-split module path, kept as the log target.
