@@ -234,31 +234,48 @@ async fn at_the_post_cap_a_session_tool_points_a_legacy_caller_to_initialize() {
 }
 
 /// A session tool the gateway hides keeps its ordinary answer at the cap:
-/// the capacity advice would reveal a tool the caller cannot see.
+/// the degraded answer is the answer the same hidden tool gets below the cap,
+/// so the capacity path reveals nothing about tools the caller cannot see.
 #[tokio::test]
-async fn at_the_post_cap_a_hidden_session_tool_gets_no_capacity_advice() {
+async fn at_the_post_cap_a_hidden_session_tool_gets_its_ordinary_answer() {
     let (state, _dir) = super::tests::meta_fixture::test_router_app_state_with_meta(
         &crate::config::AuthConfig::default(),
         None,
         |meta| meta.with_exposed_meta_tools(&["gateway_list_servers".to_string()]),
     )
     .await;
-    state.multiplexer.fill_provisional_cap_for_test();
     let app = create_router(Arc::clone(&state));
-    let (status, _, body) = answer(
-        app.oneshot(post(
-            &call(7, "gateway_set_state", &json!({"state": "review"})),
-            None,
-        ))
-        .await
-        .unwrap(),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    let text = body.to_string();
-    assert!(!text.contains("provisional-session capacity"), "{body}");
-    assert!(
-        body.get("error").is_some() || body["result"]["isError"] == json!(true),
-        "{body}"
-    );
+    let tools = [
+        ("gateway_set_state", json!({"state": "review"})),
+        ("gateway_set_profile", json!({"profile": "default"})),
+        ("gateway_get_profile", json!({})),
+    ];
+    let mut ordinary = Vec::new();
+    for (name, arguments) in &tools {
+        let (status, _, body) = answer(
+            app.clone()
+                .oneshot(post(&call(7, name, arguments), None))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{name} below the cap: {body}");
+        ordinary.push(body);
+    }
+    state.multiplexer.fill_provisional_cap_for_test();
+    for ((name, arguments), below) in tools.iter().zip(&ordinary) {
+        let (status, session, body) = answer(
+            app.clone()
+                .oneshot(post(&call(7, name, arguments), None))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{name}: {body}");
+        assert!(session.is_none(), "{name}: served without a session");
+        assert_eq!(
+            &body, below,
+            "{name}: the hidden tool's answer must not change at the cap"
+        );
+    }
 }

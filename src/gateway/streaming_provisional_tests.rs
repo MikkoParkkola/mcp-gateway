@@ -468,35 +468,49 @@ fn a_session_frame_stays_within_the_stream_cap_sizing() {
     );
 }
 
-/// MIK-8533: real mints in both shares, then concurrent promotions and
-/// removals; each counter always equals the provisional sessions of its share
-/// still in the store.
+/// MIK-8533: releases of both shares, promotion and removal alike, overlap
+/// with new mints of both shares; each counter always equals the provisional
+/// sessions of its share still in the store.
 #[test]
 fn concurrent_mixed_mints_and_releases_keep_each_counter_exact() {
     let m = mux();
-    let minted: Vec<(SessionId, bool)> = (0..200)
+    let kind_of = |i: usize| {
+        if (i / 2) % 2 == 1 {
+            MintKind::ProvisionalStream
+        } else {
+            MintKind::Provisional
+        }
+    };
+    // Pre-minted: per kind, half promoted and half removed below.
+    let minted: Vec<SessionId> = (0..100)
         .map(|i| {
-            let stream = i % 2 == 1;
-            let kind = if stream {
-                MintKind::ProvisionalStream
-            } else {
-                MintKind::Provisional
-            };
-            let (id, _hold) = m
-                .open_request_session_scoped(None, &owner(), None, kind)
-                .expect("under the cap");
-            (id, stream)
+            m.open_request_session_scoped(None, &owner(), None, kind_of(i))
+                .map(|(id, _hold)| id)
+                .expect("under the cap")
         })
         .collect();
     std::thread::scope(|scope| {
-        for (i, (id, _)) in minted.iter().enumerate() {
+        for (i, id) in minted.iter().enumerate() {
             let m = &m;
-            scope.spawn(move || match i % 4 {
-                0 => {
-                    m.touch_if_owned(id.expose_secret(), &owner());
+            scope.spawn(move || {
+                if i % 2 == 0 {
+                    assert!(m.touch_if_owned(id.expose_secret(), &owner()));
+                } else {
+                    m.remove_session(id.expose_secret());
                 }
-                1 => m.remove_session(id.expose_secret()),
-                _ => {}
+            });
+        }
+        for i in 0..100 {
+            let m = &m;
+            scope.spawn(move || {
+                let kind = if i % 2 == 1 {
+                    MintKind::ProvisionalStream
+                } else {
+                    MintKind::Provisional
+                };
+                let _ = m
+                    .open_request_session_scoped(None, &owner(), None, kind)
+                    .expect("under the cap");
             });
         }
     });
@@ -514,5 +528,6 @@ fn concurrent_mixed_mints_and_releases_keep_each_counter_exact() {
         m.provisional_shares_for_test(),
         (stored(false), stored(true))
     );
+    // Every pre-minted one was promoted or removed; the 100 new remain.
     assert_eq!(m.provisional_shares_for_test(), (50, 50));
 }
