@@ -466,7 +466,9 @@ impl CostTracker {
     /// Record a tool-call cost event.
     ///
     /// `session_id` — MCP session identifier.
-    /// `api_key_name` — authenticated client name (`None` for anonymous/bearer).
+    /// `api_key_name` — the per-key cost name: the API key's name for an
+    /// API-key caller, `None` for any other (anonymous, the static bearer, a
+    /// dashboard session, an OIDC or key-server identity). MIK-8507.
     /// `backend` / `tool` — server and tool identifiers.
     /// `token_count` — estimated tokens (0 if unknown).
     /// `price_per_million` — USD per million tokens.
