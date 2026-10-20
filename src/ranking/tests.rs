@@ -548,3 +548,21 @@ fn offline_evaluation_report_does_not_echo_query_payload() {
 fn sr(tool: &str, description: &str) -> SearchResult {
     SearchResult::new("s", tool, description)
 }
+
+#[test]
+fn the_safety_signal_is_zero_for_every_label_the_risk_signal_zeroes() {
+    // The two parsers must read a risk label the same way (MIK-8549).
+    for key in ["risk_level", "risk"] {
+        for label in ["HIGH", "Critical", "UNSAFE", "blocked", "high"] {
+            let mut m = serde_json::Map::new();
+            m.insert(key.into(), label.into());
+            let v = serde_json::Value::Object(m);
+            assert_eq!(parse_risk_signal(&v), 0.0, "risk {key}={label}");
+            assert_eq!(
+                parse_safety_signal(&v),
+                0.0,
+                "safety must be 0 for {key}={label}, as risk is"
+            );
+        }
+    }
+}
