@@ -47,10 +47,7 @@ pub fn extract_schema_fields(schema: &serde_json::Value) -> Vec<String> {
 fn collect_schema_tokens(schema: &serde_json::Value, push: &mut impl FnMut(&str)) {
     // Top-level description words
     if let Some(desc) = schema.get("description").and_then(|v| v.as_str()) {
-        for word in desc.split_whitespace() {
-            let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
-            push(clean);
-        }
+        push_words(desc, push);
     }
 
     // Property names and their descriptions
@@ -58,11 +55,15 @@ fn collect_schema_tokens(schema: &serde_json::Value, push: &mut impl FnMut(&str)
         for (name, prop_schema) in props {
             push(name);
             if let Some(desc) = prop_schema.get("description").and_then(|v| v.as_str()) {
-                for word in desc.split_whitespace() {
-                    let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
-                    push(clean);
-                }
+                push_words(desc, push);
             }
         }
+    }
+}
+
+fn push_words(desc: &str, push: &mut impl FnMut(&str)) {
+    for word in desc.split_whitespace() {
+        let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
+        push(clean);
     }
 }
