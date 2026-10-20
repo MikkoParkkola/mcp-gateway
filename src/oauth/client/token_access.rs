@@ -14,25 +14,14 @@ impl OAuthClient {
     /// Returns an error if token refresh and re-authorization both fail.
     pub async fn get_token(&self) -> Result<String> {
         // Check if we have a valid cached token
-        {
-            let token = self.current_token.read();
-            if let Some(ref t) = *token
-                && !t.is_expired()
-            {
-                return Ok(t.access_token.clone());
-            }
+        if let Some(access) = self.live_token() {
+            return Ok(access);
         }
 
         // Try to refresh if we have a refresh token
         // A refresh sends the stored refresh token (MIK-8018); a cached one
         // only says this client has a grant to refresh.
-        let has_refresh_token = self
-            .current_token
-            .read()
-            .as_ref()
-            .is_some_and(|t| t.refresh_token.is_some());
-
-        if has_refresh_token {
+        if self.has_refresh_token() {
             match self.refresh_token().await {
                 Ok(new_token) => return Ok(new_token),
                 // A policy refusal is not an expired grant: re-authorizing
@@ -59,6 +48,14 @@ impl OAuthClient {
             .map(|token| token.access_token.clone())
     }
 
+    /// Whether the cached token holds a refresh token.
+    fn has_refresh_token(&self) -> bool {
+        self.current_token
+            .read()
+            .as_ref()
+            .is_some_and(|t| t.refresh_token.is_some())
+    }
+
     /// The token step a detached request-time task runs (MIK-8339), for a
     /// caller that captured `since` (its cancel epoch) and `cohort` before
     /// it queued. Before a login is led or joined, the refresh observes a
@@ -80,12 +77,7 @@ impl OAuthClient {
         let cancelled = || Error::AuthorizationCancelled {
             backend: self.backend_name.clone(),
         };
-        let has_refresh_token = self
-            .current_token
-            .read()
-            .as_ref()
-            .is_some_and(|t| t.refresh_token.is_some());
-        if has_refresh_token {
+        if self.has_refresh_token() {
             let refreshed = match &self.login_gate {
                 Some(gate) => tokio::select! {
                     biased;
