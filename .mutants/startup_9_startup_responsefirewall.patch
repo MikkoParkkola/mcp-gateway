@@ -1,0 +1,15 @@
+diff --git a/src/gateway/server/build_meta.rs b/src/gateway/server/build_meta.rs
+index a76fc65e3..d5214b573 100644
+--- a/src/gateway/server/build_meta.rs
++++ b/src/gateway/server/build_meta.rs
+@@ -58,9 +58,7 @@ impl Gateway {
+     pub(super) fn response_firewall(&self, meta_mcp: &MetaMcp) -> Arc<Firewall> {
+         let fw_cfg = self.config.security.firewall.clone();
+         let fw_enabled = fw_cfg.enabled;
+-        let tt = fw_cfg
+-            .anomaly_detection
+-            .then(|| Arc::new(TransitionTracker::new()));
++        let tt = (false && fw_cfg.anomaly_detection).then(|| Arc::new(TransitionTracker::new()));
+         let fw = Arc::new(
+             Firewall::from_config(fw_cfg, tt)
+                 .with_env(Arc::clone(&self.env))

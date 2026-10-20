@@ -1,0 +1,16 @@
+diff --git a/src/gateway/server/stdio_channel.rs b/src/gateway/server/stdio_channel.rs
+index b577aed8f..b10dbd9cd 100644
+--- a/src/gateway/server/stdio_channel.rs
++++ b/src/gateway/server/stdio_channel.rs
+@@ -68,7 +68,10 @@ impl StdioClientChannel {
+     /// `false` when nothing waits — the expected cause is a late answer to a
+     /// prompt that already timed out, which is not an error.
+     pub(crate) fn resolve(&self, id: &str, frame: Value) -> bool {
+-        match self.pending.remove(id) {
++        match self.pending.remove(id).or_else(|| {
++            let other = self.pending.iter().next()?.key().clone();
++            self.pending.remove(&other)
++        }) {
+             Some((_, tx)) => tx.send(frame).is_ok(),
+             None => false,
+         }

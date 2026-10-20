@@ -1,0 +1,13 @@
+diff --git a/src/transport/stdio_env.rs b/src/transport/stdio_env.rs
+index 064744c1b..e9b1a823a 100644
+--- a/src/transport/stdio_env.rs
++++ b/src/transport/stdio_env.rs
+@@ -18,8 +18,6 @@ pub(crate) fn configure_child_environment(
+     cmd: &mut Command,
+     backend_env: &HashMap<String, String>,
+ ) {
+-    cmd.env_clear();
+-
+     let path = std::env::var_os("PATH").unwrap_or_else(|| OsString::from(FALLBACK_EXEC_PATH));
+     cmd.env("PATH", path);
+ 

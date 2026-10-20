@@ -1,0 +1,23 @@
+head_sha	e312bcc08ab8124d0a9715171e718ca273c23bf7
+HTTP_03	linux	http_3_connections_api_route.patch	--lib gateway::router::tests::openwebui_adapter::start_route::callback::delete::api_delete_without_an_adapter_assertion_is_unauthenticated
+HTTP_06	linux	http_6_own_key.patch	--lib gateway::router::tests::openwebui_adapter::revoke_route::revoke_route_undeclared_account_is_404_and_touches_nothing
+HTTP_09	linux	http_9_meta_mcp_dispatch.patch	--lib gateway::router::identity_parity_tests::meta_route_contradiction_refusal_is_audited
+HTTP_12	linux	http_12_same_origin.patch	--lib transport::http::tests::evaluate_redirect_cross_origin_public_host_rejected
+HTTP_15	linux	http_15_metrics_handler.patch	--lib gateway::router::tests::metrics_scrape::metrics_wrong_token_is_401
+ACCT_02	linux	acct_2_inside.patch	--lib personal_accounts::storage::journey::tests::t_c06a_per_user_creation_is_a_sliding_ten_minute_rate
+ACCT_05	linux	acct_5_custody_release.patch	--lib personal_accounts::vault::vault_tests::revalidate::a_revoke_after_the_mint_refuses_the_credential_at_the_durable_recheck
+ACCT_08	linux	acct_8_https_scheme.patch	--lib personal_accounts::config::journey::journey_tests::public_origin_that_is_not_a_bare_https_origin_is_refused
+ACCT_11	linux	acct_11_key_fields.patch	--lib personal_accounts::tests::s01_empty_and_oversized_fields_refuse_but_boundary_is_valid
+ACCT_14	linux	acct_14_not_private.patch	--lib personal_accounts::tests::store::s03_record_filesystem_failures_are_not_absence
+OAUTH_01	linux	oauth_1_oauth_advertised.patch	--lib oauth::client::destination::tests::hardened_oauth_refuses_private_token_endpoint
+OAUTH_04	linux	oauth_4_validate_issuer.patch	--test mik_7272_oauth_acs issuer::ac_oauth_1_a_different_issuer_is_refused_before_redemption
+OAUTH_07	linux	oauth_7_get_token.patch	--lib oauth::client::authorize_tests::get_token_refreshes_an_expired_token
+BRIDGE_02	linux	bridge_2_is_bridge_reply_id.patch	--test mik_7212_mrtr7_bridge_acs ac_mrtr_7a_wire_methods_and_id_prefixes_match_the_admitted_set
+STARTUP_09	linux	startup_9_startup_responsefirewall.patch	--lib gateway::server::signing_allocation_tests::response_firewall_anomaly::anomaly_detection_on_builds_a_firewall_that_blocks_a_never_seen_transition
+STARTUP_04	linux	startup_4_startup_cleartext.patch	--lib gateway::server::cleartext::tests::every_credential_gate_counts
+STARTUP_07	linux	startup_7_startup_grantaudit.patch	--lib gateway::server::identity_grants::tests::t3cd_failed_snapshot_append_serves_nothing
+STDIO_02	linux	stdio_2_stdio_envclear.patch	--lib transport::stdio::tests::backend_subprocess_receives_only_safe_and_explicit_environment
+STDIO_05	linux	stdio_5_stdio_guardowner.patch	--lib transport::stdio::tests::stdio_refuses_to_reroute_a_progress_token_that_is_already_live
+STDIO_08	linux	stdio_8_stdio_resolveid.patch	--lib gateway::server::stdio_channel::tests::a_reply_for_another_id_leaves_the_waiting_request_pending
+TASKS_03	linux	tasks_3_owned.patch	--lib gateway::task_service::store_tests::store_04_owner_and_revision_refusals_preserve_every_file_and_view
+TASKS_06	linux	tasks_6_settle_bounded.patch	--lib gateway::task_service::store_tests::targets::settle_bounded_refuses_a_foreign_owner_and_writes_nothing
