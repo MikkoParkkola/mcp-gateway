@@ -5,9 +5,9 @@
 //! `cost_key` is the API key's name for an API-key credential and `None` for
 //! any other, so a display name another credential carries (`bearer`,
 //! `dashboard`, an OIDC actor id) never selects a key's budget. The display
-//! name itself is untouched: the audit record's `account`, the relay audit
-//! label and the response-correlation caller all read `api_key_name`, and
-//! must keep naming the caller.
+//! name itself is untouched: `api_key_name`, which the relay audit label and
+//! the response-correlation caller read, keeps naming the caller, and the
+//! audit record's `account` is asserted directly.
 
 use super::{MetaMcpCallerContext, anonymous_caller};
 use crate::security::audit::{AuditWho, CredentialKind};
