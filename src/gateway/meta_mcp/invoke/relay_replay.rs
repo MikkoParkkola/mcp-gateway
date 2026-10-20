@@ -358,25 +358,31 @@ pub(super) fn stage_plan_replay(meta: &MetaMcp, who: RelayKey<'_>) {
     let _ = (meta, who);
 }
 
-/// Stage the replayed receipts of the stored multi-target task
-/// `stored`, for `who` (E2): looked up by `(task id, revision)`, each
-/// source checked against the task's recorded targets.
-pub(crate) fn stage_task_replay(meta: &MetaMcp, who: RelayKey<'_>, stored: &CommittedTask) {
+/// Stage the replayed receipts of the stored task `stored`, for `who`
+/// (E2): looked up by `(task id, revision)`, each source checked against
+/// the task's recorded targets. Returns whether that one lookup found
+/// an entry, so a caller with a fallback for a missing entry need not
+/// look up (and count) a second time.
+pub(crate) fn stage_task_replay(meta: &MetaMcp, who: RelayKey<'_>, stored: &CommittedTask) -> bool {
     #[cfg(feature = "firewall")]
     {
         let Some(fw) = meta.firewall.as_deref().filter(|fw| fw.relay_active()) else {
-            return;
+            return false;
         };
         let Some((digests, calls)) = fw.task_replay_digests(stored.task.id(), stored.revision)
         else {
-            return;
+            return false;
         };
         let targets: Vec<(&str, &str)> =
             crate::gateway::task_service::Target::pairs(&stored.targets);
         stage_entries(fw, who, digests, &calls, Some(&targets));
+        true
     }
     #[cfg(not(feature = "firewall"))]
-    let _ = (meta, who, stored);
+    {
+        let _ = (meta, who, stored);
+        false
+    }
 }
 
 /// Stage each of `digests` for `who`, under its own source and label

@@ -13,8 +13,8 @@
 //! `relay_plan_replay_content_guards`.
 use super::super::*;
 use super::relay_plan_replay::{
-    ALPHA, BETA, OTHER_PROSE, PROSE, Rig, SUGGEST, WINDOW_SECS, answering, chain, erring_step,
-    keyed_call, playbook, playbook_args, rig, task_call,
+    ALPHA, BETA, OTHER_PROSE, PROSE, Rig, SUGGEST, Sensitivity, WINDOW_SECS, answering, chain,
+    erring_step, keyed_call, playbook, playbook_args, rig, rig_with, task_call,
 };
 use super::support::*;
 use pretty_assertions::assert_eq;
@@ -614,4 +614,70 @@ async fn g25_a_detection_off_keyed_plan_renews_nothing_once_detection_is_on() {
         probe_refused(&on, "key-b", 256, PROSE).await,
         "control: it receipts its own deliveries"
     );
+}
+
+/// R7b (REPLAY.5, found in the final review round): a plan whose steps
+/// all run on ONE distinct target. `Record.targets` is deduplicated, so
+/// the task records a single target, but it is still a plan: a re-read
+/// must replay its per-step snapshots, not stage the stored plan output
+/// as one single-target receipt. No `sources` rule: step A is sensitive
+/// only by its context-integrity verdict, which the playbook's output
+/// mapping drops (premise). The re-read still renews A's receipt as
+/// sensitive.
+/// Mutant killed: route a completed task by its target count (a plan
+/// on one distinct target takes the single-target arm and renews
+/// nothing).
+#[tokio::test]
+async fn r7b_a_one_target_playbook_still_renews_its_verdict_sensitive_step() {
+    let classified = format!("{PROSE} Contact: keeper@orchardcoop.fi");
+    let playbook = format!(
+        "name: replay\ndescription: plan steps\non_error: continue\ninputs: {{}}\nsteps:\n\
+         \x20 - name: s1\n    server: {ALPHA}\n    tool: {TOOL}\n\
+         \x20 - name: s2\n    server: {ALPHA}\n    tool: {TOOL}\n\
+         output:\n  type: object\n  properties:\n\
+         \x20   a:\n      path: $s1.content[0].text\n"
+    );
+    let rig = rig_with(
+        &classified,
+        OTHER_PROSE,
+        Some(&playbook),
+        Sensitivity::Verdict,
+    )
+    .await;
+    // Settled here, not by `Rig::settle_task`, whose premise is one call
+    // on each of alpha and beta.
+    let created = post(
+        &rig.state,
+        "key-a",
+        task_call(1, "r7b", "gateway_run_playbook", &playbook_args()),
+    )
+    .await;
+    let task = task_id(&created);
+    let settled = poll_until_terminal(&rig.state, "key-a", &task).await;
+    assert_eq!(status_of(&settled), "completed", "base: {settled}");
+    let joined = rig
+        .state
+        .task_executor
+        .drain(std::time::Duration::from_secs(10))
+        .await;
+    assert!(
+        joined.is_clean(),
+        "the settling worker must finish: {joined:?}"
+    );
+    assert_eq!(rig.calls(), (2, 0), "premise: both steps ran on alpha");
+    let targets = rig
+        .state
+        .task_executor
+        .service
+        .store
+        .targets_for_test(&task)
+        .len();
+    assert_eq!(targets, 1, "premise: the plan records ONE distinct target");
+    let shown = get_task(&rig.state, "key-a", &task).await.to_string();
+    assert!(
+        shown.contains("orchardcoop") && !shown.contains("personal_data"),
+        "premise: the stored output carries A's text but not the step's verdict: {shown}"
+    );
+    rig.renews_after(&[&classified], None, get_task(&rig.state, "key-a", &task))
+        .await;
 }

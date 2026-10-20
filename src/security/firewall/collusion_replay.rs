@@ -11,7 +11,14 @@
 //! process and are worthless after a restart, so nothing here reaches disk.
 //! A snapshot's segments hold the raw delivered text; that text is bounded
 //! by the per-entry cap ([`REPLAY_ENTRY_BYTES`], 1 MiB) and the total
-//! budget ([`REPLAY_RECEIPT_BYTES`], 32 MiB), and is never persisted.
+//! budget ([`REPLAY_RECEIPT_BYTES`], 32 MiB), and is never persisted. The
+//! budget counts fingerprint and text bytes plus a per-item estimate
+//! ([`REPLAY_ITEM_OVERHEAD`]); struct layout, spare capacity, the keys and
+//! the index are not counted, so actual memory can run somewhat above it
+//! (conservative accounting: MIK-8550). The entry cap is reached only by a
+//! task re-read with `tasks.max_record_bytes` raised: a keyed sync replay
+//! serves at most `RESULT_LIMIT` (512 KiB, fixed) and a task re-read at most
+//! `tasks.max_record_bytes` (default 512 KiB).
 //!
 //! One store sits beside each relay detector and is shared wherever the
 //! detector is shared (F6). Its lock is its own: nothing in here calls the

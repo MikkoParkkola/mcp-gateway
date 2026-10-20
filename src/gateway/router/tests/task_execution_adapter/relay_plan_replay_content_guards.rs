@@ -151,7 +151,7 @@ async fn g1_a_keyed_replay_never_receipts_the_gateways_own_advice() {
 /// re-read renews step 1 and stages nothing under label 0.
 /// Mutant: stage under label 0 from the final answer.
 #[tokio::test]
-async fn g18_a_resumed_chain_lists_both_steps_and_stages_nothing_under_step_0() {
+async fn g18_a_resumed_chain_lists_the_final_rounds_call_and_stages_nothing_under_step_0() {
     let beta = MockBackend::answering(Answer::Sequence(vec![
         super::input_round::ask("confirm", super::input_round::STATE_1),
         text(OTHER_PROSE),
@@ -217,7 +217,7 @@ async fn g18_a_resumed_chain_lists_both_steps_and_stages_nothing_under_step_0() 
 /// the live receipt held. A's text renews as before.
 /// Mutant: note only on success.
 #[tokio::test]
-async fn g21_a_failed_playbook_step_is_listed_and_stages_nothing() {
+async fn g21_a_failed_playbook_step_is_listed_and_replays_as_live() {
     let failing = MockBackend::answering(Answer::Sequence(vec![json!({
         "content": [{"type": "text", "text": OTHER_PROSE}], "isError": true})]));
     let rig = rig_with_mocks(
@@ -578,8 +578,9 @@ async fn g11b_rig() -> (Rig, String) {
 /// equivalent here, since the receipt's retained fingerprints cover the
 /// cut middle, so the leaf check already fails and the filtering path
 /// runs either way. That mutant is killed at unit level by
-/// `d11_a_changed_answer_drops_both_excuse_sets_in_both_branches`. This
-/// row pins the route outcome. Mutant killed: skip filtering on a
+/// `d11_a_changed_answer_drops_both_excuse_sets_in_both_branches` and at
+/// route level by `g11c_another_step_changing_drops_a_fully_delivered_steps_excuses`.
+/// This row pins the route outcome. Mutant killed: skip filtering on a
 /// changed answer (G11).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn g11b_a_redaction_inside_the_cut_middle_drops_its_excuse() {
@@ -670,5 +671,61 @@ async fn g11b_a_redaction_inside_the_cut_middle_drops_its_excuse() {
     assert_eq!(
         filtered, 1,
         "the filtered drop was not counted exactly once reason=filtered"
+    );
+}
+
+/// G11c (H): the F4 `identical` gate at route level. Alpha's step text
+/// runs past the record cap (its stored snapshot carries `cut_fps`,
+/// premise via the cut counter) and is delivered again in full; only
+/// beta's step changes, its credential run redacted by the second
+/// gateway's tightened policy. The answer differs (premise), so alpha's
+/// receipt goes through the filtering path although every one of its
+/// kept segments and fingerprints is still delivered: its excuse-only
+/// sets are dropped and counted `reason=filtered`.
+/// Mutant killed: the old fast path (no `identical` gate): alpha's
+/// fully delivered receipt would keep its sets, and nothing would be
+/// counted for it. d11 pins the same gate at unit level.
+#[cfg(feature = "metrics")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn g11c_another_step_changing_drops_a_fully_delivered_steps_excuses() {
+    let removed = removed_run();
+    let alpha_text = format!("{PROSE} {}", over_cap_tail());
+    let beta_text = format!("{OTHER_PROSE} {removed}");
+    let rig = with_unredacted_router(rig(&alpha_text, &beta_text, None).await);
+    let cuts_before = rig.relay.relay_text_cuts();
+    let first = post(
+        &rig.state,
+        "key-a",
+        keyed_call(1, "g11c", "gateway_execute", &chain()),
+    )
+    .await;
+    assert!(
+        first.get("error").is_none() && first.to_string().contains(&removed),
+        "base: first delivery carries beta's run unredacted: {first}"
+    );
+    assert!(
+        rig.relay.relay_text_cuts() > cuts_before,
+        "premise: live retention cut alpha's over-cap step, so its stored snapshot carries cut_fps"
+    );
+    let (on, _on_store) = redacting_gateway(&rig).await;
+    let measured = post(
+        &on,
+        "key-a",
+        keyed_call(2, "g11c", "gateway_execute", &chain()),
+    );
+    let (replay, filtered) = crate::gateway::count_plan_replay_skipped("filtered", measured);
+    assert!(replay.get("error").is_none(), "base: replayed: {replay}");
+    assert_ne!(
+        replay["result"], first["result"],
+        "premise: stored and delivered answers differ"
+    );
+    assert!(
+        replay.to_string().contains("row1199") && !replay.to_string().contains(&removed),
+        "premise: alpha is delivered in full and only beta's run is redacted: {replay}"
+    );
+    assert_eq!(rig.calls(), (1, 1), "P2: the replay dispatched nothing");
+    assert_eq!(
+        filtered, 1,
+        "alpha's fully delivered receipt kept its excuse sets against a changed answer"
     );
 }
