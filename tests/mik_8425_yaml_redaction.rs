@@ -291,7 +291,7 @@ fn a_bad_duration_read_does_not_print_it() {
     let Err(err) = yaml::from_str::<Timeout>(&text) else {
         panic!("accepted; expected a refusal for {text:?}");
     };
-    assert_redacted("bad duration", &err, SENTINEL, "timeout");
+    assert_redacted("bad duration", &err, SENTINEL, "invalid duration");
     let control = yaml::from_str::<Timeout>("timeout: 30s\n").expect("control loads");
     assert_eq!(control.timeout, std::time::Duration::from_secs(30));
 }
@@ -662,10 +662,10 @@ fn formats_a_value(arg: &str) -> bool {
         if let Some(paren) =
             macro_paren(bytes, i, "format_args").or_else(|| macro_paren(bytes, i, "format"))
         {
-            if let Some(content) = first_literal_content(arg, paren) {
-                if has_single_brace(content) {
-                    return true;
-                }
+            if let Some(content) = first_literal_content(arg, paren)
+                && has_single_brace(content)
+            {
+                return true;
             }
         } else if let Some(paren) = call_paren(bytes, i, "too_long") {
             let Some(close) = matching_paren(arg, paren) else {
