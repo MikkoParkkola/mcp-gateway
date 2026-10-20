@@ -583,7 +583,7 @@ fn sanitized(
     (name, grant): (&str, crate::gateway::authz::BackendGrant<'_>),
     request: Value,
 ) -> Result<Value, Rejection> {
-    use crate::security::sanitize::{ProtocolRoute, sanitize_request};
+    use crate::security::sanitize::{ProtocolRoute, sanitize_request_in_place};
     let exempt = state.meta_mcp.passthrough_instance(grant, name);
     if let Some(instance) = &exempt {
         crate::gateway::meta_mcp::visible::memo::record_exempt_instances(std::slice::from_ref(
@@ -597,5 +597,9 @@ fn sanitized(
         return Ok(request);
     }
     let id = crate::protocol::mrtr::raw_request_id(&request);
-    sanitize_request(&request, ProtocolRoute::Direct).map_err(|e| refused(id, &e))
+    // In place (MIK-8499): refused on an error, so a partly rewritten tree
+    // is never used.
+    let mut request = request;
+    sanitize_request_in_place(&mut request, ProtocolRoute::Direct).map_err(|e| refused(id, &e))?;
+    Ok(request)
 }

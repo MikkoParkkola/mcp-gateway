@@ -183,6 +183,91 @@ pub fn sanitize_json_value(value: &Value) -> Result<Value> {
     }
 }
 
+/// Whether [`sanitize_string`] would refuse or rewrite `s`: a NUL refuses
+/// it, an unsafe control character is stripped. Allocates nothing.
+fn string_needs_work(s: &str) -> bool {
+    contains_null_byte(s) || s.chars().any(is_unsafe_control)
+}
+
+/// [`sanitize_string`] in place (MIK-8499): a clean string is left as it is,
+/// with no allocation; a dirty one has its unsafe control characters removed
+/// where it lies. The NFC step is the identity (see
+/// [`unicode_nfc_normalize`]), so this yields exactly what `sanitize_string`
+/// returns.
+///
+/// # Errors
+///
+/// `Error::Protocol` if the string contains null bytes.
+fn sanitize_string_in_place(s: &mut String) -> Result<()> {
+    if contains_null_byte(s) {
+        return Err(Error::Protocol(
+            "Input contains null bytes which are not allowed".to_string(),
+        ));
+    }
+    if s.chars().any(is_unsafe_control) {
+        s.retain(|c| !is_unsafe_control(c));
+    }
+    Ok(())
+}
+
+/// [`sanitize_json_value`] in place (MIK-8499): the same result, copying only
+/// what changes. An object whose keys are all clean keeps its map and has its
+/// members sanitized where they are, in order; one with a key to rewrite or
+/// refuse is rebuilt by [`rebuild_keys_in_place`], its members moved, never
+/// copied. A tool's arguments are business data, so a client can send such a
+/// key there (S9c).
+///
+/// # Errors
+///
+/// `Error::Protocol` if any string contains null bytes. The value may be
+/// partly rewritten on error; every caller refuses the request then.
+fn sanitize_json_value_in_place(value: &mut Value) -> Result<()> {
+    if let Value::Object(map) = value
+        && map.keys().any(|key| string_needs_work(key))
+    {
+        return rebuild_keys_in_place(map, None, |_, member| sanitize_json_value_in_place(member));
+    }
+    match value {
+        Value::String(s) => sanitize_string_in_place(s),
+        Value::Array(items) => items.iter_mut().try_for_each(sanitize_json_value_in_place),
+        Value::Object(map) => map.values_mut().try_for_each(sanitize_json_value_in_place),
+        // Numbers, booleans, and null pass through unchanged.
+        _ => Ok(()),
+    }
+}
+
+/// `map` rebuilt with every key sanitized, its members moved, never copied
+/// (MIK-8499). The rule is the copying rebuild's: member by member, in order,
+/// the key is sanitized first (a NUL refuses), then `member` sanitizes the
+/// value under the cleaned key, then the pair is inserted, so a later key
+/// that cleans to an earlier one overwrites it and the first error wins. A
+/// member whose key as sent is `keep_as_sent` keeps its value as sent.
+/// Allocates the new map's index and nothing per member: no key is copied,
+/// however long.
+///
+/// # Errors
+///
+/// The first error, a key's or `member`'s. `map` is left empty; every
+/// caller refuses the request then.
+fn rebuild_keys_in_place(
+    map: &mut serde_json::Map<String, Value>,
+    keep_as_sent: Option<&str>,
+    mut member: impl FnMut(&str, &mut Value) -> Result<()>,
+) -> Result<()> {
+    let mut rebuilt = serde_json::Map::with_capacity(map.len());
+    for (mut key, mut value) in std::mem::take(map) {
+        // Judged on the key as sent, before cleaning, so nothing is copied.
+        let kept = keep_as_sent == Some(key.as_str());
+        sanitize_string_in_place(&mut key)?;
+        if !kept {
+            member(&key, &mut value)?;
+        }
+        rebuilt.insert(key, value);
+    }
+    *map = rebuilt;
+    Ok(())
+}
+
 /// Whether `security.sanitize_input` sanitizes requests: the one switch every
 /// entry route reads (MIK-8154 SAN.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -227,29 +312,50 @@ mod protocol;
 pub(crate) use protocol::{ProtocolRoute, validate_protocol_fields};
 
 /// The one sanitize step (MIK-8154 SAN.1): the whole request, `id` kept as is
-/// (validated); a request whose every target is `passthrough` skips it.
+/// (validated); a request whose every target is `passthrough` skips it. A
+/// copying form of [`sanitize_request_in_place`]. Every production caller owns
+/// its request and sanitizes it in place (MIK-8499), so this form serves the
+/// tests, which keep their input to compare against.
 ///
 /// # Errors
 ///
 /// `Error::Protocol` for a NUL anywhere, or a control character in `id`.
+#[cfg(test)]
 pub(crate) fn sanitize_request(request: &Value, route: ProtocolRoute) -> Result<Value> {
-    let Some(map) = request.as_object() else {
-        return sanitize_json_value(request);
+    let mut sanitized = request.clone();
+    sanitize_request_in_place(&mut sanitized, route)?;
+    Ok(sanitized)
+}
+
+/// [`sanitize_request`] on a request the caller owns (MIK-8499): the same
+/// result, copying only what changes. A request with a top-level key to
+/// rewrite is rebuilt by [`rebuild_keys_in_place`]; otherwise each member is
+/// sanitized where it lies, in order, `id` left as sent.
+///
+/// # Errors
+///
+/// `Error::Protocol` for a NUL anywhere, or a control character in `id`. The
+/// request may be partly rewritten on error; every caller refuses it then.
+pub(crate) fn sanitize_request_in_place(request: &mut Value, route: ProtocolRoute) -> Result<()> {
+    let Some(map) = request.as_object_mut() else {
+        return sanitize_json_value_in_place(request);
     };
     if let Some(Value::String(id)) = map.get("id") {
         validate_protocol_text(id)?;
     }
-    let mut sanitized = serde_json::Map::with_capacity(map.len());
-    for (key, value) in map {
-        let clean_key = sanitize_string(key)?;
-        let clean = if key == "id" {
-            value.clone()
-        } else {
-            protocol::sanitize_value(&clean_key, value, route)?
-        };
-        sanitized.insert(clean_key, clean);
+    if map.keys().any(|key| string_needs_work(key)) {
+        // `id` as sent is kept as sent; every other member is walked under
+        // its cleaned key.
+        return rebuild_keys_in_place(map, Some("id"), |clean, member| {
+            protocol::sanitize_value_in_place(clean, member, route)
+        });
     }
-    Ok(Value::Object(sanitized))
+    for (key, value) in map.iter_mut() {
+        if key != "id" {
+            protocol::sanitize_value_in_place(key, value, route)?;
+        }
+    }
+    Ok(())
 }
 
 /// Sanitize an optional JSON value, returning `None` unchanged.
@@ -267,6 +373,14 @@ pub fn sanitize_optional_json(value: Option<Value>) -> Result<Option<Value>> {
 #[cfg(test)]
 #[path = "sanitize_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "sanitize_alloc_tests.rs"]
+mod alloc_tests;
+
+#[cfg(test)]
+#[path = "sanitize_equivalence_tests.rs"]
+mod equivalence_tests;
 
 // ── Diagnostic URL redaction ──────────────────────────────────────────────────
 
