@@ -157,3 +157,6 @@ pub(super) fn agent_task_owner(client_id: &str) -> String {
         crate::hashing::sha256_hex(client_id.as_bytes())
     )
 }
+
+#[cfg(test)]
+mod owners_tests;
