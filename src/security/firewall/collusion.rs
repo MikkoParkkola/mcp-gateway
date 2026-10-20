@@ -764,9 +764,15 @@ mod stream;
 mod thin;
 pub(crate) use seam::{SeamFingerprint, SeamForms};
 
+#[path = "collusion_replay.rs"]
+pub(super) mod replay;
+
 #[cfg(test)]
 #[path = "collusion_holders_tests.rs"]
 mod holders_tests;
+#[cfg(test)]
+#[path = "collusion_replay_tests.rs"]
+mod replay_tests;
 #[cfg(test)]
 #[path = "collusion_tests.rs"]
 mod tests;

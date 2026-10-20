@@ -671,6 +671,9 @@ impl super::MetaMcp {
         // authorization refusal proves nothing was sent.
         if !matches!(outcome, Err(Error::Forbidden { .. })) {
             super::dispatch_log::note_completed(args);
+            // `MIK-8408` H2: the same call, with the plan step label it
+            // ran under, for the replay entry's `calls`.
+            super::invoke::relay::note_replay_call(args);
         }
         outcome
     }

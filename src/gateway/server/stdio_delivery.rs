@@ -70,7 +70,7 @@ impl StdioAnswer {
             Self::Finalized(answer) => {
                 let (response, settle) = answer.split();
                 let frame = crate::gateway::outbound::answer(None, None, response, None, None);
-                deliver(meta, frame, session_id, settle, None).await
+                deliver(meta, frame, session_id, settle, None).await.0
             }
         }
     }
@@ -111,10 +111,10 @@ impl super::Gateway {
         reads: &StdioReads,
         session_id: &str,
         (answer, params, hidden): (StdioAnswer, Option<&Value>, Option<&ReadAttribution>),
-        staged: StagedReceipts,
+        mut staged: StagedReceipts,
     ) -> OutboundFrame {
-        let frame = match answer {
-            StdioAnswer::Built(value) => reads.answer(value, params, hidden).await,
+        let (frame, retained) = match answer {
+            StdioAnswer::Built(value) => (reads.answer(value, params, hidden).await, true),
             StdioAnswer::Finalized(answer) => {
                 let (response, settle) = answer.split();
                 let frame = reads.judge(response, params, hidden);
@@ -123,6 +123,11 @@ impl super::Gateway {
                 deliver(meta, frame, session_id, settle, hidden.cloned()).await
             }
         };
+        // `MIK-8408` E1: an answer admission did not retain captures no
+        // replay receipts; its live receipts still record below.
+        if !retained {
+            staged.drop_replay_capture();
+        }
         staged.commit(frame.delivers_result());
         frame
     }
@@ -130,14 +135,16 @@ impl super::Gateway {
 
 /// Record the delivery of the judged `frame` (`POST /mcp`'s recorder), then
 /// settle the execution on the answer the record left: the finalized one, or
-/// the audit-unavailable refusal when the log refused the record.
+/// the audit-unavailable refusal when the log refused the record. The second
+/// value is whether admission retained the delivery (`true` with no
+/// execution to settle).
 async fn deliver(
     meta: &MetaMcp,
     frame: OutboundFrame,
     session_id: &str,
     settle: Settle,
     read: Option<ReadAttribution>,
-) -> OutboundFrame {
+) -> (OutboundFrame, bool) {
     let correlation = ResponseCorrelation {
         session_id,
         caller: "stdio",
@@ -148,8 +155,13 @@ async fn deliver(
     let (frame, stored) =
         crate::gateway::router::record_judged_delivery(meta, frame, &correlation, settle.stored)
             .await;
-    if let (Some(execution), Some(stored)) = (settle.execution, stored) {
-        execution.complete_delivery_read(&stored, settle.signing.as_ref(), (read, settle.writes));
-    }
-    frame
+    let retained = match (settle.execution, stored) {
+        (Some(execution), Some(stored)) => execution.complete_delivery_read(
+            &stored,
+            settle.signing.as_ref(),
+            (read, settle.writes),
+        ),
+        _ => true,
+    };
+    (frame, retained)
 }

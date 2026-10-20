@@ -5,6 +5,7 @@
 //! when the committed error is the peer's own.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::TaskExecutor;
 use crate::gateway::meta_mcp::invoke::relay::{AnswerShape, GatewayStamps};
@@ -98,6 +99,20 @@ pub(super) async fn settle_followed(
             cancel_rx,
         )
         .await;
+    // `MIK-8408` E1: capture under the settled row's own key, as the
+    // input-round settlement does; a single-target followed result has
+    // no in-plan receipt, so its commit captures nothing.
+    if stored && let Ok(settled) = executor.service.get(followed.principal, id) {
+        let retention = settled.task.ttl_ms().map_or(
+            Duration::from_secs(crate::idempotency::admission::RETENTION_SECS),
+            Duration::from_millis,
+        );
+        crate::gateway::meta_mcp::invoke::relay::note_task_capture(
+            id.to_owned(),
+            settled.revision,
+            retention,
+        );
+    }
     state.meta_mcp().commit_staged_relay(stored);
 }
 

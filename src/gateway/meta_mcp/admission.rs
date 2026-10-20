@@ -5,7 +5,7 @@
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 
-use crate::idempotency::admission::{Admission, Lease, Mode, Refusal, Request};
+use crate::idempotency::admission::{Admission, Lease, Mode, Refusal, Request, Settlement};
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::{Error, Result};
 
@@ -100,17 +100,19 @@ impl SyncLease {
         self,
         response: &JsonRpcResponse,
         signing: Option<&super::signing::SigningInvocationContext>,
-    ) {
+    ) -> bool {
         let read = crate::security::tenant_reads::in_read_scope()
             .then(|| crate::security::tenant_reads::noted().unwrap_or_default());
         let writes = crate::gateway::gateway_writes::recorded();
-        self.complete_delivery_read(response, signing, (read, writes));
+        self.complete_delivery_read(response, signing, (read, writes))
     }
 
     /// [`Self::complete_delivery`] for a caller past its read scope: `read` is
     /// what the scope noted (`None` when no scope was open) and `writes` what
     /// the gateway wrote into the response (MIK-7991). The stdio route settles
-    /// after its judge, outside the scope (MIK-7920).
+    /// after its judge, outside the scope (MIK-7920). `true` when the
+    /// delivery was retained, so a replay can serve it (`MIK-8408` E1: only
+    /// a retained plan delivery's receipts are captured).
     pub(crate) fn complete_delivery_read(
         self,
         response: &JsonRpcResponse,
@@ -119,7 +121,7 @@ impl SyncLease {
             Option<crate::security::tenant_reads::ReadAttribution>,
             crate::gateway::gateway_writes::WriteRecord,
         ),
-    ) {
+    ) -> bool {
         let (lease, dispatches) = self.state.into_inner();
         let audit = self.audit.into_inner();
         let steps = self.steps.into_inner();
@@ -129,7 +131,8 @@ impl SyncLease {
                 crate::protocol::mrtr::InputRequired::claims_input_required(result)
             })
         {
-            return;
+            super::invoke::relay::cancel_replay_capture();
+            return false;
         }
         // Transport correlation never belongs to retained operation state.
         let mut secured = response.to_value_lossy();
@@ -161,7 +164,12 @@ impl SyncLease {
             dispatched: Some(steps),
             bindings,
         };
-        lease.complete_secured(&serde_json::to_value(stored).unwrap_or(Value::Null));
+        let retained = lease.complete_secured(&serde_json::to_value(stored).unwrap_or(Value::Null))
+            == Settlement::Retained;
+        if !retained {
+            super::invoke::relay::cancel_replay_capture();
+        }
+        retained
     }
 }
 
@@ -352,6 +360,12 @@ impl MetaMcp {
         let operation = operation();
         #[cfg(test)]
         LAST_OPERATION.with(|last| *last.borrow_mut() = Some(operation.clone()));
+        // `MIK-8408` F1: the stored entry's replay key for this request,
+        // with the round below folded in at the note. Only a relay-active
+        // delivery captures or stages receipts, so only then is it taken.
+        let replay_key = self
+            .relay_active()
+            .then(|| super::invoke::relay::sync_replay_key(&principal, key, &operation));
         let representation = representation();
         let request = Request {
             principal: &principal,
@@ -367,14 +381,18 @@ impl MetaMcp {
             self.execution_admission().admit_round(request, &round)
         };
         match admission {
-            Ok(Admission::Owned(lease)) => Ok(SyncAdmission::Owned(SyncLease {
-                state: Mutex::new((lease, 0)),
-                playbook: None,
-                audit: Mutex::new(None),
-                steps: Mutex::new(Vec::new()),
-                bindings: Mutex::new(Vec::new()),
-            })),
+            Ok(Admission::Owned(lease)) => {
+                super::invoke::relay::note_sync_capture_key(replay_key.as_ref(), &round);
+                Ok(SyncAdmission::Owned(SyncLease {
+                    state: Mutex::new((lease, 0)),
+                    playbook: None,
+                    audit: Mutex::new(None),
+                    steps: Mutex::new(Vec::new()),
+                    bindings: Mutex::new(Vec::new()),
+                }))
+            }
             Ok(Admission::Replay(bytes)) => {
+                super::invoke::relay::note_sync_lookup_key(replay_key.as_ref(), &round);
                 // Read before the store is decoded: an unreadable origin
                 // fails the admission without touching the retained bytes it
                 // must never serve (E1).

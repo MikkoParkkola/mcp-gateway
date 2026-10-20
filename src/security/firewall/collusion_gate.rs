@@ -14,6 +14,7 @@ use serde_json::Value;
 use super::collusion::egress_parts;
 #[cfg(test)]
 pub(super) use super::collusion::egress_text;
+use super::collusion::replay::ReplayReceipts;
 use super::collusion::{
     CAPACITY_METRIC, CollusionDetector, MAX_COMMON_PRINCIPALS, RelayAction, RelayParams,
     RelayReason, SeamForms,
@@ -182,6 +183,9 @@ impl<'a> RelayCaller<'a> {
 /// [`Firewall::with_collusion`]) and the compiled globs.
 pub(super) struct RelayGate {
     detector: Option<Arc<CollusionDetector>>,
+    /// The replay receipt store (`MIK-8408` E1): one beside the detector,
+    /// shared wherever the detector is shared.
+    replay: Arc<ReplayReceipts>,
     sources: Vec<glob::Pattern>,
     non_egress: Vec<glob::Pattern>,
     /// The compiled `allowed_flows`, as (source, egress), bit `i` for entry `i`.
@@ -215,6 +219,7 @@ impl RelayGate {
         };
         Self {
             detector: detector_for(config),
+            replay: Arc::new(ReplayReceipts::new()),
             sources: compile(&config.sources),
             non_egress: compile(&config.non_egress),
             flows: config
@@ -297,8 +302,19 @@ impl Firewall {
     pub(crate) fn sharing_relay_with(mut self, other: Option<&Firewall>) -> Self {
         if let Some(other) = other {
             self.relay.detector.clone_from(&other.relay.detector);
+            // `MIK-8408` F6: the replay store is shared exactly as the
+            // detector it sits beside.
+            self.relay.replay.clone_from(&other.relay.replay);
         }
         self
+    }
+
+    /// The replay receipt store beside this firewall's detector
+    /// (`MIK-8408` E1; stage 1 reads it in tests only, route wiring is a
+    /// later stage).
+    #[cfg(test)]
+    pub(super) fn replay_receipts(&self) -> &Arc<ReplayReceipts> {
+        &self.relay.replay
     }
 
     /// The relay detector this firewall records into and checks against.
@@ -523,6 +539,9 @@ fn context_integrity_sensitive(result: &Value) -> bool {
 mod answer;
 #[path = "collusion_gate_receipts.rs"]
 mod receipts;
+#[path = "collusion_gate_replay.rs"]
+mod replay_gate;
+pub(crate) use replay_gate::{ReplayCalls, ReplaySource, ReplayedDigest};
 #[path = "collusion_gate_seams.rs"]
 mod seams;
 #[path = "collusion_staging.rs"]

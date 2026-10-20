@@ -87,8 +87,13 @@ impl MetaMcp {
             let mut staged = std::mem::take(&mut *receipts);
             // A plan's step receipts wait for the final answer, which keeps
             // each to the text it still delivers (MIK-7887.RECEIPT.2).
-            if staged.iter().any(|r| r.in_plan) {
-                staged.retain(|r| r.in_plan);
+            // Replayed receipts (`MIK-8408`) wait with them: the final pass
+            // keeps each to the answer as delivered now (F4).
+            if staged
+                .iter()
+                .any(|r| r.in_plan || r.kind == super::Kind::Replayed)
+            {
+                staged.retain(|r| r.in_plan || r.kind == super::Kind::Replayed);
                 for r in &mut staged {
                     r.pending_retain = true;
                 }
@@ -185,7 +190,9 @@ impl MetaMcp {
                 // its staged receipt, kept to the text delivered.
                 if shape.as_built(result) == AnswerShape::InvokeWrapped
                     && receipts.len() == 1
-                    && !receipts.iter().any(|r| r.in_plan)
+                    && !receipts
+                        .iter()
+                        .any(|r| r.in_plan || r.kind == super::Kind::Replayed)
                     && let Some(text) = super::super::audit::rewritten_text(result)
                 {
                     keep_to_rewritten(fw, &mut receipts, text);
@@ -197,8 +204,17 @@ impl MetaMcp {
                 let Some(copy) = receipt_copy(result, stamps, shape) else {
                     return;
                 };
-                if receipts.iter().any(|r| r.in_plan) {
-                    keep_plan_receipts(fw, &mut receipts, &plan_answer(copy));
+                if receipts
+                    .iter()
+                    .any(|r| r.in_plan || r.kind == super::Kind::Replayed)
+                {
+                    let answer = plan_answer(copy);
+                    if receipts.iter().any(|r| r.in_plan) {
+                        keep_plan_receipts(fw, &mut receipts, &answer);
+                    }
+                    // `MIK-8408` F4: a replayed receipt is kept only to
+                    // the answer as delivered now; no seam pass re-runs.
+                    keep_replayed_receipts(fw, &mut receipts, &answer);
                     return;
                 }
                 let [one] = receipts.as_mut_slice() else {
@@ -283,6 +299,32 @@ fn keep_plan_receipts(
     if read {
         super::seams::add_subset_seams(fw, receipts, answer);
     }
+}
+
+/// Keep each replayed receipt to `answer` as delivered now (`MIK-8408`
+/// F4): unchanged when the answer still delivers all of it, filtered
+/// against it otherwise, and dropped when the answer is over the bound
+/// a receipt is kept against. A replayed receipt inside a live plan
+/// step was already kept with that plan's receipts and is left alone.
+#[cfg(feature = "firewall")]
+fn keep_replayed_receipts(
+    fw: &crate::security::firewall::Firewall,
+    receipts: &mut Vec<super::Receipt>,
+    answer: &Value,
+) {
+    let mut kept: Vec<super::Receipt> = Vec::with_capacity(receipts.len());
+    for mut r in receipts.drain(..) {
+        if r.kind == super::Kind::Replayed && !r.in_plan {
+            let digest = std::mem::take(&mut r.digest);
+            let Some(digest) = fw.keep_replayed_digest(digest, answer, r.step) else {
+                continue;
+            };
+            r.digest = digest;
+            r.pending_retain = false;
+        }
+        kept.push(r);
+    }
+    *receipts = kept;
 }
 
 /// MIK-7998: the single staged receipt kept to a wrapper the gateway's own
