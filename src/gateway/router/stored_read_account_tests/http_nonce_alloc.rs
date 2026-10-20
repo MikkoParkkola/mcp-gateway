@@ -390,3 +390,61 @@ fn test_path(name: &str) -> String {
         .map_or(module, |(_crate, rest)| rest);
     format!("{module}::{name}")
 }
+
+/// MIK-8499 INTAKE.2(a): what a refused call may cost beyond parsing its
+/// body. Measured 46,792 B at both 1 and 3 MiB after the fix (it was
+/// 3,216,360 B at 1 MiB, the `_meta` merge's copy of the arguments).
+const OVER_PARSE: u64 = 64 * 1024;
+/// How much that excess may grow from 1 to 3 MiB: no payload term (measured
+/// 0 B).
+const OVER_PARSE_GROWTH: u64 = 1024;
+
+/// MIK-8499 INTAKE.2(a): on this fixture (sanitizer off, firewall off, the
+/// body in one chunk), a refused 1 and 3 MiB `gateway_invoke` costs its parse
+/// plus a fixed cap, with no second term that grows with the payload. Red
+/// before the fix: the meta-tool `_meta` merge cloned the whole argument tree
+/// (about 3.2 MB per MiB, `merge_client_meta_ref`).
+#[test]
+fn a_refused_meta_call_costs_its_parse_plus_a_fixed_cap() {
+    if isolate(&test_path(
+        "a_refused_meta_call_costs_its_parse_plus_a_fixed_cap",
+    )) {
+        return;
+    }
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    rt.block_on(async {
+        let fx = prepared("missing", &|_| None).await;
+        let plain = Some(("plain", "echo"));
+        // Warm the plain path unmetered, as the share rows do.
+        let _ = refused(&fx, plain, None, 1 << 10).await;
+        let mut over = Vec::new();
+        for size in [1usize << 20, 3 << 20] {
+            let bytes = body(plain, None, size);
+            let (_, parse) = measure_async_process_wide(|| async {
+                serde_json::from_slice::<Value>(&bytes).expect("the body is JSON")
+            })
+            .await;
+            let (reply, refusal) = refused(&fx, plain, None, size).await;
+            assert_eq!(
+                reply.pointer("/error/message").and_then(Value::as_str),
+                Some("Nonce required when message signing is enforced"),
+                "INTAKE.2(a) {size}: premise, the same refusal: {reply}"
+            );
+            let excess = refusal.bytes.saturating_sub(parse.bytes);
+            println!("INTAKE.2(a) size={size} parse={parse} refusal={refusal} over_parse={excess}");
+            assert!(
+                excess <= OVER_PARSE,
+                "INTAKE.2(a) {size}: the refusal allocated {excess} B beyond its parse, above \
+                 {OVER_PARSE} (parse {parse}, refusal {refusal})"
+            );
+            over.push(excess);
+        }
+        assert!(
+            over[1].abs_diff(over[0]) <= OVER_PARSE_GROWTH,
+            "INTAKE.2(a): the excess over parse grows with the payload: {over:?}"
+        );
+    });
+}

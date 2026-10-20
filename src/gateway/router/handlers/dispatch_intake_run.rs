@@ -337,6 +337,13 @@ pub(in crate::gateway::router::handlers) async fn intake(
         ));
     }
 
+    // MIK-8499: carry the client's `params._meta` into a meta tool's own
+    // arguments here, where the request is owned, so `tools_call`'s merge
+    // borrows them instead of copying the whole argument tree.
+    crate::gateway::router::helpers::move_client_meta_into_arguments(&mut request, |name| {
+        state.meta_mcp.exposes_meta_tool(name)
+    });
+
     // Detect client POST-back responses (has "result" or "error" but no "method").
     // These are replies to server-to-client requests such as `sampling/createMessage`.
     // Must be handled BEFORE `parse_request`, which rejects messages without "method".
