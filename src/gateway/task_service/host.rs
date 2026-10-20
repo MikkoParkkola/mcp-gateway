@@ -112,7 +112,10 @@ impl LiveHost {
             let mut request = request;
             crate::security::sanitize::sanitize_request_in_place(&mut request, route)
                 .map_err(refused)?;
-            Ok((request["params"]["arguments"].take(), Judged::default()))
+            let arguments = request
+                .pointer_mut("/params/arguments")
+                .map_or(serde_json::Value::Null, serde_json::Value::take);
+            Ok((arguments, Judged::default()))
         })
         .await
     }

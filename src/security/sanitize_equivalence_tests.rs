@@ -272,10 +272,11 @@ fn corpus() -> Vec<Value> {
 
 // ---- the comparison -------------------------------------------------------------
 
-/// The outcome both forms are compared on: the value, or the error's text
-/// (which carries its kind and code).
-fn outcome(result: Result<Value>) -> std::result::Result<Value, String> {
-    result.map_err(|e| e.to_string())
+/// The outcome both forms are compared on: the value, or the error's
+/// JSON-RPC code and text, so a changed error class is caught even when the
+/// text matches.
+fn outcome(result: Result<Value>) -> std::result::Result<Value, (i32, String)> {
+    result.map_err(|e| (e.to_rpc_code(), e.to_string()))
 }
 
 fn in_place(request: &Value, route: ProtocolRoute) -> Result<Value> {

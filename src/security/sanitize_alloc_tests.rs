@@ -31,22 +31,27 @@ fn request(size: usize) -> Value {
 
 #[test]
 fn sanitizing_a_clean_request_in_place_costs_a_fixed_amount() {
-    let mut readings = Vec::new();
-    for size in [1usize << 20, 3 << 20] {
-        let mut req = request(size);
-        let before = req.clone();
-        let ((), cost) = measure(|| {
-            sanitize_request_in_place(&mut req, ProtocolRoute::Meta).expect("clean");
-        });
-        assert_eq!(req, before, "premise: the clean request is unchanged");
+    for (route, label) in [
+        (ProtocolRoute::Meta, "Meta"),
+        (ProtocolRoute::Direct, "Direct"),
+    ] {
+        let mut readings = Vec::new();
+        for size in [1usize << 20, 3 << 20] {
+            let mut req = request(size);
+            let before = req.clone();
+            let ((), cost) = measure(|| {
+                sanitize_request_in_place(&mut req, route).expect("clean");
+            });
+            assert_eq!(req, before, "premise: the clean request is unchanged");
+            assert!(
+                cost.bytes <= CLEAN_BUDGET,
+                "INTAKE.2(b) {label} {size}: sanitizing a clean request allocated {cost}, above {CLEAN_BUDGET} B"
+            );
+            readings.push(cost.bytes);
+        }
         assert!(
-            cost.bytes <= CLEAN_BUDGET,
-            "INTAKE.2(b) {size}: sanitizing a clean request allocated {cost}, above {CLEAN_BUDGET} B"
+            readings[1].abs_diff(readings[0]) <= SIZE_SLACK,
+            "INTAKE.2(b) {label}: the cost grows with the payload: {readings:?}"
         );
-        readings.push(cost.bytes);
     }
-    assert!(
-        readings[1].abs_diff(readings[0]) <= SIZE_SLACK,
-        "INTAKE.2(b): the cost grows with the payload: {readings:?}"
-    );
 }
