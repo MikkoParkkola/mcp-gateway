@@ -567,6 +567,35 @@ fn percent_decode_handles_encoded_chars() {
     assert_eq!(percent_decode("plain"), "plain");
 }
 
+#[test]
+fn a_query_agent_id_decodes_as_utf8() {
+    assert_eq!(
+        extract_from_query("agent_id=caf%C3%A9"),
+        Some("café".to_string()),
+        "percent-encoded UTF-8 agent_id was not decoded as UTF-8"
+    );
+    assert_eq!(
+        extract_from_query("agent_id=%E6%97%A5%E6%9C%AC"),
+        Some("日本".to_string()),
+        "multi-byte percent-encoded UTF-8 agent_id was not decoded as UTF-8"
+    );
+    assert_eq!(
+        extract_from_query("agent_id=café"),
+        Some("café".to_string()),
+        "raw non-ASCII agent_id was not preserved as UTF-8"
+    );
+    assert_eq!(
+        extract_from_query("other=1&agent_id=a%2Fb"),
+        Some("a/b".to_string()),
+        "ASCII percent-encoded agent_id did not decode as before"
+    );
+    assert_eq!(
+        extract_from_query("agent_id=%FF"),
+        None,
+        "invalid UTF-8 agent_id yielded a label instead of None"
+    );
+}
+
 pub(super) fn to_base64url(input: &[u8]) -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut out = String::new();
