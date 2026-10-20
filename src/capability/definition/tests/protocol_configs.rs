@@ -305,6 +305,32 @@ fn provider_config_graphql_uses_base_url_plus_path_when_no_endpoint() {
 }
 
 #[test]
+fn provider_config_graphql_empty_endpoint_resolves_to_base_url_plus_path() {
+    // GIVEN: ProviderConfig with service = "graphql", an explicitly empty
+    // endpoint, and base_url+path
+    // WHEN: calling protocol_config()
+    // THEN: endpoint is base_url + path, as on the JSON-RPC arm
+    let provider = ProviderConfig {
+        service: "graphql".to_string(),
+        cost_per_call: 0.0,
+        timeout: 30,
+        config: RestConfig {
+            base_url: "https://gql.example.com".to_string(),
+            path: "/v2/graphql".to_string(),
+            endpoint: String::new(),
+            ..Default::default()
+        },
+    };
+
+    let proto = provider.protocol_config();
+    assert_eq!(proto.protocol_name(), "graphql");
+    assert_eq!(
+        proto.as_graphql().map(|gql| gql.endpoint.as_str()),
+        Some("https://gql.example.com/v2/graphql")
+    );
+}
+
+#[test]
 fn provider_config_graphql_extracts_query_from_body_string() {
     // GIVEN: ProviderConfig with body as a string (the query)
     // WHEN: calling protocol_config()

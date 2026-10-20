@@ -144,3 +144,122 @@ fn the_shadow_counter_labels_match_their_registration() {
         }
     }
 }
+
+/// Transport whose every request and notification fails, so a test can
+/// drive the real dispatch paths and watch what they record.
+struct FailingTransport;
+
+#[async_trait]
+impl Transport for FailingTransport {
+    async fn request(&self, _method: &str, _params: Option<Value>) -> Result<JsonRpcResponse> {
+        Err(Error::Transport("socket closed".to_string()))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> Result<()> {
+        Err(Error::Transport("socket closed".to_string()))
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+fn ok_transport() -> Arc<dyn Transport> {
+    let response = JsonRpcResponse::success_serialized(
+        RequestId::Number(1),
+        ToolsListResult {
+            tools: vec![],
+            next_cursor: None,
+        },
+    );
+    Arc::new(MockTransport::new(response, Duration::from_millis(0)))
+}
+
+fn backend_with(transport: Arc<dyn Transport>) -> Backend {
+    let backend = Backend::new(
+        "status-pin",
+        BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    );
+    backend.set_transport_for_test(transport);
+    backend
+}
+
+/// Dispatch one request (or, with `notify`, one notification) under a
+/// local recorder; returns whether it succeeded and every `status` label
+/// value registered for `mcp_backend_requests_total`.
+fn dispatch_and_statuses(backend: &Backend, notify: bool) -> (bool, Vec<String>) {
+    let recorder = BackendLabels::default();
+    let succeeded = telemetry_metrics::with_local_recorder(&recorder, || {
+        match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime.block_on(async {
+                if notify {
+                    backend
+                        .notify("notifications/initialized", None)
+                        .await
+                        .is_ok()
+                } else {
+                    backend.request("tools/list", None).await.is_ok()
+                }
+            }),
+            Err(_) => false,
+        }
+    });
+    let seen = recorder.0.into_inner();
+    let statuses = seen
+        .iter()
+        .filter(|(name, key, _, _)| name == "mcp_backend_requests_total" && key == "status")
+        .map(|(_, _, value, _)| value.clone())
+        .collect();
+    (succeeded, statuses)
+}
+
+#[test]
+fn a_successful_request_counts_status_ok() {
+    let backend = backend_with(ok_transport());
+    let (succeeded, statuses) = dispatch_and_statuses(&backend, false);
+    assert!(succeeded, "the request is answered");
+    assert!(!statuses.is_empty(), "the counter was registered");
+    assert!(statuses.iter().all(|status| status == "ok"), "{statuses:?}");
+}
+
+#[test]
+fn a_failed_request_counts_status_error() {
+    let backend = backend_with(Arc::new(FailingTransport));
+    let (succeeded, statuses) = dispatch_and_statuses(&backend, false);
+    assert!(!succeeded, "the request fails");
+    assert!(!statuses.is_empty(), "the counter was registered");
+    assert!(
+        statuses.iter().all(|status| status == "error"),
+        "{statuses:?}"
+    );
+}
+
+#[test]
+fn a_successful_notification_counts_status_ok() {
+    let backend = backend_with(ok_transport());
+    let (succeeded, statuses) = dispatch_and_statuses(&backend, true);
+    assert!(succeeded, "the notification is sent");
+    assert!(!statuses.is_empty(), "the counter was registered");
+    assert!(statuses.iter().all(|status| status == "ok"), "{statuses:?}");
+}
+
+#[test]
+fn a_failed_notification_counts_status_error() {
+    let backend = backend_with(Arc::new(FailingTransport));
+    let (succeeded, statuses) = dispatch_and_statuses(&backend, true);
+    assert!(!succeeded, "the notification fails");
+    assert!(!statuses.is_empty(), "the counter was registered");
+    assert!(
+        statuses.iter().all(|status| status == "error"),
+        "{statuses:?}"
+    );
+}

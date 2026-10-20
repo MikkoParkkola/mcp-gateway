@@ -435,10 +435,19 @@ impl Backend {
                 "{exchange} failed"
             );
         }
+        self.count_outcome(if rate_limited {
+            "rate_limited"
+        } else {
+            "error"
+        });
+    }
+
+    /// Count one dispatch outcome under its `status` label.
+    fn count_outcome(&self, status: &'static str) {
         telemetry_metrics::counter!(
             "mcp_backend_requests_total",
             "backend" => self.metric_label.clone(),
-            "status" => if rate_limited { "rate_limited" } else { "error" }
+            "status" => status
         )
         .increment(1);
     }
@@ -483,12 +492,7 @@ impl Backend {
                 } else {
                     super::fill_check::record_request_success(entry, latency);
                 }
-                telemetry_metrics::counter!(
-                    "mcp_backend_requests_total",
-                    "backend" => self.metric_label.clone(),
-                    "status" => if throttled { "rate_limited" } else { "ok" }
-                )
-                .increment(1);
+                self.count_outcome(if throttled { "rate_limited" } else { "ok" });
             }
             Err(e) => self.record_dispatch_error(entry, latency, e, "Request"),
         }
@@ -587,12 +591,7 @@ impl Backend {
                     "Notification sent successfully"
                 );
                 entry.failsafe.record_success(latency);
-                telemetry_metrics::counter!(
-                    "mcp_backend_requests_total",
-                    "backend" => self.metric_label.clone(),
-                    "status" => "ok"
-                )
-                .increment(1);
+                self.count_outcome("ok");
             }
             Err(e) => self.record_dispatch_error(&entry, latency, e, "Notification"),
         }

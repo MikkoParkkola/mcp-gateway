@@ -108,17 +108,20 @@ struct TokenResponse {
     scope: Option<String>,
 }
 
+fn redact_opt(v: Option<&String>) -> &'static str {
+    if v.is_some() { "<redacted>" } else { "None" }
+}
+
 // Manual `Debug` that redacts the OAuth tokens (CWE-532, mirrors PR #323). A
 // derived `Debug` would print `access_token` / `refresh_token` verbatim into
 // any trace or error context.
 impl std::fmt::Debug for TokenResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let redact_opt = |v: &Option<String>| if v.is_some() { "<redacted>" } else { "None" };
         f.debug_struct("TokenResponse")
             .field("access_token", &"<redacted>")
             .field("token_type", &self.token_type)
             .field("expires_in", &self.expires_in)
-            .field("refresh_token", &redact_opt(&self.refresh_token))
+            .field("refresh_token", &redact_opt(self.refresh_token.as_ref()))
             .field("scope", &self.scope)
             .finish()
     }
@@ -137,10 +140,9 @@ struct ClientRegistrationResponse {
 // or error context; only its presence is surfaced.
 impl std::fmt::Debug for ClientRegistrationResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let redact_opt = |v: &Option<String>| if v.is_some() { "<redacted>" } else { "None" };
         f.debug_struct("ClientRegistrationResponse")
             .field("client_id", &self.client_id)
-            .field("client_secret", &redact_opt(&self.client_secret))
+            .field("client_secret", &redact_opt(self.client_secret.as_ref()))
             .finish()
     }
 }
@@ -171,10 +173,9 @@ pub struct OAuthClientConfig {
 // trace or error context; only its presence is surfaced.
 impl std::fmt::Debug for OAuthClientConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let redact_opt = |v: &Option<String>| if v.is_some() { "<redacted>" } else { "None" };
         f.debug_struct("OAuthClientConfig")
             .field("client_id", &self.client_id)
-            .field("client_secret", &redact_opt(&self.client_secret))
+            .field("client_secret", &redact_opt(self.client_secret.as_ref()))
             .field("callback_host", &self.callback_host)
             .field("callback_port", &self.callback_port)
             .field("callback_path", &self.callback_path)
@@ -560,6 +561,52 @@ mod cwe532_debug_redaction {
         assert!(
             dbg.contains("client-123"),
             "client_id should stay visible: {dbg}"
+        );
+    }
+
+    // The None branch of the redaction: an absent refresh token prints as
+    // the quoted string "None", not as a bare None.
+    #[test]
+    fn token_response_debug_shows_none_for_an_absent_refresh_token() {
+        let r = TokenResponse {
+            access_token: SENTINEL.to_string(),
+            token_type: Some("Bearer".to_string()),
+            expires_in: Some(3600),
+            refresh_token: None,
+            scope: Some("read".to_string()),
+        };
+        assert_eq!(
+            format!("{r:?}"),
+            "TokenResponse { access_token: \"<redacted>\", token_type: Some(\"Bearer\"), expires_in: Some(3600), refresh_token: \"None\", scope: Some(\"read\") }"
+        );
+    }
+
+    // The None branch of the redaction: an absent issued secret prints as
+    // the quoted string "None", not as a bare None.
+    #[test]
+    fn client_registration_response_debug_shows_none_for_an_absent_secret() {
+        let r = ClientRegistrationResponse {
+            client_id: "client-123".to_string(),
+            client_secret: None,
+        };
+        assert_eq!(
+            format!("{r:?}"),
+            "ClientRegistrationResponse { client_id: \"client-123\", client_secret: \"None\" }"
+        );
+    }
+
+    // The None branch of the redaction: an absent fixed secret prints as
+    // the quoted string "None", unlike the bare None of the other options.
+    #[test]
+    fn oauth_client_config_debug_shows_none_for_an_absent_client_secret() {
+        let cfg = OAuthClientConfig {
+            client_secret: None,
+            client_id: Some("client-123".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            format!("{cfg:?}"),
+            "OAuthClientConfig { client_id: Some(\"client-123\"), client_secret: \"None\", callback_host: None, callback_port: None, callback_path: None, token_refresh_buffer_secs: None }"
         );
     }
 }

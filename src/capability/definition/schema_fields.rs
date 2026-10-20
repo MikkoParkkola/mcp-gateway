@@ -34,8 +34,8 @@ pub fn extract_schema_fields(schema: &serde_json::Value) -> Vec<String> {
     // Collect a token, deduplicating across the whole result set.
     let mut push = |token: &str| {
         let token = token.trim().to_lowercase();
-        if !token.is_empty() && seen.insert(token.clone()) {
-            fields.push(token);
+        if !token.is_empty() {
+            super::push_unique_token(&mut seen, &mut fields, token);
         }
     };
 
@@ -43,14 +43,11 @@ pub fn extract_schema_fields(schema: &serde_json::Value) -> Vec<String> {
     fields
 }
 
-/// Recursively collect tokens from a JSON Schema node.
+/// Collect tokens from a JSON Schema node (one level of `properties`).
 fn collect_schema_tokens(schema: &serde_json::Value, push: &mut impl FnMut(&str)) {
     // Top-level description words
     if let Some(desc) = schema.get("description").and_then(|v| v.as_str()) {
-        for word in desc.split_whitespace() {
-            let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
-            push(clean);
-        }
+        push_words(desc, push);
     }
 
     // Property names and their descriptions
@@ -58,11 +55,15 @@ fn collect_schema_tokens(schema: &serde_json::Value, push: &mut impl FnMut(&str)
         for (name, prop_schema) in props {
             push(name);
             if let Some(desc) = prop_schema.get("description").and_then(|v| v.as_str()) {
-                for word in desc.split_whitespace() {
-                    let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
-                    push(clean);
-                }
+                push_words(desc, push);
             }
         }
+    }
+}
+
+fn push_words(desc: &str, push: &mut impl FnMut(&str)) {
+    for word in desc.split_whitespace() {
+        let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
+        push(clean);
     }
 }

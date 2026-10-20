@@ -237,6 +237,22 @@ fn a_stored_token_equal_to_the_live_cached_one_is_not_adopted() {
 // try_client_credentials
 // ---------------------------------------------------------------------------
 
+/// A grant before `initialize` has discovered any metadata is refused as
+/// not initialized, before anything is sent.
+#[tokio::test]
+async fn a_grant_before_initialize_is_refused_as_not_initialized() {
+    let dir = tempfile::tempdir().expect("the test temp dir is created");
+    let mut client = client(dir.path(), "https://as.example", &["client_credentials"]);
+    client.auth_metadata = None;
+
+    let refused = client.try_client_credentials().await;
+
+    let Err(error) = refused else {
+        panic!("a refusal: {refused:?}");
+    };
+    assert_eq!(error.to_string(), "OAuth error: OAuth not initialized");
+}
+
 /// A server that does not advertise `client_credentials` is never sent one.
 #[tokio::test]
 async fn client_credentials_is_refused_when_the_server_does_not_advertise_it() {
@@ -286,6 +302,38 @@ async fn an_unparseable_client_credentials_answer_is_an_oauth_error() {
         matches!(refused, Err(Error::OAuth(ref m)) if m.starts_with("Failed to parse credentials response")),
         "{refused:?}"
     );
+    let key = storage_key(BACKEND, &issuer);
+    assert!(
+        client.storage.load(&key, RESOURCE).is_none(),
+        "nothing stored"
+    );
+}
+
+/// A client-credentials answer whose `expires_in` is above the 100-year
+/// bound is refused as malformed, naming the token endpoint's origin, and
+/// nothing is cached or stored.
+#[tokio::test]
+async fn an_oversized_expires_in_is_refused_on_the_client_credentials_grant() {
+    let dir = tempfile::tempdir().unwrap();
+    let issuer = token_endpoint(
+        200,
+        r#"{"access_token":"cc-access","token_type":"Bearer","expires_in":18446744073709551615}"#,
+    )
+    .await;
+    let client = client(dir.path(), &issuer, &["client_credentials"]);
+
+    let refused = client.try_client_credentials().await;
+
+    let expected = format!(
+        "the token endpoint {issuer} answered expires_in {}, more than 100 years; \
+         the answer is refused as malformed",
+        u64::MAX
+    );
+    assert!(
+        matches!(refused, Err(Error::OAuth(ref m)) if m == &expected),
+        "{refused:?}"
+    );
+    assert!(!client.has_valid_token(), "no token was cached");
     let key = storage_key(BACKEND, &issuer);
     assert!(
         client.storage.load(&key, RESOURCE).is_none(),
@@ -361,6 +409,34 @@ async fn an_unparseable_code_exchange_answer_is_an_oauth_error() {
         matches!(refused, Err(Error::OAuth(ref m)) if m.starts_with("Failed to parse token response")),
         "{refused:?}"
     );
+}
+
+/// A code-exchange answer whose `expires_in` is above the 100-year bound
+/// is refused as malformed, naming the token endpoint's origin.
+#[tokio::test]
+async fn an_oversized_expires_in_is_refused_on_the_code_exchange() {
+    let dir = tempfile::tempdir().unwrap();
+    let issuer = token_endpoint(
+        200,
+        r#"{"access_token":"code-access","token_type":"Bearer","expires_in":18446744073709551615,"refresh_token":"r1"}"#,
+    )
+    .await;
+    let client = client(dir.path(), &issuer, &[]);
+
+    let refused = client
+        .exchange_code("code", "http://127.0.0.1:9/cb", "verifier")
+        .await;
+
+    let expected = format!(
+        "the token endpoint {issuer} answered expires_in {}, more than 100 years; \
+         the answer is refused as malformed",
+        u64::MAX
+    );
+    assert!(
+        matches!(refused, Err(Error::OAuth(ref m)) if m == &expected),
+        "{refused:?}"
+    );
+    assert!(!client.has_valid_token(), "no token was cached");
 }
 
 /// A successful code exchange returns the token, and its success event says

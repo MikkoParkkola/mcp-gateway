@@ -173,6 +173,14 @@ pub struct ProviderConfig {
     pub config: RestConfig,
 }
 
+fn resolved_endpoint(endpoint: &str, base_url: &str, path: &str) -> String {
+    if endpoint.is_empty() {
+        format!("{base_url}{path}")
+    } else {
+        endpoint.to_string()
+    }
+}
+
 impl ProviderConfig {
     /// Derive the protocol-specific configuration from the `service` field.
     ///
@@ -192,11 +200,11 @@ impl ProviderConfig {
                 // The YAML `config:` block uses RestConfig for all service
                 // types — we map the relevant fields to GraphqlConfig here.
                 ProtocolConfig::Graphql(GraphqlConfig {
-                    endpoint: if self.config.endpoint.is_empty() {
-                        format!("{}{}", self.config.base_url, self.config.path)
-                    } else {
-                        self.config.endpoint.clone()
-                    },
+                    endpoint: resolved_endpoint(
+                        &self.config.endpoint,
+                        &self.config.base_url,
+                        &self.config.path,
+                    ),
                     headers: self.config.headers.clone(),
                     query: self
                         .config
@@ -219,11 +227,11 @@ impl ProviderConfig {
             "jsonrpc" => {
                 // Build JsonRpcConfig from the flat RestConfig fields.
                 ProtocolConfig::Jsonrpc(JsonRpcConfig {
-                    endpoint: if self.config.endpoint.is_empty() {
-                        format!("{}{}", self.config.base_url, self.config.path)
-                    } else {
-                        self.config.endpoint.clone()
-                    },
+                    endpoint: resolved_endpoint(
+                        &self.config.endpoint,
+                        &self.config.base_url,
+                        &self.config.path,
+                    ),
                     method: self.config.method.clone(),
                     headers: self.config.headers.clone(),
                     default_params: if self.config.static_params.is_empty() {
@@ -498,6 +506,18 @@ pub struct CapabilityMetadata {
     pub chains_with: Vec<String>,
 }
 
+/// Push `token` onto `fields` unless an equal token was already pushed,
+/// preserving first-occurrence order.
+fn push_unique_token(
+    seen: &mut std::collections::HashSet<String>,
+    fields: &mut Vec<String>,
+    token: String,
+) {
+    if seen.insert(token.clone()) {
+        fields.push(token);
+    }
+}
+
 impl CapabilityDefinition {
     /// SHA-256 of the whole definition as JSON with every object's keys
     /// sorted, providers with their typed process configs included and the
@@ -551,9 +571,7 @@ impl CapabilityDefinition {
             .into_iter()
             .chain(extract_schema_fields(&self.schema.output))
         {
-            if seen.insert(token.clone()) {
-                fields.push(token);
-            }
+            push_unique_token(&mut seen, &mut fields, token);
         }
 
         fields
