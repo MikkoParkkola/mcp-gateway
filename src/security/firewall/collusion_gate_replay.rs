@@ -29,7 +29,7 @@ pub(crate) struct ReplayedDigest {
     pub(crate) tool: String,
     pub(crate) seam_sources: Option<Box<[String]>>,
     /// The stored entry's answer digest (F4), the same on every digest
-    /// of one entry: [`Firewall::keep_replayed_digest`] compares the
+    /// of one entry: [`Firewall::keep_replayed_digests`] compares the
     /// replayed answer against it.
     pub(crate) answer_digest: String,
 }
@@ -186,38 +186,59 @@ impl Firewall {
         }
     }
 
-    /// `digest`, a replayed receipt, kept to `answer` as delivered now
-    /// (F4): unchanged only when `answer` is byte-identical to the stored
-    /// answer its entry's receipts were committed against — its
+    /// One delivery's replayed receipts, digest and plan step each,
+    /// kept to `answer` as delivered now (F4): a digest is unchanged
+    /// only when `answer` is byte-identical to the stored answer its
+    /// entry's receipts were committed against — its
     /// `canonical_json_sha256` equals `stored_digest` (the canonical
     /// JSON hash, not the detector's keyed one: the gate is a whole-answer
     /// equality test, and the keyed hash exists only as sampled k-grams
     /// of leaf forms, which cannot certify that nothing outside the kept
     /// segments changed) — and the answer still delivers all of it. Else
     /// filtered against it, dropping what cannot be filtered safely
-    /// (counted). `None` when the answer is over the bound a receipt is
-    /// kept against, counted `over_bound`: the receipt stages nothing,
-    /// never text the replay did not deliver.
-    pub(crate) fn keep_replayed_digest(
+    /// (counted `filtered`, once per receipt that dropped a set).
+    ///
+    /// The answer is read, hashed and fingerprinted once for the whole
+    /// delivery: every digest is kept against the same `Delivered`, so
+    /// its k-gram set is built once, however many receipts replay. The
+    /// results are in `items` order, `None` where the receipt stages
+    /// nothing — relay detection off, or the answer over the bound a
+    /// receipt is kept against, counted `over_bound` once per dropped
+    /// receipt: never text the replay did not deliver. No items, no
+    /// work: the answer is not read at all.
+    pub(crate) fn keep_replayed_digests(
         &self,
-        digest: DeliveryDigest,
+        items: Vec<(DeliveryDigest, Option<u32>)>,
         answer: &Value,
         stored_digest: Option<&str>,
-        step: Option<u32>,
-    ) -> Option<DeliveryDigest> {
-        let detector = self.relay_detector()?;
+    ) -> Vec<Option<DeliveryDigest>> {
+        if items.is_empty() {
+            return Vec::new();
+        }
+        let Some(detector) = self.relay_detector() else {
+            return items.into_iter().map(|_| None).collect();
+        };
         let (leaves, values) = delivery_parts(answer);
         let Some(delivered) = Delivered::of_parts(leaves, values) else {
-            count_replay_skipped("over_bound");
-            return None;
+            // Once per dropped receipt, as the per-receipt form counted.
+            for _ in &items {
+                count_replay_skipped("over_bound");
+            }
+            return items.into_iter().map(|_| None).collect();
         };
         let delivered = delivered.with_answer(answer);
         let identical = stored_digest
             .is_some_and(|stored| stored == crate::hashing::canonical_json_sha256(answer));
-        let (kept, dropped) = digest.kept_to_replay_answer(detector, &delivered, identical, step);
-        if dropped {
-            count_replay_skipped("filtered");
-        }
-        Some(kept)
+        items
+            .into_iter()
+            .map(|(digest, step)| {
+                let (kept, dropped) =
+                    digest.kept_to_replay_answer(detector, &delivered, identical, step);
+                if dropped {
+                    count_replay_skipped("filtered");
+                }
+                Some(kept)
+            })
+            .collect()
     }
 }

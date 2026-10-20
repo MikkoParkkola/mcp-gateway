@@ -681,3 +681,72 @@ async fn r7b_a_one_target_playbook_still_renews_its_verdict_sensitive_step() {
     rig.renews_after(&[&classified], None, get_task(&rig.state, "key-a", &task))
         .await;
 }
+
+/// G49 (REPLAY.4, NFR.WORKLOAD.1; final review round): a multi-step
+/// replay parses, hashes and fingerprints the delivered answer once per
+/// delivery, not once per replayed step. Measured as the bytes one task
+/// re-read allocates, process-wide in an isolated child: the same 64 KiB
+/// plan answer re-read as a 4-step chain allocates under twice what it
+/// allocates as a 1-step chain. Per-step re-parsing measured 4.4x on the
+/// base (GitHub run 39410318997); once per delivery measured 1.36x.
+/// Mutant killed: keep each replayed digest against a freshly parsed
+/// answer (the per-step `delivery_parts` / hash / k-gram build).
+#[test]
+fn g49_a_multi_step_replay_parses_the_answer_once() {
+    use crate::gateway::server::signing_allocation_tests::alloc_meter::{
+        isolate, measure_async_process_wide,
+    };
+    let path = {
+        let m = module_path!();
+        let m = m.split_once("::").map_or(m, |(_c, rest)| rest);
+        format!("{m}::g49_a_multi_step_replay_parses_the_answer_once")
+    };
+    if isolate(&path) {
+        return;
+    }
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a test runtime builds: fixture");
+    let bytes_for = |steps: usize| {
+        rt.block_on(async {
+            let unit = "The orchard ledger records seven rows of late pears and the grafting dates. ";
+            let size = 64 * 1024 / steps;
+            let text = unit.repeat(size / unit.len() + 1)[..size].to_owned();
+            let rig = rig(&text, &text, None).await;
+            let chain = json!({"chain": (0..steps)
+                .map(|i| json!({"tool": format!("{}:{TOOL}", if i % 2 == 0 { ALPHA } else { BETA }), "arguments": {}}))
+                .collect::<Vec<_>>()});
+            let created = post(&rig.state, "key-a", task_call(1, "g49", "gateway_execute", &chain)).await;
+            let task = task_id(&created);
+            let settled = poll_until_terminal(&rig.state, "key-a", &task).await;
+            assert_eq!(status_of(&settled), "completed", "base: {settled}");
+            let joined = rig
+                .state
+                .task_executor
+                .drain(std::time::Duration::from_secs(30))
+                .await;
+            assert!(joined.is_clean(), "the settling worker must finish: {joined:?}");
+            assert!(
+                (0..16u64).any(|r| rig.relay.task_replay_digests(&task, r).is_some()),
+                "premise: the plan's replay entry was stored, so the re-read replays it"
+            );
+            let warm = get_task(&rig.state, "key-a", &task).await;
+            assert!(warm.get("error").is_none(), "premise: the re-read serves: {warm}");
+            let (read, measured) =
+                measure_async_process_wide(|| get_task(&rig.state, "key-a", &task)).await;
+            assert_eq!(
+                read["result"].to_string().len(),
+                warm["result"].to_string().len(),
+                "premise: the measured re-read returned the stored answer: {read}"
+            );
+            measured.bytes
+        })
+    };
+    let one = bytes_for(1);
+    let four = bytes_for(4);
+    assert!(
+        four < 2 * one,
+        "a 4-step replay allocated {four} B against {one} B for 1 step: the delivered answer is re-parsed per step"
+    );
+}

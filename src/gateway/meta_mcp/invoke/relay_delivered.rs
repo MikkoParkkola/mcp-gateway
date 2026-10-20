@@ -316,21 +316,34 @@ fn keep_replayed_receipts(
     receipts: &mut Vec<super::Receipt>,
     answer: &Value,
 ) {
-    let stored = super::replay::stored_answer_digest();
-    let mut kept: Vec<super::Receipt> = Vec::with_capacity(receipts.len());
-    for mut r in receipts.drain(..) {
-        if r.kind == super::Kind::Replayed && !r.in_plan {
-            let digest = std::mem::take(&mut r.digest);
-            let Some(digest) = fw.keep_replayed_digest(digest, answer, stored.as_deref(), r.step)
-            else {
-                continue;
-            };
-            r.digest = digest;
-            r.pending_retain = false;
-        }
-        kept.push(r);
+    // The delivery's replayed digests move out in receipt order (no
+    // clone, no index vector: receipt order is the mapping back) and
+    // are kept against one parse of `answer` (none: nothing is read).
+    let items: Vec<_> = receipts
+        .iter_mut()
+        .filter(|r| r.kind == super::Kind::Replayed && !r.in_plan)
+        .map(|r| (std::mem::take(&mut r.digest), r.step))
+        .collect();
+    if items.is_empty() {
+        return;
     }
-    *receipts = kept;
+    let stored = super::replay::stored_answer_digest();
+    let mut kept = fw
+        .keep_replayed_digests(items, answer, stored.as_deref())
+        .into_iter();
+    receipts.retain_mut(|r| {
+        if r.kind != super::Kind::Replayed || r.in_plan {
+            return true;
+        }
+        match kept.next().flatten() {
+            Some(digest) => {
+                r.digest = digest;
+                r.pending_retain = false;
+                true
+            }
+            None => false,
+        }
+    });
 }
 
 /// MIK-7998: the single staged receipt kept to a wrapper the gateway's own
@@ -787,3 +800,7 @@ mod tests {
 #[cfg(all(test, feature = "firewall"))]
 #[path = "relay_delivered_p3_tests.rs"]
 mod p3_tests;
+
+#[cfg(all(test, feature = "firewall", feature = "metrics"))]
+#[path = "relay_delivered_replay_count_tests.rs"]
+mod replay_count_tests;
