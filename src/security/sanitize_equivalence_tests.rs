@@ -185,7 +185,7 @@ fn corpus() -> Vec<Value> {
     for _ in 0..100 {
         deep = json!({"k\u{1}": [deep]});
     }
-    vec![
+    let mut all = vec![
         // Clean, on every slot kind.
         call(
             "backend_tool",
@@ -240,30 +240,6 @@ fn corpus() -> Vec<Value> {
             "backend_tool",
             json!({"key": "kept", "ke\u{1}y": "bad\u{0}"}),
         ),
-        // MIK-8499 option A: a dirty key beside bulk values, on each slot kind
-        // that rebuilds (a backend tool's arguments, a meta tool's inner ones).
-        call(
-            "backend_tool",
-            json!({"k\u{1}ey": 1, "bulk": "x".repeat(64 << 10), "list": [1, "two\u{1}", {"n": null}]}),
-        ),
-        call(
-            "gateway_invoke",
-            json!({"server": "s", "tool": "t", "arguments": {"k\u{1}ey": 1, "bulk": "y".repeat(64 << 10)}}),
-        ),
-        // Collisions after stripping: three ways, both dirty, an object
-        // overwriting an object, and inside a meta tool's inner arguments.
-        call(
-            "backend_tool",
-            json!({"key": "first", "ke\u{1}y": "second", "k\u{200B}ey": "third"}),
-        ),
-        call("backend_tool", json!({"k\u{1}ey": "a", "ke\u{85}y": "b"})),
-        call("backend_tool", json!({"k\u{1}": {"x": 1}, "k": {"y": 2}})),
-        call(
-            "gateway_invoke",
-            json!({"server": "s", "tool": "t", "arguments": {"key": "kept", "ke\u{1}y": "over"}}),
-        ),
-        // A rebuild that meets a NUL after a rewritten key: the first error wins.
-        call("backend_tool", json!({"k\u{1}ey": 1, "q": "a\u{0}"})),
         // NULs: a value, a key, encoded in a string slot, in a chain step.
         call("backend_tool", json!({"q": "a\u{0}b"})),
         call("backend_tool", json!({"k\u{0}": 1})),
@@ -293,6 +269,41 @@ fn corpus() -> Vec<Value> {
         // Top-level keys: a dirty one rebuilds the request; a dirty `id`.
         json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params\u{1}": {}, "x\u{200B}": 1}),
         json!({"jsonrpc": "2.0", "id": "a\u{1}", "method": "tools/call", "params": {}}),
+    ];
+    all.extend(rebuild_corpus());
+    all
+}
+
+/// The inputs added for MIK-8499 option A, where an object with a key to
+/// rewrite is rebuilt by moving its members: the rule (key first, then value,
+/// a later duplicate overwrites, the first error wins) must match the
+/// reference's on every one.
+fn rebuild_corpus() -> Vec<Value> {
+    vec![
+        // MIK-8499 option A: a dirty key beside bulk values, on each slot kind
+        // that rebuilds (a backend tool's arguments, a meta tool's inner ones).
+        call(
+            "backend_tool",
+            json!({"k\u{1}ey": 1, "bulk": "x".repeat(64 << 10), "list": [1, "two\u{1}", {"n": null}]}),
+        ),
+        call(
+            "gateway_invoke",
+            json!({"server": "s", "tool": "t", "arguments": {"k\u{1}ey": 1, "bulk": "y".repeat(64 << 10)}}),
+        ),
+        // Collisions after stripping: three ways, both dirty, an object
+        // overwriting an object, and inside a meta tool's inner arguments.
+        call(
+            "backend_tool",
+            json!({"key": "first", "ke\u{1}y": "second", "k\u{200B}ey": "third"}),
+        ),
+        call("backend_tool", json!({"k\u{1}ey": "a", "ke\u{85}y": "b"})),
+        call("backend_tool", json!({"k\u{1}": {"x": 1}, "k": {"y": 2}})),
+        call(
+            "gateway_invoke",
+            json!({"server": "s", "tool": "t", "arguments": {"key": "kept", "ke\u{1}y": "over"}}),
+        ),
+        // A rebuild that meets a NUL after a rewritten key: the first error wins.
+        call("backend_tool", json!({"k\u{1}ey": 1, "q": "a\u{0}"})),
         // Top-level keys that clean to a protocol key: the value is walked
         // under the cleaned key, so a `params` that cleans in refuses a slot
         // that is not JSON (key first, then value), and a collision keeps the
