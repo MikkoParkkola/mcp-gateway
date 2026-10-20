@@ -74,27 +74,27 @@ impl MetaMcp {
     /// Route a retry to the backend that opened the exchange, or `None` when
     /// the call is not a retry this gateway minted a continuation for.
     ///
-    /// // A retry names the backend tool it continues, not `gateway_invoke`,
-    /// // and a backend tool answers to its own name only where an operator
-    /// // surfaced it. Routing this by name would refuse every honest retry on
-    /// // an unpinned tool with the -32601 fallback below, so the backend comes
-    /// // from the envelope the gateway itself minted. The name the client
-    /// // presented is not trusted by being routed: it is checked against the
-    /// // digest sealed in that same envelope before anything dispatches.
-    /// //
-    /// // Two meta-tools are left alone, and only two. `gateway_invoke` and
-    /// // `gateway_execute` carry their own server and tool and route into
-    /// // `invoke_tool`, where `redeem_retry` opens the same envelope: a retry
-    /// // wrapped in either reaches the guard by its ordinary path, so routing
-    /// // it from here would only open it twice.
-    /// //
-    /// // Every other meta-tool is answered by the gateway itself and never
-    /// // enters that scope. Exempting the whole `gateway_` prefix therefore
-    /// // let a retry naming one — `gateway_list_servers`, say — run as a fresh
-    /// // call with its continuation never examined, which is the repeat the
-    /// // envelope exists to prevent (MIK-7215). Such a retry is routed like
-    /// // any other: the envelope names a backend, the presented name is not
-    /// // that backend's tool, and the digest check refuses it downstream.
+    /// A retry names the backend tool it continues, not `gateway_invoke`,
+    /// and a backend tool answers to its own name only where an operator
+    /// surfaced it. Routing this by name would refuse every honest retry on
+    /// an unpinned tool with the -32601 fallback below, so the backend comes
+    /// from the envelope the gateway itself minted. The name the client
+    /// presented is not trusted by being routed: it is checked against the
+    /// digest sealed in that same envelope before anything dispatches.
+    ///
+    /// Two meta-tools are left alone, and only two. `gateway_invoke` and
+    /// `gateway_execute` carry their own server and tool and route into
+    /// `invoke_tool`, where `redeem_retry` opens the same envelope: a retry
+    /// wrapped in either reaches the guard by its ordinary path, so routing
+    /// it from here would only open it twice.
+    ///
+    /// Every other meta-tool is answered by the gateway itself and never
+    /// enters that scope. Exempting the whole `gateway_` prefix therefore
+    /// let a retry naming one — `gateway_list_servers`, say — run as a fresh
+    /// call with its continuation never examined, which is the repeat the
+    /// envelope exists to prevent (MIK-7215). Such a retry is routed like
+    /// any other: the envelope names a backend, the presented name is not
+    /// that backend's tool, and the digest check refuses it downstream.
     pub(super) async fn route_retry_to_origin_backend(
         &self,
         target: &DispatchTarget<'_>,

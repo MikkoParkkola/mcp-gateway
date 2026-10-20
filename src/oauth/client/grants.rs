@@ -300,9 +300,6 @@ impl OAuthClient {
         }
     }
 
-    /// Test-only: the cached token lapses now, in memory and in storage, as
-    /// if its lifetime had passed (MIK-8269): a row that needs a lapsed token
-    /// asks for one instead of sleeping out a short-lived token.
     /// Test-only: the cross-process lock `save_issued` takes before it
     /// stores a login's token (`hold_across_processes`), so a row can hold it
     /// as another gateway process would (MIK-8339 LOGINDL.18b).
@@ -316,6 +313,9 @@ impl OAuthClient {
             .with_extension("refresh.lock")
     }
 
+    /// Test-only: the cached token lapses now, in memory and in storage, as
+    /// if its lifetime had passed (MIK-8269): a row that needs a lapsed token
+    /// asks for one instead of sleeping out a short-lived token.
     #[cfg(test)]
     pub(crate) async fn age_token_for_test(&self) {
         let now = crate::clock::unix_secs().expect("the test clock reads after 1970");
