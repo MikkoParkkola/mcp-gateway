@@ -168,7 +168,7 @@ impl EventSource for WatchSource {
     }
 
     fn offers(&self, name: &str) -> bool {
-        name.starts_with(PREFIX) && name.ends_with(SUFFIX) && self.target(name).is_some()
+        is_watch(name) && self.target(name).is_some()
     }
 
     /// The capability must still be watchable and the options valid. Where
