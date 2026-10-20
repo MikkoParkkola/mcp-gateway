@@ -100,7 +100,7 @@ pub(super) fn stdio_meta(
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {
-                rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                rules: crate::yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
                 collusion: CollusionConfig {
                     action: CollusionAction::Block,
                     min_matches: 1,
@@ -121,7 +121,7 @@ pub(super) fn stdio_meta(
     meta.share_keyring_with_for_test(&firewall);
     if let Some(playbook) = playbook {
         let definition: crate::playbook::PlaybookDefinition =
-            serde_yaml::from_str(playbook).expect("playbook fixture must parse");
+            crate::yaml::from_str(playbook).expect("playbook fixture must parse");
         let mut engine = crate::playbook::PlaybookEngine::new();
         engine.register(definition);
         meta.set_playbook_engine(engine);
@@ -282,7 +282,7 @@ async fn a_detection_off_answer_replayed_on_never_receipts_gateway_text_over_std
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {
-                rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                rules: crate::yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
                 collusion: CollusionConfig {
                     action: CollusionAction::Block,
                     min_matches: 1,

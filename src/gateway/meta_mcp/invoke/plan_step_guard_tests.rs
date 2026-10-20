@@ -24,7 +24,7 @@
 //! only `product_code` read, so comments and `#[cfg(test)]` items
 //! never count.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::clock::tests::{a_test_file, product_code};
 
@@ -49,12 +49,11 @@ fn plan_step_calls(code: &str) -> usize {
     calls
 }
 
-/// Every `src/` product file (relative path, `/`-separated) that calls
-/// `plan_step(`, with its call count, and how many files were read.
-fn plan_step_call_sites() -> (BTreeMap<String, usize>, usize) {
+/// Every `src/` product file: its relative path (`/`-separated) and
+/// its `product_code`.
+fn product_files() -> Vec<(String, String)> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut sites = BTreeMap::new();
-    let mut read = 0;
+    let mut files = Vec::new();
     for entry in walkdir::WalkDir::new(root.join("src")) {
         let entry = entry.expect("src is readable: fixture");
         let path = entry.path();
@@ -65,10 +64,21 @@ fn plan_step_call_sites() -> (BTreeMap<String, usize>, usize) {
             continue;
         }
         let src = std::fs::read_to_string(path).expect("readable source: fixture");
-        read += 1;
-        let calls = plan_step_calls(&product_code(&src));
+        files.push((rel.to_string_lossy().replace('\\', "/"), product_code(&src)));
+    }
+    files
+}
+
+/// Every `src/` product file (relative path, `/`-separated) that calls
+/// `plan_step(`, with its call count, and how many files were read.
+fn plan_step_call_sites() -> (BTreeMap<String, usize>, usize) {
+    let files = product_files();
+    let read = files.len();
+    let mut sites = BTreeMap::new();
+    for (rel, code) in &files {
+        let calls = plan_step_calls(code);
         if calls > 0 {
-            sites.insert(rel.to_string_lossy().replace('\\', "/"), calls);
+            sites.insert(rel.clone(), calls);
         }
     }
     (sites, read)
@@ -126,4 +136,131 @@ fn the_step_dispatch_path_names_no_plan_entry_point() {
              so nested plans are reachable and MIK-8409.NESTED.1 must reopen"
         );
     }
+}
+
+/// The plan-replay staging entry points, each spelled as it is called.
+const STAGING_ENTRIES: [&str; 5] = [
+    "stage_stored_receipt(",
+    "stage_task_replay(",
+    ".stage_replay(",
+    "stage_plan_replay(",
+    "stage_entries(",
+];
+
+/// The name a line declares a `fn` under, if it declares one: the
+/// identifier after the first `fn` word on the line (a `fn(...)`
+/// pointer type names nothing and is skipped).
+fn declared_fn(line: &str) -> Option<&str> {
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+    for (at, _) in line.match_indices("fn ") {
+        if line[..at].chars().next_back().is_some_and(is_ident) {
+            continue;
+        }
+        let rest = line[at + 3..].trim_start();
+        let name = &rest[..rest.find(|c: char| !is_ident(c)).unwrap_or(rest.len())];
+        if !name.is_empty() {
+            return Some(name);
+        }
+    }
+    None
+}
+
+/// Every staging call in `src/` product code, as `(entry as called,
+/// file, enclosing fn)`, plus how many files were read. The enclosing
+/// fn is the nearest preceding line in the same file that declares a
+/// `fn`; a staging entry point's own `fn <name>(` definition line is
+/// not a call.
+fn staging_call_sites() -> (BTreeSet<(String, String, String)>, usize) {
+    let files = product_files();
+    let read = files.len();
+    let mut sites = BTreeSet::new();
+    for (rel, code) in &files {
+        let mut enclosing: Option<&str> = None;
+        for line in code.lines() {
+            let declared = declared_fn(line);
+            if let Some(name) = declared {
+                enclosing = Some(name);
+            }
+            for entry in STAGING_ENTRIES {
+                let bare = entry.trim_start_matches('.').trim_end_matches('(');
+                if declared == Some(bare) || !line.contains(entry) {
+                    continue;
+                }
+                sites.insert((
+                    entry.to_owned(),
+                    rel.clone(),
+                    enclosing.unwrap_or_default().to_owned(),
+                ));
+            }
+        }
+    }
+    (sites, read)
+}
+
+/// (c) plan-replay staging happens only after authorization: a refused
+/// read or a refused admission never reaches a staging entry point.
+/// Each staging entry point has exactly the call sites below — each
+/// one reached only past the authorization its path performs — so any
+/// new caller is a new way to stage that must first be shown to sit
+/// past authorization too. Indirection does not hide a caller: a new
+/// wrapper that reaches staging must itself call one of these names,
+/// so it appears as a new caller and fails this guard; calls through
+/// a function pointer or trait object are not seen (none exist today).
+#[test]
+fn staging_entry_points_have_only_their_authorized_callers() {
+    let (found, read) = staging_call_sites();
+    assert!(
+        read > 0,
+        "the scan read no file at all: it is reading nothing"
+    );
+    for entry in STAGING_ENTRIES {
+        assert!(
+            found.iter().any(|triple| triple.0.as_str() == entry),
+            "the scan found no {entry} call at all: it is reading nothing"
+        );
+    }
+    let expected: BTreeSet<(String, String, String)> = [
+        (
+            "stage_stored_receipt(",
+            "src/gateway/meta_mcp/task_replay.rs",
+            "refuse_stored",
+        ),
+        (
+            "stage_task_replay(",
+            "src/gateway/meta_mcp/task_replay/receipts.rs",
+            "stage_stored_receipt",
+        ),
+        (
+            ".stage_replay(",
+            "src/gateway/meta_mcp/invoke/audit.rs",
+            "audit_replay",
+        ),
+        (
+            "stage_plan_replay(",
+            "src/gateway/meta_mcp/invoke/relay.rs",
+            "stage_replay",
+        ),
+        (
+            "stage_entries(",
+            "src/gateway/meta_mcp/invoke/relay_replay.rs",
+            "stage_plan_replay",
+        ),
+        (
+            "stage_entries(",
+            "src/gateway/meta_mcp/invoke/relay_replay.rs",
+            "stage_task_replay",
+        ),
+    ]
+    .into_iter()
+    .map(|(entry, file, enclosing)| (entry.to_owned(), file.to_owned(), enclosing.to_owned()))
+    .collect();
+    let unexpected: Vec<_> = found.difference(&expected).collect();
+    let missing: Vec<_> = expected.difference(&found).collect();
+    assert!(
+        unexpected.is_empty() && missing.is_empty(),
+        "plan-replay staging happens only after authorization: a refused \
+         read or a refused admission never reaches a staging entry point. \
+         Unexpected callers {unexpected:?}, missing callers (stale \
+         allow-list) {missing:?}"
+    );
 }

@@ -184,21 +184,6 @@ fn summary(server: &str, tool: &str, step: Option<u32>) -> Summary {
     (server.to_owned(), tool.to_owned(), step, false, true)
 }
 
-/// The process-global `reason` count of the replay-skipped counter.
-#[cfg(feature = "metrics")]
-fn skipped_count(reason: &str) -> u64 {
-    crate::metrics::install();
-    crate::metrics::render()
-        .lines()
-        .find(|line| {
-            line.starts_with("mcp_gateway_collusion_plan_replay_skipped_total")
-                && line.contains(&format!("reason=\"{reason}\""))
-        })
-        .and_then(|line| line.rsplit(' ').next())
-        .and_then(|n| n.parse::<u64>().ok())
-        .unwrap_or(0)
-}
-
 /// G2: `commit_with(fw, false)` records nothing; `commit_with(fw,
 /// true)` records the staged replay receipts. The same staged task
 /// replay is committed both ways, and only the delivered one makes
@@ -315,28 +300,29 @@ async fn g3_g35_sources_outside_the_task_targets_stage_nothing() {
 /// Mutant killed: error or panic on a missing entry (the staging
 /// calls below would not return), or rebuild from the stored answer
 /// when absent (a receipt would stage).
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn g4_an_absent_store_entry_stages_nothing() {
     let (meta, _fw) = relay_meta();
     let stored = completed(&[("alpha", "read"), ("beta", "read")]);
     let alice = RelayKey::new("alice", true);
-    #[cfg(feature = "metrics")]
-    let absent_before = skipped_count("absent");
-    let staged = collecting(async {
+    let measured = collecting(async {
         stage_task_replay(&meta, alice, &stored);
         note_sync_lookup("id".to_owned(), "round".to_owned(), "op".to_owned());
         stage_plan_replay(&meta, alice);
         staged_summaries()
-    })
-    .await;
+    });
+    #[cfg(feature = "metrics")]
+    let (staged, absent) = crate::gateway::count_plan_replay_skipped("absent", measured);
+    #[cfg(not(feature = "metrics"))]
+    let staged = measured.await;
     assert!(
         staged.is_empty(),
         "an absent store entry staged a receipt: {staged:?}"
     );
     #[cfg(feature = "metrics")]
-    assert!(
-        skipped_count("absent") > absent_before,
-        "the absent lookups were not counted reason=absent"
+    assert_eq!(
+        absent, 2,
+        "the two absent lookups (task and sync) were not each counted reason=absent"
     );
 }
 
@@ -390,16 +376,17 @@ fn nested_rig() -> (Arc<MetaMcp>, Arc<Firewall>, CommittedTask) {
 /// drop only seams touching the nested label (the outside seam
 /// would appear); skip the nested label's receipts (an inner
 /// summary would be missing).
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn g6_g40_a_nested_label_stages_its_inner_receipts_and_no_seam() {
     let (meta, _fw, stored) = nested_rig();
-    #[cfg(feature = "metrics")]
-    let dropped_before = skipped_count("nested_seam");
-    let staged = collecting(async {
+    let measured = collecting(async {
         stage_task_replay(&meta, RelayKey::new("alice", true), &stored);
         staged_summaries()
-    })
-    .await;
+    });
+    #[cfg(feature = "metrics")]
+    let (staged, dropped) = crate::gateway::count_plan_replay_skipped("nested_seam", measured);
+    #[cfg(not(feature = "metrics"))]
+    let staged = measured.await;
     assert_eq!(
         staged,
         vec![
@@ -409,9 +396,9 @@ async fn g6_g40_a_nested_label_stages_its_inner_receipts_and_no_seam() {
         "the inner receipts stage under their own sources and no seam stages"
     );
     #[cfg(feature = "metrics")]
-    assert!(
-        skipped_count("nested_seam") >= dropped_before + 2,
-        "both dropped seams were not counted reason=nested_seam"
+    assert_eq!(
+        dropped, 2,
+        "both dropped seams were not counted exactly once each reason=nested_seam"
     );
 }
 

@@ -13,27 +13,13 @@
 //! `relay_plan_replay_content_guards`.
 use super::super::*;
 use super::relay_plan_replay::{
-    ALPHA, BETA, OTHER_PROSE, PROSE, Rig, WINDOW_SECS, answering, chain, keyed_call, rig, task_call,
+    ALPHA, BETA, OTHER_PROSE, PROSE, Rig, SUGGEST, WINDOW_SECS, answering, chain, erring_step,
+    keyed_call, playbook, playbook_args, rig, task_call,
 };
 use super::support::*;
 use pretty_assertions::assert_eq;
 
 use crate::security::firewall::{CollusionAction, CollusionConfig, Firewall, FirewallConfig};
-
-/// The replay-skipped counter's `reason` count, as the unit rows read it.
-#[cfg(feature = "metrics")]
-pub(super) fn skipped_count(reason: &str) -> u64 {
-    crate::metrics::install();
-    crate::metrics::render()
-        .lines()
-        .find(|l| {
-            l.starts_with("mcp_gateway_collusion_plan_replay_skipped_total")
-                && l.contains(&format!("reason=\"{reason}\""))
-        })
-        .and_then(|l| l.rsplit(' ').next())
-        .and_then(|n| n.parse::<u64>().ok())
-        .unwrap_or(0)
-}
 
 /// [`Rig::refused`] for a bare second-gateway `state`.
 pub(super) async fn probe_refused(
@@ -94,7 +80,8 @@ pub(super) fn plan_auth() -> AuthConfig {
 }
 
 /// A gateway with no firewall (relay detection off) over the shared
-/// step mocks: the first gateway of G25-T/H.
+/// step mocks, with G25's playbook registered: the first gateway of
+/// G25-T/H.
 async fn off_gateway(
     alpha: &Arc<MockBackend>,
     beta: &Arc<MockBackend>,
@@ -103,13 +90,71 @@ async fn off_gateway(
         &plan_auth(),
         None,
         None,
-        |meta| meta,
+        |meta| {
+            let definition: crate::playbook::PlaybookDefinition =
+                crate::yaml::from_str(&playbook()).expect("playbook fixture must parse");
+            let mut engine = crate::playbook::PlaybookEngine::new();
+            engine.register(definition);
+            meta.set_playbook_engine(engine);
+            meta
+        },
     )
     .await;
     register(&state, BACKEND, &answering("ok"));
     register(&state, ALPHA, alpha);
     register(&state, BETA, beta);
     (state, store)
+}
+
+/// G25-H's detection-on gateway over `off`'s admission, with its
+/// freshly keyed relay firewall and the playbook registered, and
+/// the probe and step backends registered.
+async fn on_gateway_over_off(
+    off: &Arc<AppState>,
+    alpha: &Arc<MockBackend>,
+    beta: &Arc<MockBackend>,
+) -> (Arc<AppState>, tempfile::TempDir) {
+    let relay_fw = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    min_matches: 1,
+                    sources: vec![format!("{ALPHA}:*"), format!("{BETA}:*")],
+                    window_secs: WINDOW_SECS,
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .keyed_for_test()
+        .keeping_every_kgram(),
+    );
+    relay_fw.advance_collusion_clock_for_test(std::time::Duration::ZERO);
+    let admission = Arc::clone(off.meta_mcp.execution_admission());
+    let handle = Arc::clone(&relay_fw);
+    let (on, on_store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
+        &plan_auth(),
+        None,
+        None,
+        move |mut meta| {
+            meta.share_execution_admission_for_test(admission);
+            meta.share_keyring_with_for_test(&handle);
+            meta.set_firewall(Some(handle));
+            let definition: crate::playbook::PlaybookDefinition =
+                crate::yaml::from_str(&playbook()).expect("playbook fixture must parse");
+            let mut engine = crate::playbook::PlaybookEngine::new();
+            engine.register(definition);
+            meta.set_playbook_engine(engine);
+            meta
+        },
+    )
+    .await;
+    register(&on, BACKEND, &answering("ok"));
+    register(&on, ALPHA, alpha);
+    register(&on, BETA, beta);
+    (on, on_store)
 }
 
 /// The second rig's gateway (fresh firewall/store) reopened over
@@ -149,9 +194,11 @@ async fn state_over_tasks(second: Rig, tasks_dir: std::path::PathBuf) -> Arc<App
 /// re-read of `task` still serves its stored answer and renews
 /// nothing, counted absent, while a live delivery receipts (control).
 async fn renews_nothing_after_reopen(on: &Arc<AppState>, task: &str, id: i64) {
+    let measured = get_task(on, "key-a", task);
     #[cfg(feature = "metrics")]
-    let absent_before = skipped_count("absent");
-    let read = get_task(on, "key-a", task).await;
+    let (read, absent) = crate::gateway::count_plan_replay_skipped("absent", measured);
+    #[cfg(not(feature = "metrics"))]
+    let read = measured.await;
     assert_eq!(status_of(&read), "completed", "base: {read}");
     assert!(
         read.to_string().contains(PROSE),
@@ -162,9 +209,9 @@ async fn renews_nothing_after_reopen(on: &Arc<AppState>, task: &str, id: i64) {
         "the re-read renewed a receipt the gateway never held"
     );
     #[cfg(feature = "metrics")]
-    assert!(
-        skipped_count("absent") > absent_before,
-        "not counted reason=absent"
+    assert_eq!(
+        absent, 1,
+        "not counted exactly once reason=absent for the one absent lookup"
     );
     let live = live_invoke(on, id + 1, ALPHA).await;
     assert!(
@@ -324,7 +371,7 @@ async fn g46_a_stored_read_refusal_stages_nothing() {
 /// stages nothing on re-read, counted absent; the entry died with
 /// the first process.
 /// Mutant: re-derive when absent.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn g32_a_restarted_gateway_stages_nothing_counted_absent() {
     let first = rig(PROSE, OTHER_PROSE, None).await;
     let task = first.settle_task("g32", "gateway_execute", chain()).await;
@@ -344,22 +391,30 @@ async fn g32_a_restarted_gateway_stages_nothing_counted_absent() {
 }
 
 /// G25 (T): a plan task delivered with detection off renews nothing
-/// when the store is reopened with detection on, counted absent.
-/// Mutant: open the provenance scope only when relay is active.
-#[tokio::test]
+/// when the store is reopened with detection on, counted absent, and
+/// no gateway text in its stored answer is receipted: beta's step
+/// answers the parameter-style tool error R9 uses, so the stored
+/// answer carries the gateway's [`SUGGEST`] advice (premise).
+/// Mutants: open the provenance scope only when relay is active; no
+/// gateway-writes scope with detection off.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn g25_a_detection_off_plan_task_renews_nothing_once_detection_is_on() {
     let alpha = answering(PROSE);
-    let beta = answering(OTHER_PROSE);
+    let beta = erring_step();
     let (off, off_store) = off_gateway(&alpha, &beta).await;
     let created = post(
         &off,
         "key-a",
-        task_call(1, "g25-t", "gateway_execute", &chain()),
+        task_call(1, "g25-t", "gateway_run_playbook", &playbook_args()),
     )
     .await;
     let task = task_id(&created);
     let settled = poll_until_terminal(&off, "key-a", &task).await;
     assert_eq!(status_of(&settled), "completed", "premise: {settled}");
+    assert!(
+        settled.to_string().contains(SUGGEST),
+        "premise: stored answer carries the gateway's advice: {settled}"
+    );
     assert_eq!(
         (alpha.calls(), beta.calls()),
         (1, 1),
@@ -372,73 +427,49 @@ async fn g25_a_detection_off_plan_task_renews_nothing_once_detection_is_on() {
     assert!(joined.is_clean(), "the workers must finish: {joined:?}");
     let tasks_dir = off_store.path().join("tasks");
     drop(off);
-    let on = state_over_tasks(rig(PROSE, OTHER_PROSE, None).await, tasks_dir).await;
+    let on = state_over_tasks(rig(PROSE, OTHER_PROSE, Some(&playbook())).await, tasks_dir).await;
     renews_nothing_after_reopen(&on, &task, 250).await;
+    assert!(
+        !probe_refused(&on, "key-b", 253, SUGGEST).await,
+        "the re-read receipted the gateway's own advice"
+    );
 }
 
 /// G25 (H): a keyed plan delivered with detection off, replayed once
 /// the firewall is swapped on over the same admission, renews
-/// nothing, counted absent. Mutant: as G25-T.
-#[tokio::test]
+/// nothing, counted absent, and receipts no gateway text: the stored
+/// answer carries [`SUGGEST`] (premise, as G25-T). Mutants: as G25-T.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn g25_a_detection_off_keyed_plan_renews_nothing_once_detection_is_on() {
     let alpha = answering(PROSE);
-    let beta = answering(OTHER_PROSE);
+    let beta = erring_step();
     let (off, _off_store) = off_gateway(&alpha, &beta).await;
     let first = post(
         &off,
         "key-a",
-        keyed_call(1, "g25-h", "gateway_execute", &chain()),
+        keyed_call(1, "g25-h", "gateway_run_playbook", &playbook_args()),
     )
     .await;
     assert!(first.get("error").is_none(), "base: delivered: {first}");
+    assert!(
+        first.to_string().contains(SUGGEST),
+        "premise: stored answer carries the gateway's advice: {first}"
+    );
     assert_eq!(
         (alpha.calls(), beta.calls()),
         (1, 1),
         "premise: dispatched, detection off"
     );
-    let relay_fw = Arc::new(
-        Firewall::from_config(
-            FirewallConfig {
-                collusion: CollusionConfig {
-                    action: CollusionAction::Block,
-                    min_matches: 1,
-                    sources: vec![format!("{ALPHA}:*"), format!("{BETA}:*")],
-                    window_secs: WINDOW_SECS,
-                    ..CollusionConfig::default()
-                },
-                ..FirewallConfig::default()
-            },
-            None,
-        )
-        .keyed_for_test()
-        .keeping_every_kgram(),
-    );
-    relay_fw.advance_collusion_clock_for_test(std::time::Duration::ZERO);
-    let admission = Arc::clone(off.meta_mcp.execution_admission());
-    let handle = Arc::clone(&relay_fw);
-    let (on, _on_store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
-        &plan_auth(),
-        None,
-        None,
-        move |mut meta| {
-            meta.share_execution_admission_for_test(admission);
-            meta.share_keyring_with_for_test(&handle);
-            meta.set_firewall(Some(handle));
-            meta
-        },
-    )
-    .await;
-    register(&on, BACKEND, &answering("ok"));
-    register(&on, ALPHA, &alpha);
-    register(&on, BETA, &beta);
-    #[cfg(feature = "metrics")]
-    let absent_before = skipped_count("absent");
-    let replay = post(
+    let (on, _on_store) = on_gateway_over_off(&off, &alpha, &beta).await;
+    let measured = post(
         &on,
         "key-a",
-        keyed_call(2, "g25-h", "gateway_execute", &chain()),
-    )
-    .await;
+        keyed_call(2, "g25-h", "gateway_run_playbook", &playbook_args()),
+    );
+    #[cfg(feature = "metrics")]
+    let (replay, absent) = crate::gateway::count_plan_replay_skipped("absent", measured);
+    #[cfg(not(feature = "metrics"))]
+    let replay = measured.await;
     assert_eq!(
         replay["result"], first["result"],
         "premise: retained answer replayed unchanged"
@@ -456,10 +487,14 @@ async fn g25_a_detection_off_keyed_plan_renews_nothing_once_detection_is_on() {
         !probe_refused(&on, "key-b", 254, OTHER_PROSE).await,
         "renewed a detection-off plan (step B)"
     );
-    #[cfg(feature = "metrics")]
     assert!(
-        skipped_count("absent") > absent_before,
-        "not counted reason=absent"
+        !probe_refused(&on, "key-b", 257, SUGGEST).await,
+        "the replay receipted the gateway's own advice"
+    );
+    #[cfg(feature = "metrics")]
+    assert_eq!(
+        absent, 1,
+        "not counted exactly once reason=absent for the one absent lookup"
     );
     let live = live_invoke(&on, 255, ALPHA).await;
     assert!(
