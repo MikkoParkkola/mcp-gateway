@@ -478,7 +478,15 @@ fn a_negative_journey_limit_is_refused_at_parse() {
         "starts_per_minute_per_user",
         "journeys_created_per_minute",
     ] {
-        refused(&limit(field, "-1"), "integer `-1`, expected u");
+        let yaml = limit(field, "-1");
+        refused(&yaml, "integer, expected u");
+        match check(&yaml) {
+            Ok(()) => panic!("accepted; expected a refusal for {field}"),
+            Err(message) => assert!(
+                !message.contains("-1"),
+                "refusal prints the value: {message:?} contains \"-1\""
+            ),
+        }
     }
 }
 
@@ -540,10 +548,15 @@ fn authorize_extra_accepts_only_the_closed_values() {
             ),
         }
     }
-    refused(
-        &with(from, "authorize_extra: { include_granted_scopes: maybe }"),
-        "expected a boolean",
-    );
+    let yaml = with(from, "authorize_extra: { include_granted_scopes: maybe }");
+    refused(&yaml, "expected a boolean");
+    match check(&yaml) {
+        Ok(()) => panic!("accepted; expected a refusal for include_granted_scopes: maybe"),
+        Err(message) => assert!(
+            !message.contains("maybe"),
+            "refusal prints the value: {message:?} contains \"maybe\""
+        ),
+    }
 }
 
 #[test]
