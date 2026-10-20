@@ -142,7 +142,7 @@ fn open_stream_session(
         existing,
         owner,
         credential,
-        MintKind::Provisional,
+        MintKind::ProvisionalStream,
     ) {
         Ok((opened, request_hold)) => Ok((opened, Some(request_hold))),
         Err(SessionCapacity) => Err(Box::new(session_capacity_refusal(None))),

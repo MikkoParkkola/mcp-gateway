@@ -59,6 +59,66 @@ fn account_slot(server: &str, account: &AccountKey) -> AccountSlot {
     (server.to_owned(), account.clone())
 }
 
+/// The borrowed form of a [`TargetKey`], for reads: no key is built.
+fn target<'a>(server: &'a str, tool: &'a str) -> (&'a str, &'a str) {
+    (server, tool)
+}
+
+/// The borrowed form of an [`AccountSlot`], for reads: no key is built.
+fn slot<'a>(server: &'a str, account: &'a AccountKey) -> (&'a str, &'a str) {
+    (server, account.0.as_str())
+}
+
+/// A memo key seen as its two string halves, so a read can look an owned
+/// key up by borrowed text through `Borrow<dyn Pair>` (MIK-8498.1b).
+trait Pair {
+    fn pair(&self) -> (&str, &str);
+}
+
+impl Pair for (String, String) {
+    fn pair(&self) -> (&str, &str) {
+        (self.0.as_str(), self.1.as_str())
+    }
+}
+
+impl Pair for (String, AccountKey) {
+    fn pair(&self) -> (&str, &str) {
+        (self.0.as_str(), self.1.0.as_str())
+    }
+}
+
+impl Pair for (&str, &str) {
+    fn pair(&self) -> (&str, &str) {
+        (self.0, self.1)
+    }
+}
+
+impl std::hash::Hash for dyn Pair + '_ {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(&self.pair(), state);
+    }
+}
+
+impl PartialEq for dyn Pair + '_ {
+    fn eq(&self, other: &Self) -> bool {
+        self.pair() == other.pair()
+    }
+}
+
+impl Eq for dyn Pair + '_ {}
+
+impl<'a> std::borrow::Borrow<dyn Pair + 'a> for (String, String) {
+    fn borrow(&self) -> &(dyn Pair + 'a) {
+        self as &(dyn Pair + 'a)
+    }
+}
+
+impl<'a> std::borrow::Borrow<dyn Pair + 'a> for (String, AccountKey) {
+    fn borrow(&self) -> &(dyn Pair + 'a) {
+        self as &(dyn Pair + 'a)
+    }
+}
+
 /// One map in the open request's memo (MIK-8498 VISIBLE.2). Every memo map
 /// is this type, so each accessor states only which operation it uses:
 /// first-wins, overwrite, read, take, or take the first that matches.
@@ -84,23 +144,40 @@ impl<K: std::hash::Hash + Eq, V> Keyed<K, V> {
         self.0.lock().insert(key, value);
     }
 
-    fn get(&self, key: &K) -> Option<V>
+    // Reads are generic over the borrowed form of the key (`dyn Pair` for
+    // the pair-keyed maps; the owned key itself, e.g. `DeferredReplayKey`,
+    // for the rest), so a lookup need not build an owned key.
+    fn get<Q>(&self, key: &Q) -> Option<V>
     where
         V: Clone,
+        K: std::borrow::Borrow<Q>,
+        Q: std::hash::Hash + Eq + ?Sized,
     {
         self.0.lock().get(key).cloned()
     }
 
     /// Read the entry in place, without cloning or consuming it.
-    fn with<R>(&self, key: &K, read: impl FnOnce(&V) -> R) -> Option<R> {
+    fn with<Q, R>(&self, key: &Q, read: impl FnOnce(&V) -> R) -> Option<R>
+    where
+        K: std::borrow::Borrow<Q>,
+        Q: std::hash::Hash + Eq + ?Sized,
+    {
         self.0.lock().get(key).map(read)
     }
 
-    fn take(&self, key: &K) -> Option<V> {
+    fn take<Q>(&self, key: &Q) -> Option<V>
+    where
+        K: std::borrow::Borrow<Q>,
+        Q: std::hash::Hash + Eq + ?Sized,
+    {
         self.0.lock().remove(key)
     }
 
-    fn contains(&self, key: &K) -> bool {
+    fn contains<Q>(&self, key: &Q) -> bool
+    where
+        K: std::borrow::Borrow<Q>,
+        Q: std::hash::Hash + Eq + ?Sized,
+    {
         self.0.lock().contains_key(key)
     }
 
@@ -178,7 +255,11 @@ pub(crate) fn record_account_outcome(server: &str, account: &AccountKey, outcome
 /// `None`, and the caller fails closed. It never judges afresh (unlike the
 /// visibility fallback in [`MetaMcp::tool_visible_to`](crate::gateway::meta_mcp::MetaMcp::tool_visible_to)).
 pub(crate) fn account_outcome(server: &str, account: &AccountKey) -> Option<AccountOutcome> {
-    in_memo(|memo| memo.offer_pending.get(&account_slot(server, account))).flatten()
+    in_memo(|memo| {
+        memo.offer_pending
+            .get(&slot(server, account) as &(dyn Pair + '_))
+    })
+    .flatten()
 }
 
 /// A caller verdict's resolution, waiting for the first invocation on its
@@ -208,7 +289,8 @@ pub(crate) struct Judged {
 
 impl VisibilityMemo {
     fn recorded(&self, server: &str, tool: &str) -> Option<Visibility> {
-        self.visibility.get(&target_key(server, tool))
+        self.visibility
+            .get(&target(server, tool) as &(dyn Pair + '_))
     }
 
     /// Record `judged` unless an answer is already recorded; returns the
@@ -311,7 +393,7 @@ pub(crate) fn with_carried<R>(
 ) -> Option<R> {
     in_memo(|memo| {
         memo.carried_credential
-            .with(&target_key(server, tool), read)
+            .with(&target(server, tool) as &(dyn Pair + '_), read)
     })
     .flatten()
 }
@@ -319,7 +401,11 @@ pub(crate) fn with_carried<R>(
 /// Take the resolution carried for `(server, tool)`, consuming it: a later
 /// invocation of the same `(server, tool)` resolves again.
 pub(crate) fn take_carried(server: &str, tool: &str) -> Option<Carried> {
-    in_memo(|memo| memo.carried_credential.take(&target_key(server, tool))).flatten()
+    in_memo(|memo| {
+        memo.carried_credential
+            .take(&target(server, tool) as &(dyn Pair + '_))
+    })
+    .flatten()
 }
 
 /// MIK-8361: keep the route stage's refusal code for `(server, tool)`, so the
@@ -330,7 +416,11 @@ pub(crate) fn note_denial_code(server: &str, tool: &str, code: i32) {
 
 /// The code [`note_denial_code`] kept for `(server, tool)`, if any.
 pub(crate) fn denial_code(server: &str, tool: &str) -> Option<i32> {
-    in_memo(|memo| memo.denial_code.get(&target_key(server, tool))).flatten()
+    in_memo(|memo| {
+        memo.denial_code
+            .get(&target(server, tool) as &(dyn Pair + '_))
+    })
+    .flatten()
 }
 
 /// The answer already recorded for `(server, tool)` in the open request, if
@@ -388,7 +478,11 @@ pub(crate) fn record_account_binding(server: &str, account: &AccountKey, binding
 
 /// The binding the pre-pass's view read gave `(server, account)`, if any.
 pub(crate) fn account_binding(server: &str, account: &AccountKey) -> Option<String> {
-    in_memo(|memo| memo.account_binding.get(&account_slot(server, account))).flatten()
+    in_memo(|memo| {
+        memo.account_binding
+            .get(&slot(server, account) as &(dyn Pair + '_))
+    })
+    .flatten()
 }
 
 /// Keep the live call's refusal for `(server, account)` in the open request;
@@ -408,7 +502,11 @@ pub(crate) fn record_account_transient(server: &str, tool: &str, reason: String)
 
 /// The transient kept for `(server, tool)`, without consuming it.
 pub(crate) fn account_transient(server: &str, tool: &str) -> Option<String> {
-    in_memo(|memo| memo.account_transient.get(&target_key(server, tool))).flatten()
+    in_memo(|memo| {
+        memo.account_transient
+            .get(&target(server, tool) as &(dyn Pair + '_))
+    })
+    .flatten()
 }
 
 /// Take any one transient this request holds, consuming it: the task
@@ -432,7 +530,11 @@ pub(crate) fn take_any_transient_resolution_error() -> Option<crate::Error> {
 
 /// Take the transient kept for `(server, tool)`, consuming it once.
 pub(crate) fn take_account_transient(server: &str, tool: &str) -> Option<String> {
-    in_memo(|memo| memo.account_transient.take(&target_key(server, tool))).flatten()
+    in_memo(|memo| {
+        memo.account_transient
+            .take(&target(server, tool) as &(dyn Pair + '_))
+    })
+    .flatten()
 }
 
 /// Keep the route verdict's resolution error for `(server, tool)` in the
@@ -444,17 +546,29 @@ pub(crate) fn record_resolution_error(server: &str, tool: &str, error: crate::Er
 /// Whether a resolution error is kept for `(server, tool)`, without
 /// consuming it: a repeated verdict reads it as a memo hit (G1a twin).
 pub(crate) fn has_resolution_error(server: &str, tool: &str) -> bool {
-    in_memo(|memo| memo.resolution_error.contains(&target_key(server, tool))).unwrap_or(false)
+    in_memo(|memo| {
+        memo.resolution_error
+            .contains(&target(server, tool) as &(dyn Pair + '_))
+    })
+    .unwrap_or(false)
 }
 
 /// Take the resolution error kept for `(server, tool)`, consuming it once.
 pub(crate) fn take_resolution_error(server: &str, tool: &str) -> Option<crate::Error> {
-    in_memo(|memo| memo.resolution_error.take(&target_key(server, tool))).flatten()
+    in_memo(|memo| {
+        memo.resolution_error
+            .take(&target(server, tool) as &(dyn Pair + '_))
+    })
+    .flatten()
 }
 
 /// Take the refusal kept for `(server, account)`, if any.
 pub(crate) fn take_account_refusal(server: &str, account: &AccountKey) -> Option<crate::Error> {
-    in_memo(|memo| memo.account_refusal.take(&account_slot(server, account))).flatten()
+    in_memo(|memo| {
+        memo.account_refusal
+            .take(&slot(server, account) as &(dyn Pair + '_))
+    })
+    .flatten()
 }
 
 /// Record `(server, tool)` absent for the rest of the request (MIK-8387).
@@ -555,5 +669,9 @@ mod memo_tests {
 
 #[cfg(test)]
 mod account_tests;
+#[cfg(test)]
+mod alloc_tests;
+#[cfg(test)]
+mod key_tests;
 #[cfg(test)]
 mod semantics_tests;

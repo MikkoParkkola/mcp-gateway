@@ -87,13 +87,20 @@ pub struct ImportedSkill {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub code_blocks: Vec<SkillCodeBlock>,
 
-    /// Other frontmatter fields kept verbatim (e.g. `metadata`).
+    /// Other frontmatter fields, converted to JSON values (e.g. `metadata`).
     ///
-    /// The value type is still the YAML parser's own tree type, named here
-    /// through the crate's YAML adapter, so this release does not change it.
-    /// 4.0.0 changes it to `serde_json::Value` (MIK-8425 MIG.2).
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, crate::yaml::Value>,
+    /// MIK-8425, 4.0.0: this field type changes here on its own, not as part
+    /// of the later YAML backend swap. A YAML tag `!t v` becomes the one-entry
+    /// map `{"!t": v}` and cannot be told from a map keyed `"!t"`. Boolean,
+    /// integer and finite float keys become strings; null, non-finite float,
+    /// sequence, mapping and tagged keys drop their entry. The full rules are
+    /// in the 4.0.0 upgrade notes (`UPGRADING`, MIK-8425).
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "extra_via_yaml_tree"
+    )]
+    pub extra: BTreeMap<String, serde_json::Value>,
 
     /// Absolute path to the source SKILL.md file, if parsed from disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -157,7 +164,7 @@ pub fn parse_skill_md(content: &str) -> Result<ImportedSkill> {
         if let Some(key) = k.as_str()
             && !reserved.contains(&key)
         {
-            extra.insert(key.to_owned(), v.clone());
+            extra.insert(key.to_owned(), crate::yaml::to_json(v));
         }
     }
 
@@ -260,6 +267,20 @@ pub fn read_auxiliary_file(skill: &ImportedSkill, relative: &str) -> Result<Stri
 }
 
 // ── internals ────────────────────────────────────────────────────────────────
+
+/// Deserialize `extra` through the YAML tree, so one conversion rule covers
+/// every input, and `serde_json`'s `raw_value` magic key
+/// (`$serde_json::private::RawValue`, live because the crate enables that
+/// feature) stays an ordinary map key instead of being interpreted.
+fn extra_via_yaml_tree<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<BTreeMap<String, serde_json::Value>, D::Error> {
+    let raw = BTreeMap::<String, crate::yaml::Value>::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .map(|(key, value)| (key, crate::yaml::to_json(&value)))
+        .collect())
+}
 
 /// Split a SKILL.md document into (frontmatter, body).
 ///
@@ -635,5 +656,127 @@ mod tests {
         let content = read_auxiliary_file(&skill, "reference.md").unwrap();
         // THEN
         assert_eq!(content, "Reference content");
+    }
+
+    // E1
+    #[test]
+    fn extra_nested_metadata_maps_to_json_values() {
+        let content = "---\nname: n\ndescription: d\nmetadata:\n  openclaw:\n    category: productivity\n---\nBody\n";
+        let skill = parse_skill_md(content).expect("fixture skill parses");
+        let extra: &BTreeMap<String, serde_json::Value> = &skill.extra;
+        assert_eq!(
+            extra["metadata"],
+            serde_json::json!({"openclaw": {"category": "productivity"}})
+        );
+    }
+
+    // E2
+    #[test]
+    fn extra_keeps_yaml_tags_as_one_entry_maps() {
+        let content =
+            "---\nname: n\ndescription: d\nx: !custom {a: 1}\ns: [!t 1, plain]\n---\nBody\n";
+        let skill = parse_skill_md(content).expect("fixture skill parses");
+        assert_eq!(skill.extra["x"], serde_json::json!({"!custom": {"a": 1}}));
+        assert_eq!(skill.extra["s"], serde_json::json!([{"!t": 1}, "plain"]));
+    }
+
+    // E3
+    #[test]
+    fn extra_stringifies_scalar_keys_and_drops_other_keys() {
+        let content = "---\nname: n\ndescription: d\nm: {1: one, true: t, 1.5: f, 1.0: g, 1e3: h, -0.0: z0, two: 2, [a]: z, ~: n, {k: v}: w, !t k: x, .inf: i}\n---\nBody\n";
+        let skill = parse_skill_md(content).expect("fixture skill parses");
+        assert_eq!(
+            skill.extra["m"],
+            serde_json::json!({"1": "one", "true": "t", "1.5": "f", "1.0": "g", "1000.0": "h", "-0.0": "z0", "two": 2})
+        );
+    }
+
+    // E4
+    #[test]
+    fn extra_maps_non_finite_floats_to_null_and_keeps_number_kinds() {
+        let content = "---\nname: n\ndescription: d\nf: [.inf, -.inf, .nan, 1.5, 1.0, 18446744073709551615, -9223372036854775808]\n---\nBody\n";
+        let skill = parse_skill_md(content).expect("fixture skill parses");
+        assert_eq!(
+            skill.extra["f"],
+            serde_json::json!([
+                null,
+                null,
+                null,
+                1.5,
+                1.0,
+                18_446_744_073_709_551_615_u64,
+                -9_223_372_036_854_775_808_i64
+            ])
+        );
+        assert!(skill.extra["f"][4].is_f64());
+    }
+
+    // E5
+    #[test]
+    fn extra_later_stringified_key_wins_when_int_comes_first() {
+        let content = "---\nname: n\ndescription: d\nm: {1: a, \"1\": b}\n---\nBody\n";
+        let skill = parse_skill_md(content).expect("fixture skill parses");
+        assert_eq!(skill.extra["m"], serde_json::json!({"1": "b"}));
+    }
+
+    // E5
+    #[test]
+    fn extra_later_stringified_key_wins_when_string_comes_first() {
+        let content = "---\nname: n\ndescription: d\nm: {\"1\": a, 1: b}\n---\nBody\n";
+        let skill = parse_skill_md(content).expect("fixture skill parses");
+        assert_eq!(skill.extra["m"], serde_json::json!({"1": "b"}));
+    }
+
+    // E5
+    #[test]
+    fn extra_duplicate_yaml_keys_are_still_refused() {
+        let content = "---\nname: n\ndescription: d\nm: {a: 1, a: 2}\n---\nBody\n";
+        assert!(parse_skill_md(content).is_err());
+    }
+
+    // E8
+    #[test]
+    fn extra_deserializing_from_json_keeps_raw_value_magic_key_as_plain_map() {
+        let skill: ImportedSkill = serde_json::from_value(serde_json::json!({"name": "n", "description": "d", "body": "b", "extra": {"x": {"$serde_json::private::RawValue": "0"}}})).expect("fixture skill deserializes");
+        assert_eq!(
+            skill.extra["x"],
+            serde_json::json!({"$serde_json::private::RawValue": "0"})
+        );
+    }
+
+    // E8
+    #[test]
+    fn extra_deserializing_from_yaml_applies_tag_rule() {
+        let skill: ImportedSkill = crate::yaml::from_str::<ImportedSkill>(
+            "name: n\ndescription: d\nbody: b\nextra:\n  x: !t 1\n",
+        )
+        .expect("fixture skill deserializes");
+        assert_eq!(skill.extra["x"], serde_json::json!({"!t": 1}));
+    }
+
+    // E1b
+    #[test]
+    fn extra_null_and_bool_values_map_to_json() {
+        let content = "---\nname: n\ndescription: d\nv: {n: ~, t: true, f: false}\n---\nBody\n";
+        let skill = parse_skill_md(content).expect("fixture skill parses");
+        assert_eq!(
+            skill.extra["v"],
+            serde_json::json!({"n": null, "t": true, "f": false})
+        );
+    }
+
+    // E3b
+    #[test]
+    fn extra_negative_and_max_u64_keys_stringify() {
+        let content = concat!(
+            "---\nname: n\ndescription: d\n",
+            "m: {-5: neg, 18446744073709551615: max}\n",
+            "---\nBody\n",
+        );
+        let skill = parse_skill_md(content).expect("fixture skill parses");
+        assert_eq!(
+            skill.extra["m"],
+            serde_json::json!({"-5": "neg", "18446744073709551615": "max"})
+        );
     }
 }

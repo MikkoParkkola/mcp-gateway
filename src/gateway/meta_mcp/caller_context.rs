@@ -122,6 +122,14 @@ pub struct MetaMcpCallerContext<'a> {
 }
 
 impl<'a> MetaMcpCallerContext<'a> {
+    /// The name per-key cost governance charges this caller to: the API key's
+    /// name for an API-key credential, `None` for any other (MIK-8507).
+    /// `api_key_name` stays the display name for audit and correlation.
+    pub(crate) fn cost_key(&self) -> Option<&'a str> {
+        self.api_key_name
+            .filter(|_| self.credential_kind == crate::security::audit::CredentialKind::ApiKey)
+    }
+
     /// The fields the chokepoint reads, as the view discovery is judged by.
     #[must_use]
     pub fn scope(&self) -> InvokeScope<'_> {

@@ -455,6 +455,7 @@ src/gateway/meta_mcp/invoke/worker_clock.rs	take_redemption_unreadable	-	task-wo
 src/gateway/meta_mcp/invoke/worker_clock.rs	take_withheld	-	task-worker executions only, not a request-thread call
 src/gateway/router/handlers.rs	meta_mcp_dispatch	http_invoke_tiny	the HTTP /mcp dispatcher
 src/gateway/router/handlers.rs	refusal_status	http_invoke_tiny	read on every HTTP answer
+src/gateway/router/handlers/dispatch_intake.rs	degraded_session_tool_refusal	http_invoke_tiny	read per HTTP tools/call: one flag check unless the request was served without a session at the cap (MIK-8533)
 src/gateway/router/handlers/dispatch_intake.rs	external_tool	http_invoke_tiny	the tool name the response policy keys on, read per HTTP request
 src/gateway/router/handlers/dispatch_intake.rs	mcp_cancel_key	http_invoke_tiny	registered for every HTTP tools/call so its caller can cancel it
 src/gateway/router/handlers/dispatch_intake.rs	params	http_invoke_tiny	the request params accessor

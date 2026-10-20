@@ -62,6 +62,10 @@ pub(super) struct ClientSession {
     /// Requests running under this session now. A provisional session with
     /// one in flight is never reaped (MIK-8504).
     pub(super) in_flight: std::sync::atomic::AtomicUsize,
+    /// Whether a provisional session was minted by a GET stream, and so
+    /// counts against the stream share rather than the POST share
+    /// (MIK-8533). Read only while `provisional` is set.
+    pub(super) provisional_stream: std::sync::atomic::AtomicBool,
 }
 
 impl ClientSession {

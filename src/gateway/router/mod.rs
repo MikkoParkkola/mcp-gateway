@@ -94,6 +94,8 @@ mod continuation_instance_tests;
 #[cfg(all(test, feature = "webui"))]
 mod control_plane_grant_clock_tests;
 #[cfg(test)]
+mod cost_key_tests;
+#[cfg(test)]
 mod direct_audit_tests;
 #[cfg(test)]
 mod direct_cache_guard_tests;
@@ -205,6 +207,9 @@ pub(super) mod route_matrix_driver_tests;
 #[cfg(all(test, feature = "firewall"))]
 pub(super) mod route_matrix_x14_nonce_tests;
 /// MIK-8504: the provisional-session cap refuses before anything runs.
+/// MIK-8533: past the POST cap a sessionless legacy call is served without a session.
+#[cfg(test)]
+mod session_capacity_degrade_tests;
 #[cfg(test)]
 mod session_capacity_tests;
 #[cfg(test)]

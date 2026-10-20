@@ -151,6 +151,28 @@ impl Gateway {
         #[cfg(feature = "cost-governance")]
         let (cost_registry_opt, budget_enforcer_opt) =
             persistence::boot_cost_governance(&self.config.cost_governance, &data_dir);
+        // MIK-8507: only an API key is charged per key, so name each `per_key`
+        // entry that can never limit anyone rather than ignore it silently.
+        #[cfg(feature = "cost-governance")]
+        if self.config.cost_governance.enabled {
+            let why = if self.config.auth.enabled {
+                "names no configured API key"
+            } else {
+                "limits no caller while auth is off"
+            };
+            for entry in self
+                .config
+                .cost_governance
+                .budgets
+                .unmatched_per_key(&self.config.auth)
+            {
+                warn!(
+                    entry,
+                    "budgets.per_key entry {why}: only API keys are charged per key. \
+                     budgets.daily and budgets.per_tool cap every caller"
+                );
+            }
+        }
 
         // ── MetaMcp builder ──────────────────────────────────────────────────
         #[allow(unused_mut)]

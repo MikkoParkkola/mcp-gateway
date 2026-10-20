@@ -207,6 +207,9 @@ pub(super) async fn admit<'a>(
             .unwrap_or_default(),
         session_id: route.session_id,
         api_key_name: client.map(|c| c.name.as_str()),
+        cost_key: client
+            .filter(|c| c.credential_kind == crate::security::audit::CredentialKind::ApiKey)
+            .map(|c| c.name.as_str()),
         trace_id: "",
         caller_key,
     };
@@ -712,6 +715,7 @@ pub(super) fn screen_target<'a>(call: &BackendCall<'a>, method: &'a str) -> Back
         },
         session_id: call.session_id,
         api_key_name: call.api_key_name,
+        cost_key: call.cost_key,
         trace_id: call.trace_id,
         caller_key: call.caller_key,
     }

@@ -188,7 +188,7 @@ pub(in crate::gateway::router::handlers) async fn intake(
     }
     // Not a stream reader, so no branch subscribes: a held subscription
     // fakes a deliverable prompt.
-    let (opened, session_hold) = super::session::open_request_session(
+    let (opened, session_hold, session_degraded) = super::session::open_request_session(
         state,
         &request,
         &headers,
@@ -334,6 +334,13 @@ pub(in crate::gateway::router::handlers) async fn intake(
             StatusCode::BAD_REQUEST,
         ));
     }
+
+    // MIK-8499: carry the client's `params._meta` into a meta tool's own
+    // arguments here, where the request is owned, so `tools_call`'s merge
+    // borrows them instead of copying the whole argument tree.
+    crate::gateway::router::helpers::move_client_meta_into_arguments(&mut request, |name| {
+        state.meta_mcp.exposes_meta_tool(name)
+    });
 
     // Detect client POST-back responses (has "result" or "error" but no "method").
     // These are replies to server-to-client requests such as `sampling/createMessage`.
@@ -661,6 +668,7 @@ pub(in crate::gateway::router::handlers) async fn intake(
             admission_owner,
             _inflight_permit: inflight_permit,
             _session_hold: session_hold,
+            session_degraded,
         },
     ))
 }

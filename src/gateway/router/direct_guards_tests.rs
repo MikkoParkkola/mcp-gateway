@@ -216,6 +216,8 @@ async fn t3c_an_admission_holds_its_cost_until_it_is_dropped() {
         tool: "read",
         session_id: None,
         api_key_name: Some("k-budget"),
+        // An API key: the budget below is charged to it.
+        cost_key: Some("k-budget"),
         trace_id: "",
         caller_key: None,
     };
@@ -686,6 +688,8 @@ async fn t3c_a_bridged_round_and_a_direct_call_share_one_budget() {
             .declared_capabilities();
             let ctx = crate::gateway::meta_mcp::MetaMcpCallerContext {
                 api_key_name: Some("k-budget"),
+                // An API key: its budget is shared with the direct call below.
+                credential_kind: crate::security::audit::CredentialKind::ApiKey,
                 era: crate::protocol::meta::Era::Legacy,
                 input_capabilities: declared,
                 channel: &channel,

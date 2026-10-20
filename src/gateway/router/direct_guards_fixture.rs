@@ -391,6 +391,22 @@ pub(crate) async fn fixture_modern_off(answer: Answer) -> Fx {
     fx
 }
 
+/// The static bearer the [`fixture_with_bearer`] fixture serves.
+pub(crate) const BEARER_SECRET: &str = "the-static-bearer";
+
+/// [`fixture_built`] with a static bearer configured, and an API key named
+/// `bearer` (its secret is `bearer`): two credentials sharing one display
+/// name (MIK-8507).
+pub(crate) async fn fixture_with_bearer(
+    answer: Answer,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    WITH_BEARER.with(|b| b.set(true));
+    let fx = fixture_inner(answer, false, build).await;
+    WITH_BEARER.with(|b| b.set(false));
+    fx
+}
+
 /// [`fixture`] with a key server attached, so its temporary tokens are
 /// credentials the auth middleware resolves (MIK-8286 R5).
 pub(crate) async fn fixture_with_key_server(
@@ -418,6 +434,7 @@ pub(crate) async fn fixture_firewalled_anomaly(answer: Answer) -> Fx {
 // call, so the plain fixtures keep their signatures.
 thread_local! {
     static HARDENED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static WITH_BEARER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static MODERN_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static KEY_SERVER: std::cell::RefCell<Option<Arc<crate::key_server::KeyServer>>> =
         const { std::cell::RefCell::new(None) };
@@ -465,7 +482,6 @@ thread_local! {
 
 /// The auth the fixture serves: four keys, plus a client breaker when asked.
 fn fixture_auth() -> AuthConfig {
-    #[cfg_attr(not(feature = "firewall"), allow(unused_mut))]
     let mut auth = AuthConfig {
         enabled: true,
         api_keys: vec![
@@ -504,6 +520,10 @@ fn fixture_auth() -> AuthConfig {
         ],
         ..Default::default()
     };
+    if WITH_BEARER.with(std::cell::Cell::get) {
+        auth.bearer_token = Some(BEARER_SECRET.to_string());
+        auth.api_keys.push(key("bearer"));
+    }
     #[cfg(feature = "firewall")]
     if CLIENT_BREAKER.with(std::cell::Cell::get) {
         auth.client_circuit_breaker = Some(crate::config::CircuitBreakerConfig {
