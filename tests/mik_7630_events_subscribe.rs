@@ -411,6 +411,63 @@ async fn subscriptions_survive_restart_and_ttl_is_negotiated() {
     );
 }
 
+/// T57 (EVENTS.4): refreshBefore is null ONLY when no expiry was both requested
+/// (`ttlMs: null`) and allowed. With `allow_no_expiry: true`, an absent `ttlMs`
+/// still gets `default_ttl`, and a numeric one is still clamped.
+#[tokio::test]
+async fn allow_no_expiry_still_grants_a_time_unless_ttl_is_null() {
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let gw = start(
+        root.path(),
+        &rx,
+        json!({"min_ttl": "1s", "default_ttl": "1h", "allow_no_expiry": true}),
+    )
+    .await;
+    let sub = |repo: &str, ttl: Option<Value>| {
+        let mut p = params(&rx.url, "whsec_placeholder", json!({"repo": repo}));
+        p["delivery"]["secret"] = json!(whsec(32));
+        if let Some(ttl) = ttl {
+            p["ttlMs"] = ttl;
+        }
+        p
+    };
+    let absent = gw
+        .rpc(Some(ALICE), "events/subscribe", sub("absent-allowed", None))
+        .await;
+    assert!(absent["result"]["id"].is_string(), "{absent}");
+    about(
+        refresh_before(&absent),
+        3600,
+        "absent ttlMs with allow_no_expiry",
+    );
+    let long = gw
+        .rpc(
+            Some(ALICE),
+            "events/subscribe",
+            sub("long-allowed", Some(json!(864_000_000))),
+        )
+        .await;
+    assert!(long["result"]["id"].is_string(), "{long}");
+    about(
+        refresh_before(&long),
+        86_400,
+        "numeric ttlMs is clamped to max_ttl with allow_no_expiry",
+    );
+    let none = gw
+        .rpc(
+            Some(ALICE),
+            "events/subscribe",
+            sub("null-allowed", Some(Value::Null)),
+        )
+        .await;
+    assert!(none["result"]["id"].is_string(), "{none}");
+    assert!(
+        refresh_before(&none).is_none(),
+        "null with allow_no_expiry means no expiry"
+    );
+}
+
 /// T23 (EVENTS.7), I1 clauses: `{}` twice, another caller's `{}` changes
 /// nothing, and an `id` in params is ignored.
 #[tokio::test]

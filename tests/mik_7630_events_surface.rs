@@ -438,3 +438,101 @@ fn challenge_comparison_uses_the_constant_time_primitive() {
         "no plain equality on the challenge"
     );
 }
+
+/// T56 (EVENTS.3): a SOURCE check, not a timing proof. `ct_eq` and `!=` return
+/// the same answer for every input, so no behavioural test can tell them apart.
+/// This check pins that `CallbackClient::verify` compares the echoed challenge
+/// with `ct_eq` and with no `==`/`!=`. T53 searches all of `src/events` and also
+/// passes on the `ct_eq` in `services.rs`; this one is scoped to the one
+/// function.
+#[test]
+fn the_verify_challenge_compare_is_ct_eq_source_check() {
+    fn mentions_target(expr: &syn::Expr) -> bool {
+        struct Probe {
+            found: bool,
+        }
+        impl<'ast> syn::visit::Visit<'ast> for Probe {
+            fn visit_ident(&mut self, ident: &'ast syn::Ident) {
+                if ident == "got" || ident == "challenge" {
+                    self.found = true;
+                }
+            }
+        }
+        let mut probe = Probe { found: false };
+        syn::visit::Visit::visit_expr(&mut probe, expr);
+        probe.found
+    }
+    struct Compare {
+        ct_eq: usize,
+        plain: usize,
+    }
+    impl<'ast> syn::visit::Visit<'ast> for Compare {
+        fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+            if node.method == "ct_eq" {
+                let receiver = mentions_target(&node.receiver);
+                let argument = node.args.iter().any(mentions_target);
+                if receiver || argument {
+                    self.ct_eq += 1;
+                }
+            }
+            syn::visit::visit_expr_method_call(self, node);
+        }
+
+        fn visit_expr_binary(&mut self, node: &'ast syn::ExprBinary) {
+            if matches!(node.op, syn::BinOp::Eq | syn::BinOp::Ne)
+                && (mentions_target(&node.left) || mentions_target(&node.right))
+            {
+                self.plain += 1;
+            }
+            syn::visit::visit_expr_binary(self, node);
+        }
+    }
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/events/client.rs");
+    let source = std::fs::read_to_string(&path)
+        .expect("read src/events/client.rs for the verify source check");
+    let file = syn::parse_file(&source).expect("parse src/events/client.rs");
+    let implementation = file
+        .items
+        .iter()
+        .find_map(|item| {
+            if let syn::Item::Impl(item_impl) = item
+                && let syn::Type::Path(type_path) = &*item_impl.self_ty
+                && type_path.qself.is_none()
+                && type_path.path.is_ident("CallbackClient")
+            {
+                return Some(item_impl);
+            }
+            None
+        })
+        .expect(
+            "CallbackClient impl not found in src/events/client.rs; a rename must fail this test",
+        );
+    let verify = implementation
+        .items
+        .iter()
+        .find_map(|item| {
+            if let syn::ImplItem::Fn(item_fn) = item && item_fn.sig.ident == "verify" {
+                return Some(item_fn);
+            }
+            None
+        })
+        .expect(
+            "CallbackClient::verify not found in src/events/client.rs; a rename must fail this test",
+        );
+    assert!(
+        !verify.block.stmts.is_empty(),
+        "CallbackClient::verify has no statements; fixture broken"
+    );
+    let mut compare = Compare { ct_eq: 0, plain: 0 };
+    syn::visit::Visit::visit_block(&mut compare, &verify.block);
+    assert!(
+        compare.ct_eq >= 1,
+        "ct_eq compare of got/challenge missing in CallbackClient::verify: found {}",
+        compare.ct_eq
+    );
+    assert_eq!(
+        compare.plain, 0,
+        "plain ==/!= compare of got/challenge in CallbackClient::verify: found {}",
+        compare.plain
+    );
+}
