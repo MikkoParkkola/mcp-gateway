@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use super::relay_plan_replay::{ALPHA, BETA, rig, task_call};
 use super::support::*;
 use crate::gateway::server::signing_allocation_tests::alloc_meter::{
-    isolate, measure_async_process_wide,
+    isolate, measure_async_process_wide, wide_peak,
 };
 
 fn prose(bytes: usize) -> String {
@@ -61,7 +61,7 @@ fn zz_replay_ab() {
                 let entry = (0..16u64).any(|r| rig.relay.task_replay_digests(&task, r).is_some());
                 let stored_size = first["result"].to_string().len();
                 let mut bad = 0u64;
-                let (mut calls, mut bytes, mut us) = (Vec::new(), Vec::new(), Vec::new());
+                let (mut calls, mut bytes, mut us, mut peaks) = (Vec::new(), Vec::new(), Vec::new(), Vec::<u64>::new());
                 for i in 0..m {
                     let _ = i;
                     let t = Instant::now();
@@ -74,16 +74,17 @@ fn zz_replay_ab() {
                             lines.push(format!("PROBEBAD {label} n={n} size={size} stored={stored_size} body={v}"));
                         }
                     }
+                    peaks.push(wide_peak().max(0) as u64);
                     calls.push(meter.calls);
                     bytes.push(meter.bytes);
                 }
-                for v in [&mut calls, &mut bytes, &mut us] {
+                for v in [&mut calls, &mut bytes, &mut us, &mut peaks] {
                     v.sort_unstable();
                 }
                 let med = |v: &Vec<u64>| v[v.len() / 2];
                 lines.push(format!(
-                    "PROBEREPLAY {label} n={n} m={m} ok={}/{m} stored_size={stored_size} entry={entry} answer_bytes={} calls_median={} bytes_median={} us_median={} us_min={}",
-                    m - bad, first.to_string().len(), med(&calls), med(&bytes), med(&us), us[0]
+                    "PROBEREPLAY {label} n={n} m={m} ok={}/{m} stored_size={stored_size} entry={entry} answer_bytes={} calls_median={} bytes_median={} us_median={} us_min={} peak_live_median={} peak_live_max={}",
+                    m - bad, first.to_string().len(), med(&calls), med(&bytes), med(&us), us[0], med(&peaks), peaks[peaks.len() - 1]
                 ));
             }
         }

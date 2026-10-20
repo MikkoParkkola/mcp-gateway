@@ -68,6 +68,20 @@ static WIDE_CALLS: AtomicU64 = AtomicU64::new(0);
 static WIDE_LARGEST: AtomicU64 = AtomicU64::new(0);
 static WIDE_LARGE: AtomicU64 = AtomicU64::new(0);
 static WIDE_LARGE_TOTAL: AtomicU64 = AtomicU64::new(0);
+/// THROWAWAY (MIK-8408 pairs): net live bytes since the scope armed, and its high-water.
+static WIDE_LIVE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+static WIDE_PEAK: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// THROWAWAY: the high-water of net live bytes in the last process-wide scope.
+pub(crate) fn wide_peak() -> i64 {
+    WIDE_PEAK.load(Ordering::SeqCst)
+}
+
+fn release(bytes: usize) {
+    if WIDE.load(Ordering::Relaxed) {
+        WIDE_LIVE.fetch_sub(bytes as i64, Ordering::Relaxed);
+    }
+}
 
 /// Nothing below allocates, so recording cannot re-enter the allocator.
 fn record(bytes: usize) {
@@ -76,6 +90,8 @@ fn record(bytes: usize) {
         WIDE_BYTES.fetch_add(bytes, Ordering::Relaxed);
         WIDE_CALLS.fetch_add(1, Ordering::Relaxed);
         WIDE_LARGEST.fetch_max(bytes, Ordering::Relaxed);
+        let live = WIDE_LIVE.fetch_add(bytes as i64, Ordering::Relaxed) + bytes as i64;
+        WIDE_PEAK.fetch_max(live, Ordering::Relaxed);
         if bytes >= LARGE_BYTES as u64 {
             WIDE_LARGE.fetch_add(1, Ordering::Relaxed);
             WIDE_LARGE_TOTAL.fetch_add(bytes, Ordering::Relaxed);
@@ -118,10 +134,12 @@ unsafe impl GlobalAlloc for MeteredSystem {
         // allocator for four blocks, and hiding three of them is exactly the
         // blindness the positive control exists to detect.
         record(new_size);
+        release(layout.size());
         unsafe { System.realloc(ptr, layout, new_size) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        release(layout.size());
         unsafe { System.dealloc(ptr, layout) }
     }
 }
@@ -295,6 +313,8 @@ where
     ] {
         counter.store(0, Ordering::SeqCst);
     }
+    WIDE_LIVE.store(0, Ordering::SeqCst);
+    WIDE_PEAK.store(0, Ordering::SeqCst);
     WIDE.store(true, Ordering::SeqCst);
     let scope = WideScope;
 
