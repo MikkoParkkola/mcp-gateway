@@ -11,10 +11,15 @@ use crate::Error;
 use crate::gateway::router::CallerStanding;
 
 /// One meta-tool the dispatch answers by name (MIK-8498 DISPATCH.3). The
-/// meta match dispatches on this, so the names it routes are data: `ALL`
-/// is checked against `surfaced::META_TOOLS` by a test, and a variant left
-/// out of `ALL` is never built (`parse` reads only `ALL`), which the
-/// dead-code lint refuses.
+/// meta match dispatches on this, so the names it routes are data.
+/// `parse` is a literal match on the exact strings `name()` returns.
+/// The round-trip test ties them together: for every arm in `ALL` it
+/// asserts `parse(arm.name())` is that arm, and that `ALL`'s names equal
+/// `surfaced::META_TOOLS`. The literal match builds every variant it
+/// names, so the dead-code lint does not cover a variant left out of
+/// `ALL`: that test catches such a variant only when its name reaches
+/// `META_TOOLS`, and catches a `parse` arm missing or misspelled for an
+/// arm `ALL` does name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum MetaArm {
     Search,
@@ -89,7 +94,28 @@ impl MetaArm {
 
     /// The meta-tool `tool_name` names, or `None` for any other name.
     pub(super) fn parse(tool_name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|arm| arm.name() == tool_name)
+        Some(match tool_name {
+            "gateway_search" => Self::Search,
+            "gateway_execute" => Self::Execute,
+            "gateway_list_servers" => Self::ListServers,
+            "gateway_list_tools" => Self::ListTools,
+            "gateway_search_tools" => Self::SearchTools,
+            "gateway_invoke" => Self::Invoke,
+            "gateway_get_stats" => Self::GetStats,
+            "gateway_cost_report" => Self::CostReport,
+            "gateway_webhook_status" => Self::WebhookStatus,
+            "gateway_run_playbook" => Self::RunPlaybook,
+            "gateway_kill_server" => Self::KillServer,
+            "gateway_revive_server" => Self::ReviveServer,
+            "gateway_list_disabled_capabilities" => Self::ListDisabledCapabilities,
+            "gateway_set_profile" => Self::SetProfile,
+            "gateway_get_profile" => Self::GetProfile,
+            "gateway_list_profiles" => Self::ListProfiles,
+            "gateway_set_state" => Self::SetState,
+            "gateway_reload_config" => Self::ReloadConfig,
+            "gateway_reload_capabilities" => Self::ReloadCapabilities,
+            _ => return None,
+        })
     }
 }
 

@@ -307,7 +307,6 @@ mod tests { fn t() { let _ = Error::BackendUnavailable("test".into()); } }
 /// another file keeps its reviewed row (MIK-8498 DISPATCH.3).
 fn enclosing_item(clean: &str, at: usize) -> String {
     let b = clean.as_bytes();
-    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
     // The span of the block a keyword opens: from the keyword to its matching
     // `}`, or `None` for a body-less item (`;` before any `{`).
     let block = |from: usize| -> Option<usize> {
@@ -330,7 +329,9 @@ fn enclosing_item(clean: &str, at: usize) -> String {
         }
         None
     };
-    let keyword = |word: &str| {
+    fn keyword<'a>(clean: &'a str, word: &'a str) -> impl Iterator<Item = usize> + 'a {
+        let b = clean.as_bytes();
+        let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
         clean.match_indices(word).filter_map(move |(k, _)| {
             let end = k + word.len();
             let bounded = (k == 0 || !ident(b[k - 1]))
@@ -338,9 +339,9 @@ fn enclosing_item(clean: &str, at: usize) -> String {
                     .is_some_and(|c| c.is_ascii_whitespace() || *c == b'<');
             bounded.then_some(k)
         })
-    };
+    }
     // The innermost `fn` whose span holds `at`, and its name.
-    let function = keyword("fn")
+    let function = keyword(clean, "fn")
         .filter_map(|k| Some((k, block(k)?)))
         .filter(|(k, end)| *k <= at && at <= *end)
         .max_by_key(|(k, _)| *k)
@@ -355,7 +356,7 @@ fn enclosing_item(clean: &str, at: usize) -> String {
         return "<module>".to_owned();
     };
     // The innermost `impl` whose span holds `at`: its self type's last segment.
-    let owner = keyword("impl")
+    let owner = keyword(clean, "impl")
         .filter_map(|k| Some((k, block(k)?)))
         .filter(|(k, end)| *k <= at && at <= *end)
         .max_by_key(|(k, _)| *k)
