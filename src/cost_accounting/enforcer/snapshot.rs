@@ -5,8 +5,12 @@
 
 use std::collections::HashMap;
 
+use dashmap::DashMap;
+
 use super::super::persistence::EnforcerSaveSnapshot;
-use super::{AlertAction, BudgetEnforcer, EnforcerSnapshot, add_capped, rows, usd};
+use super::{
+    AlertAction, BudgetEnforcer, DailyAccumulator, EnforcerSnapshot, add_capped, rows, usd,
+};
 
 impl BudgetEnforcer {
     /// Re-apply today's spend from a persisted snapshot, so a restart keeps
@@ -97,17 +101,9 @@ impl BudgetEnforcer {
     fn snapshot_at(&self, taken_at: Option<u64>) -> EnforcerSnapshot {
         let global_daily_usd = usd(self.global_daily.current());
 
-        let tool_daily: HashMap<String, f64> = self
-            .tool_daily
-            .iter()
-            .map(|e| (e.key().clone(), usd(e.value().current())))
-            .collect();
+        let tool_daily = daily_usd(&self.tool_daily);
 
-        let key_daily: HashMap<String, f64> = self
-            .key_daily
-            .iter()
-            .map(|e| (e.key().clone(), usd(e.value().current())))
-            .collect();
+        let key_daily = daily_usd(&self.key_daily);
 
         EnforcerSnapshot {
             global_daily_usd,
@@ -147,4 +143,10 @@ impl BudgetEnforcer {
 
         best
     }
+}
+
+fn daily_usd(map: &DashMap<String, DailyAccumulator>) -> HashMap<String, f64> {
+    map.iter()
+        .map(|e| (e.key().clone(), usd(e.value().current())))
+        .collect()
 }
