@@ -328,11 +328,12 @@ fn keyword<'a>(clean: &'a str, word: &'a str) -> impl Iterator<Item = usize> + '
 
 /// The item `at` sits in, in sanitized source: `Type::method` inside an
 /// `impl`, `function` outside one, or `<module>` for a construction outside
-/// any function (an import). This is the item part of the key
+/// any function (an import), with the enclosing function's keyword offset
+/// (`None` for `<module>`). This is the item part of the key
 /// [`construction_sites`] builds: the module path from the file plus this
 /// `Type::method` or `fn`. A move to another module changes the row, but a
 /// row never names a file name (MIK-8498 DISPATCH.3).
-fn enclosing_item(clean: &str, at: usize) -> String {
+fn enclosing_item(clean: &str, at: usize) -> (String, Option<usize>) {
     let b = clean.as_bytes();
     // The span of the block a keyword opens: from the keyword to its matching
     // `}`, or `None` for a body-less item (`;` before any `{`).
@@ -356,25 +357,29 @@ fn enclosing_item(clean: &str, at: usize) -> String {
         }
         None
     };
-    // The innermost `fn` whose span holds `at`, and its name.
+    // The innermost `fn` whose span holds `at`, its offset and its name.
     let function = keyword(clean, "fn")
         .filter_map(|k| Some((k, block(k)?)))
         .filter(|(k, end)| *k <= at && at <= *end)
         .max_by_key(|(k, _)| *k)
         .map(|(k, _)| {
             let rest = clean[k + 2..].trim_start();
-            rest[..rest
+            let name = rest[..rest
                 .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
                 .unwrap_or(rest.len())]
-                .to_owned()
+                .to_owned();
+            (k, name)
         });
-    let Some(function) = function else {
-        return "<module>".to_owned();
+    let Some((fn_at, function)) = function else {
+        return ("<module>".to_owned(), None);
     };
-    // The innermost `impl` whose span holds `at`: its self type's last segment.
+    // The innermost `impl` whose span holds `at` and whose keyword starts
+    // before the enclosing `fn` keyword: its self type's last segment. A
+    // signature `impl Trait` sits after the `fn` keyword, so it is not the
+    // owner.
     let owner = keyword(clean, "impl")
         .filter_map(|k| Some((k, block(k)?)))
-        .filter(|(k, end)| *k <= at && at <= *end)
+        .filter(|(k, end)| *k < fn_at && *k <= at && at <= *end)
         .max_by_key(|(k, _)| *k)
         .map(|(k, _)| {
             let header =
@@ -402,36 +407,69 @@ fn enclosing_item(clean: &str, at: usize) -> String {
             let path = self_type.split(['<', ' ', '\n']).next().unwrap_or_default();
             path.rsplit("::").next().unwrap_or(path).to_owned()
         });
-    owner.map_or(function.clone(), |owner| format!("{owner}::{function}"))
+    (
+        owner.map_or(function.clone(), |owner| format!("{owner}::{function}")),
+        Some(fn_at),
+    )
+}
+
+/// One construction site's label for the two-functions message.
+fn site_label(file: &str, fn_at: Option<usize>) -> String {
+    match fn_at {
+        Some(at) => format!("{file}@{at}"),
+        None => file.to_owned(),
+    }
+}
+
+/// Record that `key` was produced by (`file`, `fn_at`). A later site with
+/// the same key from a different file or a different fn offset is an error:
+/// one key, one function. Several constructions inside one function record
+/// the same triple, so they are accepted.
+fn record_construction_site(
+    owners: &mut BTreeMap<String, (String, Option<usize>)>,
+    key: &str,
+    file: &str,
+    fn_at: Option<usize>,
+) -> Result<(), String> {
+    if let Some((first_file, first_fn)) = owners.get(key) {
+        if first_file != file || *first_fn != fn_at {
+            return Err(format!(
+                "{key} names two functions ({} and {}): a row must name one reviewed function",
+                site_label(first_file, *first_fn),
+                site_label(file, fn_at)
+            ));
+        }
+        return Ok(());
+    }
+    owners.insert(key.to_owned(), (file.to_owned(), fn_at));
+    Ok(())
 }
 
 /// How many times each non-test item under `src/` constructs `name`, keyed
 /// by the module-qualified function: the module path from the file plus
 /// [`enclosing_item`] (`Type::method` or `fn`), with just the item at the
 /// crate root. A move to another module changes the row, but a row never
-/// names a file name. Two different files producing the same qualified key
-/// is an error, as that can only happen through `#[path]` or a bug: a
-/// qualified key must name one reviewed site.
+/// names a file name. The same qualified key from two files, or from two
+/// functions in one file, is an error: a row must name one reviewed
+/// function.
 fn construction_sites(name: &str) -> BTreeMap<String, usize> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut found: BTreeMap<String, usize> = BTreeMap::new();
-    let mut owner: BTreeMap<String, String> = BTreeMap::new();
+    let mut owners: BTreeMap<String, (String, Option<usize>)> = BTreeMap::new();
     for file in construction_counts(name).into_keys() {
         let src = std::fs::read_to_string(root.join(&file)).expect("readable source");
         let clean = strip_test_items(&sanitize(&src));
         let module = module_path(&file);
         for at in construction_offsets(&clean, name) {
-            let item = enclosing_item(&clean, at);
+            let (item, fn_at) = enclosing_item(&clean, at);
             let key = if module.is_empty() {
                 item
             } else {
                 format!("{module}::{item}")
             };
-            let first = owner.entry(key.clone()).or_insert_with(|| file.clone());
-            assert_eq!(
-                *first, file,
-                "{key} constructs {name} in two files: the qualified key must name one site"
-            );
+            if let Err(message) = record_construction_site(&mut owners, &key, &file, fn_at) {
+                panic!("{message}");
+            }
             *found.entry(key).or_default() += 1;
         }
     }
@@ -507,11 +545,44 @@ fn a_construction_is_keyed_by_its_enclosing_item() {
     let clean = sanitize(src);
     let items: Vec<String> = construction_offsets(&clean, "make")
         .into_iter()
-        .map(|at| enclosing_item(&clean, at))
+        .map(|at| enclosing_item(&clean, at).0)
         .collect();
     assert_eq!(
         items,
         ["<module>", "Holder::build", "Wrapper::show", "free"]
+    );
+}
+
+#[test]
+fn a_signature_impl_trait_is_not_the_enclosing_owner() {
+    let src = "fn g(x: impl Clone) { make(); }\nfn h() -> impl Clone { make(); }\n";
+    let clean = sanitize(src);
+    let items: Vec<String> = construction_offsets(&clean, "make")
+        .into_iter()
+        .map(|at| enclosing_item(&clean, at).0)
+        .collect();
+    assert_eq!(items, ["g", "h"]);
+}
+
+#[test]
+fn one_key_names_one_function() {
+    let src = "impl A { fn f() { make(); } }\nimpl A { fn f() { make(); } }\n";
+    let clean = sanitize(src);
+    let sites: Vec<(String, Option<usize>)> = construction_offsets(&clean, "make")
+        .into_iter()
+        .map(|at| enclosing_item(&clean, at))
+        .collect();
+    assert_eq!(sites.len(), 2);
+    assert_eq!(sites[0].0.as_str(), "A::f");
+    assert_eq!(sites[0].0.as_str(), sites[1].0.as_str());
+    assert_ne!(sites[0].1, sites[1].1);
+    let mut owners: BTreeMap<String, (String, Option<usize>)> = BTreeMap::new();
+    assert!(record_construction_site(&mut owners, &sites[0].0, "snippet.rs", sites[0].1).is_ok());
+    assert!(record_construction_site(&mut owners, &sites[0].0, "snippet.rs", sites[0].1).is_ok());
+    let rejected = record_construction_site(&mut owners, &sites[1].0, "snippet.rs", sites[1].1);
+    assert!(
+        matches!(&rejected, Err(message) if message.contains("names two functions") && message.contains("a row must name one reviewed function")),
+        "{rejected:?}"
     );
 }
 

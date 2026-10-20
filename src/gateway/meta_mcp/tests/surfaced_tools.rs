@@ -558,8 +558,9 @@ fn inspect_discovery_value_redacts_credentials_when_not_blocking() {
 /// the meta match dispatches on (`MetaArm::ALL`), one source checked against
 /// the other, with no read of any file's text. A meta tool added to one and
 /// not the other fails here, before a surfaced backend tool could shadow it
-/// and receive the gateway's meta decoding. A `MetaArm` variant left out of
-/// `ALL` is never built, which the dead-code lint refuses.
+/// and receive the gateway's meta decoding. The `meta_arms!` table is the
+/// only list; the enum, `ALL`, `name` and `parse` are generated from it, so
+/// a variant cannot exist outside `ALL`.
 #[test]
 fn meta_tool_names_are_the_dispatch_arms() {
     use super::super::dispatch_names::MetaArm;

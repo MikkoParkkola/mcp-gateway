@@ -10,113 +10,49 @@ use super::{MetaMcp, MetaMcpCallerContext};
 use crate::Error;
 use crate::gateway::router::CallerStanding;
 
-/// One meta-tool the dispatch answers by name (MIK-8498 DISPATCH.3). The
-/// meta match dispatches on this, so the names it routes are data.
-/// `parse` is a literal match on the exact strings `name()` returns.
-/// The round-trip test ties them together: for every arm in `ALL` it
-/// asserts `parse(arm.name())` is that arm, and that `ALL`'s names equal
-/// `surfaced::META_TOOLS`. The literal match builds every variant it
-/// names, so the dead-code lint does not cover a variant left out of
-/// `ALL`: that test catches such a variant only when its name reaches
-/// `META_TOOLS`, and catches a `parse` arm missing or misspelled for an
-/// arm `ALL` does name.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum MetaArm {
-    Search,
-    Execute,
-    ListServers,
-    ListTools,
-    SearchTools,
-    Invoke,
-    GetStats,
-    CostReport,
-    WebhookStatus,
-    RunPlaybook,
-    KillServer,
-    ReviveServer,
-    ListDisabledCapabilities,
-    SetProfile,
-    GetProfile,
-    ListProfiles,
-    SetState,
-    ReloadConfig,
-    ReloadCapabilities,
+macro_rules! meta_arms {
+    ($($variant:ident => $name:literal,)*) => {
+        #[doc = "One meta-tool the dispatch answers by name (MIK-8498 DISPATCH.3)."]
+        #[doc = "The meta match dispatches on this, so the names it routes are data."]
+        #[doc = "The `meta_arms!` table below is the only list: the enum, `ALL`,"]
+        #[doc = "`name` and `parse` are generated from it, so a variant cannot"]
+        #[doc = "exist outside `ALL`. The test compares `ALL` with"]
+        #[doc = "`surfaced::META_TOOLS` and round-trips every name."]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub(super) enum MetaArm { $($variant,)* }
+        impl MetaArm {
+            #[doc = "Every meta-tool, in the order a did-you-mean hint ranks them."]
+            pub(super) const ALL: [Self; [$(stringify!($variant)),*].len()] = [$(Self::$variant,)*];
+            #[doc = "The tool name a client calls this meta-tool by."]
+            pub(super) const fn name(self) -> &'static str { match self { $(Self::$variant => $name,)* } }
+            #[doc = "The meta-tool `tool_name` names, or `None` for any other name."]
+            pub(super) fn parse(tool_name: &str) -> Option<Self> {
+                Some(match tool_name { $($name => Self::$variant,)* _ => return None })
+            }
+        }
+    };
 }
 
-impl MetaArm {
-    /// Every meta-tool, in the order a did-you-mean hint ranks them.
-    pub(super) const ALL: [Self; 19] = [
-        Self::Search,
-        Self::Execute,
-        Self::ListServers,
-        Self::ListTools,
-        Self::SearchTools,
-        Self::Invoke,
-        Self::GetStats,
-        Self::CostReport,
-        Self::WebhookStatus,
-        Self::RunPlaybook,
-        Self::KillServer,
-        Self::ReviveServer,
-        Self::ListDisabledCapabilities,
-        Self::SetProfile,
-        Self::GetProfile,
-        Self::ListProfiles,
-        Self::SetState,
-        Self::ReloadConfig,
-        Self::ReloadCapabilities,
-    ];
-
-    /// The tool name a client calls this meta-tool by.
-    pub(super) const fn name(self) -> &'static str {
-        match self {
-            Self::Search => "gateway_search",
-            Self::Execute => "gateway_execute",
-            Self::ListServers => "gateway_list_servers",
-            Self::ListTools => "gateway_list_tools",
-            Self::SearchTools => "gateway_search_tools",
-            Self::Invoke => "gateway_invoke",
-            Self::GetStats => "gateway_get_stats",
-            Self::CostReport => "gateway_cost_report",
-            Self::WebhookStatus => "gateway_webhook_status",
-            Self::RunPlaybook => "gateway_run_playbook",
-            Self::KillServer => "gateway_kill_server",
-            Self::ReviveServer => "gateway_revive_server",
-            Self::ListDisabledCapabilities => "gateway_list_disabled_capabilities",
-            Self::SetProfile => "gateway_set_profile",
-            Self::GetProfile => "gateway_get_profile",
-            Self::ListProfiles => "gateway_list_profiles",
-            Self::SetState => "gateway_set_state",
-            Self::ReloadConfig => "gateway_reload_config",
-            Self::ReloadCapabilities => "gateway_reload_capabilities",
-        }
-    }
-
-    /// The meta-tool `tool_name` names, or `None` for any other name.
-    pub(super) fn parse(tool_name: &str) -> Option<Self> {
-        Some(match tool_name {
-            "gateway_search" => Self::Search,
-            "gateway_execute" => Self::Execute,
-            "gateway_list_servers" => Self::ListServers,
-            "gateway_list_tools" => Self::ListTools,
-            "gateway_search_tools" => Self::SearchTools,
-            "gateway_invoke" => Self::Invoke,
-            "gateway_get_stats" => Self::GetStats,
-            "gateway_cost_report" => Self::CostReport,
-            "gateway_webhook_status" => Self::WebhookStatus,
-            "gateway_run_playbook" => Self::RunPlaybook,
-            "gateway_kill_server" => Self::KillServer,
-            "gateway_revive_server" => Self::ReviveServer,
-            "gateway_list_disabled_capabilities" => Self::ListDisabledCapabilities,
-            "gateway_set_profile" => Self::SetProfile,
-            "gateway_get_profile" => Self::GetProfile,
-            "gateway_list_profiles" => Self::ListProfiles,
-            "gateway_set_state" => Self::SetState,
-            "gateway_reload_config" => Self::ReloadConfig,
-            "gateway_reload_capabilities" => Self::ReloadCapabilities,
-            _ => return None,
-        })
-    }
+meta_arms! {
+    Search => "gateway_search",
+    Execute => "gateway_execute",
+    ListServers => "gateway_list_servers",
+    ListTools => "gateway_list_tools",
+    SearchTools => "gateway_search_tools",
+    Invoke => "gateway_invoke",
+    GetStats => "gateway_get_stats",
+    CostReport => "gateway_cost_report",
+    WebhookStatus => "gateway_webhook_status",
+    RunPlaybook => "gateway_run_playbook",
+    KillServer => "gateway_kill_server",
+    ReviveServer => "gateway_revive_server",
+    ListDisabledCapabilities => "gateway_list_disabled_capabilities",
+    SetProfile => "gateway_set_profile",
+    GetProfile => "gateway_get_profile",
+    ListProfiles => "gateway_list_profiles",
+    SetState => "gateway_set_state",
+    ReloadConfig => "gateway_reload_config",
+    ReloadCapabilities => "gateway_reload_capabilities",
 }
 
 impl MetaMcp {
@@ -164,8 +100,8 @@ impl MetaMcp {
         armed
             && scanned
             && matches!(
-                tool_name,
-                "gateway_search" | "gateway_list_tools" | "gateway_search_tools"
+                MetaArm::parse(tool_name),
+                Some(MetaArm::Search | MetaArm::ListTools | MetaArm::SearchTools)
             )
     }
 }

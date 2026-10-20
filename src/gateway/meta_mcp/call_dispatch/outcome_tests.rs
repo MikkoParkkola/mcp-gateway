@@ -29,7 +29,7 @@ fn an_error_keeps_the_ineligible_chain() {
     else {
         panic!("an error goes on to be shaped");
     };
-    assert!(result.is_err());
+    assert!(matches!(&result, Err(crate::Error::Config(message)) if message.as_str() == "refused"));
     assert!(matches!(source, ChainSource::NotEligible));
     assert!(upstream.is_none());
 }
