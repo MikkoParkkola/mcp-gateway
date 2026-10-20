@@ -81,7 +81,7 @@ pub(super) fn task_owner_key(proven: Option<&str>, client: Option<&Authenticated
     if credential.is_empty() {
         return credential;
     }
-    proven.map_or(credential, |proven| proven.to_owned())
+    proven.map_or(credential, ToOwned::to_owned)
 }
 
 /// The ONE owner every task-touching arm of a request uses.

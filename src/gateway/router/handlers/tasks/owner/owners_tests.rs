@@ -65,197 +65,145 @@ fn verified() -> VerifiedIdentity {
     }
 }
 
-fn check(label: &str, got: TaskOwners, want: (&str, &str, &str)) {
+struct Fixtures {
+    agent: crate::gateway::oauth::AgentIdentity,
+    subject: GrantSubject,
+    client: AuthenticatedClient,
+    verified: VerifiedIdentity,
+    agent_owner: String,
+    credential_owner: String,
+    actor: String,
+}
+
+fn fixtures() -> Fixtures {
+    let verified_fixture = verified();
+    let actor = VerifiedIdentity::stable_actor_id(&verified_fixture);
+    Fixtures {
+        agent: agent("agent-a"),
+        subject: proven_subject(),
+        client: key_holder("alpha"),
+        verified: verified_fixture,
+        agent_owner: agent_task_owner("agent-a"),
+        credential_owner: format!(
+            "{}{}",
+            crate::gateway::auth::CREDENTIAL_OWNER_PREFIX,
+            "alpha"
+        ),
+        actor,
+    }
+}
+
+fn caller<'a>(
+    verified_identity: Option<&'a VerifiedIdentity>,
+    agent: Option<&'a crate::gateway::oauth::AgentIdentity>,
+    subject: Option<&'a GrantSubject>,
+    client: Option<&'a AuthenticatedClient>,
+) -> TaskCaller<'a> {
+    TaskCaller {
+        verified_identity,
+        agent,
+        subject,
+        cert: None,
+        client,
+    }
+}
+
+fn check(label: &str, got: &TaskOwners, want: (&str, &str, &str)) {
     assert_eq!(got.task, want.0, "{label}: task owner");
     assert_eq!(got.events, want.1, "{label}: events owner");
     assert_eq!(got.admission, want.2, "{label}: admission owner");
 }
 
 #[tokio::test]
-async fn route_owners_across_identity_combinations() {
+async fn route_owners_with_auth_off() {
     let (off, _off_store) = state(false).await;
-    let (on, _on_store) = state(true).await;
-    let agent_fixture = agent("agent-a");
-    let subject_fixture = proven_subject();
-    let client_fixture = key_holder("alpha");
-    let verified_fixture = verified();
+    let fx = fixtures();
     let disabled = AUTH_DISABLED_TASK_OWNER;
-    let agent_owner = agent_task_owner("agent-a");
-    let credential_owner = format!(
-        "{}{}",
-        crate::gateway::auth::CREDENTIAL_OWNER_PREFIX,
-        "alpha"
-    );
-    let actor = VerifiedIdentity::stable_actor_id(&verified_fixture);
 
     check(
         "auth off, nothing",
-        super::route_owners(
-            &off,
-            &TaskCaller {
-                verified_identity: None,
-                agent: None,
-                subject: None,
-                cert: None,
-                client: None,
-            },
-        ),
+        &super::route_owners(&off, &caller(None, None, None, None)),
         (disabled, disabled, ""),
     );
     check(
         "auth off, agent only",
-        super::route_owners(
-            &off,
-            &TaskCaller {
-                verified_identity: None,
-                agent: Some(&agent_fixture),
-                subject: None,
-                cert: None,
-                client: None,
-            },
-        ),
-        (&agent_owner, disabled, &agent_owner),
+        &super::route_owners(&off, &caller(None, Some(&fx.agent), None, None)),
+        (&fx.agent_owner, disabled, &fx.agent_owner),
     );
     check(
         "auth off, proven subject",
-        super::route_owners(
-            &off,
-            &TaskCaller {
-                verified_identity: None,
-                agent: None,
-                subject: Some(&subject_fixture),
-                cert: None,
-                client: None,
-            },
-        ),
+        &super::route_owners(&off, &caller(None, None, Some(&fx.subject), None)),
         (SUBJECT_KEY, SUBJECT_KEY, SUBJECT_KEY),
     );
     // The task arm passes the agent, so only the events arm takes the
     // `(None, Some(subject))` branch.
     check(
         "auth off, agent and proven subject",
-        super::route_owners(
+        &super::route_owners(
             &off,
-            &TaskCaller {
-                verified_identity: None,
-                agent: Some(&agent_fixture),
-                subject: Some(&subject_fixture),
-                cert: None,
-                client: None,
-            },
+            &caller(None, Some(&fx.agent), Some(&fx.subject), None),
         ),
-        (&agent_owner, SUBJECT_KEY, &agent_owner),
+        (&fx.agent_owner, SUBJECT_KEY, &fx.agent_owner),
     );
     check(
         "auth off, verified identity",
-        super::route_owners(
-            &off,
-            &TaskCaller {
-                verified_identity: Some(&verified_fixture),
-                agent: None,
-                subject: None,
-                cert: None,
-                client: None,
-            },
-        ),
-        (&actor, &actor, &actor),
+        &super::route_owners(&off, &caller(Some(&fx.verified), None, None, None)),
+        (&fx.actor, &fx.actor, &fx.actor),
     );
+}
+
+#[tokio::test]
+async fn route_owners_with_auth_on() {
+    let (on, _on_store) = state(true).await;
+    let fx = fixtures();
+
     check(
         "auth on, nothing",
-        super::route_owners(
-            &on,
-            &TaskCaller {
-                verified_identity: None,
-                agent: None,
-                subject: None,
-                cert: None,
-                client: None,
-            },
-        ),
+        &super::route_owners(&on, &caller(None, None, None, None)),
         ("", "", ""),
     );
     check(
         "auth on, agent only",
-        super::route_owners(
-            &on,
-            &TaskCaller {
-                verified_identity: None,
-                agent: Some(&agent_fixture),
-                subject: None,
-                cert: None,
-                client: None,
-            },
-        ),
-        (&agent_owner, "", &agent_owner),
+        &super::route_owners(&on, &caller(None, Some(&fx.agent), None, None)),
+        (&fx.agent_owner, "", &fx.agent_owner),
     );
     check(
         "auth on, authenticated API-key client",
-        super::route_owners(
-            &on,
-            &TaskCaller {
-                verified_identity: None,
-                agent: None,
-                subject: None,
-                cert: None,
-                client: Some(&client_fixture),
-            },
+        &super::route_owners(&on, &caller(None, None, None, Some(&fx.client))),
+        (
+            &fx.credential_owner,
+            &fx.credential_owner,
+            &fx.credential_owner,
         ),
-        (&credential_owner, &credential_owner, &credential_owner),
     );
     check(
         "auth on, client and proven subject",
-        super::route_owners(
+        &super::route_owners(
             &on,
-            &TaskCaller {
-                verified_identity: None,
-                agent: None,
-                subject: Some(&subject_fixture),
-                cert: None,
-                client: Some(&client_fixture),
-            },
+            &caller(None, None, Some(&fx.subject), Some(&fx.client)),
         ),
         (SUBJECT_KEY, SUBJECT_KEY, SUBJECT_KEY),
     );
     check(
         "auth on, proven subject with no client",
-        super::route_owners(
-            &on,
-            &TaskCaller {
-                verified_identity: None,
-                agent: None,
-                subject: Some(&subject_fixture),
-                cert: None,
-                client: None,
-            },
-        ),
+        &super::route_owners(&on, &caller(None, None, Some(&fx.subject), None)),
         ("", "", ""),
     );
     check(
         "auth on, verified identity and agent",
-        super::route_owners(
+        &super::route_owners(
             &on,
-            &TaskCaller {
-                verified_identity: Some(&verified_fixture),
-                agent: Some(&agent_fixture),
-                subject: None,
-                cert: None,
-                client: None,
-            },
+            &caller(Some(&fx.verified), Some(&fx.agent), None, None),
         ),
-        (&actor, &actor, &actor),
+        (&fx.actor, &fx.actor, &fx.actor),
     );
     check(
         "auth on, client and agent",
-        super::route_owners(
-            &on,
-            &TaskCaller {
-                verified_identity: None,
-                agent: Some(&agent_fixture),
-                subject: None,
-                cert: None,
-                client: Some(&client_fixture),
-            },
+        &super::route_owners(&on, &caller(None, Some(&fx.agent), None, Some(&fx.client))),
+        (
+            &fx.credential_owner,
+            &fx.credential_owner,
+            &fx.credential_owner,
         ),
-        (&credential_owner, &credential_owner, &credential_owner),
     );
 }
