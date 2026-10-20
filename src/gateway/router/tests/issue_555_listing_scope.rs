@@ -465,7 +465,7 @@ async fn list_equals_invoke_surfaced() {
     }
 }
 
-/// T6 (C6 HTTP_02, MIK-8589): the direct route's `tools/list` is filtered by the key's
+/// T6 (C6 `HTTP_02`, MIK-8589): the direct route's `tools/list` is filtered by the key's
 /// per-tool allowlist (`decide_tool_target`), not only by backend scope. `read-key` may
 /// reach every backend but call only `alpha_read`, so the direct list of `beta` drops
 /// `beta_tool`, which no global policy denies. The meta-route T3 cannot see this filter.
