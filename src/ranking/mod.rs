@@ -395,6 +395,7 @@ fn baseline_top_tool(candidates: &[SearchResult], query: &str) -> Option<String>
 }
 
 fn explanation_for(result: &SearchResult) -> RankingExplanation {
+    const THRESHOLD: f64 = 0.75;
     let mut reasons = Vec::new();
     if result.signals.relevance > 0.0 {
         reasons.push("intent_match".to_string());
@@ -407,50 +408,43 @@ fn explanation_for(result: &SearchResult) -> RankingExplanation {
     if result.signals.grant >= 1.0 {
         reasons.push("grant_ok".to_string());
     }
-    if result.signals.risk < 0.75 {
-        reasons.push("risk_downgraded".to_string());
-    } else {
-        reasons.push("risk_fit".to_string());
-    }
-    if result.signals.policy_fit < 0.75 {
-        reasons.push("policy_downgraded".to_string());
-    } else {
-        reasons.push("policy_fit".to_string());
-    }
-    if result.signals.permission_fit < 0.75 {
-        reasons.push("permission_downgraded".to_string());
-    } else {
-        reasons.push("permission_fit".to_string());
-    }
-    if result.signals.trust < 0.75 {
-        reasons.push("trust_downgraded".to_string());
-    } else {
-        reasons.push("trust_ok".to_string());
-    }
-    if result.signals.cost_efficiency < 0.75 {
-        reasons.push("cost_downgraded".to_string());
-    } else {
-        reasons.push("cost_fit".to_string());
-    }
-    if result.signals.latency < 0.75 {
-        reasons.push("latency_downgraded".to_string());
-    } else {
-        reasons.push("latency_fit".to_string());
-    }
-    if result.signals.success_rate < 0.75 {
-        reasons.push("success_rate_downgraded".to_string());
-    } else {
-        reasons.push("success_rate_fit".to_string());
-    }
-    if result.signals.user_preference < 0.75 {
-        reasons.push("user_preference_downgraded".to_string());
-    } else {
-        reasons.push("user_preference_fit".to_string());
-    }
-    if result.signals.organization_preference < 0.75 {
-        reasons.push("organization_preference_downgraded".to_string());
-    } else {
-        reasons.push("organization_preference_fit".to_string());
+    let threshold_reasons = [
+        (result.signals.risk, "risk_downgraded", "risk_fit"),
+        (result.signals.policy_fit, "policy_downgraded", "policy_fit"),
+        (
+            result.signals.permission_fit,
+            "permission_downgraded",
+            "permission_fit",
+        ),
+        (result.signals.trust, "trust_downgraded", "trust_ok"),
+        (
+            result.signals.cost_efficiency,
+            "cost_downgraded",
+            "cost_fit",
+        ),
+        (result.signals.latency, "latency_downgraded", "latency_fit"),
+        (
+            result.signals.success_rate,
+            "success_rate_downgraded",
+            "success_rate_fit",
+        ),
+        (
+            result.signals.user_preference,
+            "user_preference_downgraded",
+            "user_preference_fit",
+        ),
+        (
+            result.signals.organization_preference,
+            "organization_preference_downgraded",
+            "organization_preference_fit",
+        ),
+    ];
+    for (value, lo, hi) in threshold_reasons {
+        if value < THRESHOLD {
+            reasons.push(lo.to_string());
+        } else {
+            reasons.push(hi.to_string());
+        }
     }
     if result.signals.user_feedback > 0.0 {
         reasons.push("local_feedback_boost".to_string());
