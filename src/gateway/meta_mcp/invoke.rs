@@ -51,7 +51,9 @@ pub(in crate::gateway) use chokepoint::{DirectPermit, Outbound};
 pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2.1)
 pub(crate) mod egress;
 mod nonce_settle; // MIK-8150: refund requests and dispatch marks of a signed execution
-pub(super) use nonce_settle::{ask_if_refused_submit, refused_submit_answer, spend_witness};
+pub(super) use nonce_settle::{
+    ask_if_refused_submit, ask_refund, refused_submit_answer, spend_witness,
+};
 mod r2_check;
 mod step_fingerprint;
 // #1962: settlement of a bridged round's key, kept out of this file's size baseline.
@@ -249,11 +251,7 @@ impl MetaMcp {
             std::ops::ControlFlow::Continue(unproven) => unproven,
         };
         let target = (server, backend.as_ref().map(|backend| backend.instance()));
-        let propagation::ResolvedDispatch {
-            caller_credential,
-            account_credential,
-            binding: dispatch_binding,
-        } = resolved;
+        let (caller_credential, account_credential, dispatch_binding) = resolved.into_parts();
         // Who the response cache keys on, in one place and one namespace per
         // source (`support::caller_cache_principal`). The binding when identity
         // propagation is minting per-user credentials, then the verified OIDC

@@ -11,10 +11,10 @@ use serde_json::Value;
 
 use super::settlement::interrupted_result;
 use super::{CommitFailure, CommittedTask, TaskExecutor, TransitionWrite};
+use crate::gateway::task_service::ErrorAuthor;
 use crate::gateway::task_service::record::InterruptedTask;
 use crate::gateway::task_service::service::ServiceError;
 use crate::gateway::task_service::store::StoreError;
-use crate::gateway::task_service::{ErrorAuthor, Target};
 use crate::protocol::tasks::TaskTransition;
 
 impl TaskExecutor {
@@ -86,7 +86,7 @@ impl TaskExecutor {
         revision: u64,
         settlement: (
             TaskTransition,
-            Option<Vec<Target>>,
+            crate::gateway::task_service::record::Provenance,
             crate::gateway::gateway_writes::WriteRecord,
         ),
         author: ErrorAuthor,

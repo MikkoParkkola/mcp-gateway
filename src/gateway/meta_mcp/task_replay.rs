@@ -500,6 +500,12 @@ impl MetaMcp {
         ) {
             return Some(error_response_preserving_status(id.clone(), &error));
         }
+        // MIK-8407: the stored output only under the bindings that produced
+        // it, judged for a read and a repeat alike (a repeat's site-5 proof
+        // proves the CURRENT account, never the recorded one).
+        if let Err(error) = self.judge_stored_provenance(stored, caller) {
+            return Some(error_response_preserving_status(id.clone(), &error));
+        }
         if let Err(withheld) = self.judge_stored_accounts(
             &self.scoped(caller.scope().authorizer.backend_grant()),
             stored,
@@ -656,6 +662,27 @@ impl MetaMcp {
             }
         }
         Ok(())
+    }
+
+    /// A row written before bindings were recorded has no provenance, so its
+    /// backend output is refused (design r4 E4); the row and its key stay
+    /// held. Any other row: each recorded binding against the target's now.
+    fn judge_stored_provenance(
+        &self,
+        stored: &CommittedTask,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> Result<()> {
+        if !stored.bindings_recorded {
+            let server = stored
+                .targets
+                .first()
+                .map_or(stored.task.tool(), |target| target.server.as_str());
+            return Err(super::stored_binding::Refusal::Legacy.error(server));
+        }
+        self.judge_bindings(
+            &self.scoped(caller.scope().authorizer.backend_grant()),
+            &stored.bindings,
+        )
     }
 
     fn authorize_stored(

@@ -265,7 +265,21 @@ async fn production_client_refuses_cleartext_fetches_and_hops() {
         .get_or_fetch("https://idp.example", "http://idp.example/jwks", false)
         .await
         .expect_err("cleartext jwks off this machine");
-    assert!(err.to_string().contains("non-HTTPS"), "{err}");
+    assert!(matches!(err, OidcError::InsecureFetch), "{err}");
+    // A host that only starts like a loopback one is off this machine.
+    for lookalike in [
+        "http://127.0.0.1.idp.example/jwks",
+        "http://localhost.idp.example/jwks",
+    ] {
+        let err = cache
+            .get_or_fetch("https://idp.example", lookalike, false)
+            .await
+            .expect_err("a lookalike of loopback is not loopback");
+        assert!(
+            matches!(err, OidcError::InsecureFetch),
+            "{lookalike}: {err}"
+        );
+    }
     let err = cache
         .resolve_jwks_uri(
             "https://idp.example",

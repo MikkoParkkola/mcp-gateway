@@ -240,3 +240,34 @@ fn a_gateway_sealed_offer_forwards_its_keys_and_never_the_seal() {
     assert_eq!(data["connect_url"], "https://chat.test/s");
     assert_eq!(data.as_object().unwrap().len(), 4, "{data}");
 }
+
+/// MIK-8429 G4: `tool_text` is forwarded from any error's data, a backend's
+/// on a direct call included, but only as a string within the playbook's cap
+/// (256 characters plus a cut marker). Longer, or not a string, it is
+/// dropped like any unnamed key.
+#[test]
+fn a_backend_tool_text_is_forwarded_only_within_the_cap() {
+    let key = crate::playbook::TOOL_TEXT_DATA_KEY;
+    let cap = crate::playbook::TOOL_TEXT_CAP;
+    let backend = |text: Value| Error::JsonRpc {
+        code: -32603,
+        message: "backend failed".into(),
+        data: Some(json!({ key: text })),
+    };
+    for (text, kept) in [
+        (json!("w".repeat(cap + 1)), true),
+        (json!("w".repeat(cap + 2)), false),
+        (json!(["not", "a", "string"]), false),
+    ] {
+        let response =
+            error_response_preserving_status(RequestId::Number(94), &backend(text.clone()));
+        let data = response.error.expect("an error").data;
+        assert_eq!(
+            data.as_ref().and_then(|d| d.get(key)).is_some(),
+            kept,
+            "G4: tool_text {} chars forwarded={}: {data:?}",
+            text.as_str().map_or(0, |t| t.chars().count()),
+            !kept
+        );
+    }
+}

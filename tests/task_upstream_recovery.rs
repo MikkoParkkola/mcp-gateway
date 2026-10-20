@@ -103,9 +103,15 @@ async fn a_captured_handle_is_recorded_at_version_three_with_its_descriptor() {
     let record = durable_record(root.path(), &task_id);
     assert_eq!(
         record["version"],
-        json!(5),
-        "a direct task records its target at creation (#2450), which raises the row to version 5; \
-         the handle's own descriptor is asserted below: {record}"
+        json!(9),
+        "every row is created at BINDING_VERSION 9, recording the bindings its dispatch ran \
+         under (MIK-8407); the handle's own descriptor is asserted below: {record}"
+    );
+    assert!(
+        record["bindings"]
+            .as_array()
+            .is_some_and(|bindings| !bindings.is_empty()),
+        "the dispatch's bindings are recorded, not an empty list: {record}"
     );
     assert_eq!(
         record["dispatched"],
@@ -717,5 +723,13 @@ async fn a_cancelled_task_nobody_follows_cancels_its_upstream_job_once() {
         record.get("upstreamCancelPending").is_none(),
         "confirmation clears the pending cancel: {record}"
     );
-    assert_eq!(record["version"], serde_json::json!(8), "{record}");
+    // Created at BINDING_VERSION 9 (MIK-8407); the cancel's own fields are
+    // asserted above, and nothing lowers a row's version.
+    assert_eq!(record["version"], serde_json::json!(9), "{record}");
+    assert!(
+        record["bindings"]
+            .as_array()
+            .is_some_and(|bindings| !bindings.is_empty()),
+        "the dispatch's bindings are recorded, not an empty list: {record}"
+    );
 }

@@ -143,6 +143,16 @@ impl MetaMcp {
         if settle_lost_round(&e, idem_reservation.as_mut(), LostRoundRoute::Meta) {
             *idem_reservation = None;
         }
+        // MIK-8429: a playbook step keeps a busy custody typed. Folded into a
+        // tool value it reads as any tool error, and the plan would null-fill
+        // the step and run its successor; as itself it ends the plan,
+        // retryable. Its key was released above (pre-dispatch), so nothing
+        // is left to settle. A direct call keeps the folded answer.
+        if crate::playbook::current_step().is_some()
+            && crate::personal_accounts::refusal::transient_data(&e).is_some()
+        {
+            return Err(e);
+        }
         // The error budget already counted this failure (the shared
         // accounting stage).  The idempotency reservation is left
         // for the commit below unless it was released or settled above.
@@ -275,9 +285,7 @@ impl MetaMcp {
         &self,
         call: &Call<'_, '_>,
         dispatched: &mut Dispatched,
-        bridge_account_credential: &mut Option<
-            std::sync::Arc<crate::identity_propagation::PreparedAccountCredential>,
-        >,
+        bridge_account_credential: &mut super::propagation::DispatchAccount,
         idem_reservation: &mut Option<IdempotencyReservation>,
     ) -> Result<ControlFlow<GuardedValue, Settled>> {
         let &Call {

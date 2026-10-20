@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! SIGNING.2: restart-only signing changes cannot publish partial live state.
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -76,7 +79,7 @@ impl Fixture {
         });
         mcp_gateway::gateway::test_helpers::write_owner_only(
             &path,
-            serde_yaml::to_string(&document).unwrap(),
+            yaml::to_string(&document).unwrap(),
         )
         .unwrap();
         let evaluated = Config::load_evaluated(Some(&path)).expect("valid startup fixture");
@@ -127,7 +130,7 @@ impl Fixture {
     fn write_candidate(&self, document: &Value) {
         mcp_gateway::gateway::test_helpers::write_owner_only(
             &self.path,
-            serde_yaml::to_string(document).unwrap(),
+            yaml::to_string(document).unwrap(),
         )
         .unwrap();
     }

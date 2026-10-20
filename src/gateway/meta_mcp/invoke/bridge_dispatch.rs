@@ -125,8 +125,7 @@ pub(super) struct BridgeDispatcher<'a> {
     pub(super) credential_owner: Option<&'a str>,
     pub(super) headers: &'a [(String, String)],
     pub(super) cache_binding: Option<&'a str>,
-    pub(super) account_credential:
-        Option<Arc<crate::identity_propagation::PreparedAccountCredential>>,
+    pub(super) account_credential: super::propagation::DispatchAccount,
     pub(super) api_key_name: Option<&'a str>,
     pub(super) trace_id: &'a str,
     pub(super) policy_epoch: u64,

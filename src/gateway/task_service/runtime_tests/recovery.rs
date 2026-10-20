@@ -363,8 +363,8 @@ fn rewrite_as_v1(dir: &std::path::Path, id: &str) {
         .expect("the committed record parses");
     assert_eq!(
         before["version"],
-        json!(crate::gateway::task_service::record::RECORD_VERSION),
-        "the fixture starts in the current record format"
+        json!(crate::gateway::task_service::record::BINDING_VERSION),
+        "the fixture starts in the current record format (admitted at BINDING_VERSION, MIK-8407)"
     );
     assert_eq!(
         before.get("dispatched"),
@@ -405,7 +405,7 @@ fn rewrite_as_v2(dir: &std::path::Path, id: &str) {
     let mut record: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(
         record["version"],
-        json!(crate::gateway::task_service::record::RECORD_VERSION)
+        json!(crate::gateway::task_service::record::BINDING_VERSION)
     );
     assert!(record.get("upstream").is_none());
     assert!(record["dispatched"].is_boolean());

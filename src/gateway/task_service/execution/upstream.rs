@@ -123,7 +123,10 @@ impl TaskExecutor {
         principal: &str,
         id: &str,
         revision: u64,
-        capture: UpstreamCapture,
+        (capture, bindings): (
+            UpstreamCapture,
+            Vec<crate::gateway::meta_mcp::admission::StepBinding>,
+        ),
     ) -> bool {
         let Ok(owner) = self.service.owner(principal) else {
             return false;
@@ -146,12 +149,14 @@ impl TaskExecutor {
             arguments: capture.arguments,
             operation_digest,
         };
-        match self
+        // MIK-8407: the bindings the dispatch ran under, from the worker's
+        // own log, go durable in the same write as the handle.
+        let marked = self
             .service
             .store
-            .mark_upstream(owner.as_digest(), id, revision, record)
-            .await
-        {
+            .mark_upstream(owner.as_digest(), id, revision, (record, bindings))
+            .await;
+        match marked {
             Ok(()) => true,
             Err(error) => {
                 tracing::warn!(

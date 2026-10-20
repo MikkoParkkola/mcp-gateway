@@ -10,7 +10,7 @@
 use super::{
     Arc, BeginOutcome, CancelOutcome, CommitFailure, CommitStage, CommittedTask, CreateOutcome,
     CreateWrite, DrainOutcome, Duration, EXECUTION_TARGET, ErrorAuthor, Handoff, HandoffRegistry,
-    Mutex, PublicationHook, Semaphore, ServiceError, SubscriptionRegistry, Target, Task, TaskCall,
+    Mutex, PublicationHook, Semaphore, ServiceError, SubscriptionRegistry, Task, TaskCall,
     TaskExecutor, TaskIntent, TaskService, TaskTransition, TransitionWrite, UpstreamRecovery,
     commit_and_run, commit_to_service, is_terminal, json, oneshot, upstream,
 };
@@ -468,7 +468,11 @@ impl TaskExecutor {
                     owner_digest,
                     id,
                     revision,
-                    (event, None, writes),
+                    (
+                        event,
+                        crate::gateway::task_service::record::Provenance::default(),
+                        writes,
+                    ),
                     author,
                     Some(now),
                 )
@@ -482,7 +486,7 @@ impl TaskExecutor {
                 let cancel = || {
                     (
                         TaskTransition::Cancel,
-                        None,
+                        crate::gateway::task_service::record::Provenance::default(),
                         crate::gateway::gateway_writes::WriteRecord::default(),
                     )
                 };
@@ -540,7 +544,7 @@ impl TaskExecutor {
         revision: u64,
         outcome: (
             TaskTransition,
-            Option<Vec<Target>>,
+            crate::gateway::task_service::record::Provenance,
             crate::gateway::gateway_writes::WriteRecord,
         ),
         author: ErrorAuthor,

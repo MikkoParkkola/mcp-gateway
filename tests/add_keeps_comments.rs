@@ -6,6 +6,9 @@
 //! Both re-serialised the whole config, which dropped every comment,
 //! including the security warning `init` writes next to `bearer_token`.
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 use std::path::Path;
 
 #[path = "common/gateway_bin.rs"]
@@ -115,7 +118,7 @@ fn a_file_another_writer_broke_is_refused_not_replaced() {
     mcp_gateway::gateway::test_helpers::write_owner_only(&path, "backends: {}\n").expect("write");
     let before = load_existing_or_default(&path).expect("load");
     let mut config = before.clone();
-    let backend: BackendConfig = serde_yaml::from_str("command: echo\n").expect("backend");
+    let backend: BackendConfig = yaml::from_str("command: echo\n").expect("backend");
     config.backends.insert("new".into(), backend);
     // Another writer adds a key the loader refuses after `add` loaded the file.
     mcp_gateway::gateway::test_helpers::write_owner_only(
@@ -146,7 +149,7 @@ fn an_invalid_config_is_refused_and_left_unwritten() {
     let before = load_existing_or_default(&path).expect("load");
     let mut config = before.clone();
     let backend: BackendConfig =
-        serde_yaml::from_str("command: echo\nruntime_profile: nosuch\n").expect("backend");
+        yaml::from_str("command: echo\nruntime_profile: nosuch\n").expect("backend");
     config.backends.insert("new".into(), backend);
 
     assert!(write_config_fixture(&path, &config).is_err());
@@ -168,7 +171,7 @@ fn ui_write(path: &Path, change: impl FnOnce(&mut mcp_gateway::config::Config)) 
 }
 
 fn echo_backend() -> mcp_gateway::config::BackendConfig {
-    serde_yaml::from_str("command: echo\n").expect("backend")
+    yaml::from_str("command: echo\n").expect("backend")
 }
 
 const NOTED: &str = "# kept by hand\nbackends:\n  # why old exists\n  old:\n    command: x\n";

@@ -14,8 +14,9 @@
 //!
 //! 1. **The inactive path is trivial.** This allocator is installed for the
 //!    whole lib-test binary, so every other test in the crate runs through it.
-//!    When no scope is open the cost is one relaxed thread-local `bool` read
-//!    and a forward to `System`. No lock, no buffer, no allocation, no
+//!    When no scope is open the cost is one relaxed thread-local `bool` read,
+//!    one relaxed atomic `bool` load (the process-wide mode, MIK-8412) and a
+//!    forward to `System`. No lock, no buffer, no allocation, no
 //!    initialiser — the cells are `const`-initialised, so touching them cannot
 //!    allocate and cannot register a destructor.
 //! 2. **Deallocation is never counted and never touches the cells.** The
@@ -29,10 +30,11 @@
 //! Contamination is handled a second time by the caller: every measuring test
 //! re-executes itself as a child process running exactly one test on a
 //! current-thread runtime, so no unrelated test's allocations can land in a
-//! total. See `signing_nonce_allocations_support::isolate`.
+//! total. See [`isolate`].
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 thread_local! {
     /// Whether THIS thread is inside an open measurement scope.
@@ -56,8 +58,29 @@ pub(super) struct MeteredSystem;
 /// allocation this large counts, a long string included.
 pub(crate) const LARGE_BYTES: usize = 2 * 1024;
 
+/// Process-wide counters for [`measure_async_process_wide`]: every thread's
+/// allocations while set, the blocking pool's included (MIK-8412: custody
+/// work runs in `spawn_blocking`). Only an isolated child may set it, where
+/// no other test runs. Atomics, so recording still never allocates.
+static WIDE: AtomicBool = AtomicBool::new(false);
+static WIDE_BYTES: AtomicU64 = AtomicU64::new(0);
+static WIDE_CALLS: AtomicU64 = AtomicU64::new(0);
+static WIDE_LARGEST: AtomicU64 = AtomicU64::new(0);
+static WIDE_LARGE: AtomicU64 = AtomicU64::new(0);
+static WIDE_LARGE_TOTAL: AtomicU64 = AtomicU64::new(0);
+
 /// Nothing below allocates, so recording cannot re-enter the allocator.
 fn record(bytes: usize) {
+    if WIDE.load(Ordering::Relaxed) {
+        let bytes = bytes as u64;
+        WIDE_BYTES.fetch_add(bytes, Ordering::Relaxed);
+        WIDE_CALLS.fetch_add(1, Ordering::Relaxed);
+        WIDE_LARGEST.fetch_max(bytes, Ordering::Relaxed);
+        if bytes >= LARGE_BYTES as u64 {
+            WIDE_LARGE.fetch_add(1, Ordering::Relaxed);
+            WIDE_LARGE_TOTAL.fetch_add(bytes, Ordering::Relaxed);
+        }
+    }
     let _ = ACTIVE.try_with(|active| {
         if active.get() {
             let _ = BYTES.try_with(|total| total.set(total.get().saturating_add(bytes as u64)));
@@ -189,7 +212,7 @@ pub(crate) fn measure<T>(body: impl FnOnce() -> T) -> (T, Measured) {
 /// performed while assembling the arguments — outside the total. Taking the
 /// closure means the only work outside the scope is what the test prepared
 /// before calling.
-pub(super) async fn measure_async<F, Fut>(make: F) -> (Fut::Output, Measured)
+pub(crate) async fn measure_async<F, Fut>(make: F) -> (Fut::Output, Measured)
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future,
@@ -197,4 +220,123 @@ where
     let meter = Meter::start();
     let value = make().await;
     (value, meter.stop())
+}
+
+/// Set in a re-executed child. Its presence is what tells a test body it is
+/// the one that must actually measure.
+const CHILD_ENV: &str = "MCPGW_ALLOC_METER_CHILD";
+
+/// Returns `true` in the PARENT, after running this one test in a child that
+/// did the measuring. Returns `false` in the child, meaning "you are the
+/// measurement, proceed".
+///
+/// Why a child at all: thread-local totals already keep other tests out of a
+/// reading, but [`measure_async_process_wide`] counts every thread, so only a
+/// process running exactly one test can use it.
+///
+/// `--exact` plus the assertion on `1 passed` is load-bearing. A child that
+/// matched zero tests exits 0, and the parent would go green on a test that
+/// never ran — a case that can never fail is not a test.
+pub(crate) fn isolate(test_path: &str) -> bool {
+    if std::env::var_os(CHILD_ENV).is_some() {
+        return false;
+    }
+    let exe = std::env::current_exe().expect("the running test binary must be locatable");
+    let output = std::process::Command::new(exe)
+        .args([test_path, "--exact", "--nocapture", "--test-threads=1"])
+        .env(CHILD_ENV, "1")
+        .output()
+        .expect("re-executing the test binary must succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        output.status.success(),
+        "isolated child failed for {test_path}\n--- child stdout ---\n{stdout}\n--- child stderr ---\n{stderr}"
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "isolated child for {test_path} did not run exactly one test\n--- child stdout ---\n{stdout}"
+    );
+    true
+}
+
+/// Clears the process-wide flag on every exit, an unwind included.
+struct WideScope;
+
+impl Drop for WideScope {
+    fn drop(&mut self) {
+        WIDE.store(false, Ordering::SeqCst);
+    }
+}
+
+/// [`measure_async`] counting EVERY thread's allocations, the blocking pool's
+/// included, for a dispatch that offloads work (MIK-8412). Only inside an
+/// [`isolate`]d child: elsewhere other tests' threads would land in it.
+pub(crate) async fn measure_async_process_wide<F, Fut>(make: F) -> (Fut::Output, Measured)
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future,
+{
+    assert!(
+        std::env::var_os(CHILD_ENV).is_some(),
+        "process-wide metering runs only in an isolated child"
+    );
+    assert!(
+        !WIDE.load(Ordering::SeqCst),
+        "process-wide meters must not nest"
+    );
+    // Zeroed before arming, so no allocation lands between the two.
+    for counter in [
+        &WIDE_BYTES,
+        &WIDE_CALLS,
+        &WIDE_LARGEST,
+        &WIDE_LARGE,
+        &WIDE_LARGE_TOTAL,
+    ] {
+        counter.store(0, Ordering::SeqCst);
+    }
+    WIDE.store(true, Ordering::SeqCst);
+    let scope = WideScope;
+
+    let value = make().await;
+    drop(scope);
+    let read = |counter: &AtomicU64| counter.load(Ordering::SeqCst);
+    (
+        value,
+        Measured {
+            bytes: read(&WIDE_BYTES),
+            calls: read(&WIDE_CALLS),
+            largest: read(&WIDE_LARGEST),
+            large: read(&WIDE_LARGE),
+            large_bytes: read(&WIDE_LARGE_TOTAL),
+        },
+    )
+}
+
+/// MIK-8412: the process-wide mode is off unless an isolated child arms it.
+/// In this (parent) process nothing arms it, so an allocation lands in no
+/// process-wide counter.
+#[test]
+fn the_process_wide_mode_is_off_by_default() {
+    assert!(
+        std::env::var_os(CHILD_ENV).is_none() && !WIDE.load(Ordering::SeqCst),
+        "process-wide metering is armed outside an isolated child"
+    );
+    let before = WIDE_CALLS.load(Ordering::SeqCst);
+    drop(std::hint::black_box(vec![0_u8; 4 * LARGE_BYTES]));
+    assert_eq!(
+        WIDE_CALLS.load(Ordering::SeqCst),
+        before,
+        "an allocation was counted process-wide while the mode was off"
+    );
+}
+
+/// Outside an isolated child the process-wide meter refuses to start.
+#[test]
+#[should_panic(expected = "process-wide metering runs only in an isolated child")]
+fn the_process_wide_meter_refuses_outside_a_child() {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("runtime")
+        .block_on(measure_async_process_wide(|| async {}));
 }

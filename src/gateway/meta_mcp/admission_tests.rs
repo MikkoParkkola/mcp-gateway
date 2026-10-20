@@ -438,7 +438,10 @@ fn sub4_preflight_preserves_legacy_unkeyed_per_step_authorization() {
 #[tokio::test]
 async fn sub4_playbook_dispatch_uses_admitted_definition() {
     let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
-    let original = original_plan();
+    let mut original = original_plan();
+    // The absent backend's answer is a failed step (MIK-8429), so `continue`
+    // lets the invoker reach the second step, whose target this row observes.
+    original.on_error = crate::playbook::ErrorStrategy::Continue;
     install_plan(&meta, original.clone());
     let policy = MutablePolicy::new(SECOND);
     let retry = RetryFields {
@@ -625,6 +628,7 @@ fn replay_facts_round_trip_and_older_records_decode() {
             read: None,
             writes: crate::gateway::gateway_writes::WriteRecord::default(),
             dispatched: None,
+            bindings: Vec::new(),
         };
         let bytes = serde_json::to_vec(&stored).unwrap();
         let (_, audit) = stored_response(&bytes).expect("decodes");
@@ -663,6 +667,7 @@ fn a_stored_delivery_with_any_write_record_still_decodes() {
         read: None,
         writes: crate::gateway::gateway_writes::WriteRecord::default(),
         dispatched: None,
+        bindings: Vec::new(),
     };
     for writes in [
         json!([{"layer": "value", "path": ["trace_id"], "digest": 17}]),
@@ -715,6 +720,7 @@ async fn a_replay_restores_the_stored_reading() {
         read: Some(b.clone()),
         writes: crate::gateway::gateway_writes::WriteRecord::default(),
         dispatched: None,
+        bindings: Vec::new(),
     };
     let bytes = serde_json::to_vec(&stored).unwrap();
     let (_, restored) = with_read_scope(std::sync::Arc::clone(&fw), async {

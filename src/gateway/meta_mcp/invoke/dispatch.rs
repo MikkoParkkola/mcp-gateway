@@ -99,7 +99,7 @@ impl MetaMcp {
         // The capability route's account credential, resolved once above the
         // response cache and carried down unchanged. `None` for every MCP
         // backend and for a capability with no account reference.
-        account_credential: Option<Arc<crate::identity_propagation::PreparedAccountCredential>>,
+        account_credential: super::propagation::DispatchAccount,
         // The per-key cost name (`MetaMcpCallerContext::cost_key`): the
         // only name this function uses, for the spend it settles (MIK-8507).
         cost_key: Option<&str>,
@@ -235,7 +235,7 @@ impl MetaMcp {
         // Resolved before the outer response cache, rechecked against the same
         // registry inside the executor before the inner cache and before
         // egress. Never minted here.
-        account_credential: Option<Arc<crate::identity_propagation::PreparedAccountCredential>>,
+        account_credential: super::propagation::DispatchAccount,
         policy_epoch: u64,
         protocol_revision: Option<&str>,
         routing_profile: &str,
@@ -274,7 +274,10 @@ impl MetaMcp {
                     // Carried, not re-resolved: the executor rechecks it
                     // against the same registry before its own cache lookup
                     // and again before egress.
-                    account_credential,
+                    account_credential: account_credential.credential,
+                    account_resolution: crate::capability::AccountResolution::ByCaller(
+                        account_credential.reference,
+                    ),
                     mcp_generation: None,
                     credential_principal: credential_owner.map(str::to_owned),
                 },

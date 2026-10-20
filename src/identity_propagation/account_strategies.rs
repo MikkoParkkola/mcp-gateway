@@ -44,6 +44,10 @@ use crate::personal_accounts::{
 use crate::security::TransparencyLogger;
 use crate::{Error, Result};
 
+// The one strategy an installed descriptor mints through, in its own module.
+mod minter;
+pub(crate) use minter::Minter;
+
 /// What the validated configuration says an account IS. Keyed by the
 /// `accounts.descriptors` map key — the logical `backend_id` of the account key,
 /// and the only thing `auth.account` may name.
@@ -55,6 +59,8 @@ pub(crate) struct DeclaredAccount {
     pub(crate) provider: String,
     /// The declared mode, as written. No mode is ever inferred.
     pub(crate) mode: DescriptorMode,
+    /// `account_fingerprint` of the declared descriptor (MIK-8407).
+    pub(crate) fingerprint: String,
 }
 
 /// What can actually mint for an account, installed before serving.
@@ -67,44 +73,11 @@ pub(crate) struct InstalledAccount {
     pub(crate) required: bool,
     pub(crate) token_exchange_endpoint: Option<String>,
     pub(crate) token_exchange_scope: Option<String>,
+    /// `account_fingerprint` of the declared descriptor (MIK-8407).
+    pub(crate) fingerprint: String,
     /// What mints for this descriptor. Shared with the per-backend install for
     /// the same descriptor, so two consumers can never drift onto two strategies.
     pub(crate) minter: Minter,
-}
-
-/// The one strategy instance an installed descriptor mints through.
-///
-/// ONE FIELD, NOT TWO. A managed descriptor's vault is kept typed because
-/// durable custody is not expressible through [`IdentityPropagation`]:
-/// `propagate` mints, and a recheck must NOT mint. Holding it as its own variant
-/// (rather than a trait object plus an optional typed copy) makes "a vault
-/// strategy with no custody handle" or "a custody handle for some other
-/// strategy" unrepresentable: one descriptor has one key, one resolver and one
-/// store no matter which consumer reaches it.
-pub(crate) enum Minter {
-    /// `personal_managed`: the vault the installer built.
-    Managed(Arc<crate::personal_accounts::VaultStrategy>),
-    /// `external`: the strategy's published expiry and behaviour, unchanged.
-    External(Arc<dyn IdentityPropagation>),
-}
-
-impl Minter {
-    /// The trait object the per-backend MCP map holds: for a managed
-    /// descriptor the vault itself, coerced, so it is the same allocation.
-    pub(crate) fn strategy(&self) -> Arc<dyn IdentityPropagation> {
-        match self {
-            Self::Managed(vault) => Arc::clone(vault) as Arc<dyn IdentityPropagation>,
-            Self::External(strategy) => Arc::clone(strategy),
-        }
-    }
-
-    /// The managed vault, when this descriptor is `personal_managed`.
-    pub(crate) fn managed(&self) -> Option<&Arc<crate::personal_accounts::VaultStrategy>> {
-        match self {
-            Self::Managed(vault) => Some(vault),
-            Self::External(_) => None,
-        }
-    }
 }
 
 /// What resolving an account reference produced.
@@ -255,12 +228,19 @@ pub(crate) struct AccountStrategyRegistry {
 impl AccountStrategyRegistry {
     /// Record a configured descriptor. Idempotent: a reload declaring the same
     /// descriptor replaces the entry with an identical one.
-    pub(crate) fn declare(&self, descriptor_id: &str, provider: &str, mode: DescriptorMode) {
+    pub(crate) fn declare(
+        &self,
+        descriptor_id: &str,
+        provider: &str,
+        mode: DescriptorMode,
+        fingerprint: &str,
+    ) {
         self.declared.write().insert(
             descriptor_id.to_string(),
             DeclaredAccount {
                 provider: provider.to_string(),
                 mode,
+                fingerprint: fingerprint.to_string(),
             },
         );
     }
@@ -271,7 +251,12 @@ impl AccountStrategyRegistry {
     /// `external` descriptor must keep its declared mode, and collapsing it
     /// would make the registration check answer the wrong question.
     pub(crate) fn install(&self, account: InstalledAccount, mode: DescriptorMode) {
-        self.declare(&account.descriptor_id, &account.provider, mode);
+        self.declare(
+            &account.descriptor_id,
+            &account.provider,
+            mode,
+            &account.fingerprint,
+        );
         self.installed
             .write()
             .insert(account.descriptor_id.clone(), Arc::new(account));

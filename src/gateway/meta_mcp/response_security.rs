@@ -568,6 +568,21 @@ mod challenge_tests;
 #[path = "response_delivery_tests.rs"]
 mod delivery_tests;
 
+/// A playbook step failure's tool text (MIK-8429 D3), forwarded so an
+/// aborted plan still tells its caller why. Only a string within the
+/// playbook's cap: the key is named, not the whole object, and a backend's
+/// error data carrying the same key cannot push more text through it.
+fn capped_tool_text(data: &serde_json::Value) -> Option<(String, serde_json::Value)> {
+    let text = data.get(crate::playbook::TOOL_TEXT_DATA_KEY)?.as_str()?;
+    // One more than the cap: the cut marker the playbook appends.
+    (text.chars().count() <= crate::playbook::TOOL_TEXT_CAP + 1).then(|| {
+        (
+            crate::playbook::TOOL_TEXT_DATA_KEY.to_string(),
+            serde_json::Value::from(text),
+        )
+    })
+}
+
 #[cfg(test)]
 #[path = "chain_emission_tests.rs"]
 mod chain_emission_tests;
@@ -670,6 +685,7 @@ pub(crate) fn error_response_preserving_status(
                 ]
                 .into_iter()
                 .filter_map(|key| Some((key.to_string(), data.get(key)?.clone())))
+                .chain(capped_tool_text(data))
                 .collect();
                 // `None` rather than `{}`: a backend error carrying none of these
                 // keys leaves `data` absent exactly as when one key was forwarded.

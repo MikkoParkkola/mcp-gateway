@@ -192,6 +192,9 @@ mod oracle_response_targets_tests;
 /// MIK-8406: a stored plan replay needs every plan account live.
 #[cfg(test)]
 mod plan_replay_liveness_tests;
+/// MIK-8429: a busy custody on a playbook step ends the plan, retryable.
+#[cfg(test)]
+mod playbook_busy_tests;
 #[cfg(test)]
 mod playbook_envelope_tests;
 #[cfg(test)]
@@ -203,6 +206,9 @@ mod reload_status_tests;
 pub(super) mod route_matrix_driver_tests;
 #[cfg(all(test, feature = "firewall"))]
 pub(super) mod route_matrix_x14_nonce_tests;
+/// MIK-8504: the provisional-session cap refuses before anything runs.
+#[cfg(test)]
+mod session_capacity_tests;
 #[cfg(test)]
 mod slot_quota_direct_tests;
 #[cfg(test)]

@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The shipped binary under an events config, restartable on one store.
 
+#[path = "../common/yaml.rs"]
+mod yaml;
+
 #[path = "../common/gateway_bin.rs"]
 pub(crate) mod gateway_bin;
 
@@ -201,7 +204,7 @@ impl Gateway {
         let config_path = self.root.join("gateway.yaml");
         mcp_gateway::gateway::test_helpers::write_owner_only(
             &config_path,
-            serde_yaml::to_string(&self.config).expect("config YAML"),
+            yaml::to_string(&self.config).expect("config YAML"),
         )
         .expect("write gateway config");
         let log = std::fs::File::create(self.log_path()).expect("gateway log");
@@ -286,7 +289,7 @@ impl Gateway {
         self.config = config;
         mcp_gateway::gateway::test_helpers::write_owner_only(
             self.root.join("gateway.yaml"),
-            serde_yaml::to_string(&self.config).expect("config YAML"),
+            yaml::to_string(&self.config).expect("config YAML"),
         )
         .expect("rewrite gateway config");
     }

@@ -29,6 +29,9 @@ use crate::protocol::{
     ResourcesTemplatesListResult, Tool, ToolsListResult,
 };
 
+// MIK-8014 PERF.12: the fresh-slot answer and completeness `tools_for_check` reads.
+#[path = "metadata_fresh_check.rs"]
+mod fresh_check;
 // MIK-8393: the response cache's admission, read from the slot this file resolves.
 #[path = "metadata_read_only.rs"]
 mod read_only;
@@ -536,6 +539,10 @@ impl Backend {
         headers: &[(String, String)],
         stale_hit: bool,
     ) -> Result<(Arc<Vec<Tool>>, Completeness)> {
+        // A fresh slot fetches nothing, so no lease, hook or deadline (PERF.12).
+        if let Some(held) = self.fresh_tools_for_check(binding) {
+            return Ok(held);
+        }
         let limit = self.config.timeout;
         let fill = self.tools_fill(binding, headers, FillBound::CallTimeout(limit), stale_hit);
         // MIK-7982 C3/C4: both deadlines below read this caller's provenance.
@@ -550,13 +557,7 @@ impl Backend {
                 })
         };
         let tools = Provenance::scope(&self.login_gate, bounded).await?;
-        let slot = self.tools_slot(binding);
-        let completeness = slot.tools_cache.with_cached(|current| match current {
-            Some(held) if Arc::ptr_eq(held, &tools) => {
-                Completeness::held(slot.tools_truncated.load(Ordering::SeqCst))
-            }
-            _ => Completeness::Unknown,
-        });
+        let completeness = self.held_completeness(binding, &tools);
         Ok((tools, completeness))
     }
 

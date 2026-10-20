@@ -24,7 +24,17 @@ async fn one_sender_claims_a_cancelled_rows_upstream_cancel() {
     let path = dir.path().join("tasks");
     let store = open(&path).await;
     let admission = services();
-    let (row, binding) = admitted(&store, &admission, "cancel-claim").await;
+    let (row, binding) = admitted_with(
+        &store,
+        &admission,
+        "cancel-claim",
+        // As production admits a single call: its one target at creation.
+        vec![Target {
+            server: "orders".into(),
+            tool: "create".into(),
+        }],
+    )
+    .await;
     let owner = binding.principal_digest().to_owned();
     let id = row.id().to_owned();
 
@@ -88,7 +98,10 @@ async fn one_sender_claims_a_cancelled_rows_upstream_cancel() {
         record.get("upstream").is_none(),
         "the claim takes the descriptor off the row: {record}"
     );
-    assert_eq!(record["version"], json!(8));
+    assert_eq!(
+        record["version"],
+        json!(crate::gateway::task_service::record::BINDING_VERSION)
+    );
     assert_eq!(record["revision"], json!(2), "the claim moves no revision");
     // Every later sender, with or without a handle, is told it was taken.
     for again in [None, Some(descriptor(&binding, "job-b"))] {
@@ -124,7 +137,12 @@ async fn the_durable_handle_wins_over_an_offered_one() {
     let owner = binding.principal_digest().to_owned();
     let id = row.id().to_owned();
     store
-        .mark_upstream(&owner, &id, 1, descriptor(&binding, "job-durable"))
+        .mark_upstream(
+            &owner,
+            &id,
+            1,
+            (descriptor(&binding, "job-durable"), Vec::new()),
+        )
         .await
         .unwrap();
     store
@@ -227,7 +245,7 @@ async fn a_row_admitted_at_the_tightest_budget_still_takes_the_cancel_claim() {
     let mut widest = descriptor(&binding, "x");
     widest.handle = widest_handle_reservation();
     store
-        .mark_upstream(&owner, &id, 1, widest.clone())
+        .mark_upstream(&owner, &id, 1, (widest.clone(), Vec::new()))
         .await
         .unwrap();
     store
@@ -270,10 +288,13 @@ async fn a_row_without_a_naming_target_copies_the_backend_and_still_fits() {
             &owner,
             &id,
             1,
-            vec![Target {
-                server: "elsewhere".into(),
-                tool: "other".into(),
-            }],
+            (
+                vec![Target {
+                    server: "elsewhere".into(),
+                    tool: "other".into(),
+                }],
+                Vec::new(),
+            ),
         )
         .await
         .unwrap();
@@ -307,7 +328,7 @@ async fn a_row_without_a_naming_target_copies_the_backend_and_still_fits() {
     let mut widest = descriptor(&binding, "x");
     widest.handle = widest_handle_reservation();
     store
-        .mark_upstream(&owner, &id, 1, widest.clone())
+        .mark_upstream(&owner, &id, 1, (widest.clone(), Vec::new()))
         .await
         .unwrap();
     store
@@ -338,13 +359,13 @@ async fn a_legacy_row_at_the_byte_cap_takes_a_pending_claim() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tasks");
     let store = open(&path).await;
-    let (row, binding) = admitted(&store, &services(), "cancel-legacy-cap").await;
+    let (row, binding) = admitted_legacy(&store, &services(), "cancel-legacy-cap").await;
     let owner = binding.principal_digest().to_owned();
     let id = row.id().to_owned();
     let mut wide = descriptor(&binding, "job-wide");
     wide.backend = "b".repeat(128);
     store
-        .mark_upstream(&owner, &id, 1, wide.clone())
+        .mark_upstream(&owner, &id, 1, (wide.clone(), Vec::new()))
         .await
         .unwrap();
     store
@@ -443,11 +464,16 @@ async fn a_claimed_legacy_row_keeps_its_call_as_a_target() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tasks");
     let store = open(&path).await;
-    let (row, binding) = admitted(&store, &services(), "cancel-legacy").await;
+    let (row, binding) = admitted_legacy(&store, &services(), "cancel-legacy").await;
     let owner = binding.principal_digest().to_owned();
     let id = row.id().to_owned();
     store
-        .mark_upstream(&owner, &id, 1, descriptor(&binding, "job-legacy"))
+        .mark_upstream(
+            &owner,
+            &id,
+            1,
+            (descriptor(&binding, "job-legacy"), Vec::new()),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -493,7 +519,7 @@ async fn an_offered_claim_on_a_legacy_row_keeps_its_call_as_a_target() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tasks");
     let store = open(&path).await;
-    let (row, binding) = admitted(&store, &services(), "cancel-legacy-offer").await;
+    let (row, binding) = admitted_legacy(&store, &services(), "cancel-legacy-offer").await;
     let owner = binding.principal_digest().to_owned();
     let id = row.id().to_owned();
     store
@@ -515,4 +541,46 @@ async fn an_offered_claim_on_a_legacy_row_keeps_its_call_as_a_target() {
     );
     assert!(record.get("upstream").is_none(), "{record}");
     store.close().await.unwrap();
+}
+
+/// MIK-8407 (final round-2 finding: the handle was durable before its
+/// bindings): `mark_upstream` writes the handle and the bindings the dispatch
+/// ran under in one write, and a reopened store reads both back. Mutant: the
+/// bindings dropped from, or deferred past, that write.
+#[tokio::test]
+async fn a_durable_handle_carries_its_bindings_across_a_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let store = open(&path).await;
+    let (row, binding) = admitted(&store, &services(), "handle-bindings").await;
+    let owner = binding.principal_digest().to_owned();
+    let id = row.id().to_owned();
+    let ran_under = vec![(
+        "orders".to_owned(),
+        "create".to_owned(),
+        Some("work#f1".to_owned()),
+    )];
+    store
+        .mark_upstream(
+            &owner,
+            &id,
+            1,
+            (descriptor(&binding, "job-bound"), ran_under.clone()),
+        )
+        .await
+        .unwrap();
+    store.close().await.unwrap();
+
+    let reopened = open(&path).await;
+    let read = reopened.get(&owner, &id).unwrap();
+    assert!(read.bindings_recorded, "handle row not at BINDING_VERSION");
+    assert_eq!(read.bindings, ran_under, "bindings lost with the handle");
+    assert_eq!(
+        reopened
+            .upstream_for_test(&id)
+            .map(|upstream| upstream.handle),
+        Some("job-bound".to_owned()),
+        "the handle is not on the reopened row"
+    );
+    reopened.close().await.unwrap();
 }

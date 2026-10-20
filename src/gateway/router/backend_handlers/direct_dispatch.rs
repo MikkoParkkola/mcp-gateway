@@ -258,8 +258,11 @@ pub(super) async fn admit<'a>(
         ));
     }
     let mut guarded = idempotency_outcome(scope, envelope, preflight, propagation)?;
-    let (lease, replay) =
-        super::direct_idempotency::execution_lease(scope, envelope, preflight, &mut guarded)?;
+    let (lease, replay) = super::direct_idempotency::execution_lease(
+        scope,
+        (envelope, preflight, propagation),
+        &mut guarded,
+    )?;
     admitted.lease = lease;
     admitted.nonce = admit_signing_nonce(scope, preflight)?;
     admitted.witness = admission_witness(admitted.nonce.as_ref(), propagation, &route.backend);

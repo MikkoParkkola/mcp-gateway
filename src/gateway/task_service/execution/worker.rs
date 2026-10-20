@@ -286,7 +286,13 @@ async fn run_dispatched(
             &principal,
             &id,
             revision,
-            (job, handle, caller.relay_caller(session_id.as_deref())),
+            // MIK-8407: with the bindings the dispatch ran under, from its log.
+            (
+                job,
+                handle,
+                caller.relay_caller(session_id.as_deref()),
+                intent.owned.dispatch_log().bindings(),
+            ),
             &mut cancel_rx,
         )
         .await;
@@ -318,6 +324,7 @@ async fn follow_handle(
         crate::gateway::meta_mcp::invoke::relay::RelayKey<'_>,
         bool,
     ),
+    bindings: &[crate::gateway::meta_mcp::admission::StepBinding],
     cancel_rx: &mut watch::Receiver<bool>,
 ) {
     // Neither early return below can strand a refused capture's handle: a job
@@ -418,6 +425,7 @@ async fn follow_handle(
         id,
         principal,
         revision,
+        bindings,
     };
     let writes = crate::gateway::gateway_writes::snapshot_since(writes_mark);
     settle_followed(

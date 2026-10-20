@@ -216,7 +216,7 @@ fn write_discovered_to_config_creates_file_when_missing() {
     let written = write_discovered_to_config(&[server], Some(&output), CommentLoss::Refuse)
         .expect("write should succeed");
 
-    assert_eq!(written, output);
+    assert_eq!(written, (output.clone(), 1));
     let loaded = Config::load(Some(&output)).expect("must reload");
     assert!(loaded.backends.contains_key("tavily"));
 }
@@ -246,6 +246,56 @@ fn write_discovered_to_config_preserves_existing_backends() {
     let loaded = Config::load(Some(&output)).expect("must reload");
     assert!(loaded.backends.contains_key("existing"));
     assert!(loaded.backends.contains_key("tavily"));
+}
+
+/// MIK-8358: a discovered entry named like the capabilities backend (the
+/// default `setup export` name, `gateway`) is skipped, not written as a
+/// backend config validation refuses; the rest of the batch is written.
+#[test]
+fn write_discovered_to_config_skips_the_capabilities_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("discovered.yaml");
+    let servers = [
+        make_discovered_server("gateway"),
+        make_discovered_server("tavily"),
+    ];
+
+    let (_, written) = write_discovered_to_config(&servers, Some(&output), CommentLoss::Refuse)
+        .expect("a batch holding the capabilities name still writes");
+    assert_eq!(written, 1, "the skipped server was counted as written");
+
+    let loaded = Config::load(Some(&output)).expect("must reload");
+    assert!(
+        !loaded.backends.contains_key("gateway"),
+        "{:?}",
+        loaded.backends.keys()
+    );
+    assert!(loaded.backends.contains_key("tavily"));
+}
+
+/// The skip follows the saved `capabilities.name`, not the default.
+#[test]
+fn write_discovered_to_config_skips_a_custom_capabilities_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("discovered.yaml");
+    let mut existing = Config::default();
+    existing.capabilities.name = "caps".to_string();
+    write_config_fixture(&output, &existing).expect("initial write should succeed");
+
+    let servers = [
+        make_discovered_server("caps"),
+        make_discovered_server("gateway"),
+    ];
+    write_discovered_to_config(&servers, Some(&output), CommentLoss::Refuse)
+        .expect("write should succeed");
+
+    let loaded = Config::load(Some(&output)).expect("must reload");
+    assert!(
+        !loaded.backends.contains_key("caps"),
+        "{:?}",
+        loaded.backends.keys()
+    );
+    assert!(loaded.backends.contains_key("gateway"));
 }
 
 // GH462.CONFIG.1 / GH462.CONFIG.2: the shared loader's existing writer stays fail-closed.

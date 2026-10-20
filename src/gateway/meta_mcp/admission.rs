@@ -20,7 +20,7 @@ mod replay;
 pub(crate) use replay::ReplayTarget;
 #[path = "admission_stored.rs"]
 mod stored;
-pub(crate) use stored::ReplayAudit;
+pub(crate) use stored::{ReplayAudit, StepBinding, note_distinct};
 use stored::{StoredChain, StoredDelivery, stored_response};
 
 /// Borrowed by inner dispatches, owned by the outer request future. Dropping the
@@ -35,6 +35,8 @@ pub(crate) struct SyncLease {
     /// The steps this execution was served (sent, or answered from a stored
     /// or cached result), kept for a replay (#3872 FIX 1).
     steps: Mutex<Vec<(String, String)>>,
+    /// The binding each step ran under (MIK-8407), kept for a replay.
+    bindings: Mutex<Vec<stored::StepBinding>>,
 }
 
 impl SyncLease {
@@ -55,6 +57,13 @@ impl SyncLease {
         if !steps.iter().any(|(s, t)| s == server && t == tool) {
             steps.push((server.to_owned(), tool.to_owned()));
         }
+    }
+
+    /// Note the binding `(server, tool)` is dispatched under, once per
+    /// distinct binding: a step seen under two can match no single current
+    /// one, so its replay refuses (MIK-8407).
+    pub(crate) fn note_binding(&self, (server, tool): (&str, &str), binding: Option<&str>) {
+        stored::note_distinct(&mut self.bindings.lock(), (server, tool), binding);
     }
 
     pub(crate) fn mark_dispatched(&self) {
@@ -108,6 +117,7 @@ impl SyncLease {
         let (lease, dispatches) = self.state.into_inner();
         let audit = self.audit.into_inner();
         let steps = self.steps.into_inner();
+        let bindings = self.bindings.into_inner();
         if dispatches == 0
             || response.result.as_ref().is_some_and(|result| {
                 crate::protocol::mrtr::InputRequired::claims_input_required(result)
@@ -143,6 +153,7 @@ impl SyncLease {
             read,
             writes,
             dispatched: Some(steps),
+            bindings,
         };
         lease.complete_secured(&serde_json::to_value(stored).unwrap_or(Value::Null));
     }
@@ -169,12 +180,14 @@ pub(crate) enum SyncAdmission {
     /// target-branch target, else a continuation retry's origin, else `None`
     /// for a plan; it steers the route-stage deferral), and the steps it
     /// dispatched (`None` in a record that predates the list, MIK-8361),
-    /// which a plan replay proves live before it is served (MIK-8406).
+    /// which a plan replay proves live before it is served (MIK-8406), and
+    /// the binding each step ran under, judged before serving (MIK-8407).
     Replay(
         JsonRpcResponse,
         Option<ReplayAudit>,
         Option<ReplayTarget>,
         Option<Vec<(String, String)>>,
+        Vec<stored::StepBinding>,
     ),
 }
 
@@ -353,6 +366,7 @@ impl MetaMcp {
                 playbook: None,
                 audit: Mutex::new(None),
                 steps: Mutex::new(Vec::new()),
+                bindings: Mutex::new(Vec::new()),
             })),
             Ok(Admission::Replay(bytes)) => {
                 // Read before the store is decoded: an unreadable origin
@@ -368,6 +382,7 @@ impl MetaMcp {
                     audit,
                     single_target,
                     stored::dispatched_steps(&bytes),
+                    stored::stored_bindings(&bytes),
                 ))
             }
             Ok(Admission::InFlight) => {
@@ -565,7 +580,7 @@ impl MetaMcp {
         // gate, and any other admission answer is the one a missing step
         // gets, never the step's reason (ruling A).
         let ran = match &admission {
-            Ok(SyncAdmission::Replay(_, _, _, dispatched)) => Some(dispatched),
+            Ok(SyncAdmission::Replay(_, _, _, dispatched, _)) => Some(dispatched),
             _ => None,
         };
         if let Some(dispatched) = ran

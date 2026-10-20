@@ -5,9 +5,12 @@
 //! a caller can compare what it sent with what Linear stored. Without the
 //! field in the response, a write that did not apply looks like one that did.
 
+#[path = "common/yaml.rs"]
+mod yaml;
+
 use std::path::Path;
 
-use serde_yaml::Value;
+use yaml::Value;
 
 /// The long text fields a Linear write can send.
 const LONG_TEXT: [&str; 2] = ["description", "body"];
@@ -45,7 +48,7 @@ fn every_linear_write_selects_the_long_text_it_sends() {
         if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
             continue;
         }
-        let cap: Value = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap())
+        let cap: Value = yaml::from_str(&std::fs::read_to_string(&path).unwrap())
             .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let Some(providers) = cap["providers"].as_mapping() else {
             continue;

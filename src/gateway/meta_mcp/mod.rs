@@ -514,6 +514,26 @@ struct DispatchTarget<'a> {
     caller: &'a MetaMcpCallerContext<'a>,
 }
 
+impl<'a> DispatchTarget<'a> {
+    /// One call to route below the gate (MIK-8498 DISPATCH.2): the bundle
+    /// every routing step takes, so no step re-spells its five parts.
+    fn new(
+        id: RequestId,
+        tool_name: &'a str,
+        arguments: std::borrow::Cow<'a, Value>,
+        session_id: Option<&'a str>,
+        caller: &'a MetaMcpCallerContext<'a>,
+    ) -> Self {
+        Self {
+            id,
+            tool_name,
+            arguments,
+            session_id,
+            caller,
+        }
+    }
+}
+
 /// How a dispatch's own result is presented, and the only thing the two
 /// entry points above disagree about. The routing, the checks and the error
 /// side are one code path.
@@ -523,6 +543,23 @@ enum ResultShape {
     Wrapped,
     /// The tool's result as it came back, for a task to settle on.
     Native,
+}
+
+impl ResultShape {
+    /// The shape a result takes for the name the caller presented, when no
+    /// entry point fixed it (a repeated task call's failed fill): a surfaced
+    /// backend tool is its own tool to the client and answers native;
+    /// `gateway_invoke` and every other name answer as the meta reply.
+    ///
+    /// Not the rule for the routes themselves: a retry routed to its origin
+    /// backend answers native whatever its name (`invoke_named_backend_tool`).
+    fn of_presented(tool_name: &str, surfaced: &visible::SurfacedMap) -> Self {
+        if tool_name == "gateway_invoke" || surfaced.unscoped(tool_name).is_none() {
+            Self::Wrapped
+        } else {
+            Self::Native
+        }
+    }
 }
 
 // ============================================================================
@@ -688,6 +725,8 @@ mod withheld_catalogue_tests;
 mod account_outcome;
 mod listing_view;
 mod session_end;
+/// MIK-8407 / MIK-8440: a stored result's recorded bindings, judged.
+pub(crate) mod stored_binding;
 
 #[cfg(test)]
 #[path = "session_bound_tests.rs"]

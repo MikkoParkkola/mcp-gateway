@@ -48,11 +48,11 @@ fn a_token_answer_stores_its_lifetime() {
 /// C5: an unset buffer is not written back as a number.
 #[test]
 fn an_unset_buffer_is_not_serialized() {
-    let cfg: crate::config::OAuthConfig = serde_yaml::from_str("enabled: true\n").expect("parse");
-    let text = serde_yaml::to_string(&cfg).expect("serialize");
+    let cfg: crate::config::OAuthConfig = crate::yaml::from_str("enabled: true\n").expect("parse");
+    let text = crate::yaml::to_string(&cfg).expect("serialize");
     assert!(!text.contains("token_refresh_buffer_secs"), "{text}");
-    let back: crate::config::OAuthConfig = serde_yaml::from_str(&text).expect("reload");
-    let again = serde_yaml::to_string(&back).expect("serialize again");
+    let back: crate::config::OAuthConfig = crate::yaml::from_str(&text).expect("reload");
+    let again = crate::yaml::to_string(&back).expect("serialize again");
     assert!(!again.contains("token_refresh_buffer_secs"), "{again}");
 }
 
@@ -96,8 +96,8 @@ fn the_refresh_buffer_table() {
 #[test]
 fn a_set_buffer_above_the_bound_is_refused() {
     let over = crate::duration_bound::MAX_DURATION.as_secs() + 1;
-    let parsed: std::result::Result<crate::config::OAuthConfig, serde_yaml::Error> =
-        serde_yaml::from_str(&format!("token_refresh_buffer_secs: {over}\n"));
+    let parsed: std::result::Result<crate::config::OAuthConfig, crate::yaml::Error> =
+        crate::yaml::from_str(&format!("token_refresh_buffer_secs: {over}\n"));
     let err = parsed.expect_err("refused").to_string();
     assert!(
         !err.contains(&over.to_string()),
@@ -133,6 +133,6 @@ fn an_old_stored_token_loads_with_the_floor_buffer() {
 /// C2a: `oauth: {}` leaves the buffer unset, not 300.
 #[test]
 fn an_empty_oauth_block_leaves_the_buffer_unset() {
-    let cfg: crate::config::OAuthConfig = serde_yaml::from_str("{}\n").expect("parse");
+    let cfg: crate::config::OAuthConfig = crate::yaml::from_str("{}\n").expect("parse");
     assert_eq!(cfg.token_refresh_buffer_secs, None);
 }
