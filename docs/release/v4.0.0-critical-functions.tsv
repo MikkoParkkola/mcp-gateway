@@ -139,7 +139,6 @@ src/gateway/router/handlers/request_checks.rs	request_check_refusal	1	critical	b
 src/gateway/router/handlers/tasks.rs	recover_from_upstream	1	critical	a	recover_from_upstream	Re-authorizes the original target against the current caller before any upstream recovery query
 src/gateway/router/handlers/tasks/owner.rs	route_task_owner	1	critical	c	route_task_owner	Picks the one owner string for every task arm; never derived from request data
 src/gateway/router/handlers/tasks.rs	task_intent_for_call	1	critical	a	task_intent_for_call	Refuses task creation without a verified identity when auth is on, or without an idempotency key
-src/gateway/router/handlers/tasks/owner.rs	task_principal	1	standard	borderline	task_principal	Principal derivation; wrong value mis-scopes task ownership
 src/gateway/router/handlers/tasks.rs	tasks_cancel	1	standard	borderline	tasks_cancel	Owner scoping comes only from the owner string passed to TaskRoute
 src/gateway/router/handlers/tasks.rs	tasks_get	1	standard	borderline	tasks_get	Wires the recovery authz and refuse_stored_delivery checks into the read path
 src/gateway/router/handlers/tasks.rs	update_caller	1	standard	borderline	update_caller	Resume caller must be the live update requester, not the creator

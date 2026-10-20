@@ -20,8 +20,19 @@ async fn an_anonymous_task_submit_is_judged_without_allocating() {
         "jsonrpc": "2.0", "id": 9, "method": "tools/call",
         "params": {"name": "gateway_invoke", "task": {"ttl": 60000}, "arguments": {}},
     });
-    let (verdict, measured) =
-        measure(|| intake_judgement(&state, &request, (None, None, None), (None, None)));
+    let task_caller = super::super::tasks::owner::TaskCaller {
+        verified_identity: None,
+        agent: None,
+        subject: None,
+        cert: None,
+        client: None,
+    };
+    let owners = super::super::tasks::owner::TaskOwners {
+        task: String::new(),
+        events: String::new(),
+        admission: String::new(),
+    };
+    let (verdict, measured) = measure(|| intake_judgement(&state, &request, &task_caller, &owners));
     assert!(
         verdict.is_none(),
         "a task submit with auth off is left to the task path"

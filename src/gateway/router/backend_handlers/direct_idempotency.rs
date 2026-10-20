@@ -100,16 +100,9 @@ pub(super) fn execution_lease(
     }
     let caller = scope.caller;
     // The owner task admission spells (MIK-8193): one store, one identity.
-    let (_, _, admission_owner) = super::super::handlers::route_owners(
-        scope.state,
-        caller.verified_identity.as_ref(),
-        caller.oauth_agent_identity.as_ref(),
-        (
-            caller.grant_subject.as_ref(),
-            caller.cert_identity.as_ref(),
-            caller.client.as_ref(),
-        ),
-    );
+    let task_caller = caller.task_caller();
+    let admission_owner =
+        super::super::handlers::tasks::owner::route_owners(scope.state, &task_caller).admission;
     let tool = envelope
         .params
         .as_ref()

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Pins `route_owners` across identity combinations for MIK-8498.TASKS.1.
 
-use super::{AUTH_DISABLED_TASK_OWNER, agent_task_owner};
+use super::{AUTH_DISABLED_TASK_OWNER, TaskCaller, TaskOwners, agent_task_owner};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::identity_grants::GrantSubject;
 use crate::key_server::oidc::VerifiedIdentity;
@@ -65,10 +65,10 @@ fn verified() -> VerifiedIdentity {
     }
 }
 
-fn check(label: &str, got: (String, String, String), want: (&str, &str, &str)) {
-    assert_eq!(got.0, want.0, "{label}: task owner");
-    assert_eq!(got.1, want.1, "{label}: events owner");
-    assert_eq!(got.2, want.2, "{label}: admission owner");
+fn check(label: &str, got: TaskOwners, want: (&str, &str, &str)) {
+    assert_eq!(got.task, want.0, "{label}: task owner");
+    assert_eq!(got.events, want.1, "{label}: events owner");
+    assert_eq!(got.admission, want.2, "{label}: admission owner");
 }
 
 #[tokio::test]
@@ -90,17 +90,44 @@ async fn route_owners_across_identity_combinations() {
 
     check(
         "auth off, nothing",
-        super::route_owners(&off, None, None, (None, None, None)),
+        super::route_owners(
+            &off,
+            &TaskCaller {
+                verified_identity: None,
+                agent: None,
+                subject: None,
+                cert: None,
+                client: None,
+            },
+        ),
         (disabled, disabled, ""),
     );
     check(
         "auth off, agent only",
-        super::route_owners(&off, None, Some(&agent_fixture), (None, None, None)),
+        super::route_owners(
+            &off,
+            &TaskCaller {
+                verified_identity: None,
+                agent: Some(&agent_fixture),
+                subject: None,
+                cert: None,
+                client: None,
+            },
+        ),
         (&agent_owner, disabled, &agent_owner),
     );
     check(
         "auth off, proven subject",
-        super::route_owners(&off, None, None, (Some(&subject_fixture), None, None)),
+        super::route_owners(
+            &off,
+            &TaskCaller {
+                verified_identity: None,
+                agent: None,
+                subject: Some(&subject_fixture),
+                cert: None,
+                client: None,
+            },
+        ),
         (SUBJECT_KEY, SUBJECT_KEY, SUBJECT_KEY),
     );
     // The task arm passes the agent, so only the events arm takes the
@@ -109,54 +136,111 @@ async fn route_owners_across_identity_combinations() {
         "auth off, agent and proven subject",
         super::route_owners(
             &off,
-            None,
-            Some(&agent_fixture),
-            (Some(&subject_fixture), None, None),
+            &TaskCaller {
+                verified_identity: None,
+                agent: Some(&agent_fixture),
+                subject: Some(&subject_fixture),
+                cert: None,
+                client: None,
+            },
         ),
         (&agent_owner, SUBJECT_KEY, &agent_owner),
     );
     check(
         "auth off, verified identity",
-        super::route_owners(&off, Some(&verified_fixture), None, (None, None, None)),
+        super::route_owners(
+            &off,
+            &TaskCaller {
+                verified_identity: Some(&verified_fixture),
+                agent: None,
+                subject: None,
+                cert: None,
+                client: None,
+            },
+        ),
         (&actor, &actor, &actor),
     );
     check(
         "auth on, nothing",
-        super::route_owners(&on, None, None, (None, None, None)),
+        super::route_owners(
+            &on,
+            &TaskCaller {
+                verified_identity: None,
+                agent: None,
+                subject: None,
+                cert: None,
+                client: None,
+            },
+        ),
         ("", "", ""),
     );
     check(
         "auth on, agent only",
-        super::route_owners(&on, None, Some(&agent_fixture), (None, None, None)),
+        super::route_owners(
+            &on,
+            &TaskCaller {
+                verified_identity: None,
+                agent: Some(&agent_fixture),
+                subject: None,
+                cert: None,
+                client: None,
+            },
+        ),
         (&agent_owner, "", &agent_owner),
     );
     check(
         "auth on, authenticated API-key client",
-        super::route_owners(&on, None, None, (None, None, Some(&client_fixture))),
+        super::route_owners(
+            &on,
+            &TaskCaller {
+                verified_identity: None,
+                agent: None,
+                subject: None,
+                cert: None,
+                client: Some(&client_fixture),
+            },
+        ),
         (&credential_owner, &credential_owner, &credential_owner),
     );
     check(
         "auth on, client and proven subject",
         super::route_owners(
             &on,
-            None,
-            None,
-            (Some(&subject_fixture), None, Some(&client_fixture)),
+            &TaskCaller {
+                verified_identity: None,
+                agent: None,
+                subject: Some(&subject_fixture),
+                cert: None,
+                client: Some(&client_fixture),
+            },
         ),
         (SUBJECT_KEY, SUBJECT_KEY, SUBJECT_KEY),
     );
     check(
         "auth on, proven subject with no client",
-        super::route_owners(&on, None, None, (Some(&subject_fixture), None, None)),
+        super::route_owners(
+            &on,
+            &TaskCaller {
+                verified_identity: None,
+                agent: None,
+                subject: Some(&subject_fixture),
+                cert: None,
+                client: None,
+            },
+        ),
         ("", "", ""),
     );
     check(
         "auth on, verified identity and agent",
         super::route_owners(
             &on,
-            Some(&verified_fixture),
-            Some(&agent_fixture),
-            (None, None, None),
+            &TaskCaller {
+                verified_identity: Some(&verified_fixture),
+                agent: Some(&agent_fixture),
+                subject: None,
+                cert: None,
+                client: None,
+            },
         ),
         (&actor, &actor, &actor),
     );
@@ -164,9 +248,13 @@ async fn route_owners_across_identity_combinations() {
         "auth on, client and agent",
         super::route_owners(
             &on,
-            None,
-            Some(&agent_fixture),
-            (None, None, Some(&client_fixture)),
+            &TaskCaller {
+                verified_identity: None,
+                agent: Some(&agent_fixture),
+                subject: None,
+                cert: None,
+                client: Some(&client_fixture),
+            },
         ),
         (&credential_owner, &credential_owner, &credential_owner),
     );

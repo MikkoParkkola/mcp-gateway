@@ -56,6 +56,18 @@ impl Caller {
             ),
         )
     }
+
+    pub(super) fn task_caller(
+        &self,
+    ) -> crate::gateway::router::handlers::tasks::owner::TaskCaller<'_> {
+        crate::gateway::router::handlers::tasks::owner::TaskCaller {
+            verified_identity: self.verified_identity.as_ref(),
+            agent: self.oauth_agent_identity.as_ref(),
+            subject: self.grant_subject.as_ref(),
+            cert: self.cert_identity.as_ref(),
+            client: self.client.as_ref(),
+        }
+    }
 }
 
 /// C5 route parity (MIK-6746): `require_id` and the `known_agents` allowlist
@@ -544,16 +556,8 @@ fn validated(request: &Value) -> Result<(), Rejection> {
 /// id. The owner and principal are read as admission reads them
 /// (`direct_idempotency.rs`), through the one shared function.
 fn intake_refusal(state: &AppState, request: &Value, caller: &Caller) -> Option<Rejection> {
-    let (_, _, owner) = super::super::handlers::route_owners(
-        state,
-        caller.verified_identity.as_ref(),
-        caller.oauth_agent_identity.as_ref(),
-        (
-            caller.grant_subject.as_ref(),
-            caller.cert_identity.as_ref(),
-            caller.client.as_ref(),
-        ),
-    );
+    let task_caller = caller.task_caller();
+    let owner = super::super::handlers::tasks::owner::route_owners(state, &task_caller).admission;
     let error = crate::gateway::meta_mcp::intake_refusal(
         request,
         crate::gateway::meta_mcp::AdmissionOwner::routed(&owner),

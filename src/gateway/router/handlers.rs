@@ -39,7 +39,7 @@ pub(super) mod request_checks;
 mod request_facts;
 mod session_end;
 mod sse;
-mod tasks;
+pub(super) mod tasks;
 
 #[cfg(test)]
 use health::backends_overall_healthy;
@@ -59,7 +59,6 @@ use request_facts::{
 pub(super) use session_end::{mcp_delete_handler, sse_deprecated_handler};
 pub(super) use sse::mcp_sse_handler;
 use sse::unsupported_version_error;
-pub(super) use tasks::route_owners;
 
 #[allow(clippy::too_many_lines)]
 async fn meta_mcp_dispatch(
