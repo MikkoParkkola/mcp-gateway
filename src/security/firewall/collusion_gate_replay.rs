@@ -36,14 +36,13 @@ pub(crate) struct ReplayedDigest {
 
 impl Firewall {
     /// Store the committed in-plan `receipts` of a retained sync plan
-    /// delivery under its admission key (F1), with its `calls` and the
+    /// delivery under its admission key (F1: identity, round,
+    /// operation), with its `calls` and the
     /// digest of the delivered answer they were committed against (F4),
     /// live for `retention` (the retained result's own retention).
     pub(crate) fn store_sync_replay(
         &self,
-        identity: &str,
-        round: &str,
-        operation: &str,
+        (identity, round, operation): (&str, &str, &str),
         receipts: &[ReplaySource<'_>],
         calls: ReplayCalls,
         answer_digest: &str,

@@ -5,10 +5,9 @@
 //! for the file-size ceiling. The rig is `relay_plan_replay`'s.
 use super::super::*;
 use super::relay_plan_replay::{
-    ALPHA, OTHER_PROSE, PROSE, Rig, Sensitivity, answering, chain, rig, rig_with_mocks, task_call,
-    text,
+    ALPHA, OTHER_PROSE, PROSE, Rig, Sensitivity, answering, chain, rig_with_mocks, task_call, text,
 };
-use super::relay_plan_replay_guards::{committed, delist};
+use super::relay_plan_replay_guards::delist;
 use super::support::*;
 use pretty_assertions::assert_eq;
 

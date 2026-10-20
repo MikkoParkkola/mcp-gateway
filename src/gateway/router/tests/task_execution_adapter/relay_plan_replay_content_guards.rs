@@ -531,6 +531,36 @@ async fn g11_a_replay_time_redaction_renews_only_what_it_delivers() {
     );
 }
 
+/// G11b's rig and the removed run: alpha's over-cap step text with the
+/// credential run in its cut middle, and the untightened router.
+async fn g11b_rig() -> (Rig, String) {
+    let removed = removed_run();
+    let filler = |tag: &str| {
+        (0..450)
+            .map(|i| format!("{tag}{i:04}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let alpha_text = format!("{PROSE} {} {removed} {}", filler("head"), filler("tail"));
+    let at = alpha_text
+        .find(&removed)
+        .expect("the run is in alpha's text: fixture");
+    assert!(
+        at > 3 * 1024 && at + removed.len() < alpha_text.len() - 3 * 1024,
+        "premise: the run lies in the cut middle, past the kept head and before the kept tail"
+    );
+    // Alpha answers the plan's over-cap text first, then (carol's live
+    // call) a short copy of the head and the run: under the cap, so the
+    // run is fingerprinted and carol is a live witness for it. An
+    // over-cap copy would cut the run from her receipt too.
+    let witness = format!("{PROSE} {removed}");
+    let alpha = MockBackend::answering(Answer::Sequence(vec![text(&alpha_text), text(&witness)]));
+    let rig = with_unredacted_router(
+        rig_with_mocks(alpha, answering(OTHER_PROSE), None, Sensitivity::Rule).await,
+    );
+    (rig, removed)
+}
+
 /// G11b (H): as G11, but the replay-time redaction removes text only
 /// from inside the live receipt's cut middle. Alpha's step text runs
 /// past the record cap with the credential run past the kept head
@@ -548,22 +578,7 @@ async fn g11_a_replay_time_redaction_renews_only_what_it_delivers() {
 /// excused for the removed run, and nothing would count `filtered`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn g11b_a_redaction_inside_the_cut_middle_drops_its_excuse() {
-    let removed = removed_run();
-    let filler = |tag: &str| {
-        (0..450)
-            .map(|i| format!("{tag}{i:04}"))
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
-    let alpha_text = format!("{PROSE} {} {removed} {}", filler("head"), filler("tail"));
-    let at = alpha_text
-        .find(&removed)
-        .expect("the run is in alpha's text: fixture");
-    assert!(
-        at > 3 * 1024 && at + removed.len() < alpha_text.len() - 3 * 1024,
-        "premise: the run lies in the cut middle, past the kept head and before the kept tail"
-    );
-    let rig = with_unredacted_router(rig(&alpha_text, OTHER_PROSE, None).await);
+    let (rig, removed) = g11b_rig().await;
     let cuts_before = rig.relay.relay_text_cuts();
     let first = post(
         &rig.state,
@@ -600,7 +615,7 @@ async fn g11b_a_redaction_inside_the_cut_middle_drops_its_excuse() {
     .await;
     assert!(
         carol.get("error").is_none() && carol.to_string().contains(&removed),
-        "premise: carol was delivered alpha's whole text: {carol}"
+        "premise: carol was delivered the head and the run: {carol}"
     );
     assert!(
         rig.refused("key-a", 122, &removed).await,

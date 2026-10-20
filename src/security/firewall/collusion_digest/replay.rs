@@ -312,7 +312,10 @@ impl DeliveryDigest {
             let mut dropped = cut.is_some() || seams.is_some();
             if let Judged::Unread { receipt, .. } = &mut self.judged {
                 receipt.fps.retain(|fp| found.contains(fp));
-                dropped = dropped || receipt.cut.take().is_some();
+                // Taken before the `||`: a short-circuit would keep the
+                // receipt's cut whenever an outer set was already dropped.
+                let receipt_cut = receipt.cut.take().is_some();
+                dropped = dropped || receipt_cut;
             }
             self.segments.retain(|s| delivered_segment(s) && s.whole);
             self.retained.retain(|fp| found.contains(fp));

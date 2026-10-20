@@ -363,7 +363,7 @@ src/gateway/meta_mcp/invoke/receipt_test_support.rs	detectable	-	test-only suppo
 src/gateway/meta_mcp/invoke/receipt_test_support.rs	distinct_prose	-	test-only support (the module is cfg(all(test, firewall)))
 src/gateway/meta_mcp/invoke/receipt_test_support.rs	own_hint_text	-	test-only support (the module is cfg(all(test, firewall)))
 src/gateway/meta_mcp/invoke/relay.rs	collecting	-	direct-route and task-executor receipt scopes only; meta HTTP uses collecting_http and stdio collecting_staged
-src/gateway/meta_mcp/invoke/relay.rs	collecting_http	http_invoke_tiny	wraps every HTTP delivery (collects only with relay detection on)
+src/gateway/meta_mcp/invoke/relay.rs	collecting_http	http_invoke_tiny	wraps every HTTP delivery (collects only with relay detection on); with relay detection OFF it opens the gateway-writes scope (MIK-8408 D5), +3 allocations and about 735 B per tiny gateway_invoke (371 to 374, measured); removal ticketed as MIK-8545 (v4.1.0)
 src/gateway/meta_mcp/invoke/relay.rs	collecting_staged	-	on-path, untimed: only with relay detection active; the harness routes configure none
 src/gateway/meta_mcp/invoke/relay.rs	commit	stdio_invoke_tiny	commits or drops the staged receipts of every judged stdio answer
 src/gateway/meta_mcp/invoke/relay.rs	commit_staged_relay	-	task-executor executions only, not a live request-thread call
@@ -420,7 +420,7 @@ src/gateway/meta_mcp/invoke/relay_delivered.rs	tool_value	-	on-path, untimed: re
 src/gateway/meta_mcp/invoke/relay_delivered.rs	unescape	-	on-path, untimed: relay receipts for wrappers a final pass rewrote only
 src/gateway/meta_mcp/invoke/relay_replay.rs	cancel_replay_capture	-	on-path, untimed: keyed synchronous calls that settle without a retained answer; one task-local lookup, a no-op unless relay detection opened a capture scope; the timed rows send no idempotency key
 src/gateway/meta_mcp/invoke/relay_replay.rs	capture_commit	-	on-path, untimed: every receipt commit, but returns at once without a capture (relay detection off, or an unkeyed call); with relay detection on, a keyed answer stores or removes its replay entry (one store lock); the harness stages no receipt
-src/gateway/meta_mcp/invoke/relay_replay.rs	collecting_writes	stdio_invoke_tiny	every stdio call with relay detection OFF (MIK-8408 D5): opens the gateway-writes task-local scope, so the gateway's own notes are recorded for a later replay; cost measured base vs head in the PR evidence
+src/gateway/meta_mcp/invoke/relay_replay.rs	collecting_writes	stdio_invoke_tiny	every stdio call with relay detection OFF (MIK-8408 D5): opens the gateway-writes task-local scope, so the gateway's own notes are recorded for a later replay; not free: the same scope costs +3 allocations and about 735 B per tiny HTTP gateway_invoke (371 to 374); removal ticketed as MIK-8545 (v4.1.0)
 src/gateway/meta_mcp/invoke/relay_replay.rs	has_nested_label	-	on-path, untimed: MIK-8408 plan replay staging only (relay detection on and a stored replay entry)
 src/gateway/meta_mcp/invoke/relay_replay.rs	note_capture_answer	-	on-path, untimed: relay detection on and a delivery with in-plan receipts only (relay_delivered.rs keep); one canonical-JSON sha256 of the plan answer per such delivery, keyed or not (MIK-8408 F4); the timed rows run no firewall
 src/gateway/meta_mcp/invoke/relay_replay.rs	note_replay_call	http_invoke_tiny	every backend dispatch (beside note_completed): two task-local lookups, then returns unless relay detection opened a replay scope; records (label, server, tool) only inside one

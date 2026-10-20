@@ -382,7 +382,7 @@ async fn g46_a_stored_read_refusal_stages_nothing() {
 /// removed, alice's refused re-read (the MIK-8392 delist refusal of
 /// G46) counts `absent == 0` exactly: no lookup ran on the refused
 /// read. Mutant (planted bug) killed: "stage before the gate inside
-/// refuse_stored" — a call to `stage_stored_receipt` at the top of
+/// `refuse_stored`" — a call to `stage_stored_receipt` at the top of
 /// `refuse_stored` would look the entry up on the refused read and
 /// count `absent == 1`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -418,7 +418,7 @@ async fn g46b_a_refused_read_with_an_absent_entry_counts_no_absent_lookup() {
 /// place (expiry is lazy, on an authorized lookup): alice's later
 /// authorized re-read of the same task counts `expired == 1`
 /// exactly, and renews nothing. Mutant (planted bug) killed: "stage
-/// before the gate inside refuse_stored" — a call to
+/// before the gate inside `refuse_stored`" — a call to
 /// `stage_stored_receipt` at the top of `refuse_stored` would count
 /// the expiry on the refused read and evict the entry there, so the
 /// authorized read would count `absent`, not `expired == 1`.

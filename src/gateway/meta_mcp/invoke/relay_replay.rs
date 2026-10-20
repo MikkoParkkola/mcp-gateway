@@ -8,6 +8,7 @@
 
 use std::cell::RefCell;
 use std::future::Future;
+#[cfg(feature = "firewall")]
 use std::time::Duration;
 
 use serde_json::Value;
@@ -302,9 +303,7 @@ pub(super) fn capture_commit(
                 fw.remove_sync_replay(identity, round, operation);
             } else {
                 fw.store_sync_replay(
-                    identity,
-                    round,
-                    operation,
+                    (identity.as_str(), round.as_str(), operation.as_str()),
                     &sources,
                     calls,
                     answer_digest,
