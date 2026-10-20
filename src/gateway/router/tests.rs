@@ -109,7 +109,12 @@ async fn test_task_runtime(
     let (service, executor) = crate::gateway::task_service::open_runtime_with_admission(
         &store_dir.path().join("tasks"),
         crate::config::TasksConfig::default().max_workers,
-        crate::gateway::task_service::StoreLimits::default(),
+        crate::gateway::task_service::StoreLimits {
+            records: 256,
+            per_principal: 32,
+            record_bytes: 4 * 1024 * 1024,
+            logical_bytes: 1024 * 1024 * 1024,
+        },
         Arc::clone(subscriptions),
         Arc::clone(meta_mcp.execution_admission()),
     )
