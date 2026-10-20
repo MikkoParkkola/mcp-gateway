@@ -52,18 +52,25 @@ replace it.
 3. **G2:** the sentinel is absent on every path. Point 1 is necessary but
    not sufficient. MIG.2 adds G2 cases that the B3 suite does not have,
    each checking Display and Debug:
-   - an undefined alias;
+   - an undefined alias. serde_yaml's unknown-anchor wording is pinned. The
+     sentinel is a resolved value elsewhere in the same document, so the
+     check is not vacuous, and it is the alias name only if `Display`
+     actually echoes that name;
    - figment `ConfigFile::data` and the full `Config::load` extract;
    - `doctor/hidden_keys` and `commands/backend_url_keys`;
    - a multi-document refusal.
 4. **G3, read-side enum parity:** the map form `agent: {exact: ...}` is
    still refused in YAML. This applies to the externally tagged enums. The
-   untagged and internally tagged enums (for example `TransportConfig` and
-   `ProtocolConfig`) keep accepting maps, as they do today. The MIG.2 plan
+   untagged and internally tagged enums (for example `TransportConfig`)
+   keep accepting maps, as they do today. The census counts only enums
+   reachable from an adapter `from_str` target. The MIG.2 plan
    lists each class with its count, from a census of `#[serde(untagged)]`
    and `#[serde(tag = ...)]`.
 5. **Duplicate-key parity** in all four destinations: struct, nested map,
-   tree, and figment `Dict`.
+   tree, and figment `Dict`. This includes a flattened untagged field, such
+   as `BackendConfig.transport` (`#[serde(flatten)]` over an untagged
+   enum). A `behaviour.txt` row is recorded for it with serde_yaml before
+   the swap.
 6. **Resource limits:**
    - depth 128 loads and 129 is refused;
    - the alias fan-out document loads at level 3 and is refused at level 4.
@@ -93,7 +100,7 @@ docs.rs, or "unverified" (the spike must confirm it).
 | D6 | Enum read, map form | refused | **accepted** | probe | keep refusing (G3) |
 | D7 | Enum read, tag form, both shapes | accepted | accepted, same value | probe | accept |
 | D8 | Merge key `<<: *b` | not applied: `<<` is an ordinary key, and strict keys refuse it | **applied** by default (`MergeKeyPolicy::Merge`) | probe, docs.rs | treat as an ordinary key |
-| D9 | `yes`/`no`/`on`/`off` into `bool` | refused (YAML 1.2 core) | **accepted** as YAML 1.1 booleans by default | probe, docs.rs | refuse (strict booleans) |
+| D9 | `yes`/`no`/`on`/`off` into `bool` | refused | **accepted** as YAML 1.1 booleans by default | probe, docs.rs | refuse (strict booleans) |
 | D10 | `yes` into `String` | `"yes"` | `"yes"` | probe | same |
 | D11 | Error text shape | `<key path>: <serde message> at line L column C` | `error: line L column C: <message>`, **no key path** | probe | keep serde_yaml's shape (see Design 3) |
 | D12 | Error snippet | none | **source snippet with the offending line** by default (`with_snippet`) | probe, docs.rs | no snippet. The snippet is a CWE-532 leak |
@@ -101,7 +108,7 @@ docs.rs, or "unverified" (the spike must confirm it).
 | D14 | Syntax-error wording | libyaml's (`did not find expected ',' or ']'`) | its own (`unclosed bracket '['`) | probe | pin new wording or map it. A test-text change goes to the seats |
 | D15 | Depth limit | 128 loads, 129 refused (`recursion limit exceeded`) | `Budget` setting | MIG.0 behaviour.txt, docs.rs | set the same limits explicitly |
 | D16 | Alias expansion limit | level 3 loads, level 4 refused (`repetition limit exceeded`) | `Budget` and alias limits | MIG.0 behaviour.txt | set the same limits explicitly |
-| D17 | Custom tags on plain values | kept in `Value::Tagged` | `reject_unsupported_tags` defaults to false, so they are kept | docs.rs (corrected in review) | custom tags become `Tagged`; standard tags (`!!str`, `!!int`, `!!float`, `!!bool`, `!!null`, `!!map`, `!!seq`) resolve as serde_yaml does; `!!merge <<` is an ordinary string key (MIG.0 fixture) |
+| D17 | Custom tags on plain values | kept in `Value::Tagged` | `reject_unsupported_tags` defaults to false, so they are kept | docs.rs (corrected in review) | custom tags become `Tagged`; standard tags (`!!str`, `!!int`, `!!float`, `!!bool`, `!!null`, `!!map`, `!!seq`) resolve as serde_yaml does; `!!merge <<` is an ordinary string key (MIG.0 fixture); a non-local URI tag (`!<tag:example.org,2026:kind>`) is dropped and its scalar read as a string, as serde_yaml does. The comparison fixtures pin both local and URI tags before S1 passes |
 | D18 | Non-string keys, tags and non-finite numbers in the tree | `Value` holds them | no `Value` type | code | the adapter's own tree holds them; `to_json` rules unchanged (B2) |
 | D19 | Multi-document stream | `from_str`, `from_str_loose` and figment refuse a second document with serde_yaml's multi-document error; the `Deserializer` iterator yields each document, an empty one as null | unverified | code, `behaviour.txt:85-90` | the single-document entry points return the same multi-document refusal; `documents()` yields every document, empty as null, and stops at the first refusal |
 | D23 | Leading-zero plain decimal (`0755`) into a String or the tree | the string `"0755"` | unverified | `behaviour.txt:40` | string |
@@ -131,7 +138,9 @@ Why not call serde-saphyr's typed deserializer directly:
 - `Null`, `Bool`, `Number` (i64, u64 or f64, with serde_yaml's
   distinctions), `String`, `Sequence`, `Mapping` (ordered, with any
   `Value` as key) and `Tagged { tag, value }`;
-- each node carries its source `Location`.
+- source locations live on the parse representation (section 2). A
+  materialized `Value` node does not carry one, which keeps `Value`
+  comparisons and the public shape unchanged.
 
 Its accessors match the MIG.1a inventory of the `Value` and `Mapping` API in
 use (indexing, `get`, `as_*`, `is_*`, tag access, `Number`), so call sites
@@ -153,7 +162,10 @@ representation keeps what the destinations disagree on:
   (plain or quoted) and any explicit tag. Resolution happens only when the
   destination asks for a type, with the rules of D9 and D23 to D26:
   - a `String` target gets the original text;
-  - the tree resolves YAML 1.2 core plain scalars as serde_yaml does.
+  - the tree resolves plain scalars as serde_yaml 0.9.34 does.
+    `tests/fixtures/mik_8425_yaml/behaviour.txt` is the resolver's
+    specification, not any YAML schema name. serde_yaml is not plain YAML
+    1.2 core: `0755` stays the string `"0755"` (D23).
 - **Tags** follow D17: standard tags resolve, custom tags become `Tagged`,
   and `!!merge <<` stays an ordinary key (D8).
 - **Positions:** every node keeps its `Location`.
@@ -170,8 +182,9 @@ representation keeps what the destinations disagree on:
 `from_str::<T>` parses, then deserializes `T` from the parse representation
 with the adapter's own `Deserializer`, which reproduces serde_yaml's rules:
 - **Enums:** for an externally tagged enum, a unit variant is read from a
-  plain scalar and a non-unit variant only from a tag, so the map form is
-  refused (G3, D6). Untagged and internally tagged enums are deserialized
+  scalar of any style (plain or quoted: `agent: any` and `agent: "any"`
+  both work, as with serde_yaml), and a non-unit variant only from a tag,
+  so the map form is refused (G3, D6). Untagged and internally tagged enums are deserialized
   through serde's buffered `Content` path and keep accepting maps, as they
   do today. The class census is in the MIG.2 plan.
 - **Repeated keys:** a map target keeps the last value, and a struct target
@@ -244,6 +257,7 @@ change a user can see goes in `upgrading.d`.
   - `MergeKeyPolicy::AsOrdinary`;
   - `strict_booleans`;
   - `reject_unsupported_tags`;
+  - `NonFiniteFloatPolicy` (including `PassThrough`, for D25);
   - `with_snippet: false`;
   - `Budget`.
 
@@ -262,9 +276,14 @@ change a user can see goes in `upgrading.d`.
   - positions for every node.
 
   S1 also converts a parser syntax error into the adapter's error and shows
-  that no parser text reaches `Display`. It shows the budget refusing the
+  that no parser text reaches `Display`. It does this on the B3
+  unterminated-quote fixture that carries the sentinel, and on the
+  `behaviour.txt` flow-sequence error, and asserts the pinned substrings
+  and `leaks=false`. It shows the budget refusing the
   level-4 alias document before allocation passes the limit (peak memory
-  measured).
+  measured). The budget is also tested against an alias inside an ignored
+  subtree (a field the target skips), a recursive alias, and a budget that
+  resets per document in a stream, each compared with serde_yaml.
 - **S2, O2:** the emitter must reach zero byte diffs on each of these:
   - every MIG.0 writer golden: config splice, URL persistence, `upgrade`,
     `cap`, `config_write`, grants;
@@ -278,14 +297,21 @@ change a user can see goes in `upgrading.d`.
   beside MIG.0, and that has no result in the tree yet. Run it with the
   representation and deserializer sketch:
   - every externally tagged enum refuses the map form and accepts the tag
-    form;
+    form, and a unit variant is accepted plain and quoted;
   - untagged and internally tagged enums keep accepting maps (positive
     controls);
-  - duplicate keys behave right in all four destinations.
+  - duplicate keys behave right in all four destinations;
+  - key identity is destination-dependent: `1:` and `"1":` are different
+    keys in the tree but the same key in a `String`-keyed map;
+  - an overwritten earlier value that is invalid is not validated, under
+    last-wins;
+  - `#[serde(flatten)]` structs with a repeated key behave as serde_yaml
+    does.
 - **Kill gate:** stop and take the result to the lead if any of these
   holds. The fallback is the dated exception, decided by the operator.
   - S0 does not match and S1 finds no usable event stream;
-  - S2 cannot reach byte-equality;
+  - S2 cannot reach byte-equality with O2b (serde-saphyr's serializer over
+    the tree), tried first, nor with O2a (the adapter's own emitter);
   - S3 finds a parity gap.
 
 ## Size and order
@@ -299,7 +325,15 @@ change a user can see goes in `upgrading.d`.
   choice, tag placement and line breaks. The `behaviour.txt:110-112` write
   rows show the edge cases. Expect another 500 to 1,000 lines, pinned by
   the goldens. S2 replaces this estimate with a measured one.
-- **Layout:** split across `src/yaml/` under the 800-line file cap.
+- **Layout:** split across `src/yaml/` under the 800-line file cap. The
+  split stays a crate::-free unit, so `tests/common/yaml.rs` still compiles
+  it through `#[path]`. This design supersedes the parent design's option
+  list for MIG.2 (snippets off, merge keys `AsOrdinary` and so on), because
+  serde-saphyr's typed options are used only if S0 wins.
+- **PR size:** the parent design's 15-file cap per PR cannot hold for the
+  swap. The swap is one atomic backend change, and splitting it would
+  leave the crate on two parsers. The MIG.2 plan names the file count and
+  asks the lead for an exception.
 - **Tests:** at least as much again. MIG.3 to MIG.5 and the extra G2 cases
   go inside the same PR, and the existing suites run unchanged.
 - **Process:** muse writes it, two seats review, and it goes through the
@@ -354,3 +388,22 @@ and grok SHIP-WITH-FIXES (grok-20261020T082306Z-76794). Folded:
 - S2 diffs every writer golden and adds generated round trips;
 - S3 adds positive controls;
 - the size estimate is redone, with the emitter priced on its own.
+
+The second round, 2026-10-20 (delta): gpt SHIP-WITH-FIXES
+(gpt-20261020T084356Z-20818) and grok SHIP-WITH-FIXES
+(grok-20261020T084358Z-20957). Folded:
+- `behaviour.txt` is the resolver specification. The "YAML 1.2 core" gloss
+  is gone, because `0755` stays a string;
+- quoted unit variants are accepted;
+- a non-local URI tag is dropped, as serde_yaml does;
+- locations live on the parse representation only;
+- `NonFiniteFloatPolicy` is in S0;
+- the undefined-alias G2 case places its sentinel;
+- flatten over untagged (`BackendConfig.transport`) is a hard requirement;
+- S1 converts the B3 and `behaviour.txt` syntax fixtures;
+- S1 budget edge cases (ignored subtree, recursive alias, per-document);
+- S3 key identity, overwritten invalid values and flatten;
+- S2 tries O2b then O2a before the kill;
+- the `#[path]` unit is kept, and the parent option list is superseded;
+- the 15-file cap needs a lead exception for the swap;
+- the G3 census is limited to enums reachable from `from_str`.
