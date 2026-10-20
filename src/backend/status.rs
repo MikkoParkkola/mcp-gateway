@@ -98,13 +98,6 @@ impl Backend {
         }
     }
 
-    /// Get backend status.
-    ///
-    /// Reports the canonical Shared slot's circuit/health state (MIK-6735
-    /// fix 1): this is the backend-wide, single-tenant view -- the same one
-    /// `status()` reported before per-user slots existed -- and deliberately
-    /// does not aggregate across per-user slots, which each fail
-    /// independently and are not surfaced individually here.
     /// Coarse lifecycle state, distinct from health.
     ///
     /// `running: bool` cannot express "stopped on purpose". Reporting a
