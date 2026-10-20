@@ -358,13 +358,14 @@ impl OAuthClient {
     /// Load a previously-registered dynamic `client_id` from storage into
     /// memory, tagging its provenance as [`ClientIdSource::Registered`].
     ///
-    /// A no-op when a `client_id` is already set: that only happens when
-    /// `OAuthClientConfig.client_id` was supplied, i.e. operator config that
-    /// must never be overwritten by (or conflated with) a stale disk record.
-    /// Because of that guard, any id loaded here is necessarily a prior
-    /// Dynamic Client Registration, never operator config (Defect 2,
-    /// MIK-6750 r7) — safe to mark `Registered` so a later `invalid_client`
-    /// rejection may purge it.
+    /// A no-op when a `client_id` is already in memory: either
+    /// `OAuthClientConfig.client_id` was supplied (operator config, which
+    /// must never be overwritten by or conflated with a stale disk record),
+    /// or this client already registered or restored one. Because of that
+    /// guard, any id loaded here is necessarily a prior Dynamic Client
+    /// Registration, never operator config (Defect 2, MIK-6750 r7) — safe
+    /// to mark `Registered` so a later `invalid_client` rejection may purge
+    /// it.
     fn restore_persisted_client_id(&self) {
         if self.client_id.read().is_some() {
             return;
