@@ -34,16 +34,16 @@ async fn state(
     crate::gateway::router::tests::test_router_app_state_with_auth(&auth).await
 }
 
-fn key_holder(principal: &str) -> AuthenticatedClient {
+fn key_holder(secret: &str) -> AuthenticatedClient {
     AuthenticatedClient {
         quota_principal: None,
-        name: principal.to_string(),
+        name: secret.to_string(),
         rate_limit: 0,
         backends: vec!["*".to_string()],
         allowed_tools: None,
         denied_tools: None,
         admin: false,
-        principal: principal.to_string(),
+        principal: crate::gateway::auth::principal_of(secret),
         authenticated: true,
         credential_kind: crate::security::audit::CredentialKind::ApiKey,
     }
@@ -119,7 +119,7 @@ fn fixtures() -> Fixtures {
         credential_owner: format!(
             "{}{}",
             crate::gateway::auth::CREDENTIAL_OWNER_PREFIX,
-            "alpha"
+            crate::gateway::auth::principal_of("alpha")
         ),
         actor,
     }
