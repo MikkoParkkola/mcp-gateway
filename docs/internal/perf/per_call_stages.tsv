@@ -280,6 +280,10 @@ src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs
 src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	required_mint_without_transparency_log_fails_closed	-	test-only (the module is cfg(test))
 src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	resolve_caller_credential_wires_token_exchange_endpoint_and_scope	-	test-only (the module is cfg(test))
 src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	token_exchange_idp_cfg	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/intake.rs	directives	http_invoke_tiny	on the HTTP gateway_invoke path (S2, MIK-8488)
+src/gateway/meta_mcp/invoke/intake.rs	intake	http_invoke_tiny	on the HTTP gateway_invoke path (S1, MIK-8488)
+src/gateway/meta_mcp/invoke/keys.rs	admit_keys	http_invoke_tiny	on the HTTP gateway_invoke path (S4, MIK-8488)
+src/gateway/meta_mcp/invoke/keys.rs	pre_send	http_invoke_tiny	on the HTTP gateway_invoke path (S5, MIK-8488)
 src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	http_invoke_tiny	checked on every invoke; bridges only a legacy interim ask
 src/gateway/meta_mcp/invoke/nonce_settle.rs	ask_if_refused_submit	-	on-path, untimed: task submit outcomes only (the refund is asked on a refusal); the timed rows carry no task member
 src/gateway/meta_mcp/invoke/nonce_settle.rs	ask_if_transient	-	on-path, untimed: busy-custody refusals only; the timed rows succeed
@@ -448,6 +452,7 @@ src/gateway/meta_mcp/invoke/relay_seams_record.rs	answer_parts	-	gateway_execute
 src/gateway/meta_mcp/invoke/relay_seams_record.rs	composite	-	gateway_execute and playbook plan answers only, not a single gateway_invoke
 src/gateway/meta_mcp/invoke/relay_seams_record.rs	seam_fingerprints	-	gateway_execute and playbook plan answers only, not a single gateway_invoke
 src/gateway/meta_mcp/invoke/relay_seams_record.rs	walk	-	gateway_execute and playbook plan answers only, not a single gateway_invoke
+src/gateway/meta_mcp/invoke/resolve.rs	resolve	http_invoke_tiny	on the HTTP gateway_invoke path (S3, MIK-8488)
 src/gateway/meta_mcp/invoke/send.rs	admit_send	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/send.rs	send	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/side_effect_markers.rs	is_gateway_notice	-	on-path, untimed: idempotent replays serving a stored notice only
