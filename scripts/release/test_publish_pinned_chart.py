@@ -3,17 +3,24 @@
 """publish_pinned_chart.sh never replaces a published chart version (MIK-7952).
 
 The script runs against stub helm, docker and cosign on PATH, in a throwaway
-repository holding a minimal chart. The stub registry keeps one pushed archive.
-Four cases: an unpublished version is pushed; a rerun with identical bytes
-passes; different contents under the version stop the run before any push; a
-lookup that fails for another reason (403) stops it too.
+repository holding a minimal chart. The stub registry keeps one pushed archive
+(and the version it was pushed as, so a pull of another version reads as
+unpublished). Four cases: an unpublished version is pushed; a rerun with
+identical bytes passes; different contents under the version stop the run
+before any push; a lookup that fails for another reason (403) stops it too.
+Rehearsal cases (MIK-8603): REHEARSAL_RUN to charts-rehearsal pushes
+<version>-rehearsal.<run> and another run id still pushes while an earlier
+version is published; REHEARSAL_RUN with the real repo or a non-digit run id
+is refused before any push.
 """
 
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 
@@ -43,6 +50,8 @@ if args[0] == "package":
 elif args[0] == "push":
     log("push")
     shutil.copy(args[1], pushed)
+    name = pathlib.Path(args[1]).name
+    (state / "pushed-version").write_text(name[len("mcp-gateway-"):-len(".tgz")])
     print("Digest: sha256:" + hashlib.sha256(pushed.read_bytes()).hexdigest())
 elif args[0] == "pull":
     log("pull")
@@ -52,7 +61,8 @@ elif args[0] == "pull":
         print('Error: GET "https://ghcr.io/token": response status code 403: denied', file=sys.stderr); sys.exit(1)
     if mode == "blob":
         print('Error: failed to perform "Fetch" on source: sha256:abc: not found', file=sys.stderr); sys.exit(1)
-    if not pushed.exists():
+    pushed_version = state / "pushed-version"
+    if not pushed.exists() or (pushed_version.exists() and pushed_version.read_text() != version):
         # Helm 4.3.0's wording for a tag that does not resolve.
         print(f'Error: failed to perform "FetchReference" on source: ghcr.io/mikkoparkkola/charts/mcp-gateway:{version}: not found', file=sys.stderr); sys.exit(1)
     shutil.copy(pushed, dest / f"mcp-gateway-{version}.tgz")
@@ -96,18 +106,31 @@ class ExistingVersion(unittest.TestCase):
         self.commit = subprocess.run([*git[:3], "rev-parse", "HEAD"], check=True,
                                      capture_output=True, text=True).stdout.strip()
 
-    def publish(self, lookup=""):
+    def publish(self, lookup="", repo="oci://ghcr.io/mikkoparkkola/charts",
+                rehearsal_run=None):
         env = {**os.environ, "PATH": f"{self.bin}{os.pathsep}{os.environ['PATH']}",
                "STUB_STATE": str(self.state), "STUB_LOOKUP": lookup,
                "TAG_COMMIT": self.commit, "SIGNER_IDENTITY": "id", "SIGNER_ISSUER": "iss",
                "CHART_NOTES": str(self.tmp / "notes.md")}
+        env.pop("REHEARSAL_RUN", None)
+        if rehearsal_run is not None:
+            env["REHEARSAL_RUN"] = rehearsal_run
         return subprocess.run(["bash", str(SCRIPT), "ghcr.io/mikkoparkkola/mcp-gateway@" + DIGEST,
-                               "oci://ghcr.io/mikkoparkkola/charts"],
+                               repo],
                               cwd=self.repo, env=env, capture_output=True, text=True)
 
     def pushes(self):
         calls = self.state / "calls"
         return calls.read_text().split().count("push") if calls.exists() else 0
+
+    def pulls(self):
+        calls = self.state / "calls"
+        return calls.read_text().split().count("pull") if calls.exists() else 0
+
+    def pushed_version(self):
+        with tarfile.open(self.state / "pushed.tgz") as tar:
+            chart = tar.extractfile("mcp-gateway/Chart.yaml").read().decode()
+        return re.search(r"(?m)^version: *(\S+)", chart).group(1)
 
     def test_an_unpublished_version_is_pushed(self):
         done = self.publish()
@@ -135,6 +158,42 @@ class ExistingVersion(unittest.TestCase):
                 self.assertIn("could not tell whether chart", done.stderr)
                 self.assertEqual(self.pushes(), 0)
                 self.assertFalse((self.state / "pushed.tgz").exists())
+
+    def test_a_rehearsal_run_pushes_a_rehearsal_version(self):
+        done = self.publish(repo="oci://ghcr.io/mikkoparkkola/charts-rehearsal",
+                            rehearsal_run="12345")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.pushes(), 1)
+        self.assertEqual(self.pushed_version(), "0.2.0-rehearsal.12345")
+
+    def test_a_second_rehearsal_with_another_run_id_still_pushes(self):
+        first = self.publish(repo="oci://ghcr.io/mikkoparkkola/charts-rehearsal",
+                             rehearsal_run="111")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(self.pushed_version(), "0.2.0-rehearsal.111")
+        done = self.publish(repo="oci://ghcr.io/mikkoparkkola/charts-rehearsal",
+                            rehearsal_run="222")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.pushes(), 2)
+        self.assertEqual(self.pushed_version(), "0.2.0-rehearsal.222")
+
+    def test_rehearsal_run_with_the_real_repo_is_refused(self):
+        done = self.publish(repo="oci://ghcr.io/mikkoparkkola/charts",
+                            rehearsal_run="12345")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("rehearsal package", done.stderr)
+        self.assertIn("charts-rehearsal", done.stderr)
+        self.assertEqual(self.pushes(), 0)
+        self.assertEqual(self.pulls(), 0)
+
+    def test_rehearsal_run_that_is_not_all_digits_is_refused(self):
+        for run in ("12a", "1;rm"):
+            with self.subTest(run=run):
+                done = self.publish(repo="oci://ghcr.io/mikkoparkkola/charts-rehearsal",
+                                    rehearsal_run=run)
+                self.assertNotEqual(done.returncode, 0)
+                self.assertIn("REHEARSAL_RUN", done.stderr)
+                self.assertEqual(self.pushes(), 0)
 
 
 if __name__ == "__main__":
