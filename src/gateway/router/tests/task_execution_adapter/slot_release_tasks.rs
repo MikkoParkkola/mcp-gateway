@@ -756,6 +756,16 @@ async fn dropped_top_level_question(
         .await
         .expect("the router must answer");
     std::assert_eq!(response.status(), StatusCode::OK);
+    std::assert_eq!(
+        mock.calls(),
+        1,
+        "precondition: the backend received the call"
+    );
+    std::assert_eq!(
+        held(&state).await,
+        1,
+        "precondition: the question was minted and holds its slot"
+    );
     // The client goes away: the SSE body is never read.
     drop(response);
     settle_quiet().await;

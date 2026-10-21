@@ -8,6 +8,7 @@
 //! session's Meta-MCP read through the `stdio_meta_mcp_for_test` seam.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -33,52 +34,58 @@ type Stdout = Lines<BufReader<DuplexStream>>;
 
 /// A backend whose `tools/call` answers with a question about the tenant
 /// the call names.
-async fn spawn_backend() -> String {
+async fn spawn_backend() -> (String, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let route_calls = Arc::clone(&calls);
     let app = axum::Router::new().route(
         "/",
-        axum::routing::post(|axum::Json(request): axum::Json<Value>| async move {
-            let method = request.get("method").and_then(Value::as_str).unwrap_or("");
-            let result = match method {
-                "initialize" => json!({
-                    "protocolVersion": "2025-06-18",
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {"name": BACKEND, "version": "0"},
-                }),
-                "tools/list" => json!({"tools": [
-                    {"name": ASKING, "inputSchema": {"type": "object"}},
-                    {"name": SLOW_ASKING, "inputSchema": {"type": "object"}},
-                    {"name": STATE_ONLY, "inputSchema": {"type": "object"}},
-                ]}),
-                "tools/call" => {
-                    let params = request.get("params").cloned().unwrap_or_default();
-                    if params["name"] == SLOW_ASKING {
-                        tokio::time::sleep(SLOW).await;
-                    }
-                    let tenant = params["arguments"]["customer_id"].clone();
-                    if params["name"] == STATE_ONLY {
-                        return axum::Json(json!({"jsonrpc": "2.0", "id": request.get("id"),
-                        "result": {
+        axum::routing::post(move |axum::Json(request): axum::Json<Value>| {
+            let calls = Arc::clone(&route_calls);
+            async move {
+                let method = request.get("method").and_then(Value::as_str).unwrap_or("");
+                let result = match method {
+                    "initialize" => json!({
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": BACKEND, "version": "0"},
+                    }),
+                    "tools/list" => json!({"tools": [
+                        {"name": ASKING, "inputSchema": {"type": "object"}},
+                        {"name": SLOW_ASKING, "inputSchema": {"type": "object"}},
+                        {"name": STATE_ONLY, "inputSchema": {"type": "object"}},
+                    ]}),
+                    "tools/call" => {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        let params = request.get("params").cloned().unwrap_or_default();
+                        if params["name"] == SLOW_ASKING {
+                            tokio::time::sleep(SLOW).await;
+                        }
+                        let tenant = params["arguments"]["customer_id"].clone();
+                        if params["name"] == STATE_ONLY {
+                            return axum::Json(json!({"jsonrpc": "2.0", "id": request.get("id"),
+                            "result": {
+                                "resultType": "input_required",
+                                "requestState": "backend-state",
+                                "content": [{"type": "text",
+                                             "text": json!({"customer_id": tenant}).to_string()}],
+                            }}));
+                        }
+                        json!({
                             "resultType": "input_required",
+                            "inputRequests": {"k1": {
+                                "method": "elicitation/create",
+                                "params": {"message": "Which account?",
+                                           "requestedSchema": {"type": "object"}},
+                            }},
                             "requestState": "backend-state",
                             "content": [{"type": "text",
                                          "text": json!({"customer_id": tenant}).to_string()}],
-                        }}));
+                        })
                     }
-                    json!({
-                        "resultType": "input_required",
-                        "inputRequests": {"k1": {
-                            "method": "elicitation/create",
-                            "params": {"message": "Which account?",
-                                       "requestedSchema": {"type": "object"}},
-                        }},
-                        "requestState": "backend-state",
-                        "content": [{"type": "text",
-                                     "text": json!({"customer_id": tenant}).to_string()}],
-                    })
-                }
-                _ => json!({}),
-            };
-            axum::Json(json!({"jsonrpc": "2.0", "id": request.get("id"), "result": result}))
+                    _ => json!({}),
+                };
+                axum::Json(json!({"jsonrpc": "2.0", "id": request.get("id"), "result": result}))
+            }
         }),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -86,7 +93,7 @@ async fn spawn_backend() -> String {
         .expect("bind fixture backend");
     let address = listener.local_addr().expect("fixture address");
     tokio::spawn(async move { drop(axum::serve(listener, app).await) });
-    format!("http://{address}/")
+    (format!("http://{address}/"), calls)
 }
 
 /// What a session's config switches on.
@@ -103,6 +110,7 @@ struct Session {
     stdin: DuplexStream,
     stdout: Stdout,
     meta: Arc<MetaMcp>,
+    calls: Arc<AtomicUsize>,
     task: JoinHandle<crate::Result<()>>,
     _dir: tempfile::TempDir,
 }
@@ -110,7 +118,7 @@ struct Session {
 /// A stdio session under `setup`, its stdout `capacity` bytes deep, with
 /// the handshake answered.
 async fn open(setup: Setup, capacity: usize) -> Session {
-    let backend_url = spawn_backend().await;
+    let (backend_url, calls) = spawn_backend().await;
     let dir = tempfile::tempdir().expect("tempdir");
     let quoted = |name: &str| {
         serde_json::to_string(&dir.path().join(name).display().to_string()).expect("a JSON string")
@@ -147,6 +155,7 @@ async fn open(setup: Setup, capacity: usize) -> Session {
         stdin,
         stdout: BufReader::new(reader).lines(),
         meta,
+        calls,
         task,
         _dir: dir,
     };
@@ -381,6 +390,7 @@ async fn a_stdio_question_still_queued_at_session_end_gives_its_slot_back() {
         stdin,
         stdout,
         meta,
+        calls: _,
         task,
         _dir,
     } = session;
@@ -479,6 +489,11 @@ async fn c1_stdio_a_replayed_nested_question_keeps_its_slot() {
         1,
         "the replayed question's slot is still held (the store owns it)"
     );
+    assert_eq!(
+        session.calls.load(Ordering::SeqCst),
+        1,
+        "the replay was served from the store, not by running the backend again"
+    );
 }
 
 /// C1-stdio guard (SLOT.8, execution-admission store; MIK-8176): execution
@@ -509,6 +524,11 @@ async fn c1_stdio_a_cancelled_unsent_question_is_not_retained_and_frees_its_slot
     assert!(
         replay.to_string().contains("unavailable"),
         "the refusal is Unavailable: {replay}"
+    );
+    assert_eq!(
+        session.calls.load(Ordering::SeqCst),
+        1,
+        "the refused retry did not reach the backend"
     );
     assert_eq!(
         session.held().await,
