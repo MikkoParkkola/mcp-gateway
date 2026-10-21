@@ -718,12 +718,7 @@ impl MetaMcp {
     /// Count every un-keyed admission, and warn about a MODERN one at most once
     /// per (backend, tool) per [`super::warn_limit::WARN_INTERVAL`]. Labels carry no identity.
     fn record_unkeyed(&self, is_modern: bool, read_only: bool, (server, tool): (&str, &str)) {
-        telemetry_metrics::counter!(
-            "mcp_unkeyed_calls_total",
-            "era" => if is_modern { "modern" } else { "legacy" },
-            "gateway_read_only" => if read_only { "true" } else { "false" }
-        )
-        .increment(1);
+        super::warn_limit::count_unkeyed(is_modern, read_only);
         let now = std::time::Instant::now();
         if !is_modern || !first_warn(&mut self.unkeyed.warned.lock(), server, tool, now) {
             return;
