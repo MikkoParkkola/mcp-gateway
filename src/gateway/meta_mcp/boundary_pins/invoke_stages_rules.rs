@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use syn::visit::Visit;
 
 use super::invoke_stages_allow::{ExtraKind, GROUPS};
+use super::invoke_stages_dest::{check_input_destructured, group_fields_by_type};
 
 /// A stage function found by name, whether a free item or an `impl` method.
 pub(super) struct FoundFunc<'a> {
@@ -118,9 +119,9 @@ fn target_structs<'a>(found: &'a FoundFunc<'a>, in_type: &'a str) -> Vec<&'a syn
     seen.hits
 }
 
-/// R1: no `..` in the `In` or group destructures.
+/// R1: the `In` is move-destructured in full, with no `..` in it or any group.
 pub(super) fn check_r1(found: &FoundFunc<'_>, in_type: &str) -> Vec<String> {
-    let mut out = Vec::new();
+    let mut out = check_input_destructured(found, in_type);
     for pat in target_structs(found, in_type) {
         if pat.rest.is_some() {
             let tail = pat
@@ -266,7 +267,7 @@ impl<'ast> Visit<'ast> for Lets<'ast> {
 }
 
 /// R4: every group-typed `In` field is itself destructured in full.
-pub(super) fn check_r4(found: &FoundFunc<'_>, in_type: &str) -> Vec<String> {
+pub(super) fn check_r4(found: &FoundFunc<'_>, file: &syn::File, in_type: &str) -> Vec<String> {
     let mut out = Vec::new();
     let targets = target_structs(found, in_type);
     for pat in &targets {
@@ -296,6 +297,10 @@ pub(super) fn check_r4(found: &FoundFunc<'_>, in_type: &str) -> Vec<String> {
             }
         }
     }
+    let typed = group_fields_by_type(file, in_type);
+    if typed.is_empty() {
+        return out;
+    }
     let mut lets = Lets { inits: Vec::new() };
     lets.visit_block(found.block);
     for pat in &targets {
@@ -307,26 +312,24 @@ pub(super) fn check_r4(found: &FoundFunc<'_>, in_type: &str) -> Vec<String> {
         if tail != in_type {
             continue;
         }
-        for field in &pat.fields {
-            let Some(name) = member_name(&field.member) else {
-                continue;
-            };
-            let mut group = String::new();
-            for (candidate, _) in GROUPS {
-                if name.eq_ignore_ascii_case(candidate) {
-                    group = candidate.to_string();
+        for (name, group) in &typed {
+            let mut field_pat: Option<&syn::Pat> = None;
+            for field in &pat.fields {
+                if member_name(&field.member).as_deref() == Some(name.as_str()) {
+                    field_pat = Some(field.pat.as_ref());
                 }
             }
-            if group.is_empty() {
+            let Some(bound) = field_pat else {
+                out.push(format!("R4: the `{name}` group is never destructured"));
                 continue;
-            }
-            if let syn::Pat::Struct(inner) = field.pat.as_ref()
-                && tail_is(&inner.path, &group)
+            };
+            if let syn::Pat::Struct(inner) = bound
+                && tail_is(&inner.path, group)
             {
                 continue;
             }
-            let binding = if let syn::Pat::Ident(bound) = field.pat.as_ref() {
-                bound.ident.to_string()
+            let binding = if let syn::Pat::Ident(named) = bound {
+                named.ident.to_string()
             } else {
                 String::new()
             };
@@ -334,7 +337,7 @@ pub(super) fn check_r4(found: &FoundFunc<'_>, in_type: &str) -> Vec<String> {
             if !binding.is_empty() {
                 for (pat, init) in &lets.inits {
                     if let syn::Pat::Struct(plain) = pat
-                        && tail_is(&plain.path, &group)
+                        && tail_is(&plain.path, group)
                         && let Some(syn::Expr::Path(rhs)) = init
                         && rhs.path.segments.len() == 1
                         && rhs
@@ -481,39 +484,58 @@ fn names_banned_lint(attr: &syn::Attribute) -> bool {
     false
 }
 
+fn attr_detail(attr: &syn::Attribute) -> String {
+    let name = attr
+        .path()
+        .segments
+        .last()
+        .map_or(String::from("attr"), |seg| seg.ident.to_string());
+    let tokens = match &attr.meta {
+        syn::Meta::List(list) => list.tokens.to_string(),
+        _ => String::new(),
+    };
+    format!("{name}({tokens})")
+}
+
 struct Attrs {
-    hits: usize,
+    hits: Vec<String>,
 }
 
 impl<'ast> Visit<'ast> for Attrs {
     fn visit_attribute(&mut self, attr: &'ast syn::Attribute) {
         if names_banned_lint(attr) {
-            self.hits += 1;
+            self.hits.push(attr_detail(attr));
         }
     }
 }
 
 /// R7: no silencing of `unused` lints on the stage or in its file header.
 pub(super) fn check_r7(found: &FoundFunc<'_>, file: &syn::File) -> Vec<String> {
-    let mut hits = 0usize;
+    let mut out = Vec::new();
     for attr in found.attrs {
         if names_banned_lint(attr) {
-            hits += 1;
+            out.push(format!(
+                "R7: silencing attribute `{}` on the stage",
+                attr_detail(attr)
+            ));
         }
     }
-    let mut seen = Attrs { hits: 0 };
+    let mut seen = Attrs { hits: Vec::new() };
     seen.visit_block(found.block);
-    hits += seen.hits;
+    for detail in seen.hits {
+        out.push(format!(
+            "R7: silencing attribute `{detail}` inside the stage"
+        ));
+    }
     for attr in &file.attrs {
         if names_banned_lint(attr) {
-            hits += 1;
+            out.push(format!(
+                "R7: silencing attribute `{}` in the file header",
+                attr_detail(attr)
+            ));
         }
     }
-    if hits == 0 {
-        Vec::new()
-    } else {
-        vec![format!("R7: {hits} silencing attribute(s) of unused lints")]
-    }
+    out
 }
 
 fn is_self(expr: &syn::Expr) -> bool {
@@ -573,6 +595,7 @@ impl<'ast> Visit<'ast> for Selves {
 pub(super) fn check_r8(found: &FoundFunc<'_>) -> Vec<String> {
     let mut seen = Selves { hits: 0 };
     seen.visit_block(found.block);
+    seen.hits += super::invoke_stages_r6::macro_bare_self_count(found);
     if seen.hits == 0 {
         Vec::new()
     } else {

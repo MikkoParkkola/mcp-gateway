@@ -22,9 +22,9 @@ fn all_for(
     out.extend(check_r1(&found, in_type));
     out.extend(check_r2(&found, in_type));
     out.extend(check_r3(&found, in_type));
-    out.extend(check_r4(&found, in_type));
+    out.extend(check_r4(&found, &file, in_type));
     out.extend(check_r5(&found, in_type, extra));
-    out.extend(check_r6(&found, allow, in_type));
+    out.extend(check_r6(&found, allow));
     out.extend(check_r7(&found, &file));
     out.extend(check_r8(&found));
     out.extend(check_r9(&found, allow));
@@ -32,26 +32,15 @@ fn all_for(
     out
 }
 
-fn only(rule: &str, violations: &[String]) {
-    let tag = format!("{rule}:");
-    assert!(
-        !violations.is_empty(),
-        "{rule}: the fixture reported nothing"
+fn expect_one(rule: &str, detail: &str, violations: &[String]) {
+    assert_eq!(
+        violations.len(),
+        1,
+        "{rule}: want one hit, got {violations:?}"
     );
-    for hit in violations {
-        assert!(hit.contains(&tag), "{rule}: off-rule hit: {hit}");
-    }
-    for other in [
-        "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10",
-    ] {
-        if other == rule {
-            continue;
-        }
-        let ban = format!("{other}:");
-        for hit in violations {
-            assert!(!hit.contains(&ban), "{rule}: leaked {other}: {hit}");
-        }
-    }
+    let hit = &violations[0];
+    assert!(hit.contains(rule), "{rule}: missing tag in {hit}");
+    assert!(hit.contains(detail), "{rule}: missing `{detail}` in {hit}");
 }
 
 /// R1 fires on a `..` rest pattern in the `In` destructure.
@@ -63,20 +52,92 @@ fn r1_flags_a_rest_pattern() {
             let IntakeIn { args, .. } = input;
         }
     "#;
-    only("R1", &all_for(source, "intake", "IntakeIn", &[], &[]));
+    expect_one(
+        "R1:",
+        "`..`",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
 }
 
-/// R2 fires on `_` sub-patterns in the `In` destructure.
+/// R1 fires when the `In` parameter is discarded as `_`.
 #[test]
-fn r2_flags_wild_subpatterns() {
+fn r1_flags_a_wild_param() {
+    let source = r#"
+        #[forbid(unused_variables)]
+        fn intake(_: IntakeIn) {
+        }
+    "#;
+    expect_one(
+        "R1:",
+        "`_`",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
+}
+
+/// R1 fires on field access through the undestructured input binding.
+#[test]
+fn r1_flags_field_access_on_input() {
+    let source = r#"
+        #[forbid(unused_variables)]
+        fn intake(input: IntakeIn) {
+            let IntakeIn { args, session_id, caller } = input;
+            let x = input.args;
+        }
+    "#;
+    expect_one(
+        "R1:",
+        "field access",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
+}
+
+/// R1 fires when the input binding is passed on after its destructure.
+#[test]
+fn r1_flags_input_passed_on() {
+    let source = r#"
+        #[forbid(unused_variables)]
+        fn intake(input: IntakeIn) {
+            let IntakeIn { args, session_id, caller } = input;
+            helper(input);
+        }
+    "#;
+    expect_one(
+        "R1:",
+        "passed on",
+        &all_for(source, "intake", "IntakeIn", &[], &["helper"]),
+    );
+}
+
+/// R2 fires on a `_` sub-pattern in the `In` destructure.
+#[test]
+fn r2_flags_a_wild_field() {
     let source = r#"
         #[forbid(unused_variables)]
         fn intake(input: IntakeIn) {
             let IntakeIn { args: _, caller } = input;
+        }
+    "#;
+    expect_one(
+        "R2:",
+        "`_`",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
+}
+
+/// R2 fires on a second `_` shape, so either wild form is pinned alone.
+#[test]
+fn r2_flags_a_second_wild_field() {
+    let source = r#"
+        #[forbid(unused_variables)]
+        fn intake(input: IntakeIn) {
             let IntakeIn { args, session_id: _ } = input;
         }
     "#;
-    only("R2", &all_for(source, "intake", "IntakeIn", &[], &[]));
+    expect_one(
+        "R2:",
+        "`_`",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
 }
 
 /// R3 fires on a `_`-led binding in the `In` destructure.
@@ -88,22 +149,47 @@ fn r3_flags_an_underscore_binding() {
             let IntakeIn { args: _x, caller } = input;
         }
     "#;
-    only("R3", &all_for(source, "intake", "IntakeIn", &[], &[]));
+    expect_one(
+        "R3:",
+        "_x",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
 }
 
 /// R4 fires on a group destructure that skips a field.
 #[test]
 fn r4_flags_a_skipped_group_field() {
     let source = r#"
+        struct DirectivesIn { args: Args, session_id: Sid, caller: Caller, trace_id: Tid, step: Step }
+        struct Step { server: S, tool: T }
         #[forbid(unused_variables)]
         fn directives(input: DirectivesIn) {
             let DirectivesIn { args, session_id, caller, trace_id, step } = input;
             let Step { server } = step;
         }
     "#;
-    only(
-        "R4",
+    expect_one(
+        "R4:",
+        "`tool`",
         &all_for(source, "directives", "DirectivesIn", &[], &[]),
+    );
+}
+
+/// R4 fires when a `Step`-typed field keeps its name but not its destructure.
+#[test]
+fn r4_flags_a_group_typed_field_left_bound() {
+    let source = r#"
+        struct IntakeIn { args: Args, route: Step }
+        struct Step { server: S, tool: T }
+        #[forbid(unused_variables)]
+        fn intake(input: IntakeIn) {
+            let IntakeIn { args, route } = input;
+        }
+    "#;
+    expect_one(
+        "R4:",
+        "`route`",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
     );
 }
 
@@ -116,29 +202,120 @@ fn r5_flags_an_extra_parameter() {
             let IntakeIn { args, session_id, caller } = input;
         }
     "#;
-    only("R5", &all_for(source, "intake", "IntakeIn", &[], &[]));
+    expect_one(
+        "R5:",
+        "unexpected",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
 }
 
-/// R6 fires on undeclared `self`, bare-call and callback dependencies.
+/// R6 fires on an undeclared `self` field.
 #[test]
-fn r6_flags_undeclared_dependencies() {
+fn r6_flags_an_undeclared_self_field() {
     let source = r#"
         #[forbid(unused_variables)]
         fn intake(&self, input: IntakeIn) {
             let IntakeIn { args, session_id, caller } = input;
-            let _a = self.secret_field;
-            let _b = mystery_call(args);
-            let _c = args.map(mystery_callback);
+            let a = self.secret_field;
         }
     "#;
-    only("R6", &all_for(source, "intake", "IntakeIn", &[], &[]));
+    expect_one(
+        "R6:",
+        "self.secret_field",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
 }
 
-/// R7 fires on silencing attributes on a `let` and in the file header.
+/// R6 fires on an undeclared bare imported call.
 #[test]
-fn r7_flags_silencing_attributes() {
+fn r6_flags_an_undeclared_bare_call() {
     let source = r#"
-        #![allow(warnings)]
+        #[forbid(unused_variables)]
+        fn intake(input: IntakeIn) {
+            let IntakeIn { args, session_id, caller } = input;
+            let a = mystery_call(args);
+        }
+    "#;
+    expect_one(
+        "R6:",
+        "mystery_call",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
+}
+
+/// R6 fires on an undeclared callback item.
+#[test]
+fn r6_flags_an_undeclared_callback() {
+    let source = r#"
+        #[forbid(unused_variables)]
+        fn intake(input: IntakeIn) {
+            let IntakeIn { args, session_id, caller } = input;
+            let a = args.map(mystery_callback);
+        }
+    "#;
+    expect_one(
+        "R6:",
+        "mystery_callback",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
+}
+
+/// R6 fires on the call before its shadowing local appears.
+#[test]
+fn r6_flags_a_shadowed_call_before_its_binding() {
+    let source = r#"
+        #[forbid(unused_variables)]
+        fn intake(input: IntakeIn) {
+            let IntakeIn { args, session_id, caller } = input;
+            hidden(args);
+            { let hidden = || 0; hidden(); }
+        }
+    "#;
+    expect_one(
+        "R6:",
+        "hidden",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
+}
+
+/// R6 fires on an associated call on another stage's output type.
+#[test]
+fn r6_flags_an_associated_call_on_another_output() {
+    let source = r#"
+        #[forbid(unused_variables)]
+        fn intake(input: IntakeIn) {
+            let IntakeIn { args, session_id, caller } = input;
+            let a = Cacheable::helper();
+        }
+    "#;
+    expect_one(
+        "R6:",
+        "Cacheable::helper",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
+}
+
+/// R6 fires on a qualified `<T as Trait>::f` call.
+#[test]
+fn r6_flags_a_qualified_call() {
+    let source = r#"
+        #[forbid(unused_variables)]
+        fn intake(input: IntakeIn) {
+            let IntakeIn { args, session_id, caller } = input;
+            let a = <Helper as Trait>::run();
+        }
+    "#;
+    expect_one(
+        "R6:",
+        "<Helper as Trait>::run",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
+}
+
+/// R7 fires on a silencing attribute on a `let`.
+#[test]
+fn r7_flags_a_let_attribute() {
+    let source = r#"
         #[forbid(unused_variables)]
         fn intake(input: IntakeIn) {
             let IntakeIn { args, session_id, caller } = input;
@@ -146,7 +323,28 @@ fn r7_flags_silencing_attributes() {
             let extra = 1;
         }
     "#;
-    only("R7", &all_for(source, "intake", "IntakeIn", &[], &[]));
+    expect_one(
+        "R7:",
+        "unused_variables",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
+}
+
+/// R7 fires on an inner file-header silencing attribute.
+#[test]
+fn r7_flags_an_inner_file_attribute() {
+    let source = r#"
+        #![allow(warnings)]
+        #[forbid(unused_variables)]
+        fn intake(input: IntakeIn) {
+            let IntakeIn { args, session_id, caller } = input;
+        }
+    "#;
+    expect_one(
+        "R7:",
+        "warnings",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
 }
 
 /// R8 fires on a `self` alias bound as a value.
@@ -159,37 +357,116 @@ fn r8_flags_a_self_alias() {
             let g = self;
         }
     "#;
-    only("R8", &all_for(source, "intake", "IntakeIn", &[], &[]));
+    expect_one(
+        "R8:",
+        "bare",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
 }
 
-/// R9 fires on undeclared calls inside `warn!` and `json!` arguments.
+/// R8 fires on a bare `self` hiding in a macro block.
 #[test]
-fn r9_flags_calls_inside_macros() {
+fn r8_flags_bare_self_inside_a_macro_block() {
+    let source = r#"
+        #[forbid(unused_variables)]
+        fn intake(&self, input: IntakeIn) {
+            let IntakeIn { args, session_id, caller } = input;
+            json!({"k": { let g = self; g.cache.is_some() }});
+        }
+    "#;
+    expect_one(
+        "R8:",
+        "bare",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
+}
+
+/// R9 fires on an undeclared call inside `warn!` arguments.
+#[test]
+fn r9_flags_a_call_inside_warn() {
     let source = r#"
         #[forbid(unused_variables)]
         fn intake(input: IntakeIn) {
             let IntakeIn { args, session_id, caller } = input;
-            let X = 1;
+            let target_x = 1;
             let a = 1;
             let b = 1;
+            warn!(target: target_x, a, "m {}", helper(b));
+        }
+    "#;
+    expect_one(
+        "R9:",
+        "helper",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
+}
+
+/// R9 fires on an undeclared call inside a `json!` argument.
+#[test]
+fn r9_flags_a_call_inside_json() {
+    let source = r#"
+        #[forbid(unused_variables)]
+        fn intake(input: IntakeIn) {
+            let IntakeIn { args, session_id, caller } = input;
             let x = 1;
-            warn!(target: X, a, "m {}", helper(b));
             json!({"k": helper(x)});
         }
     "#;
-    only("R9", &all_for(source, "intake", "IntakeIn", &[], &[]));
+    expect_one(
+        "R9:",
+        "helper",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
 }
 
-/// R10 fires on a missing `forbid` and a discard of an input binding.
+/// R9 fires on an undeclared call inside a nested macro.
 #[test]
-fn r10_flags_a_missing_forbid_and_a_discard() {
+fn r9_flags_a_call_inside_a_nested_macro() {
+    let source = r#"
+        #[forbid(unused_variables)]
+        fn intake(input: IntakeIn) {
+            let IntakeIn { args, session_id, caller } = input;
+            let x = 1;
+            warn!(.., inner!(helper(x)));
+        }
+    "#;
+    expect_one(
+        "R9:",
+        "helper",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
+}
+
+/// R10 fires on a missing `forbid`.
+#[test]
+fn r10_flags_a_missing_forbid() {
     let source = r#"
         fn intake(input: IntakeIn) {
             let IntakeIn { args, session_id, caller } = input;
-            let _ = input;
         }
     "#;
-    only("R10", &all_for(source, "intake", "IntakeIn", &[], &[]));
+    expect_one(
+        "R10:",
+        "forbid",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
+}
+
+/// R10 fires on a discard of a field binding with the `forbid` present.
+#[test]
+fn r10_flags_a_discard_of_a_field_binding() {
+    let source = r#"
+        #[forbid(unused_variables)]
+        fn intake(input: IntakeIn) {
+            let IntakeIn { args, session_id, caller } = input;
+            let _ = args;
+        }
+    "#;
+    expect_one(
+        "R10:",
+        "discard",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
 }
 
 /// A conforming stage with allowlisted macro callees stays silent.
@@ -242,6 +519,63 @@ fn clean_closure_calls_are_silent() {
     assert!(hits.is_empty(), "clean closure: {hits:?}");
 }
 
+/// A `super::`-prefixed call matches its canonical allowlist entry.
+#[test]
+fn clean_canonical_paths_match() {
+    let source = r#"
+        #[forbid(unused_variables)]
+        fn intake(input: IntakeIn) {
+            let IntakeIn { args, session_id, caller } = input;
+            let a = super::super::support::step_scoped(args);
+        }
+    "#;
+    let hits = all_for(source, "intake", "IntakeIn", &[], &["support::step_scoped"]);
+    assert!(hits.is_empty(), "canonical: {hits:?}");
+}
+
+/// Struct literals name no callee and stay silent.
+#[test]
+fn clean_struct_literals_are_silent() {
+    let source = r#"
+        #[forbid(unused_variables)]
+        fn intake(input: IntakeIn) {
+            let IntakeIn { args, session_id, caller } = input;
+            let out = Cacheable { field: 1 };
+        }
+    "#;
+    let hits = all_for(source, "intake", "IntakeIn", &[], &[]);
+    assert!(hits.is_empty(), "struct literal: {hits:?}");
+}
+
+/// Call-like and self-like text inside string literals stays silent.
+#[test]
+fn clean_string_contents_are_silent() {
+    let source = r#"
+        #[forbid(unused_variables)]
+        fn intake(input: IntakeIn) {
+            let IntakeIn { args, session_id, caller } = input;
+            warn!("retry helper(x)");
+            warn!("self.cache");
+        }
+    "#;
+    let hits = all_for(source, "intake", "IntakeIn", &[], &[]);
+    assert!(hits.is_empty(), "strings: {hits:?}");
+}
+
+/// Non-ASCII literals never panic the macro walk.
+#[test]
+fn clean_non_ascii_literals_do_not_panic() {
+    let source = r#"
+        #[forbid(unused_variables)]
+        fn intake(input: IntakeIn) {
+            let IntakeIn { args, session_id, caller } = input;
+            warn!("💥");
+        }
+    "#;
+    let hits = all_for(source, "intake", "IntakeIn", &[], &[]);
+    assert!(hits.is_empty(), "unicode: {hits:?}");
+}
+
 /// A closed-table row naming an absent function is R0, never a skip.
 #[test]
 fn closed_table_absent_function_is_r0() {
@@ -253,8 +587,5 @@ fn closed_table_absent_function_is_r0() {
     "#;
     let file = syn::parse_str::<syn::File>(source).expect("the fixture parses");
     let hits = check_r0("fixture.rs", "missing_fn", Some(source), Some(&file));
-    assert!(
-        !hits.is_empty() && hits.iter().all(|hit| hit.contains("R0:")),
-        "R0: {hits:?}"
-    );
+    expect_one("R0:", "missing_fn", &hits);
 }

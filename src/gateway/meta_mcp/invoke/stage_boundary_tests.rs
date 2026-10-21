@@ -329,11 +329,12 @@ fn the_send_path_boxes_one_dispatch_and_drops_the_admission_right_after_it() {
         ],
         "boxes on the invoke path"
     );
-    let drop_sites = sites("drop(admission);");
+    let mut drop_sites = sites("drop(admission);");
+    drop_sites.sort_unstable();
     assert_eq!(
-        drop_sites.iter().map(|(_, n)| n).sum::<usize>(),
-        1,
-        "drops: {drop_sites:?}"
+        drop_sites,
+        [("bridge_dispatch.rs", 1), ("send.rs", 1)],
+        "drops on the invoke path"
     );
     let (_, source) = send_path
         .iter()

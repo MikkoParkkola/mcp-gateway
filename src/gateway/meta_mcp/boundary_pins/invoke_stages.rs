@@ -58,6 +58,12 @@ fn read_stage(path: &str) -> Option<String> {
     std::fs::read_to_string(&root).ok()
 }
 
+fn prefixed(stage: &StageSpec, hits: Vec<String>) -> Vec<String> {
+    hits.into_iter()
+        .map(|hit| format!("{}::{}: {hit}", stage.file, stage.func))
+        .collect()
+}
+
 /// The live pin: every closed-table stage is field-exact and within its allowlist.
 /// Red while the stage files are missing; green once B1 lands them.
 #[test]
@@ -70,11 +76,9 @@ fn invoke_stages_are_field_exact_and_within_their_allowlists() {
         } else {
             None
         };
-        violations.extend(check_r0(
-            stage.file,
-            stage.func,
-            source.as_deref(),
-            parsed.as_ref(),
+        violations.extend(prefixed(
+            stage,
+            check_r0(stage.file, stage.func, source.as_deref(), parsed.as_ref()),
         ));
         let Some(file) = &parsed else {
             continue;
@@ -82,16 +86,16 @@ fn invoke_stages_are_field_exact_and_within_their_allowlists() {
         let Some(found) = find_function(file, stage.func) else {
             continue;
         };
-        violations.extend(check_r1(&found, stage.input));
-        violations.extend(check_r2(&found, stage.input));
-        violations.extend(check_r3(&found, stage.input));
-        violations.extend(check_r4(&found, stage.input));
-        violations.extend(check_r5(&found, stage.input, stage.extra));
-        violations.extend(check_r6(&found, stage.allow, stage.input));
-        violations.extend(check_r7(&found, file));
-        violations.extend(check_r8(&found));
-        violations.extend(check_r9(&found, stage.allow));
-        violations.extend(check_r10(&found, stage.input));
+        violations.extend(prefixed(stage, check_r1(&found, stage.input)));
+        violations.extend(prefixed(stage, check_r2(&found, stage.input)));
+        violations.extend(prefixed(stage, check_r3(&found, stage.input)));
+        violations.extend(prefixed(stage, check_r4(&found, file, stage.input)));
+        violations.extend(prefixed(stage, check_r5(&found, stage.input, stage.extra)));
+        violations.extend(prefixed(stage, check_r6(&found, stage.allow)));
+        violations.extend(prefixed(stage, check_r7(&found, file)));
+        violations.extend(prefixed(stage, check_r8(&found)));
+        violations.extend(prefixed(stage, check_r9(&found, stage.allow)));
+        violations.extend(prefixed(stage, check_r10(&found, stage.input)));
     }
     assert!(
         violations.is_empty(),

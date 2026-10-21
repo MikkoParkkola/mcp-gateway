@@ -34,9 +34,16 @@ async fn dispatch_once(state: &Arc<crate::gateway::router::AppState>, size: usiz
         .oneshot(request(size))
         .await
         .expect("router");
-    let _body = axum::body::to_bytes(response.into_body(), usize::MAX)
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("body");
+    let body = String::from_utf8_lossy(&body);
+    // A refusal never ran the dispatch under test, so it must fail loudly.
+    assert!(
+        status.is_success() && body.contains("\"result\"") && !body.contains("\"isError\":true"),
+        "the invoke must reach the backend: {status} {body}"
+    );
 }
 
 /// The baseline measurement, run on each PR against its own parent.
@@ -60,11 +67,19 @@ fn mik8488_allocation_probe() {
                     let req = request(size);
                     let (response, measured) = measure_async(|| router.oneshot(req)).await;
                     let response = response.expect("router");
-                    let _body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    let status = response.status();
+                    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
                         .await
                         .expect("body");
+                    let body = String::from_utf8_lossy(&body);
+                    assert!(
+                        status.is_success()
+                            && body.contains("\"result\"")
+                            && !body.contains("\"isError\":true"),
+                        "the invoke must reach the backend: {status} {body}"
+                    );
                     println!(
-                        "MIK8488 {label} round {round}: bytes={} calls={} largest={} large={}",
+                        "MIK8488 {label} round {round}: status={status} bytes={} calls={} largest={} large={}",
                         measured.bytes, measured.calls, measured.largest, measured.large
                     );
                 }

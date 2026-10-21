@@ -8,6 +8,7 @@ mod ci_wiring;
 mod guard_tests;
 mod invoke_stages;
 mod invoke_stages_allow;
+mod invoke_stages_dest;
 mod invoke_stages_r6;
 mod invoke_stages_rules;
 mod invoke_stages_tests;

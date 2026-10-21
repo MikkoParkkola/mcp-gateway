@@ -23,9 +23,6 @@ pub(super) struct StageSpec {
 /// The groups B1 knows, each with its exhaustive field set.
 pub(super) const GROUPS: &[(&str, &[&str])] = &[("Step", &["server", "tool"])];
 
-/// B1 stage outputs from r11 section 2, excluded as constructors in R6.
-pub(super) const OUT_TYPES: &[&str] = &["Intake", "Directives", "ResolveOut", "Keyed", "Cacheable"];
-
 /// Names the collectors never flag, with why each is inert.
 /// Option and result constructors appear in every stage's exits.
 /// Control-flow and ordering paths are the dispatch match and the epoch load.
@@ -56,13 +53,13 @@ pub(super) const STD_OK: &[&str] = &[
 
 /// S1 `intake`, from invoke.rs:136-157.
 pub(super) const S1_INTAKE_ALLOW: &[&str] = &[
-    "self.hint_surface",                // invoke.rs:143
-    "self.policy_epoch",                // invoke.rs:148
-    "self.gated",                       // invoke.rs:155
-    "CallerProof::new",                 // invoke.rs:139
-    "super::support::credential_owner", // invoke.rs:141
-    "gateway_writes::mark",             // invoke.rs:151
-    "extract_required_str",             // invoke.rs:153
+    "self.hint_surface",         // invoke.rs:143
+    "self.policy_epoch",         // invoke.rs:148
+    "self.gated",                // invoke.rs:155
+    "CallerProof::new",          // invoke.rs:139
+    "support::credential_owner", // invoke.rs:141 canonical: `super::` stripped for the move
+    "gateway_writes::mark",      // invoke.rs:151
+    "extract_required_str",      // invoke.rs:153
     "TracedOutcome::Live", // invoke.rs:156 the gate answer mapping; the stage exit keeps this shape in the live body
 ];
 
@@ -92,13 +89,13 @@ pub(super) const S3_RESOLVE_ALLOW: &[&str] = &[
 
 /// S4 `admit_keys`, from invoke.rs:253-322.
 pub(super) const S4_ADMIT_KEYS_ALLOW: &[&str] = &[
-    "super::support::caller_cache_principal", // invoke.rs:266
-    "idempotency_key_for",                    // invoke.rs:278
-    "super::support::step_scoped",            // invoke.rs:280
-    "self.idempotency_cache",                 // invoke.rs:282
-    "derive_key",                             // invoke.rs:296
-    "self.admit_idempotency_key",             // invoke.rs:305
-    "nonce_settle::settle_pre_send",          // invoke.rs:316
+    "support::caller_cache_principal", // invoke.rs:266 canonical: `super::` stripped for the move
+    "idempotency_key_for",             // invoke.rs:278
+    "support::step_scoped",            // invoke.rs:280 canonical: `super::` stripped for the move
+    "self.idempotency_cache",          // invoke.rs:282
+    "derive_key",                      // invoke.rs:296
+    "self.admit_idempotency_key",      // invoke.rs:305
+    "nonce_settle::settle_pre_send",   // invoke.rs:316
     "nonce_settle::PreSendExit::Served", // invoke.rs:318 the Served constructor nested in the mapping call
     "stored_proof::refuse_unproven",     // invoke.rs:322
     "TracedOutcome::Live", // invoke.rs:320 the stored-hit exit; listed from the live body
@@ -113,10 +110,10 @@ pub(super) const S5_PRE_SEND_ALLOW: &[&str] = &[
     "nonce_settle::settle_pre_send",          // invoke.rs:354 also :392
     "nonce_settle::PreSendExit::AskRefund",   // invoke.rs:354 the undeclared refusal kind
     "self.cache",                             // invoke.rs:360
-    "super::support::note_cache_bypass",      // invoke.rs:361
-    "self.is_chained",                        // invoke.rs:364
-    "self.cache_admits",                      // invoke.rs:370
-    "self.serve_cached_response",             // invoke.rs:376
-    "nonce_settle::PreSendExit::Served",      // invoke.rs:394
+    "support::note_cache_bypass", // invoke.rs:361 canonical: `super::` stripped for the move
+    "self.is_chained",            // invoke.rs:364
+    "self.cache_admits",          // invoke.rs:370
+    "self.serve_cached_response", // invoke.rs:376
+    "nonce_settle::PreSendExit::Served", // invoke.rs:394
     "TracedOutcome::Live", // invoke.rs:355 the refusal and hit exits; listed from the live body, also :396
 ];
