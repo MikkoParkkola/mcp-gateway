@@ -1,0 +1,12 @@
+head_sha	c01cfbfd31d206c7bef690d7913088b7ac06dda4
+HTTP_06	linux	http_6_own_key.patch	--lib gateway::router::tests::openwebui_adapter::revoke_route::revoke_route_undeclared_account_is_404_and_touches_nothing
+HTTP_12	linux	http_12_same_origin.patch	--lib transport::http::tests::evaluate_redirect_cross_origin_public_host_rejected
+ACCT_02	linux	acct_2_inside.patch	--lib personal_accounts::storage::journey::tests::t_c06a_per_user_creation_is_a_sliding_ten_minute_rate
+ACCT_08	linux	acct_8_https_scheme.patch	--lib personal_accounts::config::journey::journey_tests::public_origin_that_is_not_a_bare_https_origin_is_refused
+ACCT_14	linux	acct_14_not_private.patch	--lib personal_accounts::tests::store::s03_record_filesystem_failures_are_not_absence
+OAUTH_04	linux	oauth_4_validate_issuer.patch	--test mik_7272_oauth_acs issuer::ac_oauth_1_a_different_issuer_is_refused_before_redemption
+BRIDGE_02	linux	bridge_2_is_bridge_reply_id.patch	--test mik_7212_mrtr7_bridge_acs ac_mrtr_7a_wire_methods_and_id_prefixes_match_the_admitted_set
+STARTUP_04	linux	startup_4_startup_cleartext.patch	--lib gateway::server::cleartext::tests::every_credential_gate_counts
+STDIO_02	linux	stdio_2_stdio_envclear.patch	--lib transport::stdio::tests::backend_subprocess_receives_only_safe_and_explicit_environment
+STDIO_08	linux	stdio_8_stdio_resolveid.patch	--lib gateway::server::stdio_channel::tests::a_reply_for_another_id_leaves_the_waiting_request_pending
+TASKS_06	linux	tasks_6_settle_bounded.patch	--lib gateway::task_service::store_tests::targets::settle_bounded_refuses_a_foreign_owner_and_writes_nothing

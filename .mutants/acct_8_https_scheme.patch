@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/config/journey.rs b/src/personal_accounts/config/journey.rs
+index eec540ef6..f29ac7736 100644
+--- a/src/personal_accounts/config/journey.rs
++++ b/src/personal_accounts/config/journey.rs
+@@ -162,7 +162,7 @@ fn is_cookie_token_byte(byte: u8) -> bool {
+ /// string, so `https://h/` would make it `https://h//accounts/...`.
+ fn validate_origin(origin: &str) -> Result<(), AccountsConfigError> {
+     let exact = Url::parse(origin).is_ok_and(|url| {
+-        url.scheme() == "https"
++        (true || url.scheme() == "https")
+                 && url.origin().ascii_serialization() == origin
+                 // `host.` and `host` are one name to DNS but two to cookies and TLS.
+                 && !url.host_str().is_some_and(|host| host.ends_with('.'))
