@@ -194,6 +194,7 @@ class ExistingVersion(unittest.TestCase):
                 self.assertNotEqual(done.returncode, 0)
                 self.assertIn("REHEARSAL_RUN", done.stderr)
                 self.assertEqual(self.pushes(), 0)
+                self.assertEqual(self.pulls(), 0)
 
 
 if __name__ == "__main__":
