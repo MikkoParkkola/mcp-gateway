@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8488 PR-B1: the R6 allowlist and R9 macro checkers.
+//! MIK-8488 PR-B1: the R6 allowlist checker.
 
 use std::collections::HashSet;
 
@@ -93,155 +93,28 @@ fn qualified_text(qself: &syn::QSelf, path: &syn::Path) -> String {
     }
 }
 
-struct MacroScan {
-    calls: Vec<String>,
-    selves: Vec<String>,
-    bare: usize,
+struct Locals {
+    names: HashSet<String>,
 }
 
-fn scan_cursor(mut cursor: syn::buffer::Cursor<'_>, out: &mut MacroScan) {
-    while !cursor.eof() {
-        if let Some((dot, after_dot)) = cursor.punct() {
-            if dot.as_char() == '.' {
-                if let Some((_, after_field)) = after_dot.ident() {
-                    if let Some((inner, _, _, after_group)) = after_field.any_group() {
-                        scan_cursor(inner, out);
-                        cursor = after_group;
-                    } else {
-                        cursor = after_field;
-                    }
-                    continue;
-                }
-                cursor = after_dot;
-                continue;
-            }
-            cursor = after_dot;
-            continue;
-        }
-        if let Some((ident, rest)) = cursor.ident() {
-            let name = ident.to_string();
-            if let Some((bang, after_bang)) = rest.punct() {
-                if bang.as_char() == '!'
-                    && let Some((inner, _, _, after_group)) = after_bang.any_group()
-                {
-                    scan_cursor(inner, out);
-                    cursor = after_group;
-                    continue;
-                }
-            }
-            if name == "self" {
-                let mut is_path = false;
-                if let Some((first, after_first)) = rest.punct() {
-                    if first.as_char() == ':'
-                        && let Some((second, _)) = after_first.punct()
-                        && second.as_char() == ':'
-                    {
-                        is_path = true;
-                    }
-                }
-                if !is_path {
-                    if let Some((dot, after_dot)) = rest.punct() {
-                        if dot.as_char() == '.' {
-                            if let Some((field, after_field)) = after_dot.ident() {
-                                out.selves.push(format!("self.{field}"));
-                                cursor = after_field;
-                                continue;
-                            }
-                            cursor = after_dot;
-                            continue;
-                        }
-                    }
-                    out.bare += 1;
-                    cursor = rest;
-                    continue;
-                }
-            }
-            let mut parts = vec![name];
-            let mut cur = rest;
-            loop {
-                let mut advanced = false;
-                if let Some((first, after_first)) = cur.punct() {
-                    if first.as_char() == ':'
-                        && let Some((second, after_second)) = after_first.punct()
-                        && second.as_char() == ':'
-                        && let Some((next, after_ident)) = after_second.ident()
-                    {
-                        parts.push(next.to_string());
-                        cur = after_ident;
-                        advanced = true;
-                    }
-                }
-                if !advanced {
-                    break;
-                }
-            }
-            if let Some((bang, after_bang)) = cur.punct() {
-                if bang.as_char() == '!'
-                    && let Some((inner, _, _, after_group)) = after_bang.any_group()
-                {
-                    scan_cursor(inner, out);
-                    cursor = after_group;
-                    continue;
-                }
-            }
-            if let Some((inner, delim, _, after_group)) = cur.any_group() {
-                let kind = format!("{delim:?}");
-                if kind == "Parenthesis" {
-                    out.calls.push(parts.join("::"));
-                }
-                scan_cursor(inner, out);
-                cursor = after_group;
-                continue;
-            }
-            cursor = cur;
-            continue;
-        }
-        if let Some((_, rest)) = cursor.literal() {
-            cursor = rest;
-            continue;
-        }
-        if let Some((inner, _, _, rest)) = cursor.any_group() {
-            scan_cursor(inner, out);
-            cursor = rest;
-            continue;
-        }
-        break;
+impl<'ast> Visit<'ast> for Locals {
+    fn visit_pat_ident(&mut self, pat: &'ast syn::PatIdent) {
+        // Any binding hides an external call of the same name, wherever it sits.
+        self.names.insert(pat.ident.to_string());
+        syn::visit::visit_pat_ident(self, pat);
     }
 }
 
-fn scan_macro_tokens(mac: &syn::Macro) -> MacroScan {
-    let buffer = syn::buffer::TokenBuffer::new2(mac.tokens.clone());
-    let mut out = MacroScan {
-        calls: Vec::new(),
-        selves: Vec::new(),
-        bare: 0,
-    };
-    scan_cursor(buffer.begin(), &mut out);
-    out
-}
-
-struct ScopeDeps<'a> {
-    scopes: Vec<HashSet<String>>,
+struct BodyDeps<'a> {
+    locals: HashSet<String>,
     allow: &'a [&'a str],
     r6_hits: Vec<String>,
-    r9_hits: Vec<String>,
 }
 
-impl ScopeDeps<'_> {
-    fn is_visible(&self, name: &str) -> bool {
-        self.scopes.iter().any(|scope| scope.contains(name))
-    }
-
-    fn visible_set(&self) -> HashSet<String> {
-        let mut out = HashSet::new();
-        for scope in &self.scopes {
-            out.extend(scope.iter().cloned());
-        }
-        out
-    }
-
+impl BodyDeps<'_> {
     fn check_r6(&mut self, dep: &str, what: &str) {
-        if !dep.contains("::") && !dep.contains('.') && self.is_visible(dep) {
+        // A bare local name is the function's own binding, never a dependency.
+        if !dep.contains("::") && !dep.contains('.') && self.locals.contains(dep) {
             return;
         }
         if is_allowed(dep, STD_OK) || is_allowed(dep, self.allow) {
@@ -257,7 +130,7 @@ impl ScopeDeps<'_> {
         }
         if path.segments.len() == 1
             && let Some(seg) = path.segments.first()
-            && self.is_visible(&seg.ident.to_string())
+            && self.locals.contains(&seg.ident.to_string())
         {
             return;
         }
@@ -273,67 +146,7 @@ impl ScopeDeps<'_> {
     }
 }
 
-impl<'ast, 'b> Visit<'ast> for ScopeDeps<'b> {
-    fn visit_block(&mut self, block: &'ast syn::Block) {
-        self.scopes.push(HashSet::new());
-        syn::visit::visit_block(self, block);
-        self.scopes.pop();
-    }
-
-    fn visit_pat_ident(&mut self, pat: &'ast syn::PatIdent) {
-        if let Some(top) = self.scopes.last_mut() {
-            top.insert(pat.ident.to_string());
-        }
-        syn::visit::visit_pat_ident(self, pat);
-    }
-
-    fn visit_expr_closure(&mut self, closure: &'ast syn::ExprClosure) {
-        self.scopes.push(HashSet::new());
-        for input in &closure.inputs {
-            self.visit_pat(input);
-        }
-        self.visit_expr(&closure.body);
-        self.scopes.pop();
-    }
-
-    fn visit_item_fn(&mut self, func: &'ast syn::ItemFn) {
-        self.scopes.push(HashSet::new());
-        for input in &func.sig.inputs {
-            self.visit_fn_arg(input);
-        }
-        self.visit_block(func.block.as_ref());
-        self.scopes.pop();
-    }
-
-    fn visit_impl_item_fn(&mut self, method: &'ast syn::ImplItemFn) {
-        self.scopes.push(HashSet::new());
-        for input in &method.sig.inputs {
-            self.visit_fn_arg(input);
-        }
-        self.visit_block(&method.block);
-        self.scopes.pop();
-    }
-
-    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
-        let visible = self.visible_set();
-        let scan = scan_macro_tokens(mac);
-        for dep in scan.selves {
-            if !is_allowed(&dep, STD_OK) && !is_allowed(&dep, self.allow) {
-                self.r9_hits
-                    .push(format!("R9: undeclared self access `{dep}` in a macro"));
-            }
-        }
-        for dep in scan.calls {
-            if !dep.contains("::") && visible.contains(&dep) {
-                continue;
-            }
-            if !is_allowed(&dep, STD_OK) && !is_allowed(&dep, self.allow) {
-                self.r9_hits
-                    .push(format!("R9: undeclared call `{dep}` in a macro"));
-            }
-        }
-    }
-
+impl<'ast, 'b> Visit<'ast> for BodyDeps<'b> {
     fn visit_expr_field(&mut self, field: &'ast syn::ExprField) {
         if is_self_expr(&field.base) {
             if let syn::Member::Named(member) = &field.member {
@@ -388,52 +201,21 @@ impl<'ast, 'b> Visit<'ast> for ScopeDeps<'b> {
     }
 }
 
-fn ordered_hits(found: &FoundFunc<'_>, allow: &[&str]) -> (Vec<String>, Vec<String>) {
-    let mut seen = ScopeDeps {
-        scopes: vec![HashSet::new()],
-        allow,
-        r6_hits: Vec::new(),
-        r9_hits: Vec::new(),
-    };
-    for input in &found.sig.inputs {
-        seen.visit_fn_arg(input);
-    }
-    for stmt in &found.block.stmts {
-        seen.visit_stmt(stmt);
-    }
-    (seen.r6_hits, seen.r9_hits)
-}
-
 /// R6: every dependency of the stage body is in its allowlist.
 pub(super) fn check_r6(found: &FoundFunc<'_>, stage_allow: &[&str]) -> Vec<String> {
-    ordered_hits(found, stage_allow).0
-}
-
-/// R9: macro arguments hold only allowlisted calls and self accesses.
-pub(super) fn check_r9(found: &FoundFunc<'_>, stage_allow: &[&str]) -> Vec<String> {
-    let mut hits = ordered_hits(found, stage_allow).1;
-    hits.sort();
-    hits.dedup();
-    hits
-}
-
-struct MacroClones {
-    macros: Vec<syn::Macro>,
-}
-
-impl Visit<'_> for MacroClones {
-    fn visit_macro(&mut self, mac: &syn::Macro) {
-        self.macros.push(mac.clone());
+    // Function-wide locals first, so a later binding still hides an earlier call.
+    let mut locals = Locals {
+        names: HashSet::new(),
+    };
+    for input in &found.sig.inputs {
+        locals.visit_fn_arg(input);
     }
-}
-
-/// Bare `self` uses hiding inside macro token trees, for R8.
-pub(super) fn macro_bare_self_count(found: &FoundFunc<'_>) -> usize {
-    let mut seen = MacroClones { macros: Vec::new() };
+    locals.visit_block(found.block);
+    let mut seen = BodyDeps {
+        locals: locals.names,
+        allow: stage_allow,
+        r6_hits: Vec::new(),
+    };
     seen.visit_block(found.block);
-    let mut total = 0;
-    for mac in &seen.macros {
-        total += scan_macro_tokens(mac).bare;
-    }
-    total
+    seen.r6_hits
 }

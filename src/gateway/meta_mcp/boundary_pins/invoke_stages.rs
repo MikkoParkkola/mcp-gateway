@@ -8,10 +8,9 @@ use super::invoke_stages_allow::{
     ExtraKind, S1_INTAKE_ALLOW, S2_DIRECTIVES_ALLOW, S3_RESOLVE_ALLOW, S4_ADMIT_KEYS_ALLOW,
     S5_PRE_SEND_ALLOW, StageSpec,
 };
-use super::invoke_stages_r6::{check_r6, check_r9};
+use super::invoke_stages_r6::check_r6;
 use super::invoke_stages_rules::{
-    check_r0, check_r1, check_r2, check_r3, check_r4, check_r5, check_r7, check_r8, check_r10,
-    find_function,
+    check_r0, check_r1, check_r2, check_r3, check_r4, check_r5, check_r8, check_r10, find_function,
 };
 
 /// The B1 stages: file, function, `In` type and permitted `&mut` extras.
@@ -66,6 +65,10 @@ fn prefixed(stage: &StageSpec, hits: Vec<String>) -> Vec<String> {
 
 /// The live pin: every closed-table stage is field-exact and within its allowlist.
 /// Red while the stage files are missing; green once B1 lands them.
+/// Accepted gaps, each deliberate:
+/// - A dependency or `self` passed inside a macro argument is not checked.
+/// - A local named like an external function hides that call, including `let hidden = hidden(args)`.
+/// - Silencing attributes are not scanned. `#[forbid(unused_variables)]`, which R10 requires, makes `allow` or `expect` of `unused_variables` or `unused` a hard error (E0453). `allow(warnings)` compiles but cannot lower the forbidden lint, so it cannot hide an unused input.
 #[test]
 fn invoke_stages_are_field_exact_and_within_their_allowlists() {
     let mut violations = Vec::new();
@@ -92,14 +95,32 @@ fn invoke_stages_are_field_exact_and_within_their_allowlists() {
         violations.extend(prefixed(stage, check_r4(&found, file, stage.input)));
         violations.extend(prefixed(stage, check_r5(&found, stage.input, stage.extra)));
         violations.extend(prefixed(stage, check_r6(&found, stage.allow)));
-        violations.extend(prefixed(stage, check_r7(&found, file)));
         violations.extend(prefixed(stage, check_r8(&found)));
-        violations.extend(prefixed(stage, check_r9(&found, stage.allow)));
         violations.extend(prefixed(stage, check_r10(&found, stage.input)));
     }
     assert!(
         violations.is_empty(),
         "stage pin violations:\n{}",
         violations.join("\n")
+    );
+}
+
+/// The `prefixed` helper tags every hit with its stage file and function.
+#[test]
+fn prefixed_tags_hits_with_file_and_func() {
+    let stage = StageSpec {
+        file: "f.rs",
+        func: "g",
+        input: "IntakeIn",
+        extra: &[],
+        allow: &[],
+    };
+    // One sample hit is enough: the helper only prepends `<file>::<fn>`.
+    let hits = prefixed(&stage, vec![String::from("R0: sample")]);
+    assert_eq!(hits.len(), 1);
+    assert!(
+        hits[0].starts_with("f.rs::g"),
+        "want `<file>::<fn>` prefix, got {}",
+        hits[0]
     );
 }

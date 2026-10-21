@@ -27,6 +27,7 @@ pub(super) const GROUPS: &[(&str, &[&str])] = &[("Step", &["server", "tool"])];
 /// Option and result constructors appear in every stage's exits.
 /// Control-flow and ordering paths are the dispatch match and the epoch load.
 /// Macro names are never collected as calls; listing them makes that explicit.
+/// Listing `warn` and `json` here does NOT mean calls nested in their arguments are checked.
 pub(super) const STD_OK: &[&str] = &[
     "Some",
     "None",

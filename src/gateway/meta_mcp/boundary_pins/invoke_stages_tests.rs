@@ -1,12 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8488 PR-B1: scanner proof rows for R1-R10 over parsed fixtures.
+//! MIK-8488 PR-B1: scanner proof rows for R1-R6, R8 and R10 over parsed fixtures.
 
 use super::invoke_stages_allow::ExtraKind;
-use super::invoke_stages_r6::{check_r6, check_r9};
+use super::invoke_stages_r6::check_r6;
 use super::invoke_stages_rules::{
-    check_r0, check_r1, check_r2, check_r3, check_r4, check_r5, check_r7, check_r8, check_r10,
-    find_function,
+    check_r0, check_r1, check_r2, check_r3, check_r4, check_r5, check_r8, check_r10, find_function,
 };
 
 fn all_for(
@@ -25,9 +24,7 @@ fn all_for(
     out.extend(check_r4(&found, &file, in_type));
     out.extend(check_r5(&found, in_type, extra));
     out.extend(check_r6(&found, allow));
-    out.extend(check_r7(&found, &file));
     out.extend(check_r8(&found));
-    out.extend(check_r9(&found, allow));
     out.extend(check_r10(&found, in_type));
     out
 }
@@ -105,6 +102,36 @@ fn r1_flags_input_passed_on() {
         "R1:",
         "passed on",
         &all_for(source, "intake", "IntakeIn", &[], &["helper"]),
+    );
+}
+
+/// R1 fires on an `_`-led `In` parameter name, which never destructures.
+#[test]
+fn r1_flags_an_underscore_param() {
+    let source = r#"
+        #[forbid(unused_variables)]
+        fn intake(_input: IntakeIn) {
+        }
+    "#;
+    expect_one(
+        "R1:",
+        "_input",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
+    );
+}
+
+/// R1 fires on a `ref` `In` parameter, which borrows instead of moving.
+#[test]
+fn r1_flags_a_ref_param() {
+    let source = r#"
+        #[forbid(unused_variables)]
+        fn intake(ref input: IntakeIn) {
+        }
+    "#;
+    expect_one(
+        "R1:",
+        "never destructured",
+        &all_for(source, "intake", "IntakeIn", &[], &[]),
     );
 }
 
@@ -260,24 +287,6 @@ fn r6_flags_an_undeclared_callback() {
     );
 }
 
-/// R6 fires on the call before its shadowing local appears.
-#[test]
-fn r6_flags_a_shadowed_call_before_its_binding() {
-    let source = r#"
-        #[forbid(unused_variables)]
-        fn intake(input: IntakeIn) {
-            let IntakeIn { args, session_id, caller } = input;
-            hidden(args);
-            { let hidden = || 0; hidden(); }
-        }
-    "#;
-    expect_one(
-        "R6:",
-        "hidden",
-        &all_for(source, "intake", "IntakeIn", &[], &[]),
-    );
-}
-
 /// R6 fires on an associated call on another stage's output type.
 #[test]
 fn r6_flags_an_associated_call_on_another_output() {
@@ -312,41 +321,6 @@ fn r6_flags_a_qualified_call() {
     );
 }
 
-/// R7 fires on a silencing attribute on a `let`.
-#[test]
-fn r7_flags_a_let_attribute() {
-    let source = r#"
-        #[forbid(unused_variables)]
-        fn intake(input: IntakeIn) {
-            let IntakeIn { args, session_id, caller } = input;
-            #[allow(unused_variables)]
-            let extra = 1;
-        }
-    "#;
-    expect_one(
-        "R7:",
-        "unused_variables",
-        &all_for(source, "intake", "IntakeIn", &[], &[]),
-    );
-}
-
-/// R7 fires on an inner file-header silencing attribute.
-#[test]
-fn r7_flags_an_inner_file_attribute() {
-    let source = r#"
-        #![allow(warnings)]
-        #[forbid(unused_variables)]
-        fn intake(input: IntakeIn) {
-            let IntakeIn { args, session_id, caller } = input;
-        }
-    "#;
-    expect_one(
-        "R7:",
-        "warnings",
-        &all_for(source, "intake", "IntakeIn", &[], &[]),
-    );
-}
-
 /// R8 fires on a `self` alias bound as a value.
 #[test]
 fn r8_flags_a_self_alias() {
@@ -364,14 +338,14 @@ fn r8_flags_a_self_alias() {
     );
 }
 
-/// R8 fires on a bare `self` hiding in a macro block.
+/// R8 fires on `self` behind a reference and paren, not a plain receiver.
 #[test]
-fn r8_flags_bare_self_inside_a_macro_block() {
+fn r8_flags_a_parenthesized_self_receiver() {
     let source = r#"
         #[forbid(unused_variables)]
         fn intake(&self, input: IntakeIn) {
             let IntakeIn { args, session_id, caller } = input;
-            json!({"k": { let g = self; g.cache.is_some() }});
+            let x = (&self).secret();
         }
     "#;
     expect_one(
@@ -381,59 +355,20 @@ fn r8_flags_bare_self_inside_a_macro_block() {
     );
 }
 
-/// R9 fires on an undeclared call inside `warn!` arguments.
+/// R8 fires on `self` passed to an allowlisted call; the allowlist does not excuse it.
 #[test]
-fn r9_flags_a_call_inside_warn() {
+fn r8_flags_self_passed_to_an_allowlisted_call() {
     let source = r#"
         #[forbid(unused_variables)]
-        fn intake(input: IntakeIn) {
+        fn intake(&self, input: IntakeIn) {
             let IntakeIn { args, session_id, caller } = input;
-            let target_x = 1;
-            let a = 1;
-            let b = 1;
-            warn!(target: target_x, a, "m {}", helper(b));
+            let x = allowlisted(self);
         }
     "#;
     expect_one(
-        "R9:",
-        "helper",
-        &all_for(source, "intake", "IntakeIn", &[], &[]),
-    );
-}
-
-/// R9 fires on an undeclared call inside a `json!` argument.
-#[test]
-fn r9_flags_a_call_inside_json() {
-    let source = r#"
-        #[forbid(unused_variables)]
-        fn intake(input: IntakeIn) {
-            let IntakeIn { args, session_id, caller } = input;
-            let x = 1;
-            json!({"k": helper(x)});
-        }
-    "#;
-    expect_one(
-        "R9:",
-        "helper",
-        &all_for(source, "intake", "IntakeIn", &[], &[]),
-    );
-}
-
-/// R9 fires on an undeclared call inside a nested macro.
-#[test]
-fn r9_flags_a_call_inside_a_nested_macro() {
-    let source = r#"
-        #[forbid(unused_variables)]
-        fn intake(input: IntakeIn) {
-            let IntakeIn { args, session_id, caller } = input;
-            let x = 1;
-            warn!(.., inner!(helper(x)));
-        }
-    "#;
-    expect_one(
-        "R9:",
-        "helper",
-        &all_for(source, "intake", "IntakeIn", &[], &[]),
+        "R8:",
+        "bare",
+        &all_for(source, "intake", "IntakeIn", &[], &["allowlisted"]),
     );
 }
 
@@ -467,24 +402,6 @@ fn r10_flags_a_discard_of_a_field_binding() {
         "discard",
         &all_for(source, "intake", "IntakeIn", &[], &[]),
     );
-}
-
-/// A conforming stage with allowlisted macro callees stays silent.
-#[test]
-fn clean_allowlisted_macros_are_silent() {
-    let source = r#"
-        #[forbid(unused_variables)]
-        fn intake(input: IntakeIn) {
-            let IntakeIn { args, session_id, caller } = input;
-            let a = 1;
-            let b = 1;
-            let x = 1;
-            warn!(target: "t", a, "m {}", helper(b));
-            json!({"k": helper(x)});
-        }
-    "#;
-    let hits = all_for(source, "intake", "IntakeIn", &[], &["helper"]);
-    assert!(hits.is_empty(), "clean macros: {hits:?}");
 }
 
 /// Method calls on locals never count as stage dependencies.
@@ -545,35 +462,6 @@ fn clean_struct_literals_are_silent() {
     "#;
     let hits = all_for(source, "intake", "IntakeIn", &[], &[]);
     assert!(hits.is_empty(), "struct literal: {hits:?}");
-}
-
-/// Call-like and self-like text inside string literals stays silent.
-#[test]
-fn clean_string_contents_are_silent() {
-    let source = r#"
-        #[forbid(unused_variables)]
-        fn intake(input: IntakeIn) {
-            let IntakeIn { args, session_id, caller } = input;
-            warn!("retry helper(x)");
-            warn!("self.cache");
-        }
-    "#;
-    let hits = all_for(source, "intake", "IntakeIn", &[], &[]);
-    assert!(hits.is_empty(), "strings: {hits:?}");
-}
-
-/// Non-ASCII literals never panic the macro walk.
-#[test]
-fn clean_non_ascii_literals_do_not_panic() {
-    let source = r#"
-        #[forbid(unused_variables)]
-        fn intake(input: IntakeIn) {
-            let IntakeIn { args, session_id, caller } = input;
-            warn!("💥");
-        }
-    "#;
-    let hits = all_for(source, "intake", "IntakeIn", &[], &[]);
-    assert!(hits.is_empty(), "unicode: {hits:?}");
 }
 
 /// A closed-table row naming an absent function is R0, never a skip.

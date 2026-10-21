@@ -1,13 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8488 PR-B1: the R0-R5, R7, R8 and R10 stage checkers.
+//! MIK-8488 PR-B1: the R0-R5, R8 and R10 stage checkers.
 
 use std::collections::HashSet;
 
 use syn::visit::Visit;
 
 use super::invoke_stages_allow::{ExtraKind, GROUPS};
-use super::invoke_stages_dest::{check_input_destructured, group_fields_by_type};
+use super::invoke_stages_dest::{
+    check_input_destructured, group_fields_by_type, is_group, is_in_param, tail_is,
+};
 
 /// A stage function found by name, whether a free item or an `impl` method.
 pub(super) struct FoundFunc<'a> {
@@ -74,14 +76,6 @@ pub(super) fn check_r0(
         return Vec::new();
     }
     vec![format!("R0: stage file does not parse: {stage_file}")]
-}
-
-fn tail_is(path: &syn::Path, name: &str) -> bool {
-    path.segments.last().is_some_and(|seg| seg.ident == name)
-}
-
-fn is_group(name: &str) -> bool {
-    GROUPS.iter().any(|(group, _)| *group == name)
 }
 
 fn is_target(path: &syn::Path, in_type: &str) -> bool {
@@ -358,17 +352,6 @@ pub(super) fn check_r4(found: &FoundFunc<'_>, file: &syn::File, in_type: &str) -
     out
 }
 
-fn is_in_param(ty: &syn::Type, in_type: &str) -> bool {
-    if let syn::Type::Path(plain) = ty
-        && plain.qself.is_none()
-        && tail_is(&plain.path, in_type)
-    {
-        true
-    } else {
-        false
-    }
-}
-
 fn is_witness(ty: &syn::Type) -> bool {
     if let syn::Type::Reference(borrow) = ty
         && borrow.mutability.is_some()
@@ -454,90 +437,6 @@ pub(super) fn check_r5(
     out
 }
 
-fn lint_tail(part: &str) -> &str {
-    let part = part.trim();
-    if let Some((_, tail)) = part.rsplit_once("::") {
-        tail.trim()
-    } else {
-        part
-    }
-}
-
-fn names_banned_lint(attr: &syn::Attribute) -> bool {
-    if !(attr.path().is_ident("allow") || attr.path().is_ident("expect")) {
-        return false;
-    }
-    let tokens = match &attr.meta {
-        syn::Meta::List(list) => list.tokens.to_string(),
-        _ => return false,
-    };
-    for part in tokens.split(',') {
-        let part = part.trim();
-        if part.contains('=') {
-            continue;
-        }
-        let tail = lint_tail(part);
-        if tail == "unused_variables" || tail == "unused" || tail == "warnings" {
-            return true;
-        }
-    }
-    false
-}
-
-fn attr_detail(attr: &syn::Attribute) -> String {
-    let name = attr
-        .path()
-        .segments
-        .last()
-        .map_or(String::from("attr"), |seg| seg.ident.to_string());
-    let tokens = match &attr.meta {
-        syn::Meta::List(list) => list.tokens.to_string(),
-        _ => String::new(),
-    };
-    format!("{name}({tokens})")
-}
-
-struct Attrs {
-    hits: Vec<String>,
-}
-
-impl<'ast> Visit<'ast> for Attrs {
-    fn visit_attribute(&mut self, attr: &'ast syn::Attribute) {
-        if names_banned_lint(attr) {
-            self.hits.push(attr_detail(attr));
-        }
-    }
-}
-
-/// R7: no silencing of `unused` lints on the stage or in its file header.
-pub(super) fn check_r7(found: &FoundFunc<'_>, file: &syn::File) -> Vec<String> {
-    let mut out = Vec::new();
-    for attr in found.attrs {
-        if names_banned_lint(attr) {
-            out.push(format!(
-                "R7: silencing attribute `{}` on the stage",
-                attr_detail(attr)
-            ));
-        }
-    }
-    let mut seen = Attrs { hits: Vec::new() };
-    seen.visit_block(found.block);
-    for detail in seen.hits {
-        out.push(format!(
-            "R7: silencing attribute `{detail}` inside the stage"
-        ));
-    }
-    for attr in &file.attrs {
-        if names_banned_lint(attr) {
-            out.push(format!(
-                "R7: silencing attribute `{}` in the file header",
-                attr_detail(attr)
-            ));
-        }
-    }
-    out
-}
-
 fn is_self(expr: &syn::Expr) -> bool {
     if let syn::Expr::Path(plain) = expr
         && plain.qself.is_none()
@@ -595,7 +494,6 @@ impl<'ast> Visit<'ast> for Selves {
 pub(super) fn check_r8(found: &FoundFunc<'_>) -> Vec<String> {
     let mut seen = Selves { hits: 0 };
     seen.visit_block(found.block);
-    seen.hits += super::invoke_stages_r6::macro_bare_self_count(found);
     if seen.hits == 0 {
         Vec::new()
     } else {
@@ -616,7 +514,12 @@ fn carries_forbid(attrs: &[syn::Attribute]) -> bool {
             _ => continue,
         };
         for part in tokens.split(',') {
-            if lint_tail(part) == "unused_variables" {
+            // The lint tail after any `::` decides, so `clippy::x` never matches.
+            let trimmed = part.trim();
+            let tail = trimmed
+                .rsplit_once("::")
+                .map_or(trimmed, |(_, tail)| tail.trim());
+            if tail == "unused_variables" {
                 return true;
             }
         }

@@ -7,15 +7,15 @@ use syn::visit::Visit;
 use super::invoke_stages_allow::GROUPS;
 use super::invoke_stages_rules::FoundFunc;
 
-fn tail_is(path: &syn::Path, name: &str) -> bool {
+pub(super) fn tail_is(path: &syn::Path, name: &str) -> bool {
     path.segments.last().is_some_and(|seg| seg.ident == name)
 }
 
-fn is_group(name: &str) -> bool {
+pub(super) fn is_group(name: &str) -> bool {
     GROUPS.iter().any(|(group, _)| *group == name)
 }
 
-fn is_in_param(ty: &syn::Type, in_type: &str) -> bool {
+pub(super) fn is_in_param(ty: &syn::Type, in_type: &str) -> bool {
     if let syn::Type::Path(plain) = ty
         && plain.qself.is_none()
         && tail_is(&plain.path, in_type)
