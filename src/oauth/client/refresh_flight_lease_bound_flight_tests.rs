@@ -116,15 +116,16 @@ async fn t13h_interactive_waiter_behind_the_flight_lock_keeps_the_long_wait() {
     .expect("a bounded wait answers inside twice the bound");
 }
 
-/// T13i: a non-interactive save queued behind the in-process flight lock
-/// answers the marked busy error at the short wait. RED now: `save_issued`
-/// waits the flight lock unbounded, so the outer timeout fires.
+/// T13i: a Long `save_issued` queued behind the in-process flight lock is
+/// still pending past the short wait, then saves once the holder releases,
+/// inside the long budget. RED in phase 1, where a non-interactive save
+/// answers busy at 2 s.
 #[tokio::test(start_paused = true)]
-async fn t13i_noninteractive_save_behind_the_flight_lock_answers_busy_at_the_short_wait() {
+async fn t13i_a_long_save_behind_the_flight_lock_waits_and_saves() {
     tokio::time::timeout(CREDENTIAL_LOCK_WAIT * 2, async {
         let server = TokenServer::start(&[]).await;
         let dir = tempfile::tempdir().expect("a scratch token store");
-        let oauth = client(dir.path(), &server);
+        let oauth = Arc::new(client(dir.path(), &server));
         let (_, token_path, _) = credential_paths(&oauth);
         // The in-process holder: a spawned task, so the waiter queues behind
         // another task's hold rather than its own.
@@ -136,35 +137,43 @@ async fn t13i_noninteractive_save_behind_the_flight_lock_answers_busy_at_the_sho
             async move {
                 let _guard = flight.lock.lock().await;
                 acquired.notify_one();
-                tokio::time::sleep(CREDENTIAL_LOCK_WAIT * 2 + Duration::from_secs(10)).await;
+                tokio::time::sleep(Duration::from_secs(5)).await;
             }
         });
         acquired.notified().await;
 
         let issued = token("issued", None, false);
-        let start = Instant::now();
-        let outcome =
-            crate::oauth::login_gate::non_interactive(oauth.save_issued_for_test(&issued)).await;
-        let elapsed = start.elapsed();
-        holder.abort();
+        let waiter = tokio::spawn({
+            let oauth = Arc::clone(&oauth);
+            let issued = issued.clone();
+            async move {
+                let start = Instant::now();
+                let outcome =
+                    crate::oauth::login_gate::non_interactive(oauth.save_issued_for_test(&issued))
+                        .await;
+                (outcome, start.elapsed())
+            }
+        });
+        // Past the short wait the Long save is still queued.
+        tokio::time::sleep(SHORT_CONTENTION_WAIT + POLL).await;
+        assert!(
+            !waiter.is_finished(),
+            "a long save answered inside the short wait"
+        );
 
-        let error = outcome.expect_err("no token saves past a held flight");
+        let (outcome, elapsed) = waiter.await.expect("the waiter joins");
+        holder.await.expect("the holder joins");
+        outcome.expect("the long save saves after the release");
         assert!(
-            is_credential_lock_busy(&error),
-            "not the marked error: {error}"
-        );
-        assert!(
-            matches!(error, Error::BackendUnavailable(_)),
-            "not unwrapped: {error:?}"
-        );
-        assert!(error.is_pre_dispatch(), "a busy lock frees the key");
-        assert!(
-            (SHORT_CONTENTION_WAIT..SHORT_CONTENTION_WAIT + POLL + Duration::from_secs(1))
+            (Duration::from_secs(5)..Duration::from_secs(5) + POLL + Duration::from_secs(1))
                 .contains(&elapsed),
-            "answered off the short wait: {elapsed:?}"
+            "saved off the release: {elapsed:?}"
+        );
+        assert_eq!(
+            stored(&oauth).expect("saved").access_token,
+            issued.access_token
         );
         assert_eq!(server.requests(), 0, "the save sent");
-        assert!(stored(&oauth).is_none(), "a failed save stored a token");
     })
     .await
     .expect("a bounded save answers inside twice the bound");

@@ -367,6 +367,16 @@ impl HttpTransport {
         self.oauth_client.clone()
     }
 
+    /// Seed the message URL and the default-bucket session, as an initialize
+    /// would, so a test can drive `close()` without a handshake.
+    #[cfg(test)]
+    pub(crate) fn seed_session_for_test(&self, message_url: String, session_id: &str) {
+        *self.message_url.write() = Some(message_url);
+        self.sessions
+            .write()
+            .insert(String::new(), session_id.to_string());
+    }
+
     /// Create a new HTTP transport
     ///
     /// If `streamable_http` is true, uses direct POST without SSE handshake.

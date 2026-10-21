@@ -86,8 +86,12 @@ async fn two_capability_calls_refresh_a_rotating_token_once() {
     server.arrivals(2, Duration::from_secs(2)).await;
     server.release.notify_one();
 
-    a.await.unwrap().expect("the first refresh succeeds");
-    let _ = b.await.unwrap();
+    let issued = a.await.unwrap().expect("the first refresh succeeds");
+    let adopted = b
+        .await
+        .unwrap()
+        .expect("the second call takes up the stored token");
+    assert_eq!(adopted, issued);
     assert_eq!(
         server.uses("r1"),
         1,

@@ -209,13 +209,13 @@ async fn t4_waiter_adopts_what_a_releasing_holder_stored() {
     .expect("a 30 s wait ends inside twice the bound");
 }
 
-/// T4b: the same 30 s holder, the waiter non-interactive: it answers the
-/// marked error at the short wait instead of waiting for the release. RED on
+/// T4b: the same 30 s holder, the waiter in the Short class (a probe): it
+/// answers the marked error at the short wait instead of waiting for the release. RED on
 /// the base, where the waiter waits the 30 s and adopts (the lease wait is
 /// unbounded, so no short bound answers). No socket runs: the lease blocks
 /// the exchange before any POST, and the adoption (on the base) sends none.
 #[tokio::test(start_paused = true)]
-async fn t4b_noninteractive_waiter_answers_busy_at_the_short_wait() {
+async fn t4b_a_short_class_waiter_answers_busy_at_the_short_wait() {
     tokio::time::timeout(CREDENTIAL_LOCK_WAIT * 2, async {
         let server = TokenServer::start(&[]).await;
         let dir = tempfile::tempdir().expect("a scratch token store");
@@ -233,7 +233,7 @@ async fn t4b_noninteractive_waiter_answers_busy_at_the_short_wait() {
             let client = Arc::clone(&client);
             async move {
                 let start = Instant::now();
-                let outcome = headless(&client).await;
+                let outcome = crate::oauth::login_gate::short_contention(client.get_token()).await;
                 (outcome, start.elapsed())
             }
         });
