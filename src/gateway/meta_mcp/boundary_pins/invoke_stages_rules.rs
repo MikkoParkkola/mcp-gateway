@@ -652,7 +652,7 @@ fn is_input_path(expr: &syn::Expr, inputs: &HashSet<String>) -> bool {
 impl Visit<'_> for Discards<'_> {
     fn visit_local(&mut self, local: &syn::Local) {
         if let Some(init) = local.init.as_ref() {
-            let discarded = match local.pat.as_ref() {
+            let discarded = match &local.pat {
                 syn::Pat::Wild(_) => is_input_path(&init.expr, self.inputs),
                 syn::Pat::Ident(bound) => {
                     let name = bound.ident.to_string();
