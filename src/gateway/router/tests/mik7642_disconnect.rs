@@ -19,8 +19,8 @@ use crate::transport::HttpTransport;
 /// Every message the backend received, in arrival order.
 type Seen = Arc<Mutex<Vec<Value>>>;
 
-/// A legacy backend that answers `tools/call` only after a long sleep.
-async fn slow_backend() -> (String, Seen) {
+/// A legacy backend that answers `tools/call` after `call_delay`.
+async fn slow_backend(call_delay: Duration) -> (String, Seen) {
     let seen = Seen::default();
     let record = Arc::clone(&seen);
     let app = axum::Router::new().fallback(move |body: String| {
@@ -36,7 +36,7 @@ async fn slow_backend() -> (String, Seen) {
                     {"name": "act", "description": "slow", "inputSchema": {"type": "object"}},
                 ]}),
                 Some("tools/call") => {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    tokio::time::sleep(call_delay).await;
                     json!({"content": [{"type": "text", "text": "done"}]})
                 }
                 _ => json!({}),
@@ -82,7 +82,7 @@ fn auth() -> AuthConfig {
 
 #[tokio::test]
 async fn a_client_disconnect_mid_call_cancels_the_backend_call_by_its_id() {
-    let (backend_url, seen) = slow_backend().await;
+    let (backend_url, seen) = slow_backend(Duration::from_secs(5)).await;
     let (state, _store) = super::test_router_app_state_with_auth(&auth()).await;
     let backend = Arc::new(Backend::new(
         "svc",
@@ -153,4 +153,85 @@ async fn a_client_disconnect_mid_call_cancels_the_backend_call_by_its_id() {
         "it names the backend's own id"
     );
     assert_ne!(cancels[0]["params"]["requestId"], json!("client-7"));
+}
+
+/// MIK-8614.CANCELZERO.1: the "0 after completion" half of MIK-7642.GH2495.3
+/// on this route. A client that disconnects after reading the answer sends
+/// the backend no cancel: the exchange already finished, so there is nothing
+/// left to cancel.
+#[tokio::test]
+async fn a_client_disconnect_after_the_answer_sends_no_cancel() {
+    let (backend_url, seen) = slow_backend(Duration::ZERO).await;
+    let (state, _store) = super::test_router_app_state_with_auth(&auth()).await;
+    let backend = Arc::new(Backend::new(
+        "svc",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let transport = HttpTransport::new(&backend_url, HashMap::new(), Duration::from_secs(30), true)
+        .expect("a transport");
+    // A transport that never handshook reads as not connected, and the
+    // backend would then restart from its empty config instead of using it.
+    transport
+        .initialize()
+        .await
+        .expect("the backend handshakes");
+    backend.set_transport_for_test(transport as Arc<dyn crate::transport::Transport>);
+    assert!(state.backends.register(backend));
+    let router = super::create_router(Arc::clone(&state));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gateway = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+    });
+
+    let client = reqwest::Client::builder()
+        .pool_max_idle_per_host(0)
+        .build()
+        .expect("a client");
+    let call = json!({
+        "jsonrpc": "2.0", "id": "client-7", "method": "tools/call",
+        "params": {"name": "act", "arguments": {}},
+    });
+    let exchange = async {
+        let response = client
+            .post(format!("http://{gateway}/mcp/svc"))
+            .header("authorization", "Bearer k")
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream")
+            .body(call.to_string())
+            .send()
+            .await?;
+        let status = response.status();
+        Ok::<_, reqwest::Error>((status, response.text().await?))
+    };
+    // The backend answers at once; the bound is only a hang guard.
+    let (status, body) = tokio::time::timeout(Duration::from_secs(30), exchange)
+        .await
+        .expect("the answered call arrives")
+        .expect("the whole response reads");
+    assert_eq!(status, reqwest::StatusCode::OK, "{body}");
+    assert!(body.contains("done"), "the client read the answer: {body}");
+    // With no idle pool, dropping the client closes the connection.
+    drop(client);
+    // A wrongly sent cancel would arrive at once; give it time to show.
+    // timing: absence
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let calls = of_method(&seen, "tools/call");
+    assert_eq!(
+        calls.len(),
+        1,
+        "MIK-8614.CANCELZERO.1: the backend got the call once: {:?}",
+        seen.lock().unwrap()
+    );
+    let cancels = of_method(&seen, "notifications/cancelled");
+    assert!(
+        cancels.is_empty(),
+        "MIK-8614.CANCELZERO.1: no cancel after completion: {cancels:?}"
+    );
 }
