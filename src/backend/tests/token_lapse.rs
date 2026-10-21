@@ -106,6 +106,9 @@ async fn t13e_a_probe_whose_start_meets_a_held_lock_skips_the_rebuild() {
         .expect("another process holds the credential lock");
     // The next probe starts a fresh transport, so `ensure_started` reaches
     // the handshake's token step.
+    // The fixture's own start may still hold the start lock; a probe would
+    // then refuse at once without reaching the token step.
+    within("the first start to settle", backend.start_settled()).await;
     let old = backend.shared_entry().transport.write().take();
     assert!(old.is_some(), "premise: the backend had started");
     let rebuilds = backend
