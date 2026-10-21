@@ -484,12 +484,12 @@ pub(crate) use grants::OAUTH_AUTHORIZATION_WINDOW;
 #[cfg(test)]
 mod grants_tests;
 mod refresh_flight;
+#[cfg(test)]
+pub(crate) use refresh_flight::busy_error_for_test;
 pub(crate) use refresh_flight::{
     RefreshCaller, RefreshRequest, Refreshed, StoredCredential, is_credential_lock_busy,
     refresh_stored,
 };
-#[cfg(test)]
-pub(crate) use refresh_flight::busy_error_for_test;
 #[cfg(test)]
 mod issuer_provenance_tests;
 #[cfg(test)]

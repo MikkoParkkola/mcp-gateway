@@ -726,12 +726,18 @@ async fn a_polled_save_gives_up_on_a_held_repair_lock_at_its_bound() {
     // The 200 ms bound lives only in the lease deadline: without it this
     // await would hang, so an outer wall-clock bound fails the regression
     // in about 5 s instead.
+    let started = std::time::Instant::now();
     let saved = tokio::time::timeout(
         Duration::from_secs(5),
         store.save_client_id_polled(backend, resource, "ours", Duration::from_millis(200)),
     )
     .await
     .expect("the polled save never answered");
+    let (elapsed, bound) = (started.elapsed(), Duration::from_millis(200 + 50 + 1_000)); // + poll + slack
+    assert!(
+        (Duration::from_millis(200)..=bound).contains(&elapsed),
+        "a stretched bound answers late: {elapsed:?}"
+    );
 
     assert!(
         matches!(&saved, Err(Error::OAuth(m)) if m.contains("still held")),

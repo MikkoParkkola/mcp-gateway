@@ -362,20 +362,8 @@ impl OAuthClient {
         // One budget covers the in-process flight and the cross-process lease:
         // a save queued behind an in-process holder answers the same busy
         // error at the deadline instead of queuing unbounded (MIK-8619).
-        let now = tokio::time::Instant::now();
-        let deadline = if crate::oauth::login_gate::interactive() {
-            now + super::refresh_flight::CREDENTIAL_LOCK_WAIT
-        } else {
-            now + super::refresh_flight::NONINTERACTIVE_LEASE_WAIT
-        };
-        let _guard = tokio::time::timeout_at(deadline, flight.lock.lock())
-            .await
-            .map_err(|_| {
-                Error::BackendUnavailable(format!(
-                    "{}: the refresh lock stayed held past the contention budget",
-                    super::refresh_flight::CREDENTIAL_LOCK_BUSY
-                ))
-            })?;
+        let deadline = super::refresh_flight::contention_deadline();
+        let _guard = super::refresh_flight::lock_flight_until(&flight, deadline).await?;
         let _across = super::refresh_flight::hold_across_processes(&token_path, deadline).await?;
         self.store_issued_locked(&key, token)
     }
