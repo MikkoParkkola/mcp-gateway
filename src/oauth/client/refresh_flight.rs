@@ -84,14 +84,14 @@ impl Flight {
     }
 }
 
-/// The contention deadline for the calling task: `now + CREDENTIAL_LOCK_WAIT` (90 s)
-/// for an interactive caller, `now + SHORT_CONTENTION_WAIT` (2 s) otherwise.
+/// The contention deadline for the calling task: `now + SHORT_CONTENTION_WAIT`
+/// (2 s) for a Short caller, `now + CREDENTIAL_LOCK_WAIT` (90 s) otherwise.
+/// Whether the caller may log in does not change it.
 pub(super) fn contention_deadline() -> tokio::time::Instant {
     let now = tokio::time::Instant::now();
-    if crate::oauth::login_gate::interactive() {
-        now + CREDENTIAL_LOCK_WAIT
-    } else {
-        now + SHORT_CONTENTION_WAIT
+    match crate::oauth::login_gate::contention_class() {
+        crate::oauth::login_gate::ContentionClass::Short => now + SHORT_CONTENTION_WAIT,
+        crate::oauth::login_gate::ContentionClass::Long => now + CREDENTIAL_LOCK_WAIT,
     }
 }
 
@@ -120,24 +120,17 @@ fn busy_error(detail: &str) -> crate::Error {
 /// after the in-process lock, so one waiter per process polls here. Polled,
 /// not blocked on: a cancelled caller leaves no thread waiting behind it.
 ///
-/// Bounded by the caller's `deadline`, capped to the short wait for
-/// non-interactive callers. Every lock failure answers `BackendUnavailable`
-/// with the busy marker, which frees the key and never starts a login.
+/// Bounded by the caller's `deadline`: `refresh_stored` and `save_issued`
+/// pass `contention_deadline()`, a login's save passes its window, and
+/// storage's polled save passes its own bound. Every lock failure answers
+/// `BackendUnavailable` with the busy marker, which frees the key and never
+/// starts a login.
 pub(super) async fn hold_across_processes(
     token_path: &Path,
     deadline: tokio::time::Instant,
 ) -> crate::Result<ExclusiveFileLock> {
     let lock_path = token_path.with_extension("refresh.lock");
-    // A non-interactive caller (the probe) never waits out a peer's whole
-    // exchange: the short wait, capped by the caller's own deadline. An
-    // interactive caller's deadline (a login's window may exceed 90 s) is
-    // kept unchanged.
-    let effective = if crate::oauth::login_gate::interactive() {
-        deadline
-    } else {
-        deadline.min(contention_deadline())
-    };
-    match ExclusiveFileLock::lease(&lock_path, LOCK_POLL, effective).await {
+    match ExclusiveFileLock::lease(&lock_path, LOCK_POLL, deadline).await {
         Ok(lock) => Ok(lock),
         // A spent contention budget, not proof the holder stalled: try again later.
         Err(error) if error.kind() == std::io::ErrorKind::TimedOut => Err(busy_error(
@@ -184,9 +177,9 @@ const EXCHANGE_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
 /// interactive caller's own window ends later.
 pub(super) const CREDENTIAL_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(90);
 
-/// The contention budget for non-interactive callers (the probe, era
-/// discovery, the upstream listener, meta-MCP upstream, transport close): a
-/// peer legitimately holds the lease for a moment while refreshing, so zero is
+/// The contention budget of the Short class (the probe, era discovery,
+/// transport close): callers whose own deadline is at or below it. A peer
+/// legitimately holds the lease for a moment while refreshing, so zero is
 /// too strict, but a full exchange wait would outlast the probe's own timeout.
 /// Pinned below it by test.
 /// Known limit: a configured health timeout of 2 s or less can still time out

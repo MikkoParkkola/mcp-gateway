@@ -27,6 +27,7 @@ pub(crate) use scopes::{
     non_interactive, past, set_out_cohort, set_out_epoch, set_out_with_cohort, short_contention,
     stage_end,
 };
+pub(in crate::oauth) use scopes::{ContentionClass, contention_class};
 
 /// How a login that produced no token ended, kept as data because [`Error`]
 /// is not `Clone`: every caller of the cohort gets its own typed copy.
