@@ -1,0 +1,13 @@
+head_sha	c01cfbfd31d206c7bef690d7913088b7ac06dda4
+HTTP_02	linux	http_2_decide_tool_target.patch	--lib gateway::router::tests::issue_555_listing_scope::direct_tools_list_drops_a_tool_outside_the_key_allowlist
+HTTP_08	linux	http_8_resolve_passthrough_headers.patch	--lib gateway::router::backend_handlers::tests::passthrough::required_and_absent_refuses
+HTTP_14	linux	http_14_notification_key_resolve.patch	--lib gateway::router::direct_notification_refusal_tests::a_required_passthrough_backend_refuses_without_a_credential
+ACCT_04	linux	acct_4_scope_broaden.patch	--lib personal_accounts::service::service_tests::service_refresh_tests::narrower_scopes_advance_epoch_and_retire_lease_but_broader_scopes_are_refused
+ACCT_10	linux	acct_10_consent_fence.patch	--lib personal_accounts::service::service_tests::service_consent_tests::the_guarded_store_entrypoint_fences_a_stale_expectation_without_writing
+ACCT_16	linux	acct_16_start_rate.patch	--lib personal_accounts::storage::journey::tests_gaps::start_rate_n_plus_one_within_a_minute_is_429_then_admitted_after_the_window
+OAUTH_06	linux	oauth_6_discover.patch	--lib oauth::metadata::tests::discovery_refuses_metadata_claiming_another_issuer
+BRIDGE_04	linux	bridge_4_run_gate_rounds.patch	--test mik_7212_mrtr7_bridge_acs ac_mrtr_7a_the_gate_inspects_every_round_not_only_the_first
+STARTUP_06	linux	startup_6_startup_networkbind.patch	--lib gateway::server::support::network_bind_tests::auth_enabled_is_not_enough_when_tools_are_public
+STDIO_04	linux	stdio_4_stdio_progressonly.patch	--lib transport::stdio::tests::a_message_stamped_with_a_registered_progress_token_is_not_delivered
+TASKS_02	linux	tasks_2_owns_all.patch	--lib gateway::task_service::service_tests::service_07_owns_all_is_all_or_nothing
+TASKS_08	linux	tasks_8_consistent_with.patch	--lib gateway::task_service::record::legacy_tests::a_legacy_row_without_a_consistent_descriptor_names_nothing
