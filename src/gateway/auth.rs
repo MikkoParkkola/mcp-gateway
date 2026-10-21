@@ -238,7 +238,7 @@ impl AuthenticatedClient {
     #[must_use]
     pub(crate) fn api_key_identity(&self) -> Option<&str> {
         (self.authenticated && self.credential_kind == CredentialKind::ApiKey)
-            .then(|| self.name.as_str())
+            .then_some(self.name.as_str())
     }
 
     /// The refusal text when this client may not reach `backend`.

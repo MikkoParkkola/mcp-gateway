@@ -178,7 +178,7 @@ async fn intake_withholds_a_surfaced_personal_name_from_the_static_bearer() {
     let port = start_probe().await;
     let (caps, _dir) = personal_caps("caps", "probe", &format!("http://localhost:{port}")).await;
     let grants = LocalIdentityGrantStore::from_grants([bearer_grant("probe")]);
-    let fx = sanitizing(
+    let fx = Box::pin(sanitizing(
         true,
         fixture_with_bearer(Answer::Ok, {
             let caps = Arc::clone(&caps);
@@ -192,7 +192,7 @@ async fn intake_withholds_a_surfaced_personal_name_from_the_static_bearer() {
                 meta
             }
         }),
-    )
+    ))
     .await;
     let (_, body) = send(
         &fx,
@@ -224,7 +224,7 @@ async fn intake_shows_a_surfaced_personal_name_to_the_api_key() {
     let port = start_probe().await;
     let (caps, _dir) = personal_caps("caps", "probe", &format!("http://localhost:{port}")).await;
     let grants = LocalIdentityGrantStore::from_grants([bearer_grant("probe")]);
-    let fx = sanitizing(
+    let fx = Box::pin(sanitizing(
         true,
         fixture_with_bearer(Answer::Ok, {
             let caps = Arc::clone(&caps);
@@ -238,7 +238,7 @@ async fn intake_shows_a_surfaced_personal_name_to_the_api_key() {
                 meta
             }
         }),
-    )
+    ))
     .await;
     let (_, body) = send(
         &fx,
@@ -430,7 +430,11 @@ async fn watch_poll_admits_the_api_key_for_its_grant() {
         input_schema: json!({}),
     };
     assert!(
-        host.may_invoke(&holder, &target, chrono::Utc::now()),
+        host.may_invoke(
+            &holder,
+            &target,
+            crate::clock::utc_now().expect("a readable clock")
+        ),
         "the api key keeps its grant"
     );
 }
