@@ -520,7 +520,11 @@ struct BusyLister {
 
 #[async_trait]
 impl crate::transport::Transport for BusyLister {
-    async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<JsonRpcResponse> {
         if method != "tools/list" {
             return Ok(JsonRpcResponse::success(RequestId::Number(1), json!({})));
         }
@@ -561,9 +565,10 @@ fn busy_backend(failsafe: &FailsafeConfig, lister: Arc<BusyLister>) -> Arc<Backe
 
 /// T13f: a tools fill whose `tools/list` answers the marked busy error takes
 /// no breaker sample and stamps no cooldown (`FillEnd::Pending`, like an
-/// authorization wait). An unmarked `BackendUnavailable` still samples and
-/// stamps, so a blanket skip of the variant fails. RED now: `record_fill`
-/// samples and `FillEnd::of` stamps.
+/// authorization wait). One failure is seeded first, so a wrong success sample
+/// (a reset to zero) fails as well as a sampled failure. An unmarked
+/// `BackendUnavailable` still samples and stamps, so a blanket skip of the
+/// variant fails. RED now: `record_fill` samples and `FillEnd::of` stamps.
 #[tokio::test(start_paused = true)]
 async fn t13f_fill_over_a_busy_lock_takes_no_sample_and_no_cooldown() {
     tokio::time::timeout(Duration::from_secs(30), async {
@@ -575,7 +580,14 @@ async fn t13f_fill_over_a_busy_lock_takes_no_sample_and_no_cooldown() {
             marked: true,
         });
         let marked_backend = busy_backend(&failsafe, Arc::clone(&marked_lister));
+        // A seeded failure: the count must stay put, so a reset fails too.
+        marked_backend
+            .shared_entry()
+            .failsafe
+            .circuit_breaker
+            .record_failure("seed", Duration::ZERO);
         let before = marked_backend.circuit_breaker_stats().current_failures;
+        assert_eq!(before, 1, "the seed did not land: {before}");
         let first = check(&marked_backend, "edit", &undeclared()).await;
         let Err(marked_error) = first else {
             panic!("no tools cross a busy lock");
@@ -652,6 +664,21 @@ async fn t13f_fill_over_a_busy_lock_takes_no_sample_and_no_cooldown() {
             plain_lister.lists.load(Ordering::SeqCst),
             1,
             "the second call listed again inside the cooldown"
+        );
+
+        // The predicate needs the colon: a message starting with the marker
+        // text but without it is not busy. RED now: the `BackendUnavailable`
+        // arm matches the bare prefix.
+        let near =
+            crate::Error::BackendUnavailable("credential lock busy without a colon".to_string());
+        assert!(
+            !crate::oauth::client::is_credential_lock_busy(&near),
+            "a colonless marker reads busy: {near}"
+        );
+        let positive = crate::oauth::client::busy_error_for_test("the token step holds the lease");
+        assert!(
+            crate::oauth::client::is_credential_lock_busy(&positive),
+            "the marked error does not read busy: {positive}"
         );
     })
     .await

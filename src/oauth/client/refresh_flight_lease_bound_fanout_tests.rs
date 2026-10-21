@@ -495,9 +495,9 @@ async fn t13b_probe_answers_busy_at_the_short_wait() {
 
 /// T13g: a probe queued behind an in-process holder answers the marked busy
 /// error at the short wait, with no rebuild and no breaker sample. The holder
-/// is the flight lock taken directly, as an interactive refresh blocked on the
-/// lease would hold it. RED now: `refresh_stored` waits the flight lock
-/// unbounded, so the probe times out at 5 s and rebuilds.
+/// is a spawned task holding the flight lock, as an interactive refresh
+/// blocked on the lease would hold it. RED now: `refresh_stored` waits the
+/// flight lock unbounded, so the probe times out at 5 s and rebuilds.
 #[tokio::test(start_paused = true)]
 async fn t13g_probe_behind_an_in_process_holder_answers_busy_at_the_short_wait() {
     tokio::time::timeout(Duration::from_secs(5) * 2, async {
@@ -506,9 +506,20 @@ async fn t13g_probe_behind_an_in_process_holder_answers_busy_at_the_short_wait()
         let oauth = client(dir.path(), &server);
         hold(&oauth, &token("a1", Some("r1"), true));
         let (_, token_path, _) = credential_paths(&oauth);
-        // The in-process holder: the flight lock, held across the probe.
+        // The in-process holder: a spawned task, so the probe queues behind
+        // another task's hold rather than its own.
         let flight = Flight::of(&token_path);
-        let _in_process = flight.lock.lock().await;
+        let acquired = Arc::new(tokio::sync::Notify::new());
+        let holder = tokio::spawn({
+            let flight = Arc::clone(&flight);
+            let acquired = Arc::clone(&acquired);
+            async move {
+                let _guard = flight.lock.lock().await;
+                acquired.notify_one();
+                tokio::time::sleep(CREDENTIAL_LOCK_WAIT * 2).await;
+            }
+        });
+        acquired.notified().await;
         let backend = crate::backend::Backend::new(
             "t13g-probe",
             crate::config::BackendConfig::default(),
@@ -523,6 +534,7 @@ async fn t13g_probe_behind_an_in_process_holder_answers_busy_at_the_short_wait()
         let start = Instant::now();
         let outcome = backend.health_probe(Duration::from_secs(5)).await;
         let elapsed = start.elapsed();
+        holder.abort();
 
         let error = outcome.expect_err("a busy lock is not health");
         assert!(
