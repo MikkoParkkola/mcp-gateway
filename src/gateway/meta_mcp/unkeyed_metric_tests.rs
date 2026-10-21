@@ -24,6 +24,24 @@ fn an_unkeyed_admission_is_counted_without_allocating() {
     );
 }
 
+/// Every (era, read-only) arm, measured at the helper itself: the modern arms
+/// cannot be measured through `record_unkeyed`, whose warn limiter does its
+/// own work. A computed label in any one arm allocates a label Vec and fails here.
+#[test]
+fn every_label_arm_counts_without_allocating() {
+    let _guard = telemetry_metrics::set_default_local_recorder(&telemetry_metrics::NoopRecorder);
+    for (is_modern, read_only) in [(true, true), (true, false), (false, true), (false, false)] {
+        let ((), measured) = crate::gateway::alloc_meter::measure(|| {
+            super::super::warn_limit::count_unkeyed(is_modern, read_only)
+        });
+        assert_eq!(
+            measured.calls, 0,
+            "the (modern={is_modern}, read_only={read_only}) arm allocated {} times ({} B) (MIK-8014 PERF.13a)",
+            measured.calls, measured.bytes
+        );
+    }
+}
+
 /// Green on base and head: the series' name, labels and values are the
 /// contract ADR-012 names; this is the differential check.
 #[test]
