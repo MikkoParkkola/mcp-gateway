@@ -91,8 +91,14 @@ async fn a_client_disconnect_mid_call_cancels_the_backend_call_by_its_id() {
         &FailsafeConfig::default(),
         Duration::from_secs(60),
     ));
-    let transport = HttpTransport::new(&backend_url, HashMap::new(), Duration::from_secs(30), true)
-        .expect("a transport");
+    // The transport timeout must outlast the test's own hang guard.
+    let transport = HttpTransport::new(
+        &backend_url,
+        HashMap::new(),
+        Duration::from_secs(3600),
+        true,
+    )
+    .expect("a transport");
     // A transport that never handshook reads as not connected, and the
     // backend would then restart from its empty config instead of using it.
     transport
@@ -273,8 +279,14 @@ async fn mcp_gateway_with_slow_backend(
         &FailsafeConfig::default(),
         Duration::from_secs(60),
     ));
-    let transport = HttpTransport::new(&backend_url, HashMap::new(), Duration::from_secs(30), true)
-        .expect("a transport");
+    // The transport timeout must outlast the test's own hang guard.
+    let transport = HttpTransport::new(
+        &backend_url,
+        HashMap::new(),
+        Duration::from_secs(3600),
+        true,
+    )
+    .expect("a transport");
     // A transport that never handshook reads as not connected, and the
     // backend would then restart from its empty config instead of using it.
     transport
