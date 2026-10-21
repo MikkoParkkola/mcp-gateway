@@ -16,10 +16,11 @@ permissions:
 env:
   REF_B: v3.5.1
   REF_C: 5ddc1226ff413d4ca54203b8c480224985e9be5b
-  # PERF.7 re-measure (MIK-8014): T is the release-line tip after PERF.10-12,
-  # MIK-8504 and MIK-8533. Each row also records the gateway's RSS before and
-  # after the measured calls (MIK-8504.SESS.3).
-  REF_T: b9a69a1e0a45b3b2ebf0b59b4ee6b9b6a6f7db53
+  # PERF.7 re-measure (MIK-8014), 2026-10-21: T is the release-line tip after
+  # #3990, #3991, #3992 and PERF.13(a) (#4028). Same protocol as run
+  # 39360034151; only T moves. Each row also records the gateway's RSS before
+  # and after the measured calls (MIK-8504.SESS.3).
+  REF_T: c3878f4cd0556ea01a6adbed5ce92adc90b8a338
   FEATURES: a2a,webui,config-export,cost-governance,firewall,discovery,semantic-search,tool-profiles,metrics
   CARGO_PROFILE_RELEASE_STRIP: none
   CARGO_PROFILE_RELEASE_DEBUG: "1"
