@@ -5,8 +5,12 @@
 
 use std::collections::HashMap;
 
+use dashmap::DashMap;
+
 use super::super::persistence::EnforcerSaveSnapshot;
-use super::{AlertAction, BudgetEnforcer, EnforcerSnapshot, add_capped, rows, usd};
+use super::{
+    AlertAction, BudgetEnforcer, DailyAccumulator, EnforcerSnapshot, add_capped, rows, usd,
+};
 
 impl BudgetEnforcer {
     /// Re-apply today's spend from a persisted snapshot, so a restart keeps
@@ -18,7 +22,7 @@ impl BudgetEnforcer {
     pub fn restore(&self, persisted: &super::super::persistence::PersistedCosts) {
         // A clock it cannot read keeps the saved spend counting (MIK-8202):
         // discarding it would restart the budgets at zero.
-        let today = crate::clock::unix_secs().map(|now| now / 86_400);
+        let today = super::current_day();
         if today.is_ok_and(|today| persisted.saved_at / 86_400 != today) {
             tracing::info!(
                 // The pre-split module path, kept as the log target.
@@ -95,26 +99,11 @@ impl BudgetEnforcer {
     }
 
     fn snapshot_at(&self, taken_at: Option<u64>) -> EnforcerSnapshot {
-        #[allow(clippy::cast_precision_loss)]
-        let global_daily_usd = self.global_daily.current() as f64 / 1_000_000.0;
+        let global_daily_usd = usd(self.global_daily.current());
 
-        let tool_daily: HashMap<String, f64> = self
-            .tool_daily
-            .iter()
-            .map(|e| {
-                #[allow(clippy::cast_precision_loss)]
-                (e.key().clone(), e.value().current() as f64 / 1_000_000.0)
-            })
-            .collect();
+        let tool_daily = daily_usd(&self.tool_daily);
 
-        let key_daily: HashMap<String, f64> = self
-            .key_daily
-            .iter()
-            .map(|e| {
-                #[allow(clippy::cast_precision_loss)]
-                (e.key().clone(), e.value().current() as f64 / 1_000_000.0)
-            })
-            .collect();
+        let key_daily = daily_usd(&self.key_daily);
 
         EnforcerSnapshot {
             global_daily_usd,
@@ -154,4 +143,10 @@ impl BudgetEnforcer {
 
         best
     }
+}
+
+fn daily_usd(map: &DashMap<String, DailyAccumulator>) -> HashMap<String, f64> {
+    map.iter()
+        .map(|e| (e.key().clone(), usd(e.value().current())))
+        .collect()
 }

@@ -116,12 +116,7 @@ fn validate_without_proof(
         // `mtls` or `jwt` row at self-declaration, so an operator restoring
         // legacy behaviour re-declares those entries and the config records
         // which ones they are.
-        if !config.known_agents.is_empty()
-            && !config
-                .known_agents
-                .iter()
-                .any(|entry| entry.source == AgentSourceKey::Declared && entry.id == declared.id)
-        {
+        if !config.known_agents.is_empty() && !admits_declared(&config.known_agents, &declared.id) {
             return Err(format!(
                 "Agent label {} is not in the known_agents allowlist as a declared entry",
                 quoted(&declared.id)

@@ -615,3 +615,158 @@ fn the_other_risk_and_safety_arms_are_unchanged() {
         1.0
     );
 }
+
+fn result_with_all_threshold_signals(nine: f64) -> SearchResult {
+    let mut result = SearchResult::new("s", "t", "d");
+    result.signals = RankingSignals {
+        relevance: 1.0,
+        safety: 1.0,
+        risk: nine,
+        trust: nine,
+        grant: 1.0,
+        policy_fit: nine,
+        permission_fit: nine,
+        runtime_health: 1.0,
+        cost_efficiency: nine,
+        latency: nine,
+        success_rate: nine,
+        freshness: 1.0,
+        user_preference: nine,
+        organization_preference: nine,
+        user_feedback: 1.0,
+        usage_count: 0,
+    };
+    result
+}
+
+fn explanation_reason_strs(explanation: &RankingExplanation) -> Vec<&str> {
+    explanation.reasons.iter().map(String::as_str).collect()
+}
+
+/// The nine threshold signals in push order: a setter, the low reason and
+/// the high reason, written out from the strings `explanation_for` pushes.
+type ThresholdRow = (fn(&mut RankingSignals, f64), &'static str, &'static str);
+
+fn threshold_signals() -> [ThresholdRow; 9] {
+    [
+        (|s, v| s.risk = v, "risk_downgraded", "risk_fit"),
+        (|s, v| s.policy_fit = v, "policy_downgraded", "policy_fit"),
+        (
+            |s, v| s.permission_fit = v,
+            "permission_downgraded",
+            "permission_fit",
+        ),
+        (|s, v| s.trust = v, "trust_downgraded", "trust_ok"),
+        (|s, v| s.cost_efficiency = v, "cost_downgraded", "cost_fit"),
+        (|s, v| s.latency = v, "latency_downgraded", "latency_fit"),
+        (
+            |s, v| s.success_rate = v,
+            "success_rate_downgraded",
+            "success_rate_fit",
+        ),
+        (
+            |s, v| s.user_preference = v,
+            "user_preference_downgraded",
+            "user_preference_fit",
+        ),
+        (
+            |s, v| s.organization_preference = v,
+            "organization_preference_downgraded",
+            "organization_preference_fit",
+        ),
+    ]
+}
+
+const ALL_HIGH_REASONS: [&str; 13] = [
+    "intent_match",
+    "safety_ok",
+    "grant_ok",
+    "risk_fit",
+    "policy_fit",
+    "permission_fit",
+    "trust_ok",
+    "cost_fit",
+    "latency_fit",
+    "success_rate_fit",
+    "user_preference_fit",
+    "organization_preference_fit",
+    "local_feedback_boost",
+];
+
+const ALL_LOW_REASONS: [&str; 13] = [
+    "intent_match",
+    "safety_ok",
+    "grant_ok",
+    "risk_downgraded",
+    "policy_downgraded",
+    "permission_downgraded",
+    "trust_downgraded",
+    "cost_downgraded",
+    "latency_downgraded",
+    "success_rate_downgraded",
+    "user_preference_downgraded",
+    "organization_preference_downgraded",
+    "local_feedback_boost",
+];
+
+#[test]
+fn explanation_lists_every_high_reason_in_order() {
+    // Every one of the nine signals at 1.0: every high arm.
+    let high = explanation_for(&result_with_all_threshold_signals(1.0));
+    assert_eq!(explanation_reason_strs(&high), ALL_HIGH_REASONS.to_vec());
+}
+
+#[test]
+fn explanation_lists_every_low_reason_in_order() {
+    // Every one of the nine signals at 0.0: every low arm.
+    let low = explanation_for(&result_with_all_threshold_signals(0.0));
+    assert_eq!(explanation_reason_strs(&low), ALL_LOW_REASONS.to_vec());
+}
+
+#[test]
+fn each_signal_below_the_threshold_downgrades_only_itself() {
+    // Just below the boundary: 0.749 < 0.75, so it takes the low arm.
+    for (index, (setter, low, high)) in threshold_signals().into_iter().enumerate() {
+        let mut result = result_with_all_threshold_signals(1.0);
+        setter(&mut result.signals, 0.749);
+        let mut expected = ALL_HIGH_REASONS.to_vec();
+        assert_eq!(expected[3 + index], high, "table order for {low}");
+        expected[3 + index] = low;
+        let below = explanation_for(&result);
+        assert_eq!(
+            explanation_reason_strs(&below),
+            expected,
+            "signal {low} at 0.749"
+        );
+    }
+}
+
+#[test]
+fn each_signal_at_the_threshold_stays_fit() {
+    // Boundary: exactly 0.75 is not < 0.75, so it takes the high arm.
+    for (setter, low, _) in threshold_signals() {
+        let mut result = result_with_all_threshold_signals(1.0);
+        setter(&mut result.signals, 0.75);
+        let boundary = explanation_for(&result);
+        assert_eq!(
+            explanation_reason_strs(&boundary),
+            ALL_HIGH_REASONS.to_vec(),
+            "signal {low} at 0.75"
+        );
+    }
+}
+
+#[test]
+fn a_nan_signal_stays_fit() {
+    // NaN < 0.75 is false, so a NaN signal takes the high arm.
+    for (setter, low, _) in threshold_signals() {
+        let mut result = result_with_all_threshold_signals(1.0);
+        setter(&mut result.signals, f64::NAN);
+        let nan = explanation_for(&result);
+        assert_eq!(
+            explanation_reason_strs(&nan),
+            ALL_HIGH_REASONS.to_vec(),
+            "signal {low} at NaN"
+        );
+    }
+}

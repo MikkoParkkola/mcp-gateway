@@ -462,8 +462,7 @@ impl BudgetEnforcer {
         // Check 1: per-tool daily limit
         if let Some(&limit) = self.config.budgets.per_tool.get(tool_name) {
             let acc = self.tool_daily.entry(tool_name.to_string()).or_default();
-            #[allow(clippy::cast_precision_loss)]
-            let current_usd = (acc.current() + pending.tool(tool_name)) as f64 / 1_000_000.0;
+            let current_usd = usd(acc.current() + pending.tool(tool_name));
             let projected = current_usd + cost;
 
             if let Some(action) = self.evaluate_alerts(projected, limit) {
@@ -490,8 +489,7 @@ impl BudgetEnforcer {
 
         // Check 2: global daily limit
         if !blocked && let Some(limit) = self.config.budgets.daily {
-            #[allow(clippy::cast_precision_loss)]
-            let current_usd = (self.global_daily.current() + pending.global) as f64 / 1_000_000.0;
+            let current_usd = usd(self.global_daily.current() + pending.global);
             let projected = current_usd + cost;
 
             if let Some(action) = self.evaluate_alerts(projected, limit) {
@@ -521,8 +519,7 @@ impl BudgetEnforcer {
             && let Some(&limit) = self.config.budgets.per_key.get(key_name)
         {
             let acc = self.key_daily.entry(key_name.to_string()).or_default();
-            #[allow(clippy::cast_precision_loss)]
-            let current_usd = (acc.current() + pending.key(key_name)) as f64 / 1_000_000.0;
+            let current_usd = usd(acc.current() + pending.key(key_name));
             let projected = current_usd + cost;
 
             if let Some(action) = self.evaluate_alerts(projected, limit) {
