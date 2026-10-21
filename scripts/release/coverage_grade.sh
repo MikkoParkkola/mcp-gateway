@@ -7,8 +7,8 @@
 #
 #   coverage_grade.sh <rev> [tag]        probe <rev> on CI, wait, grade
 #   coverage_grade.sh --run <id> <rev>   grade a finished probe run of <rev>
-#   coverage_grade.sh --self-check       grade the 2026-10-06 baseline run and
-#                                        require its known FAIL
+#   coverage_grade.sh --self-check       offline check from the vendored baseline:
+#                                        its PASS reproduces and a planted FAIL is caught
 #
 # A probe is <rev>'s tree plus this checkout's .github/workflows/coverage-probe.yml,
 # committed with plumbing (no checkout is touched) and pushed to
@@ -25,26 +25,89 @@ REPO=MikkoParkkola/mcp-gateway
 HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$(git -C "$HERE" rev-parse --show-toplevel)"
 
-# Baseline run at the release-line tip 409e95619 (artifacts kept 90 days, to 2027-01-04):
-# one Critical row below, query_and_commit at 91.67%; every path clear.
-SELF_RUN=37423361628
-SELF_REV=409e95619a608d638735a3dc0ca44942e922cf08
-SELF_ROW=$'BELOW\t 91.67%\t55/60\tsrc/gateway/task_service/execution/upstream.rs:query_and_commit#1'
+# Offline self-check baseline: release-line commit 07027881e, whose grader
+# inputs and outputs are vendored below (artifacts are kept 14 days).
+SELF_DIR=docs/release/baselines/coverage-39396107020
+SELF_REV=07027881e
 
 # The probe workflow a graded run must have executed, byte for byte: this
 # checkout's .github/workflows/coverage-probe.yml (MIK-8217 moved it there; CI
-# runs the same file), or for the self-check the definition that
-# baseline run used (it predates this script).
+# runs the same file).
 PROBE_PATH=.github/workflows/coverage-probe.yml
 PROBE_FILE="$(git rev-parse --show-toplevel)/$PROBE_PATH"
 PROBE_BLOB="$(git hash-object "$PROBE_FILE")"
 
-self_check=""
+self_check() {
+  (cd "$SELF_DIR" && shasum -a 256 -c SHA256SUMS) \
+    || { echo "SELF-CHECK FAILED: baseline files do not match SHA256SUMS" >&2; exit 1; }
+  tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+  mkdir -p "$tmp/src"
+  xz -dc "$SELF_DIR/linux.lcov.xz" > "$tmp/linux.lcov"
+  xz -dc "$SELF_DIR/windows.lcov.xz" > "$tmp/windows.lcov"
+  xz -dc "$SELF_DIR/cov.json.xz" > "$tmp/cov.json"
+  rev="$(git rev-parse "$SELF_REV^{commit}")"
+  git archive "$rev" src docs/release | tar -x -C "$tmp/src"
+  functions=0; paths=0
+  (cd "$tmp/src" && python3 "$HERE/critical_function_coverage.py" \
+    --lcov "$tmp/linux.lcov" --lcov "$tmp/windows.lcov") \
+    > "$tmp/functions.txt" || functions=$?
+  (cd "$tmp/src" && python3 "$HERE/critical_path_coverage.py" "$tmp/cov.json") \
+    > "$tmp/paths.txt" || paths=$?
+  if [[ "$functions" != 0 || "$paths" != 0 ]] \
+    || ! cmp -s "$tmp/functions.txt" "$SELF_DIR/functions.txt" \
+    || ! cmp -s "$tmp/paths.txt" "$SELF_DIR/paths.txt"; then
+    echo "SELF-CHECK FAILED: the baseline PASS did not reproduce" >&2
+    exit 1
+  fi
+  cp "$tmp/linux.lcov" "$tmp/linux-zero.lcov"
+  cp "$tmp/windows.lcov" "$tmp/windows-zero.lcov"
+  python3 - "$tmp/linux-zero.lcov" "$tmp/windows-zero.lcov" <<'EOF'
+import sys
+target = "src/gateway/task_service/execution/upstream.rs"
+for path in sys.argv[1:]:
+    with open(path) as f:
+        lines = f.readlines()
+    in_target = False
+    out = []
+    for line in lines:
+        if line.startswith("SF:"):
+            p = line[3:].strip().replace("\\", "/")
+            in_target = p.endswith(target)
+            out.append(line)
+        elif in_target and line.startswith("DA:"):
+            num = line[3:].split(",", 1)[0]
+            try:
+                n = int(num)
+            except ValueError:
+                out.append(line)
+                continue
+            if 302 <= n <= 400:
+                out.append("DA:%d,0\n" % n)
+            else:
+                out.append(line)
+        else:
+            if line.startswith("end_of_record"):
+                in_target = False
+            out.append(line)
+    with open(path, "w") as f:
+        f.writelines(out)
+EOF
+  neg=0
+  (cd "$tmp/src" && python3 "$HERE/critical_function_coverage.py" \
+    --lcov "$tmp/linux-zero.lcov" --lcov "$tmp/windows-zero.lcov") \
+    > "$tmp/neg.txt" || neg=$?
+  if [[ "$neg" == 0 ]] \
+    || ! grep -E "^BELOW.*src/gateway/task_service/execution/upstream\.rs:query_and_commit#1" "$tmp/neg.txt" >/dev/null; then
+    echo "SELF-CHECK FAILED: the negative control was not caught" >&2
+    exit 1
+  fi
+  echo "SELF-CHECK ok: the baseline PASS reproduces and the planted FAIL is caught"
+  exit 0
+}
+
 case "${1:-}" in
   --self-check)
-    self_check=1; run=$SELF_RUN; rev=$SELF_REV
-    PROBE_PATH=.github/workflows/coverage-cov3.yml
-    PROBE_BLOB=8367614b5373f66b4f5142c15fe0afdb36c6b249
+    self_check
     ;;
   --run) run="${2:?--run <id> <rev>}"; rev="$(git rev-parse "${3:?--run <id> <rev>}^{commit}")" ;;
   "" | -*) echo "usage: $0 <rev> [tag] | --run <id> <rev> | --self-check" >&2; exit 2 ;;
@@ -105,9 +168,9 @@ conclusion="$(gh run view "$run" -R "$REPO" --json jobs -q \
 grades="$(git rev-parse --path-format=absolute --git-common-dir)/coverage-grade"
 out="$grades/$run"
 rm -rf "$out"; mkdir -p "$out/src"
-# Shared by every worktree of the clone and ~50 MB a run: keep the newest few,
-# this run and the self-check baseline (MIK-8217).
-python3 "$HERE/prune_coverage_grades.py" "$grades" 3 "$run" "$SELF_RUN"
+# Shared by every worktree of the clone and ~50 MB a run: keep the newest few
+# plus this run (MIK-8217).
+python3 "$HERE/prune_coverage_grades.py" "$grades" 3 "$run"
 # A failed download is no grade either: the check below names each report it
 # left absent and ends NOT GRADED (MIK-8265).
 gh run download "$run" -R "$REPO" -D "$out/art" || echo "download of run $run failed or was partial"
@@ -146,15 +209,4 @@ grep -v '^ok' "$out/functions.txt" || true
 echo "== paths"
 cat "$out/paths.txt"
 echo "GRADE rev=$rev run=$run conclusion=$conclusion: $([[ $status == 0 ]] && echo PASS || echo FAIL)"
-
-if [[ -n "$self_check" ]]; then
-  if [[ $status == 1 ]] && grep -qF "$SELF_ROW" "$out/functions.txt" \
-    && grep -qx 'critical rows failing: 1' "$out/functions.txt" \
-    && grep -qx 'paths failing: 0' "$out/paths.txt"; then
-    echo "SELF-CHECK ok: the known FAIL is reproduced"
-    exit 0
-  fi
-  echo "SELF-CHECK FAILED: the baseline grade did not reproduce" >&2
-  exit 1
-fi
 exit "$status"
