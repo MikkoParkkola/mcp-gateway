@@ -434,3 +434,67 @@ async fn the_same_mcp_caller_on_another_session_reaches_nothing() {
         "nothing was cancelled"
     );
 }
+
+/// MIK-8614.CANCELZERO.2: the caller's cancel after its call was answered
+/// reaches nothing. The dispatch is gone, so the backend is sent no cancel.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_callers_cancel_after_the_answer_reaches_nothing() {
+    let gw = gateway().await;
+    gw.upstream.release.add_permits(1);
+    let (status, answer) = send(&gw, call(7), "alpha").await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert!(
+        answer.get("error").is_none(),
+        "the call is answered: {answer}"
+    );
+    assert!(
+        answer.to_string().contains("done"),
+        "the backend answered the call: {answer}"
+    );
+    assert_eq!(
+        gw.upstream.calls.lock().len(),
+        1,
+        "the backend got the call once"
+    );
+    assert_eq!(send(&gw, cancel(7), "alpha").await.0, StatusCode::ACCEPTED);
+    // A wrongly sent cancel would arrive at once; give it time to show.
+    // timing: absence
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(
+        gw.upstream.cancels.lock().is_empty(),
+        "MIK-8614.CANCELZERO.2: no cancel after completion"
+    );
+}
+
+/// MIK-8614.CANCELZERO.2 on `/mcp`: the caller's cancel after its call was
+/// answered reaches nothing; the backend is sent no cancel.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_mcp_callers_cancel_after_the_answer_reaches_nothing() {
+    let gw = gateway().await;
+    let session = mcp_session(&gw, "alpha").await;
+    gw.upstream.release.add_permits(1);
+    let (status, answer, _) = send_mcp(&gw, invoke(7), "alpha", Some(&session)).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert!(
+        answer.get("error").is_none(),
+        "the call is answered: {answer}"
+    );
+    assert!(
+        answer.to_string().contains("done"),
+        "the backend answered the call: {answer}"
+    );
+    assert_eq!(
+        gw.upstream.calls.lock().len(),
+        1,
+        "the backend got the call once"
+    );
+    let (status, _, _) = send_mcp(&gw, cancel(7), "alpha", Some(&session)).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    // A wrongly sent cancel would arrive at once; give it time to show.
+    // timing: absence
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(
+        gw.upstream.cancels.lock().is_empty(),
+        "MIK-8614.CANCELZERO.2: no cancel after completion"
+    );
+}

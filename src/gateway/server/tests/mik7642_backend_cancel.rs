@@ -257,6 +257,7 @@ async fn a_cancel_after_the_answer_sends_nothing() {
         "precondition: the call was answered"
     );
     send(&mut served.stdin, &cancel(&client_id)).await;
+    // timing: absence
     tokio::time::sleep(Duration::from_millis(1000)).await;
     let cancels = backend_cancels(&served.seen);
     served.task.abort();
