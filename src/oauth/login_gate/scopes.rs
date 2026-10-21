@@ -272,3 +272,6 @@ impl Provenance {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
