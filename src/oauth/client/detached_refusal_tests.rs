@@ -12,18 +12,27 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use super::tests::{client_with_refused_refresh, count_browsers};
-use crate::oauth::login_gate::Cohort;
+use crate::oauth::login_gate::{LoginGate, SetOut};
 
+/// With a login gate attached and the step's epoch, cohort and deadline
+/// taken from it, as the request path's `detach_token_step` takes them, so
+/// the gated refresh branch is the one exercised.
 #[tokio::test]
 async fn get_token_detached_surfaces_a_refused_refresh_without_authorizing() {
     let dir = tempfile::tempdir().unwrap();
-    let mut client = client_with_refused_refresh(dir.path()).await;
+    let gate = Arc::new(LoginGate::default());
+    let mut client = client_with_refused_refresh(dir.path())
+        .await
+        .with_login_gate(Arc::clone(&gate));
     let opened = count_browsers(&mut client);
-    let cohort = Arc::new(Cohort::default());
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let SetOut {
+        since,
+        cohort,
+        deadline,
+    } = gate.set_out_now();
     let outcome = tokio::time::timeout(
         Duration::from_secs(10),
-        client.get_token_detached(true, 0, &cohort, deadline),
+        client.get_token_detached(true, since, &cohort, deadline),
     )
     .await;
     assert_eq!(opened.load(Ordering::SeqCst), 0, "no authorization starts");
