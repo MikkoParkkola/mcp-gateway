@@ -236,6 +236,17 @@ async fn a_client_disconnect_after_the_answer_sends_no_cancel() {
     );
 }
 
+/// Wait, under a 10 s hang guard, until the backend has seen `method`.
+async fn until_seen(seen: &Seen, method: &str, what: &str) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while of_method(seen, method).is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect(what);
+}
+
 /// Serve the gateway with the legacy `svc` backend over real sockets, and open
 /// an `/mcp` session on it. The store keeps the task runtime alive.
 async fn mcp_gateway_with_slow_backend(
@@ -342,25 +353,30 @@ async fn an_mcp_client_disconnect_mid_call_cancels_the_backend_call_by_its_id() 
     let (gateway, seen, client, session, _store) =
         mcp_gateway_with_slow_backend(Duration::from_secs(5)).await;
     let call = invoke("client-7");
-    // Dropping the exchange closes the connection while the backend still
-    // works. The body is read inside the timeout, so headers alone don't end it.
-    let exchange = async {
-        let response = client
+    // Aborting the task drops the in-flight request while the backend still
+    // works; with no idle pool the connection closes.
+    let task_client = client.clone();
+    let task_session = session.clone();
+    let task = tokio::spawn(async move {
+        let response = task_client
             .post(format!("http://{gateway}/mcp"))
             .header("authorization", "Bearer k")
             .header("content-type", "application/json")
             .header("accept", "application/json")
-            .header("mcp-session-id", &session)
+            .header("mcp-session-id", &task_session)
             .body(call.to_string())
             .send()
             .await?;
         let status = response.status();
         Ok::<_, reqwest::Error>((status, response.text().await?))
-    };
-    if let Ok(answered) = tokio::time::timeout(Duration::from_millis(1500), exchange).await {
-        let seen = seen.lock().unwrap().clone();
-        panic!("precondition: the call was still running; got {answered:?}, backend saw {seen:?}");
-    }
+    });
+    until_seen(&seen, "tools/call", "the backend receives the call").await;
+    assert!(
+        !task.is_finished(),
+        "precondition: the call was still running"
+    );
+    task.abort();
+    let _ = task.await;
     let calls = of_method(&seen, "tools/call");
     assert_eq!(
         calls.len(),
@@ -368,17 +384,9 @@ async fn an_mcp_client_disconnect_mid_call_cancels_the_backend_call_by_its_id() 
         "precondition: the backend got the call: {:?}",
         seen.lock().unwrap()
     );
-    // The cancel lands on the dropped connection's teardown; wait for it.
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if !of_method(&seen, "notifications/cancelled").is_empty() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("the cancel arrives");
+    until_seen(&seen, "notifications/cancelled", "the cancel arrives").await;
+    // timing: absence
+    tokio::time::sleep(Duration::from_millis(500)).await;
     let calls = of_method(&seen, "tools/call");
     assert_eq!(
         calls.len(),
