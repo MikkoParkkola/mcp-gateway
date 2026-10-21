@@ -174,7 +174,7 @@ pub(super) fn check_r2(found: &FoundFunc<'_>, in_type: &str) -> Vec<String> {
         };
         seen.visit_pat_struct(pat);
         if seen.found {
-            out.push(format!("R2: `_` in the {} destructure", in_type));
+            out.push(format!("R2: `_` in the {in_type} destructure"));
         }
     }
     out
@@ -281,7 +281,7 @@ pub(super) fn check_r4(found: &FoundFunc<'_>, file: &syn::File, in_type: &str) -
             }
         }
         for field in want {
-            if !have.contains(&field.to_string()) {
+            if !have.contains(*field) {
                 out.push(format!("R4: the {tail} destructure skips `{field}`"));
             }
         }

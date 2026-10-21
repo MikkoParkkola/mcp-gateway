@@ -49,7 +49,7 @@ async fn dispatch_once(state: &Arc<crate::gateway::router::AppState>, size: usiz
 /// The baseline measurement, run on each PR against its own parent.
 /// Procedure: `cargo test --lib gateway::server::signing_allocation_tests::mik8488_alloc_probe::mik8488_allocation_probe -- --ignored --exact --nocapture --test-threads=1`.
 #[test]
-#[ignore]
+#[ignore = "a measurement, run on demand: see the doc comment"]
 fn mik8488_allocation_probe() {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()

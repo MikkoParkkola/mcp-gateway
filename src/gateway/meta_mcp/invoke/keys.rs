@@ -80,9 +80,9 @@ impl MetaMcp {
     /// S4, the key admission: the call's idempotency key, or its stored
     /// answer when the key replays one.
     #[forbid(unused_variables)]
-    pub(super) fn admit_keys<'a, 'c>(
+    pub(super) fn admit_keys(
         &self,
-        input: KeysIn<'a, 'c>,
+        input: KeysIn<'_, '_>,
         idem_reservation: &mut Option<IdempotencyReservation>,
     ) -> Result<std::ops::ControlFlow<TracedOutcome, Keyed>> {
         let KeysIn {
@@ -172,9 +172,9 @@ impl MetaMcp {
     /// S5, the pre-send: the undeclared-key check, then the cached answer when
     /// the call may be served from the cache.
     #[forbid(unused_variables)]
-    pub(super) async fn pre_send<'a, 'c>(
+    pub(super) async fn pre_send(
         &self,
-        input: PreSendIn<'a, 'c>,
+        input: PreSendIn<'_, '_>,
         witness: &mut Witnessed<'_, '_>,
         idem_reservation: &mut Option<IdempotencyReservation>,
     ) -> Result<std::ops::ControlFlow<TracedOutcome, Cacheable>> {

@@ -48,9 +48,9 @@ impl MetaMcp {
     /// S3, the resolve: the resolution the call dispatches under, or the
     /// lift's stored answer when one is deferred for it.
     #[forbid(unused_variables)]
-    pub(super) async fn resolve<'a, 'c>(
+    pub(super) async fn resolve<'a>(
         &self,
-        input: ResolveIn<'a, 'c>,
+        input: ResolveIn<'a, '_>,
         witness: &mut Witnessed<'_, '_>,
     ) -> Result<std::ops::ControlFlow<TracedOutcome, ResolveOut<'a>>> {
         // MIK-8356 R5.2: the resolution a caller verdict carried, or a fresh one.

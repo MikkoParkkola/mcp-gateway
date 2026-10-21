@@ -146,7 +146,7 @@ impl BodyDeps<'_> {
     }
 }
 
-impl<'ast, 'b> Visit<'ast> for BodyDeps<'b> {
+impl<'ast> Visit<'ast> for BodyDeps<'_> {
     fn visit_expr_field(&mut self, field: &'ast syn::ExprField) {
         if is_self_expr(&field.base) {
             if let syn::Member::Named(member) = &field.member {

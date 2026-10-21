@@ -57,7 +57,9 @@ pub(super) struct Intake<'a, 'c> {
     pub(super) writes_mark: gateway_writes::Mark,
 }
 
-/// S2's input: exactly what the directives read.
+/// S2's input: exactly what the directives read. Every field is a borrow or
+/// a copy, so the stage takes it by value without consuming anything.
+#[derive(Clone, Copy)]
 pub(super) struct DirectivesIn<'a, 'c> {
     pub(super) args: &'a Value,
     pub(super) session_id: Option<&'a str>,
@@ -134,7 +136,7 @@ impl MetaMcp {
     /// S2, the directives: the call's arguments with the gateway directives
     /// stripped, and the keys the idempotency and cache stages build on.
     #[forbid(unused_variables)]
-    pub(super) fn directives<'a, 'c>(&self, input: DirectivesIn<'a, 'c>) -> Result<Directives<'a>> {
+    pub(super) fn directives<'a>(&self, input: DirectivesIn<'a, '_>) -> Result<Directives<'a>> {
         let DirectivesIn {
             args,
             session_id,
