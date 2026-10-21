@@ -7,13 +7,12 @@
 //! `gateway_list_disabled_capabilities`, `gateway_reload_config`,
 //! `gateway_webhook_status`, and `gateway_run_playbook`.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 
 use serde_json::Value;
 
 use crate::Result;
-use crate::idempotency::{IdempotencyReservation, derive_key};
-use crate::identity_propagation::CallerProof;
+use crate::idempotency::IdempotencyReservation;
 
 /// `logger` field on every `notifications/message` this module raises
 /// (ADR-014 §3). One name for both sites: a caller filtering on the logger
@@ -34,11 +33,9 @@ mod guarded;
 use super::response_security::chain_receipt::ChainReceipt;
 use guarded::GuardedValue;
 
-use super::super::meta_mcp_helpers::{extract_required_str, parse_tool_arguments};
 #[cfg(test)]
 use super::super::recovery::ErrorCategory;
 use super::MetaMcp;
-use super::refund_witness as rw;
 mod side_effect_markers;
 mod undeclared_gate;
 // D1: the invocation record, written around `invoke_tool_traced`.
@@ -65,7 +62,6 @@ mod withheld_evidence;
 // #1961: the account-bound MCP mint, kept out of this file's size baseline.
 mod account_mint;
 
-use super::support::idempotency_key_for;
 pub(crate) use side_effect_markers::{LostRoundRoute, settle_lost_round};
 use side_effect_markers::{uncertain_side_effect, withheld_side_effect};
 pub(crate) mod gateway_writes;
@@ -83,11 +79,14 @@ mod caller_verdict;
 mod continuation;
 mod dispatch;
 mod errors;
+mod intake;
+mod keys;
 mod legacy_bridge;
 mod policy;
 mod post_dispatch;
 mod pre_dispatch;
 mod projection;
+mod resolve;
 // MIK-8488: the send admission and the dispatch, out of `invoke_tool_traced`.
 mod send;
 pub(crate) use caller_verdict::{CallerVerdict, TargetNaming};
@@ -107,7 +106,7 @@ use errors::classify_dispatch_error;
 use errors::{classify_from_detail, dispatch_error_result};
 use projection::{
     apply_capability_projection, call_capability_tool_with_identity, emit_projection_ab_event,
-    extract_client_claim, json_is_populated,
+    json_is_populated,
 };
 pub(crate) use stored_proof::SourcedOutcome;
 use stored_proof::TracedOutcome;
@@ -130,75 +129,27 @@ impl MetaMcp {
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
         trace_id: &str,
     ) -> Result<TracedOutcome> {
-        // Unpacked once, here, so the context travels whole across the call
-        // boundary for the same reason `invoke_tool` takes it whole: no call
-        // site can pass an authorizer without the identity it authorizes.
-        let api_key_name = caller.api_key_name;
-        let verified_identity = caller.verified_identity;
-        let provenance = caller.provenance();
-        let caller_proof = CallerProof::new(verified_identity, provenance);
-        // Names an MCP child when nothing above does (MIK-7825).
-        let credential_owner = super::support::credential_owner(caller);
-        // The meta-tools this caller can see, for its recovery hints (MIK-7974).
-        let surface = self.hint_surface(caller);
+        let intake = match self
+            .intake(intake::IntakeIn {
+                args,
+                session_id,
+                caller,
+            })
+            .await?
+        {
+            std::ops::ControlFlow::Break(outcome) => return Ok(outcome),
+            std::ops::ControlFlow::Continue(intake) => intake,
+        };
 
-        // Capture once, before any authorization input is read. A bump after
-        // this strands the insert under the epoch this call was authorized
-        // in. A second load at the write site is the 4.g race.
-        let policy_epoch = self.policy_epoch.load(Ordering::Acquire);
-        // MIK-7991: this call's own gateway writes start here, apart from an
-        // earlier plan step's in the same delivery; stored with its answer.
-        let writes_mark = gateway_writes::mark();
+        let directives = self.directives(intake::DirectivesIn {
+            args,
+            session_id,
+            caller,
+            trace_id,
+            step: intake.step,
+        })?;
 
-        let server = extract_required_str(args, "server")?;
-        let tool = extract_required_str(args, "tool")?;
-        if let Some(answer) = self.gated(args, (server, tool), caller, session_id).await {
-            return answer.map(TracedOutcome::Live);
-        }
-
-        let mut arguments = parse_tool_arguments(args)?;
-        // `_full` is a gateway directive (opt out of response projection), not
-        // an upstream parameter. Capture and strip it BEFORE the argument hash
-        // and idempotency key are computed, so toggling it cannot bypass
-        // idempotency or pollute the cache key, and it never reaches a backend
-        // (MIK-3533).
-        let want_full = arguments
-            .get("_full")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        if let Some(obj) = arguments.as_object_mut() {
-            obj.remove("_full");
-        }
-
-        // MIK-6914 Option B: the caller may attach an untrusted claim-under-test
-        // (`_claim`) about the result it will render. Like `_full` it is a
-        // gateway directive, stripped here — before the argument hash and cache
-        // key are computed — so it never reaches a backend and never fragments
-        // the cache. Bound to this call's `trace_id`, it is threaded to the
-        // provenance chokepoint and (with capture enabled) recorded as the claim
-        // under scrutiny. It is never the ground-truth leg.
-        let client_claim = extract_client_claim(&mut arguments, trace_id);
-
-        // MIK-5877: in `experimental` mode the projected (treatment) and raw
-        // (control) arms must NOT share response-cache / idempotency entries, or
-        // one arm's shape would be served to the other (the key is otherwise
-        // just server:tool:hash(args)). Suffix both keys with the arm so each
-        // arm is isolated while still deduping within itself — preserving
-        // idempotency's double-execution protection per arm. `off`/`on` add no
-        // suffix, so their keys are byte-identical to before.
-        // G4: the arm keys on the caller, never on the "" every modern caller
-        // shares; a keyless caller gets the control arm and is not counted.
-        let arm_key = caller.experiment_key();
-        let projection_key_suffix =
-            crate::projection::projection_key_suffix(self.projection_mode, arm_key);
-
-        tracing::Span::current().record("trace_id", trace_id);
-
-        let profile = self.active_profile(session_id);
-
-        let tool_key = format!("{server}:{tool}");
-
-        // `_full` requests bypass idempotency and response caching entirely.
+        // `_full` requests bypass the response cache, never idempotency (S4).
         // A `_full` call returns a different (unprojected) payload than the
         // cached/projected result, so sharing a key would let one shape leak
         // into the other (a non-`_full` caller could hit a cached full payload
@@ -212,217 +163,108 @@ impl MetaMcp {
         // MIK-8353 3a: the refund witness, carried through every may-effect
         // step below; any exit hands back what survived.
         let mut witness = nonce_settle::Witnessed::take(caller);
-        // MIK-8356 R5.2: the resolution a caller verdict carried, or a fresh one.
-        let (backend, resolved) = match self
-            .dispatch_resolution(
-                &self.scoped(caller.scope().authorizer.backend_grant()),
-                (server, tool),
-                (caller_proof, verified_identity, caller.caller_key),
-                surface,
+        let resolve_out = match self
+            .resolve(
+                resolve::ResolveIn {
+                    caller,
+                    session_id,
+                    trace_id,
+                    step: intake.step,
+                    caller_proof: intake.facts.caller_proof,
+                    verified_identity: intake.facts.verified_identity,
+                    surface: intake.facts.surface,
+                },
                 &mut witness,
             )
-            .await
+            .await?
         {
-            Ok(std::ops::ControlFlow::Continue(resolution)) => resolution,
-            Ok(std::ops::ControlFlow::Break(answer)) => return Ok(TracedOutcome::Live(answer)),
-            Err(error) => {
-                // A busy custody refused this call before its backend, with
-                // its witness kept: ask for the nonce back, settled when
-                // the call returns (MIK-8392 Busy parity).
-                nonce_settle::ask_if_transient(caller, &error);
-                return Err(error);
-            }
+            std::ops::ControlFlow::Break(outcome) => return Ok(outcome),
+            std::ops::ControlFlow::Continue(resolve_out) => resolve_out,
         };
-        // MIK-8475: the cooldown check precedes the lift, so a keyed replay of
-        // a cooling tool is refused as the live call is (same nonce accounting).
-        witness.carry(rw::dispatch_effect(
-            resolved.minted(),
-            resolved.account_credential.is_some(),
-        ));
-        self.admit_after_credential((server, tool), session_id, trace_id)?;
-        // The lift (MIK-8392 STORED.2): proven live, before key/spend/redeem/relay act.
-        let unproven = match self
-            .lift_deferred((server, tool), &resolved, &mut witness, session_id, caller)
-            .await
-        {
-            std::ops::ControlFlow::Break(replay) => return Ok(TracedOutcome::Stored(replay)),
-            std::ops::ControlFlow::Continue(unproven) => unproven,
-        };
-        let target = (server, backend.as_ref().map(|backend| backend.instance()));
-        let (caller_credential, account_credential, dispatch_binding) = resolved.into_parts();
-        // Who the response cache keys on, in one place and one namespace per
-        // source (`support::caller_cache_principal`). The binding when identity
-        // propagation is minting per-user credentials, then the verified OIDC
-        // subject, then the caller's own `GrantSubject` (trusted headers, mTLS
-        // or an OAuth agent, `router/identity.rs`), then, for an authenticated
-        // caller, the digest of its validated credential (`cred:`). An
-        // authenticated caller none of these names is `Unresolved` and gets no
-        // cache key and no retry key; only an anonymous caller shares the
-        // pooled namespace. The binding handed in is the dispatch one, so a
-        // capability's account boundary reaches both keys.
-        //
-        // The retry entry is keyed on this same principal, so a caller the
-        // response cache tells apart never shares a retry entry.
-        let caller_principal = super::support::caller_cache_principal(
-            dispatch_binding.as_deref(),
-            verified_identity,
-            caller.grant_subject.as_ref(),
-            caller.owner_principal(),
-            caller.authentication,
-        );
-
-        // `want_full` no longer suppresses the key. It selects the shape of the
-        // *reply*, not whether the backend acts, and a directive that switches
-        // off duplicate protection is a bypass any client can set — which is
-        // exactly what the `_full` stripping above says must not be possible.
-        let idem_key = idempotency_key_for(
-            caller.retry.idempotency_key.as_deref(),
-            &super::support::step_scoped(&projection_key_suffix),
-            &caller_principal,
-            self.idempotency_cache.as_ref(),
-            "meta",
-        );
-        // What the key is a key *for*. A client key is an opaque string it
-        // chose, so nothing about it says which request it was minted for;
-        // without this a key reused for a different call replays the first
-        // call's result as though it were this one's.
-        //
-        // The retry pair is part of that binding (MRTR.10). A retry reuses the
-        // client's key and the original arguments, so those alone cannot tell
-        // one continuation from another: a confirmation answered "accept" and
-        // then "decline" would fingerprint identically, and the decline would
-        // be served the acceptance.
-        let idem_fingerprint = idem_key.as_ref().map(|_| {
-            let base = derive_key(&tool_key, &arguments);
-            let discriminator = caller.retry.key_discriminator();
-            format!("{base}{discriminator}")
-        });
-
         // Owns the in-flight entry from admission until a terminal state. Its
         // `Drop` releases the key, so an early return after dispatch cannot
         // strand the entry as in-flight until the guard times out.
         let mut idem_reservation: Option<IdempotencyReservation> = None;
-        if let Some(stored) = self.admit_idempotency_key(
-            caller,
-            session_id,
-            (server, tool),
-            trace_id,
-            (idem_key.as_deref(), idem_fingerprint.as_deref()),
-            (arm_key, &tool_key),
-            api_key_name,
-            client_claim.as_ref(),
+        let keyed = match self.admit_keys(
+            keys::KeysIn {
+                caller,
+                session_id,
+                trace_id,
+                step: intake.step,
+                arguments: &directives.arguments,
+                arm_key: directives.arm_key,
+                tool_key: &directives.tool_key,
+                projection_key_suffix: &directives.projection_key_suffix,
+                client_claim: &directives.client_claim,
+                api_key_name: intake.facts.api_key_name,
+                verified_identity: intake.facts.verified_identity,
+                dispatch_binding: &resolve_out.dispatch_binding,
+                unproven: resolve_out.unproven,
+            },
             &mut idem_reservation,
         )? {
-            nonce_settle::settle_pre_send(
-                caller,
-                nonce_settle::PreSendExit::Served((server, tool)),
-            );
-            return Ok(TracedOutcome::Live(stored));
-        }
-        stored_proof::refuse_unproven(unproven, server)?; // FIX 1b: at most once
+            std::ops::ControlFlow::Break(outcome) => return Ok(outcome),
+            std::ops::ControlFlow::Continue(keyed) => keyed,
+        };
 
-        // Defense in depth on an already-classified value: the exact set both
-        // layers accept, so a value that is not a revision this build serves —
-        // including a whitespace-padded spelling of one that is — bypasses the
-        // cache instead of naming a bucket of its own. Never trimmed onto a
-        // canonical revision.
-        let protocol_revision = caller
-            .protocol_revision
-            .and_then(crate::protocol::meta::served_revision);
-
-        // Whether the check below fills a list from the backend: counted at
-        // the fill, so a slot that expires mid-check still counts.
-        let fills = || backend.as_ref().map_or(0, |b| b.list_fills());
-        let fills_before = fills();
-        let checked = self
-            .answer_undeclared_key(
-                caller,
-                session_id,
-                (server, tool),
-                backend.as_ref(),
-                &arguments,
-                dispatch_binding.as_deref(),
-                &caller_credential,
-                verified_identity,
+        let cacheable = match self
+            .pre_send(
+                keys::PreSendIn {
+                    caller,
+                    session_id,
+                    trace_id,
+                    step: intake.step,
+                    backend: &resolve_out.backend,
+                    arguments: &directives.arguments,
+                    dispatch_binding: &resolve_out.dispatch_binding,
+                    caller_credential: &resolve_out.caller_credential,
+                    verified_identity: intake.facts.verified_identity,
+                    want_full: directives.want_full,
+                    caller_principal: &keyed.caller_principal,
+                    projection_key_suffix: &directives.projection_key_suffix,
+                    profile: &directives.profile,
+                    policy_epoch: intake.policy_epoch,
+                    arm_key: directives.arm_key,
+                    tool_key: &directives.tool_key,
+                    api_key_name: intake.facts.api_key_name,
+                    client_claim: &directives.client_claim,
+                },
+                &mut witness,
                 &mut idem_reservation,
             )
-            .await;
-        // Carried before either exit below, so neither hands back a witness
-        // the check's fill spent.
-        witness.carry(rw::schema_effect(fills() != fills_before));
-        if let Some(refusal) = checked? {
-            nonce_settle::settle_pre_send(caller, nonce_settle::PreSendExit::AskRefund); // MIK-8353 3d: the witness decides
-            return Ok(TracedOutcome::Live(refusal));
-        }
-
-        // Counted only for a call the cache would otherwise have served, so an
-        // `unresolved_principal` count always means a real bypass.
-        if !want_full && protocol_revision.is_some() && self.cache.is_some() {
-            super::support::note_cache_bypass(&caller_principal, "meta");
-        }
-        // A chained backend's answer is bound to one challenge: no cache (D7).
-        let chained = self.is_chained(backend.as_deref());
-        // MIK-8393 (#3773): a stored result may stand in for a call only when
-        // this caller's slot declared the tool read-only, so the call it
-        // replaces had no effect to lose. Absent means deny: an unannotated
-        // tool, an undiscovered slot and a write all go to the backend, and
-        // their answers are never stored.
-        let read_only = self.cache_admits(
-            (server, tool),
-            backend.as_deref(),
-            dispatch_binding.as_deref(),
-        );
-        if read_only
-            && let Some(cached) = self.serve_cached_response(
-                caller,
-                session_id,
-                (server, tool),
-                trace_id,
-                (want_full, chained),
-                protocol_revision,
-                &arguments,
-                (&projection_key_suffix, &caller_principal),
-                (&profile.name, policy_epoch),
-                (arm_key, &tool_key),
-                api_key_name,
-                client_claim.as_ref(),
-                &mut idem_reservation,
-            )
+            .await?
         {
-            nonce_settle::settle_pre_send(
-                caller,
-                nonce_settle::PreSendExit::Served((server, tool)),
-            );
-            return Ok(TracedOutcome::Live(cached));
-        }
+            std::ops::ControlFlow::Break(outcome) => return Ok(outcome),
+            std::ops::ControlFlow::Continue(cacheable) => cacheable,
+        };
 
         let call = send::Call {
             args,
             session_id,
             caller,
             trace_id,
-            server,
-            tool,
-            target,
-            arguments: &arguments,
-            want_full,
-            client_claim: &client_claim,
-            arm_key,
-            projection_key_suffix: &projection_key_suffix,
-            profile: &profile,
-            tool_key: &tool_key,
-            policy_epoch,
-            writes_mark,
-            surface,
-            caller_proof,
-            credential_owner: &credential_owner,
-            backend: &backend,
-            caller_credential: &caller_credential,
-            dispatch_binding: &dispatch_binding,
-            caller_principal: &caller_principal,
-            protocol_revision,
-            chained,
-            read_only,
+            server: intake.step.server,
+            tool: intake.step.tool,
+            target: resolve_out.target,
+            arguments: &directives.arguments,
+            want_full: directives.want_full,
+            client_claim: &directives.client_claim,
+            arm_key: directives.arm_key,
+            projection_key_suffix: &directives.projection_key_suffix,
+            profile: &directives.profile,
+            tool_key: &directives.tool_key,
+            policy_epoch: intake.policy_epoch,
+            writes_mark: intake.writes_mark,
+            surface: intake.facts.surface,
+            caller_proof: intake.facts.caller_proof,
+            credential_owner: &intake.facts.credential_owner,
+            backend: &resolve_out.backend,
+            caller_credential: &resolve_out.caller_credential,
+            dispatch_binding: &resolve_out.dispatch_binding,
+            caller_principal: &keyed.caller_principal,
+            protocol_revision: cacheable.protocol_revision,
+            chained: cacheable.chained,
+            read_only: cacheable.read_only,
         };
         let sent = self
             .admit_send(&call, &mut idem_reservation, &mut witness)
@@ -430,12 +272,12 @@ impl MetaMcp {
         // Cloned before `accounted_dispatch` takes it: a bridged round must reach
         // the backend with the credential the first round used, and an `Arc` clone
         // is that same credential rather than a second resolution of it.
-        let mut bridge_account_credential = account_credential.clone();
+        let mut bridge_account_credential = resolve_out.account_credential.clone();
         let mut dispatched = self
             .send(
                 &call,
                 sent,
-                account_credential,
+                resolve_out.account_credential,
                 &mut idem_reservation,
                 &mut witness,
             )

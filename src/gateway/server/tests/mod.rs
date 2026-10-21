@@ -20,6 +20,7 @@ mod invoke_argument_copies;
 mod is_connected_count;
 #[cfg(feature = "firewall")]
 mod judge_allocations;
+mod mik8488_alloc_probe;
 mod per_call_timing;
 mod signing_nonce_allocations;
 pub(in crate::gateway::server) mod signing_nonce_allocations_support;
