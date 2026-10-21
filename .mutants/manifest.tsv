@@ -1,0 +1,12 @@
+head_sha	c01cfbfd31d206c7bef690d7913088b7ac06dda4
+HTTP_05	linux	http_5_authorize_tool_target.patch	--lib gateway::router::tests::authz_and_sse::authorize_tool_target_blocks_ssrf_when_protection_enabled
+HTTP_11	linux	http_11_response_blocked.patch	--lib gateway::router::dispatch_parity_tests::t12_response_firewall_block_refuses_on_both_routes
+ACCT_01	linux	acct_1_audience.patch	--lib identity_propagation::account_strategies::lifetime_tests::revalidate_refuses_each_way_the_world_moved_since_the_mint
+ACCT_07	linux	acct_7_protocol_relative.patch	--lib personal_accounts::config::journey::journey_tests::a_return_path_that_is_not_single_slash_absolute_is_refused
+ACCT_13	linux	acct_13_symlink_precheck.patch	--lib personal_accounts::storage::migration_source::migration_source_tests::a_symlink_at_the_resolved_path_refuses_even_to_a_valid_record
+OAUTH_03	linux	oauth_3_is_expired.patch	--lib oauth::storage::tests::is_expired_with_60_second_buffer
+BRIDGE_01	linux	bridge_1_plan_undeclared.patch	--test mik_7212_mrtr7_bridge_acs first_round::ac_mrtr_7a_an_undeclared_opening_entry_is_refused_without_a_slice
+STARTUP_03	linux	startup_3_startup_preparesigning.patch	--lib gateway::server::signing_allocation_tests::stdio_chain_nonce_refusal::a_malformed_chain_nonce_on_another_method_is_refused
+STDIO_01	linux	stdio_1_stdio_misdeliver.patch	--lib transport::stdio::tests::a_response_for_an_id_nobody_waits_on_reaches_no_other_caller
+STDIO_07	linux	stdio_7_stdio_quoting.patch	--lib transport::stdio::start_refusal_tests::an_unterminated_quote_is_a_config_error
+TASKS_05	linux	tasks_5_owner.patch	--lib gateway::task_service::service_tests::service_07b_an_unattributable_principal_owns_nothing_even_the_empty_set

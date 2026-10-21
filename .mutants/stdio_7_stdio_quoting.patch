@@ -1,0 +1,19 @@
+diff --git a/src/transport/stdio.rs b/src/transport/stdio.rs
+index 0000000..0000000 100644
+--- a/src/transport/stdio.rs
++++ b/src/transport/stdio.rs
+@@ -137,12 +137,8 @@ impl StdioTransport {
+     /// The child's command, with piped stdio, environment and working
+     /// directory.
+     fn spawn_command(&self) -> Result<Command> {
+-        let parts = crate::transport::split_command(&self.command).ok_or_else(|| {
+-            Error::Config(format!(
+-                "Invalid stdio command quoting: {}",
+-                crate::security::summarize_stdio_command(&self.command)
+-            ))
+-        })?;
++        let parts = crate::transport::split_command(&self.command)
++            .unwrap_or_else(|| self.command.split_whitespace().map(String::from).collect());
+         let Some((program, args)) = parts.split_first() else {
+             return Err(Error::Config("Empty command".to_string()));
+         };
