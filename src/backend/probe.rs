@@ -67,7 +67,7 @@ impl Backend {
         // probe never begins a login and never queues behind a start in flight,
         // which may be one; either answers `AuthorizationRequired` at once,
         // which is no fault to rebuild and which the health loop skips.
-        let started = crate::oauth::login_gate::non_interactive(self.ensure_started()).await;
+        let started = crate::oauth::login_gate::short_contention(self.ensure_started()).await;
         if let Err(e) = started {
             #[cfg(test)]
             super::lifecycle::hold_at(&self.probe_error_gate).await;
@@ -100,7 +100,7 @@ impl Backend {
         // question it is right to refuse.
         let method = self.liveness_method().await;
 
-        let request = crate::oauth::login_gate::non_interactive(transport.request(method, None));
+        let request = crate::oauth::login_gate::short_contention(transport.request(method, None));
         let answer = match tokio::time::timeout(timeout, request).await {
             Ok(answer) => answer,
             Err(_elapsed) => {
@@ -245,7 +245,7 @@ impl Backend {
     /// The probe's rebuild: a forced restart run non-interactive, so it
     /// neither ends a login in flight nor opens one (MIK-7982).
     async fn rebuild_from_probe(&self) {
-        let _ = crate::oauth::login_gate::non_interactive(self.force_restart()).await;
+        let _ = crate::oauth::login_gate::short_contention(self.force_restart()).await;
     }
 }
 

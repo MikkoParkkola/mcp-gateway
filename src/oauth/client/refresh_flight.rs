@@ -85,13 +85,13 @@ impl Flight {
 }
 
 /// The contention deadline for the calling task: `now + CREDENTIAL_LOCK_WAIT` (90 s)
-/// for an interactive caller, `now + NONINTERACTIVE_LEASE_WAIT` (2 s) otherwise.
+/// for an interactive caller, `now + SHORT_CONTENTION_WAIT` (2 s) otherwise.
 pub(super) fn contention_deadline() -> tokio::time::Instant {
     let now = tokio::time::Instant::now();
     if crate::oauth::login_gate::interactive() {
         now + CREDENTIAL_LOCK_WAIT
     } else {
-        now + NONINTERACTIVE_LEASE_WAIT
+        now + SHORT_CONTENTION_WAIT
     }
 }
 
@@ -192,7 +192,7 @@ pub(super) const CREDENTIAL_LOCK_WAIT: std::time::Duration = std::time::Duration
 /// Known limit: a configured health timeout of 2 s or less can still time out
 /// and rebuild under lock contention, as it did before this fix (follow-up
 /// MIK-8624).
-pub(super) const NONINTERACTIVE_LEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+pub(super) const SHORT_CONTENTION_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// The busy marker every lock failure carries: messages read
 /// `credential lock busy: <label>`.
@@ -678,8 +678,8 @@ mod tests {
     fn the_short_wait_is_strictly_below_the_probe_timeout() {
         let probe = crate::config::HealthCheckConfig::default().timeout;
         assert!(
-            NONINTERACTIVE_LEASE_WAIT < probe,
-            "the short wait ({NONINTERACTIVE_LEASE_WAIT:?}) must answer before the probe timeout ({probe:?})"
+            SHORT_CONTENTION_WAIT < probe,
+            "the short wait ({SHORT_CONTENTION_WAIT:?}) must answer before the probe timeout ({probe:?})"
         );
     }
 }

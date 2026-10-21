@@ -24,7 +24,8 @@ use crate::Error;
 mod scopes;
 pub(crate) use scopes::{
     Carried, DETACHED_DEADLINE, Provenance, SetOut, carry_scopes, fill_scope, interactive,
-    non_interactive, past, set_out_cohort, set_out_epoch, set_out_with_cohort, stage_end,
+    non_interactive, past, set_out_cohort, set_out_epoch, set_out_with_cohort, short_contention,
+    stage_end,
 };
 
 /// How a login that produced no token ended, kept as data because [`Error`]

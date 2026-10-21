@@ -14,7 +14,7 @@ use super::lease_bound::{POLL, credential_paths};
 use super::*;
 use crate::Error;
 use crate::oauth::client::refresh_flight::{
-    CREDENTIAL_LOCK_WAIT, Flight, NONINTERACTIVE_LEASE_WAIT, is_credential_lock_busy,
+    CREDENTIAL_LOCK_WAIT, Flight, SHORT_CONTENTION_WAIT, is_credential_lock_busy,
 };
 
 /// A transport whose request runs the real token step before answering
@@ -85,7 +85,7 @@ async fn t13h_interactive_waiter_behind_the_flight_lock_keeps_the_long_wait() {
             async move { oauth.get_token().await }
         });
         // Past the short wait the long waiter is still queued.
-        tokio::time::sleep(NONINTERACTIVE_LEASE_WAIT + POLL).await;
+        tokio::time::sleep(SHORT_CONTENTION_WAIT + POLL).await;
         assert!(
             !waiter.is_finished(),
             "an interactive waiter answered inside the short wait"
@@ -159,7 +159,7 @@ async fn t13i_noninteractive_save_behind_the_flight_lock_answers_busy_at_the_sho
         );
         assert!(error.is_pre_dispatch(), "a busy lock frees the key");
         assert!(
-            (NONINTERACTIVE_LEASE_WAIT..NONINTERACTIVE_LEASE_WAIT + POLL + Duration::from_secs(1))
+            (SHORT_CONTENTION_WAIT..SHORT_CONTENTION_WAIT + POLL + Duration::from_secs(1))
                 .contains(&elapsed),
             "answered off the short wait: {elapsed:?}"
         );
@@ -229,7 +229,7 @@ async fn t13j_one_budget_covers_the_flight_lock_and_the_lease() {
             "not unwrapped: {error:?}"
         );
         assert!(
-            (NONINTERACTIVE_LEASE_WAIT..NONINTERACTIVE_LEASE_WAIT + POLL + Duration::from_secs(1))
+            (SHORT_CONTENTION_WAIT..SHORT_CONTENTION_WAIT + POLL + Duration::from_secs(1))
                 .contains(&elapsed),
             "answered off the single budget (about 3.5 s is two budgets): {elapsed:?}"
         );

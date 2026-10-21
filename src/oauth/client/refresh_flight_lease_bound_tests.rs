@@ -14,7 +14,7 @@ use crate::Error;
 use crate::oauth::OAuthClient;
 use crate::oauth::client::OAUTH_AUTHORIZATION_WINDOW;
 use crate::oauth::client::refresh_flight::{
-    CREDENTIAL_LOCK_WAIT, Flight, NONINTERACTIVE_LEASE_WAIT, hold_across_processes,
+    CREDENTIAL_LOCK_WAIT, Flight, SHORT_CONTENTION_WAIT, hold_across_processes,
     is_credential_lock_busy,
 };
 use crate::oauth::client::renewal::Renewal;
@@ -269,7 +269,7 @@ async fn t4b_noninteractive_waiter_answers_busy_at_the_short_wait() {
             "a busy lock frees the key: {error:?}"
         );
         assert!(
-            (NONINTERACTIVE_LEASE_WAIT..NONINTERACTIVE_LEASE_WAIT + POLL + Duration::from_secs(1))
+            (SHORT_CONTENTION_WAIT..SHORT_CONTENTION_WAIT + POLL + Duration::from_secs(1))
                 .contains(&elapsed),
             "answered off the short wait: {elapsed:?}"
         );

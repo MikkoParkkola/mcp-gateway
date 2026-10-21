@@ -14,7 +14,7 @@ use super::lease_bound::{POLL, count_browsers, credential_paths, is_deferred};
 use super::*;
 use crate::Error;
 use crate::oauth::client::refresh_flight::{
-    CREDENTIAL_LOCK_BUSY, CREDENTIAL_LOCK_WAIT, Flight, NONINTERACTIVE_LEASE_WAIT,
+    CREDENTIAL_LOCK_BUSY, CREDENTIAL_LOCK_WAIT, Flight, SHORT_CONTENTION_WAIT,
     is_credential_lock_busy,
 };
 use crate::oauth::login_gate::{Begin, LoginGate};
@@ -469,7 +469,7 @@ async fn t13b_probe_answers_busy_at_the_short_wait() {
             "not unwrapped: {error:?}"
         );
         assert!(
-            (NONINTERACTIVE_LEASE_WAIT..NONINTERACTIVE_LEASE_WAIT + POLL + Duration::from_secs(1))
+            (SHORT_CONTENTION_WAIT..SHORT_CONTENTION_WAIT + POLL + Duration::from_secs(1))
                 .contains(&elapsed),
             "answered off the short wait: {elapsed:?}"
         );
@@ -546,7 +546,7 @@ async fn t13g_probe_behind_an_in_process_holder_answers_busy_at_the_short_wait()
             "not unwrapped: {error:?}"
         );
         assert!(
-            (NONINTERACTIVE_LEASE_WAIT..NONINTERACTIVE_LEASE_WAIT + POLL + Duration::from_secs(1))
+            (SHORT_CONTENTION_WAIT..SHORT_CONTENTION_WAIT + POLL + Duration::from_secs(1))
                 .contains(&elapsed),
             "answered off the short wait: {elapsed:?}"
         );

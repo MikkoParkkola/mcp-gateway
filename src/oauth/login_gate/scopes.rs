@@ -137,6 +137,17 @@ pub(crate) async fn non_interactive<F: std::future::Future>(work: F) -> F::Outpu
     NON_INTERACTIVE.scope((), work).await
 }
 
+/// Run `work` as a Short contention caller: one whose own deadline is at or
+/// below the short contention wait (the health probe, era discovery, a
+/// connection close). It never begins or waits on a login, as
+/// [`non_interactive`]. The class is task-local: a spawned or detached task
+/// does not inherit it and waits the long budget.
+pub(crate) async fn short_contention<F: std::future::Future>(work: F) -> F::Output {
+    // MIK-8619 r4.4 prep: identity over `non_interactive`; the class that
+    // selects the short budget lands with the implementation.
+    non_interactive(work).await
+}
+
 /// Whether the current task may begin or wait on a login. Read before any
 /// `tokio::spawn`: a spawned task does not inherit the scope.
 pub(crate) fn interactive() -> bool {
