@@ -1,6 +1,6 @@
 # BUILD.1 PASS check: the client's stream-json output shows a successful gateway_list_servers call.
 # Run: jq -s -e -f scripts/release/build1_pass_check.jq client.jsonl
-# Event shape follows the Claude Code stream-json docs; confirmed by MIK-8602.VERIFY.7.
+# Event shape follows the Claude Code stream-json docs; not yet confirmed against a live run (pending MIK-8602.VERIFY.7).
 try (
   . as $events
   # R1: tool_use ids for gateway_list_servers on assistant events (need at least one).
