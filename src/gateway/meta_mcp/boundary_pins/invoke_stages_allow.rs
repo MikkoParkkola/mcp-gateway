@@ -52,6 +52,9 @@ pub(super) const STD_OK: &[&str] = &[
     "info",
 ];
 
+// Line references below cite invoke.rs at acf56382d, before the stages
+// moved out of it (MIK-8488 PR-B1).
+
 /// S1 `intake`, from invoke.rs:136-157.
 pub(super) const S1_INTAKE_ALLOW: &[&str] = &[
     "self.hint_surface",         // invoke.rs:143

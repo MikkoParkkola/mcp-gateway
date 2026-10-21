@@ -142,7 +142,7 @@ impl MetaMcp {
             step: intake.step,
         })?;
 
-        // `_full` requests bypass idempotency and response caching entirely.
+        // `_full` requests bypass the response cache, never idempotency (S4).
         // A `_full` call returns a different (unprojected) payload than the
         // cached/projected result, so sharing a key would let one shape leak
         // into the other (a non-`_full` caller could hit a cached full payload
