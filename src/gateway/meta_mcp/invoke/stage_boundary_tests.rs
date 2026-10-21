@@ -260,12 +260,44 @@ async fn a_live_backend_answer_is_delivered_as_the_backends() {
     assert_eq!(source, crate::protocol::ChainSource::Backend);
 }
 
-/// The files the send path of `invoke_tool_traced` lives in.
-const SEND_PATH: [(&str, &str); 3] = [
-    ("invoke.rs", include_str!("../invoke.rs")),
-    ("send.rs", include_str!("send.rs")),
-    ("post_dispatch.rs", include_str!("post_dispatch.rs")),
-];
+/// Every production file on the invoke path, read at run time so a new
+/// sibling module is scanned the day it lands: `invoke.rs` and each
+/// `invoke/*.rs` that is not a test file.
+fn invoke_production_files() -> Vec<std::path::PathBuf> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway/meta_mcp");
+    let mut files = vec![root.join("invoke.rs")];
+    for entry in std::fs::read_dir(root.join("invoke")).expect("the invoke directory") {
+        let path = entry.expect("a directory entry").path();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if path.extension().is_some_and(|e| e == "rs")
+            && !name.ends_with("_tests.rs")
+            && !name.contains("test_support")
+        {
+            files.push(path);
+        }
+    }
+    files
+}
+
+/// The send path sources, read at run time so a new stage file stays checked
+/// without editing a list.
+fn send_path_sources() -> Vec<(String, String)> {
+    invoke_production_files()
+        .into_iter()
+        .map(|path| {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_string();
+            let source = std::fs::read_to_string(&path).expect("a readable source file");
+            (name, source)
+        })
+        .collect()
+}
 
 /// S7 (design r3 item 5): the dispatch is boxed once, and the spend admission
 /// is given back right after its await. A second box would be a per-call
@@ -273,11 +305,12 @@ const SEND_PATH: [(&str, &str); 3] = [
 /// would hold the spend reservation across the dispatch error's settlement.
 #[test]
 fn the_send_path_boxes_one_dispatch_and_drops_the_admission_right_after_it() {
+    let send_path = send_path_sources();
     // Per file, so a failure names where the extra or missing site is.
     let sites = |needle: &str| -> Vec<(&str, usize)> {
-        SEND_PATH
+        send_path
             .iter()
-            .map(|(file, source)| (*file, source.matches(needle).count()))
+            .map(|(file, source)| (file.as_str(), source.matches(needle).count()))
             .filter(|(_, n)| *n > 0)
             .collect()
     };
@@ -293,7 +326,7 @@ fn the_send_path_boxes_one_dispatch_and_drops_the_admission_right_after_it() {
         1,
         "drops: {drop_sites:?}"
     );
-    let (_, source) = SEND_PATH
+    let (_, source) = send_path
         .iter()
         .find(|(_, source)| source.contains("Box::pin("))
         .expect("counted above");
@@ -570,25 +603,13 @@ fn every_pre_send_settlement_goes_through_the_mapping() {
         "note_served(",
         "want_refund(",
     ];
-    // Every production file on the invoke path, read at run time so a new
-    // sibling module is scanned the day it lands (final review): `invoke.rs`
-    // and each `invoke/*.rs` that is not a test file, less the mapping itself.
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway/meta_mcp");
-    let mut files = vec![root.join("invoke.rs")];
-    for entry in std::fs::read_dir(root.join("invoke")).expect("the invoke directory") {
-        let path = entry.expect("a directory entry").path();
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default();
-        if path.extension().is_some_and(|e| e == "rs")
-            && !name.ends_with("_tests.rs")
-            && !name.contains("test_support")
-            && name != "nonce_settle.rs"
-        {
-            files.push(path);
-        }
-    }
+    // Every production file on the invoke path, less the mapping itself.
+    let mut files = invoke_production_files();
+    files.retain(|path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name != "nonce_settle.rs")
+    });
     assert!(
         files.len() > 30,
         "premise: the scan found {} files",

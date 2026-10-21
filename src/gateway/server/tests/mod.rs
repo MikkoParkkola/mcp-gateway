@@ -18,6 +18,7 @@ mod fresh_slot_verdict;
 mod input_key_allocations;
 mod invoke_argument_copies;
 mod is_connected_count;
+mod mik8488_alloc_probe;
 #[cfg(feature = "firewall")]
 mod judge_allocations;
 mod per_call_timing;
