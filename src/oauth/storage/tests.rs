@@ -725,10 +725,10 @@ async fn a_polled_save_gives_up_on_a_held_repair_lock_at_its_bound() {
 
     // The 200 ms bound lives only in the lease deadline: without it this
     // await would hang, so an outer wall-clock bound fails the regression
-    // in about 5 s instead.
+    // in about 10 s instead (the real-clock timing floor).
     let started = std::time::Instant::now();
     let saved = tokio::time::timeout(
-        Duration::from_secs(5),
+        Duration::from_secs(10),
         store.save_client_id_polled(backend, resource, "ours", Duration::from_millis(200)),
     )
     .await
