@@ -2065,7 +2065,12 @@ jobs:
           set -euo pipefail
           if [ "$REHEARSAL" = true ]; then
             image="$REHEARSAL_IMAGE"; repo=oci://ghcr.io/mikkoparkkola/charts-rehearsal
+            # A fresh chart version per run (MIK-8603): the rehearsal package
+            # keeps earlier runs' versions, and the script never replaces one.
+            export REHEARSAL_RUN="$GITHUB_RUN_ID"
           else
+            # The real publish never stages a rehearsal version, whatever the runner env holds.
+            unset REHEARSAL_RUN
             [[ $SIGNED_LIST =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no signed index digest from docker-manifest"; exit 1; }
             image="ghcr.io/mikkoparkkola/mcp-gateway@${SIGNED_LIST}"; repo=oci://ghcr.io/mikkoparkkola/charts
           fi
@@ -2097,6 +2102,30 @@ jobs:
           name: chart-notes
           path: ${{ runner.temp }}/chart-notes.md
           retention-days: 14
+      # The rehearsal's chart version is disposable: delete it and its
+      # signature, best-effort, so charts-rehearsal does not accumulate one
+      # version per run (MIK-8603). Never runs for the real `charts` package.
+      - name: Delete this rehearsal's chart version
+        if: always() && github.event_name == 'workflow_dispatch'
+        # Best-effort: a cleanup error never fails the rehearsal it follows.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PACKAGE: charts-rehearsal%2Fmcp-gateway
+        run: |
+          set -uo pipefail
+          tag="$(yq '.version' deploy/helm/mcp-gateway/Chart.yaml)-rehearsal.$GITHUB_RUN_ID"
+          versions=$(gh api "/users/MikkoParkkola/packages/container/$PACKAGE/versions" --paginate) \
+            || { echo "::warning::could not list $PACKAGE versions; $tag left in place"; exit 0; }
+          digest=$(jq -r --arg t "$tag" '.[] | select(.metadata.container.tags | index($t)) | .name' <<<"$versions")
+          [ -n "$digest" ] || { echo "::warning::no $tag in $PACKAGE to delete; if this run pushed it, delete it by hand"; exit 0; }
+          sig="sha256-${digest#sha256:}.sig"
+          for id in $(jq -r --arg t "$tag" --arg s "$sig" \
+              '.[] | select(.metadata.container.tags | (index($t) or index($s))) | .id' <<<"$versions"); do
+            gh api --method DELETE "/users/MikkoParkkola/packages/container/$PACKAGE/versions/$id" \
+              && echo "deleted $PACKAGE version $id" \
+              || echo "::warning::could not delete $PACKAGE version $id ($tag); delete it by hand"
+          done
 
   publish-mcp-registry:
     name: Publish to the MCP Registry

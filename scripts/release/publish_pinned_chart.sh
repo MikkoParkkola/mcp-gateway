@@ -9,8 +9,11 @@
 # commit after the freeze, so the digest goes into the packaged chart only.
 #
 # usage: TAG_COMMIT=<sha> SIGNER_IDENTITY=<id> SIGNER_ISSUER=<url> CHART_NOTES=<file> \
-#          publish_pinned_chart.sh <image-ref> <oci-repo>
+#          [REHEARSAL_RUN=<run-id>] publish_pinned_chart.sh <image-ref> <oci-repo>
 #   e.g. publish_pinned_chart.sh ghcr.io/mikkoparkkola/mcp-gateway:4.0.0 oci://ghcr.io/mikkoparkkola/charts
+# REHEARSAL_RUN is optional and only for oci://ghcr.io/mikkoparkkola/charts-rehearsal:
+# when set (all digits, a GitHub run id) the staged chart version becomes
+# <committed version>-rehearsal.<REHEARSAL_RUN>. Unset or empty: no change.
 # SIGNER_IDENTITY and SIGNER_ISSUER are the exact certificate identity and OIDC
 # issuer the keyless signature must carry; verify pins both, never a regexp.
 # On success CHART_NOTES receives the release-notes block users verify against.
@@ -22,6 +25,16 @@ repo=${2:?oci chart repository}
 : "${SIGNER_IDENTITY:?set SIGNER_IDENTITY to the identity the chart is signed as}"
 : "${SIGNER_ISSUER:?set SIGNER_ISSUER to the OIDC issuer of that identity}"
 : "${CHART_NOTES:?set CHART_NOTES to the file the release-notes block goes to}"
+if [[ -n ${REHEARSAL_RUN:-} ]]; then
+  if ! [[ $REHEARSAL_RUN =~ ^[0-9]+$ ]]; then
+    echo "REHEARSAL_RUN must be all digits (a GitHub run id): $REHEARSAL_RUN" >&2
+    exit 1
+  fi
+  if [[ $repo != "oci://ghcr.io/mikkoparkkola/charts-rehearsal" ]]; then
+    echo "REHEARSAL_RUN is only for the rehearsal package oci://ghcr.io/mikkoparkkola/charts-rehearsal, not $repo" >&2
+    exit 1
+  fi
+fi
 
 digest=$(docker buildx imagetools inspect "$image" --format '{{json .Manifest.Digest}}' | tr -d '"')
 if ! [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
@@ -38,6 +51,12 @@ epoch=$(git show -s --format=%ct "$TAG_COMMIT")
 stage() {
   git archive "$TAG_COMMIT" deploy/helm/mcp-gateway | tar -x -C "$1"
   DIGEST="$digest" yq -i '.image.digest = strenv(DIGEST)' "$1/deploy/helm/mcp-gateway/values.yaml"
+  # A rehearsal from any commit publishes a fresh version
+  # (<version>-rehearsal.<run>), so the replace refusal below stays intact;
+  # the real package never takes this path (checked above).
+  if [[ -n ${REHEARSAL_RUN:-} ]]; then
+    REHEARSAL_RUN="$REHEARSAL_RUN" yq -i '.version = (.version | tostring) + "-rehearsal." + strenv(REHEARSAL_RUN)' "$1/deploy/helm/mcp-gateway/Chart.yaml"
+  fi
   python3 - "$epoch" "$1/deploy" <<'PY'
 import os, sys
 when = int(sys.argv[1])
