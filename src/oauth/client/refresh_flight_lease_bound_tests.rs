@@ -14,8 +14,8 @@ use crate::Error;
 use crate::oauth::OAuthClient;
 use crate::oauth::client::OAUTH_AUTHORIZATION_WINDOW;
 use crate::oauth::client::refresh_flight::{
-    CREDENTIAL_LOCK_BUSY, CREDENTIAL_LOCK_WAIT, Flight, NONINTERACTIVE_LEASE_WAIT,
-    hold_across_processes, is_credential_lock_busy,
+    CREDENTIAL_LOCK_WAIT, Flight, NONINTERACTIVE_LEASE_WAIT, hold_across_processes,
+    is_credential_lock_busy,
 };
 use crate::oauth::client::renewal::Renewal;
 use crate::oauth::client::{StoredCredential, refresh_stored};
@@ -28,14 +28,9 @@ use crate::oauth::login_gate::LoginGate;
 /// One lock poll (50 ms), mirroring the private `LOCK_POLL`, which phase 2 keeps.
 pub(super) const POLL: Duration = Duration::from_millis(50);
 
-/// Whether a renewal deferred on a busy lock: phase 2 replaces with
-/// `matches!(renewal, Renewal::Deferred)`. Until then no renewal is one, so
-/// the negation of today's three variants reads the same either way.
+/// Whether a renewal deferred on a busy lock.
 pub(super) fn is_deferred(renewal: &Renewal) -> bool {
-    !matches!(
-        renewal,
-        Renewal::Renewed | Renewal::Refused | Renewal::Exhausted
-    )
+    matches!(renewal, Renewal::Deferred)
 }
 
 /// The credential's key and its token and lock paths for `client`.

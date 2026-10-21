@@ -125,10 +125,13 @@ pub(super) async fn hold_across_processes(
 /// or the joiner's `OAuth` text form (`Failed(error.to_string())` keeps the
 /// marker with its colon inside the Display wrapper).
 pub(crate) fn is_credential_lock_busy(error: &Error) -> bool {
+    // Both arms match the marker with its colon: a bare-prefix message such
+    // as "credential lock busy-service..." is not a busy lock.
+    let marker = format!("{CREDENTIAL_LOCK_BUSY}:");
     match error {
-        Error::BackendUnavailable(text) => text.starts_with(CREDENTIAL_LOCK_BUSY),
-        // `CREDENTIAL_LOCK_BUSY` with its colon; the joiner's wrapped text.
-        Error::OAuth(text) => text.contains("credential lock busy:"),
+        Error::BackendUnavailable(text) => text.starts_with(&marker),
+        // The joiner's Display-wrapped text keeps the marker inside.
+        Error::OAuth(text) => text.contains(&marker),
         _ => false,
     }
 }
@@ -157,6 +160,9 @@ pub(super) const CREDENTIAL_LOCK_WAIT: std::time::Duration = std::time::Duration
 /// peer legitimately holds the lease for a moment while refreshing, so zero is
 /// too strict, but a full exchange wait would outlast the probe's own timeout.
 /// Pinned below it by test.
+/// Known limit: a configured health timeout of 2 s or less can still time out
+/// and rebuild under lock contention, as it did before this fix (follow-up
+/// planned).
 pub(super) const NONINTERACTIVE_LEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// The busy marker every lock failure carries: messages read
@@ -241,12 +247,24 @@ pub(crate) async fn refresh_stored(
     } = at;
     let token_path = storage.token_path(key, resource_url);
     let flight = Flight::of(&token_path);
-    let guard = Arc::clone(&flight.lock).lock_owned().await;
-    let across = hold_across_processes(
-        &token_path,
-        tokio::time::Instant::now() + CREDENTIAL_LOCK_WAIT,
-    )
-    .await?;
+    // One budget covers the in-process flight and the cross-process lease: a
+    // waiter queued behind an in-process holder answers the same busy error
+    // at the deadline instead of queuing unbounded (MIK-8619).
+    let now = tokio::time::Instant::now();
+    let deadline = if crate::oauth::login_gate::interactive() {
+        now + CREDENTIAL_LOCK_WAIT
+    } else {
+        now + NONINTERACTIVE_LEASE_WAIT
+    };
+    let wait = Arc::clone(&flight.lock).lock_owned();
+    let guard = tokio::time::timeout_at(deadline, wait)
+        .await
+        .map_err(|_| {
+            Error::BackendUnavailable(format!(
+                "{CREDENTIAL_LOCK_BUSY}: the refresh lock stayed held past the contention budget"
+            ))
+        })?;
+    let across = hold_across_processes(&token_path, deadline).await?;
 
     let stored = storage.load(key, resource_url);
     if let Some(access) = caller.adopt(stored.as_ref()) {

@@ -42,6 +42,9 @@ const PRE_SEND_SITES: &[&str] = &[
     // inside `build_mcp_headers` before the POST; capability refresh before
     // its HTTP call; token saves send no tool request at all).
     "oauth/client/refresh_flight.rs",
+    // A queued save's flight wait (MIK-8619): the `save_issued` lock is taken
+    // in the token step, and a token save sends no tool request at all.
+    "oauth/client/grants.rs",
 ];
 
 /// `src` with comments, string literals and char literals replaced by spaces,

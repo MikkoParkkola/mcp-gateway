@@ -723,9 +723,15 @@ async fn a_polled_save_gives_up_on_a_held_repair_lock_at_its_bound() {
         crate::fs_lock::ExclusiveFileLock::acquire(&store.client_lock_path(backend, resource))
             .expect("another process holds the repair lock");
 
-    let saved = store
-        .save_client_id_polled(backend, resource, "ours", Duration::from_millis(200))
-        .await;
+    // The 200 ms bound lives only in the lease deadline: without it this
+    // await would hang, so an outer wall-clock bound fails the regression
+    // in about 5 s instead.
+    let saved = tokio::time::timeout(
+        Duration::from_secs(5),
+        store.save_client_id_polled(backend, resource, "ours", Duration::from_millis(200)),
+    )
+    .await
+    .expect("the polled save never answered");
 
     assert!(
         matches!(&saved, Err(Error::OAuth(m)) if m.contains("still held")),
