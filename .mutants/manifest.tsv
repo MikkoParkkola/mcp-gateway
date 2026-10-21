@@ -1,0 +1,12 @@
+head_sha	c01cfbfd31d206c7bef690d7913088b7ac06dda4
+HTTP_03	linux	http_3_connections_api_route.patch	--lib gateway::router::tests::openwebui_adapter::start_route::callback::delete::api_delete_without_an_adapter_assertion_is_unauthenticated
+HTTP_09	linux	http_9_meta_mcp_dispatch.patch	--lib gateway::router::identity_parity_tests::meta_route_contradiction_refusal_is_audited
+HTTP_15	linux	http_15_metrics_handler.patch	--lib gateway::router::tests::metrics_scrape::metrics_wrong_token_is_401
+ACCT_05	linux	acct_5_custody_release.patch	--lib personal_accounts::vault::vault_tests::revalidate::a_revoke_after_the_mint_refuses_the_credential_at_the_durable_recheck
+ACCT_11	linux	acct_11_key_fields.patch	--lib personal_accounts::tests::s01_empty_and_oversized_fields_refuse_but_boundary_is_valid
+OAUTH_01	linux	oauth_1_oauth_advertised.patch	--lib oauth::client::destination::tests::hardened_oauth_refuses_private_token_endpoint
+OAUTH_07	linux	oauth_7_get_token.patch	--lib oauth::client::authorize_tests::get_token_refreshes_an_expired_token
+STARTUP_09	linux	startup_9_startup_responsefirewall.patch	--lib gateway::server::signing_allocation_tests::response_firewall_anomaly::anomaly_detection_on_builds_a_firewall_that_blocks_a_never_seen_transition
+STARTUP_07	linux	startup_7_startup_grantaudit.patch	--lib gateway::server::identity_grants::tests::t3cd_failed_snapshot_append_serves_nothing
+STDIO_05	linux	stdio_5_stdio_guardowner.patch	--lib transport::stdio::tests::stdio_refuses_to_reroute_a_progress_token_that_is_already_live
+TASKS_03	linux	tasks_3_owned.patch	--lib gateway::task_service::store_tests::store_04_owner_and_revision_refusals_preserve_every_file_and_view
