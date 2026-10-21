@@ -182,7 +182,9 @@ async fn t7_two_periods_are_two_bounded_attempts() {
         }
         let attempts: Vec<_> = spans
             .into_iter()
-            .filter(|(at, span)| Some(*at) == open_start || *span >= CREDENTIAL_LOCK_WAIT - TICK)
+            .filter(|(at, span)| {
+                Some(*at) == open_start || *span >= CREDENTIAL_LOCK_WAIT.saturating_sub(TICK)
+            })
             .collect();
         looping.abort();
         drop(log_guard);
@@ -204,7 +206,7 @@ async fn t7_two_periods_are_two_bounded_attempts() {
         );
         for (_, span) in &attempts {
             assert!(
-                ((CREDENTIAL_LOCK_WAIT - TICK)
+                ((CREDENTIAL_LOCK_WAIT.saturating_sub(TICK))
                     ..CREDENTIAL_LOCK_WAIT + POLL + Duration::from_secs(1))
                     .contains(span),
                 "a period held more than one bound: {span:?}"
