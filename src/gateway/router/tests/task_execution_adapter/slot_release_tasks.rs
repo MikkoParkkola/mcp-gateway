@@ -796,4 +796,24 @@ async fn c1_mcp_a_dropped_top_level_question_is_not_replayed_under_its_key() {
         0,
         "the dropped question's slot is released, not held by the store"
     );
+    // A fresh key recovers: it is not refused, and the backend runs again (the mock's second answer is `done()`).
+    let fresh_body = keyed(
+        declaring_elicitation(modern(
+            2,
+            "tools/call",
+            json!({ "name": "gateway_invoke", "arguments": { "server": BACKEND, "tool": TOOL, "arguments": {} } }),
+            true,
+        )),
+        "c1-mcp-fresh-key",
+    );
+    let fresh = post(&state, "key-a", fresh_body).await;
+    std::assert!(
+        fresh.get("error").is_none(),
+        "a fresh key is not refused: {fresh}"
+    );
+    std::assert_eq!(
+        mock.calls(),
+        2,
+        "the fresh key ran the backend call again: {fresh}"
+    );
 }
