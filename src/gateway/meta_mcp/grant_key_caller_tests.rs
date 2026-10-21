@@ -15,7 +15,7 @@
 //! `cost_key_caller_tests.rs` does and judges it through
 //! `may_invoke(..., ctx.scope(), ...)`, with the personal capability plus
 //! one identity grant from `grant_agent_key_tests.rs`. Every row is RED on
-//! the base except the two whose doc comments say green by design.
+//! the base except the three whose doc comments say green by design.
 
 use std::sync::Arc;
 
