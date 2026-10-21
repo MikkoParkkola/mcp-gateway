@@ -60,3 +60,43 @@ async fn a_nested_non_interactive_keeps_the_short_class() {
     );
     assert!(interactive(), "after every scope");
 }
+
+/// A `non_interactive` outside any Short scope is Long but not interactive,
+/// an inner `short_contention` turns it Short, and leaving that inner scope
+/// restores Long.
+#[tokio::test]
+async fn a_top_level_non_interactive_is_long_and_restores_long() {
+    non_interactive(async {
+        assert_eq!(
+            contention_class(),
+            ContentionClass::Long,
+            "a top-level non_interactive is Long"
+        );
+        assert!(!interactive(), "a top-level non_interactive");
+
+        short_contention(async {
+            assert_eq!(
+                contention_class(),
+                ContentionClass::Short,
+                "short_contention inside non_interactive"
+            );
+            assert!(!interactive(), "short_contention inside non_interactive");
+        })
+        .await;
+
+        assert_eq!(
+            contention_class(),
+            ContentionClass::Long,
+            "leaving the inner short_contention lost Long"
+        );
+        assert!(!interactive(), "leaving the inner short_contention");
+    })
+    .await;
+
+    assert_eq!(
+        contention_class(),
+        ContentionClass::Long,
+        "after every scope"
+    );
+    assert!(interactive(), "after every scope");
+}

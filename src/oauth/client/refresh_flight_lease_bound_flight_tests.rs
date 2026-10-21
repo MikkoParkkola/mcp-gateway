@@ -179,6 +179,71 @@ async fn t13i_a_long_save_behind_the_flight_lock_waits_and_saves() {
     .expect("a bounded save answers inside twice the bound");
 }
 
+/// T13k: a Long `save_issued` queued behind an in-process flight lock held
+/// past the 90 s budget answers the marked busy error at the budget, not
+/// later and not never. Pins the save path's flight deadline (MIK-8619 r4.4;
+/// mutant mD3 waits unbounded).
+#[tokio::test(start_paused = true)]
+async fn t13k_a_long_save_behind_a_flight_held_past_the_budget_answers_busy() {
+    tokio::time::timeout(
+        CREDENTIAL_LOCK_WAIT * 2,
+        Box::pin(async {
+            let server = TokenServer::start(&[]).await;
+            let dir = tempfile::tempdir().expect("a scratch token store");
+            let oauth = Arc::new(client(dir.path(), &server));
+            let (_, token_path, _) = credential_paths(&oauth);
+            // The in-process holder: a spawned task, so the waiter queues behind
+            // another task's hold rather than its own. It never releases inside
+            // the test, past the outer timeout.
+            let flight = Flight::of(&token_path);
+            let acquired = Arc::new(tokio::sync::Notify::new());
+            let holder = tokio::spawn({
+                let flight = Arc::clone(&flight);
+                let acquired = Arc::clone(&acquired);
+                async move {
+                    let _guard = flight.lock.lock().await;
+                    acquired.notify_one();
+                    tokio::time::sleep(CREDENTIAL_LOCK_WAIT * 2 + Duration::from_secs(10)).await;
+                }
+            });
+            acquired.notified().await;
+
+            let issued = token("issued", None, false);
+            let waiter = tokio::spawn({
+                let oauth = Arc::clone(&oauth);
+                let issued = issued.clone();
+                async move {
+                    let start = Instant::now();
+                    let outcome = crate::oauth::login_gate::non_interactive(
+                        oauth.save_issued_for_test(&issued),
+                    )
+                    .await;
+                    (outcome, start.elapsed())
+                }
+            });
+
+            let (outcome, elapsed) = waiter.await.expect("the waiter joins");
+            holder.abort();
+            let error = outcome.expect_err("no token saves past a held flight");
+            assert!(
+                is_credential_lock_busy(&error),
+                "not the marked error: {error}"
+            );
+            assert!(matches!(error, Error::BackendUnavailable(_)));
+            assert!(error.is_pre_dispatch());
+            assert!(
+                (CREDENTIAL_LOCK_WAIT..CREDENTIAL_LOCK_WAIT + POLL + Duration::from_secs(1))
+                    .contains(&elapsed),
+                "answered off the long wait: {elapsed:?}"
+            );
+            assert_eq!(server.requests(), 0);
+            assert!(stored(&oauth).is_none(), "a failed save stored a token");
+        }),
+    )
+    .await
+    .expect("a bounded save answers inside twice the bound");
+}
+
 /// T13j: one budget covers the flight lock and the lease: a non-interactive
 /// probe that queued 1.5 s on the flight and meets a held lease answers busy
 /// at about 2 s total, not 1.5 s plus a fresh 2 s. RED now: the lease wait

@@ -82,3 +82,68 @@ async fn an_era_probe_meeting_a_lapsed_token_opens_no_login() {
         .expect("restart task")
         .expect("the restart's own login starts the backend");
 }
+
+/// T13e: a health probe whose `ensure_started` meets a credential lock another
+/// process holds answers the marked busy error at the short wait, and does not
+/// rebuild the transport (probe.rs busy skip; mutant m4 removes it).
+#[tokio::test]
+async fn t13e_a_probe_whose_start_meets_a_held_lock_skips_the_rebuild() {
+    let (backend, browser, _dir) = super::login_window::approved_start_full(
+        Upstream::Plain,
+        Duration::from_secs(30),
+        super::login_window::Account::PerUser,
+        super::login_window::TokenEndpoint::RefreshStalls,
+    )
+    .await;
+    lapse(&backend).await;
+    let client = backend
+        .last_oauth_client
+        .lock()
+        .clone()
+        .expect("premise: a start built an OAuth client");
+    let lock_path = client.lock().await.credential_lock_path_for_test();
+    let held = crate::fs_lock::ExclusiveFileLock::acquire(&lock_path)
+        .expect("another process holds the credential lock");
+    // The next probe starts a fresh transport, so `ensure_started` reaches
+    // the handshake's token step.
+    let old = backend.shared_entry().transport.write().take();
+    assert!(old.is_some(), "premise: the backend had started");
+    let rebuilds = backend
+        .rebuilds_attempted
+        .load(std::sync::atomic::Ordering::SeqCst);
+    let failures = backend.circuit_breaker_stats().current_failures;
+
+    let start = tokio::time::Instant::now();
+    let outcome = within(
+        "the probe",
+        Box::pin(backend.health_probe(Duration::from_secs(5))),
+    )
+    .await;
+    let elapsed = start.elapsed();
+
+    let error = outcome.expect_err("no transport starts past a held credential lock");
+    assert!(
+        crate::oauth::client::is_credential_lock_busy(&error),
+        "the start's token step did not answer busy: {error}"
+    );
+    assert_eq!(
+        backend
+            .rebuilds_attempted
+            .load(std::sync::atomic::Ordering::SeqCst),
+        rebuilds,
+        "a busy lock rebuilt the transport"
+    );
+    assert_eq!(
+        backend.circuit_breaker_stats().current_failures,
+        failures,
+        "a busy lock sampled as a backend failure"
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "the probe waited past the short wait: {elapsed:?}"
+    );
+    assert_eq!(browser.opens(), 1, "a busy lock opened a login");
+
+    drop(held);
+    drop(old);
+}
