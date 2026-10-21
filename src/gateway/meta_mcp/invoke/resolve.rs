@@ -69,7 +69,7 @@ impl MetaMcp {
                 (server, tool),
                 (caller_proof, verified_identity, caller.caller_key),
                 surface,
-                &mut witness,
+                witness,
             )
             .await
         {
@@ -94,7 +94,7 @@ impl MetaMcp {
         self.admit_after_credential((server, tool), session_id, trace_id)?;
         // The lift (MIK-8392 STORED.2): proven live, before key/spend/redeem/relay act.
         let unproven = match self
-            .lift_deferred((server, tool), &resolved, &mut witness, session_id, caller)
+            .lift_deferred((server, tool), &resolved, witness, session_id, caller)
             .await
         {
             std::ops::ControlFlow::Break(replay) => {

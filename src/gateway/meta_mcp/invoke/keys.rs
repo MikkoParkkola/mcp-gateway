@@ -157,7 +157,7 @@ impl MetaMcp {
             (arm_key, tool_key),
             api_key_name,
             client_claim.as_ref(),
-            &mut idem_reservation,
+            idem_reservation,
         )? {
             super::nonce_settle::settle_pre_send(
                 caller,
@@ -221,7 +221,7 @@ impl MetaMcp {
                 dispatch_binding.as_deref(),
                 caller_credential,
                 verified_identity,
-                &mut idem_reservation,
+                idem_reservation,
             )
             .await;
         // Carried before either exit below, so neither hands back a witness
@@ -266,7 +266,7 @@ impl MetaMcp {
                 (arm_key, tool_key),
                 api_key_name,
                 client_claim.as_ref(),
-                &mut idem_reservation,
+                idem_reservation,
             )
         {
             super::nonce_settle::settle_pre_send(
