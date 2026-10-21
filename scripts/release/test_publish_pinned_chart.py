@@ -187,8 +187,10 @@ class ExistingVersion(unittest.TestCase):
         self.assertEqual(self.pulls(), 0)
 
     def test_rehearsal_run_with_a_near_miss_repo_is_refused(self):
-        # Only the exact rehearsal package takes REHEARSAL_RUN: a name that
-        # merely starts with it, or differs in case, is another package.
+        # REHEARSAL_RUN is refused unless the repository argument is exactly the
+        # rehearsal package string: a name that only starts like it, another
+        # owner, or any change of case (even one GHCR would resolve to the same
+        # package) fails closed.
         for repo in ("oci://ghcr.io/mikkoparkkola/charts-rehearsal/",
                      "oci://ghcr.io/mikkoparkkola/charts-rehearsal2",
                      "oci://ghcr.io/mikkoparkkola/charts-rehearsal/mcp-gateway",
