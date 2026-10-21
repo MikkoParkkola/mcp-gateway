@@ -489,6 +489,8 @@ pub(crate) use refresh_flight::{
     refresh_stored,
 };
 #[cfg(test)]
+pub(crate) use refresh_flight::busy_error_for_test;
+#[cfg(test)]
 mod issuer_provenance_tests;
 #[cfg(test)]
 mod prm_discovery_tests;

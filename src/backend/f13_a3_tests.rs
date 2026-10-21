@@ -509,3 +509,151 @@ async fn h1_a_cooling_stale_slot_answers_withheld_and_missing_alike() {
         "no list went out inside the cooldown"
     );
 }
+
+/// A `tools/list` upstream that answers the marked busy error (or the same
+/// variant unmarked), so the fill's breaker and cooldown treatment is pinned
+/// without a lease or a token exchange (MIK-8619 T13f).
+struct BusyLister {
+    lists: AtomicUsize,
+    marked: bool,
+}
+
+#[async_trait]
+impl crate::transport::Transport for BusyLister {
+    async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
+        if method != "tools/list" {
+            return Ok(JsonRpcResponse::success(RequestId::Number(1), json!({})));
+        }
+        self.lists.fetch_add(1, Ordering::SeqCst);
+        tokio::task::yield_now().await;
+        Err(if self.marked {
+            crate::oauth::client::busy_error_for_test("the token step holds the lease")
+        } else {
+            crate::Error::BackendUnavailable("x".to_string())
+        })
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// A `Closed` backend on the `Shared` slot with `failsafe`, wired to `lister`.
+fn busy_backend(failsafe: &FailsafeConfig, lister: Arc<BusyLister>) -> Arc<Backend> {
+    let config = BackendConfig {
+        input_schema_enforcement: InputSchemaEnforcement::Closed,
+        ..BackendConfig::default()
+    };
+    let backend = Arc::new(Backend::new(
+        "f13",
+        config,
+        failsafe,
+        Duration::from_secs(300),
+    ));
+    backend.set_transport_for_test(lister as Arc<dyn crate::transport::Transport>);
+    backend
+}
+
+/// T13f: a tools fill whose `tools/list` answers the marked busy error takes
+/// no breaker sample and stamps no cooldown (`FillEnd::Pending`, like an
+/// authorization wait). An unmarked `BackendUnavailable` still samples and
+/// stamps, so a blanket skip of the variant fails. RED now: `record_fill`
+/// samples and `FillEnd::of` stamps.
+#[tokio::test(start_paused = true)]
+async fn t13f_fill_over_a_busy_lock_takes_no_sample_and_no_cooldown() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut failsafe = hair_trigger(Duration::from_secs(3600));
+        failsafe.circuit_breaker.failure_threshold = 5;
+        // Marked: no sample, no cooldown.
+        let marked_lister = Arc::new(BusyLister {
+            lists: AtomicUsize::new(0),
+            marked: true,
+        });
+        let marked_backend = busy_backend(&failsafe, Arc::clone(&marked_lister));
+        let before = marked_backend.circuit_breaker_stats().current_failures;
+        let first = check(&marked_backend, "edit", &undeclared()).await;
+        let Err(marked_error) = first else {
+            panic!("no tools cross a busy lock");
+        };
+        assert!(
+            crate::oauth::client::is_credential_lock_busy(&marked_error),
+            "not the marked error: {marked_error}"
+        );
+        assert!(
+            matches!(marked_error, crate::Error::BackendUnavailable(_)),
+            "not the variant: {marked_error:?}"
+        );
+        assert_eq!(
+            marked_backend.circuit_breaker_stats().current_failures,
+            before,
+            "a busy lock sampled as a backend failure"
+        );
+        assert!(
+            !marked_backend.is_circuit_tripped(),
+            "the fill tripped the breaker on a busy lock"
+        );
+        let marked_fresh =
+            crate::oauth::client::busy_error_for_test("the token step holds the lease");
+        let marked_end = super::super::fill_check::FillEnd::of::<()>(&Err(marked_fresh));
+        assert!(
+            matches!(&marked_end, super::super::fill_check::FillEnd::Pending),
+            "a busy lock stamped the cooldown: {marked_end:?}"
+        );
+        tokio::time::advance(Duration::from_millis(10)).await;
+        let second = check(&marked_backend, "edit", &undeclared()).await;
+        assert!(
+            matches!(second, Err(crate::Error::BackendUnavailable(_))),
+            "not the busy error again: {second:?}"
+        );
+        assert_eq!(
+            marked_lister.lists.load(Ordering::SeqCst),
+            2,
+            "the second call fast-failed inside a cooldown"
+        );
+
+        // Unmarked control: the same variant without the marker still samples
+        // and stamps.
+        let plain_lister = Arc::new(BusyLister {
+            lists: AtomicUsize::new(0),
+            marked: false,
+        });
+        let plain_backend = busy_backend(&failsafe, Arc::clone(&plain_lister));
+        let before = plain_backend.circuit_breaker_stats().current_failures;
+        let first = check(&plain_backend, "edit", &undeclared()).await;
+        let Err(plain_error) = first else {
+            panic!("no tools cross a failed list");
+        };
+        assert!(
+            !crate::oauth::client::is_credential_lock_busy(&plain_error),
+            "an unmarked error reads busy: {plain_error}"
+        );
+        assert!(
+            plain_backend.circuit_breaker_stats().current_failures > before,
+            "an unmarked failure was not sampled"
+        );
+        let plain_fresh = crate::Error::BackendUnavailable("x".to_string());
+        let plain_end = super::super::fill_check::FillEnd::of::<()>(&Err(plain_fresh));
+        assert!(
+            !matches!(&plain_end, super::super::fill_check::FillEnd::Pending),
+            "an unmarked failure stamped nothing: {plain_end:?}"
+        );
+        tokio::time::advance(Duration::from_millis(10)).await;
+        let second = check(&plain_backend, "edit", &undeclared()).await;
+        assert!(
+            matches!(second, Err(crate::Error::BackendUnavailable(_))),
+            "not the replayed failure: {second:?}"
+        );
+        assert_eq!(
+            plain_lister.lists.load(Ordering::SeqCst),
+            1,
+            "the second call listed again inside the cooldown"
+        );
+    })
+    .await
+    .expect("both fills answer at once");
+}

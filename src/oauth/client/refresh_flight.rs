@@ -133,6 +133,13 @@ pub(crate) fn is_credential_lock_busy(error: &Error) -> bool {
     }
 }
 
+/// Test-only: the marked busy error, so a backend fill row can drive its
+/// failure without spelling the marker (MIK-8619 T13f).
+#[cfg(test)]
+pub(crate) fn busy_error_for_test(label: &str) -> crate::Error {
+    crate::Error::BackendUnavailable(format!("{CREDENTIAL_LOCK_BUSY}: {label}"))
+}
+
 /// The most one exchange may take, answer body included. Above an owned
 /// client's own 30 s request timeout plus the 5 s redirect lookup, so it
 /// only ever ends an exchange through a supplied client.
