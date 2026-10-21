@@ -149,6 +149,14 @@ async fn t12_lock_io_error_passes_through_at_once() {
         .expect("an io error answers at once")
         .expect_err("no token crosses a broken lock");
     assert!(is_busy(&error), "not the lock-busy error: {error}");
+    assert!(
+        matches!(error, Error::BackendUnavailable(_)),
+        "the busy error rides BackendUnavailable: {error:?}"
+    );
+    assert!(
+        error.is_pre_dispatch(),
+        "a busy lock frees the key: {error:?}"
+    );
     assert!(elapsed < Duration::from_secs(5), "not at once: {elapsed:?}");
     assert_eq!(
         browsers.load(Ordering::SeqCst),

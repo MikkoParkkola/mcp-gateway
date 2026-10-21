@@ -31,8 +31,9 @@ pub(super) const BOUND: Duration = Duration::from_secs(90);
 /// One lock poll (50 ms), mirroring the private `LOCK_POLL`, which phase 2 keeps.
 pub(super) const POLL: Duration = Duration::from_millis(50);
 
-/// The busy marker text: phase 2 replaces with `CREDENTIAL_LOCK_BUSY`.
-pub(super) const BUSY_MARKER: &str = "CREDENTIAL_LOCK_BUSY";
+/// The busy marker text, the exact value phase 2 gives `refresh_flight::CREDENTIAL_LOCK_BUSY`;
+/// phase 2 replaces this stand-in with that const.
+pub(super) const BUSY_MARKER: &str = "credential lock busy";
 
 /// Whether `error` carries the busy marker: phase 2 replaces with
 /// `is_credential_lock_busy`. The marker rides as a prefix on either variant:
@@ -112,6 +113,14 @@ async fn t1_refresh_answers_busy_at_the_bound_and_frees_the_flight() {
         .expect_err("no token crosses a held lease");
     assert!(is_busy(&error), "not the lock-busy error: {error}");
     assert!(
+        matches!(error, Error::BackendUnavailable(_)),
+        "the busy error rides BackendUnavailable: {error:?}"
+    );
+    assert!(
+        error.is_pre_dispatch(),
+        "a busy lock frees the key: {error:?}"
+    );
+    assert!(
         (BOUND..BOUND + POLL + Duration::from_secs(1)).contains(&elapsed),
         "answered off the bound: {elapsed:?}"
     );
@@ -146,6 +155,14 @@ async fn t2_save_under_a_held_lease_fails_busy_and_stores_nothing() {
         .expect("a bounded save answers inside twice the bound")
         .expect_err("no token is issued past a held lease");
     assert!(is_busy(&error), "not the lock-busy error: {error}");
+    assert!(
+        matches!(error, Error::BackendUnavailable(_)),
+        "the busy error rides BackendUnavailable: {error:?}"
+    );
+    assert!(
+        error.is_pre_dispatch(),
+        "a busy lock frees the key: {error:?}"
+    );
     assert!(
         (BOUND..BOUND + POLL + Duration::from_secs(1)).contains(&elapsed),
         "answered off the bound: {elapsed:?}"
@@ -225,6 +242,10 @@ async fn t5_detached_step_answers_busy_without_a_login() {
         .expect_err("no token crosses a held lease");
     assert!(is_busy(&error), "not the lock-busy error: {error}");
     assert!(
+        matches!(error, Error::BackendUnavailable(_)),
+        "the busy error rides BackendUnavailable: {error:?}"
+    );
+    assert!(
         (BOUND..BOUND + POLL + Duration::from_secs(1)).contains(&elapsed),
         "answered off the bound: {elapsed:?}"
     );
@@ -257,6 +278,10 @@ async fn t5b_get_token_answers_busy_without_a_login() {
         .expect("a bounded step answers inside twice the bound")
         .expect_err("no token crosses a held lease");
     assert!(is_busy(&error), "not the lock-busy error: {error}");
+    assert!(
+        matches!(error, Error::BackendUnavailable(_)),
+        "the busy error rides BackendUnavailable: {error:?}"
+    );
     assert!(
         (BOUND..BOUND + POLL + Duration::from_secs(1)).contains(&elapsed),
         "answered off the bound: {elapsed:?}"
