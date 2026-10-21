@@ -197,7 +197,11 @@ async fn t12_lock_io_error_passes_through_at_once() {
         error.is_pre_dispatch(),
         "a busy lock frees the key: {error:?}"
     );
-    assert!(elapsed < Duration::from_secs(5), "not at once: {elapsed:?}");
+    // Well under the short wait: an io error does not wait, not even 2 s.
+    assert!(
+        elapsed < POLL + Duration::from_millis(500),
+        "not at once: {elapsed:?}"
+    );
     assert_eq!(
         browsers.load(Ordering::SeqCst),
         0,
@@ -215,7 +219,11 @@ async fn t12_lock_io_error_passes_through_at_once() {
     let elapsed = start.elapsed();
     let renewal = outcome.expect("an io error answers at once");
     assert!(is_deferred(&renewal), "not deferred: {renewal:?}");
-    assert!(elapsed < Duration::from_secs(5), "not at once: {elapsed:?}");
+    // Well under the short wait: an io error does not wait, not even 2 s.
+    assert!(
+        elapsed < POLL + Duration::from_millis(500),
+        "not at once: {elapsed:?}"
+    );
     assert_eq!(
         server.requests(),
         0,
@@ -237,6 +245,33 @@ impl crate::transport::Transport for BusyTransport {
         Err(crate::Error::BackendUnavailable(format!(
             "{BUSY_MARKER}: the token step holds the lease"
         )))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<serde_json::Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// A transport whose request fails unmarked: the same `BackendUnavailable`
+/// variant without the busy text, so a blanket skip of every such error fails.
+struct UnmarkedTransport;
+
+#[async_trait]
+impl crate::transport::Transport for UnmarkedTransport {
+    async fn request(
+        &self,
+        _method: &str,
+        _params: Option<serde_json::Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        Err(crate::Error::BackendUnavailable("x".to_string()))
     }
 
     async fn notify(&self, _method: &str, _params: Option<serde_json::Value>) -> crate::Result<()> {
@@ -288,46 +323,78 @@ impl crate::transport::Transport for TokenStepTransport {
 /// T13: a probe whose request meets a busy lock neither rebuilds nor trips the
 /// breaker. (The OAuth-wired variant needs `Backend::oauth_test_seam`, which
 /// is private to `backend`; the mock surfaces what the token step returns.)
+/// An unmarked `BackendUnavailable` still rebuilds, so skipping every such
+/// error fails. The outer timeout covers setup and both probes.
 #[tokio::test(start_paused = true)]
 async fn t13_probe_skips_rebuild_and_breaker_on_busy() {
-    let dir = tempfile::tempdir().expect("a scratch token store");
-    let storage = crate::oauth::TokenStorage::new(dir.path().to_path_buf()).expect("token storage");
-    let token_path = storage.token_path("t13-credential", "https://t13.example/mcp");
-    let _holder = crate::oauth::client::refresh_flight::hold_across_processes(&token_path)
-        .await
-        .expect("the other process holds the lease");
+    tokio::time::timeout(BOUND * 2, async {
+        let dir = tempfile::tempdir().expect("a scratch token store");
+        let storage =
+            crate::oauth::TokenStorage::new(dir.path().to_path_buf()).expect("token storage");
+        let token_path = storage.token_path("t13-credential", "https://t13.example/mcp");
+        let _holder = crate::oauth::client::refresh_flight::hold_across_processes(&token_path)
+            .await
+            .expect("the other process holds the lease");
 
-    let backend = crate::backend::Backend::new(
-        "t13-probe",
-        crate::config::BackendConfig::default(),
-        &crate::config::FailsafeConfig::default(),
-        Duration::from_secs(60),
-    );
-    backend.set_transport_for_test(Arc::new(BusyTransport) as Arc<dyn crate::transport::Transport>);
+        let backend = crate::backend::Backend::new(
+            "t13-probe",
+            crate::config::BackendConfig::default(),
+            &crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        );
+        backend
+            .set_transport_for_test(Arc::new(BusyTransport) as Arc<dyn crate::transport::Transport>);
 
-    let outcome = tokio::time::timeout(BOUND * 2, backend.health_probe(Duration::from_secs(5)))
-        .await
-        .expect("a probe answers");
-    let error = outcome.expect_err("a busy lock is not health");
-    assert!(is_busy(&error), "not the marked error: {error}");
-    assert!(
-        matches!(error, Error::BackendUnavailable(_)),
-        "not unwrapped: {error:?}"
-    );
-    assert_eq!(
-        backend.rebuilds_attempted.load(Ordering::SeqCst),
-        0,
-        "the probe rebuilt over a busy lock"
-    );
-    assert!(
-        !backend.is_circuit_tripped(),
-        "the probe tripped the breaker on a busy lock"
-    );
-    assert_eq!(
-        backend.circuit_breaker_stats().current_failures,
-        0,
-        "a busy lock sampled as a backend failure"
-    );
+        let error = backend
+            .health_probe(Duration::from_secs(5))
+            .await
+            .expect_err("a busy lock is not health");
+        assert!(is_busy(&error), "not the marked error: {error}");
+        assert!(
+            matches!(error, Error::BackendUnavailable(_)),
+            "not unwrapped: {error:?}"
+        );
+        assert_eq!(
+            backend.rebuilds_attempted.load(Ordering::SeqCst),
+            0,
+            "the probe rebuilt over a busy lock"
+        );
+        assert!(
+            !backend.is_circuit_tripped(),
+            "the probe tripped the breaker on a busy lock"
+        );
+        assert_eq!(
+            backend.circuit_breaker_stats().current_failures,
+            0,
+            "a busy lock sampled as a backend failure"
+        );
+
+        // Unmarked: the same variant without the busy text still rebuilds.
+        let plain = crate::backend::Backend::new(
+            "t13-plain",
+            crate::config::BackendConfig::default(),
+            &crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        );
+        plain.set_transport_for_test(
+            Arc::new(UnmarkedTransport) as Arc<dyn crate::transport::Transport>
+        );
+        let error = plain
+            .health_probe(Duration::from_secs(5))
+            .await
+            .expect_err("an unmarked failure is not health");
+        assert!(!is_busy(&error), "an unmarked error reads busy: {error}");
+        assert!(
+            matches!(error, Error::BackendUnavailable(_)),
+            "not the variant: {error:?}"
+        );
+        assert!(
+            plain.rebuilds_attempted.load(Ordering::SeqCst) > 0,
+            "the probe did not rebuild over an unmarked failure"
+        );
+    })
+    .await
+    .expect("both probes answer inside twice the bound");
 }
 
 /// T13b: a probe whose transport runs the real held-lease token step answers
@@ -432,6 +499,16 @@ async fn t13c_probe_succeeds_when_the_lease_frees_in_time() {
             .await
             .expect("the probe joins")
             .expect("the probe succeeds when the lease frees in time");
+        // The token step adopted the fresh token the holder stored.
+        let cached = oauth
+            .current_token
+            .read()
+            .clone()
+            .expect("the probe cached its token");
+        assert_eq!(
+            cached.access_token, "a2",
+            "the probe did not adopt the fresh token"
+        );
         assert_eq!(
             backend.rebuilds_attempted.load(Ordering::SeqCst),
             0,
@@ -455,7 +532,8 @@ async fn t13c_probe_succeeds_when_the_lease_frees_in_time() {
 /// T13d: a dispatch through `Backend::request` whose token step meets a busy
 /// lock leaves the breaker's failure count unchanged. The probe never calls
 /// `record_dispatch_error`, so only this path pins the exclusion; on the base
-/// the marked error counts and the row is red.
+/// the marked error counts and the row is red. An unmarked
+/// `BackendUnavailable` is still sampled, so skipping every such error fails.
 #[tokio::test(start_paused = true)]
 async fn t13d_dispatch_skips_breaker_on_busy() {
     tokio::time::timeout(BOUND * 2, async {
@@ -488,7 +566,32 @@ async fn t13d_dispatch_skips_breaker_on_busy() {
             !backend.is_circuit_tripped(),
             "the dispatch tripped the breaker on a busy lock"
         );
+
+        // Unmarked: the same variant without the busy text still samples.
+        let plain = crate::backend::Backend::new(
+            "t13d-plain",
+            crate::config::BackendConfig::default(),
+            &crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        );
+        plain.set_transport_for_test(
+            Arc::new(UnmarkedTransport) as Arc<dyn crate::transport::Transport>
+        );
+        let before = plain.circuit_breaker_stats().current_failures;
+        let error = plain
+            .request("tools/list", None)
+            .await
+            .expect_err("an unmarked failure answers no tools");
+        assert!(!is_busy(&error), "an unmarked error reads busy: {error}");
+        assert!(
+            matches!(error, Error::BackendUnavailable(_)),
+            "not the variant: {error:?}"
+        );
+        assert!(
+            plain.circuit_breaker_stats().current_failures > before,
+            "an unmarked failure was not sampled"
+        );
     })
     .await
-    .expect("a dispatch answers at once");
+    .expect("both dispatches answer at once");
 }

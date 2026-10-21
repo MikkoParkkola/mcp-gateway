@@ -175,9 +175,12 @@ async fn t2_save_under_a_held_lease_fails_busy_and_stores_nothing() {
     assert!(stored(&client).is_none(), "a failed save stored a token");
 }
 
-/// T4 (regression, green now): a holder that releases at 30 s is waited for;
-/// the waiter adopts the fresh token it stored and sends nothing. The outer
-/// timeout covers setup and execution, so a stuck readiness poll fails red.
+/// T4 (regression, green now): a holder that releases at 30 s is waited for
+/// through the INTERACTIVE `get_token` path, so the 30 s release exercises
+/// the 90 s budget (r4.2 gives non-interactive callers 2 s, so a headless
+/// waiter would answer busy instead). The waiter adopts the fresh token the
+/// holder stored and sends nothing. The outer timeout covers setup and
+/// execution, so a stuck readiness poll fails red.
 #[tokio::test(start_paused = true)]
 async fn t4_waiter_adopts_what_a_releasing_holder_stored() {
     tokio::time::timeout(BOUND * 2, async {
@@ -192,7 +195,7 @@ async fn t4_waiter_adopts_what_a_releasing_holder_stored() {
 
         let waiter = tokio::spawn({
             let client = Arc::clone(&client);
-            async move { headless(&client).await }
+            async move { client.get_token().await }
         });
         // The waiter's first poll failed: it is on the lock, and has sent nothing.
         while crate::fs_lock::lock_attempts(&lock_path) < 2 {
@@ -218,6 +221,72 @@ async fn t4_waiter_adopts_what_a_releasing_holder_stored() {
     })
     .await
     .expect("a 30 s wait ends inside twice the bound");
+}
+
+/// T4b: the same 30 s holder, the waiter non-interactive: it answers the
+/// marked error at the short wait instead of waiting for the release. RED on
+/// the base, where the waiter waits the 30 s and adopts (the lease wait is
+/// unbounded, so no short bound answers). No socket runs: the lease blocks
+/// the exchange before any POST, and the adoption (on the base) sends none.
+#[tokio::test(start_paused = true)]
+async fn t4b_noninteractive_waiter_answers_busy_at_the_short_wait() {
+    tokio::time::timeout(BOUND * 2, async {
+        let server = TokenServer::start(&[]).await;
+        let dir = tempfile::tempdir().expect("a scratch token store");
+        let client = Arc::new(client(dir.path(), &server));
+        hold(&client, &token("a1", Some("r1"), true));
+        let (_, token_path, lock_path) = credential_paths(&client);
+        let holder = hold_across_processes(&token_path)
+            .await
+            .expect("the other process holds the lease");
+
+        // The waiter reports its own elapsed: on the fixed code it answers at
+        // the short wait while the holder still holds; on the base it waits
+        // for the 30 s release below and adopts.
+        let waiter = tokio::spawn({
+            let client = Arc::clone(&client);
+            async move {
+                let start = Instant::now();
+                let outcome = headless(&client).await;
+                (outcome, start.elapsed())
+            }
+        });
+        // The waiter's first poll failed: it is on the lock, and has sent nothing.
+        while crate::fs_lock::lock_attempts(&lock_path) < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(server.requests(), 0, "sent while another process held it");
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        let key = client
+            .credential_key()
+            .expect("a test client has a credential key");
+        client
+            .storage
+            .save(&key, RESOURCE, &token("a2", Some("r2"), false))
+            .expect("the holder stores afresh");
+        drop(holder);
+
+        let (outcome, elapsed) = waiter.await.expect("the waiter joins");
+        let Err(error) = outcome else {
+            panic!("waited past the short wait and adopted: the lease wait is unbounded");
+        };
+        assert!(is_busy(&error), "not the lock-busy error: {error}");
+        assert!(
+            matches!(error, Error::BackendUnavailable(_)),
+            "the busy error rides BackendUnavailable: {error:?}"
+        );
+        assert!(
+            error.is_pre_dispatch(),
+            "a busy lock frees the key: {error:?}"
+        );
+        assert!(
+            (SHORT_WAIT..SHORT_WAIT + POLL + Duration::from_secs(1)).contains(&elapsed),
+            "answered off the short wait: {elapsed:?}"
+        );
+        assert_eq!(server.requests(), 0, "an adoption sends nothing");
+    })
+    .await
+    .expect("a short wait ends inside twice the bound");
 }
 
 /// T5: an interactive detached step with the lease held answers busy at the
