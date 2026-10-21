@@ -32,7 +32,7 @@ fn every_label_arm_counts_without_allocating() {
     let _guard = telemetry_metrics::set_default_local_recorder(&telemetry_metrics::NoopRecorder);
     for (is_modern, read_only) in [(true, true), (true, false), (false, true), (false, false)] {
         let ((), measured) = crate::gateway::alloc_meter::measure(|| {
-            super::super::warn_limit::count_unkeyed(is_modern, read_only)
+            super::super::warn_limit::count_unkeyed(is_modern, read_only);
         });
         assert_eq!(
             measured.calls, 0,
