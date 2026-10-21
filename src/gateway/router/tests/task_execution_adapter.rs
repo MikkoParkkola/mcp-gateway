@@ -139,6 +139,7 @@ mod settlement;
 mod settlement_record;
 mod signing_joint;
 mod slot_release_tasks;
+mod slot_release_top_level;
 /// `MIK-7993.STORE.1`/`.2`: a task row records the members the gateway wrote.
 #[cfg(feature = "firewall")]
 mod stored_gateway_writes;
