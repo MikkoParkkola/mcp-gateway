@@ -186,6 +186,23 @@ class ExistingVersion(unittest.TestCase):
         self.assertEqual(self.pushes(), 0)
         self.assertEqual(self.pulls(), 0)
 
+    def test_rehearsal_run_with_a_near_miss_repo_is_refused(self):
+        # Only the exact rehearsal package takes REHEARSAL_RUN: a name that
+        # merely starts with it, or differs in case, is another package.
+        for repo in ("oci://ghcr.io/mikkoparkkola/charts-rehearsal/",
+                     "oci://ghcr.io/mikkoparkkola/charts-rehearsal2",
+                     "oci://ghcr.io/mikkoparkkola/charts-rehearsal/mcp-gateway",
+                     "oci://ghcr.io/MikkoParkkola/charts-rehearsal",
+                     "oci://ghcr.io/mikkoparkkola/Charts-Rehearsal",
+                     "oci://GHCR.IO/mikkoparkkola/charts-rehearsal",
+                     "oci://ghcr.io/other/charts-rehearsal"):
+            with self.subTest(repo=repo):
+                done = self.publish(repo=repo, rehearsal_run="12345")
+                self.assertNotEqual(done.returncode, 0)
+                self.assertIn("rehearsal package", done.stderr)
+                self.assertEqual(self.pushes(), 0)
+                self.assertEqual(self.pulls(), 0)
+
     def test_rehearsal_run_that_is_not_all_digits_is_refused(self):
         for run in ("12a", "1;rm"):
             with self.subTest(run=run):
