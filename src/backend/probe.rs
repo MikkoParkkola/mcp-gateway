@@ -71,7 +71,11 @@ impl Backend {
         if let Err(e) = started {
             #[cfg(test)]
             super::lifecycle::hold_at(&self.probe_error_gate).await;
-            if !e.is_authorization_wait() {
+            // A busy lock skips the rebuild as a login wait does: no breaker
+            // sample, debug, and the next tick retries.
+            if crate::oauth::client::is_credential_lock_busy(&e) {
+                debug!(backend = %self.name, error = %e, "Health probe skipped: the credential lock is busy");
+            } else if !e.is_authorization_wait() {
                 self.rebuild_from_probe().await;
             }
             return Err(e);
@@ -130,6 +134,12 @@ impl Backend {
             }
             // The token step wanted a login: skip the tick, keep the login.
             Err(e) if e.is_authorization_wait() => Err(e),
+            // A busy lock skips the rebuild too: no breaker sample, debug,
+            // and the next tick retries.
+            Err(e) if crate::oauth::client::is_credential_lock_busy(&e) => {
+                debug!(backend = %self.name, error = %e, "Health probe skipped: the credential lock is busy");
+                Err(e)
+            }
             Err(e) => {
                 warn!(backend = %self.name, error = %e, "Health probe failed; rebuilding transport");
                 self.unserved_consecutive.store(0, Ordering::SeqCst);

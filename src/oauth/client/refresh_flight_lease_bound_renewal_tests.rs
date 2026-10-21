@@ -8,10 +8,10 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use super::lease_bound::{BOUND, POLL, is_deferred};
+use super::lease_bound::{POLL, is_deferred};
 use super::*;
 use crate::oauth::OAuthClient;
-use crate::oauth::client::refresh_flight::{Flight, hold_across_processes};
+use crate::oauth::client::refresh_flight::{CREDENTIAL_LOCK_WAIT, Flight, hold_across_processes};
 
 /// One observation tick (10 ms): the granularity `attempt_span` and the T7
 /// hold poll see mutex holds at, so spans read up to one tick short.
@@ -44,7 +44,7 @@ async fn t3_renewal_loop_lets_go_of_the_client() {
             .expect("a test client has a credential key"),
         RESOURCE,
     );
-    let _holder = hold_across_processes(&token_path)
+    let _holder = hold_across_processes(&token_path, Instant::now() + CREDENTIAL_LOCK_WAIT)
         .await
         .expect("the other process holds the lease");
     let guarded = Arc::new(tokio::sync::Mutex::new(client));
@@ -55,7 +55,7 @@ async fn t3_renewal_loop_lets_go_of_the_client() {
         }
     });
 
-    tokio::time::timeout(BOUND * 2, attempt_span(&guarded))
+    tokio::time::timeout(CREDENTIAL_LOCK_WAIT * 2, attempt_span(&guarded))
         .await
         .expect("the attempt returns inside twice the bound");
     assert!(guarded.try_lock().is_ok(), "the client stayed locked");
@@ -82,7 +82,7 @@ async fn t6_renewal_defers_after_one_bound_without_client_credentials() {
             .expect("a test client has a credential key"),
         RESOURCE,
     );
-    let _holder = hold_across_processes(&token_path)
+    let _holder = hold_across_processes(&token_path, Instant::now() + CREDENTIAL_LOCK_WAIT)
         .await
         .expect("the other process holds the lease");
     let guarded = Arc::new(tokio::sync::Mutex::new(client));
@@ -94,17 +94,21 @@ async fn t6_renewal_defers_after_one_bound_without_client_credentials() {
         }
     });
 
-    let span = tokio::time::timeout(BOUND * 2, attempt_span(&guarded))
+    let span = tokio::time::timeout(CREDENTIAL_LOCK_WAIT * 2, attempt_span(&guarded))
         .await
         .expect("the attempt returns inside twice the bound");
     looping.abort();
     drop(log_guard);
 
     assert!(
-        ((BOUND - TICK)..BOUND + POLL + Duration::from_secs(1)).contains(&span),
+        ((CREDENTIAL_LOCK_WAIT - TICK)..CREDENTIAL_LOCK_WAIT + POLL + Duration::from_secs(1))
+            .contains(&span),
         "one bound, not two: {span:?}"
     );
-    assert!(span < BOUND * 2, "a second bound ran inside the period");
+    assert!(
+        span < CREDENTIAL_LOCK_WAIT * 2,
+        "a second bound ran inside the period"
+    );
     assert_eq!(
         server.requests(),
         0,
@@ -129,7 +133,7 @@ async fn t6_renewal_defers_after_one_bound_without_client_credentials() {
 async fn t7_two_periods_are_two_bounded_attempts() {
     let period = OAuthClient::RENEWAL_CHECK_PERIOD;
     // Strictly past two full periods, so a correct run is never cut off.
-    let outer = (period + BOUND) * 2 + Duration::from_secs(10);
+    let outer = (period + CREDENTIAL_LOCK_WAIT) * 2 + Duration::from_secs(10);
     tokio::time::timeout(outer, async {
         let _server = TokenServer::start(&[]).await;
         let dir = tempfile::tempdir().expect("a scratch token store");
@@ -141,7 +145,7 @@ async fn t7_two_periods_are_two_bounded_attempts() {
                 .expect("a test client has a credential key"),
             RESOURCE,
         );
-        let _holder = hold_across_processes(&token_path)
+        let _holder = hold_across_processes(&token_path, Instant::now() + CREDENTIAL_LOCK_WAIT)
             .await
             .expect("the other process holds the lease");
         let guarded = Arc::new(tokio::sync::Mutex::new(client));
@@ -177,7 +181,7 @@ async fn t7_two_periods_are_two_bounded_attempts() {
         }
         let attempts: Vec<_> = spans
             .into_iter()
-            .filter(|(at, span)| Some(*at) == open_start || *span >= BOUND - TICK)
+            .filter(|(at, span)| Some(*at) == open_start || *span >= CREDENTIAL_LOCK_WAIT - TICK)
             .collect();
         looping.abort();
         drop(log_guard);
@@ -193,13 +197,15 @@ async fn t7_two_periods_are_two_bounded_attempts() {
             attempts[0].0.duration_since(t0)
         );
         assert!(
-            attempts[1].0.duration_since(attempts[0].0) >= period + BOUND,
+            attempts[1].0.duration_since(attempts[0].0) >= period + CREDENTIAL_LOCK_WAIT,
             "the attempts share a period: {:?} apart",
             attempts[1].0.duration_since(attempts[0].0)
         );
         for (_, span) in &attempts {
             assert!(
-                ((BOUND - TICK)..BOUND + POLL + Duration::from_secs(1)).contains(span),
+                ((CREDENTIAL_LOCK_WAIT - TICK)
+                    ..CREDENTIAL_LOCK_WAIT + POLL + Duration::from_secs(1))
+                    .contains(span),
                 "a period held more than one bound: {span:?}"
             );
         }
@@ -228,7 +234,7 @@ async fn t7_two_periods_are_two_bounded_attempts() {
 /// socket timeout. The outer timeout covers setup and the attempt.
 #[tokio::test(start_paused = true)]
 async fn t6b_renewal_without_a_refresh_token_defers_leaving_cache_and_storage() {
-    tokio::time::timeout(BOUND * 2, async {
+    tokio::time::timeout(CREDENTIAL_LOCK_WAIT * 2, async {
         let server = TokenServer::start(&[]).await;
         let dir = tempfile::tempdir().expect("a scratch token store");
         let mut made = client(dir.path(), &server);
@@ -245,7 +251,7 @@ async fn t6b_renewal_without_a_refresh_token_defers_leaving_cache_and_storage() 
                 .expect("a test client has a credential key"),
             RESOURCE,
         );
-        let _holder = hold_across_processes(&token_path)
+        let _holder = hold_across_processes(&token_path, Instant::now() + CREDENTIAL_LOCK_WAIT)
             .await
             .expect("the other process holds the lease");
         // Hold the in-process flight so the save cannot reach its lease wait
@@ -277,7 +283,8 @@ async fn t6b_renewal_without_a_refresh_token_defers_leaving_cache_and_storage() 
 
         assert!(is_deferred(&renewal), "not deferred: {renewal:?}");
         assert!(
-            (BOUND..BOUND + POLL + Duration::from_secs(1)).contains(&elapsed),
+            (CREDENTIAL_LOCK_WAIT..CREDENTIAL_LOCK_WAIT + POLL + Duration::from_secs(1))
+                .contains(&elapsed),
             "answered off the bound: {elapsed:?}"
         );
         let cached_after = client

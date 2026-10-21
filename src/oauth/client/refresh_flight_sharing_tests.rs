@@ -82,9 +82,12 @@ async fn a_refresh_waits_for_another_process_holding_the_credential() {
     hold(&client, &token("a1", Some("r1"), true));
     let key = client.credential_key().unwrap();
     let path = client.storage.token_path(&key, RESOURCE);
-    let other = super::super::refresh_flight::hold_across_processes(&path)
-        .await
-        .unwrap();
+    let other = super::super::refresh_flight::hold_across_processes(
+        &path,
+        tokio::time::Instant::now() + super::super::refresh_flight::CREDENTIAL_LOCK_WAIT,
+    )
+    .await
+    .unwrap();
 
     let refresh = tokio::spawn({
         let client = Arc::clone(&client);

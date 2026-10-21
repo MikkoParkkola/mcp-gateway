@@ -420,6 +420,11 @@ impl Backend {
         if error.is_authorization_wait() {
             return; // MIK-7982: the backend was never asked.
         }
+        // A busy credential lock is not a backend failure either: the token
+        // step never reached the wire, so it takes no breaker sample.
+        if crate::oauth::client::is_credential_lock_busy(error) {
+            return;
+        }
         let rate_limited =
             super::fill_check::record_request_failure(entry, &error.to_string(), latency);
         if rate_limited {

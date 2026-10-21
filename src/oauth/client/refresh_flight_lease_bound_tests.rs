@@ -13,41 +13,20 @@ use super::*;
 use crate::Error;
 use crate::oauth::OAuthClient;
 use crate::oauth::client::OAUTH_AUTHORIZATION_WINDOW;
-use crate::oauth::client::refresh_flight::{Flight, hold_across_processes};
+use crate::oauth::client::refresh_flight::{
+    CREDENTIAL_LOCK_BUSY, CREDENTIAL_LOCK_WAIT, Flight, NONINTERACTIVE_LEASE_WAIT,
+    hold_across_processes, is_credential_lock_busy,
+};
 use crate::oauth::client::renewal::Renewal;
 use crate::oauth::client::{StoredCredential, refresh_stored};
 use crate::oauth::login_gate::LoginGate;
 
-// Phase-2 stand-ins, shared with the sibling rows. Phase 2 deletes them and
-// uses `CREDENTIAL_LOCK_WAIT`, `CREDENTIAL_LOCK_BUSY` and
-// `is_credential_lock_busy` from `refresh_flight`, plus `Renewal::Deferred`.
+// Shared with the sibling rows. `POLL` mirrors the private `LOCK_POLL`.
 // Invariant: every row's outer timeout is twice its bound, so a regression is
 // red, never hung.
 
-/// The contention budget (90 s): phase 2 replaces with `CREDENTIAL_LOCK_WAIT`.
-pub(super) const BOUND: Duration = Duration::from_secs(90);
-
-/// The non-interactive contention budget (2 s): phase 2 replaces with NONINTERACTIVE_LEASE_WAIT.
-pub(super) const SHORT_WAIT: Duration = Duration::from_secs(2);
-
 /// One lock poll (50 ms), mirroring the private `LOCK_POLL`, which phase 2 keeps.
 pub(super) const POLL: Duration = Duration::from_millis(50);
-
-/// The busy marker text, the exact value phase 2 gives `refresh_flight::CREDENTIAL_LOCK_BUSY`;
-/// phase 2 replaces this stand-in with that const.
-pub(super) const BUSY_MARKER: &str = "credential lock busy";
-
-/// Whether `error` carries the busy marker: phase 2 replaces with
-/// `is_credential_lock_busy`. `BackendUnavailable` carries it as a prefix;
-/// joiners get it inside `OAuth` text (`Failed(error.to_string())`, r4.1), so
-/// that arm matches the marker with its colon anywhere in the text.
-pub(super) fn is_busy(error: &Error) -> bool {
-    match error {
-        Error::BackendUnavailable(text) => text.starts_with(BUSY_MARKER),
-        Error::OAuth(text) => text.contains(&format!("{BUSY_MARKER}:")),
-        _ => false,
-    }
-}
 
 /// Whether a renewal deferred on a busy lock: phase 2 replaces with
 /// `matches!(renewal, Renewal::Deferred)`. Until then no renewal is one, so
@@ -91,14 +70,14 @@ async fn t1_refresh_answers_busy_at_the_bound_and_frees_the_flight() {
     let client = client(dir.path(), &server);
     hold(&client, &token("a1", Some("r1"), true));
     let (key, token_path, _) = credential_paths(&client);
-    let _holder = hold_across_processes(&token_path)
+    let _holder = hold_across_processes(&token_path, Instant::now() + CREDENTIAL_LOCK_WAIT)
         .await
         .expect("the other process holds the lease");
     let flight = Flight::of(&token_path);
 
     let start = Instant::now();
     let outcome = tokio::time::timeout(
-        BOUND * 2,
+        CREDENTIAL_LOCK_WAIT * 2,
         refresh_stored(
             &client,
             StoredCredential {
@@ -116,7 +95,10 @@ async fn t1_refresh_answers_busy_at_the_bound_and_frees_the_flight() {
     let Err(error) = outcome.expect("a bounded wait answers inside twice the bound") else {
         panic!("no token crosses a held lease");
     };
-    assert!(is_busy(&error), "not the lock-busy error: {error}");
+    assert!(
+        is_credential_lock_busy(&error),
+        "not the lock-busy error: {error}"
+    );
     assert!(
         matches!(error, Error::BackendUnavailable(_)),
         "the busy error rides BackendUnavailable: {error:?}"
@@ -126,7 +108,8 @@ async fn t1_refresh_answers_busy_at_the_bound_and_frees_the_flight() {
         "a busy lock frees the key: {error:?}"
     );
     assert!(
-        (BOUND..BOUND + POLL + Duration::from_secs(1)).contains(&elapsed),
+        (CREDENTIAL_LOCK_WAIT..CREDENTIAL_LOCK_WAIT + POLL + Duration::from_secs(1))
+            .contains(&elapsed),
         "answered off the bound: {elapsed:?}"
     );
     assert!(
@@ -147,19 +130,26 @@ async fn t2_save_under_a_held_lease_fails_busy_and_stores_nothing() {
     let dir = tempfile::tempdir().expect("a scratch token store");
     let client = client(dir.path(), &server);
     let (_, token_path, _) = credential_paths(&client);
-    let _holder = hold_across_processes(&token_path)
+    let _holder = hold_across_processes(&token_path, Instant::now() + CREDENTIAL_LOCK_WAIT)
         .await
         .expect("the other process holds the lease");
 
     let start = Instant::now();
     let issued = token("issued", None, false);
-    let outcome = tokio::time::timeout(BOUND * 2, client.save_issued_for_test(&issued)).await;
+    let outcome = tokio::time::timeout(
+        CREDENTIAL_LOCK_WAIT * 2,
+        client.save_issued_for_test(&issued),
+    )
+    .await;
     let elapsed = start.elapsed();
 
     let error = outcome
         .expect("a bounded save answers inside twice the bound")
         .expect_err("no token is issued past a held lease");
-    assert!(is_busy(&error), "not the lock-busy error: {error}");
+    assert!(
+        is_credential_lock_busy(&error),
+        "not the lock-busy error: {error}"
+    );
     assert!(
         matches!(error, Error::BackendUnavailable(_)),
         "the busy error rides BackendUnavailable: {error:?}"
@@ -169,7 +159,8 @@ async fn t2_save_under_a_held_lease_fails_busy_and_stores_nothing() {
         "a busy lock frees the key: {error:?}"
     );
     assert!(
-        (BOUND..BOUND + POLL + Duration::from_secs(1)).contains(&elapsed),
+        (CREDENTIAL_LOCK_WAIT..CREDENTIAL_LOCK_WAIT + POLL + Duration::from_secs(1))
+            .contains(&elapsed),
         "answered off the bound: {elapsed:?}"
     );
     assert!(stored(&client).is_none(), "a failed save stored a token");
@@ -183,13 +174,13 @@ async fn t2_save_under_a_held_lease_fails_busy_and_stores_nothing() {
 /// execution, so a stuck readiness poll fails red.
 #[tokio::test(start_paused = true)]
 async fn t4_waiter_adopts_what_a_releasing_holder_stored() {
-    tokio::time::timeout(BOUND * 2, async {
+    tokio::time::timeout(CREDENTIAL_LOCK_WAIT * 2, async {
         let server = TokenServer::start(&[]).await;
         let dir = tempfile::tempdir().expect("a scratch token store");
         let client = Arc::new(client(dir.path(), &server));
         hold(&client, &token("a1", Some("r1"), true));
         let (_, token_path, lock_path) = credential_paths(&client);
-        let holder = hold_across_processes(&token_path)
+        let holder = hold_across_processes(&token_path, Instant::now() + CREDENTIAL_LOCK_WAIT)
             .await
             .expect("the other process holds the lease");
 
@@ -230,13 +221,13 @@ async fn t4_waiter_adopts_what_a_releasing_holder_stored() {
 /// the exchange before any POST, and the adoption (on the base) sends none.
 #[tokio::test(start_paused = true)]
 async fn t4b_noninteractive_waiter_answers_busy_at_the_short_wait() {
-    tokio::time::timeout(BOUND * 2, async {
+    tokio::time::timeout(CREDENTIAL_LOCK_WAIT * 2, async {
         let server = TokenServer::start(&[]).await;
         let dir = tempfile::tempdir().expect("a scratch token store");
         let client = Arc::new(client(dir.path(), &server));
         hold(&client, &token("a1", Some("r1"), true));
         let (_, token_path, lock_path) = credential_paths(&client);
-        let holder = hold_across_processes(&token_path)
+        let holder = hold_across_processes(&token_path, Instant::now() + CREDENTIAL_LOCK_WAIT)
             .await
             .expect("the other process holds the lease");
 
@@ -270,7 +261,10 @@ async fn t4b_noninteractive_waiter_answers_busy_at_the_short_wait() {
         let Err(error) = outcome else {
             panic!("waited past the short wait and adopted: the lease wait is unbounded");
         };
-        assert!(is_busy(&error), "not the lock-busy error: {error}");
+        assert!(
+            is_credential_lock_busy(&error),
+            "not the lock-busy error: {error}"
+        );
         assert!(
             matches!(error, Error::BackendUnavailable(_)),
             "the busy error rides BackendUnavailable: {error:?}"
@@ -280,7 +274,8 @@ async fn t4b_noninteractive_waiter_answers_busy_at_the_short_wait() {
             "a busy lock frees the key: {error:?}"
         );
         assert!(
-            (SHORT_WAIT..SHORT_WAIT + POLL + Duration::from_secs(1)).contains(&elapsed),
+            (NONINTERACTIVE_LEASE_WAIT..NONINTERACTIVE_LEASE_WAIT + POLL + Duration::from_secs(1))
+                .contains(&elapsed),
             "answered off the short wait: {elapsed:?}"
         );
         assert_eq!(server.requests(), 0, "an adoption sends nothing");
@@ -301,7 +296,7 @@ async fn t5_detached_step_answers_busy_without_a_login() {
     hold(&client, &token("a1", Some("r1"), true));
     let browsers = count_browsers(&mut client);
     let (_, token_path, _) = credential_paths(&client);
-    let _holder = hold_across_processes(&token_path)
+    let _holder = hold_across_processes(&token_path, Instant::now() + CREDENTIAL_LOCK_WAIT)
         .await
         .expect("the other process holds the lease");
     let cohort = gate.cohort();
@@ -309,7 +304,7 @@ async fn t5_detached_step_answers_busy_without_a_login() {
 
     let start = Instant::now();
     let outcome = tokio::time::timeout(
-        BOUND * 2,
+        CREDENTIAL_LOCK_WAIT * 2,
         client.get_token_detached(true, gate.epoch(), &cohort, deadline),
     )
     .await;
@@ -318,13 +313,17 @@ async fn t5_detached_step_answers_busy_without_a_login() {
     let error = outcome
         .expect("a bounded step answers inside twice the bound")
         .expect_err("no token crosses a held lease");
-    assert!(is_busy(&error), "not the lock-busy error: {error}");
+    assert!(
+        is_credential_lock_busy(&error),
+        "not the lock-busy error: {error}"
+    );
     assert!(
         matches!(error, Error::BackendUnavailable(_)),
         "the busy error rides BackendUnavailable: {error:?}"
     );
     assert!(
-        (BOUND..BOUND + POLL + Duration::from_secs(1)).contains(&elapsed),
+        (CREDENTIAL_LOCK_WAIT..CREDENTIAL_LOCK_WAIT + POLL + Duration::from_secs(1))
+            .contains(&elapsed),
         "answered off the bound: {elapsed:?}"
     );
     assert_eq!(
@@ -344,24 +343,28 @@ async fn t5b_get_token_answers_busy_without_a_login() {
     hold(&client, &token("a1", Some("r1"), true));
     let browsers = count_browsers(&mut client);
     let (_, token_path, _) = credential_paths(&client);
-    let _holder = hold_across_processes(&token_path)
+    let _holder = hold_across_processes(&token_path, Instant::now() + CREDENTIAL_LOCK_WAIT)
         .await
         .expect("the other process holds the lease");
 
     let start = Instant::now();
-    let outcome = tokio::time::timeout(BOUND * 2, client.get_token()).await;
+    let outcome = tokio::time::timeout(CREDENTIAL_LOCK_WAIT * 2, client.get_token()).await;
     let elapsed = start.elapsed();
 
     let error = outcome
         .expect("a bounded step answers inside twice the bound")
         .expect_err("no token crosses a held lease");
-    assert!(is_busy(&error), "not the lock-busy error: {error}");
+    assert!(
+        is_credential_lock_busy(&error),
+        "not the lock-busy error: {error}"
+    );
     assert!(
         matches!(error, Error::BackendUnavailable(_)),
         "the busy error rides BackendUnavailable: {error:?}"
     );
     assert!(
-        (BOUND..BOUND + POLL + Duration::from_secs(1)).contains(&elapsed),
+        (CREDENTIAL_LOCK_WAIT..CREDENTIAL_LOCK_WAIT + POLL + Duration::from_secs(1))
+            .contains(&elapsed),
         "answered off the bound: {elapsed:?}"
     );
     assert_eq!(
@@ -385,7 +388,7 @@ async fn t8_login_save_keeps_the_authorization_window() {
         let dir = tempfile::tempdir().expect("a scratch token store");
         let login = Arc::new(client(dir.path(), &server));
         let (_, token_path, lock_path) = credential_paths(&login);
-        let holder = hold_across_processes(&token_path)
+        let holder = hold_across_processes(&token_path, Instant::now() + CREDENTIAL_LOCK_WAIT)
             .await
             .expect("the other process holds the lease");
         let start = Instant::now();
@@ -432,7 +435,7 @@ async fn t8_login_save_keeps_the_authorization_window() {
         let dir = tempfile::tempdir().expect("a scratch token store");
         let login = client(dir.path(), &server);
         let (_, token_path, lock_path) = credential_paths(&login);
-        let _holder = hold_across_processes(&token_path)
+        let _holder = hold_across_processes(&token_path, Instant::now() + CREDENTIAL_LOCK_WAIT)
             .await
             .expect("the other process holds the lease");
         let start = Instant::now();
@@ -457,7 +460,10 @@ async fn t8_login_save_keeps_the_authorization_window() {
             ),
             "not the window expiry: {error}"
         );
-        assert!(!is_busy(&error), "a window expiry is not busy: {error}");
+        assert!(
+            !is_credential_lock_busy(&error),
+            "a window expiry is not busy: {error}"
+        );
         assert!(
             (OAUTH_AUTHORIZATION_WINDOW
                 ..OAUTH_AUTHORIZATION_WINDOW + POLL + Duration::from_secs(1))
@@ -468,4 +474,67 @@ async fn t8_login_save_keeps_the_authorization_window() {
     })
     .await
     .expect("both halves end inside twice the window");
+}
+
+/// The lease boundary: a lock released just before the deadline is still
+/// taken, because the probe runs before every sleep.
+#[tokio::test(start_paused = true)]
+async fn lease_acquires_when_released_just_before_the_deadline() {
+    tokio::time::timeout(Duration::from_secs(2) * 2, async {
+        let dir = tempfile::tempdir().expect("a scratch lock dir");
+        let lock_path = dir.path().join("boundary.lock");
+        let holder = crate::fs_lock::ExclusiveFileLock::try_lease(&lock_path)
+            .expect("a free lock leases")
+            .expect("a free lock gives Some");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let waiter = tokio::spawn({
+            let lock_path = lock_path.clone();
+            async move { crate::fs_lock::ExclusiveFileLock::lease(&lock_path, POLL, deadline).await }
+        });
+        // The waiter is on the lock: its first probe failed.
+        while crate::fs_lock::lock_attempts(&lock_path) < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // Released just before the deadline, with two polls to spare.
+        tokio::time::sleep(Duration::from_millis(1900)).await;
+        drop(holder);
+        let acquired = waiter
+            .await
+            .expect("the waiter joins")
+            .expect("a release just before the deadline is taken");
+        drop(acquired);
+    })
+    .await
+    .expect("a release before the deadline answers inside twice the bound");
+}
+
+/// The lease boundary: ongoing contention times out at the deadline.
+#[tokio::test(start_paused = true)]
+async fn lease_times_out_at_the_deadline_under_ongoing_contention() {
+    let bound = Duration::from_secs(2);
+    let dir = tempfile::tempdir().expect("a scratch lock dir");
+    let lock_path = dir.path().join("contention.lock");
+    let _holder = crate::fs_lock::ExclusiveFileLock::try_lease(&lock_path)
+        .expect("a free lock leases")
+        .expect("a free lock gives Some");
+    let deadline = Instant::now() + bound;
+    let start = Instant::now();
+    let outcome = tokio::time::timeout(
+        bound * 2,
+        crate::fs_lock::ExclusiveFileLock::lease(&lock_path, POLL, deadline),
+    )
+    .await;
+    let elapsed = start.elapsed();
+    let Err(error) = outcome.expect("a bounded wait answers inside twice the bound") else {
+        panic!("no lock crosses a held lease");
+    };
+    assert_eq!(
+        error.kind(),
+        std::io::ErrorKind::TimedOut,
+        "not a timeout: {error}"
+    );
+    assert!(
+        (bound..bound + POLL + Duration::from_secs(1)).contains(&elapsed),
+        "timed out off the deadline: {elapsed:?}"
+    );
 }

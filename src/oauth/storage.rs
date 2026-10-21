@@ -538,15 +538,23 @@ impl TokenStorage {
             Linked::Saved(id) => Ok(id),
             Linked::Corrupt { path, tmp } => {
                 let lock_path = self.client_lock_path(backend_name, resource_url);
-                let lease = crate::fs_lock::ExclusiveFileLock::lease(&lock_path, REPAIR_LOCK_POLL);
-                let lock = tokio::time::timeout(bound, lease)
-                    .await
-                    .map_err(|_| {
+                // The bound lives in the primitive now: same behaviour, one place.
+                let deadline = tokio::time::Instant::now() + bound;
+                let lock = crate::fs_lock::ExclusiveFileLock::lease(
+                    &lock_path,
+                    REPAIR_LOCK_POLL,
+                    deadline,
+                )
+                .await
+                .map_err(|error| {
+                    if error.kind() == std::io::ErrorKind::TimedOut {
                         Error::OAuth(format!(
                             "client_id repair lock still held by another process after {bound:?}"
                         ))
-                    })?
-                    .map_err(|e| repair_lock_error(&e))?;
+                    } else {
+                        repair_lock_error(&error)
+                    }
+                })?;
                 self.repair_corrupt_final(
                     backend_name,
                     resource_url,

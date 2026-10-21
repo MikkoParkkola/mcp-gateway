@@ -89,17 +89,72 @@ impl Flight {
 /// a lock on a sidecar file, released by the OS if the process dies. Taken
 /// after the in-process lock, so one waiter per process polls here. Polled,
 /// not blocked on: a cancelled caller leaves no thread waiting behind it.
-pub(super) async fn hold_across_processes(token_path: &Path) -> crate::Result<ExclusiveFileLock> {
+///
+/// Bounded by the caller's `deadline`, capped to the short wait for
+/// non-interactive callers. Every lock failure answers `BackendUnavailable`
+/// with the busy marker, which frees the key and never starts a login.
+pub(super) async fn hold_across_processes(
+    token_path: &Path,
+    deadline: tokio::time::Instant,
+) -> crate::Result<ExclusiveFileLock> {
     let lock_path = token_path.with_extension("refresh.lock");
-    ExclusiveFileLock::lease(&lock_path, LOCK_POLL)
-        .await
-        .map_err(|e| Error::OAuth(format!("Could not take the refresh lock: {e}")))
+    // A non-interactive caller (the probe) never waits out a peer's whole
+    // exchange: the short wait, capped by the caller's own deadline.
+    let effective = if crate::oauth::login_gate::interactive() {
+        deadline
+    } else {
+        let short = tokio::time::Instant::now() + NONINTERACTIVE_LEASE_WAIT;
+        if short < deadline { short } else { deadline }
+    };
+    match ExclusiveFileLock::lease(&lock_path, LOCK_POLL, effective).await {
+        Ok(lock) => Ok(lock),
+        // A spent contention budget, not proof the holder stalled: try again later.
+        Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+            Err(Error::BackendUnavailable(format!(
+                "{CREDENTIAL_LOCK_BUSY}: the refresh lock stayed held past the contention budget"
+            )))
+        }
+        // A login cannot fix a lock-file failure, so it carries the marker too.
+        Err(error) => Err(Error::BackendUnavailable(format!(
+            "{CREDENTIAL_LOCK_BUSY}: could not take the refresh lock: {error}"
+        ))),
+    }
+}
+
+/// Whether `error` is a busy credential lock: the `BackendUnavailable` marker,
+/// or the joiner's `OAuth` text form (`Failed(error.to_string())` keeps the
+/// marker with its colon inside the Display wrapper).
+pub(crate) fn is_credential_lock_busy(error: &Error) -> bool {
+    match error {
+        Error::BackendUnavailable(text) => text.starts_with(CREDENTIAL_LOCK_BUSY),
+        // `CREDENTIAL_LOCK_BUSY` with its colon; the joiner's wrapped text.
+        Error::OAuth(text) => text.contains("credential lock busy:"),
+        _ => false,
+    }
 }
 
 /// The most one exchange may take, answer body included. Above an owned
 /// client's own 30 s request timeout plus the 5 s redirect lookup, so it
 /// only ever ends an exchange through a supplied client.
 const EXCHANGE_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The contention budget: the longest a healthy holder should need, one
+/// exchange capped at `EXCHANGE_LIMIT` (60 s) plus its storage write. Past it
+/// the waiter answers busy instead of holding the flight; it is not proof the
+/// holder stalled. Under `OAUTH_AUTHORIZATION_WINDOW` (300 s), so an
+/// interactive caller's own window ends later.
+pub(super) const CREDENTIAL_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// The contention budget for non-interactive callers (the probe, era
+/// discovery, the upstream listener, meta-MCP upstream, transport close): a
+/// peer legitimately holds the lease for a moment while refreshing, so zero is
+/// too strict, but a full exchange wait would outlast the probe's own timeout.
+/// Pinned below it by test.
+pub(super) const NONINTERACTIVE_LEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The busy marker every lock failure carries: messages read
+/// `credential lock busy: <label>`.
+pub(super) const CREDENTIAL_LOCK_BUSY: &str = "credential lock busy";
 
 /// How often a credential held by another process is tried again.
 const LOCK_POLL: std::time::Duration = std::time::Duration::from_millis(50);
@@ -180,7 +235,11 @@ pub(crate) async fn refresh_stored(
     let token_path = storage.token_path(key, resource_url);
     let flight = Flight::of(&token_path);
     let guard = Arc::clone(&flight.lock).lock_owned().await;
-    let across = hold_across_processes(&token_path).await?;
+    let across = hold_across_processes(
+        &token_path,
+        tokio::time::Instant::now() + CREDENTIAL_LOCK_WAIT,
+    )
+    .await?;
 
     let stored = storage.load(key, resource_url);
     if let Some(access) = caller.adopt(stored.as_ref()) {
@@ -564,4 +623,21 @@ fn names_an_oauth_error(body: &str) -> bool {
         .ok()
         .and_then(|value| value.get("error")?.as_str().map(str::to_owned))
         .is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The short wait answers before the probe's own timeout fires, so a busy
+    /// probe returns the marked error instead of timing out and rebuilding.
+    /// A test, not a const assertion: the probe timeout lives in config.
+    #[test]
+    fn the_short_wait_is_strictly_below_the_probe_timeout() {
+        let probe = crate::config::HealthCheckConfig::default().timeout;
+        assert!(
+            NONINTERACTIVE_LEASE_WAIT < probe,
+            "the short wait ({NONINTERACTIVE_LEASE_WAIT:?}) must answer before the probe timeout ({probe:?})"
+        );
+    }
 }

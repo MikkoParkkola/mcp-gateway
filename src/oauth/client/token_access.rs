@@ -32,6 +32,8 @@ impl OAuthClient {
                 // A policy refusal is not an expired grant: re-authorizing
                 // would only walk past it (MIK-7701).
                 Err(e) if is_ssrf_refusal(&e) => return Err(e),
+                // A busy lock is not an expired grant either: no login starts.
+                Err(e) if super::refresh_flight::is_credential_lock_busy(&e) => return Err(e),
                 Err(_) => {}
             }
         }
@@ -113,6 +115,8 @@ impl OAuthClient {
                     return Ok(token);
                 }
                 Err(e) if is_ssrf_refusal(&e) => return Err(e),
+                // A busy lock is not an expired grant either: no login starts.
+                Err(e) if super::refresh_flight::is_credential_lock_busy(&e) => return Err(e),
                 Err(_) => {}
             }
         }

@@ -333,12 +333,8 @@ impl OAuthClient {
     /// fresh cancel never fires; `None` keeps the authorization window.
     #[cfg(test)]
     pub(crate) async fn save_issued_until_for_test(&self, token: &TokenInfo) -> Result<()> {
-        self.save_issued_until(
-            token,
-            &tokio_util::sync::CancellationToken::new(),
-            None,
-        )
-        .await
+        self.save_issued_until(token, &tokio_util::sync::CancellationToken::new(), None)
+            .await
     }
 
     /// Test-only: the cached token lapses now, in memory and in storage, as
@@ -364,7 +360,11 @@ impl OAuthClient {
         let token_path = self.storage.token_path(&key, &self.resource_url);
         let flight = super::refresh_flight::Flight::of(&token_path);
         let _guard = flight.lock.lock().await;
-        let _across = super::refresh_flight::hold_across_processes(&token_path).await?;
+        let _across = super::refresh_flight::hold_across_processes(
+            &token_path,
+            tokio::time::Instant::now() + super::refresh_flight::CREDENTIAL_LOCK_WAIT,
+        )
+        .await?;
         self.store_issued_locked(&key, token)
     }
 
@@ -383,9 +383,33 @@ impl OAuthClient {
         let key = self.credential_key()?;
         let token_path = self.storage.token_path(&key, &self.resource_url);
         let flight = super::refresh_flight::Flight::of(&token_path);
+        // The window Instant, computed once: the select and the lease share it,
+        // so the save waits exactly as long as today's select allows.
+        let window = match deadline {
+            Some(deadline) => {
+                crate::oauth::login_gate::stage_end(OAUTH_AUTHORIZATION_WINDOW, deadline)
+            }
+            None => tokio::time::Instant::now() + OAUTH_AUTHORIZATION_WINDOW,
+        };
         let held = async {
             let guard = flight.lock.lock().await;
-            let across = super::refresh_flight::hold_across_processes(&token_path).await?;
+            // The lease takes the same window deadline: a timeout at it is the
+            // window expiring, not a busy lock. A rarer io failure still
+            // answers busy, so joiners keep the marker.
+            let across =
+                match super::refresh_flight::hold_across_processes(&token_path, window).await {
+                    Ok(lock) => lock,
+                    Err(error)
+                        if super::refresh_flight::is_credential_lock_busy(&error)
+                            && tokio::time::Instant::now() >= window =>
+                    {
+                        return Err(Error::AuthorizationIncomplete {
+                            backend: self.backend_name().to_string(),
+                            window_secs: OAUTH_AUTHORIZATION_WINDOW.as_secs(),
+                        });
+                    }
+                    Err(error) => return Err(error),
+                };
             Ok::<_, Error>((guard, across))
         };
         let (_guard, _across) = tokio::select! {
@@ -395,10 +419,7 @@ impl OAuthClient {
                     backend: self.backend_name().to_string(),
                 });
             }
-            () = tokio::time::sleep_until(match deadline {
-                Some(deadline) => crate::oauth::login_gate::stage_end(OAUTH_AUTHORIZATION_WINDOW, deadline),
-                None => tokio::time::Instant::now() + OAUTH_AUTHORIZATION_WINDOW,
-            }) => {
+            () = tokio::time::sleep_until(window) => {
                 return Err(Error::AuthorizationIncomplete {
                     backend: self.backend_name().to_string(),
                     window_secs: OAUTH_AUTHORIZATION_WINDOW.as_secs(),

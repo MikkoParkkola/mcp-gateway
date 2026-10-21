@@ -358,6 +358,10 @@ impl CapabilityExecutor {
                     .await
                 {
                     Ok(new_token) => return Ok(new_token),
+                    // A busy lock answers at once: no re-authentication message.
+                    Err(error) if crate::oauth::client::is_credential_lock_busy(&error) => {
+                        return Err(error);
+                    }
                     Err(e) => {
                         warn!(
                             provider = %provider,
@@ -426,9 +430,13 @@ impl CapabilityExecutor {
             resource_url: provider,
             label: provider,
         };
-        let refreshed = refresh_stored(&caller, at).await.map_err(|e| {
+        let refreshed = refresh_stored(&caller, at).await.map_err(|error| {
+            // A busy lock answers unwrapped: the caller sees "try again later".
+            if crate::oauth::client::is_credential_lock_busy(&error) {
+                return error;
+            }
             Error::Config(format!(
-                "OAuth refresh request to '{}' for '{provider}' failed: {e}",
+                "OAuth refresh request to '{}' for '{provider}' failed: {error}",
                 crate::security::sanitize::redact_url_for_diagnostics(token_endpoint)
             ))
         })?;

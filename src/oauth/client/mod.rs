@@ -485,7 +485,8 @@ pub(crate) use grants::OAUTH_AUTHORIZATION_WINDOW;
 mod grants_tests;
 mod refresh_flight;
 pub(crate) use refresh_flight::{
-    RefreshCaller, RefreshRequest, Refreshed, StoredCredential, refresh_stored,
+    RefreshCaller, RefreshRequest, Refreshed, StoredCredential, is_credential_lock_busy,
+    refresh_stored,
 };
 #[cfg(test)]
 mod issuer_provenance_tests;
