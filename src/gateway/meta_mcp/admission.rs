@@ -782,6 +782,10 @@ mod round_tests;
 #[path = "admission_withheld_tests.rs"]
 mod withheld_tests;
 
+#[cfg(all(test, feature = "metrics"))]
+#[path = "unkeyed_metric_tests.rs"]
+mod unkeyed_metric_tests;
+
 /// The policy envelope for a backend tool called by its own name.
 ///
 /// Such a call has no `attestation` argument, so its token rides in
