@@ -672,6 +672,10 @@ mod catalogue_per_caller_tests;
 mod cost_key_caller_tests;
 
 #[cfg(test)]
+#[path = "grant_key_caller_tests.rs"]
+mod grant_key_caller_tests;
+
+#[cfg(test)]
 mod test_callers;
 #[cfg(test)]
 pub(super) use test_callers::{anonymous_caller, callback_capability, identified_caller};

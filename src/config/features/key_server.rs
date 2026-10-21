@@ -521,6 +521,29 @@ mod tests {
         p.jwks_uri = Some("http://127.0.0.1:39400/.well-known/jwks.json".into());
         assert!(enabled_with(vec![p]).validate().is_ok());
     }
+
+    /// MIK-8518 T9: an `oidc` provider whose issuer is a reserved grant
+    /// authority is refused at load: its tokens would otherwise arrive as
+    /// verified `api_key:` subjects and bypass the API-key-only fallback.
+    /// RED on the base (the config loads).
+    #[test]
+    fn validate_refuses_a_reserved_grant_authority_as_oidc_issuer() {
+        for reserved in ["api_key", "mtls", "agent_oauth"] {
+            let mut p = provider(reserved, vec!["client-id"]);
+            p.jwks_uri = Some("https://idp.example/.well-known/jwks.json".into());
+            let Err(refusal) = enabled_with(vec![p]).validate() else {
+                panic!("issuer '{reserved}': loaded, want a reserved-authority refusal");
+            };
+            assert!(
+                matches!(refusal, crate::Error::ConfigValidation(_)),
+                "issuer '{reserved}': refused at validation: {refusal}"
+            );
+            assert!(
+                refusal.to_string().contains(reserved),
+                "issuer '{reserved}': the message names it: {refusal}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

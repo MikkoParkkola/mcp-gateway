@@ -242,6 +242,9 @@ pub(in crate::gateway) use judged_answer::record_delivery as record_judged_deliv
 /// MIK-8286 / MIK-8287: an identity that names nobody is refused.
 #[cfg(test)]
 mod identity_collapse_tests;
+/// MIK-8518 T2: the router's grant-subject builders admit only API keys.
+#[cfg(test)]
+mod grant_key_builder_tests;
 #[cfg(test)]
 mod log_level_admin_tests;
 #[cfg(test)]
