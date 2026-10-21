@@ -145,11 +145,10 @@ impl OAuthClient {
                 };
 
                 match renewal {
-                    Renewal::Renewed => {}
                     Renewal::Refused => return,
                     // Already logged at debug where it deferred; the loop
                     // retries next period with no warning.
-                    Renewal::Deferred => {}
+                    Renewal::Renewed | Renewal::Deferred => {}
                     Renewal::Exhausted => {
                         warn!(
                             backend = %backend_name,

@@ -666,21 +666,24 @@ async fn t13f_fill_over_a_busy_lock_takes_no_sample_and_no_cooldown() {
             "the second call listed again inside the cooldown"
         );
 
-        // The predicate needs the colon: a message starting with the marker
-        // text but without it is not busy. RED now: the `BackendUnavailable`
-        // arm matches the bare prefix.
-        let near =
-            crate::Error::BackendUnavailable("credential lock busy without a colon".to_string());
-        assert!(
-            !crate::oauth::client::is_credential_lock_busy(&near),
-            "a colonless marker reads busy: {near}"
-        );
-        let positive = crate::oauth::client::busy_error_for_test("the token step holds the lease");
-        assert!(
-            crate::oauth::client::is_credential_lock_busy(&positive),
-            "the marked error does not read busy: {positive}"
-        );
+        the_busy_predicate_needs_the_colon();
     })
     .await
     .expect("both fills answer at once");
+}
+
+fn the_busy_predicate_needs_the_colon() {
+    // The predicate needs the colon: a message starting with the marker
+    // text but without it is not busy. RED now: the `BackendUnavailable`
+    // arm matches the bare prefix.
+    let near = crate::Error::BackendUnavailable("credential lock busy without a colon".to_string());
+    assert!(
+        !crate::oauth::client::is_credential_lock_busy(&near),
+        "a colonless marker reads busy: {near}"
+    );
+    let positive = crate::oauth::client::busy_error_for_test("the token step holds the lease");
+    assert!(
+        crate::oauth::client::is_credential_lock_busy(&positive),
+        "the marked error does not read busy: {positive}"
+    );
 }

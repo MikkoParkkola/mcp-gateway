@@ -185,79 +185,82 @@ async fn t13i_a_long_save_behind_the_flight_lock_waits_and_saves() {
 /// starts after the flight, so the answer lands at about 3.5 s.
 #[tokio::test(start_paused = true)]
 async fn t13j_one_budget_covers_the_flight_lock_and_the_lease() {
-    tokio::time::timeout(Duration::from_secs(5) * 2, async {
-        let server = TokenServer::start(&[]).await;
-        let dir = tempfile::tempdir().expect("a scratch token store");
-        let oauth = Arc::new(client(dir.path(), &server));
-        hold(&oauth, &token("a1", Some("r1"), true));
-        let (_, token_path, _) = credential_paths(&oauth);
-        // The cross-process lease, held throughout the probe.
-        let _lease = crate::oauth::client::refresh_flight::hold_across_processes(
-            &token_path,
-            Instant::now() + CREDENTIAL_LOCK_WAIT,
-        )
-        .await
-        .expect("the other process holds the lease");
-        // The in-process flight, held for 1.5 s, then released.
-        let flight = Flight::of(&token_path);
-        let acquired = Arc::new(tokio::sync::Notify::new());
-        let holder = tokio::spawn({
-            let flight = Arc::clone(&flight);
-            let acquired = Arc::clone(&acquired);
-            async move {
-                let _guard = flight.lock.lock().await;
-                acquired.notify_one();
-                tokio::time::sleep(Duration::from_millis(1500)).await;
-            }
-        });
-        acquired.notified().await;
+    tokio::time::timeout(
+        Duration::from_secs(5) * 2,
+        Box::pin(async {
+            let server = TokenServer::start(&[]).await;
+            let dir = tempfile::tempdir().expect("a scratch token store");
+            let oauth = Arc::new(client(dir.path(), &server));
+            hold(&oauth, &token("a1", Some("r1"), true));
+            let (_, token_path, _) = credential_paths(&oauth);
+            // The cross-process lease, held throughout the probe.
+            let _lease = crate::oauth::client::refresh_flight::hold_across_processes(
+                &token_path,
+                Instant::now() + CREDENTIAL_LOCK_WAIT,
+            )
+            .await
+            .expect("the other process holds the lease");
+            // The in-process flight, held for 1.5 s, then released.
+            let flight = Flight::of(&token_path);
+            let acquired = Arc::new(tokio::sync::Notify::new());
+            let holder = tokio::spawn({
+                let flight = Arc::clone(&flight);
+                let acquired = Arc::clone(&acquired);
+                async move {
+                    let _guard = flight.lock.lock().await;
+                    acquired.notify_one();
+                    tokio::time::sleep(Duration::from_millis(1500)).await;
+                }
+            });
+            acquired.notified().await;
 
-        let backend = crate::backend::Backend::new(
-            "t13j-probe",
-            crate::config::BackendConfig::default(),
-            &crate::config::FailsafeConfig::default(),
-            Duration::from_secs(60),
-        );
-        backend.set_transport_for_test(Arc::new(TokenStepTransport {
-            client: Arc::clone(&oauth),
-        }) as Arc<dyn crate::transport::Transport>);
-        let before = backend.circuit_breaker_stats().current_failures;
+            let backend = crate::backend::Backend::new(
+                "t13j-probe",
+                crate::config::BackendConfig::default(),
+                &crate::config::FailsafeConfig::default(),
+                Duration::from_secs(60),
+            );
+            backend.set_transport_for_test(Arc::new(TokenStepTransport {
+                client: Arc::clone(&oauth),
+            }) as Arc<dyn crate::transport::Transport>);
+            let before = backend.circuit_breaker_stats().current_failures;
 
-        let start = Instant::now();
-        let outcome = backend.health_probe(Duration::from_secs(5)).await;
-        let elapsed = start.elapsed();
-        holder.abort();
+            let start = Instant::now();
+            let outcome = backend.health_probe(Duration::from_secs(5)).await;
+            let elapsed = start.elapsed();
+            holder.abort();
 
-        let error = outcome.expect_err("a busy lock is not health");
-        assert!(
-            is_credential_lock_busy(&error),
-            "not the marked error: {error}"
-        );
-        assert!(
-            matches!(error, Error::BackendUnavailable(_)),
-            "not unwrapped: {error:?}"
-        );
-        assert!(
-            (SHORT_CONTENTION_WAIT..SHORT_CONTENTION_WAIT + POLL + Duration::from_secs(1))
-                .contains(&elapsed),
-            "answered off the single budget (about 3.5 s is two budgets): {elapsed:?}"
-        );
-        assert_eq!(
-            backend.rebuilds_attempted.load(Ordering::SeqCst),
-            0,
-            "the probe rebuilt over a busy lock"
-        );
-        assert_eq!(
-            backend.circuit_breaker_stats().current_failures,
-            before,
-            "a busy lock sampled as a backend failure"
-        );
-        assert!(
-            !backend.is_circuit_tripped(),
-            "the probe tripped the breaker on a busy lock"
-        );
-        assert_eq!(server.requests(), 0, "sent while the locks were held");
-    })
+            let error = outcome.expect_err("a busy lock is not health");
+            assert!(
+                is_credential_lock_busy(&error),
+                "not the marked error: {error}"
+            );
+            assert!(
+                matches!(error, Error::BackendUnavailable(_)),
+                "not unwrapped: {error:?}"
+            );
+            assert!(
+                (SHORT_CONTENTION_WAIT..SHORT_CONTENTION_WAIT + POLL + Duration::from_secs(1))
+                    .contains(&elapsed),
+                "answered off the single budget (about 3.5 s is two budgets): {elapsed:?}"
+            );
+            assert_eq!(
+                backend.rebuilds_attempted.load(Ordering::SeqCst),
+                0,
+                "the probe rebuilt over a busy lock"
+            );
+            assert_eq!(
+                backend.circuit_breaker_stats().current_failures,
+                before,
+                "a busy lock sampled as a backend failure"
+            );
+            assert!(
+                !backend.is_circuit_tripped(),
+                "the probe tripped the breaker on a busy lock"
+            );
+            assert_eq!(server.requests(), 0, "sent while the locks were held");
+        }),
+    )
     .await
     .expect("a probe answers inside twice its timeout");
 }

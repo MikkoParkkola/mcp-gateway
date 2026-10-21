@@ -34,9 +34,9 @@ async fn attempt_span(client: &Arc<tokio::sync::Mutex<OAuthClient>>) -> Duration
 /// client mutex is free afterwards and the loop keeps running.
 #[tokio::test(start_paused = true)]
 async fn t3_renewal_loop_lets_go_of_the_client() {
-    let _server = TokenServer::start(&[]).await;
+    let server = TokenServer::start(&[]).await;
     let dir = tempfile::tempdir().expect("a scratch token store");
-    let client = client(dir.path(), &_server);
+    let client = client(dir.path(), &server);
     hold(&client, &token("a1", Some("r1"), true));
     let token_path = client.storage.token_path(
         &client
@@ -101,7 +101,8 @@ async fn t6_renewal_defers_after_one_bound_without_client_credentials() {
     drop(log_guard);
 
     assert!(
-        ((CREDENTIAL_LOCK_WAIT - TICK)..CREDENTIAL_LOCK_WAIT + POLL + Duration::from_secs(1))
+        ((CREDENTIAL_LOCK_WAIT.saturating_sub(TICK))
+            ..CREDENTIAL_LOCK_WAIT + POLL + Duration::from_secs(1))
             .contains(&span),
         "one bound, not two: {span:?}"
     );
@@ -135,9 +136,9 @@ async fn t7_two_periods_are_two_bounded_attempts() {
     // Strictly past two full periods, so a correct run is never cut off.
     let outer = (period + CREDENTIAL_LOCK_WAIT) * 2 + Duration::from_secs(10);
     tokio::time::timeout(outer, async {
-        let _server = TokenServer::start(&[]).await;
+        let server = TokenServer::start(&[]).await;
         let dir = tempfile::tempdir().expect("a scratch token store");
-        let client = client(dir.path(), &_server);
+        let client = client(dir.path(), &server);
         hold(&client, &token("a1", Some("r1"), true));
         let token_path = client.storage.token_path(
             &client

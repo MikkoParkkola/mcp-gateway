@@ -160,7 +160,7 @@ pub(crate) fn is_credential_lock_busy(error: &Error) -> bool {
 
 /// Test-only: the marked busy error, so a backend fill row can drive its
 /// failure without spelling the marker (MIK-8619 T13f).
-#[cfg(test)]
+#[cfg(all(test, feature = "metrics"))]
 pub(crate) fn busy_error_for_test(label: &str) -> crate::Error {
     busy_error(label)
 }

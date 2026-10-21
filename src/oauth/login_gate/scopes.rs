@@ -145,9 +145,9 @@ pub(in crate::oauth) enum ContentionClass {
 
 /// Run `work` as a caller that never begins or waits on a login (the health
 /// probe, MIK-7982 C2): where it would, it gets `AuthorizationRequired`.
-/// Its contention class is Long; [`short_contention`] enters the same scope as Short.
+/// It keeps the caller's contention class: Long by default, Short inside [`short_contention`].
 pub(crate) async fn non_interactive<F: std::future::Future>(work: F) -> F::Output {
-    NON_INTERACTIVE.scope(ContentionClass::Long, work).await
+    NON_INTERACTIVE.scope(contention_class(), work).await
 }
 
 /// Run `work` as a Short contention caller: one whose own deadline is at or

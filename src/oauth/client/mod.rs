@@ -484,7 +484,7 @@ pub(crate) use grants::OAUTH_AUTHORIZATION_WINDOW;
 #[cfg(test)]
 mod grants_tests;
 mod refresh_flight;
-#[cfg(test)]
+#[cfg(all(test, feature = "metrics"))]
 pub(crate) use refresh_flight::busy_error_for_test;
 pub(crate) use refresh_flight::{
     RefreshCaller, RefreshRequest, Refreshed, StoredCredential, is_credential_lock_busy,

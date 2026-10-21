@@ -349,81 +349,85 @@ impl crate::transport::Transport for TokenStepTransport {
 /// error fails. The outer timeout covers setup and both probes.
 #[tokio::test(start_paused = true)]
 async fn t13_probe_skips_rebuild_and_breaker_on_busy() {
-    tokio::time::timeout(CREDENTIAL_LOCK_WAIT * 2, async {
-        let dir = tempfile::tempdir().expect("a scratch token store");
-        let storage =
-            crate::oauth::TokenStorage::new(dir.path().to_path_buf()).expect("token storage");
-        let token_path = storage.token_path("t13-credential", "https://t13.example/mcp");
-        let _holder = crate::oauth::client::refresh_flight::hold_across_processes(
-            &token_path,
-            Instant::now() + CREDENTIAL_LOCK_WAIT,
-        )
-        .await
-        .expect("the other process holds the lease");
-
-        let backend = crate::backend::Backend::new(
-            "t13-probe",
-            crate::config::BackendConfig::default(),
-            &crate::config::FailsafeConfig::default(),
-            Duration::from_secs(60),
-        );
-        backend
-            .set_transport_for_test(Arc::new(BusyTransport) as Arc<dyn crate::transport::Transport>);
-
-        let error = backend
-            .health_probe(Duration::from_secs(5))
+    tokio::time::timeout(
+        CREDENTIAL_LOCK_WAIT * 2,
+        Box::pin(async {
+            let dir = tempfile::tempdir().expect("a scratch token store");
+            let storage =
+                crate::oauth::TokenStorage::new(dir.path().to_path_buf()).expect("token storage");
+            let token_path = storage.token_path("t13-credential", "https://t13.example/mcp");
+            let _holder = crate::oauth::client::refresh_flight::hold_across_processes(
+                &token_path,
+                Instant::now() + CREDENTIAL_LOCK_WAIT,
+            )
             .await
-            .expect_err("a busy lock is not health");
-        assert!(
-            is_credential_lock_busy(&error),
-            "not the marked error: {error}"
-        );
-        assert!(
-            matches!(error, Error::BackendUnavailable(_)),
-            "not unwrapped: {error:?}"
-        );
-        assert_eq!(
-            backend.rebuilds_attempted.load(Ordering::SeqCst),
-            0,
-            "the probe rebuilt over a busy lock"
-        );
-        assert!(
-            !backend.is_circuit_tripped(),
-            "the probe tripped the breaker on a busy lock"
-        );
-        assert_eq!(
-            backend.circuit_breaker_stats().current_failures,
-            0,
-            "a busy lock sampled as a backend failure"
-        );
+            .expect("the other process holds the lease");
 
-        // Unmarked: the same variant without the busy text still rebuilds.
-        let plain = crate::backend::Backend::new(
-            "t13-plain",
-            crate::config::BackendConfig::default(),
-            &crate::config::FailsafeConfig::default(),
-            Duration::from_secs(60),
-        );
-        plain.set_transport_for_test(
-            Arc::new(UnmarkedTransport) as Arc<dyn crate::transport::Transport>
-        );
-        let error = plain
-            .health_probe(Duration::from_secs(5))
-            .await
-            .expect_err("an unmarked failure is not health");
-        assert!(
-            !is_credential_lock_busy(&error),
-            "an unmarked error reads busy: {error}"
-        );
-        assert!(
-            matches!(error, Error::BackendUnavailable(_)),
-            "not the variant: {error:?}"
-        );
-        assert!(
-            plain.rebuilds_attempted.load(Ordering::SeqCst) > 0,
-            "the probe did not rebuild over an unmarked failure"
-        );
-    })
+            let backend = crate::backend::Backend::new(
+                "t13-probe",
+                crate::config::BackendConfig::default(),
+                &crate::config::FailsafeConfig::default(),
+                Duration::from_secs(60),
+            );
+            backend.set_transport_for_test(
+                Arc::new(BusyTransport) as Arc<dyn crate::transport::Transport>
+            );
+
+            let error = backend
+                .health_probe(Duration::from_secs(5))
+                .await
+                .expect_err("a busy lock is not health");
+            assert!(
+                is_credential_lock_busy(&error),
+                "not the marked error: {error}"
+            );
+            assert!(
+                matches!(error, Error::BackendUnavailable(_)),
+                "not unwrapped: {error:?}"
+            );
+            assert_eq!(
+                backend.rebuilds_attempted.load(Ordering::SeqCst),
+                0,
+                "the probe rebuilt over a busy lock"
+            );
+            assert!(
+                !backend.is_circuit_tripped(),
+                "the probe tripped the breaker on a busy lock"
+            );
+            assert_eq!(
+                backend.circuit_breaker_stats().current_failures,
+                0,
+                "a busy lock sampled as a backend failure"
+            );
+
+            // Unmarked: the same variant without the busy text still rebuilds.
+            let plain = crate::backend::Backend::new(
+                "t13-plain",
+                crate::config::BackendConfig::default(),
+                &crate::config::FailsafeConfig::default(),
+                Duration::from_secs(60),
+            );
+            plain.set_transport_for_test(
+                Arc::new(UnmarkedTransport) as Arc<dyn crate::transport::Transport>
+            );
+            let error = plain
+                .health_probe(Duration::from_secs(5))
+                .await
+                .expect_err("an unmarked failure is not health");
+            assert!(
+                !is_credential_lock_busy(&error),
+                "an unmarked error reads busy: {error}"
+            );
+            assert!(
+                matches!(error, Error::BackendUnavailable(_)),
+                "not the variant: {error:?}"
+            );
+            assert!(
+                plain.rebuilds_attempted.load(Ordering::SeqCst) > 0,
+                "the probe did not rebuild over an unmarked failure"
+            );
+        }),
+    )
     .await
     .expect("both probes answer inside twice the bound");
 }
@@ -432,63 +436,66 @@ async fn t13_probe_skips_rebuild_and_breaker_on_busy() {
 /// the marked error at the short wait, without a rebuild or a breaker sample.
 #[tokio::test(start_paused = true)]
 async fn t13b_probe_answers_busy_at_the_short_wait() {
-    tokio::time::timeout(Duration::from_secs(5) * 2, async {
-        let server = TokenServer::start(&[]).await;
-        let dir = tempfile::tempdir().expect("a scratch token store");
-        let oauth = client(dir.path(), &server);
-        hold(&oauth, &token("a1", Some("r1"), true));
-        let (_, token_path, _) = credential_paths(&oauth);
-        let _holder = crate::oauth::client::refresh_flight::hold_across_processes(
-            &token_path,
-            Instant::now() + CREDENTIAL_LOCK_WAIT,
-        )
-        .await
-        .expect("the other process holds the lease");
-        let backend = crate::backend::Backend::new(
-            "t13b-probe",
-            crate::config::BackendConfig::default(),
-            &crate::config::FailsafeConfig::default(),
-            Duration::from_secs(60),
-        );
-        backend.set_transport_for_test(Arc::new(TokenStepTransport {
-            client: Arc::new(oauth),
-        }) as Arc<dyn crate::transport::Transport>);
-        let before = backend.circuit_breaker_stats().current_failures;
+    tokio::time::timeout(
+        Duration::from_secs(5) * 2,
+        Box::pin(async {
+            let server = TokenServer::start(&[]).await;
+            let dir = tempfile::tempdir().expect("a scratch token store");
+            let oauth = client(dir.path(), &server);
+            hold(&oauth, &token("a1", Some("r1"), true));
+            let (_, token_path, _) = credential_paths(&oauth);
+            let _holder = crate::oauth::client::refresh_flight::hold_across_processes(
+                &token_path,
+                Instant::now() + CREDENTIAL_LOCK_WAIT,
+            )
+            .await
+            .expect("the other process holds the lease");
+            let backend = crate::backend::Backend::new(
+                "t13b-probe",
+                crate::config::BackendConfig::default(),
+                &crate::config::FailsafeConfig::default(),
+                Duration::from_secs(60),
+            );
+            backend.set_transport_for_test(Arc::new(TokenStepTransport {
+                client: Arc::new(oauth),
+            }) as Arc<dyn crate::transport::Transport>);
+            let before = backend.circuit_breaker_stats().current_failures;
 
-        let start = Instant::now();
-        let outcome = backend.health_probe(Duration::from_secs(5)).await;
-        let elapsed = start.elapsed();
+            let start = Instant::now();
+            let outcome = backend.health_probe(Duration::from_secs(5)).await;
+            let elapsed = start.elapsed();
 
-        let error = outcome.expect_err("a busy lock is not health");
-        assert!(
-            is_credential_lock_busy(&error),
-            "not the marked error: {error}"
-        );
-        assert!(
-            matches!(error, Error::BackendUnavailable(_)),
-            "not unwrapped: {error:?}"
-        );
-        assert!(
-            (SHORT_CONTENTION_WAIT..SHORT_CONTENTION_WAIT + POLL + Duration::from_secs(1))
-                .contains(&elapsed),
-            "answered off the short wait: {elapsed:?}"
-        );
-        assert_eq!(
-            backend.rebuilds_attempted.load(Ordering::SeqCst),
-            0,
-            "the probe rebuilt over a busy lock"
-        );
-        assert_eq!(
-            backend.circuit_breaker_stats().current_failures,
-            before,
-            "a busy lock sampled as a backend failure"
-        );
-        assert!(
-            !backend.is_circuit_tripped(),
-            "the probe tripped the breaker on a busy lock"
-        );
-        assert_eq!(server.requests(), 0, "sent while another process held it");
-    })
+            let error = outcome.expect_err("a busy lock is not health");
+            assert!(
+                is_credential_lock_busy(&error),
+                "not the marked error: {error}"
+            );
+            assert!(
+                matches!(error, Error::BackendUnavailable(_)),
+                "not unwrapped: {error:?}"
+            );
+            assert!(
+                (SHORT_CONTENTION_WAIT..SHORT_CONTENTION_WAIT + POLL + Duration::from_secs(1))
+                    .contains(&elapsed),
+                "answered off the short wait: {elapsed:?}"
+            );
+            assert_eq!(
+                backend.rebuilds_attempted.load(Ordering::SeqCst),
+                0,
+                "the probe rebuilt over a busy lock"
+            );
+            assert_eq!(
+                backend.circuit_breaker_stats().current_failures,
+                before,
+                "a busy lock sampled as a backend failure"
+            );
+            assert!(
+                !backend.is_circuit_tripped(),
+                "the probe tripped the breaker on a busy lock"
+            );
+            assert_eq!(server.requests(), 0, "sent while another process held it");
+        }),
+    )
     .await
     .expect("a probe answers inside twice its timeout");
 }
@@ -500,72 +507,75 @@ async fn t13b_probe_answers_busy_at_the_short_wait() {
 /// flight lock unbounded, so the probe times out at 5 s and rebuilds.
 #[tokio::test(start_paused = true)]
 async fn t13g_probe_behind_an_in_process_holder_answers_busy_at_the_short_wait() {
-    tokio::time::timeout(Duration::from_secs(5) * 2, async {
-        let server = TokenServer::start(&[]).await;
-        let dir = tempfile::tempdir().expect("a scratch token store");
-        let oauth = client(dir.path(), &server);
-        hold(&oauth, &token("a1", Some("r1"), true));
-        let (_, token_path, _) = credential_paths(&oauth);
-        // The in-process holder: a spawned task, so the probe queues behind
-        // another task's hold rather than its own.
-        let flight = Flight::of(&token_path);
-        let acquired = Arc::new(tokio::sync::Notify::new());
-        let holder = tokio::spawn({
-            let flight = Arc::clone(&flight);
-            let acquired = Arc::clone(&acquired);
-            async move {
-                let _guard = flight.lock.lock().await;
-                acquired.notify_one();
-                tokio::time::sleep(CREDENTIAL_LOCK_WAIT * 2).await;
-            }
-        });
-        acquired.notified().await;
-        let backend = crate::backend::Backend::new(
-            "t13g-probe",
-            crate::config::BackendConfig::default(),
-            &crate::config::FailsafeConfig::default(),
-            Duration::from_secs(60),
-        );
-        backend.set_transport_for_test(Arc::new(TokenStepTransport {
-            client: Arc::new(oauth),
-        }) as Arc<dyn crate::transport::Transport>);
-        let before = backend.circuit_breaker_stats().current_failures;
+    tokio::time::timeout(
+        Duration::from_secs(5) * 2,
+        Box::pin(async {
+            let server = TokenServer::start(&[]).await;
+            let dir = tempfile::tempdir().expect("a scratch token store");
+            let oauth = client(dir.path(), &server);
+            hold(&oauth, &token("a1", Some("r1"), true));
+            let (_, token_path, _) = credential_paths(&oauth);
+            // The in-process holder: a spawned task, so the probe queues behind
+            // another task's hold rather than its own.
+            let flight = Flight::of(&token_path);
+            let acquired = Arc::new(tokio::sync::Notify::new());
+            let holder = tokio::spawn({
+                let flight = Arc::clone(&flight);
+                let acquired = Arc::clone(&acquired);
+                async move {
+                    let _guard = flight.lock.lock().await;
+                    acquired.notify_one();
+                    tokio::time::sleep(CREDENTIAL_LOCK_WAIT * 2).await;
+                }
+            });
+            acquired.notified().await;
+            let backend = crate::backend::Backend::new(
+                "t13g-probe",
+                crate::config::BackendConfig::default(),
+                &crate::config::FailsafeConfig::default(),
+                Duration::from_secs(60),
+            );
+            backend.set_transport_for_test(Arc::new(TokenStepTransport {
+                client: Arc::new(oauth),
+            }) as Arc<dyn crate::transport::Transport>);
+            let before = backend.circuit_breaker_stats().current_failures;
 
-        let start = Instant::now();
-        let outcome = backend.health_probe(Duration::from_secs(5)).await;
-        let elapsed = start.elapsed();
-        holder.abort();
+            let start = Instant::now();
+            let outcome = backend.health_probe(Duration::from_secs(5)).await;
+            let elapsed = start.elapsed();
+            holder.abort();
 
-        let error = outcome.expect_err("a busy lock is not health");
-        assert!(
-            is_credential_lock_busy(&error),
-            "not the marked error: {error}"
-        );
-        assert!(
-            matches!(error, Error::BackendUnavailable(_)),
-            "not unwrapped: {error:?}"
-        );
-        assert!(
-            (SHORT_CONTENTION_WAIT..SHORT_CONTENTION_WAIT + POLL + Duration::from_secs(1))
-                .contains(&elapsed),
-            "answered off the short wait: {elapsed:?}"
-        );
-        assert_eq!(
-            backend.rebuilds_attempted.load(Ordering::SeqCst),
-            0,
-            "the probe rebuilt over a busy lock"
-        );
-        assert_eq!(
-            backend.circuit_breaker_stats().current_failures,
-            before,
-            "a busy lock sampled as a backend failure"
-        );
-        assert!(
-            !backend.is_circuit_tripped(),
-            "the probe tripped the breaker on a busy lock"
-        );
-        assert_eq!(server.requests(), 0, "sent while the flight was held");
-    })
+            let error = outcome.expect_err("a busy lock is not health");
+            assert!(
+                is_credential_lock_busy(&error),
+                "not the marked error: {error}"
+            );
+            assert!(
+                matches!(error, Error::BackendUnavailable(_)),
+                "not unwrapped: {error:?}"
+            );
+            assert!(
+                (SHORT_CONTENTION_WAIT..SHORT_CONTENTION_WAIT + POLL + Duration::from_secs(1))
+                    .contains(&elapsed),
+                "answered off the short wait: {elapsed:?}"
+            );
+            assert_eq!(
+                backend.rebuilds_attempted.load(Ordering::SeqCst),
+                0,
+                "the probe rebuilt over a busy lock"
+            );
+            assert_eq!(
+                backend.circuit_breaker_stats().current_failures,
+                before,
+                "a busy lock sampled as a backend failure"
+            );
+            assert!(
+                !backend.is_circuit_tripped(),
+                "the probe tripped the breaker on a busy lock"
+            );
+            assert_eq!(server.requests(), 0, "sent while the flight was held");
+        }),
+    )
     .await
     .expect("a probe answers inside twice its timeout");
 }
