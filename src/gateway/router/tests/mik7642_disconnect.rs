@@ -82,7 +82,8 @@ fn auth() -> AuthConfig {
 
 #[tokio::test]
 async fn a_client_disconnect_mid_call_cancels_the_backend_call_by_its_id() {
-    let (backend_url, seen) = slow_backend(Duration::from_secs(5)).await;
+    // The backend holds the call far past the test's end: only the abort ends it.
+    let (backend_url, seen) = slow_backend(Duration::from_secs(3600)).await;
     let (state, _store) = super::test_router_app_state_with_auth(&auth()).await;
     let backend = Arc::new(Backend::new(
         "svc",
@@ -140,7 +141,13 @@ async fn a_client_disconnect_mid_call_cancels_the_backend_call_by_its_id() {
         "precondition: the call was still running"
     );
     task.abort();
-    let _ = task.await;
+    let joined = task.await;
+    assert!(
+        joined
+            .as_ref()
+            .is_err_and(tokio::task::JoinError::is_cancelled),
+        "precondition: the aborted call was cancelled, not finished: {joined:?}"
+    );
     let calls = of_method(&seen, "tools/call");
     assert_eq!(
         calls.len(),
@@ -356,8 +363,9 @@ fn invoke(client_id: &str) -> Value {
 /// id the backend received.
 #[tokio::test]
 async fn an_mcp_client_disconnect_mid_call_cancels_the_backend_call_by_its_id() {
+    // The backend holds the call far past the test's end: only the abort ends it.
     let (gateway, seen, client, session, _store) =
-        mcp_gateway_with_slow_backend(Duration::from_secs(5)).await;
+        mcp_gateway_with_slow_backend(Duration::from_secs(3600)).await;
     let call = invoke("client-7");
     // Aborting the task drops the in-flight request while the backend still
     // works; with no idle pool the connection closes.
@@ -382,7 +390,13 @@ async fn an_mcp_client_disconnect_mid_call_cancels_the_backend_call_by_its_id() 
         "precondition: the call was still running"
     );
     task.abort();
-    let _ = task.await;
+    let joined = task.await;
+    assert!(
+        joined
+            .as_ref()
+            .is_err_and(tokio::task::JoinError::is_cancelled),
+        "precondition: the aborted call was cancelled, not finished: {joined:?}"
+    );
     let calls = of_method(&seen, "tools/call");
     assert_eq!(
         calls.len(),
