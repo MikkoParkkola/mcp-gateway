@@ -1,0 +1,12 @@
+head_sha	c01cfbfd31d206c7bef690d7913088b7ac06dda4
+HTTP_04	linux	http_4_require_admin_log_level.patch	--lib gateway::router::log_level_admin_tests::a_non_admin_key_cannot_set_the_gateway_log_level
+HTTP_10	linux	http_10_sole_cookie.patch	--lib gateway::router::accounts::bridge::bridge_tests::only_one_nonempty_session_cookie_yields_a_token
+HTTP_16	linux	http_16_journeys_status.patch	--lib gateway::router::tests::openwebui_adapter::hosted_routes::status_with_a_key_but_no_assertion_is_unauthenticated
+ACCT_06	linux	acct_6_require_empty.patch	--lib personal_accounts::tests::s03_explicit_initialization_creates_encrypted_authority_and_reopens
+ACCT_12	linux	acct_12_consumed_replay.patch	--lib personal_accounts::storage::journey::tests_commit::t_c03d_admit_then_consume_is_durable_so_a_replay_after_restart_is_refused
+OAUTH_02	linux	oauth_2_has_valid_token.patch	--lib oauth::client::tests::client_with_expired_token_returns_false
+OAUTH_08	linux	oauth_8_authorize.patch	--lib oauth::client::authorize_tests::authorize_refuses_a_code_from_another_issuer_without_redeeming_it
+STARTUP_02	linux	startup_2_startup_startrefusal.patch	--lib gateway::server::cleartext::tests::reload_restart_advice_counts_the_replica_refusal
+STARTUP_08	linux	startup_8_startup_servetls.patch	--lib gateway::server::support::tests::mtls_listener::serve_tls_refuses_a_client_without_a_trusted_certificate
+STDIO_06	linux	stdio_6_stdio_replymethod.patch	--lib gateway::server::stdio_channel::tests::a_frame_with_a_null_method_is_not_a_reply
+TASKS_04	linux	tasks_4_add_targets.patch	--lib gateway::task_service::store_tests::targets::add_targets_refuses_a_foreign_owner_a_moved_row_a_settled_row_and_a_closed_store
