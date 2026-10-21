@@ -108,9 +108,10 @@ async fn t1_refresh_answers_busy_at_the_bound_and_frees_the_flight() {
     .await;
     let elapsed = start.elapsed();
 
-    let error = outcome
-        .expect("a bounded wait answers inside twice the bound")
-        .expect_err("no token crosses a held lease");
+    // `Refreshed` is not `Debug`, so the error is taken by pattern, not `expect_err`.
+    let Err(error) = outcome.expect("a bounded wait answers inside twice the bound") else {
+        panic!("no token crosses a held lease");
+    };
     assert!(is_busy(&error), "not the lock-busy error: {error}");
     assert!(
         matches!(error, Error::BackendUnavailable(_)),

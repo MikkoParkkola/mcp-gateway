@@ -108,7 +108,10 @@ async fn t11_joiner_shares_the_marked_save_failure() {
     )
     .await
     .expect("an io error answers at once");
-    let save_error = outcome.expect_err("a directory is not a lock file");
+    // `ExclusiveFileLock` is not `Debug`, so the error is taken by pattern.
+    let Err(save_error) = outcome else {
+        panic!("a directory is not a lock file");
+    };
     lead.end(Some(&save_error));
 
     let Begin::Ended(shared) = gate.begin(None, Some(&cohort)) else {
