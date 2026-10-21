@@ -309,3 +309,41 @@ async fn a_request_queued_behind_a_blocked_write_ends_pre_send() {
     assert!(!first.is_pre_dispatch(), "{first:?}");
     let _ = t.close().await;
 }
+
+/// MIK-8614: the stdio backend's "0 after completion" row for
+/// MIK-7642.GH2495.3. An answered request is never cancelled; until now only
+/// the end-to-end client-stdio row, which runs against an HTTP backend,
+/// covered it.
+#[tokio::test]
+async fn an_answered_request_is_never_cancelled() {
+    let (w, t) = started(
+        r#"read -r request
+printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$(id_of "$request")"
+cat > seen"#,
+    )
+    .await;
+    tokio::time::timeout(REQUEST_TIMEOUT, t.request("tools/list", None))
+        .await
+        .expect("the child answers")
+        .expect("an answered request succeeds");
+    t.notify("notifications/marker", None)
+        .await
+        .expect("the marker is written");
+    let log_path = w.path().join("seen");
+    tokio::time::timeout(REQUEST_TIMEOUT, async {
+        while !std::fs::read_to_string(&log_path)
+            .unwrap_or_default()
+            .contains("notifications/marker")
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the child records the marker");
+    // A cancel sent late would land after the marker: give it the time.
+    // timing: absence
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let recorded = std::fs::read_to_string(&log_path).unwrap_or_default();
+    assert!(!recorded.contains("notifications/cancelled"), "{recorded}");
+    let _ = t.close().await;
+}

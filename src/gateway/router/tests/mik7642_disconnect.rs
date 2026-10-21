@@ -235,3 +235,212 @@ async fn a_client_disconnect_after_the_answer_sends_no_cancel() {
         "MIK-8614.CANCELZERO.1: no cancel after completion: {cancels:?}"
     );
 }
+
+/// Serve the gateway with the legacy `svc` backend over real sockets, and open
+/// an `/mcp` session on it. The store keeps the task runtime alive.
+async fn mcp_gateway_with_slow_backend(
+    call_delay: Duration,
+) -> (SocketAddr, Seen, reqwest::Client, String, tempfile::TempDir) {
+    let (backend_url, seen) = slow_backend(call_delay).await;
+    let (state, store) = super::test_router_app_state_with_auth(&auth()).await;
+    let backend = Arc::new(Backend::new(
+        "svc",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let transport = HttpTransport::new(&backend_url, HashMap::new(), Duration::from_secs(30), true)
+        .expect("a transport");
+    // A transport that never handshook reads as not connected, and the
+    // backend would then restart from its empty config instead of using it.
+    transport
+        .initialize()
+        .await
+        .expect("the backend handshakes");
+    backend.set_transport_for_test(transport as Arc<dyn crate::transport::Transport>);
+    assert!(state.backends.register(backend));
+    let router = super::create_router(Arc::clone(&state));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gateway = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+    });
+    let client = reqwest::Client::builder()
+        .pool_max_idle_per_host(0)
+        .build()
+        .expect("a client");
+    let session = mcp_session(&client, gateway).await;
+    (gateway, seen, client, session, store)
+}
+
+/// Open an `/mcp` session over real sockets: `initialize` names the session,
+/// then `notifications/initialized` completes the handshake.
+async fn mcp_session(client: &reqwest::Client, gateway: SocketAddr) -> String {
+    let init = json!({
+        "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
+            "protocolVersion": crate::protocol::PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "c4", "version": "0"},
+        },
+    });
+    let response = client
+        .post(format!("http://{gateway}/mcp"))
+        .header("authorization", "Bearer k")
+        .header("content-type", "application/json")
+        .header("accept", "application/json")
+        .body(init.to_string())
+        .send()
+        .await
+        .expect("initialize answers");
+    let session = response
+        .headers()
+        .get("mcp-session-id")
+        .expect("the gateway names a session")
+        .to_str()
+        .expect("an ASCII session id")
+        .to_owned();
+    let status = response.status();
+    let body = response.text().await.expect("the handshake reads");
+    assert_eq!(status, reqwest::StatusCode::OK, "{body}");
+    assert!(body.contains("protocolVersion"), "handshake: {body}");
+    let initialized = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
+    let status = client
+        .post(format!("http://{gateway}/mcp"))
+        .header("authorization", "Bearer k")
+        .header("content-type", "application/json")
+        .header("accept", "application/json")
+        .header("mcp-session-id", &session)
+        .body(initialized.to_string())
+        .send()
+        .await
+        .expect("initialized sends")
+        .status();
+    assert_eq!(status, reqwest::StatusCode::ACCEPTED);
+    session
+}
+
+/// A `gateway_invoke` of the legacy backend's slow tool, as the client sends it.
+fn invoke(client_id: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0", "id": client_id, "method": "tools/call",
+        "params": {
+            "name": "gateway_invoke",
+            "arguments": {"server": "svc", "tool": "act", "arguments": {}},
+        },
+    })
+}
+
+/// MIK-8614.CANCELZERO.4: the "1" row on the meta-MCP route. A client that
+/// closes its `/mcp` connection mid-call cancels the backend call once, by the
+/// id the backend received.
+#[tokio::test]
+async fn an_mcp_client_disconnect_mid_call_cancels_the_backend_call_by_its_id() {
+    let (gateway, seen, client, session, _store) =
+        mcp_gateway_with_slow_backend(Duration::from_secs(5)).await;
+    let call = invoke("client-7");
+    // Dropping the exchange closes the connection while the backend still
+    // works. The body is read inside the timeout, so headers alone don't end it.
+    let exchange = async {
+        let response = client
+            .post(format!("http://{gateway}/mcp"))
+            .header("authorization", "Bearer k")
+            .header("content-type", "application/json")
+            .header("accept", "application/json")
+            .header("mcp-session-id", &session)
+            .body(call.to_string())
+            .send()
+            .await?;
+        let status = response.status();
+        Ok::<_, reqwest::Error>((status, response.text().await?))
+    };
+    if let Ok(answered) = tokio::time::timeout(Duration::from_millis(1500), exchange).await {
+        let seen = seen.lock().unwrap().clone();
+        panic!("precondition: the call was still running; got {answered:?}, backend saw {seen:?}");
+    }
+    let calls = of_method(&seen, "tools/call");
+    assert_eq!(
+        calls.len(),
+        1,
+        "precondition: the backend got the call: {:?}",
+        seen.lock().unwrap()
+    );
+    // The cancel lands on the dropped connection's teardown; wait for it.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if !of_method(&seen, "notifications/cancelled").is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the cancel arrives");
+    let calls = of_method(&seen, "tools/call");
+    assert_eq!(
+        calls.len(),
+        1,
+        "MIK-8614.CANCELZERO.4: the backend got the call once: {:?}",
+        seen.lock().unwrap()
+    );
+    let cancels = of_method(&seen, "notifications/cancelled");
+    assert_eq!(
+        cancels.len(),
+        1,
+        "MIK-8614.CANCELZERO.4: exactly one cancel: {cancels:?}"
+    );
+    assert_eq!(
+        cancels[0]["params"]["requestId"], calls[0]["id"],
+        "it names the backend's own id"
+    );
+    assert_ne!(cancels[0]["params"]["requestId"], json!("client-7"));
+}
+
+/// MIK-8614.CANCELZERO.4: the "0 after completion" half on the meta-MCP route.
+/// A client that disconnects after reading the answer sends no cancel.
+#[tokio::test]
+async fn an_mcp_client_disconnect_after_the_answer_sends_no_cancel() {
+    let (gateway, seen, client, session, _store) =
+        mcp_gateway_with_slow_backend(Duration::ZERO).await;
+    let call = invoke("client-7");
+    let exchange = async {
+        let response = client
+            .post(format!("http://{gateway}/mcp"))
+            .header("authorization", "Bearer k")
+            .header("content-type", "application/json")
+            .header("accept", "application/json")
+            .header("mcp-session-id", &session)
+            .body(call.to_string())
+            .send()
+            .await?;
+        let status = response.status();
+        Ok::<_, reqwest::Error>((status, response.text().await?))
+    };
+    // The backend answers at once; the bound is only a hang guard.
+    let (status, body) = tokio::time::timeout(Duration::from_secs(30), exchange)
+        .await
+        .expect("the answered call arrives")
+        .expect("the whole response reads");
+    assert_eq!(status, reqwest::StatusCode::OK, "{body}");
+    assert!(body.contains("done"), "the client read the answer: {body}");
+    // With no idle pool, dropping the client closes the connection.
+    drop(client);
+    // A wrongly sent cancel would arrive at once; give it time to show.
+    // timing: absence
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let calls = of_method(&seen, "tools/call");
+    assert_eq!(
+        calls.len(),
+        1,
+        "MIK-8614.CANCELZERO.4: the backend got the call once: {:?}",
+        seen.lock().unwrap()
+    );
+    let cancels = of_method(&seen, "notifications/cancelled");
+    assert!(
+        cancels.is_empty(),
+        "MIK-8614.CANCELZERO.4: no cancel after completion: {cancels:?}"
+    );
+}
