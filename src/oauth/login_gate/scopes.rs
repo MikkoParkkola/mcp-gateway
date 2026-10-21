@@ -45,9 +45,8 @@ pub(crate) struct SetOut {
 tokio::task_local! {
     static PROVENANCE: Arc<Provenance>;
     static FILL: Arc<AtomicBool>;
-    static NON_INTERACTIVE: ();
+    static NON_INTERACTIVE: ContentionClass;
     static SET_OUT: (u64, Arc<Cohort>);
-    static CONTENTION: ContentionClass;
 }
 
 /// Run a shared metadata fill's `work` with its `mark`: a request the fill
@@ -146,8 +145,9 @@ pub(in crate::oauth) enum ContentionClass {
 
 /// Run `work` as a caller that never begins or waits on a login (the health
 /// probe, MIK-7982 C2): where it would, it gets `AuthorizationRequired`.
+/// Its contention class is Long; [`short_contention`] enters the same scope as Short.
 pub(crate) async fn non_interactive<F: std::future::Future>(work: F) -> F::Output {
-    NON_INTERACTIVE.scope((), work).await
+    NON_INTERACTIVE.scope(ContentionClass::Long, work).await
 }
 
 /// Run `work` as a Short contention caller: one whose own deadline is at or
@@ -157,10 +157,9 @@ pub(crate) async fn non_interactive<F: std::future::Future>(work: F) -> F::Outpu
 /// does not inherit it and waits the long budget. A `Carried` re-entry does
 /// not carry the class either, so a detached step of a Short caller waits the
 /// long budget.
+/// One scope, not two nested ones, so a Short future is no deeper than a non-interactive one.
 pub(crate) async fn short_contention<F: std::future::Future>(work: F) -> F::Output {
-    CONTENTION
-        .scope(ContentionClass::Short, non_interactive(work))
-        .await
+    NON_INTERACTIVE.scope(ContentionClass::Short, work).await
 }
 
 /// Whether the current task may begin or wait on a login. Read before any
@@ -173,7 +172,7 @@ pub(crate) fn interactive() -> bool {
 /// else `Long`. Read before any `tokio::spawn`: a spawned task does not
 /// inherit the scope.
 pub(in crate::oauth) fn contention_class() -> ContentionClass {
-    CONTENTION.try_get().unwrap_or(ContentionClass::Long)
+    NON_INTERACTIVE.try_get().unwrap_or(ContentionClass::Long)
 }
 
 /// Whose deadline it is (MIK-7982 C3): the cohort a bounded caller captured
