@@ -27,6 +27,9 @@ use crate::oauth::login_gate::LoginGate;
 /// The contention budget (90 s): phase 2 replaces with `CREDENTIAL_LOCK_WAIT`.
 pub(super) const BOUND: Duration = Duration::from_secs(90);
 
+/// The non-interactive contention budget (2 s): phase 2 replaces with NONINTERACTIVE_LEASE_WAIT.
+pub(super) const SHORT_WAIT: Duration = Duration::from_secs(2);
+
 /// One lock poll (50 ms), mirroring the private `LOCK_POLL`, which phase 2 keeps.
 pub(super) const POLL: Duration = Duration::from_millis(50);
 

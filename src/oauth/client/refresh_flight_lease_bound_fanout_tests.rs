@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use tokio::time::Instant;
 
 use super::lease_bound::{
-    BOUND, BUSY_MARKER, POLL, count_browsers, credential_paths, is_busy, is_deferred,
+    BOUND, BUSY_MARKER, POLL, SHORT_WAIT, count_browsers, credential_paths, is_busy, is_deferred,
 };
 use super::*;
 use crate::Error;
@@ -252,6 +252,39 @@ impl crate::transport::Transport for BusyTransport {
     }
 }
 
+/// A transport whose request runs the real token step before answering
+/// health, as the HTTP transport does before its POST.
+struct TokenStepTransport {
+    client: Arc<crate::oauth::OAuthClient>,
+}
+
+#[async_trait]
+impl crate::transport::Transport for TokenStepTransport {
+    async fn request(
+        &self,
+        _method: &str,
+        _params: Option<serde_json::Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        let _token = self.client.get_token().await?;
+        Ok(crate::protocol::JsonRpcResponse::success(
+            crate::protocol::RequestId::Number(1),
+            serde_json::json!({}),
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<serde_json::Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
 /// T13: a probe whose request meets a busy lock neither rebuilds nor trips the
 /// breaker. (The OAuth-wired variant needs `Backend::oauth_test_seam`, which
 /// is private to `backend`; the mock surfaces what the token step returns.)
@@ -295,6 +328,128 @@ async fn t13_probe_skips_rebuild_and_breaker_on_busy() {
         0,
         "a busy lock sampled as a backend failure"
     );
+}
+
+/// T13b: a probe whose transport runs the real held-lease token step answers
+/// the marked error at the short wait, without a rebuild or a breaker sample.
+#[tokio::test(start_paused = true)]
+async fn t13b_probe_answers_busy_at_the_short_wait() {
+    tokio::time::timeout(Duration::from_secs(5) * 2, async {
+        let server = TokenServer::start(&[]).await;
+        let dir = tempfile::tempdir().expect("a scratch token store");
+        let oauth = client(dir.path(), &server);
+        hold(&oauth, &token("a1", Some("r1"), true));
+        let (_, token_path, _) = credential_paths(&oauth);
+        let _holder = crate::oauth::client::refresh_flight::hold_across_processes(&token_path)
+            .await
+            .expect("the other process holds the lease");
+        let backend = crate::backend::Backend::new(
+            "t13b-probe",
+            crate::config::BackendConfig::default(),
+            &crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        );
+        backend.set_transport_for_test(Arc::new(TokenStepTransport {
+            client: Arc::new(oauth),
+        }) as Arc<dyn crate::transport::Transport>);
+        let before = backend.circuit_breaker_stats().current_failures;
+
+        let start = Instant::now();
+        let outcome = backend.health_probe(Duration::from_secs(5)).await;
+        let elapsed = start.elapsed();
+
+        let error = outcome.expect_err("a busy lock is not health");
+        assert!(is_busy(&error), "not the marked error: {error}");
+        assert!(
+            matches!(error, Error::BackendUnavailable(_)),
+            "not unwrapped: {error:?}"
+        );
+        assert!(
+            (SHORT_WAIT..SHORT_WAIT + POLL + Duration::from_secs(1)).contains(&elapsed),
+            "answered off the short wait: {elapsed:?}"
+        );
+        assert_eq!(
+            backend.rebuilds_attempted.load(Ordering::SeqCst),
+            0,
+            "the probe rebuilt over a busy lock"
+        );
+        assert_eq!(
+            backend.circuit_breaker_stats().current_failures,
+            before,
+            "a busy lock sampled as a backend failure"
+        );
+        assert!(
+            !backend.is_circuit_tripped(),
+            "the probe tripped the breaker on a busy lock"
+        );
+        assert_eq!(server.requests(), 0, "sent while another process held it");
+    })
+    .await
+    .expect("a probe answers inside twice its timeout");
+}
+
+/// T13c: the same probe succeeds when the holder stores afresh and releases
+/// within the short wait; the token step adopts without sending.
+#[tokio::test(start_paused = true)]
+async fn t13c_probe_succeeds_when_the_lease_frees_in_time() {
+    tokio::time::timeout(Duration::from_secs(5) * 2, async {
+        let server = TokenServer::start(&[]).await;
+        let dir = tempfile::tempdir().expect("a scratch token store");
+        let oauth = client(dir.path(), &server);
+        hold(&oauth, &token("a1", Some("r1"), true));
+        let (key, token_path, lock_path) = credential_paths(&oauth);
+        let holder = crate::oauth::client::refresh_flight::hold_across_processes(&token_path)
+            .await
+            .expect("the other process holds the lease");
+        let oauth = Arc::new(oauth);
+        let backend = Arc::new(crate::backend::Backend::new(
+            "t13c-probe",
+            crate::config::BackendConfig::default(),
+            &crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        ));
+        backend.set_transport_for_test(Arc::new(TokenStepTransport {
+            client: Arc::clone(&oauth),
+        }) as Arc<dyn crate::transport::Transport>);
+        let before = backend.circuit_breaker_stats().current_failures;
+        let probing = tokio::spawn({
+            let backend = Arc::clone(&backend);
+            async move { backend.health_probe(Duration::from_secs(5)).await }
+        });
+        // The probe's token step is on the lock, and has sent nothing.
+        while crate::fs_lock::lock_attempts(&lock_path) < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(server.requests(), 0, "sent while another process held it");
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        oauth
+            .storage
+            .save(&key, RESOURCE, &token("a2", Some("r2"), false))
+            .expect("the holder stores afresh");
+        drop(holder);
+
+        probing
+            .await
+            .expect("the probe joins")
+            .expect("the probe succeeds when the lease frees in time");
+        assert_eq!(
+            backend.rebuilds_attempted.load(Ordering::SeqCst),
+            0,
+            "the probe rebuilt over a freed lease"
+        );
+        assert_eq!(
+            backend.circuit_breaker_stats().current_failures,
+            before,
+            "a freed lease sampled as a backend failure"
+        );
+        assert!(
+            !backend.is_circuit_tripped(),
+            "the probe tripped the breaker on a freed lease"
+        );
+        assert_eq!(server.requests(), 0, "an adoption sends nothing");
+    })
+    .await
+    .expect("a freed lease answers inside twice the probe timeout");
 }
 
 /// T13d: a dispatch through `Backend::request` whose token step meets a busy
