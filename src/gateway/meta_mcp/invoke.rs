@@ -129,7 +129,14 @@ impl MetaMcp {
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
         trace_id: &str,
     ) -> Result<TracedOutcome> {
-        let intake = match self.intake(intake::IntakeIn { args, session_id, caller }).await? {
+        let intake = match self
+            .intake(intake::IntakeIn {
+                args,
+                session_id,
+                caller,
+            })
+            .await?
+        {
             std::ops::ControlFlow::Break(outcome) => return Ok(outcome),
             std::ops::ControlFlow::Continue(intake) => intake,
         };
