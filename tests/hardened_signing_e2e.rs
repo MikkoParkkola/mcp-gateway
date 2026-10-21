@@ -215,7 +215,13 @@ async fn oracle_accepts(wire: &str, id: &Value, nonce: &str) -> bool {
     command.arg(verifier);
     let input = json!({"wire": wire, "options": {"key": KEY, "keyId": "signing-test-current",
         "expectedId": id, "expectedNonce": nonce, "now": chrono::Utc::now().timestamp()}});
-    let run = run_oracle(command, input.to_string().as_bytes(), ORACLE_LIMIT).await;
+    let run = run_oracle(
+        command,
+        input.to_string().as_bytes(),
+        ORACLE_LIMIT,
+        LimitFrom::Spawn,
+    )
+    .await;
     match run.status {
         Some(status) if status.success() => true,
         // A refusal is a result, not an error; its reason is printed so a
@@ -253,32 +259,78 @@ impl OracleRun {
     }
 }
 
+/// When an oracle's `limit` starts counting.
+enum LimitFrom {
+    /// At spawn: start-up counts against the limit (the real oracle's hang guard).
+    Spawn,
+    /// Once this marker is in the oracle's stderr: start-up does not count.
+    Marker(&'static str),
+}
+
 /// Run `command` with `input` on stdin and at most `limit` to take it and
-/// exit. Stderr goes to a temporary file, read once the child is gone, so no
-/// reader waits on a pipe a stalled child or a grandchild could hold open, and
-/// what it wrote is kept even when the child is killed at the limit.
+/// exit. Stderr goes to a named temporary file, read only through a fresh
+/// handle, so no reader waits on a pipe a stalled child or a grandchild could
+/// hold open, and what it wrote is kept even when the child is killed at the
+/// limit.
 async fn run_oracle(
     mut command: tokio::process::Command,
     input: &[u8],
     limit: Duration,
+    from: LimitFrom,
 ) -> OracleRun {
-    use std::io::{Read as _, Seek as _};
-    let mut stderr_file = tempfile::tempfile().expect("oracle stderr file");
-    let started = std::time::Instant::now();
+    use std::io::Read as _;
+    let named = tempfile::NamedTempFile::new().expect("oracle stderr file");
+    let spawned = std::time::Instant::now();
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::from(
-            stderr_file.try_clone().expect("oracle stderr handle"),
+            named.as_file().try_clone().expect("oracle stderr handle"),
         ))
         .kill_on_drop(true)
         .spawn()
         .expect("node is required for the independent signing oracle");
-    let mut stdin = child.stdin.take().expect("oracle stdin");
+    let mut stdin = Some(child.stdin.take().expect("oracle stdin"));
+    // Stderr is read only through a fresh handle, whose file offset the
+    // child never shares.
+    let read_stderr = || {
+        let mut file = named.reopen().expect("reopen oracle stderr");
+        let mut stderr = String::new();
+        let _ = file.read_to_string(&mut stderr);
+        stderr
+    };
+    let started = match from {
+        LimitFrom::Spawn => spawned,
+        LimitFrom::Marker(marker) => {
+            if let Some(mut stdin) = stdin.take() {
+                // A child that exits before reading closes the pipe; its status says why.
+                let _ = stdin.write_all(input).await;
+            }
+            loop {
+                let stderr = read_stderr();
+                if stderr.contains(marker) {
+                    break std::time::Instant::now();
+                }
+                if child.try_wait().expect("oracle process").is_some() {
+                    // Gone before running: its status and stderr are reported as usual.
+                    break spawned;
+                }
+                if spawned.elapsed() >= ORACLE_LIMIT {
+                    let _ = child.kill().await;
+                    panic!(
+                        "the oracle never wrote {marker:?} within {ORACLE_LIMIT:?} (hang guard); stderr: {stderr:?}"
+                    );
+                }
+                // timing: precondition
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    };
     let finished = tokio::time::timeout(limit, async {
         // A child that exits before reading closes the pipe; its status says why.
-        let _ = stdin.write_all(input).await;
-        drop(stdin);
+        if let Some(mut stdin) = stdin.take() {
+            let _ = stdin.write_all(input).await;
+        }
         child.wait().await
     })
     .await;
@@ -291,9 +343,7 @@ async fn run_oracle(
         None
     };
     let elapsed = started.elapsed();
-    let mut stderr = String::new();
-    stderr_file.rewind().expect("rewind oracle stderr");
-    let _ = stderr_file.read_to_string(&mut stderr);
+    let stderr = read_stderr();
     OracleRun {
         status,
         stderr,
@@ -731,13 +781,14 @@ fn fake_oracle(script: &str) -> tokio::process::Command {
 /// says why instead of only "bounded oracle".
 #[tokio::test]
 async fn an_oracle_past_its_limit_is_killed_and_reports_stderr() {
-    // Long enough that a slow-starting node writes its marker before the
-    // limit; short enough to keep the suite quick.
+    // The limit starts once the marker is written, so Node's start-up
+    // time does not count; short enough to keep the suite quick.
     let limit = Duration::from_secs(15);
     let run = run_oracle(
         fake_oracle("process.stderr.write('oracle-stalled-marker'); setInterval(() => {}, 1000);"),
         b"{}",
         limit,
+        LimitFrom::Marker("oracle-stalled-marker"),
     )
     .await;
     assert!(
@@ -765,6 +816,37 @@ async fn an_oracle_past_its_limit_is_killed_and_reports_stderr() {
     );
 }
 
+/// MIK-8610: an oracle slow to start is timed from its marker, not from
+/// spawn, so start-up never counts against the limit.
+#[tokio::test]
+async fn an_oracle_slow_to_start_is_timed_from_its_marker() {
+    // 16 s beats the 15 s limit: timed from spawn this oracle would die
+    // before writing; timed from its marker it is killed after it.
+    let limit = Duration::from_secs(15);
+    let run = run_oracle(
+        fake_oracle("setTimeout(() => { process.stderr.write('oracle-late-marker'); setInterval(() => {}, 1000); }, 16000);"),
+        b"{}",
+        limit,
+        LimitFrom::Marker("oracle-late-marker"),
+    )
+    .await;
+    assert!(
+        run.status.is_none(),
+        "a stalled oracle must be killed: {:?}",
+        run.status
+    );
+    assert!(
+        run.elapsed >= limit,
+        "killed before its limit: {:?}",
+        run.elapsed
+    );
+    let message = run.timeout_message();
+    assert!(
+        message.contains("oracle-late-marker"),
+        "stderr is lost: {message}"
+    );
+}
+
 /// MIK-8381: an oracle that refuses exits with its own status, and its stderr
 /// comes back with it.
 #[tokio::test]
@@ -773,6 +855,7 @@ async fn an_oracle_that_exits_reports_its_status_and_stderr() {
         fake_oracle("process.stderr.write('oracle-refused-marker'); process.exitCode = 3;"),
         b"{}",
         ORACLE_LIMIT,
+        LimitFrom::Spawn,
     )
     .await;
     assert_eq!(
