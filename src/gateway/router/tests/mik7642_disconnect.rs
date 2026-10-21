@@ -119,10 +119,11 @@ async fn a_client_disconnect_mid_call_cancels_the_backend_call_by_its_id() {
         "jsonrpc": "2.0", "id": "client-7", "method": "tools/call",
         "params": {"name": "act", "arguments": {}},
     });
-    // Dropping the exchange closes the connection while the backend still
-    // works. The body is read inside the timeout, so headers alone don't end it.
-    let exchange = async {
-        let response = client
+    // Aborting the task drops the in-flight request while the backend still
+    // works; with no idle pool the connection closes.
+    let task_client = client.clone();
+    let task = tokio::spawn(async move {
+        let response = task_client
             .post(format!("http://{gateway}/mcp/svc"))
             .header("authorization", "Bearer k")
             .header("content-type", "application/json")
@@ -132,11 +133,14 @@ async fn a_client_disconnect_mid_call_cancels_the_backend_call_by_its_id() {
             .await?;
         let status = response.status();
         Ok::<_, reqwest::Error>((status, response.text().await?))
-    };
-    if let Ok(answered) = tokio::time::timeout(Duration::from_millis(1500), exchange).await {
-        let seen = seen.lock().unwrap().clone();
-        panic!("precondition: the call was still running; got {answered:?}, backend saw {seen:?}");
-    }
+    });
+    until_seen(&seen, "tools/call", "the backend receives the call").await;
+    assert!(
+        !task.is_finished(),
+        "precondition: the call was still running"
+    );
+    task.abort();
+    let _ = task.await;
     let calls = of_method(&seen, "tools/call");
     assert_eq!(
         calls.len(),
@@ -145,7 +149,9 @@ async fn a_client_disconnect_mid_call_cancels_the_backend_call_by_its_id() {
         seen.lock().unwrap()
     );
 
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    until_seen(&seen, "notifications/cancelled", "the cancel arrives").await;
+    // timing: absence
+    tokio::time::sleep(Duration::from_millis(500)).await;
     let cancels = of_method(&seen, "notifications/cancelled");
     assert_eq!(cancels.len(), 1, "exactly one cancel: {cancels:?}");
     assert_eq!(
