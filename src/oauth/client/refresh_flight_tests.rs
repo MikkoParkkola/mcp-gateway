@@ -721,6 +721,12 @@ async fn a_login_save_waits_for_a_running_refresh() {
 
 #[path = "refresh_flight_sharing_tests.rs"]
 mod sharing;
+#[path = "refresh_flight_lease_bound_tests.rs"]
+mod lease_bound;
+#[path = "refresh_flight_lease_bound_renewal_tests.rs"]
+mod lease_bound_renewal;
+#[path = "refresh_flight_lease_bound_fanout_tests.rs"]
+mod lease_bound_fanout;
 
 #[path = "refresh_flight_outcome_tests.rs"]
 mod outcome;
