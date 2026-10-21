@@ -1,0 +1,4 @@
+{"model":"haiku","session_id":"sess_build1","subtype":"init","tools":["mcp__gw4__gateway_list_servers"],"type":"system"}
+{"message":{"content":[{"text":"I will list the gateway servers.","type":"text"},{"id":"toolu_01","input":{},"name":"mcp__gw4__gateway_list_servers","type":"tool_use"}],"id":"msg_01","model":"haiku","role":"assistant","type":"message"},"session_id":"sess_build1","type":"assistant"}
+{"message":{"content":[{"content":"{\"servers\":[{\"name\":\"gw4\",\"url\":\"http://127.0.0.1:39477/mcp\"}]}","is_error":false,"tool_use_id":"toolu_01","type":"tool_result"}],"role":"user"},"session_id":"sess_build1","type":"user"}
+{"is_error":false,"num_turns":3,"result":"The gateway lists one server: gw4.","session_id":"sess_build1","subtype":"success","type":"result"}
