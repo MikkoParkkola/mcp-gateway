@@ -43,3 +43,18 @@ pub(super) fn first_warn(
     warned.insert(key, now);
     true
 }
+
+/// Count one un-keyed admission in `mcp_unkeyed_calls_total` (ADR-012).
+///
+/// Each arm spells its labels as literals, so the metrics macro builds a
+/// static key: no label `Vec` or `Key` is allocated per call (MIK-8014
+/// PERF.13a). The name, label keys and values are the series' contract; the
+/// rendered series are pinned by `admission::unkeyed_metric_tests`.
+pub(super) fn count_unkeyed(is_modern: bool, read_only: bool) {
+    match (is_modern, read_only) {
+        (true, true) => telemetry_metrics::counter!("mcp_unkeyed_calls_total", "era" => "modern", "gateway_read_only" => "true").increment(1),
+        (true, false) => telemetry_metrics::counter!("mcp_unkeyed_calls_total", "era" => "modern", "gateway_read_only" => "false").increment(1),
+        (false, true) => telemetry_metrics::counter!("mcp_unkeyed_calls_total", "era" => "legacy", "gateway_read_only" => "true").increment(1),
+        (false, false) => telemetry_metrics::counter!("mcp_unkeyed_calls_total", "era" => "legacy", "gateway_read_only" => "false").increment(1),
+    }
+}
