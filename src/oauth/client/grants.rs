@@ -319,6 +319,14 @@ impl OAuthClient {
             .with_extension("refresh.lock")
     }
 
+    /// Test-only: [`save_issued`](Self::save_issued) without the
+    /// `client_credentials` exchange before it, so a row on a paused clock
+    /// reaches the lease wait without a real socket (MIK-8619 T2).
+    #[cfg(test)]
+    pub(crate) async fn save_issued_for_test(&self, token: &TokenInfo) -> Result<()> {
+        self.save_issued(token).await
+    }
+
     /// Test-only: the cached token lapses now, in memory and in storage, as
     /// if its lifetime had passed (MIK-8269): a row that needs a lapsed token
     /// asks for one instead of sleeping out a short-lived token.

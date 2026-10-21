@@ -137,19 +137,19 @@ async fn t1_refresh_answers_busy_at_the_bound_and_frees_the_flight() {
 /// caller.)
 #[tokio::test(start_paused = true)]
 async fn t2_save_under_a_held_lease_fails_busy_and_stores_nothing() {
+    // The save is driven directly: on a paused clock a real token exchange
+    // first would time out on its socket before the lease wait is reached.
     let server = TokenServer::start(&[]).await;
     let dir = tempfile::tempdir().expect("a scratch token store");
-    let mut client = client(dir.path(), &server);
-    if let Some(meta) = client.auth_metadata.as_mut() {
-        meta.grant_types_supported = vec!["client_credentials".to_string()];
-    }
+    let client = client(dir.path(), &server);
     let (_, token_path, _) = credential_paths(&client);
     let _holder = hold_across_processes(&token_path)
         .await
         .expect("the other process holds the lease");
 
     let start = Instant::now();
-    let outcome = tokio::time::timeout(BOUND * 2, client.try_client_credentials()).await;
+    let issued = token("issued", None, false);
+    let outcome = tokio::time::timeout(BOUND * 2, client.save_issued_for_test(&issued)).await;
     let elapsed = start.elapsed();
 
     let error = outcome

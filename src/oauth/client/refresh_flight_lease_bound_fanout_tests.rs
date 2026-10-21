@@ -148,9 +148,14 @@ async fn t12_lock_io_error_passes_through_at_once() {
     let start = Instant::now();
     let outcome = tokio::time::timeout(BOUND * 2, gated.get_token()).await;
     let elapsed = start.elapsed();
-    let error = outcome
-        .expect("an io error answers at once")
-        .expect_err("no token crosses a broken lock");
+    // On a timeout, the browser count says where the wait went: a login.
+    let Ok(result) = outcome else {
+        panic!(
+            "an io error did not answer at once; browsers opened: {}",
+            browsers.load(Ordering::SeqCst)
+        );
+    };
+    let error = result.expect_err("no token crosses a broken lock");
     assert!(is_busy(&error), "not the lock-busy error: {error}");
     assert!(
         matches!(error, Error::BackendUnavailable(_)),
