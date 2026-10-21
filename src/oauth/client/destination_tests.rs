@@ -572,7 +572,7 @@ async fn a_refused_token_refresh_redirect_is_typed_ssrf_blocked() {
 
 /// A client whose discovery is reachable but whose token endpoint redirects
 /// to a refused address, holding an expired token with a refresh token.
-async fn client_with_refused_refresh(dir: &std::path::Path) -> OAuthClient {
+pub(super) async fn client_with_refused_refresh(dir: &std::path::Path) -> OAuthClient {
     let refused = redirecting_listener("http://169.254.169.254/latest".to_string()).await;
     let port = serve(&Advertised {
         authorization_server: REACHABLE,
@@ -611,7 +611,7 @@ async fn client_with_refused_refresh(dir: &std::path::Path) -> OAuthClient {
 }
 
 /// Count the browser openings `client` attempts.
-fn count_browsers(client: &mut OAuthClient) -> Arc<AtomicUsize> {
+pub(super) fn count_browsers(client: &mut OAuthClient) -> Arc<AtomicUsize> {
     let opened = Arc::new(AtomicUsize::new(0));
     let count = Arc::clone(&opened);
     client.open_browser = Box::new(move |_| {

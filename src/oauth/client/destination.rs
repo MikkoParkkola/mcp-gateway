@@ -274,3 +274,7 @@ mod tests;
 #[cfg(test)]
 #[path = "cleartext_tests.rs"]
 mod cleartext_tests;
+
+#[cfg(test)]
+#[path = "detached_refusal_tests.rs"]
+mod detached_refusal_tests;
