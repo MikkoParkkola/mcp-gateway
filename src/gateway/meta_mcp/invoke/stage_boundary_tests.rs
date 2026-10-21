@@ -314,11 +314,20 @@ fn the_send_path_boxes_one_dispatch_and_drops_the_admission_right_after_it() {
             .filter(|(_, n)| *n > 0)
             .collect()
     };
-    let box_sites = sites("Box::pin(");
+    // The whole invoke path is read (design r12.2 D3), so the boxes on its
+    // other paths are named too: a box added anywhere, a new stage file
+    // included, changes this inventory. Only send.rs's is the dispatch.
+    let mut box_sites = sites("Box::pin(");
+    box_sites.sort_unstable();
     assert_eq!(
-        box_sites.iter().map(|(_, n)| n).sum::<usize>(),
-        1,
-        "boxes: {box_sites:?}"
+        box_sites,
+        [
+            ("caller_verdict.rs", 1),
+            ("legacy_bridge.rs", 1),
+            ("policy.rs", 1),
+            ("send.rs", 1),
+        ],
+        "boxes on the invoke path"
     );
     let drop_sites = sites("drop(admission);");
     assert_eq!(
@@ -328,8 +337,8 @@ fn the_send_path_boxes_one_dispatch_and_drops_the_admission_right_after_it() {
     );
     let (_, source) = send_path
         .iter()
-        .find(|(_, source)| source.contains("Box::pin("))
-        .expect("counted above");
+        .find(|(file, _)| file == "send.rs")
+        .expect("send.rs is on the invoke path");
     let boxed = source.find("Box::pin(").expect("counted above");
     let awaited = boxed
         + source[boxed..]
