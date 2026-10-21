@@ -297,3 +297,22 @@ async fn an_unauthenticated_api_key_credential_does_not_match_an_api_key_grant()
         "unauthenticated api-key credential",
     );
 }
+
+/// Display-name preservation: a `StaticBearer` caller named `bearer` keeps
+/// `api_key_name` as its display name for guards and audit; the MIK-8518 fix
+/// adds `grant_key` instead of changing `api_key_name`. Green on the base,
+/// and it must stay green.
+#[test]
+fn the_static_bearer_keeps_its_display_name_in_the_scope() {
+    let ctx = caller(
+        CredentialKind::StaticBearer,
+        Authentication::Authenticated,
+        Some("bearer"),
+        None,
+    );
+    assert_eq!(
+        ctx.scope().api_key_name,
+        Some("bearer"),
+        "the scope keeps the display name"
+    );
+}

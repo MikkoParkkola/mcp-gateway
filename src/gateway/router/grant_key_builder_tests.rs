@@ -117,9 +117,19 @@ async fn handlers_tools_call_refuses_the_static_bearer_for_an_api_key_grant() {
     .await;
     let (_, body) =
         post_meta_invoke(&fx, BEARER_SECRET, "caps", "probe", json!({}), None, None).await;
+    assert_eq!(
+        body["error"]["code"],
+        json!(-32001),
+        "the static caller is refused at the grant as not found: {body}"
+    );
+    assert_eq!(
+        body["error"]["message"],
+        json!("Tool not found: 'probe'"),
+        "the static caller is refused at the grant as not found: {body}"
+    );
     assert!(
-        body.to_string().contains("Identity grant denied"),
-        "the static caller is refused at the grant: {body}"
+        !body.to_string().contains("caller identity is required"),
+        "the call stopped at the grant, before execution: {body}"
     );
     assert!(body.get("error").is_some(), "the bearer is refused: {body}");
     assert!(
@@ -347,6 +357,17 @@ async fn direct_permit_refuses_the_static_bearer_for_an_api_key_grant() {
     })
     .await;
     let (_, body) = post_direct(&fx, "alpha", BEARER_SECRET, "read", json!({}), None, None).await;
+    assert_eq!(
+        body["error"]["code"],
+        json!(-32004),
+        "the static caller is refused at the grant: {body}"
+    );
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("Identity grant denied")),
+        "the static caller is refused at the grant: {body}"
+    );
     assert!(
         !body.to_string().contains(DIRECT_MARKER),
         "the bearer is refused: {body}"

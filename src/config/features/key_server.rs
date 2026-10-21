@@ -542,6 +542,14 @@ mod tests {
                 refusal.to_string().contains(reserved),
                 "issuer '{reserved}': the message names it: {refusal}"
             );
+            assert!(
+                refusal.to_string().contains("reserved"),
+                "issuer '{reserved}': the message names the reservation: {refusal}"
+            );
+            assert!(
+                refusal.to_string().contains("https"),
+                "issuer '{reserved}': the message points to the real https issuer URL: {refusal}"
+            );
         }
     }
 }
