@@ -276,6 +276,9 @@ pub(in crate::gateway::router::handlers) async fn intake(
             authorizer: &authorizer,
             is_admin: client.as_ref().is_some_and(|c| c.admin),
             api_key_name: client.as_ref().map(|c| c.name.as_str()),
+            grant_key: client
+                .as_ref()
+                .and_then(AuthenticatedClient::api_key_identity),
             agent_id: agent_identity.proven_agent_id(),
             grant_subject: grant_subject.as_ref(),
             caller: crate::identity_propagation::CallerProof::new(

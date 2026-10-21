@@ -183,6 +183,7 @@ pub(super) fn intent(tasks: &StdioTasks, tool: &str, retry: &RetryFields) -> Tas
                 authorizer: &crate::gateway::authz::AllowAll,
                 is_admin: false,
                 api_key_name: None,
+                grant_key: None,
                 agent_id: None,
                 grant_subject: None,
                 caller: crate::identity_propagation::CallerProof::Anonymous,

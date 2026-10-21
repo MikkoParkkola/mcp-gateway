@@ -174,6 +174,15 @@ impl KeyServerConfig {
             return Ok(());
         }
         for (idx, provider) in self.oidc.iter().enumerate() {
+            // MIK-8518: a provider under a reserved authority would mint
+            // verified subjects that collide with the gateway's own grants.
+            let issuer = provider.issuer.trim();
+            if crate::identity_grants::RESERVED_AUTHORITIES.contains(&issuer) {
+                return Err(Error::ConfigValidation(format!(
+                    "key_server.oidc[{idx}].issuer '{issuer}' is a reserved grant authority (mtls, \
+                     agent_oauth, api_key); use the provider's real https issuer URL"
+                )));
+            }
             let has_audience = provider.audiences.iter().any(|a| !a.trim().is_empty());
             if !has_audience {
                 return Err(Error::ConfigValidation(format!(

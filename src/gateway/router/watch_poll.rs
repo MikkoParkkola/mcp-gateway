@@ -198,6 +198,7 @@ impl WatchHost for GatewayWatchHost {
             authorizer: &authorizer,
             is_admin: client.admin,
             api_key_name: Some(&client.name),
+            grant_key: client.api_key_identity(),
             agent_id: None,
             grant_subject: None,
             caller: crate::identity_propagation::CallerProof::new(

@@ -249,6 +249,7 @@ fn open_scope() -> crate::gateway::meta_mcp::InvokeScope<'static> {
         authorizer: &crate::gateway::authz::AllowAll,
         is_admin: true,
         api_key_name: None,
+        grant_key: None,
         agent_id: None,
         grant_subject: None,
         caller: crate::identity_propagation::CallerProof::Anonymous,

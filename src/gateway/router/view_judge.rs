@@ -173,6 +173,7 @@ fn digest_for(
         authorizer: &authorizer,
         is_admin: client.admin,
         api_key_name: Some(&client.name),
+        grant_key: client.api_key_identity(),
         agent_id: agent.proven_agent_id(),
         grant_subject: subject.grant_subject.as_ref(),
         caller: crate::identity_propagation::CallerProof::new(

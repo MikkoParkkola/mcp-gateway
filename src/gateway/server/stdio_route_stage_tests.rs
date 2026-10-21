@@ -69,6 +69,7 @@ async fn a_withheld_targets_route_code_is_noted_for_its_record() {
         authorizer: &RefusesArguments,
         is_admin: false,
         api_key_name: None,
+        grant_key: None,
         agent_id: None,
         grant_subject: None,
         caller: crate::identity_propagation::CallerProof::Anonymous,

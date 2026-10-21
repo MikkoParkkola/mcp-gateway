@@ -45,6 +45,7 @@ pub(super) fn mint_permit(
         authorizer: &authorizer,
         is_admin: client.is_some_and(|c| c.admin),
         api_key_name: client.map(|c| c.name.as_str()),
+        grant_key: client.and_then(crate::gateway::auth::AuthenticatedClient::api_key_identity),
         agent_id: caller
             .agent_identity
             .as_ref()

@@ -316,3 +316,56 @@ fn the_static_bearer_keeps_its_display_name_in_the_scope() {
         "the scope keeps the display name"
     );
 }
+
+/// T3: `api_key_identity` is `Some(name)` only for an authenticated API key:
+/// every other kind, and an unauthenticated API-key credential, get `None`.
+#[test]
+fn api_key_identity_is_some_only_for_an_authenticated_api_key() {
+    fn client(
+        kind: CredentialKind,
+        authenticated: bool,
+    ) -> crate::gateway::auth::AuthenticatedClient {
+        crate::gateway::auth::AuthenticatedClient {
+            name: "alice".to_owned(),
+            rate_limit: 0,
+            backends: vec!["*".to_owned()],
+            allowed_tools: None,
+            denied_tools: None,
+            admin: false,
+            principal: crate::gateway::auth::principal_of("secret"),
+            quota_principal: None,
+            authenticated,
+            credential_kind: kind,
+        }
+    }
+    for kind in [
+        CredentialKind::None,
+        CredentialKind::LocalTransport,
+        CredentialKind::StaticBearer,
+        CredentialKind::ApiKey,
+        CredentialKind::DashboardSession,
+        CredentialKind::KeyServerToken,
+        CredentialKind::OidcBearer,
+    ] {
+        let caller = client(kind, true);
+        let identity = caller.api_key_identity();
+        if kind == CredentialKind::ApiKey {
+            assert_eq!(
+                identity,
+                Some("alice"),
+                "{kind:?}: an authenticated API key names itself"
+            );
+        } else {
+            assert_eq!(
+                identity, None,
+                "{kind:?}: no other credential is an API-key identity"
+            );
+        }
+    }
+    let caller = client(CredentialKind::ApiKey, false);
+    assert_eq!(
+        caller.api_key_identity(),
+        None,
+        "an unauthenticated API-key credential is no identity"
+    );
+}
