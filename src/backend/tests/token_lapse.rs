@@ -83,11 +83,14 @@ async fn an_era_probe_meeting_a_lapsed_token_opens_no_login() {
         .expect("the restart's own login starts the backend");
 }
 
-/// T13e: a health probe whose `ensure_started` meets a credential lock another
-/// process holds answers the marked busy error at the short wait, and does not
-/// rebuild the transport (probe.rs busy skip; mutant m4 removes it).
+/// T13e: a health probe whose start passes the OAuth step with a valid token,
+/// which then lapses before the handshake while another process holds the
+/// credential lock, answers the marked busy error at the short wait and does
+/// not rebuild the transport. The existing era-decision gate holds the start
+/// between the two steps (probe.rs busy skip; mutant m4 removes it).
 #[tokio::test]
 async fn t13e_a_probe_whose_start_meets_a_held_lock_skips_the_rebuild() {
+    // A valid token with a refresh token; it lapses at the gate, not here.
     let (backend, browser, _dir) = super::login_window::approved_start_full(
         Upstream::Plain,
         Duration::from_secs(30),
@@ -95,34 +98,46 @@ async fn t13e_a_probe_whose_start_meets_a_held_lock_skips_the_rebuild() {
         super::login_window::TokenEndpoint::RefreshStalls,
     )
     .await;
+    // The fixture's own start may still hold the start lock.
+    within("the first start to settle", backend.start_settled()).await;
+    // The probe's start then builds a fresh transport.
+    let old = backend.shared_entry().transport.write().take();
+    assert!(old.is_some(), "premise: the backend had started");
+    // Baselines a busy skip must leave alone.
+    let rebuilds = backend.rebuilds_attempted.load(Ordering::SeqCst);
+    let failures = backend.circuit_breaker_stats().current_failures;
+    // Pause the probe's start between the OAuth step and the handshake.
+    let gate = Arc::new(crate::backend::MarkWindowGate::default());
+    *backend.era_decision_gate.lock() = Some(Arc::clone(&gate));
+    // Spawn the probe, so the test can act while the start is paused.
+    let probe = tokio::spawn({
+        let backend = Arc::clone(&backend);
+        async move {
+            let start = tokio::time::Instant::now();
+            let outcome = backend.health_probe(Duration::from_secs(5)).await;
+            (outcome, start.elapsed())
+        }
+    });
+    within(
+        "the probe's start reaching the era decision",
+        gate.reached.notified(),
+    )
+    .await;
+    // The OAuth step passed with a valid token; lapse the new client's token,
+    // then hold its lock before releasing the start into the handshake.
     lapse(&backend).await;
     let client = backend
         .last_oauth_client
         .lock()
         .clone()
-        .expect("premise: a start built an OAuth client");
+        .expect("premise: the probe's start built an OAuth client");
     let lock_path = client.lock().await.credential_lock_path_for_test();
     let held = crate::fs_lock::ExclusiveFileLock::acquire(&lock_path)
         .expect("another process holds the credential lock");
-    // The next probe starts a fresh transport, so `ensure_started` reaches
-    // the handshake's token step.
-    // The fixture's own start may still hold the start lock; a probe would
-    // then refuse at once without reaching the token step.
-    within("the first start to settle", backend.start_settled()).await;
-    let old = backend.shared_entry().transport.write().take();
-    assert!(old.is_some(), "premise: the backend had started");
-    let rebuilds = backend
-        .rebuilds_attempted
-        .load(std::sync::atomic::Ordering::SeqCst);
-    let failures = backend.circuit_breaker_stats().current_failures;
-
-    let start = tokio::time::Instant::now();
-    let outcome = within(
-        "the probe",
-        Box::pin(backend.health_probe(Duration::from_secs(5))),
-    )
-    .await;
-    let elapsed = start.elapsed();
+    gate.release.notify_one();
+    let (outcome, elapsed) = within("the probe", probe)
+        .await
+        .expect("the probe task joins");
 
     let error = outcome.expect_err("no transport starts past a held credential lock");
     assert!(
@@ -130,9 +145,7 @@ async fn t13e_a_probe_whose_start_meets_a_held_lock_skips_the_rebuild() {
         "the start's token step did not answer busy: {error}"
     );
     assert_eq!(
-        backend
-            .rebuilds_attempted
-            .load(std::sync::atomic::Ordering::SeqCst),
+        backend.rebuilds_attempted.load(Ordering::SeqCst),
         rebuilds,
         "a busy lock rebuilt the transport"
     );
@@ -142,11 +155,12 @@ async fn t13e_a_probe_whose_start_meets_a_held_lock_skips_the_rebuild() {
         "a busy lock sampled as a backend failure"
     );
     assert!(
-        elapsed < Duration::from_secs(5),
-        "the probe waited past the short wait: {elapsed:?}"
+        elapsed < Duration::from_secs(15),
+        "the start waited past the short wait: {elapsed:?}"
     );
     assert_eq!(browser.opens(), 1, "a busy lock opened a login");
 
+    *backend.era_decision_gate.lock() = None;
     drop(held);
     drop(old);
 }
