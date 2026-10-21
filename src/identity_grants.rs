@@ -79,6 +79,11 @@ pub(crate) fn names_someone(authority: &str, subject: &str) -> bool {
     !authority.is_empty() && !subject.is_empty()
 }
 
+/// Grant authorities the gateway mints itself, so no external identity
+/// source may claim them (MIK-8518): read by the trusted-proxy guard and by
+/// `KeyServerConfig::validate`, so the two cannot drift.
+pub(crate) const RESERVED_AUTHORITIES: &[&str] = &["mtls", "agent_oauth", "api_key"];
+
 /// Agent binding for a grant.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

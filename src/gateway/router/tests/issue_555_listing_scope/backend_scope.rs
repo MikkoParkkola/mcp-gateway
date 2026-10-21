@@ -66,6 +66,7 @@ async fn agent_auth_without_identity_admits_no_backend() {
         authorizer: &authorizer,
         is_admin: false,
         api_key_name: None,
+        grant_key: None,
         agent_id: None,
         grant_subject: None,
         caller: crate::identity_propagation::CallerProof::Anonymous,

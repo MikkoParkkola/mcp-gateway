@@ -386,6 +386,7 @@ async fn a_filtered_tools_list_never_fills_a_backend_the_caller_may_not_see() {
         authorizer: &NoBackends,
         is_admin: false,
         api_key_name: None,
+        grant_key: None,
         agent_id: None,
         grant_subject: None,
         caller: crate::identity_propagation::CallerProof::Anonymous,

@@ -112,7 +112,7 @@ impl CallerIdentityConfig {
                         "authority must not carry leading or trailing whitespace".into(),
                     ));
                 }
-                if ["mtls", "agent_oauth", "api_key"].contains(&authority)
+                if crate::identity_grants::RESERVED_AUTHORITIES.contains(&authority)
                     || key_server.oidc.iter().any(|p| p.issuer.trim() == authority)
                     || access_issuer.as_deref() == Some(authority)
                 {

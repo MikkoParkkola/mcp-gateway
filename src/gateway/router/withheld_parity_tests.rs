@@ -410,6 +410,7 @@ fn row11_scope(reason: Reason) -> crate::gateway::meta_mcp::InvokeScope<'static>
         },
         is_admin: false,
         api_key_name: None,
+        grant_key: None,
         agent_id: None,
         grant_subject: None,
         caller: crate::identity_propagation::CallerProof::Anonymous,

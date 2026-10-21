@@ -38,7 +38,8 @@ pub struct MetaMcpCallerContext<'a> {
     /// Borrowed, never stored: `AppState` owns `meta_mcp`, so holding an
     /// `Arc<AppState>` inside `MetaMcp` would be a cycle that never frees.
     pub authorizer: &'a (dyn crate::gateway::authz::ToolAuthorizer + Sync),
-    /// Static or temporary API-key name, used for accounting and fallback grants.
+    /// The caller's display name, for accounting, audit and guards; the grant fallback reads
+    /// only an authenticated API key's name (MIK-8518).
     pub api_key_name: Option<&'a str>,
     /// The calling agent's PROVEN principal, for access decisions.
     ///
@@ -137,6 +138,10 @@ impl<'a> MetaMcpCallerContext<'a> {
             authorizer: self.authorizer,
             is_admin: self.is_admin,
             api_key_name: self.api_key_name,
+            grant_key: self.api_key_name.filter(|_| {
+                self.authentication == Authentication::Authenticated
+                    && self.credential_kind == crate::security::audit::CredentialKind::ApiKey
+            }),
             agent_id: self.agent_id,
             grant_subject: self.grant_subject.as_ref(),
             caller: crate::identity_propagation::CallerProof::new(

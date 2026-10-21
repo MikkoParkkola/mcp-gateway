@@ -174,6 +174,15 @@ impl KeyServerConfig {
             return Ok(());
         }
         for (idx, provider) in self.oidc.iter().enumerate() {
+            // MIK-8518: a provider under a reserved authority would mint
+            // verified subjects that collide with the gateway's own grants.
+            let issuer = provider.issuer.trim();
+            if crate::identity_grants::RESERVED_AUTHORITIES.contains(&issuer) {
+                return Err(Error::ConfigValidation(format!(
+                    "key_server.oidc[{idx}].issuer '{issuer}' is a reserved grant authority (mtls, \
+                     agent_oauth, api_key); use the provider's real https issuer URL"
+                )));
+            }
             let has_audience = provider.audiences.iter().any(|a| !a.trim().is_empty());
             if !has_audience {
                 return Err(Error::ConfigValidation(format!(
@@ -520,6 +529,37 @@ mod tests {
         p.auto_discover = false;
         p.jwks_uri = Some("http://127.0.0.1:39400/.well-known/jwks.json".into());
         assert!(enabled_with(vec![p]).validate().is_ok());
+    }
+
+    /// MIK-8518 T9: an `oidc` provider whose issuer is a reserved grant
+    /// authority is refused at load: its tokens would otherwise arrive as
+    /// verified `api_key:` subjects and bypass the API-key-only fallback.
+    /// RED on the base (the config loads).
+    #[test]
+    fn validate_refuses_a_reserved_grant_authority_as_oidc_issuer() {
+        for reserved in ["api_key", "mtls", "agent_oauth"] {
+            let mut p = provider(reserved, vec!["client-id"]);
+            p.jwks_uri = Some("https://idp.example/.well-known/jwks.json".into());
+            let Err(refusal) = enabled_with(vec![p]).validate() else {
+                panic!("issuer '{reserved}': loaded, want a reserved-authority refusal");
+            };
+            assert!(
+                matches!(refusal, crate::Error::ConfigValidation(_)),
+                "issuer '{reserved}': refused at validation: {refusal}"
+            );
+            assert!(
+                refusal.to_string().contains(reserved),
+                "issuer '{reserved}': the message names it: {refusal}"
+            );
+            assert!(
+                refusal.to_string().contains("reserved"),
+                "issuer '{reserved}': the message names the reservation: {refusal}"
+            );
+            assert!(
+                refusal.to_string().contains("https"),
+                "issuer '{reserved}': the message points to the real https issuer URL: {refusal}"
+            );
+        }
     }
 }
 

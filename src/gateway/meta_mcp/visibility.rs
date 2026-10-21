@@ -38,8 +38,11 @@ pub struct InvokeScope<'a> {
     pub authorizer: &'a (dyn ToolAuthorizer + Sync),
     /// Whether the caller holds admin.
     pub is_admin: bool,
-    /// Static or temporary API-key name, the fallback grant subject.
+    /// The caller's display name, for guards and audit; never a grant subject (MIK-8518).
     pub api_key_name: Option<&'a str>,
+    /// The API key's name, only for an authenticated API-key credential: the identity-grant
+    /// fallback subject. `None` for every other credential kind (MIK-8518).
+    pub(crate) grant_key: Option<&'a str>,
     /// The caller's proven agent principal.
     pub agent_id: Option<crate::security::ProvenAgentId<'a>>,
     /// Verified caller subject for identity-grant evaluation.
@@ -435,7 +438,7 @@ impl MetaMcp {
             identity: scope
                 .grant_subject
                 .cloned()
-                .or_else(|| Self::grant_subject_from_api_key(scope.api_key_name)),
+                .or_else(|| Self::grant_subject_from_api_key(scope.grant_key)),
             agent_id: scope
                 .agent_id
                 .map(crate::security::OwnedProvenAgentId::from),
@@ -534,6 +537,7 @@ impl InvokeScope<'static> {
             authorizer: &Operator,
             is_admin: standing == crate::gateway::router::CallerStanding::Admin,
             api_key_name: None,
+            grant_key: None,
             agent_id: None,
             grant_subject: None,
             caller: crate::identity_propagation::CallerProof::Anonymous,
@@ -574,6 +578,7 @@ impl InvokeScope<'static> {
             authorizer: &crate::gateway::authz::AllowAll,
             is_admin: standing == crate::gateway::router::CallerStanding::Admin,
             api_key_name: None,
+            grant_key: None,
             agent_id: None,
             grant_subject: None,
             caller: crate::identity_propagation::CallerProof::Anonymous,
@@ -594,6 +599,7 @@ impl<'a> InvokeScope<'a> {
             authorizer,
             is_admin: true,
             api_key_name: None,
+            grant_key: None,
             agent_id: None,
             grant_subject: None,
             // The process's one operator spawned it, so its own catalogue slot on

@@ -233,6 +233,14 @@ impl AuthenticatedClient {
         self.backends.iter().any(|b| b == "*" || b == backend)
     }
 
+    /// The API key's name when this client authenticated with an API key,
+    /// else `None`: the identity-grant fallback subject (MIK-8518).
+    #[must_use]
+    pub(crate) fn api_key_identity(&self) -> Option<&str> {
+        (self.authenticated && self.credential_kind == CredentialKind::ApiKey)
+            .then_some(self.name.as_str())
+    }
+
     /// The refusal text when this client may not reach `backend`.
     ///
     /// An empty grant names that cause and not the backend, so the answer is
