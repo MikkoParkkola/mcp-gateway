@@ -1,0 +1,13 @@
+head_sha	c01cfbfd31d206c7bef690d7913088b7ac06dda4
+HTTP_01	linux	http_1_admits_host.patch	--lib gateway::router::tests::openwebui_adapter::hosted_routes::guard_a_foreign_host_under_the_accounts_prefix_is_refused
+HTTP_07	linux	http_7_evaluate_redirect_for.patch	--lib transport::http::tests::evaluate_redirect_cross_origin_public_host_rejected
+HTTP_13	linux	http_13_request_check_refusal.patch	--test mik_7214_acs http::ac_header_3_a_disagreeing_method_header_is_refused_over_http
+ACCT_03	linux	acct_3_scope_missing.patch	--lib gateway::router::tests::openwebui_adapter::start_route::callback::abort::t_c05c_invalid_grants_are_refused_and_revoked
+ACCT_09	linux	acct_9_required_audit.patch	--lib identity_propagation::account_strategies::lifetime_tests::a_minted_credential_is_validated_and_audited_before_it_is_used
+ACCT_15	linux	acct_15_external_strategy.patch	--lib personal_accounts::config::config_tests::adapter_tests::descriptor_identity_and_strategy_placement_are_refused
+OAUTH_05	linux	oauth_5_handle_callback.patch	--lib oauth::callback::tests::callback_flow_state_mismatch
+BRIDGE_03	linux	bridge_3_prompt_slice.patch	--test mik_7212_mrtr7_bridge_acs ac_mrtr_7a_an_undeclared_variant_is_not_asked_under_an_empty_slice
+STARTUP_05	linux	startup_5_startup_auditstartup.patch	--lib gateway::server::identity_grants::tests::t3cd_failed_snapshot_append_serves_nothing
+STDIO_03	linux	stdio_3_stdio_tokencollide.patch	--lib transport::stdio::tests::stdio_refuses_to_reroute_a_progress_token_that_is_already_live
+TASKS_01	linux	tasks_1_tasks_ownerfilter.patch	--lib gateway::task_service::store_tests::adapter_marker::boundary::upstream_02_the_descriptor_probe_answers_a_foreign_owner_not_found
+TASKS_07	linux	tasks_7_get.patch	--lib gateway::task_service::service_tests::get_without_an_owner_identity_reads_nothing
