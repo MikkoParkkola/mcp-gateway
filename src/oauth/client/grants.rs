@@ -327,6 +327,20 @@ impl OAuthClient {
         self.save_issued(token).await
     }
 
+    /// Test-only: [`save_issued_until`](Self::save_issued_until) without the
+    /// login's browser, callback and exchange before it, so a row on a paused
+    /// clock reaches the lease wait without real sockets (MIK-8619 T8). A
+    /// fresh cancel never fires; `None` keeps the authorization window.
+    #[cfg(test)]
+    pub(crate) async fn save_issued_until_for_test(&self, token: &TokenInfo) -> Result<()> {
+        self.save_issued_until(
+            token,
+            &tokio_util::sync::CancellationToken::new(),
+            None,
+        )
+        .await
+    }
+
     /// Test-only: the cached token lapses now, in memory and in storage, as
     /// if its lifetime had passed (MIK-8269): a row that needs a lapsed token
     /// asks for one instead of sleeping out a short-lived token.

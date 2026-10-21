@@ -112,6 +112,10 @@ async fn t11_joiner_shares_the_marked_save_failure() {
     let Err(save_error) = outcome else {
         panic!("a directory is not a lock file");
     };
+    assert!(
+        matches!(save_error, Error::BackendUnavailable(_)),
+        "the lead's lock failure rides BackendUnavailable: {save_error:?}"
+    );
     lead.end(Some(&save_error));
 
     let Begin::Ended(shared) = gate.begin(None, Some(&cohort)) else {
@@ -130,6 +134,34 @@ async fn t11_joiner_shares_the_marked_save_failure() {
         !joined.is_pre_dispatch(),
         "r4.1: joiners lose the pre-dispatch class on this rare path"
     );
+}
+
+/// A marked `BackendUnavailable` through the same lead-end path still reads
+/// busy to the joiner (green now: the text round-trips, and `is_busy` matches
+/// the marker inside the joiner's `OAuth` text).
+#[tokio::test(start_paused = true)]
+async fn t11b_marked_error_round_trips_busy_to_the_joiner() {
+    tokio::time::timeout(BOUND * 2, async {
+        let gate = Arc::new(LoginGate::default());
+        let cohort = gate.cohort();
+        let Begin::Lead(lead) = gate.begin(None, None) else {
+            panic!("no login in flight, so the test leads");
+        };
+        let marked = Error::BackendUnavailable(format!("{BUSY_MARKER}: x"));
+        lead.end(Some(&marked));
+
+        let Begin::Ended(shared) = gate.begin(None, Some(&cohort)) else {
+            panic!("the cohort ended with the lead");
+        };
+        let joined = shared.to_error("t11b-backend");
+        assert!(
+            matches!(joined, Error::OAuth(_)),
+            "not the text form: {joined:?}"
+        );
+        assert!(is_busy(&joined), "the marker did not round-trip: {joined}");
+    })
+    .await
+    .expect("a cohort end answers at once");
 }
 
 /// T12: a lock io error that is not a timeout (a directory where the lock file
@@ -178,9 +210,12 @@ async fn t12_lock_io_error_passes_through_at_once() {
         meta.grant_types_supported = vec!["client_credentials".to_string()];
     }
     hold(&renewing, &token("a1", Some("r1"), true));
+    let start = Instant::now();
     let outcome = tokio::time::timeout(BOUND * 2, renewing.attempt_background_renewal()).await;
+    let elapsed = start.elapsed();
     let renewal = outcome.expect("an io error answers at once");
     assert!(is_deferred(&renewal), "not deferred: {renewal:?}");
+    assert!(elapsed < Duration::from_secs(5), "not at once: {elapsed:?}");
     assert_eq!(
         server.requests(),
         0,
@@ -260,4 +295,45 @@ async fn t13_probe_skips_rebuild_and_breaker_on_busy() {
         0,
         "a busy lock sampled as a backend failure"
     );
+}
+
+/// T13d: a dispatch through `Backend::request` whose token step meets a busy
+/// lock leaves the breaker's failure count unchanged. The probe never calls
+/// `record_dispatch_error`, so only this path pins the exclusion; on the base
+/// the marked error counts and the row is red.
+#[tokio::test(start_paused = true)]
+async fn t13d_dispatch_skips_breaker_on_busy() {
+    tokio::time::timeout(BOUND * 2, async {
+        let backend = crate::backend::Backend::new(
+            "t13d-dispatch",
+            crate::config::BackendConfig::default(),
+            &crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        );
+        backend.set_transport_for_test(
+            Arc::new(BusyTransport) as Arc<dyn crate::transport::Transport>
+        );
+        let before = backend.circuit_breaker_stats().current_failures;
+
+        let error = backend
+            .request("tools/list", None)
+            .await
+            .expect_err("a busy lock answers no tools");
+        assert!(is_busy(&error), "not the marked error: {error}");
+        assert!(
+            matches!(error, Error::BackendUnavailable(_)),
+            "not unwrapped: {error:?}"
+        );
+        assert_eq!(
+            backend.circuit_breaker_stats().current_failures,
+            before,
+            "a busy lock sampled as a backend failure"
+        );
+        assert!(
+            !backend.is_circuit_tripped(),
+            "the dispatch tripped the breaker on a busy lock"
+        );
+    })
+    .await
+    .expect("a dispatch answers at once");
 }

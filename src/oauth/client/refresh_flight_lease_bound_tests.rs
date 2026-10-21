@@ -8,7 +8,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use tokio::time::Instant;
-use tokio_util::sync::CancellationToken;
 
 use super::*;
 use crate::Error;
@@ -36,11 +35,13 @@ pub(super) const POLL: Duration = Duration::from_millis(50);
 pub(super) const BUSY_MARKER: &str = "credential lock busy";
 
 /// Whether `error` carries the busy marker: phase 2 replaces with
-/// `is_credential_lock_busy`. The marker rides as a prefix on either variant:
-/// `BackendUnavailable` everywhere, the `OAuth` text form for joiners (r4.1).
+/// `is_credential_lock_busy`. `BackendUnavailable` carries it as a prefix;
+/// joiners get it inside `OAuth` text (`Failed(error.to_string())`, r4.1), so
+/// that arm matches the marker with its colon anywhere in the text.
 pub(super) fn is_busy(error: &Error) -> bool {
     match error {
-        Error::BackendUnavailable(text) | Error::OAuth(text) => text.starts_with(BUSY_MARKER),
+        Error::BackendUnavailable(text) => text.starts_with(BUSY_MARKER),
+        Error::OAuth(text) => text.contains(&format!("{BUSY_MARKER}:")),
         _ => false,
     }
 }
@@ -172,44 +173,48 @@ async fn t2_save_under_a_held_lease_fails_busy_and_stores_nothing() {
 }
 
 /// T4 (regression, green now): a holder that releases at 30 s is waited for;
-/// the waiter adopts the fresh token it stored and sends nothing.
+/// the waiter adopts the fresh token it stored and sends nothing. The outer
+/// timeout covers setup and execution, so a stuck readiness poll fails red.
 #[tokio::test(start_paused = true)]
 async fn t4_waiter_adopts_what_a_releasing_holder_stored() {
-    let server = TokenServer::start(&[]).await;
-    let dir = tempfile::tempdir().expect("a scratch token store");
-    let client = Arc::new(client(dir.path(), &server));
-    hold(&client, &token("a1", Some("r1"), true));
-    let (_, token_path, lock_path) = credential_paths(&client);
-    let holder = hold_across_processes(&token_path)
-        .await
-        .expect("the other process holds the lease");
+    tokio::time::timeout(BOUND * 2, async {
+        let server = TokenServer::start(&[]).await;
+        let dir = tempfile::tempdir().expect("a scratch token store");
+        let client = Arc::new(client(dir.path(), &server));
+        hold(&client, &token("a1", Some("r1"), true));
+        let (_, token_path, lock_path) = credential_paths(&client);
+        let holder = hold_across_processes(&token_path)
+            .await
+            .expect("the other process holds the lease");
 
-    let waiter = tokio::spawn({
-        let client = Arc::clone(&client);
-        async move { headless(&client).await }
-    });
-    // The waiter's first poll failed: it is on the lock, and has sent nothing.
-    while crate::fs_lock::lock_attempts(&lock_path) < 2 {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert_eq!(server.requests(), 0, "sent while another process held it");
-    tokio::time::sleep(Duration::from_secs(30)).await;
-    let key = client
-        .credential_key()
-        .expect("a test client has a credential key");
-    client
-        .storage
-        .save(&key, RESOURCE, &token("a2", Some("r2"), false))
-        .expect("the holder stores afresh");
-    drop(holder);
+        let waiter = tokio::spawn({
+            let client = Arc::clone(&client);
+            async move { headless(&client).await }
+        });
+        // The waiter's first poll failed: it is on the lock, and has sent nothing.
+        while crate::fs_lock::lock_attempts(&lock_path) < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(server.requests(), 0, "sent while another process held it");
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        let key = client
+            .credential_key()
+            .expect("a test client has a credential key");
+        client
+            .storage
+            .save(&key, RESOURCE, &token("a2", Some("r2"), false))
+            .expect("the holder stores afresh");
+        drop(holder);
 
-    let access = tokio::time::timeout(BOUND * 2, waiter)
-        .await
-        .expect("a 30 s wait ends inside twice the bound")
-        .expect("the waiter joins")
-        .expect("the stored token is taken up");
-    assert_eq!(access, "a2");
-    assert_eq!(server.requests(), 0, "an adoption sends nothing");
+        let access = waiter
+            .await
+            .expect("the waiter joins")
+            .expect("the stored token is taken up");
+        assert_eq!(access, "a2");
+        assert_eq!(server.requests(), 0, "an adoption sends nothing");
+    })
+    .await
+    .expect("a 30 s wait ends inside twice the bound");
 }
 
 /// T5: an interactive detached step with the lease held answers busy at the
@@ -294,112 +299,101 @@ async fn t5b_get_token_answers_busy_without_a_login() {
     );
 }
 
-/// A client whose browser approves at once against `server`, for a login that
-/// must reach its save. (The sibling approval helpers are private to their
-/// modules; this is the same shape, minimal for the save rows.)
-fn approving_client(dir: &std::path::Path, server: &TokenServer) -> OAuthClient {
-    let mut approved = client(dir, server);
-    approved.callback_host = Some("127.0.0.1".to_string());
-    let iss = server.base.clone();
-    approved.open_browser = Box::new(move |url| {
-        let query: std::collections::HashMap<String, String> = url::Url::parse(url)
-            .expect("the authorization url parses")
-            .query_pairs()
-            .into_owned()
-            .collect();
-        let callback = url::Url::parse_with_params(
-            &query["redirect_uri"],
-            &[
-                ("code", "t8-approved"),
-                ("state", query["state"].as_str()),
-                ("iss", iss.as_str()),
-            ],
-        )
-        .expect("the callback url builds");
-        tokio::spawn(async move {
-            let _ = reqwest::Client::builder()
-                .no_proxy()
-                .build()
-                .expect("the approval client builds")
-                .get(callback)
-                .send()
-                .await;
-        });
-        true
-    });
-    approved
-}
-
 /// T8 (green now): a login save keeps the authorization window. Released past
 /// the contention budget but inside the window, it stores; held past the
-/// window, it ends `AuthorizationIncomplete`, never busy. (`save_issued_until`
-/// is private to `grants`; the login is its reachable caller.)
+/// window, it ends `AuthorizationIncomplete` at the window deadline, never
+/// busy. The save runs through `save_issued_until_for_test` (no browser,
+/// callback or exchange sockets); the lock-attempt seam shows it reached its
+/// lease wait. The outer timeout covers setup and execution of both halves.
 #[tokio::test(start_paused = true)]
 async fn t8_login_save_keeps_the_authorization_window() {
-    // Released at 120 s: past the budget, inside the window. The login stores.
-    let server = TokenServer::start(&[]).await;
-    let dir = tempfile::tempdir().expect("a scratch token store");
-    let login = Arc::new(approving_client(dir.path(), &server));
-    let (_, token_path, lock_path) = credential_paths(&login);
-    let holder = hold_across_processes(&token_path)
-        .await
-        .expect("the other process holds the lease");
-    let saving = tokio::spawn({
-        let login = Arc::clone(&login);
-        async move {
-            login
-                .authorize_until_by(&CancellationToken::new(), None, None)
-                .await
+    tokio::time::timeout(OAUTH_AUTHORIZATION_WINDOW * 2, async {
+        // Released at 120 s: past the budget, inside the window. The save stores.
+        let server = TokenServer::start(&[]).await;
+        let dir = tempfile::tempdir().expect("a scratch token store");
+        let login = Arc::new(client(dir.path(), &server));
+        let (_, token_path, lock_path) = credential_paths(&login);
+        let holder = hold_across_processes(&token_path)
+            .await
+            .expect("the other process holds the lease");
+        let start = Instant::now();
+        let saving = tokio::spawn({
+            let login = Arc::clone(&login);
+            async move {
+                login
+                    .save_issued_until_for_test(&token("a2", Some("r2"), false))
+                    .await
+            }
+        });
+        // The save is on the lock, and no HTTP ran to get there.
+        while crate::fs_lock::lock_attempts(&lock_path) < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
-    });
-    // The exchange landed and the save is on the lock.
-    while server.requests() < 1 {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    while crate::fs_lock::lock_attempts(&lock_path) < 2 {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    tokio::time::sleep(Duration::from_secs(120)).await;
-    drop(holder);
-    let access = tokio::time::timeout(OAUTH_AUTHORIZATION_WINDOW * 2, saving)
-        .await
-        .expect("a save released inside the window ends")
-        .expect("the login joins")
-        .expect("the login stores");
-    assert_eq!(access, "a2");
-    let key = login
-        .credential_key()
-        .expect("a test client has a credential key");
-    let saved = login
-        .storage
-        .load(&key, RESOURCE)
-        .expect("the login stored its token");
-    assert_eq!(saved.access_token, "a2");
+        assert_eq!(server.requests(), 0, "the save sent before its lease wait");
+        tokio::time::sleep(Duration::from_secs(120)).await;
+        drop(holder);
+        saving
+            .await
+            .expect("the save joins")
+            .expect("the save stores");
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= Duration::from_secs(120),
+            "stored before the release: {elapsed:?}"
+        );
+        assert!(
+            elapsed < OAUTH_AUTHORIZATION_WINDOW,
+            "waited past the window: {elapsed:?}"
+        );
+        let key = login
+            .credential_key()
+            .expect("a test client has a credential key");
+        let saved = login
+            .storage
+            .load(&key, RESOURCE)
+            .expect("the save stored its token");
+        assert_eq!(saved.access_token, "a2");
+        assert_eq!(server.requests(), 0, "the save sent");
 
-    // Held past the window: `AuthorizationIncomplete`, never busy.
-    let server = TokenServer::start(&[]).await;
-    let dir = tempfile::tempdir().expect("a scratch token store");
-    let login = Arc::new(approving_client(dir.path(), &server));
-    let (_, token_path, _) = credential_paths(&login);
-    let _holder = hold_across_processes(&token_path)
-        .await
-        .expect("the other process holds the lease");
-    let cancel = CancellationToken::new();
-    let outcome = tokio::time::timeout(
-        OAUTH_AUTHORIZATION_WINDOW * 2,
-        login.authorize_until_by(&cancel, None, None),
-    )
-    .await;
-    let error = outcome
-        .expect("a save held past the window ends at the window")
-        .expect_err("no token crosses a held lease");
-    assert!(
-        matches!(
-            error,
-            Error::AuthorizationIncomplete { window_secs, .. }
-                if window_secs == OAUTH_AUTHORIZATION_WINDOW.as_secs()
-        ),
-        "not the window expiry: {error}"
-    );
-    assert!(!is_busy(&error), "a window expiry is not busy: {error}");
+        // Held past the window: `AuthorizationIncomplete` at the window deadline.
+        let server = TokenServer::start(&[]).await;
+        let dir = tempfile::tempdir().expect("a scratch token store");
+        let login = client(dir.path(), &server);
+        let (_, token_path, lock_path) = credential_paths(&login);
+        let _holder = hold_across_processes(&token_path)
+            .await
+            .expect("the other process holds the lease");
+        let start = Instant::now();
+        let saving = tokio::spawn({
+            let issued = token("issued", Some("r9"), false);
+            async move { login.save_issued_until_for_test(&issued).await }
+        });
+        while crate::fs_lock::lock_attempts(&lock_path) < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(server.requests(), 0, "the save sent before its lease wait");
+        let error = saving
+            .await
+            .expect("the save joins")
+            .expect_err("no token crosses a held lease");
+        let elapsed = start.elapsed();
+        assert!(
+            matches!(
+                error,
+                Error::AuthorizationIncomplete { window_secs, .. }
+                    if window_secs == OAUTH_AUTHORIZATION_WINDOW.as_secs()
+            ),
+            "not the window expiry: {error}"
+        );
+        assert!(!is_busy(&error), "a window expiry is not busy: {error}");
+        assert!(
+            (OAUTH_AUTHORIZATION_WINDOW
+                ..OAUTH_AUTHORIZATION_WINDOW + POLL + Duration::from_secs(1))
+                .contains(&elapsed),
+            "expired off the window deadline: {elapsed:?}"
+        );
+        assert_eq!(server.requests(), 0, "the save sent");
+    })
+    .await
+    .expect("both halves end inside twice the window");
 }
