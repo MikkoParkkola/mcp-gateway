@@ -22,6 +22,9 @@ pub(super) enum Renewal {
     Refused,
     /// Every headless grant failed: the person must authorize again.
     Exhausted,
+    /// The credential lock was busy: nothing ran, and the loop retries next
+    /// period without trying another grant on the same lease.
+    Deferred,
 }
 
 impl OAuthClient {
@@ -40,6 +43,16 @@ impl OAuthClient {
             match self.refresh_token().await {
                 Ok(_) => return Renewal::Renewed,
                 Err(e) if is_ssrf_refusal(&e) => return self.refused(&e),
+                // A busy lock skips `client_credentials`, which takes the same
+                // lease and would wait another bound, then mislog as exhausted.
+                Err(e) if super::refresh_flight::is_credential_lock_busy(&e) => {
+                    debug!(
+                        backend = %self.backend_name,
+                        error = %e,
+                        "Token refresh deferred: the credential lock is busy"
+                    );
+                    return Renewal::Deferred;
+                }
                 Err(e) => {
                     debug!(
                         backend = %self.backend_name,
@@ -54,6 +67,16 @@ impl OAuthClient {
         match self.try_client_credentials().await {
             Ok(_) => Renewal::Renewed,
             Err(e) if is_ssrf_refusal(&e) => self.refused(&e),
+            // Its save met the busy lease: deferred, not exhausted, so no
+            // misleading re-authorization warning follows.
+            Err(e) if super::refresh_flight::is_credential_lock_busy(&e) => {
+                debug!(
+                    backend = %self.backend_name,
+                    error = %e,
+                    "Token renewal deferred: the credential lock is busy"
+                );
+                Renewal::Deferred
+            }
             Err(e) => {
                 debug!(
                     backend = %self.backend_name,
@@ -122,8 +145,10 @@ impl OAuthClient {
                 };
 
                 match renewal {
-                    Renewal::Renewed => {}
                     Renewal::Refused => return,
+                    // Already logged at debug where it deferred; the loop
+                    // retries next period with no warning.
+                    Renewal::Renewed | Renewal::Deferred => {}
                     Renewal::Exhausted => {
                         warn!(
                             backend = %backend_name,

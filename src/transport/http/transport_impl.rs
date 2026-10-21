@@ -301,7 +301,7 @@ impl Transport for HttpTransport {
             // A close uses or refreshes a credential, never a login (MIK-8339):
             // this one choke point covers every close path (restart, stop,
             // idle stop, pool eviction, identity-slot teardown).
-            let request = match crate::oauth::login_gate::non_interactive(
+            let request = match crate::oauth::login_gate::short_contention(
                 self.build_mcp_headers(HeaderMode::Close, Some(&bucket)),
             )
             .await

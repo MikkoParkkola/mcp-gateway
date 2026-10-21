@@ -319,6 +319,24 @@ impl OAuthClient {
             .with_extension("refresh.lock")
     }
 
+    /// Test-only: [`save_issued`](Self::save_issued) without the
+    /// `client_credentials` exchange before it, so a row on a paused clock
+    /// reaches the lease wait without a real socket (MIK-8619 T2).
+    #[cfg(test)]
+    pub(crate) async fn save_issued_for_test(&self, token: &TokenInfo) -> Result<()> {
+        self.save_issued(token).await
+    }
+
+    /// Test-only: [`save_issued_until`](Self::save_issued_until) without the
+    /// login's browser, callback and exchange before it, so a row on a paused
+    /// clock reaches the lease wait without real sockets (MIK-8619 T8). A
+    /// fresh cancel never fires; `None` keeps the authorization window.
+    #[cfg(test)]
+    pub(crate) async fn save_issued_until_for_test(&self, token: &TokenInfo) -> Result<()> {
+        self.save_issued_until(token, &tokio_util::sync::CancellationToken::new(), None)
+            .await
+    }
+
     /// Test-only: the cached token lapses now, in memory and in storage, as
     /// if its lifetime had passed (MIK-8269): a row that needs a lapsed token
     /// asks for one instead of sleeping out a short-lived token.
@@ -341,8 +359,12 @@ impl OAuthClient {
         let key = self.credential_key()?;
         let token_path = self.storage.token_path(&key, &self.resource_url);
         let flight = super::refresh_flight::Flight::of(&token_path);
-        let _guard = flight.lock.lock().await;
-        let _across = super::refresh_flight::hold_across_processes(&token_path).await?;
+        // One budget covers the in-process flight and the cross-process lease:
+        // a save queued behind an in-process holder answers the same busy
+        // error at the deadline instead of queuing unbounded (MIK-8619).
+        let deadline = super::refresh_flight::contention_deadline();
+        let _guard = super::refresh_flight::lock_flight_until(&flight, deadline).await?;
+        let _across = super::refresh_flight::hold_across_processes(&token_path, deadline).await?;
         self.store_issued_locked(&key, token)
     }
 
@@ -361,9 +383,33 @@ impl OAuthClient {
         let key = self.credential_key()?;
         let token_path = self.storage.token_path(&key, &self.resource_url);
         let flight = super::refresh_flight::Flight::of(&token_path);
+        // The window Instant, computed once: the select and the lease share it,
+        // so the save waits exactly as long as today's select allows.
+        let window = match deadline {
+            Some(deadline) => {
+                crate::oauth::login_gate::stage_end(OAUTH_AUTHORIZATION_WINDOW, deadline)
+            }
+            None => tokio::time::Instant::now() + OAUTH_AUTHORIZATION_WINDOW,
+        };
         let held = async {
             let guard = flight.lock.lock().await;
-            let across = super::refresh_flight::hold_across_processes(&token_path).await?;
+            // The lease takes the same window deadline: a timeout at it is the
+            // window expiring, not a busy lock. A rarer io failure still
+            // answers busy, so joiners keep the marker.
+            let across =
+                match super::refresh_flight::hold_across_processes(&token_path, window).await {
+                    Ok(lock) => lock,
+                    Err(error)
+                        if super::refresh_flight::is_credential_lock_busy(&error)
+                            && tokio::time::Instant::now() >= window =>
+                    {
+                        return Err(Error::AuthorizationIncomplete {
+                            backend: self.backend_name().to_string(),
+                            window_secs: OAUTH_AUTHORIZATION_WINDOW.as_secs(),
+                        });
+                    }
+                    Err(error) => return Err(error),
+                };
             Ok::<_, Error>((guard, across))
         };
         let (_guard, _across) = tokio::select! {
@@ -373,10 +419,7 @@ impl OAuthClient {
                     backend: self.backend_name().to_string(),
                 });
             }
-            () = tokio::time::sleep_until(match deadline {
-                Some(deadline) => crate::oauth::login_gate::stage_end(OAUTH_AUTHORIZATION_WINDOW, deadline),
-                None => tokio::time::Instant::now() + OAUTH_AUTHORIZATION_WINDOW,
-            }) => {
+            () = tokio::time::sleep_until(window) => {
                 return Err(Error::AuthorizationIncomplete {
                     backend: self.backend_name().to_string(),
                     window_secs: OAUTH_AUTHORIZATION_WINDOW.as_secs(),

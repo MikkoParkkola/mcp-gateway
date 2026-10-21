@@ -104,8 +104,10 @@ fn marker(client: &OAuthClient) -> Option<String> {
     client.storage.load_refresh_state(&key, RESOURCE).in_flight
 }
 
-/// Run `client`'s `get_token` the way the health probe and renewal do: never
-/// opening a login, so a refused refresh cannot reach a browser.
+/// Run `client`'s `get_token` as renewal and the background callers do:
+/// never opening a login, so a refused refresh cannot reach a browser. This
+/// is the Long contention class (90 s, adopts); a Short (probe-class) row
+/// uses `short_contention` instead.
 async fn headless(client: &OAuthClient) -> Result<String> {
     crate::oauth::login_gate::non_interactive(client.get_token()).await
 }
@@ -719,6 +721,16 @@ async fn a_login_save_waits_for_a_running_refresh() {
     assert_eq!(stored(&refresher).unwrap().access_token, issued);
 }
 
+#[path = "refresh_flight_contention_class_tests.rs"]
+mod contention_class;
+#[path = "refresh_flight_lease_bound_tests.rs"]
+mod lease_bound;
+#[path = "refresh_flight_lease_bound_fanout_tests.rs"]
+mod lease_bound_fanout;
+#[path = "refresh_flight_lease_bound_flight_tests.rs"]
+mod lease_bound_flight;
+#[path = "refresh_flight_lease_bound_renewal_tests.rs"]
+mod lease_bound_renewal;
 #[path = "refresh_flight_sharing_tests.rs"]
 mod sharing;
 

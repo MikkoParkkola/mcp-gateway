@@ -37,6 +37,11 @@ const PRE_SEND_SITES: &[&str] = &[
     "backend/probe.rs",
     // Warm start (not tool dispatch).
     "gateway/server/warmstart.rs",
+    // Credential lease wait (MIK-8619): the lock is taken in the token step,
+    // before any byte of the tool request is sent (MCP: `get_oauth_token`
+    // inside `build_mcp_headers` before the POST; capability refresh before
+    // its HTTP call; token saves send no tool request at all).
+    "oauth/client/refresh_flight.rs",
 ];
 
 /// `src` with comments, string literals and char literals replaced by spaces,

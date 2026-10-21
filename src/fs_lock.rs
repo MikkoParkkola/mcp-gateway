@@ -166,15 +166,33 @@ impl ExclusiveFileLock {
         }
     }
 
-    /// Wait for the lock by polling [`Self::try_lease`] every `poll`, never by
-    /// blocking a thread: a dropped (cancelled or timed-out) caller leaves no
-    /// thread waiting behind it. The caller bounds the wait.
-    pub(crate) async fn lease(lock_path: &Path, poll: std::time::Duration) -> io::Result<Self> {
+    /// Wait for the lock by polling [`Self::try_lease`] every `poll` until
+    /// `deadline`, never by blocking a thread: a dropped (cancelled or
+    /// timed-out) caller leaves no thread waiting behind it. Returns
+    /// `TimedOut` when the deadline passes before the lock is taken; the probe
+    /// runs before every sleep, so a lock released just before the deadline is
+    /// still taken.
+    pub(crate) async fn lease(
+        lock_path: &Path,
+        poll: std::time::Duration,
+        deadline: tokio::time::Instant,
+    ) -> io::Result<Self> {
         loop {
             if let Some(lock) = Self::try_lease(lock_path)? {
                 return Ok(lock);
             }
-            tokio::time::sleep(poll).await;
+            // The bound: past it, the wait ends TimedOut rather than holding forever.
+            if tokio::time::Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "the credential lease wait reached its deadline",
+                ));
+            }
+            // Wake at the next poll or the deadline, whichever comes first, so
+            // the timeout fires at the deadline instead of a poll late.
+            let next = tokio::time::Instant::now() + poll;
+            let wake = if next < deadline { next } else { deadline };
+            tokio::time::sleep_until(wake).await;
         }
     }
 

@@ -15,6 +15,7 @@ use std::time::Duration;
 use super::LIST_MAX_PAGES;
 use super::pool::PooledEntry;
 use crate::failsafe::CircuitState;
+use crate::oauth::client::is_credential_lock_busy;
 use crate::trust::closed_keys::{count, count_reason};
 use crate::{Error, Result};
 
@@ -132,8 +133,9 @@ impl FillEnd {
     pub(crate) fn of<T>(drained: &crate::Result<T>) -> Self {
         match drained {
             Ok(_) => Self::Drained,
-            // A login in progress stamps no cooldown (MIK-7982).
-            Err(e) if e.is_authorization_wait() => Self::Pending,
+            // A login in progress, or a busy credential lock, stamps no
+            // cooldown (MIK-7982, MIK-8619).
+            Err(e) if e.is_authorization_wait() || is_credential_lock_busy(e) => Self::Pending,
             Err(e) => match Replay::of(e) {
                 None if is_transport_failure(e) => Self::Unreplayable,
                 transport => Self::Failed { transport },
@@ -301,9 +303,10 @@ fn record_fill(
         record_reachable(entry, warmup, latency);
         return;
     };
-    // A person still logging in is neither a failure nor reachability: the
-    // backend was never asked (MIK-7982).
-    if error.is_authorization_wait() {
+    // A person still logging in, or a busy credential lock, is neither a
+    // failure nor reachability: the backend was never asked (MIK-7982,
+    // MIK-8619).
+    if error.is_authorization_wait() || is_credential_lock_busy(error) {
         return;
     }
     let reason = error.to_string();

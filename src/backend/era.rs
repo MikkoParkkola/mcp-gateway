@@ -42,7 +42,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 /// token, the probe reads as silence instead.
 async fn probe(transport: &Arc<dyn Transport>, timeout: Duration) -> ProbeOutcome {
     let request =
-        crate::oauth::login_gate::non_interactive(transport.request(DISCOVER_METHOD, None));
+        crate::oauth::login_gate::short_contention(transport.request(DISCOVER_METHOD, None));
     match tokio::time::timeout(timeout, request).await {
         Ok(Ok(response)) => outcome_of(response),
         Ok(Err(_)) | Err(_) => ProbeOutcome::NoAnswer,

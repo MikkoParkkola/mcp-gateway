@@ -9,6 +9,7 @@ use tracing::{debug, info, warn};
 use super::expand_home_path;
 use crate::backend::BackendRegistry;
 use crate::config::Config;
+use crate::oauth::client::is_credential_lock_busy;
 
 /// Spawn the SIEM evidence-export background task (MIK-6703).
 ///
@@ -234,9 +235,10 @@ pub(super) fn spawn_health_loop(
                             // success, and rebuilds the transport on failure —
                             // the automatic equivalent of gateway_revive_server.
                             if let Err(e) = backend.health_probe(probe_timeout).await {
-                                // A start in flight (perhaps a login) is a
-                                // skipped tick, not a failed check (MIK-7982).
-                                if e.is_authorization_wait() {
+                                // A start in flight (perhaps a login), or a
+                                // busy credential lock, is a skipped tick, not
+                                // a failed check (MIK-7982, MIK-8619).
+                                if e.is_authorization_wait() || is_credential_lock_busy(&e) {
                                     debug!(backend = %backend.name, error = %e, "Health check skipped");
                                 } else {
                                     warn!(backend = %backend.name, error = %e, "Health check failed");

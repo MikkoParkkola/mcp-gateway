@@ -45,7 +45,7 @@ pub(crate) struct SetOut {
 tokio::task_local! {
     static PROVENANCE: Arc<Provenance>;
     static FILL: Arc<AtomicBool>;
-    static NON_INTERACTIVE: ();
+    static NON_INTERACTIVE: ContentionClass;
     static SET_OUT: (u64, Arc<Cohort>);
 }
 
@@ -131,16 +131,48 @@ impl Carried {
     }
 }
 
+/// Which contention budget a credential-lock waiter gets (MIK-8619 r4.4):
+/// chosen by the caller's own deadline, not by whether it may log in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::oauth) enum ContentionClass {
+    /// The default: wait up to the full contention budget, then adopt what
+    /// the holder stored.
+    Long,
+    /// A caller whose own deadline is at or below the short wait (the health
+    /// probe, era discovery, connection close).
+    Short,
+}
+
 /// Run `work` as a caller that never begins or waits on a login (the health
 /// probe, MIK-7982 C2): where it would, it gets `AuthorizationRequired`.
+/// It keeps the caller's contention class: Long by default, Short inside [`short_contention`].
 pub(crate) async fn non_interactive<F: std::future::Future>(work: F) -> F::Output {
-    NON_INTERACTIVE.scope((), work).await
+    NON_INTERACTIVE.scope(contention_class(), work).await
+}
+
+/// Run `work` as a Short contention caller: one whose own deadline is at or
+/// below the short contention wait (the health probe, era discovery, a
+/// connection close). It never begins or waits on a login, as
+/// [`non_interactive`]. The class is task-local: a spawned or detached task
+/// does not inherit it and waits the long budget. A `Carried` re-entry does
+/// not carry the class either, so a detached step of a Short caller waits the
+/// long budget.
+/// One scope, not two nested ones, so a Short future is no deeper than a non-interactive one.
+pub(crate) async fn short_contention<F: std::future::Future>(work: F) -> F::Output {
+    NON_INTERACTIVE.scope(ContentionClass::Short, work).await
 }
 
 /// Whether the current task may begin or wait on a login. Read before any
 /// `tokio::spawn`: a spawned task does not inherit the scope.
 pub(crate) fn interactive() -> bool {
     NON_INTERACTIVE.try_get().is_err()
+}
+
+/// The current task's contention class: `Short` inside [`short_contention`],
+/// else `Long`. Read before any `tokio::spawn`: a spawned task does not
+/// inherit the scope.
+pub(in crate::oauth) fn contention_class() -> ContentionClass {
+    NON_INTERACTIVE.try_get().unwrap_or(ContentionClass::Long)
 }
 
 /// Whose deadline it is (MIK-7982 C3): the cohort a bounded caller captured
@@ -240,3 +272,6 @@ impl Provenance {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
