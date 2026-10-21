@@ -40,6 +40,7 @@ const PROBE_MARKER: &str = "served-probe";
 /// A loopback probe answering one static marker, the
 /// `identity_collapse_tests.rs` shape without its hit counter.
 async fn start_probe() -> u16 {
+    // port-check: the listener serves on in the spawned task
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("the probe binds loopback");
