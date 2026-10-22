@@ -312,6 +312,7 @@ async fn run(cli: Cli) -> ExitCode {
             shadow_format,
             start_stdio,
             show_stderr,
+            no_registry_check: _,
         }) => {
             if shadow {
                 commands::run_doctor_shadow_command(&shadow_format)

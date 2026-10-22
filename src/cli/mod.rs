@@ -531,6 +531,9 @@ pub enum Command {
         /// With `--start-stdio`: also show a failed start's masked stderr tail.
         #[arg(long, requires = "start_stdio")]
         show_stderr: bool,
+        /// Skip the npm registry lookup (MIK-8512).
+        #[arg(long)]
+        no_registry_check: bool,
     },
 
     /// Apply pending post-upgrade migrations and update the version stamp

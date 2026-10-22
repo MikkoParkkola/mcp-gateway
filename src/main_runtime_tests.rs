@@ -57,6 +57,26 @@ fn every_serve_mode_bounds_the_runtime_shutdown() {
     );
 }
 
+/// MIK-8512: doctor's npm lookup resolves names on the blocking pool, where a
+/// stalled DNS lookup outlives the check's own budget. Doctor's shutdown is
+/// bounded at one second, so the process exits behind it; other one-shot
+/// commands still wait for their writes.
+#[test]
+fn doctor_bounds_the_runtime_shutdown_at_one_second() {
+    use clap::Parser as _;
+    let doctor = mcp_gateway::cli::Cli::try_parse_from(["mcp-gateway", "doctor"])
+        .expect("doctor parses")
+        .command;
+    assert_eq!(
+        RuntimeShutdown::of(doctor.as_ref()),
+        RuntimeShutdown::Bounded(Duration::from_secs(1))
+    );
+    let init = mcp_gateway::cli::Cli::try_parse_from(["mcp-gateway", "init"])
+        .expect("init parses")
+        .command;
+    assert_eq!(RuntimeShutdown::of(init.as_ref()), RuntimeShutdown::WaitForBlockingWork);
+}
+
 /// Run `body` on its own thread and return its value, failing at this
 /// assertion, not by hanging the suite, when it has not returned in 5 s.
 fn within_watchdog<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {

@@ -1901,6 +1901,7 @@ dependencies = [
  "dirs",
  "dotenvy",
  "figment",
+ "flate2",
  "futures",
  "glob",
  "governor",
@@ -1954,6 +1955,7 @@ dependencies = [
  "url",
  "uuid",
  "walkdir",
+ "webpki-roots 1.0.10",
  "windows-sys 0.61.2",
  "x509-parser",
 ]

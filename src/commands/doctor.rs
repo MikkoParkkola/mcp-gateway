@@ -24,6 +24,7 @@ use serde_json::{Value, json};
 
 mod health;
 mod hidden_keys;
+mod npm_pin;
 mod posture;
 mod provenance;
 mod remedy;
