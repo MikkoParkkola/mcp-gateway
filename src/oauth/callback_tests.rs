@@ -546,8 +546,8 @@ async fn a_provider_error_with_the_right_state_ends_the_login_with_it() {
     );
 }
 
-/// LOG.1: a refused request logs only the mismatch (with state_len) and no
-/// attacker text, and no provider_error event.
+/// LOG.1: a refused request logs only the mismatch (with `state_len`) and no
+/// attacker text, and no `provider_error` event.
 // Current-thread on purpose: `capture()` is thread-local, so the axum
 // handler must run on this thread for its events to be captured.
 #[tokio::test(flavor = "current_thread")]
