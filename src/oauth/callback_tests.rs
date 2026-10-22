@@ -321,14 +321,28 @@ async fn callback_flow_missing_code() {
     let callback_url = server.callback_url.clone();
 
     let client = reqwest::Client::new();
-    let _resp = client
-        .get(format!("{callback_url}?state=state123"))
-        .send()
+    let resp = tokio::time::timeout(
+        crate::test_wait::HANG_BOUND,
+        client.get(format!("{callback_url}?state=state123")).send(),
+    )
+    .await
+    .expect("the missing-code callback is answered")
+    .expect("the missing-code callback sends");
+    let page = tokio::time::timeout(crate::test_wait::HANG_BOUND, resp.text())
         .await
-        .unwrap();
+        .expect("the missing-code page arrives")
+        .expect("the missing-code page reads");
+    assert!(page.contains("No code received"), "{page}");
 
-    let result = server.wait_for_callback().await;
-    assert!(result.is_err());
+    // The right state with no code ends the login through the missing-code
+    // branch, not the state refusal the fix moved ahead of it.
+    let result = tokio::time::timeout(crate::test_wait::HANG_BOUND, server.wait_for_callback())
+        .await
+        .expect("the login answers the missing code");
+    assert!(
+        matches!(result, Err(crate::Error::OAuth(ref t)) if t == "No authorization code received"),
+        "{result:?}"
+    );
 }
 
 /// A log capture for the current thread. A process-wide registry keeps
