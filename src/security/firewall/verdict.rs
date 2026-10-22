@@ -3,9 +3,8 @@
 
 //! Firewall verdict predicates and the rule helpers that pick an action.
 
-use super::{
-    CompiledRule, Finding, FirewallAction, FirewallRule, FirewallVerdict, ScanType, Severity,
-};
+use super::{CompiledRule, Finding, FirewallAction, FirewallRule, FirewallVerdict, ScanType};
+use crate::security::Severity;
 
 impl FirewallVerdict {
     /// Construct an unconditional allow verdict (used when scanning is disabled).

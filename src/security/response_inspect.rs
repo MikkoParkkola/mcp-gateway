@@ -14,7 +14,7 @@ use regex::RegexSet;
 use serde::Serialize;
 use std::sync::LazyLock;
 
-pub use super::Severity;
+use super::Severity;
 
 /// A single inspection finding.
 ///

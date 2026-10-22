@@ -150,8 +150,6 @@ pub enum ContextIntegrityClassifier {
     DataExfiltration,
 }
 
-pub use crate::security::Severity as ContextIntegritySeverity;
-
 /// Provenance for the content evaluated by the kernel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextProvenance {

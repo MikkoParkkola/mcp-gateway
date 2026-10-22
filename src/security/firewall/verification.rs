@@ -3,6 +3,7 @@
 //! Kani proofs for the firewall action defaults.
 
 use super::*;
+use crate::security::Severity;
 
 fn any_firewall_action() -> FirewallAction {
     match kani::any::<u8>() % 3 {

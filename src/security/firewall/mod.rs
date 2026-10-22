@@ -145,7 +145,7 @@ pub struct Finding {
     /// Which scan produced this finding.
     pub scan_type: ScanType,
     /// Severity: critical and high (block), medium (warn), low (log).
-    pub severity: Severity,
+    pub severity: crate::security::Severity,
     /// Human-readable description of the finding.
     pub description: String,
     /// The matched pattern or fragment, truncated. Never written to the audit row.
@@ -153,8 +153,6 @@ pub struct Finding {
     /// Where the finding was detected.
     pub location: FindingLocation,
 }
-
-pub use crate::security::Severity;
 
 /// Where a finding was detected in the invocation flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -473,7 +471,7 @@ impl Firewall {
             tenant_guard::TenantVerdict::Refused { distinct, limit } => {
                 findings.push(Finding {
                     scan_type: ScanType::CrossTenantReach,
-                    severity: Severity::High,
+                    severity: crate::security::Severity::High,
                     description: format!(
                         "Cross-tenant reach exceeded: principal touched {distinct} distinct \
                          tenants (limit {limit})"
@@ -492,7 +490,7 @@ impl Firewall {
                 );
                 findings.push(Finding {
                     scan_type: ScanType::CrossTenantReach,
-                    severity: Severity::High,
+                    severity: crate::security::Severity::High,
                     description:
                         "Tenant-scoped call has no authenticated principal to key breadth on; \
                          call refused unmeasured"
@@ -527,7 +525,7 @@ impl Firewall {
             budget_guard::BudgetVerdict::Refused { total, limit } => {
                 findings.push(Finding {
                     scan_type: ScanType::BudgetExceeded,
-                    severity: Severity::High,
+                    severity: crate::security::Severity::High,
                     description: format!(
                         "Call budget exceeded: {total} calls in the window (limit {limit})"
                     ),
@@ -544,7 +542,7 @@ impl Firewall {
                 // caller (MIK-7971), which arrives here as an identity.
                 findings.push(Finding {
                     scan_type: ScanType::BudgetExceeded,
-                    severity: Severity::High,
+                    severity: crate::security::Severity::High,
                     description:
                         "Call budget has no caller identity to key on; call refused unattributed"
                             .to_string(),

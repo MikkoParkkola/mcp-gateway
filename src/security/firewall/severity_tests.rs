@@ -4,6 +4,7 @@
 //! and the serialized severity strings (MIK-8669).
 
 use super::*;
+use crate::security::Severity;
 
 // ── MIK-8669 commit G guard tests: severity table ───────────────────────────
 

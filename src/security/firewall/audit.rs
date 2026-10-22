@@ -56,7 +56,7 @@ const SCHEMA_VERSION: u8 = 3;
 #[derive(Serialize)]
 struct AuditFinding {
     scan_type: super::ScanType,
-    severity: super::Severity,
+    severity: crate::security::Severity,
     location: super::FindingLocation,
 }
 
@@ -77,7 +77,7 @@ impl From<&Finding> for AuditFinding {
 const _: () = {
     const fn copy<T: Copy>() {}
     copy::<super::ScanType>();
-    copy::<super::Severity>();
+    copy::<crate::security::Severity>();
     copy::<super::FindingLocation>();
 };
 
@@ -355,8 +355,9 @@ mod content_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::super::{FindingLocation, FirewallAction, ScanType, Severity};
+    use super::super::{FindingLocation, FirewallAction, ScanType};
     use super::*;
+    use crate::security::Severity;
     use serde_json::json;
     use tempfile::NamedTempFile;
 
