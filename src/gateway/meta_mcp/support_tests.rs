@@ -400,11 +400,12 @@ fn jwk_for(seed: &[u8; 32], kid: &str) -> String {
 /// MIK-8398 D1a: with both the HMAC signer and a public signer enabled, the
 /// stamped `_meta.provenance` carries a `public_signature` that verifies Bound
 /// against the result it was stamped over.
-#[test]
-fn d1a_dual_signed_tool_result_carries_a_bound_public_signature() {
+#[tokio::test]
+async fn d1a_dual_signed_tool_result_carries_a_bound_public_signature() {
     use crate::attestation::{BnautAttestationSigner, RESULT_PROVENANCE_DOMAIN_INFO};
     use crate::backend::BackendRegistry;
     use crate::gateway::meta_mcp::MetaMcp;
+    use crate::gateway::meta_mcp::invoke::with_minted_receipts;
     use crate::trust::provenance_public::{
         ProvenancePublicSigner, TrustSet, VerifyStatus, verify_public,
     };
@@ -419,8 +420,12 @@ fn d1a_dual_signed_tool_result_carries_a_bound_public_signature() {
     meta.enable_public_provenance(public);
 
     let result = serde_json::json!({"content": [{"type": "text", "text": "ok"}]});
-    let mut stamped = meta.stamp_direct_result(result, "github", "search_issues", None);
-    meta.seal_public_provenance(&mut stamped);
+    let mut stamped = with_minted_receipts(async {
+        let mut stamped = meta.stamp_direct_result(result, "github", "search_issues", None);
+        meta.seal_public_provenance(&mut stamped);
+        stamped
+    })
+    .await;
     let prov = stamped
         .pointer("/_meta/provenance")
         .expect("stamping emits _meta.provenance");

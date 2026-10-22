@@ -5,6 +5,11 @@ The HMAC in `result._meta.provenance` stays the gateway's own seal; the Ed25519
 signature travels beside it as the `public_signature` member, so anyone
 holding the public JWK can verify a receipt without any gateway secret.
 
+A receipt is publicly signed only in the request that minted it, once: the
+mint records the receipt, and the seal consumes that record. A receipt minted
+in another request — a replayed response, a backend-planted copy — is never
+sealed, at any depth, on any method.
+
 ## Setup
 
 Set two environment variables (an env file works; see `docs/DEPLOYMENT.md`):
@@ -41,7 +46,7 @@ To make a trust file from the export, run the public-key command and extract the
 
 - `payload` is base64url without padding of the exact JSON bytes in member order alg, kid, receipt, result_sha256, v as the committed fixture serializes it. Verifiers must use the exact payload bytes, never re-serialize.
 - `sig` is base64url without padding of the 64-byte Ed25519 signature over the domain tag followed by the payload bytes.
-- `result_sha256` is the hex digest of the result exactly as the client receives it, minus `_meta`, or null when there is no result to bind.
+- `result_sha256` is the hex digest of the result exactly as the client receives it, minus its top-level `_meta` and `_signature` members, or null when there is no result to bind.
 
 The verifier checks the signature over the decoded payload bytes it was
 given; it never re-canonicalizes.
@@ -93,17 +98,40 @@ holding an integer outside ±(2^53−1).
 
 ## Where receipts live
 
-- Top level: `result._meta.provenance`, `--result` = `result`.
+- Top level: `result._meta.provenance`, `--result` = `result`. Sealed at delivery.
 - Task: `result.result._meta.provenance`, `--result` = `result.result`.
+  Sealed at creation, when the result is recovered.
 - Chain: parse `content[0].text`; each step's receipt is at
   `results[i].result._meta.provenance`, `--result` = `results[i].result`.
+  Sealed at creation, when the step answers.
 - Playbook without an output mapping: `output.<step>._meta.provenance`,
-  `--result` = `output.<step>`.
+  `--result` = `output.<step>`. Sealed at creation, when the step answers.
 - A mapped playbook output carries no step receipt.
 
 Step seals are applied before the egress firewall. A step result the firewall
 later redacts verifies as `ResultMismatch`, which is the honest outcome, not a
 bypass.
+
+A direct idempotent replay that does not re-stamp delivers its stored receipt
+unsealed: the receipt was minted in an earlier request, so this request's seal
+refuses it.
+
+## Reading a saved response
+
+```bash
+# The receipt and the result it binds:
+jq '.result._meta.provenance' response.json
+jq '.result' response.json
+# A task answer:
+jq '.result.result._meta.provenance' response.json
+jq '.result.result' response.json
+# A chain step (inside the wrapped text):
+jq -r '.result.content[0].text' response.json | jq '.results[0].result._meta.provenance'
+jq -r '.result.content[0].text' response.json | jq '.results[0].result'
+# A playbook step:
+jq -r '.result.content[0].text' response.json | jq '.output.<step>._meta.provenance'
+jq -r '.result.content[0].text' response.json | jq '.output.<step>'
+```
 
 ## Digest recipe for non-Rust verifiers
 
@@ -131,7 +159,7 @@ TAG = b"mcp-gateway-provenance-ed25519-v1\0"
 def b64u_no_pad(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
-def verify(jwk: dict, prov: dict) -> dict:
+def verify(jwk: dict, prov: dict, result: dict | None = None) -> dict:
     payload_b64 = prov["public_signature"]["payload"]
     sig = b64u_no_pad(prov["public_signature"]["sig"])
     payload = b64u_no_pad(payload_b64)
@@ -146,5 +174,11 @@ def verify(jwk: dict, prov: dict) -> dict:
         raise ValueError("kid_mismatch")
     if body["receipt"] != prov["receipt"]:
         raise ValueError("outer_receipt_mismatch")
+    if result is not None and body["result_sha256"] is not None:
+        trimmed = {k: v for k, v in result.items() if k not in ("_meta", "_signature")}
+        # canonical_json is RFC 8785 canonical JSON of the value it is given.
+        digest = hashlib.sha256(canonical_json(trimmed)).hexdigest()
+        if digest != body["result_sha256"]:
+            raise ValueError("result_mismatch")
     return body
 ```

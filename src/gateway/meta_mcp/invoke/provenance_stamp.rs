@@ -1,14 +1,45 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Runtime-provenance stamping of a delivered result (MIK-6905, MIK-6908),
-//! split out of `invoke.rs`: behaviour unchanged.
-
-use std::borrow::Cow;
+//! split out of `invoke.rs`.
+//!
+//! The public seal (MIK-8398 C1c) signs only a receipt this request minted,
+//! once: the mint records the receipt's HMAC signature in the request's minted
+//! set, and the seal consumes it.
 
 use serde_json::Value;
 
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::support::{augment_with_provenance, strip_backend_provenance};
+
+tokio::task_local! {
+    /// The HMAC signatures this request minted and has not sealed yet.
+    static MINTED: parking_lot::Mutex<std::collections::HashSet<String>>;
+}
+
+/// Run `request` with one minted-receipt set for its whole lifetime, beside
+/// the visibility memo. A request already inside one keeps it, so nested entry
+/// points share the outer request's set.
+pub(crate) async fn with_minted_receipts<F: std::future::Future>(request: F) -> F::Output {
+    if MINTED.try_with(|_| ()).is_ok() {
+        return request.await;
+    }
+    MINTED
+        .scope(
+            parking_lot::Mutex::new(std::collections::HashSet::new()),
+            request,
+        )
+        .await
+}
+
+/// Count a receipt left unsealed, by why the seal refused it.
+fn note_unsealed(reason: &str) {
+    telemetry_metrics::counter!(
+        "mcp_public_provenance_unsealed_total",
+        "reason" => reason.to_owned()
+    )
+    .increment(1);
+}
 
 impl MetaMcp {
     /// Stamp a signed runtime-provenance receipt into `value._meta` when
@@ -68,6 +99,10 @@ impl MetaMcp {
             backend_ok,
             observed_at,
         );
+        // The mint: this request may seal this receipt, once. Outside a minted
+        // scope nothing is recorded and the receipt stays unsealed.
+        let sig = signed_receipt.signature.clone();
+        let _ = MINTED.try_with(|set| set.lock().insert(sig));
         if let Some(sink) = &self.claim_capture
             && let Some(call_id) = signed_receipt.receipt.call_id.clone()
         {
@@ -139,12 +174,14 @@ impl MetaMcp {
     }
 }
 
-/// Seal one receipt this gateway itself signed, and no other.
+/// Seal one receipt this request minted, and no other.
 ///
 /// Signs only when `object._meta.provenance` deserializes as a signed receipt
-/// whose HMAC verifies under this gateway's receipt-domain key; anything else
-/// is left unsealed, so the gateway never puts its Ed25519 signature on a
-/// receipt it did not issue.
+/// whose HMAC verifies under this gateway's receipt-domain key and whose
+/// signature this request's minted set still holds. The seal consumes the
+/// mint, so a receipt is sealed at most once; anything else is left unsealed
+/// and counted, and the gateway never puts its Ed25519 signature on a receipt
+/// it did not mint in this request.
 pub(in crate::gateway::meta_mcp) fn seal_receipt(
     public: &crate::trust::provenance_public::ProvenancePublicSigner,
     hmac: &crate::attestation::BnautAttestationSigner,
@@ -157,10 +194,17 @@ pub(in crate::gateway::meta_mcp) fn seal_receipt(
         return;
     };
     let Some(signature) = signed.signature_bytes() else {
+        note_unsealed("hmac_mismatch");
         return;
     };
     if !hmac.verify_bytes(&signed.receipt.canonical_bytes(), &signature) {
+        note_unsealed("hmac_mismatch");
         return;
+    }
+    match MINTED.try_with(|set| set.lock().remove(&signed.signature)) {
+        Ok(true) => {}
+        Ok(false) => return note_unsealed("not_minted"),
+        Err(_) => return note_unsealed("no_scope"),
     }
     let sig = public.sign_receipt(&signed.receipt, Some(&*object));
     if let Some(obj) = object
@@ -172,57 +216,22 @@ pub(in crate::gateway::meta_mcp) fn seal_receipt(
     }
 }
 
-/// Seal the step receipts nested in a chain or playbook answer, and only those.
-///
-/// Every `results[i].result` that is an object and every `output.<step>` member
-/// that is an object is sealed; nothing else is visited and there is no generic
-/// recursion, so a mapped playbook output carries no step receipt.
-pub(in crate::gateway::meta_mcp) fn seal_step_receipts(
-    public: &crate::trust::provenance_public::ProvenancePublicSigner,
-    hmac: &crate::attestation::BnautAttestationSigner,
-    content: &mut Value,
-) {
-    if let Some(results) = content.get_mut("results").and_then(Value::as_array_mut) {
-        for element in results.iter_mut() {
-            if let Some(result) = element.get_mut("result").filter(|v| v.is_object()) {
-                seal_receipt(public, hmac, result);
-            }
-        }
-    }
-    if let Some(output) = content.get_mut("output").and_then(Value::as_object_mut) {
-        for value in output.values_mut().filter(|v| v.is_object()) {
-            seal_receipt(public, hmac, value);
-        }
-    }
-}
-
 /// Lift `_meta.provenance` out of a dispatch result before it is wrapped.
 ///
-/// Returns the content without the receipt alongside the removed receipt.
-/// `_meta` itself is dropped when the removal leaves it empty, and every
-/// other `_meta` member is kept. Without a receipt the content is borrowed
-/// and nothing is cloned, so unstamped results keep their bytes.
-pub(in crate::gateway::meta_mcp) fn lift_receipt(
-    content: &Value,
-) -> (Cow<'_, Value>, Option<Value>) {
-    let has_receipt = content
-        .get("_meta")
-        .and_then(Value::as_object)
-        .is_some_and(|meta| meta.contains_key("provenance"));
-    if !has_receipt {
-        return (Cow::Borrowed(content), None);
-    }
-    let mut lifted = content.clone();
-    let receipt = lifted
+/// Returns the removed receipt. `_meta` itself is dropped when the removal
+/// leaves it empty, and every other `_meta` member is kept. Without a receipt
+/// nothing is touched, so unstamped results keep their bytes.
+pub(in crate::gateway::meta_mcp) fn lift_receipt(content: &mut Value) -> Option<Value> {
+    let receipt = content
         .get_mut("_meta")
         .and_then(Value::as_object_mut)
-        .and_then(|meta| meta.remove("provenance"));
-    let meta_empty = lifted
+        .and_then(|meta| meta.remove("provenance"))?;
+    let meta_empty = content
         .get("_meta")
         .and_then(Value::as_object)
         .is_some_and(serde_json::Map::is_empty);
-    if meta_empty && let Some(object) = lifted.as_object_mut() {
+    if meta_empty && let Some(object) = content.as_object_mut() {
         object.remove("_meta");
     }
-    (Cow::Owned(lifted), receipt)
+    Some(receipt)
 }

@@ -548,8 +548,11 @@ impl MetaMcp {
         self.inspect_task_result(&[target], trace_id, &mut gated)?;
         // Stamped last, as the live path is (MIK-6909): a peer receipt is
         // replaced, or dropped with stamping off, never stored as ours, and no
-        // later rewrite touches the gateway's own receipt (MIK-8030).
-        Ok(self.stamp_recovered_result(gated, server, tool, api_key_name))
+        // later rewrite touches the gateway's own receipt (MIK-8030). Sealed
+        // at creation, so the stored value carries its seal before delivery.
+        let mut stamped = self.stamp_recovered_result(gated, server, tool, api_key_name);
+        self.seal_public_provenance(&mut stamped);
+        Ok(stamped)
     }
 
     /// The tests' shorthand: the screened error alone.

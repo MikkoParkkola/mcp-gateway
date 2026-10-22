@@ -277,18 +277,10 @@ impl super::MetaMcp {
             context.chain_nonce,
             invoke_nonce,
         );
+        // Top level only: a task's stored result was sealed at creation, and a
+        // receipt this request did not mint is never sealed at any depth.
         if let Some(result) = response.result.as_mut() {
-            let nested = context.method == "tasks/get"
-                && result
-                    .get("result")
-                    .is_some_and(serde_json::Value::is_object);
-            if nested {
-                if let Some(stored) = result.get_mut("result") {
-                    self.seal_public_provenance(stored);
-                }
-            } else {
-                self.seal_public_provenance(result);
-            }
+            self.seal_public_provenance(result);
         }
 
         // A disabled signer and ordinary/admission/refusal errors must never
@@ -526,13 +518,9 @@ pub(super) fn shape_meta_result(
         ChainSource,
         Option<std::sync::Arc<crate::protocol::UpstreamChain>>,
     ),
-    public: Option<(
-        &crate::trust::provenance_public::ProvenancePublicSigner,
-        &BnautAttestationSigner,
-    )>,
 ) -> crate::protocol::JsonRpcResponse {
     let mut response = match result {
-        Ok(content) => match shape {
+        Ok(mut content) => match shape {
             // MRTR.11a: an interim round must not be pretty-printed into
             // `content[0].text`. `wrap_tool_success` reads only a
             // top-level `isError` and buries `resultType` inside a JSON string, where
@@ -548,17 +536,10 @@ pub(super) fn shape_meta_result(
                     }
                     super::interim_promotion::Promotion::Wrap => {
                         let has_output_schema = tool_name == "gateway_search_tools";
-                        let (lifted, receipt) = super::invoke::lift_receipt(&content);
-                        let mut lifted = lifted;
-                        if let Some((public, hmac)) = public {
-                            // Step seals predate the egress firewall, so a step
-                            // the firewall redacts verifies as a result mismatch.
-                            // Cloned only when a public signer is installed.
-                            super::invoke::seal_step_receipts(public, hmac, lifted.to_mut());
-                        }
+                        let receipt = super::invoke::lift_receipt(&mut content);
                         let mut wrapped = crate::gateway::meta_mcp_helpers::wrap_tool_success(
                             id,
-                            &lifted,
+                            &content,
                             has_output_schema,
                         );
                         if let Some(receipt) = receipt

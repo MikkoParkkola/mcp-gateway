@@ -70,7 +70,7 @@ mod provenance_stamp;
 pub(crate) mod relay;
 pub(super) use output_shape::enforce_output_schema;
 pub(super) use provenance_stamp::lift_receipt;
-pub(super) use provenance_stamp::seal_step_receipts;
+pub(crate) use provenance_stamp::with_minted_receipts;
 #[cfg(all(test, feature = "firewall"))]
 pub(crate) mod receipt_test_support;
 

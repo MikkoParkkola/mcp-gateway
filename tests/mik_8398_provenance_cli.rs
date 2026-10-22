@@ -647,16 +647,17 @@ fn verify_closed_stdout_keeps_the_verification_exit_code() {
     write_private(&receipt, &bytes);
     let result = copy_fixture_to(home.path(), "result.json");
     let args = verify_args(&trust, &receipt, Some(&result), &[]);
+    let (reader, writer) = std::io::pipe().expect("a pipe");
+    drop(reader);
     let mut command = gateway_bin::command(home.path(), gateway_bin::Inherit::Nothing);
     if let Some(path) = std::env::var_os("PATH") {
         command.env("PATH", path);
     }
     command
         .args(&args)
-        .stdout(Stdio::piped())
+        .stdout(Stdio::from(writer))
         .stderr(Stdio::null());
     let mut child = command.spawn().expect("the binary spawns");
-    drop(child.stdout.take());
     let status = child.wait().expect("the child waits");
     assert_eq!(status.code(), Some(1));
 }

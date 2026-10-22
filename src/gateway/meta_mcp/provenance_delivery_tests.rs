@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A `/mcp` receipt rides on the outer result (MIK-8398): the wrapped reply
-//! lifts `_meta.provenance` out of `content[0].text`, and `tasks/get` seals
-//! the stored result it serves.
+//! lifts `_meta.provenance` out of `content[0].text`, a task's stored result
+//! is sealed at creation, and a receipt is publicly signed only in the request
+//! that minted it, once (C1c).
 use super::*;
 use crate::attestation::{BnautAttestationSigner, RESULT_PROVENANCE_DOMAIN_INFO};
+use crate::gateway::meta_mcp::invoke::with_minted_receipts;
 use crate::gateway::meta_mcp::response_security::{
     ResponseCorrelation, ResponseDeliveryContext, ResponsePolicyTarget,
 };
@@ -80,202 +82,304 @@ fn assert_text_carries_no_receipt(delivered: &serde_json::Value) {
     );
 }
 
-#[tokio::test]
-async fn gateway_invoke_modern_reply_carries_a_bound_public_signature() {
-    let mut meta = MetaMcp::new(provenance_test_backend());
-    dual_signed_meta(&mut meta);
-    let trust = trust_set();
+/// A genuine receipt from one live `gateway_invoke` reply, with its public
+/// seal dropped, so a replay row can plant it where it was never minted.
+async fn captured_receipt(meta: &MetaMcp) -> serde_json::Value {
     let caller = allow_all_ctx_named(Some("alice"), None);
-    let mut response = meta
+    let response = meta
         .handle_tools_call(
-            RequestId::Number(1),
+            RequestId::Number(41),
             "gateway_invoke",
             invoke_args(),
             Some("session-1"),
             caller,
         )
         .await;
-    crate::gateway::router::shape_modern_response(&mut response, "tools/call");
     let targets: Vec<ResponsePolicyTarget> = Vec::new();
     let delivery = delivery_ctx(&targets, "tools/call", "gateway_invoke");
     let response = meta.finalize_routed(response, &delivery, None);
     let delivered = response.result.expect("a result");
-    assert_eq!(delivered["resultType"], "complete");
-    assert!(
-        delivered
-            .pointer("/_meta/provenance/public_signature")
-            .is_some(),
-        "the outer receipt carries a public signature: {delivered}"
-    );
-    let prov = outer_receipt(&delivered);
-    assert_bound(&prov, &trust, &delivered);
-    assert_eq!(
-        prov.pointer("/receipt/cache").and_then(|v| v.as_str()),
-        Some("miss")
-    );
-    assert_text_carries_no_receipt(&delivered);
+    let mut prov = outer_receipt(&delivered);
+    prov.as_object_mut()
+        .expect("a receipt object")
+        .remove("public_signature");
+    prov
+}
+
+/// A registry whose `remote_docs` backend answers `result` to every `tools/call`.
+fn answering_backend(result: serde_json::Value) -> Arc<BackendRegistry> {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig};
+    use crate::transport::Transport;
+
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(Backend::new(
+        "remote_docs",
+        BackendConfig::r2_off(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let transport: Arc<dyn Transport> = Arc::new(ToolCallTestTransport { result });
+    backend.set_transport_for_test(transport);
+    let _ = registry.register(backend);
+    registry
+}
+
+/// A plain `gateway_invoke` reply from `meta`, delivered inside one minted
+/// scope: the parsed `content[0].text`, after checking the scope sealed this
+/// request's own top-level mint.
+async fn replayed_text(meta: &MetaMcp) -> serde_json::Value {
+    with_minted_receipts(async {
+        let caller = allow_all_ctx_named(Some("alice"), None);
+        let response = meta
+            .handle_tools_call(
+                RequestId::Number(42),
+                "gateway_invoke",
+                invoke_args(),
+                Some("session-1"),
+                caller,
+            )
+            .await;
+        let targets: Vec<ResponsePolicyTarget> = Vec::new();
+        let delivery = delivery_ctx(&targets, "tools/call", "gateway_invoke");
+        let response = meta.finalize_routed(response, &delivery, None);
+        let delivered = response.result.expect("a result");
+        assert!(
+            delivered
+                .pointer("/_meta/provenance/public_signature")
+                .is_some(),
+            "the scope seals this request's own mint: {delivered}"
+        );
+        let text = delivered
+            .pointer("/content/0/text")
+            .and_then(|v| v.as_str())
+            .expect("a wrapped reply carries text");
+        serde_json::from_str(text).expect("the text parses as JSON")
+    })
+    .await
+}
+
+/// A `tasks/get` envelope serving `stored` as its completed result.
+fn task_envelope(stored: &serde_json::Value) -> JsonRpcResponse {
+    let mut task = crate::protocol::tasks::Task::create("search").expect("a task");
+    task.complete(stored).expect("completes");
+    let mut envelope = serde_json::to_value(task.wire()).expect("wire");
+    envelope["resultType"] = json!("complete");
+    JsonRpcResponse::success(RequestId::Number(5), envelope)
+}
+
+#[tokio::test]
+async fn gateway_invoke_modern_reply_carries_a_bound_public_signature() {
+    with_minted_receipts(async {
+        let mut meta = MetaMcp::new(provenance_test_backend());
+        dual_signed_meta(&mut meta);
+        let trust = trust_set();
+        let caller = allow_all_ctx_named(Some("alice"), None);
+        let mut response = meta
+            .handle_tools_call(
+                RequestId::Number(1),
+                "gateway_invoke",
+                invoke_args(),
+                Some("session-1"),
+                caller,
+            )
+            .await;
+        crate::gateway::router::shape_modern_response(&mut response, "tools/call");
+        let targets: Vec<ResponsePolicyTarget> = Vec::new();
+        let delivery = delivery_ctx(&targets, "tools/call", "gateway_invoke");
+        let response = meta.finalize_routed(response, &delivery, None);
+        let delivered = response.result.expect("a result");
+        assert_eq!(delivered["resultType"], "complete");
+        assert!(
+            delivered
+                .pointer("/_meta/provenance/public_signature")
+                .is_some(),
+            "the outer receipt carries a public signature: {delivered}"
+        );
+        let prov = outer_receipt(&delivered);
+        assert_bound(&prov, &trust, &delivered);
+        assert_eq!(
+            prov.pointer("/receipt/cache").and_then(|v| v.as_str()),
+            Some("miss")
+        );
+        assert_text_carries_no_receipt(&delivered);
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn gateway_invoke_legacy_reply_carries_a_bound_public_signature() {
-    let mut meta = MetaMcp::new(provenance_test_backend());
-    dual_signed_meta(&mut meta);
-    let trust = trust_set();
-    let caller = allow_all_ctx_named(Some("alice"), None);
-    let response = meta
-        .handle_tools_call(
-            RequestId::Number(2),
-            "gateway_invoke",
-            invoke_args(),
-            Some("session-1"),
-            caller,
-        )
-        .await;
-    let targets: Vec<ResponsePolicyTarget> = Vec::new();
-    let delivery = delivery_ctx(&targets, "tools/call", "gateway_invoke");
-    let response = meta.finalize_routed(response, &delivery, None);
-    let delivered = response.result.expect("a result");
-    assert!(
-        delivered
-            .pointer("/_meta/provenance/public_signature")
-            .is_some(),
-        "the outer receipt carries a public signature: {delivered}"
-    );
-    let prov = outer_receipt(&delivered);
-    assert_bound(&prov, &trust, &delivered);
-    assert_eq!(
-        prov.pointer("/receipt/cache").and_then(|v| v.as_str()),
-        Some("miss")
-    );
-    assert_text_carries_no_receipt(&delivered);
+    with_minted_receipts(async {
+        let mut meta = MetaMcp::new(provenance_test_backend());
+        dual_signed_meta(&mut meta);
+        let trust = trust_set();
+        let caller = allow_all_ctx_named(Some("alice"), None);
+        let response = meta
+            .handle_tools_call(
+                RequestId::Number(2),
+                "gateway_invoke",
+                invoke_args(),
+                Some("session-1"),
+                caller,
+            )
+            .await;
+        let targets: Vec<ResponsePolicyTarget> = Vec::new();
+        let delivery = delivery_ctx(&targets, "tools/call", "gateway_invoke");
+        let response = meta.finalize_routed(response, &delivery, None);
+        let delivered = response.result.expect("a result");
+        assert!(
+            delivered
+                .pointer("/_meta/provenance/public_signature")
+                .is_some(),
+            "the outer receipt carries a public signature: {delivered}"
+        );
+        let prov = outer_receipt(&delivered);
+        assert_bound(&prov, &trust, &delivered);
+        assert_eq!(
+            prov.pointer("/receipt/cache").and_then(|v| v.as_str()),
+            Some("miss")
+        );
+        assert_text_carries_no_receipt(&delivered);
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn gateway_invoke_response_cache_hit_carries_a_bound_public_signature() {
-    let mut meta = MetaMcp::with_features(
-        provenance_test_backend(),
-        Some(Arc::new(crate::cache::ResponseCache::new())),
-        None,
-        None,
-        Duration::from_secs(300),
-    );
-    dual_signed_meta(&mut meta);
-    let trust = trust_set();
-    let targets: Vec<ResponsePolicyTarget> = Vec::new();
-    let delivery = delivery_ctx(&targets, "tools/call", "gateway_invoke");
-    let first = meta
-        .handle_tools_call(
-            RequestId::Number(3),
-            "gateway_invoke",
-            invoke_args(),
-            Some("session-1"),
-            allow_all_ctx_named(Some("alice"), None),
-        )
-        .await;
-    let _ = meta.finalize_routed(first, &delivery, None);
-    let second = meta
-        .handle_tools_call(
-            RequestId::Number(3),
-            "gateway_invoke",
-            invoke_args(),
-            Some("session-1"),
-            allow_all_ctx_named(Some("alice"), None),
-        )
-        .await;
-    let response = meta.finalize_routed(second, &delivery, None);
-    let delivered = response.result.expect("a result");
-    assert!(
-        delivered
-            .pointer("/_meta/provenance/public_signature")
-            .is_some(),
-        "the cached reply carries a public signature: {delivered}"
-    );
-    let prov = outer_receipt(&delivered);
-    assert_eq!(
-        prov.pointer("/receipt/cache").and_then(|v| v.as_str()),
-        Some("hit")
-    );
-    assert_bound(&prov, &trust, &delivered);
-    assert_text_carries_no_receipt(&delivered);
+    with_minted_receipts(async {
+        let mut meta = MetaMcp::with_features(
+            provenance_test_backend(),
+            Some(Arc::new(crate::cache::ResponseCache::new())),
+            None,
+            None,
+            Duration::from_secs(300),
+        );
+        dual_signed_meta(&mut meta);
+        let trust = trust_set();
+        let targets: Vec<ResponsePolicyTarget> = Vec::new();
+        let delivery = delivery_ctx(&targets, "tools/call", "gateway_invoke");
+        let first = meta
+            .handle_tools_call(
+                RequestId::Number(3),
+                "gateway_invoke",
+                invoke_args(),
+                Some("session-1"),
+                allow_all_ctx_named(Some("alice"), None),
+            )
+            .await;
+        let _ = meta.finalize_routed(first, &delivery, None);
+        let second = meta
+            .handle_tools_call(
+                RequestId::Number(3),
+                "gateway_invoke",
+                invoke_args(),
+                Some("session-1"),
+                allow_all_ctx_named(Some("alice"), None),
+            )
+            .await;
+        let response = meta.finalize_routed(second, &delivery, None);
+        let delivered = response.result.expect("a result");
+        assert!(
+            delivered
+                .pointer("/_meta/provenance/public_signature")
+                .is_some(),
+            "the cached reply carries a public signature: {delivered}"
+        );
+        let prov = outer_receipt(&delivered);
+        assert_eq!(
+            prov.pointer("/receipt/cache").and_then(|v| v.as_str()),
+            Some("hit")
+        );
+        assert_bound(&prov, &trust, &delivered);
+        assert_text_carries_no_receipt(&delivered);
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn gateway_invoke_idempotent_replay_carries_a_bound_public_signature() {
-    let mut meta = MetaMcp::new(provenance_test_backend());
-    dual_signed_meta(&mut meta);
-    meta.enable_idempotency(
-        Arc::new(crate::idempotency::IdempotencyCache::new()),
-        Duration::from_secs(300),
-    );
-    let trust = trust_set();
-    let retry = crate::protocol::mrtr::RetryFields {
-        idempotency_key: Some("k-8398".to_owned()),
-        ..Default::default()
-    };
-    let targets: Vec<ResponsePolicyTarget> = Vec::new();
-    let delivery = delivery_ctx(&targets, "tools/call", "gateway_invoke");
-    let caller = MetaMcpCallerContext {
-        retry: &retry,
-        ..allow_all_ctx_named(Some("alice"), None)
-    };
-    let first = meta
-        .handle_tools_call(
-            RequestId::Number(4),
-            "gateway_invoke",
-            invoke_args(),
-            Some("session-1"),
-            caller,
-        )
-        .await;
-    let _ = meta.finalize_routed(first, &delivery, None);
-    let caller = MetaMcpCallerContext {
-        retry: &retry,
-        ..allow_all_ctx_named(Some("alice"), None)
-    };
-    let second = meta
-        .handle_tools_call(
-            RequestId::Number(4),
-            "gateway_invoke",
-            invoke_args(),
-            Some("session-1"),
-            caller,
-        )
-        .await;
-    let response = meta.finalize_routed(second, &delivery, None);
-    let delivered = response.result.expect("a result");
-    assert!(
-        delivered
-            .pointer("/_meta/provenance/public_signature")
-            .is_some(),
-        "the replayed reply carries a public signature: {delivered}"
-    );
-    let prov = outer_receipt(&delivered);
-    assert_eq!(
-        prov.pointer("/receipt/cache").and_then(|v| v.as_str()),
-        Some("hit")
-    );
-    assert_bound(&prov, &trust, &delivered);
+    with_minted_receipts(async {
+        let mut meta = MetaMcp::new(provenance_test_backend());
+        dual_signed_meta(&mut meta);
+        meta.enable_idempotency(
+            Arc::new(crate::idempotency::IdempotencyCache::new()),
+            Duration::from_secs(300),
+        );
+        let trust = trust_set();
+        let retry = crate::protocol::mrtr::RetryFields {
+            idempotency_key: Some("k-8398".to_owned()),
+            ..Default::default()
+        };
+        let targets: Vec<ResponsePolicyTarget> = Vec::new();
+        let delivery = delivery_ctx(&targets, "tools/call", "gateway_invoke");
+        let caller = MetaMcpCallerContext {
+            retry: &retry,
+            ..allow_all_ctx_named(Some("alice"), None)
+        };
+        let first = meta
+            .handle_tools_call(
+                RequestId::Number(4),
+                "gateway_invoke",
+                invoke_args(),
+                Some("session-1"),
+                caller,
+            )
+            .await;
+        let _ = meta.finalize_routed(first, &delivery, None);
+        let caller = MetaMcpCallerContext {
+            retry: &retry,
+            ..allow_all_ctx_named(Some("alice"), None)
+        };
+        let second = meta
+            .handle_tools_call(
+                RequestId::Number(4),
+                "gateway_invoke",
+                invoke_args(),
+                Some("session-1"),
+                caller,
+            )
+            .await;
+        let response = meta.finalize_routed(second, &delivery, None);
+        let delivered = response.result.expect("a result");
+        assert!(
+            delivered
+                .pointer("/_meta/provenance/public_signature")
+                .is_some(),
+            "the replayed reply carries a public signature: {delivered}"
+        );
+        let prov = outer_receipt(&delivered);
+        assert_eq!(
+            prov.pointer("/receipt/cache").and_then(|v| v.as_str()),
+            Some("hit")
+        );
+        assert_bound(&prov, &trust, &delivered);
+    })
+    .await;
 }
 
-#[test]
-fn tasks_get_delivers_a_bound_public_signature_on_the_stored_result() {
+#[tokio::test]
+async fn tasks_get_delivers_a_bound_public_signature_on_the_stored_result() {
     let mut meta = MetaMcp::new(provenance_test_backend());
     dual_signed_meta(&mut meta);
     let trust = trust_set();
-    let stamped = meta.stamp_recovered_result(
-        json!({"content": [{"type": "text", "text": "ok"}]}),
-        "remote_docs",
-        "search",
-        None,
-    );
-    let mut task = crate::protocol::tasks::Task::create("search").expect("a task");
-    task.complete(&stamped).expect("completes");
-    let mut envelope = serde_json::to_value(task.wire()).expect("wire");
-    envelope["resultType"] = json!("complete");
-    let response = JsonRpcResponse::success(RequestId::Number(5), envelope);
+    // Sealed at creation: the stored result carries its seal before delivery.
+    let stamped = with_minted_receipts(async {
+        meta.recover_task_result(
+            "remote_docs",
+            "search",
+            None,
+            "trace-8398",
+            json!({"content": [{"type": "text", "text": "ok"}]}),
+        )
+    })
+    .await
+    .expect("nothing in the result trips a gate");
     let targets: Vec<ResponsePolicyTarget> = Vec::new();
     let delivery = delivery_ctx(&targets, "tasks/get", "gateway_invoke");
-    let response = meta.finalize_routed(response, &delivery, None);
+    let response = with_minted_receipts(async {
+        meta.finalize_routed(task_envelope(&stamped), &delivery, None)
+    })
+    .await;
     let delivered = response.result.expect("a result");
     let prov = delivered
         .pointer("/result/_meta/provenance")
@@ -287,62 +391,89 @@ fn tasks_get_delivers_a_bound_public_signature_on_the_stored_result() {
     );
     let verified = verify_public(&prov, &trust, Some(&delivered["result"])).expect("it verifies");
     assert_eq!(verified.status, VerifyStatus::Bound);
+    // Delivery seals nothing nested: a result stored unsealed stays unsealed.
+    let unsealed = meta
+        .recover_task_result(
+            "remote_docs",
+            "search",
+            None,
+            "trace-8398",
+            json!({"content": [{"type": "text", "text": "ok"}]}),
+        )
+        .expect("nothing in the result trips a gate");
+    let response = with_minted_receipts(async {
+        meta.finalize_routed(task_envelope(&unsealed), &delivery, None)
+    })
+    .await;
+    let delivered = response.result.expect("a result");
+    let prov = delivered
+        .pointer("/result/_meta/provenance")
+        .expect("the stored result carries the receipt");
+    assert!(
+        prov.get("public_signature").is_none(),
+        "delivery seals no nested receipt: {delivered}"
+    );
 }
 
 #[tokio::test]
 async fn chain_answer_step_receipts_carry_bound_public_signatures() {
-    let mut meta = MetaMcp::new(provenance_test_backend()).with_code_mode(true);
-    dual_signed_meta(&mut meta);
-    let trust = trust_set();
-    let caller = allow_all_ctx_named(Some("alice"), None);
-    let response = meta
-        .handle_tools_call(
-            RequestId::Number(6),
-            "gateway_execute",
-            json!({"chain": [
-                {"tool": "remote_docs:search", "arguments": {}},
-                {"tool": "remote_docs:search", "arguments": {}},
-            ]}),
-            Some("session-1"),
-            caller,
-        )
-        .await;
-    let targets: Vec<ResponsePolicyTarget> = Vec::new();
-    let delivery = delivery_ctx(&targets, "tools/call", "gateway_execute");
-    let response = meta.finalize_routed(response, &delivery, None);
-    let delivered = response.result.expect("a result");
-    let text = delivered
-        .pointer("/content/0/text")
-        .and_then(|v| v.as_str())
-        .expect("a wrapped reply carries text");
-    let parsed: serde_json::Value = serde_json::from_str(text).expect("the text parses as JSON");
-    let results = parsed
-        .get("results")
-        .and_then(|v| v.as_array())
-        .expect("a chain answer carries results");
-    assert_eq!(results.len(), 2, "two steps ran: {parsed}");
-    for (i, element) in results.iter().enumerate() {
-        let step_result = element.get("result").expect("a step result");
-        let prov = step_result
-            .pointer("/_meta/provenance")
-            .expect("a step receipt");
-        assert!(
-            prov.get("public_signature").is_some(),
-            "step {i} carries a public signature: {parsed}"
-        );
-        let verified =
-            verify_public(prov, &trust, Some(step_result)).expect("the step receipt verifies");
-        assert_eq!(verified.status, VerifyStatus::Bound);
-    }
+    with_minted_receipts(async {
+        let mut meta = MetaMcp::new(provenance_test_backend()).with_code_mode(true);
+        dual_signed_meta(&mut meta);
+        let trust = trust_set();
+        let caller = allow_all_ctx_named(Some("alice"), None);
+        let response = meta
+            .handle_tools_call(
+                RequestId::Number(6),
+                "gateway_execute",
+                json!({"chain": [
+                    {"tool": "remote_docs:search", "arguments": {}},
+                    {"tool": "remote_docs:search", "arguments": {}},
+                ]}),
+                Some("session-1"),
+                caller,
+            )
+            .await;
+        let targets: Vec<ResponsePolicyTarget> = Vec::new();
+        let delivery = delivery_ctx(&targets, "tools/call", "gateway_execute");
+        let response = meta.finalize_routed(response, &delivery, None);
+        let delivered = response.result.expect("a result");
+        let text = delivered
+            .pointer("/content/0/text")
+            .and_then(|v| v.as_str())
+            .expect("a wrapped reply carries text");
+        let parsed: serde_json::Value =
+            serde_json::from_str(text).expect("the text parses as JSON");
+        let results = parsed
+            .get("results")
+            .and_then(|v| v.as_array())
+            .expect("a chain answer carries results");
+        assert_eq!(results.len(), 2, "two steps ran: {parsed}");
+        for (i, element) in results.iter().enumerate() {
+            let step_result = element.get("result").expect("a step result");
+            let prov = step_result
+                .pointer("/_meta/provenance")
+                .expect("a step receipt");
+            assert!(
+                prov.get("public_signature").is_some(),
+                "step {i} carries a public signature: {parsed}"
+            );
+            let verified =
+                verify_public(prov, &trust, Some(step_result)).expect("the step receipt verifies");
+            assert_eq!(verified.status, VerifyStatus::Bound);
+        }
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn playbook_answer_step_receipts_carry_bound_public_signatures() {
-    let mut meta = MetaMcp::new(provenance_test_backend());
-    dual_signed_meta(&mut meta);
-    let trust = trust_set();
-    let definition: crate::playbook::PlaybookDefinition = crate::yaml::from_str(
-        r"
+    with_minted_receipts(async {
+        let mut meta = MetaMcp::new(provenance_test_backend());
+        dual_signed_meta(&mut meta);
+        let trust = trust_set();
+        let definition: crate::playbook::PlaybookDefinition = crate::yaml::from_str(
+            r"
 name: two_search
 description: two searches with no output mapping
 on_error: abort
@@ -354,47 +485,50 @@ steps:
     server: remote_docs
     tool: search
 ",
-    )
-    .expect("playbook fixture must parse");
-    let name = definition.name.clone();
-    let mut engine = crate::playbook::PlaybookEngine::new();
-    engine.register(definition);
-    meta.set_playbook_engine(engine);
-    let caller = allow_all_ctx_named(Some("alice"), None);
-    let response = meta
-        .handle_tools_call(
-            RequestId::Number(7),
-            "gateway_run_playbook",
-            json!({"name": name, "arguments": {}}),
-            Some("session-1"),
-            caller,
         )
-        .await;
-    let targets: Vec<ResponsePolicyTarget> = Vec::new();
-    let delivery = delivery_ctx(&targets, "tools/call", "gateway_run_playbook");
-    let response = meta.finalize_routed(response, &delivery, None);
-    let delivered = response.result.expect("a result");
-    let text = delivered
-        .pointer("/content/0/text")
-        .and_then(|v| v.as_str())
-        .expect("a wrapped reply carries text");
-    let parsed: serde_json::Value = serde_json::from_str(text).expect("the text parses as JSON");
-    let output = parsed
-        .get("output")
-        .expect("a playbook answer carries output");
-    for step in ["first", "second"] {
-        let step_value = output.get(step).expect("a step output");
-        let prov = step_value
-            .pointer("/_meta/provenance")
-            .expect("a step receipt");
-        assert!(
-            prov.get("public_signature").is_some(),
-            "step {step} carries a public signature: {parsed}"
-        );
-        let verified =
-            verify_public(prov, &trust, Some(step_value)).expect("the step receipt verifies");
-        assert_eq!(verified.status, VerifyStatus::Bound);
-    }
+        .expect("playbook fixture must parse");
+        let name = definition.name.clone();
+        let mut engine = crate::playbook::PlaybookEngine::new();
+        engine.register(definition);
+        meta.set_playbook_engine(engine);
+        let caller = allow_all_ctx_named(Some("alice"), None);
+        let response = meta
+            .handle_tools_call(
+                RequestId::Number(7),
+                "gateway_run_playbook",
+                json!({"name": name, "arguments": {}}),
+                Some("session-1"),
+                caller,
+            )
+            .await;
+        let targets: Vec<ResponsePolicyTarget> = Vec::new();
+        let delivery = delivery_ctx(&targets, "tools/call", "gateway_run_playbook");
+        let response = meta.finalize_routed(response, &delivery, None);
+        let delivered = response.result.expect("a result");
+        let text = delivered
+            .pointer("/content/0/text")
+            .and_then(|v| v.as_str())
+            .expect("a wrapped reply carries text");
+        let parsed: serde_json::Value =
+            serde_json::from_str(text).expect("the text parses as JSON");
+        let output = parsed
+            .get("output")
+            .expect("a playbook answer carries output");
+        for step in ["first", "second"] {
+            let step_value = output.get(step).expect("a step output");
+            let prov = step_value
+                .pointer("/_meta/provenance")
+                .expect("a step receipt");
+            assert!(
+                prov.get("public_signature").is_some(),
+                "step {step} carries a public signature: {parsed}"
+            );
+            let verified =
+                verify_public(prov, &trust, Some(step_value)).expect("the step receipt verifies");
+            assert_eq!(verified.status, VerifyStatus::Bound);
+        }
+    })
+    .await;
 }
 
 #[test]
@@ -426,8 +560,8 @@ fn seal_refuses_a_receipt_this_gateway_did_not_sign() {
     );
 }
 
-#[test]
-fn forged_nested_receipt_is_never_sealed() {
+#[tokio::test]
+async fn forged_nested_receipt_is_never_sealed() {
     let mut meta = MetaMcp::new(provenance_test_backend());
     dual_signed_meta(&mut meta);
     let other = BnautAttestationSigner::new(b"other-key".to_vec(), "unit")
@@ -453,16 +587,180 @@ fn forged_nested_receipt_is_never_sealed() {
             },
         }],
     });
-    let public = meta
-        .public_provenance_signer
-        .as_deref()
-        .expect("a public signer");
-    let hmac = meta.provenance_signer.as_deref().expect("an HMAC signer");
-    crate::gateway::meta_mcp::invoke::seal_step_receipts(public, hmac, &mut content);
+    with_minted_receipts(async {
+        let step = content
+            .pointer_mut("/results/0/result")
+            .expect("a step result");
+        meta.seal_public_provenance(step);
+    })
+    .await;
     assert!(
         content
             .pointer("/results/0/result/_meta/provenance/public_signature")
             .is_none(),
         "a nested receipt this gateway did not sign must not be sealed: {content}"
+    );
+}
+
+#[tokio::test]
+async fn replayed_receipt_at_a_results_position_is_never_sealed() {
+    let mut meta = MetaMcp::new(provenance_test_backend());
+    dual_signed_meta(&mut meta);
+    let captured = with_minted_receipts(async { captured_receipt(&meta).await }).await;
+    let mut evil = MetaMcp::new(answering_backend(json!({
+        "content": [{"type": "text", "text": "ok"}],
+        "results": [{
+            "step": 0,
+            "tool": "x",
+            "result": {"forged": true, "_meta": {"provenance": captured}},
+        }],
+    })));
+    dual_signed_meta(&mut evil);
+    let parsed = replayed_text(&evil).await;
+    let step = parsed
+        .pointer("/results/0/result")
+        .expect("the planted step result");
+    assert!(
+        step.pointer("/_meta/provenance").is_some(),
+        "the planted receipt survived delivery: {parsed}"
+    );
+    assert!(
+        step.pointer("/_meta/provenance/public_signature").is_none(),
+        "a receipt minted in another request is never sealed at a results position: {parsed}"
+    );
+}
+
+#[tokio::test]
+async fn replayed_receipt_at_an_output_position_is_never_sealed() {
+    let mut meta = MetaMcp::new(provenance_test_backend());
+    dual_signed_meta(&mut meta);
+    let captured = with_minted_receipts(async { captured_receipt(&meta).await }).await;
+    let mut evil = MetaMcp::new(answering_backend(json!({
+        "output": {"x": {"forged": true, "_meta": {"provenance": captured}}},
+    })));
+    dual_signed_meta(&mut evil);
+    let parsed = replayed_text(&evil).await;
+    let step = parsed
+        .pointer("/output/x")
+        .expect("the planted step output");
+    assert!(
+        step.pointer("/_meta/provenance").is_some(),
+        "the planted receipt survived delivery: {parsed}"
+    );
+    assert!(
+        step.pointer("/_meta/provenance/public_signature").is_none(),
+        "a receipt minted in another request is never sealed at an output position: {parsed}"
+    );
+}
+
+#[tokio::test]
+async fn replayed_top_level_receipt_in_a_resources_read_answer_is_never_sealed() {
+    let mut meta = MetaMcp::new(provenance_test_backend());
+    dual_signed_meta(&mut meta);
+    let captured = with_minted_receipts(async { captured_receipt(&meta).await }).await;
+    let response = JsonRpcResponse::success(
+        RequestId::Number(43),
+        json!({
+            "contents": [{"uri": "res://x", "text": "ok"}],
+            "_meta": {"provenance": captured},
+        }),
+    );
+    let targets: Vec<ResponsePolicyTarget> = Vec::new();
+    let delivery = delivery_ctx(&targets, "resources/read", "resources/read");
+    let response =
+        with_minted_receipts(async { meta.finalize_routed(response, &delivery, None) }).await;
+    let delivered = response.result.expect("a result");
+    assert!(
+        delivered.pointer("/_meta/provenance").is_some(),
+        "the planted receipt survived delivery: {delivered}"
+    );
+    assert!(
+        delivered
+            .pointer("/_meta/provenance/public_signature")
+            .is_none(),
+        "a receipt minted in another request is never sealed on resources/read: {delivered}"
+    );
+}
+
+#[tokio::test]
+async fn a_receipt_not_minted_in_this_request_is_never_sealed() {
+    let mut meta = MetaMcp::new(provenance_test_backend());
+    dual_signed_meta(&mut meta);
+    let stamped = with_minted_receipts(async {
+        meta.stamp_direct_result(
+            json!({"content": [{"type": "text", "text": "ok"}]}),
+            "remote_docs",
+            "search",
+            None,
+        )
+    })
+    .await;
+    let mut delivered = stamped;
+    with_minted_receipts(async {
+        meta.seal_public_provenance(&mut delivered);
+    })
+    .await;
+    assert!(
+        delivered
+            .pointer("/_meta/provenance/public_signature")
+            .is_none(),
+        "a receipt minted in another request is never sealed: {delivered}"
+    );
+}
+
+#[tokio::test]
+async fn a_minted_receipt_is_sealed_at_most_once() {
+    let mut meta = MetaMcp::new(provenance_test_backend());
+    dual_signed_meta(&mut meta);
+    with_minted_receipts(async {
+        let stamped = meta.stamp_direct_result(
+            json!({"content": [{"type": "text", "text": "a"}]}),
+            "remote_docs",
+            "search",
+            None,
+        );
+        let mut first = stamped.clone();
+        meta.seal_public_provenance(&mut first);
+        assert!(
+            first
+                .pointer("/_meta/provenance/public_signature")
+                .is_some(),
+            "the first seal signs the minted receipt: {first}"
+        );
+        let echo = stamped
+            .pointer("/_meta/provenance")
+            .expect("a receipt")
+            .clone();
+        let mut second = json!({
+            "content": [{"type": "text", "text": "b"}],
+            "_meta": {"provenance": echo},
+        });
+        meta.seal_public_provenance(&mut second);
+        assert!(
+            second
+                .pointer("/_meta/provenance/public_signature")
+                .is_none(),
+            "the same receipt is never sealed twice: {second}"
+        );
+    })
+    .await;
+}
+
+#[test]
+fn a_seal_with_no_scope_fails_closed() {
+    let mut meta = MetaMcp::new(provenance_test_backend());
+    dual_signed_meta(&mut meta);
+    let mut value = meta.stamp_direct_result(
+        json!({"content": [{"type": "text", "text": "ok"}]}),
+        "remote_docs",
+        "search",
+        None,
+    );
+    meta.seal_public_provenance(&mut value);
+    assert!(
+        value
+            .pointer("/_meta/provenance/public_signature")
+            .is_none(),
+        "a seal with no scope seals nothing and never panics: {value}"
     );
 }
