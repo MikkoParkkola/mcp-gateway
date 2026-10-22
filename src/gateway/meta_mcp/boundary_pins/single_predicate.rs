@@ -86,7 +86,7 @@ fn macro_mentions_api_key(mac: &syn::ExprMacro) -> bool {
 fn is_api_key_comparison(expr: &syn::Expr) -> bool {
     match expr {
         syn::Expr::Binary(binary) => {
-            matches!(binary.op, syn::BinOp::Eq | syn::BinOp::Ne)
+            matches!(binary.op, syn::BinOp::Eq(_) | syn::BinOp::Ne(_))
                 && (is_api_key_path(&binary.left) || is_api_key_path(&binary.right))
         }
         syn::Expr::Macro(mac) => macro_mentions_api_key(mac),
@@ -110,6 +110,13 @@ impl<'ast> Visit<'ast> for ApiKeyPatProbe {
         }
         syn::visit::visit_path(self, path);
     }
+
+    fn visit_pat_ident(&mut self, binding: &'ast syn::PatIdent) {
+        if binding.subpat.is_none() && binding.ident == "ApiKey" {
+            self.found = true;
+        }
+        syn::visit::visit_pat_ident(self, binding);
+    }
 }
 
 fn pat_mentions_api_key(pat: &syn::Pat) -> bool {
@@ -118,31 +125,109 @@ fn pat_mentions_api_key(pat: &syn::Pat) -> bool {
     probe.found
 }
 
-#[derive(Default)]
-struct CatchAllProbe {
-    found: bool,
+/// Whether `ident` starts uppercase, so a bare `Pat::Ident` is a variant.
+fn is_uppercase_ident(ident: &syn::Ident) -> bool {
+    ident
+        .to_string()
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_uppercase())
 }
 
-impl<'ast> Visit<'ast> for CatchAllProbe {
-    fn visit_pat_wild(&mut self, wild: &'ast syn::PatWild) {
-        self.found = true;
-        syn::visit::visit_pat_wild(self, wild);
-    }
+/// Whether `binding` is a catch-all binding: no subpattern and lowercase.
+/// A bare uppercase `Pat::Ident` is a variant, never a binding.
+fn is_binding_ident(binding: &syn::PatIdent) -> bool {
+    binding.subpat.is_none() && !is_uppercase_ident(&binding.ident)
+}
 
-    fn visit_pat_ident(&mut self, binding: &'ast syn::PatIdent) {
-        // Bare `None` parses as `Pat::Ident` yet matches one value, so it is
-        // not a catch-all.
-        if binding.subpat.is_none() && binding.ident != "None" {
-            self.found = true;
+/// Whether `pat` is a top-level `_` or binding.
+fn is_top_level_catch_all(pat: &syn::Pat) -> bool {
+    match pat {
+        syn::Pat::Wild(_) => true,
+        syn::Pat::Ident(binding) => is_binding_ident(binding),
+        _ => false,
+    }
+}
+
+/// Strip `Pat::Paren` and `Pat::Reference` wrappers from `pat`.
+fn unwrap_pat(pat: &syn::Pat) -> &syn::Pat {
+    let mut current = pat;
+    loop {
+        match current {
+            syn::Pat::Paren(inner) => current = inner.pat.as_ref(),
+            syn::Pat::Reference(inner) => current = inner.pat.as_ref(),
+            _ => break,
         }
-        syn::visit::visit_pat_ident(self, binding);
     }
+    current
 }
 
-fn is_catch_all(pat: &syn::Pat) -> bool {
-    let mut probe = CatchAllProbe::default();
-    probe.visit_pat(pat);
-    probe.found
+/// Whether `cand` catches the `ApiKey` position in `api`.
+///
+/// A top-level `_` or binding still counts. In a `Pat::Tuple` or
+/// `Pat::TupleStruct`, only a wildcard or binding at the same index where
+/// `api` names `ApiKey` counts, recursing through `Some(..)`,
+/// `Pat::Paren` and `Pat::Reference`.
+fn is_catch_all_for(api: &syn::Pat, cand: &syn::Pat) -> bool {
+    let cand_unwrapped = unwrap_pat(cand);
+    if is_top_level_catch_all(cand_unwrapped) {
+        return true;
+    }
+    let api_unwrapped = unwrap_pat(api);
+    if let syn::Pat::Ident(binding) = api_unwrapped {
+        if let Some((_, sub)) = &binding.subpat {
+            return is_catch_all_for(sub, cand_unwrapped);
+        }
+    }
+    if let syn::Pat::Ident(binding) = cand_unwrapped {
+        if let Some((_, sub)) = &binding.subpat {
+            return is_catch_all_for(api_unwrapped, sub);
+        }
+    }
+    if let syn::Pat::Or(or) = api_unwrapped {
+        return or
+            .cases
+            .iter()
+            .filter(|case| pat_mentions_api_key(*case))
+            .any(|case| is_catch_all_for(case, cand_unwrapped));
+    }
+    if let syn::Pat::Or(or) = cand_unwrapped {
+        return or
+            .cases
+            .iter()
+            .any(|case| is_catch_all_for(api_unwrapped, case));
+    }
+    if let (syn::Pat::Tuple(api_tuple), syn::Pat::Tuple(cand_tuple)) =
+        (api_unwrapped, cand_unwrapped)
+    {
+        for (index, api_elem) in api_tuple.elems.iter().enumerate() {
+            if !pat_mentions_api_key(api_elem) {
+                continue;
+            }
+            if let Some(cand_elem) = cand_tuple.elems.iter().nth(index) {
+                if is_catch_all_for(api_elem, cand_elem) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    if let (syn::Pat::TupleStruct(api_ts), syn::Pat::TupleStruct(cand_ts)) =
+        (api_unwrapped, cand_unwrapped)
+    {
+        for (index, api_elem) in api_ts.elems.iter().enumerate() {
+            if !pat_mentions_api_key(api_elem) {
+                continue;
+            }
+            if let Some(cand_elem) = cand_ts.elems.iter().nth(index) {
+                if is_catch_all_for(api_elem, cand_elem) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    false
 }
 
 fn is_api_key_match(expr: &syn::Expr) -> bool {
@@ -151,11 +236,9 @@ fn is_api_key_match(expr: &syn::Expr) -> bool {
     };
     matched.arms.iter().enumerate().any(|(index, arm)| {
         pat_mentions_api_key(&arm.pat)
-            && matched
-                .arms
-                .iter()
-                .enumerate()
-                .any(|(other, candidate)| index != other && is_catch_all(&candidate.pat))
+            && matched.arms.iter().enumerate().any(|(other, candidate)| {
+                index != other && is_catch_all_for(&arm.pat, &candidate.pat)
+            })
     })
 }
 
@@ -277,7 +360,7 @@ fn is_principal_conjunct(expr: &syn::Expr) -> bool {
     let syn::Expr::Binary(binary) = expr else {
         return false;
     };
-    if !matches!(binary.op, syn::BinOp::And) {
+    if !matches!(binary.op, syn::BinOp::And(_)) {
         return false;
     }
     let mut auth = AuthProbe::default();
@@ -338,7 +421,11 @@ fn detected_stmt_kind(stmt: &syn::Stmt) -> Option<&'static str> {
     let syn::Stmt::Local(local) = stmt else {
         return None;
     };
-    if local.else_branch.is_none() {
+    if !local
+        .init
+        .as_ref()
+        .is_some_and(|init| init.diverge.is_some())
+    {
         return None;
     }
     pat_mentions_api_key(&local.pat).then_some("ApiKey")
@@ -356,57 +443,14 @@ fn stmt_offence(at: &Place, stmt: &syn::Stmt) -> Option<&'static str> {
 struct Offences {
     rows: Vec<String>,
     matched: Vec<bool>,
-    lines: std::collections::HashMap<String, Vec<String>>,
 }
 
 impl Offences {
-    fn file_lines(&mut self, file: &str) -> &[String] {
-        if !self.lines.contains_key(file) {
-            let text = std::fs::read_to_string(crate_root().join(file))
-                .expect("a walked production file is readable");
-            let owned: Vec<String> = text.lines().map(str::to_string).collect();
-            self.lines.insert(file.to_string(), owned);
-        }
-        if let Some(cached) = self.lines.get(file) {
-            cached
-        } else {
-            &[]
-        }
-    }
-
-    fn line_of(&mut self, file: &str, func: Option<&str>, needle: &str) -> usize {
-        let mut start = 0;
-        {
-            let lines = self.file_lines(file);
-            if let Some(want) = func {
-                for (index, line) in lines.iter().enumerate() {
-                    if line.contains("fn ") && line.contains(want) {
-                        start = index;
-                        break;
-                    }
-                }
-            }
-        }
-        let lines = self.file_lines(file);
-        for (index, line) in lines.iter().enumerate().skip(start) {
-            if line.contains(needle) {
-                return index + 1;
-            }
-        }
-        0
-    }
-
     fn record(&mut self, at: &Place, kind: &'static str) {
         if let Some(index) = allowlist_index(at, kind) {
             self.matched[index] = true;
             return;
         }
-        let needle = if kind == "ApiKey" {
-            "ApiKey"
-        } else {
-            "is_empty"
-        };
-        let _line = self.line_of(&at.file, at.func.as_deref(), needle);
         self.rows.push(format!(
             "{}:{}: {kind}",
             at.file,
@@ -433,7 +477,6 @@ fn all_offences() -> (Vec<String>, Vec<bool>) {
     let mut sink = Offences {
         rows: Vec::new(),
         matched: vec![false; ALLOWLIST.len()],
-        lines: std::collections::HashMap::new(),
     };
     walk(crate_root(), &ROOTS, &mut sink).expect("the walk reads every module");
     let mut rows = sink.rows;
@@ -676,5 +719,55 @@ fn fixture_exhaustive_nested_kind_match_is_not_flagged() {
     assert!(
         found.is_empty(),
         "an exhaustive nested kind match was flagged: {found:?}"
+    );
+}
+
+/// Lead ruling: a bare `ApiKey` from `use Kind::*` is an `ApiKey` path, so
+/// it is flagged beside a wildcard.
+#[test]
+fn fixture_imported_api_key_variant_is_flagged() {
+    let source = "fn other(k: Kind) -> u32 { match k { ApiKey => 1, _ => 0 } }";
+    let found = fixture_offences("fixture.rs", source);
+    assert!(
+        found.iter().any(|kind| kind == "ApiKey"),
+        "a bare `ApiKey` variant was not flagged"
+    );
+}
+
+/// Lead ruling: bare uppercase idents are variants, so `StaticBearer` is
+/// not a catch-all and the bare `match` is not flagged.
+#[test]
+fn fixture_bare_variant_is_not_a_catch_all() {
+    let source =
+        "fn other(k: Kind) -> u32 { match k { ApiKey => 1, StaticBearer => 2, None => 3 } }";
+    let found = fixture_offences("fixture.rs", source);
+    assert!(
+        found.is_empty(),
+        "a bare variant match was flagged: {found:?}"
+    );
+}
+
+/// Lead ruling: a tuple arm with a wildcard at the `ApiKey` position is a
+/// catch-all, so the `match` is flagged.
+#[test]
+fn fixture_tuple_catch_all_at_api_key_position_is_flagged() {
+    let source =
+        "fn other(k: Kind, x: u32) -> u32 { match (k, x) { (Kind::ApiKey, _) => 1, (_, _) => 0 } }";
+    let found = fixture_offences("fixture.rs", source);
+    assert!(
+        found.iter().any(|kind| kind == "ApiKey"),
+        "a tuple catch-all at the `ApiKey` position was not flagged"
+    );
+}
+
+/// Lead ruling: a tuple wildcard elsewhere is not a catch-all for the
+/// `ApiKey` arm, so the exhaustive tuple `match` is not flagged.
+#[test]
+fn fixture_tuple_wildcard_elsewhere_is_not_flagged() {
+    let source = "fn other(k: Kind, x: u32) -> u32 { match (k, x) { (Kind::ApiKey, _) => 1, (Kind::StaticBearer, _) => 2, (Kind::None, _) => 3 } }";
+    let found = fixture_offences("fixture.rs", source);
+    assert!(
+        found.is_empty(),
+        "a tuple wildcard elsewhere was flagged: {found:?}"
     );
 }
