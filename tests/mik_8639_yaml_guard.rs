@@ -4,7 +4,7 @@
 //! value-free refusal, fast.
 //!
 //! Every refused row parses through `from_str`, asserts the exact `Limit`
-//! variant, prints the wall time (informational only; the guard_work counter pins
+//! variant, prints the wall time (informational only; the `guard_work` counter pins
 //! the cost), and asserts Display and Debug free of
 //! the sentinel the input carries in a scalar. Red on the skeleton: its
 //! `limit()` is `None`, and shapes the backend accepts fail at the refusal
@@ -14,6 +14,7 @@
 #[path = "common/yaml.rs"]
 mod yaml;
 
+use std::fmt::Write as _;
 use std::time::Instant;
 
 use serde::Deserialize;
@@ -34,9 +35,8 @@ fn refused_as<T: serde::de::DeserializeOwned>(input: &str, what: &str) -> yaml::
     // Wall time is informational only (repo rule: no wall-clock bound under
     // 5 s in tests); the guard_work counter rows pin the cost.
     eprintln!("mik-8639 {what}: {} ms", elapsed.as_millis());
-    let err = match result {
-        Ok(_) => panic!("{what}: accepted, must be refused"),
-        Err(err) => err,
+    let Err(err) = result else {
+        panic!("{what}: accepted, must be refused")
     };
     assert!(
         !err.to_string().contains(SENTINEL),
@@ -281,7 +281,8 @@ fn flow_depth_10000_is_depth_not_syntax() {
 /// A typed reader that never looks at the deep field (DEPTH.2).
 #[derive(Deserialize)]
 struct T {
-    name: String,
+    #[serde(rename = "name")]
+    _name: String,
 }
 
 #[test]
@@ -318,7 +319,7 @@ fn tagged_scalar_with_deep_tail_refused() {
 fn aliased_input(aliases: usize) -> String {
     let mut input = format!("note: {SENTINEL}\nbase: &a 1\n");
     for index in 0..aliases {
-        input.push_str(&format!("u{index}: *a\n"));
+        writeln!(input, "u{index}: *a").expect("writing to a String cannot fail");
     }
     input
 }
@@ -354,11 +355,11 @@ fn aliases_counted_stream_wide() {
 fn tag_flood(count: usize, newline: &str) -> String {
     let mut input = String::new();
     for index in 0..count {
-        input.push_str(&format!("%TAG !t{index}! tag:x:{newline}"));
+        write!(input, "%TAG !t{index}! tag:x:{newline}").expect("writing to a String cannot fail");
     }
     input.push_str("---");
     input.push_str(newline);
-    input.push_str(&format!("note: {SENTINEL}{newline}"));
+    write!(input, "note: {SENTINEL}{newline}").expect("writing to a String cannot fail");
     input
 }
 
@@ -494,7 +495,7 @@ fn anchor_reuse_across_documents_accepted() {
         assert!(!results.is_empty(), "{what}: expected documents");
         assert_eq!(results.len(), 2, "{what}: expected exactly 2 documents");
         assert!(
-            results.iter().all(|read| read.is_ok()),
+            results.iter().all(std::result::Result::is_ok),
             "{what}: reuse across documents must be accepted"
         );
     }
@@ -527,7 +528,7 @@ fn expansion_large_scalar_fanout_refused() {
     let big = "x".repeat(8 * 1024 * 1024);
     let mut input = format!("note: {SENTINEL}\nbig: &a {big}\n");
     for index in 0..64 {
-        input.push_str(&format!("u{index}: *a\n"));
+        writeln!(input, "u{index}: *a").expect("writing to a String cannot fail");
     }
     let start = Instant::now();
     let (result, work) = yaml::guard_work(&input);
@@ -562,7 +563,7 @@ fn expansion_anchored_nulls_refused() {
     for _ in 0..64 {
         input.push_str("- *a\n");
     }
-    input.push_str(&format!("- {SENTINEL}\n"));
+    writeln!(input, "- {SENTINEL}").expect("writing to a String cannot fail");
     let start = Instant::now();
     let (result, work) = yaml::guard_work(&input);
     eprintln!("mik-8639 expand-nulls: {} ms", start.elapsed().as_millis());
@@ -591,9 +592,9 @@ fn expansion_anchored_nulls_refused() {
 fn expansion_nested_fanout_refused() {
     let big = "x".repeat(1024 * 1024);
     let mut input = format!("note: {SENTINEL}\nl0: &a {big}\n");
-    input.push_str(&format!("l1: &b [{}]\n", ["*a"; 10].join(", ")));
-    input.push_str(&format!("l2: &c [{}]\n", ["*b"; 10].join(", ")));
-    input.push_str(&format!("l3: [{}]\n", ["*c"; 10].join(", ")));
+    writeln!(input, "l1: &b [{}]", ["*a"; 10].join(", ")).expect("writing to a String cannot fail");
+    writeln!(input, "l2: &c [{}]", ["*b"; 10].join(", ")).expect("writing to a String cannot fail");
+    writeln!(input, "l3: [{}]", ["*c"; 10].join(", ")).expect("writing to a String cannot fail");
     let start = Instant::now();
     let (result, work) = yaml::guard_work(&input);
     eprintln!("mik-8639 expand-fanout: {} ms", start.elapsed().as_millis());
@@ -705,13 +706,14 @@ fn guard_work_scales_linearly_on_wide_documents() {
         (work_one, one.len(), "1 MiB"),
         (work_sixteen, sixteen.len(), "16 MiB"),
     ] {
+        let bytes = len as u64;
         assert!(
-            work as f64 / len as f64 <= 2.0,
+            work <= bytes.saturating_mul(2),
             "{what}: work per byte over the constant"
         );
     }
     assert!(
-        work_sixteen >= 12 * work_one && work_sixteen <= 20 * work_one,
+        work_one.saturating_mul(12) <= work_sixteen && work_sixteen <= work_one.saturating_mul(20),
         "work must scale about 16x, got {work_sixteen} vs {work_one}"
     );
     let comment = format!("#{}\n", "x".repeat(1024 * 1024 - 2));

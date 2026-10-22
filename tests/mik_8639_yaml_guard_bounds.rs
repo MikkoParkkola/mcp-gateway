@@ -9,6 +9,8 @@
 #[path = "common/yaml.rs"]
 mod yaml;
 
+use std::fmt::Write as _;
+
 /// The probe string hostile inputs carry; it must never reach error text.
 const SENTINEL: &str = "MIK8425-SENTINEL-7f3a";
 
@@ -17,9 +19,8 @@ const MAX_YAML_BYTES: usize = 16 * 1024 * 1024;
 
 /// Parse `input` as a tree, assert it is refused value-free, return the error.
 fn refused(input: &str, what: &str) -> yaml::Error {
-    let err = match yaml::from_str::<yaml::Value>(input) {
-        Ok(_) => panic!("{what}: accepted, must be refused"),
-        Err(err) => err,
+    let Err(err) = yaml::from_str::<yaml::Value>(input) else {
+        panic!("{what}: accepted, must be refused")
     };
     assert!(
         !err.to_string().contains(SENTINEL),
@@ -34,9 +35,8 @@ fn refused(input: &str, what: &str) -> yaml::Error {
 
 /// Parse `input` through the loose seam, assert refused value-free.
 fn refused_loose(input: &str, what: &str) -> yaml::Error {
-    let err = match yaml::from_str_loose(input) {
-        Ok(_) => panic!("{what}: accepted, must be refused"),
-        Err(err) => err,
+    let Err(err) = yaml::from_str_loose(input) else {
+        panic!("{what}: accepted, must be refused")
     };
     assert!(
         !err.to_string().contains(SENTINEL),
@@ -64,7 +64,7 @@ fn sized_input(len: usize) -> String {
 fn aliased_input(aliases: usize) -> String {
     let mut input = format!("note: {SENTINEL}\nbase: &a 1\n");
     for index in 0..aliases {
-        input.push_str(&format!("u{index}: *a\n"));
+        writeln!(input, "u{index}: *a").expect("writing to a String cannot fail");
     }
     input
 }
@@ -144,9 +144,8 @@ fn figment_size_over_limit_refused() {
         "YAML refused: {} bytes, over the 16777216-byte limit",
         input.len()
     );
-    let err = match yaml::figment_data(&input) {
-        Ok(_) => panic!("figment-size: accepted, must be refused"),
-        Err(err) => err,
+    let Err(err) = yaml::figment_data(&input) else {
+        panic!("figment-size: accepted, must be refused")
     };
     assert_eq!(err.to_string(), expected);
     assert!(
@@ -163,9 +162,8 @@ fn figment_size_over_limit_refused() {
 fn figment_depth_129_refused() {
     let input = deep_flow(129);
     let expected = "YAML refused: nesting deeper than 128 levels at line 1";
-    let err = match yaml::figment_data(&input) {
-        Ok(_) => panic!("figment-depth: accepted, must be refused"),
-        Err(err) => err,
+    let Err(err) = yaml::figment_data(&input) else {
+        panic!("figment-depth: accepted, must be refused")
     };
     assert_eq!(err.to_string(), expected);
     assert!(
@@ -182,9 +180,8 @@ fn figment_depth_129_refused() {
 fn figment_aliases_over_limit_refused() {
     let input = aliased_input(65);
     let expected = "YAML refused: more than 64 aliases";
-    let err = match yaml::figment_data(&input) {
-        Ok(_) => panic!("figment-aliases: accepted, must be refused"),
-        Err(err) => err,
+    let Err(err) = yaml::figment_data(&input) else {
+        panic!("figment-aliases: accepted, must be refused")
     };
     assert_eq!(err.to_string(), expected);
     assert!(
@@ -247,7 +244,7 @@ fn documents_aliases_over_limit_refused() {
 fn anchored_scalar_fanout(len: usize) -> String {
     let mut input = format!("a: &a {}\n", "x".repeat(len));
     for index in 0..64 {
-        input.push_str(&format!("b{index}: *a\n"));
+        writeln!(input, "b{index}: *a").expect("writing to a String cannot fail");
     }
     input
 }
@@ -285,11 +282,11 @@ fn expansion_resets_each_document_accepted() {
     let big = "x".repeat(2_097_087);
     let mut first = format!("a: &a {big}\n");
     for index in 0..32 {
-        first.push_str(&format!("b{index}: *a\n"));
+        writeln!(first, "b{index}: *a").expect("writing to a String cannot fail");
     }
     let mut second = format!("a: &a {big}\n");
     for index in 0..32 {
-        second.push_str(&format!("c{index}: *a\n"));
+        writeln!(second, "c{index}: *a").expect("writing to a String cannot fail");
     }
     let input = format!("{first}---\n{second}");
     let (result, _work) = yaml::guard_work(&input);
@@ -340,7 +337,7 @@ fn many_documents_accepted() {
     assert_eq!(expected, 1100, "fixture must hold 1100 documents");
     assert_eq!(results.len(), expected, "all documents must be yielded");
     assert!(
-        results.iter().all(|read| read.is_ok()),
+        results.iter().all(std::result::Result::is_ok),
         "1100 documents must be accepted"
     );
 }
@@ -361,7 +358,7 @@ fn anchor_reuse_after_multibyte_reports_byte_offset() {
 fn tag_directives_after_multibyte_reports_byte_offset() {
     let mut input = String::from("# ä€😀\n");
     for index in 0..65 {
-        input.push_str(&format!("%TAG !t{index}! tag:x:\n"));
+        writeln!(input, "%TAG !t{index}! tag:x:").expect("writing to a String cannot fail");
     }
     input.push_str("---\na: 1\n");
     let offset = input.match_indices("%TAG").nth(64).unwrap().0;

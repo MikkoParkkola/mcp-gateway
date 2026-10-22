@@ -14,9 +14,8 @@ use std::path::{Path, PathBuf};
 
 /// Collect `*.yaml`/`*.yml` files under `root`, skipping `target` and `.git`.
 fn collect_yaml_files(root: &Path, out: &mut Vec<PathBuf>) {
-    let entries = match std::fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(_) => return,
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
@@ -85,10 +84,11 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
                 break;
             }
         }
-        if !backend.is_empty() && backend.iter().all(|read| read.is_ok()) {
+        if !backend.is_empty() && backend.iter().all(std::result::Result::is_ok) {
             multi += 1;
             let guarded: Vec<_> = yaml::documents(&content).collect();
-            let ok = guarded.len() == backend.len() && guarded.iter().all(|read| read.is_ok());
+            let ok =
+                guarded.len() == backend.len() && guarded.iter().all(std::result::Result::is_ok);
             if !ok {
                 refused.push(path.clone());
             }

@@ -526,7 +526,7 @@ schema:
     );
 }
 
-/// MIK-8639 DEPTH.2: the TrustCard read refuses a 10,000-deep unread field
+/// MIK-8639 DEPTH.2: the `TrustCard` read refuses a 10,000-deep unread field
 /// with the guard's Depth text.
 #[tokio::test]
 async fn read_card_file_refuses_deep_unread_field() {
