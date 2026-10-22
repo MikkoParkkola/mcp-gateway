@@ -82,9 +82,9 @@ impl Fake {
     pub(super) async fn start_with(cert: Cert, replies: &[(&str, Reply)]) -> Self {
         let pki = Pki::new();
         let (chain, key) = match cert {
-            Cert::Trusted => pki.leaf(&pki.ca, "127.0.0.1"),
-            Cert::WrongName => pki.leaf(&pki.ca, "other.example"),
-            Cert::UntrustedCa => pki.leaf(&pki.stranger, "127.0.0.1"),
+            Cert::Trusted => Pki::leaf(&pki.ca, "127.0.0.1"),
+            Cert::WrongName => Pki::leaf(&pki.ca, "other.example"),
+            Cert::UntrustedCa => Pki::leaf(&pki.stranger, "127.0.0.1"),
         };
         let mut config = rustls::ServerConfig::builder_with_provider(Arc::new(
             rustls::crypto::aws_lc_rs::default_provider(),
@@ -305,7 +305,6 @@ impl Pki {
     }
 
     fn leaf(
-        &self,
         authority: &(rcgen::Certificate, rcgen::Issuer<'static, rcgen::KeyPair>),
         name: &str,
     ) -> (
@@ -577,11 +576,10 @@ const SLACK: Duration = Duration::from_secs(1);
 
 #[tokio::test]
 async fn offline_is_silent_and_quick() {
-    let closed = TcpListener::bind(("127.0.0.1", 0)).await.expect("binds");
-    let port = closed.local_addr().expect("has an address").port();
-    drop(closed);
+    // TCP port 1 (tcpmux) has no listener on a test host, so the connect is
+    // refused at once; no port is picked and released, so nothing can race.
     let cfg = ClientCfg {
-        base: Url::parse(&format!("https://127.0.0.1:{port}/")).expect("parses"),
+        base: Url::parse("https://127.0.0.1:1/").expect("parses"),
         roots: rustls::RootCertStore::empty(),
         proxy: ProxyEnv::default(),
     };
@@ -721,7 +719,7 @@ async fn a_finished_warning_survives_the_budget_running_out() {
     let rows = check(&config_of(&named), &fake.cfg(&[]), Lookup::On).await;
     let took = started.elapsed();
     assert!(
-        took >= BUDGET - Duration::from_millis(200),
+        took >= BUDGET.saturating_sub(Duration::from_millis(200)),
         "the budget ran out: {took:?}"
     );
     assert!(took < BUDGET + SLACK, "{took:?}");
@@ -1000,7 +998,11 @@ async fn child_runs_one_lookup() {
 
 /// Run the child half with `mode` and `env`; its stdout.
 async fn child(fake: &Fake, mode: &str, env: &[(&str, &str)]) -> String {
-    let hex: String = fake.ca_der.iter().map(|b| format!("{b:02x}")).collect();
+    let hex = fake.ca_der.iter().fold(String::new(), |mut hex, b| {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{b:02x}");
+        hex
+    });
     let exe = std::env::current_exe().expect("the test binary");
     let mut command = tokio::process::Command::new(exe);
     command

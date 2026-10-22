@@ -185,6 +185,7 @@ impl ProxyEnv {
     }
 
     /// A snapshot from explicit pairs (tests; unrelated names are dropped).
+    #[cfg(test)]
     pub(super) fn from_pairs(pairs: &[(&str, &str)]) -> Self {
         Self {
             pairs: pairs
@@ -242,7 +243,7 @@ pub(super) fn route(env: &ProxyEnv) -> Route {
     // value is the one used when both are set.
     for (lower, upper) in [("https_proxy", "HTTPS_PROXY"), ("all_proxy", "ALL_PROXY")] {
         let values = [env.get(lower), env.get(upper)];
-        if values.iter().all(|value| value.is_none()) {
+        if values.iter().all(Option::is_none) {
             continue;
         }
         let mut chosen: Option<Url> = None;
@@ -262,7 +263,7 @@ pub(super) fn route(env: &ProxyEnv) -> Route {
                 no_proxy: env
                     .get("no_proxy")
                     .or_else(|| env.get("NO_PROXY"))
-                    .map(|value| value.to_string()),
+                    .map(ToString::to_string),
             },
             // The group is set, so the loop produced a URL or returned
             // already; this arm only closes the match.
@@ -485,7 +486,7 @@ pub(super) async fn check(config: &Config, cfg: &ClientCfg, lookup: Lookup) -> V
                 ),
             )
             .with_category("backend_stdio")
-            .with_hint(hint(backend, pin, *backend_cfg)),
+            .with_hint(hint(backend, pin, backend_cfg)),
         );
     }
     rows

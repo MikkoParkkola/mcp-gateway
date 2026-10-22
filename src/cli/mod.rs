@@ -220,9 +220,9 @@ pub enum AccountsCommand {
 /// for anything else, empty included. An off switch that is set at all is
 /// read as on, so a misspelled value cannot silently re-enable what the
 /// operator meant to turn off.
-fn parse_off_switch(value: &str) -> Result<bool, std::convert::Infallible> {
+fn parse_off_switch(value: &str) -> bool {
     let value = value.trim();
-    Ok(!(value == "0" || value.eq_ignore_ascii_case("false")))
+    !(value == "0" || value.eq_ignore_ascii_case("false"))
 }
 
 /// Top-level subcommands
@@ -549,7 +549,7 @@ pub enum Command {
         /// `security.posture: hardened` also skips it.
         /// This skips the gateway's own npm registry lookup; it does not stop npx or other servers started by --start-stdio from contacting npm, so air-gapped hosts should not use --start-stdio.
         /// The variable takes `0` or `false` to keep the lookup on; any other value skips it.
-        #[arg(long, env = "MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK", num_args = 0..=1, default_missing_value = "true", default_value = "false", value_parser = parse_off_switch)]
+        #[arg(long, env = "MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK", num_args = 0..=1, default_missing_value = "true", default_value = "false", value_parser = |value: &str| Ok::<bool, std::convert::Infallible>(parse_off_switch(value)))]
         no_registry_check: bool,
     },
 

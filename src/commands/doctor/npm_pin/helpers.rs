@@ -83,9 +83,7 @@ pub(super) fn usable_proxy(value: &str) -> Option<Url> {
         return None;
     }
     let uri: axum::http::Uri = url.as_str().parse().ok()?;
-    if uri.authority().is_none() {
-        return None;
-    }
+    uri.authority()?;
     Some(url)
 }
 
