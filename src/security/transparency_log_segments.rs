@@ -326,3 +326,77 @@ pub(crate) fn release_reserve(path: &Path) -> io::Result<bool> {
         Err(e) => Err(e),
     }
 }
+
+#[cfg(test)]
+mod hwm_mac_tests {
+    use super::*;
+
+    #[test]
+    fn the_right_mac_parses() {
+        let secret = b"synthetic-hwm-secret-not-real";
+        let hw = HighWater {
+            counter: 7,
+            entry_hash: "ab".repeat(32),
+            segment_seq: 2,
+        };
+        let image = encode_hwm(&hw, secret, "k1").expect("encodes");
+        let parsed = parse_hwm(&image, secret, "k1");
+        assert!(
+            matches!(&parsed, Some((got, true)) if got.counter == 7),
+            "the right mac parses: {parsed:?}"
+        );
+    }
+
+    #[test]
+    fn a_wrong_mac_is_refused() {
+        let secret = b"synthetic-hwm-secret-not-real";
+        let hw = HighWater {
+            counter: 7,
+            entry_hash: "ab".repeat(32),
+            segment_seq: 2,
+        };
+        let image = encode_hwm(&hw, secret, "k1").expect("encodes");
+        let mut bad = image.clone();
+        let tabs: Vec<usize> = image
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| **b == b'\t')
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(tabs.len(), 3, "the hwm image has three tabs");
+        let mac_start = tabs[2] + 1;
+        let orig = bad[mac_start];
+        bad[mac_start] = if orig == b'a' { b'b' } else { b'a' };
+        assert_eq!(bad.len(), HWM_LEN, "flipping keeps the length");
+        assert!(
+            parse_hwm(&bad, secret, "k1").is_none(),
+            "a flipped mac is refused"
+        );
+    }
+
+    #[test]
+    fn a_short_mac_is_refused() {
+        let secret = b"synthetic-hwm-secret-not-real";
+        let hw = HighWater {
+            counter: 7,
+            entry_hash: "ab".repeat(32),
+            segment_seq: 2,
+        };
+        let image = encode_hwm(&hw, secret, "k1").expect("encodes");
+        assert_eq!(image.len(), HWM_LEN);
+        let full_mac = hwm_mac(&hw, secret, "k1");
+        let short = full_mac[..10].to_owned();
+        let body = format!(
+            "{}\t{}\t{}\t{short}",
+            hw.counter, hw.entry_hash, hw.segment_seq
+        );
+        let mut image2 = body.into_bytes();
+        image2.resize(HWM_LEN - 1, b' ');
+        image2.push(b'\n');
+        assert_eq!(image2.len(), HWM_LEN);
+        assert!(
+            parse_hwm(&image2, secret, "k1").is_none(),
+            "a short mac is refused"
+        );
+    }
+}

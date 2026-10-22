@@ -160,11 +160,8 @@ async fn an_untrusted_certificate_is_terminal_after_a_real_handshake_attempt() {
         "an untrusted certificate",
     );
     assert!(
-        matches!(
-            failure,
-            TerminalFailure::Certificate | TerminalFailure::Unclassified
-        ),
-        "a rejected certificate is terminal; reqwest cannot always name it and both spellings are terminal, got {failure:?}"
+        matches!(failure, TerminalFailure::Certificate),
+        "a rejected certificate is labelled Certificate by its type, got {failure:?}"
     );
 
     // The client's terminal answer is a CLIENT-side fact and says nothing about

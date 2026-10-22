@@ -137,3 +137,50 @@ async fn failures_before_a_byte_is_written_are_reported_unsent() {
         );
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_untrusted_certificate_is_a_tls_error() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let key_pair = rcgen::KeyPair::generate().expect("leaf key");
+    let mut params = rcgen::CertificateParams::default();
+    let mut dn = rcgen::DistinguishedName::new();
+    dn.push(rcgen::DnType::CommonName, "callback.tls-fixture.example");
+    params.distinguished_name = dn;
+    params.subject_alt_names = vec![rcgen::SanType::DnsName(
+        rcgen::string::Ia5String::try_from("callback.tls-fixture.example").expect("dns san"),
+    )];
+    let cert = params.self_signed(&key_pair).expect("self-signed leaf");
+    let cert_der = rustls::pki_types::CertificateDer::from(cert.der().to_vec());
+    let key_der = rustls::pki_types::PrivateKeyDer::from(
+        rustls::pki_types::PrivatePkcs8KeyDer::from(key_pair.serialize_der()),
+    );
+    let config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert_der], key_der)
+        .expect("server config");
+    let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(async move {
+        if let Ok((stream, _)) = listener.accept().await {
+            let _ = acceptor.accept(stream).await;
+        }
+    });
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .resolve("callback.tls-fixture.example", addr)
+        .build()
+        .expect("client");
+    let url = format!("https://callback.tls-fixture.example:{}/", addr.port());
+    let error = tokio::time::timeout(crate::test_wait::HANG_BOUND, client.get(url).send())
+        .await
+        .expect("the handshake fails within the bound")
+        .expect_err("a self-signed leaf is untrusted");
+    assert!(
+        matches!(classify(&error), CallbackFailure::TlsError),
+        "an untrusted certificate is a TLS error, got {error:?}"
+    );
+    let _ = tokio::time::timeout(crate::test_wait::HANG_BOUND, server).await;
+}
