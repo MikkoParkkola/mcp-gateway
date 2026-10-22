@@ -144,6 +144,8 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value"] }
 serde_json_canonicalizer = "0.3.2"
 serde_yaml = "0.9"
+# MIK-8639 pre-parse guard: exact pin, no comment buffer (MIK-8425 backend family).
+granit-parser = { version = "=2.0.0", default-features = false, features = ["std", "error_messages"] }
 # Collects the config keys serde skipped, so an unrecognised key is a load
 # error (C1) without a strict attribute on every config struct.
 serde_ignored = "0.1.14"

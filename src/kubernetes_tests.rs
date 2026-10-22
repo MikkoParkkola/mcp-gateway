@@ -104,16 +104,19 @@ fn parse_refuses_a_malformed_later_document() {
     assert!(matches!(err, KubernetesPlanError::Parse(_)), "got {err:?}");
 }
 
-/// MIK-8425 MIG.1c: documents are checked in order, so an earlier document's
-/// validation failure is reported before a later document's parse error.
+/// MIK-8639: `documents()` refuses the stream as a whole, so a later
+/// document's syntax refusal wins over an earlier document's validation
+/// failure. (MIK-8425 MIG.1c reported the earlier document first.)
 #[test]
-fn an_earlier_invalid_document_is_reported_before_a_later_parse_error() {
+fn the_streams_syntax_refusal_wins_over_an_earlier_invalid_document() {
     let manifest =
         "apiVersion: v1\nkind: Gateway\nmetadata:\n  name: --all\n---\nkind: [unclosed\n";
-    let err = parse_resources(manifest).expect_err("the first document is invalid");
+    let err = parse_resources(manifest).expect_err("the stream is refused as a whole");
+    assert!(matches!(err, KubernetesPlanError::Parse(_)), "got {err:?}");
     assert!(
-        matches!(err, KubernetesPlanError::InvalidName { .. }),
-        "got {err:?}"
+        err.to_string()
+            .contains("YAML refused: unclosed bracket at line 6 column 7"),
+        "got: {err}"
     );
 }
 
@@ -133,5 +136,21 @@ fn an_empty_document_keeps_later_document_indices() {
             }
         ),
         "got {err:?}"
+    );
+}
+
+/// MIK-8639 DEPTH.2: `documents()` refuses a 10,000-deep unread field with the
+/// guard's Depth text, surfaced through the manifest read.
+#[test]
+fn parse_resources_refuses_deep_unread_field() {
+    let manifest = format!(
+        "apiVersion: v1\nkind: Gateway\nmetadata:\n  name: gw\nprobe: {}1{}\n",
+        "[".repeat(10_000),
+        "]".repeat(10_000)
+    );
+    let err = parse_resources(&manifest).expect_err("10k-deep manifest must be refused");
+    assert!(
+        err.to_string().contains("nesting deeper than 128"),
+        "got: {err}"
     );
 }
