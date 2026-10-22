@@ -188,6 +188,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   queries.
 
 ### Changed
+- **`gateway_list_servers` reports `tools_count: null`, not `0`, for a backend
+  whose tools have not been loaded yet.** `tools_known: false` already marked
+  the row, but agents read the bare `0` as "this backend serves no tools" and
+  gave up on working backends. The tool description now says so and points at
+  `gateway_list_tools(server)`, which loads the list.
+
 - **A tool count is no longer reported as `0` before a backend has been
   enumerated.** `gateway_list_servers`, the `initialize` preamble and the
   `gateway_list_tools` / `gateway_search_tools` descriptions all derive their

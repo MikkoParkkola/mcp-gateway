@@ -215,8 +215,9 @@ impl MetaMcp {
                 "name": status.name,
                 "running": status.running,
                 "transport": status.transport,
-                "tools_count": status.tools_cached,
-                // Consult this before reading tools_count == 0 as "empty".
+                // `null`, not `0`, until the backend has been enumerated: callers
+                // read a bare 0 as "this backend serves no tools".
+                "tools_count": status.tools_known.then_some(status.tools_cached),
                 "tools_known": status.tools_known,
                 "circuit_breaker": status.circuit_state,
                 "status": if killed { "disabled" } else { "active" }
