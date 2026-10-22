@@ -203,7 +203,11 @@ fn compact_json_depth_129_refused() {
     let err = refused(&input, "json-129");
     assert_eq!(err.limit(), Some(&yaml::Limit::Depth { line: 1 }));
     // ACCEPTED on the skeleton by design: the same shape at 128.
-    let ok = format!("{}\"{SENTINEL}\"{}\"", "{\"a\":".repeat(128), "}".repeat(128));
+    let ok = format!(
+        "{}\"{SENTINEL}\"{}\"",
+        "{\"a\":".repeat(128),
+        "}".repeat(128)
+    );
     assert!(
         yaml::from_str::<yaml::Value>(&ok).is_ok(),
         "json-128 must be accepted"
@@ -294,28 +298,19 @@ fn tag_flood(count: usize, newline: &str) -> String {
 #[test]
 fn tag_directives_lf_over_limit_refused() {
     let err = refused(&tag_flood(65, "\n"), "tag-lf");
-    assert_eq!(
-        err.limit(),
-        Some(&yaml::Limit::TagDirectives { max: 64 })
-    );
+    assert_eq!(err.limit(), Some(&yaml::Limit::TagDirectives { max: 64 }));
 }
 
 #[test]
 fn tag_directives_cr_over_limit_refused() {
     let err = refused(&tag_flood(65, "\r"), "tag-cr");
-    assert_eq!(
-        err.limit(),
-        Some(&yaml::Limit::TagDirectives { max: 64 })
-    );
+    assert_eq!(err.limit(), Some(&yaml::Limit::TagDirectives { max: 64 }));
 }
 
 #[test]
 fn tag_directives_crlf_over_limit_refused() {
     let err = refused(&tag_flood(65, "\r\n"), "tag-crlf");
-    assert_eq!(
-        err.limit(),
-        Some(&yaml::Limit::TagDirectives { max: 64 })
-    );
+    assert_eq!(err.limit(), Some(&yaml::Limit::TagDirectives { max: 64 }));
 }
 
 #[test]
@@ -329,8 +324,7 @@ fn tag_directives_at_limit_accepted() {
 
 #[test]
 fn raw_nel_refused() {
-    let input =
-        format!("# hello\u{85}world\n%TAG !e! tag:evil:\n---\nnote: {SENTINEL}\n");
+    let input = format!("# hello\u{85}world\n%TAG !e! tag:evil:\n---\nnote: {SENTINEL}\n");
     let offset = input.find('\u{85}').unwrap();
     let err = refused(&input, "nel");
     assert_eq!(err.limit(), Some(&yaml::Limit::LineBreak { offset }));
@@ -338,8 +332,7 @@ fn raw_nel_refused() {
 
 #[test]
 fn raw_line_separator_refused() {
-    let input =
-        format!("# hello\u{2028}world\n%TAG !e! tag:evil:\n---\nnote: {SENTINEL}\n");
+    let input = format!("# hello\u{2028}world\n%TAG !e! tag:evil:\n---\nnote: {SENTINEL}\n");
     let offset = input.find('\u{2028}').unwrap();
     let err = refused(&input, "ls");
     assert_eq!(err.limit(), Some(&yaml::Limit::LineBreak { offset }));
@@ -347,8 +340,7 @@ fn raw_line_separator_refused() {
 
 #[test]
 fn raw_paragraph_separator_refused() {
-    let input =
-        format!("# hello\u{2029}world\n%TAG !e! tag:evil:\n---\nnote: {SENTINEL}\n");
+    let input = format!("# hello\u{2029}world\n%TAG !e! tag:evil:\n---\nnote: {SENTINEL}\n");
     let offset = input.find('\u{2029}').unwrap();
     let err = refused(&input, "ps");
     assert_eq!(err.limit(), Some(&yaml::Limit::LineBreak { offset }));
@@ -446,10 +438,7 @@ fn syntax_reports_bracket_position() {
     let err = refused(&input, "syntax");
     assert_eq!(
         err.limit(),
-        Some(&yaml::Limit::Syntax {
-            line: 3,
-            column: 4
-        })
+        Some(&yaml::Limit::Syntax { line: 3, column: 4 })
     );
     // documents() refuses the whole stream: exactly one error, nothing else.
     let results: Vec<_> = yaml::documents(&input).collect();
@@ -468,10 +457,7 @@ fn syntax_unexpected_character_is_value_free() {
     let err = refused(&input, "unexpected-char");
     assert_eq!(
         err.limit(),
-        Some(&yaml::Limit::Syntax {
-            line: 2,
-            column: 1
-        })
+        Some(&yaml::Limit::Syntax { line: 2, column: 1 })
     );
 }
 
@@ -481,10 +467,7 @@ fn syntax_unclosed_bracket_is_value_free() {
     let err = refused(&input, "unclosed");
     assert_eq!(
         err.limit(),
-        Some(&yaml::Limit::Syntax {
-            line: 1,
-            column: 4
-        })
+        Some(&yaml::Limit::Syntax { line: 1, column: 4 })
     );
 }
 
@@ -494,10 +477,7 @@ fn syntax_mismatched_bracket_is_value_free() {
     // Reported at the unexpected end bracket, one-based.
     let column = input.find('}').unwrap() + 1;
     let err = refused(&input, "mismatched");
-    assert_eq!(
-        err.limit(),
-        Some(&yaml::Limit::Syntax { line: 1, column })
-    );
+    assert_eq!(err.limit(), Some(&yaml::Limit::Syntax { line: 1, column }));
 }
 
 #[test]

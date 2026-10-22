@@ -8,12 +8,17 @@
 
 /// `head` plus an unread `probe` field nesting 10,000 flow sequences.
 fn deep_probe(head: &str) -> String {
-    format!("{head}probe: {}1{}\n", "[".repeat(10_000), "]".repeat(10_000))
+    format!(
+        "{head}probe: {}1{}\n",
+        "[".repeat(10_000),
+        "]".repeat(10_000)
+    )
 }
 
 #[test]
 fn openapi_converter_refuses_deep_unread_field() {
-    let content = deep_probe("openapi: 3.0.0\ninfo:\n  title: probe\n  version: \"1\"\npaths: {}\n");
+    let content =
+        deep_probe("openapi: 3.0.0\ninfo:\n  title: probe\n  version: \"1\"\npaths: {}\n");
     let err = match mcp_gateway::capability::OpenApiConverter::new().convert_string(&content) {
         Ok(_) => panic!("10k-deep spec must be refused"),
         Err(err) => err,

@@ -387,7 +387,9 @@ async fn preview_oci_package_deep_unread_field_refused() {
         "name: demo-tools\nimage_ref: ghcr.io/example/demo-tools:latest\ntools:\n  - name: export_data\n    description: Export account data\n{}",
         deep_probe_line()
     );
-    tokio::fs::write(&spec, content).await.expect("write package");
+    tokio::fs::write(&spec, content)
+        .await
+        .expect("write package");
 
     let err = preview_plan_from_file(
         ProtocolImportKind::OciMcpPackage,

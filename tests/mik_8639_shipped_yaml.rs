@@ -63,6 +63,12 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
             }
         }
     }
-    eprintln!("mik-8639 shipped-yaml: {checked} backend-accepted files, {} refused", refused.len());
-    assert!(refused.is_empty(), "seam refused shipped files: {refused:?}");
+    eprintln!(
+        "mik-8639 shipped-yaml: {checked} backend-accepted files, {} refused",
+        refused.len()
+    );
+    assert!(
+        refused.is_empty(),
+        "seam refused shipped files: {refused:?}"
+    );
 }
