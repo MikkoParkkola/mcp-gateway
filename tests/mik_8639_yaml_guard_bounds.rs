@@ -377,24 +377,15 @@ fn tag_directives_after_multibyte_reports_byte_offset() {
 fn quoted_continuation_at_parent_indent_refused_with_fix_hint() {
     let input = format!("fs:\n  description: \"first line {SENTINEL}\n  more: text\"\n");
     let err = refused(&input, "quoted-continuation");
-    assert!(
-        matches!(err.limit(), Some(yaml::Limit::Syntax { .. })),
-        "quoted-continuation: wrong limit: {:?}",
-        err.limit()
+    assert_eq!(
+        err.limit(),
+        Some(&yaml::Limit::Syntax { line: 3, column: 3 })
     );
-    let display = err.to_string();
-    assert!(
-        display.starts_with(
-            "YAML refused: quoted text is not closed, or continues with too little \
-             indentation, at line "
-        ),
-        "quoted-continuation: wrong Display: {display:?}"
-    );
-    assert!(
-        display.ends_with(
-            "; close the quote, or indent the continuation lines, or use a block scalar (| or >)"
-        ),
-        "quoted-continuation: missing fix hint: {display:?}"
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: quoted text is not closed, or continues with too little \
+         indentation, at line 3 column 3; close the quote, or indent the \
+         continuation lines, or use a block scalar (| or >)"
     );
     let accepted = format!("fs:\n  description: \"first line {SENTINEL}\n    more: text\"\n");
     assert!(
@@ -407,23 +398,14 @@ fn quoted_continuation_at_parent_indent_refused_with_fix_hint() {
 fn unterminated_quote_refused_with_fix_hint() {
     let input = format!("name: \"unterminated {SENTINEL}\n");
     let err = refused(&input, "unterminated-quote");
-    assert!(
-        matches!(err.limit(), Some(yaml::Limit::Syntax { .. })),
-        "unterminated-quote: wrong limit: {:?}",
-        err.limit()
+    assert_eq!(
+        err.limit(),
+        Some(&yaml::Limit::Syntax { line: 2, column: 1 })
     );
-    let display = err.to_string();
-    assert!(
-        display.starts_with(
-            "YAML refused: quoted text is not closed, or continues with too little \
-             indentation, at line "
-        ),
-        "unterminated-quote: wrong Display: {display:?}"
-    );
-    assert!(
-        display.ends_with(
-            "; close the quote, or indent the continuation lines, or use a block scalar (| or >)"
-        ),
-        "unterminated-quote: missing fix hint: {display:?}"
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: quoted text is not closed, or continues with too little \
+         indentation, at line 2 column 1; close the quote, or indent the \
+         continuation lines, or use a block scalar (| or >)"
     );
 }

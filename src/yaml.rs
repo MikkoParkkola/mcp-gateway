@@ -30,7 +30,7 @@
 use figment::Provider as _;
 use figment::providers::{Format as _, Yaml};
 use figment::value::{Dict, Map};
-use granit_parser::{ErrorKind, Event, Marker, ScanError, TokenType};
+use granit_parser::{ErrorKind, Event, Marker, ScanError, Tag, TokenType};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::{HashMap, HashSet};
@@ -515,12 +515,11 @@ struct Frame {
     anchor: usize,
 }
 
-/// Add `amount` to the innermost open collection, or to the document total
-/// when no collection is open. Saturating throughout.
-fn add_cost(stack: &mut [Frame], total: &mut u64, amount: u64) {
-    match stack.last_mut() {
-        Some(frame) => frame.cost = frame.cost.saturating_add(amount),
-        None => *total = total.saturating_add(amount),
+/// Add `amount` to the innermost open collection, dropping it when no
+/// collection is open. Saturating throughout.
+fn add_cost(stack: &mut [Frame], amount: u64) {
+    if let Some(frame) = stack.last_mut() {
+        frame.cost = frame.cost.saturating_add(amount);
     }
 }
 
@@ -529,13 +528,21 @@ fn scalar_cost(value: &str) -> u64 {
     u64::try_from(value.len()).map_or(u64::MAX, |len| len.saturating_add(NODE_COST))
 }
 
+/// The cost of a node's tag towards the expansion cap: its handle plus its
+/// suffix in bytes, or 0 when untagged. Saturating throughout.
+fn tag_cost(tag: Option<&Tag>) -> u64 {
+    tag.map_or(0, |tag| {
+        let bytes = tag.handle().len().saturating_add(tag.suffix().len());
+        u64::try_from(bytes).map_or(u64::MAX, |cost| cost)
+    })
+}
+
 /// Second pass: parser events. Refuses nesting past 128 levels, a 65th alias
 /// anywhere in the stream, and one document's aliases expanding to 64 MiB.
 /// Adds the events visited to `work`.
 fn pass2(text: &str, work: &mut u64) -> Result<(), Error> {
     let mut aliases = 0usize;
     let mut expanded = 0u64;
-    let mut total = 0u64;
     let mut cost: HashMap<usize, u64> = HashMap::new();
     let mut stack: Vec<Frame> = Vec::new();
     for item in granit_parser::Parser::new_from_str(text) {
@@ -547,13 +554,12 @@ fn pass2(text: &str, work: &mut u64) -> Result<(), Error> {
         match event {
             Event::DocumentStart(..) => {
                 expanded = 0;
-                total = 0;
                 cost.clear();
                 stack.clear();
             }
-            Event::SequenceStart(_, anchor, _) | Event::MappingStart(_, anchor, _) => {
+            Event::SequenceStart(_, anchor, tag) | Event::MappingStart(_, anchor, tag) => {
                 stack.push(Frame {
-                    cost: NODE_COST,
+                    cost: NODE_COST.saturating_add(tag_cost(tag.as_deref())),
                     anchor,
                 });
                 if stack.len() > MAX_DEPTH {
@@ -563,15 +569,15 @@ fn pass2(text: &str, work: &mut u64) -> Result<(), Error> {
             }
             Event::SequenceEnd | Event::MappingEnd => {
                 if let Some(frame) = stack.pop() {
-                    add_cost(&mut stack, &mut total, frame.cost);
+                    add_cost(&mut stack, frame.cost);
                     if frame.anchor != 0 {
                         cost.insert(frame.anchor, frame.cost);
                     }
                 }
             }
-            Event::Scalar(value, _, anchor, _) => {
-                let single = scalar_cost(&value);
-                add_cost(&mut stack, &mut total, single);
+            Event::Scalar(value, _, anchor, tag) => {
+                let single = scalar_cost(&value).saturating_add(tag_cost(tag.as_deref()));
+                add_cost(&mut stack, single);
                 if anchor != 0 {
                     cost.insert(anchor, single);
                 }
@@ -589,7 +595,7 @@ fn pass2(text: &str, work: &mut u64) -> Result<(), Error> {
                     return Err(Error::refused(Limit::Expansion, None));
                 }
                 expanded = expanded.saturating_add(single);
-                add_cost(&mut stack, &mut total, single);
+                add_cost(&mut stack, single);
             }
             _ => {}
         }

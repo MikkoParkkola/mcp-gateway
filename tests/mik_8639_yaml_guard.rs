@@ -619,6 +619,78 @@ fn expansion_nested_fanout_refused() {
     );
 }
 
+/// An anchored tagged node (`tag_len` x's) aliased 64 times.
+fn tagged_fanout(tag_len: usize, node: &str) -> String {
+    let mut input = format!("a: &a !{} {node}\n", "x".repeat(tag_len));
+    for index in 0..64 {
+        writeln!(input, "u{index}: *a").expect("writing to a String cannot fail");
+    }
+    input
+}
+
+#[test]
+fn tagged_scalar_alias_fanout_refused() {
+    let input = tagged_fanout(8 * 1024 * 1024, "v");
+    assert!(
+        input.len() < MAX_YAML_BYTES,
+        "input must stay under the size gate"
+    );
+    let start = Instant::now();
+    let (result, work) = yaml::guard_work(&input);
+    eprintln!("mik-8639 tagged-scalar: {} ms", start.elapsed().as_millis());
+    assert!(
+        work <= 2 * input.len() as u64,
+        "tagged-scalar: work {work} over twice the input length {}",
+        input.len()
+    );
+    let err = result.unwrap_err();
+    assert_eq!(err.limit(), Some(&yaml::Limit::Expansion));
+    let display = err.to_string();
+    assert_eq!(display, "YAML refused: alias expansion over the limit");
+    assert!(
+        !display.contains("xxxx"),
+        "tagged-scalar: Display leaks the tag"
+    );
+}
+
+#[test]
+fn tagged_collection_alias_fanout_refused() {
+    let input = tagged_fanout(8 * 1024 * 1024, "{k: v}");
+    assert!(
+        input.len() < MAX_YAML_BYTES,
+        "input must stay under the size gate"
+    );
+    let start = Instant::now();
+    let (result, work) = yaml::guard_work(&input);
+    eprintln!(
+        "mik-8639 tagged-collection: {} ms",
+        start.elapsed().as_millis()
+    );
+    assert!(
+        work <= 2 * input.len() as u64,
+        "tagged-collection: work {work} over twice the input length {}",
+        input.len()
+    );
+    let err = result.unwrap_err();
+    assert_eq!(err.limit(), Some(&yaml::Limit::Expansion));
+    let display = err.to_string();
+    assert_eq!(display, "YAML refused: alias expansion over the limit");
+    assert!(
+        !display.contains("xxxx"),
+        "tagged-collection: Display leaks the tag"
+    );
+}
+
+#[test]
+fn small_tagged_alias_fanout_accepted() {
+    // ACCEPTED by design: 1 KiB of tag over 64 aliases is well under 64 MiB.
+    let input = tagged_fanout(1024, "v");
+    assert!(
+        yaml::from_str::<yaml::Value>(&input).is_ok(),
+        "1 KiB tag with 64 aliases must load"
+    );
+}
+
 #[test]
 fn syntax_reports_bracket_position() {
     let input = format!("a: {SENTINEL}\n---\nb: [1, 2\n");

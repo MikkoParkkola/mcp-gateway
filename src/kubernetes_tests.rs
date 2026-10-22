@@ -114,7 +114,8 @@ fn the_streams_syntax_refusal_wins_over_an_earlier_invalid_document() {
     let err = parse_resources(manifest).expect_err("the stream is refused as a whole");
     assert!(matches!(err, KubernetesPlanError::Parse(_)), "got {err:?}");
     assert!(
-        err.to_string().contains("YAML refused: unclosed bracket"),
+        err.to_string()
+            .contains("YAML refused: unclosed bracket at line 6 column 7"),
         "got: {err}"
     );
 }
