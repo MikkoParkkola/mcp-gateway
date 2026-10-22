@@ -359,6 +359,8 @@ impl OAuthClient {
         let key = self.credential_key()?;
         let token_path = self.storage.token_path(&key, &self.resource_url);
         let flight = super::refresh_flight::Flight::of(&token_path);
+        #[cfg(test)]
+        flight.hold_before_issued_save().await;
         // One budget covers the in-process flight and the cross-process lease:
         // a save queued behind an in-process holder answers the same busy
         // error at the deadline instead of queuing unbounded (MIK-8619).

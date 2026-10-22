@@ -54,6 +54,10 @@ pub(crate) struct TokenServer {
     pub(crate) generation: AtomicUsize,
     pub(crate) answers: Mutex<Vec<Answer>>,
     pub(crate) arrived: tokio::sync::Notify,
+    /// Times the handler yields after `arrived` and before it answers, so a
+    /// test woken by `arrived` runs before the reply is written: a test that
+    /// takes "arrived" for "answered" fails every time instead of rarely.
+    pub(crate) yields_before_reply: AtomicUsize,
     pub(crate) release: tokio::sync::Notify,
 }
 
@@ -72,6 +76,7 @@ impl TokenServer {
             generation: AtomicUsize::new(1),
             answers: Mutex::new(answers.iter().rev().copied().collect()),
             arrived: tokio::sync::Notify::new(),
+            yields_before_reply: AtomicUsize::new(0),
             release: tokio::sync::Notify::new(),
         });
         let handler = Arc::clone(&server);
@@ -105,6 +110,9 @@ impl TokenServer {
         let client_id = form.get("client_id").cloned().unwrap_or_default();
         self.client_ids.lock().unwrap().push(client_id);
         self.arrived.notify_waiters();
+        for _ in 0..self.yields_before_reply.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
         let answer = self.answers.lock().unwrap().pop().unwrap_or(Answer::Rotate);
         let keeps = matches!(
             answer,
