@@ -33,14 +33,9 @@ security:\n  posture: hardened\n  message_signing:\n    shared_secret: \"hardene
 
 fn write_config(dir: &Path, text: &str) -> PathBuf {
     let path = dir.join("gateway.yaml");
-    std::fs::write(&path, text).expect("the config writes");
     // The gateway refuses a config other users can read.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-            .expect("the config is owner-only");
-    }
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, text)
+        .expect("the config writes owner-only");
     path
 }
 
