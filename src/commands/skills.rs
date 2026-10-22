@@ -351,14 +351,24 @@ async fn fetch_skill_from_url(
         .await
         .map_err(|e| format!("Failed to fetch '{url}': {e}"))?;
     if response.status().is_redirection() {
+        // Both URLs can carry userinfo or a signed query: the typed URL is
+        // shown redacted, and the Location is resolved against the request
+        // URL first, then shown redacted the same way.
+        let shown_url = mcp_gateway::security::sanitize::redact_url_keep_path(url);
         if let Some(location) = response
             .headers()
             .get(reqwest::header::LOCATION)
             .and_then(|value| value.to_str().ok())
         {
-            return Err(format!("{url} redirected to {location}; use the final URL"));
+            let shown = match response.url().join(location) {
+                Ok(resolved) => {
+                    mcp_gateway::security::sanitize::redact_url_keep_path(resolved.as_str())
+                }
+                Err(_) => "<invalid-url>".to_string(),
+            };
+            return Err(format!("{shown_url} redirected to {shown}; use the final URL"));
         }
-        return Err(format!("{url} redirected; use the final URL"));
+        return Err(format!("{shown_url} redirected; use the final URL"));
     }
     if !response.status().is_success() {
         return Err(format!("GET '{url}' returned HTTP {}", response.status()));
@@ -451,10 +461,49 @@ mod redirect_tests {
             .expect("bounded");
         match outcome {
             Ok(_) => panic!("expected Err, got Ok"),
+            // The target is now resolved and redacted through `Url`, which
+            // renders a bare host with a trailing slash; still an exact match.
             Err(msg) => assert_eq!(
                 msg,
-                format!("{base}/skill.md redirected to {target}; use the final URL")
+                format!("{base}/skill.md redirected to {target}/; use the final URL")
             ),
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    /// A redirect Location carrying userinfo, a query token and a fragment is
+    /// reported redacted: no credential survives, the path stays visible.
+    #[tokio::test]
+    async fn skill_fetch_redacts_credentials_in_a_redirect_location() {
+        let (counter, hits) = serve_counter().await;
+        let location = counter.replacen("http://", "http://user:hunter2@", 1)
+            + "/final/path?token=sekret-token-value#frag";
+        let app = axum::Router::new().route(
+            "/skill.md",
+            axum::routing::get(move || {
+                let location = location.clone();
+                async move {
+                    (
+                        axum::http::StatusCode::FOUND,
+                        [(axum::http::header::LOCATION, location)],
+                    )
+                }
+            }),
+        );
+        let base = serve(app).await;
+        let url = format!("{base}/skill.md");
+        let client = skill_fetch_client().expect("client");
+        let outcome = tokio::time::timeout(HANG_BOUND, fetch_skill_from_url(&client, &url))
+            .await
+            .expect("bounded");
+        match outcome {
+            Ok(_) => panic!("expected Err, got Ok"),
+            Err(msg) => {
+                assert!(!msg.contains("hunter2"), "msg: {msg}");
+                assert!(!msg.contains("sekret-token-value"), "msg: {msg}");
+                assert!(!msg.contains("user:"), "msg: {msg}");
+                assert!(msg.contains("/final/path"), "msg: {msg}");
+            }
         }
         assert_eq!(hits.load(Ordering::SeqCst), 0);
     }

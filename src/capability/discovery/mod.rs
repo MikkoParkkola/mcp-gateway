@@ -151,7 +151,7 @@ impl DiscoveryEngine {
     ///   loopback or reserved address is refused at connect (#2027)
     /// - no proxy from `HTTP(S)_PROXY` in the environment (#1881)
     /// - SSRF validation on every redirect hop
-    /// - at most MAX_REDIRECT_HOPS redirects followed; a blocked hop is an SSRF error
+    /// - at most `MAX_REDIRECT_HOPS` redirects followed; a blocked hop is an SSRF error
     /// - Configurable timeout from `options.timeout`
     ///
     /// # Panics

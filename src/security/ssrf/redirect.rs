@@ -48,7 +48,7 @@ pub(crate) enum RedirectDecision {
     Follow,
 }
 
-/// Whether a redirect with `previous` URLs already visited is past the budget. reqwest records the previous URL before asking, so on redirect k `previous == k`: `>` follows exactly MAX_REDIRECT_HOPS redirects and refuses the next. (MIK-8660 seam)
+/// Whether a redirect with `previous` URLs already visited is past the budget. reqwest records the previous URL before asking, so on redirect k `previous == k`: `>` follows exactly `MAX_REDIRECT_HOPS` redirects and refuses the next. (MIK-8660 seam)
 pub(crate) fn hop_budget_spent(previous: usize) -> bool {
     previous > MAX_REDIRECT_HOPS
 }

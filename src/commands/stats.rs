@@ -102,8 +102,16 @@ async fn handle_stats_response(response: reqwest::Response, url: &str) -> Result
             .get(reqwest::header::LOCATION)
             .and_then(|value| value.to_str().ok())
         {
+            // A Location can carry userinfo or a signed query: resolve it
+            // against the request URL, then show scheme/host/port/path only.
+            let shown = match response.url().join(location) {
+                Ok(resolved) => {
+                    mcp_gateway::security::sanitize::redact_url_keep_path(resolved.as_str())
+                }
+                Err(_) => "<invalid-url>".to_string(),
+            };
             return Err(format!(
-                "❌ the gateway URL redirected to {location}; point stats at the final URL\n"
+                "❌ the gateway URL redirected to {shown}; point stats at the final URL\n"
             ));
         }
         return Err("❌ the gateway URL redirected; point stats at the final URL\n".to_string());
@@ -361,5 +369,70 @@ mod tests {
             Err(msg) => assert!(msg.contains(&expected), "msg: {msg}"),
         }
         assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    /// A redirect Location carrying userinfo, a query token and a fragment is
+    /// reported redacted: no credential survives, the path stays visible.
+    #[tokio::test]
+    async fn stats_outcome_redacts_credentials_in_a_redirect_location() {
+        let (counter, hits) = serve_counter().await;
+        let location = counter.replacen("http://", "http://user:hunter2@", 1)
+            + "/final/path?token=sekret-token-value#frag";
+        let app = axum::Router::new().route(
+            "/mcp",
+            axum::routing::post(move || {
+                let location = location.clone();
+                async move {
+                    (
+                        axum::http::StatusCode::MOVED_PERMANENTLY,
+                        [(axum::http::header::LOCATION, location)],
+                    )
+                }
+            }),
+        );
+        let base = serve(app).await;
+        let outcome = tokio::time::timeout(
+            HANG_BOUND,
+            stats_outcome(&stats_client().expect("client"), &base),
+        )
+        .await
+        .expect("bounded");
+        match outcome {
+            Ok(text) => panic!("expected Err, got Ok: {text}"),
+            Err(msg) => {
+                assert!(!msg.contains("hunter2"), "msg: {msg}");
+                assert!(!msg.contains("sekret-token-value"), "msg: {msg}");
+                assert!(!msg.contains("user:"), "msg: {msg}");
+                assert!(msg.contains("/final/path"), "msg: {msg}");
+            }
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    /// A relative redirect Location is resolved against the request URL, so
+    /// the message names the absolute target.
+    #[tokio::test]
+    async fn stats_outcome_resolves_a_relative_redirect_location() {
+        let app = axum::Router::new().route(
+            "/mcp",
+            axum::routing::post(|| async {
+                (
+                    axum::http::StatusCode::MOVED_PERMANENTLY,
+                    [(axum::http::header::LOCATION, "/relative/target")],
+                )
+            }),
+        );
+        let base = serve(app).await;
+        let expected = format!("{base}/relative/target");
+        let outcome = tokio::time::timeout(
+            HANG_BOUND,
+            stats_outcome(&stats_client().expect("client"), &base),
+        )
+        .await
+        .expect("bounded");
+        match outcome {
+            Ok(text) => panic!("expected Err, got Ok: {text}"),
+            Err(msg) => assert!(msg.contains(&expected), "msg: {msg}"),
+        }
     }
 }

@@ -32,8 +32,8 @@ pub fn request_error_category(error: &reqwest::Error) -> &'static str {
 
 /// Whether a reqwest error's source chain holds a rustls failure.
 ///
-/// reqwest/hyper wrap a rejected certificate as io::Error(Other) holding
-/// io::Error(InvalidData) holding rustls::Error, and `io::Error::source()`
+/// reqwest/hyper wrap a rejected certificate as `io::Error(Other)` holding
+/// `io::Error(InvalidData)` holding `rustls::Error`, and `io::Error::source()`
 /// returns the inner error's source, skipping the middle layer, so one
 /// `get_ref` level is not enough.
 pub(crate) fn is_tls_failure(error: &reqwest::Error) -> bool {

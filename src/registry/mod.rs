@@ -677,7 +677,7 @@ mod tests {
     }
 
     /// A port nothing listens on: from the reserved test range, which no port-0
-    /// bind can be handed (src/test_ports.rs), so the redirect target stays closed.
+    /// bind can be handed (`src/test_ports.rs`), so the redirect target stays closed.
     fn closed_port() -> u16 {
         crate::test_ports::reserved_port()
     }

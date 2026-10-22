@@ -346,7 +346,7 @@ async fn exchange_does_not_follow_a_307_redirect() {
             async move {
                 bodies
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .push(String::from_utf8_lossy(&body).to_string());
                 (
                     axum::http::StatusCode::TEMPORARY_REDIRECT,
@@ -390,7 +390,7 @@ async fn exchange_does_not_follow_a_307_redirect() {
         text.contains("redirect"),
         "must name the redirect, got: {text}"
     );
-    let seen = bodies.lock().unwrap_or_else(|e| e.into_inner());
+    let seen = bodies.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     assert_eq!(seen.len(), 1, "listener 1 sees the POST once");
     assert!(
         seen[0].contains("subject_token"),
@@ -413,11 +413,11 @@ fn default_http_client_takes_the_token_exchange_redirect_policy() {
         .iter()
         .position(|line| line.contains("fn default_http_client"));
     assert!(start.is_some(), "fn default_http_client must exist");
-    let start = if let Some(index) = start { index } else { 0 };
+    let start: usize = start.unwrap_or_default();
     let rest = &lines[start..];
     let end = rest.iter().position(|line| *line == "}");
     assert!(end.is_some(), "fn default_http_client must end with `}}`");
-    let end = if let Some(index) = end { index } else { 0 };
+    let end: usize = end.unwrap_or_default();
     let body = rest[..=end].join("\n");
     assert!(
         body.contains(".redirect(token_exchange_redirect_policy())"),

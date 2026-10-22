@@ -321,3 +321,54 @@ async fn http_backend_probe_reports_a_redirect_without_following_it() {
     );
     assert_eq!(hits.load(Ordering::SeqCst), 0);
 }
+
+/// A redirect Location carrying userinfo, a query token and a fragment is
+/// reported redacted, in the text detail and in the `--json` report alike.
+#[tokio::test]
+async fn http_backend_probe_redacts_credentials_in_a_redirect_location() {
+    let (counter, hits) = serve_counter().await;
+    let location = counter.replacen("http://", "http://user:hunter2@", 1)
+        + "/final/path?token=sekret-token-value#frag";
+    let app = axum::Router::new().route(
+        "/x",
+        axum::routing::get(move || {
+            let location = location.clone();
+            async move {
+                (
+                    axum::http::StatusCode::MOVED_PERMANENTLY,
+                    [(axum::http::header::LOCATION, location)],
+                )
+            }
+        }),
+    );
+    let stub = serve(app).await;
+    let transport = TransportConfig::Http {
+        http_url: format!("{stub}/x"),
+        streamable_http: None,
+        protocol_version: None,
+    };
+    let outcome = tokio::time::timeout(HANG_BOUND, check_http_backend("b", &transport))
+        .await
+        .expect("bounded");
+    let Some(result) = outcome else {
+        panic!("an Http transport must produce a result");
+    };
+    assert!(!result.detail.contains("hunter2"), "detail: {}", result.detail);
+    assert!(
+        !result.detail.contains("sekret-token-value"),
+        "detail: {}",
+        result.detail
+    );
+    assert!(!result.detail.contains("user:"), "detail: {}", result.detail);
+    assert!(
+        result.detail.contains("/final/path"),
+        "detail: {}",
+        result.detail
+    );
+    let report = check_result_json_value(&result).to_string();
+    assert!(!report.contains("hunter2"), "report: {report}");
+    assert!(!report.contains("sekret-token-value"), "report: {report}");
+    assert!(!report.contains("user:"), "report: {report}");
+    assert!(report.contains("/final/path"), "report: {report}");
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+}

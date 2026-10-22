@@ -17,7 +17,7 @@ async fn a_capability_request_goes_through_its_egress_proxy() {
             let seen = Arc::clone(&seen_route);
             async move {
                 hits.fetch_add(1, Ordering::SeqCst);
-                let mut guard = seen.lock().unwrap_or_else(|e| e.into_inner());
+                let mut guard = seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 guard.push(uri.to_string());
                 if let Some(host) = headers
                     .get(axum::http::header::HOST)
@@ -52,7 +52,7 @@ async fn a_capability_request_goes_through_its_egress_proxy() {
         1,
         "the proxy sees the request once"
     );
-    let guard = seen.lock().unwrap_or_else(|e| e.into_inner());
+    let guard = seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     assert!(
         guard
             .iter()

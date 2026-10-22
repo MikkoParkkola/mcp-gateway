@@ -353,7 +353,7 @@ impl TokenExchangeStrategy {
 /// exact security-relevant downgrade this strategy exists to prevent. Panicking
 /// at construction is a hard fail-closed at startup and matches the last-resort
 /// `expect` on gateway key generation in `gateway::server`.
-/// A token endpoint has no reason to redirect, and following a 307/308 would re-POST the form, subject_token included, to the redirect target.
+/// A token endpoint has no reason to redirect, and following a 307/308 would re-POST the form, `subject_token` included, to the redirect target.
 fn token_exchange_redirect_policy() -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::none()
 }

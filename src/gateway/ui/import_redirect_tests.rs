@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8660: the spec import's redirect handling. Kept out of import.rs so
-//! the listener-route scan (gateway/routes_tests.rs), which reads that file
+//! the listener-route scan (`gateway/routes_tests.rs`), which reads that file
 //! whole, does not count these fixtures' routes as gateway routes.
 
 /// A port nothing listens on: from the reserved test range, which no port-0
-/// bind can be handed (src/test_ports.rs), so the redirect target stays closed.
+/// bind can be handed (`src/test_ports.rs`), so the redirect target stays closed.
 fn closed_port() -> u16 {
     crate::test_ports::reserved_port()
 }

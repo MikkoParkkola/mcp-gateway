@@ -6,15 +6,18 @@
 //!
 //! Rule (i): `Client::new()`, `reqwest::get`, `Policy::default()`, or a builder
 //! chain that reaches `.build()` without `.redirect(` on every path is reqwest's
-//! implicit ten-hop default. A fn returning a `ClientBuilder` is a factory; its
-//! callers are checked. Rule (ii): a hop count compared with an integer
-//! literal, or `Policy::limited`. Rule (iii): a `Policy::custom` closure that
-//! never passes `previous()` into `redirect_decision` / `hop_budget_spent`.
-//! Production means reached from `lib.rs` / `main.rs` through modules none of
-//! which is `#[cfg(test)]`, so a `#[path]` file included under a test module is
-//! test code. A parser, not a text match: comments never count.
+//! implicit ten-hop default. A fn returning a `ClientBuilder` is a factory; a
+//! call to one starts a chain, as does a `ClientBuilder` parameter. Rule (ii):
+//! a hop count compared with an integer literal, or `Policy::limited`.
+//! Rule (iii): a `Policy::custom` closure that never passes `previous()` into
+//! `redirect_decision` / `hop_budget_spent`, or discards the answer instead of
+//! branching on it. Production means reached from `lib.rs` / `main.rs`
+//! through modules none of which is `#[cfg(test)]`, so a `#[path]` file
+//! included under a test module is test code. A parser, not a text match:
+//! comments never count.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use syn::visit::Visit;
 
@@ -31,7 +34,6 @@ const RULE_DELEGATION: &str = "delegation";
 
 const EXEMPT_REDIRECT_RS: &str = "src/security/ssrf/redirect.rs";
 const OAUTH_PREFIX: &str = "src/oauth/";
-const KEY_SERVER_PREFIX: &str = "src/key_server/";
 
 fn contains_word(hay: &str, needle: &str) -> bool {
     hay.split(|c: char| !c.is_alphanumeric() && c != '_')
@@ -40,12 +42,12 @@ fn contains_word(hay: &str, needle: &str) -> bool {
 
 fn is_cfg_test(attrs: &[syn::Attribute]) -> bool {
     for attr in attrs {
-        if attr.path().is_ident("cfg") {
-            if let syn::Meta::List(list) = &attr.meta {
-                let text = list.tokens.to_string();
-                if contains_word(&text, "test") && !contains_word(&text, "not") {
-                    return true;
-                }
+        if attr.path().is_ident("cfg")
+            && let syn::Meta::List(list) = &attr.meta
+        {
+            let text = list.tokens.to_string();
+            if contains_word(&text, "test") && !contains_word(&text, "not") {
+                return true;
             }
         }
     }
@@ -54,14 +56,12 @@ fn is_cfg_test(attrs: &[syn::Attribute]) -> bool {
 
 fn path_attr_value(attrs: &[syn::Attribute]) -> Option<String> {
     for attr in attrs {
-        if attr.path().is_ident("path") {
-            if let syn::Meta::NameValue(pair) = &attr.meta {
-                if let syn::Expr::Lit(lit) = &pair.value {
-                    if let syn::Lit::Str(s) = &lit.lit {
-                        return Some(s.value());
-                    }
-                }
-            }
+        if attr.path().is_ident("path")
+            && let syn::Meta::NameValue(pair) = &attr.meta
+            && let syn::Expr::Lit(lit) = &pair.value
+            && let syn::Lit::Str(s) = &lit.lit
+        {
+            return Some(s.value());
         }
     }
     None
@@ -135,10 +135,9 @@ fn collect_child_mods_from_items(
                 let path_attr = path_attr_value(&m.attrs);
                 if let Some(child) =
                     resolve_child_mod(root, current_rel, &name, path_attr.as_deref())
+                    && !child.starts_with(OAUTH_PREFIX)
                 {
-                    if !child.starts_with(OAUTH_PREFIX) {
-                        out.push(child);
-                    }
+                    out.push(child);
                 }
             }
         }
@@ -146,7 +145,6 @@ fn collect_child_mods_from_items(
 }
 
 fn scan_crate(root: &Path) -> Vec<Entry> {
-    let mut entries = Vec::new();
     let mut seen = HashSet::new();
     let mut queue = Vec::new();
     for start in ["src/lib.rs", "src/main.rs"] {
@@ -154,6 +152,9 @@ fn scan_crate(root: &Path) -> Vec<Entry> {
             queue.push(start.to_string());
         }
     }
+    // The module walk is unchanged; parsing is split from checking so the
+    // factory names are known crate-wide before any chain is judged.
+    let mut parsed: Vec<(String, syn::File)> = Vec::new();
     while let Some(rel) = queue.pop() {
         if !seen.insert(rel.clone()) {
             continue;
@@ -161,26 +162,33 @@ fn scan_crate(root: &Path) -> Vec<Entry> {
         if rel.starts_with(OAUTH_PREFIX) {
             continue;
         }
-        let content = match std::fs::read_to_string(root.join(&rel)) {
-            Ok(c) => c,
-            Err(_) => continue,
+        let Ok(content) = std::fs::read_to_string(root.join(&rel)) else {
+            continue;
         };
-        let file = match syn::parse_file(&content) {
-            Ok(f) => f,
-            Err(_) => continue,
+        let Ok(file) = syn::parse_file(&content) else {
+            continue;
         };
-        if !is_cfg_test(&file.attrs) {
-            let mut found = Vec::new();
-            scan_items(&rel, &file.items, false, &mut found);
-            entries.extend(found);
-        }
+        let test_only = is_cfg_test(&file.attrs);
         let mut kids = Vec::new();
-        collect_child_mods_from_items(&file.items, is_cfg_test(&file.attrs), &rel, root, &mut kids);
+        collect_child_mods_from_items(&file.items, test_only, &rel, root, &mut kids);
         for k in kids {
             if !seen.contains(&k) {
                 queue.push(k);
             }
         }
+        if !test_only {
+            parsed.push((rel, file));
+        }
+    }
+    let mut factories = HashSet::new();
+    for (_, file) in &parsed {
+        collect_factories_from_items(&file.items, false, &mut factories);
+    }
+    let mut entries = Vec::new();
+    for (rel, file) in &parsed {
+        let mut found = Vec::new();
+        scan_items(rel, &file.items, false, &factories, &mut found);
+        entries.extend(found);
     }
     entries.sort();
     entries.dedup();
@@ -191,9 +199,8 @@ fn scan_source(rel: &str, src: &str) -> Vec<Entry> {
     if rel.starts_with(OAUTH_PREFIX) {
         return Vec::new();
     }
-    let file = match syn::parse_file(src) {
-        Ok(f) => f,
-        Err(_) => return Vec::new(),
+    let Ok(file) = syn::parse_file(src) else {
+        return Vec::new();
     };
     scan_file_ast(rel, &file)
 }
@@ -205,28 +212,79 @@ fn scan_file_ast(rel: &str, file: &syn::File) -> Vec<Entry> {
     if is_cfg_test(&file.attrs) {
         return Vec::new();
     }
+    let mut factories = HashSet::new();
+    collect_factories_from_items(&file.items, false, &mut factories);
     let mut out = Vec::new();
-    scan_items(rel, &file.items, false, &mut out);
+    scan_items(rel, &file.items, false, &factories, &mut out);
     out.sort();
     out.dedup();
     out
 }
 
-fn scan_items(rel: &str, items: &[syn::Item], test_only_ancestor: bool, out: &mut Vec<Entry>) {
+/// Every free fn or method in production code whose return type mentions
+/// `ClientBuilder`: a call to one starts a builder chain.
+fn collect_factories_from_items(
+    items: &[syn::Item],
+    test_only_ancestor: bool,
+    out: &mut HashSet<String>,
+) {
     for item in items {
         match item {
             syn::Item::Fn(f) => {
                 if test_only_ancestor || is_cfg_test(&f.attrs) {
                     continue;
                 }
-                push_fn_entries(rel, &f.sig.ident.to_string(), &f.sig.output, &f.block, out);
+                if return_type_mentions_client_builder(&f.sig.output) {
+                    out.insert(f.sig.ident.to_string());
+                }
             }
             syn::Item::Mod(m) => {
                 if test_only_ancestor || is_cfg_test(&m.attrs) {
                     continue;
                 }
                 if let Some((_, inner)) = &m.content {
-                    scan_items(rel, inner, false, out);
+                    collect_factories_from_items(inner, false, out);
+                }
+            }
+            syn::Item::Impl(imp) => {
+                if test_only_ancestor || is_cfg_test(&imp.attrs) {
+                    continue;
+                }
+                for inner in &imp.items {
+                    if let syn::ImplItem::Fn(meth) = inner
+                        && !is_cfg_test(&meth.attrs)
+                        && return_type_mentions_client_builder(&meth.sig.output)
+                    {
+                        out.insert(meth.sig.ident.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn scan_items(
+    rel: &str,
+    items: &[syn::Item],
+    test_only_ancestor: bool,
+    factories: &HashSet<String>,
+    out: &mut Vec<Entry>,
+) {
+    for item in items {
+        match item {
+            syn::Item::Fn(f) => {
+                if test_only_ancestor || is_cfg_test(&f.attrs) {
+                    continue;
+                }
+                push_fn_entries(rel, &f.sig, &f.block, factories, out);
+            }
+            syn::Item::Mod(m) => {
+                if test_only_ancestor || is_cfg_test(&m.attrs) {
+                    continue;
+                }
+                if let Some((_, inner)) = &m.content {
+                    scan_items(rel, inner, false, factories, out);
                 }
             }
             syn::Item::Impl(imp) => {
@@ -238,13 +296,7 @@ fn scan_items(rel: &str, items: &[syn::Item], test_only_ancestor: bool, out: &mu
                         if is_cfg_test(&meth.attrs) {
                             continue;
                         }
-                        push_fn_entries(
-                            rel,
-                            &meth.sig.ident.to_string(),
-                            &meth.sig.output,
-                            &meth.block,
-                            out,
-                        );
+                        push_fn_entries(rel, &meth.sig, &meth.block, factories, out);
                     }
                 }
             }
@@ -255,33 +307,32 @@ fn scan_items(rel: &str, items: &[syn::Item], test_only_ancestor: bool, out: &mu
 
 fn push_fn_entries(
     rel: &str,
-    func: &str,
-    output: &syn::ReturnType,
+    sig: &syn::Signature,
     block: &syn::Block,
+    factories: &HashSet<String>,
     out: &mut Vec<Entry>,
 ) {
-    let factory = return_type_mentions_client_builder(output);
-    let mut v = FnVisitor::new(rel, factory);
+    let mut v = FnVisitor::new(rel, sig, factories);
     v.visit_block(block);
-    if v.found_i {
+    if v.hits.implicit {
         out.push(Entry {
             rule: RULE_IMPLICIT,
             file: rel.to_string(),
-            func: func.to_string(),
+            func: v.func.clone(),
         });
     }
-    if v.found_ii {
+    if v.hits.hop {
         out.push(Entry {
             rule: RULE_HOP,
             file: rel.to_string(),
-            func: func.to_string(),
+            func: v.func.clone(),
         });
     }
-    if v.found_iii {
+    if v.hits.delegation {
         out.push(Entry {
             rule: RULE_DELEGATION,
             file: rel.to_string(),
-            func: func.to_string(),
+            func: v.func.clone(),
         });
     }
 }
@@ -292,7 +343,7 @@ struct ClientBuilderFinder {
 
 impl<'ast> Visit<'ast> for ClientBuilderFinder {
     fn visit_ident(&mut self, node: &'ast syn::Ident) {
-        if node.to_string() == "ClientBuilder" {
+        if node == "ClientBuilder" {
             self.found = true;
         }
     }
@@ -304,46 +355,93 @@ fn return_type_mentions_client_builder(output: &syn::ReturnType) -> bool {
     f.found
 }
 
-struct FnVisitor {
-    is_factory: bool,
-    check_ii: bool,
-    check_iii: bool,
-    in_if: u32,
-    in_closure: u32,
-    vars: HashMap<String, (bool, bool)>,
-    found_i: bool,
-    found_ii: bool,
-    found_iii: bool,
+fn type_mentions_client_builder(ty: &syn::Type) -> bool {
+    let mut f = ClientBuilderFinder { found: false };
+    f.visit_type(ty);
+    f.found
 }
 
-impl FnVisitor {
-    fn new(rel: &str, is_factory: bool) -> Self {
+/// Which rules apply to the file under visit.
+struct RuleChecks {
+    /// Rule (ii): hop-count literals and `Policy::limited`.
+    hop: bool,
+    /// Rule (iii): `Policy::custom` closures must branch on the decision.
+    delegation: bool,
+}
+
+/// Which rules have fired in the function under visit.
+#[derive(Default)]
+struct RuleHits {
+    implicit: bool,
+    hop: bool,
+    delegation: bool,
+}
+
+struct FnVisitor<'f> {
+    func: String,
+    is_factory: bool,
+    checks: RuleChecks,
+    hits: RuleHits,
+    in_conditional: u32,
+    in_closure: u32,
+    factories: &'f HashSet<String>,
+    vars: HashMap<String, (bool, bool)>,
+}
+
+impl<'f> FnVisitor<'f> {
+    fn new(rel: &str, sig: &syn::Signature, factories: &'f HashSet<String>) -> Self {
+        let exempt = rel == EXEMPT_REDIRECT_RS;
+        // A `ClientBuilder` parameter starts a chain inside the fn, with no
+        // `.redirect(` recorded yet.
+        let mut vars = HashMap::new();
+        for input in &sig.inputs {
+            if let syn::FnArg::Typed(arg) = input
+                && let syn::Pat::Ident(name) = &arg.pat
+                && type_mentions_client_builder(&arg.ty)
+            {
+                vars.insert(name.ident.to_string(), (true, false));
+            }
+        }
         Self {
-            is_factory,
-            check_ii: rel != EXEMPT_REDIRECT_RS,
-            check_iii: rel != EXEMPT_REDIRECT_RS && !rel.starts_with(KEY_SERVER_PREFIX),
-            in_if: 0,
+            func: sig.ident.to_string(),
+            is_factory: return_type_mentions_client_builder(&sig.output),
+            checks: RuleChecks {
+                hop: !exempt,
+                delegation: !exempt,
+            },
+            hits: RuleHits::default(),
+            in_conditional: 0,
             in_closure: 0,
-            vars: HashMap::new(),
-            found_i: false,
-            found_ii: false,
-            found_iii: false,
+            factories,
+            vars,
         }
     }
 }
 
-impl<'ast> Visit<'ast> for FnVisitor {
+impl<'ast, 'f> Visit<'ast> for FnVisitor<'f> {
     fn visit_item_fn(&mut self, _: &'ast syn::ItemFn) {}
     fn visit_impl_item_fn(&mut self, _: &'ast syn::ImplItemFn) {}
 
     fn visit_expr_if(&mut self, node: &'ast syn::ExprIf) {
         self.visit_expr(&node.cond);
-        self.in_if = self.in_if.saturating_add(1);
+        self.in_conditional = self.in_conditional.saturating_add(1);
         self.visit_block(&node.then_branch);
         if let Some((_, alt)) = &node.else_branch {
             self.visit_expr(alt);
         }
-        self.in_if = self.in_if.saturating_sub(1);
+        self.in_conditional = self.in_conditional.saturating_sub(1);
+    }
+
+    fn visit_expr_match(&mut self, node: &'ast syn::ExprMatch) {
+        self.visit_expr(&node.scrutinee);
+        self.in_conditional = self.in_conditional.saturating_add(1);
+        for arm in &node.arms {
+            if let Some((_, guard)) = &arm.guard {
+                self.visit_expr(guard);
+            }
+            self.visit_expr(&arm.body);
+        }
+        self.in_conditional = self.in_conditional.saturating_sub(1);
     }
 
     fn visit_expr_closure(&mut self, node: &'ast syn::ExprClosure) {
@@ -354,43 +452,55 @@ impl<'ast> Visit<'ast> for FnVisitor {
 
     fn visit_local(&mut self, node: &'ast syn::Local) {
         syn::visit::visit_local(self, node);
-        if self.in_if != 0 || self.in_closure != 0 {
+        if self.in_conditional != 0 || self.in_closure != 0 {
             return;
         }
-        if let syn::Pat::Ident(pat) = &node.pat {
-            let name = pat.ident.to_string();
-            if name == "_" {
-                return;
-            }
-            if let Some(init) = &node.init {
-                let state = analyze_builder_expr(&init.expr, &self.vars);
-                self.vars.insert(name, state);
-            }
+        if let syn::Pat::Ident(pat) = &node.pat
+            && pat.ident != "_"
+            && let Some(init) = &node.init
+        {
+            let state = analyze_builder_expr(&init.expr, &self.vars, self.factories);
+            self.vars.insert(pat.ident.to_string(), state);
         }
     }
 
     fn visit_expr_assign(&mut self, node: &'ast syn::ExprAssign) {
         syn::visit::visit_expr_assign(self, node);
-        if self.in_if != 0 || self.in_closure != 0 {
+        if self.in_closure != 0 {
             return;
         }
-        if let syn::Expr::Path(p) = &*node.left {
-            if let Some(ident) = p.path.get_ident() {
-                let name = ident.to_string();
-                if name == "_" {
-                    return;
-                }
-                let state = analyze_builder_expr(&node.right, &self.vars);
-                self.vars.insert(name, state);
+        if self.in_conditional != 0 {
+            // A branch that replaces a tracked builder with a fresh chain
+            // invalidates its recorded `.redirect(` state: the chain needs
+            // `.redirect(` after the branch.
+            if let syn::Expr::Path(p) = &*node.left
+                && let Some(ident) = p.path.get_ident()
+                && ident != "_"
+                && self
+                    .vars
+                    .get(&ident.to_string())
+                    .is_some_and(|(is_builder, _)| *is_builder)
+                && expr_contains_builder_start(&node.right, self.factories)
+            {
+                self.vars.insert(ident.to_string(), (true, false));
             }
+            return;
+        }
+        if let syn::Expr::Path(p) = &*node.left
+            && let Some(ident) = p.path.get_ident()
+            && ident != "_"
+        {
+            let state = analyze_builder_expr(&node.right, &self.vars, self.factories);
+            self.vars.insert(ident.to_string(), state);
         }
     }
 
     fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
-        if node.method.to_string() == "build" && !self.is_factory {
-            let (is_builder, has_redirect) = analyze_builder_expr(&node.receiver, &self.vars);
+        if node.method == "build" && !self.is_factory {
+            let (is_builder, has_redirect) =
+                analyze_builder_expr(&node.receiver, &self.vars, self.factories);
             if is_builder && !has_redirect {
-                self.found_i = true;
+                self.hits.implicit = true;
             }
         }
         syn::visit::visit_expr_method_call(self, node);
@@ -408,25 +518,25 @@ impl<'ast> Visit<'ast> for FnVisitor {
                 let last = &names[names.len() - 1];
                 let prev = &names[names.len() - 2];
                 if prev == "Client" && last == "new" {
-                    self.found_i = true;
+                    self.hits.implicit = true;
                 }
                 if prev == "reqwest" && last == "get" {
-                    self.found_i = true;
+                    self.hits.implicit = true;
                 }
-                if self.check_ii && prev == "Policy" && last == "limited" {
-                    self.found_ii = true;
+                if self.checks.hop && prev == "Policy" && last == "limited" {
+                    self.hits.hop = true;
                 }
-                if self.check_iii && prev == "Policy" && last == "custom" {
+                if self.checks.delegation && prev == "Policy" && last == "custom" {
                     let mut bad = false;
                     for arg in &node.args {
-                        if let syn::Expr::Closure(cl) = arg {
-                            if !closure_delegates(&cl.body) {
-                                bad = true;
-                            }
+                        if let syn::Expr::Closure(cl) = arg
+                            && !closure_delegates(&cl.body)
+                        {
+                            bad = true;
                         }
                     }
                     if bad {
-                        self.found_iii = true;
+                        self.hits.delegation = true;
                     }
                 }
             }
@@ -437,17 +547,18 @@ impl<'ast> Visit<'ast> for FnVisitor {
     fn visit_expr_path(&mut self, node: &'ast syn::ExprPath) {
         if node.path.segments.len() >= 2 {
             let mut rev = node.path.segments.iter().rev();
-            if let (Some(last), Some(prev)) = (rev.next(), rev.next()) {
-                if prev.ident.to_string() == "Policy" && last.ident.to_string() == "default" {
-                    self.found_i = true;
-                }
+            if let (Some(last), Some(prev)) = (rev.next(), rev.next())
+                && prev.ident == "Policy"
+                && last.ident == "default"
+            {
+                self.hits.implicit = true;
             }
         }
         syn::visit::visit_expr_path(self, node);
     }
 
     fn visit_expr_binary(&mut self, node: &'ast syn::ExprBinary) {
-        if self.check_ii {
+        if self.checks.hop {
             let cmp = matches!(
                 &node.op,
                 syn::BinOp::Lt(_)
@@ -462,7 +573,7 @@ impl<'ast> Visit<'ast> for FnVisitor {
                 if left_lit || right_lit {
                     let other = if left_lit { &node.right } else { &node.left };
                     if expr_mentions_previous_for_hop(other) {
-                        self.found_ii = true;
+                        self.hits.hop = true;
                     }
                 }
             }
@@ -512,47 +623,102 @@ fn expr_mentions_previous_substring(expr: &syn::Expr) -> bool {
     c.idents.iter().any(|s| s.contains("previous"))
 }
 
-struct DelegationFinder {
-    good: bool,
+/// Whether `expr` calls `redirect_decision` / `hop_budget_spent` on a
+/// previous-hop count.
+fn is_decision_call(expr: &syn::Expr) -> bool {
+    let syn::Expr::Call(call) = expr else {
+        return false;
+    };
+    let syn::Expr::Path(func) = &*call.func else {
+        return false;
+    };
+    let Some(last) = func.path.segments.last() else {
+        return false;
+    };
+    if last.ident != "redirect_decision" && last.ident != "hop_budget_spent" {
+        return false;
+    }
+    call.args
+        .first()
+        .is_some_and(expr_mentions_previous_substring)
 }
 
-impl<'ast> Visit<'ast> for DelegationFinder {
-    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
-        if let syn::Expr::Path(p) = &*node.func {
-            if let Some(last) = p.path.segments.last() {
-                let name = last.ident.to_string();
-                if name == "redirect_decision" || name == "hop_budget_spent" {
-                    if let Some(first) = node.args.first() {
-                        if expr_mentions_previous_substring(first) {
-                            self.good = true;
-                        }
-                    }
-                }
-            }
+/// Whether `expr` mentions any of the `let`-bound decision names.
+fn expr_mentions_any_bound(expr: &syn::Expr, bound: &HashSet<String>) -> bool {
+    let mut collector = IdentCollector { idents: Vec::new() };
+    collector.visit_expr(expr);
+    collector.idents.iter().any(|id| bound.contains(id))
+}
+
+/// Rule (iii): calling the decider is not enough; the closure passes only if
+/// it branches on the answer. The decision call is the scrutinee of a `match`,
+/// the condition of an `if`, or bound with `let` and that binding later
+/// matched on or used in an `if`. `let _ = ...` never counts.
+struct DecisionUsage {
+    bound: HashSet<String>,
+    used: bool,
+}
+
+impl<'ast> Visit<'ast> for DecisionUsage {
+    fn visit_expr_match(&mut self, node: &'ast syn::ExprMatch) {
+        if is_decision_call(&node.scrutinee) {
+            self.used = true;
+        } else if let syn::Expr::Path(scrutinee) = &*node.scrutinee
+            && let Some(name) = scrutinee.path.get_ident()
+            && self.bound.contains(&name.to_string())
+        {
+            self.used = true;
         }
-        if !self.good {
-            syn::visit::visit_expr_call(self, node);
+        if !self.used {
+            syn::visit::visit_expr_match(self, node);
         }
     }
+
+    fn visit_expr_if(&mut self, node: &'ast syn::ExprIf) {
+        if is_decision_call(&node.cond) || expr_mentions_any_bound(&node.cond, &self.bound) {
+            self.used = true;
+        }
+        if !self.used {
+            syn::visit::visit_expr_if(self, node);
+        }
+    }
+
+    fn visit_local(&mut self, node: &'ast syn::Local) {
+        if let syn::Pat::Ident(name) = &node.pat
+            && name.ident != "_"
+            && let Some(init) = &node.init
+            && is_decision_call(&init.expr)
+        {
+            self.bound.insert(name.ident.to_string());
+        }
+        syn::visit::visit_local(self, node);
+    }
+
     fn visit_expr_closure(&mut self, _: &'ast syn::ExprClosure) {}
     fn visit_item_fn(&mut self, _: &'ast syn::ItemFn) {}
 }
 
 fn closure_delegates(body: &syn::Expr) -> bool {
-    let mut f = DelegationFinder { good: false };
+    let mut f = DecisionUsage {
+        bound: HashSet::new(),
+        used: false,
+    };
     f.visit_expr(body);
-    f.good
+    f.used
 }
 
-fn is_start_path(path: &syn::Path) -> bool {
+fn is_start_path(path: &syn::Path, factories: &HashSet<String>) -> bool {
     let mut rev = path.segments.iter().rev();
     let Some(last) = rev.next() else {
         return false;
     };
+    if factories.contains(&last.ident.to_string()) {
+        return true;
+    }
     let name = last.ident.to_string();
     if name == "builder" {
         if let Some(second) = rev.next() {
-            return second.ident.to_string() == "Client";
+            return second.ident == "Client";
         }
         return false;
     }
@@ -565,25 +731,29 @@ fn is_start_path(path: &syn::Path) -> bool {
     name == "strict_builder"
 }
 
-struct StartFinder {
+struct StartFinder<'f> {
+    factories: &'f HashSet<String>,
     found: bool,
 }
 
-impl<'ast> Visit<'ast> for StartFinder {
+impl<'ast, 'f> Visit<'ast> for StartFinder<'f> {
     fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
-        if let syn::Expr::Path(p) = &*node.func {
-            if is_start_path(&p.path) {
-                self.found = true;
-                return;
-            }
+        if let syn::Expr::Path(p) = &*node.func
+            && is_start_path(&p.path, self.factories)
+        {
+            self.found = true;
+            return;
         }
         syn::visit::visit_expr_call(self, node);
     }
     fn visit_item_fn(&mut self, _: &'ast syn::ItemFn) {}
 }
 
-fn expr_contains_builder_start(expr: &syn::Expr) -> bool {
-    let mut f = StartFinder { found: false };
+fn expr_contains_builder_start(expr: &syn::Expr, factories: &HashSet<String>) -> bool {
+    let mut f = StartFinder {
+        factories,
+        found: false,
+    };
     f.visit_expr(expr);
     f.found
 }
@@ -594,7 +764,7 @@ struct BuildFinder {
 
 impl<'ast> Visit<'ast> for BuildFinder {
     fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
-        if node.method.to_string() == "build" {
+        if node.method == "build" {
             self.found = true;
             return;
         }
@@ -625,7 +795,7 @@ impl<'ast> Visit<'ast> for RedirectOutsideIfFinder {
         self.in_if = self.in_if.saturating_sub(1);
     }
     fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
-        if self.in_if == 0 && node.method.to_string() == "redirect" {
+        if self.in_if == 0 && node.method == "redirect" {
             self.found = true;
             return;
         }
@@ -648,14 +818,13 @@ struct VarUseCollector<'v> {
     used: Vec<bool>,
 }
 
-impl<'ast, 'v> Visit<'ast> for VarUseCollector<'v> {
+impl<'ast> Visit<'ast> for VarUseCollector<'_> {
     fn visit_expr_path(&mut self, node: &'ast syn::ExprPath) {
-        if let Some(ident) = node.path.get_ident() {
-            if let Some((is_builder, has_redirect)) = self.vars.get(&ident.to_string()) {
-                if *is_builder {
-                    self.used.push(*has_redirect);
-                }
-            }
+        if let Some(ident) = node.path.get_ident()
+            && let Some((is_builder, has_redirect)) = self.vars.get(&ident.to_string())
+            && *is_builder
+        {
+            self.used.push(*has_redirect);
         }
     }
     fn visit_item_fn(&mut self, _: &'ast syn::ItemFn) {}
@@ -673,31 +842,49 @@ fn collect_used_builder_redirects(
     c.used
 }
 
-fn analyze_builder_expr(expr: &syn::Expr, vars: &HashMap<String, (bool, bool)>) -> (bool, bool) {
+fn analyze_builder_expr(
+    expr: &syn::Expr,
+    vars: &HashMap<String, (bool, bool)>,
+    factories: &HashSet<String>,
+) -> (bool, bool) {
     match expr {
         syn::Expr::Call(call) => {
-            if let syn::Expr::Path(p) = &*call.func {
-                if is_start_path(&p.path) {
-                    return (true, false);
+            if let syn::Expr::Path(p) = &*call.func
+                && is_start_path(&p.path, factories)
+            {
+                // A factory that threads a tracked builder through (e.g.
+                // `extra_roots(builder)`) keeps that builder's recorded
+                // state; a call with no builder argument starts a fresh
+                // chain with no `.redirect(` recorded.
+                let mut seen_builder = false;
+                let mut all_redirect = true;
+                for arg in &call.args {
+                    let (is_builder, has_redirect) =
+                        analyze_builder_expr(arg, vars, factories);
+                    if is_builder {
+                        seen_builder = true;
+                        all_redirect = all_redirect && has_redirect;
+                    }
                 }
+                return (true, seen_builder && all_redirect);
             }
             (false, false)
         }
         syn::Expr::MethodCall(mc) => {
-            if mc.method.to_string() == "build" {
+            if mc.method == "build" {
                 return (false, false);
             }
-            if mc.method.to_string() == "redirect" {
-                let (builder, _) = analyze_builder_expr(&mc.receiver, vars);
+            if mc.method == "redirect" {
+                let (builder, _) = analyze_builder_expr(&mc.receiver, vars, factories);
                 return (builder, true);
             }
-            analyze_builder_expr(&mc.receiver, vars)
+            analyze_builder_expr(&mc.receiver, vars, factories)
         }
         syn::Expr::Path(p) => {
-            if let Some(ident) = p.path.get_ident() {
-                if let Some(state) = vars.get(&ident.to_string()) {
-                    return *state;
-                }
+            if let Some(ident) = p.path.get_ident()
+                && let Some(state) = vars.get(&ident.to_string())
+            {
+                return *state;
             }
             (false, false)
         }
@@ -705,7 +892,7 @@ fn analyze_builder_expr(expr: &syn::Expr, vars: &HashMap<String, (bool, bool)>) 
             if expr_contains_build(expr) {
                 return (false, false);
             }
-            let has_start = expr_contains_builder_start(expr);
+            let has_start = expr_contains_builder_start(expr, factories);
             let used = collect_used_builder_redirects(expr, vars);
             if !has_start && used.is_empty() {
                 return (false, false);
@@ -723,13 +910,21 @@ fn analyze_builder_expr(expr: &syn::Expr, vars: &HashMap<String, (bool, bool)>) 
 
 /// Reviewed exceptions, each with its reason. Keep this list short: every
 /// entry is a site the rules cannot see into.
-const ALLOWED: &[(&str, &str, &str, &str)] = &[(
-    "delegation",
-    "src/transport/http/client.rs",
-    "build",
-    "hands previous().len() to transport's own decider evaluate_redirect_for, \
-     whose count is pinned by transport/http/tests.rs (T1b, T15)",
-)];
+const ALLOWED: &[(&str, &str, &str, &str)] = &[
+    (
+        "delegation",
+        "src/transport/http/client.rs",
+        "build",
+        "hands previous().len() to transport's own decider evaluate_redirect_for, \
+         whose count is pinned by transport/http/tests.rs (T1b, T15)",
+    ),
+    (
+        "delegation",
+        "src/key_server/oidc_jwks_cache.rs",
+        "with_remote_proxy",
+        "refuses every redirect; no hop is ever followed, so there is no budget to consult",
+    ),
+];
 
 #[test]
 fn production_clients_set_an_explicit_redirect_policy() {
@@ -746,7 +941,7 @@ fn production_clients_set_an_explicit_redirect_policy() {
     entries.sort();
     let mut msg = String::from("redirect policy gaps:\n");
     for e in &entries {
-        msg.push_str(&format!("{} {}::{}\n", e.rule, e.file, e.func));
+        let _ = write!(msg, "{} {}::{}\n", e.rule, e.file, e.func);
     }
     assert!(entries.is_empty(), "{msg}");
 }
@@ -807,6 +1002,22 @@ fn the_scanner_reports_each_negative_fixture() {
         "custom-no-delegation",
         "fn f() { let _ = reqwest::redirect::Policy::custom(|a| a.follow()); }",
     );
+    check_reported(
+        "custom-delegates",
+        "fn f() { let _ = reqwest::redirect::Policy::custom(|a| { let _ = redirect_decision(a.previous().len(), a.url().as_str()); a.follow() }); }",
+    );
+    check_reported(
+        "factory-route-no-redirect",
+        "fn f() -> Client { route(None).timeout(d).build().expect(\"x\") } fn route(p: Option<u8>) -> reqwest::ClientBuilder { Client::builder() }",
+    );
+    check_reported(
+        "builder-param-no-redirect",
+        "fn f(b: reqwest::ClientBuilder) -> Client { b.timeout(d).build().expect(\"x\") }",
+    );
+    check_reported(
+        "if-branch-replaces-builder",
+        "fn f(c: bool) { let mut b = Client::builder().redirect(Policy::none()); if c { b = Client::builder(); } b.build(); }",
+    );
 }
 
 #[test]
@@ -848,12 +1059,24 @@ fn the_scanner_passes_each_positive_fixture() {
         "fn f() { let p = reqwest::redirect::Policy::none(); let _ = p; }",
     );
     check_clean(
-        "custom-delegates",
-        "fn f() { let _ = reqwest::redirect::Policy::custom(|a| { let _ = redirect_decision(a.previous().len(), a.url().as_str()); a.follow() }); }",
+        "custom-matches-on-decision",
+        "fn f() { let _ = reqwest::redirect::Policy::custom(|a| match redirect_decision(a.previous().len(), a.url().as_str()) { _ => a.follow() }); }",
     );
     check_clean(
         "factory",
         "fn make() -> reqwest::ClientBuilder { Client::builder().build(); Client::builder() }",
+    );
+    check_clean(
+        "factory-route-with-redirect",
+        "fn f() -> Client { route(None).redirect(Policy::none()).timeout(d).build().expect(\"x\") } fn route(p: Option<u8>) -> reqwest::ClientBuilder { Client::builder() }",
+    );
+    check_clean(
+        "builder-param-with-redirect",
+        "fn f(b: reqwest::ClientBuilder) -> Client { b.redirect(Policy::none()).timeout(d).build().expect(\"x\") }",
+    );
+    check_clean(
+        "if-branch-replaced-then-redirect",
+        "fn f(c: bool) { let mut b = Client::builder().redirect(Policy::none()); if c { b = Client::builder(); } b = b.redirect(Policy::none()); b.build(); }",
     );
     check_clean("comment-only", "fn f() { // Policy::limited(3)\n }");
 }
