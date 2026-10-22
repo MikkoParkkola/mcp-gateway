@@ -224,3 +224,7 @@ impl ValidationRow {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "output_truncate_tests.rs"]
+mod truncate_tests;

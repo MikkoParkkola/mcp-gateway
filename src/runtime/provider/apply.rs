@@ -255,3 +255,7 @@ fn first_nonempty_line(text: &str) -> Option<String> {
         .find(|line| !line.is_empty())
         .map(ToString::to_string)
 }
+
+#[cfg(test)]
+#[path = "apply_truncate_tests.rs"]
+mod truncate_tests;
