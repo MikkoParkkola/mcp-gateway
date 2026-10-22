@@ -14,21 +14,14 @@ use regex::RegexSet;
 use serde::Serialize;
 use std::sync::LazyLock;
 
-/// Severity level for an inspection finding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Severity {
-    /// Informational — logged but never blocks.
-    Low,
-    /// Suspicious pattern — logged prominently.
-    Medium,
-    /// Likely malicious — blocks in action mode.
-    High,
-    /// Confirmed threat pattern — always blocks in action mode.
-    Critical,
-}
+pub use super::Severity;
 
 /// A single inspection finding.
+///
+/// Kept separate from the firewall's `Finding` (`security::firewall`, feature `firewall`) on purpose:
+/// this one is serialized to clients as `_security_findings`; that one is the firewall's verdict, whose
+/// audit row (`AuditFinding`) keeps only scan type, severity and location. Both share
+/// [`crate::security::Severity`].
 #[derive(Debug, Clone, Serialize)]
 pub struct Finding {
     /// Pattern category (e.g., `"secret"`, `"injection"`, `"exfil_url"`).

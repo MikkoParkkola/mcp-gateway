@@ -54,8 +54,6 @@ pub mod principal_window;
 pub mod redactor;
 mod response;
 mod verdict;
-#[cfg(kani)]
-use verdict::default_action_for_severity;
 #[cfg(test)]
 use verdict::rule_matches;
 use verdict::{
@@ -137,31 +135,26 @@ pub struct FirewallVerdict {
 }
 
 /// A single finding from a scan.
+///
+/// Kept separate from [`crate::security::response_inspect::Finding`] on purpose: this one is the
+/// firewall's verdict; its audit row is the private `AuditFinding` (scan type, severity, location),
+/// which drops `description` and `matched`. That one is the client-visible `_security_findings`
+/// annotation, and the firewall builds behind a feature flag.
 #[derive(Debug, Clone, Serialize)]
 pub struct Finding {
     /// Which scan produced this finding.
     pub scan_type: ScanType,
-    /// Severity: high (block), medium (warn), low (log).
+    /// Severity: critical and high (block), medium (warn), low (log).
     pub severity: Severity,
     /// Human-readable description of the finding.
     pub description: String,
-    /// The matched pattern or fragment (truncated for logging).
+    /// The matched pattern or fragment, truncated. Never written to the audit row.
     pub matched: String,
     /// Where the finding was detected.
     pub location: FindingLocation,
 }
 
-/// Finding severity, which drives the default action when no rule matches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Severity {
-    /// Deterministic pattern — block by default.
-    High,
-    /// Heuristic pattern — warn by default.
-    Medium,
-    /// Statistical anomaly — log only by default.
-    Low,
-}
+pub use crate::security::Severity;
 
 /// Where a finding was detected in the invocation flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

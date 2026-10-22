@@ -99,3 +99,48 @@ fn finding_severity_serializes_to_snake_case_names() {
         );
     }
 }
+
+// ── MIK-8669 commit C1: critical severity ───────────────────────────────────
+
+#[test]
+fn critical_severity_blocks_and_is_strongest() {
+    assert_eq!(
+        decide_firewall_action(None, Some(Severity::Critical)),
+        FirewallAction::Block
+    );
+    assert_eq!(
+        strongest_finding_severity(&[finding_at(Severity::High), finding_at(Severity::Critical)]),
+        Some(Severity::Critical)
+    );
+}
+
+#[test]
+fn critical_anomaly_only_block_answers_32002() {
+    let mut verdict = FirewallVerdict {
+        allowed: false,
+        action: FirewallAction::Block,
+        findings: vec![Finding {
+            scan_type: ScanType::SequenceAnomaly,
+            severity: Severity::Critical,
+            description: "the finding".into(),
+            matched: String::new(),
+            location: FindingLocation::SequenceAnomaly,
+        }],
+        anomaly_score: None,
+    };
+    assert_eq!(
+        verdict.request_refusal(),
+        Some((-32002, "Anomaly detection blocked: the finding".to_string()))
+    );
+    verdict.findings.push(Finding {
+        scan_type: ScanType::PromptInjection,
+        severity: Severity::High,
+        description: "other finding".into(),
+        matched: String::new(),
+        location: FindingLocation::RequestArgs,
+    });
+    assert_eq!(
+        verdict.request_refusal().map(|(code, _)| code),
+        Some(-32600)
+    );
+}

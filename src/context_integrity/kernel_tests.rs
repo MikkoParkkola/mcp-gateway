@@ -85,7 +85,7 @@ fn policies_support_all_decision_kinds() {
     let content = Value::String("hello".to_string());
     let findings = [ContextIntegrityFinding {
         classifier: ContextIntegrityClassifier::PersonalData,
-        severity: ContextIntegritySeverity::Medium,
+        severity: crate::security::Severity::Medium,
         data_class: ContextDataClass::PersonalData,
         description: "test".to_string(),
         evidence: "test".to_string(),

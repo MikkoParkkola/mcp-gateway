@@ -13,9 +13,10 @@ fn any_firewall_action() -> FirewallAction {
 }
 
 fn any_severity() -> Severity {
-    match kani::any::<u8>() % 3 {
-        0 => Severity::High,
-        1 => Severity::Medium,
+    match kani::any::<u8>() % 4 {
+        0 => Severity::Critical,
+        1 => Severity::High,
+        2 => Severity::Medium,
         _ => Severity::Low,
     }
 }
@@ -44,7 +45,12 @@ fn firewall_action_resolution_contract() {
             if let Some(rule_action) = matching_rule_action {
                 assert_eq!(action, rule_action);
             } else {
-                assert_eq!(action, default_action_for_severity(severity));
+                let expected = match severity {
+                    Severity::Critical | Severity::High => FirewallAction::Block,
+                    Severity::Medium => FirewallAction::Warn,
+                    Severity::Low => FirewallAction::Allow,
+                };
+                assert_eq!(action, expected);
             }
         }
     }
