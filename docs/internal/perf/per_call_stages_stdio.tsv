@@ -402,7 +402,7 @@ src/gateway/server/warmstart.rs	gap_before_attempt	-	startup warm-start retry lo
 src/gateway/server/warmstart.rs	hook	-	hot-reload registration warming hook, off the request path
 src/gateway/server/warmstart.rs	is_readiness_error	-	startup warm-start retry loop, off the request path
 src/gateway/server/warmstart.rs	is_transient_io	-	startup warm-start retry loop, off the request path
-src/gateway/server/warmstart.rs	jittered	-	startup warm-start retry loop, off the request path
+src/jitter.rs	full_jitter	-	startup warm-start retry loop, off the request path
 src/gateway/server/warmstart.rs	lock	-	hot-reload registration warming, off the request path
 src/gateway/server/warmstart.rs	new	-	hot-reload warmer registration, off the request path
 src/gateway/server/warmstart.rs	resolve_warm_start_names	-	startup warm-start, before serving
