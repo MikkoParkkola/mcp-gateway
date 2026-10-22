@@ -13,10 +13,25 @@ use std::path::{Path, PathBuf};
 /// watched roots. A `Vec`, not a hash: exact, and the trees are small.
 pub(super) type Fingerprint = Vec<(usize, String, u64, u128)>;
 
-/// Deepest level below a watched root the fingerprint descends to.
+/// Deepest level below a watched root the fingerprint descends to. This is
+/// the backstop: the only cycle guard off unix, and a bound on deep real
+/// trees everywhere.
 const FINGERPRINT_MAX_DEPTH: u32 = 16;
 /// Most directory entries the fingerprint visits across all watched roots.
 const FINGERPRINT_MAX_ENTRIES: usize = 10_000;
+
+/// The identity of a directory for cycle detection: (device, inode) on unix.
+#[cfg(unix)]
+fn dir_id(metadata: &std::fs::Metadata) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    Some((metadata.dev(), metadata.ino()))
+}
+
+/// No stable directory identity off unix; the depth bound is the only cycle guard there.
+#[cfg(not(unix))]
+fn dir_id(_metadata: &std::fs::Metadata) -> Option<(u64, u64)> {
+    None
+}
 
 /// Fingerprint the watched directories: the sorted `(directory index,
 /// relative path, length, mtime in nanoseconds since the Unix epoch)` of
@@ -26,15 +41,23 @@ const FINGERPRINT_MAX_ENTRIES: usize = 10_000;
 /// decided with [`std::fs::metadata`], which follows symlinks. A missing
 /// directory contributes nothing and an unreadable entry is skipped. Past
 /// [`FINGERPRINT_MAX_DEPTH`] levels or [`FINGERPRINT_MAX_ENTRIES`] visited
-/// entries the walk gives up and returns `None`; a symlink cycle ends at the
-/// depth bound.
+/// entries the walk gives up and returns `None`. On unix, a symlink cycle (a
+/// directory that is its own ancestor by device and inode) ends the walk at
+/// its first repeat and returns `None`, like the bounds; off unix, the depth
+/// bound is the only guard against a cycle. A non-cyclic chain of links
+/// longer than the OS link limit fails to resolve and is skipped like any
+/// unreadable entry; that is a named limit.
 pub(super) fn fingerprint(dirs: &[String]) -> Option<Fingerprint> {
     let mut found: Fingerprint = Vec::new();
     let mut visited: usize = 0;
     for (index, dir) in dirs.iter().enumerate() {
         // The root is depth 0; each subdirectory descends one level.
-        let mut stack = vec![(PathBuf::from(dir), 0)];
-        while let Some((path, depth)) = stack.pop() {
+        let root_ancestors: Vec<(u64, u64)> = match std::fs::metadata(dir) {
+            Ok(m) => dir_id(&m).into_iter().collect(),
+            Err(_) => Vec::new(),
+        };
+        let mut stack = vec![(PathBuf::from(dir), 0, root_ancestors)];
+        while let Some((path, depth, ancestors)) = stack.pop() {
             let Ok(entries) = std::fs::read_dir(&path) else {
                 continue;
             };
@@ -59,7 +82,15 @@ pub(super) fn fingerprint(dirs: &[String]) -> Option<Fingerprint> {
                     if depth + 1 > FINGERPRINT_MAX_DEPTH {
                         return None;
                     }
-                    stack.push((entry_path, depth + 1));
+                    let id = dir_id(&metadata);
+                    if id.is_some_and(|id| ancestors.contains(&id)) {
+                        return None;
+                    }
+                    let mut ancestors_plus_id = ancestors.clone();
+                    if let Some(id) = id {
+                        ancestors_plus_id.push(id);
+                    }
+                    stack.push((entry_path, depth + 1, ancestors_plus_id));
                     continue;
                 }
                 let is_yaml = entry_path
