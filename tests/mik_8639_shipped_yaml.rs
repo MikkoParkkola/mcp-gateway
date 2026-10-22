@@ -71,9 +71,17 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
             }
             continue;
         }
-        let backend: Vec<_> = serde_yaml::Deserializer::from_str(&content)
-            .map(serde_yaml::Value::deserialize)
-            .collect();
+        // serde_yaml's stream can keep yielding after a malformed document,
+        // so stop at the first error (collecting it unbounded aborted at 77 GB).
+        let mut backend = Vec::new();
+        for document in serde_yaml::Deserializer::from_str(&content) {
+            let read = serde_yaml::Value::deserialize(document);
+            let failed = read.is_err();
+            backend.push(read);
+            if failed {
+                break;
+            }
+        }
         if !backend.is_empty() && backend.iter().all(|read| read.is_ok()) {
             multi += 1;
             let guarded: Vec<_> = yaml::documents(&content).collect();
