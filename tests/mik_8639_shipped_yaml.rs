@@ -9,6 +9,7 @@
 #[path = "common/yaml.rs"]
 mod yaml;
 
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 /// Collect `*.yaml`/`*.yml` files under `root`, skipping `target` and `.git`.
@@ -46,25 +47,44 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
         "config",
         "deploy",
         "tests/fixtures",
+        "playbooks",
+        "benchmarks",
     ] {
         collect_yaml_files(Path::new(root), &mut files);
     }
+    for file in ["gateway.example.yaml", "smithery.yaml"] {
+        files.push(PathBuf::from(file));
+    }
     assert!(!files.is_empty(), "expected to find shipped YAML files");
-    let mut checked = 0;
+    let mut single = 0;
+    let mut multi = 0;
     let mut refused = Vec::new();
     for path in &files {
-        let Ok(content) = std::fs::read_to_string(path) else {
-            continue;
+        let content = match std::fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(err) => panic!("shipped file {} unreadable: {err}", path.display()),
         };
         if serde_yaml::from_str::<serde_yaml::Value>(&content).is_ok() {
-            checked += 1;
+            single += 1;
             if yaml::from_str::<yaml::Value>(&content).is_err() {
+                refused.push(path.clone());
+            }
+            continue;
+        }
+        let backend: Vec<_> = serde_yaml::Deserializer::from_str(&content)
+            .map(serde_yaml::Value::deserialize)
+            .collect();
+        if !backend.is_empty() && backend.iter().all(|read| read.is_ok()) {
+            multi += 1;
+            let guarded: Vec<_> = yaml::documents(&content).collect();
+            let ok = guarded.len() == backend.len() && guarded.iter().all(|read| read.is_ok());
+            if !ok {
                 refused.push(path.clone());
             }
         }
     }
     eprintln!(
-        "mik-8639 shipped-yaml: {checked} backend-accepted files, {} refused",
+        "mik-8639 shipped-yaml: {single} single-document, {multi} multi-document backend-accepted files, {} refused",
         refused.len()
     );
     assert!(

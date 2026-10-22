@@ -79,6 +79,13 @@ fn size_over_limit_refused() {
             max: MAX_YAML_BYTES
         })
     );
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "YAML refused: {} bytes, over the 16777216-byte limit",
+            input.len()
+        )
+    );
 }
 
 #[test]
@@ -123,6 +130,14 @@ fn flow_sequence_depth_129_refused() {
     let input = format!("{}{SENTINEL}{}", "[".repeat(129), "]".repeat(129));
     let err = refused(&input, "flow-seq-129");
     assert_eq!(err.limit(), Some(&yaml::Limit::Depth { line: 1 }));
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: nesting deeper than 128 levels at line 1"
+    );
+}
+
+#[test]
+fn flow_sequence_depth_128_accepted() {
     // ACCEPTED on the skeleton by design: the same shape at 128.
     let ok = format!("{}{SENTINEL}{}", "[".repeat(128), "]".repeat(128));
     assert!(
@@ -136,6 +151,14 @@ fn flow_mapping_depth_129_refused() {
     let nested = format!("{}{SENTINEL}{}", "{a: ".repeat(129), "}".repeat(129));
     let err = refused(&nested, "flow-map-129");
     assert_eq!(err.limit(), Some(&yaml::Limit::Depth { line: 1 }));
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: nesting deeper than 128 levels at line 1"
+    );
+}
+
+#[test]
+fn flow_mapping_depth_128_accepted() {
     // ACCEPTED on the skeleton by design: the same shape at 128.
     let ok = format!("{}{SENTINEL}{}", "{a: ".repeat(128), "}".repeat(128));
     assert!(
@@ -148,6 +171,14 @@ fn flow_mapping_depth_129_refused() {
 fn block_mapping_depth_129_refused() {
     let err = refused(&block_map(129), "block-map-129");
     assert_eq!(err.limit(), Some(&yaml::Limit::Depth { line: 129 }));
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: nesting deeper than 128 levels at line 129"
+    );
+}
+
+#[test]
+fn block_mapping_depth_128_accepted() {
     // ACCEPTED on the skeleton by design: the same shape at 128.
     assert!(
         yaml::from_str::<yaml::Value>(&block_map(128)).is_ok(),
@@ -159,6 +190,14 @@ fn block_mapping_depth_129_refused() {
 fn block_sequence_depth_129_refused() {
     let err = refused(&block_seq(129), "block-seq-129");
     assert_eq!(err.limit(), Some(&yaml::Limit::Depth { line: 129 }));
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: nesting deeper than 128 levels at line 129"
+    );
+}
+
+#[test]
+fn block_sequence_depth_128_accepted() {
     // ACCEPTED on the skeleton by design: the same shape at 128.
     assert!(
         yaml::from_str::<yaml::Value>(&block_seq(128)).is_ok(),
@@ -171,6 +210,14 @@ fn compact_dashes_depth_129_refused() {
     let input = format!("{}{SENTINEL}", "- ".repeat(129));
     let err = refused(&input, "dashes-129");
     assert_eq!(err.limit(), Some(&yaml::Limit::Depth { line: 1 }));
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: nesting deeper than 128 levels at line 1"
+    );
+}
+
+#[test]
+fn compact_dashes_depth_128_accepted() {
     // ACCEPTED on the skeleton by design: the same shape at 128.
     let ok = format!("{}{SENTINEL}", "- ".repeat(128));
     assert!(
@@ -185,6 +232,14 @@ fn implicit_flow_map_depth_129_refused() {
     let input = format!("{}[{SENTINEL}]{}", "[a: ".repeat(64), "]".repeat(64));
     let err = refused(&input, "implicit-map-129");
     assert_eq!(err.limit(), Some(&yaml::Limit::Depth { line: 1 }));
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: nesting deeper than 128 levels at line 1"
+    );
+}
+
+#[test]
+fn implicit_flow_map_depth_128_accepted() {
     // ACCEPTED on the skeleton by design: 64 pairs alone are depth 128.
     let ok = format!("{}{SENTINEL}{}", "[a: ".repeat(64), "]".repeat(64));
     assert!(
@@ -195,19 +250,19 @@ fn implicit_flow_map_depth_129_refused() {
 
 #[test]
 fn compact_json_depth_129_refused() {
-    let input = format!(
-        "{}\"{SENTINEL}\"{}\"",
-        "{\"a\":".repeat(129),
-        "}".repeat(129)
-    );
+    let input = format!("{}\"{SENTINEL}\"{}", "{\"a\":".repeat(129), "}".repeat(129));
     let err = refused(&input, "json-129");
     assert_eq!(err.limit(), Some(&yaml::Limit::Depth { line: 1 }));
-    // ACCEPTED on the skeleton by design: the same shape at 128.
-    let ok = format!(
-        "{}\"{SENTINEL}\"{}\"",
-        "{\"a\":".repeat(128),
-        "}".repeat(128)
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: nesting deeper than 128 levels at line 1"
     );
+}
+
+#[test]
+fn compact_json_depth_128_accepted() {
+    // ACCEPTED on the skeleton by design: the same shape at 128.
+    let ok = format!("{}\"{SENTINEL}\"{}", "{\"a\":".repeat(128), "}".repeat(128));
     assert!(
         yaml::from_str::<yaml::Value>(&ok).is_ok(),
         "json-128 must be accepted"
@@ -219,6 +274,10 @@ fn flow_depth_10000_is_depth_not_syntax() {
     let input = format!("{}{SENTINEL}{}", "[".repeat(10_000), "]".repeat(10_000));
     let err = refused(&input, "flow-10k");
     assert_eq!(err.limit(), Some(&yaml::Limit::Depth { line: 1 }));
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: nesting deeper than 128 levels at line 1"
+    );
 }
 
 /// A typed reader that never looks at the deep field (DEPTH.2).
@@ -236,6 +295,10 @@ fn unread_field_10000_deep_refused() {
     );
     let err = refused_as::<T>(&input, "struct-10k");
     assert_eq!(err.limit(), Some(&yaml::Limit::Depth { line: 2 }));
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: nesting deeper than 128 levels at line 2"
+    );
 }
 
 #[test]
@@ -247,6 +310,10 @@ fn tagged_scalar_with_deep_tail_refused() {
     );
     let err = refused(&input, "bool-tail");
     assert_eq!(err.limit(), Some(&yaml::Limit::Depth { line: 3 }));
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: nesting deeper than 128 levels at line 3"
+    );
 }
 
 /// One anchor plus `aliases` references to it.
@@ -262,6 +329,7 @@ fn aliased_input(aliases: usize) -> String {
 fn aliases_over_limit_refused() {
     let err = refused(&aliased_input(65), "aliases-65");
     assert_eq!(err.limit(), Some(&yaml::Limit::Aliases { max: 64 }));
+    assert_eq!(err.to_string(), "YAML refused: more than 64 aliases");
 }
 
 #[test]
@@ -281,6 +349,7 @@ fn aliases_counted_stream_wide() {
     }
     let err = refused(&input, "aliases-stream");
     assert_eq!(err.limit(), Some(&yaml::Limit::Aliases { max: 64 }));
+    assert_eq!(err.to_string(), "YAML refused: more than 64 aliases");
 }
 
 /// `count` `%TAG` directives joined by `newline`, then a small document.
@@ -299,18 +368,30 @@ fn tag_flood(count: usize, newline: &str) -> String {
 fn tag_directives_lf_over_limit_refused() {
     let err = refused(&tag_flood(65, "\n"), "tag-lf");
     assert_eq!(err.limit(), Some(&yaml::Limit::TagDirectives { max: 64 }));
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: more than 64 %TAG directives"
+    );
 }
 
 #[test]
 fn tag_directives_cr_over_limit_refused() {
     let err = refused(&tag_flood(65, "\r"), "tag-cr");
     assert_eq!(err.limit(), Some(&yaml::Limit::TagDirectives { max: 64 }));
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: more than 64 %TAG directives"
+    );
 }
 
 #[test]
 fn tag_directives_crlf_over_limit_refused() {
     let err = refused(&tag_flood(65, "\r\n"), "tag-crlf");
     assert_eq!(err.limit(), Some(&yaml::Limit::TagDirectives { max: 64 }));
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: more than 64 %TAG directives"
+    );
 }
 
 #[test]
@@ -328,6 +409,10 @@ fn raw_nel_refused() {
     let offset = input.find('\u{85}').unwrap();
     let err = refused(&input, "nel");
     assert_eq!(err.limit(), Some(&yaml::Limit::LineBreak { offset }));
+    let expected = format!(
+        "YAML refused: U+0085, U+2028 or U+2029 line break at byte {offset}; refused: parsers disagree"
+    );
+    assert_eq!(err.to_string(), expected);
 }
 
 #[test]
@@ -336,6 +421,10 @@ fn raw_line_separator_refused() {
     let offset = input.find('\u{2028}').unwrap();
     let err = refused(&input, "ls");
     assert_eq!(err.limit(), Some(&yaml::Limit::LineBreak { offset }));
+    let expected = format!(
+        "YAML refused: U+0085, U+2028 or U+2029 line break at byte {offset}; refused: parsers disagree"
+    );
+    assert_eq!(err.to_string(), expected);
 }
 
 #[test]
@@ -344,6 +433,10 @@ fn raw_paragraph_separator_refused() {
     let offset = input.find('\u{2029}').unwrap();
     let err = refused(&input, "ps");
     assert_eq!(err.limit(), Some(&yaml::Limit::LineBreak { offset }));
+    let expected = format!(
+        "YAML refused: U+0085, U+2028 or U+2029 line break at byte {offset}; refused: parsers disagree"
+    );
+    assert_eq!(err.to_string(), expected);
 }
 
 #[test]
@@ -353,6 +446,10 @@ fn anchor_name_outside_grammar_refused() {
     let offset = input.find('&').unwrap();
     let err = refused(&input, "anchor-name");
     assert_eq!(err.limit(), Some(&yaml::Limit::AnchorName { offset }));
+    let expected = format!(
+        "YAML refused: anchor or alias name outside [A-Za-z0-9_-] at byte {offset}; refused: parsers disagree"
+    );
+    assert_eq!(err.to_string(), expected);
 }
 
 #[test]
@@ -362,6 +459,10 @@ fn anchor_reuse_refused() {
     let offset = input.rfind("&a").unwrap();
     let err = refused(&input, "anchor-reuse");
     assert_eq!(err.limit(), Some(&yaml::Limit::AnchorReuse { offset }));
+    assert_eq!(
+        err.to_string(),
+        format!("YAML refused: anchor name reused at byte {offset}")
+    );
 }
 
 #[test]
@@ -375,6 +476,7 @@ fn anchor_reuse_across_documents_accepted() {
     ] {
         let results: Vec<_> = yaml::documents(input).collect();
         assert!(!results.is_empty(), "{what}: expected documents");
+        assert_eq!(results.len(), 2, "{what}: expected exactly 2 documents");
         assert!(
             results.iter().all(|read| read.is_ok()),
             "{what}: reuse across documents must be accepted"
@@ -387,6 +489,10 @@ fn alias_to_open_anchor_refused() {
     let input = format!("a: &a [{SENTINEL}, *a]");
     let err = refused(&input, "open-direct");
     assert_eq!(err.limit(), Some(&yaml::Limit::Expansion));
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: alias expansion over the limit"
+    );
 }
 
 #[test]
@@ -394,6 +500,10 @@ fn alias_to_open_anchor_through_nested_anchor_refused() {
     let input = format!("a: &a [{SENTINEL}, &b [*a]]");
     let err = refused(&input, "open-nested");
     assert_eq!(err.limit(), Some(&yaml::Limit::Expansion));
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: alias expansion over the limit"
+    );
 }
 
 #[test]
@@ -403,8 +513,23 @@ fn expansion_large_scalar_fanout_refused() {
     for index in 0..64 {
         input.push_str(&format!("u{index}: *a\n"));
     }
-    let err = refused(&input, "expand-scalar");
+    let start = Instant::now();
+    let (result, _work) = yaml::guard_work(&input);
+    eprintln!("mik-8639 expand-scalar: {} ms", start.elapsed().as_millis());
+    let err = result.unwrap_err();
     assert_eq!(err.limit(), Some(&yaml::Limit::Expansion));
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: alias expansion over the limit"
+    );
+    assert!(
+        !err.to_string().contains(SENTINEL),
+        "expand-scalar: Display leaks the sentinel"
+    );
+    assert!(
+        !format!("{err:?}").contains(SENTINEL),
+        "expand-scalar: Debug leaks the sentinel"
+    );
 }
 
 #[test]
@@ -417,8 +542,23 @@ fn expansion_anchored_nulls_refused() {
         input.push_str("- *a\n");
     }
     input.push_str(&format!("- {SENTINEL}\n"));
-    let err = refused(&input, "expand-nulls");
+    let start = Instant::now();
+    let (result, _work) = yaml::guard_work(&input);
+    eprintln!("mik-8639 expand-nulls: {} ms", start.elapsed().as_millis());
+    let err = result.unwrap_err();
     assert_eq!(err.limit(), Some(&yaml::Limit::Expansion));
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: alias expansion over the limit"
+    );
+    assert!(
+        !err.to_string().contains(SENTINEL),
+        "expand-nulls: Display leaks the sentinel"
+    );
+    assert!(
+        !format!("{err:?}").contains(SENTINEL),
+        "expand-nulls: Debug leaks the sentinel"
+    );
 }
 
 #[test]
@@ -428,8 +568,23 @@ fn expansion_nested_fanout_refused() {
     input.push_str(&format!("l1: &b [{}]\n", ["*a"; 10].join(", ")));
     input.push_str(&format!("l2: &c [{}]\n", ["*b"; 10].join(", ")));
     input.push_str(&format!("l3: [{}]\n", ["*c"; 10].join(", ")));
-    let err = refused(&input, "expand-fanout");
+    let start = Instant::now();
+    let (result, _work) = yaml::guard_work(&input);
+    eprintln!("mik-8639 expand-fanout: {} ms", start.elapsed().as_millis());
+    let err = result.unwrap_err();
     assert_eq!(err.limit(), Some(&yaml::Limit::Expansion));
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: alias expansion over the limit"
+    );
+    assert!(
+        !err.to_string().contains(SENTINEL),
+        "expand-fanout: Display leaks the sentinel"
+    );
+    assert!(
+        !format!("{err:?}").contains(SENTINEL),
+        "expand-fanout: Debug leaks the sentinel"
+    );
 }
 
 #[test]
@@ -439,6 +594,10 @@ fn syntax_reports_bracket_position() {
     assert_eq!(
         err.limit(),
         Some(&yaml::Limit::Syntax { line: 3, column: 4 })
+    );
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: unclosed bracket at line 3 column 4"
     );
     // documents() refuses the whole stream: exactly one error, nothing else.
     let results: Vec<_> = yaml::documents(&input).collect();
@@ -459,6 +618,10 @@ fn syntax_unexpected_character_is_value_free() {
         err.limit(),
         Some(&yaml::Limit::Syntax { line: 2, column: 1 })
     );
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: unexpected character at line 2 column 1"
+    );
 }
 
 #[test]
@@ -469,15 +632,25 @@ fn syntax_unclosed_bracket_is_value_free() {
         err.limit(),
         Some(&yaml::Limit::Syntax { line: 1, column: 4 })
     );
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: unclosed bracket at line 1 column 4"
+    );
 }
 
 #[test]
 fn syntax_mismatched_bracket_is_value_free() {
     let input = format!("b: [{SENTINEL}}}\n");
-    // Reported at the unexpected end bracket, one-based.
-    let column = input.find('}').unwrap() + 1;
+    // Reported at the opening bracket's mark, columns one-based.
     let err = refused(&input, "mismatched");
-    assert_eq!(err.limit(), Some(&yaml::Limit::Syntax { line: 1, column }));
+    assert_eq!(
+        err.limit(),
+        Some(&yaml::Limit::Syntax { line: 1, column: 4 })
+    );
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: mismatched bracket at line 1 column 4"
+    );
 }
 
 #[test]
@@ -508,5 +681,13 @@ fn guard_work_scales_linearly_on_wide_documents() {
     assert!(
         work_sixteen >= 12 * work_one && work_sixteen <= 20 * work_one,
         "work must scale about 16x, got {work_sixteen} vs {work_one}"
+    );
+    let comment = format!("#{}\n", "x".repeat(1024 * 1024 - 2));
+    assert_eq!(comment.len(), 1024 * 1024);
+    let (comment_ok, comment_work) = yaml::guard_work(&comment);
+    assert!(comment_ok.is_ok(), "comment-only input must pass the guard");
+    assert!(
+        comment_work < 64,
+        "comment-only work must stay under 64, got {comment_work}"
     );
 }
