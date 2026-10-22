@@ -63,6 +63,8 @@ mod stdio_writer;
 mod task_runtime;
 #[cfg(test)]
 mod test_seams;
+#[cfg(test)]
+mod tilde_tests;
 pub(crate) use stdio_nonce::StdioNonce;
 mod support;
 mod tools_changed;

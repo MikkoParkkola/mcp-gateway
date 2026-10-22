@@ -238,6 +238,10 @@ pub fn setup_tracing(level: &str, format: Option<&str>) -> Result<()> {
 #[path = "log_filter_tests.rs"]
 mod log_filter_tests;
 
+// Unix-only: asserts POSIX mode bits under a child's umask.
+#[cfg(all(test, unix))]
+mod file_mode_inherit_tests;
+
 #[cfg(test)]
 pub(crate) mod test_classification_count;
 #[cfg(test)]

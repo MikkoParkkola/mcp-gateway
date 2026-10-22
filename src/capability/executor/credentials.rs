@@ -765,3 +765,7 @@ mod tests {
 #[cfg(test)]
 #[path = "c4_credential_tests.rs"]
 mod c4_credential_tests;
+
+#[cfg(test)]
+#[path = "credentials_tilde_tests.rs"]
+mod credentials_tilde_tests;
