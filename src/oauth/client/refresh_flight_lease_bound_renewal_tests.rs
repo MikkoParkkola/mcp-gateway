@@ -259,12 +259,11 @@ async fn t6b_renewal_without_a_refresh_token_defers_leaving_cache_and_storage() 
         let _holder = hold_across_processes(&token_path, Instant::now() + CREDENTIAL_LOCK_WAIT)
             .await
             .expect("the other process holds the lease");
-        // Pause only once the grant's answer has been READ: the save's gate
-        // is reached after the exchange, before the save's budget starts. A
-        // request merely received (`arrivals`) still has its reply in flight,
-        // and a paused clock then jumps to the client's request timeout.
-        // The server yields before replying, so a test that pauses on
-        // "received" fails every time rather than once in a while.
+        // Pause only at the issued-save gate: it is reached after the grant's
+        // answer was read and before the save's budget starts, so no socket
+        // exchange runs under the paused clock (MIK-8653). Waiting on
+        // `arrivals` instead paused with the reply still in flight; the
+        // server's yields keep that mistake failing every time.
         server.yields_before_reply.store(3, Ordering::SeqCst);
         let flight = Flight::of(&token_path);
         let gate = Arc::new(SaveGate::default());

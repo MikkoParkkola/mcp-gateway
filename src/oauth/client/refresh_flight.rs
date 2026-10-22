@@ -58,6 +58,15 @@ pub(super) struct SaveGate {
     pub(super) release: tokio::sync::Notify,
 }
 
+#[cfg(test)]
+impl SaveGate {
+    /// Signal `reached`, then wait for `release`.
+    async fn hold(&self) {
+        self.reached.notify_one();
+        self.release.notified().await;
+    }
+}
+
 /// Every credential's flight. Entries are kept for the life of the process:
 /// dropping one would drop its spent set (bounded by the credentials a process
 /// ever refreshes).
@@ -70,8 +79,7 @@ impl Flight {
     pub(super) async fn hold_before_issued_save(&self) {
         let gate = self.issued_gate.lock().clone();
         if let Some(gate) = gate {
-            gate.reached.notify_one();
-            gate.release.notified().await;
+            gate.hold().await;
         }
     }
 
@@ -532,8 +540,7 @@ impl Exchange {
         {
             let gate = self.flight.save_gate.lock().clone();
             if let Some(gate) = gate {
-                gate.reached.notify_one();
-                gate.release.notified().await;
+                gate.hold().await;
             }
         }
         match self.storage.save(&self.key, &self.resource_url, &token) {
