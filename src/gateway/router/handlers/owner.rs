@@ -24,15 +24,13 @@ use crate::mtls::CertIdentity;
 /// records whether a credential was actually validated, so an API key named
 /// "anonymous" cannot claim the unauthenticated identity's sessions.
 pub(super) fn session_owner(client: Option<&AuthenticatedClient>) -> SessionOwner {
-    match client {
+    match client.and_then(|c| c.credential_principal()) {
         // The validated principal, a digest of the secret: two API keys
         // configured with the same display name are different owners.
-        Some(c) if c.authenticated && !c.principal.is_empty() => {
-            SessionOwner::Credential(c.principal.clone())
-        }
+        Some(principal) => SessionOwner::Credential(principal.to_owned()),
         // Every other caller, named or not, is one class: an unvalidated name is
         // not a credential. Only the minted session id separates them (F9).
-        _ => SessionOwner::Anonymous,
+        None => SessionOwner::Anonymous,
     }
 }
 

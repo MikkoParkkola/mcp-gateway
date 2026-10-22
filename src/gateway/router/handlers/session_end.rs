@@ -37,7 +37,7 @@ pub(in crate::gateway::router) async fn mcp_delete_handler(
     if state.auth_config.enabled
         && !client
             .as_ref()
-            .is_some_and(|c| c.authenticated && !c.principal.is_empty())
+            .is_some_and(|c| c.credential_principal().is_some())
     {
         return gateway_reply(crate::gateway::middleware::bearer_unauthorized_response(
             "Session termination requires an authenticated credential.",

@@ -126,10 +126,7 @@ pub(super) async fn dashboard_link(
 ) -> Response {
     let Some(Extension(client)) = client.filter(|Extension(c)| {
         c.admin
-            && matches!(
-                c.credential_kind,
-                CredentialKind::StaticBearer | CredentialKind::ApiKey
-            )
+            && (c.credential_kind == CredentialKind::StaticBearer || c.api_key_identity().is_some())
     }) else {
         return admin_auth_required().into_response();
     };
@@ -139,7 +136,7 @@ pub(super) async fn dashboard_link(
     // The expiry comes from the resolved key that authenticated this request,
     // not the live file, so a reload cannot split them. A key that is not
     // found cannot prove its expiry, so it may not mint: fail closed.
-    let not_after = if client.credential_kind == CredentialKind::ApiKey {
+    let not_after = if client.api_key_identity().is_some() {
         let Some(key) = state
             .auth_config
             .api_keys

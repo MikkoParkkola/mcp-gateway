@@ -54,17 +54,15 @@ pub(super) const AUTH_DISABLED_TASK_OWNER: &str = "local:auth-disabled:tasks:v1"
 /// when the caller is unauthenticated: that is not an identity by itself, but
 /// `route_task_owner` may still give a validated agent token its own owner.
 fn session_owner_key(client: Option<&crate::gateway::auth::AuthenticatedClient>) -> String {
-    client.map_or_else(String::new, |c| {
-        if c.authenticated && !c.principal.is_empty() {
+    client
+        .and_then(|c| c.credential_principal())
+        .map_or_else(String::new, |principal| {
             format!(
                 "{}{}",
                 crate::gateway::auth::CREDENTIAL_OWNER_PREFIX,
-                c.principal
+                principal
             )
-        } else {
-            String::new()
-        }
-    })
+        })
 }
 
 /// The owner key a task records when the caller has no OIDC identity: the

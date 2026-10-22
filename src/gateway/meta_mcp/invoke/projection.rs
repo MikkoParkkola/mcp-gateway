@@ -158,6 +158,34 @@ pub(super) fn json_is_populated(value: &Value) -> bool {
     }
 }
 
+/// Inputs to the one quota rule (MIK-8659): stdio, identity, subject, the filtered credential principal, the key name.
+pub(super) struct QuotaInputs<'q> {
+    pub(super) stdio: Option<&'q [u8; 32]>,
+    pub(super) identity: Option<&'q crate::key_server::oidc::VerifiedIdentity>,
+    pub(super) subject: Option<&'q crate::identity_grants::GrantSubject>,
+    pub(super) credential_principal: Option<&'q str>,
+    pub(super) key_name: Option<&'q str>,
+}
+
+/// The one quota rule (MIK-8659): stdio, identity, subject, credential principal, then the key name if non-empty, else `None`.
+pub(super) fn quota_key_of(
+    inputs: QuotaInputs<'_>,
+) -> Option<crate::protocol::continuation::QuotaKey> {
+    use crate::protocol::continuation::{QuotaKey, QuotaSource};
+    let source = if let Some(nonce) = inputs.stdio {
+        QuotaSource::Stdio(nonce)
+    } else if let Some(identity) = inputs.identity {
+        QuotaSource::Identity(identity)
+    } else if let Some(subject) = inputs.subject {
+        QuotaSource::Subject(subject)
+    } else if let Some(principal) = inputs.credential_principal {
+        QuotaSource::Credential(principal)
+    } else {
+        QuotaSource::KeyName(inputs.key_name.filter(|n| !n.is_empty())?)
+    };
+    Some(QuotaKey::new(source))
+}
+
 impl crate::gateway::meta_mcp::MetaMcpCallerContext<'_> {
     /// Who a continuation minted or redeemed for this caller is bound to.
     ///
@@ -170,22 +198,16 @@ impl crate::gateway::meta_mcp::MetaMcpCallerContext<'_> {
     /// credential (live caller and task worker alike), the key name.
     /// `None` names no one, and nothing is minted for it.
     pub(crate) fn quota_key(&self) -> Option<crate::protocol::continuation::QuotaKey> {
-        use crate::protocol::continuation::{QuotaKey, QuotaSource};
-        let source = if let Some(nonce) = self.stdio_nonce {
-            QuotaSource::Stdio(nonce.bytes())
-        } else if let Some(identity) = self.verified_identity {
-            QuotaSource::Identity(identity)
-        } else if let Some(subject) = self.grant_subject.as_ref() {
-            QuotaSource::Subject(subject)
-        } else if let Some(principal) = self.credential_principal.filter(|p| {
-            !p.is_empty()
-                && self.authentication == crate::gateway::meta_mcp::Authentication::Authenticated
-        }) {
-            QuotaSource::Credential(principal)
-        } else {
-            QuotaSource::KeyName(self.api_key_name.filter(|n| !n.is_empty())?)
-        };
-        Some(QuotaKey::new(source))
+        quota_key_of(QuotaInputs {
+            stdio: self.stdio_nonce.map(|nonce| nonce.bytes()),
+            identity: self.verified_identity,
+            subject: self.grant_subject.as_ref(),
+            credential_principal: crate::gateway::auth::authenticated_principal(
+                self.authentication == crate::gateway::meta_mcp::Authentication::Authenticated,
+                self.credential_principal,
+            ),
+            key_name: self.api_key_name,
+        })
     }
 
     pub(crate) fn principal_source(

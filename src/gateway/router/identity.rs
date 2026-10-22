@@ -398,9 +398,9 @@ pub(super) fn caller_key(
         return key;
     }
     client
-        .filter(|c| c.authenticated && !c.principal.is_empty())
-        .map_or_else(String::new, |c| {
-            format!("credential:{}:{}", c.principal.len(), c.principal)
+        .and_then(|c| c.credential_principal())
+        .map_or_else(String::new, |principal| {
+            format!("credential:{}:{}", principal.len(), principal)
         })
 }
 
