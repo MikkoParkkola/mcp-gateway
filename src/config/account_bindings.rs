@@ -211,19 +211,11 @@ fn account_key_descriptor(
     reference: &str,
     descriptor: &AccountDescriptor,
 ) -> Result<AccountKeyDescriptor> {
-    let (Some(resource), Some(issuer)) =
-        (descriptor.resource.as_deref(), descriptor.issuer.as_deref())
-    else {
-        return Err(Error::ConfigValidation(format!(
+    AccountKeyDescriptor::from_config(reference, descriptor).ok_or_else(|| {
+        Error::ConfigValidation(format!(
             "backend '{name}' references personal_managed account descriptor '{reference}', \
              which is missing the resource/issuer the account key is built from"
-        )));
-    };
-    Ok(AccountKeyDescriptor {
-        descriptor_id: reference.to_string(),
-        provider: descriptor.provider.clone(),
-        resource: resource.to_string(),
-        issuer: issuer.to_string(),
+        ))
     })
 }
 
@@ -376,19 +368,11 @@ pub(crate) fn compile_descriptors(config: &Config) -> Result<Vec<CompiledDescrip
 fn compile_descriptor(id: &str, descriptor: &AccountDescriptor) -> Result<CompiledDescriptor> {
     let (propagation, account) = match descriptor.mode {
         DescriptorMode::PersonalManaged => {
-            let (Some(resource), Some(issuer)) =
-                (descriptor.resource.as_deref(), descriptor.issuer.as_deref())
-            else {
+            let Some(account) = AccountKeyDescriptor::from_config(id, descriptor) else {
                 return Err(Error::ConfigValidation(format!(
                     "personal_managed account descriptor '{id}' is missing the resource/issuer \
                      the account key is built from"
                 )));
-            };
-            let account = AccountKeyDescriptor {
-                descriptor_id: id.to_string(),
-                provider: descriptor.provider.clone(),
-                resource: resource.to_string(),
-                issuer: issuer.to_string(),
             };
             let revision = descriptor_revision(descriptor).map_err(|error| {
                 Error::ConfigValidation(format!(

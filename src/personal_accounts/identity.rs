@@ -47,6 +47,23 @@ pub(crate) struct AccountKeyDescriptor {
     pub(crate) issuer: String,
 }
 
+impl AccountKeyDescriptor {
+    /// The key projection of schema descriptor `descriptor_id`, or `None` when
+    /// it lacks the `resource` or `issuer` the key binds to. `None`, not an
+    /// error: each caller refuses in its own words (load, binding, migration).
+    pub(crate) fn from_config(
+        descriptor_id: &str,
+        descriptor: &crate::personal_accounts::config::AccountDescriptor,
+    ) -> Option<Self> {
+        Some(Self {
+            descriptor_id: descriptor_id.to_owned(),
+            provider: descriptor.provider.clone(),
+            resource: descriptor.resource.clone()?,
+            issuer: descriptor.issuer.clone()?,
+        })
+    }
+}
+
 /// Typed refusals when a key cannot be constructed.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum IdentityBindingError {

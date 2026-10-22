@@ -223,17 +223,12 @@ fn migrate_from(
     // `resource` and `issuer` are mandatory for `personal_managed` and are
     // validated at load, so their absence here is a configuration fault rather
     // than a migration one.
-    let (Some(resource), Some(issuer)) = (descriptor.resource.clone(), descriptor.issuer.clone())
+    let Some(key_descriptor) =
+        identity::AccountKeyDescriptor::from_config(descriptor_id, &descriptor)
     else {
         return Err(OfflineMigrationError::Configuration(format!(
             "descriptor `{descriptor_id}` declares no resource or issuer"
         )));
-    };
-    let key_descriptor = identity::AccountKeyDescriptor {
-        descriptor_id: descriptor_id.to_owned(),
-        provider: descriptor.provider.clone(),
-        resource,
-        issuer,
     };
 
     let resolved = config::resolve(gateway_config.accounts.as_ref(), overlay)

@@ -259,3 +259,44 @@ fn a_request_without_a_verified_principal_is_refused_not_inferred() {
         "no principal means no account key; nothing is inferred from the request"
     );
 }
+
+/// A schema descriptor with only the fields the projection reads.
+fn schema_descriptor(
+    resource: Option<&str>,
+    issuer: Option<&str>,
+) -> crate::personal_accounts::config::AccountDescriptor {
+    let mut value = serde_json::json!({"mode": "personal_managed", "provider": "contoso"});
+    if let Some(resource) = resource {
+        value["resource"] = resource.into();
+    }
+    if let Some(issuer) = issuer {
+        value["issuer"] = issuer.into();
+    }
+    serde_json::from_value(value).expect("fixture descriptor parses")
+}
+
+/// MIK-8666: the one projection from the schema type. A missing resource or
+/// issuer yields None, so each caller keeps raising its own error text.
+#[test]
+fn from_config_projects_the_key_fields_or_nothing() {
+    let resource = "https://www.googleapis.com/";
+    assert_eq!(
+        AccountKeyDescriptor::from_config("work", &schema_descriptor(None, Some(ISSUER))),
+        None,
+        "no resource, no key descriptor"
+    );
+    assert_eq!(
+        AccountKeyDescriptor::from_config("work", &schema_descriptor(Some(resource), None)),
+        None,
+        "no issuer, no key descriptor"
+    );
+    assert_eq!(
+        AccountKeyDescriptor::from_config("work", &schema_descriptor(Some(resource), Some(ISSUER))),
+        Some(AccountKeyDescriptor {
+            descriptor_id: "work".to_string(),
+            provider: "contoso".to_string(),
+            resource: resource.to_string(),
+            issuer: ISSUER.to_string(),
+        })
+    );
+}
