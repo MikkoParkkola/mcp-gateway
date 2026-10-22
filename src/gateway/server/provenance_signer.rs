@@ -60,9 +60,10 @@ pub(crate) fn install_public_provenance(
     env: &crate::config::EnvOverlay,
     attestation_key_id: &str,
 ) -> crate::Result<()> {
-    match crate::trust::provenance_public::resolve_public_signer(env, attestation_key_id)? {
-        Some(signer) => meta.enable_public_provenance(signer),
-        None => {}
+    if let Some(signer) =
+        crate::trust::provenance_public::resolve_public_signer(env, attestation_key_id)?
+    {
+        meta.enable_public_provenance(signer);
     }
     Ok(())
 }

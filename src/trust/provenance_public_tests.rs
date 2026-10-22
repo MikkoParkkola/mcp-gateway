@@ -143,8 +143,8 @@ fn trust_of(signer: &ProvenancePublicSigner) -> TrustSet {
 
 fn signed_prov(result: Option<&serde_json::Value>) -> serde_json::Value {
     let signer = signer_one();
-    let signed = sample().sign(&hmac());
-    provenance_value(&signed, Some((&signer, result)))
+    let stamped = sample().sign(&hmac());
+    provenance_value(&stamped, Some((&signer, result)))
 }
 
 fn payload_of(prov: &serde_json::Value) -> Vec<u8> {
@@ -193,7 +193,7 @@ pub(super) fn jwk_for(seed: &[u8; 32], kid: &str) -> String {
 #[test]
 fn a0_fixtures_match_the_committed_bytes() {
     let signer = signer_one();
-    let signed = sample().sign(&hmac());
+    let stamped = sample().sign(&hmac());
     let result = result_json();
     let unbound = serde_json::json!({"n": 9_007_199_254_740_992u64});
     let other = ProvenancePublicSigner::from_seed_for_test(SEED_TWO, KID_ONE);
@@ -203,11 +203,11 @@ fn a0_fixtures_match_the_committed_bytes() {
         ("result.json", result.clone()),
         (
             "provenance.json",
-            provenance_value(&signed, Some((&signer, Some(&result)))),
+            provenance_value(&stamped, Some((&signer, Some(&result)))),
         ),
         (
             "provenance_unbound.json",
-            provenance_value(&signed, Some((&signer, Some(&unbound)))),
+            provenance_value(&stamped, Some((&signer, Some(&unbound)))),
         ),
         ("jwk_other.json", other.public_jwk()),
         ("jwk_unknown_kid.json", unknown.public_jwk()),
@@ -721,8 +721,8 @@ fn dual_signing_keeps_the_hmac_seal() {
     let signed = sample().sign(&hmac());
     let plain = serde_json::to_value(&signed).expect("signed serializes");
     let result = result_json();
-    let signer = signer_one();
-    let stamped = provenance_value(&signed, Some((&signer, Some(&result))));
+    let key = signer_one();
+    let stamped = provenance_value(&signed, Some((&key, Some(&result))));
     for member in ["receipt", "key_id", "algorithm", "signature"] {
         assert_eq!(stamped[member], plain[member], "{member} is unchanged");
     }
@@ -741,10 +741,10 @@ fn dual_signing_keeps_the_hmac_seal() {
 
 #[test]
 fn a_wide_receipt_with_u64_max_row_count_verifies() {
-    let signed = wide_sample().sign(&hmac());
+    let stamped = wide_sample().sign(&hmac());
     let result = result_json();
     let signer = signer_one();
-    let prov = provenance_value(&signed, Some((&signer, Some(&result))));
+    let prov = provenance_value(&stamped, Some((&signer, Some(&result))));
     let trust = trust_of(&signer);
     let verified = verify_public(&prov, &trust, Some(&result)).expect("a wide receipt verifies");
     assert_eq!(verified.status, VerifyStatus::Bound);

@@ -44,12 +44,13 @@ impl std::fmt::Debug for ProvenancePublicSigner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ProvenancePublicSigner")
             .field("kid", &self.kid)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl ProvenancePublicSigner {
     /// This signer's key id.
+    #[cfg(test)]
     pub(crate) fn kid(&self) -> &str {
         &self.kid
     }
@@ -352,8 +353,7 @@ impl<'de> serde::de::Visitor<'de> for NoDupVisitor {
         E: serde::de::Error,
     {
         let number = serde_json::Number::from_f64(value)
-            .map(serde_json::Value::Number)
-            .unwrap_or(serde_json::Value::Null);
+            .map_or(serde_json::Value::Null, serde_json::Value::Number);
         Ok(NoDupValue(number))
     }
 
@@ -528,7 +528,7 @@ pub(crate) fn provenance_value(
     value
 }
 
-/// The snake_case refusal after `INVALID ` for a verify refusal.
+/// The `snake_case` refusal after `INVALID ` for a verify refusal.
 fn verify_snake(refusal: VerifyRefusal) -> &'static str {
     match refusal {
         VerifyRefusal::NoPublicSignature => "no_public_signature",
@@ -543,7 +543,7 @@ fn verify_snake(refusal: VerifyRefusal) -> &'static str {
     }
 }
 
-/// The snake_case refusal after `INVALID trust_` for a trust-set refusal.
+/// The `snake_case` refusal after `INVALID trust_` for a trust-set refusal.
 fn trust_snake(refusal: TrustSetRefusal) -> &'static str {
     match refusal {
         TrustSetRefusal::Malformed => "malformed",
@@ -559,7 +559,7 @@ fn trust_snake(refusal: TrustSetRefusal) -> &'static str {
 /// Runs `provenance public-key` / `provenance verify`; prints its own stdout/stderr lines.
 ///
 /// `config` is the global `--config` path `main` passes every 4.0 subcommand.
-/// CLI refusal reasons, pinned snake_case after `INVALID `:
+/// CLI refusal reasons, pinned `snake_case` after `INVALID `:
 /// `unknown_kid`, `bad_signature`, `bad_encoding`, `duplicate_member`,
 /// `bad_profile`, `outer_receipt_mismatch`, `result_mismatch`,
 /// `result_unhashable`, `no_public_signature`.
@@ -605,15 +605,12 @@ fn run_public_key(config: Option<&std::path::Path>) -> ExitCode {
                 "jwk": signer.public_jwk(),
                 "thumbprint": signer.jwk_thumbprint(),
             });
-            match serde_json::to_string(&output) {
-                Ok(line) => {
-                    println!("{line}");
-                    ExitCode::from(0)
-                }
-                Err(_) => {
-                    eprintln!("failed to render the public key");
-                    ExitCode::from(1)
-                }
+            if let Ok(line) = serde_json::to_string(&output) {
+                println!("{line}");
+                ExitCode::from(0)
+            } else {
+                eprintln!("failed to render the public key");
+                ExitCode::from(1)
             }
         }
         Ok(None) => {
@@ -638,12 +635,9 @@ fn run_verify(
     accept_unbound: bool,
 ) -> ExitCode {
     use crate::cli::stdout::println;
-    let trust_text = match std::fs::read_to_string(trust_path) {
-        Ok(text) => text,
-        Err(_) => {
-            println!("INVALID unreadable_input");
-            return ExitCode::from(1);
-        }
+    let Ok(trust_text) = std::fs::read_to_string(trust_path) else {
+        println!("INVALID unreadable_input");
+        return ExitCode::from(1);
     };
     let trust = match TrustSet::from_json(&trust_text) {
         Ok(set) => set,
@@ -652,19 +646,15 @@ fn run_verify(
             return ExitCode::from(1);
         }
     };
-    let receipt_text = match std::fs::read_to_string(receipt_path) {
-        Ok(text) => text,
-        Err(_) => {
-            println!("INVALID unreadable_input");
-            return ExitCode::from(1);
-        }
+    let Ok(receipt_text) = std::fs::read_to_string(receipt_path) else {
+        println!("INVALID unreadable_input");
+        return ExitCode::from(1);
     };
-    let receipt_value: serde_json::Value = match serde_json::from_str(&receipt_text) {
-        Ok(value) => value,
-        Err(_) => {
-            println!("INVALID unreadable_input");
-            return ExitCode::from(1);
-        }
+    let receipt_value: serde_json::Value = if let Ok(value) = serde_json::from_str(&receipt_text) {
+        value
+    } else {
+        println!("INVALID unreadable_input");
+        return ExitCode::from(1);
     };
     let prov = match receipt_value.pointer("/_meta/provenance") {
         Some(inner) if inner.is_object() => inner.clone(),
@@ -673,19 +663,15 @@ fn run_verify(
     let result_value: Option<serde_json::Value> = match result_path {
         None => None,
         Some(path) => {
-            let text = match std::fs::read_to_string(path) {
-                Ok(text) => text,
-                Err(_) => {
-                    println!("INVALID unreadable_input");
-                    return ExitCode::from(1);
-                }
+            let Ok(text) = std::fs::read_to_string(path) else {
+                println!("INVALID unreadable_input");
+                return ExitCode::from(1);
             };
-            match serde_json::from_str(&text) {
-                Ok(value) => Some(value),
-                Err(_) => {
-                    println!("INVALID unreadable_input");
-                    return ExitCode::from(1);
-                }
+            if let Ok(value) = serde_json::from_str(&text) {
+                Some(value)
+            } else {
+                println!("INVALID unreadable_input");
+                return ExitCode::from(1);
             }
         }
     };

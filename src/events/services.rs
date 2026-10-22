@@ -282,13 +282,13 @@ impl Services {
             crate::trust::RuntimeProvenanceReceipt::event(backend, name, now.to_rfc3339());
         match &self.provenance {
             Some(signer) => {
-                let signed = receipt.sign(signer);
+                let stamped = receipt.sign(signer);
                 match &self.public_provenance {
                     Some(public) => crate::trust::provenance_public::provenance_value(
-                        &signed,
+                        &stamped,
                         Some((public, None)),
                     ),
-                    None => serde_json::to_value(signed).unwrap_or(Value::Null),
+                    None => serde_json::to_value(stamped).unwrap_or(Value::Null),
                 }
             }
             None => serde_json::to_value(json!({ "receipt": receipt })).unwrap_or(Value::Null),

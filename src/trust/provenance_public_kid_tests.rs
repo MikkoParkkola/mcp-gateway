@@ -51,7 +51,7 @@ fn an_overlong_kid_is_refused() {
 }
 
 /// MIK-8398 D4: a kid is 1-64 bytes of `0x21..=0x7E`. Anything else is
-/// refused by the resolver (value-free) and by the trust set as MalformedKid.
+/// refused by the resolver (value-free) and by the trust set as `MalformedKid`.
 #[test]
 fn d4_malformed_kid_with_space_is_refused() {
     let encoded = seed_b64(&SEED_ONE);
@@ -86,7 +86,7 @@ fn d4_malformed_kid_with_space_is_refused() {
 }
 
 /// MIK-8398 D4: a kid is 1-64 bytes of `0x21..=0x7E`. Anything else is
-/// refused by the resolver (value-free) and by the trust set as MalformedKid.
+/// refused by the resolver (value-free) and by the trust set as `MalformedKid`.
 #[test]
 fn d4_malformed_kid_with_newline_is_refused() {
     let encoded = seed_b64(&SEED_ONE);
@@ -136,7 +136,7 @@ fn d4_malformed_kid_with_newline_is_refused() {
 }
 
 /// MIK-8398 D4: a kid is 1-64 bytes of `0x21..=0x7E`. Anything else is
-/// refused by the resolver (value-free) and by the trust set as MalformedKid.
+/// refused by the resolver (value-free) and by the trust set as `MalformedKid`.
 #[test]
 fn d4_malformed_kid_with_non_ascii_is_refused() {
     let encoded = seed_b64(&SEED_ONE);
@@ -171,7 +171,7 @@ fn d4_malformed_kid_with_non_ascii_is_refused() {
 }
 
 /// MIK-8398 D4: a kid is 1-64 bytes of `0x21..=0x7E`. Anything else is
-/// refused by the resolver (value-free) and by the trust set as MalformedKid.
+/// refused by the resolver (value-free) and by the trust set as `MalformedKid`.
 #[test]
 fn d4_malformed_kid_with_65_bytes_is_refused() {
     let encoded = seed_b64(&SEED_ONE);
