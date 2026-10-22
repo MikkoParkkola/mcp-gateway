@@ -590,4 +590,79 @@ paths:
             "the metadata IP literal must fail the SSRF predicate the gate toggles"
         );
     }
+
+    /// MIK-8691 T1: preview must not panic when `}` precedes `{` in a path line.
+    #[test]
+    fn preview_survives_a_close_brace_before_the_open_one_in_a_path() {
+        let cap = GeneratedCapability {
+            name: "x".into(),
+            yaml: "      path: /a}b/{id}\n".into(),
+        };
+        let preview = tool_preview_from_cap(&cap);
+        assert_eq!(preview.path, "/a}b/{id}");
+        assert!(preview.parameters.is_empty());
+    }
+
+    /// MIK-8691 T1b: preview must not panic when `}` precedes `{` in a description line.
+    #[test]
+    fn preview_survives_a_close_brace_before_the_open_one_in_a_description() {
+        let cap = GeneratedCapability {
+            name: "x".into(),
+            yaml: "      method: GET\n      path: /ok\ndescription: a}b{c}\n".into(),
+        };
+        let preview = tool_preview_from_cap(&cap);
+        assert_eq!(preview.method, "GET");
+        assert_eq!(preview.path, "/ok");
+        assert_eq!(preview.description, "a}b{c}");
+        assert!(preview.parameters.is_empty());
+    }
+
+    /// MIK-8691 T2: an imported path with a stray brace previews without panicking.
+    #[test]
+    fn an_imported_path_with_a_stray_brace_previews_without_panicking() {
+        const SPEC: &str = r#"{
+  "openapi": "3.0.0",
+  "info": {"title": "T", "version": "1"},
+  "servers": [{"url": "https://api.example.com"}],
+  "paths": {
+    "/a}b/{id}": {
+      "get": {
+        "operationId": "getOne",
+        "summary": "Get one",
+        "parameters": [
+          {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "OK"}
+        }
+      }
+    }
+  }
+}"#;
+        let caps = parse_spec(SPEC).expect("valid spec");
+        assert_eq!(caps.len(), 1, "expected one capability");
+        assert!(
+            caps[0].yaml.lines().any(|l| l.trim() == "path: /a}b/{id}"),
+            "{}",
+            caps[0].yaml
+        );
+        let preview = tool_preview_from_cap(&caps[0]);
+        assert_eq!(preview.method, "GET");
+        assert_eq!(preview.path, "/a}b/{id}");
+    }
+
+    /// MIK-8691 T3: well-formed `{param}` references still extract in first-appearance order.
+    #[test]
+    fn preview_parameters_are_unchanged_for_well_formed_references() {
+        let cap = GeneratedCapability {
+            name: "x".into(),
+            yaml: "      path: /users/{user_id}\n        q: \"{query}\"\n        x: {a}\n        y: {a}\n        z: {a-b}\n        w: a{b\n"
+                .into(),
+        };
+        let preview = tool_preview_from_cap(&cap);
+        assert_eq!(
+            preview.parameters,
+            vec!["user_id".to_string(), "query".to_string(), "a".to_string()]
+        );
+    }
 }
