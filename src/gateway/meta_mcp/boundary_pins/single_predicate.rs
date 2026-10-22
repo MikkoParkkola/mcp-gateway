@@ -3,20 +3,15 @@
 //! MIK-8659 T1c + T2 scan: one `ApiKey` predicate, one caller principal.
 //!
 //! A new inline copy of either predicate fails here until it is routed
-//! through the shared body. Syntax scan over `syn::Expr`, not text, so a
-//! copy split across lines is still found.
-
-use std::path::Path;
+//! through the shared body. Syntax scan, not text, so a copy split across
+//! lines is still found.
 
 use syn::visit::Visit;
 
+use super::packaged::crate_root;
 use super::scan::{Place, Sink, walk};
 
 const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.rs"];
-
-fn crate_root() -> &'static Path {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-}
 
 /// One reviewed site: file from `Place.file`, fn from `Place.func`, kind
 /// (`ApiKey` or `principal`), and why it may stay.
@@ -39,21 +34,17 @@ const ALLOWLIST: &[(&str, &str, &str, &str)] = &[
         "ApiKey",
         "delivery lifetime",
     ),
-    (
-        "src/events/services.rs",
-        "admits_at",
-        "ApiKey",
-        "subscription admission",
-    ),
 ];
 
+fn allowlist_index(at: &Place, kind: &str) -> Option<usize> {
+    let func = at.func.as_deref()?;
+    ALLOWLIST.iter().position(|(file, want, want_kind, _)| {
+        *file == at.file && *want == func && *want_kind == kind
+    })
+}
+
 fn is_allowlisted(at: &Place, kind: &str) -> bool {
-    let Some(func) = at.func.as_deref() else {
-        return false;
-    };
-    ALLOWLIST
-        .iter()
-        .any(|(file, want, want_kind, _)| *file == at.file && *want == func && *want_kind == kind)
+    allowlist_index(at, kind).is_some()
 }
 
 fn is_api_key_path(expr: &syn::Expr) -> bool {
@@ -70,7 +61,7 @@ fn is_api_key_path(expr: &syn::Expr) -> bool {
             .path
             .segments
             .last()
-            .is_some_and(|segment| segment.ident.to_string() == "ApiKey"),
+            .is_some_and(|segment| segment.ident == "ApiKey"),
         _ => false,
     }
 }
@@ -97,6 +88,66 @@ fn is_api_key_comparison(expr: &syn::Expr) -> bool {
     }
 }
 
+#[derive(Default)]
+struct ApiKeyPatProbe {
+    found: bool,
+}
+
+impl<'ast> Visit<'ast> for ApiKeyPatProbe {
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        if path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "ApiKey")
+        {
+            self.found = true;
+        }
+        syn::visit::visit_path(self, path);
+    }
+}
+
+fn pat_mentions_api_key(pat: &syn::Pat) -> bool {
+    let mut probe = ApiKeyPatProbe::default();
+    probe.visit_pat(pat);
+    probe.found
+}
+
+fn is_catch_all(pat: &syn::Pat) -> bool {
+    match pat {
+        syn::Pat::Wild(_) => true,
+        syn::Pat::Ident(binding) => binding.subpat.is_none(),
+        _ => false,
+    }
+}
+
+fn is_api_key_match(expr: &syn::Expr) -> bool {
+    let syn::Expr::Match(matched) = expr else {
+        return false;
+    };
+    let mut singles_out = false;
+    let mut has_catch_all = false;
+    for arm in &matched.arms {
+        if pat_mentions_api_key(&arm.pat) {
+            singles_out = true;
+        }
+        if is_catch_all(&arm.pat) {
+            has_catch_all = true;
+        }
+    }
+    singles_out && has_catch_all
+}
+
+fn is_api_key_let(expr: &syn::Expr) -> bool {
+    let syn::Expr::Let(let_expr) = expr else {
+        return false;
+    };
+    pat_mentions_api_key(&let_expr.pat)
+}
+
+fn is_api_key_check(expr: &syn::Expr) -> bool {
+    is_api_key_comparison(expr) || is_api_key_match(expr) || is_api_key_let(expr)
+}
+
 fn is_principal_receiver(expr: &syn::Expr) -> bool {
     let mut current = expr;
     loop {
@@ -109,15 +160,11 @@ fn is_principal_receiver(expr: &syn::Expr) -> bool {
     }
     match current {
         syn::Expr::Field(field) => match &field.member {
-            syn::Member::Named(ident) => {
-                let name = ident.to_string();
-                name == "principal" || name == "credential_principal"
-            }
+            syn::Member::Named(ident) => *ident == "principal" || *ident == "credential_principal",
             syn::Member::Unnamed(_) => false,
         },
         syn::Expr::Path(path) => path.path.segments.last().is_some_and(|segment| {
-            let name = segment.ident.to_string();
-            name == "principal" || name == "credential_principal"
+            segment.ident == "principal" || segment.ident == "credential_principal"
         }),
         _ => false,
     }
@@ -131,7 +178,7 @@ struct AuthProbe {
 impl<'ast> Visit<'ast> for AuthProbe {
     fn visit_expr_field(&mut self, field: &'ast syn::ExprField) {
         if let syn::Member::Named(ident) = &field.member
-            && ident.to_string() == "authenticated"
+            && *ident == "authenticated"
         {
             self.found = true;
         }
@@ -143,7 +190,7 @@ impl<'ast> Visit<'ast> for AuthProbe {
             .path
             .segments
             .last()
-            .is_some_and(|segment| segment.ident.to_string() == "authenticated")
+            .is_some_and(|segment| segment.ident == "authenticated")
         {
             self.found = true;
         }
@@ -158,7 +205,46 @@ struct EmptyProbe {
 
 impl<'ast> Visit<'ast> for EmptyProbe {
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
-        if call.method.to_string() == "is_empty" && is_principal_receiver(&call.receiver) {
+        if call.method == "is_empty" && is_principal_receiver(&call.receiver) {
+            self.found = true;
+        }
+        syn::visit::visit_expr_method_call(self, call);
+    }
+}
+
+#[derive(Default)]
+struct PrincipalProbe {
+    found: bool,
+}
+
+impl<'ast> Visit<'ast> for PrincipalProbe {
+    fn visit_expr_field(&mut self, field: &'ast syn::ExprField) {
+        if let syn::Member::Named(ident) = &field.member
+            && (*ident == "principal" || *ident == "credential_principal")
+        {
+            self.found = true;
+        }
+        syn::visit::visit_expr_field(self, field);
+    }
+
+    fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
+        if path.path.segments.last().is_some_and(|segment| {
+            segment.ident == "principal" || segment.ident == "credential_principal"
+        }) {
+            self.found = true;
+        }
+        syn::visit::visit_expr_path(self, path);
+    }
+}
+
+#[derive(Default)]
+struct EmptyCallProbe {
+    found: bool,
+}
+
+impl<'ast> Visit<'ast> for EmptyCallProbe {
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if call.method == "is_empty" {
             self.found = true;
         }
         syn::visit::visit_expr_method_call(self, call);
@@ -184,29 +270,78 @@ fn is_principal_conjunct(expr: &syn::Expr) -> bool {
     empty.found
 }
 
-fn offence(at: &Place, expr: &syn::Expr) -> Option<&'static str> {
-    if is_api_key_comparison(expr) && !is_allowlisted(at, "ApiKey") {
+fn is_principal_if_filter(expr: &syn::Expr) -> bool {
+    let syn::Expr::If(if_expr) = expr else {
+        return false;
+    };
+    let mut auth = AuthProbe::default();
+    auth.visit_expr(&if_expr.cond);
+    if !auth.found {
+        return false;
+    }
+    let mut principal = PrincipalProbe::default();
+    principal.visit_block(&if_expr.then_branch);
+    if !principal.found {
+        return false;
+    }
+    let mut empty = EmptyCallProbe::default();
+    empty.visit_block(&if_expr.then_branch);
+    empty.found
+}
+
+fn is_principal_check(expr: &syn::Expr) -> bool {
+    is_principal_conjunct(expr) || is_principal_if_filter(expr)
+}
+
+fn detected_kind(expr: &syn::Expr) -> Option<&'static str> {
+    if is_api_key_check(expr) {
         return Some("ApiKey");
     }
-    if is_principal_conjunct(expr) && !is_allowlisted(at, "principal") {
+    if is_principal_check(expr) {
         return Some("principal");
     }
     None
 }
 
-#[derive(Default)]
+fn offence(at: &Place, expr: &syn::Expr) -> Option<&'static str> {
+    let kind = detected_kind(expr)?;
+    if is_allowlisted(at, kind) {
+        None
+    } else {
+        Some(kind)
+    }
+}
+
+fn detected_stmt_kind(stmt: &syn::Stmt) -> Option<&'static str> {
+    let syn::Stmt::Local(local) = stmt else {
+        return None;
+    };
+    if local.else_branch.is_none() {
+        return None;
+    }
+    pat_mentions_api_key(&local.pat).then_some("ApiKey")
+}
+
+fn stmt_offence(at: &Place, stmt: &syn::Stmt) -> Option<&'static str> {
+    let kind = detected_stmt_kind(stmt)?;
+    if is_allowlisted(at, kind) {
+        None
+    } else {
+        Some(kind)
+    }
+}
+
 struct Offences {
     rows: Vec<String>,
+    matched: Vec<bool>,
     lines: std::collections::HashMap<String, Vec<String>>,
 }
 
 impl Offences {
     fn file_lines(&mut self, file: &str) -> &[String] {
         if !self.lines.contains_key(file) {
-            let text = match std::fs::read_to_string(crate_root().join(file)) {
-                Ok(text) => text,
-                Err(_) => String::new(),
-            };
+            let text = std::fs::read_to_string(crate_root().join(file))
+                .expect("a walked production file is readable");
             let owned: Vec<String> = text.lines().map(str::to_string).collect();
             self.lines.insert(file.to_string(), owned);
         }
@@ -238,62 +373,106 @@ impl Offences {
         }
         0
     }
-}
 
-impl Sink for Offences {
-    fn expr(&mut self, at: &Place, expr: &syn::Expr) {
-        let Some(kind) = offence(at, expr) else {
+    fn record(&mut self, at: &Place, kind: &'static str) {
+        if let Some(index) = allowlist_index(at, kind) {
+            self.matched[index] = true;
             return;
-        };
+        }
         let needle = if kind == "ApiKey" {
             "ApiKey"
         } else {
             "is_empty"
         };
-        let line = self.line_of(&at.file, at.func.as_deref(), needle);
+        let _line = self.line_of(&at.file, at.func.as_deref(), needle);
         self.rows.push(format!(
-            "{}:{}:{line}: {kind}",
+            "{}:{}: {kind}",
             at.file,
             at.func.as_deref().unwrap_or("-"),
         ));
     }
 }
 
-fn all_offences() -> Vec<String> {
-    let mut sink = Offences::default();
+impl Sink for Offences {
+    fn expr(&mut self, at: &Place, expr: &syn::Expr) {
+        if let Some(kind) = detected_kind(expr) {
+            self.record(at, kind);
+        }
+    }
+
+    fn stmt(&mut self, at: &Place, stmt: &syn::Stmt) {
+        if let Some(kind) = detected_stmt_kind(stmt) {
+            self.record(at, kind);
+        }
+    }
+}
+
+fn all_offences() -> (Vec<String>, Vec<bool>) {
+    let mut sink = Offences {
+        rows: Vec::new(),
+        matched: vec![false; ALLOWLIST.len()],
+        lines: std::collections::HashMap::new(),
+    };
     walk(crate_root(), &ROOTS, &mut sink).expect("the walk reads every module");
     let mut rows = sink.rows;
     rows.sort();
-    rows
+    (rows, sink.matched)
 }
 
-/// T1c: walking the crate reports no `ApiKey` comparison outside the
-/// allowlist; the failure lists file, fn and line.
+fn unused_allowlist(matched: &[bool], kind: &str) -> Vec<String> {
+    let mut unused = Vec::new();
+    for (index, &(file, func, entry_kind, reason)) in ALLOWLIST.iter().enumerate() {
+        if entry_kind == kind && !matched[index] {
+            unused.push(format!("{file}:{func} ({reason})"));
+        }
+    }
+    unused
+}
+
+/// T1c: walking the crate reports no `ApiKey` check outside the allowlist;
+/// the failure lists file, fn and kind. Every allowlist entry of this kind
+/// matched at least once, so a stale entry fails instead of lingering.
 #[test]
 fn single_api_key_predicate() {
-    let offending: Vec<String> = all_offences()
+    let (rows, matched) = all_offences();
+    let offending: Vec<String> = rows
         .into_iter()
         .filter(|row| row.ends_with("ApiKey"))
         .collect();
     assert!(
         offending.is_empty(),
-        "new `ApiKey` comparison outside the predicate (route it through `api_key_name`): {}",
+        "new `ApiKey` check outside the predicate (route it through `api_key_name`): {}",
         offending.join(", ")
+    );
+    let unused = unused_allowlist(&matched, "ApiKey");
+    assert!(
+        unused.is_empty(),
+        "allowlist entries no detector hit (remove them): {}",
+        unused.join(", ")
     );
 }
 
-/// T2 scan: walking the crate reports no principal conjunct outside the
-/// allowlist; the failure lists file, fn and line.
+/// T2 scan: walking the crate reports no principal check outside the
+/// allowlist; the failure lists file, fn and kind. Every allowlist entry of
+/// this kind matched at least once, so a stale entry fails instead of
+/// lingering.
 #[test]
 fn single_principal_predicate() {
-    let offending: Vec<String> = all_offences()
+    let (rows, matched) = all_offences();
+    let offending: Vec<String> = rows
         .into_iter()
         .filter(|row| row.ends_with("principal"))
         .collect();
     assert!(
         offending.is_empty(),
-        "principal conjunct outside `authenticated_principal` (route it through the predicate): {}",
+        "principal check outside `authenticated_principal` (route it through the predicate): {}",
         offending.join(", ")
+    );
+    let unused = unused_allowlist(&matched, "principal");
+    assert!(
+        unused.is_empty(),
+        "allowlist entries no detector hit (remove them): {}",
+        unused.join(", ")
     );
 }
 
@@ -319,6 +498,17 @@ impl<'ast> Visit<'ast> for Fixture {
             self.found.push(kind.to_string());
         }
         syn::visit::visit_expr(self, expr);
+    }
+
+    fn visit_stmt(&mut self, stmt: &'ast syn::Stmt) {
+        let at = Place {
+            file: self.file.clone(),
+            func: self.func.clone(),
+        };
+        if let Some(kind) = stmt_offence(&at, stmt) {
+            self.found.push(kind.to_string());
+        }
+        syn::visit::visit_stmt(self, stmt);
     }
 }
 
@@ -383,4 +573,62 @@ fn fixture_struct_literal_is_not_flagged() {
     let source = "fn mint(base: Client) -> Client { AuthenticatedClient { credential_kind: CredentialKind::ApiKey, ..base } }";
     let found = fixture_offences("fixture.rs", source);
     assert!(found.is_empty(), "a struct literal was flagged: {found:?}");
+}
+
+/// Grok round: the `if authenticated` filter shape from
+/// `authenticated_principal` is flagged in a non-allowlisted fn.
+#[test]
+fn fixture_if_filter_principal_form_is_flagged() {
+    let source = "fn other(authenticated: bool, principal: Option<&str>) -> Option<&str> { if authenticated { principal.filter(|p| !p.is_empty()) } else { None } }";
+    let found = fixture_offences("fixture.rs", source);
+    assert!(
+        found.iter().any(|kind| kind == "principal"),
+        "the if-filter principal form was not flagged"
+    );
+}
+
+/// Lead ruling: a `match` that singles `ApiKey` out beside a wildcard is
+/// flagged in a non-allowlisted fn.
+#[test]
+fn fixture_wildcard_api_key_match_is_flagged() {
+    let source = "fn other(k: Kind) -> u32 { match k { Kind::ApiKey => 1, _ => 0 } }";
+    let found = fixture_offences("fixture.rs", source);
+    assert!(
+        found.iter().any(|kind| kind == "ApiKey"),
+        "a wildcard `ApiKey` match was not flagged"
+    );
+}
+
+/// Lead ruling: an `if let` that singles `ApiKey` out is flagged.
+#[test]
+fn fixture_if_let_api_key_is_flagged() {
+    let source = "fn other(k: Kind) -> u32 { if let Kind::ApiKey = k { 1 } else { 0 } }";
+    let found = fixture_offences("fixture.rs", source);
+    assert!(
+        found.iter().any(|kind| kind == "ApiKey"),
+        "an `if let` on `ApiKey` was not flagged"
+    );
+}
+
+/// Lead ruling: an exhaustive dispatch over kinds is not a copy of the
+/// `ApiKey` rule, so it is not flagged.
+#[test]
+fn fixture_exhaustive_kind_match_is_not_flagged() {
+    let source = "fn other(k: Kind) -> u32 { match k { Kind::ApiKey => 1, Kind::StaticBearer => 2, Kind::None => 3 } }";
+    let found = fixture_offences("fixture.rs", source);
+    assert!(
+        found.is_empty(),
+        "an exhaustive kind match was flagged: {found:?}"
+    );
+}
+
+/// A `let ... else` that singles `ApiKey` out is flagged.
+#[test]
+fn fixture_let_else_api_key_is_flagged() {
+    let source = "fn other(k: Kind) -> u32 { let Kind::ApiKey = k else { return 0 }; 1 }";
+    let found = fixture_offences("fixture.rs", source);
+    assert!(
+        found.iter().any(|kind| kind == "ApiKey"),
+        "a `let ... else` on `ApiKey` was not flagged"
+    );
 }
