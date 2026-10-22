@@ -922,6 +922,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway doctor --fix` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:500 |
 | `mcp-gateway doctor --format` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:500 |
 | `mcp-gateway doctor -f` | KEEP | short alias of `--format` | - | src/cli/mod.rs:500 |
+| `mcp-gateway doctor --no-registry-check` | KEEP | skips doctor's npm deprecation lookup, for hosts that must not contact registry.npmjs.org (MIK-8512); env `MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK` | - | src/cli/mod.rs:500 |
 | `mcp-gateway doctor --shadow` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:500 |
 | `mcp-gateway doctor --shadow-format` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:500 |
 | `mcp-gateway doctor --show-stderr` | KEEP | diagnose a stdio backend that dies at start | - | src/cli/mod.rs:500 |
