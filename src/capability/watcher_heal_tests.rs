@@ -270,3 +270,29 @@ async fn a_stalled_walk_does_not_hold_a_pending_reload() {
         "the pending reload runs although the arming walk is stalled"
     );
 }
+
+/// MIK-8651 (#4041, macOS): a symlink loop whose resolution reaches the OS
+/// link limit (ELOOP) before the depth bound still ends the walk as a bound.
+/// Each level here costs three links (`loop` -> `.h1` -> `.h2` -> root; hidden
+/// names are not walked), so Linux's 40-link limit is reached at level 14,
+/// before the depth bound at 17. macOS reaches the same state with one link
+/// per level, because its tempdir sits under the symlinked `/var`. Red on
+/// c98347d7c: the ELOOP entry is skipped silently and the walk returns `Some`.
+#[cfg(unix)]
+#[test]
+fn a_loop_that_hits_the_os_link_limit_ends_the_walk_as_a_bound() {
+    let dir = tempfile::tempdir().expect("a tempdir for caps");
+    std::fs::write(dir.path().join("a.yaml"), cap_yaml("a", "v1")).expect("write v1");
+    let link = |target: &std::path::Path, name: &str| {
+        std::os::unix::fs::symlink(target, dir.path().join(name)).expect("link a hop");
+    };
+    link(dir.path(), ".h2");
+    link(&dir.path().join(".h2"), ".h1");
+    link(&dir.path().join(".h1"), "loop");
+    let root = dir.path().to_string_lossy().into_owned();
+    let walked = crate::capability::watcher::fingerprint::fingerprint(&[root]);
+    assert!(
+        walked.is_none(),
+        "the walk must end at a bound, got {walked:?}"
+    );
+}
