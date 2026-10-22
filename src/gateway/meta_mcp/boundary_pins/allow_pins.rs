@@ -8,7 +8,7 @@ use std::path::Path;
 use syn::visit::Visit;
 
 use super::ci_wiring::{assert_ci_registry_ban_conf_dir, checked_in_workflow};
-use super::packaged::repo_file;
+use super::packaged::{PinnedFile, repo_file};
 use super::scan::{Place, Sink, expr_attrs, item_attrs, walk};
 
 const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.rs"];
@@ -244,7 +244,7 @@ fn t1f_the_ban_config_and_its_wiring_are_pinned() {
     // The config and pre-push are repo tooling, not shipped in the published
     // crate: the whole check is checkout-only (the span below is read from the
     // config, so it cannot run without it).
-    let Some(config) = repo_file("scripts/lint/registry-ban/clippy.toml") else {
+    let Some(config) = repo_file(PinnedFile::RegistryBanClippy) else {
         return;
     };
     let (before, rest) = config
@@ -258,18 +258,27 @@ fn t1f_the_ban_config_and_its_wiring_are_pinned() {
         );
     }
     assert_eq!(span, include_str!("registry_ban_span.toml"), "span differs");
-    let Some(pre_push) = repo_file("scripts/dev/pre-push.sh") else {
+    let Some(pre_push) = repo_file(PinnedFile::PrePush) else {
         return;
     };
     assert!(
         pre_push.contains("export CLIPPY_CONF_DIR=\"$REPO_ROOT/scripts/lint/registry-ban\""),
         "pre-push does not name scripts/lint/registry-ban"
     );
-    // MIK-8481: the Linux CI step, the required check, names it too.
+    // MIK-8481: the Linux CI step, the required check, names it too. This is
+    // the one assertion against the checked-in file, so a failure names it.
     let Some(ci) = checked_in_workflow() else {
         return;
     };
-    assert_ci_registry_ban_conf_dir(&ci);
+    let outcome = std::panic::catch_unwind(move || assert_ci_registry_ban_conf_dir(&ci));
+    if let Err(payload) = outcome {
+        let detail = payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+            .unwrap_or_default();
+        panic!(".github/workflows/ci.yml: {detail}");
+    }
 }
 
 /// The class-taking operations and the scoped read.

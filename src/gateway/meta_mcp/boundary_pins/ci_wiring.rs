@@ -7,7 +7,7 @@
 //! the same step, so a mutation that turns a falsifier red is one `t1f` would
 //! catch too, and the falsifiers run in the packaged crate as well.
 
-use super::packaged::repo_file;
+use super::packaged::{PinnedFile, repo_file};
 use crate::yaml::Value;
 
 /// What the pin requires of one CI step.
@@ -16,6 +16,8 @@ struct Expect {
     name: &'static str,
     /// The job that must hold it, when the job is part of the guarantee.
     job: Option<&'static str>,
+    /// What the holding job's `runs-on` must contain.
+    runner: &'static str,
     /// Whether its `run` script chains several native commands, so every one
     /// needs its own exit-status guard (PowerShell reports only the last).
     guarded: bool,
@@ -27,12 +29,14 @@ struct Expect {
 const STEPS: [Expect; 2] = [
     Expect {
         name: "Registry ban (MIK-8387)",
-        job: None,
+        job: Some("check"),
+        runner: "ubuntu",
         guarded: false,
     },
     Expect {
         name: "Registry ban, Windows (MIK-8449)",
         job: Some("windows-clippy"),
+        runner: "windows",
         guarded: true,
     },
 ];
@@ -42,14 +46,35 @@ const CONF_DIR: &str = "${{ github.workspace }}/scripts/lint/registry-ban";
 /// The checked-in CI workflow, or `None` in a packaged crate (which does not
 /// ship it).
 pub(super) fn checked_in_workflow() -> Option<String> {
-    repo_file(".github/workflows/ci.yml")
+    repo_file(PinnedFile::CiWorkflow)
+}
+
+/// Whether a `continue-on-error` value keeps the job green when the step fails.
+fn continues_on_error(value: &Value) -> bool {
+    value.as_bool() == Some(true)
+        || value
+            .as_str()
+            .is_some_and(|s| matches!(s.trim(), "true" | "${{ true }}"))
+}
+
+/// Whether an `if` value gates the step out unconditionally: the YAML boolean
+/// `false` or the string `${{ false }}`, compared after trimming. Any other
+/// expression is accepted (the real jobs carry docs-only and cancellation
+/// expressions), which is the named limit of this check.
+fn is_literal_false_if(value: &Value) -> bool {
+    value.as_bool() == Some(false)
+        || value
+            .as_str()
+            .is_some_and(|s| matches!(s.trim(), "false" | "${{ false }}"))
 }
 
 /// Panics unless, for each of [`STEPS`], exactly one step of that name exists
 /// under `jobs`, its own `env` sets `CLIPPY_CONF_DIR` to [`CONF_DIR`], it sits
-/// in the job the table names, and a chained script guards every native
-/// command's exit status. The workflow is parsed with the repo's adapter, so
-/// quoting, comments and key order are the parser's concern.
+/// in the job the table names, the step and its job carry no cannot-fail
+/// shape (`continue-on-error: true`, a literal-false `if`), the job runs on
+/// the expected runner, and a chained script guards every native command's
+/// exit status. The workflow is parsed with the repo's adapter, so quoting,
+/// comments and key order are the parser's concern.
 pub(super) fn assert_ci_registry_ban_conf_dir(workflow: &str) {
     let doc: Value = crate::yaml::from_str(workflow).expect("the CI workflow parses");
     let jobs = doc
@@ -65,7 +90,7 @@ pub(super) fn assert_ci_registry_ban_conf_dir(workflow: &str) {
             };
             for step in steps {
                 if step.get("name").and_then(Value::as_str) == Some(name) {
-                    found.push((job.as_str().unwrap_or("?").to_owned(), step));
+                    found.push((job.as_str().unwrap_or("?").to_owned(), def, step));
                 }
             }
         }
@@ -75,7 +100,7 @@ pub(super) fn assert_ci_registry_ban_conf_dir(workflow: &str) {
             "expected exactly one CI step named {name:?}, found {}",
             found.len()
         );
-        let (job, step) = &found[0];
+        let (job, job_def, step) = &found[0];
         let conf = step
             .get("env")
             .and_then(|env| env.get("CLIPPY_CONF_DIR"))
@@ -88,6 +113,32 @@ pub(super) fn assert_ci_registry_ban_conf_dir(workflow: &str) {
         if let Some(want) = expect.job {
             assert_eq!(job, want, "the job holding the {name:?} step");
         }
+        // GATE.1: the step must be able to fail its job. A `continue-on-error`
+        // or a literal-false `if`, on the step or its job, would let the lint
+        // go red without failing CI.
+        for scope in [step, job_def] {
+            assert!(
+                !scope
+                    .get("continue-on-error")
+                    .is_some_and(continues_on_error),
+                "continue-on-error: true on the {name:?} step or its job {job}"
+            );
+            assert!(
+                !scope.get("if").is_some_and(is_literal_false_if),
+                "if: false on the {name:?} step or its job {job}"
+            );
+        }
+        // GATE.1: the ban lints from its own runner: ubuntu for the Linux
+        // pass, windows for the pass over `cfg(windows)` production code.
+        let runs_on = job_def
+            .get("runs-on")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            runs_on.contains(expect.runner),
+            "runs-on {runs_on:?} of the job {job} holding the {name:?} step is not {}",
+            expect.runner
+        );
         if expect.guarded {
             let run = step.get("run").and_then(Value::as_str).unwrap_or_default();
             let commands = run
@@ -107,7 +158,7 @@ pub(super) fn assert_ci_registry_ban_conf_dir(workflow: &str) {
 /// them (same indentation).
 const FIXTURE: &str = "name: CI
 jobs:
-  clippy:
+  check:
     runs-on: ubuntu-latest
     steps:
       - name: Registry ban (MIK-8387)
@@ -115,6 +166,9 @@ jobs:
           CLIPPY_CONF_DIR: ${{ github.workspace }}/scripts/lint/registry-ban
         run: |
           cargo clippy --lib --bins --all-features -- -D warnings
+          cargo clippy --lib --bins --no-default-features -- -D warnings
+          cargo clippy --release --lib --bins --all-features -- -D warnings
+          cargo clippy --release --lib --bins --no-default-features -- -D warnings
       - name: The registry lint still bites (MIK-8387)
         run: scripts/dev/check_registry_lint.sh --self-test
   windows-clippy:
@@ -172,16 +226,6 @@ fn must_panic(label: &str, text: &str, reason: &str) {
 #[test]
 fn the_fixture_satisfies_the_pin() {
     assert_ci_registry_ban_conf_dir(FIXTURE);
-}
-
-/// `t1f` runs this on the checked-in workflow too, but a failure here names the
-/// file; skipped in a packaged crate, which does not ship it.
-#[test]
-fn the_checked_in_workflow_satisfies_the_pin() {
-    let Some(text) = checked_in_workflow() else {
-        return;
-    };
-    assert_ci_registry_ban_conf_dir(&text);
 }
 
 const NO_ENV: &str = "CLIPPY_CONF_DIR in the env of the";
@@ -307,4 +351,182 @@ fn a_missing_exit_guard_in_the_windows_step_turns_the_pin_red() {
 fn the_windows_step_in_another_job_turns_the_pin_red() {
     let moved = mutate(FIXTURE, "  windows-clippy:\n", "  somewhere-else:\n");
     must_panic("job", &moved, "the job holding the");
+}
+
+/// MIK-8503.GATE.1: `continue-on-error` on the step turns the pin red.
+#[test]
+fn gate1_continue_on_error_on_the_step_turns_the_pin_red() {
+    for (label, head) in each_step() {
+        let text = mutate(
+            FIXTURE,
+            head,
+            &format!("{head}        continue-on-error: true\n"),
+        );
+        must_panic(label, &text, "continue-on-error");
+    }
+}
+
+/// MIK-8503.GATE.1: `continue-on-error` on the job turns the pin red.
+#[test]
+fn gate1_continue_on_error_on_the_job_turns_the_pin_red() {
+    for (label, runs_on) in [
+        ("linux", "    runs-on: ubuntu-latest\n"),
+        ("windows", "    runs-on: windows-2025\n"),
+    ] {
+        let text = mutate(
+            FIXTURE,
+            runs_on,
+            &format!("{runs_on}    continue-on-error: true\n"),
+        );
+        must_panic(label, &text, "continue-on-error");
+    }
+}
+
+/// MIK-8503.GATE.1: a literal-false `if` on the step turns the pin red.
+#[test]
+fn gate1_a_literal_false_if_on_the_step_turns_the_pin_red() {
+    for (label, head) in each_step() {
+        for cond in ["        if: false\n", "        if: ${{ false }}\n"] {
+            let text = mutate(FIXTURE, head, &format!("{head}{cond}"));
+            must_panic(label, &text, "if: false");
+        }
+    }
+}
+
+/// MIK-8503.GATE.1: a literal-false `if` on the job turns the pin red.
+#[test]
+fn gate1_a_literal_false_if_on_the_job_turns_the_pin_red() {
+    for (label, runs_on) in [
+        ("linux", "    runs-on: ubuntu-latest\n"),
+        ("windows", "    runs-on: windows-2025\n"),
+    ] {
+        for cond in ["    if: false\n", "    if: ${{ false }}\n"] {
+            let text = mutate(FIXTURE, runs_on, &format!("{runs_on}{cond}"));
+            must_panic(label, &text, "if: false");
+        }
+    }
+}
+
+/// MIK-8503.GATE.1: the wrong runner turns the pin red.
+#[test]
+fn gate1_the_wrong_runner_turns_the_pin_red() {
+    let linux = mutate(
+        FIXTURE,
+        "    runs-on: ubuntu-latest\n",
+        "    runs-on: windows-2025\n",
+    );
+    must_panic("linux runner", &linux, "runs-on");
+    let windows = mutate(
+        FIXTURE,
+        "    runs-on: windows-2025\n",
+        "    runs-on: ubuntu-latest\n",
+    );
+    must_panic("windows runner", &windows, "runs-on");
+}
+
+/// MIK-8503.GATE.1: a non-literal if is accepted (control; the real jobs carry expressions).
+#[test]
+fn gate1_a_non_literal_if_is_accepted() {
+    for runs_on in [
+        "    runs-on: ubuntu-latest\n",
+        "    runs-on: windows-2025\n",
+    ] {
+        let to = runs_on.to_owned() + "    if: ${{ !cancelled() }}\n";
+        let text = mutate(FIXTURE, runs_on, &to);
+        assert_ci_registry_ban_conf_dir(&text);
+    }
+    for (_, head) in each_step() {
+        let to = head.to_owned() + "        if: ${{ !cancelled() }}\n";
+        let text = mutate(FIXTURE, head, &to);
+        assert_ci_registry_ban_conf_dir(&text);
+    }
+}
+
+/// MIK-8503.GATE.2: moving the Linux step to another job turns the pin red.
+#[test]
+fn gate2_moving_the_linux_step_to_another_job_turns_the_pin_red() {
+    let moved = mutate(FIXTURE, "  check:\n", "  lint:\n");
+    must_panic("linux job", &moved, "the job holding");
+}
+
+/// One step's block: its `- name:` line through the line before the next
+/// non-empty line indented at or left of the step's `-`, trailing blanks dropped.
+fn step_block(text: &str, name: &str) -> Option<String> {
+    let want = format!("- name: {name}");
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.iter().position(|line| line.trim() == want)?;
+    let dash = lines[start].find('-')?;
+    let mut end = lines.len();
+    for (i, line) in lines.iter().enumerate().skip(start + 1) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if line.len() - line.trim_start().len() <= dash {
+            end = i;
+            break;
+        }
+    }
+    let mut block = lines[start..end].to_vec();
+    while block.last().is_some_and(|line| line.trim().is_empty()) {
+        block.pop();
+    }
+    Some(block.join("\n") + "\n")
+}
+
+/// MIK-8502.DRIFT.1: the fixture steps equal the checked-in blocks.
+#[test]
+fn drift1_the_fixture_steps_equal_the_checked_in_blocks() {
+    let Some(checked_in) = checked_in_workflow() else {
+        return;
+    };
+    for name in [
+        "Registry ban (MIK-8387)",
+        "Registry ban, Windows (MIK-8449)",
+    ] {
+        let fixture = step_block(FIXTURE, name).expect(name);
+        let real = step_block(&checked_in, name).expect(name);
+        assert_eq!(fixture, real, "{name}");
+    }
+}
+
+/// MIK-8502.DRIFT.1: a truncated step differs.
+#[test]
+fn drift1_a_truncated_step_differs() {
+    let block = step_block(FIXTURE, "Registry ban (MIK-8387)").expect("block");
+    let changed = mutate(
+        FIXTURE,
+        "          cargo clippy --release --lib --bins --no-default-features -- -D warnings\n",
+        "",
+    );
+    assert_ne!(
+        step_block(&changed, "Registry ban (MIK-8387)").expect("changed"),
+        block
+    );
+}
+
+/// MIK-8502.DRIFT.1: an indentation change differs.
+#[test]
+fn drift1_an_indentation_change_differs() {
+    let block = step_block(FIXTURE, "Registry ban (MIK-8387)").expect("block");
+    let from = format!("{LINUX_HEAD}        env:\n{ENV_LINE}");
+    // One space less on the env line; built by concatenation so `${{` stays literal.
+    let to = format!("{LINUX_HEAD}        env:\n") + &ENV_LINE[1..];
+    let changed = mutate(FIXTURE, &from, &to);
+    assert_ne!(
+        step_block(&changed, "Registry ban (MIK-8387)").expect("changed"),
+        block
+    );
+}
+
+/// MIK-8502.DRIFT.1: an extra env key differs.
+#[test]
+fn drift1_an_extra_env_key_differs() {
+    let block = step_block(FIXTURE, "Registry ban (MIK-8387)").expect("block");
+    let from = format!("{LINUX_HEAD}        env:\n{ENV_LINE}");
+    let to = format!("{from}          EXTRA: 1\n");
+    let changed = mutate(FIXTURE, &from, &to);
+    assert_ne!(
+        step_block(&changed, "Registry ban (MIK-8387)").expect("changed"),
+        block
+    );
 }
