@@ -137,15 +137,7 @@ fn discovery_client(
 ) -> reqwest::Client {
     builder
         .timeout(timeout)
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            let ssrf_blocked = validate_url_not_ssrf(attempt.url().as_str()).is_err();
-            let too_many_hops = attempt.previous().len() >= 5;
-            if ssrf_blocked || too_many_hops {
-                attempt.stop()
-            } else {
-                attempt.follow()
-            }
-        }))
+        .redirect(crate::security::ssrf::ssrf_redirect_policy())
         .user_agent("mcp-gateway/2.5 capability-discovery")
         .build()
         .expect("Failed to create HTTP client")
@@ -159,7 +151,7 @@ impl DiscoveryEngine {
     ///   loopback or reserved address is refused at connect (#2027)
     /// - no proxy from `HTTP(S)_PROXY` in the environment (#1881)
     /// - SSRF validation on every redirect hop
-    /// - Max 5 redirects
+    /// - at most MAX_REDIRECT_HOPS redirects followed; a blocked hop is an SSRF error
     /// - Configurable timeout from `options.timeout`
     ///
     /// # Panics

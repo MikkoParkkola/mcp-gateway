@@ -6,28 +6,12 @@
 use url::Url;
 
 use super::{same_origin, sanitize_url_for_diagnostics};
-use crate::security::ssrf::DestinationPolicy;
-
-/// Outcome of evaluating one redirect hop for the transport's HTTP client.
-///
-/// Extracted from the [`reqwest::redirect::Policy::custom`] closure so the
-/// policy is unit-testable: reqwest's `Attempt` cannot be constructed in a
-/// test, but this pure decision can. See [`evaluate_redirect`].
-
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum RedirectDecision {
-    /// Hop budget exhausted — stop and surface the last response as-is.
-    Stop,
-    /// Refuse the redirect; the payload is the operator-facing reason.
-    Reject(String),
-    /// Safe to follow.
-    Follow,
-}
+use crate::security::ssrf::{DestinationPolicy, RedirectDecision};
 
 /// Decide whether to follow a single redirect on the SSE/message client.
 ///
 /// Three guards, each of which a hop must clear:
-/// 1. **Hop cap** — at most five redirects, matching the prior policy.
+/// 1. **Hop cap** — five redirects followed, matching the prior policy.
 /// 2. **SSRF** — the target must not resolve to an internal/metadata range
 ///    ([`DestinationPolicy::check_configured_url`]).
 /// 3. **Same-origin** — the target must share the base URL's origin. The SSE
@@ -56,7 +40,7 @@ pub(super) fn evaluate_redirect_for(
     target: &Url,
     previous_hops: usize,
 ) -> RedirectDecision {
-    if previous_hops >= 5 {
+    if crate::security::ssrf::hop_budget_spent(previous_hops) {
         return RedirectDecision::Stop;
     }
     if let Err(e) = destination.check_configured_url(target.as_str()) {

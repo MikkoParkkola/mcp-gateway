@@ -129,11 +129,7 @@ pub(crate) const SSRF_BLOCKED: &str = "SSRF blocked";
 pub(crate) fn is_ssrf_refusal(error: &Error) -> bool {
     matches!(error, Error::Protocol(message) if message.starts_with(SSRF_BLOCKED))
 }
-pub(crate) use redirect::{RedirectDecision, redirect_decision, ssrf_redirect_policy};
-// Re-exported for path-compat (`crate::security::ssrf::MAX_REDIRECT_HOPS`) even
-// though every current crate-internal use goes through `redirect_decision`.
-#[allow(unused_imports)]
-pub(crate) use redirect::MAX_REDIRECT_HOPS;
+pub(crate) use redirect::{RedirectDecision, hop_budget_spent, redirect_decision, ssrf_redirect_policy};
 
 /// How a refusal names a denied address the caller already knows (a literal
 /// it wrote, or one a refusal already names). The cloud metadata services get

@@ -7,6 +7,7 @@
 //! in the chain must pass the SSRF check before the gateway follows it.
 
 use super::SSRF_BLOCKED;
+use super::SsrfDenied;
 use super::validate_url_not_ssrf;
 use crate::Error;
 use crate::Result;
@@ -30,7 +31,7 @@ pub fn validate_redirect_chain(chain: &[&str]) -> Result<()> {
     Ok(())
 }
 
-/// Maximum number of redirect hops followed before a fetch is abandoned.
+/// Maximum number of redirects followed before a fetch is abandoned.
 pub(crate) const MAX_REDIRECT_HOPS: usize = 5;
 
 /// Decision for a single redirect hop, extracted from the redirect policy so
@@ -41,15 +42,15 @@ pub(crate) const MAX_REDIRECT_HOPS: usize = 5;
 pub(crate) enum RedirectDecision {
     /// Too many hops — stop following (treated as a non-redirect response).
     Stop,
-    /// Next hop targets an SSRF-blocked address — abort with this message.
-    Block(String),
+    /// Next hop is refused: abort with this message.
+    Reject(String),
     /// Next hop is safe — follow it.
     Follow,
 }
 
-/// Whether a redirect with `previous` URLs already visited has used up the hop budget. (MIK-8660 seam)
+/// Whether a redirect with `previous` URLs already visited is past the budget. reqwest records the previous URL before asking, so on redirect k `previous == k`: `>` follows exactly MAX_REDIRECT_HOPS redirects and refuses the next. (MIK-8660 seam)
 pub(crate) fn hop_budget_spent(previous: usize) -> bool {
-    previous >= MAX_REDIRECT_HOPS
+    previous > MAX_REDIRECT_HOPS
 }
 
 /// Decide whether a redirect hop to `next_url` may be followed. Re-validates
@@ -62,7 +63,8 @@ pub(crate) fn redirect_decision(previous_hops: usize, next_url: &str) -> Redirec
         return RedirectDecision::Stop;
     }
     match validate_url_not_ssrf(next_url) {
-        Err(e) => RedirectDecision::Block(e.to_string()),
+        Err(crate::Error::Protocol(m)) => RedirectDecision::Reject(m),
+        Err(e) => RedirectDecision::Reject(e.to_string()),
         Ok(()) => RedirectDecision::Follow,
     }
 }
@@ -72,7 +74,7 @@ pub(crate) fn ssrf_redirect_policy() -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(
         |attempt| match redirect_decision(attempt.previous().len(), attempt.url().as_str()) {
             RedirectDecision::Stop => attempt.stop(),
-            RedirectDecision::Block(msg) => attempt.error(msg),
+            RedirectDecision::Reject(m) => attempt.error(SsrfDenied::new(m)),
             RedirectDecision::Follow => attempt.follow(),
         },
     )

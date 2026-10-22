@@ -31,8 +31,10 @@ use crate::{Error, Result};
 pub(super) use modern_meta::with_modern_meta as modern_listen_params;
 use modern_meta::{finalise_modern_headers, with_modern_meta};
 #[cfg(test)]
+use crate::security::ssrf::RedirectDecision;
+#[cfg(test)]
 use redirect_policy::evaluate_redirect;
-use redirect_policy::{RedirectDecision, evaluate_redirect_for};
+use redirect_policy::evaluate_redirect_for;
 
 // Names the test modules reach through `use super::*`, which the code split
 // into `requests`, `startup` and `transport_impl` no longer needs here.

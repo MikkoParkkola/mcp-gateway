@@ -40,7 +40,10 @@ pub struct OpenApiConverter {
 
 /// Message for a failed `OpenAPI` spec fetch. (MIK-8660 seam)
 fn fetch_error_message(e: &reqwest::Error) -> String {
-    format!("Failed to fetch OpenAPI spec: {e}")
+    crate::security::http_diagnostics::ssrf_refusal(e).map_or_else(
+        || format!("Failed to fetch OpenAPI spec: {e}"),
+        |refused| format!("Failed to fetch OpenAPI spec: {refused}"),
+    )
 }
 
 impl OpenApiConverter {

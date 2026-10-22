@@ -482,7 +482,7 @@ fn redirect_decision_blocks_ssrf_hop() {
     // followed - closes the open-redirect SSRF vector on convert_url.
     assert!(matches!(
         redirect_decision(0, "http://169.254.169.254/latest/meta-data/"),
-        RedirectDecision::Block(_)
+        RedirectDecision::Reject(_)
     ));
 }
 

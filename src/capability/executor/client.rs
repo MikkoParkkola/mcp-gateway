@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use reqwest::Client;
 
-use crate::security::validate_url_not_ssrf;
+use crate::security::ssrf::{RedirectDecision, redirect_decision};
 use crate::{Error, Result};
 
 /// Build a pooled HTTP client suitable for capability execution.
@@ -33,12 +33,6 @@ pub(super) fn build(proxy: Option<&url::Url>) -> Client {
         .pool_idle_timeout(Duration::from_secs(90))
         .tcp_keepalive(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            if attempt.previous().len() >= 5 {
-                return attempt.stop();
-            }
-            if let Err(e) = validate_url_not_ssrf(attempt.url().as_str()) {
-                return attempt.error(e.to_string());
-            }
             // A 307/308 re-sends the body and every header but `Authorization`,
             // so a request that started on TLS or loopback (where a credential
             // may go) never continues in cleartext off this machine (#3013).
@@ -46,11 +40,16 @@ pub(super) fn build(proxy: Option<&url::Url>) -> Client {
                 .previous()
                 .first()
                 .is_some_and(crate::gateway::is_tls_or_loopback);
-            if started_secure && !crate::gateway::is_tls_or_loopback(attempt.url()) {
-                return attempt
-                    .error("refusing a capability redirect to cleartext http:// off this machine");
+            match redirect_decision(attempt.previous().len(), attempt.url().as_str()) {
+                RedirectDecision::Stop => attempt.stop(),
+                RedirectDecision::Reject(msg) => attempt.error(msg),
+                RedirectDecision::Follow
+                    if started_secure && !crate::gateway::is_tls_or_loopback(attempt.url()) =>
+                {
+                    attempt.error("refusing a capability redirect to cleartext http:// off this machine")
+                }
+                RedirectDecision::Follow => attempt.follow(),
             }
-            attempt.follow()
         }))
         .build()
         .expect("Failed to create HTTP client")

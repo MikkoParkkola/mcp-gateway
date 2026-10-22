@@ -140,14 +140,26 @@ pub struct Registry {
     capabilities_path: PathBuf,
 }
 
-/// Plain HTTP client for registry downloads. (MIK-8660 seam)
-fn registry_client() -> reqwest::Client {
-    reqwest::Client::new()
+/// Pinned HTTP client for registry downloads with the SSRF redirect policy. (MIK-8660 seam)
+fn registry_client() -> crate::Result<reqwest::Client> {
+    crate::security::ssrf::pinned_client_builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(crate::security::ssrf::ssrf_redirect_policy())
+        .build()
+        .map_err(|e| Error::Config(format!("Failed to build HTTP client: {e}")))
 }
 
 /// Fetch a capability file body, or `None` on a non-success status. (MIK-8660 seam)
 async fn fetch_capability(client: &reqwest::Client, url: &str) -> crate::Result<Option<String>> {
-    let response = client.get(url).send().await.map_err(Error::Http)?;
+    let response = match client.get(url).send().await {
+        Err(e) => {
+            if let Some(refused) = crate::security::http_diagnostics::ssrf_refusal(&e) {
+                return Err(refused);
+            }
+            return Err(Error::Http(e));
+        }
+        Ok(response) => response,
+    };
     if !response.status().is_success() {
         return Ok(None);
     }
@@ -264,7 +276,7 @@ impl Registry {
         // For now, we'll construct the URL directly based on the capability name
         // A more robust implementation would fetch a directory listing first
 
-        let client = registry_client();
+        let client = registry_client()?;
 
         // Try common capability paths
         let search_patterns = vec![
@@ -696,7 +708,7 @@ mod tests {
         let port = listener.local_addr().expect("addr").port();
         tokio::spawn(async move { axum::serve(listener, app).await });
         let url = format!("http://127.0.0.1:{port}/x.yaml");
-        let client = super::registry_client();
+        let client = super::registry_client().expect("registry client builds");
         let outcome = tokio::time::timeout(
             crate::test_wait::HANG_BOUND,
             super::fetch_capability(&client, &url),
