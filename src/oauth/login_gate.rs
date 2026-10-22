@@ -555,6 +555,30 @@ mod tests {
         let joined = LoginOutcome::of(&provider).to_error("b");
         let busy = crate::oauth::client::is_credential_lock_busy(&joined);
         assert!(!busy, "{joined}");
+        assert!(
+            matches!(
+                &joined,
+                Error::OAuth(m) if m == "OAuth error: access_denied - credential lock busy: x"
+            ),
+            "{joined:?}"
+        );
+        assert!(!joined.is_pre_dispatch(), "{joined:?}");
+    }
+
+    /// MIK-8658 (K3): only a marked busy lock becomes typed; any other lead failure still replays as its text.
+    #[test]
+    fn an_unmarked_backend_unavailable_still_replays_as_oauth_text() {
+        let lead = Error::BackendUnavailable("x".into());
+        let joined = LoginOutcome::of(&lead).to_error("b");
+        assert!(
+            matches!(&joined, Error::OAuth(m) if m == "Backend unavailable: x"),
+            "{joined:?}"
+        );
+        assert!(!joined.is_pre_dispatch(), "{joined:?}");
+        assert!(
+            !crate::oauth::client::is_credential_lock_busy(&joined),
+            "{joined:?}"
+        );
     }
 
     /// MIK-7982 (delta review): an abandoned lead whose callback listeners

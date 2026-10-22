@@ -95,9 +95,10 @@ async fn t10_capability_refresh_answers_busy_without_reauth_noise() {
     );
 }
 
-/// T11: a joiner of a login whose save hit a lock io error shares the marked
-/// failure as `OAuth` text, which still reads busy. (`LoginOutcome::of` is
-/// private; the lead records it exactly as `authorize_shared_with` does.)
+/// T11: a joiner of a login whose save hit a lock io error gets the typed busy
+/// (`BackendUnavailable` with the marker), as the lead does (MIK-8658).
+/// (`LoginOutcome::of` is private; the lead records it exactly as
+/// `authorize_shared_with` does.)
 #[tokio::test(start_paused = true)]
 async fn t11_joiner_shares_the_marked_save_failure() {
     let dir = tempfile::tempdir().expect("a scratch token store");
@@ -139,18 +140,29 @@ async fn t11_joiner_shares_the_marked_save_failure() {
         "the marker did not reach the joiner: {joined}"
     );
     assert!(
-        matches!(joined, Error::OAuth(_)),
-        "not the text form: {joined:?}"
+        matches!(joined, Error::BackendUnavailable(_)),
+        "not the typed busy: {joined:?}"
     );
     assert!(
-        !joined.is_pre_dispatch(),
-        "r4.1: joiners lose the pre-dispatch class on this rare path"
+        joined.is_pre_dispatch(),
+        "D2: the joiner sent nothing, so its busy is pre-dispatch (supersedes #4031 r4.1)"
+    );
+    assert_eq!(
+        joined.to_rpc_code(),
+        -32000,
+        "D1: the lead's code for the same busy"
+    );
+    assert!(
+        joined
+            .to_string()
+            .starts_with("Backend unavailable: credential lock busy:"),
+        "{joined}"
     );
 }
 
-/// A marked `BackendUnavailable` through the same lead-end path still reads
-/// busy to the joiner (green now: the text round-trips, and the predicate matches
-/// the marker inside the joiner's `OAuth` text).
+/// A marked `BackendUnavailable` through the same lead-end path reaches the
+/// joiner as the same typed busy: same text, code and pre-dispatch class as
+/// the lead's (MIK-8658).
 #[tokio::test(start_paused = true)]
 async fn t11b_marked_error_round_trips_busy_to_the_joiner() {
     tokio::time::timeout(CREDENTIAL_LOCK_WAIT * 2, async {
@@ -167,13 +179,19 @@ async fn t11b_marked_error_round_trips_busy_to_the_joiner() {
         };
         let joined = shared.to_error("t11b-backend");
         assert!(
-            matches!(joined, Error::OAuth(_)),
-            "not the text form: {joined:?}"
+            matches!(joined, Error::BackendUnavailable(_)),
+            "not the typed busy: {joined:?}"
         );
         assert!(
             is_credential_lock_busy(&joined),
             "the marker did not round-trip: {joined}"
         );
+        assert_eq!(
+            joined.to_string(),
+            format!("Backend unavailable: {CREDENTIAL_LOCK_BUSY}: x")
+        );
+        assert!(joined.is_pre_dispatch(), "{joined:?}");
+        assert_eq!(joined.to_rpc_code(), -32000);
     })
     .await
     .expect("a cohort end answers at once");

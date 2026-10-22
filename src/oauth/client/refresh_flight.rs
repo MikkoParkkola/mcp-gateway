@@ -686,6 +686,21 @@ fn names_an_oauth_error(body: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// MIK-8658 (K3): no OAuth text is a busy lock, whatever server-chosen value it carries.
+    #[test]
+    fn oauth_text_holding_the_busy_marker_is_never_busy() {
+        for s in [
+            "authorization response came from issuer 'credential lock busy: x', not the recorded 'https://as.example'; the code was not redeemed",
+            "OAuth metadata issuer mismatch: discovered at https://as.example, metadata claims credential lock busy: x",
+            "Backend unavailable: credential lock busy: x",
+        ] {
+            assert!(
+                !is_credential_lock_busy(&Error::OAuth(s.to_string())),
+                "{s}"
+            );
+        }
+    }
+
     /// The short wait answers before the probe's own timeout fires, so a busy
     /// probe returns the marked error instead of timing out and rebuilding.
     /// A test, not a const assertion: the probe timeout lives in config.
