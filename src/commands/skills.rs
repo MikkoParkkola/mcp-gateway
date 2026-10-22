@@ -442,7 +442,7 @@ mod redirect_tests {
         );
         let base = serve(app).await;
         let url = format!("{base}/skill.md");
-        let client = skill_fetch_client();
+        let client = skill_fetch_client().expect("client");
         let outcome = tokio::time::timeout(HANG_BOUND, fetch_skill_from_url(&client, &url))
             .await
             .expect("bounded");

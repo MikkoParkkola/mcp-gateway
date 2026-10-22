@@ -292,7 +292,7 @@ mod tests {
     #[tokio::test]
     async fn stats_outcome_renders_the_stubbed_gateway_statistics() {
         let base = serve(stats_stub()).await;
-        let outcome = tokio::time::timeout(HANG_BOUND, stats_outcome(&stats_client(), &base))
+        let outcome = tokio::time::timeout(HANG_BOUND, stats_outcome(&stats_client().expect("client"), &base))
             .await
             .expect("bounded");
         match outcome {
@@ -312,7 +312,7 @@ mod tests {
         let addr = listener.local_addr().expect("addr");
         tokio::spawn(async move { axum::serve(listener, stats_stub()).await });
         let base = format!("http://{addr}");
-        let outcome = tokio::time::timeout(HANG_BOUND, stats_outcome(&stats_client(), &base))
+        let outcome = tokio::time::timeout(HANG_BOUND, stats_outcome(&stats_client().expect("client"), &base))
             .await
             .expect("bounded");
         match outcome {
@@ -341,7 +341,7 @@ mod tests {
             }),
         );
         let base = serve(app).await;
-        let outcome = tokio::time::timeout(HANG_BOUND, stats_outcome(&stats_client(), &base))
+        let outcome = tokio::time::timeout(HANG_BOUND, stats_outcome(&stats_client().expect("client"), &base))
             .await
             .expect("bounded");
         match outcome {
