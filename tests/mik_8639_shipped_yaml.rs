@@ -37,8 +37,24 @@ fn collect_yaml_files(root: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Cargo writes this file at the root of every packaged crate.
+const PACKAGED_MARKER: &str = ".cargo_vcs_info.json";
+
+/// Whether `root` is an unpacked published crate, where the packaged suite
+/// runs the tests: the repo YAML walked below is not published there
+/// (Cargo.toml `include`), so the check belongs to the full-checkout job.
+fn is_packaged_crate(root: &Path) -> bool {
+    root.join(PACKAGED_MARKER).is_file()
+}
+
 #[test]
 fn shipped_yaml_accepted_by_backend_stays_accepted() {
+    if is_packaged_crate(Path::new(env!("CARGO_MANIFEST_DIR"))) {
+        eprintln!(
+            "mik-8639 shipped-yaml: skipped in the packaged crate: the repo YAML it checks is not published; the full-checkout CI job runs it"
+        );
+        return;
+    }
     let mut files = Vec::new();
     for root in [
         "capabilities",
@@ -102,4 +118,28 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
         refused.is_empty(),
         "seam refused shipped files: {refused:?}"
     );
+}
+
+/// The packaged-crate switch both ways: a root with cargo's marker is the
+/// packaged crate (skip), and one without it keeps the strict check. In a
+/// full checkout the manifest directory itself carries no marker.
+#[test]
+fn packaged_marker_skips_and_its_absence_stays_strict() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    assert!(
+        !is_packaged_crate(dir.path()),
+        "without the marker the strict check runs"
+    );
+    std::fs::write(dir.path().join(PACKAGED_MARKER), "{}").expect("write the marker");
+    assert!(
+        is_packaged_crate(dir.path()),
+        "with the marker the check is skipped"
+    );
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    if manifest.join(".git").exists() {
+        assert!(
+            !is_packaged_crate(manifest),
+            "a full checkout must run the strict check"
+        );
+    }
 }
