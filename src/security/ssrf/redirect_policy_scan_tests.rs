@@ -928,9 +928,68 @@ const ALLOWED: &[(&str, &str, &str, &str)] = &[
         "src/personal_accounts/provider/http.rs",
         "build",
         "private; its only callers pass strict_builder(), which sets Policy::none() (the \
-         production path and the cfg(test) for_test seam)",
+         production path and the cfg(test) for_test seam); pinned by \
+         personal_accounts_build_is_only_handed_the_strict_builder",
     ),
 ];
+
+/// Pins the reason of the `personal_accounts/provider/http.rs::build` row in
+/// [`ALLOWED`]: every `Self::build(..)` there is handed `strict_builder()`,
+/// directly or through the test seam's `configure(strict_builder())`. A new
+/// caller with any other builder fails here instead of passing the scan unseen.
+#[test]
+fn personal_accounts_build_is_only_handed_the_strict_builder() {
+    struct Calls(Vec<bool>);
+    impl<'ast> Visit<'ast> for Calls {
+        fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+            if let syn::Expr::Path(p) = &*node.func {
+                let names: Vec<String> = p
+                    .path
+                    .segments
+                    .iter()
+                    .map(|s| s.ident.to_string())
+                    .collect();
+                if names == ["Self", "build"] {
+                    self.0
+                        .push(node.args.len() == 1 && hands_strict(&node.args[0]));
+                }
+            }
+            syn::visit::visit_expr_call(self, node);
+        }
+    }
+    fn called(expr: &syn::Expr, name: &str) -> Option<usize> {
+        let syn::Expr::Call(call) = expr else {
+            return None;
+        };
+        let syn::Expr::Path(p) = &*call.func else {
+            return None;
+        };
+        (p.path.segments.last()?.ident == name).then_some(call.args.len())
+    }
+    fn hands_strict(expr: &syn::Expr) -> bool {
+        called(expr, "strict_builder") == Some(0)
+            || (called(expr, "configure") == Some(1)
+                && matches!(expr, syn::Expr::Call(c) if hands_strict(&c.args[0])))
+    }
+    let callers = |source: &str| {
+        let mut calls = Calls(Vec::new());
+        calls.visit_file(&syn::parse_file(source).expect("parse"));
+        calls.0
+    };
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/personal_accounts/provider/http.rs");
+    let real = callers(&std::fs::read_to_string(&path).expect("read http.rs"));
+    assert!(
+        !real.is_empty(),
+        "no Self::build call found: the pin reads the wrong file"
+    );
+    assert!(
+        real.iter().all(|ok| *ok),
+        "a Self::build caller is handed another builder: {real:?}"
+    );
+    // The pin can fail: a caller handing a loose builder is caught.
+    let planted = "impl P { fn a() { Self::build(strict_builder()) } fn b() { Self::build(Client::builder()) } }";
+    assert_eq!(callers(planted), [true, false]);
+}
 
 #[test]
 fn production_clients_set_an_explicit_redirect_policy() {

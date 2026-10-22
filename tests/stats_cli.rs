@@ -9,7 +9,7 @@
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
 
-/// Repo precedent for an integration test's hang bound (events/fanout_tests.rs:273).
+/// Repo precedent for an integration test's hang bound (`events/fanout_tests.rs:273`).
 const HANG_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
 
 use std::sync::Arc;
