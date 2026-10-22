@@ -118,11 +118,13 @@ mod hop_budget_tests {
             }))
             .build()
             .expect("client");
-        client
-            .get(format!("http://{addr}/0"))
-            .send()
-            .await
-            .expect("the chain ends in a 3xx");
+        tokio::time::timeout(
+            crate::test_wait::HANG_BOUND,
+            client.get(format!("http://{addr}/0")).send(),
+        )
+        .await
+        .expect("bounded")
+        .expect("the chain ends in a 3xx");
         // One initial request plus one per redirect followed.
         assert_eq!(hits.load(Ordering::SeqCst) - 1, super::MAX_REDIRECT_HOPS);
     }

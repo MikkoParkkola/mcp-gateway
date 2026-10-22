@@ -9,6 +9,9 @@
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
 
+/// Repo precedent for an integration test's hang bound (events/fanout_tests.rs:273).
+const HANG_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -57,21 +60,26 @@ async fn the_stats_command_bypasses_an_environment_proxy() {
     .await;
 
     let home = tempfile::tempdir().expect("temp dir");
-    let out = tokio::task::spawn_blocking(move || {
-        gateway_bin::command(home.path(), gateway_bin::Inherit::Environment)
-            .args(["stats", "--url", &gateway])
-            .env("HTTP_PROXY", &proxy)
-            .env("http_proxy", &proxy)
-            .env("ALL_PROXY", &proxy)
-            .env("all_proxy", &proxy)
-            .env_remove("NO_PROXY")
-            .env_remove("no_proxy")
-            .env("MCP_GATEWAY_CONFIG_DIR", home.path())
-            .output()
-            .expect("the command runs")
-    })
+    let mut command = gateway_bin::command(home.path(), gateway_bin::Inherit::Environment);
+    command
+        .args(["stats", "--url", &gateway])
+        .env("HTTP_PROXY", &proxy)
+        .env("http_proxy", &proxy)
+        .env("ALL_PROXY", &proxy)
+        .env("all_proxy", &proxy)
+        .env_remove("NO_PROXY")
+        .env_remove("no_proxy")
+        .env("MCP_GATEWAY_CONFIG_DIR", home.path());
+    // A hung binary is killed when the bound passes, not left to stall the run.
+    let out = tokio::time::timeout(
+        HANG_BOUND,
+        tokio::process::Command::from(command)
+            .kill_on_drop(true)
+            .output(),
+    )
     .await
-    .expect("join");
+    .expect("bounded")
+    .expect("the command runs");
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
