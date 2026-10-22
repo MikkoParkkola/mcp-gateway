@@ -575,6 +575,37 @@ mod tests {
         assert!(!joined.is_pre_dispatch(), "{joined:?}");
     }
 
+    /// MIK-8658 (K3): a joiner waiting on the attempt, and detached work
+    /// classified against the cohort, both get the lead's typed busy.
+    #[tokio::test]
+    async fn a_marked_busy_replays_typed_through_finished_and_classify() {
+        let gate = Arc::new(LoginGate::default());
+        let cohort = gate.cohort();
+        let Begin::Lead(lead) = gate.begin(None, None) else {
+            panic!("no login in flight, so the first caller leads");
+        };
+        let Begin::Join(attempt) = gate.begin(None, None) else {
+            panic!("a login is in flight, so the second caller joins");
+        };
+        let marked = Error::BackendUnavailable("credential lock busy: x".into());
+        lead.end(Some(&marked));
+
+        let outcome = attempt.finished().await.expect("the lead failed");
+        assert_eq!(
+            outcome,
+            LoginOutcome::Busy("credential lock busy: x".into())
+        );
+        let timeout = Error::BackendTimeout("b".into());
+        for joined in [outcome.to_error("b"), gate.classify(&cohort, "b", timeout)] {
+            assert!(
+                matches!(&joined, Error::BackendUnavailable(m) if m == "credential lock busy: x"),
+                "{joined:?}"
+            );
+            assert_eq!(joined.to_rpc_code(), marked.to_rpc_code(), "{joined:?}");
+            assert!(joined.is_pre_dispatch(), "{joined:?}");
+        }
+    }
+
     /// MIK-8658 (K3): only a marked busy lock becomes typed; any other lead failure still replays as its text.
     #[test]
     fn an_unmarked_backend_unavailable_still_replays_as_oauth_text() {

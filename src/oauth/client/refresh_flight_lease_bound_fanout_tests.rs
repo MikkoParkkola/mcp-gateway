@@ -158,6 +158,16 @@ async fn t11_joiner_shares_the_marked_save_failure() {
             .starts_with("Backend unavailable: credential lock busy:"),
         "{joined}"
     );
+    assert_eq!(
+        joined.to_string(),
+        save_error.to_string(),
+        "the joiner replays the lead's text"
+    );
+    assert_eq!(
+        joined.to_rpc_code(),
+        save_error.to_rpc_code(),
+        "the joiner replays the lead's code"
+    );
 }
 
 /// A marked `BackendUnavailable` through the same lead-end path reaches the

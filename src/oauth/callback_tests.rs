@@ -273,7 +273,10 @@ async fn provider_error_text_with_the_busy_marker_is_not_a_busy_lock() {
         .expect("callback answers");
     let error = server.wait_for_callback().await.expect_err("login ended");
     let busy = crate::oauth::client::is_credential_lock_busy(&error);
-    assert!(matches!(&error, Error::OAuth(m) if m.contains("busy: x")));
+    assert!(
+        matches!(&error, Error::OAuth(m) if m == "OAuth error: access_denied - credential lock busy: x"),
+        "{error:?}"
+    );
     assert!(!busy, "{error}");
 }
 
