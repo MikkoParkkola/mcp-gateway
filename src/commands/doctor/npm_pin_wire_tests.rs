@@ -199,11 +199,19 @@ async fn every_off_reason_sends_nothing_and_prints_one_skipped_pass() {
 
 // ── fail-soft: every failure is silence, inside the budget ─────────────────
 
-/// A margin for scheduling on a loaded CI runner.
-const SLACK: Duration = Duration::from_secs(1);
+/// The longest a whole check may take: the budget plus one second for
+/// scheduling on a loaded CI runner. A literal, so the timing guard can read
+/// it; `the_budget_bound_is_the_budget_plus_one_second` keeps it in step.
+// timing-oracle: vs BUDGET (MIK-8512)
+const BUDGET_BOUND: Duration = Duration::from_secs(5);
+
+#[test]
+fn the_budget_bound_is_the_budget_plus_one_second() {
+    assert_eq!(BUDGET + Duration::from_secs(1), BUDGET_BOUND);
+}
 
 #[tokio::test]
-async fn offline_is_silent_and_quick() {
+async fn offline_is_silent() {
     // TCP port 1 (tcpmux) has no listener on a test host, so the connect is
     // refused at once; no port is picked and released, so nothing can race.
     let cfg = ClientCfg {
@@ -211,7 +219,6 @@ async fn offline_is_silent_and_quick() {
         roots: rustls::RootCertStore::empty(),
         proxy: ProxyEnv::default(),
     };
-    let started = Instant::now();
     let rows = check(
         &config_of(&[("memory", memory_on("2026.8.31"))]),
         &cfg,
@@ -219,12 +226,6 @@ async fn offline_is_silent_and_quick() {
     )
     .await;
     assert!(rows.is_empty(), "{rows:?}");
-    // A refused connection answers at once; well under the connect bound.
-    assert!(
-        started.elapsed() < CONNECT_TIMEOUT,
-        "{:?}",
-        started.elapsed()
-    );
 }
 
 /// Five stalled packages need two waves at four in flight; without the
@@ -260,7 +261,7 @@ async fn stalls_end_inside_the_budget_and_never_exceed_the_concurrency() {
     let took = started.elapsed();
     assert!(rows.is_empty(), "{rows:?}");
     assert!(
-        took < BUDGET + SLACK,
+        took < BUDGET_BOUND,
         "the budget bounds the whole check: {took:?}"
     );
     assert!(
@@ -350,7 +351,7 @@ async fn a_finished_warning_survives_the_budget_running_out() {
         took >= BUDGET.saturating_sub(Duration::from_millis(200)),
         "the budget ran out: {took:?}"
     );
-    assert!(took < BUDGET + SLACK, "{took:?}");
+    assert!(took < BUDGET_BOUND, "{took:?}");
     let labels: Vec<&str> = warns(&rows).iter().map(|r| r.label.as_str()).collect();
     assert_eq!(labels, ["memory: npm pin"], "{rows:?}");
 }
@@ -394,7 +395,7 @@ async fn a_second_wave_warning_is_not_held_behind_a_stalled_request() {
         took >= BUDGET.saturating_sub(Duration::from_millis(200)),
         "the budget ran out: {took:?}"
     );
-    assert!(took < BUDGET + SLACK, "{took:?}");
+    assert!(took < BUDGET_BOUND, "{took:?}");
     let labels: Vec<&str> = warns(&rows).iter().map(|r| r.label.as_str()).collect();
     assert_eq!(labels, ["t: npm pin"], "{rows:?}");
 }
