@@ -12,7 +12,9 @@ use tokio::time::Instant;
 use super::lease_bound::{POLL, is_deferred};
 use super::*;
 use crate::oauth::OAuthClient;
-use crate::oauth::client::refresh_flight::{CREDENTIAL_LOCK_WAIT, Flight, hold_across_processes};
+use crate::oauth::client::refresh_flight::{
+    CREDENTIAL_LOCK_WAIT, Flight, SaveGate, hold_across_processes,
+};
 
 /// One observation tick (10 ms): the granularity `attempt_span` and the T7
 /// hold poll see mutex holds at, so spans read up to one tick short.
@@ -232,10 +234,9 @@ async fn t7_two_periods_are_two_bounded_attempts() {
 /// Renewal without a refresh token takes the `client_credentials`-only arm;
 /// with the save lease held its save meets the bound, the attempt defers,
 /// and neither the cache nor storage changes (the save fails first). The
-/// exchange runs with real time before the pause, so no socket runs under the
-/// paused clock: RED on the base is the outer timeout (the save waits
-/// unbounded on the lease, so no Deferred answers), never Exhausted from a
-/// socket timeout. The outer timeout covers setup and the attempt.
+/// exchange runs with real time and the clock pauses only after its answer
+/// was read (the save's gate), so no socket runs under the paused clock. The
+/// outer timeout covers setup and the attempt.
 #[tokio::test(start_paused = true)]
 async fn t6b_renewal_without_a_refresh_token_defers_leaving_cache_and_storage() {
     tokio::time::timeout(CREDENTIAL_LOCK_WAIT * 2, async {
@@ -258,22 +259,26 @@ async fn t6b_renewal_without_a_refresh_token_defers_leaving_cache_and_storage() 
         let _holder = hold_across_processes(&token_path, Instant::now() + CREDENTIAL_LOCK_WAIT)
             .await
             .expect("the other process holds the lease");
-        // Hold the in-process flight so the save cannot reach its lease wait
-        // before the pause: the exchange completes with real time while the
-        // save waits on this lock, then the pause lands before the lease wait.
-        // The server answers only after this test has run on: see the fixture.
+        // Pause only once the grant's answer has been READ: the save's gate
+        // is reached after the exchange, before the save's budget starts. A
+        // request merely received (`arrivals`) still has its reply in flight,
+        // and a paused clock then jumps to the client's request timeout.
+        // The server yields before replying, so a test that pauses on
+        // "received" fails every time rather than once in a while.
         server.yields_before_reply.store(3, Ordering::SeqCst);
         let flight = Flight::of(&token_path);
-        let flight_guard = flight.lock.lock().await;
+        let gate = Arc::new(SaveGate::default());
+        *flight.issued_gate.lock() = Some(Arc::clone(&gate));
 
-        // The exchange with real time: the POST answers before the pause, so
-        // the paused clock never waits on a socket.
+        // The exchange with real time.
         tokio::time::resume();
         let attempting = tokio::spawn({
             let client = Arc::clone(&client);
             async move { client.attempt_background_renewal().await }
         });
-        server.arrivals(1, Duration::from_secs(5)).await;
+        tokio::time::timeout(Duration::from_secs(5), gate.reached.notified())
+            .await
+            .expect("the save is reached after the exchange");
         assert_eq!(
             server.requests(),
             1,
@@ -283,9 +288,10 @@ async fn t6b_renewal_without_a_refresh_token_defers_leaving_cache_and_storage() 
 
         // The save now meets the held lease under the paused clock.
         let start = Instant::now();
-        drop(flight_guard);
+        gate.release.notify_one();
         let renewal = attempting.await.expect("the attempt joins");
         let elapsed = start.elapsed();
+        *flight.issued_gate.lock() = None;
 
         assert!(is_deferred(&renewal), "not deferred: {renewal:?}");
         assert!(

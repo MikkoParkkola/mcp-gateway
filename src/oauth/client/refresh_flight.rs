@@ -39,6 +39,11 @@ pub(super) struct Flight {
     /// before the token is saved, with the flight still held.
     #[cfg(test)]
     pub(super) save_gate: parking_lot::Mutex<Option<Arc<SaveGate>>>,
+    /// A test's pause point in `save_issued`, before its contention budget
+    /// starts: by then the grant's answer has been read, so a test may pause
+    /// the clock with no socket exchange left in flight.
+    #[cfg(test)]
+    pub(super) issued_gate: parking_lot::Mutex<Option<Arc<SaveGate>>>,
     /// A test's shorter bound on one exchange, in place of `EXCHANGE_LIMIT`.
     #[cfg(test)]
     pub(super) exchange_limit: parking_lot::Mutex<Option<std::time::Duration>>,
@@ -60,6 +65,16 @@ static FLIGHTS: LazyLock<parking_lot::Mutex<HashMap<PathBuf, Arc<Flight>>>> =
     LazyLock::new(parking_lot::Mutex::default);
 
 impl Flight {
+    /// Wait at [`Self::issued_gate`] when a test set one.
+    #[cfg(test)]
+    pub(super) async fn hold_before_issued_save(&self) {
+        let gate = self.issued_gate.lock().clone();
+        if let Some(gate) = gate {
+            gate.reached.notify_one();
+            gate.release.notified().await;
+        }
+    }
+
     /// The bound on one exchange: `EXCHANGE_LIMIT`, or a test's shorter one.
     #[cfg_attr(not(test), allow(clippy::unused_self))]
     fn limit(&self) -> std::time::Duration {
