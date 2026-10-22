@@ -470,9 +470,10 @@ impl<'ast, 'f> Visit<'ast> for FnVisitor<'f> {
             return;
         }
         if self.in_conditional != 0 {
-            // A branch that replaces a tracked builder with a fresh chain
-            // invalidates its recorded `.redirect(` state: the chain needs
-            // `.redirect(` after the branch.
+            // A branch that replaces a tracked builder with a fresh chain, or
+            // with another tracked builder variable whose own state has no
+            // `.redirect(`, invalidates its recorded `.redirect(` state: the
+            // chain needs `.redirect(` after the branch.
             if let syn::Expr::Path(p) = &*node.left
                 && let Some(ident) = p.path.get_ident()
                 && ident != "_"
@@ -480,7 +481,7 @@ impl<'ast, 'f> Visit<'ast> for FnVisitor<'f> {
                     .vars
                     .get(&ident.to_string())
                     .is_some_and(|(is_builder, _)| *is_builder)
-                && expr_contains_builder_start(&node.right, self.factories)
+                && branch_replaces_builder(&node.right, &self.vars, self.factories)
             {
                 self.vars.insert(ident.to_string(), (true, false));
             }
@@ -651,9 +652,10 @@ fn expr_mentions_any_bound(expr: &syn::Expr, bound: &HashSet<String>) -> bool {
 }
 
 /// Rule (iii): calling the decider is not enough; the closure passes only if
-/// it branches on the answer. The decision call is the scrutinee of a `match`,
-/// the condition of an `if`, or bound with `let` and that binding later
-/// matched on or used in an `if`. `let _ = ...` never counts.
+/// it branches on the answer. The decision call is the scrutinee of a `match`
+/// with an arm naming a variant, the condition of an `if`, or bound with `let`
+/// and that binding later matched on or used in an `if`. `let _ = ...` never
+/// counts, and neither does `match ... { _ => ... }`.
 struct DecisionUsage {
     bound: HashSet<String>,
     used: bool,
@@ -661,13 +663,21 @@ struct DecisionUsage {
 
 impl<'ast> Visit<'ast> for DecisionUsage {
     fn visit_expr_match(&mut self, node: &'ast syn::ExprMatch) {
-        if is_decision_call(&node.expr) {
-            self.used = true;
-        } else if let syn::Expr::Path(scrutinee) = &*node.expr
-            && let Some(name) = scrutinee.path.get_ident()
-            && self.bound.contains(&name.to_string())
+        // A match counts as using the decision only if some arm names a
+        // variant; `{ _ => ... }` discards the answer like `let _ = ...`.
+        if node
+            .arms
+            .iter()
+            .any(|arm| !matches!(arm.pat, syn::Pat::Wild(_)))
         {
-            self.used = true;
+            if is_decision_call(&node.expr) {
+                self.used = true;
+            } else if let syn::Expr::Path(scrutinee) = &*node.expr
+                && let Some(name) = scrutinee.path.get_ident()
+                && self.bound.contains(&name.to_string())
+            {
+                self.used = true;
+            }
         }
         if !self.used {
             syn::visit::visit_expr_match(self, node);
@@ -756,6 +766,27 @@ fn expr_contains_builder_start(expr: &syn::Expr, factories: &HashSet<String>) ->
     };
     f.visit_expr(expr);
     f.found
+}
+
+/// Whether an assignment's right-hand side replaces a tracked builder's
+/// recorded state from inside a branch: a fresh chain start, or another
+/// tracked builder variable whose own state has no `.redirect(`.
+fn branch_replaces_builder(
+    right: &syn::Expr,
+    vars: &HashMap<String, (bool, bool)>,
+    factories: &HashSet<String>,
+) -> bool {
+    if expr_contains_builder_start(right, factories) {
+        return true;
+    }
+    if let syn::Expr::Path(p) = right
+        && let Some(name) = p.path.get_ident()
+    {
+        return vars
+            .get(&name.to_string())
+            .is_some_and(|(is_builder, has_redirect)| *is_builder && !*has_redirect);
+    }
+    false
 }
 
 struct BuildFinder {
@@ -915,13 +946,13 @@ const ALLOWED: &[(&str, &str, &str, &str)] = &[
         "src/transport/http/client.rs",
         "build",
         "hands previous().len() to transport's own decider evaluate_redirect_for, \
-         whose count is pinned by transport/http/tests.rs (T1b, T15)",
+         whose count is pinned by transport/http/tests.rs (evaluate_redirect_hop_cap_stops)",
     ),
     (
         "delegation",
         "src/key_server/oidc_jwks_cache.rs",
         "with_remote_proxy",
-        "refuses every redirect; no hop is ever followed, so there is no budget to consult",
+        "the loopback client's redirect closure errors on every hop; the remote client in the same fn uses remote_redirect_policy, which calls hop_budget_spent",
     ),
     (
         "implicit-policy",
@@ -1006,7 +1037,7 @@ fn production_clients_set_an_explicit_redirect_policy() {
     entries.sort();
     let mut msg = String::from("redirect policy gaps:\n");
     for e in &entries {
-        let _ = write!(msg, "{} {}::{}\n", e.rule, e.file, e.func);
+        let _ = writeln!(msg, "{} {}::{}", e.rule, e.file, e.func);
     }
     assert!(entries.is_empty(), "{msg}");
 }
@@ -1072,6 +1103,10 @@ fn the_scanner_reports_each_negative_fixture() {
         "fn f() { let _ = reqwest::redirect::Policy::custom(|a| { let _ = redirect_decision(a.previous().len(), a.url().as_str()); a.follow() }); }",
     );
     check_reported(
+        "custom-match-wildcard-only",
+        "fn f() { let _ = reqwest::redirect::Policy::custom(|a| match redirect_decision(a.previous().len(), a.url().as_str()) { _ => a.follow() }); }",
+    );
+    check_reported(
         "factory-route-no-redirect",
         "fn f() -> Client { route(None).timeout(d).build().expect(\"x\") } fn route(p: Option<u8>) -> reqwest::ClientBuilder { Client::builder() }",
     );
@@ -1082,6 +1117,10 @@ fn the_scanner_reports_each_negative_fixture() {
     check_reported(
         "if-branch-replaces-builder",
         "fn f(c: bool) { let mut b = Client::builder().redirect(Policy::none()); if c { b = Client::builder(); } b.build(); }",
+    );
+    check_reported(
+        "if-branch-replaces-builder-with-variable",
+        "fn f(c: bool) { let n = Client::builder(); let mut b = Client::builder().redirect(Policy::none()); if c { b = n; } b.build(); }",
     );
 }
 
@@ -1125,7 +1164,7 @@ fn the_scanner_passes_each_positive_fixture() {
     );
     check_clean(
         "custom-matches-on-decision",
-        "fn f() { let _ = reqwest::redirect::Policy::custom(|a| match redirect_decision(a.previous().len(), a.url().as_str()) { _ => a.follow() }); }",
+        "fn f() { let _ = reqwest::redirect::Policy::custom(|a| match redirect_decision(a.previous().len(), a.url().as_str()) { RedirectDecision::Stop => a.stop(), RedirectDecision::Follow => a.follow(), RedirectDecision::Reject(m) => a.error(m) }); }",
     );
     check_clean(
         "factory",

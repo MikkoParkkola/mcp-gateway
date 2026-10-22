@@ -258,6 +258,30 @@ pub fn diagnostic_url(raw: &str) -> String {
     redact_url_for_diagnostics(raw)
 }
 
+/// How a CLI message names where a redirect pointed: the response's `Location` resolved against the request URL,
+/// shown as scheme, host and port only ([`crate::security::sanitize::redact_url_for_diagnostics`]). A path, a
+/// query or userinfo can each be the secret (a webhook `/hooks/<token>`, a signed link), and doctor's `--json`
+/// report is made for pasting into bug reports, so none of them is shown; the message says how to see the rest.
+///
+/// Public only for the binary's redirect messages (stats, doctor, skills); not a stable API.
+#[doc(hidden)]
+#[must_use]
+pub fn redirect_target_phrase(response: &reqwest::Response) -> String {
+    let Some(raw) = response.headers().get(reqwest::header::LOCATION) else {
+        return "no Location".to_string();
+    };
+    let Ok(location) = raw.to_str() else {
+        return "an unreadable Location".to_string();
+    };
+    match response.url().join(location) {
+        Ok(resolved) => format!(
+            "{} (path hidden; run `curl -I` on the URL you gave to see the full Location)",
+            redact_url_for_diagnostics(resolved.as_str())
+        ),
+        Err(_) => "an unreadable Location".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

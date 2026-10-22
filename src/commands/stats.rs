@@ -98,24 +98,11 @@ pub async fn run_stats_command(url: &str) -> ExitCode {
 
 async fn handle_stats_response(response: reqwest::Response, url: &str) -> Result<String, String> {
     if response.status().is_redirection() {
-        if let Some(location) = response
-            .headers()
-            .get(reqwest::header::LOCATION)
-            .and_then(|value| value.to_str().ok())
-        {
-            // A Location can carry userinfo or a signed query: resolve it
-            // against the request URL, then show scheme/host/port/path only.
-            let shown = match response.url().join(location) {
-                Ok(resolved) => {
-                    mcp_gateway::security::sanitize::redact_url_keep_path(resolved.as_str())
-                }
-                Err(_) => "<invalid-url>".to_string(),
-            };
-            return Err(format!(
-                "❌ the gateway URL redirected to {shown}; point stats at the final URL\n"
-            ));
-        }
-        return Err("❌ the gateway URL redirected; point stats at the final URL\n".to_string());
+        let phrase =
+            mcp_gateway::security::http_diagnostics::redirect_target_phrase(&response);
+        return Err(format!(
+            "❌ the gateway URL redirected to {phrase}; point stats at the final URL\n"
+        ));
     }
     if !response.status().is_success() {
         return Err(format!(
@@ -171,9 +158,9 @@ fn print_top_tools(stats: &serde_json::Value) -> String {
     {
         let mut out = String::from("\n🏆 Top Tools:\n");
         for tool in top_tools {
-            let _ = write!(
+            let _ = writeln!(
                 out,
-                "  • {}:{} - {} calls\n",
+                "  • {}:{} - {} calls",
                 tool["server"].as_str().unwrap_or(""),
                 tool["tool"].as_str().unwrap_or(""),
                 tool["count"]
@@ -345,8 +332,9 @@ mod tests {
     async fn stats_outcome_reports_a_redirect_without_following_it() {
         let (counter, hits) = serve_counter().await;
         let target = format!("{counter}/mcp");
-        let expected =
-            format!("the gateway URL redirected to {target}; point stats at the final URL");
+        let expected = format!(
+            "the gateway URL redirected to {counter} (path hidden; run `curl -I` on the URL you gave to see the full Location); point stats at the final URL"
+        );
         let app = axum::Router::new().route(
             "/mcp",
             axum::routing::post(move || {
@@ -374,7 +362,7 @@ mod tests {
     }
 
     /// A redirect Location carrying userinfo, a query token and a fragment is
-    /// reported redacted: no credential survives, the path stays visible.
+    /// reported origin-only: no credential survives, and the path stays hidden.
     #[tokio::test]
     async fn stats_outcome_redacts_credentials_in_a_redirect_location() {
         let (counter, hits) = serve_counter().await;
@@ -405,14 +393,16 @@ mod tests {
                 assert!(!msg.contains("hunter2"), "msg: {msg}");
                 assert!(!msg.contains("sekret-token-value"), "msg: {msg}");
                 assert!(!msg.contains("user:"), "msg: {msg}");
-                assert!(msg.contains("/final/path"), "msg: {msg}");
+                assert!(!msg.contains("/final/path"), "msg: {msg}");
+                assert!(msg.contains(&counter), "msg: {msg}");
+                assert!(msg.contains("path hidden"), "msg: {msg}");
             }
         }
         assert_eq!(hits.load(Ordering::SeqCst), 0);
     }
 
     /// A relative redirect Location is resolved against the request URL, so
-    /// the message names the absolute target.
+    /// the message names the request's origin, with the path hidden.
     #[tokio::test]
     async fn stats_outcome_resolves_a_relative_redirect_location() {
         let app = axum::Router::new().route(
@@ -425,7 +415,6 @@ mod tests {
             }),
         );
         let base = serve(app).await;
-        let expected = format!("{base}/relative/target");
         let outcome = tokio::time::timeout(
             HANG_BOUND,
             stats_outcome(&stats_client().expect("client"), &base),
@@ -434,7 +423,69 @@ mod tests {
         .expect("bounded");
         match outcome {
             Ok(text) => panic!("expected Err, got Ok: {text}"),
-            Err(msg) => assert!(msg.contains(&expected), "msg: {msg}"),
+            Err(msg) => {
+                assert!(msg.contains(&base), "msg: {msg}");
+                assert!(msg.contains("path hidden"), "msg: {msg}");
+                assert!(!msg.contains("/relative/target"), "msg: {msg}");
+            }
+        }
+    }
+
+    /// A redirect Location whose path carries the secret (a webhook token) is
+    /// reported origin-only: the path never appears.
+    #[tokio::test]
+    async fn stats_outcome_hides_a_secret_carrying_redirect_path() {
+        let (counter, hits) = serve_counter().await;
+        let location = format!("{counter}/hooks/sekret-path-token-77");
+        let app = axum::Router::new().route(
+            "/mcp",
+            axum::routing::post(move || {
+                let location = location.clone();
+                async move {
+                    (
+                        axum::http::StatusCode::MOVED_PERMANENTLY,
+                        [(axum::http::header::LOCATION, location)],
+                    )
+                }
+            }),
+        );
+        let base = serve(app).await;
+        let outcome = tokio::time::timeout(
+            HANG_BOUND,
+            stats_outcome(&stats_client().expect("client"), &base),
+        )
+        .await
+        .expect("bounded");
+        match outcome {
+            Ok(text) => panic!("expected Err, got Ok: {text}"),
+            Err(msg) => {
+                assert!(!msg.contains("sekret-path-token-77"), "msg: {msg}");
+                assert!(!msg.contains("/hooks/"), "msg: {msg}");
+                assert!(msg.contains(&counter), "msg: {msg}");
+                assert!(msg.contains("path hidden"), "msg: {msg}");
+            }
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    /// A 3xx with no Location is reported with the phrase covering the
+    /// missing header, not followed.
+    #[tokio::test]
+    async fn stats_outcome_reports_a_redirect_with_no_location() {
+        let app = axum::Router::new().route(
+            "/mcp",
+            axum::routing::post(|| async { axum::http::StatusCode::MOVED_PERMANENTLY }),
+        );
+        let base = serve(app).await;
+        let outcome = tokio::time::timeout(
+            HANG_BOUND,
+            stats_outcome(&stats_client().expect("client"), &base),
+        )
+        .await
+        .expect("bounded");
+        match outcome {
+            Ok(text) => panic!("expected Err, got Ok: {text}"),
+            Err(msg) => assert!(msg.contains("redirected to no Location"), "msg: {msg}"),
         }
     }
 }

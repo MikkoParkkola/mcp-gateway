@@ -422,26 +422,13 @@ async fn check_http_backend(name: &str, transport: &TransportConfig) -> Option<C
             let ms = start.elapsed().as_millis();
             let status = resp.status();
             if status.is_redirection() {
-                // A Location can carry userinfo or a signed query: resolve it
-                // against the request URL, then show scheme/host/port/path only.
-                let shown = match resp
-                    .headers()
-                    .get(reqwest::header::LOCATION)
-                    .and_then(|value| value.to_str().ok())
-                {
-                    Some(location) => match resp.url().join(location) {
-                        Ok(resolved) => {
-                            mcp_gateway::security::sanitize::redact_url_keep_path(resolved.as_str())
-                        }
-                        Err(_) => "<invalid-url>".to_string(),
-                    },
-                    None => "(no Location)".to_string(),
-                };
+                let phrase =
+                    mcp_gateway::security::http_diagnostics::redirect_target_phrase(&resp);
                 return Some(
                     CheckResult::fail(
                         label,
                         format!(
-                            "HTTP {status} redirect to {shown} (not followed; point doctor at the final URL)"
+                            "HTTP {status} redirect to {phrase} (not followed; point doctor at the final URL)"
                         ),
                     )
                     .with_category("backend_http"),

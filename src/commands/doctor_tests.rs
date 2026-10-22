@@ -287,8 +287,9 @@ async fn serve_counter() -> (String, Arc<AtomicUsize>) {
 /// T13a (RED): a 301 from an HTTP backend is reported, not followed.
 #[tokio::test]
 async fn http_backend_probe_reports_a_redirect_without_following_it() {
-    let (location, hits) = serve_counter().await;
-    let expected = location.clone();
+    let (counter, hits) = serve_counter().await;
+    let location = format!("{counter}/moved/here");
+    let expected = counter.clone();
     let app = axum::Router::new().route(
         "/x",
         axum::routing::get(move || {
@@ -319,11 +320,16 @@ async fn http_backend_probe_reports_a_redirect_without_following_it() {
         "detail: {}",
         result.detail
     );
+    assert!(
+        !result.detail.contains("/moved/here"),
+        "detail: {}",
+        result.detail
+    );
     assert_eq!(hits.load(Ordering::SeqCst), 0);
 }
 
 /// A redirect Location carrying userinfo, a query token and a fragment is
-/// reported redacted, in the text detail and in the `--json` report alike.
+/// reported origin-only, in the text detail and in the `--json` report alike.
 #[tokio::test]
 async fn http_backend_probe_redacts_credentials_in_a_redirect_location() {
     let (counter, hits) = serve_counter().await;
@@ -369,7 +375,17 @@ async fn http_backend_probe_redacts_credentials_in_a_redirect_location() {
         result.detail
     );
     assert!(
-        result.detail.contains("/final/path"),
+        !result.detail.contains("/final/path"),
+        "detail: {}",
+        result.detail
+    );
+    assert!(
+        result.detail.contains(&counter),
+        "detail: {}",
+        result.detail
+    );
+    assert!(
+        result.detail.contains("path hidden"),
         "detail: {}",
         result.detail
     );
@@ -377,6 +393,102 @@ async fn http_backend_probe_redacts_credentials_in_a_redirect_location() {
     assert!(!report.contains("hunter2"), "report: {report}");
     assert!(!report.contains("sekret-token-value"), "report: {report}");
     assert!(!report.contains("user:"), "report: {report}");
-    assert!(report.contains("/final/path"), "report: {report}");
+    assert!(!report.contains("/final/path"), "report: {report}");
+    assert!(report.contains(&counter), "report: {report}");
+    assert!(report.contains("path hidden"), "report: {report}");
     assert_eq!(hits.load(Ordering::SeqCst), 0);
+}
+
+/// A redirect Location whose path carries the secret (a webhook token) is
+/// reported origin-only, in the text detail and in the `--json` report alike.
+#[tokio::test]
+async fn http_backend_probe_hides_a_secret_carrying_redirect_path() {
+    let (counter, hits) = serve_counter().await;
+    let location = format!("{counter}/hooks/sekret-path-token-77");
+    let app = axum::Router::new().route(
+        "/x",
+        axum::routing::get(move || {
+            let location = location.clone();
+            async move {
+                (
+                    axum::http::StatusCode::MOVED_PERMANENTLY,
+                    [(axum::http::header::LOCATION, location)],
+                )
+            }
+        }),
+    );
+    let stub = serve(app).await;
+    let transport = TransportConfig::Http {
+        http_url: format!("{stub}/x"),
+        streamable_http: None,
+        protocol_version: None,
+    };
+    let outcome = tokio::time::timeout(HANG_BOUND, check_http_backend("b", &transport))
+        .await
+        .expect("bounded");
+    let Some(result) = outcome else {
+        panic!("an Http transport must produce a result");
+    };
+    assert!(
+        !result.detail.contains("sekret-path-token-77"),
+        "detail: {}",
+        result.detail
+    );
+    assert!(
+        !result.detail.contains("/hooks/"),
+        "detail: {}",
+        result.detail
+    );
+    assert!(
+        result.detail.contains("path hidden"),
+        "detail: {}",
+        result.detail
+    );
+    let report = check_result_json_value(&result).to_string();
+    assert!(!report.contains("sekret-path-token-77"), "report: {report}");
+    assert!(!report.contains("/hooks/"), "report: {report}");
+    assert!(report.contains("path hidden"), "report: {report}");
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+}
+
+/// A relative redirect Location is resolved against the request URL, so the
+/// detail names the request's origin, with the path hidden.
+#[tokio::test]
+async fn http_backend_probe_resolves_a_relative_redirect_location() {
+    let app = axum::Router::new().route(
+        "/x",
+        axum::routing::get(|| async {
+            (
+                axum::http::StatusCode::MOVED_PERMANENTLY,
+                [(axum::http::header::LOCATION, "/relative/target")],
+            )
+        }),
+    );
+    let stub = serve(app).await;
+    let transport = TransportConfig::Http {
+        http_url: format!("{stub}/x"),
+        streamable_http: None,
+        protocol_version: None,
+    };
+    let outcome = tokio::time::timeout(HANG_BOUND, check_http_backend("b", &transport))
+        .await
+        .expect("bounded");
+    let Some(result) = outcome else {
+        panic!("an Http transport must produce a result");
+    };
+    assert!(
+        result.detail.contains(&stub),
+        "detail: {}",
+        result.detail
+    );
+    assert!(
+        result.detail.contains("path hidden"),
+        "detail: {}",
+        result.detail
+    );
+    assert!(
+        !result.detail.contains("/relative/target"),
+        "detail: {}",
+        result.detail
+    );
 }

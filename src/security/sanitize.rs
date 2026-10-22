@@ -435,11 +435,8 @@ pub fn redact_url_for_diagnostics(raw: &str) -> String {
 /// still names the value an operator mistyped. Otherwise it is replaced by
 /// [`UNPARSEABLE_URL`].
 ///
-/// Public only for the binary's redirect messages (stats, doctor,
-/// skills); not a stable API.
-#[doc(hidden)]
 #[must_use]
-pub fn redact_url_keep_path(raw: &str) -> String {
+pub(crate) fn redact_url_keep_path(raw: &str) -> String {
     if let Ok(mut url) = url::Url::parse(raw)
         && url.has_host()
     {
