@@ -679,11 +679,7 @@ impl<'ast> Visit<'ast> for DecisionUsage {
         // A match counts as using the decision only if some arm names a
         // variant; `{ _ => ... }` or `{ decided => ... }` discards the answer
         // like `let _ = ...`.
-        if node
-            .arms
-            .iter()
-            .any(|arm| pattern_names_variant(&arm.pat))
-        {
+        if node.arms.iter().any(|arm| pattern_names_variant(&arm.pat)) {
             if is_decision_call(&node.expr) {
                 self.used = true;
             } else if let syn::Expr::Path(scrutinee) = &*node.expr

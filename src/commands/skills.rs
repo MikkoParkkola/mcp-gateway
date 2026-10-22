@@ -346,16 +346,12 @@ async fn fetch_skill_from_url(
     url: &str,
 ) -> Result<ImportedSkill, String> {
     let shown_url = mcp_gateway::security::sanitize::redact_url_for_diagnostics(url);
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| {
-            mcp_gateway::security::http_diagnostics::safe_reqwest_message(
-                &format!("Failed to fetch '{shown_url}'"),
-                &e,
-            )
-        })?;
+    let response = client.get(url).send().await.map_err(|e| {
+        mcp_gateway::security::http_diagnostics::safe_reqwest_message(
+            &format!("Failed to fetch '{shown_url}'"),
+            &e,
+        )
+    })?;
     if response.status().is_redirection() {
         let phrase = mcp_gateway::security::http_diagnostics::redirect_target_phrase(&response);
         return Err(format!(
@@ -368,15 +364,12 @@ async fn fetch_skill_from_url(
             response.status()
         ));
     }
-    let content = response
-        .text()
-        .await
-        .map_err(|e| {
-            mcp_gateway::security::http_diagnostics::safe_reqwest_message(
-                &format!("Failed to read body from '{shown_url}'"),
-                &e,
-            )
-        })?;
+    let content = response.text().await.map_err(|e| {
+        mcp_gateway::security::http_diagnostics::safe_reqwest_message(
+            &format!("Failed to read body from '{shown_url}'"),
+            &e,
+        )
+    })?;
     mcp_gateway::skills::parse_skill_md(&content).map_err(|e| e.to_string())
 }
 
