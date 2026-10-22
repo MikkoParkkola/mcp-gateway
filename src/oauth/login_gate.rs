@@ -548,6 +548,15 @@ mod tests {
         assert!(matches!(refused.to_error("b"), Error::Protocol(m) if m == "ssrf"));
     }
 
+    /// MIK-8658 (K3): a joiner's replayed provider text is no busy lock.
+    #[test]
+    fn a_joiner_does_not_read_provider_text_as_a_busy_lock() {
+        let provider = Error::OAuth("OAuth error: access_denied - credential lock busy: x".into());
+        let joined = LoginOutcome::of(&provider).to_error("b");
+        let busy = crate::oauth::client::is_credential_lock_busy(&joined);
+        assert!(!busy, "{joined}");
+    }
+
     /// MIK-7982 (delta review): an abandoned lead whose callback listeners
     /// are still closing keeps its attempt registered until they have, so
     /// the next login cannot race them for a fixed callback port.

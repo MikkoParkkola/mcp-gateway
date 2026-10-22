@@ -257,6 +257,26 @@ async fn callback_flow_error_from_provider() {
     assert!(result.is_err());
 }
 
+/// MIK-8658 (K3): provider text holding the busy marker is no busy lock.
+#[tokio::test]
+async fn provider_error_text_with_the_busy_marker_is_not_a_busy_lock() {
+    let server = start_callback_server("s".to_string(), None, None, None)
+        .await
+        .expect("callback server starts");
+    let callback_url = server.callback_url.clone();
+    reqwest::Client::new()
+        .get(format!(
+            "{callback_url}?error=access_denied&error_description=credential+lock+busy%3A+x&state=s"
+        ))
+        .send()
+        .await
+        .expect("callback answers");
+    let error = server.wait_for_callback().await.expect_err("login ended");
+    let busy = crate::oauth::client::is_credential_lock_busy(&error);
+    assert!(matches!(&error, Error::OAuth(m) if m.contains("busy: x")));
+    assert!(!busy, "{error}");
+}
+
 #[tokio::test]
 async fn callback_flow_missing_code() {
     let server = start_callback_server("state123".to_string(), None, None, None)
