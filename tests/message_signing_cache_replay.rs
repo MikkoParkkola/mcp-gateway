@@ -21,13 +21,13 @@ pub mod signing_gateway;
 #[path = "common/yaml.rs"]
 mod yaml;
 
-use std::path::PathBuf;
-use std::process::Stdio;
+#[path = "common/signing_oracle.rs"]
+mod signing_oracle;
+
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 use signing_gateway::{BackendFixture, HttpGateway, KEY, fixture_config, invoke};
-use tokio::io::AsyncWriteExt as _;
 
 const KEY_ID: &str = "signing-test-current";
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
@@ -47,17 +47,6 @@ fn now_unix() -> u64 {
 
 /// Verify `response` with the independent oracle, for `request_id` and `nonce`.
 async fn verify(response: &Value, request_id: &str, nonce: &str) {
-    let verifier =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/common/signing_verifier.mjs");
-    let mut child = tokio::process::Command::new("node")
-        .arg(verifier)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("node is required for the independent signing oracle");
-    let mut stdin = child.stdin.take().expect("verifier stdin");
     let input = json!({
         "wire": serde_json::to_string(response).expect("serialize delivered wire"),
         "options": {
@@ -68,20 +57,14 @@ async fn verify(response: &Value, request_id: &str, nonce: &str) {
             "now": now_unix()
         }
     });
-    stdin
-        .write_all(input.to_string().as_bytes())
-        .await
-        .expect("write verifier stdin");
-    drop(stdin);
-    let output = tokio::time::timeout(IO_TIMEOUT, child.wait_with_output())
-        .await
-        .expect("bounded node oracle")
-        .expect("node oracle process");
+    let run = signing_oracle::verify(&input, IO_TIMEOUT).await;
+    let Some(status) = run.status else {
+        panic!("{}", run.timeout_message());
+    };
     assert!(
-        output.status.success(),
-        "oracle refused the {request_id} delivery: stdout={} stderr={} wire={response}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        status.success(),
+        "oracle refused the {request_id} delivery: stderr={} wire={response}",
+        run.stderr
     );
 }
 
