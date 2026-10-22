@@ -557,8 +557,7 @@ mod mik_8659_caller_tests {
             enabled: true,
             ..crate::config::AuthConfig::default()
         };
-        let (state, _dir) =
-            super::super::tests::test_router_app_state_with_auth(&auth).await;
+        let (state, _dir) = super::super::tests::test_router_app_state_with_auth(&auth).await;
         let call = |client: Option<crate::gateway::auth::AuthenticatedClient>| async {
             let reply = super::super::handlers::mcp_delete_handler(
                 axum::extract::State(std::sync::Arc::clone(&state)),
@@ -625,7 +624,8 @@ mod mik_8659_caller_tests {
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("readable body");
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
         (status, json)
     }
 
@@ -659,7 +659,9 @@ mod mik_8659_caller_tests {
         let (status, body) = post_dashboard_link(&state, secret).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{body}");
         assert!(
-            body.get("link").and_then(serde_json::Value::as_str).is_some(),
+            body.get("link")
+                .and_then(serde_json::Value::as_str)
+                .is_some(),
             "a link is minted: {body}"
         );
     }

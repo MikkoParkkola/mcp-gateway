@@ -207,11 +207,7 @@ mod mik_8659_owner_tests {
         let ok = client(true, "p");
         assert_eq!(
             super::session_owner_key(Some(&ok)),
-            format!(
-                "{}{}",
-                crate::gateway::auth::CREDENTIAL_OWNER_PREFIX,
-                "p"
-            )
+            format!("{}{}", crate::gateway::auth::CREDENTIAL_OWNER_PREFIX, "p")
         );
     }
 }

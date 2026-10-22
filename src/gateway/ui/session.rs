@@ -251,7 +251,9 @@ mod mik_8659_dashboard_tests {
             ..real
         };
         let backends = Arc::new(crate::backend::BackendRegistry::new());
-        let meta_mcp = Arc::new(crate::gateway::meta_mcp::MetaMcp::new(Arc::clone(&backends)));
+        let meta_mcp = Arc::new(crate::gateway::meta_mcp::MetaMcp::new(Arc::clone(
+            &backends,
+        )));
         let streaming_config = crate::config::StreamingConfig::default();
         let multiplexer = Arc::new(crate::gateway::streaming::NotificationMultiplexer::new(
             Arc::clone(&backends),
@@ -264,9 +266,8 @@ mod mik_8659_dashboard_tests {
             false,
             Arc::new(crate::gateway::oauth::AgentRegistry::new()),
         );
-        let gateway_key_pair = Arc::new(
-            crate::gateway::oauth::GatewayKeyPair::generate().expect("gateway key"),
-        );
+        let gateway_key_pair =
+            Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("gateway key"));
         let authorizer = crate::gateway::auth::AuthState {
             auth_config: Arc::clone(&auth_config),
             key_server: None,

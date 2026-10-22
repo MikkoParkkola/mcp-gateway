@@ -630,6 +630,53 @@ async fn t5_wrong_binding_first_then_rightful_redeems_on_meta() {
     assert!(right.is_ok(), "rightful binding still redeems: {right:?}");
 }
 
+/// MIK-8659 T5 wrong-binding-first on direct (RED): the direct route charges a bound anonymous caller to the key-name quota and binds it to its passthrough binding; a different binding is refused without consuming the round, and the rightful one still redeems. Today direct_quota_key gives None, so the mint never starts.
+#[tokio::test]
+async fn t5_wrong_binding_first_then_rightful_redeems_on_direct() {
+    let state = std::sync::Arc::new(crate::protocol::continuation::ContinuationState::new());
+    let client = crate::gateway::auth::anonymous_client();
+    let a = (None, (Some("binding-a"), None), Some(&client));
+    let b = (None, (Some("binding-b"), None), Some(&client));
+    let quota = direct_quota_key(a).expect("direct charges a bound anonymous caller");
+    let arguments = serde_json::json!({});
+    let (envelope, _) = super::mint_continuation(
+        &state,
+        super::direct_source(a),
+        &quota,
+        ("fixture", None),
+        "tool",
+        &arguments,
+        None,
+    )
+    .await
+    .expect("bound anonymous mints");
+    let retry = crate::protocol::mrtr::RetryFields {
+        request_state: Some(envelope),
+        ..Default::default()
+    };
+    let wrong = super::redeem_retry(
+        &state,
+        (super::direct_source(b), &retry),
+        ("fixture", None),
+        "tool",
+        &arguments,
+    )
+    .await;
+    assert!(
+        wrong.is_err(),
+        "wrong binding is refused, consuming nothing: {wrong:?}"
+    );
+    let right = super::redeem_retry(
+        &state,
+        (super::direct_source(a), &retry),
+        ("fixture", None),
+        "tool",
+        &arguments,
+    )
+    .await;
+    assert!(right.is_ok(), "rightful binding still redeems: {right:?}");
+}
+
 /// MIK-8659 T5 shared cap (RED): one `ContinuationState` serves both routes;
 /// different bindings filling the shared anonymous key-name cap refuse the
 /// next mint. Today the direct leg cannot even reach the cap (no quota key),
@@ -644,7 +691,11 @@ async fn t5_shared_anonymous_cap_spans_both_routes() {
         bindings.push(format!("cap-{i:03}"));
     }
     // Half the cap through the meta shape (key-name quota + bound source).
-    for (i, binding) in bindings.iter().enumerate().take(crate::protocol::continuation::PRINCIPAL_SLOTS / 2) {
+    for (i, binding) in bindings
+        .iter()
+        .enumerate()
+        .take(crate::protocol::continuation::PRINCIPAL_SLOTS / 2)
+    {
         let key = format!("idp:{}:{binding}", binding.len());
         // `key` outlives the mint below; the borrow ends at the await.
         let minted = super::mint_continuation(

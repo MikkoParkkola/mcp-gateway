@@ -17,12 +17,12 @@ const API_KEY_ALLOWLIST: &[(&str, &str)] = &[
     ("gateway/auth.rs", "the one predicate, api_key_identity"),
     ("gateway/auth_resolved.rs", "mint literal"),
     ("events/records.rs", "delivery lifetime"),
-    (
-        "gateway/router/handlers/events.rs",
-        "live-binding arm",
-    ),
+    ("gateway/router/handlers/events.rs", "live-binding arm"),
     ("events/services.rs", "subscription admission"),
-    ("security/audit.rs", "defines the enum and CredentialKind::of"),
+    (
+        "security/audit.rs",
+        "defines the enum and CredentialKind::of",
+    ),
 ];
 
 /// `src` with comments, string literals and char literals replaced by spaces,
@@ -180,9 +180,10 @@ fn is_api_key_comparison(line: &str) -> bool {
     let mut has_variant = false;
     for (at, _) in line.match_indices("::ApiKey") {
         let end = at + "::ApiKey".len();
-        let continues = line.as_bytes().get(end).is_some_and(|c| {
-            c.is_ascii_alphanumeric() || *c == b'_'
-        });
+        let continues = line
+            .as_bytes()
+            .get(end)
+            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_');
         if !continues {
             has_variant = true;
             break;
@@ -200,7 +201,10 @@ fn is_api_key_comparison(line: &str) -> bool {
 #[test]
 fn t1c_no_api_key_comparison_outside_the_predicate() {
     let allowlisted = |file: &str| {
-        if API_KEY_ALLOWLIST.iter().any(|(allowed, _)| *allowed == file) {
+        if API_KEY_ALLOWLIST
+            .iter()
+            .any(|(allowed, _)| *allowed == file)
+        {
             return true;
         }
         // Any file that only defines the enum or its `of` constructor.
