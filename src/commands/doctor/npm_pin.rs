@@ -185,7 +185,7 @@ const PROXY_NAMES: [&str; 8] = [
 impl ProxyEnv {
     /// The process environment's proxy variables.
     pub(super) fn from_process() -> Self {
-        Self::from_lookup(std::env::var_os)
+        Self::from_lookup(|name| std::env::var_os(name))
     }
 
     /// A snapshot from explicit pairs (tests; unrelated names are dropped).
