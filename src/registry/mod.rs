@@ -662,4 +662,51 @@ mod tests {
             );
         }
     }
+
+    fn closed_port() -> u16 {
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("bind closed-port probe");
+        let port = probe.local_addr().expect("closed-port addr").port();
+        drop(probe);
+        port
+    }
+
+    #[tokio::test]
+    async fn fetch_capability_refuses_redirect_to_private_target() {
+        let closed = closed_port();
+        let target = format!("http://127.0.0.1:{closed}/");
+        let app = axum::Router::new().route(
+            "/x.yaml",
+            axum::routing::get(move || {
+                let target = target.clone();
+                async move {
+                    (
+                        axum::http::StatusCode::FOUND,
+                        [(axum::http::header::LOCATION, target)],
+                    )
+                }
+            }),
+        );
+        let listener = tokio::time::timeout(
+            crate::test_wait::HANG_BOUND,
+            tokio::net::TcpListener::bind("127.0.0.1:0"),
+        )
+        .await
+        .expect("bounded")
+        .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let url = format!("http://127.0.0.1:{port}/x.yaml");
+        let client = super::registry_client();
+        let outcome = tokio::time::timeout(
+            crate::test_wait::HANG_BOUND,
+            super::fetch_capability(&client, &url),
+        )
+        .await
+        .expect("bounded");
+        let err = outcome.expect_err("a redirect to loopback must be refused");
+        assert!(
+            err.to_string().contains("SSRF blocked"),
+            "expected an SSRF refusal, got: {err}"
+        );
+    }
 }

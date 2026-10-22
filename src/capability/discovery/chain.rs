@@ -305,4 +305,226 @@ mod tests {
             SpecFormat::Swagger2
         ));
     }
+
+    fn closed_port() -> u16 {
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("bind closed-port probe");
+        let port = probe.local_addr().expect("closed-port addr").port();
+        drop(probe);
+        port
+    }
+
+    #[tokio::test]
+    async fn probe_records_ssrf_refusal_on_blocked_redirect() {
+        let closed = closed_port();
+        let target = format!("http://127.0.0.1:{closed}/");
+        let app = axum::Router::new().fallback(move || {
+            let target = target.clone();
+            async move {
+                (
+                    axum::http::StatusCode::FOUND,
+                    [(axum::http::header::LOCATION, target)],
+                )
+            }
+        });
+        let listener = tokio::time::timeout(
+            crate::test_wait::HANG_BOUND,
+            tokio::net::TcpListener::bind("127.0.0.1:0"),
+        )
+        .await
+        .expect("bounded")
+        .expect("bind");
+        let addr_a = listener.local_addr().expect("addr");
+        let port_a = addr_a.port();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let client = crate::capability::discovery::discovery_client(
+            crate::security::ssrf::pinned_client_builder()
+                .resolve("spec-a.discovery-fixture.test", addr_a)
+                .resolve("spec-b.discovery-fixture.test", addr_a),
+            std::time::Duration::from_secs(5),
+        );
+        let chain = DiscoveryChain::new(&client, None);
+        let base_a = format!("http://spec-a.discovery-fixture.test:{port_a}");
+        let probed = tokio::time::timeout(crate::test_wait::HANG_BOUND, chain.probe(&base_a))
+            .await
+            .expect("bounded");
+        assert!(probed.is_none(), "a blocked hop finds no spec");
+        let refusal = chain.ssrf_refusal();
+        assert!(
+            refusal.as_deref().is_some_and(|m| m.starts_with("SSRF blocked")),
+            "ssrf_refusal must name the block, got: {refusal:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_follows_safe_cross_host_redirect_to_spec() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let b_hits = Arc::new(AtomicUsize::new(0));
+        let b_counter = Arc::clone(&b_hits);
+        let spec_body = r#"{"openapi":"3.0.0","paths":{}}"#;
+        let app_b = axum::Router::new().route(
+            "/spec.json",
+            axum::routing::get(move || {
+                let b_counter = Arc::clone(&b_counter);
+                let body = spec_body.to_string();
+                async move {
+                    b_counter.fetch_add(1, Ordering::SeqCst);
+                    body
+                }
+            }),
+        );
+        let listener_b = tokio::time::timeout(
+            crate::test_wait::HANG_BOUND,
+            tokio::net::TcpListener::bind("127.0.0.1:0"),
+        )
+        .await
+        .expect("bounded")
+        .expect("bind b");
+        let addr_b = listener_b.local_addr().expect("addr b");
+        let port_b = addr_b.port();
+        tokio::spawn(async move { axum::serve(listener_b, app_b).await });
+
+        let target_b = format!("http://spec-b.discovery-fixture.test:{port_b}/spec.json");
+        let app_a = axum::Router::new().route(
+            "/openapi.json",
+            axum::routing::get(move || {
+                let target = target_b.clone();
+                async move {
+                    (
+                        axum::http::StatusCode::FOUND,
+                        [(axum::http::header::LOCATION, target)],
+                    )
+                }
+            }),
+        );
+        let listener_a = tokio::time::timeout(
+            crate::test_wait::HANG_BOUND,
+            tokio::net::TcpListener::bind("127.0.0.1:0"),
+        )
+        .await
+        .expect("bounded")
+        .expect("bind a");
+        let addr_a = listener_a.local_addr().expect("addr a");
+        let port_a = addr_a.port();
+        tokio::spawn(async move { axum::serve(listener_a, app_a).await });
+
+        let client = crate::capability::discovery::discovery_client(
+            crate::security::ssrf::pinned_client_builder()
+                .resolve("spec-a.discovery-fixture.test", addr_a)
+                .resolve("spec-b.discovery-fixture.test", addr_b),
+            std::time::Duration::from_secs(5),
+        );
+        let base_a = format!("http://spec-a.discovery-fixture.test:{port_a}");
+        let chain = DiscoveryChain::new(&client, None);
+        let probed = tokio::time::timeout(crate::test_wait::HANG_BOUND, chain.probe(&base_a))
+            .await
+            .expect("bounded");
+        assert!(probed.is_some(), "a safe redirect finds the spec");
+        assert_eq!(
+            b_hits.load(Ordering::SeqCst),
+            1,
+            "B serves the followed redirect once"
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_strips_authorization_on_cross_host_redirect() {
+        use std::sync::Arc;
+
+        let auth = format!("{} {}", "Bearer", "synthetic-marker-not-a-credential");
+
+        let b_auths: Arc<std::sync::Mutex<Vec<Option<String>>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let b_auths_route = Arc::clone(&b_auths);
+        let spec_body = r#"{"openapi":"3.0.0","paths":{}}"#;
+        let app_b = axum::Router::new().route(
+            "/spec.json",
+            axum::routing::get(move |headers: axum::http::HeaderMap| {
+                let b_auths = Arc::clone(&b_auths_route);
+                let body = spec_body.to_string();
+                async move {
+                    let seen = headers
+                        .get(axum::http::header::AUTHORIZATION)
+                        .and_then(|v| v.to_str().ok().map(str::to_string));
+                    b_auths
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push(seen);
+                    body
+                }
+            }),
+        );
+        let listener_b = tokio::time::timeout(
+            crate::test_wait::HANG_BOUND,
+            tokio::net::TcpListener::bind("127.0.0.1:0"),
+        )
+        .await
+        .expect("bounded")
+        .expect("bind b");
+        let addr_b = listener_b.local_addr().expect("addr b");
+        let port_b = addr_b.port();
+        tokio::spawn(async move { axum::serve(listener_b, app_b).await });
+
+        let a_auths: Arc<std::sync::Mutex<Vec<Option<String>>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let a_auths_route = Arc::clone(&a_auths);
+        let target_b = format!("http://spec-b.discovery-fixture.test:{port_b}/spec.json");
+        let app_a = axum::Router::new().route(
+            "/openapi.json",
+            axum::routing::get(move |headers: axum::http::HeaderMap| {
+                let a_auths = Arc::clone(&a_auths_route);
+                let target = target_b.clone();
+                async move {
+                    let seen = headers
+                        .get(axum::http::header::AUTHORIZATION)
+                        .and_then(|v| v.to_str().ok().map(str::to_string));
+                    a_auths
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push(seen);
+                    (
+                        axum::http::StatusCode::FOUND,
+                        [(axum::http::header::LOCATION, target)],
+                    )
+                }
+            }),
+        );
+        let listener_a = tokio::time::timeout(
+            crate::test_wait::HANG_BOUND,
+            tokio::net::TcpListener::bind("127.0.0.1:0"),
+        )
+        .await
+        .expect("bounded")
+        .expect("bind a");
+        let addr_a = listener_a.local_addr().expect("addr a");
+        let port_a = addr_a.port();
+        tokio::spawn(async move { axum::serve(listener_a, app_a).await });
+
+        let client = crate::capability::discovery::discovery_client(
+            crate::security::ssrf::pinned_client_builder()
+                .resolve("spec-a.discovery-fixture.test", addr_a)
+                .resolve("spec-b.discovery-fixture.test", addr_b),
+            std::time::Duration::from_secs(5),
+        );
+        let base_a = format!("http://spec-a.discovery-fixture.test:{port_a}");
+        let chain = DiscoveryChain::new(&client, Some(&auth));
+        let probed = tokio::time::timeout(crate::test_wait::HANG_BOUND, chain.probe(&base_a))
+            .await
+            .expect("bounded");
+        assert!(probed.is_some(), "a safe redirect finds the spec");
+        let seen_a = a_auths.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(seen_a.len(), 1, "A sees its probe once");
+        assert!(
+            seen_a[0].is_some(),
+            "A's probe request must carry authorization"
+        );
+        drop(seen_a);
+        let seen_b = b_auths.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(seen_b.len(), 1, "B serves the followed redirect once");
+        assert!(
+            seen_b[0].is_none(),
+            "B must not receive the authorization header"
+        );
+    }
 }

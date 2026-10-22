@@ -305,3 +305,122 @@ fn c4a_the_subject_prefix_matches_the_widened_exchange_key() {
              subject+audience matching silently no-ops on this path"
     );
 }
+
+#[tokio::test]
+async fn exchange_does_not_follow_a_307_redirect() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let second_hits = Arc::new(AtomicUsize::new(0));
+    let second_counter = Arc::clone(&second_hits);
+    let app2 = axum::Router::new().route(
+        "/token",
+        axum::routing::post(move |_body: axum::body::Bytes| {
+            let second_counter = Arc::clone(&second_counter);
+            async move {
+                second_counter.fetch_add(1, Ordering::SeqCst);
+                axum::Json(serde_json::json!({
+                    "access_token": "should-not-be-followed",
+                    "expires_in": 300,
+                }))
+            }
+        }),
+    );
+    let listener2 = tokio::time::timeout(
+        crate::test_wait::HANG_BOUND,
+        tokio::net::TcpListener::bind("127.0.0.1:0"),
+    )
+    .await
+    .expect("bounded")
+    .expect("bind second");
+    let port2 = listener2.local_addr().expect("addr second").port();
+    tokio::spawn(async move { axum::serve(listener2, app2).await });
+
+    let bodies: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let bodies_route = Arc::clone(&bodies);
+    let target2 = format!("http://127.0.0.1:{port2}/token");
+    let app1 = axum::Router::new().route(
+        "/token",
+        axum::routing::post(move |body: axum::body::Bytes| {
+            let bodies = Arc::clone(&bodies_route);
+            let target = target2.clone();
+            async move {
+                bodies
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(String::from_utf8_lossy(&body).to_string());
+                (
+                    axum::http::StatusCode::TEMPORARY_REDIRECT,
+                    [(axum::http::header::LOCATION, target)],
+                )
+            }
+        }),
+    );
+    let listener1 = tokio::time::timeout(
+        crate::test_wait::HANG_BOUND,
+        tokio::net::TcpListener::bind("127.0.0.1:0"),
+    )
+    .await
+    .expect("bounded")
+    .expect("bind first");
+    let port1 = listener1.local_addr().expect("addr first").port();
+    tokio::spawn(async move { axum::serve(listener1, app1).await });
+
+    let endpoint1 = format!("http://127.0.0.1:{port1}/token");
+    let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
+    let http = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(super::token_exchange_redirect_policy())
+        .build()
+        .expect("client");
+    let strategy = TokenExchangeStrategy::with_http_client(key, 300, http);
+    let outcome = tokio::time::timeout(
+        crate::test_wait::HANG_BOUND,
+        strategy.exchange(
+            &endpoint1,
+            "synthetic-subject-token-not-real",
+            &backend(Some(&endpoint1)),
+        ),
+    )
+    .await
+    .expect("bounded");
+    let err = outcome.expect_err("a 307 must not be followed");
+    let text = err.to_string();
+    assert!(text.contains("307"), "must name the status, got: {text}");
+    assert!(
+        text.contains("redirect"),
+        "must name the redirect, got: {text}"
+    );
+    let seen = bodies.lock().unwrap_or_else(|e| e.into_inner());
+    assert_eq!(seen.len(), 1, "listener 1 sees the POST once");
+    assert!(
+        seen[0].contains("subject_token"),
+        "the POST carries the exchange body, got: {}",
+        seen[0]
+    );
+    drop(seen);
+    assert_eq!(
+        second_hits.load(Ordering::SeqCst),
+        0,
+        "listener 2 must see no request"
+    );
+}
+
+#[test]
+fn default_http_client_takes_the_token_exchange_redirect_policy() {
+    let src = include_str!("token_exchange.rs");
+    let lines: Vec<&str> = src.lines().collect();
+    let start = lines
+        .iter()
+        .position(|line| line.contains("fn default_http_client"));
+    assert!(start.is_some(), "fn default_http_client must exist");
+    let start = if let Some(index) = start { index } else { 0 };
+    let rest = &lines[start..];
+    let end = rest.iter().position(|line| *line == "}");
+    assert!(end.is_some(), "fn default_http_client must end with `}`");
+    let end = if let Some(index) = end { index } else { 0 };
+    let body = rest[..=end].join("\n");
+    assert!(
+        body.contains(".redirect(token_exchange_redirect_policy())"),
+        "the default client must take the token-exchange redirect policy, got:\n{body}"
+    );
+}
