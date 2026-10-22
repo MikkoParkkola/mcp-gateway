@@ -277,6 +277,9 @@ impl super::MetaMcp {
             context.chain_nonce,
             invoke_nonce,
         );
+        if let Some(result) = response.result.as_mut() {
+            self.seal_public_provenance(result);
+        }
 
         // A disabled signer and ordinary/admission/refusal errors must never
         // validate captured nonce state or increment finalization failures.

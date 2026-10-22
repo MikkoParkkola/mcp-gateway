@@ -31,17 +31,17 @@ mcp-gateway provenance public-key
 # {"jwk":{"kty":"OKP","crv":"Ed25519","kid":"prov-2026-10","x":"..."},"thumbprint":"..."}
 ```
 
+Prerequisites are provenance stamping on with the HMAC signing key configured, plus the seed and key-id env vars below. Without stamping there is no receipt to seal; without the seed there is no public part.
+
+To make a trust file from the export, run the public-key command and extract the `jwk` member with `jq .jwk` into a file usable with `--trust`.
+
 ## Signed bytes
 
-`public_signature` is `{"payload": <String>, "sig": <String>}`:
+`public_signature` is a payload and sig pair:
 
-- `payload` is base64url without padding of the exact JSON bytes of
-  `{"v":1,"alg":"EdDSA","kid":<kid>,"receipt":<receipt>,"result_sha256":<hex or null>}`,
-  built with `serde_json::json!` in that member order.
-- `sig` is base64url without padding of the 64-byte Ed25519 signature over
-  `b"mcp-gateway-provenance-ed25519-v1\0"` followed by the payload bytes.
-- `result_sha256` is the hex digest of the result, or null when there is no
-  result to bind.
+- `payload` is base64url without padding of the exact JSON bytes in member order alg, kid, receipt, result_sha256, v as the committed fixture serializes it. Verifiers must use the exact payload bytes, never re-serialize.
+- `sig` is base64url without padding of the 64-byte Ed25519 signature over the domain tag followed by the payload bytes.
+- `result_sha256` is the hex digest of the result exactly as the client receives it, minus `_meta`, or null when there is no result to bind.
 
 The verifier checks the signature over the decoded payload bytes it was
 given; it never re-canonicalizes.
@@ -93,7 +93,7 @@ holding an integer outside ±(2^53−1).
 ## Digest recipe for non-Rust verifiers
 
 `result_sha256` is SHA-256 hex of RFC 8785 canonical JSON of the result
-object without its top-level `_meta` and `_signature` members, refusing
+object exactly as the client receives it, without its top-level `_meta` and `_signature` members, refusing
 (non-interoperable) numbers outside the exact-integer range: integers must
 be within ±(2^53−1); anything else unhashable yields a null digest.
 
@@ -125,8 +125,11 @@ def verify(jwk: dict, prov: dict) -> dict:
     key = Ed25519PublicKey.from_public_bytes(b64u_no_pad(jwk["x"]))
     key.verify(sig, TAG + payload)
     body = json.loads(payload)
-    assert body["v"] == 1 and body["alg"] == "EdDSA"
-    assert body["kid"] == jwk["kid"]
-    assert body["receipt"] == prov["receipt"]
+    if not (body["v"] == 1 and body["alg"] == "EdDSA"):
+        raise ValueError("bad_profile")
+    if body["kid"] != jwk["kid"]:
+        raise ValueError("kid_mismatch")
+    if body["receipt"] != prov["receipt"]:
+        raise ValueError("outer_receipt_mismatch")
     return body
 ```

@@ -491,3 +491,77 @@ async fn a_direct_receipt_is_built_without_the_shapers_members() {
     let read = modern(&fx, "alpha", "resources/read", json!({"uri": "res://x"})).await;
     unshaped("catalogue", &read, &["resultType", "cacheScope", "ttlMs"]);
 }
+
+#[tokio::test]
+async fn a_direct_modern_call_delivers_a_bound_public_signature() {
+    use crate::attestation::{BnautAttestationSigner, RESULT_PROVENANCE_DOMAIN_INFO};
+    use crate::trust::provenance_public::{
+        ProvenancePublicSigner, TrustSet, VerifyStatus, verify_public,
+    };
+    for backend in BACKENDS {
+        let fx = fixture(Answer::Ok, |meta| {
+            meta.enable_provenance_stamping(
+                BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+                    .with_audience("test-gateway")
+                    .derive_domain(RESULT_PROVENANCE_DOMAIN_INFO),
+            );
+            meta.enable_public_provenance(ProvenancePublicSigner::from_seed_for_test(
+                [7u8; 32],
+                "prov-test-1",
+            ));
+        })
+        .await;
+        let body = modern(&fx, backend, "tools/call", call_params()).await;
+        assert_eq!(body["result"]["resultType"], "complete", "shaped delivery");
+        let prov = body
+            .pointer("/result/_meta/provenance")
+            .expect("provenance stamped")
+            .clone();
+        assert!(prov.get("public_signature").is_some(), "public sealed");
+        let public = ProvenancePublicSigner::from_seed_for_test([7u8; 32], "prov-test-1");
+        let jwk_text = serde_json::to_string(&public.public_jwk()).expect("jwk serializes");
+        let trust = TrustSet::from_json(&jwk_text).expect("trust loads");
+        let verified = verify_public(&prov, &trust, Some(&body["result"]))
+            .expect("a shaped delivery verifies");
+        assert_eq!(verified.status, VerifyStatus::Bound, "BOUND");
+        assert_eq!(verified.kid, "prov-test-1");
+    }
+}
+
+#[tokio::test]
+async fn a_direct_legacy_call_delivers_a_bound_public_signature() {
+    use crate::attestation::{BnautAttestationSigner, RESULT_PROVENANCE_DOMAIN_INFO};
+    use crate::trust::provenance_public::{
+        ProvenancePublicSigner, TrustSet, VerifyStatus, verify_public,
+    };
+    for backend in BACKENDS {
+        let fx = fixture(Answer::Ok, |meta| {
+            meta.enable_provenance_stamping(
+                BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+                    .with_audience("test-gateway")
+                    .derive_domain(RESULT_PROVENANCE_DOMAIN_INFO),
+            );
+            meta.enable_public_provenance(ProvenancePublicSigner::from_seed_for_test(
+                [7u8; 32],
+                "prov-test-1",
+            ));
+        })
+        .await;
+        let body = legacy(&fx, backend, "tools/call", call_params()).await;
+        assert!(
+            body["result"].get("resultType").is_none(),
+            "unshaped delivery"
+        );
+        let prov = body
+            .pointer("/result/_meta/provenance")
+            .expect("provenance stamped")
+            .clone();
+        assert!(prov.get("public_signature").is_some(), "public sealed");
+        let public = ProvenancePublicSigner::from_seed_for_test([7u8; 32], "prov-test-1");
+        let jwk_text = serde_json::to_string(&public.public_jwk()).expect("jwk serializes");
+        let trust = TrustSet::from_json(&jwk_text).expect("trust loads");
+        let verified = verify_public(&prov, &trust, Some(&body["result"]))
+            .expect("a legacy delivery verifies");
+        assert_eq!(verified.status, VerifyStatus::Bound, "BOUND");
+    }
+}

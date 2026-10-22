@@ -580,3 +580,83 @@ fn config_export_output_holds_no_canary_seed() {
         "export leaks the canary hex"
     );
 }
+
+#[test]
+fn verify_duplicate_receipt_member_is_invalid() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let trust = copy_fixture_to(home.path(), "jwk.json");
+    let prov = fixture_json("provenance.json");
+    let receipt_text = serde_json::to_string(&prov["receipt"]).expect("receipt serializes");
+    let key_id = serde_json::to_string(&prov["key_id"]).expect("key id");
+    let algorithm = serde_json::to_string(&prov["algorithm"]).expect("algorithm");
+    let signature = serde_json::to_string(&prov["signature"]).expect("signature");
+    let public_sig = serde_json::to_string(&prov["public_signature"]).expect("public part");
+    let text = format!(
+        "receipt:{receipt_text},receipt:{receipt_text},key:{key_id},alg:{algorithm},sig:{signature},pub:{public_sig}"
+    );
+    let text = text
+        .replacen("receipt:", "\"receipt\":", 1)
+        .replacen("receipt:", "\"receipt\":", 1)
+        .replacen("key:", "\"key_id\":", 1)
+        .replacen("alg:", "\"algorithm\":", 1)
+        .replacen("sig:", "\"signature\":", 1)
+        .replacen("pub:", "\"public_signature\":", 1);
+    let text = format!("{{{text}}}");
+    let receipt = home.path().join("dup_receipt.json");
+    write_private(&receipt, text.as_bytes());
+    let result = copy_fixture_to(home.path(), "result.json");
+    let out = run(
+        home.path(),
+        &verify_args(&trust, &receipt, Some(&result), &[]),
+        &[],
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(stdout, "INVALID duplicate_member\n");
+}
+
+#[test]
+fn verify_duplicate_result_member_is_invalid() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let trust = copy_fixture_to(home.path(), "jwk.json");
+    let receipt = copy_fixture_to(home.path(), "provenance.json");
+    let result_json = fixture_json("result.json");
+    let content_text = serde_json::to_string(&result_json["content"]).expect("content serializes");
+    let text = format!("{\"content\":{content_text},\"content\":{content_text}}}");
+    let dup_result = home.path().join("dup_result.json");
+    write_private(&dup_result, text.as_bytes());
+    let out = run(
+        home.path(),
+        &verify_args(&trust, &receipt, Some(&dup_result), &[]),
+        &[],
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(stdout, "INVALID duplicate_member\n");
+}
+
+#[test]
+fn verify_closed_stdout_keeps_the_verification_exit_code() {
+    use std::process::Stdio;
+    let home = tempfile::tempdir().expect("temporary home");
+    let trust = copy_fixture_to(home.path(), "jwk.json");
+    let mut prov = fixture_json("provenance.json");
+    prov["receipt"]["tool"] = serde_json::json!("other_tool");
+    let receipt = home.path().join("tampered.json");
+    let bytes = serde_json::to_vec(&prov).expect("tampered serializes");
+    write_private(&receipt, &bytes);
+    let result = copy_fixture_to(home.path(), "result.json");
+    let args = verify_args(&trust, &receipt, Some(&result), &[]);
+    let mut command = gateway_bin::command(home.path(), gateway_bin::Inherit::Nothing);
+    if let Some(path) = std::env::var_os("PATH") {
+        command.env("PATH", path);
+    }
+    command
+        .args(&args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = command.spawn().expect("the binary spawns");
+    drop(child.stdout.take());
+    let status = child.wait().expect("the child waits");
+    assert_eq!(status.code(), Some(1));
+}

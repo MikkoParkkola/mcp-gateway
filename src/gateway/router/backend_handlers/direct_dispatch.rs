@@ -605,6 +605,9 @@ pub(super) fn finish_tail(
     let nonce = preflight.chain_nonce.as_deref();
     state.meta_mcp.finish_direct(&mut response, method, nonce);
     if method == "tools/call" {
+        if let Some(result) = response.result.as_mut() {
+            state.meta_mcp.seal_public_provenance(result);
+        }
         let nonce = preflight.signs.then_some(&preflight.signing_nonce);
         sign_and_record(state, auth, (name, tool), &mut response, (nonce, stamps));
     } else if matches!(method, "prompts/get" | "resources/read") && response.error.is_none() {

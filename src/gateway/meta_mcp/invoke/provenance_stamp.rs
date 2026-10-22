@@ -65,7 +65,6 @@ impl MetaMcp {
             cache,
             backend_ok,
             observed_at,
-            self.public_provenance_signer.as_deref(),
         );
         if let Some(sink) = &self.claim_capture
             && let Some(call_id) = signed_receipt.receipt.call_id.clone()
@@ -125,5 +124,34 @@ impl MetaMcp {
             // directive, so there is no client claim-under-test here.
             None,
         )
+    }
+
+    pub(crate) fn seal_public_provenance(&self, result: &mut Value) {
+        let Some(public) = self.public_provenance_signer.as_deref() else {
+            return;
+        };
+        let Some(prov) = result.pointer("/_meta/provenance") else {
+            return;
+        };
+        if prov.get("signature").is_none() {
+            return;
+        }
+        let Some(receipt_value) = prov.get("receipt") else {
+            return;
+        };
+        let Ok(receipt) =
+            serde_json::from_value::<crate::trust::RuntimeProvenanceReceipt>(receipt_value.clone())
+        else {
+            return;
+        };
+        let sig = public.sign_receipt(&receipt, Some(&*result));
+        if let Some(obj) = result
+            .pointer_mut("/_meta/provenance")
+            .and_then(|v| v.as_object_mut())
+        {
+            if let Ok(sig_value) = serde_json::to_value(&sig) {
+                obj.insert("public_signature".to_owned(), sig_value);
+            }
+        }
     }
 }

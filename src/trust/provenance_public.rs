@@ -556,6 +556,16 @@ fn trust_snake(refusal: TrustSetRefusal) -> &'static str {
     }
 }
 
+fn emit_line(line: &str) {
+    use std::io::Write as _;
+    let _ = writeln!(std::io::stdout().lock(), "{line}");
+}
+
+fn emit_fmt(args: std::fmt::Arguments<'_>) {
+    use std::io::Write as _;
+    let _ = writeln!(std::io::stdout().lock(), "{args}");
+}
+
 /// Runs `provenance public-key` / `provenance verify`; prints its own stdout/stderr lines.
 ///
 /// `config` is the global `--config` path `main` passes every 4.0 subcommand.
@@ -587,7 +597,6 @@ pub fn run_provenance_command(
 
 /// Export the gateway's public provenance JWK and thumbprint.
 fn run_public_key(config: Option<&std::path::Path>) -> ExitCode {
-    use crate::cli::stdout::println;
     let loaded = match crate::config::Config::load(config) {
         Ok(cfg) => cfg,
         Err(error) => {
@@ -606,7 +615,7 @@ fn run_public_key(config: Option<&std::path::Path>) -> ExitCode {
                 "thumbprint": signer.jwk_thumbprint(),
             });
             if let Ok(line) = serde_json::to_string(&output) {
-                println!("{line}");
+                emit_line(&line);
                 ExitCode::from(0)
             } else {
                 eprintln!("failed to render the public key");
@@ -634,27 +643,31 @@ fn run_verify(
     signature_only: bool,
     accept_unbound: bool,
 ) -> ExitCode {
-    use crate::cli::stdout::println;
     let Ok(trust_text) = std::fs::read_to_string(trust_path) else {
-        println!("INVALID unreadable_input");
+        emit_line("INVALID unreadable_input");
         return ExitCode::from(1);
     };
     let trust = match TrustSet::from_json(&trust_text) {
         Ok(set) => set,
         Err(refusal) => {
-            println!("INVALID trust_{}", trust_snake(refusal));
+            emit_fmt(format_args!("INVALID trust_{}", trust_snake(refusal)));
             return ExitCode::from(1);
         }
     };
     let Ok(receipt_text) = std::fs::read_to_string(receipt_path) else {
-        println!("INVALID unreadable_input");
+        emit_line("INVALID unreadable_input");
         return ExitCode::from(1);
     };
-    let receipt_value: serde_json::Value = if let Ok(value) = serde_json::from_str(&receipt_text) {
-        value
-    } else {
-        println!("INVALID unreadable_input");
-        return ExitCode::from(1);
+    let receipt_value: serde_json::Value = match serde_json::from_str::<NoDupValue>(&receipt_text) {
+        Ok(wrapped) => wrapped.0,
+        Err(error) if error.to_string().contains("duplicate member") => {
+            emit_line("INVALID duplicate_member");
+            return ExitCode::from(1);
+        }
+        Err(_) => {
+            emit_line("INVALID unreadable_input");
+            return ExitCode::from(1);
+        }
     };
     let prov = match receipt_value.pointer("/_meta/provenance") {
         Some(inner) if inner.is_object() => inner.clone(),
@@ -664,45 +677,53 @@ fn run_verify(
         None => None,
         Some(path) => {
             let Ok(text) = std::fs::read_to_string(path) else {
-                println!("INVALID unreadable_input");
+                emit_line("INVALID unreadable_input");
                 return ExitCode::from(1);
             };
-            if let Ok(value) = serde_json::from_str(&text) {
-                Some(value)
-            } else {
-                println!("INVALID unreadable_input");
-                return ExitCode::from(1);
+            match serde_json::from_str::<NoDupValue>(&text) {
+                Ok(wrapped) => Some(wrapped.0),
+                Err(error) if error.to_string().contains("duplicate member") => {
+                    emit_line("INVALID duplicate_member");
+                    return ExitCode::from(1);
+                }
+                Err(_) => {
+                    emit_line("INVALID unreadable_input");
+                    return ExitCode::from(1);
+                }
             }
         }
     };
     match verify_public(&prov, &trust, result_value.as_ref()) {
         Ok(verified) => match verified.status {
             VerifyStatus::Bound => {
-                println!("BOUND kid={}", verified.kid);
+                emit_fmt(format_args!("BOUND kid={}", verified.kid));
                 ExitCode::from(0)
             }
             VerifyStatus::Unbound if accept_unbound => {
-                println!("UNBOUND kid={} (accepted: --accept-unbound)", verified.kid);
+                emit_fmt(format_args!(
+                    "UNBOUND kid={} (accepted: --accept-unbound)",
+                    verified.kid
+                ));
                 ExitCode::from(0)
             }
             VerifyStatus::Unbound => {
-                println!("UNBOUND kid={}", verified.kid);
+                emit_fmt(format_args!("UNBOUND kid={}", verified.kid));
                 ExitCode::from(1)
             }
             VerifyStatus::SignatureOnly if signature_only => {
-                println!(
+                emit_fmt(format_args!(
                     "SIGNATURE-ONLY kid={} (accepted: --signature-only)",
                     verified.kid
-                );
+                ));
                 ExitCode::from(0)
             }
             VerifyStatus::SignatureOnly => {
-                println!("SIGNATURE-ONLY kid={}", verified.kid);
+                emit_fmt(format_args!("SIGNATURE-ONLY kid={}", verified.kid));
                 ExitCode::from(1)
             }
         },
         Err(refusal) => {
-            println!("INVALID {}", verify_snake(refusal));
+            emit_fmt(format_args!("INVALID {}", verify_snake(refusal)));
             ExitCode::from(1)
         }
     }
