@@ -9,8 +9,7 @@
 //! implicit ten-hop default. A fn returning a `ClientBuilder` is a factory; its
 //! callers are checked. Rule (ii): a hop count compared with an integer
 //! literal, or `Policy::limited`. Rule (iii): a `Policy::custom` closure that
-//! never hands `previous()` to a decider fn (`redirect_decision`,
-//! `hop_budget_spent`, transport's `evaluate_redirect_for`).
+//! never passes `previous()` into `redirect_decision` / `hop_budget_spent`.
 //! Production means reached from `lib.rs` / `main.rs` through modules none of
 //! which is `#[cfg(test)]`, so a `#[path]` file included under a test module is
 //! test code. A parser, not a text match: comments never count.
@@ -526,13 +525,17 @@ struct DelegationFinder {
 
 impl<'ast> Visit<'ast> for DelegationFinder {
     fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
-        // Handing the hop count to a decider is delegation, whatever the
-        // decider is called or where the count sits in its arguments; a
-        // decider that then compares it to a literal is rule (ii)'s to catch.
-        if matches!(&*node.func, syn::Expr::Path(_))
-            && node.args.iter().any(expr_mentions_previous_substring)
-        {
-            self.good = true;
+        if let syn::Expr::Path(p) = &*node.func {
+            if let Some(last) = p.path.segments.last() {
+                let name = last.ident.to_string();
+                if name == "redirect_decision" || name == "hop_budget_spent" {
+                    if let Some(first) = node.args.first() {
+                        if expr_mentions_previous_substring(first) {
+                            self.good = true;
+                        }
+                    }
+                }
+            }
         }
         if !self.good {
             syn::visit::visit_expr_call(self, node);
@@ -728,10 +731,25 @@ fn analyze_builder_expr(
     }
 }
 
+/// Reviewed exceptions, each with its reason. Keep this list short: every
+/// entry is a site the rules cannot see into.
+const ALLOWED: &[(&str, &str, &str, &str)] = &[(
+    "delegation",
+    "src/transport/http/client.rs",
+    "build",
+    "hands previous().len() to transport's own decider evaluate_redirect_for, \
+     whose count is pinned by transport/http/tests.rs (T1b, T15)",
+)];
+
 #[test]
 fn production_clients_set_an_explicit_redirect_policy() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut entries = scan_crate(root);
+    for (rule, file, func, _why) in ALLOWED {
+        let before = entries.len();
+        entries.retain(|e| !(e.rule == *rule && e.file == *file && e.func == *func));
+        assert!(entries.len() < before, "stale allowlist entry: {rule} {file}::{func}");
+    }
     entries.sort();
     let mut msg = String::from("redirect policy gaps:\n");
     for e in &entries {
@@ -775,6 +793,10 @@ fn the_scanner_reports_each_negative_fixture() {
     check_reported(
         "redirect-only-in-if",
         "fn f(cond: bool) { let mut b = Client::builder(); if cond { b = b.redirect(reqwest::redirect::Policy::none()); } let _ = b.build(); }",
+    );
+    check_reported(
+        "count-handed-to-a-fn-that-ignores-it",
+        "fn f() { let _ = reqwest::redirect::Policy::custom(|a| { ignore(a.previous().len()); a.follow() }); }",
     );
     check_reported(
         "previous-hops-cmp",
