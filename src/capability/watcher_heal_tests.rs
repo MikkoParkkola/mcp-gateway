@@ -340,4 +340,53 @@ fn a_tree_without_loops_keeps_its_logical_names() {
         walked.iter().all(|entry| entry.0 == 0 && entry.2 > 0),
         "every entry is in directory 0 with a length, got {walked:?}"
     );
+    // Length and mtime match a direct stat of the logical file, through the link.
+    for (_, name, len, nanos) in &walked {
+        let meta = std::fs::metadata(root.path().join(name)).expect("stat the logical file");
+        let want = meta
+            .modified()
+            .expect("an mtime")
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("after the epoch")
+            .as_nanos();
+        assert_eq!(
+            (*len, *nanos),
+            (meta.len(), want),
+            "{name}: length and mtime"
+        );
+    }
+}
+
+/// MIK-8651: a cycle between two directories whose every hop resolves
+/// through 21 links (`next` plus 20 hidden hops) still ends the walk at its
+/// first repeat. Reading through the accumulated path would cost 42 links at
+/// `a/next/next`, past Linux's 40, and skip the entry silently; reading each
+/// directory through its canonical path costs only one hop's 21.
+#[cfg(unix)]
+#[test]
+fn a_two_directory_cycle_of_long_link_chains_ends_the_walk_as_a_bound() {
+    let root = tempfile::tempdir().expect("a tempdir for the root");
+    let r = root.path();
+    for dir in ["a", "b"] {
+        std::fs::create_dir(r.join(dir)).expect("make a hop directory");
+    }
+    std::fs::write(r.join("a/x.yaml"), cap_yaml("x", "v1")).expect("write x");
+    // `from/next` -> .{tag}1 -> ... -> .{tag}20 -> `to`: 21 links per hop.
+    let chain = |from: &str, tag: &str, to: &str| {
+        for i in 1..20 {
+            let next = r.join(format!(".{tag}{}", i + 1));
+            std::os::unix::fs::symlink(next, r.join(format!(".{tag}{i}"))).expect("link a hop");
+        }
+        std::os::unix::fs::symlink(r.join(to), r.join(format!(".{tag}20"))).expect("link the end");
+        std::os::unix::fs::symlink(r.join(format!(".{tag}1")), r.join(from).join("next"))
+            .expect("link the start");
+    };
+    chain("a", "p", "b");
+    chain("b", "q", "a");
+    let root_dir = r.to_string_lossy().into_owned();
+    let walked = crate::capability::watcher::fingerprint::fingerprint(&[root_dir]);
+    assert!(
+        walked.is_none(),
+        "the cycle must end the walk at a bound, got {walked:?}"
+    );
 }
