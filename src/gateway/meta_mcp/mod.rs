@@ -369,8 +369,7 @@ pub struct MetaMcp {
 
     /// Public (Ed25519) provenance signer (MIK-8398).
     ///
-    /// `Some` when the public seed resolves; `None` otherwise. The skeleton
-    /// stores it and the stamping path does not read it yet.
+    /// `Some` when the public seed resolves; `None` otherwise.
     pub(super) public_provenance_signer:
         Option<Arc<crate::trust::provenance_public::ProvenancePublicSigner>>,
 

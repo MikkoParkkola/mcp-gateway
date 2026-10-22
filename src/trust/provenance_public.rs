@@ -7,11 +7,8 @@
 //! seal; the Ed25519 signature travels beside it as the `public_signature`
 //! member of the serialized provenance object, so anyone holding the public
 //! JWK can verify a receipt without any gateway secret.
-//!
-//! This file is the red-phase skeleton: every behaviour body returns its inert
-//! value, and the tests pin the contract the implementation must meet.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::process::ExitCode;
 
 use serde::{Deserialize, Serialize};
@@ -23,6 +20,9 @@ pub(crate) const PROVENANCE_SEED_ENV: &str = "GATEWAY_PROVENANCE_SIGNING_SEED";
 
 /// Environment variable holding this signer's key id.
 pub(crate) const PROVENANCE_KEY_ID_ENV: &str = "GATEWAY_PROVENANCE_KEY_ID";
+
+/// Domain tag separating this signature from every other envelope.
+const DOMAIN_TAG: &[u8] = b"mcp-gateway-provenance-ed25519-v1\0";
 
 /// The detached public signature: `{"payload": <String>, "sig": <String>}`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -58,24 +58,60 @@ impl ProvenancePublicSigner {
     ///
     /// Never carries a `d` member.
     pub(crate) fn public_jwk(&self) -> serde_json::Value {
-        serde_json::Value::Null
+        use base64::Engine as _;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use ring::signature::KeyPair as _;
+        let x = URL_SAFE_NO_PAD.encode(self.key_pair.public_key().as_ref());
+        serde_json::json!({
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "kid": self.kid,
+            "x": x,
+        })
     }
 
     /// RFC 7638 thumbprint: b64url of the SHA-256 of
     /// `{"crv":"Ed25519","kty":"OKP","x":"<x>"}`, with no spaces.
     pub(crate) fn jwk_thumbprint(&self) -> String {
-        String::new()
+        use base64::Engine as _;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use ring::signature::KeyPair as _;
+        use sha2::Digest as _;
+        let x = URL_SAFE_NO_PAD.encode(self.key_pair.public_key().as_ref());
+        let message = format!("{{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"{x}\"}}");
+        URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(message.as_bytes()))
     }
 
     /// The [`PublicSignature`] for this receipt and optional result.
     pub(crate) fn sign_receipt(
         &self,
-        _receipt: &RuntimeProvenanceReceipt,
-        _result: Option<&serde_json::Value>,
+        receipt: &RuntimeProvenanceReceipt,
+        result: Option<&serde_json::Value>,
     ) -> PublicSignature {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let receipt_value = serde_json::to_value(receipt).unwrap_or(serde_json::Value::Null);
+        let digest = match result {
+            Some(value) => match crate::security::signature_chain::content_digest(value) {
+                Ok(hex) => serde_json::Value::from(hex),
+                Err(_) => serde_json::Value::Null,
+            },
+            None => serde_json::Value::Null,
+        };
+        let payload = serde_json::json!({
+            "v": 1,
+            "alg": "EdDSA",
+            "kid": self.kid,
+            "receipt": receipt_value,
+            "result_sha256": digest,
+        });
+        let payload_bytes = serde_json::to_vec(&payload).unwrap_or_default();
+        let mut message = DOMAIN_TAG.to_vec();
+        message.extend_from_slice(&payload_bytes);
+        let sig = self.key_pair.sign(&message);
         PublicSignature {
-            payload: String::new(),
-            sig: String::new(),
+            payload: URL_SAFE_NO_PAD.encode(&payload_bytes),
+            sig: URL_SAFE_NO_PAD.encode(sig.as_ref()),
         }
     }
 
@@ -91,6 +127,12 @@ impl ProvenancePublicSigner {
     }
 }
 
+/// A key id is 1-64 bytes of `0x21..=0x7E`.
+fn is_valid_kid(kid: &str) -> bool {
+    let bytes = kid.as_bytes();
+    (1..=64).contains(&bytes.len()) && bytes.iter().all(|b| (0x21..=0x7E).contains(b))
+}
+
 /// Resolve the public signer from the environment overlay.
 ///
 /// Absent (seed unset or blank) resolves to `Ok(None)`. Every `Err` carries
@@ -98,10 +140,47 @@ impl ProvenancePublicSigner {
 /// of `0x21..=0x7E`, and must name neither the attestation key id nor its
 /// `bnaut/` form.
 pub(crate) fn resolve_public_signer(
-    _env: &crate::config::EnvOverlay,
-    _attestation_key_id: &str,
+    env: &crate::config::EnvOverlay,
+    attestation_key_id: &str,
 ) -> crate::Result<Option<ProvenancePublicSigner>> {
-    Ok(None)
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
+    let trimmed = match env.resolve(PROVENANCE_SEED_ENV) {
+        None => return Ok(None),
+        Some(text) if text.trim().is_empty() => return Ok(None),
+        Some(text) => text.trim().to_owned(),
+    };
+    let seed = STANDARD.decode(trimmed.as_bytes()).map_err(|_| {
+        crate::Error::ConfigValidation(format!(
+            "{PROVENANCE_SEED_ENV} must be standard base64 of exactly 32 bytes"
+        ))
+    })?;
+    if seed.len() != 32 {
+        return Err(crate::Error::ConfigValidation(format!(
+            "{PROVENANCE_SEED_ENV} must be standard base64 of exactly 32 bytes"
+        )));
+    }
+    let kid = env.resolve(PROVENANCE_KEY_ID_ENV).ok_or_else(|| {
+        crate::Error::ConfigValidation(format!(
+            "{PROVENANCE_KEY_ID_ENV} is required when {PROVENANCE_SEED_ENV} is set"
+        ))
+    })?;
+    if !is_valid_kid(&kid) {
+        return Err(crate::Error::ConfigValidation(format!(
+            "{PROVENANCE_KEY_ID_ENV} must be 1-64 bytes of 0x21..=0x7E"
+        )));
+    }
+    if kid == attestation_key_id || kid == format!("bnaut/{attestation_key_id}") {
+        return Err(crate::Error::ConfigValidation(format!(
+            "{PROVENANCE_KEY_ID_ENV} must not equal the attestation key id or its bnaut/ form"
+        )));
+    }
+    let key_pair = ring::signature::Ed25519KeyPair::from_seed_unchecked(&seed).map_err(|_| {
+        crate::Error::ConfigValidation(format!(
+            "{PROVENANCE_SEED_ENV} must be standard base64 of exactly 32 bytes"
+        ))
+    })?;
+    Ok(Some(ProvenancePublicSigner { key_pair, kid }))
 }
 
 /// How a receipt verified.
@@ -156,9 +235,61 @@ pub(crate) struct TrustSet {
 
 impl TrustSet {
     /// Parse one JWK object or a `{"keys":[...]}` set.
-    pub(crate) fn from_json(_text: &str) -> Result<Self, TrustSetRefusal> {
-        Err(TrustSetRefusal::Malformed)
+    pub(crate) fn from_json(text: &str) -> Result<Self, TrustSetRefusal> {
+        let value: serde_json::Value =
+            serde_json::from_str(text).map_err(|_| TrustSetRefusal::Malformed)?;
+        let obj = value.as_object().ok_or(TrustSetRefusal::Malformed)?;
+        if let Some(keys_value) = obj.get("keys") {
+            let items = keys_value.as_array().ok_or(TrustSetRefusal::Malformed)?;
+            let mut keys = BTreeMap::new();
+            for item in items {
+                let (kid, bytes) = parse_jwk(item)?;
+                if keys.insert(kid, bytes).is_some() {
+                    return Err(TrustSetRefusal::DuplicateKid);
+                }
+            }
+            Ok(Self { keys })
+        } else {
+            let (kid, bytes) = parse_jwk(&value)?;
+            let mut keys = BTreeMap::new();
+            keys.insert(kid, bytes);
+            Ok(Self { keys })
+        }
     }
+}
+
+/// One JWK object to its kid and 32-byte key.
+fn parse_jwk(value: &serde_json::Value) -> Result<(String, [u8; 32]), TrustSetRefusal> {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let obj = value.as_object().ok_or(TrustSetRefusal::Malformed)?;
+    if obj.contains_key("d") {
+        return Err(TrustSetRefusal::PrivateMember);
+    }
+    let kty_ok = obj.get("kty").and_then(serde_json::Value::as_str) == Some("OKP");
+    let crv_ok = obj.get("crv").and_then(serde_json::Value::as_str) == Some("Ed25519");
+    if !kty_ok || !crv_ok {
+        return Err(TrustSetRefusal::NotEd25519);
+    }
+    let x = obj
+        .get("x")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(TrustSetRefusal::BadX)?;
+    if x.contains('=') {
+        return Err(TrustSetRefusal::BadX);
+    }
+    let decoded = URL_SAFE_NO_PAD.decode(x).map_err(|_| TrustSetRefusal::BadX)?;
+    if decoded.len() != 32 {
+        return Err(TrustSetRefusal::BadX);
+    }
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(&decoded);
+    let kid = obj.get("kid").ok_or(TrustSetRefusal::MissingKid)?;
+    let kid = kid.as_str().ok_or(TrustSetRefusal::MalformedKid)?;
+    if !is_valid_kid(kid) {
+        return Err(TrustSetRefusal::MalformedKid);
+    }
+    Ok((kid.to_owned(), bytes))
 }
 
 /// Why a trust set was refused.
@@ -180,25 +311,244 @@ pub(crate) enum TrustSetRefusal {
     MalformedKid,
 }
 
+/// A JSON value parsed without accepting a repeated member at any depth.
+struct NoDupValue(serde_json::Value);
+
+/// Rebuilds a [`serde_json::Value`] while refusing a repeated object key.
+struct NoDupVisitor;
+
+impl<'de> serde::de::Visitor<'de> for NoDupVisitor {
+    type Value = NoDupValue;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("JSON without duplicate members")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(NoDupValue(serde_json::Value::Bool(value)))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(NoDupValue(serde_json::Value::Number(value.into())))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(NoDupValue(serde_json::Value::Number(value.into())))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        let number = serde_json::Number::from_f64(value)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null);
+        Ok(NoDupValue(number))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(NoDupValue(serde_json::Value::String(value.to_owned())))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(NoDupValue(serde_json::Value::String(value)))
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(NoDupValue(serde_json::Value::Null))
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(NoDupValue(serde_json::Value::Null))
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        let mut items = Vec::new();
+        while let Some(elem) = seq.next_element::<NoDupValue>()? {
+            items.push(elem.0);
+        }
+        Ok(NoDupValue(serde_json::Value::Array(items)))
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::MapAccess<'de>,
+    {
+        let mut seen = HashSet::new();
+        let mut obj = serde_json::Map::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if !seen.insert(key.clone()) {
+                return Err(serde::de::Error::custom("duplicate member"));
+            }
+            let value: NoDupValue = map.next_value()?;
+            obj.insert(key, value.0);
+        }
+        Ok(NoDupValue(serde_json::Value::Object(obj)))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for NoDupValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(NoDupVisitor)
+    }
+}
+
 /// Verify a serialized provenance object against the trust set.
 ///
 /// `prov` is the [`provenance_value`] object: the signed receipt plus its
 /// sibling `public_signature` member. Status lines print only a kid found in
 /// the trust set, never the payload's untrusted kid.
 pub(crate) fn verify_public(
-    _prov: &serde_json::Value,
-    _trust: &TrustSet,
-    _result: Option<&serde_json::Value>,
+    prov: &serde_json::Value,
+    trust: &TrustSet,
+    result: Option<&serde_json::Value>,
 ) -> Result<VerifiedReceipt, VerifyRefusal> {
-    Err(VerifyRefusal::NoPublicSignature)
+    use base64::Engine as _;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use ring::signature::{ED25519, UnparsedPublicKey};
+    let sig_obj = prov
+        .get("public_signature")
+        .ok_or(VerifyRefusal::NoPublicSignature)?;
+    let payload_b64 = sig_obj
+        .get("payload")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(VerifyRefusal::BadEncoding)?;
+    let sig_b64 = sig_obj
+        .get("sig")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(VerifyRefusal::BadEncoding)?;
+    if payload_b64.contains('=') || sig_b64.contains('=') {
+        return Err(VerifyRefusal::BadEncoding);
+    }
+    let payload_bytes =
+        URL_SAFE_NO_PAD.decode(payload_b64).map_err(|_| VerifyRefusal::BadEncoding)?;
+    let sig_bytes = URL_SAFE_NO_PAD.decode(sig_b64).map_err(|_| VerifyRefusal::BadEncoding)?;
+    if sig_bytes.len() != 64 {
+        return Err(VerifyRefusal::BadEncoding);
+    }
+    let payload = match serde_json::from_slice::<NoDupValue>(&payload_bytes) {
+        Ok(wrapped) => wrapped.0,
+        Err(error) if error.to_string().contains("duplicate member") => {
+            return Err(VerifyRefusal::DuplicateMember);
+        }
+        Err(_) => return Err(VerifyRefusal::BadEncoding),
+    };
+    let kid = payload
+        .get("kid")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(VerifyRefusal::UnknownKid)?;
+    let key = trust.keys.get(kid).ok_or(VerifyRefusal::UnknownKid)?;
+    let mut message = DOMAIN_TAG.to_vec();
+    message.extend_from_slice(&payload_bytes);
+    UnparsedPublicKey::new(&ED25519, key)
+        .verify(&message, &sig_bytes)
+        .map_err(|_| VerifyRefusal::BadSignature)?;
+    let version_ok = payload.get("v").and_then(serde_json::Value::as_u64) == Some(1);
+    let alg_ok = payload.get("alg").and_then(serde_json::Value::as_str) == Some("EdDSA");
+    if !version_ok || !alg_ok {
+        return Err(VerifyRefusal::BadProfile);
+    }
+    if prov.get("receipt") != payload.get("receipt") {
+        return Err(VerifyRefusal::OuterReceiptMismatch);
+    }
+    let receipt_value = payload.get("receipt").ok_or(VerifyRefusal::BadProfile)?;
+    let receipt: RuntimeProvenanceReceipt =
+        serde_json::from_value(receipt_value.clone()).map_err(|_| VerifyRefusal::BadProfile)?;
+    match payload.get("result_sha256") {
+        None | Some(serde_json::Value::Null) => Ok(VerifiedReceipt {
+            status: VerifyStatus::Unbound,
+            kid: kid.to_owned(),
+            receipt,
+        }),
+        Some(serde_json::Value::String(expected)) => match result {
+            None => Ok(VerifiedReceipt {
+                status: VerifyStatus::SignatureOnly,
+                kid: kid.to_owned(),
+                receipt,
+            }),
+            Some(offered) => match crate::security::signature_chain::content_digest(offered) {
+                Ok(computed) if computed == *expected => Ok(VerifiedReceipt {
+                    status: VerifyStatus::Bound,
+                    kid: kid.to_owned(),
+                    receipt,
+                }),
+                Ok(_) => Err(VerifyRefusal::ResultMismatch),
+                Err(_) => Err(VerifyRefusal::ResultUnhashable),
+            },
+        },
+        Some(_) => Err(VerifyRefusal::BadProfile),
+    }
 }
 
 /// Serialize `signed` and, when `public` is `Some`, add its `public_signature`.
 pub(crate) fn provenance_value(
     signed: &SignedResultProvenance,
-    _public: Option<(&ProvenancePublicSigner, Option<&serde_json::Value>)>,
+    public: Option<(&ProvenancePublicSigner, Option<&serde_json::Value>)>,
 ) -> serde_json::Value {
-    serde_json::to_value(signed).unwrap_or(serde_json::Value::Null)
+    let mut value = serde_json::to_value(signed).unwrap_or(serde_json::Value::Null);
+    if let Some((signer, result)) = public {
+        let sig = signer.sign_receipt(&signed.receipt, result);
+        if let Some(obj) = value.as_object_mut() {
+            let sig_value = serde_json::to_value(sig).unwrap_or(serde_json::Value::Null);
+            obj.insert("public_signature".to_owned(), sig_value);
+        }
+    }
+    value
+}
+
+/// The snake_case refusal after `INVALID ` for a verify refusal.
+fn verify_snake(refusal: VerifyRefusal) -> &'static str {
+    match refusal {
+        VerifyRefusal::NoPublicSignature => "no_public_signature",
+        VerifyRefusal::BadEncoding => "bad_encoding",
+        VerifyRefusal::DuplicateMember => "duplicate_member",
+        VerifyRefusal::BadProfile => "bad_profile",
+        VerifyRefusal::UnknownKid => "unknown_kid",
+        VerifyRefusal::BadSignature => "bad_signature",
+        VerifyRefusal::OuterReceiptMismatch => "outer_receipt_mismatch",
+        VerifyRefusal::ResultMismatch => "result_mismatch",
+        VerifyRefusal::ResultUnhashable => "result_unhashable",
+    }
+}
+
+/// The snake_case refusal after `INVALID trust_` for a trust-set refusal.
+fn trust_snake(refusal: TrustSetRefusal) -> &'static str {
+    match refusal {
+        TrustSetRefusal::Malformed => "malformed",
+        TrustSetRefusal::DuplicateKid => "duplicate_kid",
+        TrustSetRefusal::NotEd25519 => "not_ed25519",
+        TrustSetRefusal::BadX => "bad_x",
+        TrustSetRefusal::PrivateMember => "private_member",
+        TrustSetRefusal::MissingKid => "missing_kid",
+        TrustSetRefusal::MalformedKid => "malformed_kid",
+    }
 }
 
 /// Runs `provenance public-key` / `provenance verify`; prints its own stdout/stderr lines.
@@ -209,10 +559,156 @@ pub(crate) fn provenance_value(
 /// `bad_profile`, `outer_receipt_mismatch`, `result_mismatch`,
 /// `result_unhashable`, `no_public_signature`.
 pub fn run_provenance_command(
-    _cmd: &crate::cli::ProvenanceCommand,
-    _config: Option<&std::path::Path>,
+    cmd: &crate::cli::ProvenanceCommand,
+    config: Option<&std::path::Path>,
 ) -> ExitCode {
-    ExitCode::from(1)
+    match cmd {
+        crate::cli::ProvenanceCommand::PublicKey => run_public_key(config),
+        crate::cli::ProvenanceCommand::Verify {
+            trust,
+            receipt,
+            result,
+            signature_only,
+            accept_unbound,
+        } => run_verify(trust, receipt, result.as_ref(), *signature_only, *accept_unbound),
+    }
+}
+
+/// Export the gateway's public provenance JWK and thumbprint.
+fn run_public_key(config: Option<&std::path::Path>) -> ExitCode {
+    use crate::cli::stdout::println;
+    let loaded = match crate::config::Config::load(config) {
+        Ok(cfg) => cfg,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(1);
+        }
+    };
+    let overlay = loaded.env_overlay();
+    let attestation = overlay
+        .resolve(crate::attestation::ATTESTATION_KEY_ID_ENV)
+        .unwrap_or_else(|| "gateway".to_owned());
+    match resolve_public_signer(&overlay, &attestation) {
+        Ok(Some(signer)) => {
+            let output = serde_json::json!({
+                "jwk": signer.public_jwk(),
+                "thumbprint": signer.jwk_thumbprint(),
+            });
+            match serde_json::to_string(&output) {
+                Ok(line) => {
+                    println!("{line}");
+                    ExitCode::from(0)
+                }
+                Err(_) => {
+                    eprintln!("failed to render the public key");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        Ok(None) => {
+            eprintln!(
+                "{PROVENANCE_SEED_ENV} is not set: set it and {PROVENANCE_KEY_ID_ENV} to export the public key"
+            );
+            ExitCode::from(1)
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// Verify one receipt file against one trust file, with an optional result.
+fn run_verify(
+    trust_path: &std::path::Path,
+    receipt_path: &std::path::Path,
+    result_path: Option<&std::path::PathBuf>,
+    signature_only: bool,
+    accept_unbound: bool,
+) -> ExitCode {
+    use crate::cli::stdout::println;
+    let trust_text = match std::fs::read_to_string(trust_path) {
+        Ok(text) => text,
+        Err(_) => {
+            println!("INVALID unreadable_input");
+            return ExitCode::from(1);
+        }
+    };
+    let trust = match TrustSet::from_json(&trust_text) {
+        Ok(set) => set,
+        Err(refusal) => {
+            println!("INVALID trust_{}", trust_snake(refusal));
+            return ExitCode::from(1);
+        }
+    };
+    let receipt_text = match std::fs::read_to_string(receipt_path) {
+        Ok(text) => text,
+        Err(_) => {
+            println!("INVALID unreadable_input");
+            return ExitCode::from(1);
+        }
+    };
+    let receipt_value: serde_json::Value = match serde_json::from_str(&receipt_text) {
+        Ok(value) => value,
+        Err(_) => {
+            println!("INVALID unreadable_input");
+            return ExitCode::from(1);
+        }
+    };
+    let prov = match receipt_value.pointer("/_meta/provenance") {
+        Some(inner) if inner.is_object() => inner.clone(),
+        _ => receipt_value,
+    };
+    let result_value: Option<serde_json::Value> = match result_path {
+        None => None,
+        Some(path) => {
+            let text = match std::fs::read_to_string(path) {
+                Ok(text) => text,
+                Err(_) => {
+                    println!("INVALID unreadable_input");
+                    return ExitCode::from(1);
+                }
+            };
+            match serde_json::from_str(&text) {
+                Ok(value) => Some(value),
+                Err(_) => {
+                    println!("INVALID unreadable_input");
+                    return ExitCode::from(1);
+                }
+            }
+        }
+    };
+    match verify_public(&prov, &trust, result_value.as_ref()) {
+        Ok(verified) => match verified.status {
+            VerifyStatus::Bound => {
+                println!("BOUND kid={}", verified.kid);
+                ExitCode::from(0)
+            }
+            VerifyStatus::Unbound if accept_unbound => {
+                println!("UNBOUND kid={} (accepted: --accept-unbound)", verified.kid);
+                ExitCode::from(0)
+            }
+            VerifyStatus::Unbound => {
+                println!("UNBOUND kid={}", verified.kid);
+                ExitCode::from(1)
+            }
+            VerifyStatus::SignatureOnly if signature_only => {
+                println!(
+                    "SIGNATURE-ONLY kid={} (accepted: --signature-only)",
+                    verified.kid
+                );
+                ExitCode::from(0)
+            }
+            VerifyStatus::SignatureOnly => {
+                println!("SIGNATURE-ONLY kid={}", verified.kid);
+                ExitCode::from(1)
+            }
+        },
+        Err(refusal) => {
+            println!("INVALID {}", verify_snake(refusal));
+            ExitCode::from(1)
+        }
+    }
 }
 
 #[cfg(test)]

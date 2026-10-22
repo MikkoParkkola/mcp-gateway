@@ -579,6 +579,7 @@ pub(super) fn augment_with_provenance(
     cache: crate::trust::CacheOutcome,
     backend_ok: bool,
     observed_at: String,
+    public: Option<&crate::trust::provenance_public::ProvenancePublicSigner>,
 ) -> (Value, crate::trust::SignedResultProvenance) {
     use crate::trust::RuntimeProvenanceReceipt;
 
@@ -603,16 +604,20 @@ pub(super) fn augment_with_provenance(
         receipt = receipt.with_call_id(trace_id);
     }
     let signed_receipt = receipt.sign(signer);
+    let prov_value = match public {
+        Some(signer) => crate::trust::provenance_public::provenance_value(
+            &signed_receipt,
+            Some((signer, Some(&result))),
+        ),
+        None => serde_json::to_value(&signed_receipt).unwrap_or(Value::Null),
+    };
 
     if let Value::Object(ref mut map) = result {
         let meta = map
             .entry("_meta")
             .or_insert_with(|| Value::Object(serde_json::Map::new()));
         if let Value::Object(meta_map) = meta {
-            meta_map.insert(
-                "provenance".to_string(),
-                serde_json::to_value(signed_receipt.clone()).unwrap_or(Value::Null),
-            );
+            meta_map.insert("provenance".to_string(), prov_value);
         }
     }
     note_written(&["_meta", "provenance"], &result);

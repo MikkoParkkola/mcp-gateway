@@ -24,7 +24,8 @@ impl MetaMcp {
 
     /// Enable public (Ed25519) provenance stamping (MIK-8398).
     ///
-    /// The skeleton stores the signer; the stamping path does not read it yet.
+    /// When set alongside the HMAC signer, every stamped result also carries
+    /// a publicly verifiable Ed25519 signature.
     pub(crate) fn enable_public_provenance(
         &mut self,
         signer: crate::trust::provenance_public::ProvenancePublicSigner,

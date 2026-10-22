@@ -8,7 +8,9 @@ use tracing::{info, warn};
 
 use super::Gateway;
 use super::identity_grants::load_configured_identity_grants;
-use super::provenance_signer::{provenance_key, resolve_provenance_signer};
+use super::provenance_signer::{
+    install_public_provenance, provenance_key, resolve_provenance_signer,
+};
 use super::{expand_home_path, persistence};
 use crate::cache::ResponseCache;
 use crate::gateway::meta_mcp::MetaMcp;
@@ -351,6 +353,14 @@ impl Gateway {
                          DISABLED (fail-closed) — set the signing key to emit verifiable receipts"
                     );
                 }
+            }
+            // MIK-8398: the public signer rides the same stamping switch. A
+            // malformed seed refuses startup; when stamping is off this block
+            // never runs, so the seed is not read at all.
+            if let Some(meta) = Arc::get_mut(&mut meta_mcp) {
+                install_public_provenance(meta, &self.env.get(), &key_id)?;
+            } else {
+                return Err(Error::Internal("build_meta_mcp holds no exclusive MetaMcp".to_owned()));
             }
         }
 

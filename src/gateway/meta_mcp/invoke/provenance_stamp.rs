@@ -65,6 +65,7 @@ impl MetaMcp {
             cache,
             backend_ok,
             observed_at,
+            self.public_provenance_signer.as_deref(),
         );
         if let Some(sink) = &self.claim_capture
             && let Some(call_id) = signed_receipt.receipt.call_id.clone()
