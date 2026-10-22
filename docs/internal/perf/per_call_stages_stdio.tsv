@@ -402,7 +402,6 @@ src/gateway/server/warmstart.rs	gap_before_attempt	-	startup warm-start retry lo
 src/gateway/server/warmstart.rs	hook	-	hot-reload registration warming hook, off the request path
 src/gateway/server/warmstart.rs	is_readiness_error	-	startup warm-start retry loop, off the request path
 src/gateway/server/warmstart.rs	is_transient_io	-	startup warm-start retry loop, off the request path
-src/jitter.rs	full_jitter	-	startup warm-start retry loop, off the request path
 src/gateway/server/warmstart.rs	lock	-	hot-reload registration warming, off the request path
 src/gateway/server/warmstart.rs	new	-	hot-reload warmer registration, off the request path
 src/gateway/server/warmstart.rs	resolve_warm_start_names	-	startup warm-start, before serving
@@ -420,6 +419,7 @@ src/gateway/server/warmstart/tests.rs	a_dormant_backend_with_an_empty_cache_is_r
 src/gateway/server/warmstart/tests.rs	a_hung_attempt_is_timed_out_and_retried	-	test-only (the module is cfg(test))
 src/gateway/server/warmstart/tests.rs	a_permanently_broken_backend_stops_without_looping	-	test-only (the module is cfg(test))
 src/gateway/server/warmstart/tests.rs	a_reachable_backend_makes_exactly_one_attempt	-	test-only (the module is cfg(test))
+src/gateway/server/warmstart/tests.rs	a_sub_millisecond_gap_still_jitters_over_its_bound	-	test-only (the module is cfg(test))
 src/gateway/server/warmstart/tests.rs	a_transport_failure_the_transport_calls_permanent_stops_the_loop	-	test-only (the module is cfg(test))
 src/gateway/server/warmstart/tests.rs	ac_discover_6_the_retry_schedule_is_pinned_in_seconds	-	test-only (the module is cfg(test))
 src/gateway/server/warmstart/tests.rs	an_empty_tool_list_is_re_asked_a_bounded_number_of_times	-	test-only (the module is cfg(test))
