@@ -278,7 +278,17 @@ impl super::MetaMcp {
             invoke_nonce,
         );
         if let Some(result) = response.result.as_mut() {
-            self.seal_public_provenance(result);
+            let nested = context.method == "tasks/get"
+                && result
+                    .get("result")
+                    .is_some_and(serde_json::Value::is_object);
+            if nested {
+                if let Some(stored) = result.get_mut("result") {
+                    self.seal_public_provenance(stored);
+                }
+            } else {
+                self.seal_public_provenance(result);
+            }
         }
 
         // A disabled signer and ordinary/admission/refusal errors must never
@@ -534,11 +544,24 @@ pub(super) fn shape_meta_result(
                     }
                     super::interim_promotion::Promotion::Wrap => {
                         let has_output_schema = tool_name == "gateway_search_tools";
-                        crate::gateway::meta_mcp_helpers::wrap_tool_success(
+                        let (lifted, receipt) = super::invoke::lift_receipt(&content);
+                        let mut wrapped = crate::gateway::meta_mcp_helpers::wrap_tool_success(
                             id,
-                            &content,
+                            &lifted,
                             has_output_schema,
-                        )
+                        );
+                        if let Some(receipt) = receipt
+                            && let Some(result) = wrapped.result.as_mut()
+                            && let Some(obj) = result.as_object_mut()
+                        {
+                            let meta = obj.entry("_meta".to_owned()).or_insert_with(|| {
+                                serde_json::Value::Object(serde_json::Map::new())
+                            });
+                            if let Some(map) = meta.as_object_mut() {
+                                map.insert("provenance".to_owned(), receipt);
+                            }
+                        }
+                        wrapped
                     }
                     super::interim_promotion::Promotion::UpstreamFault(message) => {
                         super::error_response_preserving_status(

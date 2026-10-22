@@ -3,6 +3,8 @@
 //! Runtime-provenance stamping of a delivered result (MIK-6905, MIK-6908),
 //! split out of `invoke.rs`: behaviour unchanged.
 
+use std::borrow::Cow;
+
 use serde_json::Value;
 
 use crate::gateway::meta_mcp::MetaMcp;
@@ -154,4 +156,37 @@ impl MetaMcp {
             }
         }
     }
+}
+
+/// Lift `_meta.provenance` out of a dispatch result before it is wrapped.
+///
+/// Returns the content without the receipt alongside the removed receipt.
+/// `_meta` itself is dropped when the removal leaves it empty, and every
+/// other `_meta` member is kept. Without a receipt the content is borrowed
+/// and nothing is cloned, so unstamped results keep their bytes.
+pub(in crate::gateway::meta_mcp) fn lift_receipt(
+    content: &Value,
+) -> (Cow<'_, Value>, Option<Value>) {
+    let has_receipt = content
+        .get("_meta")
+        .and_then(Value::as_object)
+        .is_some_and(|meta| meta.contains_key("provenance"));
+    if !has_receipt {
+        return (Cow::Borrowed(content), None);
+    }
+    let mut lifted = content.clone();
+    let receipt = lifted
+        .get_mut("_meta")
+        .and_then(Value::as_object_mut)
+        .and_then(|meta| meta.remove("provenance"));
+    let meta_empty = lifted
+        .get("_meta")
+        .and_then(Value::as_object)
+        .is_some_and(|meta| meta.is_empty());
+    if meta_empty
+        && let Some(object) = lifted.as_object_mut()
+    {
+        object.remove("_meta");
+    }
+    (Cow::Owned(lifted), receipt)
 }

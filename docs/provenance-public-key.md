@@ -1,7 +1,7 @@
 # Public provenance signatures
 
 A second, publicly verifiable signature over each runtime-provenance receipt.
-The HMAC in `_meta.provenance` stays the gateway's own seal; the Ed25519
+The HMAC in `result._meta.provenance` stays the gateway's own seal; the Ed25519
 signature travels beside it as the `public_signature` member, so anyone
 holding the public JWK can verify a receipt without any gateway secret.
 
@@ -84,8 +84,9 @@ mcp-gateway provenance verify --trust jwk.json event.json --result event-result.
 ```
 
 `<receipt>` may be a provenance object or a full stamped result (its
-`_meta.provenance` is used); `--result` may likewise be a bare or stamped
-result.
+`result._meta.provenance` is used — `result.result._meta.provenance` for a
+task, passing `result.result` as `--result`); `--result` may likewise be a
+bare or stamped result.
 
 Unbound receipts come from event receipts, non-object results, and results
 holding an integer outside ±(2^53−1).

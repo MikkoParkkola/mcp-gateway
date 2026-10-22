@@ -583,9 +583,8 @@ impl MetaMcp {
         // response signing so the message MAC also covers the receipt. Cache
         // hits at the early returns above are stamped with cache=Hit; this is
         // the live-fetch (cache-miss) path.
-        // ponytail: direct-backend HTTP passthrough (router/backend_handlers.rs)
-        // is a separate surface — it has no MetaMcpInvoker/signer; wire when
-        // provenance is needed there (threads signer through GatewayState).
+        // The direct route stamps through `stamp_direct_result`; every route's
+        // public signature is sealed at delivery by `seal_public_provenance`.
         final_result = self.maybe_stamp_provenance(
             final_result,
             server,
