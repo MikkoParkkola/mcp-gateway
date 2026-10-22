@@ -211,12 +211,11 @@ impl ProxyEnv {
             .iter()
             .filter_map(|name| {
                 let value = lookup(name)?;
-                match value.into_string() {
-                    Ok(value) => Some(((*name).to_string(), value)),
-                    Err(_) => {
-                        unreadable = true;
-                        None
-                    }
+                if let Ok(value) = value.into_string() {
+                    Some(((*name).to_string(), value))
+                } else {
+                    unreadable = true;
+                    None
                 }
             })
             .collect();
