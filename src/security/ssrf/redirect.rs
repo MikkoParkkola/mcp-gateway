@@ -124,4 +124,16 @@ mod hop_budget_tests {
         // One initial request plus one per redirect followed.
         assert_eq!(hits.load(Ordering::SeqCst) - 1, super::MAX_REDIRECT_HOPS);
     }
+
+    #[test]
+    fn redirect_decision_follows_the_fifth_redirect_and_stops_the_sixth() {
+        assert_eq!(
+            super::redirect_decision(5, "https://1.1.1.1/x"),
+            super::RedirectDecision::Follow
+        );
+        assert_eq!(
+            super::redirect_decision(6, "https://1.1.1.1/x"),
+            super::RedirectDecision::Stop
+        );
+    }
 }

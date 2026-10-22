@@ -430,12 +430,17 @@ fn evaluate_redirect_internal_range_still_ssrf_rejected() {
 
 #[test]
 fn evaluate_redirect_hop_cap_stops() {
-    // At the fifth prior hop the policy stops following, matching the prior cap,
-    // regardless of whether the target would otherwise be allowed.
+    // The fifth redirect is followed and the sixth stopped: MAX_REDIRECT_HOPS counts redirects followed.
     let decision = evaluate_redirect(
         &url("https://api.example.com/sse"),
         &url("https://api.example.com/again"),
         5,
+    );
+    assert_eq!(decision, RedirectDecision::Follow);
+    let decision = evaluate_redirect(
+        &url("https://api.example.com/sse"),
+        &url("https://api.example.com/again"),
+        6,
     );
     assert_eq!(decision, RedirectDecision::Stop);
 }

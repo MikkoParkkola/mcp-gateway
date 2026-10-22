@@ -691,3 +691,48 @@ impl Default for OpenApiConverter {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod fetch_error_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_blocked_redirect_names_its_ssrf_reason() {
+        let closed = {
+            let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("probe bind");
+            let port = probe.local_addr().expect("probe addr").port();
+            drop(probe);
+            port
+        };
+        let app = axum::Router::new().route(
+            "/spec",
+            axum::routing::get(move || async move {
+                axum::response::Redirect::temporary(&format!("http://127.0.0.1:{closed}/"))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(crate::security::ssrf::ssrf_redirect_policy())
+            .build()
+            .expect("client");
+        let result = tokio::time::timeout(
+            crate::test_wait::HANG_BOUND,
+            client
+                .get(format!("http://127.0.0.1:{port}/spec"))
+                .send(),
+        )
+        .await
+        .expect("bounded");
+        let error = result.expect_err("the SSRF-blocked redirect must fail");
+        let message = fetch_error_message(&error);
+        assert!(
+            message.contains("SSRF blocked"),
+            "expected SSRF reason in: {message}"
+        );
+    }
+}
