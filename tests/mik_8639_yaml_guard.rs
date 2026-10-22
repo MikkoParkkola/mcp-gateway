@@ -4,8 +4,8 @@
 //! value-free refusal, fast.
 //!
 //! Every refused row parses through `from_str`, asserts the exact `Limit`
-//! variant, prints the wall time (the 50 ms bar is informational) while
-//! asserting under 500 ms in debug, and asserts Display and Debug free of
+//! variant, prints the wall time (informational only; the guard_work counter pins
+//! the cost), and asserts Display and Debug free of
 //! the sentinel the input carries in a scalar. Red on the skeleton: its
 //! `limit()` is `None`, and shapes the backend accepts fail at the refusal
 //! itself. Rows marked ACCEPTED pass on the skeleton by design and pin the
@@ -14,7 +14,7 @@
 #[path = "common/yaml.rs"]
 mod yaml;
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use serde::Deserialize;
 
@@ -25,17 +25,15 @@ const SENTINEL: &str = "MIK8425-SENTINEL-7f3a";
 /// The size gate the guard enforces on every text-taking seam.
 const MAX_YAML_BYTES: usize = 16 * 1024 * 1024;
 
-/// Parse `input` as `T`, assert it is refused fast and value-free, and return
+/// Parse `input` as `T`, assert it is refused and value-free, and return
 /// the error for the row's `limit()` assertion.
 fn refused_as<T: serde::de::DeserializeOwned>(input: &str, what: &str) -> yaml::Error {
     let start = Instant::now();
     let result = yaml::from_str::<T>(input);
     let elapsed = start.elapsed();
+    // Wall time is informational only (repo rule: no wall-clock bound under
+    // 5 s in tests); the guard_work counter rows pin the cost.
     eprintln!("mik-8639 {what}: {} ms", elapsed.as_millis());
-    assert!(
-        elapsed < Duration::from_millis(500),
-        "{what}: {elapsed:?} over the 500 ms debug bar"
-    );
     let err = match result {
         Ok(_) => panic!("{what}: accepted, must be refused"),
         Err(err) => err,
@@ -51,7 +49,7 @@ fn refused_as<T: serde::de::DeserializeOwned>(input: &str, what: &str) -> yaml::
     err
 }
 
-/// Parse `input` as a tree, assert it is refused fast and value-free.
+/// Parse `input` as a tree, assert it is refused and value-free.
 fn refused(input: &str, what: &str) -> yaml::Error {
     refused_as::<yaml::Value>(input, what)
 }
