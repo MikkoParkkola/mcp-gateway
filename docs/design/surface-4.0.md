@@ -576,13 +576,13 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `routing_profiles.<name>.deny_tools` | KEEP | `type default` | per-session tool scoping | - | src/routing_profile/mod.rs:73 |
 | `routing_profiles.<name>.description` | KEEP | `type default` | per-session tool scoping | - | src/routing_profile/mod.rs:53 |
 | `runtime` | KEEP | `type default` | sandbox runtime profiles (opt-in) | - | src/config/mod.rs:138 |
-| `runtime.availability` | KEEP | `RuntimeAvailabilityConfig::default()` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:23 |
-| `runtime.availability.docker` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:120 |
-| `runtime.availability.kubernetes` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:128 |
-| `runtime.availability.launchd` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:126 |
-| `runtime.availability.local_process` | KEEP | `true` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:118 |
-| `runtime.availability.podman` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:122 |
-| `runtime.availability.systemd` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:124 |
+| `runtime.availability` | KEEP | `RuntimeAvailability::default()` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/config/features/runtime.rs:23 |
+| `runtime.availability.docker` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/runtime/provider.rs:80 |
+| `runtime.availability.kubernetes` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/runtime/provider.rs:88 |
+| `runtime.availability.launchd` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/runtime/provider.rs:86 |
+| `runtime.availability.local_process` | KEEP | `true` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/runtime/provider.rs:78 |
+| `runtime.availability.podman` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/runtime/provider.rs:82 |
+| `runtime.availability.systemd` | KEEP | `false` | operator policy: which runtimes may run here (`local_process: false` is a sandbox opt-out no probe can infer) | - | src/runtime/provider.rs:84 |
 | `runtime.default_provider` | KEEP | `RuntimeProviderKind::LocalProcess` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:21 |
 | `runtime.profiles` | KEEP | `HashMap::new()` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:25 |
 | `runtime.profiles.<name>.data_class` | KEEP | `RuntimeDataClass::Internal` | sandbox runtime profiles (opt-in) | - | src/config/features/runtime.rs:170 |
