@@ -17,6 +17,9 @@ fn a_multi_byte_character_at_the_cut_is_not_split() {
 
 #[test]
 fn ascii_is_cut_to_the_width_with_an_ellipsis() {
-    assert_eq!(truncate(&"a".repeat(40), 28), format!("{}...", "a".repeat(25)));
+    assert_eq!(
+        truncate(&"a".repeat(40), 28),
+        format!("{}...", "a".repeat(25))
+    );
     assert_eq!(truncate("short", 28), "short");
 }

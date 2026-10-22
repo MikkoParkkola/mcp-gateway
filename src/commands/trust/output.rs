@@ -180,7 +180,13 @@ pub(super) fn truncate(value: &str, max_len: usize) -> String {
     if value.len() <= max_len {
         value.to_string()
     } else {
-        format!("{}...", &value[..max_len.saturating_sub(3)])
+        // Back off to a char boundary: slicing inside a multi-byte character
+        // panics (MIK-8655).
+        let mut cut = max_len.saturating_sub(3);
+        while !value.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        format!("{}...", &value[..cut])
     }
 }
 

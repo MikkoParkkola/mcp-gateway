@@ -15,7 +15,11 @@ fn a_multi_byte_character_at_the_cut_is_not_split() {
     let text = format!("{}€ and more", "a".repeat(4095));
     let out = truncate_process_text(Cow::Owned(text.clone()));
     let body = out.strip_suffix(SUFFIX).expect("the cut is marked");
-    assert_eq!(body.len(), 4095, "backs off to the boundary before the character");
+    assert_eq!(
+        body.len(),
+        4095,
+        "backs off to the boundary before the character"
+    );
     assert!(text.starts_with(body));
 }
 
