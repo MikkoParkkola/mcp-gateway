@@ -203,3 +203,17 @@ fn an_observation_on_a_clock_before_1970_is_undated() {
     assert_eq!(observed.era, Era::Modern);
     assert!(!observed.render().contains_key("era_probed_at"));
 }
+
+#[test]
+fn era_labels_are_the_wire_spellings() {
+    assert_eq!(Era::Modern.as_str(), "modern");
+    assert_eq!(Era::Legacy.as_str(), "legacy");
+    assert_eq!(
+        serde_json::to_value(Era::Modern).ok(),
+        Some(serde_json::Value::from("modern"))
+    );
+    assert_eq!(
+        serde_json::to_value(Era::Legacy).ok(),
+        Some(serde_json::Value::from("legacy"))
+    );
+}

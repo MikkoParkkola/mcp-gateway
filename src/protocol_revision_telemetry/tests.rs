@@ -298,3 +298,9 @@ fn shadow_tools_list_records_filters_and_would_be_scope() {
         1
     );
 }
+
+#[test]
+fn cache_scope_labels_are_the_spec_strings() {
+    assert_eq!(CacheScope::Public.as_str(), "public");
+    assert_eq!(CacheScope::Private.as_str(), "private");
+}
