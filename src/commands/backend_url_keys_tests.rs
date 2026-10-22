@@ -399,3 +399,17 @@ fn a_mapping_key_is_read_as_yaml_reads_it() {
         assert_eq!(got, *want, "{line:?}");
     }
 }
+
+#[test]
+fn a_rename_that_breaks_the_strict_parse_is_rolled_back() {
+    // Reaches the rollback with YAML the guard accepts: `fs` also holds `url`
+    // as an explicit `? url` key the line scan cannot see, so renaming its
+    // `http_url` makes a duplicate `url` the strict parse refuses. Every
+    // rename in the text, `ok`'s too, is undone and both are reported.
+    let text = "backends:\n  ok:\n    http_url: \"https://ok.example.test/mcp\"\n  fs:\n    http_url: \"https://fs.example.test/mcp\"\n    ? url\n    : \"https://fs2.example.test/mcp\"\n";
+    let out = rewrite_url_aliases(text, None);
+    assert_eq!(out.text, text);
+    assert!(out.changed.is_empty(), "{:?}", out.changed);
+    assert!(out.skipped.contains(&"ok".to_string()), "{:?}", out.skipped);
+    assert!(out.skipped.contains(&"fs".to_string()), "{:?}", out.skipped);
+}
