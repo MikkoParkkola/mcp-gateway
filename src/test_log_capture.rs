@@ -5,6 +5,7 @@
 //! The pattern of `security::agent_identity_audit_tests`, shared so a test
 //! can assert what an operator's log would show.
 
+use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
 use tracing_subscriber::layer::SubscriberExt;
@@ -111,33 +112,6 @@ impl std::io::Write for Counter {
     }
 }
 
-/// A live count, on this thread, of log records at exactly `level` whose
-/// message contains `text`, for a test that must wait for a record rather
-/// than read the log afterwards. Counting stops when the guard drops.
-pub(crate) fn live_count_at(
-    level: tracing::Level,
-    text: &'static str,
-) -> (
-    tracing::subscriber::DefaultGuard,
-    tokio::sync::watch::Receiver<usize>,
-) {
-    keep_interest_open();
-    let (tx, rx) = tokio::sync::watch::channel(0);
-    let layer = SingleLevelCounter {
-        level,
-        text,
-        sender: Arc::new(tx),
-    };
-    let subscriber = tracing_subscriber::registry().with(layer);
-    (tracing::subscriber::set_default(subscriber), rx)
-}
-
-struct SingleLevelCounter {
-    level: tracing::Level,
-    text: &'static str,
-    sender: Arc<tokio::sync::watch::Sender<usize>>,
-}
-
 /// The concatenated `str` and `debug` fields of one event, so a `contains`
 /// check sees the message however the macros recorded it.
 struct FieldText(String);
@@ -149,28 +123,8 @@ impl tracing::field::Visit for FieldText {
     }
 
     fn record_debug(&mut self, _field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        self.0.push_str(&format!("{value:?}"));
+        let _ = write!(self.0, "{value:?}");
         self.0.push(' ');
-    }
-}
-
-impl<S> tracing_subscriber::Layer<S> for SingleLevelCounter
-where
-    S: tracing::Subscriber,
-{
-    fn on_event(
-        &self,
-        event: &tracing::Event<'_>,
-        _ctx: tracing_subscriber::layer::Context<'_, S>,
-    ) {
-        if event.metadata().level() != &self.level {
-            return;
-        }
-        let mut seen = FieldText(String::new());
-        event.record(&mut seen);
-        if seen.0.contains(self.text) {
-            self.sender.send_modify(|n| *n += 1);
-        }
     }
 }
 

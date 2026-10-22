@@ -33,22 +33,17 @@ pub(super) fn fingerprint(dirs: &[String]) -> Option<Fingerprint> {
         // The root is depth 0; each subdirectory descends one level.
         let mut stack = vec![(PathBuf::from(dir), 0)];
         while let Some((path, depth)) = stack.pop() {
-            let entries = match std::fs::read_dir(&path) {
-                Ok(entries) => entries,
-                Err(_) => continue,
+            let Ok(entries) = std::fs::read_dir(&path) else {
+                continue;
             };
             for entry in entries {
-                let entry = match entry {
-                    Ok(entry) => entry,
-                    Err(_) => continue,
-                };
+                let Ok(entry) = entry else { continue };
                 visited += 1;
                 if visited > FINGERPRINT_MAX_ENTRIES {
                     return None;
                 }
-                let file_type = match entry.file_type() {
-                    Ok(file_type) => file_type,
-                    Err(_) => continue,
+                let Ok(file_type) = entry.file_type() else {
+                    continue;
                 };
                 if file_type.is_dir() {
                     if depth + 1 > FINGERPRINT_MAX_DEPTH {
@@ -69,13 +64,11 @@ pub(super) fn fingerprint(dirs: &[String]) -> Option<Fingerprint> {
                 if !is_yaml {
                     continue;
                 }
-                let metadata = match std::fs::metadata(&entry_path) {
-                    Ok(metadata) => metadata,
-                    Err(_) => continue,
+                let Ok(metadata) = std::fs::metadata(&entry_path) else {
+                    continue;
                 };
-                let modified = match metadata.modified() {
-                    Ok(modified) => modified,
-                    Err(_) => continue,
+                let Ok(modified) = metadata.modified() else {
+                    continue;
                 };
                 let nanos = match modified.duration_since(std::time::UNIX_EPOCH) {
                     Ok(elapsed) => elapsed.as_nanos(),
@@ -97,8 +90,7 @@ pub(super) fn fingerprint(dirs: &[String]) -> Option<Fingerprint> {
 /// Run [`fingerprint`] on the blocking pool: the walk is synchronous I/O and
 /// must not stall the loop's ticks. A failed join reads as bounds exceeded.
 pub(super) async fn blocking_fingerprint(dirs: Vec<String>) -> Option<Fingerprint> {
-    match tokio::task::spawn_blocking(move || fingerprint(&dirs)).await {
-        Ok(found) => found,
-        Err(_) => None,
-    }
+    tokio::task::spawn_blocking(move || fingerprint(&dirs))
+        .await
+        .unwrap_or_default()
 }

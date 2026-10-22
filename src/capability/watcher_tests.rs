@@ -66,7 +66,7 @@ fn test_watcher_creation() {
     let backend = Arc::new(crate::capability::CapabilityBackend::new("test", executor));
 
     // Should not panic with empty directories
-    let watcher = CapabilityWatcher::start(backend, rx, None);
+    let watcher = CapabilityWatcher::start(backend, rx, None, 60);
     assert!(watcher.is_ok());
 }
 
@@ -453,11 +453,17 @@ async fn a_same_length_edit_heals_by_mtime() {
         .expect("the log counter is alive");
     let path = dir.path().join("a.yaml");
     std::fs::write(&path, cap_yaml("a", "v2")).expect("write v2 same length");
+    // From the file's own mtime, not the wall clock: the +5 s push only has
+    // to differ from the armed baseline, whatever the clock says.
+    let mtime = std::fs::metadata(&path)
+        .expect("metadata for the mtime push")
+        .modified()
+        .expect("a readable mtime");
     std::fs::File::options()
         .write(true)
         .open(&path)
         .expect("open for mtime")
-        .set_modified(std::time::SystemTime::now() + Duration::from_secs(5))
+        .set_modified(mtime + Duration::from_secs(5))
         .expect("push the mtime +5 s");
     assert!(
         eventually(Duration::from_secs(3), || {
@@ -568,7 +574,7 @@ async fn a_lagged_startup_scan_wait_does_not_drop_the_baseline_report() {
     );
     let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
     let changes: CatalogueChanged = Arc::new(|_name: &str| {});
-    let _watcher = CapabilityWatcher::start(backend, shutdown_rx, Some(changes))
+    let _watcher = CapabilityWatcher::start(backend, shutdown_rx, Some(changes), 60)
         .expect("start with no directories succeeds");
     // No await between spawn and sends: on a current-thread runtime the report
     // task cannot run until the wait below, so both sends land first and the

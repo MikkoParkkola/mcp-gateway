@@ -64,11 +64,12 @@ pub struct CapabilityWatcher {
     _watcher: Mutex<Option<RecommendedWatcher>>,
 }
 
-/// Timing knobs for the reload task. Production threads
-/// [`ReloadTuning::from_config_secs`] through
-/// [`CapabilityWatcher::start_with_tuning`]; tests build their own.
+/// Timing knobs for the reload task. Production builds them from
+/// `capabilities.stale_check_secs` via
+/// [`ReloadTuning::from_config_secs`] in [`CapabilityWatcher::start`];
+/// tests build their own.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct ReloadTuning {
+struct ReloadTuning {
     /// Stale-catalogue check interval; `None` = off.
     stale_check: Option<Duration>,
     /// A reload still running after this logs a warn.
@@ -90,7 +91,7 @@ impl Default for ReloadTuning {
 impl ReloadTuning {
     /// Production tuning from config: `0` turns the stale check off, any
     /// other value is its interval in seconds. Restart-only, like the key.
-    pub(crate) fn from_config_secs(stale_check_secs: u64) -> Self {
+    fn from_config_secs(stale_check_secs: u64) -> Self {
         let stale_check = if stale_check_secs == 0 {
             None
         } else {
@@ -144,6 +145,34 @@ impl InFlight {
     }
 }
 
+/// Mutable state of the reload loop, threaded through its tick helpers.
+#[derive(Default)]
+struct LoopState {
+    /// The file event channel is still open; `false` once it closes.
+    events_open: bool,
+    /// A reload is wanted once the debounce has elapsed.
+    pending_reload: bool,
+    /// When the last file event (or stale heal) arrived.
+    last_event: Option<Instant>,
+    /// The running reload, if any: its join handle, its slow-warning
+    /// bookkeeping, and the fingerprint taken before it started.
+    in_flight: Option<(tokio::task::JoinHandle<bool>, InFlight, Option<Fingerprint>)>,
+    /// The fingerprint taken before the last complete reload; `None` with
+    /// the stale check off, or while the first arm is still pending.
+    baseline: Option<Fingerprint>,
+    /// One-time log lines already emitted.
+    logged: LoggedOnce,
+}
+
+/// One-time log lines of the reload loop, each emitted at most once.
+#[derive(Default)]
+struct LoggedOnce {
+    /// The "stale check armed" line.
+    stale_armed: bool,
+    /// The walk-bounds skip warning.
+    bounds_skip: bool,
+}
+
 /// Wait for a real shutdown on a broadcast channel that may also lag or lose
 /// its senders. `Ok(())` is a real shutdown and returns; `Lagged` warns and
 /// the wait continues, since a lagged receiver still holds the latest send;
@@ -181,23 +210,17 @@ impl CapabilityWatcher {
     /// `changes` hears the backend's name once its startup scan completes and
     /// after every successful reload, so listeners get `tools/list_changed`
     /// when the catalogue they see changed (F24).
+    ///
+    /// `stale_check_secs` tunes the stale-catalogue check: the check runs
+    /// every that many seconds, and `0` turns it off. Restart-only, like
+    /// the key.
     pub fn start(
         backend: Arc<CapabilityBackend>,
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
         changes: Option<CatalogueChanged>,
+        stale_check_secs: u64,
     ) -> Result<Self> {
-        Self::start_with_tuning(backend, shutdown_rx, changes, ReloadTuning::default())
-    }
-
-    /// [`start`](Self::start) with explicit timing knobs: production passes
-    /// [`ReloadTuning::from_config_secs`] so `capabilities.stale_check_secs`
-    /// tunes the stale check.
-    pub(crate) fn start_with_tuning(
-        backend: Arc<CapabilityBackend>,
-        shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-        changes: Option<CatalogueChanged>,
-        tuning: ReloadTuning,
-    ) -> Result<Self> {
+        let tuning = ReloadTuning::from_config_secs(stale_check_secs);
         if let Some(changes) = &changes {
             // Before any early return: without a file watcher the catalogue
             // can still change (a manual reload), so its baseline is needed.
@@ -262,12 +285,10 @@ impl CapabilityWatcher {
                             // reload task is gone — is worth a warn.
                             if let Err(tokio::sync::mpsc::error::TrySendError::Closed(())) =
                                 event_tx.try_send(())
-                            {
-                                if !reload_task_gone
+                                && !reload_task_gone
                                     .swap(true, std::sync::atomic::Ordering::SeqCst)
-                                {
-                                    warn!("capability file event dropped: the reload task is gone");
-                                }
+                            {
+                                warn!("capability file event dropped: the reload task is gone");
                             }
                         }
                     }
@@ -314,7 +335,7 @@ impl CapabilityWatcher {
             tokio::pin!(shutdown_wait);
             loop {
                 tokio::select! {
-                    _ = &mut shutdown_wait => return,
+                    () = &mut shutdown_wait => return,
                     _ = tick.tick() => {
                         if backend.initial_scan_complete() {
                             changes(&backend.name);
@@ -329,6 +350,7 @@ impl CapabilityWatcher {
     /// Spawn the background reload task with debouncing, at production
     /// timing. Callers that tune the timing use
     /// [`spawn_reload_task_tuned`](Self::spawn_reload_task_tuned) instead.
+    #[cfg(test)]
     fn spawn_reload_task(
         backend: Arc<CapabilityBackend>,
         event_rx: mpsc::Receiver<()>,
@@ -357,25 +379,19 @@ impl CapabilityWatcher {
         tokio::spawn(async move {
             let debounce = tuning.debounce;
             let reload_slow = tuning.reload_slow;
-            let mut events_open = true;
-            let mut pending_reload = false;
-            let mut last_event: Option<Instant> = None;
-            let mut in_flight: Option<(
-                tokio::task::JoinHandle<bool>,
-                InFlight,
-                Option<Fingerprint>,
-            )> = None;
+            let mut state = LoopState {
+                events_open: true,
+                ..LoopState::default()
+            };
             // The stale baseline, armed before the loop so the first tick
             // already compares against the catalogue as the task found it.
             // With the check off the baseline stays `None` and the stale
             // branch below waits forever.
-            let mut baseline: Option<Fingerprint> = None;
             if tuning.stale_check.is_some() {
-                baseline = blocking_fingerprint(backend.watched_directories()).await;
+                state.baseline = blocking_fingerprint(backend.watched_directories()).await;
             }
-            let mut stale_armed_logged = false;
-            if baseline.is_some() {
-                stale_armed_logged = true;
+            if state.baseline.is_some() {
+                state.logged.stale_armed = true;
                 info!("Capability stale check armed");
             }
 
@@ -385,134 +401,142 @@ impl CapabilityWatcher {
             // warn a closed channel on every tick, not once.
             let shutdown_wait = real_shutdown(&mut shutdown_rx);
             tokio::pin!(shutdown_wait);
-            let mut bounds_warned = false;
             loop {
                 tokio::select! {
-                    maybe = event_rx.recv(), if events_open => {
-                        match maybe {
-                            Some(()) => {
-                                last_event = Some(Instant::now());
-                                pending_reload = true;
-                            }
-                            None => {
-                                events_open = false;
-                                warn!(
-                                    "Capability watcher: file event source is gone; relying on the stale check"
-                                );
-                            }
+                    maybe = event_rx.recv(), if state.events_open => {
+                        if let Some(()) = maybe {
+                            state.last_event = Some(Instant::now());
+                            state.pending_reload = true;
+                        } else {
+                            state.events_open = false;
+                            warn!(
+                                "Capability watcher: file event source is gone; relying on the stale check"
+                            );
                         }
                     }
                     _ = interval.tick() => {
-                        // (a) Reap a finished reload. The baseline advances
-                        // to the fingerprint taken before the reload, so an
-                        // edit made during the reload still differs on the
-                        // next tick and reloads again.
-                        let finished = in_flight
-                            .as_ref()
-                            .is_some_and(|(handle, _, _)| handle.is_finished());
-                        if finished {
-                            if let Some((handle, _, before)) = in_flight.take() {
-                                match handle.await {
-                                    Ok(reloaded) => {
-                                        if reloaded
-                                            && backend.initial_scan_loaded_every_directory()
-                                            && let Some(found) = before
-                                        {
-                                            baseline = Some(found);
-                                        } else {
-                                            warn!("capability reload incomplete; will retry");
-                                        }
-                                    }
-                                    Err(join_error) => {
-                                        if join_error.is_panic() {
-                                            // Dev fails as release aborts
-                                            // (r3): re-raise the panic.
-                                            std::panic::resume_unwind(join_error.into_panic());
-                                        } else {
-                                            warn!("capability reload cancelled; will retry");
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        // (b) Report a reload running past `reload_slow`,
-                        // once; the reload itself is never cancelled.
-                        if let Some((_, inflight, _)) = in_flight.as_mut()
-                            && let Some(message) =
-                                inflight.slow_warning(Instant::now(), reload_slow)
-                        {
-                            warn!("{message}");
-                        }
-                        // (c) Start a reload when one is pending, the
-                        // debounce has elapsed and none is in flight.
-                        if pending_reload
-                            && in_flight.is_none()
-                            && last_event.is_some_and(|at| at.elapsed() >= debounce)
-                        {
-                            // The fingerprint is taken before the reload
-                            // starts; the baseline advances to it only when
-                            // the reload completes (see (a) above).
-                            let before = blocking_fingerprint(backend.watched_directories()).await;
-                            let (handle, inflight) =
-                                Self::spawn_reload(Arc::clone(&backend), changes.clone());
-                            in_flight = Some((handle, inflight, before));
-                            pending_reload = false;
-                            last_event = None;
-                        }
+                        Self::on_tick(&mut state, &backend, changes.as_ref(), debounce, reload_slow).await;
                     }
-                    _ = async {
+                    () = async {
                         if let Some(stale) = stale_interval.as_mut() {
                             stale.tick().await;
                         } else {
                             std::future::pending::<()>().await;
                         }
                     } => {
-                        trace!("Capability stale check tick");
-                        match blocking_fingerprint(backend.watched_directories()).await {
-                            None => {
-                                if !bounds_warned {
-                                    bounds_warned = true;
-                                    warn!(
-                                        "stale check skipped: watched tree exceeds the walk bounds"
-                                    );
-                                }
-                            }
-                            Some(found) => {
-                                if baseline.is_none() {
-                                    // First-arm path: the start-of-task walk
-                                    // exceeded the bounds, so try again.
-                                    baseline = Some(found);
-                                    if !stale_armed_logged {
-                                        stale_armed_logged = true;
-                                        info!("Capability stale check armed");
-                                    }
-                                } else if baseline.as_ref().is_some_and(|base| found != *base)
-                                    && !pending_reload
-                                    && in_flight.is_none()
-                                {
-                                    warn!(
-                                        "capability files changed but no file event arrived; reloading"
-                                    );
-                                    pending_reload = true;
-                                    // Due on the next 100 ms tick: the reload
-                                    // starts there, not here, so both paths
-                                    // share the one guarded start in (c).
-                                    let now = Instant::now();
-                                    last_event = Some(match now.checked_sub(debounce) {
-                                        Some(ready) => ready,
-                                        None => now,
-                                    });
-                                }
-                            }
-                        }
+                        Self::on_stale_tick(&mut state, &backend, debounce).await;
                     }
-                    _ = &mut shutdown_wait => {
+                    () = &mut shutdown_wait => {
                         info!("Capability watcher shutting down");
                         break;
                     }
                 }
             }
         });
+    }
+
+    /// One 100 ms tick of the reload loop: reap a finished reload,
+    /// warn about a slow one, and start a pending reload past its
+    /// debounce.
+    async fn on_tick(
+        state: &mut LoopState,
+        backend: &Arc<CapabilityBackend>,
+        changes: Option<&CatalogueChanged>,
+        debounce: Duration,
+        reload_slow: Duration,
+    ) {
+        Self::reap_in_flight(state, backend).await;
+        // Report a reload running past `reload_slow`, once; the reload
+        // itself is never cancelled.
+        if let Some((_, active, _)) = state.in_flight.as_mut()
+            && let Some(message) = active.slow_warning(Instant::now(), reload_slow)
+        {
+            warn!("{message}");
+        }
+        // Start a reload when one is pending, the debounce has elapsed
+        // and none is in flight.
+        if state.pending_reload
+            && state.in_flight.is_none()
+            && state.last_event.is_some_and(|at| at.elapsed() >= debounce)
+        {
+            // The fingerprint is taken before the reload starts; the
+            // baseline advances to it only when the reload completes
+            // (see `reap_in_flight`).
+            let before = blocking_fingerprint(backend.watched_directories()).await;
+            let (handle, active) = Self::spawn_reload(Arc::clone(backend), changes.cloned());
+            state.in_flight = Some((handle, active, before));
+            state.pending_reload = false;
+            state.last_event = None;
+        }
+    }
+
+    /// Reap a finished reload. The baseline advances to the fingerprint
+    /// taken before the reload, so an edit made during the reload still
+    /// differs on the next tick and reloads again.
+    async fn reap_in_flight(state: &mut LoopState, backend: &CapabilityBackend) {
+        let finished = state
+            .in_flight
+            .as_ref()
+            .is_some_and(|(handle, _, _)| handle.is_finished());
+        if finished && let Some((handle, _, before)) = state.in_flight.take() {
+            match handle.await {
+                Ok(reloaded) => {
+                    if reloaded
+                        && backend.initial_scan_loaded_every_directory()
+                        && let Some(found) = before
+                    {
+                        state.baseline = Some(found);
+                    } else {
+                        warn!("capability reload incomplete; will retry");
+                    }
+                }
+                Err(join_error) => {
+                    if join_error.is_panic() {
+                        // Dev fails as release aborts
+                        // (r3): re-raise the panic.
+                        std::panic::resume_unwind(join_error.into_panic());
+                    }
+                    warn!("capability reload cancelled; will retry");
+                }
+            }
+        }
+    }
+
+    /// One stale-check tick: fingerprint the watched trees and, on drift
+    /// with no reload pending or in flight, warn and queue a reload
+    /// through the normal debounced path.
+    async fn on_stale_tick(state: &mut LoopState, backend: &CapabilityBackend, debounce: Duration) {
+        trace!("Capability stale check tick");
+        match blocking_fingerprint(backend.watched_directories()).await {
+            None => {
+                if !state.logged.bounds_skip {
+                    state.logged.bounds_skip = true;
+                    warn!("stale check skipped: watched tree exceeds the walk bounds");
+                }
+            }
+            Some(found) => {
+                if state.baseline.is_none() {
+                    // First-arm path: the start-of-task walk exceeded the
+                    // bounds, so try again.
+                    state.baseline = Some(found);
+                    if !state.logged.stale_armed {
+                        state.logged.stale_armed = true;
+                        info!("Capability stale check armed");
+                    }
+                } else if state.baseline.as_ref().is_some_and(|base| found != *base)
+                    && !state.pending_reload
+                    && state.in_flight.is_none()
+                {
+                    warn!("capability files changed but no file event arrived; reloading");
+                    state.pending_reload = true;
+                    // Due on the next 100 ms tick: the reload starts there,
+                    // not here, so both paths share the one guarded start
+                    // in `on_tick`.
+                    let now = Instant::now();
+                    state.last_event = Some(now.checked_sub(debounce).unwrap_or(now));
+                }
+            }
+        }
     }
 
     /// Spawn one reload and return its join handle with the in-flight
