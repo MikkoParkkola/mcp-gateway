@@ -227,6 +227,25 @@ fn names_certificate_failure(error: &reqwest::Error) -> bool {
 mod embedded_userinfo_guard_tests {
     use super::*;
 
+    // T8b (MIK-8660, lane-written red probe): the string markers read the URL
+    // too, so a refused connection to a path named `handshake` is labelled a
+    // certificate failure.
+    #[tokio::test]
+    async fn a_refused_connection_named_handshake_is_not_a_certificate_failure() {
+        let error = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client")
+            .get("http://127.0.0.1:1/handshake")
+            .send()
+            .await
+            .expect_err("port 1 refuses");
+        assert!(
+            !matches!(classify(&error), HttpError::Terminal(TerminalFailure::Certificate)),
+            "{error}"
+        );
+    }
+
     /// Synthetic markers only. These are not credentials for anything.
     const USER: &str = "not-a-real-user";
     const PASS: &str = "not-a-real-secret";

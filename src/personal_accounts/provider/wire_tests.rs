@@ -443,3 +443,30 @@ async fn a_dropped_pause_serves_no_metadata_however_valid_the_responder() {
 
     fixture.stop().await;
 }
+
+// T8a (MIK-8660, lane-written red probe): the typed rustls downcast that
+// `events/client.rs` uses must name a real untrusted-certificate handshake.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_typed_tls_check_names_an_untrusted_certificate() {
+    let fixture = Fixture::start(responder(|_| json_200("{}"))).await;
+    let error = reqwest::Client::builder()
+        .no_proxy()
+        .resolve(HOST, fixture.addr)
+        .build()
+        .expect("client")
+        .get(fixture.url("/x"))
+        .send()
+        .await
+        .expect_err("the fixture CA is not trusted");
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+    let mut typed = false;
+    while let Some(current) = source {
+        typed |= current.downcast_ref::<rustls::Error>().is_some()
+            || current
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::get_ref)
+                .is_some_and(|inner| inner.downcast_ref::<rustls::Error>().is_some());
+        source = current.source();
+    }
+    assert!(typed, "{error:?}");
+}
