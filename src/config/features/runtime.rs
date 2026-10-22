@@ -317,3 +317,7 @@ fn config_error(message: impl Into<String>) -> Error {
 fn default_true() -> bool {
     true
 }
+
+#[cfg(test)]
+#[path = "runtime_tests.rs"]
+mod tests;
