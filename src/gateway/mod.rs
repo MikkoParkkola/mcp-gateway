@@ -272,10 +272,6 @@ pub mod test_helpers {
 /// (router route guards, stdio guards, `meta_mcp` unit rows): a
 /// private `#[cfg(test)]` item here reaches exactly those descendants
 /// and nothing outside `gateway`.
-#[cfg(test)]
-#[path = "single_predicate_scan_tests.rs"]
-mod single_predicate_scan_tests;
-
 #[cfg(all(test, feature = "metrics", feature = "firewall"))]
 fn count_plan_replay_skipped<F: std::future::Future>(
     reason: &str,

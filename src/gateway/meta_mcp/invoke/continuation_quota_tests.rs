@@ -566,12 +566,24 @@ async fn t5_unbound_anonymous_is_refused_on_both_routes() {
     )
     .await;
     assert!(minted.is_none(), "meta refuses the unbound caller");
-    // Direct: refused already at the quota key.
+    // Direct: quota exists, but the source has no fingerprint.
+    let unbound = (None, (None, None), Some(&client));
     assert_eq!(
-        direct_quota_key((None, (None, None), Some(&client))),
-        None,
-        "direct refuses the unbound caller"
+        direct_quota_key(unbound),
+        Some(QuotaKey::new(QuotaSource::KeyName("anonymous"))),
+        "direct charges the key-name quota"
     );
+    let direct_minted = super::mint_continuation(
+        &state,
+        super::direct_source(unbound),
+        &quota,
+        ("fixture", None),
+        "tool",
+        &arguments,
+        None,
+    )
+    .await;
+    assert!(direct_minted.is_none(), "direct refuses the unbound caller");
 }
 
 /// MIK-8659 T5 wrong-binding-first (GREEN on meta): the wrong binding is
@@ -682,21 +694,15 @@ async fn t5_wrong_binding_first_then_rightful_redeems_on_direct() {
 /// so the shared fill fails.
 #[tokio::test]
 async fn t5_shared_anonymous_cap_spans_both_routes() {
+    let slots = crate::protocol::continuation::PRINCIPAL_SLOTS;
     let state = std::sync::Arc::new(crate::protocol::continuation::ContinuationState::new());
     let quota = QuotaKey::new(QuotaSource::KeyName("anonymous"));
     let arguments = serde_json::json!({});
-    let mut bindings = Vec::new();
-    for i in 0..crate::protocol::continuation::PRINCIPAL_SLOTS {
-        bindings.push(format!("cap-{i:03}"));
-    }
-    // Half the cap through the meta shape (key-name quota + bound source).
-    for (i, binding) in bindings
-        .iter()
-        .enumerate()
-        .take(crate::protocol::continuation::PRINCIPAL_SLOTS / 2)
-    {
+    let client = crate::gateway::auth::anonymous_client();
+    let half = slots / 2;
+    for i in 0..half {
+        let binding = format!("binding-{i}");
         let key = format!("idp:{}:{binding}", binding.len());
-        // `key` is moved into the mint below.
         let minted = super::mint_continuation(
             &state,
             crate::protocol::mrtr::PrincipalSource::Key(key),
@@ -709,12 +715,49 @@ async fn t5_shared_anonymous_cap_spans_both_routes() {
         .await;
         assert!(minted.is_some(), "meta fill {i} mints");
     }
-    // The direct leg must charge the same quota key; today it is None.
-    let client = crate::gateway::auth::anonymous_client();
-    let direct_quota = direct_quota_key((None, (Some("cap-direct"), None), Some(&client)));
-    assert_eq!(
-        direct_quota,
-        Some(quota.clone()),
-        "direct shares the anonymous key-name cap"
+    let direct_bindings: Vec<String> = (half..slots)
+        .map(|i| format!("cap-direct-{i:03}"))
+        .collect();
+    for (i, binding) in direct_bindings.iter().enumerate() {
+        let caller = (None, (Some(binding.as_str()), None), Some(&client));
+        let direct_quota = direct_quota_key(caller).expect("direct charges a bound caller");
+        let minted = super::mint_continuation(
+            &state,
+            super::direct_source(caller),
+            &direct_quota,
+            ("fixture", None),
+            "tool",
+            &arguments,
+            None,
+        )
+        .await;
+        assert!(minted.is_some(), "direct fill {i} mints");
+    }
+    let overflow = super::mint_continuation(
+        &state,
+        crate::protocol::mrtr::PrincipalSource::Key("idp:16:binding-overflow".to_owned()),
+        &quota,
+        ("fixture", None),
+        "tool",
+        &arguments,
+        None,
+    )
+    .await;
+    assert!(overflow.is_none(), "meta refuses past the shared cap");
+    let overflow_caller = (None, (Some("cap-direct-overflow"), None), Some(&client));
+    let overflow_quota = direct_quota_key(overflow_caller).expect("direct still charges quota");
+    let direct_overflow = super::mint_continuation(
+        &state,
+        super::direct_source(overflow_caller),
+        &overflow_quota,
+        ("fixture", None),
+        "tool",
+        &arguments,
+        None,
+    )
+    .await;
+    assert!(
+        direct_overflow.is_none(),
+        "direct refuses past the shared cap"
     );
 }
