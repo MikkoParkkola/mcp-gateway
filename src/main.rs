@@ -312,12 +312,20 @@ async fn run(cli: Cli) -> ExitCode {
             shadow_format,
             start_stdio,
             show_stderr,
+            no_registry_check,
         }) => {
             if shadow {
                 commands::run_doctor_shadow_command(&shadow_format)
             } else {
                 let probe = commands::StdioProbe::from_flags(start_stdio, show_stderr);
-                commands::run_doctor_command(fix, config.as_deref(), format, probe).await
+                commands::run_doctor_command(
+                    fix,
+                    config.as_deref(),
+                    format,
+                    probe,
+                    no_registry_check,
+                )
+                .await
             }
         }
         Some(Command::Upgrade {

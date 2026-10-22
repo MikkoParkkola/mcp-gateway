@@ -8,6 +8,8 @@
 //! forced value into the operator's file.
 //!
 //! What `hardened` enforces in this version:
+//! - `doctor` skips its npm registry deprecation lookup (its probes of the
+//!   operator's own backends still run);
 //! - the context-integrity preset is at least `team_shared`
 //!   (`enterprise_strict` is kept) and `non_bypassable` is on;
 //! - the firewall and anomaly detection are on, and an anomaly score at or

@@ -245,6 +245,19 @@ scripts/dev/usability-smoke.sh  # repo checkout: no prompts + safe export + rout
 scripts/dev/service-template-smoke.sh  # repo checkout: service template paths + native start smoke
 ```
 
+**Network use.** Doctor warns when a stdio backend pins a registry npm package
+to a version npm marks deprecated. That lookup is on by default: it sends only
+package names from the gateway's own registry to registry.npmjs.org (never
+backend names, versions or settings), and npm sees this host's IP address.
+Skip it with `--no-registry-check`, `MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK=1`,
+or `security.posture: hardened`; a failed lookup prints nothing and never
+fails doctor. This skips the gateway's own npm registry lookup; it does not stop npx or other servers started by --start-stdio from contacting npm, so air-gapped hosts should not use --start-stdio.
+The lookup uses only the proxy named by `HTTPS_PROXY` or `ALL_PROXY` (either case; an
+`http`/`https` proxy without credentials, honouring `NO_PROXY`), never an OS proxy setting,
+and trusts only the bundled Mozilla root certificates, never the system store. With no
+proxy variable set it connects directly. Behind a TLS-inspecting proxy, or a proxy setting
+that is unusable or unreadable, it makes no request and prints nothing.
+
 Client configs are still generated on the host, not inside the container:
 
 ```bash
