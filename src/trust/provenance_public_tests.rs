@@ -183,12 +183,14 @@ fn a0_fixtures_match_the_committed_bytes() {
     let result = result_json();
     let unbound = serde_json::json!({"n": 9_007_199_254_740_992u64});
     let other = ProvenancePublicSigner::from_seed_for_test(SEED_TWO, KID_ONE);
+    let unknown = signer_two();
     let fixtures = [
         ("jwk.json", signer.public_jwk()),
         ("result.json", result.clone()),
         ("provenance.json", provenance_value(&signed, Some((&signer, Some(&result))))),
         ("provenance_unbound.json", provenance_value(&signed, Some((&signer, Some(&unbound))))),
         ("jwk_other.json", other.public_jwk()),
+        ("jwk_unknown_kid.json", unknown.public_jwk()),
         (
             "provenance_wide.json",
             provenance_value(&wide_sample().sign(&hmac()), Some((&signer, Some(&result)))),
@@ -307,16 +309,32 @@ fn d4_malformed_kids_are_refused() {
         );
         let result = resolve_public_signer(&env, ATTESTATION_ID);
         assert!(result.is_err(), "a malformed kid {resolved:?} is refused");
-        assert_value_free(&result.expect_err("just asserted"), &SEED_ONE);
+        let err = result.expect_err("just asserted");
+        assert_value_free(&err, &SEED_ONE);
+        if resolved.contains('\n') {
+            let display = err.to_string();
+            let debug = format!("{err:?}");
+            assert!(!display.contains(resolved), "the error leaks the raw kid: {display}");
+            assert!(!debug.contains(resolved), "the error leaks the raw kid: {debug}");
+        }
 
         let x = URL_SAFE_NO_PAD.encode([7u8; 32]);
         let kid_json = serde_json::to_string(resolved).expect("a kid serializes");
         let text =
             format!("{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":{kid_json},\"x\":\"{x}\"}}");
-        assert!(
-            matches!(TrustSet::from_json(&text), Err(TrustSetRefusal::MalformedKid)),
+        let trust = TrustSet::from_json(&text);
+        let Err(refusal) = trust else {
+            panic!("the trust set must refuse {resolved:?} as MalformedKid");
+        };
+        assert_eq!(
+            refusal,
+            TrustSetRefusal::MalformedKid,
             "the trust set must refuse {resolved:?} as MalformedKid"
         );
+        if resolved.contains('\n') {
+            let debug = format!("{refusal:?}");
+            assert!(!debug.contains(resolved), "the trust error leaks the raw kid: {debug}");
+        }
     }
 }
 

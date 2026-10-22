@@ -378,6 +378,54 @@ fn verify_signature_without_domain_tag_is_invalid() {
     }
 }
 
+#[test]
+fn verify_newline_kid_prints_one_line() {
+    use ring::signature::Ed25519KeyPair;
+
+    let home = tempfile::tempdir().expect("temporary home");
+    let key_pair = Ed25519KeyPair::from_seed_unchecked(&[7u8; 32]).expect("a seed loads");
+    let x = URL_SAFE_NO_PAD.encode(key_pair.public_key().as_ref());
+    let trust_text =
+        format!("{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":\"prov-test-1\",\"x\":\"{x}\"}}");
+    let trust = home.path().join("trust.json");
+    write_private(&trust, trust_text.as_bytes());
+    let inner = serde_json::json!({
+        "subject_kind": "runtime",
+        "backend_id": "github",
+        "tool": "search_issues",
+        "observed_at": "2026-07-13T10:15:30Z",
+        "cache": "miss",
+        "backend_ok": true,
+        "evidence_kind": "observed"
+    });
+    let payload = serde_json::json!({
+        "v": 1,
+        "alg": "EdDSA",
+        "kid": "prov\ntest",
+        "receipt": inner,
+        "result_sha256": null,
+    });
+    let payload_bytes = serde_json::to_vec(&payload).expect("payload serializes");
+    let prov = serde_json::json!({
+        "receipt": inner,
+        "key_id": "bnaut/gateway",
+        "algorithm": "HS256",
+        "signature": "dummy",
+        "public_signature": {
+            "payload": URL_SAFE_NO_PAD.encode(&payload_bytes),
+            "sig": URL_SAFE_NO_PAD.encode([0u8; 64]),
+        },
+    });
+    let receipt = home.path().join("newline_kid.json");
+    let bytes = serde_json::to_vec(&prov).expect("receipt serializes");
+    write_private(&receipt, &bytes);
+    let out = run(home.path(), &verify_args(&trust, &receipt, None, &[]), &[]);
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(stdout.lines().count(), 1, "exactly one stdout line: {stdout:?}");
+    assert!(stdout.ends_with('\n'), "the line ends with a newline: {stdout:?}");
+}
+
 fn hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -398,6 +446,11 @@ fn doctor_output_holds_no_canary_seed() {
     let out = run(home.path(), &args, &[]);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "doctor exits 0, stderr: {stderr}");
+    assert!(
+        stdout.contains(config.display().to_string().as_str()),
+        "doctor names the supplied config path: {stdout}"
+    );
     let combined = format!("{stdout}{stderr}");
     assert!(!combined.contains(canary_b64.as_str()), "doctor leaks the canary seed");
     assert!(!combined.contains(canary_hex.as_str()), "doctor leaks the canary hex");
@@ -423,6 +476,9 @@ fn config_export_output_holds_no_canary_seed() {
     let out = run(home.path(), &args, &[]);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "export exits 0, stderr: {stderr}");
+    let parsed: Value = serde_json::from_str(&stdout).expect("stdout parses as JSON");
+    assert!(parsed.get("mcpServers").is_some(), "export prints its JSON shape: {stdout}");
     let combined = format!("{stdout}{stderr}");
     assert!(!combined.contains(canary_b64.as_str()), "export leaks the canary seed");
     assert!(!combined.contains(canary_hex.as_str()), "export leaks the canary hex");

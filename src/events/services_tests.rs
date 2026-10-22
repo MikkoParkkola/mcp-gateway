@@ -77,6 +77,22 @@ fn the_receipt_is_signed_only_when_stamping_is_on() {
     assert!(stamped["signature"].as_str().is_some_and(|s| !s.is_empty()));
 }
 
+/// The `x` of `seed`: the real public key, without touching the skeleton's
+/// `public_jwk` (Null until implemented).
+fn x_of(seed: &[u8; 32]) -> String {
+    use base64::Engine as _;
+    let key_pair = ring::signature::Ed25519KeyPair::from_seed_unchecked(seed).expect("a seed loads");
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key_pair.public_key().as_ref())
+}
+
+/// A JWK text for `seed`/`kid`, built from literals plus the seed's real key.
+fn jwk_for(seed: &[u8; 32], kid: &str) -> String {
+    format!(
+        "{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":\"{kid}\",\"x\":\"{}\"}}",
+        x_of(seed)
+    )
+}
+
 /// MIK-8398 D1b: the event `provenance()` with both signers yields a value
 /// whose public signature verifies Unbound — an event has no result to bind.
 #[test]
@@ -86,15 +102,6 @@ fn d1b_dual_signed_event_provenance_is_unbound() {
     };
 
     let public = ProvenancePublicSigner::from_seed_for_test([7u8; 32], "prov-test-1");
-    let jwk = public.public_jwk();
-    assert_eq!(
-        jwk.get("kty").and_then(serde_json::Value::as_str),
-        Some("OKP"),
-        "the test signer's JWK must read as OKP: {jwk}"
-    );
-    let trust = TrustSet::from_json(serde_json::to_string(&jwk).expect("a JWK serializes").as_str())
-        .expect("the test JWK loads as a trust set");
-
     let hmac = crate::attestation::BnautAttestationSigner::new(b"k".to_vec(), "id")
         .with_audience("test-gateway");
     let stamped = Services {
@@ -111,16 +118,22 @@ fn d1b_dual_signed_event_provenance_is_unbound() {
         stamped.get("public_signature").is_some(),
         "dual-signed event provenance must add public_signature: {stamped}"
     );
+    let trust = TrustSet::from_json(jwk_for(&[7u8; 32], "prov-test-1").as_str())
+        .expect("the test JWK loads as a trust set");
     let verified = verify_public(&stamped, &trust, None).expect("an event verifies");
     assert_eq!(verified.status, VerifyStatus::Unbound);
 }
 
 /// MIK-8398 D1c (event half, lead row): with the HMAC signer only — the public
-/// seed absent — the event provenance is byte-identical to today's, with no
-/// `public_signature`.
+/// seed absent — the event provenance matches the primitive-built bytes
+/// exactly, with no `public_signature`.
 #[test]
 fn d1c_event_without_public_seed_is_byte_identical() {
-    let now = crate::clock::utc_now().expect("clock");
+    use crate::trust::RuntimeProvenanceReceipt;
+
+    let now = chrono::DateTime::parse_from_rfc3339("2026-07-13T10:15:30Z")
+        .expect("the fixed time parses")
+        .with_timezone(&chrono::Utc);
     let hmac = || {
         crate::attestation::BnautAttestationSigner::new(b"k".to_vec(), "id")
             .with_audience("test-gateway")
@@ -130,21 +143,21 @@ fn d1c_event_without_public_seed_is_byte_identical() {
         ..services(Vec::new())
     }
     .provenance("hooks", "webhook.c.r.received", now);
-    let today = Services {
-        provenance: Some(Arc::new(hmac())),
-        ..services(Vec::new())
-    }
-    .provenance("hooks", "webhook.c.r.received", now);
+    let receipt =
+        RuntimeProvenanceReceipt::event("hooks", "webhook.c.r.received", now.to_rfc3339());
+    let expected = serde_json::to_value(receipt.sign(&hmac())).expect("expected serializes");
     assert_eq!(
-        serde_json::to_string(&stamped).expect("stamped serializes"),
-        serde_json::to_string(&today).expect("today serializes"),
-        "HMAC-only event provenance must match today's bytes"
+        stamped, expected,
+        "HMAC-only event provenance must match the primitive-built bytes"
     );
-    for (name, value) in [("stamped", &stamped), ("today", &today)] {
-        assert!(
-            value.get("public_signature").is_none(),
-            "{name} must carry no public_signature: {value}"
-        );
+    assert!(
+        stamped.get("public_signature").is_none(),
+        "HMAC-only event provenance must carry no public_signature: {stamped}"
+    );
+    let members = stamped.as_object().expect("an object");
+    assert_eq!(members.len(), 4, "no extra members: {stamped}");
+    for member in ["receipt", "key_id", "algorithm", "signature"] {
+        assert!(members.contains_key(member), "missing {member}: {stamped}");
     }
 }
 

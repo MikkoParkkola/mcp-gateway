@@ -171,6 +171,23 @@ fn the_wrong_key_fails() {
     let out = run(home.path(), &args);
     assert_eq!(out.status.code(), Some(1));
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(stdout, "INVALID bad_signature\n");
+}
+
+#[test]
+fn unknown_kid_fails() {
+    let trust_jwk = fixture_json("jwk_unknown_kid.json");
+    let prov = fixture_json("provenance.json");
+    assert!(!independent_verify(&trust_jwk, &prov));
+
+    let home = tempfile::tempdir().expect("temporary home");
+    let trust = copy_fixture_to(home.path(), "jwk_unknown_kid.json");
+    let receipt = copy_fixture_to(home.path(), "provenance.json");
+    let result = copy_fixture_to(home.path(), "result.json");
+    let args = verify_args(&trust, &receipt, Some(&result));
+    let out = run(home.path(), &args);
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     assert_eq!(stdout, "INVALID unknown_kid\n");
 }
 
