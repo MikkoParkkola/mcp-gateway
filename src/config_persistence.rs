@@ -985,3 +985,8 @@ mod edit_tests;
 #[cfg(all(test, unix))]
 #[path = "config_persistence_atomic_tests.rs"]
 mod atomic_tests;
+
+// Linux only: writes POSIX ACL xattrs, which only the Linux probe reads.
+#[cfg(all(test, any(target_os = "linux", target_os = "android")))]
+#[path = "config_persistence_acl_tests.rs"]
+mod acl_tests;
