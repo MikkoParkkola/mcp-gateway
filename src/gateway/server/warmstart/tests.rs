@@ -493,3 +493,17 @@ fn unreachable_backend(name: &str) -> Arc<crate::backend::Backend> {
         Duration::from_secs(60),
     ))
 }
+
+/// MIK-8665 (DUPC-8.PR8.3): a sub-millisecond gap still spreads over its
+/// bound. Rounding to whole milliseconds turned every 100 µs draw into zero, so
+/// warm-start retried with no wait at all; asserted over a sample, not one draw.
+#[test]
+fn a_sub_millisecond_gap_still_jitters_over_its_bound() {
+    let bound = Duration::from_micros(100);
+    let draws: Vec<Duration> = (0..256).map(|_| super::jittered(bound)).collect();
+    assert!(draws.iter().all(|d| *d <= bound), "a draw exceeded {bound:?}");
+    assert!(
+        draws.iter().any(|d| !d.is_zero()),
+        "256 draws over {bound:?} were all zero"
+    );
+}
