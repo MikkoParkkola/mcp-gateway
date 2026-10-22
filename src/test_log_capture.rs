@@ -7,6 +7,8 @@
 
 use std::sync::{Arc, Mutex};
 
+use tracing_subscriber::layer::SubscriberExt;
+
 // The one keeper, shared with the binary's capture (MIK-8254).
 #[path = "test_support/interest.rs"]
 mod interest;
@@ -106,6 +108,124 @@ impl std::io::Write for Counter {
 
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
+    }
+}
+
+/// A live count, on this thread, of log records at exactly `level` whose
+/// message contains `text`, for a test that must wait for a record rather
+/// than read the log afterwards. Counting stops when the guard drops.
+pub(crate) fn live_count_at(
+    level: tracing::Level,
+    text: &'static str,
+) -> (
+    tracing::subscriber::DefaultGuard,
+    tokio::sync::watch::Receiver<usize>,
+) {
+    keep_interest_open();
+    let (tx, rx) = tokio::sync::watch::channel(0);
+    let layer = SingleLevelCounter {
+        level,
+        text,
+        sender: Arc::new(tx),
+    };
+    let subscriber = tracing_subscriber::registry().with(layer);
+    (tracing::subscriber::set_default(subscriber), rx)
+}
+
+struct SingleLevelCounter {
+    level: tracing::Level,
+    text: &'static str,
+    sender: Arc<tokio::sync::watch::Sender<usize>>,
+}
+
+/// The concatenated `str` and `debug` fields of one event, so a `contains`
+/// check sees the message however the macros recorded it.
+struct FieldText(String);
+
+impl tracing::field::Visit for FieldText {
+    fn record_str(&mut self, _field: &tracing::field::Field, value: &str) {
+        self.0.push_str(value);
+        self.0.push(' ');
+    }
+
+    fn record_debug(&mut self, _field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.0.push_str(&format!("{value:?}"));
+        self.0.push(' ');
+    }
+}
+
+impl<S> tracing_subscriber::Layer<S> for SingleLevelCounter
+where
+    S: tracing::Subscriber,
+{
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        if event.metadata().level() != &self.level {
+            return;
+        }
+        let mut seen = FieldText(String::new());
+        event.record(&mut seen);
+        if seen.0.contains(self.text) {
+            self.sender.send_modify(|n| *n += 1);
+        }
+    }
+}
+
+/// A live count, on this thread, for several `(level, text)` pairs in ONE
+/// subscriber, for a test that needs e.g. an INFO baseline and a WARN heal at
+/// once. Two `set_default` guards cannot both count (the inner shadows the
+/// outer on this thread), so one capture counts all of them. Counting stops
+/// when the guard drops; `filters[i]` is counted in the returned `Vec[i]`.
+pub(crate) fn live_counts_at(
+    filters: &[(tracing::Level, &'static str)],
+) -> (
+    tracing::subscriber::DefaultGuard,
+    tokio::sync::watch::Receiver<Vec<usize>>,
+) {
+    keep_interest_open();
+    let (tx, rx) = tokio::sync::watch::channel(vec![0; filters.len()]);
+    let layer = MultiLevelCounter {
+        filters: filters.to_vec(),
+        sender: Arc::new(tx),
+    };
+    let subscriber = tracing_subscriber::registry().with(layer);
+    (tracing::subscriber::set_default(subscriber), rx)
+}
+
+struct MultiLevelCounter {
+    filters: Vec<(tracing::Level, &'static str)>,
+    sender: Arc<tokio::sync::watch::Sender<Vec<usize>>>,
+}
+
+impl<S> tracing_subscriber::Layer<S> for MultiLevelCounter
+where
+    S: tracing::Subscriber,
+{
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let mut seen = FieldText(String::new());
+        event.record(&mut seen);
+        let level = event.metadata().level();
+        if !self
+            .filters
+            .iter()
+            .any(|(wanted, text)| level == wanted && seen.0.contains(text))
+        {
+            return;
+        }
+        self.sender.send_modify(|counts| {
+            for (slot, (wanted, text)) in self.filters.iter().enumerate() {
+                if level == wanted && seen.0.contains(text) {
+                    counts[slot] += 1;
+                }
+            }
+        });
     }
 }
 

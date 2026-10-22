@@ -49,6 +49,23 @@ impl Default for ReloadTuning {
     }
 }
 
+/// In-flight reload bookkeeping (MIK-8651 LOUD.1, candidate e). Compile-only
+/// shell: the unit test pins the contract, the implementation lands next.
+#[cfg(test)]
+struct InFlight {
+    started: Instant,
+    stage: Arc<std::sync::atomic::AtomicU8>,
+    warned: bool,
+}
+
+#[cfg(test)]
+impl InFlight {
+    fn slow_warning(&mut self, _now: Instant, _reload_slow: Duration) -> Option<String> {
+        let _ = (&self.started, &self.stage, self.warned);
+        None
+    }
+}
+
 impl CapabilityWatcher {
     /// Start watching capability directories for changes
     ///
