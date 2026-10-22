@@ -768,27 +768,33 @@ fn a_seal_with_no_scope_fails_closed() {
 }
 
 /// R17 (MIK-8398 C1g): a live `gateway_invoke` whose backend answer carries
-/// `cacheScope: "public"` is sealed over the delivered bytes. The backend
-/// answer is a state-only interim, so the outer result carries the scope at
-/// its own top level (the position `clamp_delivered_scope` rewrites) rather
-/// than buried in `content[0].text`. The oracle is the serialized wire form,
-/// so any post-seal mutation fails, not only this clamp.
+/// `cacheScope: "public"` is sealed over the delivered bytes. The tool is
+/// called by its surfaced name, so the backend's own envelope is the outer
+/// result (Native) and its `cacheScope` sits at the top level the clamp
+/// rewrites; a `gateway_invoke` reply would bury it in `content[0].text`.
+/// The oracle is the serialized wire form, so any post-seal mutation fails,
+/// not only this clamp. A guard: the live route clamped before the seal at
+/// ecfd7a9b5 already (`response_security.rs` PARENT.6).
 #[tokio::test]
 async fn a_public_scope_is_sealed_as_delivered_on_the_meta_route() {
     with_minted_receipts(Box::pin(async {
         let mut meta = MetaMcp::new(answering_backend(json!({
-            "resultType": "input_required",
-            "requestState": "backend-opaque-state",
+            "content": [{"type": "text", "text": "ok"}],
+            "isError": false,
             "cacheScope": "public",
-        })));
+        })))
+        .with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
+            server: "remote_docs".to_string(),
+            tool: "search".to_string(),
+        }]);
         dual_signed_meta(&mut meta);
         let trust = trust_set();
         let caller = allow_all_ctx_named(Some("alice"), None);
         let response = meta
             .handle_tools_call(
                 RequestId::Number(17),
-                "gateway_invoke",
-                invoke_args(),
+                "search",
+                json!({}),
                 Some("session-1"),
                 caller,
             )
