@@ -86,14 +86,15 @@ async fn lagged_shutdown_warns_then_stops() {
         .send(())
         .expect("the second shutdown send lands");
     CapabilityWatcher::spawn_reload_task(backend, event_rx, shutdown_rx, None);
-    tokio::time::timeout(Duration::from_secs(2), counts.wait_for(|v| v[0] >= 1))
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, counts.wait_for(|v| v[0] >= 1))
         .await
-        .expect("a warn naming Lagged within 2 s")
+        .expect("a warn naming Lagged within the hang bound")
         .expect("the log counter is alive");
     assert!(
-        eventually(Duration::from_secs(2), || event_tx.is_closed()).await,
+        eventually(crate::test_wait::HANG_BOUND, || event_tx.is_closed()).await,
         "the retained shutdown stops the task"
     );
+    // timing: absence
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(counts.borrow()[0], 1, "Lagged warns exactly once");
 }
@@ -117,16 +118,17 @@ async fn closed_shutdown_keeps_reloading() {
     // result is not the assertion, the reload below is.
     let _event_accepted = event_tx.send(()).await;
     assert!(
-        eventually(Duration::from_secs(3), || {
+        eventually(crate::test_wait::HANG_BOUND, || {
             description_of(&backend, "a").as_deref() == Some("v2-much-longer")
         })
         .await,
         "the edit still reloads with the shutdown channel closed"
     );
-    tokio::time::timeout(Duration::from_secs(2), counts.wait_for(|v| v[0] >= 1))
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, counts.wait_for(|v| v[0] >= 1))
         .await
-        .expect("a warn that the shutdown channel closed within 2 s")
+        .expect("a warn that the shutdown channel closed within the hang bound")
         .expect("the log counter is alive");
+    // timing: absence
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(
         counts.borrow()[0],
@@ -146,7 +148,7 @@ async fn a_real_shutdown_still_stops() {
     CapabilityWatcher::spawn_reload_task(backend, event_rx, shutdown_rx, None);
     shutdown_tx.send(()).expect("the shutdown send lands");
     assert!(
-        eventually(Duration::from_secs(2), || event_tx.is_closed()).await,
+        eventually(crate::test_wait::HANG_BOUND, || event_tx.is_closed()).await,
         "a real shutdown stops the task"
     );
 }
@@ -178,23 +180,24 @@ async fn a_dead_event_source_heals_by_mtime_open_sender() {
         None,
         tuning,
     );
-    tokio::time::timeout(Duration::from_secs(2), counts.wait_for(|v| v[0] >= 1))
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, counts.wait_for(|v| v[0] >= 1))
         .await
-        .expect("the armed baseline within 2 s")
+        .expect("the armed baseline within the hang bound")
         .expect("the log counter is alive");
     // `event_tx` stays alive and never sends: the event source is silent.
     std::fs::write(dir.path().join("a.yaml"), cap_yaml("a", "v2-much-longer")).expect("write v2");
     assert!(
-        eventually(Duration::from_secs(3), || {
+        eventually(crate::test_wait::HANG_BOUND, || {
             description_of(&backend, "a").as_deref() == Some("v2-much-longer")
         })
         .await,
         "the stale check heals the edit with no file event"
     );
-    tokio::time::timeout(Duration::from_secs(2), counts.wait_for(|v| v[1] >= 1))
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, counts.wait_for(|v| v[1] >= 1))
         .await
-        .expect("a heal warn within 2 s")
+        .expect("a heal warn within the hang bound")
         .expect("the log counter is alive");
+    // timing: absence
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert_eq!(counts.borrow()[1], 1, "the heal warns exactly once");
     drop(event_tx);
@@ -230,26 +233,27 @@ async fn a_dead_event_source_heals_by_mtime_dropped_sender() {
         None,
         tuning,
     );
-    tokio::time::timeout(Duration::from_secs(2), counts.wait_for(|v| v[0] >= 1))
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, counts.wait_for(|v| v[0] >= 1))
         .await
-        .expect("the armed baseline within 2 s")
+        .expect("the armed baseline within the hang bound")
         .expect("the log counter is alive");
-    tokio::time::timeout(Duration::from_secs(2), counts.wait_for(|v| v[1] >= 1))
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, counts.wait_for(|v| v[1] >= 1))
         .await
-        .expect("a warn that the event source is gone within 2 s")
+        .expect("a warn that the event source is gone within the hang bound")
         .expect("the log counter is alive");
     std::fs::write(dir.path().join("a.yaml"), cap_yaml("a", "v2-much-longer")).expect("write v2");
     assert!(
-        eventually(Duration::from_secs(3), || {
+        eventually(crate::test_wait::HANG_BOUND, || {
             description_of(&backend, "a").as_deref() == Some("v2-much-longer")
         })
         .await,
         "the stale check heals the edit with the event sender dropped"
     );
-    tokio::time::timeout(Duration::from_secs(2), counts.wait_for(|v| v[2] >= 1))
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, counts.wait_for(|v| v[2] >= 1))
         .await
-        .expect("a heal warn within 2 s")
+        .expect("a heal warn within the hang bound")
         .expect("the log counter is alive");
+    // timing: absence
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert_eq!(
         counts.borrow()[1],
@@ -287,23 +291,24 @@ async fn heal_sees_a_file_added() {
         None,
         tuning,
     );
-    tokio::time::timeout(Duration::from_secs(2), counts.wait_for(|v| v[0] >= 1))
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, counts.wait_for(|v| v[0] >= 1))
         .await
-        .expect("the armed baseline within 2 s")
+        .expect("the armed baseline within the hang bound")
         .expect("the log counter is alive");
     std::fs::write(dir.path().join("b.yaml"), cap_yaml("b", "b-added-here")).expect("write b");
     assert!(
-        eventually(Duration::from_secs(3), || {
+        eventually(crate::test_wait::HANG_BOUND, || {
             description_of(&backend, "b").as_deref() == Some("b-added-here")
                 && description_of(&backend, "a").as_deref() == Some("v1")
         })
         .await,
         "the added file appears in the catalogue"
     );
-    tokio::time::timeout(Duration::from_secs(2), counts.wait_for(|v| v[1] >= 1))
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, counts.wait_for(|v| v[1] >= 1))
         .await
-        .expect("a heal warn within 2 s")
+        .expect("a heal warn within the hang bound")
         .expect("the log counter is alive");
+    // timing: absence
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert_eq!(counts.borrow()[1], 1, "the heal warns exactly once");
 }
@@ -337,23 +342,24 @@ async fn heal_sees_a_file_removed() {
         None,
         tuning,
     );
-    tokio::time::timeout(Duration::from_secs(2), counts.wait_for(|v| v[0] >= 1))
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, counts.wait_for(|v| v[0] >= 1))
         .await
-        .expect("the armed baseline within 2 s")
+        .expect("the armed baseline within the hang bound")
         .expect("the log counter is alive");
     std::fs::remove_file(dir.path().join("b.yaml")).expect("remove b");
     assert!(
-        eventually(Duration::from_secs(3), || {
+        eventually(crate::test_wait::HANG_BOUND, || {
             description_of(&backend, "b").is_none()
                 && description_of(&backend, "a").as_deref() == Some("v1")
         })
         .await,
         "the removed file leaves the catalogue while the rest stays"
     );
-    tokio::time::timeout(Duration::from_secs(2), counts.wait_for(|v| v[1] >= 1))
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, counts.wait_for(|v| v[1] >= 1))
         .await
-        .expect("a heal warn within 2 s")
+        .expect("a heal warn within the hang bound")
         .expect("the log counter is alive");
+    // timing: absence
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert_eq!(counts.borrow()[1], 1, "the heal warns exactly once");
 }
@@ -399,23 +405,23 @@ async fn an_edit_made_during_a_reload_is_not_absorbed() {
         Some(changes),
         tuning,
     );
-    tokio::time::timeout(Duration::from_secs(2), counts.wait_for(|v| v[0] >= 1))
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, counts.wait_for(|v| v[0] >= 1))
         .await
-        .expect("the armed baseline within 2 s")
+        .expect("the armed baseline within the hang bound")
         .expect("the log counter is alive");
     std::fs::write(dir.path().join("a.yaml"), cap_yaml("a", "v2-longer")).expect("write v2");
     event_tx.send(()).await.expect("the task takes the event");
     // No further events: only the stale check can bring v3.
     assert!(
-        eventually(Duration::from_secs(3), || {
+        eventually(crate::test_wait::HANG_BOUND, || {
             description_of(&backend, "a").as_deref() == Some("v3-much-much-longer")
         })
         .await,
         "the edit made during the reload heals to v3"
     );
-    tokio::time::timeout(Duration::from_secs(2), counts.wait_for(|v| v[1] >= 1))
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, counts.wait_for(|v| v[1] >= 1))
         .await
-        .expect("a heal warn for the second reload within 2 s")
+        .expect("a heal warn for the second reload within the hang bound")
         .expect("the log counter is alive");
 }
 
@@ -447,9 +453,9 @@ async fn a_same_length_edit_heals_by_mtime() {
         None,
         tuning,
     );
-    tokio::time::timeout(Duration::from_secs(2), counts.wait_for(|v| v[0] >= 1))
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, counts.wait_for(|v| v[0] >= 1))
         .await
-        .expect("the armed baseline within 2 s")
+        .expect("the armed baseline within the hang bound")
         .expect("the log counter is alive");
     let path = dir.path().join("a.yaml");
     std::fs::write(&path, cap_yaml("a", "v2")).expect("write v2 same length");
@@ -466,16 +472,17 @@ async fn a_same_length_edit_heals_by_mtime() {
         .set_modified(mtime + Duration::from_secs(5))
         .expect("push the mtime +5 s");
     assert!(
-        eventually(Duration::from_secs(3), || {
+        eventually(crate::test_wait::HANG_BOUND, || {
             description_of(&backend, "a").as_deref() == Some("v2")
         })
         .await,
         "the same-length edit heals by mtime"
     );
-    tokio::time::timeout(Duration::from_secs(2), counts.wait_for(|v| v[1] >= 1))
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, counts.wait_for(|v| v[1] >= 1))
         .await
-        .expect("a heal warn within 2 s")
+        .expect("a heal warn within the hang bound")
         .expect("the log counter is alive");
+    // timing: absence
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert_eq!(counts.borrow()[1], 1, "the heal warns exactly once");
 }
@@ -502,6 +509,7 @@ async fn heal_off_when_none() {
         tuning,
     );
     std::fs::write(dir.path().join("a.yaml"), cap_yaml("a", "v2-much-longer")).expect("write v2");
+    // timing: absence
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert_eq!(
         description_of(&backend, "a").as_deref(),
@@ -538,11 +546,12 @@ async fn no_spurious_heal() {
         None,
         tuning,
     );
-    tokio::time::timeout(Duration::from_secs(2), counts.wait_for(|v| v[0] >= 1))
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, counts.wait_for(|v| v[0] >= 1))
         .await
-        .expect("the armed baseline within 2 s")
+        .expect("the armed baseline within the hang bound")
         .expect("the log counter is alive");
     let generation = backend.catalogue_generation();
+    // timing: absence
     tokio::time::sleep(Duration::from_millis(600)).await;
     assert_eq!(
         backend.catalogue_generation(),
@@ -583,10 +592,11 @@ async fn a_lagged_startup_scan_wait_does_not_drop_the_baseline_report() {
     shutdown_tx
         .send(())
         .expect("the second shutdown send lands");
-    tokio::time::timeout(Duration::from_secs(2), counts.wait_for(|v| v[0] >= 1))
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, counts.wait_for(|v| v[0] >= 1))
         .await
-        .expect("a warn naming Lagged within 2 s")
+        .expect("a warn naming Lagged within the hang bound")
         .expect("the log counter is alive");
+    // timing: absence
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(counts.borrow()[0], 1, "Lagged warns exactly once");
 }
@@ -623,3 +633,6 @@ fn slow_reload_warns_once_and_is_not_cancelled() {
         "silent after warning once"
     );
 }
+
+#[path = "watcher_heal_tests.rs"]
+mod heal;

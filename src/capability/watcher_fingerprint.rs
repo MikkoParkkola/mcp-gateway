@@ -22,10 +22,12 @@ const FINGERPRINT_MAX_ENTRIES: usize = 10_000;
 /// relative path, length, mtime in nanoseconds since the Unix epoch)` of
 /// every `*.yaml`/`*.yml`, recursive.
 ///
-/// A missing directory contributes nothing and an unreadable entry is
-/// skipped. Past [`FINGERPRINT_MAX_DEPTH`] levels or
-/// [`FINGERPRINT_MAX_ENTRIES`] visited entries the walk gives up and returns
-/// `None`, and the stale check warns instead of healing that tick.
+/// Mirrors the loader: hidden names are skipped, and file or directory is
+/// decided with [`std::fs::metadata`], which follows symlinks. A missing
+/// directory contributes nothing and an unreadable entry is skipped. Past
+/// [`FINGERPRINT_MAX_DEPTH`] levels or [`FINGERPRINT_MAX_ENTRIES`] visited
+/// entries the walk gives up and returns `None`; a symlink cycle ends at the
+/// depth bound.
 pub(super) fn fingerprint(dirs: &[String]) -> Option<Fingerprint> {
     let mut found: Fingerprint = Vec::new();
     let mut visited: usize = 0;
@@ -42,31 +44,30 @@ pub(super) fn fingerprint(dirs: &[String]) -> Option<Fingerprint> {
                 if visited > FINGERPRINT_MAX_ENTRIES {
                     return None;
                 }
-                let Ok(file_type) = entry.file_type() else {
+                let entry_path = entry.path();
+                if entry_path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with('.'))
+                {
+                    continue;
+                }
+                // Follows symlinks, like the loader's `path.is_dir()`.
+                let Ok(metadata) = std::fs::metadata(&entry_path) else {
                     continue;
                 };
-                if file_type.is_dir() {
+                if metadata.is_dir() {
                     if depth + 1 > FINGERPRINT_MAX_DEPTH {
                         return None;
                     }
-                    stack.push((entry.path(), depth + 1));
+                    stack.push((entry_path, depth + 1));
                     continue;
                 }
-                // Only real files count: symlinks are neither descended nor
-                // recorded, so a link cycle cannot loop the walk.
-                if !file_type.is_file() {
-                    continue;
-                }
-                let entry_path = entry.path();
                 let is_yaml = entry_path
                     .extension()
                     .is_some_and(|ext| ext == "yaml" || ext == "yml");
                 if !is_yaml {
                     continue;
                 }
-                let Ok(metadata) = std::fs::metadata(&entry_path) else {
-                    continue;
-                };
                 let Ok(modified) = metadata.modified() else {
                     continue;
                 };
@@ -85,12 +86,4 @@ pub(super) fn fingerprint(dirs: &[String]) -> Option<Fingerprint> {
     // `read_dir` order is unspecified; the comparison needs a canonical one.
     found.sort();
     Some(found)
-}
-
-/// Run [`fingerprint`] on the blocking pool: the walk is synchronous I/O and
-/// must not stall the loop's ticks. A failed join reads as bounds exceeded.
-pub(super) async fn blocking_fingerprint(dirs: Vec<String>) -> Option<Fingerprint> {
-    tokio::task::spawn_blocking(move || fingerprint(&dirs))
-        .await
-        .unwrap_or_default()
 }

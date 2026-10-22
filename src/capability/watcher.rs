@@ -107,7 +107,7 @@ impl ReloadTuning {
 #[path = "watcher_fingerprint.rs"]
 mod fingerprint;
 
-use fingerprint::{Fingerprint, blocking_fingerprint};
+use fingerprint::Fingerprint;
 
 /// In-flight reload bookkeeping (MIK-8651 LOUD.1, candidate e): the loop holds
 /// the spawned reload's start time and the stage it last reported, and warns
@@ -152,16 +152,37 @@ struct LoopState {
     events_open: bool,
     /// A reload is wanted once the debounce has elapsed.
     pending_reload: bool,
+    /// The last finished reload was incomplete; stale ticks retry it even
+    /// when the fingerprint equals the baseline.
+    retry_incomplete: bool,
     /// When the last file event (or stale heal) arrived.
     last_event: Option<Instant>,
     /// The running reload, if any: its join handle, its slow-warning
     /// bookkeeping, and the fingerprint taken before it started.
     in_flight: Option<(tokio::task::JoinHandle<bool>, InFlight, Option<Fingerprint>)>,
+    /// The fingerprint walk in flight, if any: at most one, never awaited,
+    /// only polled with `is_finished()`.
+    fingerprint_walk: Option<(tokio::task::JoinHandle<Option<Fingerprint>>, Instant)>,
+    /// What the in-flight walk is for and whether the baseline needs a
+    /// reload to reconcile it.
+    fingerprint_state: FingerprintState,
     /// The fingerprint taken before the last complete reload; `None` with
     /// the stale check off, or while the first arm is still pending.
     baseline: Option<Fingerprint>,
     /// One-time log lines already emitted.
     logged: LoggedOnce,
+}
+
+/// What the in-flight fingerprint walk is for.
+#[derive(Default)]
+struct FingerprintState {
+    /// The stalled-walk warning already fired for the current walk.
+    stalled_warned: bool,
+    /// A debounced reload is waiting for its before-fingerprint.
+    awaiting_before: bool,
+    /// The baseline is missing or stale; the first readable fingerprint
+    /// triggers a reload so the baseline comes from that reload's before.
+    needs_reconcile: bool,
 }
 
 /// One-time log lines of the reload loop, each emitted at most once.
@@ -311,7 +332,7 @@ impl CapabilityWatcher {
                     info!(directory = %dir, "Watching for capability changes");
                 }
             } else {
-                debug!(directory = %dir, "Directory does not exist, skipping watch");
+                warn!(directory = %dir, "capability directory does not exist; it is not watched for file events, the stale check still covers it");
             }
         }
 
@@ -379,24 +400,24 @@ impl CapabilityWatcher {
         tokio::spawn(async move {
             let debounce = tuning.debounce;
             let reload_slow = tuning.reload_slow;
+            let stale_enabled = tuning.stale_check.is_some();
             let mut state = LoopState {
                 events_open: true,
                 ..LoopState::default()
             };
-            // The stale baseline, armed before the loop so the first tick
-            // already compares against the catalogue as the task found it.
-            // With the check off the baseline stays `None` and the stale
-            // branch below waits forever.
+            // The arming walk starts at task start; its result adopts the
+            // baseline when polled. With the check off no walk ever starts
+            // and the stale branch below waits forever.
             if tuning.stale_check.is_some() {
-                state.baseline = blocking_fingerprint(backend.watched_directories()).await;
-            }
-            if state.baseline.is_some() {
-                state.logged.stale_armed = true;
-                info!("Capability stale check armed");
+                let dirs = backend.watched_directories();
+                let walk = tokio::task::spawn_blocking(move || fingerprint::fingerprint(&dirs));
+                state.fingerprint_walk = Some((walk, Instant::now()));
             }
 
             let mut interval = tokio::time::interval(Duration::from_millis(100));
-            let mut stale_interval = tuning.stale_check.map(tokio::time::interval);
+            let mut stale_interval = tuning.stale_check.map(|period| {
+                tokio::time::interval_at(tokio::time::Instant::now() + period, period)
+            });
             // One wait for the whole task: a fresh wait every round would
             // warn a closed channel on every tick, not once.
             let shutdown_wait = real_shutdown(&mut shutdown_rx);
@@ -415,7 +436,7 @@ impl CapabilityWatcher {
                         }
                     }
                     _ = interval.tick() => {
-                        Self::on_tick(&mut state, &backend, changes.as_ref(), debounce, reload_slow).await;
+                        Self::on_tick(&mut state, &backend, changes.as_ref(), debounce, reload_slow, stale_enabled).await;
                     }
                     () = async {
                         if let Some(stale) = stale_interval.as_mut() {
@@ -424,7 +445,7 @@ impl CapabilityWatcher {
                             std::future::pending::<()>().await;
                         }
                     } => {
-                        Self::on_stale_tick(&mut state, &backend, debounce).await;
+                        Self::on_stale_tick(&mut state, &backend, debounce);
                     }
                     () = &mut shutdown_wait => {
                         info!("Capability watcher shutting down");
@@ -435,17 +456,21 @@ impl CapabilityWatcher {
         });
     }
 
-    /// One 100 ms tick of the reload loop: reap a finished reload,
-    /// warn about a slow one, and start a pending reload past its
-    /// debounce.
+    /// One 100 ms tick of the reload loop: reap a finished reload, poll
+    /// the fingerprint walk, warn about a slow reload, and start a
+    /// pending reload past its debounce.
     async fn on_tick(
         state: &mut LoopState,
         backend: &Arc<CapabilityBackend>,
         changes: Option<&CatalogueChanged>,
         debounce: Duration,
         reload_slow: Duration,
+        stale_enabled: bool,
     ) {
-        Self::reap_in_flight(state, backend).await;
+        Self::reap_in_flight(state, backend, stale_enabled).await;
+        if stale_enabled {
+            Self::poll_fingerprint_walk(state, backend, changes, debounce, reload_slow).await;
+        }
         // Report a reload running past `reload_slow`, once; the reload
         // itself is never cancelled.
         if let Some((_, active, _)) = state.in_flight.as_mut()
@@ -459,84 +484,191 @@ impl CapabilityWatcher {
             && state.in_flight.is_none()
             && state.last_event.is_some_and(|at| at.elapsed() >= debounce)
         {
-            // The fingerprint is taken before the reload starts; the
-            // baseline advances to it only when the reload completes
-            // (see `reap_in_flight`).
-            let before = blocking_fingerprint(backend.watched_directories()).await;
-            let (handle, active) = Self::spawn_reload(Arc::clone(backend), changes.cloned());
-            state.in_flight = Some((handle, active, before));
-            state.pending_reload = false;
-            state.last_event = None;
+            if !stale_enabled {
+                let (handle, active) = Self::spawn_reload(Arc::clone(backend), changes.cloned());
+                state.in_flight = Some((handle, active, None));
+                state.pending_reload = false;
+                state.last_event = None;
+            } else if !state.fingerprint_state.awaiting_before && state.fingerprint_walk.is_none() {
+                // The before-fingerprint is a walk of its own; the reload
+                // starts when it finishes, so the loop never blocks.
+                let dirs = backend.watched_directories();
+                let walk = tokio::task::spawn_blocking(move || fingerprint::fingerprint(&dirs));
+                state.fingerprint_walk = Some((walk, Instant::now()));
+                state.fingerprint_state.awaiting_before = true;
+                state.fingerprint_state.stalled_warned = false;
+            }
         }
+    }
+
+    /// Poll the one fingerprint walk: take a finished result, or warn once
+    /// when it runs past `reload_slow`. A pre-reload walk past the bound
+    /// abandons the walk and starts the reload with `None`.
+    async fn poll_fingerprint_walk(
+        state: &mut LoopState,
+        backend: &Arc<CapabilityBackend>,
+        changes: Option<&CatalogueChanged>,
+        debounce: Duration,
+        reload_slow: Duration,
+    ) {
+        let Some((handle, started)) = state.fingerprint_walk.as_mut() else {
+            return;
+        };
+        if handle.is_finished() {
+            let Some((walk, _)) = state.fingerprint_walk.take() else {
+                return;
+            };
+            let found = walk.await.unwrap_or_default();
+            state.fingerprint_state.stalled_warned = false;
+            if state.fingerprint_state.awaiting_before {
+                state.fingerprint_state.awaiting_before = false;
+                let (handle, active) = Self::spawn_reload(Arc::clone(backend), changes.cloned());
+                state.in_flight = Some((handle, active, found));
+                state.pending_reload = false;
+                state.last_event = None;
+            } else {
+                Self::on_fingerprint_found(state, found, debounce);
+            }
+        } else if !state.fingerprint_state.stalled_warned && started.elapsed() >= reload_slow {
+            state.fingerprint_state.stalled_warned = true;
+            warn!("capability stale check fingerprint walk is stalled");
+            if state.fingerprint_state.awaiting_before {
+                state.fingerprint_state.awaiting_before = false;
+                if let Some((walk, _)) = state.fingerprint_walk.take() {
+                    walk.abort();
+                }
+                state.fingerprint_state.stalled_warned = false;
+                let (handle, active) = Self::spawn_reload(Arc::clone(backend), changes.cloned());
+                state.in_flight = Some((handle, active, None));
+                state.pending_reload = false;
+                state.last_event = None;
+            }
+        }
+    }
+
+    /// A finished stale-check walk: arm the baseline, reconcile it, or heal
+    /// on drift through the normal debounced path.
+    fn on_fingerprint_found(state: &mut LoopState, found: Option<Fingerprint>, debounce: Duration) {
+        let Some(found) = found else {
+            if !state.logged.bounds_skip {
+                state.logged.bounds_skip = true;
+                warn!("stale check skipped: watched tree exceeds the walk bounds");
+            }
+            if state.baseline.is_none() {
+                state.fingerprint_state.needs_reconcile = true;
+            }
+            return;
+        };
+        if state.baseline.is_none() {
+            if state.fingerprint_state.needs_reconcile {
+                Self::queue_heal(state, debounce);
+            } else {
+                state.baseline = Some(found);
+                if !state.logged.stale_armed {
+                    state.logged.stale_armed = true;
+                    info!("Capability stale check armed");
+                }
+            }
+            return;
+        }
+        if state.fingerprint_state.needs_reconcile {
+            Self::queue_heal(state, debounce);
+        } else if state.baseline.as_ref().is_some_and(|base| found != *base)
+            && !state.pending_reload
+            && state.in_flight.is_none()
+        {
+            warn!("capability files changed but no file event arrived; reloading");
+            Self::queue_heal(state, debounce);
+        }
+    }
+
+    /// Queue a reload due on the next 100 ms tick, when none is pending or
+    /// in flight. Both stale paths share the one guarded start in `on_tick`.
+    fn queue_heal(state: &mut LoopState, debounce: Duration) {
+        if state.pending_reload || state.in_flight.is_some() {
+            return;
+        }
+        state.pending_reload = true;
+        let now = Instant::now();
+        state.last_event = Some(now.checked_sub(debounce).unwrap_or(now));
     }
 
     /// Reap a finished reload. The baseline advances to the fingerprint
     /// taken before the reload, so an edit made during the reload still
     /// differs on the next tick and reloads again.
-    async fn reap_in_flight(state: &mut LoopState, backend: &CapabilityBackend) {
+    async fn reap_in_flight(
+        state: &mut LoopState,
+        backend: &CapabilityBackend,
+        stale_enabled: bool,
+    ) {
         let finished = state
             .in_flight
             .as_ref()
             .is_some_and(|(handle, _, _)| handle.is_finished());
-        if finished && let Some((handle, _, before)) = state.in_flight.take() {
-            match handle.await {
-                Ok(reloaded) => {
-                    if reloaded
-                        && backend.initial_scan_loaded_every_directory()
-                        && let Some(found) = before
-                    {
-                        state.baseline = Some(found);
-                    } else {
-                        warn!("capability reload incomplete; will retry");
-                    }
-                }
-                Err(join_error) => {
-                    if join_error.is_panic() {
-                        // Dev fails as release aborts
-                        // (r3): re-raise the panic.
-                        std::panic::resume_unwind(join_error.into_panic());
-                    }
-                    warn!("capability reload cancelled; will retry");
-                }
-            }
+        if !finished {
+            return;
         }
-    }
-
-    /// One stale-check tick: fingerprint the watched trees and, on drift
-    /// with no reload pending or in flight, warn and queue a reload
-    /// through the normal debounced path.
-    async fn on_stale_tick(state: &mut LoopState, backend: &CapabilityBackend, debounce: Duration) {
-        trace!("Capability stale check tick");
-        match blocking_fingerprint(backend.watched_directories()).await {
-            None => {
-                if !state.logged.bounds_skip {
-                    state.logged.bounds_skip = true;
-                    warn!("stale check skipped: watched tree exceeds the walk bounds");
-                }
-            }
-            Some(found) => {
-                if state.baseline.is_none() {
-                    // First-arm path: the start-of-task walk exceeded the
-                    // bounds, so try again.
+        let Some((handle, _, before)) = state.in_flight.take() else {
+            return;
+        };
+        match handle.await {
+            Ok(reloaded) => {
+                // `initial_scan_loaded_every_directory` is rewritten by every `reload()` through `set_catalogue_partial`, so it describes the catalogue just installed.
+                let complete = reloaded && backend.initial_scan_loaded_every_directory();
+                if !complete {
+                    state.retry_incomplete = true;
+                    warn!("capability reload incomplete; will retry");
+                } else if !stale_enabled {
+                    state.retry_incomplete = false;
+                } else if let Some(found) = before {
+                    state.retry_incomplete = false;
                     state.baseline = Some(found);
+                    state.fingerprint_state.needs_reconcile = false;
                     if !state.logged.stale_armed {
                         state.logged.stale_armed = true;
                         info!("Capability stale check armed");
                     }
-                } else if state.baseline.as_ref().is_some_and(|base| found != *base)
-                    && !state.pending_reload
-                    && state.in_flight.is_none()
-                {
-                    warn!("capability files changed but no file event arrived; reloading");
-                    state.pending_reload = true;
-                    // Due on the next 100 ms tick: the reload starts there,
-                    // not here, so both paths share the one guarded start
-                    // in `on_tick`.
-                    let now = Instant::now();
-                    state.last_event = Some(now.checked_sub(debounce).unwrap_or(now));
+                } else {
+                    state.retry_incomplete = false;
+                    warn!(
+                        "capability reload complete but the stale-check baseline was not updated: fingerprint unavailable"
+                    );
+                    state.fingerprint_state.needs_reconcile = true;
                 }
             }
+            Err(join_error) => {
+                if join_error.is_panic() {
+                    // Dev fails as release aborts
+                    // (r3): re-raise the panic.
+                    std::panic::resume_unwind(join_error.into_panic());
+                }
+                state.retry_incomplete = true;
+                warn!("capability reload cancelled; will retry");
+            }
         }
+    }
+
+    /// One stale-check tick: retry an incomplete reload, or start the one
+    /// fingerprint walk when none is running. A finished walk is compared
+    /// when polled on the 100 ms tick.
+    fn on_stale_tick(state: &mut LoopState, backend: &CapabilityBackend, debounce: Duration) {
+        trace!("Capability stale check tick");
+        if state.retry_incomplete && !state.pending_reload && state.in_flight.is_none() {
+            warn!("capability reload incomplete; retrying");
+            Self::queue_heal(state, debounce);
+            return;
+        }
+        if state.pending_reload
+            || state.in_flight.is_some()
+            || state.fingerprint_state.awaiting_before
+            || state.fingerprint_walk.is_some()
+        {
+            return;
+        }
+        let dirs = backend.watched_directories();
+        let walk = tokio::task::spawn_blocking(move || fingerprint::fingerprint(&dirs));
+        state.fingerprint_walk = Some((walk, Instant::now()));
+        state.fingerprint_state.stalled_warned = false;
     }
 
     /// Spawn one reload and return its join handle with the in-flight
