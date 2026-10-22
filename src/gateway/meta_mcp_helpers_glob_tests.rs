@@ -228,3 +228,85 @@ fn unicode_lowercase_expansion_is_matched_like_the_old_matcher() {
     );
     assert!(expected3, "the expanded pattern matches the expanded name");
 }
+
+fn bundled_references() -> Vec<String> {
+    let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/capabilities"));
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    let mut stack: Vec<std::path::PathBuf> = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = std::fs::read_dir(&dir).expect("read_dir on capabilities tree");
+        for entry in entries {
+            let entry = entry.expect("dir entry");
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.is_file() {
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                if ext == "yaml" || ext == "yml" {
+                    files.push(path);
+                }
+            }
+        }
+    }
+    files.sort();
+    let mut references: Vec<String> = Vec::new();
+    for path in &files {
+        let content = std::fs::read_to_string(path).expect("read capability yaml");
+        for line in content.lines() {
+            if let Some(rest) = line.strip_prefix("name:") {
+                let value = rest.trim().trim_matches('"').trim_matches('\'').trim();
+                if !value.is_empty() {
+                    references.push(format!("gateway:{value}").to_lowercase());
+                }
+                break;
+            }
+        }
+    }
+    references
+}
+
+#[test]
+fn the_ticket_query_stays_within_the_bound_against_every_bundled_name() {
+    let mut pattern: Vec<char> = vec!['*'; 40];
+    pattern.push('!');
+    let references = bundled_references();
+    assert!(
+        references.len() >= 50,
+        "expected at least 50 bundled references, found {}",
+        references.len()
+    );
+    for r in &references {
+        let (matched, steps) = glob_match_steps(&chars(r), &pattern);
+        assert!(!matched, "ticket query must not match {r}");
+        let b = bound(r.chars().count(), 41);
+        assert!(
+            steps <= b,
+            "steps {steps} exceeded bound {b} for {r} against the ticket query"
+        );
+    }
+}
+
+/// The iterative matcher holds no stack frame per star, so a long star run cannot overflow the stack (MIK-8683, found independently by the sec2 review).
+#[test]
+fn a_256_star_pattern_matches_without_recursion_within_the_bound() {
+    let pattern: Vec<char> = vec!['*'; 256];
+    let mut pattern_bang: Vec<char> = vec!['*'; 256];
+    pattern_bang.push('!');
+    for name in ["gateway:ab_cdefghi", ""] {
+        let n = name.chars().count();
+        let (matched, steps) = glob_match_steps(&chars(name), &pattern);
+        assert!(matched, "256 stars must match {name:?}");
+        let b = bound(n, 256);
+        assert!(
+            steps <= b,
+            "steps {steps} exceeded bound {b} for {name:?} against 256 stars"
+        );
+        let (matched, steps) = glob_match_steps(&chars(name), &pattern_bang);
+        assert!(!matched, "256 stars + ! must not match {name:?}");
+        let b = bound(n, 257);
+        assert!(
+            steps <= b,
+            "steps {steps} exceeded bound {b} for {name:?} against 256 stars + !"
+        );
+    }
+}

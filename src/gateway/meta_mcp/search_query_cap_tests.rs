@@ -37,6 +37,14 @@ async fn a_query_of_256_characters_is_accepted() {
         "256 'İ' must be accepted: {:?}",
         result.err()
     );
+
+    let q = "*".repeat(256);
+    let result = meta.code_mode_search_anon(&json!({"query": q}), None).await;
+    assert!(
+        result.is_ok(),
+        "256 '*' must be accepted: {:?}",
+        result.err()
+    );
 }
 
 /// The refusal is -32602, names the limit, and echoes no part of the query in
