@@ -101,25 +101,22 @@ impl LiveHost {
         let view =
             crate::gateway::meta_mcp::visible::TargetView::Caller(caller.scope(), session_id);
         // A memo for the judgement alone: the round's dispatch judges live.
-        // The minted-receipt scope rides outside the memo.
-        crate::gateway::meta_mcp::invoke::with_minted_receipts(
-            crate::gateway::meta_mcp::visible::memo::with_visibility_memo(async move {
-                if crate::gateway::router::sanitize_exempt(self.meta_mcp(), &request, view) {
-                    return Ok((
-                        call.arguments.clone(),
-                        crate::gateway::meta_mcp::visible::memo::judged(),
-                    ));
-                }
-                // In place, then the arguments taken out, not copied (MIK-8499).
-                let mut request = request;
-                crate::security::sanitize::sanitize_request_in_place(&mut request, route)
-                    .map_err(refused)?;
-                let arguments = request
-                    .pointer_mut("/params/arguments")
-                    .map_or(serde_json::Value::Null, serde_json::Value::take);
-                Ok((arguments, Judged::default()))
-            }),
-        )
+        crate::gateway::meta_mcp::visible::memo::with_visibility_memo(async move {
+            if crate::gateway::router::sanitize_exempt(self.meta_mcp(), &request, view) {
+                return Ok((
+                    call.arguments.clone(),
+                    crate::gateway::meta_mcp::visible::memo::judged(),
+                ));
+            }
+            // In place, then the arguments taken out, not copied (MIK-8499).
+            let mut request = request;
+            crate::security::sanitize::sanitize_request_in_place(&mut request, route)
+                .map_err(refused)?;
+            let arguments = request
+                .pointer_mut("/params/arguments")
+                .map_or(serde_json::Value::Null, serde_json::Value::take);
+            Ok((arguments, Judged::default()))
+        })
         .await
     }
 

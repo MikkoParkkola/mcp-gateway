@@ -77,7 +77,7 @@ fn hits(wanted: impl Fn(&str) -> bool) -> Vec<(String, String, String)> {
                 continue;
             }
             let rel = path
-                .strip_prefix(&root)
+                .strip_prefix(root)
                 .unwrap_or(&path)
                 .to_string_lossy()
                 .replace('\\', "/");

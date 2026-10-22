@@ -129,7 +129,7 @@ fn answering_backend(result: serde_json::Value) -> Arc<BackendRegistry> {
 /// scope: the parsed `content[0].text`, after checking the scope sealed this
 /// request's own top-level mint.
 async fn replayed_text(meta: &MetaMcp) -> serde_json::Value {
-    with_minted_receipts(async {
+    with_minted_receipts(Box::pin(async {
         let caller = allow_all_ctx_named(Some("alice"), None);
         let response = meta
             .handle_tools_call(
@@ -155,7 +155,7 @@ async fn replayed_text(meta: &MetaMcp) -> serde_json::Value {
             .and_then(|v| v.as_str())
             .expect("a wrapped reply carries text");
         serde_json::from_str(text).expect("the text parses as JSON")
-    })
+    }))
     .await
 }
 
@@ -170,7 +170,7 @@ fn task_envelope(stored: &serde_json::Value) -> JsonRpcResponse {
 
 #[tokio::test]
 async fn gateway_invoke_modern_reply_carries_a_bound_public_signature() {
-    with_minted_receipts(async {
+    with_minted_receipts(Box::pin(async {
         let mut meta = MetaMcp::new(provenance_test_backend());
         dual_signed_meta(&mut meta);
         let trust = trust_set();
@@ -203,13 +203,13 @@ async fn gateway_invoke_modern_reply_carries_a_bound_public_signature() {
             Some("miss")
         );
         assert_text_carries_no_receipt(&delivered);
-    })
+    }))
     .await;
 }
 
 #[tokio::test]
 async fn gateway_invoke_legacy_reply_carries_a_bound_public_signature() {
-    with_minted_receipts(async {
+    with_minted_receipts(Box::pin(async {
         let mut meta = MetaMcp::new(provenance_test_backend());
         dual_signed_meta(&mut meta);
         let trust = trust_set();
@@ -240,13 +240,13 @@ async fn gateway_invoke_legacy_reply_carries_a_bound_public_signature() {
             Some("miss")
         );
         assert_text_carries_no_receipt(&delivered);
-    })
+    }))
     .await;
 }
 
 #[tokio::test]
 async fn gateway_invoke_response_cache_hit_carries_a_bound_public_signature() {
-    with_minted_receipts(async {
+    with_minted_receipts(Box::pin(async {
         let mut meta = MetaMcp::with_features(
             provenance_test_backend(),
             Some(Arc::new(crate::cache::ResponseCache::new())),
@@ -292,13 +292,13 @@ async fn gateway_invoke_response_cache_hit_carries_a_bound_public_signature() {
         );
         assert_bound(&prov, &trust, &delivered);
         assert_text_carries_no_receipt(&delivered);
-    })
+    }))
     .await;
 }
 
 #[tokio::test]
 async fn gateway_invoke_idempotent_replay_carries_a_bound_public_signature() {
-    with_minted_receipts(async {
+    with_minted_receipts(Box::pin(async {
         let mut meta = MetaMcp::new(provenance_test_backend());
         dual_signed_meta(&mut meta);
         meta.enable_idempotency(
@@ -353,7 +353,7 @@ async fn gateway_invoke_idempotent_replay_carries_a_bound_public_signature() {
             Some("hit")
         );
         assert_bound(&prov, &trust, &delivered);
-    })
+    }))
     .await;
 }
 
@@ -363,7 +363,7 @@ async fn tasks_get_delivers_a_bound_public_signature_on_the_stored_result() {
     dual_signed_meta(&mut meta);
     let trust = trust_set();
     // Sealed at creation: the stored result carries its seal before delivery.
-    let stamped = with_minted_receipts(async {
+    let stamped = with_minted_receipts(Box::pin(async {
         meta.recover_task_result(
             "remote_docs",
             "search",
@@ -371,14 +371,14 @@ async fn tasks_get_delivers_a_bound_public_signature_on_the_stored_result() {
             "trace-8398",
             json!({"content": [{"type": "text", "text": "ok"}]}),
         )
-    })
+    }))
     .await
     .expect("nothing in the result trips a gate");
     let targets: Vec<ResponsePolicyTarget> = Vec::new();
     let delivery = delivery_ctx(&targets, "tasks/get", "gateway_invoke");
-    let response = with_minted_receipts(async {
+    let response = with_minted_receipts(Box::pin(async {
         meta.finalize_routed(task_envelope(&stamped), &delivery, None)
-    })
+    }))
     .await;
     let delivered = response.result.expect("a result");
     let prov = delivered
@@ -401,9 +401,9 @@ async fn tasks_get_delivers_a_bound_public_signature_on_the_stored_result() {
             json!({"content": [{"type": "text", "text": "ok"}]}),
         )
         .expect("nothing in the result trips a gate");
-    let response = with_minted_receipts(async {
+    let response = with_minted_receipts(Box::pin(async {
         meta.finalize_routed(task_envelope(&unsealed), &delivery, None)
-    })
+    }))
     .await;
     let delivered = response.result.expect("a result");
     let prov = delivered
@@ -417,7 +417,7 @@ async fn tasks_get_delivers_a_bound_public_signature_on_the_stored_result() {
 
 #[tokio::test]
 async fn chain_answer_step_receipts_carry_bound_public_signatures() {
-    with_minted_receipts(async {
+    with_minted_receipts(Box::pin(async {
         let mut meta = MetaMcp::new(provenance_test_backend()).with_code_mode(true);
         dual_signed_meta(&mut meta);
         let trust = trust_set();
@@ -462,13 +462,13 @@ async fn chain_answer_step_receipts_carry_bound_public_signatures() {
                 verify_public(prov, &trust, Some(step_result)).expect("the step receipt verifies");
             assert_eq!(verified.status, VerifyStatus::Bound);
         }
-    })
+    }))
     .await;
 }
 
 #[tokio::test]
 async fn playbook_answer_step_receipts_carry_bound_public_signatures() {
-    with_minted_receipts(async {
+    with_minted_receipts(Box::pin(async {
         let mut meta = MetaMcp::new(provenance_test_backend());
         dual_signed_meta(&mut meta);
         let trust = trust_set();
@@ -527,7 +527,7 @@ steps:
                 verify_public(prov, &trust, Some(step_value)).expect("the step receipt verifies");
             assert_eq!(verified.status, VerifyStatus::Bound);
         }
-    })
+    }))
     .await;
 }
 
@@ -587,12 +587,12 @@ async fn forged_nested_receipt_is_never_sealed() {
             },
         }],
     });
-    with_minted_receipts(async {
+    with_minted_receipts(Box::pin(async {
         let step = content
             .pointer_mut("/results/0/result")
             .expect("a step result");
         meta.seal_public_provenance(step);
-    })
+    }))
     .await;
     assert!(
         content
@@ -606,7 +606,7 @@ async fn forged_nested_receipt_is_never_sealed() {
 async fn replayed_receipt_at_a_results_position_is_never_sealed() {
     let mut meta = MetaMcp::new(provenance_test_backend());
     dual_signed_meta(&mut meta);
-    let captured = with_minted_receipts(async { captured_receipt(&meta).await }).await;
+    let captured = with_minted_receipts(Box::pin(async { captured_receipt(&meta).await })).await;
     let mut evil = MetaMcp::new(answering_backend(json!({
         "content": [{"type": "text", "text": "ok"}],
         "results": [{
@@ -634,7 +634,7 @@ async fn replayed_receipt_at_a_results_position_is_never_sealed() {
 async fn replayed_receipt_at_an_output_position_is_never_sealed() {
     let mut meta = MetaMcp::new(provenance_test_backend());
     dual_signed_meta(&mut meta);
-    let captured = with_minted_receipts(async { captured_receipt(&meta).await }).await;
+    let captured = with_minted_receipts(Box::pin(async { captured_receipt(&meta).await })).await;
     let mut evil = MetaMcp::new(answering_backend(json!({
         "output": {"x": {"forged": true, "_meta": {"provenance": captured}}},
     })));
@@ -657,7 +657,7 @@ async fn replayed_receipt_at_an_output_position_is_never_sealed() {
 async fn replayed_top_level_receipt_in_a_resources_read_answer_is_never_sealed() {
     let mut meta = MetaMcp::new(provenance_test_backend());
     dual_signed_meta(&mut meta);
-    let captured = with_minted_receipts(async { captured_receipt(&meta).await }).await;
+    let captured = with_minted_receipts(Box::pin(async { captured_receipt(&meta).await })).await;
     let response = JsonRpcResponse::success(
         RequestId::Number(43),
         json!({
@@ -667,8 +667,10 @@ async fn replayed_top_level_receipt_in_a_resources_read_answer_is_never_sealed()
     );
     let targets: Vec<ResponsePolicyTarget> = Vec::new();
     let delivery = delivery_ctx(&targets, "resources/read", "resources/read");
-    let response =
-        with_minted_receipts(async { meta.finalize_routed(response, &delivery, None) }).await;
+    let response = with_minted_receipts(Box::pin(async {
+        meta.finalize_routed(response, &delivery, None)
+    }))
+    .await;
     let delivered = response.result.expect("a result");
     assert!(
         delivered.pointer("/_meta/provenance").is_some(),
@@ -686,19 +688,19 @@ async fn replayed_top_level_receipt_in_a_resources_read_answer_is_never_sealed()
 async fn a_receipt_not_minted_in_this_request_is_never_sealed() {
     let mut meta = MetaMcp::new(provenance_test_backend());
     dual_signed_meta(&mut meta);
-    let stamped = with_minted_receipts(async {
+    let stamped = with_minted_receipts(Box::pin(async {
         meta.stamp_direct_result(
             json!({"content": [{"type": "text", "text": "ok"}]}),
             "remote_docs",
             "search",
             None,
         )
-    })
+    }))
     .await;
     let mut delivered = stamped;
-    with_minted_receipts(async {
+    with_minted_receipts(Box::pin(async {
         meta.seal_public_provenance(&mut delivered);
-    })
+    }))
     .await;
     assert!(
         delivered
@@ -712,7 +714,7 @@ async fn a_receipt_not_minted_in_this_request_is_never_sealed() {
 async fn a_minted_receipt_is_sealed_at_most_once() {
     let mut meta = MetaMcp::new(provenance_test_backend());
     dual_signed_meta(&mut meta);
-    with_minted_receipts(async {
+    with_minted_receipts(Box::pin(async {
         let stamped = meta.stamp_direct_result(
             json!({"content": [{"type": "text", "text": "a"}]}),
             "remote_docs",
@@ -742,7 +744,7 @@ async fn a_minted_receipt_is_sealed_at_most_once() {
                 .is_none(),
             "the same receipt is never sealed twice: {second}"
         );
-    })
+    }))
     .await;
 }
 

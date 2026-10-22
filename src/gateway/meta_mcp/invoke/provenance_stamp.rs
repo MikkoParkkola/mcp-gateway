@@ -20,7 +20,12 @@ tokio::task_local! {
 /// Run `request` with one minted-receipt set for its whole lifetime, beside
 /// the visibility memo. A request already inside one keeps it, so nested entry
 /// points share the outer request's set.
-pub(crate) async fn with_minted_receipts<F: std::future::Future>(request: F) -> F::Output {
+///
+/// The argument is boxed as `dyn Future` so the scope adds no future-type
+/// depth (MIK-7678, `scripts/ci/check-recursion-margin.sh`).
+pub(crate) async fn with_minted_receipts<'a, T>(
+    request: std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>,
+) -> T {
     if MINTED.try_with(|_| ()).is_ok() {
         return request.await;
     }
