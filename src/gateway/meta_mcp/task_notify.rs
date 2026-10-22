@@ -24,7 +24,7 @@
 use serde_json::{Value, json};
 
 use super::MetaMcp;
-use super::response_security::ResponseCorrelation;
+use super::response_security::{DeliveryCredential, ResponseCorrelation};
 use crate::gateway::task_service::CommittedTask;
 use crate::protocol::subscriptions::SubscriptionId;
 
@@ -34,6 +34,8 @@ pub(crate) struct Reader<'a> {
     pub session_id: &'a str,
     /// The reader's verified grant subject, when one resolved (MIK-7938).
     pub subject: Option<&'a crate::identity_grants::GrantSubject>,
+    /// The credential the delivery record names (MIK-8672).
+    pub credential: DeliveryCredential<'a>,
 }
 
 /// A frame built for one reader, not yet delivered. Nothing about its delivery
@@ -154,7 +156,7 @@ impl MetaMcp {
             subject: reader.subject,
         };
         let delivered = self
-            .record_notification_delivery_attempt(sent, &correlation)
+            .record_notification_delivery_attempt(sent, &correlation, reader.credential)
             .await;
         pending.staged.commit(delivered && !pending.withheld);
         delivered

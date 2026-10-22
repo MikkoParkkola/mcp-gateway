@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use crate::backend::{Backend, BackendRegistry};
 use crate::config::{BackendConfig, FailsafeConfig};
 use crate::gateway::authz::{AllowAll, DenyAll, ToolAuthorizer};
+use crate::gateway::meta_mcp::response_security::DeliveryCredential;
 use crate::gateway::meta_mcp::{Authentication, MetaMcp, MetaMcpCallerContext};
 use crate::identity_grants::GrantSubject;
 use crate::key_server::oidc::VerifiedIdentity;
@@ -553,7 +554,11 @@ fn only_delivery(dir: &tempfile::TempDir) -> Value {
 
 /// The delivery record the meta route writes for `who`'s answer: the finalized
 /// response, correlated as the route correlates it (MIK-8672 C3).
-async fn record_delivery_for(meta: &MetaMcp, who: &Caller) {
+async fn record_delivery_for(
+    meta: &MetaMcp,
+    who: &Caller,
+    client: &crate::gateway::auth::AuthenticatedClient,
+) {
     let response = JsonRpcResponse::success(RequestId::Number(1), ok_result());
     let correlation = crate::security::response_policy::ResponseCorrelation {
         session_id: "",
@@ -563,7 +568,13 @@ async fn record_delivery_for(meta: &MetaMcp, who: &Caller) {
         subject: who.grant.as_ref(),
     };
     assert!(
-        meta.record_delivery_of(&response, &correlation, None).await,
+        meta.record_delivery_of(
+            &response,
+            &correlation,
+            DeliveryCredential::of(Some(client)),
+            None,
+        )
+        .await,
         "the delivery is recorded"
     );
 }
@@ -674,7 +685,7 @@ async fn meta_delivery_records_name_the_harness_credentials() {
         meta.invoke_tool(&args(), None, &context(&AllowAll, &who))
             .await
             .expect("allowed call");
-        record_delivery_for(&meta, &who).await;
+        record_delivery_for(&meta, &who, &client).await;
         assert_delivery_matches_invocation(&dir, "oidc_bearer", &who.principal);
     }
     // key_server_token row: the ID token exchanged at `/auth/token`.
@@ -697,18 +708,32 @@ async fn meta_delivery_records_name_the_harness_credentials() {
         meta.invoke_tool(&args(), None, &context(&AllowAll, &who))
             .await
             .expect("allowed call");
-        record_delivery_for(&meta, &who).await;
+        record_delivery_for(&meta, &who, &client).await;
         assert_delivery_matches_invocation(&dir, "key_server_token", &who.principal);
     }
     // dashboard_session row.
     {
         let dir = tempfile::tempdir().expect("a log directory");
         let meta = meta(Ok(ok_result()), &dir);
+        // The middleware's own mint (`dashboard_client` in auth_clients.rs)
+        // is private to `auth`, so the row carries its exact values.
+        let client = crate::gateway::auth::AuthenticatedClient {
+            quota_principal: Some(crate::gateway::auth::QuotaPrincipal::dashboard_session()),
+            name: "dashboard".to_string(),
+            principal: "dashboard-session".to_string(),
+            rate_limit: 0,
+            backends: vec!["*".to_string()],
+            allowed_tools: None,
+            denied_tools: None,
+            admin: true,
+            authenticated: true,
+            credential_kind: CredentialKind::DashboardSession,
+        };
         let who = dashboard_caller();
         meta.invoke_tool(&args(), None, &context(&AllowAll, &who))
             .await
             .expect("allowed call");
-        record_delivery_for(&meta, &who).await;
+        record_delivery_for(&meta, &who, &client).await;
         assert_delivery_matches_invocation(&dir, "dashboard_session", &who.principal);
     }
 }
@@ -737,7 +762,7 @@ async fn two_tokens_for_one_actor_name_different_principals() {
         meta.invoke_tool(&args(), None, &context(&AllowAll, &who))
             .await
             .expect("allowed call");
-        record_delivery_for(&meta, &who).await;
+        record_delivery_for(&meta, &who, &client).await;
         principals.push(only_delivery(&dir)["who"]["principal"].clone());
     }
     assert_ne!(
@@ -770,25 +795,25 @@ async fn one_actors_token_refresh_and_bearer_name_one_caller_and_account() {
             .validate_token(&token)
             .await
             .expect("the exchanged token validates");
-        whos.push(caller_of(&client, temp.identity));
+        whos.push((caller_of(&client, temp.identity), client));
     }
     let (client, identity) = harness
         .ks
         .verify_bearer_identity(&id)
         .await
         .expect("the delegated Bearer [REDACTED]");
-    whos.push(caller_of(&client, identity));
-    let actor = whos[0].account.clone();
-    for who in &whos {
+    whos.push((caller_of(&client, identity), client));
+    let actor = whos[0].0.account.clone();
+    for (who, _) in &whos {
         assert_eq!(who.account, actor, "premise: one actor");
     }
-    for who in &whos {
+    for (who, client) in &whos {
         let dir = tempfile::tempdir().expect("a log directory");
         let meta = meta(Ok(ok_result()), &dir);
         meta.invoke_tool(&args(), None, &context(&AllowAll, who))
             .await
             .expect("allowed call");
-        record_delivery_for(&meta, who).await;
+        record_delivery_for(&meta, who, client).await;
         let delivery = only_delivery(&dir);
         assert_eq!(delivery["caller"], json!(actor), "{delivery}");
         assert_eq!(delivery["who"]["account"], json!(actor), "{delivery}");
