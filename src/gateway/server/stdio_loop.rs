@@ -191,10 +191,13 @@ impl Gateway {
                 clippy::disallowed_methods,
                 reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
             )]
-            crate::capability::CapabilityWatcher::start(
+            crate::capability::CapabilityWatcher::start_with_tuning(
                 cap_backend,
                 announcer.shutdown(),
                 Some(self.backends.catalogue_hook()),
+                crate::capability::ReloadTuning::from_config_secs(
+                    self.config.capabilities.stale_check_secs,
+                ),
             )
             .inspect_err(|error| warn!(%error, "stdio: capability hot-reload disabled"))
             .ok()

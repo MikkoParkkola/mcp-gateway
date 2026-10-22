@@ -1472,6 +1472,37 @@ follows a credential.
 
 For multi-client setups with per-client tool scoping, see the [README auth section](../README.md#authentication).
 
+### Capability hot-reload
+
+Capability files are watched and reloaded without a restart. Because file
+events can stop arriving silently, the watcher also re-checks the watched
+trees every `capabilities.stale_check_secs` (default 60; `0` turns the check
+off) and reloads when the files drifted with no event. The key is
+restart-only: changing it needs a restart to take effect.
+
+The watcher warns rather than dying quietly. `shutdown channel Lagged` means
+a shutdown send was overwritten and the wait continues; `shutdown channel
+closed` means the shutdown sender is gone and the watcher keeps running;
+`file event source is gone` means file events stopped and the stale check is
+now the only reload path; `no file event arrived` means the stale check found
+drift and reloaded; `reload still running` names a reload stuck past 60 s in
+its stage, which is reported and never cancelled; `reload incomplete` means
+the reload failed or left a directory unloaded and will be retried.
+
+To force a reload, call `gateway_reload_capabilities` with an API key marked
+`admin: true`:
+
+```bash
+curl -s http://127.0.0.1:39400/mcp \
+  -H "Authorization: Bearer $ADMIN_KEY" \
+  -H "content-type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"gateway_reload_capabilities","arguments":{}}}'
+```
+
+`$ADMIN_KEY` is an API key configured with `admin: true`. A non-admin key gets
+HTTP 403: the tool is in the admin-only set, so
+the router refuses the call before any reload runs.
+
 ### Narrowing the meta-tool surface
 
 Admin standing decides which management tools a *caller* sees. `meta_mcp.exposed_meta_tools`

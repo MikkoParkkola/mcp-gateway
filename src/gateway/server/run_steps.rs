@@ -11,7 +11,7 @@ use super::Gateway;
 use super::account_bindings;
 use super::warmstart::WarmerGuard;
 use crate::Result;
-use crate::capability::{CapabilityBackend, CapabilityExecutor, CapabilityWatcher};
+use crate::capability::{CapabilityBackend, CapabilityExecutor, CapabilityWatcher, ReloadTuning};
 use crate::config_reload::{ConfigWatcher, IdentityGrantSink, LiveConfig};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::oauth::GatewayKeyPair;
@@ -158,10 +158,11 @@ impl Gateway {
                 clippy::disallowed_methods,
                 reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
             )]
-            match CapabilityWatcher::start(
+            match CapabilityWatcher::start_with_tuning(
                 Arc::clone(&cap_backend),
                 shutdown_tx.subscribe(),
                 Some(self.backends.catalogue_hook()),
+                ReloadTuning::from_config_secs(self.config.capabilities.stale_check_secs),
             ) {
                 Ok(w) => {
                     info!("Capability hot-reload enabled");
