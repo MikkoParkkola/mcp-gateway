@@ -398,6 +398,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `capabilities.process_commands[].args_prefix` | KEEP | — | where REST capabilities come from and what they may touch | - | src/config/features/capability.rs:110 |
 | `capabilities.process_commands[].command` | KEEP | — | where REST capabilities come from and what they may touch | - | src/config/features/capability.rs:107 |
 | `capabilities.process_execution` | KEEP | `ProcessExecution::Enabled` | where REST capabilities come from and what they may touch | - | src/config/features/capability.rs:34 |
+| `capabilities.stale_check_secs` | KEEP | `60` | where REST capabilities come from and what they may touch | - | src/config/features/capability.rs:23 |
 | `code_mode` | KEEP | `type default` | opt-in tool surfaces (CODE_MODE.md) | - | src/config/mod.rs:126 |
 | `code_mode.enabled` | KEEP | `type default` | opt-in tool surfaces (CODE_MODE.md) | - | src/config/features/code_mode.rs:24 |
 | `control_plane` | KEEP | `type default` | governance roles and SIEM export (control_plane.md) | - | src/config/mod.rs:141 |
