@@ -123,7 +123,7 @@ fn t1a_gateway_mints_agree_on_api_key_identity() {
         let ctx = context_for(&client);
         assert_eq!(ctx.cost_key(), expected, "{label}: context cost_key");
         assert_eq!(
-            ctx.scope().grant_key.as_deref(),
+            ctx.scope().grant_key,
             expected,
             "{label}: context grant_key"
         );
@@ -147,11 +147,7 @@ fn t1b_unauthenticated_api_key_gives_none_everywhere() {
     );
     let ctx = context_for(&client);
     assert_eq!(ctx.cost_key(), None, "context cost_key refuses");
-    assert_eq!(
-        ctx.scope().grant_key.as_deref(),
-        None,
-        "context grant_key refuses"
-    );
+    assert_eq!(ctx.scope().grant_key, None, "context grant_key refuses");
 }
 
 /// MIK-8659 T3 (GREEN): the persisted owner prefix is pinned literally, so a

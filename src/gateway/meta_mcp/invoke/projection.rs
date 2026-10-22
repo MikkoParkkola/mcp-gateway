@@ -169,7 +169,7 @@ pub(super) struct QuotaInputs<'q> {
 
 /// The one quota rule (MIK-8659): stdio, identity, subject, credential principal, then the key name if non-empty, else `None`.
 pub(super) fn quota_key_of(
-    inputs: QuotaInputs<'_>,
+    inputs: &QuotaInputs<'_>,
 ) -> Option<crate::protocol::continuation::QuotaKey> {
     use crate::protocol::continuation::{QuotaKey, QuotaSource};
     let source = if let Some(nonce) = inputs.stdio {
@@ -198,8 +198,10 @@ impl crate::gateway::meta_mcp::MetaMcpCallerContext<'_> {
     /// credential (live caller and task worker alike), the key name.
     /// `None` names no one, and nothing is minted for it.
     pub(crate) fn quota_key(&self) -> Option<crate::protocol::continuation::QuotaKey> {
-        quota_key_of(QuotaInputs {
-            stdio: self.stdio_nonce.map(|nonce| nonce.bytes()),
+        quota_key_of(&QuotaInputs {
+            stdio: self
+                .stdio_nonce
+                .map(crate::gateway::server::StdioNonce::bytes),
             identity: self.verified_identity,
             subject: self.grant_subject.as_ref(),
             credential_principal: crate::gateway::auth::authenticated_principal(

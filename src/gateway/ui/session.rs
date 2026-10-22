@@ -207,6 +207,93 @@ fn is_wildcard(host: &str) -> bool {
 
 #[cfg(test)]
 mod mik_8659_dashboard_tests {
+    async fn t1f_app_state(
+        auth_config: &std::sync::Arc<crate::gateway::auth::ResolvedAuthConfig>,
+        store_dir: &std::path::Path,
+    ) -> std::sync::Arc<super::super::super::router::AppState> {
+        use std::sync::Arc;
+        let backends = Arc::new(crate::backend::BackendRegistry::new());
+        let meta_mcp = Arc::new(crate::gateway::meta_mcp::MetaMcp::new(Arc::clone(
+            &backends,
+        )));
+        let streaming_config = crate::config::StreamingConfig::default();
+        let multiplexer = Arc::new(crate::gateway::streaming::NotificationMultiplexer::new(
+            Arc::clone(&backends),
+            streaming_config.clone(),
+        ));
+        let proxy_manager = Arc::new(crate::gateway::proxy::ProxyManager::new(Arc::clone(
+            &multiplexer,
+        )));
+        let agent_auth = crate::gateway::oauth::AgentAuthState::new(
+            false,
+            Arc::new(crate::gateway::oauth::AgentRegistry::new()),
+        );
+        let gateway_key_pair =
+            Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("gateway key"));
+        let authorizer = crate::gateway::auth::AuthState {
+            auth_config: Arc::clone(auth_config),
+            key_server: None,
+            dashboard_bootstrap: Arc::default(),
+            tls_enabled: false,
+            live_config: Arc::new(crate::config_reload::LiveConfig::new(
+                crate::config::Config::default(),
+            )),
+            agent_auth: agent_auth.clone(),
+        };
+        let subscriptions = Arc::new(
+            crate::gateway::subscription_registry::SubscriptionRegistry::new(64, authorizer),
+        );
+        let (task_service, task_executor) =
+            crate::gateway::task_service::open_runtime_with_admission(
+                &store_dir.join("tasks"),
+                crate::config::TasksConfig::default().max_workers,
+                crate::gateway::task_service::StoreLimits::default(),
+                Arc::clone(&subscriptions),
+                Arc::clone(meta_mcp.execution_admission()),
+            )
+            .await
+            .expect("task store opens");
+        Arc::new(super::super::super::router::AppState {
+            session_lifecycle: None,
+            continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
+            env: None,
+            backends,
+            meta_mcp,
+            meta_mcp_enabled: true,
+            multiplexer,
+            proxy_manager,
+            streaming_config,
+            auth_config: Arc::clone(auth_config),
+            key_server: None,
+            tool_policy: Arc::new(crate::security::ToolPolicy::default()),
+            mtls_policy: Arc::new(crate::mtls::MtlsPolicy::from_config(
+                &crate::mtls::MtlsConfig::default(),
+            )),
+            sanitize_input: false,
+            ssrf_protection: false,
+            trust_configured_backends: false,
+            inflight: Arc::new(tokio::sync::Semaphore::new(8)),
+            agent_auth,
+            gateway_key_pair,
+            capability_dirs: Vec::new(),
+            config_path: None,
+            #[cfg(feature = "firewall")]
+            firewall: None,
+            agent_identity_config: crate::config::AgentIdentityConfig::default(),
+            control_plane_store: None,
+            control_plane_base: None,
+            live_config: Arc::new(crate::config_reload::LiveConfig::new(
+                crate::config::Config::default(),
+            )),
+            export_status: None,
+            transparency_log: None,
+            dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
+            tasks: task_service,
+            task_executor,
+            subscriptions,
+        })
+    }
+
     /// MIK-8659 T1f unauthenticated (RED): the same admin API key with
     /// `authenticated: false` is refused by the auth check alone. Host is
     /// loopback and the key is found with no expiry, so only the missing
@@ -247,87 +334,8 @@ mod mik_8659_dashboard_tests {
             authenticated: false,
             ..real
         };
-        let backends = Arc::new(crate::backend::BackendRegistry::new());
-        let meta_mcp = Arc::new(crate::gateway::meta_mcp::MetaMcp::new(Arc::clone(
-            &backends,
-        )));
-        let streaming_config = crate::config::StreamingConfig::default();
-        let multiplexer = Arc::new(crate::gateway::streaming::NotificationMultiplexer::new(
-            Arc::clone(&backends),
-            streaming_config.clone(),
-        ));
-        let proxy_manager = Arc::new(crate::gateway::proxy::ProxyManager::new(Arc::clone(
-            &multiplexer,
-        )));
-        let agent_auth = crate::gateway::oauth::AgentAuthState::new(
-            false,
-            Arc::new(crate::gateway::oauth::AgentRegistry::new()),
-        );
-        let gateway_key_pair =
-            Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("gateway key"));
-        let authorizer = crate::gateway::auth::AuthState {
-            auth_config: Arc::clone(&auth_config),
-            key_server: None,
-            dashboard_bootstrap: Arc::default(),
-            tls_enabled: false,
-            live_config: Arc::new(crate::config_reload::LiveConfig::new(
-                crate::config::Config::default(),
-            )),
-            agent_auth: agent_auth.clone(),
-        };
-        let subscriptions = Arc::new(
-            crate::gateway::subscription_registry::SubscriptionRegistry::new(64, authorizer),
-        );
         let store_dir = tempfile::tempdir().expect("task store dir");
-        let (task_service, task_executor) =
-            crate::gateway::task_service::open_runtime_with_admission(
-                &store_dir.path().join("tasks"),
-                crate::config::TasksConfig::default().max_workers,
-                crate::gateway::task_service::StoreLimits::default(),
-                Arc::clone(&subscriptions),
-                Arc::clone(meta_mcp.execution_admission()),
-            )
-            .await
-            .expect("task store opens");
-        let state = Arc::new(super::super::super::router::AppState {
-            session_lifecycle: None,
-            continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
-            env: None,
-            backends,
-            meta_mcp,
-            meta_mcp_enabled: true,
-            multiplexer,
-            proxy_manager,
-            streaming_config,
-            auth_config,
-            key_server: None,
-            tool_policy: Arc::new(crate::security::ToolPolicy::default()),
-            mtls_policy: Arc::new(crate::mtls::MtlsPolicy::from_config(
-                &crate::mtls::MtlsConfig::default(),
-            )),
-            sanitize_input: false,
-            ssrf_protection: false,
-            trust_configured_backends: false,
-            inflight: Arc::new(tokio::sync::Semaphore::new(8)),
-            agent_auth,
-            gateway_key_pair,
-            capability_dirs: Vec::new(),
-            config_path: None,
-            #[cfg(feature = "firewall")]
-            firewall: None,
-            agent_identity_config: crate::config::AgentIdentityConfig::default(),
-            control_plane_store: None,
-            control_plane_base: None,
-            live_config: Arc::new(crate::config_reload::LiveConfig::new(
-                crate::config::Config::default(),
-            )),
-            export_status: None,
-            transparency_log: None,
-            dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
-            tasks: task_service,
-            task_executor,
-            subscriptions,
-        });
+        let state = t1f_app_state(&auth_config, store_dir.path()).await;
         let response = super::dashboard_link(
             axum::extract::State(Arc::clone(&state)),
             Some(axum::extract::Extension(unauthenticated)),

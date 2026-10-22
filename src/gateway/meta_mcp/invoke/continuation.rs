@@ -528,7 +528,7 @@ pub(crate) type DirectCaller<'a> = (
 fn direct_quota_key(
     (identity, (_, subject), client): DirectCaller<'_>,
 ) -> Option<crate::protocol::continuation::QuotaKey> {
-    super::projection::quota_key_of(super::projection::QuotaInputs {
+    super::projection::quota_key_of(&super::projection::QuotaInputs {
         stdio: None,
         identity,
         subject,

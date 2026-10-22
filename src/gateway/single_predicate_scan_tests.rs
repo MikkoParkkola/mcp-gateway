@@ -265,7 +265,7 @@ fn t2_no_principal_conjunct_outside_auth() {
                 .collect::<Vec<_>>()
                 .join("\n");
             let split = joined.contains("Authenticated")
-                && joined.contains("!")
+                && joined.contains('!')
                 && joined.contains("is_empty")
                 && (joined.contains("credential_principal")
                     || joined.contains("principal")

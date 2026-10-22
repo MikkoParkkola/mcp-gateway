@@ -688,6 +688,6 @@ mod mik_8659_caller_tests {
             ..crate::gateway::meta_mcp::anonymous_caller()
         };
         assert_eq!(ctx.cost_key(), Some("k-user"));
-        assert_eq!(ctx.scope().grant_key.as_deref(), Some("k-user"));
+        assert_eq!(ctx.scope().grant_key, Some("k-user"));
     }
 }

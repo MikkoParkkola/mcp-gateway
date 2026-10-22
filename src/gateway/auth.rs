@@ -189,11 +189,11 @@ mod resolved;
 pub use crate::security::audit::CredentialKind;
 
 /// The one API-key predicate (MIK-8659): a caller's API-key name iff it authenticated with an API key.
-pub(in crate::gateway) fn api_key_name<'n>(
+pub(in crate::gateway) fn api_key_name(
     authenticated: bool,
     kind: CredentialKind,
-    name: Option<&'n str>,
-) -> Option<&'n str> {
+    name: Option<&str>,
+) -> Option<&str> {
     if authenticated && kind == CredentialKind::ApiKey {
         name
     } else {
@@ -202,10 +202,10 @@ pub(in crate::gateway) fn api_key_name<'n>(
 }
 
 /// The one caller-principal predicate (MIK-8659): the principal iff the caller authenticated and it is non-empty.
-pub(in crate::gateway) fn authenticated_principal<'p>(
+pub(in crate::gateway) fn authenticated_principal(
     authenticated: bool,
-    principal: Option<&'p str>,
-) -> Option<&'p str> {
+    principal: Option<&str>,
+) -> Option<&str> {
     if authenticated {
         principal.filter(|p| !p.is_empty())
     } else {

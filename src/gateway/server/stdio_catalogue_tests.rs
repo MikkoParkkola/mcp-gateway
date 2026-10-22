@@ -40,11 +40,7 @@ fn t1a_stdio_caller_has_no_api_key_identity() {
         crate::protocol::meta::Era::Modern,
     );
     assert_eq!(caller.cost_key(), None, "stdio has no cost key");
-    assert_eq!(
-        caller.scope().grant_key.as_deref(),
-        None,
-        "stdio has no grant key"
-    );
+    assert_eq!(caller.scope().grant_key, None, "stdio has no grant key");
     let expected = crate::protocol::continuation::QuotaKey::new(
         crate::protocol::continuation::QuotaSource::Stdio(
             super::super::StdioNonce::process().bytes(),

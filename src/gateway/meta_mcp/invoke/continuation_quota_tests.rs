@@ -40,11 +40,7 @@ fn t1a_context_readers_agree_over_gateway_mints() {
         let expected = crate::gateway::auth::expected_api_key(&client);
         let ctx = context_for(&client);
         assert_eq!(ctx.cost_key(), expected, "{label}: cost_key");
-        assert_eq!(
-            ctx.scope().grant_key.as_deref(),
-            expected,
-            "{label}: grant_key"
-        );
+        assert_eq!(ctx.scope().grant_key, expected, "{label}: grant_key");
     }
 }
 
@@ -82,7 +78,7 @@ async fn t1a_key_server_token_has_no_api_key_identity() {
     assert_eq!(client.api_key_identity(), None);
     let ctx = context_for(&client);
     assert_eq!(ctx.cost_key(), None);
-    assert_eq!(ctx.scope().grant_key.as_deref(), None);
+    assert_eq!(ctx.scope().grant_key, None);
 }
 
 /// MIK-8659 T1a OIDC bearer (GREEN): a real delegated bearer is no API key
@@ -109,7 +105,7 @@ async fn t1a_oidc_bearer_has_no_api_key_identity() {
     assert_eq!(client.api_key_identity(), None);
     let ctx = context_for(&client);
     assert_eq!(ctx.cost_key(), None);
-    assert_eq!(ctx.scope().grant_key.as_deref(), None);
+    assert_eq!(ctx.scope().grant_key, None);
 }
 
 /// MIK-8659 T4 direct-public (RED): a public caller is charged to its own
@@ -166,7 +162,7 @@ fn t4_api_key_gives_credential_quota_on_both_routes() {
 fn t4_oidc_gives_identity_quota_when_an_identity_is_passed() {
     let identity = crate::key_server::oidc::VerifiedIdentity {
         subject: "alice".to_owned(),
-        email: "".to_owned(),
+        email: String::new(),
         name: None,
         groups: vec![],
         issuer: "https://idp.example".to_owned(),
@@ -204,7 +200,7 @@ fn t4_oidc_gives_identity_quota_when_an_identity_is_passed() {
 fn t4_quota_precedence_and_fallthrough() {
     let identity = crate::key_server::oidc::VerifiedIdentity {
         subject: "alice".to_owned(),
-        email: "".to_owned(),
+        email: String::new(),
         name: None,
         groups: vec![],
         issuer: "https://idp.example".to_owned(),
@@ -630,7 +626,10 @@ async fn t5_wrong_binding_first_then_rightful_redeems_on_meta() {
     assert!(right.is_ok(), "rightful binding still redeems: {right:?}");
 }
 
-/// MIK-8659 T5 wrong-binding-first on direct (RED): the direct route charges a bound anonymous caller to the key-name quota and binds it to its passthrough binding; a different binding is refused without consuming the round, and the rightful one still redeems. Today direct_quota_key gives None, so the mint never starts.
+/// MIK-8659 T5 wrong-binding-first on direct (RED): the direct route charges a bound anonymous
+/// caller to the key-name quota and binds it to its passthrough binding; a different binding is
+/// refused without consuming the round, and the rightful one still redeems. Today
+/// `direct_quota_key` gives None, so the mint never starts.
 #[tokio::test]
 async fn t5_wrong_binding_first_then_rightful_redeems_on_direct() {
     let state = std::sync::Arc::new(crate::protocol::continuation::ContinuationState::new());
