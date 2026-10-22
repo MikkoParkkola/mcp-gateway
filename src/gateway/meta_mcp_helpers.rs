@@ -364,11 +364,10 @@ pub(crate) fn tool_matches_glob(tool: &Tool, pattern: &str) -> bool {
     tool_name_matches_glob(&tool.name, pattern)
 }
 
-/// Glob matching implementation using char slices for clean recursion.
+/// Glob matching on char slices: collects each side once and hands both to
+/// the iterative matcher [`glob_match_steps`].
 ///
 /// Both `text` and `pattern` must already be lowercased by the caller.
-/// Delegates immediately to the char-slice helper to avoid repeated
-/// `chars().collect()` allocations on every recursive call.
 fn glob_match_impl(text: &str, pattern: &str) -> bool {
     let text_chars: Vec<char> = text.chars().collect();
     let pat_chars: Vec<char> = pattern.chars().collect();
@@ -390,7 +389,9 @@ fn glob_match_impl(text: &str, pattern: &str) -> bool {
 /// runs from one backtrack to the next. Within a phase every main-loop
 /// iteration advances `pi` except the final mismatch, so a phase has at most
 /// m+1 iterations. Each backtrack moves the star's text index forward by
-/// one, so there are at most n+1 phases. The trailing-star loop adds at most
+/// one, and a later `*` replaces the remembered star only at the current
+/// text index, which is never behind the old one, so that index never moves
+/// back and there are at most n+1 phases. The trailing-star loop adds at most
 /// m. Total `steps <= (n+1)(m+1) + m` for n = text chars and m = pattern
 /// chars.
 fn glob_match_steps(text: &[char], pattern: &[char]) -> (bool, u64) {
