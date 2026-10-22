@@ -351,3 +351,187 @@ fn glob_and_directory_entries_count_as_shipped() {
     assert!(shipped(&patterns, "upgrading.d"));
     assert!(!shipped(&patterns, "scripts/never/shipped.sh"));
 }
+
+/// MIK-8501.SCAN.1: a `crate_root()` call triggers the scan without `CARGO_MANIFEST_DIR`.
+#[test]
+fn scan1_a_crate_root_helper_call_triggers_the_scan() {
+    let (root, patterns) = scratch();
+    let source = r#"fn f() { let _ = crate_root().join("tools/run.sh"); }"#;
+    assert_eq!(
+        offenders(root.path(), &patterns, FILE, source),
+        ["tools/run.sh".to_owned()]
+    );
+}
+
+/// MIK-8501.SCAN.1: a `golden::repo_root()` call triggers the scan.
+#[test]
+fn scan1_a_golden_repo_root_call_triggers_the_scan() {
+    let (root, patterns) = scratch();
+    let source = r#"fn f() { let _ = golden::repo_root().join("top.sh"); }"#;
+    assert_eq!(
+        offenders(root.path(), &patterns, FILE, source),
+        ["top.sh".to_owned()]
+    );
+}
+
+/// MIK-8501.SCAN.1: a bare `repo_root()` call triggers the scan.
+#[test]
+fn scan1_a_bare_repo_root_call_triggers_the_scan() {
+    let (root, patterns) = scratch();
+    let source = r#"fn f() { let _ = repo_root().join("top.sh"); }"#;
+    assert_eq!(
+        offenders(root.path(), &patterns, FILE, source),
+        ["top.sh".to_owned()]
+    );
+}
+
+/// MIK-8501.SCAN.1: lookalike names do not trigger the scan.
+#[test]
+fn scan1_lookalike_names_do_not_trigger() {
+    let (root, patterns) = scratch();
+    for source in [
+        r#"fn f() { let _ = my_crate_root().join("top.sh"); }"#,
+        r#"fn f() { let crate_root = 1; let _ = ("top.sh", crate_root); }"#,
+        r#"fn f() { let _ = "top.sh"; }"#,
+    ] {
+        assert!(
+            offenders(root.path(), &patterns, FILE, source).is_empty(),
+            "{source}"
+        );
+    }
+}
+
+/// MIK-8501.SCAN.2: a const used only through the helper is exempt.
+#[test]
+fn scan2_a_const_used_only_through_the_helper_is_exempt() {
+    let (root, patterns) = scratch();
+    let source = r#"const P: &str = "tools/run.sh"; fn f() { let _ = env!("CARGO_MANIFEST_DIR"); repo_file(P); }"#;
+    assert!(offenders(root.path(), &patterns, FILE, source).is_empty());
+}
+
+/// MIK-8501.SCAN.2: a let binding used only through the helper is exempt.
+#[test]
+fn scan2_a_let_used_only_through_the_helper_is_exempt() {
+    let (root, patterns) = scratch();
+    let source = r#"fn f() { let _ = env!("CARGO_MANIFEST_DIR"); let p = "tools/run.sh"; read_or_skip(root, p, false); }"#;
+    assert!(offenders(root.path(), &patterns, FILE, source).is_empty());
+}
+
+/// MIK-8501.SCAN.2: a const read directly is flagged.
+#[test]
+fn scan2_a_const_read_directly_is_flagged() {
+    let (root, patterns) = scratch();
+    let source = r#"const P: &str = "tools/run.sh"; fn f() { let _ = env!("CARGO_MANIFEST_DIR"); let _ = crate_root().join(P); }"#;
+    assert_eq!(
+        offenders(root.path(), &patterns, FILE, source),
+        ["tools/run.sh".to_owned()]
+    );
+}
+
+/// MIK-8501.SCAN.2: a let binding read directly is flagged.
+#[test]
+fn scan2_a_let_read_directly_is_flagged() {
+    let (root, patterns) = scratch();
+    let source = r#"fn f() { let _ = env!("CARGO_MANIFEST_DIR"); let p = "tools/run.sh"; let _ = crate_root().join(p); }"#;
+    assert_eq!(
+        offenders(root.path(), &patterns, FILE, source),
+        ["tools/run.sh".to_owned()]
+    );
+}
+
+/// MIK-8501.SCAN.2: a binding used by the helper AND read directly is flagged (falsifier of the exemption).
+#[test]
+fn scan2_a_binding_also_read_directly_is_flagged() {
+    let (root, patterns) = scratch();
+    let source = r#"const P: &str = "tools/run.sh"; fn f() { let _ = env!("CARGO_MANIFEST_DIR"); repo_file(P); let _ = crate_root().join(P); }"#;
+    assert_eq!(
+        offenders(root.path(), &patterns, FILE, source),
+        ["tools/run.sh".to_owned()]
+    );
+}
+
+/// MIK-8501.SCAN.4: `include_str!` alone triggers, resolved from the file's directory.
+#[test]
+fn scan4_include_str_alone_triggers_and_resolves_from_the_file() {
+    let (root, patterns) = scratch();
+    std::fs::create_dir_all(root.path().join("tests")).expect("mkdir tests");
+    let source = r#"const T: &str = include_str!("../tools/run.sh");"#;
+    assert_eq!(
+        offenders(root.path(), &patterns, FILE, source),
+        ["tools/run.sh".to_owned()]
+    );
+}
+
+/// MIK-8501.SCAN.4: `include_bytes!` alone triggers the scan.
+#[test]
+fn scan4_include_bytes_alone_triggers() {
+    let (root, patterns) = scratch();
+    std::fs::create_dir_all(root.path().join("tests")).expect("mkdir tests");
+    let source = r#"const T: &[u8] = include_bytes!("../top.sh");"#;
+    assert_eq!(
+        offenders(root.path(), &patterns, FILE, source),
+        ["top.sh".to_owned()]
+    );
+}
+
+/// MIK-8501.SCAN.4: a `concat!` literal is seen as one path.
+#[test]
+fn scan4_a_concat_literal_is_seen() {
+    let (root, patterns) = scratch();
+    let source = r#"fn f() { let _ = env!("CARGO_MANIFEST_DIR"); let _ = crate_root().join(concat!("tools/", "run.sh")); }"#;
+    assert_eq!(
+        offenders(root.path(), &patterns, FILE, source),
+        ["tools/run.sh".to_owned()]
+    );
+}
+
+/// MIK-8501.SCAN.4: a backslash literal is normalised to slashes.
+#[test]
+fn scan4_a_backslash_literal_is_seen() {
+    let (root, patterns) = scratch();
+    let source = r#"fn f() { let _ = env!("CARGO_MANIFEST_DIR"); let _ = crate_root().join("tools\\run.sh"); }"#;
+    assert_eq!(
+        offenders(root.path(), &patterns, FILE, source),
+        ["tools/run.sh".to_owned()]
+    );
+}
+
+/// MIK-8502.DRIFT.3: a one-line `include` array is parsed.
+#[test]
+fn drift3_a_one_line_include_is_parsed() {
+    assert_eq!(
+        include_patterns("[package]\ninclude = [\"shipped.txt\", \"docs/a.md\"]\n"),
+        ["shipped.txt", "docs/a.md"]
+    );
+}
+
+/// MIK-8502.DRIFT.3: comments on every line are ignored (green control; the base parser already passes it).
+#[test]
+fn drift3_comments_on_every_line_are_ignored() {
+    assert_eq!(
+        include_patterns(
+            "[package]\ninclude = [ # open\n    \"a\", # one\n    \"b\" # two\n] # close\n"
+        ),
+        ["a", "b"]
+    );
+}
+
+/// MIK-8502.DRIFT.3: a bracket inside quotes does not end the array.
+#[test]
+fn drift3_a_bracket_inside_quotes_is_kept() {
+    assert_eq!(
+        include_patterns("[package]\ninclude = [\"a]b\", \"c\"]\n"),
+        ["a]b", "c"]
+    );
+}
+
+/// MIK-8502.DRIFT.3: a hash inside quotes is kept.
+#[test]
+fn drift3_a_hash_inside_quotes_is_kept() {
+    assert_eq!(
+        include_patterns(
+            "[package]\ninclude = [ # open\n    \"a#b\", # one\n    \"c\" # two\n] # close\n"
+        ),
+        ["a#b", "c"]
+    );
+}
