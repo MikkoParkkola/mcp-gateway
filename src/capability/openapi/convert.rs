@@ -701,12 +701,8 @@ mod fetch_error_tests {
 
     #[tokio::test]
     async fn a_blocked_redirect_names_its_ssrf_reason() {
-        let closed = {
-            let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("probe bind");
-            let port = probe.local_addr().expect("probe addr").port();
-            drop(probe);
-            port
-        };
+        // Nothing listens on a reserved test port (src/test_ports.rs).
+        let closed = crate::test_ports::reserved_port();
         let app = axum::Router::new().route(
             "/spec",
             axum::routing::get(move || async move {

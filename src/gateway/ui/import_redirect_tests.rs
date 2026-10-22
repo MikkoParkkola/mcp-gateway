@@ -4,11 +4,10 @@
 //! the listener-route scan (gateway/routes_tests.rs), which reads that file
 //! whole, does not count these fixtures' routes as gateway routes.
 
+/// A port nothing listens on: from the reserved test range, which no port-0
+/// bind can be handed (src/test_ports.rs), so the redirect target stays closed.
 fn closed_port() -> u16 {
-    let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("bind closed-port probe");
-    let port = probe.local_addr().expect("closed-port addr").port();
-    drop(probe);
-    port
+    crate::test_ports::reserved_port()
 }
 
 #[tokio::test]
