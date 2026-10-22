@@ -108,19 +108,6 @@ impl RuntimeConfig {
     }
 }
 
-/// The config type this field once had; `RuntimeAvailability` is the one
-/// definition. Kept as an alias only until the last commit of MIK-8666.
-pub use crate::runtime::RuntimeAvailability as RuntimeAvailabilityConfig;
-
-impl RuntimeAvailability {
-    /// The conversion `RuntimeAvailabilityConfig` had, kept with its alias until
-    /// the last commit of MIK-8666; the two types are now one.
-    #[must_use]
-    pub fn runtime_availability(&self) -> RuntimeAvailability {
-        self.clone()
-    }
-}
-
 /// A named runtime policy profile.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]

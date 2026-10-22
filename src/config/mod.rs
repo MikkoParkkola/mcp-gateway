@@ -70,10 +70,9 @@ pub use features::{
     HealthCheckConfig, IdempotencyConfig, IdempotencyReadOnlyTool, IdentityGrantsConfig,
     KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig,
     PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig, ProcessCommand, ProcessExecution,
-    RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig, RetryConfig,
-    RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig, SecurityConfig,
-    SignatureChainConfig, StreamingConfig, TasksConfig, ToolContractConfig, WebhookConfig,
-    api_key_digest_spec,
+    RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig, RetryConfig, RuntimeConfig,
+    RuntimeProfileConfig, SecurityConfig, SignatureChainConfig, StreamingConfig, TasksConfig,
+    ToolContractConfig, WebhookConfig, api_key_digest_spec,
 };
 pub use features::{
     EventsConfig, EventsRateLimit, EventsScheduleConfig, EventsSourcesConfig, EventsWatchConfig,

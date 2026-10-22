@@ -220,10 +220,6 @@ fn scope_matches(policy_item: &str, request_item: &str) -> bool {
     }
 }
 
-/// The rule types this module once mirrored; the config types are the one
-/// definition. Kept as aliases only until the last commit of MIK-8666.
-pub use crate::config::{PolicyMatchConfig as MatchCriteria, PolicyScopesConfig as PolicyScopes};
-
 #[cfg(test)]
 mod tests {
     use super::*;
