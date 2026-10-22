@@ -177,3 +177,41 @@ fn agent_task_owner(client_id: &str) -> String {
 mod agent_owner_tests;
 #[cfg(test)]
 mod owners_tests;
+
+#[cfg(test)]
+mod mik_8659_owner_tests {
+    fn client(authenticated: bool, principal: &str) -> crate::gateway::auth::AuthenticatedClient {
+        crate::gateway::auth::AuthenticatedClient {
+            name: "k".to_owned(),
+            rate_limit: 0,
+            backends: vec!["*".to_owned()],
+            allowed_tools: None,
+            denied_tools: None,
+            admin: false,
+            principal: principal.to_owned(),
+            quota_principal: None,
+            authenticated,
+            credential_kind: crate::security::audit::CredentialKind::ApiKey,
+        }
+    }
+
+    /// MIK-8659 T2 (GREEN): the task owner key needs an authenticated
+    /// non-empty principal; `{false, "p"}` and `{true, ""}` give no key.
+    #[test]
+    fn t2_task_owner_key_needs_a_principal() {
+        assert_eq!(super::session_owner_key(None), "");
+        let unauthenticated = client(false, "p");
+        assert_eq!(super::session_owner_key(Some(&unauthenticated)), "");
+        let empty = client(true, "");
+        assert_eq!(super::session_owner_key(Some(&empty)), "");
+        let ok = client(true, "p");
+        assert_eq!(
+            super::session_owner_key(Some(&ok)),
+            format!(
+                "{}{}",
+                crate::gateway::auth::CREDENTIAL_OWNER_PREFIX,
+                "p"
+            )
+        );
+    }
+}

@@ -708,3 +708,9 @@ mod client_state_tests;
 #[cfg(test)]
 #[path = "auth_signing_dashboard_quota_tests.rs"]
 mod signing_dashboard_quota_tests;
+
+#[cfg(test)]
+#[path = "auth_caller_agreement_tests.rs"]
+mod caller_agreement_tests;
+#[cfg(test)]
+pub(crate) use caller_agreement_tests::{expected_api_key, mints};

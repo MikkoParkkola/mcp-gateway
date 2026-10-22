@@ -256,4 +256,39 @@ mod tests {
             &subject_owner(&headers(None)),
         );
     }
+
+    /// MIK-8659 T2 (GREEN): the session owner needs an authenticated
+    /// non-empty principal; `{false, "p"}` and `{true, ""}` are anonymous.
+    #[test]
+    fn t2_session_owner_needs_a_principal() {
+        fn client(
+            authenticated: bool,
+            principal: &str,
+        ) -> crate::gateway::auth::AuthenticatedClient {
+            crate::gateway::auth::AuthenticatedClient {
+                name: "k".to_owned(),
+                rate_limit: 0,
+                backends: vec!["*".to_owned()],
+                allowed_tools: None,
+                denied_tools: None,
+                admin: false,
+                principal: principal.to_owned(),
+                quota_principal: None,
+                authenticated,
+                credential_kind: crate::security::audit::CredentialKind::ApiKey,
+            }
+        }
+        let unauthenticated = client(false, "p");
+        assert_eq!(
+            session_owner(Some(&unauthenticated)),
+            SessionOwner::Anonymous
+        );
+        let empty = client(true, "");
+        assert_eq!(session_owner(Some(&empty)), SessionOwner::Anonymous);
+        let ok = client(true, "p");
+        assert_eq!(
+            session_owner(Some(&ok)),
+            SessionOwner::Credential("p".to_owned())
+        );
+    }
 }
