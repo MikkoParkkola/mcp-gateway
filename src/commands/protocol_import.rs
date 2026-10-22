@@ -374,8 +374,8 @@ fn parse_document<T: DeserializeOwned>(
     content: &str,
 ) -> Result<T, String> {
     serde_json::from_str(content).or_else(|json_err| {
-        guard_untrusted_yaml(content)
-            .map_err(|guard_err| format!("rejected {label} {}: {guard_err}", file.display()))?;
+        // The YAML seam guards every caller (MIK-8639): size, depth, aliases,
+        // directives, expansion, names and syntax are refused before parsing.
         crate::yaml::from_str(content).map_err(|yaml_err| {
             format!(
                 "failed to parse {label} {} as JSON or YAML: {json_err}; {yaml_err}",
@@ -383,60 +383,6 @@ fn parse_document<T: DeserializeOwned>(
             )
         })
     })
-}
-
-/// Maximum byte size of an untrusted spec document.
-const MAX_SPEC_BYTES: usize = 16 * 1024 * 1024;
-/// Maximum number of YAML alias references tolerated. Legitimate API specs use
-/// `$ref` (a spec-level mechanism), not YAML aliases, so this is ~0 in practice;
-/// a low cap kills the exponential "billion laughs" alias-amplification bomb.
-const MAX_YAML_ALIASES: usize = 64;
-
-/// Reject hostile untrusted YAML before it reaches the YAML parser, which expands
-/// anchor/alias references during deserialization (a "billion laughs" memory /
-/// stack `DoS`). JSON parsing is already bounded by `serde_json`'s recursion limit,
-/// so this guard only runs on the YAML fallback path.
-fn guard_untrusted_yaml(content: &str) -> Result<(), String> {
-    if content.len() > MAX_SPEC_BYTES {
-        return Err(format!(
-            "document is {} bytes, exceeds the {MAX_SPEC_BYTES}-byte spec limit",
-            content.len()
-        ));
-    }
-    let alias_count = count_yaml_aliases(content);
-    if alias_count > MAX_YAML_ALIASES {
-        return Err(format!(
-            "document uses {alias_count} YAML aliases (limit {MAX_YAML_ALIASES}); \
-             alias amplification is rejected — use $ref for spec-level reuse"
-        ));
-    }
-    Ok(())
-}
-
-/// Count YAML alias references (`*name` in node position) in raw text. A node
-/// alias appears at the start of a value, i.e. after a structural character
-/// (`:`, `-`, `[`, `{`, `,`) or at line start, followed by an anchor-name char.
-/// This deliberately over-counts conservatively rather than parse YAML.
-fn count_yaml_aliases(content: &str) -> usize {
-    let bytes = content.as_bytes();
-    let mut count = 0;
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'*' && i + 1 < bytes.len() {
-            let next = bytes[i + 1];
-            let prev = bytes[..i]
-                .iter()
-                .rev()
-                .find(|b| !b.is_ascii_whitespace())
-                .copied();
-            let at_node_position = matches!(prev, None | Some(b':' | b'-' | b'[' | b'{' | b','));
-            if at_node_position && (next.is_ascii_alphanumeric() || next == b'_') {
-                count += 1;
-            }
-        }
-        i += 1;
-    }
-    count
 }
 
 fn default_source_name(file: &Path) -> String {

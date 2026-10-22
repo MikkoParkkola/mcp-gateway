@@ -4,42 +4,9 @@ use mcp_gateway::protocol_imports::{ImportRiskKind, ImportSourceKind};
 
 use super::*;
 
-#[test]
-fn guard_rejects_yaml_alias_bomb() {
-    // A billion-laughs-style alias amplification must be rejected before
-    // the YAML parser expands it.
-    use std::fmt::Write as _;
-    let mut bomb = String::from("a: &a [x, x, x, x, x, x, x, x, x]\n");
-    for (i, prev) in ('b'..='z').zip('a'..='y') {
-        let _ = writeln!(
-            bomb,
-            "{i}: &{i} [*{prev}, *{prev}, *{prev}, *{prev}, *{prev}, *{prev}, *{prev}, *{prev}, *{prev}]"
-        );
-    }
-    let err = guard_untrusted_yaml(&bomb).expect_err("alias bomb must be rejected");
-    assert!(err.contains("alias"), "got: {err}");
-}
-
-#[test]
-fn guard_allows_normal_yaml_without_aliases() {
-    let ok = "openapi: 3.0.0\ninfo:\n  title: x\npaths: {}\n";
-    assert!(guard_untrusted_yaml(ok).is_ok());
-}
-
-#[test]
-fn guard_rejects_oversized_document() {
-    let big = "x".repeat(MAX_SPEC_BYTES + 1);
-    let err = guard_untrusted_yaml(&big).expect_err("oversized doc must be rejected");
-    assert!(err.contains("exceeds"), "got: {err}");
-}
-
-#[test]
-fn count_yaml_aliases_ignores_scalar_stars() {
-    // `*` inside scalar text (not in node position) must not be counted.
-    assert_eq!(count_yaml_aliases("note: see 2 * 3 for math\n"), 0);
-    assert_eq!(count_yaml_aliases("ref: *anchor\n"), 1);
-    assert_eq!(count_yaml_aliases("list:\n  - *a\n  - *b\n"), 2);
-}
+// MIK-8639: the old `guard_untrusted_yaml` rows (alias bomb, 16 MiB, alias
+// count) moved to `tests/mik_8639_yaml_guard.rs`, which pins the same limits
+// on the seam that now guards every caller.
 
 const OPENAPI_SPEC: &str = r#"
 openapi: 3.0.0

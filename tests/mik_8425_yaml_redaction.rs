@@ -153,12 +153,7 @@ fn a_syntax_error_does_not_print_it() {
         Ok(v) => panic!("accepted; expected a refusal for {text:?}, got {v:?}"),
         Err(e) => e,
     };
-    assert_redacted(
-        "syntax error",
-        &err,
-        SENTINEL,
-        "while scanning a quoted scalar",
-    );
+    assert_redacted("syntax error", &err, SENTINEL, "unclosed quote");
     let control = yaml::from_str::<yaml::Value>("a: \"closed\"\n").expect("control loads");
     assert_eq!(
         control.get("a").and_then(yaml::Value::as_str),
@@ -184,7 +179,12 @@ fn a_depth_refusal_does_not_print_it() {
     let Err(err) = yaml::from_str::<yaml::Value>(&deep) else {
         panic!("accepted 129-deep nesting; expected a recursion refusal");
     };
-    assert_redacted("depth refusal", &err, SENTINEL, "recursion limit exceeded");
+    assert_redacted(
+        "depth refusal",
+        &err,
+        SENTINEL,
+        "nesting deeper than 128 levels",
+    );
     let shallow = format!("{}{}{}", "[".repeat(128), SENTINEL, "]".repeat(128));
     let control = yaml::from_str::<yaml::Value>(&shallow).expect("128-deep control loads");
     assert!(control.is_sequence());
@@ -244,22 +244,12 @@ fn every_reader_redacts() {
     let Err(err) = yaml::from_str_loose(&syntax_text) else {
         panic!("loose reader accepted an unterminated scalar");
     };
-    assert_redacted(
-        "from_str_loose",
-        &err,
-        SENTINEL,
-        "while scanning a quoted scalar",
-    );
+    assert_redacted("from_str_loose", &err, SENTINEL, "unclosed quote");
 
     let Some(err) = yaml::documents(&syntax_text).find_map(Result::err) else {
         panic!("documents accepted an unterminated scalar; expected a refusal");
     };
-    assert_redacted(
-        "documents",
-        &err,
-        SENTINEL,
-        "while scanning a quoted scalar",
-    );
+    assert_redacted("documents", &err, SENTINEL, "unclosed quote");
 
     let control = yaml::from_str::<Port>("port: 8080\n").expect("typed control loads");
     assert_eq!(control.port, 8080);

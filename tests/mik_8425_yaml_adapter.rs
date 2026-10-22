@@ -16,12 +16,14 @@ use figment::Provider as _;
 use figment::providers::{Format as _, Yaml};
 
 /// T1: a stream yields every document and ends at its first refusal.
+/// MIK-8639: the guard refuses the stream as a whole, so a refused stream
+/// yields exactly one refusal and no document.
 #[test]
 fn documents_stops_at_the_first_refusal() {
     let read: Vec<bool> = yaml::documents("a: 1\n---\nb: [1, 2\n")
         .map(|d| d.is_ok())
         .collect();
-    assert_eq!(read, [true, false], "Ok, then the refusal, then the end");
+    assert_eq!(read, [false], "one refusal, nothing yielded");
 
     // Joined, not terminated: a trailing `---` would start a 301st, empty
     // document, in serde_yaml as here.
@@ -36,9 +38,16 @@ fn documents_stops_at_the_first_refusal() {
 
     let late = format!("{}b: [1, 2\n", "a: 1\n---\n".repeat(260));
     let read = yaml::documents(&late).collect::<Vec<_>>();
-    assert_eq!(read.len(), 261, "260 valid documents, then the refusal");
-    assert!(read[..260].iter().all(Result::is_ok));
-    assert!(read[260].is_err());
+    assert_eq!(read.len(), 1, "one refusal, nothing yielded");
+    let err = read[0].as_ref().unwrap_err();
+    assert_eq!(err.limit(), Some(&yaml::Limit::Syntax {
+        line: 521,
+        column: 4
+    }));
+    assert_eq!(
+        err.to_string(),
+        "YAML refused: unclosed bracket at line 521 column 4"
+    );
 }
 
 /// T2: the duplicate-key rule per destination, on the adapter's own paths.
@@ -58,6 +67,7 @@ fn from_str_refuses_a_repeated_key_in_a_tree() {
 
 /// T2b: the config loader's provider call, through the adapter, is
 /// identical to figment's own: profiles and values, or kind and message.
+/// MIK-8639: inputs the guard refuses carry the guard refusal instead.
 #[test]
 fn figment_data_matches_the_yaml_provider() {
     let cases = [
@@ -70,6 +80,24 @@ fn figment_data_matches_the_yaml_provider() {
         "",
     ];
     for text in cases {
+        // The guard refuses these two before figment's provider runs.
+        if text == "a: [1, 2\n" {
+            let err = yaml::figment_data(text).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "YAML refused: unclosed bracket at line 1 column 4",
+                "guard refusal for {text:?}"
+            );
+            continue;
+        }
+        if text == "server: \"unterminated\n" {
+            let err = yaml::figment_data(text).unwrap_err();
+            assert!(
+                err.to_string().starts_with("YAML refused: "),
+                "guard refusal for {text:?}, got: {err}"
+            );
+            continue;
+        }
         let ours = yaml::figment_data(text);
         let theirs = Yaml::string(text).data();
         match (ours, theirs) {
@@ -117,9 +145,42 @@ fn tree_or_refusal(r: Result<yaml::Value, impl std::fmt::Display>) -> String {
 
 /// T3: on every recorded behaviour input the adapter reads what `serde_yaml`
 /// reads, as a tree, as a `Dict`, as a stream and as a typed map.
+/// MIK-8639: the input the guard refuses carries the guard refusal instead.
 #[test]
 fn adapter_reads_like_serde_yaml_on_the_behaviour_cases() {
     for text in BEHAVIOUR_INPUTS {
+        // The guard refuses the unclosed flow sequence on every reading.
+        if *text == "x: [1, 2\n" {
+            let refused = "YAML refused: unclosed bracket at line 1 column 4";
+            assert_eq!(
+                tree_or_refusal(yaml::from_str::<yaml::Value>(text)),
+                format!("ERR {refused}"),
+                "tree reading of {text:?}"
+            );
+            assert_eq!(
+                format!(
+                    "{:?}",
+                    yaml::from_str_loose(text).map_err(|e| e.to_string())
+                ),
+                format!("Err({refused:?})"),
+                "Dict reading of {text:?}"
+            );
+            let ours: Vec<String> = yaml::documents(text).map(tree_or_refusal).collect();
+            assert_eq!(
+                ours,
+                [format!("ERR {refused}")],
+                "stream reading of {text:?}"
+            );
+            assert_eq!(
+                format!(
+                    "{:?}",
+                    yaml::from_str::<BTreeMap<String, String>>(text).map_err(|e| e.to_string())
+                ),
+                format!("Err({refused:?})"),
+                "typed reading of {text:?}"
+            );
+            continue;
+        }
         assert_eq!(
             tree_or_refusal(yaml::from_str::<yaml::Value>(text)),
             tree_or_refusal(
@@ -170,6 +231,7 @@ fn adapter_reads_like_serde_yaml_on_the_behaviour_cases() {
 
 /// T3, limits: the nesting depth and alias-expansion refusal points recorded
 /// in MIG.0 (`behaviour.txt`) hold through the adapter.
+/// MIK-8639: depth 129 is refused by the guard now, with the guard's text.
 #[test]
 fn adapter_keeps_the_recorded_refusal_points() {
     let nested = |depth: usize| format!("{}{}", "[".repeat(depth), "]".repeat(depth));
@@ -181,12 +243,11 @@ fn adapter_keeps_the_recorded_refusal_points() {
         }
         doc
     };
-    for (doc, refused) in [
-        (nested(128), false),
-        (nested(129), true),
-        (fanout(3), false),
-        (fanout(4), true),
-    ] {
+    assert_eq!(
+        tree_or_refusal(yaml::from_str::<yaml::Value>(&nested(129))),
+        "ERR YAML refused: nesting deeper than 128 levels at line 1"
+    );
+    for (doc, refused) in [(nested(128), false), (fanout(3), false), (fanout(4), true)] {
         assert_eq!(yaml::from_str::<yaml::Value>(&doc).is_err(), refused);
         assert_eq!(
             tree_or_refusal(yaml::from_str::<yaml::Value>(&doc)),

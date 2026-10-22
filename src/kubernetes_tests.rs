@@ -104,16 +104,21 @@ fn parse_refuses_a_malformed_later_document() {
     assert!(matches!(err, KubernetesPlanError::Parse(_)), "got {err:?}");
 }
 
-/// MIK-8425 MIG.1c: documents are checked in order, so an earlier document's
-/// validation failure is reported before a later document's parse error.
+/// MIK-8639: `documents()` refuses the stream as a whole, so a later
+/// document's syntax refusal wins over an earlier document's validation
+/// failure. (MIK-8425 MIG.1c reported the earlier document first.)
 #[test]
-fn an_earlier_invalid_document_is_reported_before_a_later_parse_error() {
+fn the_streams_syntax_refusal_wins_over_an_earlier_invalid_document() {
     let manifest =
         "apiVersion: v1\nkind: Gateway\nmetadata:\n  name: --all\n---\nkind: [unclosed\n";
-    let err = parse_resources(manifest).expect_err("the first document is invalid");
+    let err = parse_resources(manifest).expect_err("the stream is refused as a whole");
     assert!(
-        matches!(err, KubernetesPlanError::InvalidName { .. }),
+        matches!(err, KubernetesPlanError::Parse(_)),
         "got {err:?}"
+    );
+    assert!(
+        err.to_string().contains("YAML refused: unclosed bracket"),
+        "got: {err}"
     );
 }
 
