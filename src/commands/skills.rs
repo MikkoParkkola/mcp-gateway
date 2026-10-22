@@ -366,7 +366,9 @@ async fn fetch_skill_from_url(
                 }
                 Err(_) => "<invalid-url>".to_string(),
             };
-            return Err(format!("{shown_url} redirected to {shown}; use the final URL"));
+            return Err(format!(
+                "{shown_url} redirected to {shown}; use the final URL"
+            ));
         }
         return Err(format!("{shown_url} redirected; use the final URL"));
     }

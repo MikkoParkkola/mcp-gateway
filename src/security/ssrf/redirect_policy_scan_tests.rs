@@ -859,8 +859,7 @@ fn analyze_builder_expr(
                 let mut seen_builder = false;
                 let mut all_redirect = true;
                 for arg in &call.args {
-                    let (is_builder, has_redirect) =
-                        analyze_builder_expr(arg, vars, factories);
+                    let (is_builder, has_redirect) = analyze_builder_expr(arg, vars, factories);
                     if is_builder {
                         seen_builder = true;
                         all_redirect = all_redirect && has_redirect;
@@ -923,6 +922,13 @@ const ALLOWED: &[(&str, &str, &str, &str)] = &[
         "src/key_server/oidc_jwks_cache.rs",
         "with_remote_proxy",
         "refuses every redirect; no hop is ever followed, so there is no budget to consult",
+    ),
+    (
+        "implicit-policy",
+        "src/personal_accounts/provider/http.rs",
+        "build",
+        "private; its only callers pass strict_builder(), which sets Policy::none() (the \
+         production path and the cfg(test) for_test seam)",
     ),
 ];
 

@@ -390,7 +390,9 @@ async fn exchange_does_not_follow_a_307_redirect() {
         text.contains("redirect"),
         "must name the redirect, got: {text}"
     );
-    let seen = bodies.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let seen = bodies
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     assert_eq!(seen.len(), 1, "listener 1 sees the POST once");
     assert!(
         seen[0].contains("subject_token"),

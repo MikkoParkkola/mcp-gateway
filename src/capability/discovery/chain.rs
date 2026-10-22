@@ -448,7 +448,10 @@ mod tests {
                     let seen = headers
                         .get(axum::http::header::AUTHORIZATION)
                         .and_then(|v| v.to_str().ok().map(str::to_string));
-                    b_auths.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(seen);
+                    b_auths
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(seen);
                     body
                 }
             }),
@@ -477,7 +480,10 @@ mod tests {
                     let seen = headers
                         .get(axum::http::header::AUTHORIZATION)
                         .and_then(|v| v.to_str().ok().map(str::to_string));
-                    a_auths.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(seen);
+                    a_auths
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(seen);
                     (
                         axum::http::StatusCode::FOUND,
                         [(axum::http::header::LOCATION, target)],
@@ -508,14 +514,18 @@ mod tests {
             .await
             .expect("bounded");
         assert!(probed.is_some(), "a safe redirect finds the spec");
-        let seen_a = a_auths.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let seen_a = a_auths
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(seen_a.len(), 1, "A sees its probe once");
         assert!(
             seen_a[0].is_some(),
             "A's probe request must carry authorization"
         );
         drop(seen_a);
-        let seen_b = b_auths.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let seen_b = b_auths
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(seen_b.len(), 1, "B serves the followed redirect once");
         assert!(
             seen_b[0].is_none(),

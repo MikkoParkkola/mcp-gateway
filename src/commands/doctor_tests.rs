@@ -353,13 +353,21 @@ async fn http_backend_probe_redacts_credentials_in_a_redirect_location() {
     let Some(result) = outcome else {
         panic!("an Http transport must produce a result");
     };
-    assert!(!result.detail.contains("hunter2"), "detail: {}", result.detail);
+    assert!(
+        !result.detail.contains("hunter2"),
+        "detail: {}",
+        result.detail
+    );
     assert!(
         !result.detail.contains("sekret-token-value"),
         "detail: {}",
         result.detail
     );
-    assert!(!result.detail.contains("user:"), "detail: {}", result.detail);
+    assert!(
+        !result.detail.contains("user:"),
+        "detail: {}",
+        result.detail
+    );
     assert!(
         result.detail.contains("/final/path"),
         "detail: {}",

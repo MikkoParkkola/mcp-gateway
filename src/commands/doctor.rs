@@ -431,9 +431,7 @@ async fn check_http_backend(name: &str, transport: &TransportConfig) -> Option<C
                 {
                     Some(location) => match resp.url().join(location) {
                         Ok(resolved) => {
-                            mcp_gateway::security::sanitize::redact_url_keep_path(
-                                resolved.as_str(),
-                            )
+                            mcp_gateway::security::sanitize::redact_url_keep_path(resolved.as_str())
                         }
                         Err(_) => "<invalid-url>".to_string(),
                     },
