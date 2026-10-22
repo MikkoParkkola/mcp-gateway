@@ -415,6 +415,55 @@ async fn tasks_get_delivers_a_bound_public_signature_on_the_stored_result() {
     );
 }
 
+/// C1i twin of `tasks_get_delivers_a_bound_public_signature_on_the_stored_result`:
+/// a recovered result carrying `cacheScope: "public"` is sealed over the
+/// delivered bytes. The oracle is the serialized `tasks/get` response, so a
+/// seal over `public` fails Bound against the delivered `private`, even when
+/// the in-memory envelope already clamped.
+#[tokio::test]
+async fn tasks_get_with_a_public_scope_is_sealed_as_delivered() {
+    let mut meta = MetaMcp::new(provenance_test_backend());
+    dual_signed_meta(&mut meta);
+    let trust = trust_set();
+    let stamped = with_minted_receipts(Box::pin(async {
+        meta.recover_task_result(
+            "remote_docs",
+            "search",
+            None,
+            "trace-8398",
+            json!({
+                "content": [{"type": "text", "text": "ok"}],
+                "cacheScope": "public",
+            }),
+        )
+    }))
+    .await
+    .expect("nothing in the result trips a gate");
+    let targets: Vec<ResponsePolicyTarget> = Vec::new();
+    let delivery = delivery_ctx(&targets, "tasks/get", "gateway_invoke");
+    let response = with_minted_receipts(Box::pin(async {
+        meta.finalize_routed(task_envelope(&stamped), &delivery, None)
+    }))
+    .await;
+    let wire = serde_json::to_value(&response).expect("the wire form serializes");
+    let delivered = &wire["result"]["result"];
+    assert_eq!(
+        delivered.get("cacheScope").and_then(|v| v.as_str()),
+        Some("private"),
+        "the wire clamp delivers private: {wire}"
+    );
+    let prov = delivered
+        .pointer("/_meta/provenance")
+        .expect("the stored result carries the receipt")
+        .clone();
+    assert!(
+        prov.get("public_signature").is_some(),
+        "the stored receipt carries a public signature: {delivered}"
+    );
+    let verified = verify_public(&prov, &trust, Some(delivered)).expect("it verifies");
+    assert_eq!(verified.status, VerifyStatus::Bound);
+}
+
 #[tokio::test]
 async fn chain_answer_step_receipts_carry_bound_public_signatures() {
     with_minted_receipts(Box::pin(async {

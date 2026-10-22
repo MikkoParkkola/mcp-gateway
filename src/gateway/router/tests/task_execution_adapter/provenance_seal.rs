@@ -4,12 +4,14 @@
 //!
 //! The worker's dispatch mints its receipt with no request scope around it,
 //! so nothing seals it at creation. These rows run a task through the real
-//! `/mcp` route with both provenance signers installed and read the stored
-//! completed result back: its top-level receipt must carry a public signature
-//! that verifies Bound against the serialized delivered bytes. The serialized
-//! task wire is the oracle (MIK-8398 C1g): the claim is about the bytes
-//! delivery serves, after the wire clamp, so any post-seal mutation fails,
-//! not only this clamp.
+//! `/mcp` route with both provenance signers installed and read the delivered
+//! `tasks/get` body back: its `result.result` must carry a public signature
+//! that verifies Bound against those delivered bytes. The HTTP body from
+//! `poll_until_terminal` is the oracle (MIK-8398 C1i): the claim is about the
+//! bytes delivery serves, after every wire and serialization clamp, so any
+//! post-seal mutation fails, not only this clamp. The in-memory wire check
+//! adds nothing once delivery seals nothing (proven in
+//! `provenance_delivery_tests`), so these rows keep only the delivered check.
 use super::super::*;
 use super::input_round::{
     STATE_1, answer, ask, create, done, state_only, update, wait_input_required,
@@ -17,23 +19,9 @@ use super::input_round::{
 use super::support::*;
 
 use crate::attestation::{BnautAttestationSigner, RESULT_PROVENANCE_DOMAIN_INFO};
-use crate::key_server::oidc::VerifiedIdentity;
 use crate::trust::provenance_public::{
     ProvenancePublicSigner, TrustSet, VerifyStatus, verify_public,
 };
-
-/// The admission principal the route derives for `key-a` (as in
-/// `provide_input_guards`).
-fn alice() -> String {
-    VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@adapter.test".to_string(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://idp.adapter.test".to_string(),
-    }
-    .stable_actor_id()
-}
 
 /// The suite's state with both provenance signers installed on the Meta-MCP
 /// before it is shared (as in `relay_settlement`).
@@ -65,36 +53,28 @@ fn trust_set() -> TrustSet {
     TrustSet::from_json(&jwk_text).expect("trust loads")
 }
 
-/// The stored completed result of `id`, read back from the committed record
-/// through its serialized wire form: `serde_json::to_value(task.wire())`
-/// `["result"]`, the bytes delivery serves after the wire clamp.
-fn stored_result(state: &Arc<AppState>, id: &str) -> Value {
-    let committed = state
-        .tasks
-        .get(&alice(), id)
-        .expect("the owner reads its task");
-    std::assert_eq!(
-        committed.task.status(),
-        crate::protocol::tasks::TaskStatus::Completed,
-        "the task completed"
-    );
-    let wire = serde_json::to_value(committed.task.wire()).expect("the wire form serializes");
-    wire.get("result")
-        .expect("a completed task stores a result")
+/// The delivered completed result: `poll_until_terminal` returns the HTTP
+/// `tasks/get` body the client parsed (a JSON-RPC response, as `status_of`
+/// reads `/result/status`), so `/result/result` is the task result as
+/// delivered, after every wire and serialization clamp.
+fn delivered_result(settled: &Value) -> Value {
+    settled
+        .pointer("/result/result")
+        .expect("a completed tasks/get carries its result")
         .clone()
 }
 
-fn assert_sealed_bound(stored: &Value) {
-    let prov = stored
+fn assert_sealed_bound(delivered: &Value) {
+    let prov = delivered
         .pointer("/_meta/provenance")
-        .expect("the stored result carries a receipt")
+        .expect("the delivered result carries a receipt")
         .clone();
     assert!(
         prov.get("public_signature").is_some(),
-        "the stored receipt carries a public signature: {stored}"
+        "the delivered receipt carries a public signature: {delivered}"
     );
-    let verified =
-        verify_public(&prov, &trust_set(), Some(stored)).expect("the stored receipt verifies");
+    let verified = verify_public(&prov, &trust_set(), Some(delivered))
+        .expect("the delivered receipt verifies");
     std::assert_eq!(verified.status, VerifyStatus::Bound);
 }
 
@@ -115,7 +95,7 @@ async fn a_task_run_by_the_worker_stores_a_sealed_result() {
     let settled = poll_until_terminal(&state, "key-a", &id).await;
     std::assert_eq!(status_of(&settled), "completed", "{settled}");
     std::assert_eq!(mock.calls(), 1, "one dispatch ran the task");
-    assert_sealed_bound(&stored_result(&state, &id));
+    assert_sealed_bound(&delivered_result(&settled));
 }
 
 /// R15: the same through an input round: the resume's dispatch and settle
@@ -142,7 +122,7 @@ async fn an_input_round_resume_stores_a_sealed_result() {
     let settled = poll_until_terminal(&state, "key-a", &id).await;
     std::assert_eq!(status_of(&settled), "completed", "{settled}");
     std::assert_eq!(mock.calls(), 2, "one first dispatch and one resume");
-    assert_sealed_bound(&stored_result(&state, &id));
+    assert_sealed_bound(&delivered_result(&settled));
 }
 
 /// R16: a result stored after a state-only round is sealed. The worker
@@ -163,13 +143,13 @@ async fn a_result_stored_after_a_state_only_round_is_sealed() {
         2,
         "one first dispatch and one state-only resume"
     );
-    assert_sealed_bound(&stored_result(&state, &id));
+    assert_sealed_bound(&delivered_result(&settled));
 }
 
-/// R19 (MIK-8398 C1g): a worker task whose backend answer carries
+/// R19 (MIK-8398 C1g, C1i): a worker task whose backend answer carries
 /// `cacheScope: "public"` stores a result sealed over the delivered bytes.
-/// The oracle is the serialized task wire, not the stored record, so a seal
-/// over `public` fails Bound against the delivered `private`.
+/// The oracle is the HTTP `tasks/get` body, not the in-memory record, so a
+/// seal over `public` fails Bound against the delivered `private`.
 #[tokio::test]
 async fn a_worker_task_with_a_public_scope_is_sealed_as_delivered() {
     let mock = MockBackend::answering(Answer::Result(json!({
@@ -188,11 +168,11 @@ async fn a_worker_task_with_a_public_scope_is_sealed_as_delivered() {
     let settled = poll_until_terminal(&state, "key-a", &id).await;
     std::assert_eq!(status_of(&settled), "completed", "{settled}");
     std::assert_eq!(mock.calls(), 1, "one dispatch ran the task");
-    let stored = stored_result(&state, &id);
+    let delivered = delivered_result(&settled);
     std::assert_eq!(
-        stored.get("cacheScope").and_then(Value::as_str),
+        delivered.get("cacheScope").and_then(Value::as_str),
         Some("private"),
-        "the wire clamp delivers private: {stored}"
+        "the wire clamp delivers private: {delivered}"
     );
-    assert_sealed_bound(&stored);
+    assert_sealed_bound(&delivered);
 }
