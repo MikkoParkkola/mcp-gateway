@@ -537,12 +537,16 @@ fn the_memory_hint_names_the_cache_the_backend_uses() {
     let command = "npx -y @modelcontextprotocol/server-memory@2026.8.31";
     let old = pin(MEMORY_PACKAGE, "2026.8.31");
     let backend = stdio(command, &[]);
-    let dir = mcp_gateway::transport::isolated_package_manager_env("memory", command, HashMap::new())
-        .get("npm_config_cache")
-        .expect("npx is assigned an npm cache")
-        .clone();
+    let dir =
+        mcp_gateway::transport::isolated_package_manager_env("memory", command, HashMap::new())
+            .get("npm_config_cache")
+            .expect("npx is assigned an npm cache")
+            .clone();
     let text = hint("memory", &old, &backend);
-    let under = std::path::Path::new(&dir).join("_npx").display().to_string();
+    let under = std::path::Path::new(&dir)
+        .join("_npx")
+        .display()
+        .to_string();
     assert!(text.contains(&under), "{text}");
     // The old text named "pkg-cache/memory directory"; the real directory is
     // pkg-cache/memory-<hash>, so the space after the name tells them apart.
@@ -552,7 +556,11 @@ fn the_memory_hint_names_the_cache_the_backend_uses() {
 #[test]
 fn an_operator_npm_cache_is_named_in_the_memory_hint() {
     let command = "npx -y @modelcontextprotocol/server-memory@2026.8.31";
-    let cache = if cfg!(windows) { r"C:\srv\npm" } else { "/srv/npm" };
+    let cache = if cfg!(windows) {
+        r"C:\srv\npm"
+    } else {
+        "/srv/npm"
+    };
     let old = pin(MEMORY_PACKAGE, "2026.8.31");
     let backend = stdio(command, &[("npm_config_cache", cache)]);
     let text = hint("memory", &old, &backend);
