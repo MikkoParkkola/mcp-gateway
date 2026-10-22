@@ -3,7 +3,7 @@
 //! MIK-8398 AC1: a receipt verifies with only the public JWK.
 //!
 //! No `mcp_gateway` item is used: the fixtures are verified independently with
-//! ring, base64 and serde_json only, and the binary runs with a cleared
+//! ring, base64 and `serde_json` only, and the binary runs with a cleared
 //! environment so no signing secret is present.
 
 #[path = "common/gateway_bin.rs"]

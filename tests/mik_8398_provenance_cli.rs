@@ -66,9 +66,11 @@ fn config_with_env_files(home: &Path, env_files: &[PathBuf]) -> PathBuf {
 fn config_with_env_files_and_port(home: &Path, env_files: &[PathBuf], port: u16) -> PathBuf {
     let config = home.join("gateway.yaml");
     let mut text = format!("server:\n  port: {port}\nenv_files:\n");
-    for file in env_files {
-        text.push_str(&format!("  - '{}'\n", file.display()));
-    }
+    text.extend(
+        env_files
+            .iter()
+            .map(|file| format!("  - '{}'\n", file.display())),
+    );
     write_private(&config, text.as_bytes());
     config
 }
@@ -502,11 +504,7 @@ fn verify_newline_kid_prints_one_line() {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push_str(&format!("{byte:02x}"));
-    }
-    out
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[test]
