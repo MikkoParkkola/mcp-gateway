@@ -40,10 +40,13 @@ fn documents_stops_at_the_first_refusal() {
     let read = yaml::documents(&late).collect::<Vec<_>>();
     assert_eq!(read.len(), 1, "one refusal, nothing yielded");
     let err = read[0].as_ref().unwrap_err();
-    assert_eq!(err.limit(), Some(&yaml::Limit::Syntax {
-        line: 521,
-        column: 4
-    }));
+    assert_eq!(
+        err.limit(),
+        Some(&yaml::Limit::Syntax {
+            line: 521,
+            column: 4
+        })
+    );
     assert_eq!(
         err.to_string(),
         "YAML refused: unclosed bracket at line 521 column 4"

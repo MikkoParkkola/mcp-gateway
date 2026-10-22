@@ -63,11 +63,17 @@ impl std::fmt::Display for Error {
                     write!(f, "YAML refused: {len} bytes, over the {max}-byte limit")
                 }
                 Limit::Depth { line } => {
-                    write!(f, "YAML refused: nesting deeper than 128 levels at line {line}")
+                    write!(
+                        f,
+                        "YAML refused: nesting deeper than 128 levels at line {line}"
+                    )
                 }
                 Limit::Aliases { .. } => f.write_str("YAML refused: more than 64 aliases"),
                 Limit::TagDirectives { offset, .. } => {
-                    write!(f, "YAML refused: more than 64 %TAG directives at byte {offset}")
+                    write!(
+                        f,
+                        "YAML refused: more than 64 %TAG directives at byte {offset}"
+                    )
                 }
                 Limit::Expansion => f.write_str("YAML refused: alias expansion over the limit"),
                 Limit::AnchorReuse { offset } => {
@@ -389,7 +395,12 @@ fn at_offset(marker: Marker, make: impl FnOnce(usize) -> Limit) -> Error {
 fn map_scan_error(scan: &ScanError) -> Error {
     let marker = scan.marker();
     if matches!(scan.kind(), ErrorKind::RecursionLimitExceeded) {
-        return Error::refused(Limit::Depth { line: marker.line() }, None);
+        return Error::refused(
+            Limit::Depth {
+                line: marker.line(),
+            },
+            None,
+        );
     }
     Error::refused(
         Limit::Syntax {
@@ -679,8 +690,7 @@ pub(crate) fn documents(text: &str) -> impl Iterator<Item = Result<Value, Error>
             return None;
         }
         let document = stream.next()?;
-        let reading =
-            <Value as serde::Deserialize>::deserialize(document).map_err(Error::backend);
+        let reading = <Value as serde::Deserialize>::deserialize(document).map_err(Error::backend);
         refused = reading.is_err();
         Some(reading)
     })

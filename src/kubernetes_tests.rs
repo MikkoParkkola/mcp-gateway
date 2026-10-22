@@ -112,10 +112,7 @@ fn the_streams_syntax_refusal_wins_over_an_earlier_invalid_document() {
     let manifest =
         "apiVersion: v1\nkind: Gateway\nmetadata:\n  name: --all\n---\nkind: [unclosed\n";
     let err = parse_resources(manifest).expect_err("the stream is refused as a whole");
-    assert!(
-        matches!(err, KubernetesPlanError::Parse(_)),
-        "got {err:?}"
-    );
+    assert!(matches!(err, KubernetesPlanError::Parse(_)), "got {err:?}");
     assert!(
         err.to_string().contains("YAML refused: unclosed bracket"),
         "got: {err}"
