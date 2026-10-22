@@ -230,3 +230,33 @@ fn provenance_value_is_called_only_from_event_services() {
          (MIK-8398 C1c: seal only what this request minted)"
     );
 }
+
+#[test]
+fn seal_receipt_is_called_only_from_the_seal() {
+    let mut found = false;
+    let mut strays = Vec::new();
+    for (file, func, at) in hits(|code| code.contains("seal_receipt(")) {
+        if file == "src/gateway/meta_mcp/invoke/provenance_stamp.rs" && func == "seal_receipt" {
+            continue;
+        }
+        if file == "src/gateway/meta_mcp/invoke/provenance_stamp.rs"
+            && func == "seal_public_provenance"
+        {
+            found = true;
+            continue;
+        }
+        strays.push(format!("{at} in {func}"));
+    }
+    assert!(
+        strays.is_empty(),
+        "a `seal_receipt` caller outside `seal_public_provenance` seals outside \
+         the mint rule — a nested seal or a new direct caller \
+         (MIK-8398 C1g): {strays:?}"
+    );
+    assert!(
+        found,
+        "the `seal_receipt` call in `seal_public_provenance` \
+         (src/gateway/meta_mcp/invoke/provenance_stamp.rs) is gone: no receipt \
+         would ever be sealed (MIK-8398 C1g)"
+    );
+}

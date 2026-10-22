@@ -565,3 +565,49 @@ async fn a_direct_legacy_call_delivers_a_bound_public_signature() {
         assert_eq!(verified.status, VerifyStatus::Bound, "BOUND");
     }
 }
+
+/// R18 (MIK-8398 C1g): the same as R17 on the direct route. The backend
+/// answers `cacheScope: "public"` (`Answer::PublicScope`, as the replay row
+/// above reasons about); the delivered body carries `private`, and the seal
+/// verifies Bound against those delivered bytes.
+#[tokio::test]
+async fn a_direct_public_scope_is_sealed_as_delivered() {
+    use crate::attestation::{BnautAttestationSigner, RESULT_PROVENANCE_DOMAIN_INFO};
+    use crate::trust::provenance_public::{
+        ProvenancePublicSigner, TrustSet, VerifyStatus, verify_public,
+    };
+    for backend in BACKENDS {
+        let fx = fixture(Answer::PublicScope, |meta| {
+            meta.enable_provenance_stamping(
+                BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+                    .with_audience("test-gateway")
+                    .derive_domain(RESULT_PROVENANCE_DOMAIN_INFO),
+            );
+            meta.enable_public_provenance(ProvenancePublicSigner::from_seed_for_test(
+                [7u8; 32],
+                "prov-test-1",
+            ));
+        })
+        .await;
+        let body = modern(&fx, backend, "tools/call", call_params()).await;
+        assert_eq!(
+            body["result"].get("cacheScope").and_then(|v| v.as_str()),
+            Some("private"),
+            "{backend}: the wire clamp delivers private: {body}"
+        );
+        let prov = body
+            .pointer("/result/_meta/provenance")
+            .expect("provenance stamped")
+            .clone();
+        assert!(
+            prov.get("public_signature").is_some(),
+            "{backend}: public sealed"
+        );
+        let public = ProvenancePublicSigner::from_seed_for_test([7u8; 32], "prov-test-1");
+        let jwk_text = serde_json::to_string(&public.public_jwk()).expect("jwk serializes");
+        let trust = TrustSet::from_json(&jwk_text).expect("trust loads");
+        let verified = verify_public(&prov, &trust, Some(&body["result"]))
+            .expect("a public scope verifies against the delivered bytes");
+        assert_eq!(verified.status, VerifyStatus::Bound, "{backend}: BOUND");
+    }
+}

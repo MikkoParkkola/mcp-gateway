@@ -551,6 +551,7 @@ impl MetaMcp {
         // later rewrite touches the gateway's own receipt (MIK-8030). Sealed
         // at creation, so the stored value carries its seal before delivery.
         let mut stamped = self.stamp_recovered_result(gated, server, tool, api_key_name);
+        crate::protocol::cacheable::clamp_delivered_scope(&mut stamped);
         self.seal_public_provenance(&mut stamped);
         Ok(stamped)
     }

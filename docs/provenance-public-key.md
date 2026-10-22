@@ -10,6 +10,9 @@ mint records the receipt, and the seal consumes that record. A receipt minted
 in another request — a replayed response, a backend-planted copy — is never
 sealed, at any depth, on any method.
 
+Sealing principle: the seal must cover the bytes as delivered, so every
+deterministic wire transform happens before it.
+
 ## Setup
 
 Set two environment variables (an env file works; see `docs/DEPLOYMENT.md`):
@@ -111,6 +114,10 @@ holding an integer outside ±(2^53−1).
 Step seals are applied before the egress firewall. A step result the firewall
 later redacts verifies as `ResultMismatch`, which is the honest outcome, not a
 bypass.
+
+Step-receipt asymmetry: step results sit inside `content[0].text`, which the
+wire never clamps, so a step's `cacheScope` is delivered as the backend sent
+it.
 
 A direct idempotent replay that does not re-stamp delivers its stored receipt
 unsealed: the receipt was minted in an earlier request, so this request's seal

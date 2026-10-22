@@ -187,6 +187,9 @@ impl MetaMcp {
 /// mint, so a receipt is sealed at most once; anything else is left unsealed
 /// and counted, and the gateway never puts its Ed25519 signature on a receipt
 /// it did not mint in this request.
+///
+/// Sealing principle (MIK-8398 C1g): the seal must cover the bytes as
+/// delivered, so every deterministic wire transform happens before it.
 pub(in crate::gateway::meta_mcp) fn seal_receipt(
     public: &crate::trust::provenance_public::ProvenancePublicSigner,
     hmac: &crate::attestation::BnautAttestationSigner,

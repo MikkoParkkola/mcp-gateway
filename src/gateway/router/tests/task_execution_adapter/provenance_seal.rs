@@ -6,9 +6,10 @@
 //! so nothing seals it at creation. These rows run a task through the real
 //! `/mcp` route with both provenance signers installed and read the stored
 //! completed result back: its top-level receipt must carry a public signature
-//! that verifies Bound against the stored result itself. The committed record
-//! is the oracle (as in `egress_task`): the claim is about the stored bytes,
-//! before delivery serves them.
+//! that verifies Bound against the serialized delivered bytes. The serialized
+//! task wire is the oracle (MIK-8398 C1g): the claim is about the bytes
+//! delivery serves, after the wire clamp, so any post-seal mutation fails,
+//! not only this clamp.
 use super::super::*;
 use super::input_round::{
     STATE_1, answer, ask, create, done, state_only, update, wait_input_required,
@@ -64,7 +65,9 @@ fn trust_set() -> TrustSet {
     TrustSet::from_json(&jwk_text).expect("trust loads")
 }
 
-/// The stored completed result of `id`, read back from the committed record.
+/// The stored completed result of `id`, read back from the committed record
+/// through its serialized wire form: `serde_json::to_value(task.wire())`
+/// `["result"]`, the bytes delivery serves after the wire clamp.
 fn stored_result(state: &Arc<AppState>, id: &str) -> Value {
     let committed = state
         .tasks
@@ -75,9 +78,8 @@ fn stored_result(state: &Arc<AppState>, id: &str) -> Value {
         crate::protocol::tasks::TaskStatus::Completed,
         "the task completed"
     );
-    committed
-        .task
-        .result()
+    let wire = serde_json::to_value(committed.task.wire()).expect("the wire form serializes");
+    wire.get("result")
         .expect("a completed task stores a result")
         .clone()
 }
@@ -162,4 +164,35 @@ async fn a_result_stored_after_a_state_only_round_is_sealed() {
         "one first dispatch and one state-only resume"
     );
     assert_sealed_bound(&stored_result(&state, &id));
+}
+
+/// R19 (MIK-8398 C1g): a worker task whose backend answer carries
+/// `cacheScope: "public"` stores a result sealed over the delivered bytes.
+/// The oracle is the serialized task wire, not the stored record, so a seal
+/// over `public` fails Bound against the delivered `private`.
+#[tokio::test]
+async fn a_worker_task_with_a_public_scope_is_sealed_as_delivered() {
+    let mock = MockBackend::answering(Answer::Result(json!({
+        "content": [{ "type": "text", "text": "mock-backend-answered" }],
+        "structuredContent": { "marker": "mock-backend-answered" },
+        "cacheScope": "public",
+    })));
+    let (state, _store) = dual_signed_state(&mock).await;
+    let created = post(
+        &state,
+        "key-a",
+        task_invoke(1, "prov-worker-scope", json!({})),
+    )
+    .await;
+    let id = task_id(&created);
+    let settled = poll_until_terminal(&state, "key-a", &id).await;
+    std::assert_eq!(status_of(&settled), "completed", "{settled}");
+    std::assert_eq!(mock.calls(), 1, "one dispatch ran the task");
+    let stored = stored_result(&state, &id);
+    std::assert_eq!(
+        stored.get("cacheScope").and_then(Value::as_str),
+        Some("private"),
+        "the wire clamp delivers private: {stored}"
+    );
+    assert_sealed_bound(&stored);
 }

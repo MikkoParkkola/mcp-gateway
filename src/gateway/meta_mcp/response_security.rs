@@ -280,6 +280,8 @@ impl super::MetaMcp {
         // Top level only: a task's stored result was sealed at creation, and a
         // receipt this request did not mint is never sealed at any depth.
         if let Some(result) = response.result.as_mut() {
+            // The scope was clamped above (PARENT.6), so the seal covers the
+            // bytes as delivered (MIK-8398 C1g).
             self.seal_public_provenance(result);
         }
 

@@ -766,3 +766,106 @@ fn a_seal_with_no_scope_fails_closed() {
         "a seal with no scope seals nothing and never panics: {value}"
     );
 }
+
+/// R17 (MIK-8398 C1g): a live `gateway_invoke` whose backend answer carries
+/// `cacheScope: "public"` is sealed over the delivered bytes. The backend
+/// answer is a state-only interim, so the outer result carries the scope at
+/// its own top level (the position `clamp_delivered_scope` rewrites) rather
+/// than buried in `content[0].text`. The oracle is the serialized wire form,
+/// so any post-seal mutation fails, not only this clamp.
+#[tokio::test]
+async fn a_public_scope_is_sealed_as_delivered_on_the_meta_route() {
+    with_minted_receipts(Box::pin(async {
+        let mut meta = MetaMcp::new(answering_backend(json!({
+            "resultType": "input_required",
+            "requestState": "backend-opaque-state",
+            "cacheScope": "public",
+        })));
+        dual_signed_meta(&mut meta);
+        let trust = trust_set();
+        let caller = allow_all_ctx_named(Some("alice"), None);
+        let response = meta
+            .handle_tools_call(
+                RequestId::Number(17),
+                "gateway_invoke",
+                invoke_args(),
+                Some("session-1"),
+                caller,
+            )
+            .await;
+        let targets: Vec<ResponsePolicyTarget> = Vec::new();
+        let delivery = delivery_ctx(&targets, "tools/call", "gateway_invoke");
+        let response = meta.finalize_routed(response, &delivery, None);
+        let wire = serde_json::to_value(&response).expect("the wire form serializes");
+        let delivered = &wire["result"];
+        assert_eq!(
+            delivered.get("cacheScope").and_then(|v| v.as_str()),
+            Some("private"),
+            "the wire clamp delivers private: {wire}"
+        );
+        let prov = delivered
+            .pointer("/_meta/provenance")
+            .expect("the outer result carries the receipt")
+            .clone();
+        assert!(
+            prov.get("public_signature").is_some(),
+            "the outer receipt carries a public signature: {delivered}"
+        );
+        let verified = verify_public(&prov, &trust, Some(delivered)).expect("the receipt verifies");
+        assert_eq!(verified.status, VerifyStatus::Bound);
+    }))
+    .await;
+}
+
+/// R20 (MIK-8398 C1g): a chain step's bytes are unchanged by the seal. Step
+/// results sit inside `content[0].text`, which the wire never clamps, so a
+/// step's `cacheScope` is delivered as the backend sent it, and its seal
+/// verifies against those bytes. Mutant: a clamp at the step seal sites.
+#[tokio::test]
+async fn chain_step_bytes_are_unchanged_by_the_seal() {
+    with_minted_receipts(Box::pin(async {
+        let mut meta = MetaMcp::new(answering_backend(json!({
+            "content": [{"type": "text", "text": "ok"}],
+            "isError": false,
+            "cacheScope": "public",
+        })))
+        .with_code_mode(true);
+        dual_signed_meta(&mut meta);
+        let trust = trust_set();
+        let caller = allow_all_ctx_named(Some("alice"), None);
+        let response = meta
+            .handle_tools_call(
+                RequestId::Number(20),
+                "gateway_execute",
+                json!({"chain": [
+                    {"tool": "remote_docs:search", "arguments": {}},
+                ]}),
+                Some("session-1"),
+                caller,
+            )
+            .await;
+        let targets: Vec<ResponsePolicyTarget> = Vec::new();
+        let delivery = delivery_ctx(&targets, "tools/call", "gateway_execute");
+        let response = meta.finalize_routed(response, &delivery, None);
+        let delivered = response.result.expect("a result");
+        let text = delivered
+            .pointer("/content/0/text")
+            .and_then(|v| v.as_str())
+            .expect("a wrapped reply carries text");
+        let parsed: serde_json::Value =
+            serde_json::from_str(text).expect("the text parses as JSON");
+        let step_result = parsed.pointer("/results/0/result").expect("a step result");
+        assert_eq!(
+            step_result.get("cacheScope").and_then(|v| v.as_str()),
+            Some("public"),
+            "no clamp at steps: {parsed}"
+        );
+        let prov = step_result
+            .pointer("/_meta/provenance")
+            .expect("a step receipt");
+        let verified =
+            verify_public(prov, &trust, Some(step_result)).expect("the step receipt verifies");
+        assert_eq!(verified.status, VerifyStatus::Bound);
+    }))
+    .await;
+}

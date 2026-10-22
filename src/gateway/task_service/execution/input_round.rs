@@ -102,6 +102,11 @@ impl<'a> Settling<'a> {
             // One worker seal point (MIK-8398 C1e): the first dispatch, a
             // resume, and every state-only re-dispatch pass through here once.
             if let Some(result) = response.result.as_mut() {
+                // MIK-8398 C1g: the stored result is delivered through the
+                // task wire's cacheScope clamp, so it is clamped before the
+                // seal. Step seals take no clamp: a step result sits inside
+                // `content[0].text`, which the wire never clamps.
+                crate::protocol::cacheable::clamp_delivered_scope(result);
                 self.state.meta_mcp().seal_public_provenance(result);
             }
             let round = match classify_dispatch(response) {
