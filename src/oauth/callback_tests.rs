@@ -362,7 +362,8 @@ pub(in crate::oauth) fn capture() -> (
 
 /// MIK-7324.COV.3: the operator's log names a forged state as a possible
 /// CSRF attempt, and a good callback as a success, each by its event name.
-#[tokio::test]
+// Current-thread on purpose: `capture()` is thread-local.
+#[tokio::test(flavor = "current_thread")]
 async fn callback_outcomes_are_logged_by_event_name() {
     let (guard, buffer) = capture();
 
@@ -438,7 +439,8 @@ async fn start_test_server(expected_state: &str) -> (CallbackServer, String, req
 }
 
 /// GET `full_url` and assert the state-first refusal: 400 with "State mismatch".
-async fn assert_refused(client: &reqwest::Client, full_url: String) {
+/// Returns the refusal page for callers that check what it leaves out.
+async fn assert_refused(client: &reqwest::Client, full_url: String) -> String {
     let resp = tokio::time::timeout(crate::test_wait::HANG_BOUND, client.get(full_url).send())
         .await
         .expect("the refused request is answered")
@@ -452,6 +454,7 @@ async fn assert_refused(client: &reqwest::Client, full_url: String) {
         body.contains("State mismatch"),
         "the refusal names the state: {body}"
     );
+    body
 }
 
 /// CBSTATE.1: a wrong or missing state with an error is refused and the login
@@ -516,10 +519,20 @@ async fn a_wrong_or_missing_state_without_an_error_is_refused_and_the_login_cont
 async fn a_provider_error_with_the_right_state_ends_the_login_with_it() {
     let (server, url, client) = start_test_server("expected").await;
     let full = format!("{url}?error=access_denied&error_description=User+denied&state=expected");
-    tokio::time::timeout(crate::test_wait::HANG_BOUND, client.get(full).send())
+    let resp = tokio::time::timeout(crate::test_wait::HANG_BOUND, client.get(full).send())
         .await
         .expect("the provider error is answered")
         .expect("the provider error sends");
+    let page = tokio::time::timeout(crate::test_wait::HANG_BOUND, resp.text())
+        .await
+        .expect("the provider error page arrives")
+        .expect("the provider error page reads");
+    assert!(
+        page.contains("Authorization Failed")
+            && page.contains("access_denied")
+            && page.contains("User denied"),
+        "the right-state error keeps the provider's failure page: {page}"
+    );
     let outcome = tokio::time::timeout(crate::test_wait::HANG_BOUND, server.wait_for_callback())
         .await
         .expect("the login answers the provider error");
@@ -528,22 +541,30 @@ async fn a_provider_error_with_the_right_state_ends_the_login_with_it() {
         Ok((_, result)) => panic!("a provider error ends the login, got code: {}", result.code),
     };
     assert!(
-        matches!(err, crate::Error::OAuth(ref t) if t.contains("access_denied")),
+        matches!(err, crate::Error::OAuth(ref t) if t.contains("access_denied") && t.contains("User denied")),
         "the login ends with the provider error: {err:?}"
     );
 }
 
 /// LOG.1: a refused request logs only the mismatch (with state_len) and no
 /// attacker text, and no provider_error event.
-#[tokio::test]
+// Current-thread on purpose: `capture()` is thread-local, so the axum
+// handler must run on this thread for its events to be captured.
+#[tokio::test(flavor = "current_thread")]
 async fn a_refused_request_logs_only_the_mismatch_and_no_attacker_text() {
     let (guard, buffer) = capture();
     let (server, url, client) = start_test_server("expected").await;
-    assert_refused(
+    let page = assert_refused(
         &client,
         format!("{url}?state=STATEMARK7f3&error=ERRMARK7f3&error_description=DESCMARK7f3"),
     )
     .await;
+    for marker in ["STATEMARK7f3", "ERRMARK7f3", "DESCMARK7f3"] {
+        assert!(
+            !page.contains(marker),
+            "{marker} must not reach the page: {page}"
+        );
+    }
     let valid = format!("{url}?code=c&state=expected");
     tokio::time::timeout(crate::test_wait::HANG_BOUND, client.get(valid).send())
         .await
@@ -564,7 +585,7 @@ async fn a_refused_request_logs_only_the_mismatch_and_no_attacker_text() {
         "the mismatch is logged:\n{log}"
     );
     assert!(
-        log.contains("state_len=11"),
+        log.contains(&format!("state_len={}", "STATEMARK7f3".len())),
         "the state length is logged:\n{log}"
     );
     for absent in [
