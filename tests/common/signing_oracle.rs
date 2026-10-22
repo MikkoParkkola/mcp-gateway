@@ -4,6 +4,7 @@
 //! MIK-8701): `tests/common/signing_verifier.mjs`, run once warm per test
 //! binary, then once per verify under the caller's own bound.
 
+use std::io::Write as _;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -169,12 +170,13 @@ async fn warm() {
     static WARM: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
     WARM.get_or_init(|| async {
         let run = run_oracle(verifier(), b"", WARM_LIMIT, None).await;
-        if run.status.is_none() {
-            panic!("signing oracle warm-up: {}", run.timeout_message());
-        }
+        assert!(
+            run.status.is_some(),
+            "signing oracle warm-up: {}",
+            run.timeout_message()
+        );
         // Straight to the stderr handle, not `eprintln!`: libtest captures the
         // macro for a passing test, and CI must show the cold-start cost.
-        use std::io::Write as _;
         let _ = writeln!(
             std::io::stderr(),
             "signing oracle warm-up took {:?}",
