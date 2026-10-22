@@ -274,21 +274,24 @@ async fn fetch_spec(url: &str, ssrf_protection: bool) -> Result<String, (StatusC
     // disable them for trusted internal specs.
     // Never an environment proxy: it would resolve the name instead of the
     // pin below (#1881).
-    let builder = if ssrf_protection {
-        crate::security::ssrf::pinned_client_builder()
-            .redirect(crate::security::ssrf::ssrf_redirect_policy())
+    let policy = if ssrf_protection {
+        crate::security::ssrf::ssrf_redirect_policy()
     } else {
-        reqwest::Client::builder().no_proxy().redirect(
-            reqwest::redirect::Policy::custom(|attempt| {
-                if crate::security::ssrf::hop_budget_spent(attempt.previous().len()) {
-                    attempt.stop()
-                } else {
-                    attempt.follow()
-                }
-            }),
-        )
+        reqwest::redirect::Policy::custom(|attempt| {
+            if crate::security::ssrf::hop_budget_spent(attempt.previous().len()) {
+                attempt.stop()
+            } else {
+                attempt.follow()
+            }
+        })
     };
-    let client = builder
+    let base = if ssrf_protection {
+        crate::security::ssrf::pinned_client_builder()
+    } else {
+        reqwest::Client::builder().no_proxy()
+    };
+    let client = base
+        .redirect(policy)
         .timeout(std::time::Duration::from_secs(30))
         .user_agent("mcp-gateway/openapi-importer")
         .build()
