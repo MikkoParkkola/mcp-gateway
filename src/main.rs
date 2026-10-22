@@ -30,6 +30,7 @@ use mcp_gateway::{
     config::{Config, EnvOverlay},
     gateway::Gateway,
     setup_tracing,
+    trust::run_provenance_command,
     validator::ValidateConfig,
 };
 use tracing::{error, info};
@@ -100,9 +101,7 @@ async fn run(cli: Cli) -> ExitCode {
         Some(Command::Ranking(ranking_cmd)) => commands::run_ranking_command(ranking_cmd),
         Some(Command::Tls(tls_cmd)) => commands::run_tls_command(tls_cmd),
         Some(Command::Trust(trust_cmd)) => commands::run_trust_command(trust_cmd).await,
-        Some(Command::Provenance(cmd)) => {
-            mcp_gateway::trust::run_provenance_command(&cmd, config_path.as_deref())
-        }
+        Some(Command::Provenance(cmd)) => run_provenance_command(&cmd, config_path.as_deref()),
         Some(Command::Identity(identity_cmd)) => commands::run_identity_command(identity_cmd).await,
         // Offline and synchronous on purpose: initializing custody state must
         // not share a dispatch path with anything that starts the gateway.
