@@ -354,6 +354,10 @@ src/gateway/meta_mcp/invoke/propagation.rs	take	-	on-path, untimed: legacy elici
 src/gateway/meta_mcp/invoke/provenance_stamp.rs	maybe_stamp_provenance	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/provenance_stamp.rs	stamp_direct_result	-	direct /mcp/{backend} route only, not the meta tools/call path
 src/gateway/meta_mcp/invoke/provenance_stamp.rs	stamp_recovered_result	-	upstream task recovery (tasks/get) only, not a live dispatch
+src/gateway/meta_mcp/invoke/provenance_stamp.rs	lift_receipt	http_invoke_tiny	on the HTTP gateway_invoke path (wrapped meta reply); borrows without a receipt
+src/gateway/meta_mcp/invoke/provenance_stamp.rs	seal_public_provenance	http_invoke_tiny	on the HTTP gateway_invoke path (finalize_routed); returns at once without a public signer
+src/gateway/meta_mcp/invoke/provenance_stamp.rs	seal_receipt	-	on-path, untimed: runs only with a public provenance signer installed, which the harness does not configure
+src/gateway/meta_mcp/invoke/provenance_stamp.rs	seal_step_receipts	-	on-path, untimed: runs only with a public provenance signer installed, which the harness does not configure
 src/gateway/meta_mcp/invoke/r2_check.rs	absent_on_slot	-	on-path, untimed: per-user-catalogue backends withholding the tool only
 src/gateway/meta_mcp/invoke/r2_check.rs	account_refused_fill	-	on-path, untimed: cold-slot catalogue fills the failsafe refused only
 src/gateway/meta_mcp/invoke/r2_check.rs	answer_refused_fill	-	on-path, untimed: cold-slot catalogue fills that failed only

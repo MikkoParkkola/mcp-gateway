@@ -132,28 +132,67 @@ impl MetaMcp {
         let Some(public) = self.public_provenance_signer.as_deref() else {
             return;
         };
-        let Some(prov) = result.pointer("/_meta/provenance") else {
+        let Some(hmac) = self.provenance_signer.as_deref() else {
             return;
         };
-        if prov.get("signature").is_none() {
-            return;
+        seal_receipt(public, hmac, result);
+    }
+}
+
+/// Seal one receipt this gateway itself signed, and no other.
+///
+/// Signs only when `object._meta.provenance` deserializes as a signed receipt
+/// whose HMAC verifies under this gateway's receipt-domain key; anything else
+/// is left unsealed, so the gateway never puts its Ed25519 signature on a
+/// receipt it did not issue.
+pub(in crate::gateway::meta_mcp) fn seal_receipt(
+    public: &crate::trust::provenance_public::ProvenancePublicSigner,
+    hmac: &crate::attestation::BnautAttestationSigner,
+    object: &mut Value,
+) {
+    let Some(prov) = object.pointer("/_meta/provenance").cloned() else {
+        return;
+    };
+    let Ok(signed) = serde_json::from_value::<crate::trust::SignedResultProvenance>(prov) else {
+        return;
+    };
+    let Some(signature) = signed.signature_bytes() else {
+        return;
+    };
+    if !hmac.verify_bytes(&signed.receipt.canonical_bytes(), &signature) {
+        return;
+    }
+    let sig = public.sign_receipt(&signed.receipt, Some(&*object));
+    if let Some(obj) = object
+        .pointer_mut("/_meta/provenance")
+        .and_then(|v| v.as_object_mut())
+    {
+        if let Ok(sig_value) = serde_json::to_value(&sig) {
+            obj.insert("public_signature".to_owned(), sig_value);
         }
-        let Some(receipt_value) = prov.get("receipt") else {
-            return;
-        };
-        let Ok(receipt) =
-            serde_json::from_value::<crate::trust::RuntimeProvenanceReceipt>(receipt_value.clone())
-        else {
-            return;
-        };
-        let sig = public.sign_receipt(&receipt, Some(&*result));
-        if let Some(obj) = result
-            .pointer_mut("/_meta/provenance")
-            .and_then(|v| v.as_object_mut())
-        {
-            if let Ok(sig_value) = serde_json::to_value(&sig) {
-                obj.insert("public_signature".to_owned(), sig_value);
+    }
+}
+
+/// Seal the step receipts nested in a chain or playbook answer, and only those.
+///
+/// Every `results[i].result` that is an object and every `output.<step>` member
+/// that is an object is sealed; nothing else is visited and there is no generic
+/// recursion, so a mapped playbook output carries no step receipt.
+pub(in crate::gateway::meta_mcp) fn seal_step_receipts(
+    public: &crate::trust::provenance_public::ProvenancePublicSigner,
+    hmac: &crate::attestation::BnautAttestationSigner,
+    content: &mut Value,
+) {
+    if let Some(results) = content.get_mut("results").and_then(Value::as_array_mut) {
+        for element in results.iter_mut() {
+            if let Some(result) = element.get_mut("result").filter(|v| v.is_object()) {
+                seal_receipt(public, hmac, result);
             }
+        }
+    }
+    if let Some(output) = content.get_mut("output").and_then(Value::as_object_mut) {
+        for value in output.values_mut().filter(|v| v.is_object()) {
+            seal_receipt(public, hmac, value);
         }
     }
 }
@@ -183,9 +222,7 @@ pub(in crate::gateway::meta_mcp) fn lift_receipt(
         .get("_meta")
         .and_then(Value::as_object)
         .is_some_and(|meta| meta.is_empty());
-    if meta_empty
-        && let Some(object) = lifted.as_object_mut()
-    {
+    if meta_empty && let Some(object) = lifted.as_object_mut() {
         object.remove("_meta");
     }
     (Cow::Owned(lifted), receipt)

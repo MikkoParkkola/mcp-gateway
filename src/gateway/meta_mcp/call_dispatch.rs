@@ -147,6 +147,9 @@ impl MetaMcp {
             ResultShape::Native,
             declared,
             chain,
+            self.public_provenance_signer
+                .as_deref()
+                .zip(self.provenance_signer.as_deref()),
         )
     }
 
@@ -473,8 +476,17 @@ impl MetaMcp {
         let scanned = matches!(result, Ok(_) | Err(crate::Error::ResponseFirewallRefused));
         let inspected = self.marks_discovery(tool_name, scanned);
         let (declared, chain) = (caller.input_capabilities, (source, upstream));
-        let mut response =
-            response_security::shape_meta_result(id, tool_name, result, shape, declared, chain);
+        let mut response = response_security::shape_meta_result(
+            id,
+            tool_name,
+            result,
+            shape,
+            declared,
+            chain,
+            self.public_provenance_signer
+                .as_deref()
+                .zip(self.provenance_signer.as_deref()),
+        );
         response.egress_scanned = inspected;
         response
     }

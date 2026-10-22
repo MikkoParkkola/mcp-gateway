@@ -250,6 +250,9 @@ impl MetaMcp {
             shape,
             caller.input_capabilities,
             (ChainSource::NotEligible, None),
+            self.public_provenance_signer
+                .as_deref()
+                .zip(self.provenance_signer.as_deref()),
         )
     }
 }

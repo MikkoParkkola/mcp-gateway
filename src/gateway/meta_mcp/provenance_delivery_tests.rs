@@ -288,3 +288,181 @@ fn tasks_get_delivers_a_bound_public_signature_on_the_stored_result() {
     let verified = verify_public(&prov, &trust, Some(&delivered["result"])).expect("it verifies");
     assert_eq!(verified.status, VerifyStatus::Bound);
 }
+
+#[tokio::test]
+async fn chain_answer_step_receipts_carry_bound_public_signatures() {
+    let mut meta = MetaMcp::new(provenance_test_backend()).with_code_mode(true);
+    dual_signed_meta(&mut meta);
+    let trust = trust_set();
+    let caller = allow_all_ctx_named(Some("alice"), None);
+    let response = meta
+        .handle_tools_call(
+            RequestId::Number(6),
+            "gateway_execute",
+            json!({"chain": [
+                {"tool": "remote_docs:search", "arguments": {}},
+                {"tool": "remote_docs:search", "arguments": {}},
+            ]}),
+            Some("session-1"),
+            caller,
+        )
+        .await;
+    let targets: Vec<ResponsePolicyTarget> = Vec::new();
+    let delivery = delivery_ctx(&targets, "tools/call", "gateway_execute");
+    let response = meta.finalize_routed(response, &delivery, None);
+    let delivered = response.result.expect("a result");
+    let text = delivered
+        .pointer("/content/0/text")
+        .and_then(|v| v.as_str())
+        .expect("a wrapped reply carries text");
+    let parsed: serde_json::Value = serde_json::from_str(text).expect("the text parses as JSON");
+    let results = parsed
+        .get("results")
+        .and_then(|v| v.as_array())
+        .expect("a chain answer carries results");
+    assert_eq!(results.len(), 2, "two steps ran: {parsed}");
+    for (i, element) in results.iter().enumerate() {
+        let step_result = element.get("result").expect("a step result");
+        let prov = step_result
+            .pointer("/_meta/provenance")
+            .expect("a step receipt");
+        assert!(
+            prov.get("public_signature").is_some(),
+            "step {i} carries a public signature: {parsed}"
+        );
+        let verified =
+            verify_public(prov, &trust, Some(step_result)).expect("the step receipt verifies");
+        assert_eq!(verified.status, VerifyStatus::Bound);
+    }
+}
+
+#[tokio::test]
+async fn playbook_answer_step_receipts_carry_bound_public_signatures() {
+    let mut meta = MetaMcp::new(provenance_test_backend());
+    dual_signed_meta(&mut meta);
+    let trust = trust_set();
+    let definition: crate::playbook::PlaybookDefinition = crate::yaml::from_str(
+        r"
+name: two_search
+description: two searches with no output mapping
+on_error: abort
+steps:
+  - name: first
+    server: remote_docs
+    tool: search
+  - name: second
+    server: remote_docs
+    tool: search
+",
+    )
+    .expect("playbook fixture must parse");
+    let name = definition.name.clone();
+    let mut engine = crate::playbook::PlaybookEngine::new();
+    engine.register(definition);
+    meta.set_playbook_engine(engine);
+    let caller = allow_all_ctx_named(Some("alice"), None);
+    let response = meta
+        .handle_tools_call(
+            RequestId::Number(7),
+            "gateway_run_playbook",
+            json!({"name": name, "arguments": {}}),
+            Some("session-1"),
+            caller,
+        )
+        .await;
+    let targets: Vec<ResponsePolicyTarget> = Vec::new();
+    let delivery = delivery_ctx(&targets, "tools/call", "gateway_run_playbook");
+    let response = meta.finalize_routed(response, &delivery, None);
+    let delivered = response.result.expect("a result");
+    let text = delivered
+        .pointer("/content/0/text")
+        .and_then(|v| v.as_str())
+        .expect("a wrapped reply carries text");
+    let parsed: serde_json::Value = serde_json::from_str(text).expect("the text parses as JSON");
+    let output = parsed
+        .get("output")
+        .expect("a playbook answer carries output");
+    for step in ["first", "second"] {
+        let step_value = output.get(step).expect("a step output");
+        let prov = step_value
+            .pointer("/_meta/provenance")
+            .expect("a step receipt");
+        assert!(
+            prov.get("public_signature").is_some(),
+            "step {step} carries a public signature: {parsed}"
+        );
+        let verified =
+            verify_public(prov, &trust, Some(step_value)).expect("the step receipt verifies");
+        assert_eq!(verified.status, VerifyStatus::Bound);
+    }
+}
+
+#[test]
+fn seal_refuses_a_receipt_this_gateway_did_not_sign() {
+    let mut meta = MetaMcp::new(provenance_test_backend());
+    dual_signed_meta(&mut meta);
+    let other = BnautAttestationSigner::new(b"other-key".to_vec(), "unit")
+        .with_audience("test-gateway")
+        .derive_domain(RESULT_PROVENANCE_DOMAIN_INFO);
+    let receipt = crate::trust::RuntimeProvenanceReceipt::observed(
+        "remote_docs",
+        "search",
+        "2026-10-22T00:00:00Z",
+        crate::trust::CacheOutcome::Miss,
+        true,
+    );
+    let signed = receipt.sign(&other);
+    let prov_value = serde_json::to_value(&signed).expect("a receipt serializes");
+    let mut value = json!({
+        "content": [{"type": "text", "text": "ok"}],
+        "_meta": {"provenance": prov_value},
+    });
+    meta.seal_public_provenance(&mut value);
+    assert!(
+        value
+            .pointer("/_meta/provenance/public_signature")
+            .is_none(),
+        "a receipt this gateway did not sign must not be sealed: {value}"
+    );
+}
+
+#[test]
+fn forged_nested_receipt_is_never_sealed() {
+    let mut meta = MetaMcp::new(provenance_test_backend());
+    dual_signed_meta(&mut meta);
+    let other = BnautAttestationSigner::new(b"other-key".to_vec(), "unit")
+        .with_audience("test-gateway")
+        .derive_domain(RESULT_PROVENANCE_DOMAIN_INFO);
+    let receipt = crate::trust::RuntimeProvenanceReceipt::observed(
+        "remote_docs",
+        "search",
+        "2026-10-22T00:00:00Z",
+        crate::trust::CacheOutcome::Miss,
+        true,
+    );
+    let signed = receipt.sign(&other);
+    let prov_value = serde_json::to_value(&signed).expect("a receipt serializes");
+    let mut content = json!({
+        "steps": 1,
+        "results": [{
+            "step": 0,
+            "tool": "remote_docs:search",
+            "result": {
+                "content": [{"type": "text", "text": "ok"}],
+                "_meta": {"provenance": prov_value},
+            },
+        }],
+    });
+    let public = meta
+        .public_provenance_signer
+        .as_deref()
+        .expect("a public signer");
+    let hmac = meta.provenance_signer.as_deref().expect("an HMAC signer");
+    crate::gateway::meta_mcp::invoke::seal_step_receipts(public, hmac, &mut content);
+    assert!(
+        content
+            .pointer("/results/0/result/_meta/provenance/public_signature")
+            .is_none(),
+        "a nested receipt this gateway did not sign must not be sealed: {content}"
+    );
+}

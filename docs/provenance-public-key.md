@@ -91,6 +91,20 @@ bare or stamped result.
 Unbound receipts come from event receipts, non-object results, and results
 holding an integer outside ±(2^53−1).
 
+## Where receipts live
+
+- Top level: `result._meta.provenance`, `--result` = `result`.
+- Task: `result.result._meta.provenance`, `--result` = `result.result`.
+- Chain: parse `content[0].text`; each step's receipt is at
+  `results[i].result._meta.provenance`, `--result` = `results[i].result`.
+- Playbook without an output mapping: `output.<step>._meta.provenance`,
+  `--result` = `output.<step>`.
+- A mapped playbook output carries no step receipt.
+
+Step seals are applied before the egress firewall. A step result the firewall
+later redacts verifies as `ResultMismatch`, which is the honest outcome, not a
+bypass.
+
 ## Digest recipe for non-Rust verifiers
 
 `result_sha256` is SHA-256 hex of RFC 8785 canonical JSON of the result

@@ -526,6 +526,10 @@ pub(super) fn shape_meta_result(
         ChainSource,
         Option<std::sync::Arc<crate::protocol::UpstreamChain>>,
     ),
+    public: Option<(
+        &crate::trust::provenance_public::ProvenancePublicSigner,
+        &BnautAttestationSigner,
+    )>,
 ) -> crate::protocol::JsonRpcResponse {
     let mut response = match result {
         Ok(content) => match shape {
@@ -545,6 +549,13 @@ pub(super) fn shape_meta_result(
                     super::interim_promotion::Promotion::Wrap => {
                         let has_output_schema = tool_name == "gateway_search_tools";
                         let (lifted, receipt) = super::invoke::lift_receipt(&content);
+                        let mut lifted = lifted;
+                        if let Some((public, hmac)) = public {
+                            // Step seals predate the egress firewall, so a step
+                            // the firewall redacts verifies as a result mismatch.
+                            // Cloned only when a public signer is installed.
+                            super::invoke::seal_step_receipts(public, hmac, lifted.to_mut());
+                        }
                         let mut wrapped = crate::gateway::meta_mcp_helpers::wrap_tool_success(
                             id,
                             &lifted,
