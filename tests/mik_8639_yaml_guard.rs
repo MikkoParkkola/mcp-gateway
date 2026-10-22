@@ -366,31 +366,49 @@ fn tag_flood(count: usize, newline: &str) -> String {
 
 #[test]
 fn tag_directives_lf_over_limit_refused() {
-    let err = refused(&tag_flood(65, "\n"), "tag-lf");
-    assert_eq!(err.limit(), Some(&yaml::Limit::TagDirectives { max: 64 }));
+    let input = tag_flood(65, "\n");
+    // The byte where the 65th directive starts.
+    let offset = input.match_indices("%TAG").nth(64).unwrap().0;
+    let err = refused(&input, "tag-lf");
+    assert_eq!(
+        err.limit(),
+        Some(&yaml::Limit::TagDirectives { max: 64, offset })
+    );
     assert_eq!(
         err.to_string(),
-        "YAML refused: more than 64 %TAG directives"
+        format!("YAML refused: more than 64 %TAG directives at byte {offset}")
     );
 }
 
 #[test]
 fn tag_directives_cr_over_limit_refused() {
-    let err = refused(&tag_flood(65, "\r"), "tag-cr");
-    assert_eq!(err.limit(), Some(&yaml::Limit::TagDirectives { max: 64 }));
+    let input = tag_flood(65, "\r");
+    // The byte where the 65th directive starts.
+    let offset = input.match_indices("%TAG").nth(64).unwrap().0;
+    let err = refused(&input, "tag-cr");
+    assert_eq!(
+        err.limit(),
+        Some(&yaml::Limit::TagDirectives { max: 64, offset })
+    );
     assert_eq!(
         err.to_string(),
-        "YAML refused: more than 64 %TAG directives"
+        format!("YAML refused: more than 64 %TAG directives at byte {offset}")
     );
 }
 
 #[test]
 fn tag_directives_crlf_over_limit_refused() {
-    let err = refused(&tag_flood(65, "\r\n"), "tag-crlf");
-    assert_eq!(err.limit(), Some(&yaml::Limit::TagDirectives { max: 64 }));
+    let input = tag_flood(65, "\r\n");
+    // The byte where the 65th directive starts.
+    let offset = input.match_indices("%TAG").nth(64).unwrap().0;
+    let err = refused(&input, "tag-crlf");
+    assert_eq!(
+        err.limit(),
+        Some(&yaml::Limit::TagDirectives { max: 64, offset })
+    );
     assert_eq!(
         err.to_string(),
-        "YAML refused: more than 64 %TAG directives"
+        format!("YAML refused: more than 64 %TAG directives at byte {offset}")
     );
 }
 

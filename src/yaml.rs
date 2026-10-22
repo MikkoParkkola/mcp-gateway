@@ -79,7 +79,7 @@ pub(crate) enum Limit {
     Size { len: usize, max: usize },
     Depth { line: usize },
     Aliases { max: usize },
-    TagDirectives { max: usize },
+    TagDirectives { max: usize, offset: usize },
     Expansion,
     AnchorReuse { offset: usize },
     AnchorName { offset: usize },

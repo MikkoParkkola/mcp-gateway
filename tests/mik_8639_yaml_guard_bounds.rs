@@ -282,7 +282,10 @@ fn expansion_just_under_64mib_accepted() {
 }
 
 // Saturation is not reachable through &str under the 16 MiB size and 64-alias
-// caps (max about 2^56); no row pins it.
+// caps (max about 2^56); no row pins it. It stays unreachable by construction,
+// not only by those caps: the guard checks the 64 MiB cap BEFORE every add
+// (refusing at the first add that would reach it) and uses checked or
+// saturating adds.
 
 #[test]
 fn expansion_resets_each_document_accepted() {
