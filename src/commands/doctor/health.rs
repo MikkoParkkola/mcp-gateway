@@ -332,3 +332,116 @@ fn runtime_base_url(config: &Config) -> String {
     };
     format!("http://{}:{}", host, config.server.port)
 }
+
+#[cfg(test)]
+mod redirect_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const HANG_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
+
+    /// A listener on loopback serving `app`; returns its base URL.
+    async fn serve(app: axum::Router) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        format!("http://{addr}")
+    }
+
+    /// A counting listener; returns its base URL and hit count.
+    async fn serve_counter() -> (String, Arc<AtomicUsize>) {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&hits);
+        let base = serve(axum::Router::new().fallback(move || {
+            let seen = Arc::clone(&seen);
+            async move {
+                seen.fetch_add(1, Ordering::SeqCst);
+                axum::http::StatusCode::OK
+            }
+        }))
+        .await;
+        (base, hits)
+    }
+
+    /// T13b (RED): a 301 from `/health` is reported, not followed.
+    #[tokio::test]
+    async fn gateway_health_probe_reports_a_redirect_without_following_it() {
+        let (location, hits) = serve_counter().await;
+        let expected = location.clone();
+        let app = axum::Router::new().route(
+            "/health",
+            axum::routing::get(move || {
+                let location = location.clone();
+                async move {
+                    (
+                        axum::http::StatusCode::MOVED_PERMANENTLY,
+                        [(axum::http::header::LOCATION, location)],
+                    )
+                }
+            }),
+        );
+        let base = serve(app).await;
+        let client = runtime_probe_client().expect("client");
+        let probe = tokio::time::timeout(HANG_BOUND, probe_gateway_health(&client, &base))
+            .await
+            .expect("bounded");
+        assert!(
+            probe.result.detail.contains("301"),
+            "detail: {}",
+            probe.result.detail
+        );
+        assert!(
+            probe.result.detail.contains(&expected),
+            "detail: {}",
+            probe.result.detail
+        );
+        assert!(
+            !probe.result.detail.contains("was not a gateway health payload"),
+            "detail: {}",
+            probe.result.detail
+        );
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    /// T13c (RED): a 301 from POST `/mcp` is reported, not followed.
+    #[tokio::test]
+    async fn mcp_probe_reports_a_redirect_without_following_it() {
+        let (location, hits) = serve_counter().await;
+        let expected = location.clone();
+        let app = axum::Router::new().route(
+            "/mcp",
+            axum::routing::post(move || {
+                let location = location.clone();
+                async move {
+                    (
+                        axum::http::StatusCode::MOVED_PERMANENTLY,
+                        [(axum::http::header::LOCATION, location)],
+                    )
+                }
+            }),
+        );
+        let base = serve(app).await;
+        let client = runtime_probe_client().expect("client");
+        let outcome = tokio::time::timeout(
+            HANG_BOUND,
+            post_mcp_probe(&client, &base, serde_json::json!({}), None),
+        )
+        .await
+        .expect("bounded");
+        match outcome {
+            Ok(_) => panic!("expected Err, got Ok"),
+            Err(result) => {
+                assert!(result.detail.contains("301"), "detail: {}", result.detail);
+                assert!(
+                    result.detail.contains(&expected),
+                    "detail: {}",
+                    result.detail
+                );
+            }
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+}

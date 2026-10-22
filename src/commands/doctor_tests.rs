@@ -251,3 +251,73 @@ fn doctor_suggests_a_command_that_rechecks_the_same_config() {
         other => panic!("`{fix}` runs {other:?}, not doctor"),
     }
 }
+
+// ── MIK-8660 T13a: the HTTP probe reports a redirect, never follows it ──────
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+const HANG_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// A listener on loopback serving `app`; returns its base URL.
+async fn serve(app: axum::Router) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    format!("http://{addr}")
+}
+
+/// A counting listener; returns its base URL and hit count.
+async fn serve_counter() -> (String, Arc<AtomicUsize>) {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&hits);
+    let base = serve(axum::Router::new().fallback(move || {
+        let seen = Arc::clone(&seen);
+        async move {
+            seen.fetch_add(1, Ordering::SeqCst);
+            axum::http::StatusCode::OK
+        }
+    }))
+    .await;
+    (base, hits)
+}
+
+/// T13a (RED): a 301 from an HTTP backend is reported, not followed.
+#[tokio::test]
+async fn http_backend_probe_reports_a_redirect_without_following_it() {
+    let (location, hits) = serve_counter().await;
+    let expected = location.clone();
+    let app = axum::Router::new().route(
+        "/x",
+        axum::routing::get(move || {
+            let location = location.clone();
+            async move {
+                (
+                    axum::http::StatusCode::MOVED_PERMANENTLY,
+                    [(axum::http::header::LOCATION, location)],
+                )
+            }
+        }),
+    );
+    let stub = serve(app).await;
+    let transport = TransportConfig::Http {
+        http_url: format!("{stub}/x"),
+        streamable_http: None,
+        protocol_version: None,
+    };
+    let outcome = tokio::time::timeout(HANG_BOUND, check_http_backend("b", &transport))
+        .await
+        .expect("bounded");
+    let Some(result) = outcome else {
+        panic!("an Http transport must produce a result");
+    };
+    assert!(result.detail.contains("301"), "detail: {}", result.detail);
+    assert!(
+        result.detail.contains(&expected),
+        "detail: {}",
+        result.detail
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+}

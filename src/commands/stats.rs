@@ -148,6 +148,10 @@ fn print_top_tools(stats: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const HANG_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
 
     /// GIVEN the default gateway config's loopback host/port
     /// WHEN building the default stats URL
@@ -212,5 +216,112 @@ mod tests {
             default_stats_url("gateway.internal", 8080),
             "http://gateway.internal:8080"
         );
+    }
+
+    /// A listener on loopback serving `app`; returns its base URL.
+    async fn serve(app: axum::Router) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        format!("http://{addr}")
+    }
+
+    /// The gateway stub: POST `/mcp` answers the stats payload.
+    fn stats_stub() -> axum::Router {
+        axum::Router::new().route(
+            "/mcp",
+            axum::routing::post(|| async {
+                axum::Json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": {
+                        "content": [{
+                            "type": "text",
+                            "text": "{\"invocations\":3,\"cache_hits\":1,\"cache_hit_rate\":0.5,\"tools_discovered\":2,\"tools_available\":2,\"top_tools\":[]}"
+                        }]
+                    }
+                }))
+            }),
+        )
+    }
+
+    /// A counting listener; returns its base URL and hit count.
+    async fn serve_counter() -> (String, Arc<AtomicUsize>) {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&hits);
+        let base = serve(axum::Router::new().fallback(move || {
+            let seen = Arc::clone(&seen);
+            async move {
+                seen.fetch_add(1, Ordering::SeqCst);
+                axum::http::StatusCode::OK
+            }
+        }))
+        .await;
+        (base, hits)
+    }
+
+    /// T7a (GUARD): stats renders the gateway's reported counters.
+    #[tokio::test]
+    async fn stats_outcome_renders_the_stubbed_gateway_statistics() {
+        let base = serve(stats_stub()).await;
+        let outcome = tokio::time::timeout(HANG_BOUND, stats_outcome(&stats_client(), &base))
+            .await
+            .expect("bounded");
+        match outcome {
+            Ok(text) => assert!(text.contains("Invocations:       3"), "text: {text}"),
+            Err(msg) => panic!("expected Ok, got Err: {msg}"),
+        }
+    }
+
+    /// T7b (GUARD): stats reaches the whole 127/8 loopback range.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn stats_outcome_reaches_a_127_8_loopback_address() {
+        // The only thing that could refuse a private host is an SSRF pin; stats has none, and a pin classifies 127.0.0.2 like an RFC1918 address.
+        let listener = tokio::net::TcpListener::bind("127.0.0.2:0")
+            .await
+            .expect("bind 127.0.0.2");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move { axum::serve(listener, stats_stub()).await });
+        let base = format!("http://{addr}");
+        let outcome = tokio::time::timeout(HANG_BOUND, stats_outcome(&stats_client(), &base))
+            .await
+            .expect("bounded");
+        match outcome {
+            Ok(text) => assert!(text.contains("Invocations:       3"), "text: {text}"),
+            Err(msg) => panic!("expected Ok, got Err: {msg}"),
+        }
+    }
+
+    /// T7c (RED): a 301 from the gateway URL is reported, not followed.
+    #[tokio::test]
+    async fn stats_outcome_reports_a_redirect_without_following_it() {
+        let (counter, hits) = serve_counter().await;
+        let target = format!("{counter}/mcp");
+        let expected =
+            format!("the gateway URL redirected to {target}; point stats at the final URL");
+        let app = axum::Router::new().route(
+            "/mcp",
+            axum::routing::post(move || {
+                let target = target.clone();
+                async move {
+                    (
+                        axum::http::StatusCode::MOVED_PERMANENTLY,
+                        [(axum::http::header::LOCATION, target)],
+                    )
+                }
+            }),
+        );
+        let base = serve(app).await;
+        let outcome = tokio::time::timeout(HANG_BOUND, stats_outcome(&stats_client(), &base))
+            .await
+            .expect("bounded");
+        match outcome {
+            Ok(text) => panic!("expected Err, got Ok: {text}"),
+            Err(msg) => assert!(msg.contains(&expected), "msg: {msg}"),
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
     }
 }
