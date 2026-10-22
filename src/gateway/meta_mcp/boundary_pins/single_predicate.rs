@@ -34,6 +34,12 @@ const ALLOWLIST: &[(&str, &str, &str, &str)] = &[
         "ApiKey",
         "delivery lifetime",
     ),
+    (
+        "src/events/services.rs",
+        "admits_at",
+        "ApiKey",
+        "subscription admission",
+    ),
 ];
 
 fn allowlist_index(at: &Place, kind: &str) -> Option<usize> {
@@ -112,29 +118,45 @@ fn pat_mentions_api_key(pat: &syn::Pat) -> bool {
     probe.found
 }
 
-fn is_catch_all(pat: &syn::Pat) -> bool {
-    match pat {
-        syn::Pat::Wild(_) => true,
-        syn::Pat::Ident(binding) => binding.subpat.is_none(),
-        _ => false,
+#[derive(Default)]
+struct CatchAllProbe {
+    found: bool,
+}
+
+impl<'ast> Visit<'ast> for CatchAllProbe {
+    fn visit_pat_wild(&mut self, wild: &'ast syn::PatWild) {
+        self.found = true;
+        syn::visit::visit_pat_wild(self, wild);
     }
+
+    fn visit_pat_ident(&mut self, binding: &'ast syn::PatIdent) {
+        // Bare `None` parses as `Pat::Ident` yet matches one value, so it is
+        // not a catch-all.
+        if binding.subpat.is_none() && binding.ident != "None" {
+            self.found = true;
+        }
+        syn::visit::visit_pat_ident(self, binding);
+    }
+}
+
+fn is_catch_all(pat: &syn::Pat) -> bool {
+    let mut probe = CatchAllProbe::default();
+    probe.visit_pat(pat);
+    probe.found
 }
 
 fn is_api_key_match(expr: &syn::Expr) -> bool {
     let syn::Expr::Match(matched) = expr else {
         return false;
     };
-    let mut singles_out = false;
-    let mut has_catch_all = false;
-    for arm in &matched.arms {
-        if pat_mentions_api_key(&arm.pat) {
-            singles_out = true;
-        }
-        if is_catch_all(&arm.pat) {
-            has_catch_all = true;
-        }
-    }
-    singles_out && has_catch_all
+    matched.arms.iter().enumerate().any(|(index, arm)| {
+        pat_mentions_api_key(&arm.pat)
+            && matched
+                .arms
+                .iter()
+                .enumerate()
+                .any(|(other, candidate)| index != other && is_catch_all(&candidate.pat))
+    })
 }
 
 fn is_api_key_let(expr: &syn::Expr) -> bool {
@@ -630,5 +652,29 @@ fn fixture_let_else_api_key_is_flagged() {
     assert!(
         found.iter().any(|kind| kind == "ApiKey"),
         "a `let ... else` on `ApiKey` was not flagged"
+    );
+}
+
+/// MIK-8659: a nested binding beside an `ApiKey` arm is a catch-all, so the
+/// `match` is flagged.
+#[test]
+fn fixture_nested_catch_all_api_key_match_is_flagged() {
+    let source = "fn check(k: Option<Kind>) -> u8 { match k { Some(Kind::ApiKey) => 1, Some(other) => 0, None => 2 } }";
+    let found = fixture_offences("fixture.rs", source);
+    assert!(
+        found.iter().any(|kind| kind == "ApiKey"),
+        "a nested catch-all `ApiKey` match was not flagged"
+    );
+}
+
+/// MIK-8659: an exhaustive nested dispatch over kinds is not a copy of the
+/// `ApiKey` rule, so it is not flagged.
+#[test]
+fn fixture_exhaustive_nested_kind_match_is_not_flagged() {
+    let source = "fn other(k: Option<Kind>) -> u8 { match k { Some(Kind::ApiKey) => 1, Some(Kind::StaticBearer) => 2, Some(Kind::None) => 3, None => 4 } }";
+    let found = fixture_offences("fixture.rs", source);
+    assert!(
+        found.is_empty(),
+        "an exhaustive nested kind match was flagged: {found:?}"
     );
 }
