@@ -622,7 +622,7 @@ fn verify_duplicate_result_member_is_invalid() {
     let receipt = copy_fixture_to(home.path(), "provenance.json");
     let result_json = fixture_json("result.json");
     let content_text = serde_json::to_string(&result_json["content"]).expect("content serializes");
-    let text = format!("{\"content\":{content_text},\"content\":{content_text}}}");
+    let text = format!("{{\"content\":{content_text},\"content\":{content_text}}}");
     let dup_result = home.path().join("dup_result.json");
     write_private(&dup_result, text.as_bytes());
     let out = run(
