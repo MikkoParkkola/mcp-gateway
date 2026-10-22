@@ -229,7 +229,7 @@ fn migrate_from(
             "descriptor `{descriptor_id}` declares no resource or issuer"
         )));
     };
-    let key_descriptor = identity::AccountDescriptor {
+    let key_descriptor = identity::AccountKeyDescriptor {
         descriptor_id: descriptor_id.to_owned(),
         provider: descriptor.provider.clone(),
         resource,

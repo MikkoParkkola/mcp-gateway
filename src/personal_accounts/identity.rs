@@ -36,7 +36,7 @@ use crate::key_server::oidc::VerifiedIdentity;
 /// Deliberately NOT `identity_propagation::BackendDescriptor`: that type is the
 /// propagation strategy's descriptor and has no resource or issuer.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct AccountDescriptor {
+pub(crate) struct AccountKeyDescriptor {
     /// The `accounts.descriptors` map key. This is the account key's `backend_id`.
     pub(crate) descriptor_id: String,
     /// Logical OAuth provider id, e.g. `google`. Does not itself select a token.
@@ -200,7 +200,7 @@ impl<'a> Principal<'a> {
 /// field without appearing in a diff.
 pub(crate) fn account_key(
     principal: Option<Principal<'_>>,
-    descriptor: &AccountDescriptor,
+    descriptor: &AccountKeyDescriptor,
 ) -> Result<AccountKey, IdentityBindingError> {
     // No principal, no account. Nothing is inferred from the request, and there
     // is no anonymous or operator-token fallback for personal mode. The

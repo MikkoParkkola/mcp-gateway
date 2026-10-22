@@ -36,7 +36,7 @@ use crate::identity_propagation::{
 };
 use crate::personal_accounts::config::{AccountDescriptor, AccountsConfig, DescriptorMode};
 use crate::personal_accounts::descriptor_revision;
-use crate::personal_accounts::identity::AccountDescriptor as AccountKeyDescriptor;
+use crate::personal_accounts::identity::AccountKeyDescriptor;
 use crate::secret_injection::InjectTarget;
 use crate::{Error, Result};
 

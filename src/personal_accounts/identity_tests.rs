@@ -37,8 +37,8 @@ fn identity() -> VerifiedIdentity {
 
 /// The configured descriptor. `descriptor_id` is the `accounts.descriptors` map
 /// key, which the approved table makes the account key's `backend_id`.
-fn descriptor() -> AccountDescriptor {
-    AccountDescriptor {
+fn descriptor() -> AccountKeyDescriptor {
+    AccountKeyDescriptor {
         descriptor_id: "google-workspace-personal".into(),
         provider: "google".into(),
         resource: "https://www.googleapis.com/drive/v3".into(),
@@ -47,7 +47,7 @@ fn descriptor() -> AccountDescriptor {
 }
 
 #[track_caller]
-fn digest_of(identity: &VerifiedIdentity, descriptor: &AccountDescriptor, what: &str) -> String {
+fn digest_of(identity: &VerifiedIdentity, descriptor: &AccountKeyDescriptor, what: &str) -> String {
     refuse_scaffold(
         account_key(Some(Principal::Verified(identity)), descriptor),
         what,
@@ -184,7 +184,7 @@ fn each_of_the_five_tuple_fields_changes_the_digest() {
         (
             "backend_id",
             identity(),
-            AccountDescriptor {
+            AccountKeyDescriptor {
                 descriptor_id: "google-workspace-secondary".into(),
                 ..descriptor()
             },
@@ -192,7 +192,7 @@ fn each_of_the_five_tuple_fields_changes_the_digest() {
         (
             "resource",
             identity(),
-            AccountDescriptor {
+            AccountKeyDescriptor {
                 resource: "https://www.googleapis.com/calendar/v3".into(),
                 ..descriptor()
             },
@@ -200,7 +200,7 @@ fn each_of_the_five_tuple_fields_changes_the_digest() {
         (
             "oauth_issuer",
             identity(),
-            AccountDescriptor {
+            AccountKeyDescriptor {
                 issuer: "https://login.microsoftonline.com/common/v2.0".into(),
                 ..descriptor()
             },
@@ -236,7 +236,7 @@ fn two_consumer_references_to_one_descriptor_id_are_the_same_account() {
 
     // Same provider, different descriptor id: a different account. Joining on
     // provider name alone is what row 431 forbids.
-    let sibling = AccountDescriptor {
+    let sibling = AccountKeyDescriptor {
         descriptor_id: "google-workspace-secondary".into(),
         ..descriptor()
     };
