@@ -47,7 +47,7 @@ const DECISION_ONLY: &[(&str, &str, &str, &str)] = &[
         "meta_mcp/admission.rs",
         "admit_meta_sync_unrefunded",
         r"Ok\(SyncAdmission::Replay\(_, _, _, dispatched, _\)\) => Some\(dispatched\)",
-        "classifies the admission only to keep a withheld step's refusal on a replay (MIK-8361 ruling A); the replay itself is returned unchanged to its caller, which delivers its holds; pinned by row C1-stdio-nested (c1_stdio_a_replayed_nested_question_keeps_its_slot), whose replay passes this match",
+        "classifies the admission only to keep a withheld step's refusal on a replay (MIK-8361 ruling A); the replay itself is returned unchanged to its caller, which delivers its holds; pinned by row C1-stdio-nested (c1_stdio_a_replayed_nested_question_keeps_its_slot), whose replay passes this match; the fifth member is the MIK-8407 step bindings, which this site neither judges nor projects, so a change in Replay's arity is a one-line bump of this pattern with this invariant kept",
     ),
 ];
 
@@ -148,60 +148,178 @@ fn enclosing_fn(lines: &[&str], at: usize) -> Option<(String, String)> {
     Some((name, lines[start..end].join("\n")))
 }
 
+/// A1 on one file: the unguarded projections in `text` (`rel` is its path under
+/// src/gateway), excused only by the given tables. Same checks, strings and
+/// order as the guard reports.
+fn unguarded_in(rel: &str, text: &str, tables: &[&[(&str, &str, &str, &str)]]) -> Vec<String> {
+    // Compiled once per process, not per file.
+    static SHAPES: std::sync::LazyLock<Vec<regex::Regex>> = std::sync::LazyLock::new(|| {
+        PROJECTIONS
+            .iter()
+            .map(|p| regex::Regex::new(p).expect("a valid pattern"))
+            .collect()
+    });
+    // A renamed import of a guarded item would hide a projection from the
+    // shapes above: rejected outright, never added as another pattern.
+    static ALIAS: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"\buse\b.*\b(wire|result|CachedResult|task_envelope)\b.*\bas\b")
+            .expect("a valid pattern")
+    });
+    let (shapes, alias) = (&*SHAPES, &*ALIAS);
+    let mut unguarded = Vec::new();
+    let lines: Vec<&str> = text.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim_start().starts_with("//") {
+            continue;
+        }
+        if alias.is_match(line) {
+            unguarded.push(format!("{rel}:{}: renamed import of a guarded item", i + 1));
+            continue;
+        }
+        if !shapes.iter().any(|s| s.is_match(line)) {
+            continue;
+        }
+        let Some((name, body)) = enclosing_fn(&lines, i) else {
+            unguarded.push(format!("{rel}:{}: projection outside any fn", i + 1));
+            continue;
+        };
+        let guarded = body.contains("Held<") || body.contains(".deliver(");
+        // Excused only for the shape the entry names, on this very line.
+        let listed = tables
+            .iter()
+            .flat_map(|t| t.iter())
+            .any(|(f, n, shape, _)| {
+                *f == rel
+                    && *n == name
+                    && regex::Regex::new(shape)
+                        .expect("a valid pattern")
+                        .is_match(line)
+            });
+        if !guarded && !listed {
+            unguarded.push(format!("{rel}:{}: {name}", i + 1));
+        }
+    }
+    unguarded
+}
+
 /// A1, red on base: every retained-payload projection is guarded or listed.
 #[test]
 fn every_retained_output_projection_delivers_its_holds() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway");
-    let shapes: Vec<regex::Regex> = PROJECTIONS
-        .iter()
-        .map(|p| regex::Regex::new(p).expect("a valid pattern"))
-        .collect();
-    // A renamed import of a guarded item would hide a projection from the
-    // shapes above: rejected outright, never added as another pattern.
-    let alias = regex::Regex::new(r"\buse\b.*\b(wire|result|CachedResult|task_envelope)\b.*\bas\b")
-        .expect("a valid pattern");
     let mut unguarded = Vec::new();
     for file in sources("src/gateway", Files::Production) {
         let text = std::fs::read_to_string(&file).expect("a readable source file");
         let rel = file.strip_prefix(&root).expect("under src/gateway");
         let rel = rel.to_string_lossy().replace('\\', "/");
-        let lines: Vec<&str> = text.lines().collect();
-        for (i, line) in lines.iter().enumerate() {
-            if line.trim_start().starts_with("//") {
-                continue;
-            }
-            if alias.is_match(line) {
-                unguarded.push(format!("{rel}:{}: renamed import of a guarded item", i + 1));
-                continue;
-            }
-            if !shapes.iter().any(|s| s.is_match(line)) {
-                continue;
-            }
-            let Some((name, body)) = enclosing_fn(&lines, i) else {
-                unguarded.push(format!("{rel}:{}: projection outside any fn", i + 1));
-                continue;
-            };
-            let guarded = body.contains("Held<") || body.contains(".deliver(");
-            // Excused only for the shape the entry names, on this very line.
-            let listed = DECISION_ONLY
-                .iter()
-                .chain(OWNED_ELSEWHERE)
-                .any(|(f, n, shape, _)| {
-                    *f == rel
-                        && *n == name
-                        && regex::Regex::new(shape)
-                            .expect("a valid pattern")
-                            .is_match(line)
-                });
-            if !guarded && !listed {
-                unguarded.push(format!("{rel}:{}: {name}", i + 1));
-            }
-        }
+        unguarded.extend(unguarded_in(&rel, &text, &[DECISION_ONLY, OWNED_ELSEWHERE]));
     }
     assert!(
         unguarded.is_empty(),
         "retained output reaches the wire without delivering its holds:\n{}",
         unguarded.join("\n")
+    );
+}
+
+// The SHGUARD.1 control's fixtures: the excused Replay arm verbatim from
+// admit_meta_sync_unrefunded, and its payload-binding twin. `synthetic` seats
+// the arm on line 3 of a minimal copy of the excused fn, so a reported
+// projection reads `meta_mcp/admission.rs:3: admit_meta_sync_unrefunded`.
+// Each is split by `concat!` so this file's own text never holds the
+// projection shape A1 scans for (A1 scans this file too).
+const EXCUSED_LINE: &str = concat!(
+    "Ok(SyncAdmission::",
+    "Replay(_, _, _, dispatched, _)) => Some(dispatched),"
+);
+const PAYLOAD_LINE: &str = concat!(
+    "Ok(SyncAdmission::",
+    "Replay(response, _, _, dispatched, _)) => Some(dispatched),"
+);
+fn synthetic(arm: &str) -> String {
+    format!(
+        "fn admit_meta_sync_unrefunded(admission: X) -> Y {{\n    let ran = match &admission {{\n        {arm}\n        _ => None,\n    }};\n}}\n"
+    )
+}
+
+/// MIK-8509.SHGUARD.1: a Replay arm that binds the payload in the excused fn is reported
+#[test]
+fn shguard1_a_payload_binding_replay_is_reported() {
+    assert_eq!(
+        unguarded_in(
+            "meta_mcp/admission.rs",
+            &synthetic(PAYLOAD_LINE),
+            &[DECISION_ONLY, OWNED_ELSEWHERE]
+        ),
+        vec!["meta_mcp/admission.rs:3: admit_meta_sync_unrefunded".to_owned()],
+        "the DECISION_ONLY pin for admit_meta_sync_unrefunded excuses a payload-reading Replay arm: narrow it back to the exact line"
+    );
+}
+
+/// MIK-8509.SHGUARD.1: the twin, so the control cannot pass for an unrelated reason
+#[test]
+fn shguard1_the_excused_line_alone_passes() {
+    // The excused arm binds nothing but `dispatched`, so the live pin still
+    // excuses it: an empty report here means the test above fails only when
+    // the payload is bound, not for some unrelated shape.
+    assert!(
+        unguarded_in(
+            "meta_mcp/admission.rs",
+            &synthetic(EXCUSED_LINE),
+            &[DECISION_ONLY, OWNED_ELSEWHERE]
+        )
+        .is_empty(),
+        "the verbatim excused line must stay excused: the DECISION_ONLY pin for admit_meta_sync_unrefunded no longer matches EXCUSED_LINE"
+    );
+}
+
+/// MIK-8509.SHGUARD.1: the control's excused line is still verbatim in admission.rs
+#[test]
+fn shguard1_the_excused_line_is_the_live_one() {
+    // Ties the fixture to the live source: if the arm in admission.rs drifts,
+    // the control would pin a fiction, so it must fail loudly instead.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway/meta_mcp/admission.rs");
+    let text = std::fs::read_to_string(&path).expect("admission.rs is readable");
+    let lines: Vec<&str> = text.lines().collect();
+    // Only a copy inside the excused fn counts: the pin excuses that fn alone.
+    let live = lines.iter().enumerate().any(|(i, line)| {
+        line.trim() == EXCUSED_LINE
+            && enclosing_fn(&lines, i).is_some_and(|(name, _)| name == "admit_meta_sync_unrefunded")
+    });
+    assert!(
+        live,
+        "admit_meta_sync_unrefunded's excused Replay line in src/gateway/meta_mcp/admission.rs changed: update EXCUSED_LINE and PAYLOAD_LINE here and the DECISION_ONLY pattern for it in step, keeping the arm payload-free"
+    );
+}
+
+/// MIK-8509.SHGUARD.3: widening the pin to Replay\(.*\) hides the payload read, so SHGUARD.1 would go red
+#[test]
+fn shguard3_a_widened_pin_would_hide_the_payload_read() {
+    // Shows the pin's narrowness is load-bearing: a `Replay(.*)` pattern
+    // excuses the payload-binding arm too, so SHGUARD.1 would go red on the
+    // live tables only if the pin stays exact.
+    let mut replaced = 0;
+    let widened: Vec<(&str, &str, &str, &str)> = DECISION_ONLY
+        .iter()
+        .map(|(f, n, shape, why)| {
+            if *f == "meta_mcp/admission.rs" && *n == "admit_meta_sync_unrefunded" {
+                replaced += 1;
+                (*f, *n, r"Replay\(.*\)", *why)
+            } else {
+                (*f, *n, *shape, *why)
+            }
+        })
+        .collect();
+    assert_eq!(
+        replaced, 1,
+        "expected exactly one DECISION_ONLY entry for meta_mcp/admission.rs admit_meta_sync_unrefunded"
+    );
+    assert!(
+        unguarded_in(
+            "meta_mcp/admission.rs",
+            &synthetic(PAYLOAD_LINE),
+            &[&widened, OWNED_ELSEWHERE]
+        )
+        .is_empty(),
+        "a Replay(.*) pin should excuse the payload-binding arm; if it does not, SHGUARD.1 no longer proves the pin's narrowness"
     );
 }
 
