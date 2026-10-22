@@ -9,7 +9,8 @@
 //! implicit ten-hop default. A fn returning a `ClientBuilder` is a factory; its
 //! callers are checked. Rule (ii): a hop count compared with an integer
 //! literal, or `Policy::limited`. Rule (iii): a `Policy::custom` closure that
-//! never passes `previous()` into `redirect_decision` / `hop_budget_spent`.
+//! never hands `previous()` to a decider fn (`redirect_decision`,
+//! `hop_budget_spent`, transport's `evaluate_redirect_for`).
 //! Production means reached from `lib.rs` / `main.rs` through modules none of
 //! which is `#[cfg(test)]`, so a `#[path]` file included under a test module is
 //! test code. A parser, not a text match: comments never count.
@@ -525,17 +526,13 @@ struct DelegationFinder {
 
 impl<'ast> Visit<'ast> for DelegationFinder {
     fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
-        if let syn::Expr::Path(p) = &*node.func {
-            if let Some(last) = p.path.segments.last() {
-                let name = last.ident.to_string();
-                if name == "redirect_decision" || name == "hop_budget_spent" {
-                    if let Some(first) = node.args.first() {
-                        if expr_mentions_previous_substring(first) {
-                            self.good = true;
-                        }
-                    }
-                }
-            }
+        // Handing the hop count to a decider is delegation, whatever the
+        // decider is called or where the count sits in its arguments; a
+        // decider that then compares it to a literal is rule (ii)'s to catch.
+        if matches!(&*node.func, syn::Expr::Path(_))
+            && node.args.iter().any(expr_mentions_previous_substring)
+        {
+            self.good = true;
         }
         if !self.good {
             syn::visit::visit_expr_call(self, node);
