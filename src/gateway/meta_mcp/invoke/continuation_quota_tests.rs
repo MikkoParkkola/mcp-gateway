@@ -458,6 +458,19 @@ async fn t1e_empty_principal_yields_no_api_key_ref() {
     );
 }
 
+/// MIK-8659 T1d/T1e control (GREEN): an authenticated API-key caller WITH a
+/// principal does get an `ApiKeyRef`. The harness's live config has no key
+/// named `k`, so the hook's live re-check refuses it and the backend event is
+/// hidden. Deleting the hook's `ApiKeyRef` construction makes this red.
+#[tokio::test]
+async fn t1de_control_principal_yields_an_api_key_ref() {
+    let found = events_search_visible("k", Some("p")).await;
+    assert!(
+        !found,
+        "control: a non-empty principal builds an ApiKeyRef, so the live re-check hides the event"
+    );
+}
+
 /// Seed one backend event on `alpha`, install a live config with no API key
 /// `name`, and report whether the hook's search path shows it to a caller
 /// `{Authenticated, ApiKey, name, principal}`.
