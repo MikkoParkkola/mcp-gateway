@@ -166,19 +166,15 @@ pub(super) async fn hold_across_processes(
     }
 }
 
-/// Whether `error` is a busy credential lock: the `BackendUnavailable` marker,
-/// or the joiner's `OAuth` text form (`Failed(error.to_string())` keeps the
-/// marker with its colon inside the Display wrapper).
+/// Whether `error` is a busy credential lock: a `BackendUnavailable` that
+/// starts with the marker. A login joiner gets the same typed error
+/// (`LoginOutcome::Busy`), so no text form is read: `OAuth` text can carry
+/// server-chosen values and is never busy (MIK-8658).
 pub(crate) fn is_credential_lock_busy(error: &Error) -> bool {
-    // Both arms match the marker with its colon: a bare-prefix message such
-    // as "credential lock busy-service..." is not a busy lock.
+    // The marker with its colon: a bare-prefix message such as
+    // "credential lock busy-service..." is not a busy lock.
     let marker = format!("{CREDENTIAL_LOCK_BUSY}:");
-    match error {
-        Error::BackendUnavailable(text) => text.starts_with(&marker),
-        // The joiner's Display-wrapped text keeps the marker inside.
-        Error::OAuth(text) => text.contains(&marker),
-        _ => false,
-    }
+    matches!(error, Error::BackendUnavailable(text) if text.starts_with(&marker))
 }
 
 /// Test-only: the marked busy error, so a backend fill row can drive its

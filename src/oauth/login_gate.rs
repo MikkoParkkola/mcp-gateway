@@ -42,6 +42,10 @@ pub(crate) enum LoginOutcome {
     /// The gateway's own destination policy refused a step of it (the
     /// message of the `Protocol` error), kept as that variant.
     Refused(String),
+    /// The credential lock was busy (the lead's marked `BackendUnavailable`,
+    /// its inner text kept): joiners get the same typed busy, so it frees the
+    /// key and never starts a login (MIK-8658).
+    Busy(String),
 }
 
 impl LoginOutcome {
@@ -53,6 +57,11 @@ impl LoginOutcome {
             Error::AuthorizationCancelled { .. } => Self::Cancelled,
             Error::OAuth(message) => Self::Failed(message.clone()),
             Error::Protocol(message) => Self::Refused(message.clone()),
+            Error::BackendUnavailable(text)
+                if crate::oauth::client::is_credential_lock_busy(error) =>
+            {
+                Self::Busy(text.clone())
+            }
             other => Self::Failed(other.to_string()),
         }
     }
@@ -68,6 +77,7 @@ impl LoginOutcome {
             Self::Cancelled => Error::AuthorizationCancelled { backend },
             Self::Failed(message) => Error::OAuth(message.clone()),
             Self::Refused(message) => Error::Protocol(message.clone()),
+            Self::Busy(text) => Error::BackendUnavailable(text.clone()),
         }
     }
 }
