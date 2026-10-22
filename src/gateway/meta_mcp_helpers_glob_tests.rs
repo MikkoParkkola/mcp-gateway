@@ -162,10 +162,15 @@ fn the_matcher_agrees_with_the_old_one_on_a_generated_corpus() {
         let Some(expected) = oracle(&name, &pattern, &mut calls, 10_000_000) else {
             panic!("oracle budget exhausted at iter {iter} for ({name:?}, {pattern:?})");
         };
-        let (matched, _) = glob_match_steps(&name, &pattern);
+        let (matched, steps) = glob_match_steps(&name, &pattern);
         assert_eq!(
             matched, expected,
             "generated pair iter {iter} ({name:?}, {pattern:?}) mismatch"
+        );
+        let b = bound(name.len(), pattern.len());
+        assert!(
+            steps <= b,
+            "generated pair iter {iter} ({name:?}, {pattern:?}): steps {steps} over bound {b}"
         );
     }
 }
@@ -203,4 +208,23 @@ fn unicode_lowercase_expansion_is_matched_like_the_old_matcher() {
             "İ / {pat} disagrees with oracle on lowercased inputs"
         );
     }
+    // Pinned as booleans too, so an edit to the oracle cannot flip them.
+    assert_eq!(dotted_c.len(), 2, "lowercased İ is two chars");
+    assert!(tool_name_matches_glob("İ", "??"), "İ matches ??");
+    assert!(!tool_name_matches_glob("İ", "?"), "İ does not match ?");
+
+    // The pattern side expands too: "İ*" lowercases to three chars.
+    let name_c3 = chars(&"i\u{307}stanbul".to_lowercase());
+    let pat_c3 = chars(&"İ*".to_lowercase());
+    assert_eq!(pat_c3.len(), 3, "lowercased İ* is three chars");
+    let mut calls3: u64 = 0;
+    let Some(expected3) = oracle(&name_c3, &pat_c3, &mut calls3, 10_000_000) else {
+        panic!("oracle budget exhausted for i\u{307}stanbul / İ*");
+    };
+    assert_eq!(
+        tool_name_matches_glob("i\u{307}stanbul", "İ*"),
+        expected3,
+        "i\u{307}stanbul / İ* disagrees with oracle on lowercased inputs"
+    );
+    assert!(expected3, "the expanded pattern matches the expanded name");
 }

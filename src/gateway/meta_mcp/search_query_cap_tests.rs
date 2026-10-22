@@ -39,17 +39,29 @@ async fn a_query_of_256_characters_is_accepted() {
     );
 }
 
-fn assert_refused_with(result: crate::Result<serde_json::Value>, label: &str) {
+/// The refusal is -32602, names the limit, and echoes no part of the query in
+/// its message or its data (a 16-char slice of what was sent is the probe).
+fn assert_refused_with(result: crate::Result<serde_json::Value>, label: &str, query: &str) {
+    let probe: String = query.chars().take(16).collect();
     match result {
-        Err(Error::JsonRpc { code, message, .. }) => {
+        Err(Error::JsonRpc {
+            code,
+            message,
+            data,
+        }) => {
             assert_eq!(code, -32602, "{label}: code must be -32602");
             assert!(
                 message.contains("256"),
                 "{label}: message must contain \"256\": {message}"
             );
             assert!(
-                !message.contains("xxxxxxxx"),
+                !message.contains(&probe),
                 "{label}: message must not echo the query: {message}"
+            );
+            assert!(
+                data.as_ref()
+                    .is_none_or(|d| !d.to_string().contains(&probe)),
+                "{label}: data must not echo the query: {data:?}"
             );
         }
         other => panic!("{label}: expected JsonRpc -32602 refusal, got: {other:?}"),
@@ -61,11 +73,11 @@ async fn a_query_over_256_characters_is_refused_without_echoing_it() {
     let meta = gateway();
     let q = "x".repeat(257);
     let result = meta.code_mode_search_anon(&json!({"query": q}), None).await;
-    assert_refused_with(result, "257 'x'");
+    assert_refused_with(result, "257 'x'", &q);
 
     let q = "*".repeat(300);
     let result = meta.code_mode_search_anon(&json!({"query": q}), None).await;
-    assert_refused_with(result, "300 '*'");
+    assert_refused_with(result, "300 '*'", &q);
 }
 
 #[test]
