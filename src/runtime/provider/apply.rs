@@ -243,7 +243,13 @@ fn truncate_process_text(text: std::borrow::Cow<'_, str>) -> String {
     const LIMIT: usize = 4096;
     let mut output = text.into_owned();
     if output.len() > LIMIT {
-        output.truncate(LIMIT);
+        // Back off to a char boundary: `truncate` panics inside a multi-byte
+        // character, and the release profile aborts on panic (MIK-8655).
+        let mut cut = LIMIT;
+        while !output.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        output.truncate(cut);
         output.push_str("...[truncated]");
     }
     output
@@ -255,3 +261,7 @@ fn first_nonempty_line(text: &str) -> Option<String> {
         .find(|line| !line.is_empty())
         .map(ToString::to_string)
 }
+
+#[cfg(test)]
+#[path = "apply_truncate_tests.rs"]
+mod truncate_tests;
