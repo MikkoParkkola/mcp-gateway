@@ -1,0 +1,293 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! MIK-8398 rows C1-C4: the `provenance` CLI through the binary.
+//!
+//! Inputs are the A fixtures, copied (or edited, for tamper rows) into a
+//! tempdir. No `mcp_gateway` item is used.
+
+#[path = "common/gateway_bin.rs"]
+mod gateway_bin;
+
+use std::path::{Path, PathBuf};
+
+use base64::Engine as _;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use serde_json::Value;
+
+const SEED_ENV: &str = "GATEWAY_PROVENANCE_SIGNING_SEED";
+const KID_ENV: &str = "GATEWAY_PROVENANCE_KEY_ID";
+const KID: &str = "prov-test-1";
+
+fn fixture_path(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mik_8398").join(name)
+}
+
+fn read_fixture(name: &str) -> Vec<u8> {
+    std::fs::read(fixture_path(name)).unwrap_or_else(|error| {
+        panic!("fixture {name} missing: bless with UPDATE_GOLDEN=1 on the implemented tree: {error}")
+    })
+}
+
+fn fixture_json(name: &str) -> Value {
+    serde_json::from_slice(&read_fixture(name)).expect("fixture parses")
+}
+
+fn write_private(path: &Path, contents: &[u8]) {
+    std::fs::write(path, contents).expect("file writes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .expect("file is owner-only");
+    }
+}
+
+fn copy_fixture_to(home: &Path, name: &str) -> PathBuf {
+    let target = home.join(name);
+    write_private(&target, &read_fixture(name));
+    target
+}
+
+fn seed_env_file(home: &Path, seed: &[u8; 32], kid: &str) -> PathBuf {
+    let env_file = home.join("prov.env");
+    let text = format!("{SEED_ENV}={}\n{KID_ENV}={kid}\n", STANDARD.encode(seed));
+    write_private(&env_file, text.as_bytes());
+    env_file
+}
+
+fn config_with_env_files(home: &Path, env_files: &[PathBuf]) -> PathBuf {
+    let config = home.join("gateway.yaml");
+    let mut text = String::from("server:\n  port: 39400\nenv_files:\n");
+    for file in env_files {
+        text.push_str(&format!("  - '{}'\n", file.display()));
+    }
+    write_private(&config, text.as_bytes());
+    config
+}
+
+fn public_key_args(config: &Path) -> Vec<String> {
+    vec![
+        "provenance".to_owned(),
+        "public-key".to_owned(),
+        "-c".to_owned(),
+        config.display().to_string(),
+    ]
+}
+
+fn verify_args(
+    trust: &Path,
+    receipt: &Path,
+    result: Option<&Path>,
+    flags: &[&str],
+) -> Vec<String> {
+    let mut args = vec![
+        "provenance".to_owned(),
+        "verify".to_owned(),
+        "--trust".to_owned(),
+        trust.display().to_string(),
+        receipt.display().to_string(),
+    ];
+    if let Some(result) = result {
+        args.push("--result".to_owned());
+        args.push(result.display().to_string());
+    }
+    for flag in flags {
+        args.push((*flag).to_owned());
+    }
+    args
+}
+
+fn run(home: &Path, args: &[String], extra_env: &[(&str, &str)]) -> std::process::Output {
+    let mut command = gateway_bin::command(home, gateway_bin::Inherit::Nothing);
+    if let Some(path) = std::env::var_os("PATH") {
+        command.env("PATH", path);
+    }
+    for (key, value) in extra_env {
+        command.env(*key, *value);
+    }
+    command.args(args).output().expect("the binary runs")
+}
+
+#[test]
+fn public_key_prints_the_jwk_and_thumbprint() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let seed_b64 = STANDARD.encode([7u8; 32]);
+    let env_file = seed_env_file(home.path(), &[7u8; 32], KID);
+    let config = config_with_env_files(home.path(), &[env_file]);
+    let out = run(home.path(), &public_key_args(&config), &[]);
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "exit 0, stderr: {stderr}");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let printed: Value = serde_json::from_str(&stdout).expect("stdout is one JSON object");
+    assert_eq!(printed["jwk"], fixture_json("jwk.json"));
+    let x = printed["jwk"]["x"].as_str().expect("an x");
+    let message = format!("{{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"{x}\"}}");
+    let digest = ring::digest::digest(&ring::digest::SHA256, message.as_bytes());
+    let expected = URL_SAFE_NO_PAD.encode(digest);
+    assert_eq!(printed["thumbprint"].as_str(), Some(expected.as_str()));
+    assert!(!stdout.contains(seed_b64.as_str()), "stdout leaks the seed");
+    assert!(!stderr.contains(seed_b64.as_str()), "stderr leaks the seed");
+}
+
+#[test]
+fn env_file_wins_over_the_process_environment() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let env_file = seed_env_file(home.path(), &[7u8; 32], KID);
+    let config = config_with_env_files(home.path(), &[env_file]);
+    let override_seed = STANDARD.encode([9u8; 32]);
+    let out = run(home.path(), &public_key_args(&config), &[(SEED_ENV, override_seed.as_str())]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let printed: Value = serde_json::from_str(&stdout).expect("stdout is one JSON object");
+    assert_eq!(printed["jwk"], fixture_json("jwk.json"));
+    assert_ne!(printed["jwk"], fixture_json("jwk_other.json"));
+}
+
+#[test]
+fn public_key_without_a_seed_names_the_variable() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let config = home.path().join("gateway.yaml");
+    write_private(&config, b"server:\n  port: 39400\n");
+    let out = run(home.path(), &public_key_args(&config), &[]);
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(stderr.contains(SEED_ENV), "stderr names the variable: {stderr}");
+}
+
+#[test]
+fn public_key_with_a_bad_seed_leaks_nothing() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let bad = STANDARD.encode([7u8; 31]);
+    let env_file = home.path().join("prov.env");
+    let text = format!("{SEED_ENV}={bad}\n{KID_ENV}={KID}\n");
+    write_private(&env_file, text.as_bytes());
+    let config = config_with_env_files(home.path(), &[env_file]);
+    let out = run(home.path(), &public_key_args(&config), &[]);
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(!stdout.contains(bad.as_str()), "stdout leaks the seed");
+    assert!(!stderr.contains(bad.as_str()), "stderr leaks the seed");
+}
+
+#[test]
+fn verify_bounds_with_a_result() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let trust = copy_fixture_to(home.path(), "jwk.json");
+    let receipt = copy_fixture_to(home.path(), "provenance.json");
+    let result = copy_fixture_to(home.path(), "result.json");
+    let out = run(home.path(), &verify_args(&trust, &receipt, Some(&result), &[]), &[]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(stdout, "BOUND kid=prov-test-1\n");
+}
+
+#[test]
+fn verify_without_a_result_needs_its_flag() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let trust = copy_fixture_to(home.path(), "jwk.json");
+    let receipt = copy_fixture_to(home.path(), "provenance.json");
+    let out = run(home.path(), &verify_args(&trust, &receipt, None, &[]), &[]);
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(stdout, "SIGNATURE-ONLY kid=prov-test-1\n");
+    let args = verify_args(&trust, &receipt, None, &["--signature-only"]);
+    let out = run(home.path(), &args, &[]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(stdout, "SIGNATURE-ONLY kid=prov-test-1 (accepted: --signature-only)\n");
+}
+
+#[test]
+fn verify_unbound_needs_its_flag() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let trust = copy_fixture_to(home.path(), "jwk.json");
+    let receipt = copy_fixture_to(home.path(), "provenance_unbound.json");
+    let result = home.path().join("unbound_result.json");
+    write_private(&result, b"{\"n\":9007199254740992}");
+    let out = run(home.path(), &verify_args(&trust, &receipt, Some(&result), &[]), &[]);
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(stdout, "UNBOUND kid=prov-test-1\n");
+    let args = verify_args(&trust, &receipt, Some(&result), &["--accept-unbound"]);
+    let out = run(home.path(), &args, &[]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(stdout, "UNBOUND kid=prov-test-1 (accepted: --accept-unbound)\n");
+}
+
+#[test]
+fn verify_flags_do_not_cross_rescue() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let trust = copy_fixture_to(home.path(), "jwk.json");
+    let bound = copy_fixture_to(home.path(), "provenance.json");
+    let unbound = copy_fixture_to(home.path(), "provenance_unbound.json");
+    let result = home.path().join("unbound_result.json");
+    write_private(&result, b"{\"n\":9007199254740992}");
+    let args = verify_args(&trust, &bound, None, &["--accept-unbound"]);
+    let out = run(home.path(), &args, &[]);
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(stdout, "SIGNATURE-ONLY kid=prov-test-1\n");
+    let args = verify_args(&trust, &unbound, Some(&result), &["--signature-only"]);
+    let out = run(home.path(), &args, &[]);
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(stdout, "UNBOUND kid=prov-test-1\n");
+}
+
+#[test]
+fn verify_tampered_is_invalid_with_both_flags() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let trust = copy_fixture_to(home.path(), "jwk.json");
+    let mut prov = fixture_json("provenance.json");
+    prov["receipt"]["tool"] = serde_json::json!("other_tool");
+    let receipt = home.path().join("tampered.json");
+    let bytes = serde_json::to_vec(&prov).expect("tampered serializes");
+    write_private(&receipt, &bytes);
+    let result = copy_fixture_to(home.path(), "result.json");
+    let flags = ["--signature-only", "--accept-unbound"];
+    let out = run(home.path(), &verify_args(&trust, &receipt, Some(&result), &flags), &[]);
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(stdout.lines().count(), 1);
+    assert!(stdout.starts_with("INVALID"), "status names the refusal: {stdout}");
+}
+
+#[test]
+fn verify_accepts_a_stamped_result_as_receipt() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let trust = copy_fixture_to(home.path(), "jwk.json");
+    let result = fixture_json("result.json");
+    let stamped = serde_json::json!({
+        "content": result["content"].clone(),
+        "_meta": {"provenance": fixture_json("provenance.json")},
+    });
+    let receipt = home.path().join("stamped.json");
+    let bytes = serde_json::to_vec(&stamped).expect("stamped serializes");
+    write_private(&receipt, &bytes);
+    let expected = copy_fixture_to(home.path(), "result.json");
+    let out = run(home.path(), &verify_args(&trust, &receipt, Some(&expected), &[]), &[]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(stdout, "BOUND kid=prov-test-1\n");
+}
+
+#[test]
+fn verify_accepts_a_stamped_result_as_result() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let trust = copy_fixture_to(home.path(), "jwk.json");
+    let receipt = copy_fixture_to(home.path(), "provenance.json");
+    let result = fixture_json("result.json");
+    let stamped = serde_json::json!({
+        "content": result["content"].clone(),
+        "_meta": {"provenance": fixture_json("provenance.json")},
+    });
+    let stamped_result = home.path().join("stamped_result.json");
+    let bytes = serde_json::to_vec(&stamped).expect("stamped serializes");
+    write_private(&stamped_result, &bytes);
+    let out = run(home.path(), &verify_args(&trust, &receipt, Some(&stamped_result), &[]), &[]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(stdout, "BOUND kid=prov-test-1\n");
+}
