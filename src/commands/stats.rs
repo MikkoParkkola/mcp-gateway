@@ -98,8 +98,7 @@ pub async fn run_stats_command(url: &str) -> ExitCode {
 
 async fn handle_stats_response(response: reqwest::Response, url: &str) -> Result<String, String> {
     if response.status().is_redirection() {
-        let phrase =
-            mcp_gateway::security::http_diagnostics::redirect_target_phrase(&response);
+        let phrase = mcp_gateway::security::http_diagnostics::redirect_target_phrase(&response);
         return Err(format!(
             "❌ the gateway URL redirected to {phrase}; point stats at the final URL\n"
         ));

@@ -352,9 +352,10 @@ async fn fetch_skill_from_url(
         .await
         .map_err(|e| format!("Failed to fetch '{shown_url}': {e}"))?;
     if response.status().is_redirection() {
-        let phrase =
-            mcp_gateway::security::http_diagnostics::redirect_target_phrase(&response);
-        return Err(format!("{shown_url} redirected to {phrase}; use the final URL"));
+        let phrase = mcp_gateway::security::http_diagnostics::redirect_target_phrase(&response);
+        return Err(format!(
+            "{shown_url} redirected to {phrase}; use the final URL"
+        ));
     }
     if !response.status().is_success() {
         return Err(format!(
@@ -559,13 +560,12 @@ mod redirect_tests {
         );
         for app in [redirect_app, missing_app] {
             let base = serve(app).await;
-            let typed =
-                base.replacen("http://", "http://user:hunter2@", 1) + "/skill.md?token=sekret-typed";
+            let typed = base.replacen("http://", "http://user:hunter2@", 1)
+                + "/skill.md?token=sekret-typed";
             let client = skill_fetch_client().expect("client");
-            let outcome =
-                tokio::time::timeout(HANG_BOUND, fetch_skill_from_url(&client, &typed))
-                    .await
-                    .expect("bounded");
+            let outcome = tokio::time::timeout(HANG_BOUND, fetch_skill_from_url(&client, &typed))
+                .await
+                .expect("bounded");
             match outcome {
                 Ok(_) => panic!("expected Err, got Ok"),
                 Err(msg) => {

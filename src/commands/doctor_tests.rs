@@ -476,11 +476,7 @@ async fn http_backend_probe_resolves_a_relative_redirect_location() {
     let Some(result) = outcome else {
         panic!("an Http transport must produce a result");
     };
-    assert!(
-        result.detail.contains(&stub),
-        "detail: {}",
-        result.detail
-    );
+    assert!(result.detail.contains(&stub), "detail: {}", result.detail);
     assert!(
         result.detail.contains("path hidden"),
         "detail: {}",

@@ -284,8 +284,7 @@ async fn post_mcp_probe(
 
     let status = response.status();
     if status.is_redirection() {
-        let location =
-            mcp_gateway::security::http_diagnostics::redirect_target_phrase(&response);
+        let location = mcp_gateway::security::http_diagnostics::redirect_target_phrase(&response);
         return Err(Box::new(
             CheckResult::fail(
                 "MCP handshake",

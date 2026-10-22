@@ -422,8 +422,7 @@ async fn check_http_backend(name: &str, transport: &TransportConfig) -> Option<C
             let ms = start.elapsed().as_millis();
             let status = resp.status();
             if status.is_redirection() {
-                let phrase =
-                    mcp_gateway::security::http_diagnostics::redirect_target_phrase(&resp);
+                let phrase = mcp_gateway::security::http_diagnostics::redirect_target_phrase(&resp);
                 return Some(
                     CheckResult::fail(
                         label,
