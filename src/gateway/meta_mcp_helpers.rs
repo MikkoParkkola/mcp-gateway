@@ -372,29 +372,38 @@ pub(crate) fn tool_matches_glob(tool: &Tool, pattern: &str) -> bool {
 fn glob_match_impl(text: &str, pattern: &str) -> bool {
     let text_chars: Vec<char> = text.chars().collect();
     let pat_chars: Vec<char> = pattern.chars().collect();
-    glob_match_chars(&text_chars, &pat_chars)
+    glob_match_steps(&text_chars, &pat_chars).0
+}
+
+/// Match and the number of matcher steps taken; the count is what the MIK-8683 bound tests read.
+fn glob_match_steps(text: &[char], pattern: &[char]) -> (bool, u64) {
+    let mut steps = 0;
+    let matched = glob_match_chars(text, pattern, &mut steps);
+    (matched, steps)
 }
 
 /// Recursive char-slice glob matcher.
 ///
 /// Supports `*` (zero or more chars) and `?` (exactly one char).
 /// Pattern and text must already be normalized (lowercased) by the caller.
-fn glob_match_chars(text: &[char], pattern: &[char]) -> bool {
+fn glob_match_chars(text: &[char], pattern: &[char], steps: &mut u64) -> bool {
+    *steps += 1;
     match (text.first(), pattern.first()) {
         // Both exhausted: success
         (None, None) => true,
         // Pattern has a trailing star that matches empty: skip it
-        (None, Some('*')) => glob_match_chars(text, &pattern[1..]),
+        (None, Some('*')) => glob_match_chars(text, &pattern[1..], steps),
         // Text exhausted with non-star pattern remaining, or text remains but pattern exhausted
         (None, _) | (Some(_), None) => false,
         // Star: try matching zero chars (advance pattern) or one char (advance text)
         (Some(_), Some('*')) => {
-            glob_match_chars(text, &pattern[1..]) || glob_match_chars(&text[1..], pattern)
+            glob_match_chars(text, &pattern[1..], steps)
+                || glob_match_chars(&text[1..], pattern, steps)
         }
         // Question mark: matches any single char
-        (Some(_), Some('?')) => glob_match_chars(&text[1..], &pattern[1..]),
+        (Some(_), Some('?')) => glob_match_chars(&text[1..], &pattern[1..], steps),
         // Literal: must equal
-        (Some(t), Some(p)) => *t == *p && glob_match_chars(&text[1..], &pattern[1..]),
+        (Some(t), Some(p)) => *t == *p && glob_match_chars(&text[1..], &pattern[1..], steps),
     }
 }
 
@@ -744,3 +753,7 @@ mod tests;
 #[cfg(test)]
 #[path = "meta_mcp_helpers_chain_tests.rs"]
 mod chain_tests;
+
+#[cfg(test)]
+#[path = "meta_mcp_helpers_glob_tests.rs"]
+mod glob_tests;
