@@ -28,6 +28,27 @@ pub struct CapabilityWatcher {
     _watcher: Mutex<Option<RecommendedWatcher>>,
 }
 
+/// Timing knobs for the reload task. Production uses `ReloadTuning::default()`.
+#[derive(Clone, Copy, Debug)]
+struct ReloadTuning {
+    /// Stale-catalogue check interval; `None` = off.
+    stale_check: Option<Duration>,
+    /// A reload still running after this logs a warn.
+    reload_slow: Duration,
+    /// Quiet time after the last event before a reload.
+    debounce: Duration,
+}
+
+impl Default for ReloadTuning {
+    fn default() -> Self {
+        Self {
+            stale_check: Some(Duration::from_secs(60)),
+            reload_slow: Duration::from_secs(60),
+            debounce: Duration::from_millis(500),
+        }
+    }
+}
+
 impl CapabilityWatcher {
     /// Start watching capability directories for changes
     ///
@@ -230,21 +251,23 @@ impl CapabilityWatcher {
             }
         });
     }
+
+    /// Spawn the reload task with explicit timing knobs (MIK-8651).
+    ///
+    /// Shell: `tuning` is accepted but not yet honoured. Until the heal lands
+    /// this behaves exactly like [`Self::spawn_reload_task`].
+    fn spawn_reload_task_tuned(
+        backend: Arc<CapabilityBackend>,
+        event_rx: mpsc::Receiver<()>,
+        shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+        changes: Option<CatalogueChanged>,
+        tuning: ReloadTuning,
+    ) {
+        let _ = (tuning.stale_check, tuning.reload_slow, tuning.debounce);
+        Self::spawn_reload_task(backend, event_rx, shutdown_rx, changes);
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_watcher_creation() {
-        // Basic smoke test - actual file watching tested in integration tests
-        let (_tx, rx) = tokio::sync::broadcast::channel(1);
-        let executor = Arc::new(crate::capability::CapabilityExecutor::new());
-        let backend = Arc::new(crate::capability::CapabilityBackend::new("test", executor));
-
-        // Should not panic with empty directories
-        let watcher = CapabilityWatcher::start(backend, rx, None);
-        assert!(watcher.is_ok());
-    }
-}
+#[path = "watcher_tests.rs"]
+mod tests;
