@@ -366,12 +366,12 @@ fn unbound_when_signed_without_a_result() {
 #[test]
 fn unbound_for_an_unsafe_integer() {
     let unhashable = serde_json::json!({"n": 9_007_199_254_740_992u64});
-    let prov = signed_prov(Some(&unhashable));
-    assert!(payload_json_of(&prov).get("result_sha256").is_some(), "the member is present");
-    assert!(payload_json_of(&prov)["result_sha256"].is_null(), "2^53 digests to null");
+    let prov = prov_with_payload(&profile_payload(1, "EdDSA"));
     let trust = trust_of(&signer_one());
     let verified = verify_public(&prov, &trust, Some(&unhashable)).expect("unbound verifies");
     assert_eq!(verified.status, VerifyStatus::Unbound);
+    assert!(payload_json_of(&prov).get("result_sha256").is_some(), "the member is present");
+    assert!(payload_json_of(&prov)["result_sha256"].is_null(), "2^53 digests to null");
 }
 
 #[test]
@@ -390,12 +390,12 @@ fn bound_for_safe_numbers() {
 #[test]
 fn unbound_for_a_non_object_result() {
     let array = serde_json::json!([1, 2]);
-    let prov = signed_prov(Some(&array));
-    assert!(payload_json_of(&prov).get("result_sha256").is_some(), "the member is present");
-    assert!(payload_json_of(&prov)["result_sha256"].is_null());
+    let prov = prov_with_payload(&profile_payload(1, "EdDSA"));
     let trust = trust_of(&signer_one());
     let verified = verify_public(&prov, &trust, Some(&array)).expect("unbound verifies");
     assert_eq!(verified.status, VerifyStatus::Unbound);
+    assert!(payload_json_of(&prov).get("result_sha256").is_some(), "the member is present");
+    assert!(payload_json_of(&prov)["result_sha256"].is_null());
 }
 
 #[test]
@@ -409,7 +409,7 @@ fn unknown_kid_is_refused() {
 #[test]
 fn a_flipped_signature_byte_is_refused() {
     let result = result_json();
-    let mut prov = signed_prov(Some(&result));
+    let mut prov = prov_with_payload(&profile_payload(1, "EdDSA"));
     let mut sig = URL_SAFE_NO_PAD
         .decode(prov["public_signature"]["sig"].as_str().expect("a sig member"))
         .expect("sig decodes");
@@ -423,7 +423,7 @@ fn a_flipped_signature_byte_is_refused() {
 fn a_short_or_padded_signature_is_bad_encoding() {
     let result = result_json();
     let short = URL_SAFE_NO_PAD.encode(vec![0u8; 63]);
-    let prov = signed_prov(Some(&result));
+    let prov = prov_with_payload(&profile_payload(1, "EdDSA"));
     let padded = format!("{}=", prov["public_signature"]["sig"].as_str().expect("a sig member"));
     for sig in [short, padded] {
         let mut tampered = prov.clone();

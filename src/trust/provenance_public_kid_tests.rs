@@ -6,10 +6,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
 use super::*;
-#[allow(unused_imports)]
 use super::tests::{
-    ATTESTATION_ID, KID_ONE, KID_TWO, SEED_ONE, SEED_TWO, assert_value_free, jwk_for,
-    overlay_with, seed_b64, x_of,
+    ATTESTATION_ID, KID_ONE, SEED_ONE, SEED_TWO, assert_value_free, jwk_for, overlay_with,
+    seed_b64, x_of,
 };
 
 #[test]
@@ -48,54 +47,149 @@ fn an_overlong_kid_is_refused() {
 /// MIK-8398 D4: a kid is 1-64 bytes of `0x21..=0x7E`. Anything else is
 /// refused by the resolver (value-free) and by the trust set as MalformedKid.
 #[test]
-fn d4_malformed_kids_are_refused() {
+fn d4_malformed_kid_with_space_is_refused() {
+    let encoded = seed_b64(&SEED_ONE);
+    let written = "\"prov test\"";
+    let resolved = "prov test";
+    let (_dir, env) = overlay_with(&[
+        (PROVENANCE_SEED_ENV, encoded.as_str()),
+        (PROVENANCE_KEY_ID_ENV, written),
+    ]);
+    assert_eq!(
+        env.resolve(PROVENANCE_KEY_ID_ENV).as_deref(),
+        Some(resolved),
+        "the env file must transport the kid under test"
+    );
+    let result = resolve_public_signer(&env, ATTESTATION_ID);
+    assert!(result.is_err(), "a malformed kid {resolved:?} is refused");
+    let err = result.expect_err("just asserted");
+    assert_value_free(&err, &SEED_ONE);
+
+    let x = URL_SAFE_NO_PAD.encode([7u8; 32]);
+    let kid_json = serde_json::to_string(resolved).expect("a kid serializes");
+    let text = format!("{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":{kid_json},\"x\":\"{x}\"}}");
+    let trust = TrustSet::from_json(&text);
+    let Err(refusal) = trust else {
+        panic!("the trust set must refuse {resolved:?} as MalformedKid");
+    };
+    assert_eq!(
+        refusal,
+        TrustSetRefusal::MalformedKid,
+        "the trust set must refuse {resolved:?} as MalformedKid"
+    );
+}
+
+/// MIK-8398 D4: a kid is 1-64 bytes of `0x21..=0x7E`. Anything else is
+/// refused by the resolver (value-free) and by the trust set as MalformedKid.
+#[test]
+fn d4_malformed_kid_with_newline_is_refused() {
+    let encoded = seed_b64(&SEED_ONE);
+    let written = "\"prov\\ntest\"";
+    let resolved = "prov\ntest";
+    let (_dir, env) = overlay_with(&[
+        (PROVENANCE_SEED_ENV, encoded.as_str()),
+        (PROVENANCE_KEY_ID_ENV, written),
+    ]);
+    assert_eq!(
+        env.resolve(PROVENANCE_KEY_ID_ENV).as_deref(),
+        Some(resolved),
+        "the env file must transport the kid under test"
+    );
+    let result = resolve_public_signer(&env, ATTESTATION_ID);
+    assert!(result.is_err(), "a malformed kid {resolved:?} is refused");
+    let err = result.expect_err("just asserted");
+    assert_value_free(&err, &SEED_ONE);
+    let display = err.to_string();
+    let debug = format!("{err:?}");
+    assert!(!display.contains(resolved), "the error leaks the raw kid: {display}");
+    assert!(!debug.contains(resolved), "the error leaks the raw kid: {debug}");
+
+    let x = URL_SAFE_NO_PAD.encode([7u8; 32]);
+    let kid_json = serde_json::to_string(resolved).expect("a kid serializes");
+    let text = format!("{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":{kid_json},\"x\":\"{x}\"}}");
+    let trust = TrustSet::from_json(&text);
+    let Err(refusal) = trust else {
+        panic!("the trust set must refuse {resolved:?} as MalformedKid");
+    };
+    assert_eq!(
+        refusal,
+        TrustSetRefusal::MalformedKid,
+        "the trust set must refuse {resolved:?} as MalformedKid"
+    );
+    let debug = format!("{refusal:?}");
+    assert!(!debug.contains(resolved), "the trust error leaks the raw kid: {debug}");
+}
+
+/// MIK-8398 D4: a kid is 1-64 bytes of `0x21..=0x7E`. Anything else is
+/// refused by the resolver (value-free) and by the trust set as MalformedKid.
+#[test]
+fn d4_malformed_kid_with_non_ascii_is_refused() {
+    let encoded = seed_b64(&SEED_ONE);
+    let written = "\"prov-✓\"";
+    let resolved = "prov-✓";
+    let (_dir, env) = overlay_with(&[
+        (PROVENANCE_SEED_ENV, encoded.as_str()),
+        (PROVENANCE_KEY_ID_ENV, written),
+    ]);
+    assert_eq!(
+        env.resolve(PROVENANCE_KEY_ID_ENV).as_deref(),
+        Some(resolved),
+        "the env file must transport the kid under test"
+    );
+    let result = resolve_public_signer(&env, ATTESTATION_ID);
+    assert!(result.is_err(), "a malformed kid {resolved:?} is refused");
+    let err = result.expect_err("just asserted");
+    assert_value_free(&err, &SEED_ONE);
+
+    let x = URL_SAFE_NO_PAD.encode([7u8; 32]);
+    let kid_json = serde_json::to_string(resolved).expect("a kid serializes");
+    let text = format!("{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":{kid_json},\"x\":\"{x}\"}}");
+    let trust = TrustSet::from_json(&text);
+    let Err(refusal) = trust else {
+        panic!("the trust set must refuse {resolved:?} as MalformedKid");
+    };
+    assert_eq!(
+        refusal,
+        TrustSetRefusal::MalformedKid,
+        "the trust set must refuse {resolved:?} as MalformedKid"
+    );
+}
+
+/// MIK-8398 D4: a kid is 1-64 bytes of `0x21..=0x7E`. Anything else is
+/// refused by the resolver (value-free) and by the trust set as MalformedKid.
+#[test]
+fn d4_malformed_kid_with_65_bytes_is_refused() {
     let encoded = seed_b64(&SEED_ONE);
     let long = "k".repeat(65);
     let long_quoted = format!("\"{long}\"");
-    for (written, resolved) in [
-        ("\"prov test\"", "prov test"),
-        ("\"prov\\ntest\"", "prov\ntest"),
-        ("\"prov-✓\"", "prov-✓"),
-        (long_quoted.as_str(), long.as_str()),
-    ] {
-        let (_dir, env) = overlay_with(&[
-            (PROVENANCE_SEED_ENV, encoded.as_str()),
-            (PROVENANCE_KEY_ID_ENV, written),
-        ]);
-        assert_eq!(
-            env.resolve(PROVENANCE_KEY_ID_ENV).as_deref(),
-            Some(resolved),
-            "the env file must transport the kid under test"
-        );
-        let result = resolve_public_signer(&env, ATTESTATION_ID);
-        assert!(result.is_err(), "a malformed kid {resolved:?} is refused");
-        let err = result.expect_err("just asserted");
-        assert_value_free(&err, &SEED_ONE);
-        if resolved.contains('\n') {
-            let display = err.to_string();
-            let debug = format!("{err:?}");
-            assert!(!display.contains(resolved), "the error leaks the raw kid: {display}");
-            assert!(!debug.contains(resolved), "the error leaks the raw kid: {debug}");
-        }
+    let written = long_quoted.as_str();
+    let resolved = long.as_str();
+    let (_dir, env) = overlay_with(&[
+        (PROVENANCE_SEED_ENV, encoded.as_str()),
+        (PROVENANCE_KEY_ID_ENV, written),
+    ]);
+    assert_eq!(
+        env.resolve(PROVENANCE_KEY_ID_ENV).as_deref(),
+        Some(resolved),
+        "the env file must transport the kid under test"
+    );
+    let result = resolve_public_signer(&env, ATTESTATION_ID);
+    assert!(result.is_err(), "a malformed kid {resolved:?} is refused");
+    let err = result.expect_err("just asserted");
+    assert_value_free(&err, &SEED_ONE);
 
-        let x = URL_SAFE_NO_PAD.encode([7u8; 32]);
-        let kid_json = serde_json::to_string(resolved).expect("a kid serializes");
-        let text =
-            format!("{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":{kid_json},\"x\":\"{x}\"}}");
-        let trust = TrustSet::from_json(&text);
-        let Err(refusal) = trust else {
-            panic!("the trust set must refuse {resolved:?} as MalformedKid");
-        };
-        assert_eq!(
-            refusal,
-            TrustSetRefusal::MalformedKid,
-            "the trust set must refuse {resolved:?} as MalformedKid"
-        );
-        if resolved.contains('\n') {
-            let debug = format!("{refusal:?}");
-            assert!(!debug.contains(resolved), "the trust error leaks the raw kid: {debug}");
-        }
-    }
+    let x = URL_SAFE_NO_PAD.encode([7u8; 32]);
+    let kid_json = serde_json::to_string(resolved).expect("a kid serializes");
+    let text = format!("{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":{kid_json},\"x\":\"{x}\"}}");
+    let trust = TrustSet::from_json(&text);
+    let Err(refusal) = trust else {
+        panic!("the trust set must refuse {resolved:?} as MalformedKid");
+    };
+    assert_eq!(
+        refusal,
+        TrustSetRefusal::MalformedKid,
+        "the trust set must refuse {resolved:?} as MalformedKid"
+    );
 }
 
 #[test]
