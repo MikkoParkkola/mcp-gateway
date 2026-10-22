@@ -2167,6 +2167,19 @@
         "docs/design/RFC-0060-dual-generation-mcp.md",
         "docs/requirements/RELEASE-4.0.0-operator-decisions.md"
       ]
+    },
+    {
+      "id": "mik_8014_perf_ships_unmet",
+      "status": "resolved",
+      "resolved": "2026-10-22",
+      "authority": "operator ruling 2026-10-22, relayed by the release lead: option 2 of the MIK-8014 PERF.7 operator brief (waive with the evidence), applied to PERF.5 and PERF.7, with the instruction to state plainly that the bar was not met. The closure method is a recorded operator override (operator in chat: \"Close it by a recorded operator override\"). Linear: MIK-8014 comment 4e5230a1-72c2-45bc-b7d3-a23a0ed5fd4d.",
+      "selection": "MIK-8014.PERF.5 and MIK-8014.PERF.7 ship UNMET in 4.0.0. The bars were NOT met; this is not a pass. PERF.7: run 39643338183 (GitHub ubuntu-24.04-arm, clean musl profile, 40,000 calls at 400/s, 3 rotated runs per version) measured medians B (v3.5.1) 292.5, C (5ddc1226f) 379.0 and T (c3878f4cd) 401.5 us per call, a drop C-T of -22.5 us (per-run pair median -12.0), against bars of 11.80 us (scoped) and 15.66 us (literal): a shortfall of 34.3 us and 38.2 us. PERF.5: no counter handle is held at any named site (holding handles was rejected 2026-10-21 because a handle taken before the recorder exists stops counting); register_counter still costs 3.32 us per call at b9a69a1e0, inside the PERF.7 shortfall. These are MIK-8014 ticket criteria, not rows of this ledger, so no criteria row changes.",
+      "rationale": "The operator accepted the shortfall on 2026-10-22 on the grounds that no removable per-call cost reaches it: the remaining candidates (PERF.13 b superseded; c and d, about 0.14 and 0.8 us, deferred to MIK-8630) sit below the run-to-run noise (the same C commit measured 358.0 and 379.0 us in two runs, and one run's spread is 27-58 us). Two corrections are part of the record. (1) The earlier statement of no hidden regression is not fully right: the gateway's own code time grew about 5 us per call between b9a69a1e0 and c3878f4cd, inferred from one profiled run per version; MIK-8545 (about 735 B per call) is one known cost in that range. (2) The line tip 6dbfd5b0d was NOT re-measured; #4029 (MIK-8488 PR-B1) restructured the per-call path after c3878f4cd, and a single re-run was ruled out because it cannot resolve a 21 us swing against a 5 us question.",
+      "consequence": "Disclosed under Known limitations in docs/release/v4.0.0-release-notes-DRAFT.md. Follow-ups in 4.1.0: MIK-8552, MIK-8553 and MIK-8545, and a steadier instruction-count method for the per-call goal, decided before measuring. MIK-8014 closes by a recorded operator override with its evidence lines left as measured (PERF.5 FAIL, PERF.7 FAIL).",
+      "evidence": [
+        "docs/requirements/RELEASE-4.0.0-operator-decisions.md",
+        "docs/release/v4.0.0-release-notes-DRAFT.md"
+      ]
     }
   ]
 }
