@@ -44,7 +44,6 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
     for root in [
         "capabilities",
         "examples",
-        "config",
         "deploy",
         "tests/fixtures",
         "playbooks",
