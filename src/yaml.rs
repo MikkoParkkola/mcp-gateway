@@ -48,17 +48,20 @@ pub(crate) struct Error(Repr);
 enum Repr {
     /// `serde_yaml`'s error, shown redacted exactly as before the guard.
     Backend(serde_yaml::Error),
-    /// The guard's refusal: which limit fired, and for Syntax the wording.
-    Refused { limit: Limit, what: Option<String> },
+    /// The guard's refusal: which limit fired, and for Syntax the wording
+    /// plus an optional fixed fix hint.
+    Refused {
+        limit: Limit,
+        what: Option<String>,
+        hint: Option<&'static str>,
+    },
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.0 {
-            Repr::Backend(err) => {
-                return f.write_str(&redact_message(&err.to_string()));
-            }
-            Repr::Refused { limit, what } => match limit {
+            Repr::Backend(err) => f.write_str(&redact_message(&err.to_string())),
+            Repr::Refused { limit, what, hint } => match limit {
                 Limit::Size { len, max } => {
                     write!(f, "YAML refused: {len} bytes, over the {max}-byte limit")
                 }
@@ -89,7 +92,14 @@ impl std::fmt::Display for Error {
                 ),
                 Limit::Syntax { line, column } => {
                     let what = what.as_deref().unwrap_or("syntax error");
-                    write!(f, "YAML refused: {what} at line {line} column {column}")
+                    if let Some(hint) = hint {
+                        write!(
+                            f,
+                            "YAML refused: {what} at line {line} column {column}; {hint}"
+                        )
+                    } else {
+                        write!(f, "YAML refused: {what} at line {line} column {column}")
+                    }
                 }
             },
         }
@@ -145,7 +155,20 @@ impl Error {
 
     /// The guard's refusal; `what` carries the Syntax wording and nothing else.
     fn refused(limit: Limit, what: Option<String>) -> Self {
-        Self(Repr::Refused { limit, what })
+        Self(Repr::Refused {
+            limit,
+            what,
+            hint: None,
+        })
+    }
+
+    /// The guard's refusal with a fixed fix hint for one Syntax kind.
+    fn refused_hint(limit: Limit, what: Option<String>, hint: &'static str) -> Self {
+        Self(Repr::Refused {
+            limit,
+            what,
+            hint: Some(hint),
+        })
     }
 }
 
@@ -390,6 +413,10 @@ fn at_offset(marker: Marker, make: impl FnOnce(usize) -> Limit) -> Error {
     }
 }
 
+/// The fix hint for a quoted value left unclosed or continued with too little indentation.
+const QUOTED_INDENT_HINT: &str =
+    "close the quote, or indent the continuation lines, or use a block scalar (| or >)";
+
 /// A granit failure as the guard's refusal: its recursion breach is Depth,
 /// every other kind is Syntax at the marker's line and 1-based column.
 fn map_scan_error(scan: &ScanError) -> Error {
@@ -402,18 +429,21 @@ fn map_scan_error(scan: &ScanError) -> Error {
             None,
         );
     }
-    Error::refused(
-        Limit::Syntax {
-            line: marker.line(),
-            column: marker.col().saturating_add(1),
-        },
-        Some(syntax_what(scan.kind())),
-    )
+    let limit = Limit::Syntax {
+        line: marker.line(),
+        column: marker.col().saturating_add(1),
+    };
+    let what = syntax_what(scan.kind());
+    if matches!(scan.kind(), ErrorKind::InvalidQuotedScalarIndent) {
+        return Error::refused_hint(limit, Some(what), QUOTED_INDENT_HINT);
+    }
+    Error::refused(limit, Some(what))
 }
 
 /// The Syntax wording for a granit kind: granit's own Display, except the nine
-/// data-carrying kinds, which get fixed text (the exact `=2.0.0` pin freezes
-/// the set). Never echoes document bytes, names or tags.
+/// data-carrying kinds and the quoted-indent kind, which get fixed text (the
+/// exact `=2.0.0` pin freezes the set). Never echoes document bytes, names
+/// or tags.
 fn syntax_what(kind: &ErrorKind) -> String {
     match kind {
         ErrorKind::UnexpectedCharacter { .. } => String::from("unexpected character"),
@@ -423,8 +453,11 @@ fn syntax_what(kind: &ErrorKind) -> String {
         ErrorKind::MismatchedFlowCollectionEnd { .. } => String::from("mismatched bracket"),
         ErrorKind::UnclosedFlowCollection { .. } => String::from("unclosed bracket"),
         ErrorKind::InputByteLimitExceeded { .. } => String::from("input too large"),
-        ErrorKind::DirectiveByteLimitExceeded { .. } => String::from("directive too large"),
-        ErrorKind::TooManyReservedDirectiveParams { .. } => String::from("directive too large"),
+        ErrorKind::DirectiveByteLimitExceeded { .. }
+        | ErrorKind::TooManyReservedDirectiveParams { .. } => String::from("directive too large"),
+        ErrorKind::InvalidQuotedScalarIndent => {
+            String::from("quoted text is not closed, or continues with too little indentation,")
+        }
         other => other.to_string(),
     }
 }
@@ -484,7 +517,7 @@ struct Frame {
 
 /// Add `amount` to the innermost open collection, or to the document total
 /// when no collection is open. Saturating throughout.
-fn add_cost(stack: &mut Vec<Frame>, total: &mut u64, amount: u64) {
+fn add_cost(stack: &mut [Frame], total: &mut u64, amount: u64) {
     match stack.last_mut() {
         Some(frame) => frame.cost = frame.cost.saturating_add(amount),
         None => *total = total.saturating_add(amount),

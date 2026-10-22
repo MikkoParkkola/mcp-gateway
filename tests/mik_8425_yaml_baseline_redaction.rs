@@ -91,7 +91,7 @@ fn capability_rows(out: &mut String) {
             name: "capability/syntax-error",
             bad: format!("name: \"unterminated {SENTINEL}\n"),
             good: capability("30"),
-            names: "unclosed quote",
+            names: "quoted text is not closed, or continues with too little indentation",
         },
     ];
     for case in &cases {
@@ -120,7 +120,7 @@ fn config_rows(out: &mut String) {
             name: "config/syntax-error",
             bad: format!("server: \"unterminated {SENTINEL}\n"),
             good: "server: {}\n".to_owned(),
-            names: "unclosed quote",
+            names: "quoted text is not closed, or continues with too little indentation",
         },
         Case {
             name: "config/nested-type-error",

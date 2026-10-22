@@ -3,8 +3,8 @@
 //! MIK-8639 DEPTH.2: library entry points refuse a 10,000-deep unread field
 //! with the guard's Depth text.
 //!
-//! Red on the skeleton: these reads either succeed or refuse with serde_yaml's
-//! own wording, which never contains "nesting deeper than 128".
+//! Red on the skeleton: these reads either succeed or refuse with the backend
+//! parser's own wording, which never contains "nesting deeper than 128".
 
 /// `head` plus an unread `probe` field nesting 10,000 flow sequences.
 fn deep_probe(head: &str) -> String {

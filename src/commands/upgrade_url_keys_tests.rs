@@ -281,3 +281,29 @@ fn a_rewrite_debug_never_prints_the_config_text() {
     assert!(!debug.contains("surf2-debug-secret"), "{debug}");
     assert!(debug.contains("bytes redacted"), "{debug}");
 }
+
+/// MIK-8639: a config the guard refuses is reported in the guard's own
+/// value-free words, and the file is left as it was.
+#[test]
+fn upgrade_refusal_reports_the_guard_reason_for_an_unclosed_quote() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    let text = "backends:\n  ok:\n    http_url: \"https://ok.example.test/mcp\"\n  fs:\n    description: \"first line\n    http_url: still the description\"\n    command: x\n";
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, text).expect("write config");
+    let error = rewrite_url_aliases_in(&path, RewriteMode::Apply).expect_err("refused");
+    assert!(
+        error.contains(
+            "could not be read as a config: YAML refused: quoted text is not closed, \
+             or continues with too little indentation, at line "
+        ),
+        "{error}"
+    );
+    assert!(
+        error.ends_with(
+            "; close the quote, or indent the continuation lines, \
+             or use a block scalar (| or >); nothing was upgraded."
+        ),
+        "{error}"
+    );
+    assert_eq!(std::fs::read_to_string(&path).expect("read back"), text);
+}

@@ -394,7 +394,12 @@ fn allowlist() -> std::collections::BTreeSet<String> {
         .expect("allowlist")
         .lines()
         .filter(|l| !l.is_empty())
-        .map(str::to_owned)
+        .map(|line| {
+            line.split_once(" # ")
+                .map_or(line, |(path, _)| path)
+                .trim()
+                .to_owned()
+        })
         .collect()
 }
 
