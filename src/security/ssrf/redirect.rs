@@ -62,6 +62,10 @@ pub(crate) fn redirect_decision(previous_hops: usize, next_url: &str) -> Redirec
     }
 }
 
+#[cfg(test)]
+#[path = "redirect_policy_scan_tests.rs"]
+mod redirect_policy_scan;
+
 // T1e (MIK-8660, lane-written red probe): reqwest's `previous()` already holds
 // the first URL, so `>= MAX_REDIRECT_HOPS` follows one hop fewer than the doc.
 #[cfg(test)]
