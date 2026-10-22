@@ -1321,6 +1321,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `MCP_GATEWAY_CLIENT_KEY` | KEEP | credentials for `dashboard-link` and `events dead-letters` against a remote gateway | - | src/cli/dashboard_link.rs:26 |
 | `MCP_GATEWAY_CONFIG` | KEEP | container and service-manager form of the global flags | - | src/cli/mod.rs:127 |
 | `MCP_GATEWAY_CONFIG_DIR` | KEEP | data directory for persisted state (src/gateway/server/persistence.rs:181); volume-mounted deployments set it | - | src/cli/mod.rs:571 |
+| `MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK` | KEEP | env form of `doctor --no-registry-check`: skips doctor's npm deprecation lookup on hosts that must not contact registry.npmjs.org (MIK-8512) | - | src/cli/mod.rs:552 |
 | `MCP_GATEWAY_FIREWALL_SKIP_KEYS` | KEEP | security policy list (rule 1): replaces the argument keys the injection scan treats as free text, so it can widen or narrow the scan; an explicit operator decision (rule 2) | - | src/security/firewall/input_scanner.rs:85 |
 | `MCP_GATEWAY_HOST` | KEEP | container and service-manager form of the global flags | - | src/cli/mod.rs:135 |
 | `MCP_GATEWAY_KIND_CLUSTER` | INTERNAL | variable of a repository test script, not read by the binary | test-only; docs say so | deploy/kubernetes/enterprise-alpha/scripts/kind-rollback-smoke.sh:19 |
