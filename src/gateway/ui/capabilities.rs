@@ -736,4 +736,17 @@ providers:
         let result = find_capability_file(&["/nonexistent/dir".to_owned()], "my-tool");
         assert!(result.is_none());
     }
+
+    // ── MIK-8639 DEPTH.2 ──────────────────────────────────────────────────────
+
+    #[test]
+    fn validate_yaml_body_refuses_deep_unread_field() {
+        let deep = format!(
+            "name: probe\nprobe: {}1{}\n",
+            "[".repeat(10_000),
+            "]".repeat(10_000)
+        );
+        let err = validate_yaml_body(&deep).expect("10k-deep YAML must be refused");
+        assert!(err.contains("nesting deeper than 128"), "got: {err}");
+    }
 }

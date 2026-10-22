@@ -66,6 +66,25 @@ impl Error {
             column: at.column(),
         })
     }
+
+    /// Why the guard refused the text, when it did.
+    pub(crate) fn limit(&self) -> Option<&Limit> {
+        None
+    }
+}
+
+/// Why the guard refused a text. Value-free: carries positions and limits, never document bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Limit {
+    Size { len: usize, max: usize },
+    Depth { line: usize },
+    Aliases { max: usize },
+    TagDirectives { max: usize },
+    Expansion,
+    AnchorReuse { offset: usize },
+    AnchorName { offset: usize },
+    LineBreak { offset: usize },
+    Syntax { line: usize, column: usize },
 }
 
 /// Where in a YAML document a refusal points.
@@ -185,15 +204,33 @@ fn location(tail: &str) -> &str {
     if exact { suffix } else { "" }
 }
 
+/// Refuse hostile YAML text before it reaches the backend (MIK-8639).
+///
+/// The skeleton accepts everything; the guard implementation adds the limits.
+fn guard(text: &str) -> Result<(), Error> {
+    let _ = text;
+    Ok(())
+}
+
+/// The guard result plus the number of parser events and scanner tokens visited.
+///
+/// Test-only work counter behind the linearity bar; absent from production builds.
+#[cfg(test)]
+pub(crate) fn guard_work(text: &str) -> (Result<(), Error>, u64) {
+    (guard(text), 0)
+}
+
 /// Parse `text` into `T`. A key repeated in a struct or in a `Value` is
 /// refused; a key repeated in a map keeps its last value.
 pub(crate) fn from_str<T: DeserializeOwned>(text: &str) -> Result<T, Error> {
+    guard(text)?;
     serde_yaml::from_str(text).map_err(Error)
 }
 
 /// Parse `text` as figment's `Dict`, the way the config loader reads it: a
 /// repeated key keeps its last value at every level.
 pub(crate) fn from_str_loose(text: &str) -> Result<Dict, Error> {
+    guard(text)?;
     Yaml::from_str(text).map_err(Error)
 }
 
@@ -204,6 +241,7 @@ pub(crate) fn from_str_loose(text: &str) -> Result<Dict, Error> {
     reason = "figment's own `Provider::data` signature, which the config loader returns"
 )]
 pub(crate) fn figment_data(text: &str) -> figment::Result<Map<figment::Profile, Dict>> {
+    guard(text).map_err(|err| figment::Error::from(err.to_string()))?;
     Yaml::string(text).data()
 }
 
@@ -297,9 +335,13 @@ fn json_key(key: &Value) -> Option<String> {
 /// this iterator stops for it. There is no document count cap: a long
 /// manifest is read in full.
 pub(crate) fn documents(text: &str) -> impl Iterator<Item = Result<Value, Error>> + '_ {
+    let mut early = guard(text).err();
     let mut stream = serde_yaml::Deserializer::from_str(text);
-    let mut refused = false;
+    let mut refused = early.is_some();
     std::iter::from_fn(move || {
+        if let Some(err) = early.take() {
+            return Some(Err(err));
+        }
         if refused {
             return None;
         }

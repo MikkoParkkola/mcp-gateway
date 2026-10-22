@@ -135,3 +135,19 @@ fn an_empty_document_keeps_later_document_indices() {
         "got {err:?}"
     );
 }
+
+/// MIK-8639 DEPTH.2: `documents()` refuses a 10,000-deep unread field with the
+/// guard's Depth text, surfaced through the manifest read.
+#[test]
+fn parse_resources_refuses_deep_unread_field() {
+    let manifest = format!(
+        "apiVersion: v1\nkind: Gateway\nmetadata:\n  name: gw\nprobe: {}1{}\n",
+        "[".repeat(10_000),
+        "]".repeat(10_000)
+    );
+    let err = parse_resources(&manifest).expect_err("10k-deep manifest must be refused");
+    assert!(
+        err.to_string().contains("nesting deeper than 128"),
+        "got: {err}"
+    );
+}

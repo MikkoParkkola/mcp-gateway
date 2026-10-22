@@ -352,3 +352,71 @@ tools:
     assert!(err.contains("no reversible capability YAML drafts"));
     assert!(!dir.path().join("drafts").exists());
 }
+
+/// MIK-8639 DEPTH.2: an unread `probe` field nesting 10,000 flow sequences.
+fn deep_probe_line() -> String {
+    format!("probe: {}1{}\n", "[".repeat(10_000), "]".repeat(10_000))
+}
+
+#[tokio::test]
+async fn preview_graphql_deep_unread_field_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let spec = dir.path().join("deep.yaml");
+    let content = format!(
+        "endpoint: https://api.example.test/graphql\noperations:\n  - name: Viewer\n    operation_type: query\n    query: \"query {{ viewer {{ login }} }}\"\n{}",
+        deep_probe_line()
+    );
+    tokio::fs::write(&spec, content).await.expect("write spec");
+
+    let err = preview_plan_from_file(
+        ProtocolImportKind::Graphql,
+        &spec,
+        None,
+        "imported_tool_baseline".to_string(),
+    )
+    .await
+    .expect_err("10k-deep GraphQL spec must be refused");
+    assert!(err.contains("nesting deeper than 128"), "got: {err}");
+}
+
+#[tokio::test]
+async fn preview_oci_package_deep_unread_field_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let spec = dir.path().join("package.yaml");
+    let content = format!(
+        "name: demo-tools\nimage_ref: ghcr.io/example/demo-tools:latest\ntools:\n  - name: export_data\n    description: Export account data\n{}",
+        deep_probe_line()
+    );
+    tokio::fs::write(&spec, content).await.expect("write package");
+
+    let err = preview_plan_from_file(
+        ProtocolImportKind::OciMcpPackage,
+        &spec,
+        None,
+        "imported_tool_baseline".to_string(),
+    )
+    .await
+    .expect_err("10k-deep OCI package metadata must be refused");
+    assert!(err.contains("nesting deeper than 128"), "got: {err}");
+}
+
+#[tokio::test]
+async fn preview_openapi_deep_unread_field_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let spec = dir.path().join("deep.yaml");
+    let content = format!(
+        "openapi: 3.0.0\ninfo:\n  title: probe\n  version: \"1\"\npaths: {}\n{}",
+        deep_probe_line()
+    );
+    tokio::fs::write(&spec, content).await.expect("write spec");
+
+    let err = preview_plan_from_file(
+        ProtocolImportKind::OpenApi,
+        &spec,
+        Some("deep-probe".to_string()),
+        "imported_tool_baseline".to_string(),
+    )
+    .await
+    .expect_err("10k-deep OpenAPI spec must be refused");
+    assert!(err.contains("nesting deeper than 128"), "got: {err}");
+}
