@@ -99,6 +99,11 @@ impl<'a> Settling<'a> {
                 }
                 Resealed::Done => return,
             }
+            // One worker seal point (MIK-8398 C1e): the first dispatch, a
+            // resume, and every state-only re-dispatch pass through here once.
+            if let Some(result) = response.result.as_mut() {
+                self.state.meta_mcp().seal_public_provenance(result);
+            }
             let round = match classify_dispatch(response) {
                 DispatchSettlement::Complete(result) => {
                     let writes = round_mark.map_or_else(
@@ -631,11 +636,7 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
     executor
         .proceed_unless_late(ids, deadline, expired, at)
         .await?;
-    let mut response = inspect_settled(&state, &call, &id, response);
-    // Sealed at creation, as the worker's first dispatch is (MIK-8398 C1d).
-    if let Some(result) = response.result.as_mut() {
-        state.meta_mcp().seal_public_provenance(result);
-    }
+    let response = inspect_settled(&state, &call, &id, response);
     Settling::new(&executor, &state, &owned, &call, &principal, &id, revision)
         .settle_or_ask(response, &mut cancel_rx)
         .await;

@@ -4,6 +4,7 @@
 //! it, once. These rows pin the seal points, the one mint site and the writers
 //! of `public_signature`, matched by file plus enclosing function name.
 //! C1d extends the seal set to the task worker's native settle paths.
+//! C1e collapses the worker seals to the one `settle_or_ask` seal point.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -92,7 +93,7 @@ fn hits(wanted: impl Fn(&str) -> bool) -> Vec<(String, String, String)> {
 }
 
 #[test]
-fn public_seals_happen_only_at_the_seven_seal_points() {
+fn public_seals_happen_only_at_the_six_seal_points() {
     let expected: BTreeSet<(String, String)> = [
         (
             "src/gateway/meta_mcp/response_security.rs",
@@ -106,12 +107,8 @@ fn public_seals_happen_only_at_the_seven_seal_points() {
         ("src/gateway/meta_mcp/playbook_invoker.rs", "invoke"),
         ("src/gateway/meta_mcp/upstream.rs", "recover_gated"),
         (
-            "src/gateway/task_service/execution/worker.rs",
-            "run_dispatched",
-        ),
-        (
             "src/gateway/task_service/execution/input_round.rs",
-            "resume_flow",
+            "settle_or_ask",
         ),
     ]
     .into_iter()
@@ -133,7 +130,7 @@ fn public_seals_happen_only_at_the_seven_seal_points() {
     }
     assert!(
         strays.is_empty(),
-        "a public seal outside the seven seal points signs a receipt at a position \
+        "a public seal outside the six seal points signs a receipt at a position \
          this request never minted (MIK-8398 C1c: seal only what this request minted): {strays:?}"
     );
     for pair in &expected {

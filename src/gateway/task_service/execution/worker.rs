@@ -301,13 +301,7 @@ async fn run_dispatched(
         .await;
     } else {
         drop(key_hold);
-        let mut response = inspect_settled(&state, &call, &id, response);
-        // Sealed at creation (MIK-8398 C1d): the dispatch above minted this
-        // receipt in this worker's scope, so this seal consumes that mint
-        // before the value is stored.
-        if let Some(result) = response.result.as_mut() {
-            state.meta_mcp().seal_public_provenance(result);
-        }
+        let response = inspect_settled(&state, &call, &id, response);
         Settling::new(
             &executor,
             &state,

@@ -10,7 +10,9 @@
 //! is the oracle (as in `egress_task`): the claim is about the stored bytes,
 //! before delivery serves them.
 use super::super::*;
-use super::input_round::{STATE_1, answer, ask, create, done, update, wait_input_required};
+use super::input_round::{
+    STATE_1, answer, ask, create, done, state_only, update, wait_input_required,
+};
 use super::support::*;
 
 use crate::attestation::{BnautAttestationSigner, RESULT_PROVENANCE_DOMAIN_INFO};
@@ -138,5 +140,26 @@ async fn an_input_round_resume_stores_a_sealed_result() {
     let settled = poll_until_terminal(&state, "key-a", &id).await;
     assert_eq!(status_of(&settled), "completed", "{settled}");
     assert_eq!(mock.calls(), 2, "one first dispatch and one resume");
+    assert_sealed_bound(&stored_result(&state, &id));
+}
+
+/// R16: a result stored after a state-only round is sealed. The worker
+/// re-dispatches in place through `settle_or_ask`, and that re-dispatch mints
+/// inside the worker scope, so the single worker seal point seals it. Mutant:
+/// only the first dispatch and the resume are sealed, so the stored receipt
+/// carries no public signature.
+#[tokio::test]
+async fn a_result_stored_after_a_state_only_round_is_sealed() {
+    let mock = MockBackend::answering(Answer::Sequence(vec![state_only("s-only"), done()]));
+    let (state, _store) = dual_signed_state(&mock).await;
+    let created = post(&state, "key-a", create(1, "prov-state-only-seal")).await;
+    let id = task_id(&created);
+    let settled = poll_until_terminal(&state, "key-a", &id).await;
+    assert_eq!(status_of(&settled), "completed", "{settled}");
+    assert_eq!(
+        mock.calls(),
+        2,
+        "one first dispatch and one state-only resume"
+    );
     assert_sealed_bound(&stored_result(&state, &id));
 }
