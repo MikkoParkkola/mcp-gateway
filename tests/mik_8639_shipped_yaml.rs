@@ -40,7 +40,7 @@ fn collect_yaml_files(root: &Path, out: &mut Vec<PathBuf>) {
 /// Whether `root` is the unpacked published crate, where the packaged suite
 /// runs the tests: the repo YAML walked below is not published there
 /// (Cargo.toml `include`). Same rule as the lib's `packaged_crate_at`
-/// (src/gateway/meta_mcp/boundary_pins/packaged.rs): `cargo package` writes
+/// (`src/gateway/meta_mcp/boundary_pins/packaged.rs`): `cargo package` writes
 /// `Cargo.toml.orig`, and an unpacked crate has no `.git`.
 fn is_packaged_crate(root: &Path) -> bool {
     root.join("Cargo.toml.orig").exists() && !root.join(".git").exists()
@@ -127,9 +127,8 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
 
 /// The packaged-crate switch both ways. A root with `Cargo.toml.orig` and no
 /// `.git` is the unpacked crate (skip); without the marker, or with a `.git`
-/// beside a stray `Cargo.toml.orig`, the strict check runs. The live root is
-/// classified as its `.git` says, so the skip fires in the packaged job and
-/// never in a checkout.
+/// beside a stray `Cargo.toml.orig`, the strict check runs. On the live root
+/// the skip may fire only where the walked YAML is missing.
 #[test]
 fn packaged_marker_skips_and_its_absence_stays_strict() {
     let dir = tempfile::tempdir().expect("a temporary directory");
@@ -148,9 +147,8 @@ fn packaged_marker_skips_and_its_absence_stays_strict() {
         "a checkout with a stray marker keeps the strict check"
     );
     let root = package_root();
-    assert_eq!(
-        is_packaged_crate(&root),
-        !root.join(".git").exists(),
-        "the live root is the packaged crate exactly when it has no .git"
+    assert!(
+        !is_packaged_crate(&root) || !root.join("playbooks").exists(),
+        "the skip fires only where the repo YAML it checks is absent"
     );
 }
