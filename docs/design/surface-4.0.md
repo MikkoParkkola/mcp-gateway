@@ -1078,8 +1078,6 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway provenance public-key` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:738 |
 | `mcp-gateway provenance public-key --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/subcommands.rs:738 |
 | `mcp-gateway provenance public-key -h` | KEEP | short alias of `--help` | - | src/cli/subcommands.rs:738 |
-| `mcp-gateway provenance public-key --config` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:738 |
-| `mcp-gateway provenance public-key -c` | KEEP | short alias of `--config` | - | src/cli/subcommands.rs:738 |
 | `mcp-gateway provenance verify` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/subcommands.rs:746 |
 | `mcp-gateway provenance verify --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/subcommands.rs:746 |
 | `mcp-gateway provenance verify -h` | KEEP | short alias of `--help` | - | src/cli/subcommands.rs:746 |

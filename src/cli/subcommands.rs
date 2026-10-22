@@ -731,15 +731,15 @@ pub enum AuditCommand {
 }
 
 /// Public provenance key export and verification commands.
+///
+/// The configuration comes from the global `--config` (`-c`,
+/// `MCP_GATEWAY_CONFIG`), as for every other 4.0 subcommand — this enum
+/// defines no `--config` of its own.
 #[derive(Subcommand, Debug)]
 pub enum ProvenanceCommand {
     /// Export the gateway's public provenance key as JWK.
     #[command(about = "Export the public provenance key")]
-    PublicKey {
-        /// Path to the gateway configuration file (YAML)
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-    },
+    PublicKey,
 
     /// Verify a signed provenance receipt against trusted public keys.
     #[command(about = "Verify a signed provenance receipt")]

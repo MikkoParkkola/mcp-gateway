@@ -34,6 +34,14 @@ fn sample() -> RuntimeProvenanceReceipt {
     )
 }
 
+/// Every optional field populated, `row_count` at `u64::MAX`.
+fn wide_sample() -> RuntimeProvenanceReceipt {
+    sample()
+        .with_auth_context_ref("sha256:wide-test-context")
+        .with_row_count(u64::MAX)
+        .with_call_id("gw-wide-test")
+}
+
 fn hmac() -> BnautAttestationSigner {
     BnautAttestationSigner::new(b"hmac-test-key".to_vec(), "gateway")
         .derive_domain(RESULT_PROVENANCE_DOMAIN_INFO)
@@ -97,14 +105,25 @@ fn assert_value_free(error: &crate::Error, seed: &[u8]) {
     let debug = format!("{error:?}");
     let encoded = seed_b64(seed);
     let rendered = hex(seed);
+    let supplied = String::from_utf8_lossy(seed);
     for text in [&display, &debug] {
         assert!(!text.contains(encoded.as_str()), "error leaks the seed: {text}");
         assert!(!text.contains(rendered.as_str()), "error leaks the seed: {text}");
+        assert!(
+            !text.contains(supplied.as_ref()),
+            "error leaks the supplied seed text: {text}"
+        );
     }
 }
 
 fn trust_of(signer: &ProvenancePublicSigner) -> TrustSet {
-    let text = serde_json::to_string(&signer.public_jwk()).expect("JWK serializes");
+    let jwk = signer.public_jwk();
+    assert_eq!(
+        jwk.get("kty").and_then(serde_json::Value::as_str),
+        Some("OKP"),
+        "the test signer's JWK must read as OKP: {jwk}"
+    );
+    let text = serde_json::to_string(&jwk).expect("JWK serializes");
     TrustSet::from_json(&text).expect("trust set builds")
 }
 
@@ -142,16 +161,19 @@ fn prov_with_payload(payload: &[u8]) -> serde_json::Value {
     prov
 }
 
-fn jwk_text(signer: &ProvenancePublicSigner) -> String {
-    serde_json::to_string(&signer.public_jwk()).expect("JWK serializes")
+/// The `x` of `seed`: the real public key, without touching the skeleton's
+/// `public_jwk` (Null until implemented).
+fn x_of(seed: &[u8; 32]) -> String {
+    let key_pair = Ed25519KeyPair::from_seed_unchecked(seed).expect("a seed loads");
+    URL_SAFE_NO_PAD.encode(key_pair.public_key().as_ref())
 }
 
-fn jwk_object(signer: &ProvenancePublicSigner) -> serde_json::Map<String, serde_json::Value> {
-    serde_json::to_value(signer.public_jwk())
-        .expect("JWK serializes")
-        .as_object()
-        .expect("JWK is an object")
-        .clone()
+/// A JWK text for `seed`/`kid`, built from literals plus the seed's real key.
+fn jwk_for(seed: &[u8; 32], kid: &str) -> String {
+    format!(
+        "{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":\"{kid}\",\"x\":\"{}\"}}",
+        x_of(seed)
+    )
 }
 
 #[test]
@@ -167,6 +189,10 @@ fn a0_fixtures_match_the_committed_bytes() {
         ("provenance.json", provenance_value(&signed, Some((&signer, Some(&result))))),
         ("provenance_unbound.json", provenance_value(&signed, Some((&signer, Some(&unbound))))),
         ("jwk_other.json", other.public_jwk()),
+        (
+            "provenance_wide.json",
+            provenance_value(&wide_sample().sign(&hmac()), Some((&signer, Some(&result)))),
+        ),
     ];
     let update = std::env::var("UPDATE_GOLDEN").is_ok();
     for (name, value) in fixtures {
@@ -187,6 +213,8 @@ fn a0_fixtures_match_the_committed_bytes() {
 
 #[test]
 fn an_absent_seed_resolves_to_no_signer() {
+    assert!(std::env::var(PROVENANCE_SEED_ENV).is_err(), "an inherited seed would be silently used");
+    assert!(std::env::var(PROVENANCE_KEY_ID_ENV).is_err(), "an inherited kid would be silently used");
     let resolved = resolve_public_signer(&EnvOverlay::none(), ATTESTATION_ID)
         .expect("absent is not an error");
     assert!(resolved.is_none());
@@ -230,6 +258,8 @@ fn a_non_base64_seed_is_refused() {
 
 #[test]
 fn a_seed_without_a_kid_is_refused() {
+    assert!(std::env::var(PROVENANCE_SEED_ENV).is_err(), "an inherited seed would be silently used");
+    assert!(std::env::var(PROVENANCE_KEY_ID_ENV).is_err(), "an inherited kid would be silently used");
     let encoded = seed_b64(&SEED_ONE);
     let (_dir, env) = overlay_with(&[(PROVENANCE_SEED_ENV, encoded.as_str())]);
     let error = resolve_public_signer(&env, ATTESTATION_ID).expect_err("a missing kid is refused");
@@ -252,6 +282,62 @@ fn an_overlong_kid_is_refused() {
     ]);
     let error = resolve_public_signer(&env, ATTESTATION_ID).expect_err("a 65-byte kid is refused");
     assert_value_free(&error, &SEED_ONE);
+}
+
+/// MIK-8398 D4: a kid is 1-64 bytes of `0x21..=0x7E`. Anything else is
+/// refused by the resolver (value-free) and by the trust set as MalformedKid.
+#[test]
+fn d4_malformed_kids_are_refused() {
+    let encoded = seed_b64(&SEED_ONE);
+    let long = "k".repeat(65);
+    for (written, resolved) in [
+        ("prov test", "prov test"),
+        ("\"prov\\ntest\"", "prov\ntest"),
+        ("prov-✓", "prov-✓"),
+        (long.as_str(), long.as_str()),
+    ] {
+        let (_dir, env) = overlay_with(&[
+            (PROVENANCE_SEED_ENV, encoded.as_str()),
+            (PROVENANCE_KEY_ID_ENV, written),
+        ]);
+        assert_eq!(
+            env.resolve(PROVENANCE_KEY_ID_ENV).as_deref(),
+            Some(resolved),
+            "the env file must transport the kid under test"
+        );
+        let result = resolve_public_signer(&env, ATTESTATION_ID);
+        assert!(result.is_err(), "a malformed kid {resolved:?} is refused");
+        assert_value_free(&result.expect_err("just asserted"), &SEED_ONE);
+
+        let x = URL_SAFE_NO_PAD.encode([7u8; 32]);
+        let kid_json = serde_json::to_string(resolved).expect("a kid serializes");
+        let text =
+            format!("{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":{kid_json},\"x\":\"{x}\"}}");
+        assert!(
+            matches!(TrustSet::from_json(&text), Err(TrustSetRefusal::MalformedKid)),
+            "the trust set must refuse {resolved:?} as MalformedKid"
+        );
+    }
+}
+
+#[test]
+fn d4_a_64_byte_tilde_kid_is_accepted() {
+    let kid = "~".repeat(64);
+    let encoded = seed_b64(&SEED_ONE);
+    let (_dir, env) = overlay_with(&[
+        (PROVENANCE_SEED_ENV, encoded.as_str()),
+        (PROVENANCE_KEY_ID_ENV, kid.as_str()),
+    ]);
+    let signer = resolve_public_signer(&env, ATTESTATION_ID).expect("a 64-byte kid resolves");
+    assert_eq!(
+        signer.as_ref().map(super::ProvenancePublicSigner::kid),
+        Some(kid.as_str()),
+        "a 64-byte kid yields a signer"
+    );
+
+    let x = URL_SAFE_NO_PAD.encode([7u8; 32]);
+    let text = format!("{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":\"{kid}\",\"x\":\"{x}\"}}");
+    assert!(TrustSet::from_json(&text).is_ok(), "a 64-byte kid loads");
 }
 
 #[test]
@@ -324,6 +410,18 @@ fn mismatch_with_another_result() {
 }
 
 #[test]
+fn bound_receipt_with_an_unhashable_offer_is_unhashable() {
+    let result = result_json();
+    let prov = signed_prov(Some(&result));
+    let trust = trust_of(&signer_one());
+    let array = serde_json::json!([1, 2]);
+    assert_eq!(
+        verify_public(&prov, &trust, Some(&array)),
+        Err(VerifyRefusal::ResultUnhashable)
+    );
+}
+
+#[test]
 fn signature_only_without_a_result() {
     let result = result_json();
     let prov = signed_prov(Some(&result));
@@ -343,12 +441,16 @@ fn unbound_when_signed_without_a_result() {
             verify_public(&prov, &trust, offered).expect("an undigested receipt verifies");
         assert_eq!(verified.status, VerifyStatus::Unbound);
     }
+    let payload = payload_json_of(&prov);
+    assert!(payload.get("result_sha256").is_some(), "the member is present");
+    assert!(payload["result_sha256"].is_null(), "and its value is null");
 }
 
 #[test]
 fn unbound_for_an_unsafe_integer() {
     let unhashable = serde_json::json!({"n": 9_007_199_254_740_992u64});
     let prov = signed_prov(Some(&unhashable));
+    assert!(payload_json_of(&prov).get("result_sha256").is_some(), "the member is present");
     assert!(payload_json_of(&prov)["result_sha256"].is_null(), "2^53 digests to null");
     let trust = trust_of(&signer_one());
     let verified = verify_public(&prov, &trust, Some(&unhashable)).expect("unbound verifies");
@@ -372,6 +474,7 @@ fn bound_for_safe_numbers() {
 fn unbound_for_a_non_object_result() {
     let array = serde_json::json!([1, 2]);
     let prov = signed_prov(Some(&array));
+    assert!(payload_json_of(&prov).get("result_sha256").is_some(), "the member is present");
     assert!(payload_json_of(&prov)["result_sha256"].is_null());
     let trust = trust_of(&signer_one());
     let verified = verify_public(&prov, &trust, Some(&array)).expect("unbound verifies");
@@ -428,6 +531,18 @@ fn an_edited_outer_receipt_mismatches() {
     );
 }
 
+#[test]
+fn an_outer_only_extra_member_mismatches() {
+    let result = result_json();
+    let mut prov = signed_prov(Some(&result));
+    prov["receipt"]["extra_outer_only"] = serde_json::json!("forged");
+    let trust = trust_of(&signer_one());
+    assert_eq!(
+        verify_public(&prov, &trust, Some(&result)),
+        Err(VerifyRefusal::OuterReceiptMismatch)
+    );
+}
+
 fn profile_payload(v: u64, alg: &str) -> Vec<u8> {
     let payload = serde_json::json!({
         "v": v,
@@ -467,6 +582,54 @@ fn a_duplicate_payload_member_is_refused() {
 }
 
 #[test]
+fn a_duplicate_member_inside_receipt_is_refused() {
+    let receipt_text = serde_json::to_string(&receipt_json()).expect("receipt serializes");
+    let once = "\"tool\":\"search_issues\"";
+    let text = format!(
+        "{{\"v\":1,\"alg\":\"EdDSA\",\"kid\":\"{KID_ONE}\",\"receipt\":{},\"result_sha256\":null}}",
+        receipt_text.replacen(once, &format!("{once},{once}"), 1)
+    );
+    let prov = prov_with_payload(text.as_bytes());
+    let trust = trust_of(&signer_one());
+    assert_eq!(verify_public(&prov, &trust, None), Err(VerifyRefusal::DuplicateMember));
+}
+
+#[test]
+fn a_signature_without_the_domain_tag_is_bad_signature() {
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "v": 1,
+        "alg": "EdDSA",
+        "kid": KID_ONE,
+        "receipt": receipt_json(),
+        "result_sha256": null,
+    }))
+    .expect("payload serializes");
+    let key_pair = Ed25519KeyPair::from_seed_unchecked(&SEED_ONE).expect("a seed loads");
+    let sig = URL_SAFE_NO_PAD.encode(key_pair.sign(&payload).as_ref());
+    let mut prov = serde_json::to_value(sample().sign(&hmac())).expect("signed serializes");
+    prov["public_signature"] = serde_json::json!({
+        "payload": URL_SAFE_NO_PAD.encode(&payload),
+        "sig": sig,
+    });
+    let trust = trust_of(&signer_one());
+    assert_eq!(verify_public(&prov, &trust, None), Err(VerifyRefusal::BadSignature));
+}
+
+#[test]
+fn a_non_canonical_payload_verifies_verbatim() {
+    let text = format!(
+        "{{ \"kid\" : \"{KID_ONE}\" , \"v\" : 1 , \"alg\" : \"EdDSA\" , \"receipt\" : {} , \"result_sha256\" : null }}",
+        serde_json::to_string(&receipt_json()).expect("receipt serializes")
+    );
+    let prov = prov_with_payload(text.as_bytes());
+    let trust = trust_of(&signer_one());
+    let verified = verify_public(&prov, &trust, None).expect("non-canonical verifies");
+    assert_eq!(verified.status, VerifyStatus::Unbound);
+    assert_eq!(verified.receipt, sample());
+    assert_eq!(payload_of(&prov), text.as_bytes());
+}
+
+#[test]
 fn a_plain_signature_has_no_public_part() {
     let plain = serde_json::to_value(sample().sign(&hmac())).expect("signed serializes");
     let trust = TrustSet { keys: BTreeMap::new() };
@@ -478,13 +641,16 @@ fn a_plain_signature_has_no_public_part() {
 
 #[test]
 fn a_single_jwk_is_a_trust_set() {
-    assert!(TrustSet::from_json(&jwk_text(&signer_one())).is_ok());
+    assert!(TrustSet::from_json(&jwk_for(&SEED_ONE, KID_ONE)).is_ok());
 }
 
 #[test]
 fn a_jwks_selects_by_kid() {
-    let set = serde_json::json!({"keys": [signer_one().public_jwk(), signer_two().public_jwk()]});
-    let text = serde_json::to_string(&set).expect("JWKS serializes");
+    let text = format!(
+        "{{\"keys\":[{},{}]}}",
+        jwk_for(&SEED_ONE, KID_ONE),
+        jwk_for(&SEED_TWO, KID_TWO)
+    );
     let trust = TrustSet::from_json(&text).expect("two keys load");
     let result = result_json();
     let one = signer_one();
@@ -499,41 +665,48 @@ fn a_jwks_selects_by_kid() {
 
 #[test]
 fn a_duplicate_kid_is_refused() {
-    let set = serde_json::json!({"keys": [signer_one().public_jwk(), signer_one().public_jwk()]});
-    let text = serde_json::to_string(&set).expect("JWKS serializes");
-    assert_eq!(TrustSet::from_json(&text), Err(TrustSetRefusal::DuplicateKid));
+    let text = format!(
+        "{{\"keys\":[{},{}]}}",
+        jwk_for(&SEED_ONE, KID_ONE),
+        jwk_for(&SEED_TWO, KID_ONE)
+    );
+    assert!(matches!(TrustSet::from_json(&text), Err(TrustSetRefusal::DuplicateKid)));
 }
 
 #[test]
 fn a_non_edwards_key_is_refused() {
-    let mut jwk = jwk_object(&signer_one());
-    jwk.insert("kty".to_owned(), serde_json::Value::from("EC"));
-    let text = serde_json::to_string(&jwk).expect("JWK serializes");
-    assert_eq!(TrustSet::from_json(&text), Err(TrustSetRefusal::NotEd25519));
+    let x = x_of(&SEED_ONE);
+    for text in [
+        format!("{{\"kty\":\"EC\",\"crv\":\"Ed25519\",\"kid\":\"{KID_ONE}\",\"x\":\"{x}\"}}"),
+        format!("{{\"kty\":\"OKP\",\"crv\":\"X25519\",\"kid\":\"{KID_ONE}\",\"x\":\"{x}\"}}"),
+    ] {
+        assert!(
+            matches!(TrustSet::from_json(&text), Err(TrustSetRefusal::NotEd25519)),
+            "not-Ed25519 must refuse: {text}"
+        );
+    }
 }
 
 #[test]
 fn a_short_x_is_refused() {
-    let mut jwk = jwk_object(&signer_one());
-    jwk.insert("x".to_owned(), serde_json::Value::from(URL_SAFE_NO_PAD.encode([0u8; 31])));
-    let text = serde_json::to_string(&jwk).expect("JWK serializes");
-    assert_eq!(TrustSet::from_json(&text), Err(TrustSetRefusal::BadX));
+    let x = URL_SAFE_NO_PAD.encode([0u8; 31]);
+    let text = format!("{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":\"{KID_ONE}\",\"x\":\"{x}\"}}");
+    assert!(matches!(TrustSet::from_json(&text), Err(TrustSetRefusal::BadX)));
 }
 
 #[test]
 fn a_private_member_is_refused() {
-    let mut jwk = jwk_object(&signer_one());
-    jwk.insert("d".to_owned(), serde_json::Value::from("secret"));
-    let text = serde_json::to_string(&jwk).expect("JWK serializes");
-    assert_eq!(TrustSet::from_json(&text), Err(TrustSetRefusal::PrivateMember));
+    let text = format!(
+        "{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":\"{KID_ONE}\",\"x\":\"{}\",\"d\":\"secret\"}}",
+        x_of(&SEED_ONE)
+    );
+    assert!(matches!(TrustSet::from_json(&text), Err(TrustSetRefusal::PrivateMember)));
 }
 
 #[test]
 fn a_missing_kid_is_refused() {
-    let mut jwk = jwk_object(&signer_one());
-    jwk.remove("kid");
-    let text = serde_json::to_string(&jwk).expect("JWK serializes");
-    assert_eq!(TrustSet::from_json(&text), Err(TrustSetRefusal::MissingKid));
+    let text = format!("{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"{}\"}}", x_of(&SEED_ONE));
+    assert!(matches!(TrustSet::from_json(&text), Err(TrustSetRefusal::MissingKid)));
 }
 
 #[test]
@@ -579,4 +752,21 @@ fn dual_signing_keeps_the_hmac_seal() {
         "gateway",
     ));
     assert!(validator.verify_result_provenance(&back));
+}
+
+#[test]
+fn a_wide_receipt_with_u64_max_row_count_verifies() {
+    let signed = wide_sample().sign(&hmac());
+    let result = result_json();
+    let signer = signer_one();
+    let prov = provenance_value(&signed, Some((&signer, Some(&result))));
+    let trust = trust_of(&signer);
+    let payload_text = String::from_utf8(payload_of(&prov)).expect("payload is UTF-8");
+    assert!(
+        payload_text.contains("18446744073709551615"),
+        "the payload must carry u64::MAX exactly: {payload_text}"
+    );
+    let verified = verify_public(&prov, &trust, Some(&result)).expect("a wide receipt verifies");
+    assert_eq!(verified.status, VerifyStatus::Bound);
+    assert_eq!(verified.receipt, wide_sample());
 }

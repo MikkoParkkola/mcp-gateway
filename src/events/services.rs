@@ -22,6 +22,9 @@ pub(crate) struct Services {
     pub audit: Option<Arc<TransparencyLogger>>,
     /// The provenance signer, when stamping is on.
     pub provenance: Option<Arc<crate::attestation::BnautAttestationSigner>>,
+    /// The public (Ed25519) provenance signer (MIK-8398). Stored, not read yet.
+    pub(crate) public_provenance:
+        Option<Arc<crate::trust::provenance_public::ProvenancePublicSigner>>,
     #[cfg(feature = "cost-governance")]
     pub budget: Option<(
         Arc<crate::cost_accounting::enforcer::BudgetEnforcer>,

@@ -67,10 +67,10 @@ fn config_with_env_files(home: &Path, env_files: &[PathBuf]) -> PathBuf {
 
 fn public_key_args(config: &Path) -> Vec<String> {
     vec![
+        "--config".to_owned(),
+        config.display().to_string(),
         "provenance".to_owned(),
         "public-key".to_owned(),
-        "-c".to_owned(),
-        config.display().to_string(),
     ]
 }
 
@@ -130,16 +130,36 @@ fn public_key_prints_the_jwk_and_thumbprint() {
 }
 
 #[test]
+fn public_key_reads_the_config_from_the_environment() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let env_file = seed_env_file(home.path(), &[7u8; 32], KID);
+    let config = config_with_env_files(home.path(), &[env_file]);
+    let config_text = config.display().to_string();
+    let args = vec!["provenance".to_owned(), "public-key".to_owned()];
+    let out = run(home.path(), &args, &[("MCP_GATEWAY_CONFIG", config_text.as_str())]);
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "exit 0, stderr: {stderr}");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let printed: Value = serde_json::from_str(&stdout).expect("stdout is one JSON object");
+    assert_eq!(printed["jwk"], fixture_json("jwk.json"));
+}
+
+#[test]
 fn env_file_wins_over_the_process_environment() {
     let home = tempfile::tempdir().expect("temporary home");
     let env_file = seed_env_file(home.path(), &[7u8; 32], KID);
     let config = config_with_env_files(home.path(), &[env_file]);
     let override_seed = STANDARD.encode([9u8; 32]);
-    let out = run(home.path(), &public_key_args(&config), &[(SEED_ENV, override_seed.as_str())]);
+    let out = run(
+        home.path(),
+        &public_key_args(&config),
+        &[(SEED_ENV, override_seed.as_str()), (KID_ENV, "prov-test-2")],
+    );
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let printed: Value = serde_json::from_str(&stdout).expect("stdout is one JSON object");
     assert_eq!(printed["jwk"], fixture_json("jwk.json"));
+    assert_eq!(printed["jwk"]["kid"], serde_json::json!("prov-test-1"));
     assert_ne!(printed["jwk"], fixture_json("jwk_other.json"));
 }
 
@@ -250,8 +270,7 @@ fn verify_tampered_is_invalid_with_both_flags() {
     let out = run(home.path(), &verify_args(&trust, &receipt, Some(&result), &flags), &[]);
     assert_eq!(out.status.code(), Some(1));
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    assert_eq!(stdout.lines().count(), 1);
-    assert!(stdout.starts_with("INVALID"), "status names the refusal: {stdout}");
+    assert_eq!(stdout, "INVALID outer_receipt_mismatch\n");
 }
 
 #[test]
@@ -290,4 +309,121 @@ fn verify_accepts_a_stamped_result_as_result() {
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     assert_eq!(stdout, "BOUND kid=prov-test-1\n");
+}
+
+#[test]
+fn verify_result_mismatch_is_invalid_under_every_flag_set() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let trust = copy_fixture_to(home.path(), "jwk.json");
+    let receipt = copy_fixture_to(home.path(), "provenance.json");
+    let other = home.path().join("other_result.json");
+    write_private(&other, b"{\"content\":[{\"type\":\"text\",\"text\":\"other\"}]}");
+    let flag_sets: [&[&str]; 4] = [
+        &[],
+        &["--signature-only"],
+        &["--accept-unbound"],
+        &["--signature-only", "--accept-unbound"],
+    ];
+    for flags in flag_sets {
+        let out = run(home.path(), &verify_args(&trust, &receipt, Some(&other), flags), &[]);
+        assert_eq!(out.status.code(), Some(1), "flags {flags:?} must not rescue a mismatch");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert_eq!(stdout, "INVALID result_mismatch\n");
+    }
+}
+
+#[test]
+fn verify_unhashable_offer_is_invalid_under_every_flag_set() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let trust = copy_fixture_to(home.path(), "jwk.json");
+    let receipt = copy_fixture_to(home.path(), "provenance.json");
+    let array = home.path().join("array_result.json");
+    write_private(&array, b"[1,2]");
+    let flag_sets: [&[&str]; 4] = [
+        &[],
+        &["--signature-only"],
+        &["--accept-unbound"],
+        &["--signature-only", "--accept-unbound"],
+    ];
+    for flags in flag_sets {
+        let out = run(home.path(), &verify_args(&trust, &receipt, Some(&array), flags), &[]);
+        assert_eq!(out.status.code(), Some(1), "flags {flags:?} must not rescue");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert_eq!(stdout, "INVALID result_unhashable\n");
+    }
+}
+
+#[test]
+fn verify_signature_without_domain_tag_is_invalid() {
+    use ring::signature::Ed25519KeyPair;
+
+    let home = tempfile::tempdir().expect("temporary home");
+    let trust = copy_fixture_to(home.path(), "jwk.json");
+    let mut prov = fixture_json("provenance.json");
+    let payload = URL_SAFE_NO_PAD
+        .decode(prov["public_signature"]["payload"].as_str().expect("a payload"))
+        .expect("payload decodes");
+    let key_pair = Ed25519KeyPair::from_seed_unchecked(&[7u8; 32]).expect("a seed loads");
+    let bare = URL_SAFE_NO_PAD.encode(key_pair.sign(&payload).as_ref());
+    prov["public_signature"]["sig"] = serde_json::json!(bare);
+    let receipt = home.path().join("bare_tag.json");
+    let bytes = serde_json::to_vec(&prov).expect("tampered serializes");
+    write_private(&receipt, &bytes);
+    let result = copy_fixture_to(home.path(), "result.json");
+    for flags in [&[][..], &["--signature-only", "--accept-unbound"][..]] {
+        let out = run(home.path(), &verify_args(&trust, &receipt, Some(&result), flags), &[]);
+        assert_eq!(out.status.code(), Some(1), "flags {flags:?} must not rescue");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert_eq!(stdout, "INVALID bad_signature\n");
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+#[test]
+fn doctor_output_holds_no_canary_seed() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let canary = [42u8; 32];
+    let canary_b64 = STANDARD.encode(canary);
+    let canary_hex = hex(&canary);
+    let env_file = seed_env_file(home.path(), &canary, "prov-canary");
+    let config = config_with_env_files(home.path(), &[env_file]);
+    let args = vec!["--config".to_owned(), config.display().to_string(), "doctor".to_owned()];
+    let out = run(home.path(), &args, &[]);
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    let combined = format!("{stdout}{stderr}");
+    assert!(!combined.contains(canary_b64.as_str()), "doctor leaks the canary seed");
+    assert!(!combined.contains(canary_hex.as_str()), "doctor leaks the canary hex");
+}
+
+#[cfg(feature = "config-export")]
+#[test]
+fn config_export_output_holds_no_canary_seed() {
+    let home = tempfile::tempdir().expect("temporary home");
+    let canary = [42u8; 32];
+    let canary_b64 = STANDARD.encode(canary);
+    let canary_hex = hex(&canary);
+    let env_file = seed_env_file(home.path(), &canary, "prov-canary");
+    let config = config_with_env_files(home.path(), &[env_file]);
+    let args = vec![
+        "setup".to_owned(),
+        "export".to_owned(),
+        "--target".to_owned(),
+        "generic".to_owned(),
+        "--config".to_owned(),
+        config.display().to_string(),
+    ];
+    let out = run(home.path(), &args, &[]);
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    let combined = format!("{stdout}{stderr}");
+    assert!(!combined.contains(canary_b64.as_str()), "export leaks the canary seed");
+    assert!(!combined.contains(canary_hex.as_str()), "export leaks the canary hex");
 }

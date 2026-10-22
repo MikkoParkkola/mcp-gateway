@@ -304,6 +304,134 @@ fn resolve_provenance_signer_accepts_key_with_internal_whitespace() {
     );
 }
 
+// ── Public-provenance startup refusal (MIK-8398 D2) ────────────────────
+//
+// `install_public_provenance` is the startup seam `build_meta.rs` will call
+// inside its `provenance_stamping` block. Every refusal carries value-free
+// text that never repeats the seed.
+
+fn public_provenance_overlay(
+    vars: &[(&str, &str)],
+) -> (tempfile::TempDir, crate::config::EnvOverlay) {
+    let dir = tempfile::tempdir().expect("temporary dir");
+    let mut text = String::new();
+    for (key, value) in vars {
+        text.push_str(key);
+        text.push('=');
+        text.push_str(value);
+        text.push('\n');
+    }
+    let path = dir.path().join("prov.env");
+    crate::gateway::test_helpers::write_owner_only(&path, text).expect("env file writes");
+    (dir, crate::config::EnvOverlay::from_paths(&[path]))
+}
+
+#[test]
+fn d2_malformed_seed_refuses_without_leaking() {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
+    use crate::gateway::server::provenance_signer::install_public_provenance;
+    use crate::trust::provenance_public::{PROVENANCE_KEY_ID_ENV, PROVENANCE_SEED_ENV};
+
+    let short = STANDARD.encode([7u8; 31]);
+    for bad in [short.as_str(), "!!!not-base64!!!"] {
+        let (_dir, env) = public_provenance_overlay(&[
+            (PROVENANCE_SEED_ENV, bad),
+            (PROVENANCE_KEY_ID_ENV, "prov-test-1"),
+        ]);
+        let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+        let result = install_public_provenance(&mut meta, &env, "gateway");
+        assert!(result.is_err(), "seed {bad:?} must refuse");
+        let display = result.expect_err("just asserted").to_string();
+        assert!(!display.contains(bad), "the refusal leaks the seed: {display}");
+        assert!(
+            !meta.public_provenance_installed(),
+            "a refused seed must not install"
+        );
+    }
+}
+
+#[test]
+fn d2_seed_without_kid_refuses_without_leaking() {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
+    use crate::gateway::server::provenance_signer::install_public_provenance;
+    use crate::trust::provenance_public::{PROVENANCE_KEY_ID_ENV, PROVENANCE_SEED_ENV};
+
+    let seed = STANDARD.encode([7u8; 32]);
+    for kid in [None, Some("  ")] {
+        let mut vars = vec![(PROVENANCE_SEED_ENV, seed.as_str())];
+        if let Some(kid) = kid {
+            vars.push((PROVENANCE_KEY_ID_ENV, kid));
+        }
+        let (_dir, env) = public_provenance_overlay(&vars);
+        let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+        let result = install_public_provenance(&mut meta, &env, "gateway");
+        assert!(result.is_err(), "a seed without a kid {kid:?} must refuse");
+        let display = result.expect_err("just asserted").to_string();
+        assert!(!display.contains(seed.as_str()), "the refusal leaks the seed: {display}");
+    }
+}
+
+#[test]
+fn d2_kid_colliding_with_attestation_refuses() {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
+    use crate::gateway::server::provenance_signer::install_public_provenance;
+    use crate::trust::provenance_public::{PROVENANCE_KEY_ID_ENV, PROVENANCE_SEED_ENV};
+
+    let seed = STANDARD.encode([7u8; 32]);
+    for kid in ["gateway", "bnaut/gateway"] {
+        let (_dir, env) = public_provenance_overlay(&[
+            (PROVENANCE_SEED_ENV, seed.as_str()),
+            (PROVENANCE_KEY_ID_ENV, kid),
+        ]);
+        let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+        let result = install_public_provenance(&mut meta, &env, "gateway");
+        assert!(result.is_err(), "kid {kid:?} must refuse");
+        let display = result.expect_err("just asserted").to_string();
+        assert!(!display.contains(seed.as_str()), "the refusal leaks the seed: {display}");
+    }
+}
+
+#[test]
+fn d2_valid_seed_installs_the_signer() {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
+    use crate::gateway::server::provenance_signer::install_public_provenance;
+    use crate::trust::provenance_public::{PROVENANCE_KEY_ID_ENV, PROVENANCE_SEED_ENV};
+
+    let seed = STANDARD.encode([7u8; 32]);
+    let (_dir, env) = public_provenance_overlay(&[
+        (PROVENANCE_SEED_ENV, seed.as_str()),
+        (PROVENANCE_KEY_ID_ENV, "prov-test-1"),
+    ]);
+    let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    let result = install_public_provenance(&mut meta, &env, "gateway");
+    assert!(result.is_ok(), "a valid seed installs: {result:?}");
+    assert!(meta.public_provenance_installed(), "a valid seed must install the signer");
+}
+
+#[test]
+fn d2_absent_seed_installs_nothing() {
+    use crate::gateway::server::provenance_signer::install_public_provenance;
+    use crate::trust::provenance_public::{PROVENANCE_KEY_ID_ENV, PROVENANCE_SEED_ENV};
+
+    assert!(
+        std::env::var(PROVENANCE_SEED_ENV).is_err(),
+        "an inherited seed would silently decide this row"
+    );
+    assert!(
+        std::env::var(PROVENANCE_KEY_ID_ENV).is_err(),
+        "an inherited kid would silently decide this row"
+    );
+    let env = crate::config::EnvOverlay::none();
+    let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    let result = install_public_provenance(&mut meta, &env, "gateway");
+    assert!(result.is_ok(), "an absent seed is not an error: {result:?}");
+    assert!(!meta.public_provenance_installed(), "an absent seed installs nothing");
+}
+
 // ── Background tasks must stop when the mode that owns them stops ────────
 
 #[tokio::test]

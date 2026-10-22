@@ -22,6 +22,22 @@ impl MetaMcp {
         self.provenance_signer = Some(Arc::new(signer));
     }
 
+    /// Enable public (Ed25519) provenance stamping (MIK-8398).
+    ///
+    /// The skeleton stores the signer; the stamping path does not read it yet.
+    pub(crate) fn enable_public_provenance(
+        &mut self,
+        signer: crate::trust::provenance_public::ProvenancePublicSigner,
+    ) {
+        self.public_provenance_signer = Some(Arc::new(signer));
+    }
+
+    /// Whether a public provenance signer is installed (tests only).
+    #[cfg(test)]
+    pub(crate) fn public_provenance_installed(&self) -> bool {
+        self.public_provenance_signer.is_some()
+    }
+
     /// Enable ASI07 origin-link emission, with increment-3 defaults for the
     /// verification trust (no trusted keys, 8 links, 300 s window).
     pub(crate) fn set_chain_signer(

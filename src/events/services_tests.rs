@@ -39,6 +39,7 @@ fn services(keys: Vec<ApiKeyConfig>) -> Services {
         firewall: None,
         audit: None,
         provenance: None,
+        public_provenance: None,
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: LiveCredentials::default(),
@@ -74,6 +75,77 @@ fn the_receipt_is_signed_only_when_stamping_is_on() {
     );
     assert_eq!(stamped["receipt"]["backend_id"], "hooks");
     assert!(stamped["signature"].as_str().is_some_and(|s| !s.is_empty()));
+}
+
+/// MIK-8398 D1b: the event `provenance()` with both signers yields a value
+/// whose public signature verifies Unbound — an event has no result to bind.
+#[test]
+fn d1b_dual_signed_event_provenance_is_unbound() {
+    use crate::trust::provenance_public::{
+        ProvenancePublicSigner, TrustSet, VerifyStatus, verify_public,
+    };
+
+    let public = ProvenancePublicSigner::from_seed_for_test([7u8; 32], "prov-test-1");
+    let jwk = public.public_jwk();
+    assert_eq!(
+        jwk.get("kty").and_then(serde_json::Value::as_str),
+        Some("OKP"),
+        "the test signer's JWK must read as OKP: {jwk}"
+    );
+    let trust = TrustSet::from_json(serde_json::to_string(&jwk).expect("a JWK serializes").as_str())
+        .expect("the test JWK loads as a trust set");
+
+    let hmac = crate::attestation::BnautAttestationSigner::new(b"k".to_vec(), "id")
+        .with_audience("test-gateway");
+    let stamped = Services {
+        provenance: Some(Arc::new(hmac)),
+        public_provenance: Some(Arc::new(public)),
+        ..services(Vec::new())
+    }
+    .provenance(
+        "hooks",
+        "webhook.c.r.received",
+        crate::clock::utc_now().expect("clock"),
+    );
+    assert!(
+        stamped.get("public_signature").is_some(),
+        "dual-signed event provenance must add public_signature: {stamped}"
+    );
+    let verified = verify_public(&stamped, &trust, None).expect("an event verifies");
+    assert_eq!(verified.status, VerifyStatus::Unbound);
+}
+
+/// MIK-8398 D1c (event half, lead row): with the HMAC signer only — the public
+/// seed absent — the event provenance is byte-identical to today's, with no
+/// `public_signature`.
+#[test]
+fn d1c_event_without_public_seed_is_byte_identical() {
+    let now = crate::clock::utc_now().expect("clock");
+    let hmac = || {
+        crate::attestation::BnautAttestationSigner::new(b"k".to_vec(), "id")
+            .with_audience("test-gateway")
+    };
+    let stamped = Services {
+        provenance: Some(Arc::new(hmac())),
+        ..services(Vec::new())
+    }
+    .provenance("hooks", "webhook.c.r.received", now);
+    let today = Services {
+        provenance: Some(Arc::new(hmac())),
+        ..services(Vec::new())
+    }
+    .provenance("hooks", "webhook.c.r.received", now);
+    assert_eq!(
+        serde_json::to_string(&stamped).expect("stamped serializes"),
+        serde_json::to_string(&today).expect("today serializes"),
+        "HMAC-only event provenance must match today's bytes"
+    );
+    for (name, value) in [("stamped", &stamped), ("today", &today)] {
+        assert!(
+            value.get("public_signature").is_none(),
+            "{name} must carry no public_signature: {value}"
+        );
+    }
 }
 
 #[test]

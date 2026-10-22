@@ -154,8 +154,7 @@ fn a_flipped_payload_byte_fails() {
     let out = run(home.path(), &args);
     assert_eq!(out.status.code(), Some(1));
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    assert_eq!(stdout.lines().count(), 1);
-    assert!(stdout.starts_with("INVALID"), "status names the refusal: {stdout}");
+    assert_eq!(stdout, "INVALID bad_signature\n");
 }
 
 #[test]
@@ -172,7 +171,7 @@ fn the_wrong_key_fails() {
     let out = run(home.path(), &args);
     assert_eq!(out.status.code(), Some(1));
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    assert!(stdout.starts_with("INVALID"), "status names the refusal: {stdout}");
+    assert_eq!(stdout, "INVALID unknown_kid\n");
 }
 
 #[test]

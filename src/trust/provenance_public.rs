@@ -94,7 +94,9 @@ impl ProvenancePublicSigner {
 /// Resolve the public signer from the environment overlay.
 ///
 /// Absent (seed unset or blank) resolves to `Ok(None)`. Every `Err` carries
-/// value-free text that never repeats the seed.
+/// value-free text that never repeats the seed. The key id must be 1-64 bytes
+/// of `0x21..=0x7E`, and must name neither the attestation key id nor its
+/// `bnaut/` form.
 pub(crate) fn resolve_public_signer(
     _env: &crate::config::EnvOverlay,
     _attestation_key_id: &str,
@@ -174,12 +176,15 @@ pub(crate) enum TrustSetRefusal {
     PrivateMember,
     /// A key has no `kid`.
     MissingKid,
+    /// A `kid` is not 1-64 bytes of `0x21..=0x7E` (printable ASCII, no space).
+    MalformedKid,
 }
 
 /// Verify a serialized provenance object against the trust set.
 ///
 /// `prov` is the [`provenance_value`] object: the signed receipt plus its
-/// sibling `public_signature` member.
+/// sibling `public_signature` member. Status lines print only a kid found in
+/// the trust set, never the payload's untrusted kid.
 pub(crate) fn verify_public(
     _prov: &serde_json::Value,
     _trust: &TrustSet,
@@ -197,7 +202,16 @@ pub(crate) fn provenance_value(
 }
 
 /// Runs `provenance public-key` / `provenance verify`; prints its own stdout/stderr lines.
-pub fn run_provenance_command(_cmd: &crate::cli::ProvenanceCommand) -> ExitCode {
+///
+/// `config` is the global `--config` path `main` passes every 4.0 subcommand.
+/// CLI refusal reasons, pinned snake_case after `INVALID `:
+/// `unknown_kid`, `bad_signature`, `bad_encoding`, `duplicate_member`,
+/// `bad_profile`, `outer_receipt_mismatch`, `result_mismatch`,
+/// `result_unhashable`, `no_public_signature`.
+pub fn run_provenance_command(
+    _cmd: &crate::cli::ProvenanceCommand,
+    _config: Option<&std::path::Path>,
+) -> ExitCode {
     ExitCode::from(1)
 }
 
