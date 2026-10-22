@@ -383,6 +383,7 @@ async fn a_step_scoped_key_cannot_be_spelled_by_a_client_key() {
 /// `public_jwk` (Null until implemented).
 fn x_of(seed: &[u8; 32]) -> String {
     use base64::Engine as _;
+    use ring::signature::KeyPair as _;
     let key_pair = ring::signature::Ed25519KeyPair::from_seed_unchecked(seed).expect("a seed loads");
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key_pair.public_key().as_ref())
 }

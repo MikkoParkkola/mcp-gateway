@@ -56,8 +56,12 @@ fn seed_env_file(home: &Path, seed: &[u8; 32], kid: &str) -> PathBuf {
 }
 
 fn config_with_env_files(home: &Path, env_files: &[PathBuf]) -> PathBuf {
+    config_with_env_files_and_port(home, env_files, 39400)
+}
+
+fn config_with_env_files_and_port(home: &Path, env_files: &[PathBuf], port: u16) -> PathBuf {
     let config = home.join("gateway.yaml");
-    let mut text = String::from("server:\n  port: 39400\nenv_files:\n");
+    let mut text = format!("server:\n  port: {port}\nenv_files:\n");
     for file in env_files {
         text.push_str(&format!("  - '{}'\n", file.display()));
     }
@@ -378,17 +382,24 @@ fn verify_signature_without_domain_tag_is_invalid() {
     }
 }
 
+/// A newline in the payload kid smuggles no second stdout line: the payload
+/// is validly signed, the kid is simply unknown, and the refusal names only
+/// the pinned reason.
 #[test]
 fn verify_newline_kid_prints_one_line() {
-    use ring::signature::Ed25519KeyPair;
+    use ring::signature::{Ed25519KeyPair, KeyPair as _};
+
+    const DOMAIN_TAG: &[u8] = b"mcp-gateway-provenance-ed25519-v1\0";
 
     let home = tempfile::tempdir().expect("temporary home");
+    let trust = copy_fixture_to(home.path(), "jwk.json");
     let key_pair = Ed25519KeyPair::from_seed_unchecked(&[7u8; 32]).expect("a seed loads");
     let x = URL_SAFE_NO_PAD.encode(key_pair.public_key().as_ref());
-    let trust_text =
-        format!("{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":\"prov-test-1\",\"x\":\"{x}\"}}");
-    let trust = home.path().join("trust.json");
-    write_private(&trust, trust_text.as_bytes());
+    assert_eq!(
+        fixture_json("jwk.json")["x"].as_str(),
+        Some(x.as_str()),
+        "the trust file holds the signing key under another kid"
+    );
     let inner = serde_json::json!({
         "subject_kind": "runtime",
         "backend_id": "github",
@@ -406,6 +417,8 @@ fn verify_newline_kid_prints_one_line() {
         "result_sha256": null,
     });
     let payload_bytes = serde_json::to_vec(&payload).expect("payload serializes");
+    let mut message = DOMAIN_TAG.to_vec();
+    message.extend_from_slice(&payload_bytes);
     let prov = serde_json::json!({
         "receipt": inner,
         "key_id": "bnaut/gateway",
@@ -413,7 +426,7 @@ fn verify_newline_kid_prints_one_line() {
         "signature": "dummy",
         "public_signature": {
             "payload": URL_SAFE_NO_PAD.encode(&payload_bytes),
-            "sig": URL_SAFE_NO_PAD.encode([0u8; 64]),
+            "sig": URL_SAFE_NO_PAD.encode(key_pair.sign(&message).as_ref()),
         },
     });
     let receipt = home.path().join("newline_kid.json");
@@ -422,8 +435,7 @@ fn verify_newline_kid_prints_one_line() {
     let out = run(home.path(), &verify_args(&trust, &receipt, None, &[]), &[]);
     assert_eq!(out.status.code(), Some(1));
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    assert_eq!(stdout.lines().count(), 1, "exactly one stdout line: {stdout:?}");
-    assert!(stdout.ends_with('\n'), "the line ends with a newline: {stdout:?}");
+    assert_eq!(stdout, "INVALID unknown_kid\n");
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -441,7 +453,7 @@ fn doctor_output_holds_no_canary_seed() {
     let canary_b64 = STANDARD.encode(canary);
     let canary_hex = hex(&canary);
     let env_file = seed_env_file(home.path(), &canary, "prov-canary");
-    let config = config_with_env_files(home.path(), &[env_file]);
+    let config = config_with_env_files_and_port(home.path(), &[env_file], 0);
     let args = vec!["--config".to_owned(), config.display().to_string(), "doctor".to_owned()];
     let out = run(home.path(), &args, &[]);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
