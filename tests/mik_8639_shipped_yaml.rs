@@ -50,6 +50,10 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
         "playbooks",
         "benchmarks",
     ] {
+        assert!(
+            Path::new(root).is_dir(),
+            "shipped root {root} is missing; a rename must fail, not drop coverage"
+        );
         collect_yaml_files(Path::new(root), &mut files);
     }
     for file in ["gateway.example.yaml", "smithery.yaml"] {

@@ -148,10 +148,7 @@ fn figment_size_over_limit_refused() {
         Ok(_) => panic!("figment-size: accepted, must be refused"),
         Err(err) => err,
     };
-    assert!(
-        err.to_string().contains(&expected),
-        "figment-size: missing guard text"
-    );
+    assert_eq!(err.to_string(), expected);
     assert!(
         !err.to_string().contains(SENTINEL),
         "figment-size: Display leaks the sentinel"
@@ -170,10 +167,7 @@ fn figment_depth_129_refused() {
         Ok(_) => panic!("figment-depth: accepted, must be refused"),
         Err(err) => err,
     };
-    assert!(
-        err.to_string().contains(expected),
-        "figment-depth: missing guard text"
-    );
+    assert_eq!(err.to_string(), expected);
     assert!(
         !err.to_string().contains(SENTINEL),
         "figment-depth: Display leaks the sentinel"
@@ -192,10 +186,7 @@ fn figment_aliases_over_limit_refused() {
         Ok(_) => panic!("figment-aliases: accepted, must be refused"),
         Err(err) => err,
     };
-    assert!(
-        err.to_string().contains(expected),
-        "figment-aliases: missing guard text"
-    );
+    assert_eq!(err.to_string(), expected);
     assert!(
         !err.to_string().contains(SENTINEL),
         "figment-aliases: Display leaks the sentinel"
@@ -351,5 +342,36 @@ fn many_documents_accepted() {
     assert!(
         results.iter().all(|read| read.is_ok()),
         "1100 documents must be accepted"
+    );
+}
+
+#[test]
+fn anchor_reuse_after_multibyte_reports_byte_offset() {
+    let input = String::from("note: \"ä€😀\"\nx: &a 1\ny: &a 2\n");
+    let offset = input.rfind("&a").unwrap();
+    let err = refused(&input, "reuse-utf8");
+    assert_eq!(err.limit(), Some(&yaml::Limit::AnchorReuse { offset }));
+    assert_eq!(
+        err.to_string(),
+        format!("YAML refused: anchor name reused at byte {offset}")
+    );
+}
+
+#[test]
+fn tag_directives_after_multibyte_reports_byte_offset() {
+    let mut input = String::from("# ä€😀\n");
+    for index in 0..65 {
+        input.push_str(&format!("%TAG !t{index}! tag:x:\n"));
+    }
+    input.push_str("---\na: 1\n");
+    let offset = input.match_indices("%TAG").nth(64).unwrap().0;
+    let err = refused(&input, "tag-utf8");
+    assert_eq!(
+        err.limit(),
+        Some(&yaml::Limit::TagDirectives { max: 64, offset })
+    );
+    assert_eq!(
+        err.to_string(),
+        format!("YAML refused: more than 64 %TAG directives at byte {offset}")
     );
 }

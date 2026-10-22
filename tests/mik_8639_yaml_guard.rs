@@ -532,8 +532,13 @@ fn expansion_large_scalar_fanout_refused() {
         input.push_str(&format!("u{index}: *a\n"));
     }
     let start = Instant::now();
-    let (result, _work) = yaml::guard_work(&input);
+    let (result, work) = yaml::guard_work(&input);
     eprintln!("mik-8639 expand-scalar: {} ms", start.elapsed().as_millis());
+    assert!(
+        work <= 2 * input.len() as u64,
+        "expand-scalar: work {work} over twice the input length {}",
+        input.len()
+    );
     let err = result.unwrap_err();
     assert_eq!(err.limit(), Some(&yaml::Limit::Expansion));
     assert_eq!(
@@ -561,8 +566,13 @@ fn expansion_anchored_nulls_refused() {
     }
     input.push_str(&format!("- {SENTINEL}\n"));
     let start = Instant::now();
-    let (result, _work) = yaml::guard_work(&input);
+    let (result, work) = yaml::guard_work(&input);
     eprintln!("mik-8639 expand-nulls: {} ms", start.elapsed().as_millis());
+    assert!(
+        work <= 2 * input.len() as u64,
+        "expand-nulls: work {work} over twice the input length {}",
+        input.len()
+    );
     let err = result.unwrap_err();
     assert_eq!(err.limit(), Some(&yaml::Limit::Expansion));
     assert_eq!(
@@ -587,8 +597,13 @@ fn expansion_nested_fanout_refused() {
     input.push_str(&format!("l2: &c [{}]\n", ["*b"; 10].join(", ")));
     input.push_str(&format!("l3: [{}]\n", ["*c"; 10].join(", ")));
     let start = Instant::now();
-    let (result, _work) = yaml::guard_work(&input);
+    let (result, work) = yaml::guard_work(&input);
     eprintln!("mik-8639 expand-fanout: {} ms", start.elapsed().as_millis());
+    assert!(
+        work <= 2 * input.len() as u64,
+        "expand-fanout: work {work} over twice the input length {}",
+        input.len()
+    );
     let err = result.unwrap_err();
     assert_eq!(err.limit(), Some(&yaml::Limit::Expansion));
     assert_eq!(
@@ -623,10 +638,11 @@ fn syntax_reports_bracket_position() {
     assert!(results[0].is_err(), "the single item must be the refusal");
 }
 
-// The other six data-carrying granit kinds (Custom, InputIo, InputDecoding,
-// InputByteLimitExceeded, DirectiveByteLimitExceeded and
-// TooManyReservedDirectiveParams) need I/O sources and are not reachable
-// from &str, so only the three kinds below have rows.
+// Custom, InputIo, InputDecoding and InputByteLimitExceeded need I/O sources
+// and are not reachable from &str. DirectiveByteLimitExceeded (granit's
+// 1024-byte directive budget) and TooManyReservedDirectiveParams (16
+// reserved-directive params) are reachable from &str and have rows in
+// mik_8639_yaml_guard_bounds.rs, so only the three kinds below have rows here.
 
 #[test]
 fn syntax_unexpected_character_is_value_free() {
