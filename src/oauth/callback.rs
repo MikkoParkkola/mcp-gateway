@@ -15,10 +15,11 @@ use std::sync::Arc;
 use axum::{
     Router,
     extract::{Query, State},
-    response::{Html, IntoResponse},
+    response::{Html, IntoResponse, Response},
     routing::get,
 };
 use serde::Deserialize;
+use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tracing::{debug, info, warn};
@@ -348,10 +349,14 @@ pub async fn start_callback_server(
 }
 
 /// Handle the OAuth callback
+///
+/// State is checked first: a request with a missing or mismatched state is
+/// answered 400 and does not end the login; the window and cancellation still
+/// bound it.
 async fn handle_callback(
     State(state): State<Arc<tokio::sync::Mutex<CallbackState>>>,
     Query(params): Query<CallbackParams>,
-) -> impl IntoResponse {
+) -> Response {
     // #143 — structured telemetry: callback received event.
     // Fields computed before the macro: tracing compiles its arguments twice,
     // and the coverage instrument reads the copy that never runs (MIK-7324).
@@ -364,6 +369,27 @@ async fn handle_callback(
     );
 
     let mut state = state.lock().await;
+
+    // State first: refuse before looking at `error` or `code`.
+    let state_ok = params
+        .state
+        .as_deref()
+        .is_some_and(|s| bool::from(s.as_bytes().ct_eq(state.expected_state.as_bytes())));
+    if !state_ok {
+        let state_len = params.state.as_deref().map_or(0, str::len);
+        warn!(
+            event = "oauth.callback.state_mismatch",
+            has_state, state_len, "OAuth state mismatch — possible CSRF attempt"
+        );
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Html(
+                "<html><body><h1>Authorization Failed</h1><p>State mismatch</p></body></html>"
+                    .to_string(),
+            ),
+        )
+            .into_response();
+    }
 
     // Check for errors
     if let Some(ref error) = params.error {
@@ -385,27 +411,8 @@ async fn handle_callback(
         let escaped_description = escape_html(description);
         return Html(format!(
             "<html><body><h1>Authorization Failed</h1><p>{escaped_error}: {escaped_description}</p></body></html>"
-        ));
-    }
-
-    // Validate state
-    if params.state.as_deref() != Some(&state.expected_state) {
-        // #143 — structured telemetry: CSRF / state-mismatch event.
-        let received = params.state.as_deref().unwrap_or("<none>");
-        warn!(
-            event = "oauth.callback.state_mismatch",
-            received, "OAuth state mismatch — possible CSRF attempt"
-        );
-        let result = Err(Error::OAuth(
-            "State mismatch - possible CSRF attack".to_string(),
-        ));
-        if let Some(tx) = state.tx.take() {
-            let _ = tx.send(result);
-        }
-        return Html(
-            "<html><body><h1>Authorization Failed</h1><p>State mismatch</p></body></html>"
-                .to_string(),
-        );
+        ))
+        .into_response();
     }
 
     // Extract code
@@ -421,7 +428,8 @@ async fn handle_callback(
         return Html(
             "<html><body><h1>Authorization Failed</h1><p>No code received</p></body></html>"
                 .to_string(),
-        );
+        )
+        .into_response();
     };
 
     // #143 — structured telemetry: successful callback event.
@@ -444,6 +452,7 @@ async fn handle_callback(
     Html(
         "<html><body><h1>Authorization Successful!</h1><p>You can close this window.</p></body></html>".to_string()
     )
+    .into_response()
 }
 
 fn escape_html(input: &str) -> String {
