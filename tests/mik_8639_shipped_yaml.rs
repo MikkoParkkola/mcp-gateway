@@ -37,19 +37,24 @@ fn collect_yaml_files(root: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Cargo writes this file at the root of every packaged crate.
-const PACKAGED_MARKER: &str = ".cargo_vcs_info.json";
-
-/// Whether `root` is an unpacked published crate, where the packaged suite
+/// Whether `root` is the unpacked published crate, where the packaged suite
 /// runs the tests: the repo YAML walked below is not published there
-/// (Cargo.toml `include`), so the check belongs to the full-checkout job.
+/// (Cargo.toml `include`). Same rule as the lib's `packaged_crate_at`
+/// (src/gateway/meta_mcp/boundary_pins/packaged.rs): `cargo package` writes
+/// `Cargo.toml.orig`, and an unpacked crate has no `.git`.
 fn is_packaged_crate(root: &Path) -> bool {
-    root.join(PACKAGED_MARKER).is_file()
+    root.join("Cargo.toml.orig").exists() && !root.join(".git").exists()
+}
+
+/// The package root: cargo runs an integration test from it, and the walk
+/// below reads its paths relative to it.
+fn package_root() -> PathBuf {
+    std::env::current_dir().expect("the test's working directory")
 }
 
 #[test]
 fn shipped_yaml_accepted_by_backend_stays_accepted() {
-    if is_packaged_crate(Path::new(env!("CARGO_MANIFEST_DIR"))) {
+    if is_packaged_crate(&package_root()) {
         eprintln!(
             "mik-8639 shipped-yaml: skipped in the packaged crate: the repo YAML it checks is not published; the full-checkout CI job runs it"
         );
@@ -120,9 +125,11 @@ fn shipped_yaml_accepted_by_backend_stays_accepted() {
     );
 }
 
-/// The packaged-crate switch both ways: a root with cargo's marker is the
-/// packaged crate (skip), and one without it keeps the strict check. In a
-/// full checkout the manifest directory itself carries no marker.
+/// The packaged-crate switch both ways. A root with `Cargo.toml.orig` and no
+/// `.git` is the unpacked crate (skip); without the marker, or with a `.git`
+/// beside a stray `Cargo.toml.orig`, the strict check runs. The live root is
+/// classified as its `.git` says, so the skip fires in the packaged job and
+/// never in a checkout.
 #[test]
 fn packaged_marker_skips_and_its_absence_stays_strict() {
     let dir = tempfile::tempdir().expect("a temporary directory");
@@ -130,16 +137,20 @@ fn packaged_marker_skips_and_its_absence_stays_strict() {
         !is_packaged_crate(dir.path()),
         "without the marker the strict check runs"
     );
-    std::fs::write(dir.path().join(PACKAGED_MARKER), "{}").expect("write the marker");
+    std::fs::write(dir.path().join("Cargo.toml.orig"), "").expect("write the marker");
     assert!(
         is_packaged_crate(dir.path()),
-        "with the marker the check is skipped"
+        "with the marker and no .git the check is skipped"
     );
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    if manifest.join(".git").exists() {
-        assert!(
-            !is_packaged_crate(manifest),
-            "a full checkout must run the strict check"
-        );
-    }
+    std::fs::create_dir(dir.path().join(".git")).expect("create .git");
+    assert!(
+        !is_packaged_crate(dir.path()),
+        "a checkout with a stray marker keeps the strict check"
+    );
+    let root = package_root();
+    assert_eq!(
+        is_packaged_crate(&root),
+        !root.join(".git").exists(),
+        "the live root is the packaged crate exactly when it has no .git"
+    );
 }
