@@ -12,13 +12,21 @@
 //! - every failure is silent, the whole check sits under one budget, and it
 //!   never fails `doctor`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use mcp_gateway::config::{BackendConfig, Config};
+use futures::StreamExt as _;
+use mcp_gateway::config::{BackendConfig, Config, TransportConfig};
 use url::Url;
 
 use super::CheckResult;
+
+mod helpers;
+
+use helpers::{
+    fetch_doc, has_absolute_memory_path, is_exact_version, is_format_char, strip_escapes,
+    usable_proxy,
+};
 
 /// The one registry this check reads.
 pub(super) const REGISTRY_BASE: &str = "https://registry.npmjs.org/";
@@ -56,14 +64,22 @@ pub(super) enum Lookup {
 /// The run's lookup: on by default (operator ruling 2026-10-22), off by the
 /// switch or the hardened posture.
 pub(super) fn decide(switch_off: bool, hardened: bool) -> Lookup {
-    let _ = (switch_off, hardened);
-    unimplemented!("MIK-8512")
+    // The switch wins the reason when both apply: it is what the user typed.
+    if switch_off {
+        Lookup::OffByFlag
+    } else if hardened {
+        Lookup::OffByPosture
+    } else {
+        Lookup::On
+    }
 }
 
 /// [`decide`] for a loaded config: hardened is `security.posture: hardened`.
 pub(super) fn lookup_of(config: &Config, switch_off: bool) -> Lookup {
-    let _ = (config, switch_off);
-    unimplemented!("MIK-8512")
+    decide(
+        switch_off,
+        config.security.posture == mcp_gateway::security::SecurityPosture::Hardened,
+    )
 }
 
 /// A pinned registry package: `name@version` from an `npx` command.
@@ -78,25 +94,69 @@ pub(super) struct Pin {
 /// (`^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`, at most 64 characters). Anything
 /// else is no pin.
 pub(super) fn npx_pin(command: &str) -> Option<Pin> {
-    let _ = command;
-    unimplemented!("MIK-8512")
+    // The host's own splitter, so this reads the command the way spawn will.
+    let argv = mcp_gateway::transport::split_command(command)?;
+    let program = argv.first()?;
+    // The last path segment, on either separator, so a full path to npx
+    // counts and a lookalike program name does not.
+    let bin = program.rsplit(['/', '\\']).next()?;
+    if bin != "npx" && bin != "npx.cmd" {
+        return None;
+    }
+    let mut index = 1;
+    while matches!(argv.get(index).map(String::as_str), Some("-y" | "--yes")) {
+        index += 1;
+    }
+    let spec = argv.get(index)?;
+    // Any other flag before the package changes what npx would install
+    // (another registry, an extra package), so it is not a plain pin.
+    if spec.starts_with('-') {
+        return None;
+    }
+    // The last '@' splits name from version; a scoped name's leading '@'
+    // sits at index 0 and does not split.
+    let at = spec.rfind('@')?;
+    if at == 0 {
+        return None;
+    }
+    let (name, version) = (&spec[..at], &spec[at + 1..]);
+    if name.is_empty() || !is_exact_version(version) {
+        return None;
+    }
+    // Tokens after the spec are the server's own arguments, not part of it.
+    Some(Pin {
+        name: name.to_string(),
+        version: version.to_string(),
+    })
 }
 
 /// Every package name the bundled registry pins through `npx`.
 pub(super) fn allowlist() -> BTreeSet<String> {
-    unimplemented!("MIK-8512")
+    mcp_gateway::registry::server_registry::all()
+        .iter()
+        .filter_map(|entry| npx_pin(entry.command))
+        .map(|pin| pin.name)
+        .collect()
 }
 
 /// The registry's own current version of `name`, when it pins one.
 pub(super) fn current_version(name: &str) -> Option<String> {
-    let _ = name;
-    unimplemented!("MIK-8512")
+    mcp_gateway::registry::server_registry::all()
+        .iter()
+        .filter_map(|entry| npx_pin(entry.command))
+        .find(|pin| pin.name == name)
+        .map(|pin| pin.version)
 }
 
 /// The package document's URL: `/<name>`, a scoped name's `/` encoded as `%2F`.
 pub(super) fn package_url(base: &Url, name: &str) -> Url {
-    let _ = (base, name);
-    unimplemented!("MIK-8512")
+    // Only a scoped name's first '/' is encoded; the rest of the name is
+    // already a single path segment. A join error cannot happen for an
+    // allowlisted name, so the base itself is the inert fallback.
+    match base.join(&name.replacen('/', "%2F", 1)) {
+        Ok(url) => url,
+        Err(_) => base.clone(),
+    }
 }
 
 /// The proxy variables, read once: `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`
@@ -106,23 +166,54 @@ pub(super) struct ProxyEnv {
     pairs: Vec<(String, String)>,
 }
 
+/// The only environment names a snapshot holds, in both cases.
+const PROXY_NAMES: [&str; 8] = [
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
+];
+
 impl ProxyEnv {
     /// The process environment's proxy variables.
     pub(super) fn from_process() -> Self {
-        unimplemented!("MIK-8512")
+        Self::from_lookup(|name| std::env::var(name).ok())
     }
 
     /// A snapshot from explicit pairs (tests; unrelated names are dropped).
     pub(super) fn from_pairs(pairs: &[(&str, &str)]) -> Self {
-        let _ = pairs;
-        unimplemented!("MIK-8512")
+        Self {
+            pairs: pairs
+                .iter()
+                .filter(|(name, _)| PROXY_NAMES.contains(name))
+                .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+                .collect(),
+        }
     }
 
     /// The proxy variables read through `lookup`; `from_process` is this
     /// with `std::env::var`.
     pub(super) fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Self {
-        let _ = lookup;
-        unimplemented!("MIK-8512")
+        Self {
+            pairs: PROXY_NAMES
+                .iter()
+                .filter_map(|name| lookup(name).map(|value| ((*name).to_string(), value)))
+                .collect(),
+        }
+    }
+
+    /// The value of `name`, when set; an empty value is unset, the way the
+    /// tools that read these variables treat it.
+    fn get(&self, name: &str) -> Option<&str> {
+        self.pairs
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+            .filter(|value| !value.is_empty())
     }
 }
 
@@ -143,8 +234,42 @@ pub(super) enum Route {
 /// before uppercase; an empty value is unset; `HTTP_PROXY` is for `http://`
 /// targets only.
 pub(super) fn route(env: &ProxyEnv) -> Route {
-    let _ = env;
-    unimplemented!("MIK-8512")
+    // One group at a time, https before all. A group that is set but
+    // unusable skips the lookup outright: falling back to the other group,
+    // or going direct, would send the request by a route nobody chose.
+    // Within a group every set value must be usable, so a broken spelling
+    // in either case cannot hide behind the working one; the lowercase
+    // value is the one used when both are set.
+    for (lower, upper) in [("https_proxy", "HTTPS_PROXY"), ("all_proxy", "ALL_PROXY")] {
+        let values = [env.get(lower), env.get(upper)];
+        if values.iter().all(|value| value.is_none()) {
+            continue;
+        }
+        let mut chosen: Option<Url> = None;
+        for value in values.into_iter().flatten() {
+            match usable_proxy(value) {
+                Some(url) => {
+                    if chosen.is_none() {
+                        chosen = Some(url);
+                    }
+                }
+                None => return Route::Skip,
+            }
+        }
+        return match chosen {
+            Some(url) => Route::Proxy {
+                url,
+                no_proxy: env
+                    .get("no_proxy")
+                    .or_else(|| env.get("NO_PROXY"))
+                    .map(|value| value.to_string()),
+            },
+            // The group is set, so the loop produced a URL or returned
+            // already; this arm only closes the match.
+            None => Route::Skip,
+        };
+    }
+    Route::Direct
 }
 
 /// Everything the one client builder takes, as data. Production and tests
@@ -158,7 +283,15 @@ pub(super) struct ClientCfg {
 impl ClientCfg {
     /// npm, the bundled `webpki-roots`, the process proxy variables.
     pub(super) fn production() -> Self {
-        unimplemented!("MIK-8512")
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        Self {
+            // The one `expect` in this module: a compile-time literal,
+            // pinned by a test, not operator input.
+            base: Url::parse(REGISTRY_BASE).expect("REGISTRY_BASE is a valid URL literal"),
+            roots,
+            proxy: ProxyEnv::from_process(),
+        }
     }
 }
 
@@ -166,31 +299,112 @@ impl ClientCfg {
 /// Never reads proxies itself (`no_proxy()`), never follows a redirect,
 /// never retries, never consults the platform verifier.
 pub(super) fn client(cfg: &ClientCfg) -> Option<reqwest::Client> {
-    let _ = cfg;
-    unimplemented!("MIK-8512")
+    let route = route(&cfg.proxy);
+    if matches!(route, Route::Skip) {
+        return None;
+    }
+    // The injected roots are the only roots: a preconfigured TLS backend
+    // built from them alone, never the platform verifier. HTTP/1.1 is the
+    // only ALPN on offer, matching `http1_only` below.
+    let mut tls = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+        rustls::crypto::aws_lc_rs::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .ok()?
+    .with_root_certificates(cfg.roots.clone())
+    .with_no_client_auth();
+    tls.alpn_protocols = vec![b"http/1.1".to_vec()];
+
+    // `no_proxy()` stops the builder reading proxy variables itself, so
+    // the route chosen from the snapshot above is the only proxy decision.
+    // No redirects and no retries: one request, one answer, or silence.
+    let mut builder = reqwest::Client::builder()
+        .tls_backend_preconfigured(tls)
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .user_agent(USER_AGENT)
+        .http1_only();
+    if let Route::Proxy { url, no_proxy } = route {
+        let proxy = reqwest::Proxy::https(url.as_str())
+            .ok()?
+            .no_proxy(no_proxy.as_deref().and_then(reqwest::NoProxy::from_string));
+        builder = builder.proxy(proxy);
+    }
+    builder.build().ok()
 }
 
 /// npm's `deprecated` text for `version` in an abbreviated document, when it
 /// is a non-empty string after trimming. Any parse failure is `None`.
 pub(super) fn deprecation(doc: &[u8], version: &str) -> Option<String> {
-    let _ = (doc, version);
-    unimplemented!("MIK-8512")
+    let value: serde_json::Value = serde_json::from_slice(doc).ok()?;
+    let text = value
+        .get("versions")?
+        .get(version)?
+        .get("deprecated")?
+        .as_str()?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 /// npm's text made safe for a terminal: ANSI escapes and Unicode `Cc`/`Cf`
 /// characters removed, whitespace runs collapsed to one space, cut to
 /// [`MESSAGE_CAP`] characters.
 pub(super) fn npm_text(raw: &str) -> String {
-    let _ = raw;
-    unimplemented!("MIK-8512")
+    // Escapes first: a sequence can hide characters the filters below
+    // would otherwise keep, and its own bytes must not survive either.
+    let mut kept = String::new();
+    for c in strip_escapes(raw).chars() {
+        if is_format_char(c) {
+            continue;
+        }
+        if c.is_control() {
+            // Line breaks and tabs only separate words; every other
+            // control (a bell, a backspace over printed text) is dropped.
+            if matches!(c, '\n' | '\r' | '\t') {
+                kept.push(' ');
+            }
+            continue;
+        }
+        kept.push(c);
+    }
+    // One space between words, nothing at the ends, capped by characters
+    // so the cut never splits one.
+    kept.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(MESSAGE_CAP)
+        .collect()
 }
 
 /// The hint for a deprecated pin. For [`MEMORY_PACKAGE`] with no absolute
 /// `MEMORY_FILE_PATH` in the backend's env, the copy-first steps that keep
 /// the graph; otherwise "edit the pin".
 pub(super) fn hint(backend: &str, pin: &Pin, config: &BackendConfig) -> String {
-    let _ = (backend, pin, config);
-    unimplemented!("MIK-8512")
+    let target = match current_version(&pin.name) {
+        Some(current) => format!("{}@{current}", pin.name),
+        None => "the registry's current version".to_string(),
+    };
+    // server-memory keeps its graph next to the installed package unless
+    // MEMORY_FILE_PATH names an absolute path, and a new pin installs into
+    // a new directory: the graph must be copied out before the pin moves.
+    if pin.name == MEMORY_PACKAGE && !has_absolute_memory_path(config) {
+        format!(
+            "First copy the existing memory.jsonl (under the gateway's \
+             pkg-cache/{backend} directory) to an absolute path and set \
+             MEMORY_FILE_PATH to it in backends.{backend}.env, then edit \
+             the pin in backends.{backend}.command to {target}"
+        )
+    } else {
+        format!("edit the pin in backends.{backend}.command to {target}")
+    }
 }
 
 /// The rows: one `Pass` skipped row when the lookup is off; otherwise one
@@ -198,8 +412,83 @@ pub(super) fn hint(backend: &str, pin: &Pin, config: &BackendConfig) -> String {
 /// order, and nothing at all on any failure. Completed rows survive the
 /// budget running out.
 pub(super) async fn check(config: &Config, cfg: &ClientCfg, lookup: Lookup) -> Vec<CheckResult> {
-    let _ = (config, cfg, lookup);
-    unimplemented!("MIK-8512")
+    let skipped = match lookup {
+        Lookup::On => None,
+        Lookup::OffByFlag => Some("skipped (--no-registry-check)"),
+        Lookup::OffByPosture => Some("skipped (security.posture: hardened)"),
+    };
+    if let Some(detail) = skipped {
+        return vec![CheckResult::pass(SKIPPED_LABEL, detail).with_category("backend_stdio")];
+    }
+
+    // Only registry packages are ever asked about: a pin outside the
+    // allowlist is not collected, so its name never leaves the machine.
+    let allowed = allowlist();
+    let mut pins: Vec<(String, Pin, &BackendConfig)> = Vec::new();
+    for (name, backend) in config.enabled_backends() {
+        let TransportConfig::Stdio { command, .. } = &backend.transport else {
+            continue;
+        };
+        let Some(pin) = npx_pin(command) else {
+            continue;
+        };
+        if allowed.contains(&pin.name) {
+            pins.push((name.clone(), pin, backend));
+        }
+    }
+    // Backend-name order, whatever order the config map yields.
+    pins.sort_by(|a, b| a.0.cmp(&b.0));
+    if pins.is_empty() {
+        return Vec::new();
+    }
+    let Some(http) = client(cfg) else {
+        return Vec::new();
+    };
+
+    // One request per distinct package, however many backends pin it,
+    // started in sorted order with at most CONCURRENCY in flight.
+    let names: BTreeSet<String> = pins.iter().map(|(_, pin, _)| pin.name.clone()).collect();
+    // Documents land in a map outside the timed future, so a finished
+    // answer survives the budget running out under slower ones.
+    let mut docs: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    let _ = tokio::time::timeout(BUDGET, async {
+        let http = &http;
+        let mut stream = futures::stream::iter(names.into_iter().map(|name| async move {
+            let doc = fetch_doc(http, cfg, &name).await;
+            (name, doc)
+        }))
+        .buffered(CONCURRENCY);
+        while let Some((name, doc)) = stream.next().await {
+            if let Some(doc) = doc {
+                docs.insert(name, doc);
+            }
+        }
+    })
+    .await;
+
+    let mut rows = Vec::new();
+    for (backend, pin, backend_cfg) in &pins {
+        let Some(doc) = docs.get(&pin.name) else {
+            continue;
+        };
+        let Some(text) = deprecation(doc, &pin.version) else {
+            continue;
+        };
+        rows.push(
+            CheckResult::warn(
+                format!("{backend}: npm pin"),
+                format!(
+                    "{}@{} is deprecated on npm. npm says: \"{}\"",
+                    pin.name,
+                    pin.version,
+                    npm_text(&text)
+                ),
+            )
+            .with_category("backend_stdio")
+            .with_hint(hint(backend, pin, *backend_cfg)),
+        );
+    }
+    rows
 }
 
 #[cfg(test)]

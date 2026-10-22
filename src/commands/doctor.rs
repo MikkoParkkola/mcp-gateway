@@ -172,6 +172,7 @@ pub async fn run_doctor_command(
     config_path: Option<&Path>,
     format: OutputFormat,
     stdio_probe: StdioProbe,
+    no_registry_check: bool,
 ) -> ExitCode {
     if format != OutputFormat::Json {
         println!("Gateway Doctor");
@@ -215,13 +216,23 @@ pub async fn run_doctor_command(
         results.extend(start_stdio::stdio_row(stdio_probe, name, backend).await);
     }
 
-    // ── 6. AI client configuration ─────────────────────────────────────────
+    // ── 6. npm pin deprecation (MIK-8512) ──────────────────────────────────
+    results.extend(
+        npm_pin::check(
+            &config,
+            &npm_pin::ClientCfg::production(),
+            npm_pin::lookup_of(&config, no_registry_check),
+        )
+        .await,
+    );
+
+    // ── 7. AI client configuration ─────────────────────────────────────────
     results.push(check_ai_client_config(&config).await);
     results.push(posture::check_security_posture(&config));
 
-    // ── 7. Passive ShadowRadar handoff ─────────────────────────────────────
+    // ── 8. Passive ShadowRadar handoff ─────────────────────────────────────
     results.extend(check_shadow_radar(&config, config_path).await);
-    // ── 8. Remote backend provenance (#1943) ──────────────────────────────
+    // ── 9. Remote backend provenance (#1943) ──────────────────────────────
     results.extend(provenance::check_remote_provenance(&config));
 
     // ── Print and summarize ────────────────────────────────────────────────

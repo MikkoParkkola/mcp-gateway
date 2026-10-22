@@ -15,16 +15,24 @@ use mcp_gateway::cli::Command;
 pub(crate) const SERVE_RUNTIME_SHUTDOWN_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(10);
 
+/// How long `doctor`'s runtime may wait, after `run` returned, for
+/// blocking-pool work still running: doctor's npm lookup resolves names
+/// on the blocking pool, and a stalled DNS lookup must not hold the exit.
+pub(crate) const DOCTOR_RUNTIME_SHUTDOWN_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(1);
+
 /// What `main` does with the runtime once `run` returned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RuntimeShutdown {
-    /// Wait for every blocking-pool task. Every command but `serve`: a one-shot
-    /// command's own writes must not be cut.
+    /// Wait for every blocking-pool task. Every command but `serve` and
+    /// `doctor`: a one-shot command's own writes must not be cut.
     WaitForBlockingWork,
     /// Wait this long, then exit behind whatever is still running. Every serve
     /// mode: stdio loses at most the one in-flight fragment a slow client
     /// stopped reading; HTTP leaves behind only a write stuck on a stalled
-    /// mount, which an unbounded wait would never finish either.
+    /// mount, which an unbounded wait would never finish either. `doctor`
+    /// too, behind a stalled DNS lookup (see
+    /// [`DOCTOR_RUNTIME_SHUTDOWN_TIMEOUT`]).
     Bounded(std::time::Duration),
 }
 
@@ -33,6 +41,7 @@ impl RuntimeShutdown {
         match command {
             // No subcommand serves HTTP.
             Some(Command::Serve { .. }) | None => Self::Bounded(SERVE_RUNTIME_SHUTDOWN_TIMEOUT),
+            Some(Command::Doctor { .. }) => Self::Bounded(DOCTOR_RUNTIME_SHUTDOWN_TIMEOUT),
             Some(_) => Self::WaitForBlockingWork,
         }
     }
@@ -72,7 +81,7 @@ pub(crate) fn shut_down(runtime: tokio::runtime::Runtime, mode: RuntimeShutdown)
         tracing::error!(
             ?timeout,
             "shutdown exited with blocking work still running after the bound \
-             (a disk or mount write that never returned?)"
+             (a disk write, or doctor's network lookup, that never returned?)"
         );
     }
     left_running
