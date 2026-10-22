@@ -23,7 +23,8 @@ other servers started by --start-stdio from contacting npm, so air-gapped hosts 
 
 /// One enabled backend pinning a package the registry does not ship. Doctor
 /// only locates its command (no `--start-stdio`), so nothing is started.
-const STANDARD: &str = "backends:\n  internal:\n    command: \"npx -y @company/internal-tool@1.2.3\"\n";
+const STANDARD: &str =
+    "backends:\n  internal:\n    command: \"npx -y @company/internal-tool@1.2.3\"\n";
 
 /// The same backend under `security.posture: hardened` (which forces message
 /// signing, so it carries a secret).
@@ -87,18 +88,30 @@ fn the_flag_skips_the_lookup_with_a_pass_row() {
     let rows = doctor(STANDARD, &["--no-registry-check"], &[]);
     let row = skipped(&rows).expect("the skipped row");
     assert_eq!(row["status"], "pass", "{row}");
-    assert!(row["detail"].as_str().unwrap_or_default().contains("--no-registry-check"), "{row}");
+    assert!(
+        row["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("--no-registry-check"),
+        "{row}"
+    );
 }
 
 #[test]
 fn the_environment_variable_turns_it_off_for_any_value_but_0_and_false() {
     for value in ["1", "true", "TRUE", "yes", "garbage"] {
         let rows = doctor(STANDARD, &[], &[(ENV, value)]);
-        assert!(skipped(&rows).is_some(), "{ENV}={value} must skip: {rows:?}");
+        assert!(
+            skipped(&rows).is_some(),
+            "{ENV}={value} must skip: {rows:?}"
+        );
     }
     for value in ["0", "false", "False"] {
         let rows = doctor(STANDARD, &[], &[(ENV, value)]);
-        assert!(skipped(&rows).is_none(), "{ENV}={value} must not skip: {rows:?}");
+        assert!(
+            skipped(&rows).is_none(),
+            "{ENV}={value} must not skip: {rows:?}"
+        );
     }
     // Unset: the lookup runs (on by default), so no skipped row either.
     assert!(skipped(&doctor(STANDARD, &[], &[])).is_none());
@@ -109,7 +122,13 @@ fn the_hardened_posture_skips_the_lookup() {
     let rows = doctor(HARDENED, &[], &[]);
     let row = skipped(&rows).expect("the skipped row under hardened");
     assert_eq!(row["status"], "pass", "{row}");
-    assert!(row["detail"].as_str().unwrap_or_default().contains("hardened"), "{row}");
+    assert!(
+        row["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("hardened"),
+        "{row}"
+    );
 }
 
 #[test]
@@ -122,7 +141,10 @@ fn the_help_text_carries_the_disclosure() {
     let help = String::from_utf8_lossy(&output.stdout);
     let flat: String = help.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(flat.contains("--no-registry-check"), "{help}");
-    assert!(flat.contains(SENTENCE), "the disclosure, word for word: {help}");
+    assert!(
+        flat.contains(SENTENCE),
+        "the disclosure, word for word: {help}"
+    );
     assert!(flat.contains(ENV), "{help}");
     // Operator ruling 2026-10-22: on by default, and the help says what that
     // costs in privacy: which names leave the machine, and that npm sees the IP.

@@ -58,14 +58,38 @@ fn the_hardened_posture_turns_the_lookup_off() {
 fn npx_pin_accepts_only_the_listed_forms() {
     let memory = "@modelcontextprotocol/server-memory";
     let accepted: &[(&str, &str, &str)] = &[
-        ("npx -y @modelcontextprotocol/server-memory@2026.8.31", memory, "2026.8.31"),
-        ("npx --yes @modelcontextprotocol/server-memory@1.0.0", memory, "1.0.0"),
-        ("npx @modelcontextprotocol/server-memory@1.0.0", memory, "1.0.0"),
+        (
+            "npx -y @modelcontextprotocol/server-memory@2026.8.31",
+            memory,
+            "2026.8.31",
+        ),
+        (
+            "npx --yes @modelcontextprotocol/server-memory@1.0.0",
+            memory,
+            "1.0.0",
+        ),
+        (
+            "npx @modelcontextprotocol/server-memory@1.0.0",
+            memory,
+            "1.0.0",
+        ),
         ("npx -y -y tavily-mcp@0.2.22", "tavily-mcp", "0.2.22"),
-        ("/usr/local/bin/npx -y tavily-mcp@0.2.22", "tavily-mcp", "0.2.22"),
+        (
+            "/usr/local/bin/npx -y tavily-mcp@0.2.22",
+            "tavily-mcp",
+            "0.2.22",
+        ),
         ("npx.cmd -y tavily-mcp@0.2.22", "tavily-mcp", "0.2.22"),
-        ("npx -y @playwright/mcp@0.0.83 --headless --isolated", "@playwright/mcp", "0.0.83"),
-        ("npx -y tavily-mcp@1.2.3-beta.1", "tavily-mcp", "1.2.3-beta.1"),
+        (
+            "npx -y @playwright/mcp@0.0.83 --headless --isolated",
+            "@playwright/mcp",
+            "0.0.83",
+        ),
+        (
+            "npx -y tavily-mcp@1.2.3-beta.1",
+            "tavily-mcp",
+            "1.2.3-beta.1",
+        ),
     ];
     for (command, name, version) in accepted {
         assert_eq!(npx_pin(command), Some(pin(name, version)), "{command}");
@@ -76,7 +100,11 @@ fn npx_pin_accepts_only_the_listed_forms() {
     let path_form = r"C:\node\npx.cmd -y tavily-mcp@0.2.22";
     #[cfg(not(windows))]
     let path_form = "'/opt/node bin/npx' -y tavily-mcp@0.2.22";
-    assert_eq!(npx_pin(path_form), Some(pin("tavily-mcp", "0.2.22")), "{path_form}");
+    assert_eq!(
+        npx_pin(path_form),
+        Some(pin("tavily-mcp", "0.2.22")),
+        "{path_form}"
+    );
     let refused: &[&str] = &[
         "npx -y tavily-mcp",                     // no version
         "npx -y tavily-mcp@latest",              // a tag
@@ -169,7 +197,16 @@ fn the_snapshot_reads_only_the_proxy_variables_through_its_lookup() {
     names.dedup();
     assert_eq!(
         names,
-        ["ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "all_proxy", "http_proxy", "https_proxy", "no_proxy"]
+        [
+            "ALL_PROXY",
+            "HTTPS_PROXY",
+            "HTTP_PROXY",
+            "NO_PROXY",
+            "all_proxy",
+            "http_proxy",
+            "https_proxy",
+            "no_proxy"
+        ]
     );
     assert_eq!(route(&env), via("http://p.example:3128"));
 }
@@ -191,7 +228,10 @@ fn via(url: &str) -> Route {
 fn no_proxy_variables_mean_direct() {
     assert_eq!(route_of(&[]), Route::Direct);
     // HTTP_PROXY is for http:// targets; the registry is https.
-    assert_eq!(route_of(&[("HTTP_PROXY", "http://p.example:3128")]), Route::Direct);
+    assert_eq!(
+        route_of(&[("HTTP_PROXY", "http://p.example:3128")]),
+        Route::Direct
+    );
     // An empty value is unset.
     assert_eq!(route_of(&[("HTTPS_PROXY", "")]), Route::Direct);
     // Nothing outside the proxy variables is read: REQUEST_METHOD (hyper-util's
@@ -201,22 +241,40 @@ fn no_proxy_variables_mean_direct() {
 
 #[test]
 fn https_proxy_then_all_proxy_lowercase_first() {
-    assert_eq!(route_of(&[("HTTPS_PROXY", "http://p.example:3128")]), via("http://p.example:3128"));
-    assert_eq!(route_of(&[("https_proxy", "https://p.example:443")]), via("https://p.example:443"));
-    assert_eq!(route_of(&[("ALL_PROXY", "http://a.example:3128")]), via("http://a.example:3128"));
     assert_eq!(
-        route_of(&[("ALL_PROXY", "http://a.example:1"), ("HTTPS_PROXY", "http://h.example:2")]),
+        route_of(&[("HTTPS_PROXY", "http://p.example:3128")]),
+        via("http://p.example:3128")
+    );
+    assert_eq!(
+        route_of(&[("https_proxy", "https://p.example:443")]),
+        via("https://p.example:443")
+    );
+    assert_eq!(
+        route_of(&[("ALL_PROXY", "http://a.example:3128")]),
+        via("http://a.example:3128")
+    );
+    assert_eq!(
+        route_of(&[
+            ("ALL_PROXY", "http://a.example:1"),
+            ("HTTPS_PROXY", "http://h.example:2")
+        ]),
         via("http://h.example:2"),
         "HTTPS_PROXY before ALL_PROXY"
     );
     assert_eq!(
-        route_of(&[("HTTPS_PROXY", "http://upper.example:1"), ("https_proxy", "http://lower.example:2")]),
+        route_of(&[
+            ("HTTPS_PROXY", "http://upper.example:1"),
+            ("https_proxy", "http://lower.example:2")
+        ]),
         via("http://lower.example:2"),
         "lowercase before uppercase"
     );
     // A valid proxy is used even with REQUEST_METHOD set (gpt r3).
     assert_eq!(
-        route_of(&[("REQUEST_METHOD", "GET"), ("HTTPS_PROXY", "http://p.example:3128")]),
+        route_of(&[
+            ("REQUEST_METHOD", "GET"),
+            ("HTTPS_PROXY", "http://p.example:3128")
+        ]),
         via("http://p.example:3128")
     );
 }
@@ -233,10 +291,19 @@ fn a_proxy_this_check_will_not_use_skips_never_direct() {
         // url::Url accepts it, http::Uri does not: hyper-util would drop it (r4.1).
         &[("HTTPS_PROXY", "http://proxy{typo}:8080")],
         // Either case invalid is enough, even when the other is valid.
-        &[("https_proxy", "http://lower.example:2"), ("HTTPS_PROXY", "socks5://u.example:1")],
-        &[("https_proxy", "socks5://l.example:1"), ("HTTPS_PROXY", "http://upper.example:2")],
+        &[
+            ("https_proxy", "http://lower.example:2"),
+            ("HTTPS_PROXY", "socks5://u.example:1"),
+        ],
+        &[
+            ("https_proxy", "socks5://l.example:1"),
+            ("HTTPS_PROXY", "http://upper.example:2"),
+        ],
         // An unusable HTTPS_PROXY is not rescued by a valid ALL_PROXY.
-        &[("HTTPS_PROXY", "socks5://s.example:1"), ("ALL_PROXY", "http://a.example:2")],
+        &[
+            ("HTTPS_PROXY", "socks5://s.example:1"),
+            ("ALL_PROXY", "http://a.example:2"),
+        ],
     ];
     for pairs in skipped {
         assert_eq!(route_of(pairs), Route::Skip, "{pairs:?}");
@@ -246,14 +313,21 @@ fn a_proxy_this_check_will_not_use_skips_never_direct() {
 #[test]
 fn no_proxy_travels_with_the_proxy() {
     assert_eq!(
-        route_of(&[("HTTPS_PROXY", "http://p.example:3128"), ("NO_PROXY", "registry.npmjs.org")]),
+        route_of(&[
+            ("HTTPS_PROXY", "http://p.example:3128"),
+            ("NO_PROXY", "registry.npmjs.org")
+        ]),
         Route::Proxy {
             url: Url::parse("http://p.example:3128").expect("parses"),
             no_proxy: Some("registry.npmjs.org".to_string()),
         }
     );
     assert_eq!(
-        route_of(&[("HTTPS_PROXY", "http://p.example:3128"), ("no_proxy", "a.example"), ("NO_PROXY", "b.example")]),
+        route_of(&[
+            ("HTTPS_PROXY", "http://p.example:3128"),
+            ("no_proxy", "a.example"),
+            ("NO_PROXY", "b.example")
+        ]),
         Route::Proxy {
             url: Url::parse("http://p.example:3128").expect("parses"),
             no_proxy: Some("a.example".to_string()),
@@ -293,7 +367,10 @@ fn doc(versions: &[(&str, Option<&str>)]) -> Vec<u8> {
 #[test]
 fn deprecation_reads_only_a_non_empty_string_for_the_pinned_version() {
     let body = doc(&[
-        ("2026.8.31", Some("Date-based versions are no longer published")),
+        (
+            "2026.8.31",
+            Some("Date-based versions are no longer published"),
+        ),
         ("1.0.0", None),
         ("0.9.0", Some("")),
         ("0.8.0", Some("   ")),
@@ -303,11 +380,22 @@ fn deprecation_reads_only_a_non_empty_string_for_the_pinned_version() {
         Some("Date-based versions are no longer published")
     );
     assert_eq!(deprecation(&body, "1.0.0"), None);
-    assert_eq!(deprecation(&body, "0.9.0"), None, "an empty string is not deprecated");
+    assert_eq!(
+        deprecation(&body, "0.9.0"),
+        None,
+        "an empty string is not deprecated"
+    );
     assert_eq!(deprecation(&body, "0.8.0"), None, "blank after trimming");
-    assert_eq!(deprecation(&body, "3.0.0"), None, "a version npm does not list");
+    assert_eq!(
+        deprecation(&body, "3.0.0"),
+        None,
+        "a version npm does not list"
+    );
     assert_eq!(deprecation(b"not json", "1.0.0"), None);
-    assert_eq!(deprecation(br#"{"versions":{"1.0.0":{"deprecated":true}}}"#, "1.0.0"), None);
+    assert_eq!(
+        deprecation(br#"{"versions":{"1.0.0":{"deprecated":true}}}"#, "1.0.0"),
+        None
+    );
     assert_eq!(deprecation(br#"{"versions":[]}"#, "1.0.0"), None);
 }
 
@@ -317,9 +405,15 @@ fn deprecation_reads_only_a_non_empty_string_for_the_pinned_version() {
 fn npm_text_strips_escapes_controls_and_format_characters() {
     assert_eq!(npm_text("plain text"), "plain text");
     assert_eq!(npm_text("\u{1b}[31mred\u{1b}[0m text"), "red text");
-    assert_eq!(npm_text("\u{1b}]8;;https://evil.example\u{7}link\u{1b}]8;;\u{7}"), "link");
+    assert_eq!(
+        npm_text("\u{1b}]8;;https://evil.example\u{7}link\u{1b}]8;;\u{7}"),
+        "link"
+    );
     assert_eq!(npm_text("a\u{0}b\u{7}c\u{8}d"), "abcd");
-    assert_eq!(npm_text("line one\nline two\r\n\tthree"), "line one line two three");
+    assert_eq!(
+        npm_text("line one\nline two\r\n\tthree"),
+        "line one line two three"
+    );
     // Bidi override and other Unicode format characters (Cf).
     assert_eq!(npm_text("safe\u{202e}txt.exe"), "safetxt.exe");
     assert_eq!(npm_text("zero\u{200b}width\u{feff}"), "zerowidth");
@@ -345,7 +439,10 @@ fn the_memory_hint_copies_the_graph_before_the_pin_changes() {
     assert!(text.contains("memory.jsonl"), "{text}");
     assert!(text.contains("pkg-cache"), "{text}");
     assert!(text.to_lowercase().contains("copy"), "{text}");
-    assert!(text.contains("1.0.0"), "names the registry's current pin: {text}");
+    assert!(
+        text.contains("1.0.0"),
+        "names the registry's current pin: {text}"
+    );
     let copy_at = text.to_lowercase().find("copy").expect("checked above");
     let pin_at = text.find("1.0.0").expect("checked above");
     assert!(copy_at < pin_at, "copy first, then change the pin: {text}");
@@ -354,7 +451,11 @@ fn the_memory_hint_copies_the_graph_before_the_pin_changes() {
 #[test]
 fn an_absolute_memory_file_path_gets_the_plain_hint() {
     let old = pin(MEMORY_PACKAGE, "2026.8.31");
-    let absolute = if cfg!(windows) { r"C:\data\memory.jsonl" } else { "/data/memory.jsonl" };
+    let absolute = if cfg!(windows) {
+        r"C:\data\memory.jsonl"
+    } else {
+        "/data/memory.jsonl"
+    };
     let backend = stdio(
         "npx -y @modelcontextprotocol/server-memory@2026.8.31",
         &[("MEMORY_FILE_PATH", absolute)],
@@ -362,7 +463,10 @@ fn an_absolute_memory_file_path_gets_the_plain_hint() {
     let text = hint("memory", &old, &backend);
     assert!(!text.contains("pkg-cache"), "{text}");
     assert!(text.contains("backends.memory.command"), "{text}");
-    assert!(text.contains("@modelcontextprotocol/server-memory@1.0.0"), "{text}");
+    assert!(
+        text.contains("@modelcontextprotocol/server-memory@1.0.0"),
+        "{text}"
+    );
 
     // A relative path does not keep the graph across versions.
     let relative = stdio(
@@ -375,12 +479,21 @@ fn an_absolute_memory_file_path_gets_the_plain_hint() {
 #[test]
 fn other_packages_get_the_edit_the_pin_hint() {
     let old = pin("@modelcontextprotocol/server-filesystem", "2026.8.31");
-    let backend = stdio("npx -y @modelcontextprotocol/server-filesystem@2026.8.31 /tmp", &[]);
+    let backend = stdio(
+        "npx -y @modelcontextprotocol/server-filesystem@2026.8.31 /tmp",
+        &[],
+    );
     let text = hint("files", &old, &backend);
     assert!(text.contains("backends.files.command"), "{text}");
-    assert!(text.contains("@modelcontextprotocol/server-filesystem@1.0.0"), "{text}");
+    assert!(
+        text.contains("@modelcontextprotocol/server-filesystem@1.0.0"),
+        "{text}"
+    );
     assert!(!text.contains("MEMORY_FILE_PATH"), "{text}");
-    assert!(!text.contains("mcp-gateway add"), "add refuses an existing name: {text}");
+    assert!(
+        !text.contains("mcp-gateway add"),
+        "add refuses an existing name: {text}"
+    );
 }
 
 #[path = "npm_pin_wire_tests.rs"]

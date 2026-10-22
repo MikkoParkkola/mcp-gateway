@@ -190,7 +190,11 @@ async fn read_head<S: tokio::io::AsyncRead + Unpin>(stream: &mut S) -> Option<Se
         .filter_map(|line| line.split_once(':'))
         .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
         .collect();
-    Some(Seen { method, target, headers })
+    Some(Seen {
+        method,
+        target,
+        headers,
+    })
 }
 
 async fn answer<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
@@ -199,23 +203,32 @@ async fn answer<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
     dripped: &AtomicUsize,
 ) {
     let head = |status: &str, extra: &str, len: usize| {
-        format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{extra}Content-Length: {len}\r\nConnection: close\r\n\r\n")
+        format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{extra}Content-Length: {len}\r\nConnection: close\r\n\r\n"
+        )
     };
     match reply {
         None => {
-            let _ = stream.write_all(head("404 Not Found", "", 0).as_bytes()).await;
+            let _ = stream
+                .write_all(head("404 Not Found", "", 0).as_bytes())
+                .await;
         }
         Some(Reply::Json(body)) => {
-            let _ = stream.write_all(head("200 OK", "", body.len()).as_bytes()).await;
+            let _ = stream
+                .write_all(head("200 OK", "", body.len()).as_bytes())
+                .await;
             let _ = stream.write_all(&body).await;
         }
         Some(Reply::Gzip(body)) => {
             use std::io::Write as _;
-            let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+            let mut encoder =
+                flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
             encoder.write_all(&body).expect("gzip writes");
             let packed = encoder.finish().expect("gzip finishes");
             let extra = "Content-Encoding: gzip\r\n";
-            let _ = stream.write_all(head("200 OK", extra, packed.len()).as_bytes()).await;
+            let _ = stream
+                .write_all(head("200 OK", extra, packed.len()).as_bytes())
+                .await;
             let _ = stream.write_all(&packed).await;
         }
         Some(Reply::Stall) => {
@@ -226,17 +239,23 @@ async fn answer<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
         }
         Some(Reply::Delay(wait, body)) => {
             tokio::time::sleep(wait).await;
-            let _ = stream.write_all(head("200 OK", "", body.len()).as_bytes()).await;
+            let _ = stream
+                .write_all(head("200 OK", "", body.len()).as_bytes())
+                .await;
             let _ = stream.write_all(&body).await;
         }
         Some(Reply::Status(code, body)) => {
             let status = format!("{code} Status");
-            let _ = stream.write_all(head(&status, "", body.len()).as_bytes()).await;
+            let _ = stream
+                .write_all(head(&status, "", body.len()).as_bytes())
+                .await;
             let _ = stream.write_all(&body).await;
         }
         Some(Reply::Redirect(location)) => {
             let extra = format!("Location: {location}\r\n");
-            let _ = stream.write_all(head("302 Found", &extra, 0).as_bytes()).await;
+            let _ = stream
+                .write_all(head("302 Found", &extra, 0).as_bytes())
+                .await;
         }
         Some(Reply::Drip { chunk, total }) => {
             let start = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n";
@@ -278,7 +297,9 @@ impl Pki {
         let key = KeyPair::generate().expect("a CA key");
         let mut params = CertificateParams::new(Vec::new()).expect("CA params");
         params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        params.distinguished_name.push(rcgen::DnType::CommonName, name);
+        params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, name);
         let cert = params.clone().self_signed(&key).expect("the CA self-signs");
         (cert, Issuer::new(params, key))
     }
@@ -294,7 +315,9 @@ impl Pki {
         let key = rcgen::KeyPair::generate().expect("a leaf key");
         let mut params =
             rcgen::CertificateParams::new(vec![name.to_string()]).expect("leaf params");
-        params.distinguished_name.push(rcgen::DnType::CommonName, name);
+        params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, name);
         let leaf = params.signed_by(&key, &authority.1).expect("the CA signs");
         let chain = vec![
             rustls::pki_types::CertificateDer::from(leaf.der().to_vec()),
@@ -309,7 +332,9 @@ impl Pki {
     fn roots(&self) -> rustls::RootCertStore {
         let mut roots = rustls::RootCertStore::empty();
         roots
-            .add(rustls::pki_types::CertificateDer::from(self.ca.0.der().to_vec()))
+            .add(rustls::pki_types::CertificateDer::from(
+                self.ca.0.der().to_vec(),
+            ))
             .expect("the fake CA is a valid root");
         roots
     }
@@ -334,14 +359,20 @@ impl Proxy {
                     let Some(head) = read_head(&mut inbound).await else {
                         return;
                     };
-                    log.lock().expect("the log locks").push(format!("{} {}", head.method, head.target));
+                    log.lock()
+                        .expect("the log locks")
+                        .push(format!("{} {}", head.method, head.target));
                     if head.method != "CONNECT" {
                         return;
                     }
                     let Ok(mut outbound) = TcpStream::connect(&head.target).await else {
                         return;
                     };
-                    if inbound.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await.is_err() {
+                    if inbound
+                        .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                        .await
+                        .is_err()
+                    {
                         return;
                     }
                     let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
@@ -380,11 +411,16 @@ fn config_of(backends: &[(&str, BackendConfig)]) -> Config {
 }
 
 fn memory_on(version: &str) -> BackendConfig {
-    stdio(&format!("npx -y @modelcontextprotocol/server-memory@{version}"), &[])
+    stdio(
+        &format!("npx -y @modelcontextprotocol/server-memory@{version}"),
+        &[],
+    )
 }
 
 fn warns(rows: &[CheckResult]) -> Vec<&CheckResult> {
-    rows.iter().filter(|r| r.status == CheckStatus::Warn).collect()
+    rows.iter()
+        .filter(|r| r.status == CheckStatus::Warn)
+        .collect()
 }
 
 // ── DOCTOR.2: the falsifier ─────────────────────────────────────────────────
@@ -392,17 +428,36 @@ fn warns(rows: &[CheckResult]) -> Vec<&CheckResult> {
 #[tokio::test]
 async fn a_deprecated_memory_pin_warns_and_the_current_one_does_not() {
     let fake = Fake::start(&[(MEMORY_PATH, Reply::Json(memory_doc()))]).await;
-    let config = config_of(&[("memory", memory_on("2026.8.31")), ("fresh", memory_on("1.0.0"))]);
+    let config = config_of(&[
+        ("memory", memory_on("2026.8.31")),
+        ("fresh", memory_on("1.0.0")),
+    ]);
     let rows = check(&config, &fake.cfg(&[]), Lookup::On).await;
     let warned = warns(&rows);
     assert_eq!(warned.len(), 1, "only the deprecated pin warns: {rows:?}");
     let row = warned[0];
     assert_eq!(row.label, "memory: npm pin");
     assert_eq!(row.category, "backend_stdio");
-    assert!(row.detail.contains("@modelcontextprotocol/server-memory@2026.8.31"), "{}", row.detail);
-    assert!(row.detail.contains(&format!("npm says: \"{DEPRECATED}\"")), "{}", row.detail);
-    assert!(row.hint.as_deref().is_some_and(|h| h.contains("MEMORY_FILE_PATH")));
-    assert!(rows.iter().all(|r| r.status != CheckStatus::Fail), "never Fail");
+    assert!(
+        row.detail
+            .contains("@modelcontextprotocol/server-memory@2026.8.31"),
+        "{}",
+        row.detail
+    );
+    assert!(
+        row.detail.contains(&format!("npm says: \"{DEPRECATED}\"")),
+        "{}",
+        row.detail
+    );
+    assert!(
+        row.hint
+            .as_deref()
+            .is_some_and(|h| h.contains("MEMORY_FILE_PATH"))
+    );
+    assert!(
+        rows.iter().all(|r| r.status != CheckStatus::Fail),
+        "never Fail"
+    );
     assert_eq!(fake.requests().len(), 1, "one request per distinct package");
 }
 
@@ -412,7 +467,9 @@ async fn a_deprecated_memory_pin_warns_and_the_current_one_does_not() {
 async fn the_request_carries_only_the_package_name_and_fixed_headers() {
     let fake = Fake::start(&[(MEMORY_PATH, Reply::Json(memory_doc()))]).await;
     let mut backend = memory_on("2026.8.31");
-    backend.env.insert("API_TOKEN".into(), "secret-value-canary".into());
+    backend
+        .env
+        .insert("API_TOKEN".into(), "secret-value-canary".into());
     let config = config_of(&[("private-backend-name", backend)]);
     let _ = check(&config, &fake.cfg(&[]), Lookup::On).await;
     let seen = fake.requests();
@@ -420,8 +477,14 @@ async fn the_request_carries_only_the_package_name_and_fixed_headers() {
     let request = &seen[0];
     assert_eq!(request.method, "GET");
     assert_eq!(request.target, MEMORY_PATH, "the version stays local");
-    assert_eq!(request.headers.get("user-agent").map(String::as_str), Some(USER_AGENT));
-    assert_eq!(request.headers.get("accept").map(String::as_str), Some(ACCEPT));
+    assert_eq!(
+        request.headers.get("user-agent").map(String::as_str),
+        Some(USER_AGENT)
+    );
+    assert_eq!(
+        request.headers.get("accept").map(String::as_str),
+        Some(ACCEPT)
+    );
     for forbidden in ["authorization", "cookie", "proxy-authorization"] {
         assert!(!request.headers.contains_key(forbidden), "{forbidden} sent");
     }
@@ -437,13 +500,26 @@ async fn the_request_carries_only_the_package_name_and_fixed_headers() {
 async fn a_package_outside_the_registry_is_never_sent() {
     let fake = Fake::start(&[]).await;
     let config = config_of(&[
-        ("internal", stdio("npx -y @company/internal-tool@1.2.3", &[])),
-        ("ranged", stdio("npx -y @modelcontextprotocol/server-memory@latest", &[])),
-        ("other-runner", stdio("pnpm dlx @modelcontextprotocol/server-memory@1.0.0", &[])),
+        (
+            "internal",
+            stdio("npx -y @company/internal-tool@1.2.3", &[]),
+        ),
+        (
+            "ranged",
+            stdio("npx -y @modelcontextprotocol/server-memory@latest", &[]),
+        ),
+        (
+            "other-runner",
+            stdio("pnpm dlx @modelcontextprotocol/server-memory@1.0.0", &[]),
+        ),
     ]);
     let rows = check(&config, &fake.cfg(&[]), Lookup::On).await;
     assert!(warns(&rows).is_empty());
-    assert_eq!(fake.requests().len(), 0, "nothing outside the allowlist is sent");
+    assert_eq!(
+        fake.requests().len(),
+        0,
+        "nothing outside the allowlist is sent"
+    );
 }
 
 #[tokio::test]
@@ -457,7 +533,11 @@ async fn one_request_per_package_with_a_row_per_backend() {
     let rows = check(&config, &fake.cfg(&[]), Lookup::On).await;
     assert_eq!(fake.requests().len(), 1, "one request for three backends");
     let labels: Vec<&str> = warns(&rows).iter().map(|r| r.label.as_str()).collect();
-    assert_eq!(labels, ["a-old: npm pin", "b-old: npm pin"], "sorted backend order");
+    assert_eq!(
+        labels,
+        ["a-old: npm pin", "b-old: npm pin"],
+        "sorted backend order"
+    );
 }
 
 #[tokio::test]
@@ -476,7 +556,12 @@ async fn a_disabled_backend_is_not_checked() {
 async fn every_off_reason_sends_nothing_and_prints_one_skipped_pass() {
     for lookup in [Lookup::OffByFlag, Lookup::OffByPosture] {
         let fake = Fake::start(&[(MEMORY_PATH, Reply::Json(memory_doc()))]).await;
-        let rows = check(&config_of(&[("memory", memory_on("2026.8.31"))]), &fake.cfg(&[]), lookup).await;
+        let rows = check(
+            &config_of(&[("memory", memory_on("2026.8.31"))]),
+            &fake.cfg(&[]),
+            lookup,
+        )
+        .await;
         assert_eq!(fake.requests().len(), 0, "{lookup:?}");
         assert_eq!(rows.len(), 1, "{lookup:?}: {rows:?}");
         assert_eq!(rows[0].status, CheckStatus::Pass);
@@ -501,10 +586,19 @@ async fn offline_is_silent_and_quick() {
         proxy: ProxyEnv::default(),
     };
     let started = Instant::now();
-    let rows = check(&config_of(&[("memory", memory_on("2026.8.31"))]), &cfg, Lookup::On).await;
+    let rows = check(
+        &config_of(&[("memory", memory_on("2026.8.31"))]),
+        &cfg,
+        Lookup::On,
+    )
+    .await;
     assert!(rows.is_empty(), "{rows:?}");
     // A refused connection answers at once; well under the connect bound.
-    assert!(started.elapsed() < CONNECT_TIMEOUT, "{:?}", started.elapsed());
+    assert!(
+        started.elapsed() < CONNECT_TIMEOUT,
+        "{:?}",
+        started.elapsed()
+    );
 }
 
 /// Five stalled packages need two waves at four in flight; without the
@@ -514,24 +608,39 @@ async fn stalls_end_inside_the_budget_and_never_exceed_the_concurrency() {
     let packages = [
         ("@modelcontextprotocol/server-filesystem", FILESYSTEM_PATH),
         ("@modelcontextprotocol/server-memory", MEMORY_PATH),
-        ("@modelcontextprotocol/server-sequential-thinking", "/@modelcontextprotocol%2Fserver-sequential-thinking"),
+        (
+            "@modelcontextprotocol/server-sequential-thinking",
+            "/@modelcontextprotocol%2Fserver-sequential-thinking",
+        ),
         ("@playwright/mcp", "/@playwright%2Fmcp"),
         ("tavily-mcp", "/tavily-mcp"),
     ];
-    let replies: Vec<(&str, Reply)> = packages.iter().map(|(_, path)| (*path, Reply::Stall)).collect();
+    let replies: Vec<(&str, Reply)> = packages
+        .iter()
+        .map(|(_, path)| (*path, Reply::Stall))
+        .collect();
     let fake = Fake::start(&replies).await;
     let backends: Vec<(String, BackendConfig)> = packages
         .iter()
         .enumerate()
         .map(|(i, (name, _))| (format!("b{i}"), stdio(&format!("npx -y {name}@1.0.0"), &[])))
         .collect();
-    let named: Vec<(&str, BackendConfig)> = backends.iter().map(|(n, b)| (n.as_str(), b.clone())).collect();
+    let named: Vec<(&str, BackendConfig)> = backends
+        .iter()
+        .map(|(n, b)| (n.as_str(), b.clone()))
+        .collect();
     let started = Instant::now();
     let rows = check(&config_of(&named), &fake.cfg(&[]), Lookup::On).await;
     let took = started.elapsed();
     assert!(rows.is_empty(), "{rows:?}");
-    assert!(took < BUDGET + SLACK, "the budget bounds the whole check: {took:?}");
-    assert!(took >= REQUEST_TIMEOUT, "the stall was waited on, not skipped: {took:?}");
+    assert!(
+        took < BUDGET + SLACK,
+        "the budget bounds the whole check: {took:?}"
+    );
+    assert!(
+        took >= REQUEST_TIMEOUT,
+        "the stall was waited on, not skipped: {took:?}"
+    );
 }
 
 /// Eight packages that each answer after 300 ms: never more than four in
@@ -541,7 +650,10 @@ async fn at_most_four_requests_are_in_flight() {
     let packages = [
         ("@modelcontextprotocol/server-filesystem", FILESYSTEM_PATH),
         ("@modelcontextprotocol/server-memory", MEMORY_PATH),
-        ("@modelcontextprotocol/server-sequential-thinking", "/@modelcontextprotocol%2Fserver-sequential-thinking"),
+        (
+            "@modelcontextprotocol/server-sequential-thinking",
+            "/@modelcontextprotocol%2Fserver-sequential-thinking",
+        ),
         ("@playwright/mcp", "/@playwright%2Fmcp"),
         ("airtable-mcp-server", "/airtable-mcp-server"),
         ("exa-mcp-server", "/exa-mcp-server"),
@@ -559,9 +671,16 @@ async fn at_most_four_requests_are_in_flight() {
         .enumerate()
         .map(|(i, (name, _))| (format!("b{i}"), stdio(&format!("npx -y {name}@1.0.0"), &[])))
         .collect();
-    let named: Vec<(&str, BackendConfig)> = backends.iter().map(|(n, b)| (n.as_str(), b.clone())).collect();
+    let named: Vec<(&str, BackendConfig)> = backends
+        .iter()
+        .map(|(n, b)| (n.as_str(), b.clone()))
+        .collect();
     let _ = check(&config_of(&named), &fake.cfg(&[]), Lookup::On).await;
-    assert_eq!(fake.requests().len(), packages.len(), "every package asked once");
+    assert_eq!(
+        fake.requests().len(),
+        packages.len(),
+        "every package asked once"
+    );
     assert_eq!(fake.peak.load(Ordering::SeqCst), CONCURRENCY);
 }
 
@@ -572,14 +691,20 @@ async fn at_most_four_requests_are_in_flight() {
 async fn a_finished_warning_survives_the_budget_running_out() {
     let stalled = [
         ("@modelcontextprotocol/server-filesystem", FILESYSTEM_PATH),
-        ("@modelcontextprotocol/server-sequential-thinking", "/@modelcontextprotocol%2Fserver-sequential-thinking"),
+        (
+            "@modelcontextprotocol/server-sequential-thinking",
+            "/@modelcontextprotocol%2Fserver-sequential-thinking",
+        ),
         ("@playwright/mcp", "/@playwright%2Fmcp"),
         ("airtable-mcp-server", "/airtable-mcp-server"),
         ("exa-mcp-server", "/exa-mcp-server"),
         ("slack-mcp-server", "/slack-mcp-server"),
         ("tavily-mcp", "/tavily-mcp"),
     ];
-    let mut replies: Vec<(&str, Reply)> = stalled.iter().map(|(_, path)| (*path, Reply::Stall)).collect();
+    let mut replies: Vec<(&str, Reply)> = stalled
+        .iter()
+        .map(|(_, path)| (*path, Reply::Stall))
+        .collect();
     replies.push((MEMORY_PATH, Reply::Json(memory_doc())));
     let fake = Fake::start(&replies).await;
     let mut backends: Vec<(String, BackendConfig)> = stalled
@@ -588,11 +713,17 @@ async fn a_finished_warning_survives_the_budget_running_out() {
         .map(|(i, (name, _))| (format!("s{i}"), stdio(&format!("npx -y {name}@1.0.0"), &[])))
         .collect();
     backends.push(("memory".to_string(), memory_on("2026.8.31")));
-    let named: Vec<(&str, BackendConfig)> = backends.iter().map(|(n, b)| (n.as_str(), b.clone())).collect();
+    let named: Vec<(&str, BackendConfig)> = backends
+        .iter()
+        .map(|(n, b)| (n.as_str(), b.clone()))
+        .collect();
     let started = Instant::now();
     let rows = check(&config_of(&named), &fake.cfg(&[]), Lookup::On).await;
     let took = started.elapsed();
-    assert!(took >= BUDGET - Duration::from_millis(200), "the budget ran out: {took:?}");
+    assert!(
+        took >= BUDGET - Duration::from_millis(200),
+        "the budget ran out: {took:?}"
+    );
     assert!(took < BUDGET + SLACK, "{took:?}");
     let labels: Vec<&str> = warns(&rows).iter().map(|r| r.label.as_str()).collect();
     assert_eq!(labels, ["memory: npm pin"], "{rows:?}");
@@ -602,7 +733,12 @@ async fn a_finished_warning_survives_the_budget_running_out() {
 async fn a_non_200_answer_is_silent_even_with_a_valid_document() {
     for code in [404u16, 500, 203] {
         let fake = Fake::start(&[(MEMORY_PATH, Reply::Status(code, memory_doc()))]).await;
-        let rows = check(&config_of(&[("memory", memory_on("2026.8.31"))]), &fake.cfg(&[]), Lookup::On).await;
+        let rows = check(
+            &config_of(&[("memory", memory_on("2026.8.31"))]),
+            &fake.cfg(&[]),
+            Lookup::On,
+        )
+        .await;
         assert!(rows.is_empty(), "HTTP {code}: {rows:?}");
     }
 }
@@ -614,19 +750,43 @@ async fn a_redirect_is_not_followed() {
         ("/elsewhere", Reply::Json(memory_doc())),
     ])
     .await;
-    let rows = check(&config_of(&[("memory", memory_on("2026.8.31"))]), &fake.cfg(&[]), Lookup::On).await;
+    let rows = check(
+        &config_of(&[("memory", memory_on("2026.8.31"))]),
+        &fake.cfg(&[]),
+        Lookup::On,
+    )
+    .await;
     assert!(rows.is_empty(), "{rows:?}");
     let targets: Vec<String> = fake.requests().into_iter().map(|r| r.target).collect();
-    assert_eq!(targets, [MEMORY_PATH], "the redirect target was never asked");
+    assert_eq!(
+        targets,
+        [MEMORY_PATH],
+        "the redirect target was never asked"
+    );
 }
 
 #[tokio::test]
 async fn an_endless_body_is_cut_early_and_silent() {
-    let fake = Fake::start(&[(MEMORY_PATH, Reply::Drip { chunk: 64 * 1024, total: 8 * MAX_DOC_BYTES })]).await;
-    let rows = check(&config_of(&[("memory", memory_on("2026.8.31"))]), &fake.cfg(&[]), Lookup::On).await;
+    let fake = Fake::start(&[(
+        MEMORY_PATH,
+        Reply::Drip {
+            chunk: 64 * 1024,
+            total: 8 * MAX_DOC_BYTES,
+        },
+    )])
+    .await;
+    let rows = check(
+        &config_of(&[("memory", memory_on("2026.8.31"))]),
+        &fake.cfg(&[]),
+        Lookup::On,
+    )
+    .await;
     assert!(rows.is_empty(), "{rows:?}");
     let written = fake.dripped.load(Ordering::SeqCst);
-    assert!(written < 4 * MAX_DOC_BYTES, "the client kept reading: {written} bytes");
+    assert!(
+        written < 4 * MAX_DOC_BYTES,
+        "the client kept reading: {written} bytes"
+    );
 }
 
 #[tokio::test]
@@ -638,19 +798,37 @@ async fn a_compressed_body_counts_its_decoded_size() {
     body.extend(std::iter::repeat_n(b'a', 2 * MAX_DOC_BYTES));
     body.extend_from_slice(br#""}"#);
     let fake = Fake::start(&[(MEMORY_PATH, Reply::Gzip(body))]).await;
-    let rows = check(&config_of(&[("memory", memory_on("2026.8.31"))]), &fake.cfg(&[]), Lookup::On).await;
-    assert!(rows.is_empty(), "the decoded size is over the cap: {rows:?}");
+    let rows = check(
+        &config_of(&[("memory", memory_on("2026.8.31"))]),
+        &fake.cfg(&[]),
+        Lookup::On,
+    )
+    .await;
+    assert!(
+        rows.is_empty(),
+        "the decoded size is over the cap: {rows:?}"
+    );
 
     // The same document under the cap, compressed, is read.
     let fake = Fake::start(&[(MEMORY_PATH, Reply::Gzip(memory_doc()))]).await;
-    let rows = check(&config_of(&[("memory", memory_on("2026.8.31"))]), &fake.cfg(&[]), Lookup::On).await;
+    let rows = check(
+        &config_of(&[("memory", memory_on("2026.8.31"))]),
+        &fake.cfg(&[]),
+        Lookup::On,
+    )
+    .await;
     assert_eq!(warns(&rows).len(), 1, "{rows:?}");
 }
 
 #[tokio::test]
 async fn invalid_json_is_silent() {
     let fake = Fake::start(&[(MEMORY_PATH, Reply::Json(b"{not json".to_vec()))]).await;
-    let rows = check(&config_of(&[("memory", memory_on("2026.8.31"))]), &fake.cfg(&[]), Lookup::On).await;
+    let rows = check(
+        &config_of(&[("memory", memory_on("2026.8.31"))]),
+        &fake.cfg(&[]),
+        Lookup::On,
+    )
+    .await;
     assert!(rows.is_empty(), "{rows:?}");
 }
 
@@ -659,10 +837,18 @@ async fn hostile_text_prints_sanitized() {
     let hostile = "\u{1b}[2J\u{1b}[31mPWNED\u{1b}[0m\nfake\u{202e}line";
     let body = super::doc(&[("2026.8.31", Some(hostile))]);
     let fake = Fake::start(&[(MEMORY_PATH, Reply::Json(body))]).await;
-    let rows = check(&config_of(&[("memory", memory_on("2026.8.31"))]), &fake.cfg(&[]), Lookup::On).await;
+    let rows = check(
+        &config_of(&[("memory", memory_on("2026.8.31"))]),
+        &fake.cfg(&[]),
+        Lookup::On,
+    )
+    .await;
     let detail = &warns(&rows)[0].detail;
     assert!(detail.contains("npm says: \"PWNED fakeline\""), "{detail}");
-    assert!(!detail.chars().any(|c| c.is_control() || c == '\u{202e}'), "{detail:?}");
+    assert!(
+        !detail.chars().any(|c| c.is_control() || c == '\u{202e}'),
+        "{detail:?}"
+    );
 }
 
 // ── TLS: the injected roots are the only roots ─────────────────────────────
@@ -671,16 +857,28 @@ async fn hostile_text_prints_sanitized() {
 async fn a_wrong_name_or_an_untrusted_ca_is_silent() {
     for cert in [Cert::WrongName, Cert::UntrustedCa] {
         let fake = Fake::start_with(cert, &[(MEMORY_PATH, Reply::Json(memory_doc()))]).await;
-        let rows = check(&config_of(&[("memory", memory_on("2026.8.31"))]), &fake.cfg(&[]), Lookup::On).await;
+        let rows = check(
+            &config_of(&[("memory", memory_on("2026.8.31"))]),
+            &fake.cfg(&[]),
+            Lookup::On,
+        )
+        .await;
         assert!(rows.is_empty(), "{rows:?}");
-        assert_eq!(fake.requests().len(), 0, "no request over a refused handshake");
+        assert_eq!(
+            fake.requests().len(),
+            0,
+            "no request over a refused handshake"
+        );
         // The server sees the client's rejection a moment after the client
         // gives up: wait for it, bounded.
         let deadline = Instant::now() + Duration::from_secs(5);
         while fake.handshakes_failed.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        assert!(fake.handshakes_failed.load(Ordering::SeqCst) >= 1, "the handshake was refused");
+        assert!(
+            fake.handshakes_failed.load(Ordering::SeqCst) >= 1,
+            "the handshake was refused"
+        );
     }
 }
 
@@ -697,7 +895,11 @@ async fn https_proxy_carries_the_lookup_through_connect() {
         Lookup::On,
     )
     .await;
-    assert_eq!(warns(&rows).len(), 1, "the lookup went through the proxy: {rows:?}");
+    assert_eq!(
+        warns(&rows).len(),
+        1,
+        "the lookup went through the proxy: {rows:?}"
+    );
     assert_eq!(proxy.connects(), [format!("CONNECT {}", fake.addr)]);
 }
 
@@ -740,10 +942,19 @@ async fn an_unusable_proxy_sends_nothing_anywhere() {
     ];
     for pairs in cases {
         let fake = Fake::start(&[(MEMORY_PATH, Reply::Json(memory_doc()))]).await;
-        let rows = check(&config_of(&[("memory", memory_on("2026.8.31"))]), &fake.cfg(pairs), Lookup::On).await;
+        let rows = check(
+            &config_of(&[("memory", memory_on("2026.8.31"))]),
+            &fake.cfg(pairs),
+            Lookup::On,
+        )
+        .await;
         assert!(rows.is_empty(), "{pairs:?}: {rows:?}");
         assert_eq!(fake.requests().len(), 0, "{pairs:?}: went direct");
-        assert_eq!(fake.handshakes_failed.load(Ordering::SeqCst), 0, "{pairs:?}: reached the fake");
+        assert_eq!(
+            fake.handshakes_failed.load(Ordering::SeqCst),
+            0,
+            "{pairs:?}: reached the fake"
+        );
     }
     assert!(proxy.connects().is_empty(), "{:?}", proxy.connects());
 }
@@ -824,7 +1035,12 @@ async fn an_empty_snapshot_ignores_the_process_proxy() {
     let fake = Fake::start(&[(MEMORY_PATH, Reply::Json(memory_doc()))]).await;
     let proxy = Proxy::start().await;
     let url = proxy.url();
-    let out = child(&fake, "empty", &[("HTTPS_PROXY", url.as_str()), ("ALL_PROXY", url.as_str())]).await;
+    let out = child(
+        &fake,
+        "empty",
+        &[("HTTPS_PROXY", url.as_str()), ("ALL_PROXY", url.as_str())],
+    )
+    .await;
     assert!(out.contains("CHILD-WARNS 1"), "{out}");
     assert!(proxy.connects().is_empty(), "{:?}", proxy.connects());
     assert_eq!(fake.requests().len(), 1);
@@ -837,7 +1053,12 @@ async fn the_process_snapshot_uses_the_process_proxy() {
     let fake = Fake::start(&[(MEMORY_PATH, Reply::Json(memory_doc()))]).await;
     let proxy = Proxy::start().await;
     let url = proxy.url();
-    let out = child(&fake, "process", &[("HTTPS_PROXY", url.as_str()), ("REQUEST_METHOD", "GET")]).await;
+    let out = child(
+        &fake,
+        "process",
+        &[("HTTPS_PROXY", url.as_str()), ("REQUEST_METHOD", "GET")],
+    )
+    .await;
     assert!(out.contains("CHILD-WARNS 1"), "{out}");
     assert_eq!(proxy.connects(), [format!("CONNECT {}", fake.addr)]);
 }

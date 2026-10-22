@@ -74,7 +74,10 @@ fn doctor_bounds_the_runtime_shutdown_at_one_second() {
     let init = mcp_gateway::cli::Cli::try_parse_from(["mcp-gateway", "init"])
         .expect("init parses")
         .command;
-    assert_eq!(RuntimeShutdown::of(init.as_ref()), RuntimeShutdown::WaitForBlockingWork);
+    assert_eq!(
+        RuntimeShutdown::of(init.as_ref()),
+        RuntimeShutdown::WaitForBlockingWork
+    );
 }
 
 /// Run `body` on its own thread and return its value, failing at this
