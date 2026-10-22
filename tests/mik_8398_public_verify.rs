@@ -59,15 +59,22 @@ fn independent_verify(jwk: &Value, prov: &Value) -> bool {
     ) else {
         return false;
     };
-    let (Ok(key), Ok(payload), Ok(sig)) = (
+    let (Ok(key), Ok(payload_raw), Ok(sig)) = (
         URL_SAFE_NO_PAD.decode(x),
         URL_SAFE_NO_PAD.decode(payload_b64),
         URL_SAFE_NO_PAD.decode(sig_b64),
     ) else {
         return false;
     };
+    let payload: Value = match serde_json::from_slice(&payload_raw) {
+        Ok(payload) => payload,
+        Err(_) => return false,
+    };
+    if payload["kid"] != jwk["kid"] {
+        return false;
+    }
     let mut message = DOMAIN_TAG.to_vec();
-    message.extend_from_slice(&payload);
+    message.extend_from_slice(&payload_raw);
     UnparsedPublicKey::new(&ED25519, key).verify(&message, &sig).is_ok()
 }
 
@@ -189,6 +196,14 @@ fn unknown_kid_fails() {
     assert_eq!(out.status.code(), Some(1));
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     assert_eq!(stdout, "INVALID unknown_kid\n");
+}
+
+#[test]
+fn a_changed_jwk_kid_fails() {
+    let mut jwk = fixture_json("jwk.json");
+    jwk["kid"] = Value::from("prov-test-9");
+    let prov = fixture_json("provenance.json");
+    assert!(!independent_verify(&jwk, &prov));
 }
 
 #[test]
