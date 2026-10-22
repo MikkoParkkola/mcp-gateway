@@ -416,7 +416,7 @@ fn default_http_client_takes_the_token_exchange_redirect_policy() {
     let start = if let Some(index) = start { index } else { 0 };
     let rest = &lines[start..];
     let end = rest.iter().position(|line| *line == "}");
-    assert!(end.is_some(), "fn default_http_client must end with `}`");
+    assert!(end.is_some(), "fn default_http_client must end with `}}`");
     let end = if let Some(index) = end { index } else { 0 };
     let body = rest[..=end].join("\n");
     assert!(
