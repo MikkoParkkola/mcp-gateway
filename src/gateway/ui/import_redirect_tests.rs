@@ -4,8 +4,6 @@
 //! the listener-route scan (gateway/routes_tests.rs), which reads that file
 //! whole, does not count these fixtures' routes as gateway routes.
 
-use super::*;
-
 fn closed_port() -> u16 {
     let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("bind closed-port probe");
     let port = probe.local_addr().expect("closed-port addr").port();
