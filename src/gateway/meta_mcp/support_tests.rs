@@ -420,7 +420,7 @@ async fn d1a_dual_signed_tool_result_carries_a_bound_public_signature() {
     meta.enable_public_provenance(public);
 
     let result = serde_json::json!({"content": [{"type": "text", "text": "ok"}]});
-    let mut stamped = with_minted_receipts(async {
+    let stamped = with_minted_receipts(async {
         let mut stamped = meta.stamp_direct_result(result, "github", "search_issues", None);
         meta.seal_public_provenance(&mut stamped);
         stamped

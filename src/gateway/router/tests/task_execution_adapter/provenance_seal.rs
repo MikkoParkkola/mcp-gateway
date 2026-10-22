@@ -70,7 +70,7 @@ fn stored_result(state: &Arc<AppState>, id: &str) -> Value {
         .tasks
         .get(&alice(), id)
         .expect("the owner reads its task");
-    assert_eq!(
+    std::assert_eq!(
         committed.task.status(),
         crate::protocol::tasks::TaskStatus::Completed,
         "the task completed"
@@ -93,7 +93,7 @@ fn assert_sealed_bound(stored: &Value) {
     );
     let verified =
         verify_public(&prov, &trust_set(), Some(stored)).expect("the stored receipt verifies");
-    assert_eq!(verified.status, VerifyStatus::Bound);
+    std::assert_eq!(verified.status, VerifyStatus::Bound);
 }
 
 /// R14: a tools/call submitted as a task and run by the worker stores a
@@ -111,8 +111,8 @@ async fn a_task_run_by_the_worker_stores_a_sealed_result() {
     .await;
     let id = task_id(&created);
     let settled = poll_until_terminal(&state, "key-a", &id).await;
-    assert_eq!(status_of(&settled), "completed", "{settled}");
-    assert_eq!(mock.calls(), 1, "one dispatch ran the task");
+    std::assert_eq!(status_of(&settled), "completed", "{settled}");
+    std::assert_eq!(mock.calls(), 1, "one dispatch ran the task");
     assert_sealed_bound(&stored_result(&state, &id));
 }
 
@@ -138,8 +138,8 @@ async fn an_input_round_resume_stores_a_sealed_result() {
         "a complete answer set is accepted: {acked}"
     );
     let settled = poll_until_terminal(&state, "key-a", &id).await;
-    assert_eq!(status_of(&settled), "completed", "{settled}");
-    assert_eq!(mock.calls(), 2, "one first dispatch and one resume");
+    std::assert_eq!(status_of(&settled), "completed", "{settled}");
+    std::assert_eq!(mock.calls(), 2, "one first dispatch and one resume");
     assert_sealed_bound(&stored_result(&state, &id));
 }
 
@@ -155,8 +155,8 @@ async fn a_result_stored_after_a_state_only_round_is_sealed() {
     let created = post(&state, "key-a", create(1, "prov-state-only-seal")).await;
     let id = task_id(&created);
     let settled = poll_until_terminal(&state, "key-a", &id).await;
-    assert_eq!(status_of(&settled), "completed", "{settled}");
-    assert_eq!(
+    std::assert_eq!(status_of(&settled), "completed", "{settled}");
+    std::assert_eq!(
         mock.calls(),
         2,
         "one first dispatch and one state-only resume"
