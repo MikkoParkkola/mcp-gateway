@@ -35,6 +35,7 @@
 //! ```
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -45,6 +46,38 @@ use tracing::{debug, error, info, warn};
 use super::regenerate_for_capability;
 use crate::Result;
 use crate::capability::parse_capability_file;
+
+/// Where the file watcher puts changed capability paths for the regen task.
+struct ChangeSet {
+    tx: mpsc::Sender<PathBuf>,
+}
+
+impl ChangeSet {
+    /// Hand a changed path to the regen task.
+    fn push(&self, path: PathBuf) {
+        let _ = self.tx.try_send(path);
+    }
+}
+
+/// The receiving side the regen task drains.
+struct ChangeSource {
+    rx: mpsc::Receiver<PathBuf>,
+    /// Pause point after a pass has regenerated its batch, before the loop
+    /// looks for changes that arrived during it (tests only).
+    #[cfg(test)]
+    after_pass: crate::test_pause::Slot,
+}
+
+/// Both sides; the channel holds 100 paths, as before.
+fn change_set() -> (Arc<ChangeSet>, ChangeSource) {
+    let (tx, rx) = mpsc::channel::<PathBuf>(100);
+    let source = ChangeSource {
+        rx,
+        #[cfg(test)]
+        after_pass: crate::test_pause::Slot::default(),
+    };
+    (Arc::new(ChangeSet { tx }), source)
+}
 
 /// Hot-reload watcher that regenerates skill bundles on capability file changes.
 pub struct SkillsWatcher {
@@ -75,9 +108,9 @@ impl SkillsWatcher {
             });
         }
 
-        let (event_tx, event_rx) = mpsc::channel::<PathBuf>(100);
-        let watcher = Self::create_watcher(event_tx, directories)?;
-        Self::spawn_regen_task(event_rx, shutdown_rx, out_dir, agent_paths);
+        let (changes, source) = change_set();
+        let watcher = Self::create_watcher(changes, directories)?;
+        Self::spawn_regen_task(source, shutdown_rx, out_dir, agent_paths);
 
         Ok(Self {
             _watcher: Mutex::new(Some(watcher)),
@@ -86,7 +119,7 @@ impl SkillsWatcher {
 
     /// Create the notify watcher, forwarding changed YAML paths.
     fn create_watcher(
-        event_tx: mpsc::Sender<PathBuf>,
+        changes: Arc<ChangeSet>,
         directories: &[String],
     ) -> Result<RecommendedWatcher> {
         let mut watcher = RecommendedWatcher::new(
@@ -98,7 +131,7 @@ impl SkillsWatcher {
                         for path in event.paths {
                             if path.extension().is_some_and(|e| e == "yaml" || e == "yml") {
                                 debug!(path = %path.display(), "Skill watcher: capability changed");
-                                let _ = event_tx.try_send(path);
+                                changes.push(path);
                             }
                         }
                     }
@@ -122,7 +155,7 @@ impl SkillsWatcher {
 
     /// Spawn the debounced regeneration task.
     fn spawn_regen_task(
-        mut event_rx: mpsc::Receiver<PathBuf>,
+        mut source: ChangeSource,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
         out_dir: PathBuf,
         agent_paths: Vec<PathBuf>,
@@ -135,7 +168,7 @@ impl SkillsWatcher {
 
             loop {
                 tokio::select! {
-                    Some(path) = event_rx.recv() => {
+                    Some(path) = source.rx.recv() => {
                         if !pending.contains(&path) {
                             pending.push(path);
                         }
@@ -148,6 +181,8 @@ impl SkillsWatcher {
                             let paths = std::mem::take(&mut pending);
                             last_event = None;
                             regenerate_changed_files(&paths, &out_dir, &agent_paths).await;
+                            #[cfg(test)]
+                            source.after_pass.pause().await;
                         }
                     }
                     _ = shutdown_rx.recv() => {
@@ -238,3 +273,7 @@ metadata:
         );
     }
 }
+
+#[cfg(test)]
+#[path = "watcher_burst_tests.rs"]
+mod burst_tests;
