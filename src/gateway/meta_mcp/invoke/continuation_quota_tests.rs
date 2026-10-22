@@ -59,7 +59,7 @@ async fn t1a_key_server_token_has_no_api_key_identity() {
             token: "mcpgw_mik_8659_token".to_owned(),
             identity: crate::key_server::oidc::VerifiedIdentity {
                 subject: "alice".to_owned(),
-                email: Some("alice@example.com".to_owned()),
+                email: "alice@example.com".to_owned(),
                 name: None,
                 groups: vec![],
                 issuer: "https://issuer.invalid".to_owned(),
@@ -166,7 +166,7 @@ fn t4_api_key_gives_credential_quota_on_both_routes() {
 fn t4_oidc_gives_identity_quota_when_an_identity_is_passed() {
     let identity = crate::key_server::oidc::VerifiedIdentity {
         subject: "alice".to_owned(),
-        email: None,
+        email: "".to_owned(),
         name: None,
         groups: vec![],
         issuer: "https://idp.example".to_owned(),
@@ -204,7 +204,7 @@ fn t4_oidc_gives_identity_quota_when_an_identity_is_passed() {
 fn t4_quota_precedence_and_fallthrough() {
     let identity = crate::key_server::oidc::VerifiedIdentity {
         subject: "alice".to_owned(),
-        email: None,
+        email: "".to_owned(),
         name: None,
         groups: vec![],
         issuer: "https://idp.example".to_owned(),
@@ -218,7 +218,7 @@ fn t4_quota_precedence_and_fallthrough() {
         authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
         credential_kind: crate::security::audit::CredentialKind::ApiKey,
         verified_identity: Some(&identity),
-        grant_subject: Some(&subject),
+        grant_subject: Some(subject.clone()),
         ..crate::gateway::meta_mcp::anonymous_caller()
     };
     assert_eq!(
@@ -233,7 +233,7 @@ fn t4_quota_precedence_and_fallthrough() {
         authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
         credential_kind: crate::security::audit::CredentialKind::ApiKey,
         verified_identity: None,
-        grant_subject: Some(&subject),
+        grant_subject: Some(subject.clone()),
         ..crate::gateway::meta_mcp::anonymous_caller()
     };
     assert_eq!(
@@ -270,8 +270,8 @@ fn t4_quota_precedence_and_fallthrough() {
         authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
         credential_kind: crate::security::audit::CredentialKind::ApiKey,
         verified_identity: Some(&identity),
-        grant_subject: Some(&subject),
-        stdio: Some(nonce),
+        grant_subject: Some(subject.clone()),
+        stdio_nonce: Some(nonce),
         ..crate::gateway::meta_mcp::anonymous_caller()
     };
     assert_eq!(
@@ -427,7 +427,7 @@ fn t2_auth_disabled_task_worker_has_no_credential() {
         api_key_name: None,
         verified_identity: None,
         grant_subject: None,
-        stdio: None,
+        stdio_nonce: None,
         ..crate::gateway::meta_mcp::anonymous_caller()
     };
     assert_eq!(
@@ -588,7 +588,7 @@ async fn t5_wrong_binding_first_then_rightful_redeems_on_meta() {
     let arguments = serde_json::json!({});
     let (envelope, _) = super::mint_continuation(
         &state,
-        crate::protocol::mrtr::PrincipalSource::Key("idp:9:binding-a"),
+        crate::protocol::mrtr::PrincipalSource::Key("idp:9:binding-a".to_owned()),
         &quota,
         ("fixture", None),
         "tool",
@@ -604,7 +604,7 @@ async fn t5_wrong_binding_first_then_rightful_redeems_on_meta() {
     let wrong = super::redeem_retry(
         &state,
         (
-            crate::protocol::mrtr::PrincipalSource::Key("idp:9:binding-b"),
+            crate::protocol::mrtr::PrincipalSource::Key("idp:9:binding-b".to_owned()),
             &retry,
         ),
         ("fixture", None),
@@ -619,7 +619,7 @@ async fn t5_wrong_binding_first_then_rightful_redeems_on_meta() {
     let right = super::redeem_retry(
         &state,
         (
-            crate::protocol::mrtr::PrincipalSource::Key("idp:9:binding-a"),
+            crate::protocol::mrtr::PrincipalSource::Key("idp:9:binding-a".to_owned()),
             &retry,
         ),
         ("fixture", None),
@@ -697,10 +697,10 @@ async fn t5_shared_anonymous_cap_spans_both_routes() {
         .take(crate::protocol::continuation::PRINCIPAL_SLOTS / 2)
     {
         let key = format!("idp:{}:{binding}", binding.len());
-        // `key` outlives the mint below; the borrow ends at the await.
+        // `key` is moved into the mint below.
         let minted = super::mint_continuation(
             &state,
-            crate::protocol::mrtr::PrincipalSource::Key(key.as_str()),
+            crate::protocol::mrtr::PrincipalSource::Key(key),
             &quota,
             ("fixture", None),
             "tool",
