@@ -71,13 +71,13 @@ pub(crate) fn redirect_decision(previous_hops: usize, next_url: &str) -> Redirec
 
 /// SSRF re-validating redirect policy shared by the spec fetch paths. (MIK-8660 seam)
 pub(crate) fn ssrf_redirect_policy() -> reqwest::redirect::Policy {
-    reqwest::redirect::Policy::custom(
-        |attempt| match redirect_decision(attempt.previous().len(), attempt.url().as_str()) {
+    reqwest::redirect::Policy::custom(|attempt| {
+        match redirect_decision(attempt.previous().len(), attempt.url().as_str()) {
             RedirectDecision::Stop => attempt.stop(),
             RedirectDecision::Reject(m) => attempt.error(SsrfDenied::new(m)),
             RedirectDecision::Follow => attempt.follow(),
-        },
-    )
+        }
+    })
 }
 
 #[cfg(test)]

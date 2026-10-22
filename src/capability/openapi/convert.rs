@@ -725,9 +725,7 @@ mod fetch_error_tests {
             .expect("client");
         let result = tokio::time::timeout(
             crate::test_wait::HANG_BOUND,
-            client
-                .get(format!("http://127.0.0.1:{port}/spec"))
-                .send(),
+            client.get(format!("http://127.0.0.1:{port}/spec")).send(),
         )
         .await
         .expect("bounded");

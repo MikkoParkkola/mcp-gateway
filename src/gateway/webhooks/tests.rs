@@ -149,8 +149,7 @@ fn extract_template_value_no_placeholders_returned_as_is() {
 // ── validate_signature ────────────────────────────────────────────────
 
 fn t9a_signature(secret: &str, body: &[u8]) -> String {
-    let mut mac =
-        hmac::Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("hmac key");
+    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("hmac key");
     mac.update(body);
     hex::encode(mac.finalize().into_bytes())
 }
@@ -188,10 +187,7 @@ fn a_signature_with_one_changed_digit_is_refused() {
     let first = tampered.as_bytes()[0];
     tampered.replace_range(0..1, if first == b'a' { "b" } else { "a" });
     assert_eq!(tampered.len(), valid.len(), "same length, one digit");
-    assert!(
-        t9a_check(body, &tampered).is_err(),
-        "tampered: {tampered}"
-    );
+    assert!(t9a_check(body, &tampered).is_err(), "tampered: {tampered}");
 }
 
 #[test]

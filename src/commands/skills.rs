@@ -341,7 +341,10 @@ async fn load_skill_from_source(source: &str) -> Result<ImportedSkill, String> {
     }
 }
 
-async fn fetch_skill_from_url(client: &reqwest::Client, url: &str) -> Result<ImportedSkill, String> {
+async fn fetch_skill_from_url(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<ImportedSkill, String> {
     let response = client
         .get(url)
         .send()

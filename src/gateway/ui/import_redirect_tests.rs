@@ -62,15 +62,13 @@ async fn fetch_spec_stops_after_five_redirects() {
     let counter = Arc::clone(&hits);
     let app = axum::Router::new().route(
         "/{n}",
-        axum::routing::get(
-            move |axum::extract::Path(n): axum::extract::Path<usize>| {
-                let counter = Arc::clone(&counter);
-                async move {
-                    counter.fetch_add(1, Ordering::SeqCst);
-                    axum::response::Redirect::temporary(&format!("/{}", n + 1))
-                }
-            },
-        ),
+        axum::routing::get(move |axum::extract::Path(n): axum::extract::Path<usize>| {
+            let counter = Arc::clone(&counter);
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                axum::response::Redirect::temporary(&format!("/{}", n + 1))
+            }
+        }),
     );
     let listener = tokio::time::timeout(
         crate::test_wait::HANG_BOUND,

@@ -350,7 +350,9 @@ mod tests {
         assert!(probed.is_none(), "a blocked hop finds no spec");
         let refusal = chain.ssrf_refusal();
         assert!(
-            refusal.as_deref().is_some_and(|m| m.starts_with("SSRF blocked")),
+            refusal
+                .as_deref()
+                .is_some_and(|m| m.starts_with("SSRF blocked")),
             "ssrf_refusal must name the block, got: {refusal:?}"
         );
     }
@@ -447,10 +449,7 @@ mod tests {
                     let seen = headers
                         .get(axum::http::header::AUTHORIZATION)
                         .and_then(|v| v.to_str().ok().map(str::to_string));
-                    b_auths
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .push(seen);
+                    b_auths.lock().unwrap_or_else(|e| e.into_inner()).push(seen);
                     body
                 }
             }),
@@ -479,10 +478,7 @@ mod tests {
                     let seen = headers
                         .get(axum::http::header::AUTHORIZATION)
                         .and_then(|v| v.to_str().ok().map(str::to_string));
-                    a_auths
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .push(seen);
+                    a_auths.lock().unwrap_or_else(|e| e.into_inner()).push(seen);
                     (
                         axum::http::StatusCode::FOUND,
                         [(axum::http::header::LOCATION, target)],

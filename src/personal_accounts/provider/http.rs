@@ -215,7 +215,10 @@ mod embedded_userinfo_guard_tests {
             .await
             .expect_err("port 1 refuses");
         assert!(
-            !matches!(classify(&error), HttpError::Terminal(TerminalFailure::Certificate)),
+            !matches!(
+                classify(&error),
+                HttpError::Terminal(TerminalFailure::Certificate)
+            ),
             "{error}"
         );
     }

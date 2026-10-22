@@ -175,13 +175,7 @@ fn scan_crate(root: &Path) -> Vec<Entry> {
             entries.extend(found);
         }
         let mut kids = Vec::new();
-        collect_child_mods_from_items(
-            &file.items,
-            is_cfg_test(&file.attrs),
-            &rel,
-            root,
-            &mut kids,
-        );
+        collect_child_mods_from_items(&file.items, is_cfg_test(&file.attrs), &rel, root, &mut kids);
         for k in kids {
             if !seen.contains(&k) {
                 queue.push(k);
@@ -394,8 +388,7 @@ impl<'ast> Visit<'ast> for FnVisitor {
 
     fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
         if node.method.to_string() == "build" && !self.is_factory {
-            let (is_builder, has_redirect) =
-                analyze_builder_expr(&node.receiver, &self.vars);
+            let (is_builder, has_redirect) = analyze_builder_expr(&node.receiver, &self.vars);
             if is_builder && !has_redirect {
                 self.found_i = true;
             }
@@ -680,10 +673,7 @@ fn collect_used_builder_redirects(
     c.used
 }
 
-fn analyze_builder_expr(
-    expr: &syn::Expr,
-    vars: &HashMap<String, (bool, bool)>,
-) -> (bool, bool) {
+fn analyze_builder_expr(expr: &syn::Expr, vars: &HashMap<String, (bool, bool)>) -> (bool, bool) {
     match expr {
         syn::Expr::Call(call) => {
             if let syn::Expr::Path(p) = &*call.func {
@@ -748,7 +738,10 @@ fn production_clients_set_an_explicit_redirect_policy() {
     for (rule, file, func, _why) in ALLOWED {
         let before = entries.len();
         entries.retain(|e| !(e.rule == *rule && e.file == *file && e.func == *func));
-        assert!(entries.len() < before, "stale allowlist entry: {rule} {file}::{func}");
+        assert!(
+            entries.len() < before,
+            "stale allowlist entry: {rule} {file}::{func}"
+        );
     }
     entries.sort();
     let mut msg = String::from("redirect policy gaps:\n");
@@ -867,14 +860,14 @@ fn the_scanner_passes_each_positive_fixture() {
 
 #[test]
 fn a_path_included_test_module_is_not_production() {
-    let base = std::env::temp_dir().join(format!(
-        "redirect_policy_scan_{}",
-        std::process::id()
-    ));
+    let base = std::env::temp_dir().join(format!("redirect_policy_scan_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(base.join("src")).expect("make temp src dir for fixture");
-    std::fs::write(base.join("src/lib.rs"), "#[cfg(test)] mod fix;\nmod live;\n")
-        .expect("write lib fixture");
+    std::fs::write(
+        base.join("src/lib.rs"),
+        "#[cfg(test)] mod fix;\nmod live;\n",
+    )
+    .expect("write lib fixture");
     std::fs::write(
         base.join("src/fix.rs"),
         "#[path = \"bridge.rs\"] mod bridge;\n",
@@ -892,7 +885,10 @@ fn a_path_included_test_module_is_not_production() {
     .expect("write live fixture");
     let entries = scan_crate(&base);
     let _ = std::fs::remove_dir_all(&base);
-    assert!(entries.len() == 1, "only live is production, got {entries:?}");
+    assert!(
+        entries.len() == 1,
+        "only live is production, got {entries:?}"
+    );
     assert_eq!(entries[0].file, "src/live.rs");
     assert_eq!(entries[0].func, "f");
 }

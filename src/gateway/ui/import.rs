@@ -302,9 +302,11 @@ async fn fetch_spec(url: &str, ssrf_protection: bool) -> Result<String, (StatusC
             )
         })?;
 
-    let resp = client.get(url).send().await.map_err(|e| {
-        (StatusCode::BAD_GATEWAY, fetch_error_message(url, &e))
-    })?;
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, fetch_error_message(url, &e)))?;
 
     if !resp.status().is_success() {
         return Err((

@@ -46,7 +46,9 @@ pub(super) fn build(proxy: Option<&url::Url>) -> Client {
                 RedirectDecision::Follow
                     if started_secure && !crate::gateway::is_tls_or_loopback(attempt.url()) =>
                 {
-                    attempt.error("refusing a capability redirect to cleartext http:// off this machine")
+                    attempt.error(
+                        "refusing a capability redirect to cleartext http:// off this machine",
+                    )
                 }
                 RedirectDecision::Follow => attempt.follow(),
             }

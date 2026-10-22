@@ -433,7 +433,10 @@ mod redirect_tests {
             probe.result.detail
         );
         assert!(
-            !probe.result.detail.contains("was not a gateway health payload"),
+            !probe
+                .result
+                .detail
+                .contains("was not a gateway health payload"),
             "detail: {}",
             probe.result.detail
         );

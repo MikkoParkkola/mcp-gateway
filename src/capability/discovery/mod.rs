@@ -163,7 +163,10 @@ impl DiscoveryEngine {
         // The pinned builder never uses an environment proxy (#1881) and pins
         // every name this client connects to, probes and redirect targets
         // alike; the base-URL check sees IP literals only (#2027).
-        let client = discovery_client(crate::security::ssrf::pinned_client_builder(), options.timeout);
+        let client = discovery_client(
+            crate::security::ssrf::pinned_client_builder(),
+            options.timeout,
+        );
         Self { client, options }
     }
 

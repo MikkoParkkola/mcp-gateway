@@ -27,11 +27,11 @@ use crate::protocol::meta::KEY_PROTOCOL_VERSION;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::http_diagnostics::SESSION_EXPIRED_MARKER;
 use crate::security::ssrf::DestinationPolicy;
+#[cfg(test)]
+use crate::security::ssrf::RedirectDecision;
 use crate::{Error, Result};
 pub(super) use modern_meta::with_modern_meta as modern_listen_params;
 use modern_meta::{finalise_modern_headers, with_modern_meta};
-#[cfg(test)]
-use crate::security::ssrf::RedirectDecision;
 #[cfg(test)]
 use redirect_policy::evaluate_redirect;
 use redirect_policy::evaluate_redirect_for;

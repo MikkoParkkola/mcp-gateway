@@ -455,5 +455,8 @@ async fn a_typed_tls_check_names_an_untrusted_certificate() {
         .send()
         .await
         .expect_err("the fixture CA is not trusted");
-    assert!(crate::security::http_diagnostics::is_tls_failure(&error), "{error:?}");
+    assert!(
+        crate::security::http_diagnostics::is_tls_failure(&error),
+        "{error:?}"
+    );
 }

@@ -109,7 +109,10 @@ async fn handle_stats_response(response: reqwest::Response, url: &str) -> Result
         return Err("❌ the gateway URL redirected; point stats at the final URL\n".to_string());
     }
     if !response.status().is_success() {
-        return Err(format!("❌ Gateway returned error: {}\n", response.status()));
+        return Err(format!(
+            "❌ Gateway returned error: {}\n",
+            response.status()
+        ));
     }
     match response.json::<serde_json::Value>().await {
         Ok(body) => print_stats_body(&body, url),
@@ -292,9 +295,12 @@ mod tests {
     #[tokio::test]
     async fn stats_outcome_renders_the_stubbed_gateway_statistics() {
         let base = serve(stats_stub()).await;
-        let outcome = tokio::time::timeout(HANG_BOUND, stats_outcome(&stats_client().expect("client"), &base))
-            .await
-            .expect("bounded");
+        let outcome = tokio::time::timeout(
+            HANG_BOUND,
+            stats_outcome(&stats_client().expect("client"), &base),
+        )
+        .await
+        .expect("bounded");
         match outcome {
             Ok(text) => assert!(text.contains("Invocations:       3"), "text: {text}"),
             Err(msg) => panic!("expected Ok, got Err: {msg}"),
@@ -312,9 +318,12 @@ mod tests {
         let addr = listener.local_addr().expect("addr");
         tokio::spawn(async move { axum::serve(listener, stats_stub()).await });
         let base = format!("http://{addr}");
-        let outcome = tokio::time::timeout(HANG_BOUND, stats_outcome(&stats_client().expect("client"), &base))
-            .await
-            .expect("bounded");
+        let outcome = tokio::time::timeout(
+            HANG_BOUND,
+            stats_outcome(&stats_client().expect("client"), &base),
+        )
+        .await
+        .expect("bounded");
         match outcome {
             Ok(text) => assert!(text.contains("Invocations:       3"), "text: {text}"),
             Err(msg) => panic!("expected Ok, got Err: {msg}"),
@@ -341,9 +350,12 @@ mod tests {
             }),
         );
         let base = serve(app).await;
-        let outcome = tokio::time::timeout(HANG_BOUND, stats_outcome(&stats_client().expect("client"), &base))
-            .await
-            .expect("bounded");
+        let outcome = tokio::time::timeout(
+            HANG_BOUND,
+            stats_outcome(&stats_client().expect("client"), &base),
+        )
+        .await
+        .expect("bounded");
         match outcome {
             Ok(text) => panic!("expected Err, got Ok: {text}"),
             Err(msg) => assert!(msg.contains(&expected), "msg: {msg}"),

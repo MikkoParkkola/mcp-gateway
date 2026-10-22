@@ -163,9 +163,10 @@ async fn fetch_capability(client: &reqwest::Client, url: &str) -> crate::Result<
     if !response.status().is_success() {
         return Ok(None);
     }
-    let body = response.text().await.map_err(|e| {
-        Error::Transport(format!("Failed to read capability content: {e}"))
-    })?;
+    let body = response
+        .text()
+        .await
+        .map_err(|e| Error::Transport(format!("Failed to read capability content: {e}")))?;
     Ok(Some(body))
 }
 
