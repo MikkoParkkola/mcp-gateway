@@ -430,8 +430,8 @@ async fn test_gateway_list_servers() {
             "transport should be string"
         );
         assert!(
-            server["tools_count"].is_number(),
-            "tools_count should be number"
+            server["tools_count"].is_number() || server["tools_count"].is_null(),
+            "tools_count should be a number, or null before enumeration"
         );
         assert!(
             server["circuit_state"].is_string(),

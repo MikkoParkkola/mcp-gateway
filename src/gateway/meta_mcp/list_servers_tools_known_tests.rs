@@ -30,7 +30,10 @@ async fn list_servers_marks_a_backend_whose_tools_were_never_enumerated() {
         .find(|s| s["name"] == "cold")
         .expect("the registered backend is listed");
 
-    assert_eq!(row["tools_count"], 0, "nothing is cached yet");
+    assert!(
+        row["tools_count"].is_null(),
+        "an unenumerated backend has no count to report, not a count of 0: {row}"
+    );
     assert_eq!(
         row["tools_known"], false,
         "an unenumerated backend must not read as an empty one"

@@ -32,7 +32,8 @@ fn build_list_servers_tool(server_count: usize) -> Tool {
         title: Some("List Servers".to_string()),
         description: Some(format!(
             "List all {server_count} connected MCP backend servers with their status, \
-         tool count, and circuit-breaker state."
+         tool count, and circuit-breaker state. tools_count is null for a backend \
+         whose tools have not been loaded yet; use gateway_list_tools(server) to load them."
         )),
         input_schema: json!({ "type": "object", "properties": {}, "required": [] }),
         output_schema: None,
