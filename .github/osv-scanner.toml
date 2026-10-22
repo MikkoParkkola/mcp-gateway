@@ -37,8 +37,8 @@
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2024-0449"
-ignoreUntil = 2026-10-26
-reason = "Unmaintained unsafe-libyaml (no patched release; RustSec informational advisory). MIK-8424; replacement/reassessment MIK-8425 due 2026-10-22. Exception expires 2026-10-26; no silent renewal. Reviewed 2026-10-12."
+ignoreUntil = 2026-11-05
+reason = "Unmaintained unsafe-libyaml (no patched release; RustSec informational advisory), reached through serde_yaml 0.9.34. MIK-8424. Operator ruling 2026-10-22, option C: a short extension from 2026-10-26 to 2026-11-05, so the v4.0.0 tag and publish complete inside it. Remove this entry when the MIK-8425 MIG.2 backend swap has landed and a real OSV scan passes with this entry removed (MIG.6); the question returns to the operator before 2026-11-05. No silent renewal. Reviewed 2026-10-22."
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0381"
