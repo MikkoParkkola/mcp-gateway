@@ -19,6 +19,7 @@ pub struct CapabilityConfig {
     /// Directories to load capability definitions from.
     pub directories: Vec<String>,
     /// Seconds between stale-catalogue checks of the watched directories; 0 turns the check off. Restart-only.
+    #[serde(deserialize_with = "crate::duration_bound::secs")]
     pub stale_check_secs: u64,
     /// HTTP(S) proxy for capability calls, e.g. `http://proxy.internal:3128`.
     ///
