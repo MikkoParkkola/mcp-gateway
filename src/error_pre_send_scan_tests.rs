@@ -42,6 +42,10 @@ const PRE_SEND_SITES: &[&str] = &[
     // inside `build_mcp_headers` before the POST; capability refresh before
     // its HTTP call; token saves send no tool request at all).
     "oauth/client/refresh_flight.rs",
+    // A login joiner's replay of the lead's credential-lock busy
+    // (`LoginOutcome::Busy`, MIK-8658): the joiner waited in the token step
+    // and sent no byte of its tool request.
+    "oauth/login_gate.rs",
 ];
 
 /// `src` with comments, string literals and char literals replaced by spaces,
