@@ -405,7 +405,7 @@ async fn preview_openapi_deep_unread_field_refused() {
     let dir = tempfile::tempdir().expect("tempdir");
     let spec = dir.path().join("deep.yaml");
     let content = format!(
-        "openapi: 3.0.0\ninfo:\n  title: probe\n  version: \"1\"\npaths: {}\n{}",
+        "openapi: 3.0.0\ninfo:\n  title: probe\n  version: \"1\"\npaths: {{}}\n{}",
         deep_probe_line()
     );
     tokio::fs::write(&spec, content).await.expect("write spec");

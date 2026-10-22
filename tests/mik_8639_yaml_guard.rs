@@ -379,7 +379,7 @@ fn anchor_reuse_across_documents_accepted() {
     // document is refused there with or without the guard).
     for (what, input) in [
         ("dashes", "x: &a 1\n---\ny: &a 2\n"),
-        ("dots", "x: &a 1\n...\ny: &a 2\n"),
+        ("dots", "x: &a 1\n...\n---\ny: &a 2\n"),
     ] {
         let results: Vec<_> = yaml::documents(input).collect();
         assert!(!results.is_empty(), "{what}: expected documents");
