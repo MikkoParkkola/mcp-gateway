@@ -14,24 +14,10 @@ use std::path::{Path, PathBuf};
 pub(super) type Fingerprint = Vec<(usize, String, u64, u128)>;
 
 /// Deepest level below a watched root the fingerprint descends to. This is
-/// the backstop: the only cycle guard off unix, and a bound on deep real
-/// trees everywhere.
+/// a backstop for deep real trees.
 const FINGERPRINT_MAX_DEPTH: u32 = 16;
 /// Most directory entries the fingerprint visits across all watched roots.
 const FINGERPRINT_MAX_ENTRIES: usize = 10_000;
-
-/// The identity of a directory for cycle detection: (device, inode) on unix.
-#[cfg(unix)]
-fn dir_id(metadata: &std::fs::Metadata) -> Option<(u64, u64)> {
-    use std::os::unix::fs::MetadataExt;
-    Some((metadata.dev(), metadata.ino()))
-}
-
-/// No stable directory identity off unix; the depth bound is the only cycle guard there.
-#[cfg(not(unix))]
-fn dir_id(_metadata: &std::fs::Metadata) -> Option<(u64, u64)> {
-    None
-}
 
 /// Fingerprint the watched directories: the sorted `(directory index,
 /// relative path, length, mtime in nanoseconds since the Unix epoch)` of
@@ -41,24 +27,28 @@ fn dir_id(_metadata: &std::fs::Metadata) -> Option<(u64, u64)> {
 /// decided with [`std::fs::metadata`], which follows symlinks. A missing
 /// directory contributes nothing and an unreadable entry is skipped. Past
 /// [`FINGERPRINT_MAX_DEPTH`] levels or [`FINGERPRINT_MAX_ENTRIES`] visited
-/// entries the walk gives up and returns `None`. On unix, a symlink cycle (a
-/// directory that is its own ancestor by device and inode) ends the walk at
-/// its first repeat and returns `None`, like the bounds; off unix, the depth
-/// bound is the only guard against a cycle. A non-cyclic chain of links
-/// longer than the OS link limit fails to resolve and is skipped like any
-/// unreadable entry; that is a named limit.
+/// entries the walk gives up and returns `None`. A symlink cycle (a
+/// directory whose canonical path equals one of its ancestors') ends the
+/// walk at its first repeat on every platform, and returns `None` like the
+/// bounds; the depth bound is a backstop for deep real trees. Each
+/// directory is read through its canonical path, so only one entry's own
+/// link chain counts against the OS link limit; a single chain longer than
+/// that limit cannot resolve and is skipped like any unreadable entry; that
+/// is a named limit. Two links to the same directory that is not an
+/// ancestor are both walked. A bind mount of an ancestor onto its own child
+/// is untested (a test needs root).
 pub(super) fn fingerprint(dirs: &[String]) -> Option<Fingerprint> {
     let mut found: Fingerprint = Vec::new();
     let mut visited: usize = 0;
     for (index, dir) in dirs.iter().enumerate() {
         // The root is depth 0; each subdirectory descends one level.
-        let root_ancestors: Vec<(u64, u64)> = match std::fs::metadata(dir) {
-            Ok(m) => dir_id(&m).into_iter().collect(),
-            Err(_) => Vec::new(),
+        let Ok(root_canon) = std::fs::canonicalize(dir) else {
+            continue;
         };
-        let mut stack = vec![(PathBuf::from(dir), 0, root_ancestors)];
-        while let Some((path, depth, ancestors)) = stack.pop() {
-            let Ok(entries) = std::fs::read_dir(&path) else {
+        let mut stack: Vec<(PathBuf, PathBuf, u32, Vec<PathBuf>)> =
+            vec![(PathBuf::from(dir), root_canon.clone(), 0, vec![root_canon])];
+        while let Some((logical, canonical, depth, ancestors)) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&canonical) else {
                 continue;
             };
             for entry in entries {
@@ -67,33 +57,32 @@ pub(super) fn fingerprint(dirs: &[String]) -> Option<Fingerprint> {
                 if visited > FINGERPRINT_MAX_ENTRIES {
                     return None;
                 }
-                let entry_path = entry.path();
-                if entry_path
-                    .file_name()
-                    .is_some_and(|name| name.to_string_lossy().starts_with('.'))
-                {
+                let name = entry.file_name();
+                if name.to_string_lossy().starts_with('.') {
                     continue;
                 }
+                let logical_path = logical.join(&name);
+                let real_path = canonical.join(&name);
                 // Follows symlinks, like the loader's `path.is_dir()`.
-                let Ok(metadata) = std::fs::metadata(&entry_path) else {
+                let Ok(metadata) = std::fs::metadata(&real_path) else {
                     continue;
                 };
                 if metadata.is_dir() {
                     if depth + 1 > FINGERPRINT_MAX_DEPTH {
                         return None;
                     }
-                    let id = dir_id(&metadata);
-                    if id.is_some_and(|id| ancestors.contains(&id)) {
+                    let Ok(child_canon) = std::fs::canonicalize(&real_path) else {
+                        continue;
+                    };
+                    if ancestors.contains(&child_canon) {
                         return None;
                     }
-                    let mut ancestors_plus_id = ancestors.clone();
-                    if let Some(id) = id {
-                        ancestors_plus_id.push(id);
-                    }
-                    stack.push((entry_path, depth + 1, ancestors_plus_id));
+                    let mut ancestors_plus = ancestors.clone();
+                    ancestors_plus.push(child_canon.clone());
+                    stack.push((logical_path, child_canon, depth + 1, ancestors_plus));
                     continue;
                 }
-                let is_yaml = entry_path
+                let is_yaml = logical_path
                     .extension()
                     .is_some_and(|ext| ext == "yaml" || ext == "yml");
                 if !is_yaml {
@@ -106,7 +95,7 @@ pub(super) fn fingerprint(dirs: &[String]) -> Option<Fingerprint> {
                     Ok(elapsed) => elapsed.as_nanos(),
                     Err(_) => 0,
                 };
-                let relative = match entry_path.strip_prefix(Path::new(dir)) {
+                let relative = match logical_path.strip_prefix(Path::new(dir)) {
                     Ok(relative) => relative.to_string_lossy().into_owned(),
                     Err(_) => continue,
                 };

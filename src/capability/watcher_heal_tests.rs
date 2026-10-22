@@ -175,8 +175,9 @@ async fn a_missing_directory_warns_at_start() {
 }
 
 /// MIK-8651.HEAL.1: a symlink loop (a directory linking to its own parent)
-/// cannot spin the stale check: the walk stops at its depth bound, warns that
-/// the tree exceeds the bounds, and the task still stops on a real shutdown.
+/// cannot spin the stale check: the walk stops at the cycle's first repeat,
+/// warns that the tree exceeds the bounds, and the task still stops on a
+/// real shutdown.
 /// Red now: the walk does not follow symlinked directories, so no bounds warn.
 #[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
@@ -271,16 +272,16 @@ async fn a_stalled_walk_does_not_hold_a_pending_reload() {
     );
 }
 
-/// MIK-8651 (#4041, macOS): a symlink loop whose resolution reaches the OS
-/// link limit (ELOOP) before the depth bound still ends the walk as a bound.
-/// Each level here costs three links (`loop` -> `.h1` -> `.h2` -> root; hidden
-/// names are not walked), so Linux's 40-link limit is reached at level 14,
-/// before the depth bound at 17. macOS reaches the same state with one link
-/// per level, because its tempdir sits under the symlinked `/var`. Red on
-/// c98347d7c: the ELOOP entry is skipped silently and the walk returns `Some`.
+/// MIK-8651 (#4041): a multi-hop symlink cycle still ends the walk as a
+/// bound. Each level costs three links (`loop` -> `.h1` -> `.h2` -> root;
+/// hidden names aren't walked). On c98347d7c the accumulated path hit
+/// Linux's 40-link limit at level 14, before the depth bound, and the walk
+/// returned `Some` silently (red, proven on Spark). Now the cycle is caught
+/// at its first repeat, because the canonical path of `loop` equals the
+/// root's.
 #[cfg(unix)]
 #[test]
-fn a_loop_that_hits_the_os_link_limit_ends_the_walk_as_a_bound() {
+fn a_multi_hop_symlink_cycle_ends_the_walk_as_a_bound() {
     let dir = tempfile::tempdir().expect("a tempdir for caps");
     std::fs::write(dir.path().join("a.yaml"), cap_yaml("a", "v1")).expect("write v1");
     let link = |target: &std::path::Path, name: &str| {
@@ -294,5 +295,49 @@ fn a_loop_that_hits_the_os_link_limit_ends_the_walk_as_a_bound() {
     assert!(
         walked.is_none(),
         "the walk must end at a bound, got {walked:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn two_links_to_one_outside_directory_are_both_walked() {
+    let root = tempfile::tempdir().expect("a tempdir for the root");
+    std::fs::write(root.path().join("a.yaml"), cap_yaml("a", "v1")).expect("write a");
+    let ext = tempfile::tempdir().expect("a tempdir for the target");
+    std::fs::write(ext.path().join("c.yaml"), cap_yaml("c", "v1")).expect("write c");
+    std::os::unix::fs::symlink(ext.path(), root.path().join("l1")).expect("link l1 to ext");
+    std::os::unix::fs::symlink(ext.path(), root.path().join("l2")).expect("link l2 to ext");
+    let root_dir = root.path().to_string_lossy().into_owned();
+    let walked = crate::capability::watcher::fingerprint::fingerprint(&[root_dir])
+        .expect("two links to a non-ancestor are not a cycle");
+    let names: Vec<&str> = walked.iter().map(|entry| entry.1.as_str()).collect();
+    assert_eq!(names, ["a.yaml", "l1/c.yaml", "l2/c.yaml"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_tree_without_loops_keeps_its_logical_names() {
+    let root = tempfile::tempdir().expect("a tempdir for the root");
+    std::fs::write(root.path().join("a.yaml"), cap_yaml("a", "v1")).expect("write a");
+    std::fs::create_dir_all(root.path().join("sub/deeper")).expect("make sub/deeper");
+    std::fs::write(root.path().join("sub/b.yml"), cap_yaml("b", "v1")).expect("write b");
+    std::fs::write(root.path().join("sub/deeper/c.yaml"), cap_yaml("c", "v1")).expect("write c");
+    std::fs::write(root.path().join("sub/notes.txt"), "notes\n").expect("write notes");
+    std::fs::create_dir_all(root.path().join(".hidden")).expect("make .hidden");
+    std::fs::write(root.path().join(".hidden/d.yaml"), cap_yaml("d", "v1")).expect("write d");
+    let ext = tempfile::tempdir().expect("a tempdir for the target");
+    std::fs::write(ext.path().join("e.yaml"), cap_yaml("e", "v1")).expect("write e");
+    std::os::unix::fs::symlink(ext.path(), root.path().join("linked")).expect("link linked to ext");
+    let root_dir = root.path().to_string_lossy().into_owned();
+    let walked = crate::capability::watcher::fingerprint::fingerprint(&[root_dir])
+        .expect("a tree without loops walks");
+    let names: Vec<&str> = walked.iter().map(|entry| entry.1.as_str()).collect();
+    assert_eq!(
+        names,
+        ["a.yaml", "linked/e.yaml", "sub/b.yml", "sub/deeper/c.yaml"]
+    );
+    assert!(
+        walked.iter().all(|entry| entry.0 == 0 && entry.2 > 0),
+        "every entry is in directory 0 with a length, got {walked:?}"
     );
 }

@@ -28,8 +28,9 @@
 //!
 //! Limits: a change that keeps the same length within the filesystem's mtime
 //! granularity is missed; a hung reload is reported, never cancelled or
-//! healed; the walk stops at depth 16 and 10 000 entries, past either of
-//! which that tick warns and skips healing.
+//! healed; the walk stops at depth 16, 10 000 entries, and a symlink cycle's
+//! first repeat, past any of which that tick warns and skips healing; a
+//! single link chain longer than the OS limit is skipped.
 //!
 //! ## Warn lines
 //!
