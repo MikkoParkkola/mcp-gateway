@@ -7,7 +7,7 @@
 //! the same step, so a mutation that turns a falsifier red is one `t1f` would
 //! catch too, and the falsifiers run in the packaged crate as well.
 
-use super::packaged::repo_file;
+use super::packaged::{PinnedFile, repo_file};
 use crate::yaml::Value;
 
 /// What the pin requires of one CI step.
@@ -16,6 +16,8 @@ struct Expect {
     name: &'static str,
     /// The job that must hold it, when the job is part of the guarantee.
     job: Option<&'static str>,
+    /// What the holding job's `runs-on` must contain.
+    runner: &'static str,
     /// Whether its `run` script chains several native commands, so every one
     /// needs its own exit-status guard (PowerShell reports only the last).
     guarded: bool,
@@ -27,12 +29,14 @@ struct Expect {
 const STEPS: [Expect; 2] = [
     Expect {
         name: "Registry ban (MIK-8387)",
-        job: None,
+        job: Some("check"),
+        runner: "ubuntu",
         guarded: false,
     },
     Expect {
         name: "Registry ban, Windows (MIK-8449)",
         job: Some("windows-clippy"),
+        runner: "windows",
         guarded: true,
     },
 ];
@@ -42,14 +46,32 @@ const CONF_DIR: &str = "${{ github.workspace }}/scripts/lint/registry-ban";
 /// The checked-in CI workflow, or `None` in a packaged crate (which does not
 /// ship it).
 pub(super) fn checked_in_workflow() -> Option<String> {
-    repo_file(".github/workflows/ci.yml")
+    repo_file(PinnedFile::CiWorkflow)
+}
+
+/// Whether a `continue-on-error` value keeps the job green when the step fails.
+fn continues_on_error(value: &Value) -> bool {
+    value.as_bool() == Some(true) || value.as_str().is_some_and(|s| s.trim() == "true")
+}
+
+/// Whether an `if` value gates the step out unconditionally: the YAML boolean
+/// `false` or the string `${{ false }}`, compared after trimming. Any other
+/// expression is accepted (the real jobs carry docs-only and cancellation
+/// expressions), which is the named limit of this check.
+fn is_literal_false_if(value: &Value) -> bool {
+    value.as_bool() == Some(false)
+        || value
+            .as_str()
+            .is_some_and(|s| matches!(s.trim(), "false" | "${{ false }}"))
 }
 
 /// Panics unless, for each of [`STEPS`], exactly one step of that name exists
 /// under `jobs`, its own `env` sets `CLIPPY_CONF_DIR` to [`CONF_DIR`], it sits
-/// in the job the table names, and a chained script guards every native
-/// command's exit status. The workflow is parsed with the repo's adapter, so
-/// quoting, comments and key order are the parser's concern.
+/// in the job the table names, the step and its job carry no cannot-fail
+/// shape (`continue-on-error: true`, a literal-false `if`), the job runs on
+/// the expected runner, and a chained script guards every native command's
+/// exit status. The workflow is parsed with the repo's adapter, so quoting,
+/// comments and key order are the parser's concern.
 pub(super) fn assert_ci_registry_ban_conf_dir(workflow: &str) {
     let doc: Value = crate::yaml::from_str(workflow).expect("the CI workflow parses");
     let jobs = doc
@@ -65,7 +87,7 @@ pub(super) fn assert_ci_registry_ban_conf_dir(workflow: &str) {
             };
             for step in steps {
                 if step.get("name").and_then(Value::as_str) == Some(name) {
-                    found.push((job.as_str().unwrap_or("?").to_owned(), step));
+                    found.push((job.as_str().unwrap_or("?").to_owned(), def, step));
                 }
             }
         }
@@ -75,7 +97,7 @@ pub(super) fn assert_ci_registry_ban_conf_dir(workflow: &str) {
             "expected exactly one CI step named {name:?}, found {}",
             found.len()
         );
-        let (job, step) = &found[0];
+        let (job, job_def, step) = &found[0];
         let conf = step
             .get("env")
             .and_then(|env| env.get("CLIPPY_CONF_DIR"))
@@ -88,6 +110,32 @@ pub(super) fn assert_ci_registry_ban_conf_dir(workflow: &str) {
         if let Some(want) = expect.job {
             assert_eq!(job, want, "the job holding the {name:?} step");
         }
+        // GATE.1: the step must be able to fail its job. A `continue-on-error`
+        // or a literal-false `if`, on the step or its job, would let the lint
+        // go red without failing CI.
+        for scope in [step, job_def] {
+            assert!(
+                !scope
+                    .get("continue-on-error")
+                    .is_some_and(continues_on_error),
+                "continue-on-error: true on the {name:?} step or its job {job}"
+            );
+            assert!(
+                !scope.get("if").is_some_and(is_literal_false_if),
+                "if: false on the {name:?} step or its job {job}"
+            );
+        }
+        // GATE.1: the ban lints from its own runner: ubuntu for the Linux
+        // pass, windows for the pass over `cfg(windows)` production code.
+        let runs_on = job_def
+            .get("runs-on")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            runs_on.contains(expect.runner),
+            "runs-on {runs_on:?} of the job {job} holding the {name:?} step is not {}",
+            expect.runner
+        );
         if expect.guarded {
             let run = step.get("run").and_then(Value::as_str).unwrap_or_default();
             let commands = run
@@ -175,16 +223,6 @@ fn must_panic(label: &str, text: &str, reason: &str) {
 #[test]
 fn the_fixture_satisfies_the_pin() {
     assert_ci_registry_ban_conf_dir(FIXTURE);
-}
-
-/// `t1f` runs this on the checked-in workflow too, but a failure here names the
-/// file; skipped in a packaged crate, which does not ship it.
-#[test]
-fn the_checked_in_workflow_satisfies_the_pin() {
-    let Some(text) = checked_in_workflow() else {
-        return;
-    };
-    assert_ci_registry_ban_conf_dir(&text);
 }
 
 const NO_ENV: &str = "CLIPPY_CONF_DIR in the env of the";

@@ -8,12 +8,18 @@
 //! that failure to the pull request.
 //!
 //! The rule, per file under `src/`, `tests/` and `benches/`: a file that
-//! mentions the crate root (`CARGO_MANIFEST_DIR`) and does not go through the
-//! helper (`repo_file` / `read_or_skip`) may not contain a string literal that
-//! names an existing file, or an existing path with a directory part, which
-//! `Cargo.toml` `include` leaves out. A literal is not proof of a read, and a
-//! path built at run time is not seen; both limits are accepted, because the
-//! failure this guards is the plain `root.join("literal")` read.
+//! reaches the crate root (`CARGO_MANIFEST_DIR`, a crate-root helper call, or
+//! an `include_*!`) and does not go through the helper (`repo_file` /
+//! `read_or_skip`) may not contain a string literal that names an existing
+//! file, or an existing path with a directory part, which `Cargo.toml`
+//! `include` leaves out. A literal is not proof of a read, and a path built
+//! at run time is not seen; both limits are accepted, because the failure
+//! this guards is the plain `root.join("literal")` read.
+//!
+//! Limits: bindings match by name with no scope analysis (a shadowed binding
+//! resolves to the first one); only `include_str!`, `include_bytes!` and
+//! `concat!` macro bodies are seen; `include_*!` paths resolve against the
+//! source file's directory.
 
 use std::path::{Path, PathBuf};
 
@@ -21,26 +27,112 @@ use syn::visit::Visit;
 
 use super::packaged::{crate_root, is_packaged_crate};
 
-/// The quoted entries of the `include = [ ... ]` array of a `Cargo.toml`.
-fn include_patterns(cargo_toml: &str) -> Vec<String> {
-    let mut patterns = Vec::new();
-    let mut inside = false;
-    for line in cargo_toml.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        if !inside {
-            inside = line.starts_with("include") && line.ends_with('[');
+#[path = "shipped_reads_scan.rs"]
+mod scan_impl;
+
+use scan_impl::Literals;
+
+/// The `[package]` table of a `Cargo.toml` (up to the next table header), or
+/// the whole text when there is no `[package]` header.
+fn package_table(cargo_toml: &str) -> &str {
+    let mut start = 0;
+    let mut found = false;
+    let mut offset = 0;
+    for line in cargo_toml.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if found && trimmed.starts_with('[') {
+            return &cargo_toml[start..offset];
+        }
+        if trimmed == "[package]" {
+            found = true;
+            start = offset + line.len();
+        }
+        offset += line.len();
+    }
+    if found {
+        &cargo_toml[start..]
+    } else {
+        cargo_toml
+    }
+}
+
+/// The text after the `[` opening the `include` array, if `region` holds an
+/// `include = [` key. The `[` may follow the `=` on a later line, with only
+/// whitespace and comments between.
+fn find_include_array(region: &str) -> Option<&str> {
+    let mut offset = 0;
+    for line in region.split_inclusive('\n') {
+        let line_start = offset;
+        offset += line.len();
+        // The key starts the line (modulo whitespace); anything after `#` is
+        // a comment, so a commented-out key never matches.
+        let code = line.split('#').next().unwrap_or("");
+        let key = code.trim_start();
+        let Some(rest) = key.strip_prefix("include") else {
+            continue;
+        };
+        // `includes` is another key: the name ends at a word boundary.
+        if rest
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        {
             continue;
         }
-        if line == "]" {
+        let Some(eq) = rest.find('=') else {
+            continue;
+        };
+        let eq_at = line_start + (code.len() - key.len()) + "include".len() + eq;
+        let mut after = &region[eq_at + 1..];
+        loop {
+            let trimmed = after.trim_start();
+            if let Some(comment) = trimmed.strip_prefix('#') {
+                after = comment.split_once('\n').map_or("", |(_, rest)| rest);
+                continue;
+            }
+            return trimmed.strip_prefix('[');
+        }
+    }
+    None
+}
+
+/// The quoted entries of the `include = [ ... ]` array in the `[package]`
+/// table of a `Cargo.toml`. A character lexer: the array may sit on one line
+/// or span lines; outside quotes `#` starts a comment (skipped to the end of
+/// the line) and the first unquoted `]` ends the array, so a `]` or `#`
+/// inside quotes is kept. Inside quotes `\` escapes the next character.
+fn include_patterns(cargo_toml: &str) -> Vec<String> {
+    let region = package_table(cargo_toml);
+    let Some(array) = find_include_array(region) else {
+        return Vec::new();
+    };
+    let mut patterns = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut chars = array.chars();
+    while let Some(c) = chars.next() {
+        if in_quotes {
+            if c == '\\' {
+                if let Some(escaped) = chars.next() {
+                    current.push(escaped);
+                }
+            } else if c == '"' {
+                in_quotes = false;
+                patterns.push(std::mem::take(&mut current));
+            } else {
+                current.push(c);
+            }
+        } else if c == '"' {
+            in_quotes = true;
+        } else if c == '#' {
+            for skipped in chars.by_ref() {
+                if skipped == '\n' {
+                    break;
+                }
+            }
+        } else if c == ']' {
             break;
         }
-        patterns.extend(
-            line.split('"')
-                .skip(1)
-                .step_by(2)
-                .map(str::to_owned)
-                .collect::<Vec<_>>(),
-        );
     }
     patterns
 }
@@ -58,37 +150,6 @@ fn shipped(patterns: &[String], rel: &str) -> bool {
     })
 }
 
-/// Every string literal of a file, and those that are arguments of a call to
-/// the packaged-aware helper (a literal read through the helper is covered; a
-/// second, direct use of the same text is not).
-#[derive(Default)]
-struct Literals {
-    all: Vec<String>,
-    covered: Vec<String>,
-}
-
-fn is_helper_call(call: &syn::ExprCall) -> bool {
-    matches!(&*call.func, syn::Expr::Path(p)
-        if p.path.segments.last().is_some_and(|s| s.ident == "repo_file" || s.ident == "read_or_skip"))
-}
-
-impl<'ast> Visit<'ast> for Literals {
-    fn visit_lit_str(&mut self, lit: &'ast syn::LitStr) {
-        self.all.push(lit.value());
-    }
-
-    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
-        if is_helper_call(call) {
-            let mut inner = Literals::default();
-            for arg in &call.args {
-                inner.visit_expr(arg);
-            }
-            self.covered.extend(inner.all);
-        }
-        syn::visit::visit_expr_call(self, call);
-    }
-}
-
 /// The helper module is the sanctioned reader: it names the pinned files in
 /// its own vacuity guard, which asks whether they exist.
 const HELPER_FILE: &str = "src/gateway/meta_mcp/boundary_pins/packaged.rs";
@@ -97,26 +158,102 @@ const HELPER_FILE: &str = "src/gateway/meta_mcp/boundary_pins/packaged.rs";
 /// repository file.
 const NOT_REPO: [&str; 3] = ["target", ".git", ".worktrees"];
 
+/// The crate-root helper names whose call triggers the scan (the names in
+/// use, found by grep): `crate_root()`, `repo_root()` and
+/// `golden::repo_root()`.
+const ROOT_HELPERS: [&str; 2] = ["crate_root", "repo_root"];
+
+/// Whether `source` calls a [`ROOT_HELPERS`] name: the name as a whole word
+/// (the preceding character is not alphanumeric or `_`, so
+/// `golden::repo_root(` counts and `my_crate_root(` does not) followed by
+/// `(`. Text-level: a definition (`fn crate_root()`) triggers too, which only
+/// scans one more file.
+fn calls_root_helper(source: &str) -> bool {
+    for helper in ROOT_HELPERS {
+        let mut start = 0;
+        while let Some(found) = source[start..].find(helper) {
+            let at = start + found;
+            let word_start = !source[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_');
+            if word_start && source[at + helper.len()..].starts_with('(') {
+                return true;
+            }
+            start = at + 1;
+        }
+    }
+    false
+}
+
+/// SCAN.3: the file holding the one reviewed `repo_root` read.
+const SCAN3_FILE: &str = "tests/mik_8425_yaml_baseline_trees.rs";
+
+/// Whether `lit` is the reviewed SCAN.3 read: the golden test names one
+/// unshipped file through `golden::repo_root()`. The golden harness tolerates
+/// absent roots (a gone file is a skipped row, a walk over a missing
+/// directory yields nothing), and the golden holds 155 shipped rows before
+/// `examples/` and `tests/fixtures/` are counted (150 needed), so the test
+/// passes from the unpacked crate; the `cargo package` confirmation run is
+/// still owed. Path-scoped: only this literal in this file is exempt, and it
+/// is spelled in parts so this file does not flag itself for naming it.
+fn is_reviewed_scan3(rel_norm: &str, lit: &str) -> bool {
+    rel_norm == SCAN3_FILE && lit.strip_suffix(".yaml") == Some("smithery")
+}
+
 /// The unshipped repo paths a source file names directly (`rel_file` is its
 /// path from the crate root).
 fn offenders(root: &Path, patterns: &[String], rel_file: &str, source: &str) -> Vec<String> {
-    // Windows hands in backslashes; the exemption names the slash form.
-    if rel_file.replace('\\', "/") == HELPER_FILE || !source.contains("CARGO_MANIFEST_DIR") {
+    // Windows hands in backslashes; the exemptions name the slash form.
+    let rel_norm = rel_file.replace('\\', "/");
+    let triggered = source.contains("CARGO_MANIFEST_DIR")
+        || source.contains("include_str!(")
+        || source.contains("include_bytes!(")
+        || calls_root_helper(source);
+    if rel_norm == HELPER_FILE || !triggered {
         return Vec::new();
     }
     let Ok(parsed) = syn::parse_file(source) else {
         return vec!["<unparsable source>".to_owned()];
     };
-    let mut literals = Literals::default();
+    let mut literals = Literals {
+        dir: Path::new(rel_file)
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default(),
+        ..Default::default()
+    };
     literals.visit_file(&parsed);
+    // A binding's literal is covered only when every use of its name is a
+    // direct helper argument; a binding with no uses stays collected.
+    let mut exempt = Vec::new();
+    for (name, lit) in &literals.bindings {
+        let used = literals.uses.get(name).copied().unwrap_or(0);
+        let through_helper = literals.helper_uses.get(name).copied().unwrap_or(0);
+        if used > 0 && used == through_helper {
+            exempt.push(lit.clone());
+        }
+    }
+    literals.covered.extend(exempt);
+    // The backslash form names the slash path (`tools\run.sh` is read as
+    // `tools/run.sh`), so every collected literal is normalised first.
+    let all: Vec<String> = literals
+        .all
+        .iter()
+        .map(|lit| lit.replace('\\', "/"))
+        .collect();
+    let covered: Vec<String> = literals
+        .covered
+        .iter()
+        .map(|lit| lit.replace('\\', "/"))
+        .collect();
     let norm = |l: &str| l.trim_end_matches('/').to_owned();
     let direct = |lit: &str| {
-        let used = literals.all.iter().filter(|l| norm(l) == lit).count();
-        let through_helper = literals.covered.iter().filter(|l| norm(l) == lit).count();
+        let used = all.iter().filter(|l| norm(l) == lit).count();
+        let through_helper = covered.iter().filter(|l| norm(l) == lit).count();
         used > through_helper
     };
-    let mut found: Vec<String> = literals
-        .all
+    let mut found: Vec<String> = all
         .iter()
         .filter(|lit| {
             lit.len() >= 3
@@ -132,6 +269,7 @@ fn offenders(root: &Path, patterns: &[String], rel_file: &str, source: &str) -> 
             path.is_file() || (lit.contains('/') && path.exists())
         })
         .filter(|lit| !shipped(patterns, lit))
+        .filter(|lit| !is_reviewed_scan3(&rel_norm, lit))
         .filter(|lit| direct(lit))
         .collect();
     found.sort();

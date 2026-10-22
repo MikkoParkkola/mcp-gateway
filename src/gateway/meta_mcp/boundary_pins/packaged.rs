@@ -41,9 +41,34 @@ pub(super) fn read_or_skip(root: &Path, rel: &str, packaged: bool) -> Option<Str
     }
 }
 
-/// [`read_or_skip`] on this crate's root.
-pub(super) fn repo_file(rel: &str) -> Option<String> {
-    read_or_skip(crate_root(), rel, is_packaged_crate())
+/// Every repository file a pin reads through [`repo_file`]. A closed enum, so
+/// a new read cannot bypass the list: it must add a variant, and the vacuity
+/// guard's exhaustive `match` (no `_` arm) fails to compile until the new
+/// variant gets a case.
+#[derive(Clone, Copy)]
+pub(super) enum PinnedFile {
+    /// `scripts/lint/registry-ban/clippy.toml`, read by `t1f`.
+    RegistryBanClippy,
+    /// `scripts/dev/pre-push.sh`, read by `t1f`.
+    PrePush,
+    /// `.github/workflows/ci.yml`, read by `checked_in_workflow`.
+    CiWorkflow,
+}
+
+impl PinnedFile {
+    /// The file's crate-root-relative path.
+    pub(super) fn path(self) -> &'static str {
+        match self {
+            PinnedFile::RegistryBanClippy => "scripts/lint/registry-ban/clippy.toml",
+            PinnedFile::PrePush => "scripts/dev/pre-push.sh",
+            PinnedFile::CiWorkflow => ".github/workflows/ci.yml",
+        }
+    }
+}
+
+/// [`read_or_skip`] on this crate's root, for a [`PinnedFile`].
+pub(super) fn repo_file(file: PinnedFile) -> Option<String> {
+    read_or_skip(crate_root(), file.path(), is_packaged_crate())
 }
 
 /// A present file is read in either mode.
@@ -112,17 +137,25 @@ fn no_stray_cargo_toml_orig_in_a_checkout() {
 }
 
 /// The vacuity guard: outside a packaged crate every file a pin reads through
-/// [`repo_file`] exists, so the skip cannot be what a checkout run took.
+/// [`repo_file`] exists, so the skip cannot be what a checkout run took. The
+/// array lists every variant and the `match` is exhaustive (no `_` arm), so a
+/// new variant without a case fails to compile.
 #[test]
 fn pinned_repo_files_are_read_in_a_checkout() {
     if is_packaged_crate() {
         return;
     }
-    for rel in [
-        "scripts/lint/registry-ban/clippy.toml",
-        "scripts/dev/pre-push.sh",
-        ".github/workflows/ci.yml",
+    for file in [
+        PinnedFile::RegistryBanClippy,
+        PinnedFile::PrePush,
+        PinnedFile::CiWorkflow,
     ] {
+        let rel = match file {
+            PinnedFile::RegistryBanClippy => "scripts/lint/registry-ban/clippy.toml",
+            PinnedFile::PrePush => "scripts/dev/pre-push.sh",
+            PinnedFile::CiWorkflow => ".github/workflows/ci.yml",
+        };
+        assert_eq!(rel, file.path(), "path() names the pinned file");
         assert!(
             crate_root().join(rel).is_file(),
             "{rel} missing in a checkout"
