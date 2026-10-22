@@ -384,7 +384,8 @@ async fn a_step_scoped_key_cannot_be_spelled_by_a_client_key() {
 fn x_of(seed: &[u8; 32]) -> String {
     use base64::Engine as _;
     use ring::signature::KeyPair as _;
-    let key_pair = ring::signature::Ed25519KeyPair::from_seed_unchecked(seed).expect("a seed loads");
+    let key_pair =
+        ring::signature::Ed25519KeyPair::from_seed_unchecked(seed).expect("a seed loads");
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key_pair.public_key().as_ref())
 }
 
@@ -448,7 +449,9 @@ fn d1c_tool_stamp_without_public_seed_is_byte_identical() {
     use crate::trust::{CacheOutcome, RuntimeProvenanceReceipt};
 
     let _clock = crate::clock::test_clock::at_secs(1_786_000_000);
-    let observed_at = crate::clock::utc_now().expect("the fixed clock reads").to_rfc3339();
+    let observed_at = crate::clock::utc_now()
+        .expect("the fixed clock reads")
+        .to_rfc3339();
     let hmac = || {
         BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
             .with_audience("test-gateway")
@@ -483,7 +486,10 @@ fn d1c_tool_stamp_without_public_seed_is_byte_identical() {
         .as_object()
         .expect("_meta is an object");
     assert_eq!(meta_obj.len(), 1, "no extra _meta members: {stamped}");
-    assert!(meta_obj.contains_key("provenance"), "the one member is provenance: {stamped}");
+    assert!(
+        meta_obj.contains_key("provenance"),
+        "the one member is provenance: {stamped}"
+    );
     let mut bare = stamped.clone();
     bare.as_object_mut()
         .expect("a stamped result is an object")

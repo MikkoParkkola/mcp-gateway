@@ -19,12 +19,16 @@ const KID_ENV: &str = "GATEWAY_PROVENANCE_KEY_ID";
 const KID: &str = "prov-test-1";
 
 fn fixture_path(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mik_8398").join(name)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/mik_8398")
+        .join(name)
 }
 
 fn read_fixture(name: &str) -> Vec<u8> {
     std::fs::read(fixture_path(name)).unwrap_or_else(|error| {
-        panic!("fixture {name} missing: bless with UPDATE_GOLDEN=1 on the implemented tree: {error}")
+        panic!(
+            "fixture {name} missing: bless with UPDATE_GOLDEN=1 on the implemented tree: {error}"
+        )
     })
 }
 
@@ -78,12 +82,7 @@ fn public_key_args(config: &Path) -> Vec<String> {
     ]
 }
 
-fn verify_args(
-    trust: &Path,
-    receipt: &Path,
-    result: Option<&Path>,
-    flags: &[&str],
-) -> Vec<String> {
+fn verify_args(trust: &Path, receipt: &Path, result: Option<&Path>, flags: &[&str]) -> Vec<String> {
     let mut args = vec![
         "provenance".to_owned(),
         "verify".to_owned(),
@@ -140,7 +139,11 @@ fn public_key_reads_the_config_from_the_environment() {
     let config = config_with_env_files(home.path(), &[env_file]);
     let config_text = config.display().to_string();
     let args = vec!["provenance".to_owned(), "public-key".to_owned()];
-    let out = run(home.path(), &args, &[("MCP_GATEWAY_CONFIG", config_text.as_str())]);
+    let out = run(
+        home.path(),
+        &args,
+        &[("MCP_GATEWAY_CONFIG", config_text.as_str())],
+    );
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(out.status.success(), "exit 0, stderr: {stderr}");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -175,7 +178,10 @@ fn public_key_without_a_seed_names_the_variable() {
     let out = run(home.path(), &public_key_args(&config), &[]);
     assert_eq!(out.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert!(stderr.contains(SEED_ENV), "stderr names the variable: {stderr}");
+    assert!(
+        stderr.contains(SEED_ENV),
+        "stderr names the variable: {stderr}"
+    );
 }
 
 #[test]
@@ -200,7 +206,11 @@ fn verify_bounds_with_a_result() {
     let trust = copy_fixture_to(home.path(), "jwk.json");
     let receipt = copy_fixture_to(home.path(), "provenance.json");
     let result = copy_fixture_to(home.path(), "result.json");
-    let out = run(home.path(), &verify_args(&trust, &receipt, Some(&result), &[]), &[]);
+    let out = run(
+        home.path(),
+        &verify_args(&trust, &receipt, Some(&result), &[]),
+        &[],
+    );
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     assert_eq!(stdout, "BOUND kid=prov-test-1\n");
@@ -219,7 +229,10 @@ fn verify_without_a_result_needs_its_flag() {
     let out = run(home.path(), &args, &[]);
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    assert_eq!(stdout, "SIGNATURE-ONLY kid=prov-test-1 (accepted: --signature-only)\n");
+    assert_eq!(
+        stdout,
+        "SIGNATURE-ONLY kid=prov-test-1 (accepted: --signature-only)\n"
+    );
 }
 
 #[test]
@@ -229,7 +242,11 @@ fn verify_unbound_needs_its_flag() {
     let receipt = copy_fixture_to(home.path(), "provenance_unbound.json");
     let result = home.path().join("unbound_result.json");
     write_private(&result, b"{\"n\":9007199254740992}");
-    let out = run(home.path(), &verify_args(&trust, &receipt, Some(&result), &[]), &[]);
+    let out = run(
+        home.path(),
+        &verify_args(&trust, &receipt, Some(&result), &[]),
+        &[],
+    );
     assert_eq!(out.status.code(), Some(1));
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     assert_eq!(stdout, "UNBOUND kid=prov-test-1\n");
@@ -237,7 +254,10 @@ fn verify_unbound_needs_its_flag() {
     let out = run(home.path(), &args, &[]);
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-    assert_eq!(stdout, "UNBOUND kid=prov-test-1 (accepted: --accept-unbound)\n");
+    assert_eq!(
+        stdout,
+        "UNBOUND kid=prov-test-1 (accepted: --accept-unbound)\n"
+    );
 }
 
 #[test]
@@ -271,7 +291,11 @@ fn verify_tampered_is_invalid_with_both_flags() {
     write_private(&receipt, &bytes);
     let result = copy_fixture_to(home.path(), "result.json");
     let flags = ["--signature-only", "--accept-unbound"];
-    let out = run(home.path(), &verify_args(&trust, &receipt, Some(&result), &flags), &[]);
+    let out = run(
+        home.path(),
+        &verify_args(&trust, &receipt, Some(&result), &flags),
+        &[],
+    );
     assert_eq!(out.status.code(), Some(1));
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     assert_eq!(stdout, "INVALID outer_receipt_mismatch\n");
@@ -290,7 +314,11 @@ fn verify_accepts_a_stamped_result_as_receipt() {
     let bytes = serde_json::to_vec(&stamped).expect("stamped serializes");
     write_private(&receipt, &bytes);
     let expected = copy_fixture_to(home.path(), "result.json");
-    let out = run(home.path(), &verify_args(&trust, &receipt, Some(&expected), &[]), &[]);
+    let out = run(
+        home.path(),
+        &verify_args(&trust, &receipt, Some(&expected), &[]),
+        &[],
+    );
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     assert_eq!(stdout, "BOUND kid=prov-test-1\n");
@@ -309,7 +337,11 @@ fn verify_accepts_a_stamped_result_as_result() {
     let stamped_result = home.path().join("stamped_result.json");
     let bytes = serde_json::to_vec(&stamped).expect("stamped serializes");
     write_private(&stamped_result, &bytes);
-    let out = run(home.path(), &verify_args(&trust, &receipt, Some(&stamped_result), &[]), &[]);
+    let out = run(
+        home.path(),
+        &verify_args(&trust, &receipt, Some(&stamped_result), &[]),
+        &[],
+    );
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     assert_eq!(stdout, "BOUND kid=prov-test-1\n");
@@ -321,7 +353,10 @@ fn verify_result_mismatch_is_invalid_under_every_flag_set() {
     let trust = copy_fixture_to(home.path(), "jwk.json");
     let receipt = copy_fixture_to(home.path(), "provenance.json");
     let other = home.path().join("other_result.json");
-    write_private(&other, b"{\"content\":[{\"type\":\"text\",\"text\":\"other\"}]}");
+    write_private(
+        &other,
+        b"{\"content\":[{\"type\":\"text\",\"text\":\"other\"}]}",
+    );
     let flag_sets: [&[&str]; 4] = [
         &[],
         &["--signature-only"],
@@ -329,8 +364,16 @@ fn verify_result_mismatch_is_invalid_under_every_flag_set() {
         &["--signature-only", "--accept-unbound"],
     ];
     for flags in flag_sets {
-        let out = run(home.path(), &verify_args(&trust, &receipt, Some(&other), flags), &[]);
-        assert_eq!(out.status.code(), Some(1), "flags {flags:?} must not rescue a mismatch");
+        let out = run(
+            home.path(),
+            &verify_args(&trust, &receipt, Some(&other), flags),
+            &[],
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "flags {flags:?} must not rescue a mismatch"
+        );
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         assert_eq!(stdout, "INVALID result_mismatch\n");
     }
@@ -350,8 +393,16 @@ fn verify_unhashable_offer_is_invalid_under_every_flag_set() {
         &["--signature-only", "--accept-unbound"],
     ];
     for flags in flag_sets {
-        let out = run(home.path(), &verify_args(&trust, &receipt, Some(&array), flags), &[]);
-        assert_eq!(out.status.code(), Some(1), "flags {flags:?} must not rescue");
+        let out = run(
+            home.path(),
+            &verify_args(&trust, &receipt, Some(&array), flags),
+            &[],
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "flags {flags:?} must not rescue"
+        );
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         assert_eq!(stdout, "INVALID result_unhashable\n");
     }
@@ -365,7 +416,11 @@ fn verify_signature_without_domain_tag_is_invalid() {
     let trust = copy_fixture_to(home.path(), "jwk.json");
     let mut prov = fixture_json("provenance.json");
     let payload = URL_SAFE_NO_PAD
-        .decode(prov["public_signature"]["payload"].as_str().expect("a payload"))
+        .decode(
+            prov["public_signature"]["payload"]
+                .as_str()
+                .expect("a payload"),
+        )
         .expect("payload decodes");
     let key_pair = Ed25519KeyPair::from_seed_unchecked(&[7u8; 32]).expect("a seed loads");
     let bare = URL_SAFE_NO_PAD.encode(key_pair.sign(&payload).as_ref());
@@ -375,8 +430,16 @@ fn verify_signature_without_domain_tag_is_invalid() {
     write_private(&receipt, &bytes);
     let result = copy_fixture_to(home.path(), "result.json");
     for flags in [&[][..], &["--signature-only", "--accept-unbound"][..]] {
-        let out = run(home.path(), &verify_args(&trust, &receipt, Some(&result), flags), &[]);
-        assert_eq!(out.status.code(), Some(1), "flags {flags:?} must not rescue");
+        let out = run(
+            home.path(),
+            &verify_args(&trust, &receipt, Some(&result), flags),
+            &[],
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "flags {flags:?} must not rescue"
+        );
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         assert_eq!(stdout, "INVALID bad_signature\n");
     }
@@ -454,7 +517,11 @@ fn doctor_output_holds_no_canary_seed() {
     let canary_hex = hex(&canary);
     let env_file = seed_env_file(home.path(), &canary, "prov-canary");
     let config = config_with_env_files_and_port(home.path(), &[env_file], 0);
-    let args = vec!["--config".to_owned(), config.display().to_string(), "doctor".to_owned()];
+    let args = vec![
+        "--config".to_owned(),
+        config.display().to_string(),
+        "doctor".to_owned(),
+    ];
     let out = run(home.path(), &args, &[]);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
@@ -464,8 +531,14 @@ fn doctor_output_holds_no_canary_seed() {
         "doctor names the supplied config path: {stdout}"
     );
     let combined = format!("{stdout}{stderr}");
-    assert!(!combined.contains(canary_b64.as_str()), "doctor leaks the canary seed");
-    assert!(!combined.contains(canary_hex.as_str()), "doctor leaks the canary hex");
+    assert!(
+        !combined.contains(canary_b64.as_str()),
+        "doctor leaks the canary seed"
+    );
+    assert!(
+        !combined.contains(canary_hex.as_str()),
+        "doctor leaks the canary hex"
+    );
 }
 
 #[cfg(feature = "config-export")]
@@ -490,8 +563,17 @@ fn config_export_output_holds_no_canary_seed() {
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(out.status.success(), "export exits 0, stderr: {stderr}");
     let parsed: Value = serde_json::from_str(&stdout).expect("stdout parses as JSON");
-    assert!(parsed.get("mcpServers").is_some(), "export prints its JSON shape: {stdout}");
+    assert!(
+        parsed.get("mcpServers").is_some(),
+        "export prints its JSON shape: {stdout}"
+    );
     let combined = format!("{stdout}{stderr}");
-    assert!(!combined.contains(canary_b64.as_str()), "export leaks the canary seed");
-    assert!(!combined.contains(canary_hex.as_str()), "export leaks the canary hex");
+    assert!(
+        !combined.contains(canary_b64.as_str()),
+        "export leaks the canary seed"
+    );
+    assert!(
+        !combined.contains(canary_hex.as_str()),
+        "export leaks the canary hex"
+    );
 }

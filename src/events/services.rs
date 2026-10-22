@@ -284,12 +284,10 @@ impl Services {
             Some(signer) => {
                 let signed = receipt.sign(signer);
                 match &self.public_provenance {
-                    Some(public) => {
-                        crate::trust::provenance_public::provenance_value(
-                            &signed,
-                            Some((public, None)),
-                        )
-                    }
+                    Some(public) => crate::trust::provenance_public::provenance_value(
+                        &signed,
+                        Some((public, None)),
+                    ),
                     None => serde_json::to_value(signed).unwrap_or(Value::Null),
                 }
             }

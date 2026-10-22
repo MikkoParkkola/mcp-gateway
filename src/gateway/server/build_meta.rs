@@ -360,7 +360,9 @@ impl Gateway {
             if let Some(meta) = Arc::get_mut(&mut meta_mcp) {
                 install_public_provenance(meta, &self.env.get(), &key_id)?;
             } else {
-                return Err(Error::Internal("build_meta_mcp holds no exclusive MetaMcp".to_owned()));
+                return Err(Error::Internal(
+                    "build_meta_mcp holds no exclusive MetaMcp".to_owned(),
+                ));
             }
         }
 

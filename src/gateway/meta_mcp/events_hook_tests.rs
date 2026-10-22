@@ -762,7 +762,9 @@ fn public_provenance_reaches_event_services() {
         [7u8; 32],
         "prov-test-1",
     ));
-    let live = Arc::new(crate::config_reload::LiveConfig::new(crate::config::Config::default()));
+    let live = Arc::new(crate::config_reload::LiveConfig::new(
+        crate::config::Config::default(),
+    ));
     let services = meta.events_services(live, crate::events::LiveCredentials::default());
     let installed = meta
         .public_provenance_signer

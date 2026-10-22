@@ -278,7 +278,9 @@ fn parse_jwk(value: &serde_json::Value) -> Result<(String, [u8; 32]), TrustSetRe
     if x.contains('=') {
         return Err(TrustSetRefusal::BadX);
     }
-    let decoded = URL_SAFE_NO_PAD.decode(x).map_err(|_| TrustSetRefusal::BadX)?;
+    let decoded = URL_SAFE_NO_PAD
+        .decode(x)
+        .map_err(|_| TrustSetRefusal::BadX)?;
     if decoded.len() != 32 {
         return Err(TrustSetRefusal::BadX);
     }
@@ -447,9 +449,12 @@ pub(crate) fn verify_public(
     if payload_b64.contains('=') || sig_b64.contains('=') {
         return Err(VerifyRefusal::BadEncoding);
     }
-    let payload_bytes =
-        URL_SAFE_NO_PAD.decode(payload_b64).map_err(|_| VerifyRefusal::BadEncoding)?;
-    let sig_bytes = URL_SAFE_NO_PAD.decode(sig_b64).map_err(|_| VerifyRefusal::BadEncoding)?;
+    let payload_bytes = URL_SAFE_NO_PAD
+        .decode(payload_b64)
+        .map_err(|_| VerifyRefusal::BadEncoding)?;
+    let sig_bytes = URL_SAFE_NO_PAD
+        .decode(sig_b64)
+        .map_err(|_| VerifyRefusal::BadEncoding)?;
     if sig_bytes.len() != 64 {
         return Err(VerifyRefusal::BadEncoding);
     }
@@ -570,7 +575,13 @@ pub fn run_provenance_command(
             result,
             signature_only,
             accept_unbound,
-        } => run_verify(trust, receipt, result.as_ref(), *signature_only, *accept_unbound),
+        } => run_verify(
+            trust,
+            receipt,
+            result.as_ref(),
+            *signature_only,
+            *accept_unbound,
+        ),
     }
 }
 
@@ -712,8 +723,8 @@ fn run_verify(
 }
 
 #[cfg(test)]
-#[path = "provenance_public_tests.rs"]
-mod tests;
-#[cfg(test)]
 #[path = "provenance_public_kid_tests.rs"]
 mod kid_tests;
+#[cfg(test)]
+#[path = "provenance_public_tests.rs"]
+mod tests;

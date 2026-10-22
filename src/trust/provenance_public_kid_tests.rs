@@ -5,16 +5,22 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
-use super::*;
 use super::tests::{
     ATTESTATION_ID, KID_ONE, SEED_ONE, SEED_TWO, assert_value_free, jwk_for, overlay_with,
     seed_b64, x_of,
 };
+use super::*;
 
 #[test]
 fn a_seed_without_a_kid_is_refused() {
-    assert!(std::env::var(PROVENANCE_SEED_ENV).is_err(), "an inherited seed would be silently used");
-    assert!(std::env::var(PROVENANCE_KEY_ID_ENV).is_err(), "an inherited kid would be silently used");
+    assert!(
+        std::env::var(PROVENANCE_SEED_ENV).is_err(),
+        "an inherited seed would be silently used"
+    );
+    assert!(
+        std::env::var(PROVENANCE_KEY_ID_ENV).is_err(),
+        "an inherited kid would be silently used"
+    );
     let encoded = seed_b64(&SEED_ONE);
     let (_dir, env) = overlay_with(&[(PROVENANCE_SEED_ENV, encoded.as_str())]);
     let error = resolve_public_signer(&env, ATTESTATION_ID).expect_err("a missing kid is refused");
@@ -101,8 +107,14 @@ fn d4_malformed_kid_with_newline_is_refused() {
     assert_value_free(&err, &SEED_ONE);
     let display = err.to_string();
     let debug = format!("{err:?}");
-    assert!(!display.contains(resolved), "the error leaks the raw kid: {display}");
-    assert!(!debug.contains(resolved), "the error leaks the raw kid: {debug}");
+    assert!(
+        !display.contains(resolved),
+        "the error leaks the raw kid: {display}"
+    );
+    assert!(
+        !debug.contains(resolved),
+        "the error leaks the raw kid: {debug}"
+    );
 
     let x = URL_SAFE_NO_PAD.encode([7u8; 32]);
     let kid_json = serde_json::to_string(resolved).expect("a kid serializes");
@@ -117,7 +129,10 @@ fn d4_malformed_kid_with_newline_is_refused() {
         "the trust set must refuse {resolved:?} as MalformedKid"
     );
     let debug = format!("{refusal:?}");
-    assert!(!debug.contains(resolved), "the trust error leaks the raw kid: {debug}");
+    assert!(
+        !debug.contains(resolved),
+        "the trust error leaks the raw kid: {debug}"
+    );
 }
 
 /// MIK-8398 D4: a kid is 1-64 bytes of `0x21..=0x7E`. Anything else is
@@ -233,11 +248,20 @@ fn a_duplicate_kid_is_refused() {
         jwk_for(&SEED_ONE, KID_ONE),
         jwk_for(&SEED_TWO, KID_ONE)
     );
-    assert!(matches!(TrustSet::from_json(&text), Err(TrustSetRefusal::DuplicateKid)));
+    assert!(matches!(
+        TrustSet::from_json(&text),
+        Err(TrustSetRefusal::DuplicateKid)
+    ));
 }
 
 #[test]
 fn a_missing_kid_is_refused() {
-    let text = format!("{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"{}\"}}", x_of(&SEED_ONE));
-    assert!(matches!(TrustSet::from_json(&text), Err(TrustSetRefusal::MissingKid)));
+    let text = format!(
+        "{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"{}\"}}",
+        x_of(&SEED_ONE)
+    );
+    assert!(matches!(
+        TrustSet::from_json(&text),
+        Err(TrustSetRefusal::MissingKid)
+    ));
 }

@@ -22,12 +22,16 @@ const KID: &str = "prov-test-1";
 const RESULT_RFC8785: &[u8] = br#"{"content":[{"text":"ok","type":"text"}]}"#;
 
 fn fixture_path(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mik_8398").join(name)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/mik_8398")
+        .join(name)
 }
 
 fn read_fixture(name: &str) -> Vec<u8> {
     std::fs::read(fixture_path(name)).unwrap_or_else(|error| {
-        panic!("fixture {name} missing: bless with UPDATE_GOLDEN=1 on the implemented tree: {error}")
+        panic!(
+            "fixture {name} missing: bless with UPDATE_GOLDEN=1 on the implemented tree: {error}"
+        )
     })
 }
 
@@ -54,8 +58,10 @@ fn hex(bytes: &[u8]) -> String {
 fn independent_verify(jwk: &Value, prov: &Value) -> bool {
     let (Some(x), Some(payload_b64), Some(sig_b64)) = (
         jwk.get("x").and_then(Value::as_str),
-        prov.pointer("/public_signature/payload").and_then(Value::as_str),
-        prov.pointer("/public_signature/sig").and_then(Value::as_str),
+        prov.pointer("/public_signature/payload")
+            .and_then(Value::as_str),
+        prov.pointer("/public_signature/sig")
+            .and_then(Value::as_str),
     ) else {
         return false;
     };
@@ -75,7 +81,9 @@ fn independent_verify(jwk: &Value, prov: &Value) -> bool {
     }
     let mut message = DOMAIN_TAG.to_vec();
     message.extend_from_slice(&payload_raw);
-    UnparsedPublicKey::new(&ED25519, key).verify(&message, &sig).is_ok()
+    UnparsedPublicKey::new(&ED25519, key)
+        .verify(&message, &sig)
+        .is_ok()
 }
 
 fn verify_args(trust: &Path, receipt: &Path, result: Option<&Path>) -> Vec<String> {
@@ -116,8 +124,12 @@ fn a_receipt_verifies_with_only_the_public_jwk() {
     let jwk = fixture_json("jwk.json");
     let prov = fixture_json("provenance.json");
     assert!(independent_verify(&jwk, &prov));
-    let payload_b64 = prov["public_signature"]["payload"].as_str().expect("a payload");
-    let payload_raw = URL_SAFE_NO_PAD.decode(payload_b64).expect("payload decodes");
+    let payload_b64 = prov["public_signature"]["payload"]
+        .as_str()
+        .expect("a payload");
+    let payload_raw = URL_SAFE_NO_PAD
+        .decode(payload_b64)
+        .expect("payload decodes");
     let payload: Value = serde_json::from_slice(&payload_raw).expect("payload parses");
     assert_eq!(payload["v"].as_u64(), Some(1));
     assert_eq!(payload["alg"].as_str(), Some("EdDSA"));
@@ -145,8 +157,12 @@ fn a1b_the_binary_reports_bound_with_only_the_public_jwk() {
 fn a_flipped_payload_byte_fails() {
     let jwk = fixture_json("jwk.json");
     let mut tampered = fixture_json("provenance.json");
-    let payload_b64 = tampered["public_signature"]["payload"].as_str().expect("a payload");
-    let mut payload = URL_SAFE_NO_PAD.decode(payload_b64).expect("payload decodes");
+    let payload_b64 = tampered["public_signature"]["payload"]
+        .as_str()
+        .expect("a payload");
+    let mut payload = URL_SAFE_NO_PAD
+        .decode(payload_b64)
+        .expect("payload decodes");
     payload[10] ^= 0x01;
     tampered["public_signature"]["payload"] = Value::from(URL_SAFE_NO_PAD.encode(&payload));
     assert!(!independent_verify(&jwk, &tampered));
@@ -210,14 +226,24 @@ fn a_changed_jwk_kid_fails() {
 fn a_missing_domain_tag_fails() {
     let jwk = fixture_json("jwk.json");
     let prov = fixture_json("provenance.json");
-    let key = URL_SAFE_NO_PAD.decode(jwk["x"].as_str().expect("an x")).expect("x decodes");
+    let key = URL_SAFE_NO_PAD
+        .decode(jwk["x"].as_str().expect("an x"))
+        .expect("x decodes");
     let payload = URL_SAFE_NO_PAD
-        .decode(prov["public_signature"]["payload"].as_str().expect("a payload"))
+        .decode(
+            prov["public_signature"]["payload"]
+                .as_str()
+                .expect("a payload"),
+        )
         .expect("payload decodes");
     let sig = URL_SAFE_NO_PAD
         .decode(prov["public_signature"]["sig"].as_str().expect("a sig"))
         .expect("sig decodes");
-    assert!(UnparsedPublicKey::new(&ED25519, key).verify(&payload, &sig).is_err());
+    assert!(
+        UnparsedPublicKey::new(&ED25519, key)
+            .verify(&payload, &sig)
+            .is_err()
+    );
 }
 
 #[test]
@@ -226,6 +252,8 @@ fn the_jwk_has_no_private_member() {
     assert!(jwk.get("d").is_none(), "no private member");
     assert_eq!(jwk["kty"].as_str(), Some("OKP"));
     assert_eq!(jwk["crv"].as_str(), Some("Ed25519"));
-    let x = URL_SAFE_NO_PAD.decode(jwk["x"].as_str().expect("an x")).expect("x decodes");
+    let x = URL_SAFE_NO_PAD
+        .decode(jwk["x"].as_str().expect("an x"))
+        .expect("x decodes");
     assert_eq!(x.len(), 32);
 }

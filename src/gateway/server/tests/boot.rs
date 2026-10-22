@@ -339,8 +339,14 @@ fn assert_value_free(error: &crate::Error, seed: &[u8]) {
     }
     let supplied = String::from_utf8_lossy(seed);
     for text in [&display, &debug] {
-        assert!(!text.contains(encoded.as_str()), "error leaks the seed: {text}");
-        assert!(!text.contains(rendered.as_str()), "error leaks the seed: {text}");
+        assert!(
+            !text.contains(encoded.as_str()),
+            "error leaks the seed: {text}"
+        );
+        assert!(
+            !text.contains(rendered.as_str()),
+            "error leaks the seed: {text}"
+        );
         assert!(
             !text.contains(supplied.as_ref()),
             "error leaks the supplied seed text: {text}"
@@ -350,10 +356,10 @@ fn assert_value_free(error: &crate::Error, seed: &[u8]) {
 
 #[test]
 fn d2_malformed_seed_refuses_without_leaking() {
-    use base64::Engine as _;
-    use base64::engine::general_purpose::STANDARD;
     use crate::gateway::server::provenance_signer::install_public_provenance;
     use crate::trust::provenance_public::{PROVENANCE_KEY_ID_ENV, PROVENANCE_SEED_ENV};
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
 
     let short_raw = [7u8; 31];
     let short = STANDARD.encode(short_raw);
@@ -379,10 +385,10 @@ fn d2_malformed_seed_refuses_without_leaking() {
 
 #[test]
 fn d2_seed_without_kid_refuses_without_leaking() {
-    use base64::Engine as _;
-    use base64::engine::general_purpose::STANDARD;
     use crate::gateway::server::provenance_signer::install_public_provenance;
     use crate::trust::provenance_public::{PROVENANCE_KEY_ID_ENV, PROVENANCE_SEED_ENV};
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
 
     assert!(
         std::env::var(PROVENANCE_SEED_ENV).is_err(),
@@ -416,10 +422,10 @@ fn d2_seed_without_kid_refuses_without_leaking() {
 
 #[test]
 fn d2_kid_colliding_with_attestation_refuses() {
-    use base64::Engine as _;
-    use base64::engine::general_purpose::STANDARD;
     use crate::gateway::server::provenance_signer::install_public_provenance;
     use crate::trust::provenance_public::{PROVENANCE_KEY_ID_ENV, PROVENANCE_SEED_ENV};
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
 
     let raw = [7u8; 32];
     let seed = STANDARD.encode(raw);
@@ -437,10 +443,10 @@ fn d2_kid_colliding_with_attestation_refuses() {
 
 #[test]
 fn d2_valid_seed_installs_the_signer() {
-    use base64::Engine as _;
-    use base64::engine::general_purpose::STANDARD;
     use crate::gateway::server::provenance_signer::install_public_provenance;
     use crate::trust::provenance_public::{PROVENANCE_KEY_ID_ENV, PROVENANCE_SEED_ENV};
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
 
     let seed = STANDARD.encode([7u8; 32]);
     let (_dir, env) = public_provenance_overlay(&[
@@ -450,7 +456,10 @@ fn d2_valid_seed_installs_the_signer() {
     let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
     let result = install_public_provenance(&mut meta, &env, "gateway");
     assert!(result.is_ok(), "a valid seed installs: {result:?}");
-    assert!(meta.public_provenance_installed(), "a valid seed must install the signer");
+    assert!(
+        meta.public_provenance_installed(),
+        "a valid seed must install the signer"
+    );
 }
 
 #[test]
@@ -470,20 +479,23 @@ fn d2_absent_seed_installs_nothing() {
     let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
     let result = install_public_provenance(&mut meta, &env, "gateway");
     assert!(result.is_ok(), "an absent seed is not an error: {result:?}");
-    assert!(!meta.public_provenance_installed(), "an absent seed installs nothing");
+    assert!(
+        !meta.public_provenance_installed(),
+        "an absent seed installs nothing"
+    );
 }
 
 /// MIK-8398: the real `build_meta_mcp` path installs the public signer when
 /// stamping is on and the seed, kid and attestation key are set.
 #[tokio::test]
 async fn boot_installs_public_provenance_when_stamping_is_on() {
-    use base64::Engine as _;
-    use base64::engine::general_purpose::STANDARD;
     use crate::attestation::{
         ATTESTATION_AUDIENCE_ENV, ATTESTATION_KEY_ID_ENV, ATTESTATION_MODE_ENV,
         ATTESTATION_SIGNING_KEY_ENV,
     };
     use crate::trust::provenance_public::{PROVENANCE_KEY_ID_ENV, PROVENANCE_SEED_ENV};
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
 
     let dir = tempfile::tempdir().expect("tempdir");
     let env_file = dir.path().join("prov.env");
