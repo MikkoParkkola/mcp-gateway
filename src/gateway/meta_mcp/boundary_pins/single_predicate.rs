@@ -5,6 +5,17 @@
 //! A new inline copy of either predicate fails here until it is routed
 //! through the shared body. Syntax scan, not text, so a copy split across
 //! lines is still found.
+//!
+//! ## Detection bounds
+//!
+//! The detector is hand-written and approximates "a copy of the API-key or
+//! principal rule". Plain tuples use position matching: a wildcard counts
+//! only at the same index where the `ApiKey` arm names `ApiKey`. Struct,
+//! slice and `..` shapes fail closed: they can only over-flag, never miss,
+//! and a flagged site is resolved by a reviewed allowlist entry or a
+//! rewrite. The principal probe can over-flag when `authenticated` and an
+//! `is_empty` on a principal appear in one expression without one guarding
+//! the other (a known false-positive bound).
 
 use syn::visit::Visit;
 
@@ -162,16 +173,209 @@ fn unwrap_pat(pat: &syn::Pat) -> &syn::Pat {
     current
 }
 
+/// Whether `pat` holds a `_` or lowercase binding anywhere inside it.
+///
+/// Recurses through `Pat::Paren`, `Pat::Reference`, `Pat::Or`,
+/// `Pat::Tuple`, `Pat::TupleStruct`, `Pat::Slice` and `Pat::Struct`; a bare
+/// uppercase `Pat::Ident` is a variant and never counts.
+fn pat_has_wildcard_or_binding(pat: &syn::Pat) -> bool {
+    match pat {
+        syn::Pat::Wild(_) => true,
+        syn::Pat::Ident(binding) => {
+            if is_binding_ident(binding) {
+                return true;
+            }
+            if let Some((_, sub)) = &binding.subpat {
+                return pat_has_wildcard_or_binding(sub);
+            }
+            false
+        }
+        syn::Pat::Paren(inner) => pat_has_wildcard_or_binding(&inner.pat),
+        syn::Pat::Reference(inner) => pat_has_wildcard_or_binding(&inner.pat),
+        syn::Pat::Or(or) => or.cases.iter().any(pat_has_wildcard_or_binding),
+        syn::Pat::Tuple(tuple) => tuple.elems.iter().any(pat_has_wildcard_or_binding),
+        syn::Pat::TupleStruct(ts) => ts.elems.iter().any(pat_has_wildcard_or_binding),
+        syn::Pat::Slice(slice) => slice.elems.iter().any(pat_has_wildcard_or_binding),
+        syn::Pat::Struct(strukt) => strukt
+            .fields
+            .iter()
+            .any(|field| pat_has_wildcard_or_binding(&field.pat)),
+        _ => false,
+    }
+}
+
+/// Whether the `ApiKey` path in `pat` passes through an unmodeled shape.
+///
+/// A `Pat::Struct` or `Pat::Slice` is always unmodeled; a `Pat::Tuple` or
+/// `Pat::TupleStruct` is unmodeled only when its `elems` hold a `Pat::Rest`.
+/// Plain tuples recurse into the `elems` that name `ApiKey`.
+fn api_path_uses_unmodeled(pat: &syn::Pat) -> bool {
+    let unwrapped = unwrap_pat(pat);
+    if matches!(unwrapped, syn::Pat::Struct(_) | syn::Pat::Slice(_)) {
+        return pat_mentions_api_key(unwrapped);
+    }
+    if let syn::Pat::Tuple(tuple) = unwrapped {
+        if tuple
+            .elems
+            .iter()
+            .any(|elem| matches!(elem, syn::Pat::Rest(_)))
+        {
+            return pat_mentions_api_key(unwrapped);
+        }
+        return tuple
+            .elems
+            .iter()
+            .filter(|elem| pat_mentions_api_key(elem))
+            .any(api_path_uses_unmodeled);
+    }
+    if let syn::Pat::TupleStruct(ts) = unwrapped {
+        if ts
+            .elems
+            .iter()
+            .any(|elem| matches!(elem, syn::Pat::Rest(_)))
+        {
+            return pat_mentions_api_key(unwrapped);
+        }
+        return ts
+            .elems
+            .iter()
+            .filter(|elem| pat_mentions_api_key(elem))
+            .any(api_path_uses_unmodeled);
+    }
+    if let syn::Pat::Ident(binding) = unwrapped {
+        if let Some((_, sub)) = &binding.subpat {
+            return api_path_uses_unmodeled(sub);
+        }
+        return false;
+    }
+    if let syn::Pat::Or(or) = unwrapped {
+        return or
+            .cases
+            .iter()
+            .filter(|case| pat_mentions_api_key(case))
+            .any(api_path_uses_unmodeled);
+    }
+    false
+}
+
+/// Whether `cand` is unmodeled at the position compared with `api`.
+///
+/// Follows the position rule through `Pat::Paren`, `Pat::Reference`,
+/// `Pat::Or` and same-index `Pat::Tuple` / `Pat::TupleStruct` steps. A
+/// `Pat::Struct`, a `Pat::Slice`, or a tuple / tuple-struct with a
+/// `Pat::Rest` at the compared position counts as unmodeled.
+fn cand_has_unmodeled_at_position(api: &syn::Pat, cand: &syn::Pat) -> bool {
+    let api_unwrapped = unwrap_pat(api);
+    let cand_unwrapped = unwrap_pat(cand);
+    if !pat_mentions_api_key(api_unwrapped) {
+        return false;
+    }
+    if matches!(cand_unwrapped, syn::Pat::Struct(_) | syn::Pat::Slice(_)) {
+        return true;
+    }
+    if let syn::Pat::Tuple(tuple) = cand_unwrapped {
+        if tuple
+            .elems
+            .iter()
+            .any(|elem| matches!(elem, syn::Pat::Rest(_)))
+        {
+            return true;
+        }
+    }
+    if let syn::Pat::TupleStruct(ts) = cand_unwrapped {
+        if ts
+            .elems
+            .iter()
+            .any(|elem| matches!(elem, syn::Pat::Rest(_)))
+        {
+            return true;
+        }
+    }
+    if let syn::Pat::Ident(binding) = api_unwrapped {
+        if let Some((_, sub)) = &binding.subpat {
+            return cand_has_unmodeled_at_position(sub, cand_unwrapped);
+        }
+    }
+    if let syn::Pat::Ident(binding) = cand_unwrapped {
+        if let Some((_, sub)) = &binding.subpat {
+            return cand_has_unmodeled_at_position(api_unwrapped, sub);
+        }
+    }
+    if let syn::Pat::Or(or) = api_unwrapped {
+        return or
+            .cases
+            .iter()
+            .filter(|case| pat_mentions_api_key(case))
+            .any(|case| cand_has_unmodeled_at_position(case, cand_unwrapped));
+    }
+    if let syn::Pat::Or(or) = cand_unwrapped {
+        return or
+            .cases
+            .iter()
+            .any(|case| cand_has_unmodeled_at_position(api_unwrapped, case));
+    }
+    if let (syn::Pat::Tuple(api_tuple), syn::Pat::Tuple(cand_tuple)) =
+        (api_unwrapped, cand_unwrapped)
+    {
+        if api_tuple
+            .elems
+            .iter()
+            .any(|elem| matches!(elem, syn::Pat::Rest(_)))
+        {
+            return true;
+        }
+        for (index, api_elem) in api_tuple.elems.iter().enumerate() {
+            if !pat_mentions_api_key(api_elem) {
+                continue;
+            }
+            if let Some(cand_elem) = cand_tuple.elems.iter().nth(index) {
+                if cand_has_unmodeled_at_position(api_elem, cand_elem) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    if let (syn::Pat::TupleStruct(api_ts), syn::Pat::TupleStruct(cand_ts)) =
+        (api_unwrapped, cand_unwrapped)
+    {
+        if api_ts
+            .elems
+            .iter()
+            .any(|elem| matches!(elem, syn::Pat::Rest(_)))
+        {
+            return true;
+        }
+        for (index, api_elem) in api_ts.elems.iter().enumerate() {
+            if !pat_mentions_api_key(api_elem) {
+                continue;
+            }
+            if let Some(cand_elem) = cand_ts.elems.iter().nth(index) {
+                if cand_has_unmodeled_at_position(api_elem, cand_elem) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    false
+}
+
 /// Whether `cand` catches the `ApiKey` position in `api`.
 ///
-/// A top-level `_` or binding still counts. In a `Pat::Tuple` or
-/// `Pat::TupleStruct`, only a wildcard or binding at the same index where
-/// `api` names `ApiKey` counts, recursing through `Some(..)`,
-/// `Pat::Paren` and `Pat::Reference`.
+/// A top-level `_` or binding still counts. In a plain `Pat::Tuple` or
+/// `Pat::TupleStruct` without `..`, only a wildcard or binding at the same
+/// index where `api` names `ApiKey` counts, recursing through `Some(..)`,
+/// `Pat::Paren` and `Pat::Reference`. A `Pat::Struct`, a `Pat::Slice`, or a
+/// tuple / tuple-struct / slice with `Pat::Rest` fails closed: any `_` or
+/// binding anywhere in `cand` then counts.
 fn is_catch_all_for(api: &syn::Pat, cand: &syn::Pat) -> bool {
     let cand_unwrapped = unwrap_pat(cand);
     if is_top_level_catch_all(cand_unwrapped) {
         return true;
+    }
+    if api_path_uses_unmodeled(api) || cand_has_unmodeled_at_position(api, cand) {
+        return pat_has_wildcard_or_binding(cand);
     }
     let api_unwrapped = unwrap_pat(api);
     if let syn::Pat::Ident(binding) = api_unwrapped {
@@ -541,233 +745,5 @@ fn single_principal_predicate() {
     );
 }
 
-struct Fixture {
-    file: String,
-    func: Option<String>,
-    found: Vec<String>,
-}
-
-impl<'ast> Visit<'ast> for Fixture {
-    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
-        let saved = self.func.replace(node.sig.ident.to_string());
-        syn::visit::visit_item_fn(self, node);
-        self.func = saved;
-    }
-
-    fn visit_expr(&mut self, expr: &'ast syn::Expr) {
-        let at = Place {
-            file: self.file.clone(),
-            func: self.func.clone(),
-        };
-        if let Some(kind) = offence(&at, expr) {
-            self.found.push(kind.to_string());
-        }
-        syn::visit::visit_expr(self, expr);
-    }
-
-    fn visit_stmt(&mut self, stmt: &'ast syn::Stmt) {
-        let at = Place {
-            file: self.file.clone(),
-            func: self.func.clone(),
-        };
-        if let Some(kind) = stmt_offence(&at, stmt) {
-            self.found.push(kind.to_string());
-        }
-        syn::visit::visit_stmt(self, stmt);
-    }
-}
-
-fn fixture_offences(file: &str, source: &str) -> Vec<String> {
-    let parsed = syn::parse_file(source).expect("fixture parses");
-    let mut fixture = Fixture {
-        file: file.to_string(),
-        func: None,
-        found: Vec::new(),
-    };
-    fixture.visit_file(&parsed);
-    fixture.found
-}
-
-/// T1c: a new comparison in an allowlisted file but a new fn is flagged.
-#[test]
-fn fixture_new_comparison_in_an_allowlisted_file_is_flagged() {
-    let source = "fn other(c: &Client) -> bool { c.credential_kind == CredentialKind::ApiKey }";
-    let found = fixture_offences("src/gateway/auth.rs", source);
-    assert!(
-        found.iter().any(|kind| kind == "ApiKey"),
-        "a new comparison in `other` was not flagged"
-    );
-}
-
-/// T1c: a comparison split across lines is flagged.
-#[test]
-fn fixture_multiline_comparison_is_flagged() {
-    let source = "fn check(c: &Client) -> bool {\n    c.credential_kind\n        ==\n        crate::security::audit::CredentialKind::ApiKey\n}";
-    let found = fixture_offences("fixture.rs", source);
-    assert!(
-        found.iter().any(|kind| kind == "ApiKey"),
-        "a multiline comparison was not flagged"
-    );
-}
-
-/// T1c: a `matches!` naming `ApiKey` is flagged.
-#[test]
-fn fixture_matches_macro_is_flagged() {
-    let source = "fn check(k: Kind) -> bool { matches!(k, Kind::ApiKey | Kind::None) }";
-    let found = fixture_offences("fixture.rs", source);
-    assert!(
-        found.iter().any(|kind| kind == "ApiKey"),
-        "`matches!` naming `ApiKey` was not flagged"
-    );
-}
-
-/// T2 scan: a principal conjunct split across lines is flagged.
-#[test]
-fn fixture_principal_conjunct_multiline_is_flagged() {
-    let source = "fn check(c: &Client) -> bool {\n    c.authenticated\n        && !c.principal.is_empty()\n}";
-    let found = fixture_offences("fixture.rs", source);
-    assert!(
-        found.iter().any(|kind| kind == "principal"),
-        "a multiline principal conjunct was not flagged"
-    );
-}
-
-/// T1c: a struct literal minting `ApiKey` is not a comparison.
-#[test]
-fn fixture_struct_literal_is_not_flagged() {
-    let source = "fn mint(base: Client) -> Client { AuthenticatedClient { credential_kind: CredentialKind::ApiKey, ..base } }";
-    let found = fixture_offences("fixture.rs", source);
-    assert!(found.is_empty(), "a struct literal was flagged: {found:?}");
-}
-
-/// Grok round: the `if authenticated` filter shape from
-/// `authenticated_principal` is flagged in a non-allowlisted fn.
-#[test]
-fn fixture_if_filter_principal_form_is_flagged() {
-    let source = "fn other(authenticated: bool, principal: Option<&str>) -> Option<&str> { if authenticated { principal.filter(|p| !p.is_empty()) } else { None } }";
-    let found = fixture_offences("fixture.rs", source);
-    assert!(
-        found.iter().any(|kind| kind == "principal"),
-        "the if-filter principal form was not flagged"
-    );
-}
-
-/// Lead ruling: a `match` that singles `ApiKey` out beside a wildcard is
-/// flagged in a non-allowlisted fn.
-#[test]
-fn fixture_wildcard_api_key_match_is_flagged() {
-    let source = "fn other(k: Kind) -> u32 { match k { Kind::ApiKey => 1, _ => 0 } }";
-    let found = fixture_offences("fixture.rs", source);
-    assert!(
-        found.iter().any(|kind| kind == "ApiKey"),
-        "a wildcard `ApiKey` match was not flagged"
-    );
-}
-
-/// Lead ruling: an `if let` that singles `ApiKey` out is flagged.
-#[test]
-fn fixture_if_let_api_key_is_flagged() {
-    let source = "fn other(k: Kind) -> u32 { if let Kind::ApiKey = k { 1 } else { 0 } }";
-    let found = fixture_offences("fixture.rs", source);
-    assert!(
-        found.iter().any(|kind| kind == "ApiKey"),
-        "an `if let` on `ApiKey` was not flagged"
-    );
-}
-
-/// Lead ruling: an exhaustive dispatch over kinds is not a copy of the
-/// `ApiKey` rule, so it is not flagged.
-#[test]
-fn fixture_exhaustive_kind_match_is_not_flagged() {
-    let source = "fn other(k: Kind) -> u32 { match k { Kind::ApiKey => 1, Kind::StaticBearer => 2, Kind::None => 3 } }";
-    let found = fixture_offences("fixture.rs", source);
-    assert!(
-        found.is_empty(),
-        "an exhaustive kind match was flagged: {found:?}"
-    );
-}
-
-/// A `let ... else` that singles `ApiKey` out is flagged.
-#[test]
-fn fixture_let_else_api_key_is_flagged() {
-    let source = "fn other(k: Kind) -> u32 { let Kind::ApiKey = k else { return 0 }; 1 }";
-    let found = fixture_offences("fixture.rs", source);
-    assert!(
-        found.iter().any(|kind| kind == "ApiKey"),
-        "a `let ... else` on `ApiKey` was not flagged"
-    );
-}
-
-/// MIK-8659: a nested binding beside an `ApiKey` arm is a catch-all, so the
-/// `match` is flagged.
-#[test]
-fn fixture_nested_catch_all_api_key_match_is_flagged() {
-    let source = "fn check(k: Option<Kind>) -> u8 { match k { Some(Kind::ApiKey) => 1, Some(other) => 0, None => 2 } }";
-    let found = fixture_offences("fixture.rs", source);
-    assert!(
-        found.iter().any(|kind| kind == "ApiKey"),
-        "a nested catch-all `ApiKey` match was not flagged"
-    );
-}
-
-/// MIK-8659: an exhaustive nested dispatch over kinds is not a copy of the
-/// `ApiKey` rule, so it is not flagged.
-#[test]
-fn fixture_exhaustive_nested_kind_match_is_not_flagged() {
-    let source = "fn other(k: Option<Kind>) -> u8 { match k { Some(Kind::ApiKey) => 1, Some(Kind::StaticBearer) => 2, Some(Kind::None) => 3, None => 4 } }";
-    let found = fixture_offences("fixture.rs", source);
-    assert!(
-        found.is_empty(),
-        "an exhaustive nested kind match was flagged: {found:?}"
-    );
-}
-
-/// Lead ruling: a bare `ApiKey` from `use Kind::*` is an `ApiKey` path, so
-/// it is flagged beside a wildcard.
-#[test]
-fn fixture_imported_api_key_variant_is_flagged() {
-    let source = "fn other(k: Kind) -> u32 { match k { ApiKey => 1, _ => 0 } }";
-    let found = fixture_offences("fixture.rs", source);
-    assert!(
-        found.iter().any(|kind| kind == "ApiKey"),
-        "a bare `ApiKey` variant was not flagged"
-    );
-}
-
-/// Lead ruling: bare uppercase idents are variants, so `StaticBearer` is
-/// not a catch-all and the bare `match` is not flagged.
-#[test]
-fn fixture_bare_variant_is_not_a_catch_all() {
-    let source =
-        "fn other(k: Kind) -> u32 { match k { ApiKey => 1, StaticBearer => 2, None => 3 } }";
-    let found = fixture_offences("fixture.rs", source);
-    assert!(
-        found.is_empty(),
-        "a bare variant match was flagged: {found:?}"
-    );
-}
-
-/// Lead ruling: a tuple arm with a wildcard at the `ApiKey` position is a
-/// catch-all, so the `match` is flagged.
-#[test]
-fn fixture_tuple_catch_all_at_api_key_position_is_flagged() {
-    let source =
-        "fn other(k: Kind, x: u32) -> u32 { match (k, x) { (Kind::ApiKey, _) => 1, (_, _) => 0 } }";
-    let found = fixture_offences("fixture.rs", source);
-    assert!(
-        found.iter().any(|kind| kind == "ApiKey"),
-        "a tuple catch-all at the `ApiKey` position was not flagged"
-    );
-}
-
-/// Lead ruling: a tuple wildcard elsewhere is not a catch-all for the
-/// `ApiKey` arm, so the exhaustive tuple `match` is not flagged.
-#[test]
-fn fixture_tuple_wildcard_elsewhere_is_not_flagged() {
-    let source = "fn other(k: Kind, x: u32) -> u32 { match (k, x) { (Kind::ApiKey, _) => 1, (Kind::StaticBearer, _) => 2, (Kind::None, _) => 3 } }";
-    let found = fixture_offences("fixture.rs", source);
-    assert!(
-        found.is_empty(),
-        "a tuple wildcard elsewhere was flagged: {found:?}"
-    );
-}
+#[path = "single_predicate_fixtures.rs"]
+mod fixtures;
