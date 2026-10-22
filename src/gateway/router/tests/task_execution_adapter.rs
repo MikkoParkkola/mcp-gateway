@@ -126,6 +126,8 @@ mod interlock;
 mod lifecycle;
 mod pending_input_policy;
 mod proven_subject_admission;
+/// MIK-8398 C1d: a task the worker runs stores a sealed result.
+mod provenance_seal;
 mod provide_input_guards;
 /// I5's during-the-wire half: one query per record at a time, worker and
 /// authenticated reader alike.

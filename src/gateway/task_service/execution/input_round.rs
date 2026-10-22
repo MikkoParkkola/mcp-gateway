@@ -557,7 +557,12 @@ struct Resume {
 async fn resume(resume: Resume, cancel_rx: watch::Receiver<bool>) {
     // Every early exit below is a `?` or a returned expression: `None` is "the
     // round was settled or closed here, nothing left to run".
-    let _ = resume_flow(resume, cancel_rx).await;
+    // One minted-receipt scope for the resume's dispatch and its settle
+    // (MIK-8398 C1d), boxed as the request entry points are.
+    let _ = crate::gateway::meta_mcp::invoke::with_minted_receipts(Box::pin(resume_flow(
+        resume, cancel_rx,
+    )))
+    .await;
 }
 
 /// A host that is gone settles the task interrupted: the call cannot run.
@@ -626,7 +631,11 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
     executor
         .proceed_unless_late(ids, deadline, expired, at)
         .await?;
-    let response = inspect_settled(&state, &call, &id, response);
+    let mut response = inspect_settled(&state, &call, &id, response);
+    // Sealed at creation, as the worker's first dispatch is (MIK-8398 C1d).
+    if let Some(result) = response.result.as_mut() {
+        state.meta_mcp().seal_public_provenance(result);
+    }
     Settling::new(&executor, &state, &owned, &call, &principal, &id, revision)
         .settle_or_ask(response, &mut cancel_rx)
         .await;
