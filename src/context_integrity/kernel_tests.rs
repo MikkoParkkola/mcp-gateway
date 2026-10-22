@@ -379,3 +379,143 @@ fn large_output_classification_is_bounded_and_samples_tail() {
         ContextIntegrityDecisionKind::Deny
     );
 }
+
+// ── MIK-8669 commit G guard tests: kernel severity surface ──────────────────
+
+const TUNNEL_SAMPLE: &str = "data at https://abc123.ngrok.io/collect";
+const CLEAN_SAMPLE: &str = "quarterly weather summary";
+
+/// An Anthropic-key-shaped fixture (the `sk-ant-` pattern), assembled from
+/// pieces so no source literal holds a key-shaped string.
+fn key_sample() -> String {
+    ["key: ", "sk-", "ant-", "api03-", "TESTFIXTURE00000001"].concat()
+}
+
+fn classification_json_for(text: &str) -> serde_json::Value {
+    let kernel = ContextIntegrityKernel::default();
+    let input = ContextIntegrityInput::read_only_tool_result(
+        remote_provenance(),
+        json!({"content": [{"type": "text", "text": text}]}),
+    );
+    let evaluation = kernel.evaluate(input);
+    serde_json::to_value(&evaluation.classification).expect("classification must serialize")
+}
+
+fn rank(severity: &str) -> u8 {
+    match severity {
+        "low" => 0,
+        "medium" => 1,
+        "high" => 2,
+        "critical" => 3,
+        unexpected => panic!("severity label outside the pinned set: {unexpected}"),
+    }
+}
+
+#[test]
+fn tunnel_url_keeps_high_severity_through_kernel_mapping() {
+    let classification = classification_json_for(TUNNEL_SAMPLE);
+    let surfaced = classification
+        .get("findings")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|findings| {
+            findings.iter().any(|finding| {
+                finding
+                    .get("description")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("Tunnel service URL")
+                    && finding
+                        .get("evidence")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|evidence| evidence.starts_with("response_inspect pattern "))
+                    && finding.get("severity").and_then(serde_json::Value::as_str) == Some("high")
+            })
+        });
+    assert!(
+        surfaced,
+        "tunnel text must surface a high response_inspect finding: {classification}"
+    );
+}
+
+#[test]
+fn anthropic_key_keeps_critical_severity_through_kernel_mapping() {
+    let classification = classification_json_for(&key_sample());
+    let surfaced = classification
+        .get("findings")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|findings| {
+            findings.iter().any(|finding| {
+                finding
+                    .get("description")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("Anthropic API key")
+                    && finding
+                        .get("evidence")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|evidence| evidence.starts_with("response_inspect pattern "))
+                    && finding.get("severity").and_then(serde_json::Value::as_str)
+                        == Some("critical")
+            })
+        });
+    assert!(
+        surfaced,
+        "key text must surface a critical response_inspect finding: {classification}"
+    );
+}
+
+#[test]
+fn kernel_max_severity_is_highest_finding_rank_for_scored_texts() {
+    let key = key_sample();
+    for text in [TUNNEL_SAMPLE, key.as_str()] {
+        let classification = classification_json_for(text);
+        let mut severities: Vec<&str> = Vec::new();
+        if let Some(findings) = classification
+            .get("findings")
+            .and_then(serde_json::Value::as_array)
+        {
+            for finding in findings {
+                let severity = finding.get("severity").and_then(serde_json::Value::as_str);
+                assert!(
+                    severity.is_some(),
+                    "every finding carries a severity: {finding}"
+                );
+                severities.extend(severity);
+            }
+        }
+        assert!(
+            !severities.is_empty(),
+            "scored text must classify with findings: {classification}"
+        );
+        for severity in &severities {
+            assert!(
+                matches!(*severity, "low" | "medium" | "high" | "critical"),
+                "severity label outside the pinned set: {severity}"
+            );
+        }
+        let highest = severities.iter().copied().map(rank).max();
+        let reported = classification
+            .get("max_severity")
+            .and_then(serde_json::Value::as_str)
+            .map(rank);
+        assert_eq!(
+            reported, highest,
+            "max_severity must equal the highest finding rank: {classification}"
+        );
+    }
+}
+
+#[test]
+fn clean_text_has_no_max_severity_and_no_findings() {
+    let classification = classification_json_for(CLEAN_SAMPLE);
+    assert!(
+        classification.get("max_severity").is_none(),
+        "clean text must not set max_severity: {classification}"
+    );
+    let no_findings = classification
+        .get("findings")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(std::vec::Vec::is_empty);
+    assert!(
+        no_findings,
+        "clean text must classify with no findings: {classification}"
+    );
+}

@@ -680,5 +680,8 @@ mod refusal_words_tests;
 mod tenant_audit_tests;
 
 #[cfg(test)]
+#[path = "severity_tests.rs"]
+mod severity_tests;
+#[cfg(test)]
 #[path = "firewall_tests.rs"]
 mod tests;

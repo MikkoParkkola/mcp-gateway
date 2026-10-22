@@ -476,4 +476,89 @@ mod tests {
         assert_eq!(indices(&observed), indices(&blocked));
         assert_eq!(runs("response_inspect", &marker), 1, "one scan, two hits");
     }
+
+    // ── MIK-8669 commit G guard tests: severity surface ─────────────────────
+
+    const TUNNEL_SAMPLE: &str = "data at https://abc123.ngrok.io/collect";
+
+    /// An Anthropic-key-shaped fixture (the `sk-ant-` pattern), assembled from
+    /// pieces so no source literal holds a key-shaped string.
+    fn key_sample() -> String {
+        ["key: ", "sk-", "ant-", "api03-", "TESTFIXTURE00000001"].concat()
+    }
+
+    #[test]
+    fn anthropic_key_finding_serializes_as_critical_secret_with_stable_keys() {
+        let value = serde_json::to_value(&inspect_response(&key_sample(), false).findings)
+            .expect("response findings must serialize");
+        let secret = value.as_array().and_then(|findings| {
+            findings.iter().find(|finding| {
+                finding.get("category").and_then(serde_json::Value::as_str) == Some("secret")
+            })
+        });
+        assert!(
+            secret.is_some(),
+            "key text must surface a secret finding: {value}"
+        );
+        let severity = secret
+            .and_then(|finding| finding.get("severity"))
+            .and_then(serde_json::Value::as_str);
+        assert_eq!(
+            severity,
+            Some("critical"),
+            "secret finding must serialize severity critical: {value}"
+        );
+        let stable_keys = secret
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|object| {
+                let keys: std::collections::BTreeSet<&str> =
+                    object.keys().map(String::as_str).collect();
+                keys == std::collections::BTreeSet::from([
+                    "category",
+                    "description",
+                    "matched_pattern_index",
+                    "severity",
+                ])
+            });
+        assert!(
+            stable_keys,
+            "secret finding must keep its four serialized keys: {value}"
+        );
+    }
+
+    #[test]
+    fn tunnel_url_finding_serializes_as_high_exfil_url() {
+        let value = serde_json::to_value(&inspect_response(TUNNEL_SAMPLE, false).findings)
+            .expect("response findings must serialize");
+        let high = value.as_array().is_some_and(|findings| {
+            findings.iter().any(|finding| {
+                finding.get("category").and_then(serde_json::Value::as_str) == Some("exfil_url")
+                    && finding.get("severity").and_then(serde_json::Value::as_str) == Some("high")
+            })
+        });
+        assert!(
+            high,
+            "tunnel URL must surface a high exfil_url finding: {value}"
+        );
+    }
+
+    #[test]
+    fn action_mode_blocks_scored_samples_while_observe_mode_passes_them() {
+        assert!(
+            inspect_response(&key_sample(), true).should_block,
+            "key text must block in action mode"
+        );
+        assert!(
+            inspect_response(TUNNEL_SAMPLE, true).should_block,
+            "tunnel text must block in action mode"
+        );
+        assert!(
+            !inspect_response(&key_sample(), false).should_block,
+            "observe mode must not block key text"
+        );
+        assert!(
+            !inspect_response(TUNNEL_SAMPLE, false).should_block,
+            "observe mode must not block tunnel text"
+        );
+    }
 }
