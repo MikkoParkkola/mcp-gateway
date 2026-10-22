@@ -533,7 +533,7 @@ fn scalar_cost(value: &str) -> u64 {
 fn tag_cost(tag: Option<&Tag>) -> u64 {
     tag.map_or(0, |tag| {
         let bytes = tag.handle().len().saturating_add(tag.suffix().len());
-        u64::try_from(bytes).map_or(u64::MAX, |cost| cost)
+        u64::try_from(bytes).unwrap_or(u64::MAX)
     })
 }
 
