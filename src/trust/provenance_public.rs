@@ -218,3 +218,6 @@ pub fn run_provenance_command(
 #[cfg(test)]
 #[path = "provenance_public_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "provenance_public_kid_tests.rs"]
+mod kid_tests;

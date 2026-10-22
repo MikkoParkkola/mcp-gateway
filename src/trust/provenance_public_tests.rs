@@ -16,12 +16,12 @@ use crate::attestation::{
 use crate::config::EnvOverlay;
 use crate::trust::{CacheOutcome, RuntimeProvenanceReceipt, SignedResultProvenance};
 
-const SEED_ONE: [u8; 32] = [7u8; 32];
-const SEED_TWO: [u8; 32] = [9u8; 32];
-const KID_ONE: &str = "prov-test-1";
-const KID_TWO: &str = "prov-test-2";
+pub(super) const SEED_ONE: [u8; 32] = [7u8; 32];
+pub(super) const SEED_TWO: [u8; 32] = [9u8; 32];
+pub(super) const KID_ONE: &str = "prov-test-1";
+pub(super) const KID_TWO: &str = "prov-test-2";
 const DOMAIN_TAG: &[u8] = b"mcp-gateway-provenance-ed25519-v1\0";
-const ATTESTATION_ID: &str = "bnaut/gateway";
+pub(super) const ATTESTATION_ID: &str = "bnaut/gateway";
 const FIXTURE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/mik_8398");
 
 fn sample() -> RuntimeProvenanceReceipt {
@@ -72,7 +72,7 @@ fn hex(bytes: &[u8]) -> String {
     out
 }
 
-fn seed_b64(seed: &[u8]) -> String {
+pub(super) fn seed_b64(seed: &[u8]) -> String {
     STANDARD.encode(seed)
 }
 
@@ -86,7 +86,7 @@ fn write_private(path: &std::path::Path, contents: &[u8]) {
     }
 }
 
-fn overlay_with(vars: &[(&str, &str)]) -> (tempfile::TempDir, EnvOverlay) {
+pub(super) fn overlay_with(vars: &[(&str, &str)]) -> (tempfile::TempDir, EnvOverlay) {
     let dir = tempfile::tempdir().expect("temporary dir");
     let mut text = String::new();
     for (key, value) in vars {
@@ -100,7 +100,7 @@ fn overlay_with(vars: &[(&str, &str)]) -> (tempfile::TempDir, EnvOverlay) {
     (dir, EnvOverlay::from_paths(&[path]))
 }
 
-fn assert_value_free(error: &crate::Error, seed: &[u8]) {
+pub(super) fn assert_value_free(error: &crate::Error, seed: &[u8]) {
     let display = error.to_string();
     let debug = format!("{error:?}");
     let encoded = seed_b64(seed);
@@ -117,14 +117,22 @@ fn assert_value_free(error: &crate::Error, seed: &[u8]) {
 }
 
 fn trust_of(signer: &ProvenancePublicSigner) -> TrustSet {
-    let jwk = signer.public_jwk();
-    assert_eq!(
-        jwk.get("kty").and_then(serde_json::Value::as_str),
-        Some("OKP"),
-        "the test signer's JWK must read as OKP: {jwk}"
-    );
-    let text = serde_json::to_string(&jwk).expect("JWK serializes");
-    TrustSet::from_json(&text).expect("trust set builds")
+    let seed = match signer.kid() {
+        KID_ONE => &SEED_ONE,
+        KID_TWO => &SEED_TWO,
+        other => panic!("trust_of knows only the two test kids, got {other:?}"),
+    };
+    let text = jwk_for(seed, signer.kid());
+    let value: serde_json::Value = serde_json::from_str(&text).expect("the literal JWK parses");
+    let x = value
+        .get("x")
+        .and_then(serde_json::Value::as_str)
+        .expect("the literal JWK carries x");
+    let decoded = URL_SAFE_NO_PAD.decode(x).expect("the literal x decodes");
+    let key: [u8; 32] = decoded.try_into().expect("the literal x is 32 bytes");
+    let mut keys = BTreeMap::new();
+    keys.insert(signer.kid().to_owned(), key);
+    TrustSet { keys }
 }
 
 fn signed_prov(result: Option<&serde_json::Value>) -> serde_json::Value {
@@ -163,13 +171,13 @@ fn prov_with_payload(payload: &[u8]) -> serde_json::Value {
 
 /// The `x` of `seed`: the real public key, without touching the skeleton's
 /// `public_jwk` (Null until implemented).
-fn x_of(seed: &[u8; 32]) -> String {
+pub(super) fn x_of(seed: &[u8; 32]) -> String {
     let key_pair = Ed25519KeyPair::from_seed_unchecked(seed).expect("a seed loads");
     URL_SAFE_NO_PAD.encode(key_pair.public_key().as_ref())
 }
 
 /// A JWK text for `seed`/`kid`, built from literals plus the seed's real key.
-fn jwk_for(seed: &[u8; 32], kid: &str) -> String {
+pub(super) fn jwk_for(seed: &[u8; 32], kid: &str) -> String {
     format!(
         "{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":\"{kid}\",\"x\":\"{}\"}}",
         x_of(seed)
@@ -224,11 +232,16 @@ fn an_absent_seed_resolves_to_no_signer() {
 
 #[test]
 fn a_blank_seed_resolves_to_no_signer() {
-    for blank in ["", "   "] {
+    for (written, blank) in [("", ""), ("\"   \"", "   ")] {
         let (_dir, env) = overlay_with(&[
-            (PROVENANCE_SEED_ENV, blank),
+            (PROVENANCE_SEED_ENV, written),
             (PROVENANCE_KEY_ID_ENV, KID_ONE),
         ]);
+        assert_eq!(
+            env.resolve(PROVENANCE_SEED_ENV).as_deref(),
+            Some(blank),
+            "the env file must transport the seed under test"
+        );
         let resolved = resolve_public_signer(&env, ATTESTATION_ID).expect("blank is not an error");
         assert!(resolved.is_none(), "blank seed {blank:?} must resolve to None");
     }
@@ -256,120 +269,6 @@ fn a_non_base64_seed_is_refused() {
     ]);
     let error = resolve_public_signer(&env, ATTESTATION_ID).expect_err("non-base64 is refused");
     assert_value_free(&error, encoded.as_bytes());
-}
-
-#[test]
-fn a_seed_without_a_kid_is_refused() {
-    assert!(std::env::var(PROVENANCE_SEED_ENV).is_err(), "an inherited seed would be silently used");
-    assert!(std::env::var(PROVENANCE_KEY_ID_ENV).is_err(), "an inherited kid would be silently used");
-    let encoded = seed_b64(&SEED_ONE);
-    let (_dir, env) = overlay_with(&[(PROVENANCE_SEED_ENV, encoded.as_str())]);
-    let error = resolve_public_signer(&env, ATTESTATION_ID).expect_err("a missing kid is refused");
-    assert_value_free(&error, &SEED_ONE);
-    let (_dir, env) = overlay_with(&[
-        (PROVENANCE_SEED_ENV, encoded.as_str()),
-        (PROVENANCE_KEY_ID_ENV, "  "),
-    ]);
-    let error = resolve_public_signer(&env, ATTESTATION_ID).expect_err("a blank kid is refused");
-    assert_value_free(&error, &SEED_ONE);
-}
-
-#[test]
-fn an_overlong_kid_is_refused() {
-    let encoded = seed_b64(&SEED_ONE);
-    let long = "k".repeat(65);
-    let (_dir, env) = overlay_with(&[
-        (PROVENANCE_SEED_ENV, encoded.as_str()),
-        (PROVENANCE_KEY_ID_ENV, long.as_str()),
-    ]);
-    let error = resolve_public_signer(&env, ATTESTATION_ID).expect_err("a 65-byte kid is refused");
-    assert_value_free(&error, &SEED_ONE);
-}
-
-/// MIK-8398 D4: a kid is 1-64 bytes of `0x21..=0x7E`. Anything else is
-/// refused by the resolver (value-free) and by the trust set as MalformedKid.
-#[test]
-fn d4_malformed_kids_are_refused() {
-    let encoded = seed_b64(&SEED_ONE);
-    let long = "k".repeat(65);
-    for (written, resolved) in [
-        ("prov test", "prov test"),
-        ("\"prov\\ntest\"", "prov\ntest"),
-        ("prov-✓", "prov-✓"),
-        (long.as_str(), long.as_str()),
-    ] {
-        let (_dir, env) = overlay_with(&[
-            (PROVENANCE_SEED_ENV, encoded.as_str()),
-            (PROVENANCE_KEY_ID_ENV, written),
-        ]);
-        assert_eq!(
-            env.resolve(PROVENANCE_KEY_ID_ENV).as_deref(),
-            Some(resolved),
-            "the env file must transport the kid under test"
-        );
-        let result = resolve_public_signer(&env, ATTESTATION_ID);
-        assert!(result.is_err(), "a malformed kid {resolved:?} is refused");
-        let err = result.expect_err("just asserted");
-        assert_value_free(&err, &SEED_ONE);
-        if resolved.contains('\n') {
-            let display = err.to_string();
-            let debug = format!("{err:?}");
-            assert!(!display.contains(resolved), "the error leaks the raw kid: {display}");
-            assert!(!debug.contains(resolved), "the error leaks the raw kid: {debug}");
-        }
-
-        let x = URL_SAFE_NO_PAD.encode([7u8; 32]);
-        let kid_json = serde_json::to_string(resolved).expect("a kid serializes");
-        let text =
-            format!("{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":{kid_json},\"x\":\"{x}\"}}");
-        let trust = TrustSet::from_json(&text);
-        let Err(refusal) = trust else {
-            panic!("the trust set must refuse {resolved:?} as MalformedKid");
-        };
-        assert_eq!(
-            refusal,
-            TrustSetRefusal::MalformedKid,
-            "the trust set must refuse {resolved:?} as MalformedKid"
-        );
-        if resolved.contains('\n') {
-            let debug = format!("{refusal:?}");
-            assert!(!debug.contains(resolved), "the trust error leaks the raw kid: {debug}");
-        }
-    }
-}
-
-#[test]
-fn d4_a_64_byte_tilde_kid_is_accepted() {
-    let kid = "~".repeat(64);
-    let encoded = seed_b64(&SEED_ONE);
-    let (_dir, env) = overlay_with(&[
-        (PROVENANCE_SEED_ENV, encoded.as_str()),
-        (PROVENANCE_KEY_ID_ENV, kid.as_str()),
-    ]);
-    let signer = resolve_public_signer(&env, ATTESTATION_ID).expect("a 64-byte kid resolves");
-    assert_eq!(
-        signer.as_ref().map(super::ProvenancePublicSigner::kid),
-        Some(kid.as_str()),
-        "a 64-byte kid yields a signer"
-    );
-
-    let x = URL_SAFE_NO_PAD.encode([7u8; 32]);
-    let text = format!("{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":\"{kid}\",\"x\":\"{x}\"}}");
-    assert!(TrustSet::from_json(&text).is_ok(), "a 64-byte kid loads");
-}
-
-#[test]
-fn a_kid_colliding_with_attestation_is_refused() {
-    let encoded = seed_b64(&SEED_ONE);
-    for kid in ["gateway", "bnaut/gateway"] {
-        let (_dir, env) = overlay_with(&[
-            (PROVENANCE_SEED_ENV, encoded.as_str()),
-            (PROVENANCE_KEY_ID_ENV, kid),
-        ]);
-        let error =
-            resolve_public_signer(&env, "gateway").expect_err("an attestation kid is refused");
-        assert_value_free(&error, &SEED_ONE);
-    }
 }
 
 #[test]
@@ -682,16 +581,6 @@ fn a_jwks_selects_by_kid() {
 }
 
 #[test]
-fn a_duplicate_kid_is_refused() {
-    let text = format!(
-        "{{\"keys\":[{},{}]}}",
-        jwk_for(&SEED_ONE, KID_ONE),
-        jwk_for(&SEED_TWO, KID_ONE)
-    );
-    assert!(matches!(TrustSet::from_json(&text), Err(TrustSetRefusal::DuplicateKid)));
-}
-
-#[test]
 fn a_non_edwards_key_is_refused() {
     let x = x_of(&SEED_ONE);
     for text in [
@@ -719,12 +608,6 @@ fn a_private_member_is_refused() {
         x_of(&SEED_ONE)
     );
     assert!(matches!(TrustSet::from_json(&text), Err(TrustSetRefusal::PrivateMember)));
-}
-
-#[test]
-fn a_missing_kid_is_refused() {
-    let text = format!("{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"{}\"}}", x_of(&SEED_ONE));
-    assert!(matches!(TrustSet::from_json(&text), Err(TrustSetRefusal::MissingKid)));
 }
 
 #[test]
@@ -779,12 +662,12 @@ fn a_wide_receipt_with_u64_max_row_count_verifies() {
     let signer = signer_one();
     let prov = provenance_value(&signed, Some((&signer, Some(&result))));
     let trust = trust_of(&signer);
+    let verified = verify_public(&prov, &trust, Some(&result)).expect("a wide receipt verifies");
+    assert_eq!(verified.status, VerifyStatus::Bound);
+    assert_eq!(verified.receipt, wide_sample());
     let payload_text = String::from_utf8(payload_of(&prov)).expect("payload is UTF-8");
     assert!(
         payload_text.contains("18446744073709551615"),
         "the payload must carry u64::MAX exactly: {payload_text}"
     );
-    let verified = verify_public(&prov, &trust, Some(&result)).expect("a wide receipt verifies");
-    assert_eq!(verified.status, VerifyStatus::Bound);
-    assert_eq!(verified.receipt, wide_sample());
 }

@@ -394,12 +394,19 @@ fn d2_seed_without_kid_refuses_without_leaking() {
     );
     let raw = [7u8; 32];
     let seed = STANDARD.encode(raw);
-    for kid in [None, Some("  ")] {
+    for (written, kid) in [(None, None), (Some("\"  \""), Some("  "))] {
         let mut vars = vec![(PROVENANCE_SEED_ENV, seed.as_str())];
-        if let Some(kid) = kid {
-            vars.push((PROVENANCE_KEY_ID_ENV, kid));
+        if let Some(written) = written {
+            vars.push((PROVENANCE_KEY_ID_ENV, written));
         }
         let (_dir, env) = public_provenance_overlay(&vars);
+        if let Some(kid) = kid {
+            assert_eq!(
+                env.resolve(PROVENANCE_KEY_ID_ENV).as_deref(),
+                Some(kid),
+                "the env file must transport the kid under test"
+            );
+        }
         let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
         let result = install_public_provenance(&mut meta, &env, "gateway");
         assert!(result.is_err(), "a seed without a kid {kid:?} must refuse");
