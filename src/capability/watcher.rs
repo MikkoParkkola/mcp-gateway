@@ -76,7 +76,13 @@ struct ReloadTuning {
     reload_slow: Duration,
     /// Quiet time after the last event before a reload.
     debounce: Duration,
+    /// The directory walk behind every fingerprint. Production uses
+    /// [`fingerprint::fingerprint`]; a test swaps in a walk it can stall.
+    walk: WalkFn,
 }
+
+/// A fingerprint walk over the watched directories.
+type WalkFn = fn(&[String]) -> Option<Fingerprint>;
 
 impl Default for ReloadTuning {
     fn default() -> Self {
@@ -84,6 +90,7 @@ impl Default for ReloadTuning {
             stale_check: Some(Duration::from_secs(60)),
             reload_slow: Duration::from_secs(60),
             debounce: Duration::from_millis(500),
+            walk: fingerprint::fingerprint,
         }
     }
 }
@@ -171,6 +178,19 @@ struct LoopState {
     baseline: Option<Fingerprint>,
     /// One-time log lines already emitted.
     logged: LoggedOnce,
+    /// The walk every fingerprint uses (from the tuning).
+    walk: Option<WalkFn>,
+}
+
+impl LoopState {
+    /// Start the one fingerprint walk on the blocking pool.
+    fn start_walk(&mut self, backend: &CapabilityBackend) {
+        let dirs = backend.watched_directories();
+        let walk = self.walk.unwrap_or(fingerprint::fingerprint);
+        let handle = tokio::task::spawn_blocking(move || walk(&dirs));
+        self.fingerprint_walk = Some((handle, Instant::now()));
+        self.fingerprint_state.stalled_warned = false;
+    }
 }
 
 /// What the in-flight fingerprint walk is for.
@@ -403,15 +423,14 @@ impl CapabilityWatcher {
             let stale_enabled = tuning.stale_check.is_some();
             let mut state = LoopState {
                 events_open: true,
+                walk: Some(tuning.walk),
                 ..LoopState::default()
             };
             // The arming walk starts at task start; its result adopts the
             // baseline when polled. With the check off no walk ever starts
             // and the stale branch below waits forever.
             if tuning.stale_check.is_some() {
-                let dirs = backend.watched_directories();
-                let walk = tokio::task::spawn_blocking(move || fingerprint::fingerprint(&dirs));
-                state.fingerprint_walk = Some((walk, Instant::now()));
+                state.start_walk(&backend);
             }
 
             let mut interval = tokio::time::interval(Duration::from_millis(100));
@@ -492,11 +511,22 @@ impl CapabilityWatcher {
             } else if !state.fingerprint_state.awaiting_before && state.fingerprint_walk.is_none() {
                 // The before-fingerprint is a walk of its own; the reload
                 // starts when it finishes, so the loop never blocks.
-                let dirs = backend.watched_directories();
-                let walk = tokio::task::spawn_blocking(move || fingerprint::fingerprint(&dirs));
-                state.fingerprint_walk = Some((walk, Instant::now()));
+                state.start_walk(backend);
                 state.fingerprint_state.awaiting_before = true;
-                state.fingerprint_state.stalled_warned = false;
+            } else if !state.fingerprint_state.awaiting_before
+                && state
+                    .fingerprint_walk
+                    .as_ref()
+                    .is_some_and(|(_, started)| started.elapsed() >= reload_slow)
+            {
+                // A stalled arming or periodic walk must not hold a pending
+                // reload hostage: reload without a before-fingerprint. The
+                // stalled walk stays the one in flight, so walks never
+                // overlap; the baseline is reconciled once one is readable.
+                let (handle, active) = Self::spawn_reload(Arc::clone(backend), changes.cloned());
+                state.in_flight = Some((handle, active, None));
+                state.pending_reload = false;
+                state.last_event = None;
             }
         }
     }
@@ -665,10 +695,7 @@ impl CapabilityWatcher {
         {
             return;
         }
-        let dirs = backend.watched_directories();
-        let walk = tokio::task::spawn_blocking(move || fingerprint::fingerprint(&dirs));
-        state.fingerprint_walk = Some((walk, Instant::now()));
-        state.fingerprint_state.stalled_warned = false;
+        state.start_walk(backend);
     }
 
     /// Spawn one reload and return its join handle with the in-flight

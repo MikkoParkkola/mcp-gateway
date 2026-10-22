@@ -214,3 +214,59 @@ async fn a_symlink_loop_ends_at_the_walk_bounds_and_warns() {
         "a real shutdown still stops the task with the loop present"
     );
 }
+
+/// Set while [`stalling_walk`] must block; the guard in the row clears it.
+static STALL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// A fingerprint walk that blocks until [`STALL`] clears, then walks.
+fn stalling_walk(dirs: &[String]) -> Option<crate::capability::watcher::fingerprint::Fingerprint> {
+    while STALL.load(std::sync::atomic::Ordering::Acquire) {
+        // timing: fixture
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    crate::capability::watcher::fingerprint::fingerprint(dirs)
+}
+
+/// Clears [`STALL`] on drop, so a failing row never leaves a walk blocked.
+struct Unstall;
+
+impl Drop for Unstall {
+    fn drop(&mut self) {
+        STALL.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// MIK-8651.HEAL.1: a stalled arming or periodic fingerprint walk does not
+/// hold a pending reload hostage: past `reload_slow` the reload runs without
+/// a before-fingerprint. Red on 7463fac2d: the reload waits for the walk.
+#[tokio::test(flavor = "current_thread")]
+async fn a_stalled_walk_does_not_hold_a_pending_reload() {
+    let _unstall = Unstall;
+    let dir = tempfile::tempdir().expect("a tempdir for caps");
+    std::fs::write(dir.path().join("a.yaml"), cap_yaml("a", "v1")).expect("write v1");
+    let backend = backend_over(dir.path()).await;
+    let (event_tx, event_rx) = mpsc::channel(100);
+    let (_shutdown_tx, shutdown_rx) = broadcast::channel(1);
+    let tuning = ReloadTuning {
+        stale_check: Some(Duration::from_millis(100)),
+        reload_slow: Duration::from_millis(300),
+        debounce: Duration::from_millis(50),
+        walk: stalling_walk,
+    };
+    CapabilityWatcher::spawn_reload_task_tuned(
+        Arc::clone(&backend),
+        event_rx,
+        shutdown_rx,
+        None,
+        tuning,
+    );
+    std::fs::write(dir.path().join("a.yaml"), cap_yaml("a", "v2-much-longer")).expect("write v2");
+    event_tx.send(()).await.expect("the task takes the event");
+    assert!(
+        eventually(crate::test_wait::HANG_BOUND, || {
+            description_of(&backend, "a").as_deref() == Some("v2-much-longer")
+        })
+        .await,
+        "the pending reload runs although the arming walk is stalled"
+    );
+}
