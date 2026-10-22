@@ -129,7 +129,7 @@ pub(crate) const SSRF_BLOCKED: &str = "SSRF blocked";
 pub(crate) fn is_ssrf_refusal(error: &Error) -> bool {
     matches!(error, Error::Protocol(message) if message.starts_with(SSRF_BLOCKED))
 }
-pub(crate) use redirect::{RedirectDecision, redirect_decision};
+pub(crate) use redirect::{RedirectDecision, redirect_decision, ssrf_redirect_policy};
 // Re-exported for path-compat (`crate::security::ssrf::MAX_REDIRECT_HOPS`) even
 // though every current crate-internal use goes through `redirect_decision`.
 #[allow(unused_imports)]

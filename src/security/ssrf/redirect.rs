@@ -47,19 +47,35 @@ pub(crate) enum RedirectDecision {
     Follow,
 }
 
+/// Whether a redirect with `previous` URLs already visited has used up the hop budget. (MIK-8660 seam)
+pub(crate) fn hop_budget_spent(previous: usize) -> bool {
+    previous >= MAX_REDIRECT_HOPS
+}
+
 /// Decide whether a redirect hop to `next_url` may be followed. Re-validates
 /// every hop against the SSRF deny list so a public URL cannot redirect into
 /// an internal address (DNS-rebinding / open-redirect SSRF). Shared by the
 /// `OpenAPI` converter (`convert_url`) and the Web-UI spec importer
 /// (`fetch_spec`) so both fetch paths enforce one policy.
 pub(crate) fn redirect_decision(previous_hops: usize, next_url: &str) -> RedirectDecision {
-    if previous_hops >= MAX_REDIRECT_HOPS {
+    if hop_budget_spent(previous_hops) {
         return RedirectDecision::Stop;
     }
     match validate_url_not_ssrf(next_url) {
         Err(e) => RedirectDecision::Block(e.to_string()),
         Ok(()) => RedirectDecision::Follow,
     }
+}
+
+/// SSRF re-validating redirect policy shared by the spec fetch paths. (MIK-8660 seam)
+pub(crate) fn ssrf_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(
+        |attempt| match redirect_decision(attempt.previous().len(), attempt.url().as_str()) {
+            RedirectDecision::Stop => attempt.stop(),
+            RedirectDecision::Block(msg) => attempt.error(msg),
+            RedirectDecision::Follow => attempt.follow(),
+        },
+    )
 }
 
 #[cfg(test)]
@@ -92,7 +108,7 @@ mod hop_budget_tests {
         let client = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::custom(|a| {
-                if a.previous().len() >= super::MAX_REDIRECT_HOPS {
+                if super::hop_budget_spent(a.previous().len()) {
                     a.stop()
                 } else {
                     a.follow()

@@ -38,11 +38,15 @@ fn is_wildcard_bind(host: &str) -> bool {
     matches!(host, "0.0.0.0" | "::" | "0:0:0:0:0:0:0:0")
 }
 
-/// Run the `stats` command against a running gateway.
-pub async fn run_stats_command(url: &str) -> ExitCode {
+/// Plain HTTP client for the `stats` command. (MIK-8660 seam)
+fn stats_client() -> reqwest::Client {
+    reqwest::Client::new()
+}
+
+/// `stats` output text for stdout (`Ok`) or stderr (`Err`). (MIK-8660 seam)
+async fn stats_outcome(client: &reqwest::Client, url: &str) -> Result<String, String> {
     use serde_json::json;
 
-    let client = reqwest::Client::new();
     let request_body = json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -57,53 +61,61 @@ pub async fn run_stats_command(url: &str) -> ExitCode {
 
     match client.post(&endpoint).json(&request_body).send().await {
         Ok(response) => handle_stats_response(response, &endpoint).await,
-        Err(e) => {
-            eprintln!("❌ Failed to connect to gateway: {e}");
-            eprintln!("   Make sure the gateway is running at {url}");
+        Err(e) => Err(format!(
+            "❌ Failed to connect to gateway: {e}\n   Make sure the gateway is running at {url}\n"
+        )),
+    }
+}
+
+/// Run the `stats` command against a running gateway.
+pub async fn run_stats_command(url: &str) -> ExitCode {
+    match stats_outcome(&stats_client(), url).await {
+        Ok(text) => {
+            print!("{text}");
+            ExitCode::SUCCESS
+        }
+        Err(text) => {
+            eprint!("{text}");
             ExitCode::FAILURE
         }
     }
 }
 
-async fn handle_stats_response(response: reqwest::Response, url: &str) -> ExitCode {
+async fn handle_stats_response(response: reqwest::Response, url: &str) -> Result<String, String> {
     if !response.status().is_success() {
-        eprintln!("❌ Gateway returned error: {}", response.status());
-        return ExitCode::FAILURE;
+        return Err(format!("❌ Gateway returned error: {}\n", response.status()));
     }
     match response.json::<serde_json::Value>().await {
         Ok(body) => print_stats_body(&body, url),
-        Err(e) => {
-            eprintln!("❌ Failed to parse response: {e}");
-            ExitCode::FAILURE
-        }
+        Err(e) => Err(format!("❌ Failed to parse response: {e}\n")),
     }
 }
 
-fn print_stats_body(body: &serde_json::Value, _url: &str) -> ExitCode {
+fn print_stats_body(body: &serde_json::Value, _url: &str) -> Result<String, String> {
     if let Some(text) = extract_stats_text(body)
         && let Ok(stats) = serde_json::from_str::<serde_json::Value>(text)
     {
-        println!("📊 Gateway Statistics\n");
-        println!("Invocations:       {}", stats["invocations"]);
-        println!("Cache Hits:        {}", stats["cache_hits"]);
-        println!("Cache Hit Rate:    {}", stats["cache_hit_rate"]);
-        println!("Tools Discovered:  {}", stats["tools_discovered"]);
-        println!("Tools Available:   {}", stats["tools_available"]);
-        print_top_tools(&stats);
-        return ExitCode::SUCCESS;
+        let mut out = format!(
+            "📊 Gateway Statistics\n\nInvocations:       {}\nCache Hits:        {}\nCache Hit Rate:    {}\nTools Discovered:  {}\nTools Available:   {}\n",
+            stats["invocations"],
+            stats["cache_hits"],
+            stats["cache_hit_rate"],
+            stats["tools_discovered"],
+            stats["tools_available"]
+        );
+        out.push_str(&print_top_tools(&stats));
+        return Ok(out);
     }
     if let Some(error) = body.get("error") {
-        eprintln!(
-            "❌ Error: {}",
+        return Err(format!(
+            "❌ Error: {}\n",
             error
                 .get("message")
                 .and_then(|v| v.as_str())
                 .unwrap_or("Unknown")
-        );
-        return ExitCode::FAILURE;
+        ));
     }
-    eprintln!("❌ Unexpected response format");
-    ExitCode::FAILURE
+    Err("❌ Unexpected response format\n".to_string())
 }
 
 fn extract_stats_text(body: &serde_json::Value) -> Option<&str> {
@@ -115,20 +127,22 @@ fn extract_stats_text(body: &serde_json::Value) -> Option<&str> {
         .as_str()
 }
 
-fn print_top_tools(stats: &serde_json::Value) {
+fn print_top_tools(stats: &serde_json::Value) -> String {
     if let Some(top_tools) = stats["top_tools"].as_array()
         && !top_tools.is_empty()
     {
-        println!("\n🏆 Top Tools:");
+        let mut out = String::from("\n🏆 Top Tools:\n");
         for tool in top_tools {
-            println!(
-                "  • {}:{} - {} calls",
+            out.push_str(&format!(
+                "  • {}:{} - {} calls\n",
                 tool["server"].as_str().unwrap_or(""),
                 tool["tool"].as_str().unwrap_or(""),
                 tool["count"]
-            );
+            ));
         }
+        return out;
     }
+    String::new()
 }
 
 #[cfg(test)]

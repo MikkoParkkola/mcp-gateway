@@ -26,7 +26,7 @@ use super::super::router::AppState;
 use super::errors::{admin_auth_required, flat_error};
 use super::is_admin;
 use crate::capability::{GeneratedCapability, OpenApiConverter};
-use crate::security::ssrf::{PinningResolver, RedirectDecision, SystemResolver, redirect_decision};
+use crate::security::ssrf::{PinningResolver, SystemResolver};
 use crate::security::validate_url_not_ssrf;
 
 // ── Request / response types ────────────────────────────────────────
@@ -227,6 +227,11 @@ async fn resolve_spec(
     }
 }
 
+/// Message for a failed spec fetch from `url`. (MIK-8660 seam)
+fn fetch_error_message(url: &str, e: &reqwest::Error) -> String {
+    format!("Failed to fetch spec from {url}: {e}")
+}
+
 /// Fetch an `OpenAPI` spec from a remote URL.
 async fn fetch_spec(url: &str, ssrf_protection: bool) -> Result<String, (StatusCode, String)> {
     // Validate URL is well-formed.
@@ -273,14 +278,7 @@ async fn fetch_spec(url: &str, ssrf_protection: bool) -> Result<String, (StatusC
     if ssrf_protection {
         builder = builder
             .dns_resolver(PinningResolver::new(SystemResolver))
-            .redirect(reqwest::redirect::Policy::custom(
-                |attempt| match redirect_decision(attempt.previous().len(), attempt.url().as_str())
-                {
-                    RedirectDecision::Stop => attempt.stop(),
-                    RedirectDecision::Block(msg) => attempt.error(msg),
-                    RedirectDecision::Follow => attempt.follow(),
-                },
-            ));
+            .redirect(crate::security::ssrf::ssrf_redirect_policy());
     }
     let client = builder.build().map_err(|e| {
         (
@@ -290,10 +288,7 @@ async fn fetch_spec(url: &str, ssrf_protection: bool) -> Result<String, (StatusC
     })?;
 
     let resp = client.get(url).send().await.map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            format!("Failed to fetch spec from {url}: {e}"),
-        )
+        (StatusCode::BAD_GATEWAY, fetch_error_message(url, &e))
     })?;
 
     if !resp.status().is_success() {

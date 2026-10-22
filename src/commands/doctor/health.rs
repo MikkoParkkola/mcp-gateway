@@ -11,6 +11,13 @@ use super::CheckResult;
 const RUNTIME_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 pub(super) const MCP_SESSION_HEADER: &str = "mcp-session-id";
 
+/// Gateway-runtime probe client with `RUNTIME_PROBE_TIMEOUT`. (MIK-8660 seam)
+fn runtime_probe_client() -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(RUNTIME_PROBE_TIMEOUT)
+        .build()
+}
+
 pub(super) async fn check_port_and_gateway_runtime(config: &Config) -> Vec<CheckResult> {
     let bind_addr = format!("{}:{}", config.server.host, config.server.port);
     if TcpListener::bind(&bind_addr).is_ok() {
@@ -23,10 +30,7 @@ pub(super) async fn check_port_and_gateway_runtime(config: &Config) -> Vec<Check
         ];
     }
 
-    let client = match reqwest::Client::builder()
-        .timeout(RUNTIME_PROBE_TIMEOUT)
-        .build()
-    {
+    let client = match runtime_probe_client() {
         Ok(client) => client,
         Err(e) => {
             return vec![

@@ -400,16 +400,20 @@ fn check_backend_env(name: &str, backend: &mcp_gateway::config::BackendConfig) -
     results
 }
 
+/// HTTP-backend probe client with a 5 s timeout. (MIK-8660 seam)
+fn backend_probe_client() -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+}
+
 async fn check_http_backend(name: &str, transport: &TransportConfig) -> Option<CheckResult> {
     let TransportConfig::Http { http_url, .. } = transport else {
         return None;
     };
 
     let label = format!("{name}: HTTP");
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .ok()?;
+    let client = backend_probe_client().ok()?;
 
     let start = Instant::now();
     match client.get(http_url).send().await {

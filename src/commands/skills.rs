@@ -315,9 +315,14 @@ fn print_skill_summary(skill: &ImportedSkill) {
 }
 
 /// Load a skill from a local path or an http(s) URL.
+/// Plain HTTP client for skill URL fetches. (MIK-8660 seam)
+fn skill_fetch_client() -> reqwest::Client {
+    reqwest::Client::new()
+}
+
 async fn load_skill_from_source(source: &str) -> Result<ImportedSkill, String> {
     if source.starts_with("http://") || source.starts_with("https://") {
-        return fetch_skill_from_url(source).await;
+        return fetch_skill_from_url(&skill_fetch_client(), source).await;
     }
 
     let path = Path::new(source);
@@ -331,8 +336,10 @@ async fn load_skill_from_source(source: &str) -> Result<ImportedSkill, String> {
     }
 }
 
-async fn fetch_skill_from_url(url: &str) -> Result<ImportedSkill, String> {
-    let response = reqwest::get(url)
+async fn fetch_skill_from_url(client: &reqwest::Client, url: &str) -> Result<ImportedSkill, String> {
+    let response = client
+        .get(url)
+        .send()
         .await
         .map_err(|e| format!("Failed to fetch '{url}': {e}"))?;
     if !response.status().is_success() {

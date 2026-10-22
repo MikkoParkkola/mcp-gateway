@@ -458,15 +458,5 @@ async fn a_typed_tls_check_names_an_untrusted_certificate() {
         .send()
         .await
         .expect_err("the fixture CA is not trusted");
-    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&error);
-    let mut typed = false;
-    while let Some(current) = source {
-        typed |= current.downcast_ref::<rustls::Error>().is_some()
-            || current
-                .downcast_ref::<std::io::Error>()
-                .and_then(std::io::Error::get_ref)
-                .is_some_and(|inner| inner.downcast_ref::<rustls::Error>().is_some());
-        source = current.source();
-    }
-    assert!(typed, "{error:?}");
+    assert!(crate::security::http_diagnostics::is_tls_failure(&error), "{error:?}");
 }

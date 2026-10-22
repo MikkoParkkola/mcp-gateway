@@ -140,6 +140,23 @@ pub struct Registry {
     capabilities_path: PathBuf,
 }
 
+/// Plain HTTP client for registry downloads. (MIK-8660 seam)
+fn registry_client() -> reqwest::Client {
+    reqwest::Client::new()
+}
+
+/// Fetch a capability file body, or `None` on a non-success status. (MIK-8660 seam)
+async fn fetch_capability(client: &reqwest::Client, url: &str) -> crate::Result<Option<String>> {
+    let response = client.get(url).send().await.map_err(Error::Http)?;
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+    let body = response.text().await.map_err(|e| {
+        Error::Transport(format!("Failed to read capability content: {e}"))
+    })?;
+    Ok(Some(body))
+}
+
 impl Registry {
     /// Create a new registry manager
     ///
@@ -247,7 +264,7 @@ impl Registry {
         // For now, we'll construct the URL directly based on the capability name
         // A more robust implementation would fetch a directory listing first
 
-        let client = reqwest::Client::new();
+        let client = registry_client();
 
         // Try common capability paths
         let search_patterns = vec![
@@ -267,12 +284,8 @@ impl Registry {
             let capability_url =
                 format!("https://raw.githubusercontent.com/{repo}/{branch}/{pattern}");
 
-            match client.get(&capability_url).send().await {
-                Ok(response) if response.status().is_success() => {
-                    let capability_content = response.text().await.map_err(|e| {
-                        Error::Transport(format!("Failed to read capability content: {e}"))
-                    })?;
-
+            match fetch_capability(&client, &capability_url).await {
+                Ok(Some(capability_content)) => {
                     // Determine subdirectory from pattern
                     let pattern_path = PathBuf::from(&pattern);
                     let subdir = pattern_path
@@ -292,8 +305,9 @@ impl Registry {
 
                     return Ok(target);
                 }
-                Ok(_) => {}
-                Err(e) => last_error = Some(e),
+                Ok(None) => {}
+                Err(Error::Http(e)) => last_error = Some(e),
+                Err(e) => return Err(e),
             }
         }
 

@@ -30,6 +30,23 @@ pub fn request_error_category(error: &reqwest::Error) -> &'static str {
     }
 }
 
+/// Whether a reqwest error's source chain names a rustls failure. (MIK-8660 seam)
+pub(crate) fn is_tls_failure(error: &reqwest::Error) -> bool {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(current) = source {
+        let tls = current.downcast_ref::<rustls::Error>().is_some()
+            || current
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::get_ref)
+                .is_some_and(|inner| inner.downcast_ref::<rustls::Error>().is_some());
+        if tls {
+            return true;
+        }
+        source = current.source();
+    }
+    false
+}
+
 /// Context + category, never `reqwest::Error` Display (that embeds the URL).
 #[must_use]
 pub fn safe_reqwest_message(context: &str, error: &reqwest::Error) -> String {
