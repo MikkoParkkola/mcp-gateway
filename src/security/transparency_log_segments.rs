@@ -291,16 +291,15 @@ pub(crate) fn parse_hwm(raw: &[u8], secret: &[u8], key_id: &str) -> Option<(High
     let mac = parts.next().unwrap_or("");
     if !secret.is_empty() {
         let want = hwm_mac(&hw, secret, key_id);
-        let ok: bool = subtle_eq(want.as_bytes(), mac.as_bytes());
+        let ok: bool = bool::from(subtle::ConstantTimeEq::ct_eq(
+            want.as_bytes(),
+            mac.as_bytes(),
+        ));
         if !ok {
             return None;
         }
     }
     Some((hw, !mac.is_empty()))
-}
-
-fn subtle_eq(a: &[u8], b: &[u8]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 /// Create `<path>.reserve` as 1 MiB of written bytes (a sparse file would

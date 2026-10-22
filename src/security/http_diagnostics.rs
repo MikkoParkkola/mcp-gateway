@@ -30,17 +30,28 @@ pub fn request_error_category(error: &reqwest::Error) -> &'static str {
     }
 }
 
-/// Whether a reqwest error's source chain names a rustls failure. (MIK-8660 seam)
+/// Whether a reqwest error's source chain holds a rustls failure.
+///
+/// reqwest/hyper wrap a rejected certificate as io::Error(Other) holding
+/// io::Error(InvalidData) holding rustls::Error, and `io::Error::source()`
+/// returns the inner error's source, skipping the middle layer, so one
+/// `get_ref` level is not enough.
 pub(crate) fn is_tls_failure(error: &reqwest::Error) -> bool {
     let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
     while let Some(current) = source {
-        let tls = current.downcast_ref::<rustls::Error>().is_some()
-            || current
-                .downcast_ref::<std::io::Error>()
-                .and_then(std::io::Error::get_ref)
-                .is_some_and(|inner| inner.downcast_ref::<rustls::Error>().is_some());
-        if tls {
+        if current.downcast_ref::<rustls::Error>().is_some() {
             return true;
+        }
+        if let Some(io_error) = current.downcast_ref::<std::io::Error>() {
+            let mut inner = io_error.get_ref();
+            while let Some(next) = inner {
+                if next.downcast_ref::<rustls::Error>().is_some() {
+                    return true;
+                }
+                inner = next
+                    .downcast_ref::<std::io::Error>()
+                    .and_then(std::io::Error::get_ref);
+            }
         }
         source = current.source();
     }

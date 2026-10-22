@@ -400,10 +400,11 @@ fn check_backend_env(name: &str, backend: &mcp_gateway::config::BackendConfig) -
     results
 }
 
-/// HTTP-backend probe client with a 5 s timeout. (MIK-8660 seam)
+/// HTTP-backend probe client with a 5 s timeout.
 fn backend_probe_client() -> reqwest::Result<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
 }
 
@@ -420,6 +421,22 @@ async fn check_http_backend(name: &str, transport: &TransportConfig) -> Option<C
         Ok(resp) => {
             let ms = start.elapsed().as_millis();
             let status = resp.status();
+            if status.is_redirection() {
+                let location = resp
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("(no Location)");
+                return Some(
+                    CheckResult::fail(
+                        label,
+                        format!(
+                            "HTTP {status} redirect to {location} (not followed; point doctor at the final URL)"
+                        ),
+                    )
+                    .with_category("backend_http"),
+                );
+            }
             // MCP servers often return 4xx on GET / — we just care they're reachable.
             if status.is_server_error() {
                 Some(

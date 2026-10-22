@@ -315,6 +315,13 @@ impl TokenExchangeStrategy {
             .await
             .map_err(|e| PropagationError::Refuse(format!("token-exchange request failed: {e}")))?;
 
+        if resp.status().is_redirection() {
+            return Err(PropagationError::Refuse(format!(
+                "token-exchange endpoint returned HTTP {}, a redirect, which is not followed",
+                resp.status()
+            )));
+        }
+
         if !resp.status().is_success() {
             return Err(PropagationError::Refuse(format!(
                 "token-exchange endpoint returned HTTP {}",
@@ -346,9 +353,9 @@ impl TokenExchangeStrategy {
 /// exact security-relevant downgrade this strategy exists to prevent. Panicking
 /// at construction is a hard fail-closed at startup and matches the last-resort
 /// `expect` on gateway key generation in `gateway::server`.
-/// Redirect policy for token-exchange POSTs (the reqwest default). (MIK-8660 seam)
+/// A token endpoint has no reason to redirect, and following a 307/308 would re-POST the form, subject_token included, to the redirect target.
 fn token_exchange_redirect_policy() -> reqwest::redirect::Policy {
-    reqwest::redirect::Policy::default()
+    reqwest::redirect::Policy::none()
 }
 
 fn default_http_client() -> reqwest::Client {

@@ -38,9 +38,16 @@ fn is_wildcard_bind(host: &str) -> bool {
     matches!(host, "0.0.0.0" | "::" | "0:0:0:0:0:0:0:0")
 }
 
-/// Plain HTTP client for the `stats` command. (MIK-8660 seam)
-fn stats_client() -> reqwest::Client {
-    reqwest::Client::new()
+/// Build the HTTP client for the `stats` command.
+///
+/// stats talks only to this gateway's own /mcp, so no redirect is legitimate and none is followed; no environment proxy either.
+fn stats_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .no_proxy()
+        .timeout(std::time::Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| format!("❌ Failed to build HTTP client: {e}\n"))
 }
 
 /// `stats` output text for stdout (`Ok`) or stderr (`Err`). (MIK-8660 seam)
@@ -69,7 +76,14 @@ async fn stats_outcome(client: &reqwest::Client, url: &str) -> Result<String, St
 
 /// Run the `stats` command against a running gateway.
 pub async fn run_stats_command(url: &str) -> ExitCode {
-    match stats_outcome(&stats_client(), url).await {
+    let client = match stats_client() {
+        Ok(client) => client,
+        Err(text) => {
+            eprint!("{text}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match stats_outcome(&client, url).await {
         Ok(text) => {
             print!("{text}");
             ExitCode::SUCCESS
@@ -82,6 +96,18 @@ pub async fn run_stats_command(url: &str) -> ExitCode {
 }
 
 async fn handle_stats_response(response: reqwest::Response, url: &str) -> Result<String, String> {
+    if response.status().is_redirection() {
+        if let Some(location) = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+        {
+            return Err(format!(
+                "❌ the gateway URL redirected to {location}; point stats at the final URL\n"
+            ));
+        }
+        return Err("❌ the gateway URL redirected; point stats at the final URL\n".to_string());
+    }
     if !response.status().is_success() {
         return Err(format!("❌ Gateway returned error: {}\n", response.status()));
     }

@@ -11,10 +11,11 @@ use super::CheckResult;
 const RUNTIME_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 pub(super) const MCP_SESSION_HEADER: &str = "mcp-session-id";
 
-/// Gateway-runtime probe client with `RUNTIME_PROBE_TIMEOUT`. (MIK-8660 seam)
+/// Gateway-runtime probe client with `RUNTIME_PROBE_TIMEOUT`.
 fn runtime_probe_client() -> reqwest::Result<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(RUNTIME_PROBE_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
 }
 
@@ -83,6 +84,23 @@ async fn probe_gateway_health(client: &reqwest::Client, base_url: &str) -> Gatew
         Ok(resp) => {
             let ms = start.elapsed().as_millis();
             let status = resp.status();
+            if status.is_redirection() {
+                let location = resp
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("(no Location)");
+                return GatewayHealthProbe {
+                    result: CheckResult::fail(
+                        "Gateway runtime",
+                        format!(
+                            "HTTP {status} redirect to {location} (not followed; point doctor at the final URL)"
+                        ),
+                    )
+                    .with_category("runtime"),
+                    gateway_detected: false,
+                };
+            }
             match resp.json::<Value>().await {
                 Ok(body) => {
                     let gateway_detected =
@@ -268,6 +286,22 @@ async fn post_mcp_probe(
     })?;
 
     let status = response.status();
+    if status.is_redirection() {
+        let location = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("(no Location)");
+        return Err(Box::new(
+            CheckResult::fail(
+                "MCP handshake",
+                format!(
+                    "HTTP {status} redirect to {location} (not followed; point doctor at the final URL)"
+                ),
+            )
+            .with_category("mcp_handshake"),
+        ));
+    }
     let session_id = response
         .headers()
         .get(MCP_SESSION_HEADER)

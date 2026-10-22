@@ -314,15 +314,20 @@ fn print_skill_summary(skill: &ImportedSkill) {
     }
 }
 
-/// Load a skill from a local path or an http(s) URL.
-/// Plain HTTP client for skill URL fetches. (MIK-8660 seam)
-fn skill_fetch_client() -> reqwest::Client {
-    reqwest::Client::new()
+/// Plain HTTP client for skill URL fetches.
+fn skill_fetch_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))
 }
 
+/// Load a skill from a local path or an http(s) URL.
 async fn load_skill_from_source(source: &str) -> Result<ImportedSkill, String> {
     if source.starts_with("http://") || source.starts_with("https://") {
-        return fetch_skill_from_url(&skill_fetch_client(), source).await;
+        let client = skill_fetch_client()?;
+        return fetch_skill_from_url(&client, source).await;
     }
 
     let path = Path::new(source);
@@ -342,6 +347,16 @@ async fn fetch_skill_from_url(client: &reqwest::Client, url: &str) -> Result<Imp
         .send()
         .await
         .map_err(|e| format!("Failed to fetch '{url}': {e}"))?;
+    if response.status().is_redirection() {
+        if let Some(location) = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+        {
+            return Err(format!("{url} redirected to {location}; use the final URL"));
+        }
+        return Err(format!("{url} redirected; use the final URL"));
+    }
     if !response.status().is_success() {
         return Err(format!("GET '{url}' returned HTTP {}", response.status()));
     }
