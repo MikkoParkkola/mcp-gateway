@@ -655,20 +655,34 @@ fn expr_mentions_any_bound(expr: &syn::Expr, bound: &HashSet<String>) -> bool {
 /// it branches on the answer. The decision call is the scrutinee of a `match`
 /// with an arm naming a variant, the condition of an `if`, or bound with `let`
 /// and that binding later matched on or used in an `if`. `let _ = ...` never
-/// counts, and neither does `match ... { _ => ... }`.
+/// counts, and neither does `match ... { _ => ... }` nor a bare identifier
+/// binding such as `match ... { decided => ... }`.
 struct DecisionUsage {
     bound: HashSet<String>,
     used: bool,
 }
 
+/// Whether a `match` arm pattern discriminates the decision by naming a
+/// variant: a path pattern, a tuple-struct pattern such as `Reject(_)`, or an
+/// or-pattern containing one. A bare wildcard `_` or a bare identifier binding
+/// (`decided => ..`) does not.
+fn pattern_names_variant(pat: &syn::Pat) -> bool {
+    match pat {
+        syn::Pat::Path(_) | syn::Pat::TupleStruct(_) => true,
+        syn::Pat::Or(or) => or.cases.iter().any(pattern_names_variant),
+        _ => false,
+    }
+}
+
 impl<'ast> Visit<'ast> for DecisionUsage {
     fn visit_expr_match(&mut self, node: &'ast syn::ExprMatch) {
         // A match counts as using the decision only if some arm names a
-        // variant; `{ _ => ... }` discards the answer like `let _ = ...`.
+        // variant; `{ _ => ... }` or `{ decided => ... }` discards the answer
+        // like `let _ = ...`.
         if node
             .arms
             .iter()
-            .any(|arm| !matches!(arm.pat, syn::Pat::Wild(_)))
+            .any(|arm| pattern_names_variant(&arm.pat))
         {
             if is_decision_call(&node.expr) {
                 self.used = true;
@@ -769,8 +783,9 @@ fn expr_contains_builder_start(expr: &syn::Expr, factories: &HashSet<String>) ->
 }
 
 /// Whether an assignment's right-hand side replaces a tracked builder's
-/// recorded state from inside a branch: a fresh chain start, or another
-/// tracked builder variable whose own state has no `.redirect(`.
+/// recorded state from inside a branch: a fresh chain start, another tracked
+/// builder variable whose own state has no `.redirect(`, or a builder
+/// expression without `.redirect(` such as `loose.timeout(d)`.
 fn branch_replaces_builder(
     right: &syn::Expr,
     vars: &HashMap<String, (bool, bool)>,
@@ -786,7 +801,8 @@ fn branch_replaces_builder(
             .get(&name.to_string())
             .is_some_and(|(is_builder, has_redirect)| *is_builder && !*has_redirect);
     }
-    false
+    let (is_builder, has_redirect) = analyze_builder_expr(right, vars, factories);
+    is_builder && !has_redirect
 }
 
 struct BuildFinder {
@@ -1107,6 +1123,10 @@ fn the_scanner_reports_each_negative_fixture() {
         "fn f() { let _ = reqwest::redirect::Policy::custom(|a| match redirect_decision(a.previous().len(), a.url().as_str()) { _ => a.follow() }); }",
     );
     check_reported(
+        "custom-match-ident-binding-only",
+        "fn f() { let _ = reqwest::redirect::Policy::custom(|a| match redirect_decision(a.previous().len(), a.url().as_str()) { decided => { let _ = decided; a.follow() } }); }",
+    );
+    check_reported(
         "factory-route-no-redirect",
         "fn f() -> Client { route(None).timeout(d).build().expect(\"x\") } fn route(p: Option<u8>) -> reqwest::ClientBuilder { Client::builder() }",
     );
@@ -1121,6 +1141,10 @@ fn the_scanner_reports_each_negative_fixture() {
     check_reported(
         "if-branch-replaces-builder-with-variable",
         "fn f(c: bool) { let n = Client::builder(); let mut b = Client::builder().redirect(Policy::none()); if c { b = n; } b.build(); }",
+    );
+    check_reported(
+        "if-branch-replaces-builder-with-builder-expr",
+        "fn f(c: bool, d: std::time::Duration) { let loose = Client::builder(); let mut b = Client::builder().redirect(Policy::none()); if c { b = loose.timeout(d); } b.build(); }",
     );
 }
 

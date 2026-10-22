@@ -350,7 +350,12 @@ async fn fetch_skill_from_url(
         .get(url)
         .send()
         .await
-        .map_err(|e| format!("Failed to fetch '{shown_url}': {e}"))?;
+        .map_err(|e| {
+            mcp_gateway::security::http_diagnostics::safe_reqwest_message(
+                &format!("Failed to fetch '{shown_url}'"),
+                &e,
+            )
+        })?;
     if response.status().is_redirection() {
         let phrase = mcp_gateway::security::http_diagnostics::redirect_target_phrase(&response);
         return Err(format!(
@@ -366,7 +371,12 @@ async fn fetch_skill_from_url(
     let content = response
         .text()
         .await
-        .map_err(|e| format!("Failed to read body from '{shown_url}': {e}"))?;
+        .map_err(|e| {
+            mcp_gateway::security::http_diagnostics::safe_reqwest_message(
+                &format!("Failed to read body from '{shown_url}'"),
+                &e,
+            )
+        })?;
     mcp_gateway::skills::parse_skill_md(&content).map_err(|e| e.to_string())
 }
 
@@ -536,14 +546,15 @@ mod redirect_tests {
         assert_eq!(hits.load(Ordering::SeqCst), 0);
     }
 
-    /// A typed URL carrying userinfo and a query token is shown origin-only in
-    /// the redirect message and in the non-success-status message alike.
+    /// A typed URL carrying userinfo, a secret path segment and a query token is
+    /// shown origin-only in the redirect message and in the non-success-status
+    /// message alike.
     #[tokio::test]
     async fn skill_fetch_redacts_credentials_in_the_typed_url() {
         let (target, hits) = serve_counter().await;
         let location = target.clone();
         let redirect_app = axum::Router::new().route(
-            "/skill.md",
+            "/hooks/sekret-typed-path",
             axum::routing::get(move || {
                 let location = location.clone();
                 async move {
@@ -555,13 +566,13 @@ mod redirect_tests {
             }),
         );
         let missing_app = axum::Router::new().route(
-            "/skill.md",
+            "/hooks/sekret-typed-path",
             axum::routing::get(|| async { axum::http::StatusCode::NOT_FOUND }),
         );
         for app in [redirect_app, missing_app] {
             let base = serve(app).await;
             let typed = base.replacen("http://", "http://user:hunter2@", 1)
-                + "/skill.md?token=sekret-typed";
+                + "/hooks/sekret-typed-path?token=sekret-typed";
             let client = skill_fetch_client().expect("client");
             let outcome = tokio::time::timeout(HANG_BOUND, fetch_skill_from_url(&client, &typed))
                 .await
@@ -571,10 +582,46 @@ mod redirect_tests {
                 Err(msg) => {
                     assert!(!msg.contains("hunter2"), "msg: {msg}");
                     assert!(!msg.contains("sekret-typed"), "msg: {msg}");
+                    assert!(!msg.contains("sekret-typed-path"), "msg: {msg}");
+                    assert!(!msg.contains("/hooks/"), "msg: {msg}");
                     assert!(!msg.contains("user:"), "msg: {msg}");
                 }
             }
         }
         assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    /// A send failure reports origin-only: no typed-URL secret survives, and
+    /// the origin is still named.
+    #[tokio::test]
+    async fn skill_fetch_send_error_hides_typed_url_secrets() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                drop(socket);
+            }
+        });
+        let typed = format!(
+            "http://user:hunter2@127.0.0.1:{port}/hooks/sekret-path-77/skill.md?token=sekret-q-77#frag-77"
+        );
+        let origin = format!("http://127.0.0.1:{port}");
+        let client = skill_fetch_client().expect("client");
+        let outcome = tokio::time::timeout(HANG_BOUND, fetch_skill_from_url(&client, &typed))
+            .await
+            .expect("bounded");
+        match outcome {
+            Ok(_) => panic!("expected Err, got Ok"),
+            Err(msg) => {
+                assert!(!msg.contains("hunter2"), "msg: {msg}");
+                assert!(!msg.contains("sekret-path-77"), "msg: {msg}");
+                assert!(!msg.contains("/hooks/"), "msg: {msg}");
+                assert!(!msg.contains("sekret-q-77"), "msg: {msg}");
+                assert!(!msg.contains("frag-77"), "msg: {msg}");
+                assert!(msg.contains(&origin), "msg: {msg}");
+            }
+        }
     }
 }
