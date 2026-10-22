@@ -187,8 +187,8 @@ fn the_snapshot_reads_only_the_proxy_variables_through_its_lookup() {
     let env = ProxyEnv::from_lookup(|name| {
         read.borrow_mut().push(name.to_string());
         match name {
-            "HTTPS_PROXY" => Some("http://p.example:3128".to_string()),
-            "REQUEST_METHOD" => Some("GET".to_string()),
+            "HTTPS_PROXY" => Some("http://p.example:3128".into()),
+            "REQUEST_METHOD" => Some("GET".into()),
             _ => None,
         }
     });
@@ -209,6 +209,42 @@ fn the_snapshot_reads_only_the_proxy_variables_through_its_lookup() {
         ]
     );
     assert_eq!(route(&env), via("http://p.example:3128"));
+}
+
+#[cfg(unix)]
+fn not_utf8() -> std::ffi::OsString {
+    use std::os::unix::ffi::OsStringExt;
+    std::ffi::OsString::from_vec(vec![b'h', 0xff, b'x'])
+}
+
+#[cfg(windows)]
+fn not_utf8() -> std::ffi::OsString {
+    use std::os::windows::ffi::OsStringExt;
+    std::ffi::OsString::from_wide(&[0x68, 0xD800, 0x78])
+}
+
+#[test]
+fn an_unreadable_proxy_variable_skips_the_lookup() {
+    for bad in ["HTTPS_PROXY", "all_proxy", "NO_PROXY", "http_proxy"] {
+        let env = ProxyEnv::from_lookup(|name| {
+            if name == bad {
+                Some(not_utf8())
+            } else if name == "HTTPS_PROXY" {
+                Some("http://p.example:3128".into())
+            } else {
+                None
+            }
+        });
+        assert_eq!(route(&env), Route::Skip, "{bad} unreadable");
+        let env = ProxyEnv::from_lookup(|name| {
+            if name == "HTTPS_PROXY" && bad != "HTTPS_PROXY" {
+                Some("http://p.example:3128".into())
+            } else {
+                None
+            }
+        });
+        assert_ne!(route(&env), Route::Skip, "{bad} unset is not Skip");
+    }
 }
 
 // ── route: the proxy is chosen here, fail-closed (r4, r4.1) ────────────────
@@ -494,6 +530,37 @@ fn other_packages_get_the_edit_the_pin_hint() {
         !text.contains("mcp-gateway add"),
         "add refuses an existing name: {text}"
     );
+}
+
+#[test]
+fn the_memory_hint_names_the_cache_the_backend_uses() {
+    let command = "npx -y @modelcontextprotocol/server-memory@2026.8.31";
+    let old = pin(MEMORY_PACKAGE, "2026.8.31");
+    let backend = stdio(command, &[]);
+    let dir = mcp_gateway::transport::isolated_package_manager_env("memory", command, HashMap::new())
+        .get("npm_config_cache")
+        .expect("npx is assigned an npm cache")
+        .clone();
+    let text = hint("memory", &old, &backend);
+    let under = std::path::Path::new(&dir).join("_npx").display().to_string();
+    assert!(text.contains(&under), "{text}");
+    // The old text named "pkg-cache/memory directory"; the real directory is
+    // pkg-cache/memory-<hash>, so the space after the name tells them apart.
+    assert!(!text.contains("pkg-cache/memory directory"), "{text}");
+}
+
+#[test]
+fn an_operator_npm_cache_is_named_in_the_memory_hint() {
+    let command = "npx -y @modelcontextprotocol/server-memory@2026.8.31";
+    let cache = if cfg!(windows) { r"C:\srv\npm" } else { "/srv/npm" };
+    let old = pin(MEMORY_PACKAGE, "2026.8.31");
+    let backend = stdio(command, &[("npm_config_cache", cache)]);
+    let text = hint("memory", &old, &backend);
+    let under = std::path::Path::new(cache)
+        .join("_npx")
+        .display()
+        .to_string();
+    assert!(text.contains(&under), "{text}");
 }
 
 #[path = "npm_pin_wire_tests.rs"]

@@ -355,6 +355,50 @@ async fn a_finished_warning_survives_the_budget_running_out() {
     assert_eq!(labels, ["memory: npm pin"], "{rows:?}");
 }
 
+/// tavily-mcp is asked in the second wave, after airtable-mcp-server, which stalls past the budget.
+#[tokio::test]
+async fn a_second_wave_warning_is_not_held_behind_a_stalled_request() {
+    let stalled = [
+        ("@modelcontextprotocol/server-filesystem", FILESYSTEM_PATH),
+        ("@modelcontextprotocol/server-memory", MEMORY_PATH),
+        (
+            "@modelcontextprotocol/server-sequential-thinking",
+            "/@modelcontextprotocol%2Fserver-sequential-thinking",
+        ),
+        ("@playwright/mcp", "/@playwright%2Fmcp"),
+        ("airtable-mcp-server", "/airtable-mcp-server"),
+    ];
+    let mut replies: Vec<(&str, Reply)> = stalled
+        .iter()
+        .map(|(_, path)| (*path, Reply::Stall))
+        .collect();
+    replies.push((
+        "/tavily-mcp",
+        Reply::Json(br#"{"versions":{"1.0.0":{"deprecated":"use 2"}}}"#.to_vec()),
+    ));
+    let fake = Fake::start(&replies).await;
+    let mut backends: Vec<(String, BackendConfig)> = stalled
+        .iter()
+        .enumerate()
+        .map(|(i, (name, _))| (format!("s{i}"), stdio(&format!("npx -y {name}@1.0.0"), &[])))
+        .collect();
+    backends.push(("t".to_string(), stdio("npx -y tavily-mcp@1.0.0", &[])));
+    let named: Vec<(&str, BackendConfig)> = backends
+        .iter()
+        .map(|(n, b)| (n.as_str(), b.clone()))
+        .collect();
+    let started = Instant::now();
+    let rows = check(&config_of(&named), &fake.cfg(&[]), Lookup::On).await;
+    let took = started.elapsed();
+    assert!(
+        took >= BUDGET.saturating_sub(Duration::from_millis(200)),
+        "the budget ran out: {took:?}"
+    );
+    assert!(took < BUDGET + SLACK, "{took:?}");
+    let labels: Vec<&str> = warns(&rows).iter().map(|r| r.label.as_str()).collect();
+    assert_eq!(labels, ["t: npm pin"], "{rows:?}");
+}
+
 #[tokio::test]
 async fn a_non_200_answer_is_silent_even_with_a_valid_document() {
     for code in [404u16, 500, 203] {

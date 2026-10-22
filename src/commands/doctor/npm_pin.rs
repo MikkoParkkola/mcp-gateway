@@ -161,9 +161,13 @@ pub(super) fn package_url(base: &Url, name: &str) -> Url {
 
 /// The proxy variables, read once: `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`
 /// and `NO_PROXY`, in both cases. Nothing else in the environment is read.
+/// A variable whose value is not valid UTF-8 is not stored, and marks the
+/// snapshot unreadable: [`route`] skips the lookup then, never reads the
+/// variable as unset.
 #[derive(Clone, Debug, Default)]
 pub(super) struct ProxyEnv {
     pairs: Vec<(String, String)>,
+    unreadable: bool,
 }
 
 /// The only environment names a snapshot holds, in both cases.
@@ -181,7 +185,7 @@ const PROXY_NAMES: [&str; 8] = [
 impl ProxyEnv {
     /// The process environment's proxy variables.
     pub(super) fn from_process() -> Self {
-        Self::from_lookup(|name| std::env::var(name).ok())
+        Self::from_lookup(std::env::var_os)
     }
 
     /// A snapshot from explicit pairs (tests; unrelated names are dropped).
@@ -193,18 +197,30 @@ impl ProxyEnv {
                 .filter(|(name, _)| PROXY_NAMES.contains(name))
                 .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
                 .collect(),
+            unreadable: false,
         }
     }
 
     /// The proxy variables read through `lookup`; `from_process` is this
-    /// with `std::env::var`.
-    pub(super) fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Self {
-        Self {
-            pairs: PROXY_NAMES
-                .iter()
-                .filter_map(|name| lookup(name).map(|value| ((*name).to_string(), value)))
-                .collect(),
-        }
+    /// with `std::env::var_os`. A value that is not valid UTF-8 is not
+    /// stored, and marks the snapshot unreadable: [`route`] skips the
+    /// lookup then.
+    pub(super) fn from_lookup(lookup: impl Fn(&str) -> Option<std::ffi::OsString>) -> Self {
+        let mut unreadable = false;
+        let pairs = PROXY_NAMES
+            .iter()
+            .filter_map(|name| {
+                let value = lookup(name)?;
+                match value.into_string() {
+                    Ok(value) => Some(((*name).to_string(), value)),
+                    Err(_) => {
+                        unreadable = true;
+                        None
+                    }
+                }
+            })
+            .collect();
+        Self { pairs, unreadable }
     }
 
     /// The value of `name`, when set; an empty value is unset, the way the
@@ -233,8 +249,14 @@ pub(super) enum Route {
 
 /// The route from the snapshot: `HTTPS_PROXY`, else `ALL_PROXY`; lowercase
 /// before uppercase; an empty value is unset; `HTTP_PROXY` is for `http://`
-/// targets only.
+/// targets only. A snapshot holding an unreadable value skips outright.
 pub(super) fn route(env: &ProxyEnv) -> Route {
+    // Any unreadable variable fails the lookup closed, NO_PROXY included:
+    // an exclusion list that cannot be read must not widen where a proxy
+    // is used, and Skip is the existing fail-closed answer.
+    if env.unreadable {
+        return Route::Skip;
+    }
     // One group at a time, https before all. A group that is set but
     // unusable skips the lookup outright: falling back to the other group,
     // or going direct, would send the request by a route nobody chose.
@@ -397,9 +419,32 @@ pub(super) fn hint(backend: &str, pin: &Pin, config: &BackendConfig) -> String {
     // MEMORY_FILE_PATH names an absolute path, and a new pin installs into
     // a new directory: the graph must be copied out before the pin moves.
     if pin.name == MEMORY_PACKAGE && !has_absolute_memory_path(config) {
+        // The npm cache the backend's child actually uses: the
+        // gateway-assigned directory, or the operator's own when they set
+        // npm_config_cache in the backend's env.
+        let cache = match &config.transport {
+            TransportConfig::Stdio { command, .. } => {
+                mcp_gateway::transport::isolated_package_manager_env(
+                    backend,
+                    command,
+                    config.env.clone(),
+                )
+                .remove("npm_config_cache")
+            }
+            _ => None,
+        };
+        let place = match cache.as_deref() {
+            Some(dir) => format!(
+                "in the {MEMORY_PACKAGE} package under {}",
+                std::path::Path::new(dir).join("_npx").display()
+            ),
+            None => format!(
+                "in the {MEMORY_PACKAGE} package under the npm cache this backend uses, \
+                 in its _npx directory"
+            ),
+        };
         format!(
-            "First copy the existing memory.jsonl (under the gateway's \
-             pkg-cache/{backend} directory) to an absolute path and set \
+            "First copy the existing memory.jsonl ({place}) to an absolute path and set \
              MEMORY_FILE_PATH to it in backends.{backend}.env, then edit \
              the pin in backends.{backend}.command to {target}"
         )
@@ -447,7 +492,9 @@ pub(super) async fn check(config: &Config, cfg: &ClientCfg, lookup: Lookup) -> V
     };
 
     // One request per distinct package, however many backends pin it,
-    // started in sorted order with at most CONCURRENCY in flight.
+    // started in sorted order with at most CONCURRENCY in flight, and
+    // collected as they arrive, so a finished answer is never held behind
+    // a stalled earlier one.
     let names: BTreeSet<String> = pins.iter().map(|(_, pin, _)| pin.name.clone()).collect();
     // Documents land in a map outside the timed future, so a finished
     // answer survives the budget running out under slower ones.
@@ -458,7 +505,7 @@ pub(super) async fn check(config: &Config, cfg: &ClientCfg, lookup: Lookup) -> V
             let doc = fetch_doc(http, cfg, &name).await;
             (name, doc)
         }))
-        .buffered(CONCURRENCY);
+        .buffer_unordered(CONCURRENCY);
         while let Some((name, doc)) = stream.next().await {
             if let Some(doc) = doc {
                 docs.insert(name, doc);

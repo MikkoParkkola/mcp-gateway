@@ -252,6 +252,10 @@ backend names, versions or settings), and npm sees this host's IP address.
 Skip it with `--no-registry-check`, `MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK=1`,
 or `security.posture: hardened`; a failed lookup prints nothing and never
 fails doctor. This skips the gateway's own npm registry lookup; it does not stop npx or other servers started by --start-stdio from contacting npm, so air-gapped hosts should not use --start-stdio.
+The lookup uses only the proxy named by `HTTPS_PROXY` or `ALL_PROXY` (either case; an
+`http`/`https` proxy without credentials, honouring `NO_PROXY`), never an OS proxy setting,
+and trusts only the bundled Mozilla root certificates, never the system store. Behind a
+TLS-inspecting proxy, or a proxy that is unset, unusable or unreadable, it prints nothing.
 
 Client configs are still generated on the host, not inside the container:
 

@@ -81,7 +81,8 @@ pub(crate) fn shut_down(runtime: tokio::runtime::Runtime, mode: RuntimeShutdown)
         tracing::error!(
             ?timeout,
             "shutdown exited with blocking work still running after the bound \
-             (a disk write, or doctor's network lookup, that never returned?)"
+             (a disk or mount write that never returned; under doctor, its 1 s bound, \
+             possibly the npm lookup's name resolution?)"
         );
     }
     left_running

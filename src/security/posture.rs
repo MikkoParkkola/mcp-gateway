@@ -8,6 +8,7 @@
 //! forced value into the operator's file.
 //!
 //! What `hardened` enforces in this version:
+//! - `doctor` skips its npm registry lookup, so it contacts no third-party host;
 //! - the context-integrity preset is at least `team_shared`
 //!   (`enterprise_strict` is kept) and `non_bypassable` is on;
 //! - the firewall and anomaly detection are on, and an anomaly score at or
