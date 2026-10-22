@@ -4,6 +4,7 @@
 //! loop with the lease held. Each drives the real loop across its periods.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use tokio::time::Instant;
@@ -260,6 +261,8 @@ async fn t6b_renewal_without_a_refresh_token_defers_leaving_cache_and_storage() 
         // Hold the in-process flight so the save cannot reach its lease wait
         // before the pause: the exchange completes with real time while the
         // save waits on this lock, then the pause lands before the lease wait.
+        // The server answers only after this test has run on: see the fixture.
+        server.yields_before_reply.store(3, Ordering::SeqCst);
         let flight = Flight::of(&token_path);
         let flight_guard = flight.lock.lock().await;
 
