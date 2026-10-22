@@ -194,8 +194,9 @@ const SCAN3_FILE: &str = "tests/mik_8425_yaml_baseline_trees.rs";
 /// absent roots (a gone file is a skipped row, a walk over a missing
 /// directory yields nothing), and the golden holds 155 shipped rows before
 /// `examples/` and `tests/fixtures/` are counted (150 needed), so the test
-/// passes from the unpacked crate; the `cargo package` confirmation run is
-/// still owed. Path-scoped: only this literal in this file is exempt, and it
+/// passes from the unpacked crate (confirmed 2026-10-22: built from
+/// `cargo package` at 0395b7fc3 with `smithery.yaml` absent, 2 passed).
+/// Path-scoped: only this literal in this file is exempt, and it
 /// is spelled in parts so this file does not flag itself for naming it.
 fn is_reviewed_scan3(rel_norm: &str, lit: &str) -> bool {
     rel_norm == SCAN3_FILE && lit.strip_suffix(".yaml") == Some("smithery")
@@ -207,8 +208,8 @@ fn offenders(root: &Path, patterns: &[String], rel_file: &str, source: &str) -> 
     // Windows hands in backslashes; the exemptions name the slash form.
     let rel_norm = rel_file.replace('\\', "/");
     let triggered = source.contains("CARGO_MANIFEST_DIR")
-        || source.contains("include_str!(")
-        || source.contains("include_bytes!(")
+        || source.contains("include_str!")
+        || source.contains("include_bytes!")
         || calls_root_helper(source);
     if rel_norm == HELPER_FILE || !triggered {
         return Vec::new();
@@ -237,9 +238,15 @@ fn offenders(root: &Path, patterns: &[String], rel_file: &str, source: &str) -> 
     literals.covered.extend(exempt);
     // The backslash form names the slash path (`tools\run.sh` is read as
     // `tools/run.sh`), so every collected literal is normalised first.
+    let includes: Vec<String> = literals
+        .includes
+        .iter()
+        .map(|lit| lit.replace('\\', "/"))
+        .collect();
     let all: Vec<String> = literals
         .all
         .iter()
+        .chain(&literals.includes)
         .map(|lit| lit.replace('\\', "/"))
         .collect();
     let covered: Vec<String> = literals
@@ -251,7 +258,7 @@ fn offenders(root: &Path, patterns: &[String], rel_file: &str, source: &str) -> 
     let direct = |lit: &str| {
         let used = all.iter().filter(|l| norm(l) == lit).count();
         let through_helper = covered.iter().filter(|l| norm(l) == lit).count();
-        used > through_helper
+        used > through_helper || includes.iter().any(|l| norm(l) == lit)
     };
     let mut found: Vec<String> = all
         .iter()
@@ -631,6 +638,60 @@ fn scan4_a_backslash_literal_is_seen() {
     assert_eq!(
         offenders(root.path(), &patterns, FILE, source),
         ["tools/run.sh".to_owned()]
+    );
+}
+
+/// MIK-8501.SCAN.2: a direct use placed before its `const` still counts.
+#[test]
+fn scan2_a_direct_use_before_the_const_is_flagged() {
+    let (root, patterns) = scratch();
+    let source = r#"fn f() { let _ = env!("CARGO_MANIFEST_DIR"); let _ = crate_root().join(P); } const P: &str = "tools/run.sh"; fn g() { repo_file(P); }"#;
+    assert_eq!(
+        offenders(root.path(), &patterns, FILE, source),
+        ["tools/run.sh".to_owned()]
+    );
+}
+
+/// MIK-8501.SCAN.2: a typed `let` used only through the helper is exempt.
+#[test]
+fn scan2_a_typed_let_used_only_through_the_helper_is_exempt() {
+    let (root, patterns) = scratch();
+    let source = r#"fn f() { let _ = env!("CARGO_MANIFEST_DIR"); let p: &str = "tools/run.sh"; read_or_skip(root, p, false); }"#;
+    assert!(offenders(root.path(), &patterns, FILE, source).is_empty());
+}
+
+/// MIK-8501.SCAN.2: a qualified direct use (`self::P`) counts against the exemption.
+#[test]
+fn scan2_a_qualified_direct_use_is_flagged() {
+    let (root, patterns) = scratch();
+    let source = r#"const P: &str = "tools/run.sh"; fn f() { let _ = env!("CARGO_MANIFEST_DIR"); read_or_skip(root, P, true); let _ = crate_root().join(self::P); }"#;
+    assert_eq!(
+        offenders(root.path(), &patterns, FILE, source),
+        ["tools/run.sh".to_owned()]
+    );
+}
+
+/// MIK-8501.SCAN.4: an `include_str!` inside a helper argument is still a direct read.
+#[test]
+fn scan4_an_include_inside_a_helper_argument_is_flagged() {
+    let (root, patterns) = scratch();
+    std::fs::create_dir_all(root.path().join("tests")).expect("mkdir tests");
+    let source = r#"fn f() { repo_file(include_str!("../tools/run.sh")); }"#;
+    assert_eq!(
+        offenders(root.path(), &patterns, FILE, source),
+        ["tools/run.sh".to_owned()]
+    );
+}
+
+/// MIK-8501.SCAN.4: a qualified, brace-delimited `std::include_bytes!` is seen.
+#[test]
+fn scan4_a_qualified_brace_include_is_seen() {
+    let (root, patterns) = scratch();
+    std::fs::create_dir_all(root.path().join("tests")).expect("mkdir tests");
+    let source = r#"const T: &[u8] = std::include_bytes! {"../top.sh"};"#;
+    assert_eq!(
+        offenders(root.path(), &patterns, FILE, source),
+        ["top.sh".to_owned()]
     );
 }
 

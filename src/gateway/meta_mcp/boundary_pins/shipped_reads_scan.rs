@@ -21,10 +21,12 @@ pub(super) struct Literals {
     /// `name → literal` for bindings initialised with one string literal; the
     /// first binding of a name wins (no scope analysis).
     pub(super) bindings: std::collections::HashMap<String, String>,
-    /// Every path-expression use of a bound name ...
+    /// Every path-expression use of a single-identifier name ...
     pub(super) uses: std::collections::HashMap<String, usize>,
     /// ... and how many of those are direct arguments of a helper call.
     pub(super) helper_uses: std::collections::HashMap<String, usize>,
+    /// `include_str!`/`include_bytes!` paths, resolved; always direct reads.
+    pub(super) includes: Vec<String>,
 }
 
 fn is_helper_call(call: &syn::ExprCall) -> bool {
@@ -58,7 +60,11 @@ impl<'ast> Visit<'ast> for Literals {
     }
 
     fn visit_local(&mut self, local: &'ast syn::Local) {
-        if let syn::Pat::Ident(named) = &local.pat
+        let pat = match &local.pat {
+            syn::Pat::Type(typed) => &*typed.pat,
+            other => other,
+        };
+        if let syn::Pat::Ident(named) = pat
             && let Some(init) = &local.init
             && let Some(lit) = as_lit_str(&init.expr)
         {
@@ -68,11 +74,11 @@ impl<'ast> Visit<'ast> for Literals {
     }
 
     fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
-        if let Some(ident) = path.path.get_ident() {
-            let name = ident.to_string();
-            if self.bindings.contains_key(&name) {
-                *self.uses.entry(name).or_default() += 1;
-            }
+        // Counted for every name, bound yet or not, by its last segment: a use
+        // before its `const`, or a qualified one (`self::P`), still counts
+        // against the exemption; only a bare name passed to a helper covers.
+        if let Some(last) = path.path.segments.last() {
+            *self.uses.entry(last.ident.to_string()).or_default() += 1;
         }
         syn::visit::visit_expr_path(self, path);
     }
@@ -101,15 +107,19 @@ impl<'ast> Visit<'ast> for Literals {
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
         // `syn` leaves macro token streams unparsed, so these literals are
         // invisible unless read here. Any other macro is not seen.
-        if mac.path.is_ident("include_str") || mac.path.is_ident("include_bytes") {
+        let name = mac.path.segments.last().map(|s| s.ident.to_string());
+        let name = name.as_deref();
+        if matches!(name, Some("include_str" | "include_bytes")) {
+            // A compile-time read: no helper can skip it, so it goes to
+            // `includes`, which helper coverage never exempts.
             if let Ok(args) = mac.parse_body_with(
                 syn::punctuated::Punctuated::<syn::LitStr, syn::Token![,]>::parse_terminated,
             ) {
                 for lit in &args {
-                    self.all.push(resolve_include(&self.dir, &lit.value()));
+                    self.includes.push(resolve_include(&self.dir, &lit.value()));
                 }
             }
-        } else if mac.path.is_ident("concat")
+        } else if name == Some("concat")
             && let Ok(args) = mac.parse_body_with(
                 syn::punctuated::Punctuated::<syn::LitStr, syn::Token![,]>::parse_terminated,
             )

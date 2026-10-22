@@ -51,7 +51,10 @@ pub(super) fn checked_in_workflow() -> Option<String> {
 
 /// Whether a `continue-on-error` value keeps the job green when the step fails.
 fn continues_on_error(value: &Value) -> bool {
-    value.as_bool() == Some(true) || value.as_str().is_some_and(|s| s.trim() == "true")
+    value.as_bool() == Some(true)
+        || value
+            .as_str()
+            .is_some_and(|s| matches!(s.trim(), "true" | "${{ true }}"))
 }
 
 /// Whether an `if` value gates the step out unconditionally: the YAML boolean
