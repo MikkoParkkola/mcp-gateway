@@ -1,0 +1,811 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+"""MIK-8691.PANIC.3: a new
+unwrap/expect/panic-family site in non-test, non-operator product code fails CI unless it carries an
+`// invariant:` comment. Existing sites are listed in a shrink-only baseline the scanner writes.
+"""
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+BASELINE_REL = Path("scripts/ci/request-panic-baseline.txt")
+
+OPERATOR_PREFIXES = (
+    "src/commands/",
+    "src/cli/",
+    "src/main",
+    "src/kubernetes",
+    "src/debug_trust_roots",
+    "src/win_acl/",
+    "src/validator/report.rs",
+    "src/validator/fix.rs",
+    "src/validator/cli_handler.rs",
+    "src/trust/lab",
+    "src/honest_task_tokens",
+)
+
+_CFG_RE = re.compile(r"#\s*\[\s*cfg\s*\(")
+_RE_UNWRAP = re.compile(r"\.\s*unwrap\s*\(\s*\)")
+_RE_EXPECT = re.compile(r"\.\s*expect\s*\(")
+_RE_ASSOC = re.compile(r"\b(?:Option|Result)\s*::\s*(?:unwrap|expect)\s*\(")
+_RE_MACRO = re.compile(r"\b(?:panic|unreachable|unimplemented|todo)\s*!")
+
+_FN_ITEMS = {"fn", "struct", "enum", "union", "impl", "mod", "trait"}
+_LET_ITEMS = {"let", "const", "static", "type", "use"}
+_PREFIX_WORDS = {"async", "const", "unsafe"}
+
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _load_orphan():
+    path = ROOT / "scripts/dev/check-orphan-test-modules.py"
+    spec = importlib.util.spec_from_file_location("check_orphan_test_modules", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_ORPHAN = _load_orphan()
+
+
+def _normalize(line: str) -> str:
+    return " ".join(line.split())
+
+
+def _is_operator(rel_posix: str) -> bool:
+    return any(rel_posix.startswith(p) for p in OPERATOR_PREFIXES)
+
+
+def _rs_files_for_root(root: Path, orphan):
+    try:
+        if root.resolve() == ROOT.resolve():
+            return orphan.src_sources()
+    except OSError:
+        pass
+    skip = getattr(orphan, "SKIP_DIRS", {".git", "target", "node_modules"})
+    src = root / "src"
+    if not src.is_dir():
+        return []
+    out = []
+    for p in src.rglob("*.rs"):
+        try:
+            parts = p.relative_to(root).parts
+        except ValueError:
+            continue
+        if skip.intersection(parts):
+            continue
+        out.append(p)
+    return sorted(out)
+
+
+def read_baseline_counts(path: Path) -> dict[tuple[str, str], int]:
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    counts: dict[tuple[str, str], int] = {}
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        try:
+            counts[(parts[0], parts[1])] = int(parts[2].strip())
+        except ValueError:
+            continue
+    return counts
+
+
+def write_baseline_counts(path: Path, current: dict) -> None:
+    items = []
+    for (rel, norm), v in current.items():
+        cnt = len(v) if isinstance(v, list) else int(v)
+        items.append((rel, norm, cnt))
+    items.sort()
+    out = "".join(f"{rel}\t{norm}\t{cnt}\n" for rel, norm, cnt in items)
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(out, encoding="utf-8")
+
+
+def _skip_ws(code: str, i: int) -> int:
+    n = len(code)
+    while i < n and code[i].isspace():
+        i += 1
+    return i
+
+
+def _read_ident(code: str, i: int):
+    m = _IDENT_RE.match(code, i)
+    if m:
+        return m.group(0), m.end()
+    return None, i
+
+
+def _skip_attributes(code: str, i: int, orphan) -> int:
+    n = len(code)
+    while True:
+        i = _skip_ws(code, i)
+        if i < n and code[i] == "#":
+            j = i + 1
+            while j < n and code[j].isspace():
+                j += 1
+            if j < n and code[j] == "!":
+                j += 1
+                while j < n and code[j].isspace():
+                    j += 1
+            if j < n and code[j] == "[":
+                i = orphan.attribute_end(code, j + 1)
+                continue
+        break
+    return i
+
+
+def _skip_pub(code: str, i: int) -> int:
+    i = _skip_ws(code, i)
+    word, wend = _read_ident(code, i)
+    if word != "pub":
+        return i
+    i = _skip_ws(code, wend)
+    if i < len(code) and code[i] == "(":
+        depth = 0
+        n = len(code)
+        while i < n:
+            if code[i] == "(":
+                depth += 1
+            elif code[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    i += 1
+                    break
+            i += 1
+    return _skip_ws(code, i)
+
+
+def _classify_item(code: str, attr_end: int, orphan):
+    i = _skip_attributes(code, attr_end, orphan)
+    i = _skip_pub(code, i)
+    p1 = i
+    j = p1
+    while True:
+        j = _skip_ws(code, j)
+        word, wend = _read_ident(code, j)
+        if word in _PREFIX_WORDS:
+            j = wend
+            continue
+        if word == "extern":
+            j = wend
+            j = _skip_ws(code, j)
+            if j < len(code) and code[j] == '"':
+                k = j + 1
+                while k < len(code) and code[k] != '"':
+                    k += 1
+                if k < len(code):
+                    k += 1
+                j = k
+            continue
+        break
+    j = _skip_ws(code, j)
+    word, _ = _read_ident(code, j)
+    fn_like = word in _FN_ITEMS
+    word1, _ = _read_ident(code, p1)
+    let_like = (word1 in _LET_ITEMS) and not fn_like
+    return fn_like, let_like
+
+
+def _item_end(code: str, attr_end: int, fn_like: bool, let_like: bool) -> int:
+    depth = 0
+    k = attr_end
+    n = len(code)
+    while k < n:
+        c = code[k]
+        if c == "(" or c == "[" or c == "{":
+            depth += 1
+            k += 1
+        elif c == ")" or c == "]" or c == "}":
+            if depth == 0:
+                return k
+            if c == "}" and depth == 1:
+                if let_like:
+                    depth -= 1
+                    k += 1
+                    continue
+                return k + 1
+            depth -= 1
+            k += 1
+        elif c == ";" and depth == 0:
+            return k + 1
+        elif c == "," and depth == 0:
+            if not fn_like:
+                return k + 1
+            k += 1
+        else:
+            k += 1
+    return n
+
+
+def _blank_cfg_items(code: str, orphan) -> str:
+    matches = list(_CFG_RE.finditer(code))
+    if not matches:
+        return code
+    descs = []
+    for m in matches:
+        expr = orphan.cfg_expression(code, m.end())
+        if not (orphan.cfg_is_test(expr) or expr.strip() == "kani"):
+            continue
+        bracket = code.find("[", m.start(), m.end())
+        if bracket < 0:
+            continue
+        try:
+            attr_end = orphan.attribute_end(code, bracket + 1)
+        except Exception:
+            continue
+        descs.append((m.start(), attr_end))
+    descs.sort()
+    if not descs:
+        return code
+    out = list(code)
+    wiped: list[tuple[int, int]] = []
+
+    def _inside(s: int) -> bool:
+        for a, b in wiped:
+            if a <= s < b:
+                return True
+        return False
+
+    for start, attr_end in descs:
+        if _inside(start):
+            continue
+        fn_like, let_like = _classify_item(code, attr_end, orphan)
+        end = _item_end(code, attr_end, fn_like, let_like)
+        if end <= start:
+            continue
+        for k in range(start, min(end, len(out))):
+            if out[k] != "\n":
+                out[k] = " "
+        wiped.append((start, end))
+    return "".join(out)
+
+
+def _find_site_starts(blanked: str) -> list[int]:
+    starts: list[int] = []
+    for rx in (_RE_UNWRAP, _RE_EXPECT, _RE_ASSOC, _RE_MACRO):
+        for m in rx.finditer(blanked):
+            starts.append(m.start())
+    starts.sort()
+    return starts
+
+
+def _is_exempt(orig_lines: list[str], blanked_lines: list[str], idx0: int) -> bool:
+    if "// invariant:" in orig_lines[idx0]:
+        return True
+    i = idx0
+    while i > 0:
+        prev_orig = orig_lines[i - 1].strip()
+        if prev_orig == "":
+            break
+        if prev_orig.startswith("//"):
+            break
+        if i - 1 < len(blanked_lines):
+            prev_blank = blanked_lines[i - 1].strip()
+        else:
+            prev_blank = prev_orig
+        if prev_blank == "":
+            break
+        if prev_blank.endswith(";") or prev_blank.endswith("{") or prev_blank.endswith("}"):
+            break
+        i -= 1
+    if i > 0 and orig_lines[i - 1].strip().startswith("// invariant:"):
+        return True
+    return False
+
+
+def collect_current(root: Path, test_only: set[Path], orphan) -> tuple[dict, int, int]:
+    current: dict[tuple[str, str], list[int]] = {}
+    scanned = 0
+    total = 0
+    for path in _rs_files_for_root(Path(root), orphan):
+        try:
+            rel = path.relative_to(root).as_posix()
+        except ValueError:
+            continue
+        if _is_operator(rel):
+            continue
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if resolved in test_only:
+            continue
+        scanned += 1
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        blanked, _ = orphan.blank(text)
+        final = _blank_cfg_items(blanked, orphan)
+        starts = _find_site_starts(final)
+        if not starts:
+            continue
+        orig_lines = text.splitlines()
+        blanked_lines = final.splitlines()
+        for st in starts:
+            line_no = final.count("\n", 0, st) + 1
+            idx0 = line_no - 1
+            if idx0 < 0 or idx0 >= len(orig_lines):
+                continue
+            norm = _normalize(orig_lines[idx0])
+            if _is_exempt(orig_lines, blanked_lines, idx0):
+                continue
+            current.setdefault((rel, norm), []).append(line_no)
+            total += 1
+    return current, scanned, total
+
+
+def find_new_sites(current: dict, baseline: dict[tuple[str, str], int]) -> list[tuple[str, int, str]]:
+    out: list[tuple[str, int, str]] = []
+    for (rel, norm), lines in current.items():
+        base = baseline.get((rel, norm), 0)
+        if len(lines) > base:
+            for ln in sorted(lines)[base:]:
+                out.append((rel, ln, norm))
+    out.sort(key=lambda t: (t[0], t[1]))
+    return out
+
+
+def shrink_failures(
+    current: dict[tuple[str, str], int], base: dict[tuple[str, str], int] | None
+) -> list[tuple[tuple[str, str], int, int | None]]:
+    if base is None:
+        return []
+    fails = []
+    for key, cur in current.items():
+        b = base.get(key)
+        if b is None or cur > b:
+            fails.append((key, cur, b))
+    return fails
+
+
+def load_base_via_git(rev: str) -> dict[tuple[str, str], int] | None:
+    # An unknown revision is an error, never "no baseline": a mistyped base or
+    # a shallow clone missing it must not pass silently. Only a revision that
+    # exists without the file (the PR that introduces it) returns None.
+    known = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}"],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if known.returncode != 0:
+        raise SystemExit(f"request-panics: base revision {rev!r} is not in this clone")
+    proc = subprocess.run(
+        ["git", "show", f"{rev}:scripts/ci/request-panic-baseline.txt"],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        errors="replace",
+    )
+    if proc.returncode != 0:
+        return None
+    counts: dict[tuple[str, str], int] = {}
+    for number, line in enumerate(proc.stdout.splitlines(), 1):
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        if len(parts) != 3 or not parts[2].strip().isdigit():
+            raise SystemExit(f"request-panics: malformed baseline line {number} at {rev}: {line!r}")
+        counts[(parts[0], parts[1])] = int(parts[2].strip())
+    return counts
+
+
+def _write_temp_files(tmp_root: Path, files: dict[str, str]) -> None:
+    for rel, content in files.items():
+        p = tmp_root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+
+
+def _scan_temp(
+    files: dict[str, str],
+    test_only_rels: tuple[str, ...] = (),
+    baseline: dict[tuple[str, str], int] | None = None,
+    orphan=None,
+):
+    if orphan is None:
+        orphan = _ORPHAN
+    if baseline is None:
+        baseline = {}
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        _write_temp_files(root, files)
+        test_only = {(root / rel).resolve() for rel in test_only_rels}
+        current, scanned, total = collect_current(root, test_only, orphan)
+        findings = find_new_sites(current, baseline)
+        return findings, current, scanned, total
+
+
+def run_self_test() -> int:
+    orphan = _ORPHAN
+    passed = 0
+
+    def check(name: str, cond: bool, extra: str = ""):
+        nonlocal passed
+        if not cond:
+            print(f"self-test FAIL: {name} {extra}".rstrip())
+            raise SystemExit(1)
+        passed += 1
+
+    # ---- Flagged ----
+    f, _, _, _ = _scan_temp({"src/foo.rs": "fn f(x: Option<i32>) -> i32 {\n    x.unwrap()\n}\n"})
+    check("flag new .unwrap()", len(f) == 1 and f[0][1] == 2, repr(f))
+
+    f, _, _, _ = _scan_temp({"src/foo.rs": "fn f(x: Option<i32>) -> i32 {\n    x.unwrap(\n    )\n}\n"})
+    check("flag .unwrap( newline )", len(f) == 1, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {"src/foo.rs": 'fn f(x: Option<i32>) -> i32 {\n    x.expect(\n        "boom",\n    )\n}\n'}
+    )
+    check("flag multiline .expect(", len(f) == 1, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {"src/foo.rs": "fn f(x: Option<i32>) -> i32 {\n    Option::unwrap(x)\n}\n"}
+    )
+    check("flag Option::unwrap", len(f) == 1, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {"src/foo.rs": 'fn f(x: Result<i32, String>) -> i32 {\n    Result::expect(x, "boom")\n}\n'}
+    )
+    check("flag Result::expect", len(f) == 1, repr(f))
+
+    for macro, body in [
+        ("panic", 'panic!("boom")'),
+        ("unreachable", 'unreachable!("x")'),
+        ("unimplemented", "unimplemented!()"),
+        ("todo", 'todo!("x")'),
+    ]:
+        f, _, _, _ = _scan_temp({"src/foo.rs": f"fn f() {{\n    {body}\n}}\n"})
+        check(f"flag {macro}!", len(f) == 1, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {"src/foo.rs": "fn f(y: Option<i32>) -> i32 {\n    y.unwrap()\n}\n"},
+        baseline={("src/foo.rs", "x.unwrap()"): 1},
+    )
+    check("flag edited baseline text", len(f) == 1 and f[0][2] == "y.unwrap()", repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {
+            "src/foo.rs": (
+                "fn f(x: Option<i32>) -> i32 {\n    x.unwrap()\n}\n"
+                "fn g(x: Option<i32>) -> i32 {\n    x.unwrap()\n}\n"
+            )
+        },
+        baseline={("src/foo.rs", "x.unwrap()"): 1},
+    )
+    check("flag identical copy (count rises)", len(f) == 1 and f[0][1] == 5, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {
+            "src/foo.rs": (
+                "fn f(x: Option<i32>, y: Option<i32>) {\n"
+                "    x.unwrap(); // invariant: x ok\n"
+                "    y.unwrap();\n"
+                "}\n"
+            )
+        }
+    )
+    check("flag site under trailing invariant", len(f) == 1 and f[0][1] == 3, repr(f))
+
+    for label, cfg_fn in [
+        ("const fn", "const fn gated() -> i32 {\n    None::<i32>.unwrap()\n}"),
+        ("async fn", "async fn gated() {\n    None::<i32>.unwrap();\n}"),
+        ("unsafe fn", "unsafe fn gated() {\n    None::<i32>.unwrap();\n}"),
+    ]:
+        f, _, _, _ = _scan_temp(
+            {
+                "src/foo.rs": (
+                    f"#[cfg(test)]\n{cfg_fn}\n"
+                    "fn live(x: Option<i32>) -> i32 {\n    x.unwrap()\n}\n"
+                )
+            }
+        )
+        check(f"flag live unwrap after cfg(test) {label}", len(f) == 1 and "x.unwrap()" in f[0][2], repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {
+            "src/foo.rs": (
+                "fn f() {\n"
+                '    let s = br#"a"b"#;\n'
+                "    let x: Option<i32> = None;\n"
+                "    x.unwrap();\n"
+                "}\n"
+            )
+        }
+    )
+    check("flag live unwrap after raw byte string", len(f) == 1, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {
+            "src/foo.rs": (
+                "fn f(#[cfg(test)] x: u32, y: Option<i32>) -> i32 {\n"
+                "    y.unwrap()\n"
+                "}\n"
+            )
+        }
+    )
+    check("flag body with cfg(test) first param", len(f) == 1 and f[0][1] == 2, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {
+            "src/foo.rs": (
+                "fn f(y: Option<i32>, #[cfg(test)] x: u32) -> i32 {\n"
+                "    y.unwrap()\n"
+                "}\n"
+            )
+        }
+    )
+    check("flag body with cfg(test) last param", len(f) == 1 and f[0][1] == 2, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {
+            "src/foo.rs": (
+                '#[cfg(any(test, feature = "x"))]\n'
+                "fn f(x: Option<i32>) -> i32 {\n"
+                "    x.unwrap()\n"
+                "}\n"
+            )
+        }
+    )
+    check("flag under cfg(any(test, ...))", len(f) == 1, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {
+            "src/foo.rs": (
+                "#[cfg(not(test))]\n"
+                "fn f(x: Option<i32>) -> i32 {\n"
+                "    x.unwrap()\n"
+                "}\n"
+            )
+        }
+    )
+    check("flag under cfg(not(test))", len(f) == 1, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {
+            "src/foo.rs": (
+                "#[cfg(kani)]\n"
+                "fn kani_only() {\n"
+                "    None::<i32>.unwrap();\n"
+                "}\n"
+                "fn live(y: Option<i32>) -> i32 {\n"
+                "    y.unwrap()\n"
+                "}\n"
+            )
+        }
+    )
+    check("flag live unwrap after cfg(kani) item", len(f) == 1 and "y.unwrap()" in f[0][2], repr(f))
+
+    # ---- Not flagged ----
+    f, _, _, _ = _scan_temp(
+        {"src/foo.rs": "fn f(x: Option<i32>) -> i32 {\n    x.unwrap() // invariant: ok\n}\n"}
+    )
+    check("pass trailing invariant", len(f) == 0, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {
+            "src/foo.rs": (
+                "fn f(x: Option<i32>) -> i32 {\n"
+                "    // invariant: ok\n"
+                "    x.unwrap()\n"
+                "}\n"
+            )
+        }
+    )
+    check("pass invariant line above", len(f) == 0, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {
+            "src/foo.rs": (
+                "fn f(x: Option<i32>) -> i32 {\n"
+                "    // invariant: ok\n"
+                "    x\n"
+                "        .as_ref()\n"
+                "        .unwrap()\n"
+                "}\n"
+            )
+        }
+    )
+    check("pass invariant above split chain", len(f) == 0, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {
+            "src/foo.rs": (
+                "fn f(x: Option<i32>) -> i32 {\n"
+                "    // moved down\n"
+                "    // another comment\n"
+                "\n"
+                "\n"
+                "    x.unwrap()\n"
+                "}\n"
+            )
+        },
+        baseline={("src/foo.rs", "x.unwrap()"): 1},
+    )
+    check("pass baseline site moved", len(f) == 0, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {"src/foo.rs": "fn f(x: Option<i32>) -> i32 {\n        x.unwrap()\n}\n"},
+        baseline={("src/foo.rs", "x.unwrap()"): 1},
+    )
+    check("pass whitespace-only reformat", len(f) == 0, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {"src/foo.rs": 'fn f() {\n    let s = "unwrap()";\n    let t = ".unwrap()";\n}\n'}
+    )
+    check("pass unwrap in string", len(f) == 0, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {"src/foo.rs": "fn f() {\n    // x.unwrap() in comment\n    /* y.expect(\"x\") */\n}\n"}
+    )
+    check("pass unwrap in comment", len(f) == 0, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {
+            "src/foo.rs": (
+                "#[cfg(test)]\n"
+                "mod t {\n"
+                "    pub fn f(x: Option<i32>) -> i32 {\n"
+                "        x.unwrap()\n"
+                "    }\n"
+                "}\n"
+            )
+        }
+    )
+    check("pass cfg(test) mod body", len(f) == 0, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {
+            "src/foo.rs": (
+                "#[cfg(test)]\n"
+                "fn f<T, U>(x: Option<T>) -> T {\n"
+                "    x.unwrap()\n"
+                "}\n"
+            )
+        }
+    )
+    check("pass cfg(test) fn<T, U> body", len(f) == 0, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {
+            "src/foo.rs": (
+                "#[cfg(kani)]\n"
+                "fn f(x: Option<i32>) -> i32 {\n"
+                "    x.unwrap()\n"
+                "}\n"
+            )
+        }
+    )
+    check("pass cfg(kani) body", len(f) == 0, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {
+            "src/foo.rs": (
+                '#[cfg(all(feature = "x", test))]\n'
+                "fn f(x: Option<i32>) -> i32 {\n"
+                "    x.unwrap()\n"
+                "}\n"
+            )
+        }
+    )
+    check("pass cfg(all(feature, test))", len(f) == 0, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {"src/mytest.rs": "fn f(x: Option<i32>) -> i32 {\n    x.unwrap()\n}\n"},
+        test_only_rels=("src/mytest.rs",),
+    )
+    check("pass test_only_files member", len(f) == 0, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {"src/cli/foo.rs": "fn f(x: Option<i32>) -> i32 {\n    x.unwrap()\n}\n"}
+    )
+    check("pass operator-module file", len(f) == 0, repr(f))
+
+    # ---- Shrink-only ----
+    check(
+        "shrink fails on added key",
+        len(shrink_failures({("a", "x"): 1, ("a", "y"): 1}, {("a", "x"): 1})) == 1,
+    )
+    check(
+        "shrink fails on raised count",
+        len(shrink_failures({("a", "x"): 2}, {("a", "x"): 1})) == 1,
+    )
+    check(
+        "shrink passes on removed key",
+        shrink_failures({("a", "x"): 1}, {("a", "x"): 1, ("a", "y"): 1}) == [],
+    )
+    check(
+        "shrink passes on lowered count",
+        shrink_failures({("a", "x"): 1}, {("a", "x"): 2}) == [],
+    )
+    check("shrink passes when base has no baseline", shrink_failures({("a", "x"): 1}, None) == [])
+
+    # ---- Round trip ----
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        _write_temp_files(
+            root,
+            {"src/foo.rs": "fn f(x: Option<i32>) -> i32 {\n    x.unwrap()\n}\n"},
+        )
+        cur, _, _ = collect_current(root, set(), orphan)
+        base = {k: len(v) for k, v in cur.items()}
+        check("round trip temp baseline gives zero findings", find_new_sites(cur, base) == [])
+
+    cur, _, _ = collect_current(ROOT, orphan.test_only_files(), orphan)
+    rels = {rel for rel, _ in cur.keys()}
+    check("round trip tip contains secrets.rs", "src/secrets.rs" in rels, repr(sorted(rels)[:5]))
+    check("round trip tip contains config/mod.rs", "src/config/mod.rs" in rels)
+    base = {k: len(v) for k, v in cur.items()}
+    check("round trip tip baseline gives zero findings", find_new_sites(cur, base) == [])
+
+    print(f"self-test: {passed} cases passed")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="MIK-8691 request panic guard")
+    parser.add_argument("--write-baseline", action="store_true")
+    parser.add_argument("--base", metavar="REV", default=None)
+    parser.add_argument("--self-test", action="store_true")
+    args = parser.parse_args(argv)
+
+    if args.self_test:
+        return run_self_test()
+
+    if args.base is not None:
+        current_path = ROOT / BASELINE_REL
+        current = read_baseline_counts(current_path)
+        base = load_base_via_git(args.base)
+        if base is None:
+            print(f"request-panics: no baseline at {args.base}, passing")
+            return 0
+        fails = shrink_failures(current, base)
+        if fails:
+            for (rel, norm), cur_cnt, base_cnt in sorted(fails, key=lambda t: (t[0][0], t[0][1])):
+                print(f"baseline grew: {rel}\t{norm}\t{base_cnt}->{cur_cnt}")
+            return 1
+        print(f"request-panics: baseline shrink-only holds ({len(current)} keys)")
+        return 0
+
+    test_only = _ORPHAN.test_only_files()
+    current, scanned, total = collect_current(ROOT, test_only, _ORPHAN)
+    # A scan that read nothing proves nothing: refuse it rather than pass.
+    if scanned == 0:
+        print("request-panics: no source files scanned; refusing to pass")
+        return 1
+
+    if args.write_baseline:
+        out = ROOT / BASELINE_REL
+        write_baseline_counts(out, current)
+        print(f"request-panics: wrote {len(current)} keys to {BASELINE_REL.as_posix()}")
+        return 0
+
+    baseline = read_baseline_counts(ROOT / BASELINE_REL)
+    findings = find_new_sites(current, baseline)
+    if findings:
+        for rel, line, norm in findings:
+            print(f"{rel}:{line}: new panic site without // invariant: {norm}")
+        return 1
+    print(f"request-panics: {scanned} files scanned, {total} non-exempt sites, 0 new")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

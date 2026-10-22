@@ -348,6 +348,8 @@ fn tool_preview_from_cap(cap: &GeneratedCapability) -> ToolPreview {
         if (trimmed.ends_with("}\"") || trimmed.ends_with('}'))
             && let Some(start) = trimmed.find('{')
             && let Some(end) = trimmed.find('}')
+            // A line whose first `}` comes before its first `{` is skipped (MIK-8691).
+            && start < end
         {
             let param_name = &trimmed[start + 1..end];
             if !param_name.is_empty()
