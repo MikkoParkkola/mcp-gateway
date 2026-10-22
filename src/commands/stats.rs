@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Stats command handler for `mcp-gateway stats`.
 
+use std::fmt::Write as _;
 use std::process::ExitCode;
 
 /// Build the default gateway base URL for the `stats` command from the
@@ -170,12 +171,13 @@ fn print_top_tools(stats: &serde_json::Value) -> String {
     {
         let mut out = String::from("\n🏆 Top Tools:\n");
         for tool in top_tools {
-            out.push_str(&format!(
+            let _ = write!(
+                out,
                 "  • {}:{} - {} calls\n",
                 tool["server"].as_str().unwrap_or(""),
                 tool["tool"].as_str().unwrap_or(""),
                 tool["count"]
-            ));
+            );
         }
         return out;
     }

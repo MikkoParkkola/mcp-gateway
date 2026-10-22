@@ -396,7 +396,7 @@ impl<'f> FnVisitor<'f> {
         let mut vars = HashMap::new();
         for input in &sig.inputs {
             if let syn::FnArg::Typed(arg) = input
-                && let syn::Pat::Ident(name) = &arg.pat
+                && let syn::Pat::Ident(name) = &*arg.pat
                 && type_mentions_client_builder(&arg.ty)
             {
                 vars.insert(name.ident.to_string(), (true, false));
@@ -433,7 +433,7 @@ impl<'ast, 'f> Visit<'ast> for FnVisitor<'f> {
     }
 
     fn visit_expr_match(&mut self, node: &'ast syn::ExprMatch) {
-        self.visit_expr(&node.scrutinee);
+        self.visit_expr(&node.expr);
         self.in_conditional = self.in_conditional.saturating_add(1);
         for arm in &node.arms {
             if let Some((_, guard)) = &arm.guard {
@@ -661,9 +661,9 @@ struct DecisionUsage {
 
 impl<'ast> Visit<'ast> for DecisionUsage {
     fn visit_expr_match(&mut self, node: &'ast syn::ExprMatch) {
-        if is_decision_call(&node.scrutinee) {
+        if is_decision_call(&node.expr) {
             self.used = true;
-        } else if let syn::Expr::Path(scrutinee) = &*node.scrutinee
+        } else if let syn::Expr::Path(scrutinee) = &*node.expr
             && let Some(name) = scrutinee.path.get_ident()
             && self.bound.contains(&name.to_string())
         {
