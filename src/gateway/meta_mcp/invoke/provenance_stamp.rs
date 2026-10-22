@@ -166,10 +166,9 @@ pub(in crate::gateway::meta_mcp) fn seal_receipt(
     if let Some(obj) = object
         .pointer_mut("/_meta/provenance")
         .and_then(|v| v.as_object_mut())
+        && let Ok(sig_value) = serde_json::to_value(&sig)
     {
-        if let Ok(sig_value) = serde_json::to_value(&sig) {
-            obj.insert("public_signature".to_owned(), sig_value);
-        }
+        obj.insert("public_signature".to_owned(), sig_value);
     }
 }
 
@@ -221,7 +220,7 @@ pub(in crate::gateway::meta_mcp) fn lift_receipt(
     let meta_empty = lifted
         .get("_meta")
         .and_then(Value::as_object)
-        .is_some_and(|meta| meta.is_empty());
+        .is_some_and(serde_json::Map::is_empty);
     if meta_empty && let Some(object) = lifted.as_object_mut() {
         object.remove("_meta");
     }
