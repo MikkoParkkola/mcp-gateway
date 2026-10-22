@@ -58,7 +58,7 @@ async fn stopping_does_not_wait_for_a_write_in_flight() {
     let (unpause, paused) = channel::<()>();
     let paused = std::sync::Mutex::new(paused);
     let hook: CommitHook = Arc::new(move |stage| {
-        if stage == CommitStage::Write {
+        if stage == StoreWriteStage::Write {
             let _ = reached_tx.send(());
             let _ = paused.lock().unwrap().recv_timeout(Duration::from_secs(10));
         }

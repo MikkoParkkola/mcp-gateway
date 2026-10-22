@@ -91,7 +91,7 @@ impl Default for StoreLimits {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum CommitStage {
+pub(super) enum StoreWriteStage {
     Write,
     Flush,
     FileSync,
@@ -104,7 +104,7 @@ pub(super) enum CommitStage {
     Deleted,
 }
 
-pub(super) type CommitHook = Arc<dyn Fn(CommitStage) -> std::io::Result<()> + Send + Sync>;
+pub(super) type CommitHook = Arc<dyn Fn(StoreWriteStage) -> std::io::Result<()> + Send + Sync>;
 
 /// One committed record and its parsed model. The two are written together and
 /// never separately, so `record.model` is always `task.snapshot()`.
@@ -489,7 +489,7 @@ impl Shared {
         // the task exists and then fail to read it.
         let committed = self.publish(task, record, HoldUpdate::Drop);
         let hook = self.hook();
-        let hook_result = fire(hook.as_ref(), CommitStage::Published);
+        let hook_result = fire(hook.as_ref(), StoreWriteStage::Published);
         if let Some(publication) = publication {
             publication.publish(committed.task.id());
         }

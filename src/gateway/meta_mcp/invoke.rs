@@ -27,7 +27,7 @@ const INVOKE_TARGET: &str = module_path!();
 // The per-dispatch credential and its redacting `Debug`, kept out of this file's size baseline.
 mod caller_credential;
 mod gate;
-use caller_credential::{CallerCredential, HeldCredential};
+use caller_credential::{CallerCredential, DispatchCredential};
 
 mod guarded;
 use super::response_security::chain_receipt::ChainReceipt;

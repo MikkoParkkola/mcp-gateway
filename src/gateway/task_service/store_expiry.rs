@@ -13,7 +13,7 @@ use super::super::record::{
 };
 use super::disk::Reread;
 use super::platform::sync_dir;
-use super::{CommitStage, Shared, StoreError, TaskStore, fire, record_name};
+use super::{Shared, StoreError, StoreWriteStage, TaskStore, fire, record_name};
 use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
 
 /// The admission binding a stored admission block describes.
@@ -451,13 +451,13 @@ impl Shared {
             }
         }
         let hook = self.hook();
-        fire(hook.as_ref(), CommitStage::DirectorySync)
+        fire(hook.as_ref(), StoreWriteStage::DirectorySync)
             .and_then(|()| sync_dir(&self.dir))
             .map_err(|error| {
                 tracing::warn!(%error, task = %id, "task record deletion not made durable");
                 StoreError::Storage
             })?;
-        fire(hook.as_ref(), CommitStage::Deleted).map_err(|_| StoreError::Storage)?;
+        fire(hook.as_ref(), StoreWriteStage::Deleted).map_err(|_| StoreError::Storage)?;
 
         // Readable view follows the durable one, then the dedupe entry and its
         // capacity go back — all still inside the guard.

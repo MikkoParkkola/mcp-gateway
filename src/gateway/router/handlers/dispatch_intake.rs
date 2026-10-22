@@ -81,7 +81,7 @@ pub(super) struct Intake<'r> {
     _inflight_permit: Result<tokio::sync::SemaphorePermit<'r>, tokio::sync::AcquireError>,
     // Held, never read: while the request runs its provisional session is
     // not reaped, and the drop starts its idle clock (MIK-8504).
-    _session_hold: Option<crate::gateway::streaming::SessionHold>,
+    _session_hold: Option<crate::gateway::streaming::InFlightHold>,
     /// Served without a session because the provisional POST cap was
     /// full (MIK-8533). A keyless legacy caller still scores under the
     /// shared anonymous key, never as an unattributed modern request.
