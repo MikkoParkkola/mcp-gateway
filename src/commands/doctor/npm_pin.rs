@@ -43,18 +43,6 @@ pub(super) const SKIPPED_LABEL: &str = "npm registry check";
 /// The package whose old graph a pin change leaves behind.
 pub(super) const MEMORY_PACKAGE: &str = "@modelcontextprotocol/server-memory";
 
-/// Whether the lookup runs when nothing turns it off. Held as one value until
-/// the operator rules on the default (lead, 2026-10-22); `decide` is tested
-/// under both.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Default {
-    On,
-    Off,
-}
-
-/// The shipped default.
-pub(super) const DEFAULT: Default = Default::On;
-
 /// Whether this run looks anything up, and if not, why.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Lookup {
@@ -63,19 +51,18 @@ pub(super) enum Lookup {
     OffByFlag,
     /// `security.posture: hardened`.
     OffByPosture,
-    /// The default is off and nothing turned it on.
-    OffByDefault,
 }
 
-/// The run's lookup from the default, the off switch and the posture.
-pub(super) fn decide(default: Default, switch_off: bool, hardened: bool) -> Lookup {
-    let _ = (default, switch_off, hardened);
+/// The run's lookup: on by default (operator ruling 2026-10-22), off by the
+/// switch or the hardened posture.
+pub(super) fn decide(switch_off: bool, hardened: bool) -> Lookup {
+    let _ = (switch_off, hardened);
     unimplemented!("MIK-8512")
 }
 
 /// [`decide`] for a loaded config: hardened is `security.posture: hardened`.
-pub(super) fn lookup_of(config: &Config, default: Default, switch_off: bool) -> Lookup {
-    let _ = (config, default, switch_off);
+pub(super) fn lookup_of(config: &Config, switch_off: bool) -> Lookup {
+    let _ = (config, switch_off);
     unimplemented!("MIK-8512")
 }
 
@@ -128,6 +115,13 @@ impl ProxyEnv {
     /// A snapshot from explicit pairs (tests; unrelated names are dropped).
     pub(super) fn from_pairs(pairs: &[(&str, &str)]) -> Self {
         let _ = pairs;
+        unimplemented!("MIK-8512")
+    }
+
+    /// The proxy variables read through `lookup`; `from_process` is this
+    /// with `std::env::var`.
+    pub(super) fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Self {
+        let _ = lookup;
         unimplemented!("MIK-8512")
     }
 }

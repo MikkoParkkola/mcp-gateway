@@ -32,27 +32,24 @@ fn stdio(command: &str, env: &[(&str, &str)]) -> BackendConfig {
     }
 }
 
-// ── decide: both defaults (lead, 2026-10-22) ───────────────────────────────
+// ── decide: on by default (operator ruling 2026-10-22) ─────────────────────
 
 #[test]
-fn decide_under_both_defaults() {
-    assert_eq!(decide(Default::On, false, false), Lookup::On);
-    assert_eq!(decide(Default::On, true, false), Lookup::OffByFlag);
-    assert_eq!(decide(Default::On, false, true), Lookup::OffByPosture);
-    assert_eq!(decide(Default::Off, false, false), Lookup::OffByDefault);
-    assert_eq!(decide(Default::Off, true, false), Lookup::OffByFlag);
-    assert_eq!(decide(Default::Off, false, true), Lookup::OffByPosture);
+fn the_lookup_is_on_unless_switched_off_or_hardened() {
+    assert_eq!(decide(false, false), Lookup::On);
+    assert_eq!(decide(true, false), Lookup::OffByFlag);
+    assert_eq!(decide(false, true), Lookup::OffByPosture);
     // The flag wins the reason when both apply: it is what the user typed.
-    assert_eq!(decide(Default::On, true, true), Lookup::OffByFlag);
+    assert_eq!(decide(true, true), Lookup::OffByFlag);
 }
 
 #[test]
 fn the_hardened_posture_turns_the_lookup_off() {
     let mut config = mcp_gateway::config::Config::default();
-    assert_eq!(lookup_of(&config, Default::On, false), Lookup::On);
+    assert_eq!(lookup_of(&config, false), Lookup::On);
     config.security.posture = mcp_gateway::security::SecurityPosture::Hardened;
-    assert_eq!(lookup_of(&config, Default::On, false), Lookup::OffByPosture);
-    assert_eq!(lookup_of(&config, Default::On, true), Lookup::OffByFlag);
+    assert_eq!(lookup_of(&config, false), Lookup::OffByPosture);
+    assert_eq!(lookup_of(&config, true), Lookup::OffByFlag);
 }
 
 // ── npx_pin: the accepted forms, table-driven ──────────────────────────────
@@ -67,13 +64,19 @@ fn npx_pin_accepts_only_the_listed_forms() {
         ("npx -y -y tavily-mcp@0.2.22", "tavily-mcp", "0.2.22"),
         ("/usr/local/bin/npx -y tavily-mcp@0.2.22", "tavily-mcp", "0.2.22"),
         ("npx.cmd -y tavily-mcp@0.2.22", "tavily-mcp", "0.2.22"),
-        (r"C:\node\npx.cmd -y tavily-mcp@0.2.22", "tavily-mcp", "0.2.22"),
         ("npx -y @playwright/mcp@0.0.83 --headless --isolated", "@playwright/mcp", "0.0.83"),
         ("npx -y tavily-mcp@1.2.3-beta.1", "tavily-mcp", "1.2.3-beta.1"),
     ];
     for (command, name, version) in accepted {
         assert_eq!(npx_pin(command), Some(pin(name, version)), "{command}");
     }
+    // A path form the host's own splitter keeps: unquoted backslashes only
+    // survive the Windows splitter, so each host gets its own row.
+    #[cfg(windows)]
+    let path_form = r"C:\node\npx.cmd -y tavily-mcp@0.2.22";
+    #[cfg(not(windows))]
+    let path_form = "'/opt/node bin/npx' -y tavily-mcp@0.2.22";
+    assert_eq!(npx_pin(path_form), Some(pin("tavily-mcp", "0.2.22")), "{path_form}");
     let refused: &[&str] = &[
         "npx -y tavily-mcp",                     // no version
         "npx -y tavily-mcp@latest",              // a tag
@@ -141,10 +144,34 @@ fn the_production_url_is_npm_with_an_encoded_scope() {
         package_url(&base, "tavily-mcp").as_str(),
         "https://registry.npmjs.org/tavily-mcp"
     );
+    let production = ClientCfg::production();
+    assert_eq!(production.base.as_str(), "https://registry.npmjs.org/");
+    // The bundled roots, every one, and nothing else.
+    let mut bundled = rustls::RootCertStore::empty();
+    bundled.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    assert!(!bundled.is_empty());
+    assert_eq!(production.roots.roots, bundled.roots);
+}
+
+#[test]
+fn the_snapshot_reads_only_the_proxy_variables_through_its_lookup() {
+    let read = std::cell::RefCell::new(Vec::new());
+    let env = ProxyEnv::from_lookup(|name| {
+        read.borrow_mut().push(name.to_string());
+        match name {
+            "HTTPS_PROXY" => Some("http://p.example:3128".to_string()),
+            "REQUEST_METHOD" => Some("GET".to_string()),
+            _ => None,
+        }
+    });
+    let mut names = read.into_inner();
+    names.sort();
+    names.dedup();
     assert_eq!(
-        ClientCfg::production().base.as_str(),
-        "https://registry.npmjs.org/"
+        names,
+        ["ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "all_proxy", "http_proxy", "https_proxy", "no_proxy"]
     );
+    assert_eq!(route(&env), via("http://p.example:3128"));
 }
 
 // ── route: the proxy is chosen here, fail-closed (r4, r4.1) ────────────────

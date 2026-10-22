@@ -26,8 +26,13 @@ pub(super) enum Reply {
     Json(Vec<u8>),
     /// 200 with this body gzip-compressed (`Content-Encoding: gzip`).
     Gzip(Vec<u8>),
-    /// Accept the request and never answer.
+    /// Accept the request and never answer; ends when the client goes away,
+    /// so the in-flight count drops when the client gives up.
     Stall,
+    /// 200 with this JSON body after this delay.
+    Delay(Duration, Vec<u8>),
+    /// This status with this JSON body (a valid document under a non-200).
+    Status(u16, Vec<u8>),
     /// 302 to this location.
     Redirect(String),
     /// 200, chunked, `chunk` bytes at a time for `total` bytes, recording how
@@ -57,6 +62,8 @@ pub(super) struct Fake {
     pub(super) addr: SocketAddr,
     /// The CA the client should trust (always the "trusted" one).
     pub(super) roots: rustls::RootCertStore,
+    /// That CA's DER, for a child process to trust it too.
+    ca_der: Vec<u8>,
     pub(super) seen: Arc<Mutex<Vec<Seen>>>,
     /// Requests in flight now, and the most at once.
     active: Arc<AtomicUsize>,
@@ -100,6 +107,7 @@ impl Fake {
         let fake = Self {
             addr,
             roots: pki.roots(),
+            ca_der: pki.ca.0.der().to_vec(),
             seen: Arc::default(),
             active: Arc::default(),
             peak: Arc::default(),
@@ -185,7 +193,7 @@ async fn read_head<S: tokio::io::AsyncRead + Unpin>(stream: &mut S) -> Option<Se
     Some(Seen { method, target, headers })
 }
 
-async fn answer<S: tokio::io::AsyncWrite + Unpin>(
+async fn answer<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
     stream: &mut S,
     reply: Option<Reply>,
     dripped: &AtomicUsize,
@@ -210,7 +218,22 @@ async fn answer<S: tokio::io::AsyncWrite + Unpin>(
             let _ = stream.write_all(head("200 OK", extra, packed.len()).as_bytes()).await;
             let _ = stream.write_all(&packed).await;
         }
-        Some(Reply::Stall) => std::future::pending::<()>().await,
+        Some(Reply::Stall) => {
+            // Read until the client closes: EOF or an error both mean gone.
+            let mut sink = [0u8; 256];
+            while matches!(stream.read(&mut sink).await, Ok(n) if n > 0) {}
+            return;
+        }
+        Some(Reply::Delay(wait, body)) => {
+            tokio::time::sleep(wait).await;
+            let _ = stream.write_all(head("200 OK", "", body.len()).as_bytes()).await;
+            let _ = stream.write_all(&body).await;
+        }
+        Some(Reply::Status(code, body)) => {
+            let status = format!("{code} Status");
+            let _ = stream.write_all(head(&status, "", body.len()).as_bytes()).await;
+            let _ = stream.write_all(&body).await;
+        }
         Some(Reply::Redirect(location)) => {
             let extra = format!("Location: {location}\r\n");
             let _ = stream.write_all(head("302 Found", &extra, 0).as_bytes()).await;
@@ -451,7 +474,7 @@ async fn a_disabled_backend_is_not_checked() {
 
 #[tokio::test]
 async fn every_off_reason_sends_nothing_and_prints_one_skipped_pass() {
-    for lookup in [Lookup::OffByFlag, Lookup::OffByPosture, Lookup::OffByDefault] {
+    for lookup in [Lookup::OffByFlag, Lookup::OffByPosture] {
         let fake = Fake::start(&[(MEMORY_PATH, Reply::Json(memory_doc()))]).await;
         let rows = check(&config_of(&[("memory", memory_on("2026.8.31"))]), &fake.cfg(&[]), lookup).await;
         assert_eq!(fake.requests().len(), 0, "{lookup:?}");
@@ -480,7 +503,8 @@ async fn offline_is_silent_and_quick() {
     let started = Instant::now();
     let rows = check(&config_of(&[("memory", memory_on("2026.8.31"))]), &cfg, Lookup::On).await;
     assert!(rows.is_empty(), "{rows:?}");
-    assert!(started.elapsed() < BUDGET, "{:?}", started.elapsed());
+    // A refused connection answers at once; well under the connect bound.
+    assert!(started.elapsed() < CONNECT_TIMEOUT, "{:?}", started.elapsed());
 }
 
 /// Five stalled packages need two waves at four in flight; without the
@@ -508,24 +532,79 @@ async fn stalls_end_inside_the_budget_and_never_exceed_the_concurrency() {
     assert!(rows.is_empty(), "{rows:?}");
     assert!(took < BUDGET + SLACK, "the budget bounds the whole check: {took:?}");
     assert!(took >= REQUEST_TIMEOUT, "the stall was waited on, not skipped: {took:?}");
-    assert_eq!(fake.peak.load(Ordering::SeqCst), CONCURRENCY, "at most four in flight");
+}
+
+/// Eight packages that each answer after 300 ms: never more than four in
+/// flight, and four at once (the pool is used, not run one by one).
+#[tokio::test]
+async fn at_most_four_requests_are_in_flight() {
+    let packages = [
+        ("@modelcontextprotocol/server-filesystem", FILESYSTEM_PATH),
+        ("@modelcontextprotocol/server-memory", MEMORY_PATH),
+        ("@modelcontextprotocol/server-sequential-thinking", "/@modelcontextprotocol%2Fserver-sequential-thinking"),
+        ("@playwright/mcp", "/@playwright%2Fmcp"),
+        ("airtable-mcp-server", "/airtable-mcp-server"),
+        ("exa-mcp-server", "/exa-mcp-server"),
+        ("slack-mcp-server", "/slack-mcp-server"),
+        ("tavily-mcp", "/tavily-mcp"),
+    ];
+    let slow = Duration::from_millis(300);
+    let replies: Vec<(&str, Reply)> = packages
+        .iter()
+        .map(|(_, path)| (*path, Reply::Delay(slow, br#"{"versions":{}}"#.to_vec())))
+        .collect();
+    let fake = Fake::start(&replies).await;
+    let backends: Vec<(String, BackendConfig)> = packages
+        .iter()
+        .enumerate()
+        .map(|(i, (name, _))| (format!("b{i}"), stdio(&format!("npx -y {name}@1.0.0"), &[])))
+        .collect();
+    let named: Vec<(&str, BackendConfig)> = backends.iter().map(|(n, b)| (n.as_str(), b.clone())).collect();
+    let _ = check(&config_of(&named), &fake.cfg(&[]), Lookup::On).await;
+    assert_eq!(fake.requests().len(), packages.len(), "every package asked once");
+    assert_eq!(fake.peak.load(Ordering::SeqCst), CONCURRENCY);
+}
+
+/// The memory warning finishes at once; seven stalled packages keep the
+/// pool busy past one request bound, so the second wave is still running
+/// when the aggregate budget ends. The finished row must survive that.
+#[tokio::test]
+async fn a_finished_warning_survives_the_budget_running_out() {
+    let stalled = [
+        ("@modelcontextprotocol/server-filesystem", FILESYSTEM_PATH),
+        ("@modelcontextprotocol/server-sequential-thinking", "/@modelcontextprotocol%2Fserver-sequential-thinking"),
+        ("@playwright/mcp", "/@playwright%2Fmcp"),
+        ("airtable-mcp-server", "/airtable-mcp-server"),
+        ("exa-mcp-server", "/exa-mcp-server"),
+        ("slack-mcp-server", "/slack-mcp-server"),
+        ("tavily-mcp", "/tavily-mcp"),
+    ];
+    let mut replies: Vec<(&str, Reply)> = stalled.iter().map(|(_, path)| (*path, Reply::Stall)).collect();
+    replies.push((MEMORY_PATH, Reply::Json(memory_doc())));
+    let fake = Fake::start(&replies).await;
+    let mut backends: Vec<(String, BackendConfig)> = stalled
+        .iter()
+        .enumerate()
+        .map(|(i, (name, _))| (format!("s{i}"), stdio(&format!("npx -y {name}@1.0.0"), &[])))
+        .collect();
+    backends.push(("memory".to_string(), memory_on("2026.8.31")));
+    let named: Vec<(&str, BackendConfig)> = backends.iter().map(|(n, b)| (n.as_str(), b.clone())).collect();
+    let started = Instant::now();
+    let rows = check(&config_of(&named), &fake.cfg(&[]), Lookup::On).await;
+    let took = started.elapsed();
+    assert!(took >= BUDGET - Duration::from_millis(200), "the budget ran out: {took:?}");
+    assert!(took < BUDGET + SLACK, "{took:?}");
+    let labels: Vec<&str> = warns(&rows).iter().map(|r| r.label.as_str()).collect();
+    assert_eq!(labels, ["memory: npm pin"], "{rows:?}");
 }
 
 #[tokio::test]
-async fn a_finished_warning_survives_the_budget_running_out() {
-    let fake = Fake::start(&[
-        (MEMORY_PATH, Reply::Json(memory_doc())),
-        (FILESYSTEM_PATH, Reply::Stall),
-    ])
-    .await;
-    let config = config_of(&[
-        ("files", stdio("npx -y @modelcontextprotocol/server-filesystem@1.0.0 /tmp", &[])),
-        ("memory", memory_on("2026.8.31")),
-    ]);
-    let started = Instant::now();
-    let rows = check(&config, &fake.cfg(&[]), Lookup::On).await;
-    assert!(started.elapsed() < BUDGET + SLACK);
-    assert_eq!(warns(&rows).len(), 1, "{rows:?}");
+async fn a_non_200_answer_is_silent_even_with_a_valid_document() {
+    for code in [404u16, 500, 203] {
+        let fake = Fake::start(&[(MEMORY_PATH, Reply::Status(code, memory_doc()))]).await;
+        let rows = check(&config_of(&[("memory", memory_on("2026.8.31"))]), &fake.cfg(&[]), Lookup::On).await;
+        assert!(rows.is_empty(), "HTTP {code}: {rows:?}");
+    }
 }
 
 #[tokio::test]
@@ -595,7 +674,13 @@ async fn a_wrong_name_or_an_untrusted_ca_is_silent() {
         let rows = check(&config_of(&[("memory", memory_on("2026.8.31"))]), &fake.cfg(&[]), Lookup::On).await;
         assert!(rows.is_empty(), "{rows:?}");
         assert_eq!(fake.requests().len(), 0, "no request over a refused handshake");
-        assert!(fake.handshakes_failed.load(Ordering::SeqCst) >= 1);
+        // The server sees the client's rejection a moment after the client
+        // gives up: wait for it, bounded.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while fake.handshakes_failed.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(fake.handshakes_failed.load(Ordering::SeqCst) >= 1, "the handshake was refused");
     }
 }
 
@@ -661,4 +746,98 @@ async fn an_unusable_proxy_sends_nothing_anywhere() {
         assert_eq!(fake.handshakes_failed.load(Ordering::SeqCst), 0, "{pairs:?}: reached the fake");
     }
     assert!(proxy.connects().is_empty(), "{:?}", proxy.connects());
+}
+
+// ── the process environment: reached only through the snapshot ─────────────
+//
+// Setting the environment in-process is unsafe in edition 2024, so these rows
+// run this test binary again as a child with a controlled environment. The
+// child half is inert unless the parent marks it.
+
+const CHILD_TEST: &str = "commands::doctor::npm_pin::tests::wire::child_runs_one_lookup";
+
+/// The child half: one lookup against the parent's fake, with either an empty
+/// snapshot or the process snapshot; prints how many rows warned.
+#[tokio::test]
+async fn child_runs_one_lookup() {
+    let Ok(mode) = std::env::var("NPM_PIN_CHILD") else {
+        return;
+    };
+    let base = Url::parse(&std::env::var("NPM_PIN_BASE").expect("a base")).expect("parses");
+    let hex = std::env::var("NPM_PIN_CA").expect("a CA");
+    let der: Vec<u8> = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex"))
+        .collect();
+    let mut roots = rustls::RootCertStore::empty();
+    roots
+        .add(rustls::pki_types::CertificateDer::from(der))
+        .expect("the CA is a root");
+    let proxy = match mode.as_str() {
+        "empty" => ProxyEnv::default(),
+        "process" => ProxyEnv::from_process(),
+        other => panic!("unexpected child mode {other}"),
+    };
+    let rows = check(
+        &config_of(&[("memory", memory_on("2026.8.31"))]),
+        &ClientCfg { base, roots, proxy },
+        Lookup::On,
+    )
+    .await;
+    println!("CHILD-WARNS {}", warns(&rows).len());
+}
+
+/// Run the child half with `mode` and `env`; its stdout.
+async fn child(fake: &Fake, mode: &str, env: &[(&str, &str)]) -> String {
+    let hex: String = fake.ca_der.iter().map(|b| format!("{b:02x}")).collect();
+    let exe = std::env::current_exe().expect("the test binary");
+    let mut command = tokio::process::Command::new(exe);
+    command
+        .args(["--exact", CHILD_TEST, "--nocapture", "--test-threads=1"])
+        .env_clear()
+        .env("NPM_PIN_CHILD", mode)
+        .env("NPM_PIN_BASE", fake.base().as_str())
+        .env("NPM_PIN_CA", hex);
+    if let Ok(root) = std::env::var("SystemRoot") {
+        command.env("SystemRoot", root);
+    }
+    for (name, value) in env {
+        command.env(name, value);
+    }
+    let output = tokio::time::timeout(Duration::from_secs(60), command.output())
+        .await
+        .expect("the child ends")
+        .expect("the child runs");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        output.status.success(),
+        "child failed: {stdout} {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    stdout
+}
+
+/// The builder never reads the environment itself (`no_proxy()`): with an
+/// empty snapshot, a process `HTTPS_PROXY` is not used.
+#[tokio::test]
+async fn an_empty_snapshot_ignores_the_process_proxy() {
+    let fake = Fake::start(&[(MEMORY_PATH, Reply::Json(memory_doc()))]).await;
+    let proxy = Proxy::start().await;
+    let url = proxy.url();
+    let out = child(&fake, "empty", &[("HTTPS_PROXY", url.as_str()), ("ALL_PROXY", url.as_str())]).await;
+    assert!(out.contains("CHILD-WARNS 1"), "{out}");
+    assert!(proxy.connects().is_empty(), "{:?}", proxy.connects());
+    assert_eq!(fake.requests().len(), 1);
+}
+
+/// `from_process` reads the real environment, and `REQUEST_METHOD` changes
+/// nothing: the lookup goes through the process proxy.
+#[tokio::test]
+async fn the_process_snapshot_uses_the_process_proxy() {
+    let fake = Fake::start(&[(MEMORY_PATH, Reply::Json(memory_doc()))]).await;
+    let proxy = Proxy::start().await;
+    let url = proxy.url();
+    let out = child(&fake, "process", &[("HTTPS_PROXY", url.as_str()), ("REQUEST_METHOD", "GET")]).await;
+    assert!(out.contains("CHILD-WARNS 1"), "{out}");
+    assert_eq!(proxy.connects(), [format!("CONNECT {}", fake.addr)]);
 }

@@ -1,14 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8512 red tests through the built binary: the off switch, its
-//! environment variable's values, and the help text's disclosure. Hermetic:
-//! every run either switches the lookup off or gives it a proxy it refuses,
-//! so no run reaches npm.
+//! environment variable's values, the hardened posture, and the help text's
+//! disclosure. Hermetic by construction: the config's only pin is a package
+//! outside the registry, which the check never sends anywhere, so no run can
+//! reach npm whatever the switch does. The lookup's traffic is tested against
+//! a local fake in `src/commands/doctor/npm_pin_wire_tests.rs`.
 
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
@@ -19,15 +21,18 @@ const SENTENCE: &str = "This skips the gateway's own npm registry lookup; it doe
 other servers started by --start-stdio from contacting npm, so air-gapped hosts should not use \
 --start-stdio.";
 
-/// A config with one enabled backend on the deprecated memory pin. Doctor
+/// One enabled backend pinning a package the registry does not ship. Doctor
 /// only locates its command (no `--start-stdio`), so nothing is started.
-fn write_config(dir: &Path) -> std::path::PathBuf {
+const STANDARD: &str = "backends:\n  internal:\n    command: \"npx -y @company/internal-tool@1.2.3\"\n";
+
+/// The same backend under `security.posture: hardened` (which forces message
+/// signing, so it carries a secret).
+const HARDENED: &str = "backends:\n  internal:\n    command: \"npx -y @company/internal-tool@1.2.3\"\n\
+security:\n  posture: hardened\n  message_signing:\n    shared_secret: \"hardened-signing-secret-0123456789abcdef\"\n";
+
+fn write_config(dir: &Path, text: &str) -> PathBuf {
     let path = dir.join("gateway.yaml");
-    std::fs::write(
-        &path,
-        "backends:\n  memory:\n    command: \"npx -y @modelcontextprotocol/server-memory@2026.8.31\"\n",
-    )
-    .expect("the config writes");
+    std::fs::write(&path, text).expect("the config writes");
     // The gateway refuses a config other users can read.
     #[cfg(unix)]
     {
@@ -38,15 +43,17 @@ fn write_config(dir: &Path) -> std::path::PathBuf {
     path
 }
 
-/// Run `doctor --format json` with `args` and `env`; the rows.
-fn doctor(args: &[&str], env: &[(&str, &str)]) -> Vec<Value> {
+/// Run `doctor --format json` on `config` with `args` and `env`; the rows.
+/// The config file is byte-identical afterwards (DOCTOR.3: read-only).
+fn doctor(config: &str, args: &[&str], env: &[(&str, &str)]) -> Vec<Value> {
     let home = tempfile::tempdir().expect("a scratch home");
-    let config = write_config(home.path());
+    let path = write_config(home.path(), config);
+    let before = std::fs::read(&path).expect("the config reads");
     let mut command = gateway_bin::command(home.path(), gateway_bin::Inherit::Nothing);
     command
         .arg("doctor")
         .arg("--config")
-        .arg(&config)
+        .arg(&path)
         .args(["--format", "json"])
         .args(args);
     for (name, value) in env {
@@ -56,44 +63,53 @@ fn doctor(args: &[&str], env: &[(&str, &str)]) -> Vec<Value> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let report: Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("doctor printed JSON ({e}): {stdout}"));
-    report["checks"].as_array().expect("a checks array").clone()
+    assert_eq!(
+        std::fs::read(&path).expect("the config reads"),
+        before,
+        "doctor changed the config"
+    );
+    let rows = report["checks"].as_array().expect("a checks array").clone();
+    // The config itself loads: a fixture error would hide every other row.
+    let config_row = rows.iter().find(|row| row["category"] == "config");
+    assert!(
+        config_row.is_some_and(|row| row["status"] != "fail"),
+        "the fixture config must load: {rows:?}"
+    );
+    rows
 }
 
 fn skipped(rows: &[Value]) -> Option<&Value> {
     rows.iter().find(|row| row["label"] == SKIPPED_LABEL)
 }
 
-/// A proxy the lookup refuses, so a run with the lookup on sends nothing.
-const REFUSED_PROXY: (&str, &str) = ("HTTPS_PROXY", "socks5://127.0.0.1:9");
-
 #[test]
 fn the_flag_skips_the_lookup_with_a_pass_row() {
-    let rows = doctor(&["--no-registry-check"], &[REFUSED_PROXY]);
+    let rows = doctor(STANDARD, &["--no-registry-check"], &[]);
     let row = skipped(&rows).expect("the skipped row");
     assert_eq!(row["status"], "pass", "{row}");
+    assert!(row["detail"].as_str().unwrap_or_default().contains("--no-registry-check"), "{row}");
 }
 
 #[test]
 fn the_environment_variable_turns_it_off_for_any_value_but_0_and_false() {
     for value in ["1", "true", "TRUE", "yes", "garbage"] {
-        let rows = doctor(&[], &[(ENV, value), REFUSED_PROXY]);
+        let rows = doctor(STANDARD, &[], &[(ENV, value)]);
         assert!(skipped(&rows).is_some(), "{ENV}={value} must skip: {rows:?}");
     }
     for value in ["0", "false", "False"] {
-        let rows = doctor(&[], &[(ENV, value), REFUSED_PROXY]);
+        let rows = doctor(STANDARD, &[], &[(ENV, value)]);
         assert!(skipped(&rows).is_none(), "{ENV}={value} must not skip: {rows:?}");
     }
+    // Unset: the lookup runs (on by default), so no skipped row either.
+    assert!(skipped(&doctor(STANDARD, &[], &[])).is_none());
 }
 
 #[test]
-fn the_check_never_adds_a_failing_row() {
-    let rows = doctor(&[], &[REFUSED_PROXY]);
-    for row in &rows {
-        let label = row["label"].as_str().unwrap_or_default();
-        if label == SKIPPED_LABEL || label.ends_with(": npm pin") {
-            assert_ne!(row["status"], "fail", "{row}");
-        }
-    }
+fn the_hardened_posture_skips_the_lookup() {
+    let rows = doctor(HARDENED, &[], &[]);
+    let row = skipped(&rows).expect("the skipped row under hardened");
+    assert_eq!(row["status"], "pass", "{row}");
+    assert!(row["detail"].as_str().unwrap_or_default().contains("hardened"), "{row}");
 }
 
 #[test]
