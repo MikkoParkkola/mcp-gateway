@@ -117,6 +117,12 @@ or its mention removed from the draft.
    has to do, or "no action" when there is nothing to do. Fragment bullets already carry this
    (checked above by `check_security_fragments.py`); the older section's bullets do not.
 6. Add a new empty `## [Unreleased]` above.
+7. Check the Known limitations section of `docs/release/v4.0.0-release-notes-DRAFT.md`.
+   Every MIK id named there must be open and in a milestone later than 4.0.0 (4.0.1 or after).
+   If a named ticket is in the 4.0.0 milestone, or already Done, the line is stale. One example
+   is a "planned for 4.0.1" line pointing at a ticket that moved into 4.0.0 and landed. Rewrite
+   or remove the line before the tag. Each id's milestone and state is read from Linear; no
+   script checks this today.
 
 Then, once that pull request has merged:
 

@@ -212,30 +212,37 @@ impl Redactor {
         Some(redacted)
     }
 
-    /// `text` redacted inside the string values a credential span overlaps,
+    /// `text` redacted inside the string literals a credential span covers,
     /// when `text` is a JSON document: today's spans, each clipped to the
-    /// value literals it covers and widened to whole escapes. The quotes,
-    /// punctuation, keys and scalars a span crosses stay as sent, so the text
-    /// still parses (MIK-8745). `None` leaves the leaf to
+    /// value literals it covers, or to the key it starts in, and widened to
+    /// whole escapes. The quotes, punctuation, scalars and other keys a span
+    /// crosses stay as sent, so the text still parses (MIK-8745). A redacted
+    /// key takes the first free name in its object, as [`Self::redact_keys`]
+    /// does, so no entry is lost (MIK-8772). `None` leaves the leaf to
     /// [`Self::redact_text`]: not a document, over the size cap, or a span
-    /// that starts inside a key.
+    /// that starts outside every literal.
     fn redact_json_text(&self, text: &str, findings: &mut Vec<Finding>) -> Option<String> {
         b2_gate(text)?;
-        let spans = self.credential_spans(text);
+        let matches = self.match_spans(text);
+        let starts: Vec<usize> = matches.iter().map(|&(start, _)| start).collect();
+        let spans = merge_spans(matches);
         let literals = json_literal::string_literals(text);
-        let starts_in_value = |at: usize| {
+        let starts_in_literal = |at: usize| {
             let after = literals.partition_point(|lit| lit.start <= at);
-            after
-                .checked_sub(1)
-                .is_some_and(|i| at < literals[i].end && !literals[i].key)
+            after.checked_sub(1).is_some_and(|i| at < literals[i].end)
         };
-        if !spans.iter().all(|&(start, _)| starts_in_value(start)) {
+        if !spans.iter().all(|&(start, _)| starts_in_literal(start)) {
             tracing::debug!(
-                "a credential span starts outside a string value; redacting the leaf whole"
+                "a credential span starts outside a string literal; redacting the leaf whole"
             );
             return None;
         }
-        let redacted = replace_spans(text, &project(text, &spans, &literals));
+        let ranges = project(text, &spans, &starts, &literals);
+        let redacted = if literals.iter().any(|lit| lit.key && covers(&ranges, lit)) {
+            rename_keys(text, &ranges, &literals)
+        } else {
+            replace_spans(text, &ranges)
+        };
         let matched: Vec<usize> = self.set.matches(text).into_iter().collect();
         self.record_findings(&matched, &redacted, Site::Value, findings);
         Some(redacted)
@@ -358,18 +365,31 @@ fn b2_gate(text: &str) -> Option<Value> {
         .filter(|value| value.is_object() || value.is_array() || value.is_string())
 }
 
-/// `spans` (merged, in order) clipped to every value literal they overlap,
-/// each piece widened to whole escapes so no escape is cut, then merged.
-/// Spans and literals are both in order, so this is one pass over each, and
-/// each end is widened by a binary search of its literal's escapes.
-fn project(text: &str, spans: &[(usize, usize)], literals: &[Literal]) -> Vec<(usize, usize)> {
+/// `spans` (merged, in order) clipped to every value literal they overlap
+/// and to every key a match starts in (`starts`, in order: one merged span
+/// can hold the matches of several keys), each piece widened to whole
+/// escapes so no escape is cut, then merged. A key no match starts in stays
+/// as sent. Spans and literals are both in order, so this is one pass over
+/// each, and each end is widened by a binary search of its literal's escapes.
+fn project(
+    text: &str,
+    spans: &[(usize, usize)],
+    starts: &[usize],
+    literals: &[Literal],
+) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     let mut first = 0;
-    for lit in literals.iter().filter(|lit| !lit.key) {
+    for lit in literals {
         while first < spans.len() && spans[first].1 <= lit.start {
             first += 1;
         }
         let mut lit_escapes = None;
+        if lit.key {
+            let after = starts.partition_point(|&at| at < lit.start);
+            if starts.get(after).is_none_or(|&at| at >= lit.end) {
+                continue; // a key spans only cross
+            }
+        }
         for &(start, end) in spans[first..].iter().take_while(|span| span.0 < lit.end) {
             let (mut from, mut to) = (start.max(lit.start), end.min(lit.end));
             if from >= to {
@@ -388,6 +408,79 @@ fn project(text: &str, spans: &[(usize, usize)], literals: &[Literal]) -> Vec<(u
     }
     ranges.sort_unstable();
     merge_spans(ranges)
+}
+
+/// Whether any of `ranges` (in order, disjoint) falls inside `lit`.
+fn covers(ranges: &[(usize, usize)], lit: &Literal) -> bool {
+    let after = ranges.partition_point(|range| range.0 < lit.start);
+    ranges.get(after).is_some_and(|range| range.0 < lit.end)
+}
+
+/// `text` with `ranges` replaced, where a key holding a range is renamed as
+/// [`Redactor::redact_keys`] renames one: within its object every clean key
+/// keeps its name, and each redacted key takes its redacted name or the first
+/// free `<name>#n`. Names compare decoded, so an escaped spelling of a taken
+/// name collides too.
+fn rename_keys(text: &str, ranges: &[(usize, usize)], literals: &[Literal]) -> String {
+    let decode = |raw: &str| serde_json::from_str::<String>(&format!("\"{raw}\"")).ok();
+    let keys = literals.iter().filter(|lit| lit.key);
+    let mut taken: HashSet<(usize, String)> = keys
+        .clone()
+        .filter(|lit| !covers(ranges, lit))
+        .filter_map(|lit| Some((lit.container, decode(&text[lit.start..lit.end])?)))
+        .collect();
+    let mut next: HashMap<(usize, String), usize> = HashMap::new();
+    let mut renamed: Vec<(usize, usize, String)> = Vec::new();
+    for lit in keys.filter(|lit| covers(ranges, lit)) {
+        let (lo, hi) = (
+            ranges.partition_point(|range| range.0 < lit.start),
+            ranges.partition_point(|range| range.0 < lit.end),
+        );
+        let inside: Vec<(usize, usize)> = ranges[lo..hi]
+            .iter()
+            .map(|range| (range.0 - lit.start, range.1 - lit.start))
+            .collect();
+        let raw = replace_spans(&text[lit.start..lit.end], &inside);
+        let Some(candidate) = decode(&raw) else {
+            renamed.push((lit.start, lit.end, raw));
+            continue;
+        };
+        let n = next.entry((lit.container, candidate.clone())).or_insert(1);
+        let mut name = candidate.clone();
+        while taken.contains(&(lit.container, name.clone())) {
+            *n += 1;
+            name = format!("{candidate}#{n}");
+        }
+        taken.insert((lit.container, name.clone()));
+        let raw = if name == candidate {
+            raw
+        } else {
+            // A JSON string's encoding: its content between the two quotes.
+            let quoted = serde_json::to_string(&name).unwrap_or_default();
+            quoted
+                .get(1..quoted.len().saturating_sub(1))
+                .unwrap_or_default()
+                .to_owned()
+        };
+        renamed.push((lit.start, lit.end, raw));
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0;
+    let mut keys = renamed.into_iter().peekable();
+    for &(start, end) in ranges {
+        if start < cursor {
+            continue; // inside a key already written whole
+        }
+        let (from, to, with) = match keys.next_if(|key| key.0 <= start && start < key.1) {
+            Some(key) => key,
+            None => (start, end, "[REDACTED:credential]".to_owned()),
+        };
+        out.push_str(&text[cursor..from]);
+        out.push_str(&with);
+        cursor = to;
+    }
+    out.push_str(&text[cursor..]);
+    out
 }
 
 /// The escape in `escapes` (in order, disjoint) that `at` falls strictly
