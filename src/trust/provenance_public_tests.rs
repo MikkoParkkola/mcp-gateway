@@ -76,14 +76,10 @@ pub(super) fn seed_b64(seed: &[u8]) -> String {
     STANDARD.encode(seed)
 }
 
+/// Owner-only on every platform (a private ACL on Windows), as the env-file
+/// loader requires: a file it refuses would resolve to no signer.
 fn write_private(path: &std::path::Path, contents: &[u8]) {
-    std::fs::write(path, contents).expect("file writes");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .expect("file is owner-only");
-    }
+    crate::gateway::test_helpers::write_owner_only(path, contents).expect("file is owner-only");
 }
 
 pub(super) fn overlay_with(vars: &[(&str, &str)]) -> (tempfile::TempDir, EnvOverlay) {
