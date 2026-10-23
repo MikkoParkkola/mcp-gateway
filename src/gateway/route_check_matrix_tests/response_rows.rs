@@ -443,7 +443,8 @@ mod stdio {
         CHAIN_NONCE, planted_credential, trust_set,
     };
     use crate::gateway::server::route_matrix_driver_tests::response::{
-        StdioSetup, stdio_sealed, stdio_sealed_replay, stdio_signed_recorded,
+        StdioSetup, stdio_legacy_then_modern_replay, stdio_sealed, stdio_sealed_replay,
+        stdio_signed_recorded,
     };
     use crate::protocol::meta::Era;
     use crate::trust::provenance_public::{VerifyRefusal, verify_public};
@@ -576,6 +577,34 @@ mod stdio {
             "R-REPLAY-Stdio: the receipt was minted once, by the first call"
         );
     }
+
+    /// R-ERAREPLAY-Stdio `stdio_cross_era_replay_reshapes_after_the_seal_gap`,
+    /// `Stdio` × `IdempotentReplay` × `Modern` × `ShapeSeal`:
+    /// `ExpectedGap(MIK-8747)`, as on `/mcp`. A modern stdio call is served
+    /// the answer a legacy call stored under its key, and the stdio tail
+    /// shapes it (`stdio_dispatch.rs:177`) after it was sealed. When MIK-8747
+    /// lands this fails: the cell returns to `NotApplicable`.
+    #[tokio::test]
+    async fn r_erareplay_stdio_cross_era_replay_reshapes_after_the_seal_gap() {
+        let (first, second, calls) = stdio_legacy_then_modern_replay().await;
+        assert_eq!(
+            calls, 1,
+            "R-ERAREPLAY-Stdio: the modern call was a replay: {second}"
+        );
+        assert_sealed_bound("R-ERAREPLAY-Stdio legacy first", delivered(&first));
+        let result = delivered(&second);
+        assert_eq!(
+            result.get("resultType").and_then(Value::as_str),
+            Some("complete"),
+            "R-ERAREPLAY-Stdio: the replay's tail shaped the stored legacy answer: {result}"
+        );
+        assert_eq!(
+            verify_public(receipt(result), &trust_set(), Some(result)).err(),
+            Some(VerifyRefusal::ResultMismatch),
+            "R-ERAREPLAY-Stdio: MIK-8747 gap closed? the cross-era replay's receipt verifies: flip the cell"
+        );
+    }
+
     /// R-RECSIGN-Stdio `stdio_sign_precedes_delivery_record` (`Sign` <
     /// `DeliveryRecord`; `Stdio` × `Fresh`). Stdio signs inside
     /// `finalize_routed` and records later, in `judge_and_commit`: the one

@@ -136,6 +136,40 @@ pub(crate) async fn stdio_sealed_replay() -> (Value, Value, usize) {
     (first, replay, calls.load(Ordering::SeqCst))
 }
 
+/// [`stdio_sealed_replay`] across eras: a legacy keyed call (`r1`) stores the
+/// answer, then a modern call with the same key is served it. Returns (first,
+/// second, backend sends).
+pub(crate) async fn stdio_legacy_then_modern_replay() -> (Value, Value, usize) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let transport = Arc::new(Counting {
+        calls: Arc::clone(&calls),
+        answer: json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+    });
+    let meta = stdio_meta(
+        |meta| {
+            surface(meta);
+            dual_signed(meta);
+            meta.enable_idempotency(
+                Arc::new(crate::idempotency::IdempotencyCache::new()),
+                crate::idempotency::CLEANUP_INTERVAL,
+            );
+        },
+        transport,
+    )
+    .await;
+    let key = crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
+    let legacy = json!({ "name": "read", "arguments": {}, "_meta": { (key): "r1" } });
+    let modern = json!({ "name": "read", "arguments": {}, "_meta": {
+        (key): "r1",
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}}},
+    } });
+    let first = stdio_send(&meta, legacy).await;
+    let second = stdio_send(&meta, modern).await;
+    (first, second, calls.load(Ordering::SeqCst))
+}
+
 /// One message-signed stdio `gateway_invoke` of `alpha`'s `read` (nonce
 /// `n1`), with both provenance signers and a transparency log on the
 /// Meta-MCP. Returns the delivered body, its `response_delivery_attempt` rows

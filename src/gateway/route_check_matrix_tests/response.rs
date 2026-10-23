@@ -324,7 +324,7 @@ pub(crate) const fn expect(
         // so nothing is sealed anew; it does mint a fresh link, after a clamp
         // that changes nothing (lead rulings, MIK-8689 phase C and R3). Its
         // tail still shapes a legacy-stored answer for a modern caller.
-        (Mcp, IdempotentReplay, Era::Modern, ShapeSeal) => ExpectedGap(RespTicket::Mik8747),
+        (Mcp | Stdio, IdempotentReplay, Era::Modern, ShapeSeal) => ExpectedGap(RespTicket::Mik8747),
         (
             Mcp | Stdio | Direct,
             IdempotentReplay,
@@ -448,8 +448,8 @@ pub(crate) const AFTER_MIK_8745: RespExpect =
 /// The gap set is exactly MIK-8705, expected (a direct replay is not
 /// resealed, both eras), and MIK-8745, expected (Mcp and stdio stamp before a
 /// scan that can break the counted text, fresh and cache hit, both eras;
-/// [`AFTER_MIK_8745`] once it lands), and MIK-8747, expected (an /mcp modern
-/// replay of a legacy-stored answer is shaped after its seal). A new, closed
+/// [`AFTER_MIK_8745`] once it lands), and MIK-8747, expected (a modern replay
+/// of a legacy-stored answer is shaped after its seal, /mcp and stdio). A new, closed
 /// or reclassified gap moves this pin.
 #[test]
 fn the_response_table_names_exactly_two_gaps() {
@@ -467,8 +467,8 @@ fn the_response_table_names_exactly_two_gaps() {
     };
     assert_eq!(of(RespTicket::Mik8705, false), 2, "{gaps:?}");
     assert_eq!(of(RespTicket::Mik8745, false), 8, "{gaps:?}");
-    assert_eq!(of(RespTicket::Mik8747, false), 1, "{gaps:?}");
-    assert_eq!(gaps.len(), 11, "the gap set moved: {gaps:?}");
+    assert_eq!(of(RespTicket::Mik8747, false), 2, "{gaps:?}");
+    assert_eq!(gaps.len(), 12, "the gap set moved: {gaps:?}");
     assert_ne!(
         expect(
             RespRoute::Mcp,

@@ -213,6 +213,9 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
         (Mcp, IdempotentReplay, Era::Modern, ShapeSeal) => {
             Driven::Row("rows::r_erareplay_cross_era_replay_reshapes_after_the_seal_gap")
         }
+        (Stdio, IdempotentReplay, Era::Modern, ShapeSeal) => Driven::Row(
+            "rows::stdio::r_erareplay_stdio_cross_era_replay_reshapes_after_the_seal_gap",
+        ),
         _ => twin(case, era),
     }
 }
