@@ -129,16 +129,10 @@ pub(crate) enum Invisible {
     /// `_signature` is no tenant-attribution key, so the judge reads nothing
     /// signing adds.
     JudgeReadsNothingSigningAdds,
-    /// A replay's stored bytes were clamped when first delivered, so its
-    /// clamp changes nothing before the fresh link it mints (the stored link
+    /// On `/mcp` and stdio a replay's stored bytes were clamped when first
+    /// delivered, so its clamp changes nothing before the fresh link it mints (the stored link
     /// is stripped: "a replay mints its own", `meta_mcp/admission.rs:147`).
     StoredBytesAlreadyClamped,
-    /// Signing records `_signature` as a gateway write
-    /// (`meta_mcp/signing.rs:772`), and the rebuild's copy strips every
-    /// gateway write (`receipt_copy`, `invoke/relay_delivered.rs:576-590`), so
-    /// the rebuild never reads what signing adds (red check f7: rebuilding
-    /// from the unsigned answer changes nothing).
-    RebuildStripsGatewayWrites,
 }
 
 /// Why a cell cannot occur.
@@ -160,6 +154,11 @@ pub(crate) enum RespNa {
     /// `rows::r_replay_mcp_reserves_the_stored_delivery` (red-check record
     /// red-A1-record.md: the earlier re-stamp premise was wrong).
     ReplayReservesTheStoredDelivery,
+    /// A keyed replay on Direct runs `finish_tail` over bytes stored before
+    /// the clamp and seal (`direct_idempotency.rs` `deliver_replay`), but it
+    /// mints no receipt, so nothing is stamped or sealed (the stored receipt
+    /// arrives unsealed: MIK-8705, `rows::r_replayseal_direct_replay_seal_gap`).
+    ReplayMintsNoReceipt,
     /// The stored task tail is the clamp and the seal over the worker's mint;
     /// the delivery stages run on the `tasks/get` route that reads it.
     TaskTailIsClampAndSeal,
@@ -302,8 +301,8 @@ pub(crate) const fn expect(
     pair: RespPair,
 ) -> RespExpect {
     use Invisible::{
-        JudgeOnlyReplaces, JudgeReadsNothingSigningAdds, RebuildStripsGatewayWrites,
-        SealWritesOnlyExcludedMeta, StampIgnoresShapedMembers, StoredBytesAlreadyClamped,
+        JudgeOnlyReplaces, JudgeReadsNothingSigningAdds, SealWritesOnlyExcludedMeta,
+        StampIgnoresShapedMembers, StoredBytesAlreadyClamped,
     };
     use RespCase::{CacheHit, Fresh, IdempotentReplay, Task as TaskCase};
     use RespExpect::{ExpectedGap, NotApplicable, OrderInvisibleByOutcome, Ordered};
@@ -326,23 +325,27 @@ pub(crate) const fn expect(
         ) => NotApplicable(RespNa::TaskTailIsClampAndSeal),
         (Direct, CacheHit, _, _) => NotApplicable(RespNa::NoCacheOnDirect),
         (_, _, Era::Legacy, ShapeSeal | StampShape) => NotApplicable(RespNa::NoModernShapeOnLegacy),
-        // A replay runs the tail on the stored, already sealed bytes: no mint,
-        // so nothing is sealed anew; it does mint a fresh link, after a clamp
-        // that changes nothing (lead rulings, MIK-8689 phase C and R3). Its
-        // tail still shapes a legacy-stored answer for a modern caller.
+        // On /mcp and stdio a replay runs the tail on the stored, already
+        // sealed bytes: no mint, so nothing is sealed anew; it does mint a
+        // fresh link, after a clamp that changes nothing (lead rulings, MIK-8689
+        // phase C and R3). Its tail still shapes a legacy-stored answer for a
+        // modern caller. Direct stores before its clamp and seal, so its replay
+        // clamps and links as fresh (round 2, F2) and mints nothing to seal.
         (Mcp | Stdio, IdempotentReplay, Era::Modern, ShapeSeal) => ExpectedGap(RespTicket::Mik8747),
-        (
-            Mcp | Stdio | Direct,
-            IdempotentReplay,
-            _,
-            ShapeSeal | FirewallSeal | ClampSeal | SealSign,
-        ) => NotApplicable(RespNa::ReplayReservesTheStoredDelivery),
-        (Mcp | Stdio | Direct, IdempotentReplay, _, ClampLink) => {
+        (Mcp | Stdio, IdempotentReplay, _, ShapeSeal | FirewallSeal | ClampSeal | SealSign) => {
+            NotApplicable(RespNa::ReplayReservesTheStoredDelivery)
+        }
+        (Mcp | Stdio, IdempotentReplay, _, ClampLink) => {
             OrderInvisibleByOutcome(StoredBytesAlreadyClamped)
         }
         (Direct, IdempotentReplay, _, StampSeal) => ExpectedGap(RespTicket::Mik8705),
-        (Mcp | Stdio, IdempotentReplay, _, StampSeal)
-        | (Mcp | Stdio | Direct, IdempotentReplay, _, FirewallStamp) => {
+        (
+            Direct,
+            IdempotentReplay,
+            _,
+            ShapeSeal | FirewallSeal | ClampSeal | SealSign | FirewallStamp,
+        ) => NotApplicable(RespNa::ReplayMintsNoReceipt),
+        (Mcp | Stdio, IdempotentReplay, _, StampSeal | FirewallStamp) => {
             NotApplicable(RespNa::ReplayReservesTheStoredDelivery)
         }
         (Mcp | Stdio, _, _, FirewallStamp) => ExpectedGap(RespTicket::Mik8745),
@@ -350,13 +353,12 @@ pub(crate) const fn expect(
         (_, _, _, StampShape) => OrderInvisibleByOutcome(StampIgnoresShapedMembers),
         (_, _, _, LinkSeal) => OrderInvisibleByOutcome(SealWritesOnlyExcludedMeta),
         (_, _, _, SignJudge) => OrderInvisibleByOutcome(JudgeReadsNothingSigningAdds),
-        (_, _, _, SignRebuild) => OrderInvisibleByOutcome(RebuildStripsGatewayWrites),
         (
             _,
             _,
             _,
             ShapeSeal | FirewallSeal | ClampLink | ClampSeal | StampSeal | SealSign | SignRecord
-            | JudgeRecord | RecordCommit | JudgeCommit | FirewallStamp,
+            | JudgeRecord | RecordCommit | JudgeCommit | SignRebuild | FirewallStamp,
         ) => Ordered,
     }
 }
@@ -457,7 +459,7 @@ pub(crate) const AFTER_MIK_8745: RespExpect =
 /// of a legacy-stored answer is shaped after its seal, /mcp and stdio). A new, closed
 /// or reclassified gap moves this pin.
 #[test]
-fn the_response_table_names_exactly_two_gaps() {
+fn the_response_table_names_its_gaps() {
     let gaps: Vec<_> = cells()
         .filter_map(|cell| match expect(cell.0, cell.1, cell.2, cell.3) {
             RespExpect::ExpectedGap(ticket) => Some((ticket, false, cell)),

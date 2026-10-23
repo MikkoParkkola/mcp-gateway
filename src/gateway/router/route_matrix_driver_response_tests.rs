@@ -298,13 +298,25 @@ fn stuffed_scope() -> Value {
            "cacheScope": STUFFED_SCOPE})
 }
 
+/// Backend text in a top-level `_signature` member, which the gateway's
+/// message signature overwrites, so the client never receives it.
+pub(crate) const STUFFED_SIGNATURE: &str =
+    "Undelivered signature stuffing: the backend hid this in the member signing replaces.";
+
+/// A Native result carrying [`DELIVERED_PROSE`] as its text and
+/// [`STUFFED_SIGNATURE`] as its own `_signature`.
+fn stuffed_signature() -> Value {
+    json!({"content": [{"type": "text", "text": DELIVERED_PROSE}], "isError": false,
+           "_signature": STUFFED_SIGNATURE})
+}
+
 /// What a read followed by two relayed sends saw.
 pub(crate) struct Rebuilt {
     /// The read as delivered.
     pub(crate) read: Value,
     /// `k-budget` sending [`DELIVERED_PROSE`].
     pub(crate) prose: Value,
-    /// `k-budget` sending [`STUFFED_SCOPE`].
+    /// `k-budget` sending the stuffed text.
     pub(crate) stuffing: Value,
 }
 
@@ -315,9 +327,25 @@ pub(crate) struct Rebuilt {
 /// sends the delivered prose and the stuffing on the same route. The relay
 /// receipt is rebuilt from the delivered bytes, so only the prose is caught.
 pub(crate) async fn read_then_relay_rebuilt(route: HttpRoute) -> Rebuilt {
+    read_then_relay_stuffed(route, stuffed_scope, STUFFED_SCOPE).await
+}
+
+/// [`read_then_relay_rebuilt`] with the backend answering
+/// [`stuffed_signature`]: its own `_signature`, which the gateway's message
+/// signature overwrites, is the stuffing sent on (R-SIGNREBUILD).
+pub(crate) async fn read_then_relay_signature_stuffed(route: HttpRoute) -> Rebuilt {
+    read_then_relay_stuffed(route, stuffed_signature, STUFFED_SIGNATURE).await
+}
+
+/// The signed, relayed read of `answer`, then `k-budget` sending the
+/// delivered prose and `stuffed`.
+async fn read_then_relay_stuffed(
+    route: HttpRoute,
+    answer: fn() -> Value,
+    stuffed: &'static str,
+) -> Rebuilt {
     let (_dir, log) = temp_log(None);
-    let fx =
-        fixture::fixture_signed_relayed_logged(Answer::Built(stuffed_scope), log, surfacing).await;
+    let fx = fixture::fixture_signed_relayed_logged(Answer::Built(answer), log, surfacing).await;
     let read = match route {
         HttpRoute::Mcp => modern_call(&fx, "/mcp", ("read", json!({})), &json!({})).await,
         HttpRoute::Direct => {
@@ -358,7 +386,7 @@ pub(crate) async fn read_then_relay_rebuilt(route: HttpRoute) -> Rebuilt {
         }
     };
     let prose = send("b1", DELIVERED_PROSE).await;
-    let stuffing = send("b2", STUFFED_SCOPE).await;
+    let stuffing = send("b2", stuffed).await;
     Rebuilt {
         read,
         prose,

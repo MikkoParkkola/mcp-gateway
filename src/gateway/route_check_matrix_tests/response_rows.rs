@@ -9,8 +9,9 @@
 use serde_json::Value;
 
 use crate::gateway::router::route_matrix_driver_tests::response::{
-    BackendAnswer, CHAIN_NONCE, DELIVERED_PROSE, HttpRoute, STUFFED_SCOPE, chained_public_scope,
-    node_verifies, planted_credential, read_then_relay, read_then_relay_rebuilt, signed_call,
+    BackendAnswer, CHAIN_NONCE, DELIVERED_PROSE, HttpRoute, STUFFED_SCOPE, STUFFED_SIGNATURE,
+    chained_public_scope, node_verifies, planted_credential, read_then_relay,
+    read_then_relay_rebuilt, read_then_relay_signature_stuffed, signed_call,
     signed_legacy_then_modern_replay, signed_recorded_call, signed_redacted_call, signed_replay,
     trust_set,
 };
@@ -208,8 +209,10 @@ async fn r_commit_delivery_record_precedes_relay_commit() {
     );
 }
 
-/// R-REBUILD `relay_receipt_reflects_the_delivered_bytes` (`Sign` <
-/// `RelayRebuild`; `Mcp`, `Direct` × `Fresh` × `Modern`).
+/// R-REBUILD `relay_receipt_reflects_the_delivered_bytes` (`Mcp`, `Direct` ×
+/// `Fresh` × `Modern`): the relay receipt is rebuilt from the delivered,
+/// clamped bytes. It is not the `Sign` < `RelayRebuild` row (that is
+/// R-SIGNREBUILD; red check f7, run 1, survived here).
 /// The backend stuffs prose into `cacheScope`, which the clamp overwrites,
 /// beside the prose it delivers. The relay receipt is rebuilt from the
 /// delivered bytes: relaying the delivered prose is refused, and relaying the
@@ -233,6 +236,38 @@ async fn r_rebuild_relay_receipt_reflects_the_delivered_bytes() {
         assert!(
             seen.stuffing.get("error").is_none(),
             "{row}: the undelivered stuffing is not receipted, so its send runs: {}",
+            seen.stuffing
+        );
+    }
+}
+
+/// R-SIGNREBUILD `sign_precedes_relay_rebuild` (`Sign` < `RelayRebuild`;
+/// `Mcp`, `Direct` × `Fresh` × `Modern`). The backend's answer carries its own
+/// `_signature` prose, which the gateway's message signature overwrites.
+/// Signing notes `_signature` as a gateway write by the digest of the value it
+/// wrote (`meta_mcp/signing.rs:772`), and the rebuild strips only that, so a
+/// rebuild after signing digests the delivered answer: relaying the delivered
+/// prose is refused and relaying the overwritten stuffing runs. A rebuild
+/// before signing has nothing noted, keeps the backend's `_signature` text,
+/// and would refuse the stuffing the client never received.
+#[tokio::test]
+async fn r_signrebuild_sign_precedes_relay_rebuild() {
+    for route in [HttpRoute::Mcp, HttpRoute::Direct] {
+        let row = format!("R-SIGNREBUILD {route:?}");
+        let seen = read_then_relay_signature_stuffed(route).await;
+        let read = seen.read.to_string();
+        assert!(
+            read.contains(DELIVERED_PROSE) && !read.contains(STUFFED_SIGNATURE),
+            "{row}: the read delivers the prose under the gateway's own signature: {read}"
+        );
+        assert_eq!(
+            seen.prose["error"]["code"], -32002,
+            "{row}: the delivered prose is receipted and its relay refused: {}",
+            seen.prose
+        );
+        assert!(
+            seen.stuffing.get("error").is_none(),
+            "{row}: the overwritten _signature text is not receipted, so its send runs: {}",
             seen.stuffing
         );
     }

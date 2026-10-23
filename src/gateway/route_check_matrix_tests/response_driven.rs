@@ -88,7 +88,7 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
     use RespCase::{CacheHit, Fresh, IdempotentReplay, Task as TaskCase};
     use RespPair::{
         ClampLink, ClampSeal, FirewallSeal, FirewallStamp, JudgeCommit, JudgeRecord, RecordCommit,
-        SealSign, ShapeSeal, SignRecord, StampSeal,
+        SealSign, ShapeSeal, SignRebuild, SignRecord, StampSeal,
     };
     use RespRoute::{Direct, Mcp, Stdio, Task};
     if !stated(expect(route, case, era, pair)) {
@@ -145,6 +145,9 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
         (Mcp | Direct, Fresh, Era::Modern, SealSign) => {
             Driven::Row("rows::r_sign_seal_precedes_sign")
         }
+        (Mcp | Direct, Fresh, Era::Modern, SignRebuild) => {
+            Driven::Row("rows::r_signrebuild_sign_precedes_relay_rebuild")
+        }
         (Mcp, Fresh, Era::Modern, RecordCommit) => {
             Driven::Row("rows::r_commit_delivery_record_precedes_relay_commit")
         }
@@ -172,7 +175,7 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
 const fn stdio_fresh_row(era: Era, pair: RespPair) -> Option<Driven> {
     use RespPair::{
         ClampLink, ClampSeal, FirewallSeal, JudgeCommit, JudgeRecord, RecordCommit, SealSign,
-        ShapeSeal, SignRecord, StampSeal,
+        ShapeSeal, SignRebuild, SignRecord, StampSeal,
     };
     Some(match (era, pair) {
         (Era::Modern, ShapeSeal) => Driven::Row("rows::stdio::r_shape_stdio_shape_precedes_seal"),
@@ -203,6 +206,12 @@ const fn stdio_fresh_row(era: Era, pair: RespPair) -> Option<Driven> {
         (Era::Legacy, ClampLink) => {
             Driven::Row("rows::stdio::r_link_stdio_scope_clamp_precedes_origin_link")
         }
+        // Stdio signs inside finalize_content and rebuilds after it, through
+        // the same rebuild the HTTP row drives.
+        (Era::Legacy, SignRebuild) => Driven::Shared {
+            pin: "response::source_order::stdio_rebuilds_after_finalize_content",
+            rows: &["rows::r_signrebuild_sign_precedes_relay_rebuild"],
+        },
         _ => return None,
     })
 }
@@ -230,6 +239,7 @@ const fn na_pins(reason: RespNa) -> &'static [&'static str] {
             "rows::r_replay_mcp_reserves_the_stored_delivery",
             "rows::stdio::r_replay_stdio_reserves_the_stored_delivery",
         ],
+        RespNa::ReplayMintsNoReceipt => &["rows::r_replayseal_direct_replay_seal_gap"],
         RespNa::NoModernShapeOnLegacy
         | RespNa::NoCacheOnDirect
         | RespNa::TaskHasNoOriginLink
@@ -263,8 +273,22 @@ fn sources_under(dir: &std::path::Path, out: &mut Vec<(std::path::PathBuf, Strin
     }
 }
 
+/// Whether `text` defines `needle` (`fn <name>(`) under a `#[test]` or
+/// `#[tokio::test]` attribute: the attribute lines directly above the fn.
+fn is_test_fn(text: &str, needle: &str) -> bool {
+    text.match_indices(needle).any(|(at, _)| {
+        let line_start = text[..at].rfind('\n').map_or(0, |n| n + 1);
+        text[..line_start]
+            .lines()
+            .rev()
+            .map(str::trim)
+            .take_while(|line| line.starts_with("#["))
+            .any(|line| line == "#[test]" || line.starts_with("#[tokio::test"))
+    })
+}
+
 /// Every name the map cites is a test this tree defines: its last segment is
-/// a `fn` (in `response_rows.rs` or `response_source_order.rs` for the
+/// a `#[test]`/`#[tokio::test]` `fn` (in `response_rows.rs` or `response_source_order.rs` for the
 /// matrix's own `rows::` and `source_order::` names), so a rename or a typo
 /// fails here and not only in an external `--list` check. A `NotApplicable`
 /// reason's rows ([`na_pins`]) are checked the same way.
@@ -292,7 +316,7 @@ fn every_cited_response_row_is_a_test_in_the_tree() {
             None
         };
         let found = files.iter().any(|(path, text)| {
-            home.is_none_or(|home| path.ends_with(home)) && text.contains(&needle)
+            home.is_none_or(|home| path.ends_with(home)) && is_test_fn(text, &needle)
         });
         if !found {
             missing.push(*name);

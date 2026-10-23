@@ -196,8 +196,12 @@ fn the_tail_takes_no_case_or_era() {
     let end = start + text[start..].find("\n}\n").expect("finish_tail closes");
     let body = &text[start..end];
     let gate = "let stamps = if envelope.era == Era::Modern {\n        crate::gateway::router::shape_modern_response(&mut response, method)";
+    let era_reads = body
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|word| *word == "era")
+        .count();
     assert_eq!(
-        body.matches("era").count(),
+        era_reads,
         body.matches(gate).count(),
         "{direct}: finish_tail reads the era beyond the shape gate: an era twin may no longer share its row"
     );
@@ -205,6 +209,26 @@ fn the_tail_takes_no_case_or_era() {
         body.matches(gate).count(),
         1,
         "{direct}: finish_tail gates the shaper on the era"
+    );
+}
+
+/// Stdio's `SignRebuild` pin: the stdio tail signs inside `finalize_content`
+/// and rebuilds the relay receipt after it, so the rebuild reads the signed
+/// answer with the gateway's `_signature` noted, as on `/mcp`
+/// (`rows::r_signrebuild_sign_precedes_relay_rebuild`).
+#[test]
+fn stdio_rebuilds_after_finalize_content() {
+    let stdio = "src/gateway/server/stdio_dispatch.rs";
+    let text = source(stdio);
+    let finalized = only(&text, "let response = meta_mcp.finalize_content(", stdio);
+    let rebuilt = only(
+        &text,
+        "meta_mcp.rebuild_receipt_from_final(response.result.as_ref(), stamps, shape);",
+        stdio,
+    );
+    assert!(
+        finalized < rebuilt,
+        "{stdio}: the relay receipt is rebuilt from the signed, finalized answer"
     );
 }
 
