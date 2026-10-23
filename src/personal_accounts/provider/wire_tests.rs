@@ -194,6 +194,26 @@ async fn an_untrusted_certificate_is_terminal_after_a_real_handshake_attempt() {
     fixture.stop().await;
 }
 
+// MIK-8660 T8a: the typed rustls downcast that
+// `events/client.rs` uses must name a real untrusted-certificate handshake.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_typed_tls_check_names_an_untrusted_certificate() {
+    let fixture = Fixture::start(responder(|_| json_200("{}"))).await;
+    let error = reqwest::Client::builder()
+        .no_proxy()
+        .resolve(HOST, fixture.addr)
+        .build()
+        .expect("client")
+        .get(fixture.url("/x"))
+        .send()
+        .await
+        .expect_err("the fixture CA is not trusted");
+    assert!(
+        crate::security::http_diagnostics::is_tls_failure(&error),
+        "{error:?}"
+    );
+}
+
 // ── 3. Delivered redirect ────────────────────────────────────────────────────
 
 /// A 302 is terminal for both operations and nothing follows it — not to the
@@ -439,24 +459,4 @@ async fn a_dropped_pause_serves_no_metadata_however_valid_the_responder() {
     );
 
     fixture.stop().await;
-}
-
-// MIK-8660 T8a: the typed rustls downcast that
-// `events/client.rs` uses must name a real untrusted-certificate handshake.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_typed_tls_check_names_an_untrusted_certificate() {
-    let fixture = Fixture::start(responder(|_| json_200("{}"))).await;
-    let error = reqwest::Client::builder()
-        .no_proxy()
-        .resolve(HOST, fixture.addr)
-        .build()
-        .expect("client")
-        .get(fixture.url("/x"))
-        .send()
-        .await
-        .expect_err("the fixture CA is not trusted");
-    assert!(
-        crate::security::http_diagnostics::is_tls_failure(&error),
-        "{error:?}"
-    );
 }

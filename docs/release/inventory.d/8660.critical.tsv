@@ -1,0 +1,1 @@
+src/identity_propagation/token_exchange.rs	token_exchange_redirect_policy	1	critical	b,d	token_exchange_redirect_policy	The token-exchange client's redirect policy: follows none, so a 307/308 from the token endpoint cannot re-post the form, subject_token included, to the redirect target; a mistake re-opens that replay (MIK-8660).
