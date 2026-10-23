@@ -8,7 +8,8 @@
 //! written apart from the product walk: its own literal scan, its own escape
 //! widening. It encodes the rule of the MIK-8745 design: today's spans
 //! (`credential_spans` over the raw leaf), projected onto every value
-//! literal they overlap and onto each key a match starts in (MIK-8772), a
+//! literal they overlap and onto each key a match starts in, read with the
+//! text after it (MIK-8772), a
 //! redacted key taking the first free `#n` in its object; other keys,
 //! quotes, punctuation, numbers and keywords are kept.
 
@@ -159,16 +160,11 @@ fn expected(text: &str) -> String {
         return today(text);
     }
     // Per literal: the ranges to replace. A value takes every span over it; a
-    // key takes them only when some single match starts inside it, or its own
-    // text matches a pattern (MIK-8772).
-    let starts: Vec<usize> = redactor().match_spans(text).iter().map(|m| m.0).collect();
-    let patterns = redactor().set;
+    // key takes them only when some pattern matches starting at one of its
+    // positions, checked at each one (MIK-8772).
     let mut per_lit: Vec<Vec<(usize, usize)>> = vec![Vec::new(); lits.len()];
     for (index, &(lit_start, lit_end, key, _)) in lits.iter().enumerate() {
-        if key
-            && !starts.iter().any(|&at| lit_start <= at && at < lit_end)
-            && !patterns.is_match(&text[lit_start..lit_end])
-        {
+        if key && !key_rows::a_match_starts_in(text, lit_start, lit_end) {
             continue;
         }
         let escs = escapes(text, lit_start, lit_end);
@@ -616,7 +612,7 @@ impl Gen {
                 for i in 0..=self.next() % 3 {
                     // A credential in a key too, the shape MIK-8772 fixes.
                     let key = if secret && self.next().is_multiple_of(3) {
-                        self.string(true)
+                        format!("{}{i}", self.string(true))
                     } else {
                         format!("{}{i}", self.pick(&["k", "name", "rows", "e\u{e9}"]))
                     };

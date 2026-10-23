@@ -7,6 +7,22 @@
 
 use super::*;
 
+/// Oracle: whether some credential pattern matches starting at a position
+/// in `text[start..end]`. Every position is tried with every pattern anchored
+/// there, so no scan window or merged span is involved.
+pub(super) fn a_match_starts_in(text: &str, start: usize, end: usize) -> bool {
+    static ANCHORED: std::sync::OnceLock<Vec<Regex>> = std::sync::OnceLock::new();
+    let anchored = ANCHORED.get_or_init(|| {
+        CREDENTIAL_PATTERNS
+            .iter()
+            .map(|(pattern, _)| Regex::new(&format!(r"\A(?:{pattern})")).expect("compiles"))
+            .collect()
+    });
+    (start..end)
+        .filter(|&at| text.is_char_boundary(at))
+        .any(|at| anchored.iter().any(|re| re.is_match(&text[at..])))
+}
+
 fn parsed(text: &str) -> Value {
     serde_json::from_str(text).unwrap_or_else(|e| panic!("{e}: {text}"))
 }
@@ -132,4 +148,18 @@ fn k8_a_suffixed_key_keeps_the_escapes_it_was_sent_with() {
             .is_some_and(|map| map.keys().all(|key| key.contains(&"a".repeat(36)))),
         "the escape decodes into the token run: {out}"
     );
+}
+
+#[test]
+fn k9_a_short_dsn_key_that_matches_only_past_its_quote() {
+    // `redis://:pw@h/0` is 7 characters after `://`, short of the rule's 10,
+    // so it matches only together with the `":{"note…` after it; and its own
+    // start sits behind the first key's greedy match, past the restart window.
+    let pad = "p".repeat(400);
+    let first = db_url("redis", "u:pw", "host:6379");
+    let short = db_url("redis", ":pw", "h/0");
+    let text = format!(r#"{{"{first}":0,"{short}":{{"note":"{pad}"}}}}"#);
+    let out = assert_projected(&text);
+    assert!(!out.contains("pw@"), "{out}");
+    assert_eq!(parsed(&out).as_object().map(Map::len), Some(2), "{out}");
 }
