@@ -223,9 +223,9 @@ impl Redactor {
     /// that starts outside every literal.
     fn redact_json_text(&self, text: &str, findings: &mut Vec<Finding>) -> Option<String> {
         b2_gate(text)?;
-        let matches = self.match_spans(text);
-        let starts: Vec<usize> = matches.iter().map(|&(start, _)| start).collect();
-        let spans = merge_spans(matches);
+        let found = self.match_spans(text);
+        let starts: Vec<usize> = found.iter().map(|&(start, _)| start).collect();
+        let spans = merge_spans(found);
         let literals = json_literal::string_literals(text);
         let starts_in_literal = |at: usize| {
             let after = literals.partition_point(|lit| lit.start <= at);
