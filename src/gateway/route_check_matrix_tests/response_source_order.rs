@@ -188,6 +188,24 @@ fn the_tail_takes_no_case_or_era() {
             "{file}: `{needle}` now takes {hits:?}: an era or case twin may no longer share its row"
         );
     }
+    // Direct's tail gets the era inside its envelope: it may read it once,
+    // to gate the shaper (the stage `NoModernShapeOnLegacy` already splits).
+    let direct = "src/gateway/router/backend_handlers/direct_dispatch.rs";
+    let text = source(direct);
+    let start = only(&text, "pub(super) fn finish_tail(", direct);
+    let end = start + text[start..].find("\n}\n").expect("finish_tail closes");
+    let body = &text[start..end];
+    let gate = "let stamps = if envelope.era == Era::Modern {\n        crate::gateway::router::shape_modern_response(&mut response, method)";
+    assert_eq!(
+        body.matches("era").count(),
+        body.matches(gate).count(),
+        "{direct}: finish_tail reads the era beyond the shape gate: an era twin may no longer share its row"
+    );
+    assert_eq!(
+        body.matches(gate).count(),
+        1,
+        "{direct}: finish_tail gates the shaper on the era"
+    );
 }
 
 /// A replay or cache-hit twin's pin: each route hands a replayed answer back
