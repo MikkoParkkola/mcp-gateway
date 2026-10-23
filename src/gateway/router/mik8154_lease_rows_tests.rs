@@ -297,14 +297,8 @@ async fn l0_the_direct_route_admits_the_operation_invoke_admits() {
 #[tokio::test]
 async fn l8b_a_call_cancelled_before_dispatch_releases() {
     let fx = Arc::new(fixture_built(Answer::Ok, |meta| meta).await);
-    let (entered, gate) = (
-        Arc::new(tokio::sync::Notify::new()),
-        Arc::new(tokio::sync::Notify::new()),
-    );
-    super::backend_handlers::direct_lease_seams::hold_before_mark(
-        Arc::clone(&entered),
-        Arc::clone(&gate),
-    );
+    // The call is aborted, never released; `_gate` keeps the pair alive to the end of the row.
+    let (entered, _gate) = super::backend_handlers::direct_lease_seams::hold_before_mark();
     let shared = Arc::clone(&fx);
     let call = tokio::spawn(async move { keyed(&shared, Via::Direct, "l8b").await });
     tokio::time::timeout(std::time::Duration::from_secs(30), entered.notified())
