@@ -22,6 +22,7 @@
 //! A modern client's elicitation never completed, and the confirmation gate on
 //! a destructive tool ran without the answer it exists to collect.
 
+use crate::error::rpc_codes::INVALID_PARAMS;
 use crate::protocol::meta::{Declared, ElicitationMode};
 use serde_json::Value;
 
@@ -120,7 +121,7 @@ pub(crate) fn take_chain_nonce_params(params: Option<&mut Value>) -> crate::Resu
         return Ok(None);
     };
     let nonce = chain_nonce_from_params(Some(&*params)).map_err(|key| {
-        crate::Error::json_rpc(-32602, format!("malformed request fields: {key}"))
+        crate::Error::json_rpc(INVALID_PARAMS, format!("malformed request fields: {key}"))
     })?;
     if let Some(members) = params.as_object_mut()
         && let Some(Value::Object(meta)) = members.get_mut("_meta")
@@ -217,7 +218,7 @@ impl RetryFields {
     pub(crate) fn solicited_input_responses(&self) -> crate::Result<Option<Value>> {
         if self.request_state.is_none() && input_responses_nonempty(self.input_responses.as_ref()) {
             return Err(crate::Error::JsonRpc {
-                code: -32602,
+                code: INVALID_PARAMS,
                 message: "inputResponses are not accepted without the requestState this gateway \
                           issued"
                     .to_owned(),
@@ -236,7 +237,7 @@ impl RetryFields {
     pub(crate) fn refuse_on_playbook_run(&self, tool_name: &str) -> crate::Result<()> {
         if tool_name == "gateway_run_playbook" && self.is_retry() {
             return Err(crate::Error::JsonRpc {
-                code: -32602,
+                code: INVALID_PARAMS,
                 message: "a playbook run has no continuation to resume: send it without \
                           requestState or inputResponses"
                     .to_owned(),

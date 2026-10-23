@@ -17,6 +17,8 @@ use crate::gateway::meta_mcp::MetaMcp;
 /// MIK-8747: keyed calls across eras on one key.
 #[path = "route_matrix_driver_era_tests.rs"]
 pub(crate) mod era;
+#[path = "route_matrix_driver_response_tests.rs"]
+pub(crate) mod response;
 #[path = "route_matrix_driver_step_tests.rs"]
 mod step;
 #[path = "route_matrix_driver_trace_tests.rs"]

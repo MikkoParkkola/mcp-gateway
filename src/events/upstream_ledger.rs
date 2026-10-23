@@ -9,6 +9,7 @@
 //! (the backend leaves the config, or the gateway restarts): the cost is our
 //! own capacity, never an uncounted subscription.
 
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
@@ -401,9 +402,6 @@ pub(crate) async fn drive(
     }
     !matches!(&result, Ok(Ok(answer)) if answer.error.as_ref().is_some_and(|e| e.code == METHOD_NOT_FOUND))
 }
-
-/// `-32601`: the peer offers no resource interest at all.
-const METHOD_NOT_FOUND: i32 = -32601;
 
 /// The call a key is due for, ignoring timing: `Some(true)` subscribe,
 /// `Some(false)` unsubscribe.

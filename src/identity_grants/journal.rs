@@ -178,8 +178,7 @@ pub fn grant_digest(grant: &IdentityGrant) -> String {
 }
 
 fn sha256_tag(bytes: &[u8]) -> String {
-    use sha2::Digest as _;
-    format!("sha256:{}", hex::encode(sha2::Sha256::digest(bytes)))
+    crate::hashing::sha256_tagged(bytes)
 }
 
 /// A change the CLI applies to the grant file: mutate it and name what it did.
