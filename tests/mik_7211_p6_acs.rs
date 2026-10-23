@@ -168,7 +168,8 @@ mod source_checks {
             "src/protocol/tasks/scope_clamp_tests.rs",
             // MIK-8398 seal rows: they write the key only into backend
             // fixtures (a `public` claim) and read it back from the delivered
-            // result to show the clamp ran before the seal.
+            // result: clamped to `private` at the top level, and left
+            // `public` inside a chain step, which the wire never clamps.
             "src/gateway/meta_mcp/provenance_delivery_tests.rs",
             "src/gateway/meta_mcp/provenance_seal_rules_tests.rs",
             "src/gateway/router/tests/task_execution_adapter/provenance_seal.rs",

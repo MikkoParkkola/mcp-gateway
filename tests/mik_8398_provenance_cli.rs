@@ -36,14 +36,12 @@ fn fixture_json(name: &str) -> Value {
     serde_json::from_slice(&read_fixture(name)).expect("fixture parses")
 }
 
+/// Owner-only on every platform (a private ACL on Windows), as the gateway
+/// requires of a config or env file it loads: a refused file would make a
+/// leak row pass on the refusal instead of the resolver.
 fn write_private(path: &Path, contents: &[u8]) {
-    std::fs::write(path, contents).expect("file writes");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .expect("file is owner-only");
-    }
+    mcp_gateway::gateway::test_helpers::write_owner_only(path, contents)
+        .expect("file is owner-only");
 }
 
 fn copy_fixture_to(home: &Path, name: &str) -> PathBuf {
