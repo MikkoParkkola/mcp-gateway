@@ -426,7 +426,12 @@ class Runner(unittest.TestCase):
         pid_file = self.f.marker("pid")
         report = self.f.run([line(f"sleep 30 > /dev/null 2>&1 & echo $! > {pid_file}")])
         self.assertEqual(report.rc, 0, report.text)
-        self.assertFalse(alive(int(pid_file.read_text())), "the background child outlived its line")
+        pid = int(pid_file.read_text())
+        for _ in range(40):  # bounded: SIGKILL delivery is asynchronous
+            if not alive(pid):
+                break
+            time.sleep(0.05)
+        self.assertFalse(alive(pid), "the background child outlived its line")
 
     # X21 (impl r1 F8): a failed reset is a failure, and the next line gets a
     # fresh clone instead of the dirty one.
@@ -568,6 +573,30 @@ class Step(unittest.TestCase):
                                   cwd=d, capture_output=True, text=True)
             self.assertEqual(done.returncode, 3)
             self.assertNotIn("AFTER", done.stdout)
+
+    # P4 (r2 gpt): the pre-push self-test step, run as pre-push.sh writes it,
+    # prints the PyYAML hint and stops when PyYAML is missing; no traceback.
+    def test_p4_the_self_test_step_without_yaml_prints_the_hint(self):
+        pre_push = (HERE / "pre-push.sh").read_text().splitlines()
+        start = pre_push.index('  step "CI-check gate self-tests"')
+        body = []
+        for text in pre_push[start + 1:]:
+            if not text.strip() or text.strip().startswith("step "):
+                break
+            body.append(text)
+        self.assertTrue(any("test_prepush_ci_checks.py" in t for t in body), body)
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            (d / "hide").mkdir()
+            (d / "hide/yaml.py").write_text("raise ImportError('hidden by P4')\n")
+            (d / "scripts/dev").mkdir(parents=True)
+            (d / "scripts/dev/test_prepush_ci_checks.py").write_text((HERE / "test_prepush_ci_checks.py").read_text())
+            done = subprocess.run(["bash", "-c", "set -euo pipefail\n" + "\n".join(body) + "\necho AFTER"], cwd=d,
+                                  capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(d / "hide")})
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("PyYAML is missing", done.stdout)
+        self.assertNotIn("Traceback", done.stdout + done.stderr)
+        self.assertNotIn("AFTER", done.stdout)
 
     # P2
     def test_p2_the_rust_step_runs_the_derived_targets_with_all_features(self):

@@ -65,6 +65,7 @@ if [[ -f Cargo.toml ]]; then
   # the runner's 22.5 s suite runs in CI only), then CI's cargo-free
   # PR-workflow checks, before any cargo step.
   step "CI-check gate self-tests"
+  python3 -c 'import yaml' 2>/dev/null || { echo "PyYAML is missing: pip install --user pyyaml (CI pins 6.0.2); pre-push installs nothing"; exit 1; }
   python3 scripts/dev/test_prepush_ci_checks.py
 
   step "CI script checks"
