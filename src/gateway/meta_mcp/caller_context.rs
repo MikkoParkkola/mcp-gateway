@@ -123,12 +123,20 @@ pub struct MetaMcpCallerContext<'a> {
 }
 
 impl<'a> MetaMcpCallerContext<'a> {
+    /// The API key's name when this caller authenticated with an API key, else `None` (MIK-8659).
+    pub(super) fn api_key_identity(&self) -> Option<&'a str> {
+        crate::gateway::auth::api_key_name(
+            self.authentication == Authentication::Authenticated,
+            self.credential_kind,
+            self.api_key_name,
+        )
+    }
+
     /// The name per-key cost governance charges this caller to: the API key's
     /// name for an API-key credential, `None` for any other (MIK-8507).
     /// `api_key_name` stays the display name for audit and correlation.
     pub(crate) fn cost_key(&self) -> Option<&'a str> {
-        self.api_key_name
-            .filter(|_| self.credential_kind == crate::security::audit::CredentialKind::ApiKey)
+        self.api_key_identity()
     }
 
     /// The fields the chokepoint reads, as the view discovery is judged by.
@@ -138,10 +146,7 @@ impl<'a> MetaMcpCallerContext<'a> {
             authorizer: self.authorizer,
             is_admin: self.is_admin,
             api_key_name: self.api_key_name,
-            grant_key: self.api_key_name.filter(|_| {
-                self.authentication == Authentication::Authenticated
-                    && self.credential_kind == crate::security::audit::CredentialKind::ApiKey
-            }),
+            grant_key: self.api_key_identity(),
             agent_id: self.agent_id,
             grant_subject: self.grant_subject.as_ref(),
             caller: crate::identity_propagation::CallerProof::new(

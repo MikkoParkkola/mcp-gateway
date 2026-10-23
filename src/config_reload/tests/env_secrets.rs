@@ -359,6 +359,23 @@ fn a_rotated_attestation_key_is_reported_although_no_config_field_names_it() {
     );
 }
 
+/// MIK-8398 restart list: the public-provenance seed and kid are read once at
+/// startup, so both names must be startup-only keys whose rotation is reported.
+#[test]
+fn the_public_provenance_keys_are_startup_only() {
+    use crate::config_reload::reload_context::IMPLICIT_STARTUP_ENV_KEYS;
+    use crate::trust::provenance_public::{PROVENANCE_KEY_ID_ENV, PROVENANCE_SEED_ENV};
+
+    assert!(
+        IMPLICIT_STARTUP_ENV_KEYS.contains(&PROVENANCE_SEED_ENV),
+        "the public seed must be a startup-only key"
+    );
+    assert!(
+        IMPLICIT_STARTUP_ENV_KEYS.contains(&PROVENANCE_KEY_ID_ENV),
+        "the public kid must be a startup-only key"
+    );
+}
+
 /// GH475.CFG.6 — an `error_budget:` edit is reported as needing a restart.
 ///
 /// The section is read once while the meta-MCP server is built, so a hot

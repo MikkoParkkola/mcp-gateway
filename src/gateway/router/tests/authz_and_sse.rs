@@ -390,3 +390,98 @@ async fn sse_deprecated_endpoint_returns_jsonrpc_error_with_migration_data() {
         "https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http"
     );
 }
+
+/// MIK-8651.OP.1: `gateway_reload_capabilities` needs an admin key. An admin
+/// call returns ok and a just-edited capability description is served; a
+/// non-admin call is HTTP 403. Regression row, expected GREEN on base.
+#[tokio::test]
+async fn gateway_reload_capabilities_needs_an_admin_key() {
+    fn cap_yaml(desc: &str) -> String {
+        format!(
+            "name: a\ndescription: {desc}\nproviders:\n  primary:\n    service: rest\n    config:\n      base_url: https://api.invalid\n      path: /k\n"
+        )
+    }
+    // Admin half: the edited description is served after the reload.
+    let dir = tempfile::tempdir().expect("a tempdir for caps");
+    std::fs::write(dir.path().join("a.yaml"), cap_yaml("v1")).expect("write v1");
+    let backend = Arc::new(crate::capability::CapabilityBackend::new(
+        "caps",
+        Arc::new(crate::capability::CapabilityExecutor::new()),
+    ));
+    backend
+        .load_from_directory(dir.path().to_str().expect("the tempdir path is utf-8"))
+        .await
+        .expect("the fixture directory loads");
+    let (state, _store) = test_router_app_state_with_auth(&scoped_auth_config(true)).await;
+    state.meta_mcp.set_capabilities(Arc::clone(&backend));
+    std::fs::write(dir.path().join("a.yaml"), cap_yaml("v2-much-longer")).expect("write v2");
+    let router = create_router(state);
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("authorization", "Bearer scoped-key")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 20,
+                "method": "tools/call",
+                "params": {
+                    "name": "gateway_reload_capabilities",
+                    "arguments": {}
+                }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        json.get("error").is_none(),
+        "an admin reload returns ok: {json}"
+    );
+    let served = backend
+        .get_tools()
+        .into_iter()
+        .find(|tool| tool.name == "a")
+        .and_then(|tool| tool.description);
+    assert_eq!(
+        served.as_deref(),
+        Some("v2-much-longer"),
+        "the just-edited description is served after the admin reload"
+    );
+
+    // Non-admin half: refused before any reload.
+    let (state, _store) = test_router_app_state_with_auth(&scoped_auth_config(false)).await;
+    let router = create_router(state);
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("authorization", "Bearer scoped-key")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 21,
+                "method": "tools/call",
+                "params": {
+                    "name": "gateway_reload_capabilities",
+                    "arguments": {}
+                }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("admin access")),
+        "a non-admin is told it needs admin: {json}"
+    );
+}

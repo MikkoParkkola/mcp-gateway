@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::*;
+use crate::security::Severity;
 use serde_json::json;
 
 fn redactor() -> Redactor {

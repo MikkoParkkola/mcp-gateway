@@ -1,0 +1,18 @@
+{
+  "algorithm": "HS256",
+  "key_id": "bnaut/gateway",
+  "public_signature": {
+    "payload": "eyJhbGciOiJFZERTQSIsImtpZCI6InByb3YtdGVzdC0xIiwicmVjZWlwdCI6eyJiYWNrZW5kX2lkIjoiZ2l0aHViIiwiYmFja2VuZF9vayI6dHJ1ZSwiY2FjaGUiOiJtaXNzIiwiZXZpZGVuY2Vfa2luZCI6Im9ic2VydmVkIiwib2JzZXJ2ZWRfYXQiOiIyMDI2LTA3LTEzVDEwOjE1OjMwWiIsInN1YmplY3Rfa2luZCI6InJ1bnRpbWUiLCJ0b29sIjoic2VhcmNoX2lzc3VlcyJ9LCJyZXN1bHRfc2hhMjU2IjpudWxsLCJ2IjoxfQ",
+    "sig": "we8U8nQ4XU9Da2DYjJOQi68umh_GubcFpF7xaENpmKoWv0jDtYYYGRdormOYi5pvaECygz3_05tG8Fu4VVvNDA"
+  },
+  "receipt": {
+    "backend_id": "github",
+    "backend_ok": true,
+    "cache": "miss",
+    "evidence_kind": "observed",
+    "observed_at": "2026-07-13T10:15:30Z",
+    "subject_kind": "runtime",
+    "tool": "search_issues"
+  },
+  "signature": "eWirTYHx1-uACI2H58nuHfVWF6oYhT-LpYXqUdApJds"
+}

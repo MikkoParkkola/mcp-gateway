@@ -39,6 +39,7 @@ pub mod response_scanner;
 pub mod sanitize;
 pub mod scope_collision;
 pub(crate) mod security_metrics;
+mod severity;
 // Emission and strip are wired (ASI07 increment 2); chain verification has
 // no caller until increment 3, which removes this `expect`.
 #[cfg_attr(
@@ -82,6 +83,7 @@ pub use sanitize::{
     sanitize_resource_metadata,
 };
 pub use scope_collision::validate_tool_name;
+pub use severity::Severity;
 pub use ssrf::{
     HostResolver, PinningResolver, SystemResolver, check_host_not_ssrf, resolve_and_validate_host,
     validate_redirect_chain, validate_url_not_ssrf,

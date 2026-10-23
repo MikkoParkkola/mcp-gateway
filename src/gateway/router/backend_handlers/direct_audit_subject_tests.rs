@@ -19,7 +19,7 @@ use crate::gateway::router::tests::direct_route_state_with_identity;
 use crate::gateway::test_helpers::MetaMcp;
 use crate::identity_propagation::{InstalledAccount, Minter};
 use crate::personal_accounts::config::DescriptorMode;
-use crate::personal_accounts::identity::AccountDescriptor;
+use crate::personal_accounts::identity::AccountKeyDescriptor;
 use crate::personal_accounts::{
     AccountCustody, CredentialLease, CustodyError, RejectionOutcome, ReleasedCredentials,
     VaultStrategy,
@@ -74,7 +74,7 @@ fn backend(config: BackendConfig) -> Arc<Backend> {
 fn operator_vault() -> Arc<VaultStrategy> {
     Arc::new(VaultStrategy::new(
         Arc::new(Unreached),
-        AccountDescriptor {
+        AccountKeyDescriptor {
             descriptor_id: ACCOUNT.to_string(),
             provider: "google".to_string(),
             resource: "https://resource.invalid/".to_string(),
