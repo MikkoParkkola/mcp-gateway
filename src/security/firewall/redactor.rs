@@ -379,7 +379,7 @@ const OVERLAP_WINDOW: usize = 256;
 /// past, and the connection-string rule needs at most its 10 `[^\s]`
 /// characters, 40 bytes in UTF-8. Every other pattern's classes exclude `"`,
 /// so its match ends inside the key. The b2 tests pin which patterns can
-/// match a quote.
+/// match a quote, and the reviewed pattern text this bound was argued for.
 const KEY_MATCH_TAIL: usize = 64;
 
 /// Every match of `re` in `text`, including matches that overlap one another:

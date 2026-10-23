@@ -177,12 +177,17 @@ fn key_cases() -> Vec<String> {
             }
         }
     }
-    for n in 1..10 {
+    for n in 0..10 {
         keys.push(format!("redis://{}", "q".repeat(n)));
         keys.push(db_url("postgres", ":pw", &"h".repeat(n)));
         // Multibyte characters: the rule counts characters, not bytes.
         keys.push(format!("redis://{}", "\u{e9}".repeat(n)));
+        // Four-byte characters, so the cut can land inside one.
+        keys.push(format!("redis://{}", "\u{1f600}".repeat(n)));
     }
+    // An API-key body far longer than any window: the match ends on the
+    // key's own quote, so the tail bound holds at that start too.
+    keys.push(format!("{}='{}", "api_key", "A".repeat(300)));
     // One under each rule's minimum, so only bytes after the key can complete it.
     let b64 = "A".repeat(19);
     keys.extend([
@@ -251,13 +256,34 @@ fn p1_every_key_a_match_starts_in_is_redacted() {
     assert!(checked > 5000, "P1 ran {checked} cases");
 }
 
-/// P2, the precondition `match_starts_in` rests on. No credential pattern
-/// has an anchor or a word boundary, so a cut haystack cannot invent a match.
-/// And only the API-key and connection-string rules can match a `"` (a quote
-/// in the pattern, a negated class, or a bare `.`), so only they can run past
-/// a key's closing quote, by the amounts `KEY_MATCH_TAIL` states.
+/// P2, the precondition `match_starts_in` rests on, pinned two ways. A scan
+/// of each pattern: no anchor or word boundary, and only the API-key and
+/// connection-string rules can match a `"`. And the full pattern text, as
+/// reviewed for `KEY_MATCH_TAIL`: a class like `\W`, `\S` or `[!-#]` can
+/// match a quote without the scan seeing it, so any change to a pattern
+/// fails here and reopens that argument.
 #[test]
-fn p2_only_two_patterns_can_cross_a_quote_and_none_is_anchored() {
+fn p2_the_patterns_are_the_reviewed_ones() {
+    let reviewed = [
+        r"(?:AKIA|ASIA)[A-Z0-9]{16}",
+        r"ghp_[A-Za-z0-9]{36}",
+        r"gho_[A-Za-z0-9]{36}",
+        r"ghs_[A-Za-z0-9]{36}",
+        r"ghr_[A-Za-z0-9]{36}",
+        r"xox[bprs]-[A-Za-z0-9-]{10,}",
+        r#"(?i)(?:api[_-]?key|apikey|secret[_-]?key)\s*[:=]\s*['"][A-Za-z0-9+/=]{20,}['"]"#,
+        r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}(?:\.[A-Za-z0-9_-]{10,})+",
+        r"-----BEGIN (?:RSA |EC |DSA )?PRIVATE KEY-----",
+        r"(?i)bearer\s+[A-Za-z0-9._~+/=-]{20,}",
+        r"(?i)(?:postgres|mysql|mongodb|redis)://[^\s]{10,}",
+        r"sk-proj-[A-Za-z0-9_-]{40,}",
+        r"0x[a-fA-F0-9]{64}",
+    ];
+    let live: Vec<&str> = CREDENTIAL_PATTERNS.iter().map(|(p, _)| *p).collect();
+    assert_eq!(
+        live, reviewed,
+        "a pattern changed: recheck KEY_MATCH_TAIL's bound"
+    );
     let mut crossers = Vec::new();
     for (pattern, name) in CREDENTIAL_PATTERNS {
         for token in [r"\b", r"\B", r"\A", r"\z", "$"] {
@@ -305,14 +331,38 @@ fn f2_many_overlapped_keys_cost() {
         i += 1;
     }
     text.push('}');
-    let started = std::time::Instant::now();
-    let (out, _) = deliver(&text);
-    let projected = started.elapsed();
-    let started = std::time::Instant::now();
-    let whole = today(&text);
-    let base = started.elapsed();
+    // One redactor built and warmed before timing, as production reuses one;
+    // the median of five samples of each path.
+    let r = redactor();
+    let leaf = || json!({ "content": [{ "type": "text", "text": text }] });
+    let mut warm = leaf();
+    r.scan_and_redact(&mut warm);
+    let median = |f: &dyn Fn()| {
+        let mut runs: Vec<_> = (0..5)
+            .map(|_| {
+                let started = std::time::Instant::now();
+                f();
+                started.elapsed()
+            })
+            .collect();
+        runs.sort();
+        runs[2]
+    };
+    let projected = median(&|| {
+        let mut value = leaf();
+        r.scan_and_redact(&mut value);
+    });
+    let base = median(&|| {
+        let _ = splice(&text, &r.credential_spans(&text));
+    });
+    let mut value = leaf();
+    r.scan_and_redact(&mut value);
+    let out = value["content"][0]["text"]
+        .as_str()
+        .expect("text")
+        .to_owned();
     assert!(
-        parses(&out) && out != whole,
+        parses(&out) && out != today(&text),
         "many keys: the projection must have run"
     );
     let ratio = projected.as_secs_f64() / base.as_secs_f64();
@@ -323,4 +373,31 @@ fn f2_many_overlapped_keys_cost() {
         ratio < 3.0,
         "many keys: ratio {ratio:.2} over the plan's 3x"
     );
+}
+
+/// The redaction marker holds no whitespace, so redacting a span that did
+/// (`Bearer` and its token) can join the text around it into a new match: a
+/// second pass then changes the first pass's output. Over-redaction, never a
+/// leak; production re-scans the same bytes on a dead-letter event replay.
+/// Pinned as today's outcome so MIK-8794's fix flips this row.
+#[test]
+fn g1_a_second_pass_still_changes_these_until_mik_8794() {
+    let bearer = format!("{} {}", "Bearer", "t".repeat(20));
+    let rows = [
+        format!("redis://{bearer}"),
+        format!(r#"{{"redis://":"{bearer}"}}"#),
+        format!(r#"{{"a":"redis://","b":"{bearer}"}}"#),
+    ];
+    for text in rows {
+        let (once, _) = deliver(&text);
+        let (twice, _) = deliver(&once);
+        assert_ne!(
+            twice, once,
+            "MIK-8794 fixed? a second pass now leaves {once:?} as it is: flip this row"
+        );
+        assert!(
+            !once.contains(&"t".repeat(20)),
+            "pass 1 still hides the token: {once}"
+        );
+    }
 }
