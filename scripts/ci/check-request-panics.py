@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 import re
 import subprocess
 import sys
@@ -95,13 +96,18 @@ def read_baseline_counts(path: Path) -> dict[tuple[str, str], int]:
         text = Path(path).read_text(encoding="utf-8", errors="replace")
     except OSError:
         raise SystemExit(f"no baseline at {BASELINE_REL.as_posix()}; run --write-baseline")
+    return _parse_baseline(text, f"in {path}")
+
+
+def _parse_baseline(text: str, where: str) -> dict[tuple[str, str], int]:
+    # Strict: a line that is not exactly path, text, count fails, never skips.
     counts: dict[tuple[str, str], int] = {}
     for number, line in enumerate(text.splitlines(), 1):
         if not line.strip():
             continue
         parts = line.split("\t")
         if len(parts) != 3 or not parts[2].strip().isdigit():
-            raise SystemExit(f"request-panics: malformed baseline line {number} in {path}: {line!r}")
+            raise SystemExit(f"request-panics: malformed baseline line {number} {where}: {line!r}")
         counts[(parts[0], parts[1])] = int(parts[2].strip())
     return counts
 
@@ -498,15 +504,7 @@ def load_base_via_git(rev: str) -> dict[tuple[str, str], int] | None:
     )
     if proc.returncode != 0:
         return None
-    counts: dict[tuple[str, str], int] = {}
-    for number, line in enumerate(proc.stdout.splitlines(), 1):
-        if not line.strip():
-            continue
-        parts = line.split("\t")
-        if len(parts) != 3 or not parts[2].strip().isdigit():
-            raise SystemExit(f"request-panics: malformed baseline line {number} at {rev}: {line!r}")
-        counts[(parts[0], parts[1])] = int(parts[2].strip())
-    return counts
+    return _parse_baseline(proc.stdout, f"at {rev}")
 
 
 def _write_temp_files(tmp_root: Path, files: dict[str, str]) -> None:
@@ -1018,6 +1016,59 @@ def run_self_test() -> int:
             globals()["ROOT"] = old_root
             orphan.ROOT = old_orphan_root
             subprocess.run = old_run
+
+    # ---- MIK-8691 round 2: C strings on the site's line never exempt it ----
+    for lit in ('cr#" // invariant: "#', 'cr" // invariant: "', 'c" // invariant: "'):
+        f, _, _, _ = _scan_temp({"src/foo.rs": f"fn f(x: Option<i32>) {{\n    x.unwrap(); let _s = {lit};\n}}\n"})
+        check(f"not exempt: invariant in {lit}", len(f) == 1, repr(f))
+
+    # ---- MIK-8691 round 2: a marker line inside a literal above a site ----
+    f, _, _, _ = _scan_temp(
+        {"src/foo.rs": 'fn f(x: Option<i32>) {\n    let _s = "\n// invariant: fake\n";\n    x.unwrap();\n}\n'}
+    )
+    check("not exempt: marker line inside a multiline string above", len(f) == 1, repr(f))
+    f, _, _, _ = _scan_temp({"src/foo.rs": "fn f(x: Option<i32>) {\n    /*\n// invariant: fake\n    */\n    x.unwrap();\n}\n"})
+    check("not exempt: marker line inside a block comment above", len(f) == 1, repr(f))
+
+    # ---- MIK-8691 round 2: a C raw string with an inner quote hides nothing ----
+    f, _, _, _ = _scan_temp({"src/foo.rs": 'fn f(x: Option<i32>) {\n    let _s = cr#"a"b"#;\n    x.unwrap();\n}\n'})
+    check('site after cr#"a"b"# still flagged', len(f) == 1, repr(f))
+
+    # ---- MIK-8691 round 2: the committed baseline is strict and live ----
+    try:
+        committed = read_baseline_counts(ROOT / BASELINE_REL)
+        live, _, _ = collect_current(ROOT, _ORPHAN.test_only_files(), _ORPHAN)
+        drift = find_new_sites(live, committed) + find_stale_allowances(live, committed)
+        check("committed baseline parses and equals the live scan", bool(committed) and not drift, repr(drift[:3]))
+    except SystemExit as exc:
+        check("committed baseline parses and equals the live scan", False, repr(exc.code))
+
+    # ---- MIK-8691 round 2: fail-closed paths through main() ----
+    def _main_on(files: dict[str, str], baseline: str, link: str | None = None) -> int:
+        with tempfile.TemporaryDirectory() as td:
+            troot = Path(td)
+            _write_temp_files(troot, {**files, BASELINE_REL.as_posix(): baseline})
+            if link is not None:
+                os.symlink(troot / "nowhere.rs", troot / link)
+            old_root, old_orphan_root = globals()["ROOT"], orphan.ROOT
+            try:
+                globals()["ROOT"] = troot
+                orphan.ROOT = troot
+                return main([])
+            finally:
+                globals()["ROOT"] = old_root
+                orphan.ROOT = old_orphan_root
+
+    site = {"src/lib.rs": "fn f(x: Option<i32>) -> i32 {\n    x.unwrap()\n}\n"}
+    key = "src/lib.rs\tx.unwrap()\t"
+    rc = _main_on(site, key + "1\n")
+    check("main exact baseline returns 0", rc == 0, repr(rc))
+    rc = _main_on(site, key + "2\n")
+    check("main padded baseline returns 1", rc == 1, repr(rc))
+    rc = _main_on({"src/lib.rs": "fn f() {}\n"}, key + "1\n")
+    check("main baseline key with no live site returns 1", rc == 1, repr(rc))
+    rc = _main_on({"src/lib.rs": "mod gone;\n"}, "", link="src/gone.rs")
+    check("main unreadable source returns 1", rc == 1, repr(rc))
 
     print(f"self-test: {passed} cases passed")
     return 0
