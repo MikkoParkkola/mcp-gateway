@@ -581,6 +581,59 @@ async fn http_backend_probe_warns_on_a_same_origin_redirect_to_a_listed_private_
     assert_eq!(hits, 0);
 }
 
+/// MIK-8660: the Location is decoded as UTF-8, as reqwest does. A Location that
+/// is not UTF-8 cannot be followed or shown: FAIL, naming it unreadable, and
+/// never a WARN or a panic.
+#[tokio::test]
+async fn http_backend_probe_fails_on_a_location_that_is_not_utf8() {
+    let app = axum::Router::new().route(
+        "/x",
+        axum::routing::get(|| async {
+            let mut response = axum::response::Response::new(axum::body::Body::empty());
+            *response.status_mut() = axum::http::StatusCode::MOVED_PERMANENTLY;
+            // 0xFF is a legal header byte (obs-text) but never valid UTF-8.
+            response.headers_mut().insert(
+                axum::http::header::LOCATION,
+                axum::http::HeaderValue::from_bytes(b"/y\xff").expect("obs-text header value"),
+            );
+            response
+        }),
+    );
+    let stub = serve(app).await;
+    let transport = TransportConfig::Http {
+        http_url: format!("{stub}/x"),
+        streamable_http: None,
+        protocol_version: None,
+    };
+    // Hardened with the backend listed: a readable same-origin Location here
+    // would be followed (WARN), so only the decoding can make this a FAIL.
+    let mut config = Config::default();
+    config.security.posture = mcp_gateway::security::SecurityPosture::Hardened;
+    config.security.hardened.private_backends = vec!["b".to_string()];
+    let outcome = tokio::time::timeout(HANG_BOUND, check_http_backend(&config, "b", &transport))
+        .await
+        .expect("bounded");
+    let Some(result) = outcome else {
+        panic!("an Http transport must produce a result");
+    };
+    assert_eq!(
+        result.status,
+        CheckStatus::Fail,
+        "detail: {}",
+        result.detail
+    );
+    assert!(
+        result.detail.contains("an unreadable Location"),
+        "detail: {}",
+        result.detail
+    );
+    assert!(
+        result.detail.contains("not followed"),
+        "detail: {}",
+        result.detail
+    );
+}
+
 /// MIK-8660 G4: reqwest does not follow a 300, so neither does the gateway.
 #[tokio::test]
 async fn http_backend_probe_fails_on_a_300_even_with_a_same_origin_location() {
