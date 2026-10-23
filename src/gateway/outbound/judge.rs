@@ -9,6 +9,7 @@
 //! scanned by default. `id` is never scanned, so a refusal that keeps a
 //! JSON-shaped id cannot refuse itself.
 
+use crate::error::rpc_codes::INTERNAL_ERROR;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,7 +22,7 @@ use crate::security::firewall::tenant_guard::{CrossTenantReads, TenantGuard};
 use crate::security::tenant_reads::{ReadAttribution, ReadTicket, ReadVerdict, RejectionEvidence};
 
 /// The code of the refusal that replaces a blocked answer.
-pub(super) const REFUSAL_CODE: i32 = -32603;
+pub(super) const REFUSAL_CODE: i32 = INTERNAL_ERROR;
 /// Its text: fixed, carrying no backend content.
 pub(super) const REFUSAL_TEXT: &str =
     "Response withheld: this caller already read another tenant's data inside the window";

@@ -3,6 +3,7 @@
 
 //! MCP JSON-RPC message types
 
+use crate::error::rpc_codes::INTERNAL_ERROR;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::warn;
@@ -138,7 +139,7 @@ impl JsonRpcResponse {
     /// Create a standard internal error response.
     #[must_use]
     pub fn internal_error(id: Option<RequestId>) -> Self {
-        Self::error(id, -32603, "Internal error")
+        Self::error(id, INTERNAL_ERROR, "Internal error")
     }
 
     /// Serialize this response into a JSON value, falling back to a standard

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Health probing of a backend (split from `lifecycle.rs`).
 
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 use std::sync::Arc;
 
 use std::sync::atomic::Ordering;
@@ -198,7 +199,7 @@ impl Backend {
         // provably cannot change. Reset rather than merely skip: a backend
         // alternating `ping` refusals with a genuine fault must not accumulate
         // the faults across the answers that proved it alive.
-        if code == crate::protocol::era::METHOD_NOT_FOUND_CODE {
+        if code == METHOD_NOT_FOUND {
             self.unserved_consecutive.store(0, Ordering::SeqCst);
             debug!(
                 backend = %self.name,

@@ -5,6 +5,7 @@ use super::{
     AdmitOutcome, Arc, Duration, Error, IdempotencyCache, IdempotencyReservation, MAX_ENTRIES,
     OwnerToken, Result, Value,
 };
+use crate::error::rpc_codes::INTERNAL_ERROR;
 
 /// Outcome of the idempotency guard.
 #[derive(Debug)]
@@ -104,7 +105,7 @@ pub fn cached_error_parts(error: &Value) -> (i32, String) {
         .get("code")
         .and_then(Value::as_i64)
         .and_then(|c| i32::try_from(c).ok())
-        .unwrap_or(-32603);
+        .unwrap_or(INTERNAL_ERROR);
     let message = error
         .get("message")
         .and_then(Value::as_str)

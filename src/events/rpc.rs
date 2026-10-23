@@ -273,9 +273,8 @@ fn checked_arguments(
 /// `sub_` + 32 hex of SHA-256 over the canonical array `[principal, url,
 /// name, arguments]` (design §6.3 step 7; see `canonical`).
 pub(crate) fn subscription_id(principal: &str, url: &str, name: &str, arguments: &Value) -> String {
-    use sha2::Digest as _;
     let canonical = canonical(&json!([principal, url, name, arguments]));
-    let digest = hex::encode(sha2::Sha256::digest(canonical));
+    let digest = crate::hashing::sha256_hex(&canonical);
     format!("sub_{}", &digest[..32])
 }
 

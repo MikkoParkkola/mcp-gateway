@@ -21,8 +21,6 @@
 //! one, and every migrated user is asked to reconnect — the outcome the row
 //! exists to prevent.
 
-use sha2::{Digest as _, Sha256};
-
 use super::super::AccountError;
 use super::super::config::{AccountDescriptor, DescriptorMode};
 use super::encode_fields;
@@ -87,7 +85,7 @@ pub(crate) fn descriptor_revision(descriptor: &AccountDescriptor) -> Result<Stri
         external.as_str(),
     ];
     let encoded = encode_fields(DOMAIN, &fields)?;
-    Ok(hex::encode(Sha256::digest(encoded)))
+    Ok(crate::hashing::sha256_hex(&encoded))
 }
 
 /// A declared-but-absent field is the empty string; `encode_fields` prefixes

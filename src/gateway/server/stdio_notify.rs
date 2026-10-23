@@ -3,6 +3,7 @@
 //! The stdio dispatch's notifications, written as they arrive and each judged
 //! for the stdio client (MIK-7116.MIN.2, design §4.3).
 
+use crate::error::rpc_codes::INVALID_REQUEST;
 use std::future::Future;
 
 use tokio::sync::mpsc::Sender;
@@ -87,7 +88,7 @@ impl Gateway {
         reads: &StdioReads,
     ) -> Vec<OutboundFrame> {
         let invalid = || {
-            crate::protocol::JsonRpcResponse::error(None, -32600, "Invalid Request")
+            crate::protocol::JsonRpcResponse::error(None, INVALID_REQUEST, "Invalid Request")
                 .to_value_lossy()
         };
         let requests = match batch {

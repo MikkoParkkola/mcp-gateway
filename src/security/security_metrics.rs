@@ -8,6 +8,7 @@
 //! the scrape token, so no label may carry a key name, subject, backend, tool
 //! or path. Per-principal breakdowns stay in the audit log.
 
+use crate::error::rpc_codes::INVALID_REQUEST;
 use serde_json::Value;
 
 use crate::Error;
@@ -114,7 +115,7 @@ impl DenialReason {
             -32003 => Self::BackendScope,
             -32004 => Self::IdentityGrant,
             -32001 => Self::GatewayRefusal,
-            -32600 => Self::RequestPolicy,
+            INVALID_REQUEST => Self::RequestPolicy,
             _ => Self::Other,
         }
     }

@@ -12,6 +12,7 @@
 //! as one tool) and `tools/call` (one `SendMessage`). Everything else is
 //! `-32601`, `server/discover` included, so the era probe settles on legacy.
 
+use crate::error::rpc_codes::{INVALID_PARAMS, METHOD_NOT_FOUND};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -188,7 +189,7 @@ impl A2aTransport {
             }
             other => Ok(JsonRpcResponse::error(
                 Some(id),
-                -32601,
+                METHOD_NOT_FOUND,
                 format!("Method not found: an A2A agent does not answer `{other}`"),
             )),
         }
@@ -201,8 +202,13 @@ impl A2aTransport {
         extra_headers: &[(String, String)],
         identity: Option<&str>,
     ) -> Result<JsonRpcResponse> {
-        let invalid =
-            |message: String| Ok(JsonRpcResponse::error(Some(id.clone()), -32602, message));
+        let invalid = |message: String| {
+            Ok(JsonRpcResponse::error(
+                Some(id.clone()),
+                INVALID_PARAMS,
+                message,
+            ))
+        };
         let name = params.and_then(|p| p.get("name")).and_then(Value::as_str);
         if name != Some(TOOL_NAME) {
             return invalid(format!(
@@ -257,7 +263,7 @@ impl A2aTransport {
                 // nothing reached the agent.
                 return Ok(JsonRpcResponse::error(
                     Some(id),
-                    -32602,
+                    INVALID_PARAMS,
                     "requestState does not name a question waiting for this caller",
                 ));
             }

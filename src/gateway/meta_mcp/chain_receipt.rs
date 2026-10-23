@@ -7,6 +7,7 @@
 //! processing, task-handle capture, continuations or the input bridge read
 //! it, and binds the chain to the challenge this dispatch sent.
 
+use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS};
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -41,7 +42,9 @@ pub(crate) fn mint_nonce() -> crate::Result<String> {
     let mut bytes = [0_u8; 16];
     ring::rand::SystemRandom::new()
         .fill(&mut bytes)
-        .map_err(|_| crate::Error::json_rpc(-32603, "no randomness for the chain challenge"))?;
+        .map_err(|_| {
+            crate::Error::json_rpc(INTERNAL_ERROR, "no randomness for the chain challenge")
+        })?;
     Ok(hex::encode(bytes))
 }
 
@@ -50,7 +53,7 @@ pub(crate) fn mint_nonce() -> crate::Result<String> {
 /// `_meta` that is not an object cannot carry it, so the call is refused
 /// rather than dispatched unchallenged.
 pub(crate) fn inject_nonce(params: &mut Value, nonce: &str) -> crate::Result<()> {
-    let malformed = || crate::Error::json_rpc(-32602, "malformed request fields: _meta");
+    let malformed = || crate::Error::json_rpc(INVALID_PARAMS, "malformed request fields: _meta");
     let members = params.as_object_mut().ok_or_else(malformed)?;
     let meta = members
         .entry("_meta")
