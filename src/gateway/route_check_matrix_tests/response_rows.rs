@@ -415,7 +415,7 @@ mod stdio {
         CHAIN_NONCE, planted_credential, trust_set,
     };
     use crate::gateway::server::route_matrix_driver_tests::response::{
-        StdioSetup, stdio_sealed, stdio_sealed_replay,
+        StdioSetup, stdio_sealed, stdio_sealed_replay, stdio_signed_recorded,
     };
     use crate::protocol::meta::Era;
     use crate::trust::provenance_public::{VerifyRefusal, verify_public};
@@ -546,6 +546,35 @@ mod stdio {
                 .and_then(Value::as_str),
             Some("miss"),
             "R-REPLAY-Stdio: the receipt was minted once, by the first call"
+        );
+    }
+    /// R-RECSIGN-Stdio `stdio_sign_precedes_delivery_record` (`Sign` <
+    /// `DeliveryRecord`; `Stdio` × `Fresh`). Stdio signs inside
+    /// `finalize_routed` and records later, in `judge_and_commit`: the one
+    /// delivery row hashes the delivered document with `_signature` in it.
+    #[tokio::test]
+    async fn r_recsign_stdio_sign_precedes_delivery_record() {
+        let (body, rows, _dir) = stdio_signed_recorded().await;
+        let result = delivered(&body);
+        assert!(
+            result.get("_signature").is_some(),
+            "R-RECSIGN-Stdio: the answer is message-signed: {result}"
+        );
+        assert_eq!(rows.len(), 1, "R-RECSIGN-Stdio: one delivery row: {rows:?}");
+        let expected = super::record_hash(&body);
+        assert_eq!(
+            rows[0]["response_hash"].as_str(),
+            Some(expected.as_str()),
+            "R-RECSIGN-Stdio: the record hashes the delivered, signed document"
+        );
+        let mut unsigned = body.clone();
+        if let Some(result) = unsigned.get_mut("result").and_then(Value::as_object_mut) {
+            result.remove("_signature");
+        }
+        assert_ne!(
+            super::record_hash(&unsigned),
+            expected,
+            "R-RECSIGN-Stdio: the hash tells a signed document from an unsigned one"
         );
     }
 }

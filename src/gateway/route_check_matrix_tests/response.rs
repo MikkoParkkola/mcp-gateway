@@ -584,13 +584,15 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
         (Stdio, Fresh, _, FirewallSeal) => {
             Driven::Row("rows::stdio::r_fwseal_stdio_firewall_precedes_seal")
         }
-        (Stdio, Fresh, _, SealSign | SignRecord) => Driven::Shared {
+        (Stdio, Fresh, _, SealSign) => Driven::Shared {
             pin: "response::source_order::stdio_finalizes_through_finalize_routed",
-            rows: &[
-                "rows::r_sign_seal_precedes_sign",
-                "rows::r_recsign_sign_precedes_delivery_record",
-            ],
+            rows: &["rows::r_sign_seal_precedes_sign"],
         },
+        // Stdio records outside `finalize_routed`, in `judge_and_commit`, so
+        // its own row drives the pair (lead ruling R4).
+        (Stdio, Fresh, Era::Legacy, SignRecord) => {
+            Driven::Row("rows::stdio::r_recsign_stdio_sign_precedes_delivery_record")
+        }
         (Stdio, Fresh, Era::Legacy, JudgeRecord) => Driven::Row(
             "server::signing_allocation_tests::stdio_tenant_reads::stdio_judged_read_is_one_record",
         ),

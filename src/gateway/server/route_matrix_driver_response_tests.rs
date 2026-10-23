@@ -135,3 +135,39 @@ pub(crate) async fn stdio_sealed_replay() -> (Value, Value, usize) {
     let replay = stdio_send(&meta, params).await;
     (first, replay, calls.load(Ordering::SeqCst))
 }
+
+/// One message-signed stdio `gateway_invoke` of `alpha`'s `read` (nonce
+/// `n1`), with both provenance signers and a transparency log on the
+/// Meta-MCP. Returns the delivered body, its `response_delivery_attempt` rows
+/// and the log's directory (kept alive by the caller).
+pub(crate) async fn stdio_signed_recorded() -> (Value, Vec<Value>, tempfile::TempDir) {
+    use crate::gateway::router::route_matrix_driver_tests::response::{delivery_rows, temp_log};
+    let (dir, log) = temp_log(None);
+    let meta_log = Arc::clone(&log);
+    let transport = Arc::new(Counting {
+        calls: Arc::default(),
+        answer: json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+    });
+    let meta = stdio_meta(
+        move |meta| {
+            dual_signed(meta);
+            meta.enable_message_signing(
+                crate::security::message_signing::MessageSigner::new(
+                    b"stdio-recsign-secret-0123456789abcdef".to_vec(),
+                    None,
+                    "stdio".to_owned(),
+                ),
+                std::time::Duration::from_secs(300),
+                false,
+            );
+            meta.enable_transparency_log(meta_log);
+        },
+        transport,
+    )
+    .await;
+    let params = json!({ "name": "gateway_invoke", "arguments": {
+        "server": "alpha", "tool": "read", "arguments": {}, "nonce": "n1" } });
+    let body = stdio_send(&meta, params).await;
+    let rows = delivery_rows(&log).await;
+    (body, rows, dir)
+}

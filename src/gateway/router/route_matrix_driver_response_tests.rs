@@ -174,7 +174,7 @@ pub(crate) async fn signed_recorded_call(route: HttpRoute) -> Recorded {
 
 /// A transparency log in a fresh directory, under `policy` when one is given
 /// (otherwise the logger's own default).
-fn temp_log(
+pub(crate) fn temp_log(
     policy: Option<crate::security::audit::AuditFailurePolicy>,
 ) -> (tempfile::TempDir, Arc<crate::security::TransparencyLogger>) {
     let dir = tempfile::tempdir().expect("a temporary directory");
@@ -197,7 +197,7 @@ fn temp_log(
 }
 
 /// `log`'s `response_delivery_attempt` rows, once nothing is in flight.
-async fn delivery_rows(log: &crate::security::TransparencyLogger) -> Vec<Value> {
+pub(crate) async fn delivery_rows(log: &crate::security::TransparencyLogger) -> Vec<Value> {
     // Real time only as a hang guard: the append is out once nothing is in flight.
     let guard = std::time::Instant::now();
     while log.write_in_flight_for_test() {
