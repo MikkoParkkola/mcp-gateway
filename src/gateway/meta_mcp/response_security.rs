@@ -196,8 +196,13 @@ impl super::MetaMcp {
         context: &ResponseDeliveryContext<'_>,
     ) -> crate::protocol::JsonRpcResponse {
         let response = self.finalize_content(response, context);
-        self.record_delivery(response, &context.correlation, None)
-            .await
+        self.record_delivery(
+            response,
+            &context.correlation,
+            DeliveryCredential::of(None),
+            None,
+        )
+        .await
     }
 
     /// Everything of the finalization that decides the delivered content:
@@ -554,8 +559,34 @@ pub(crate) fn chain_after_gates(
     }
 }
 
+/// The credential a delivery record names (MIK-8672): the same `credential_kind` and `principal` the
+/// invocation record of the same caller carries (`AuditWho::from_request`, security/audit.rs:227).
+#[derive(Clone, Copy, Debug)]
+pub(in crate::gateway) struct DeliveryCredential<'a> {
+    pub(in crate::gateway) kind: crate::security::audit::CredentialKind,
+    pub(in crate::gateway) principal: &'a str,
+}
+impl<'a> DeliveryCredential<'a> {
+    /// Exactly `AuditWho::from_request`'s two fields for `client`.
+    pub(in crate::gateway) fn of(
+        client: Option<&'a crate::gateway::auth::AuthenticatedClient>,
+    ) -> Self {
+        Self {
+            kind: crate::security::audit::CredentialKind::of(client),
+            principal: client.map_or("", |c| c.principal.as_str()),
+        }
+    }
+    /// The stdio transport.
+    pub(in crate::gateway) const fn stdio() -> Self {
+        Self {
+            kind: crate::security::audit::CredentialKind::LocalTransport,
+            principal: crate::gateway::server::STDIO_CREDENTIAL_PRINCIPAL,
+        }
+    }
+}
+
 mod delivery_record;
-pub(crate) use delivery_record::record_answer_delivery;
+pub(in crate::gateway) use delivery_record::record_answer_delivery;
 
 #[path = "chain_receipt.rs"]
 pub(crate) mod chain_receipt;
