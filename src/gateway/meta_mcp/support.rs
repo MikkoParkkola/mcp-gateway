@@ -197,12 +197,18 @@ pub(super) fn caller_cache_principal(
             subject.subject
         ));
     }
-    match (authentication, credential_principal) {
+    match (
+        authentication,
+        crate::gateway::auth::authenticated_principal(
+            authentication == Authentication::Authenticated,
+            credential_principal,
+        ),
+    ) {
         (Authentication::Anonymous, _) => CachePrincipal::Anonymous,
-        (Authentication::Authenticated, Some(digest)) if !digest.is_empty() => {
+        (Authentication::Authenticated, Some(digest)) => {
             CachePrincipal::Caller(format!("cred:{}:{digest}", digest.len()))
         }
-        (Authentication::Authenticated, _) => CachePrincipal::Unresolved,
+        (Authentication::Authenticated, None) => CachePrincipal::Unresolved,
     }
 }
 
@@ -244,12 +250,10 @@ pub(super) fn key_binding<'a>(
 /// `None` unless the request authenticated: with authentication off the
 /// principal is a gateway constant, not a caller.
 pub(super) fn credential_owner(caller: &super::MetaMcpCallerContext<'_>) -> Option<String> {
-    if caller.authentication != Authentication::Authenticated {
-        return None;
-    }
-    let principal = caller
-        .credential_principal
-        .filter(|text| !text.is_empty())?;
+    let principal = crate::gateway::auth::authenticated_principal(
+        caller.authentication == Authentication::Authenticated,
+        caller.credential_principal,
+    )?;
     let prefix = crate::gateway::auth::CREDENTIAL_OWNER_PREFIX;
     Some(if principal.starts_with(prefix) {
         principal.to_owned()
@@ -603,16 +607,14 @@ pub(super) fn augment_with_provenance(
         receipt = receipt.with_call_id(trace_id);
     }
     let signed_receipt = receipt.sign(signer);
+    let prov_value = serde_json::to_value(&signed_receipt).unwrap_or(Value::Null);
 
     if let Value::Object(ref mut map) = result {
         let meta = map
             .entry("_meta")
             .or_insert_with(|| Value::Object(serde_json::Map::new()));
         if let Value::Object(meta_map) = meta {
-            meta_map.insert(
-                "provenance".to_string(),
-                serde_json::to_value(signed_receipt.clone()).unwrap_or(Value::Null),
-            );
+            meta_map.insert("provenance".to_string(), prov_value);
         }
     }
     note_written(&["_meta", "provenance"], &result);

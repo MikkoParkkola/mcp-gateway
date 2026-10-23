@@ -316,8 +316,9 @@ async fn s2d_stdio_refuses_a_control_character_in_the_method() {
 /// "Firewall blocked: ...", and an allowed verdict refuses nothing.
 #[test]
 fn the_firewall_refusal_is_one_definition() {
+    use crate::security::Severity;
     use crate::security::firewall::{
-        Finding, FindingLocation, FirewallAction, FirewallVerdict, ScanType, Severity,
+        Finding, FindingLocation, FirewallAction, FirewallVerdict, ScanType,
     };
     let verdict = |allowed, scan_type, location| FirewallVerdict {
         allowed,

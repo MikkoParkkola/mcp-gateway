@@ -321,6 +321,7 @@ impl Placed {
 /// Write `value` to `dir/name` owner-only, through a temp file and a rename.
 /// `Err` means the record was not put in place and the previous file, if
 /// any, is untouched; past the rename the outcome is a [`Placed`].
+// Not `config_persistence::write_atomic`: its phase-aware `Placed` outcome after the rename.
 pub(crate) fn write_record<T: Serialize>(
     dir: &Path,
     name: &str,

@@ -112,6 +112,7 @@ async fn a_spend_refusal_after_a_refresh(slot: Slot) -> Refused {
     let alice = identity("alice");
     let mut caller = caller_as(Some(&alice), None);
     caller.api_key_name = Some("k-budget");
+    caller.authentication = crate::gateway::meta_mcp::Authentication::Authenticated;
     // An API key: only an API key is charged per key (MIK-8507).
     caller.credential_kind = crate::security::audit::CredentialKind::ApiKey;
     if matches!(slot, Slot::Warm) {

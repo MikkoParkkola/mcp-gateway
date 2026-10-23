@@ -82,6 +82,7 @@ src/gateway/server/persistence.rs	standard_data_dir	-	startup data-directory res
 src/gateway/server/persistence.rs	with_account_custody	-	Gateway construction, once at startup
 src/gateway/server/persistence.rs	with_data_dir	-	Gateway construction, once at startup
 src/gateway/server/persistence.rs	write_costs	-	periodic cost saver task and shutdown saves, off the request path
+src/gateway/server/provenance_signer.rs	install_public_provenance	-	startup signer installation, once per serve
 src/gateway/server/provenance_signer.rs	provenance_key	-	startup signer installation, once per serve
 src/gateway/server/provenance_signer.rs	resolve_provenance_signer	-	startup signer installation, once per serve
 src/gateway/server/route_matrix_driver_tests/playbook_drivers.rs	close	-	test-only (the module is cfg(test))

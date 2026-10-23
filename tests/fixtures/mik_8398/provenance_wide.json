@@ -1,0 +1,21 @@
+{
+  "algorithm": "HS256",
+  "key_id": "bnaut/gateway",
+  "public_signature": {
+    "payload": "eyJhbGciOiJFZERTQSIsImtpZCI6InByb3YtdGVzdC0xIiwicmVjZWlwdCI6eyJhdXRoX2NvbnRleHRfcmVmIjoic2hhMjU2OndpZGUtdGVzdC1jb250ZXh0IiwiYmFja2VuZF9pZCI6ImdpdGh1YiIsImJhY2tlbmRfb2siOnRydWUsImNhY2hlIjoibWlzcyIsImNhbGxfaWQiOiJndy13aWRlLXRlc3QiLCJldmlkZW5jZV9raW5kIjoib2JzZXJ2ZWQiLCJvYnNlcnZlZF9hdCI6IjIwMjYtMDctMTNUMTA6MTU6MzBaIiwicm93X2NvdW50IjoxODQ0Njc0NDA3MzcwOTU1MTYxNSwic3ViamVjdF9raW5kIjoicnVudGltZSIsInRvb2wiOiJzZWFyY2hfaXNzdWVzIn0sInJlc3VsdF9zaGEyNTYiOiI1ZGEyNjYwNjMzZWVkMTQ1ZGYwYTM1OGI3MWE1N2Q0MjM3NTdiODI3NzYzZGI3MTcyY2E0MWRjYmJjYjhhMmIyIiwidiI6MX0",
+    "sig": "qvE4qkUbP2UcoAJO0zYZOL0Qb3zr76YmO5wdV0ui0HwBduDGohlIe22Hzj6_WK8vpzUdHH4gCOBImJox4qO_Dw"
+  },
+  "receipt": {
+    "auth_context_ref": "sha256:wide-test-context",
+    "backend_id": "github",
+    "backend_ok": true,
+    "cache": "miss",
+    "call_id": "gw-wide-test",
+    "evidence_kind": "observed",
+    "observed_at": "2026-07-13T10:15:30Z",
+    "row_count": 18446744073709551615,
+    "subject_kind": "runtime",
+    "tool": "search_issues"
+  },
+  "signature": "a9GGy2qNBYX17Y5ckkcUAB-ANk7p5JUlcsTeV5V_KxA"
+}

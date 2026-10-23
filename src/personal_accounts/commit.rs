@@ -142,6 +142,7 @@ pub(super) enum ReplaceStep {
 /// Scratch file, write, `sync_all`, rename over `name`, sync the directory
 /// (journey design §5.2): the one sequence `authority.json` and
 /// `journeys.json` share. A failure before the rename removes the scratch file.
+// Not `config_persistence::write_atomic`: its Staged/Renamed outcome and directory sync.
 pub(super) fn replace_file(
     dir: &Path,
     name: &str,

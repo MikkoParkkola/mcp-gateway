@@ -540,16 +540,11 @@ impl crate::oauth::client::RefreshCaller for ProviderRefresh<'_> {
 }
 
 fn expand_home_dir(path: &str) -> Result<std::path::PathBuf> {
-    if let Some(rest) = path.strip_prefix("~/") {
-        match crate::home_dir::home_dir() {
-            Some(home) => Ok(home.join(rest)),
-            None => Err(Error::Config(
-                "Cannot expand ~ in file credential path: HOME not set".to_string(),
-            )),
-        }
-    } else {
-        Ok(std::path::PathBuf::from(path))
-    }
+    crate::home_dir::expand_with(path, crate::home_dir::home_dir()).map_err(
+        |crate::home_dir::NoHome| {
+            Error::Config("Cannot expand ~ in file credential path: HOME not set".to_string())
+        },
+    )
 }
 
 fn extract_json_field(json: &Value, field: &str, path: &std::path::Path) -> Result<String> {
@@ -765,3 +760,7 @@ mod tests {
 #[cfg(test)]
 #[path = "c4_credential_tests.rs"]
 mod c4_credential_tests;
+
+#[cfg(test)]
+#[path = "credentials_tilde_tests.rs"]
+mod credentials_tilde_tests;
