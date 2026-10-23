@@ -109,14 +109,7 @@ impl UsageStats {
 
         let top_tools: Vec<TopTool> = tool_counts
             .into_iter()
-            .map(|(name, count)| {
-                let parts: Vec<&str> = name.split(':').collect();
-                TopTool {
-                    server: parts.first().unwrap_or(&"").to_string(),
-                    tool: parts.get(1).unwrap_or(&"").to_string(),
-                    count,
-                }
-            })
+            .map(|(name, count)| TopTool::from_key(&name, count))
             .collect();
 
         #[allow(clippy::cast_precision_loss)]
@@ -185,6 +178,20 @@ pub struct TopTool {
     pub tool: String,
     /// Usage count
     pub count: u64,
+}
+
+impl TopTool {
+    /// The row for a `server:tool` counter key. Only the first `:` splits it,
+    /// so a tool name that holds a colon stays whole (MIK-8667); a key with no
+    /// colon becomes a row with an empty tool, as before.
+    pub(crate) fn from_key(key: &str, count: u64) -> Self {
+        let (server, tool) = key.split_once(':').unwrap_or((key, ""));
+        Self {
+            server: server.to_string(),
+            tool: tool.to_string(),
+            count,
+        }
+    }
 }
 
 /// Per-server cached token entry in statistics snapshots
@@ -362,5 +369,18 @@ mod tests {
         let snap = stats.snapshot(10);
         assert_eq!(snap.total_cached_tokens, 0);
         assert!(snap.cached_tokens_by_server.is_empty());
+    }
+
+    /// DUPC-10.PR10.3: the key splits at its first colon only, so a tool
+    /// name with a colon is reported whole.
+    #[test]
+    fn a_tool_name_with_a_colon_keeps_its_full_name() {
+        let stats = UsageStats::new();
+        stats.record_invocation("s", "a:b");
+        let top = &stats.snapshot(1).top_tools[0];
+        assert_eq!(
+            (top.server.as_str(), top.tool.as_str(), top.count),
+            ("s", "a:b", 1)
+        );
     }
 }
