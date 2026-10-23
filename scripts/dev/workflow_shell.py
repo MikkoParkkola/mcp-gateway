@@ -310,8 +310,80 @@ def _command_words(piece):
     return words
 
 
+# The completeness guard (lead ruling 2026-10-23, after r2 and r3 each found
+# bash forms the walker missed): enumerating bash grammar does not converge, an
+# invariant that fails closed does. Every python word and every repo-relative
+# `.py` path in a block must be accounted for by an Execution; an excess raises
+# UnsupportedSyntax naming it. Both exception lists are closed and pinned (D29).
+LOOKUPS = ("command -v", "which", "type", "hash")  # name a program, run nothing
+DATA_COMMANDS = ("echo", "printf")  # their `.py` arguments are text, not scripts
+PY_WORD = re.compile(r"(?<![\w./$-])python3?(?:\.\d+)?(?![\w.-])")
+PY_PATH = re.compile(r"(?<![\w./$-])(?:\./)?(?:[\w*-]+/)*[\w*-]+\.py(?![\w.])")
+_LOOKUP_BEFORE = re.compile(r"(?:^|[\s;&|(])(?:" + "|".join(l.replace(" ", r"\s+") for l in LOOKUPS) + r")(?:\s+[\w./-]+)*\s+$")
+_INLINE_AFTER = re.compile(r"^(?:\s+-[A-Za-z]+)*\s+-(?:[A-Za-z]*[cm]\b|\s|$)")  # -c, -m, - (stdin)
+
+
+def _guard_lines(run_block):
+    """`run_block`'s command text for the guard: continuations joined, comment
+    lines and QUOTED heredoc bodies dropped (unquoted ones expand `$( )`)."""
+    text = re.sub(r"\$\{\{\s*(.*?)\s*\}\}", lambda m: "${{" + m.group(1).replace(" ", "") + "}}", run_block)
+    kept, quoted = [], None
+    for line in text.replace("\\\n", " ").splitlines():
+        if quoted is not None:
+            if line.strip() == quoted[0]:
+                quoted = None
+            elif not quoted[1]:
+                kept.append(line)
+            continue
+        if not line.strip().startswith("#"):
+            kept.append(line)
+        opener = HEREDOC.search(line)
+        if opener:
+            quoted = (opener.group(2), bool(opener.group(1)))
+    return kept
+
+
+def _data_stripped(line):
+    """`line` without the arguments of its echo/printf commands (DATA_COMMANDS)."""
+    kept = []
+    for piece in _chains(line):
+        for stage in _pipe_stages(piece):
+            words = stage.split()
+            if not (words and words[0] in DATA_COMMANDS):
+                kept.append(stage)
+    return " ; ".join(kept)
+
+
+def _check_complete(run_block, found):
+    """Raise UnsupportedSyntax when the block names more Python than `found` runs."""
+    lines = _guard_lines(run_block)
+    loose = []
+    for line in lines:
+        for m in PY_WORD.finditer(line):
+            if not (_LOOKUP_BEFORE.search(line[:m.start()]) or _INLINE_AFTER.match(line[m.end():])):
+                loose.append(line.strip())
+    if len(loose) > len(found):
+        raise UnsupportedSyntax(
+            f"{len(loose)} python command(s), {len(found)} read as script executions; "
+            f"a form the walker cannot read: {' | '.join(dict.fromkeys(loose))}"
+        )
+    scripts = {e.script for e in found}
+    unread = [m.group(0).removeprefix("./") for line in lines for m in PY_PATH.finditer(_data_stripped(line))]
+    unread = [path for path in dict.fromkeys(unread) if path not in scripts]
+    if unread:
+        raise UnsupportedSyntax(f".py path(s) named but not read as an execution: {', '.join(unread)}")
+
+
 def executions(run_block: str) -> list[Execution]:
-    """Every script execution in one `run:` block, in order."""
+    """Every script execution in one `run:` block, in order; UnsupportedSyntax
+    when the block names Python the walker cannot account for."""
+    found = _walk(run_block)
+    _check_complete(run_block, found)
+    return found
+
+
+def _walk(run_block: str) -> list[Execution]:
+    """The walker proper: every script execution it can read, in order."""
     # One word per `${{ … }}` expression, so whitespace splitting keeps it whole.
     run_block = re.sub(r"\$\{\{\s*(.*?)\s*\}\}", lambda m: "${{" + m.group(1).replace(" ", "") + "}}", run_block)
     lines = heredocs_dropped(run_block.replace("\\\n", " ").splitlines())
@@ -323,7 +395,7 @@ def executions(run_block: str) -> list[Execution]:
             # A substitution runs its own commands (nested ones recursively);
             # single-quoted text is data and holds none.
             for _, _, body in _lex(pipeline)[1]:
-                found += executions(body)
+                found += _walk(body)
             stages = _pipe_stages(pipeline)
             if not stages:
                 continue

@@ -504,11 +504,12 @@ class Rows(unittest.TestCase):
     def test_d7_mentions_are_not_executions(self):
         for s in ("scripts/m.py", "scripts/n.py"):
             self.t.script(s)
-        self.t.workflow(
-            "ci.yml",
-            pr_job('# python3 scripts/m.py\necho "scripts/m.py"\ngrep -q scripts/m.py README.md || true\npython3 scripts/n.py'),
-        )
+        self.t.workflow("ci.yml", pr_job('# python3 scripts/m.py\necho "scripts/m.py"\npython3 scripts/n.py'))
         self.assertEqual(scripts_of(scanned_forms(self.t.root)), {"scripts/n.py"})
+        # Under the completeness guard any other mention fails closed, named.
+        self.t.workflow("ci.yml", pr_job("grep -q scripts/m.py README.md || true\npython3 scripts/n.py"))
+        found = problems(self.t.root, ci_only={})
+        self.assertTrue(any("unsupported" in p and "scripts/m.py" in p for p in found), found)
 
     # D8
     def test_d8_chains_split_and_a_pipeline_stays_one_form(self):
@@ -529,7 +530,10 @@ class Rows(unittest.TestCase):
 
     # D18 (impl r1 F3): single-quoted text is data, not a substitution.
     def test_d18_a_single_quoted_substitution_is_not_an_execution(self):
-        self.assertEqual(workflow_shell.executions("echo '$(python3 scripts/q.py)'"), [])
+        self.assertEqual(workflow_shell._walk("echo '$(python3 scripts/q.py)'"), [])
+        # The guard still counts the python word: data that names Python fails closed.
+        with self.assertRaises(workflow_shell.UnsupportedSyntax):
+            workflow_shell.executions("echo '$(python3 scripts/q.py)'")
 
     # D19 (impl r1 F4): a quoted argument with a space stays one argument;
     # an unbalanced quote fails closed.
@@ -616,6 +620,50 @@ class Rows(unittest.TestCase):
         self.t.workflow("ci.yml", ci.replace("cargo --locked clippy", "cargo ${{ matrix.cmd }}"))
         self.t.pre_push(good)
         self.assertTrue(any(p.startswith("cannot read CI clippy command") for p in problems(self.t.root, ci_only={})))
+
+    # D27 (lead ruling 2026-10-23): each of r3's fail-open shapes is now
+    # UnsupportedSyntax, named with its step, instead of no execution at all.
+    def test_d27_r3_fail_open_shapes_fail_closed_naming_the_step(self):
+        self.t.script("scripts/x.py")
+        shapes = {
+            "multi-line substitution": "out=$(python3 scripts/x.py\n)",
+            "bare ampersand": "echo done & python3 scripts/x.py",
+            "time prefix": "time python3 scripts/x.py",
+            "nohup prefix": "nohup python3 scripts/x.py",
+            "subshell": "(python3 scripts/x.py)",
+            "case arm": "case x in *) python3 scripts/x.py ;; esac",
+            "process substitution": "cat <(python3 scripts/x.py)",
+            "xargs": "echo scripts/x.py | xargs -I{} python3 {}",
+            "ansi-c quote": "python3 $'scripts/x.py'",
+            "unquoted heredoc": "cat <<EOF\n$(python3 scripts/x.py)\nEOF",
+        }
+        for label, run in shapes.items():
+            with self.subTest(label):
+                self.t.workflow("ci.yml", pr_job(run).replace("      - run:", "      - name: shape step\n        run:", 1))
+                found = problems(self.t.root, ci_only={})
+                self.assertTrue(any(p.startswith("unsupported execution syntax in ci.yml step 'shape step'") for p in found), found)
+
+    # D28 (lead ruling 2026-10-23): a `.py` path run by something other than a
+    # python word is named, not lost.
+    def test_d28_a_py_path_run_without_a_python_word_is_named(self):
+        for run in ("$PY scripts/x.py", "${{ env.PYTHON }} scripts/x.py", "uv run scripts/x.py"):
+            with self.subTest(run):
+                with self.assertRaises(workflow_shell.UnsupportedSyntax) as caught:
+                    workflow_shell.executions(run)
+                self.assertIn("scripts/x.py", str(caught.exception))
+
+    # D29 (lead ruling 2026-10-23): the guard's exceptions are closed lists.
+    def test_d29_the_guards_exception_lists_are_closed(self):
+        self.assertEqual(workflow_shell.LOOKUPS, ("command -v", "which", "type", "hash"))
+        self.assertEqual(workflow_shell.DATA_COMMANDS, ("echo", "printf"))
+        for lookup in ("command -v python3", "which python3", "type python3", "hash python3"):
+            with self.subTest(lookup):
+                self.assertEqual(workflow_shell.executions(lookup), [])
+        self.assertEqual(workflow_shell.executions('echo "see scripts/x.py"'), [])
+        for not_a_lookup in ("whereis python3", "command python3 -V", "ls python3"):
+            with self.subTest(not_a_lookup):
+                with self.assertRaises(workflow_shell.UnsupportedSyntax):
+                    workflow_shell.executions(not_a_lookup)
 
     # D9
     def test_d9_pull_request_target_counts_as_a_pr_workflow(self):
