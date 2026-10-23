@@ -371,7 +371,7 @@ impl MetaMcp {
             return asking(
                 caller,
                 Err(Error::json_rpc(
-                    -32602,
+                    INVALID_PARAMS,
                     format!("'query' is longer than {MAX_SEARCH_QUERY_CHARS} characters"),
                 )),
             );
