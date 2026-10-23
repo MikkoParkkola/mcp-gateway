@@ -314,9 +314,15 @@ async fn http_backend_probe_reports_a_redirect_without_following_it() {
     let Some(result) = outcome else {
         panic!("an Http transport must produce a result");
     };
+    assert_eq!(result.status, CheckStatus::Fail);
     assert!(result.detail.contains("301"), "detail: {}", result.detail);
     assert!(
         result.detail.contains(&expected),
+        "detail: {}",
+        result.detail
+    );
+    assert!(
+        result.detail.contains("another origin"),
         "detail: {}",
         result.detail
     );
@@ -487,4 +493,156 @@ async fn http_backend_probe_resolves_a_relative_redirect_location() {
         "detail: {}",
         result.detail
     );
+}
+
+/// MIK-8660 G4: a same-origin redirect is a WARN — the gateway follows it —
+/// and the probe still does not follow it.
+#[tokio::test]
+async fn http_backend_probe_warns_on_a_same_origin_redirect_without_following_it() {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&hits);
+    let app = axum::Router::new()
+        .route(
+            "/x",
+            axum::routing::get(|| async {
+                (
+                    axum::http::StatusCode::MOVED_PERMANENTLY,
+                    [(axum::http::header::LOCATION, "/y")],
+                )
+            }),
+        )
+        .route(
+            "/y",
+            axum::routing::get(move || {
+                let seen = Arc::clone(&seen);
+                async move {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    axum::http::StatusCode::OK
+                }
+            }),
+        );
+    let stub = serve(app).await;
+    let transport = TransportConfig::Http {
+        http_url: format!("{stub}/x"),
+        streamable_http: None,
+        protocol_version: None,
+    };
+    let outcome = tokio::time::timeout(HANG_BOUND, check_http_backend("b", &transport))
+        .await
+        .expect("bounded");
+    let Some(result) = outcome else {
+        panic!("an Http transport must produce a result");
+    };
+    assert_eq!(result.status, CheckStatus::Warn);
+    assert!(result.detail.contains(&stub), "detail: {}", result.detail);
+    assert!(
+        result.detail.contains("same-origin"),
+        "detail: {}",
+        result.detail
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+}
+
+/// MIK-8660 G4: a redirect to another loopback listener (another port, hence
+/// another origin) is a FAIL — the gateway refuses it — and the probe still
+/// does not follow it.
+#[tokio::test]
+async fn http_backend_probe_fails_on_a_cross_origin_redirect_without_following_it() {
+    let (counter, hits) = serve_counter().await;
+    let location = format!("{counter}/elsewhere");
+    let expected = counter.clone();
+    let app = axum::Router::new().route(
+        "/x",
+        axum::routing::get(move || {
+            let location = location.clone();
+            async move {
+                (
+                    axum::http::StatusCode::MOVED_PERMANENTLY,
+                    [(axum::http::header::LOCATION, location)],
+                )
+            }
+        }),
+    );
+    let stub = serve(app).await;
+    let transport = TransportConfig::Http {
+        http_url: format!("{stub}/x"),
+        streamable_http: None,
+        protocol_version: None,
+    };
+    let outcome = tokio::time::timeout(HANG_BOUND, check_http_backend("b", &transport))
+        .await
+        .expect("bounded");
+    let Some(result) = outcome else {
+        panic!("an Http transport must produce a result");
+    };
+    assert_eq!(result.status, CheckStatus::Fail);
+    assert!(
+        result.detail.contains(&expected),
+        "detail: {}",
+        result.detail
+    );
+    assert!(
+        result.detail.contains("another origin"),
+        "detail: {}",
+        result.detail
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+}
+
+/// MIK-8660 G4: a redirect to an unreachable foreign origin is a FAIL.
+#[tokio::test]
+async fn http_backend_probe_fails_on_a_redirect_to_an_unreachable_origin() {
+    let app = axum::Router::new().route(
+        "/x",
+        axum::routing::get(|| async {
+            (
+                axum::http::StatusCode::MOVED_PERMANENTLY,
+                [(axum::http::header::LOCATION, "http://10.255.255.1/x")],
+            )
+        }),
+    );
+    let stub = serve(app).await;
+    let transport = TransportConfig::Http {
+        http_url: format!("{stub}/x"),
+        streamable_http: None,
+        protocol_version: None,
+    };
+    let outcome = tokio::time::timeout(HANG_BOUND, check_http_backend("b", &transport))
+        .await
+        .expect("bounded");
+    let Some(result) = outcome else {
+        panic!("an Http transport must produce a result");
+    };
+    assert_eq!(result.status, CheckStatus::Fail);
+    assert!(result.detail.contains("301"), "detail: {}", result.detail);
+    assert!(
+        result.detail.contains("another origin"),
+        "detail: {}",
+        result.detail
+    );
+}
+
+/// The `same_origin` truth table, also held by `src/transport/http/tests.rs`;
+/// change them together.
+#[test]
+fn same_origin_truth_table_matches_transport() {
+    let cases = [
+        ("https://h.test/a", "https://h.test/b", true),
+        ("https://h.test/", "https://h.test:443/", true),
+        ("http://h.test/", "http://h.test:80/x", true),
+        ("https://h.test/", "http://h.test/", false),
+        ("https://h.test/", "https://h.test:8443/", false),
+        ("https://h.test/", "https://g.test/", false),
+        ("http://127.0.0.1:8080/", "http://127.0.0.1:8081/", false),
+        ("http://127.0.0.1:8080/", "http://localhost:8080/", false),
+    ];
+    for (a, b, expected) in cases {
+        let left = url::Url::parse(a).expect("case URL parses");
+        let right = url::Url::parse(b).expect("case URL parses");
+        assert_eq!(
+            same_origin(&left, &right),
+            expected,
+            "same_origin({a}, {b})"
+        );
+    }
 }

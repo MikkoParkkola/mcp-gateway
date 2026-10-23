@@ -468,6 +468,29 @@ fn evaluate_redirect_cross_origin_rejected_mid_chain() {
     }
 }
 
+/// The `same_origin` truth table, also held by `src/commands/doctor_tests.rs`;
+/// change them together.
+#[test]
+fn same_origin_truth_table_matches_doctor_copy() {
+    let cases = [
+        ("https://h.test/a", "https://h.test/b", true),
+        ("https://h.test/", "https://h.test:443/", true),
+        ("http://h.test/", "http://h.test:80/x", true),
+        ("https://h.test/", "http://h.test/", false),
+        ("https://h.test/", "https://h.test:8443/", false),
+        ("https://h.test/", "https://g.test/", false),
+        ("http://127.0.0.1:8080/", "http://127.0.0.1:8081/", false),
+        ("http://127.0.0.1:8080/", "http://localhost:8080/", false),
+    ];
+    for (a, b, expected) in cases {
+        assert_eq!(
+            same_origin(&url(a), &url(b)),
+            expected,
+            "same_origin({a}, {b})"
+        );
+    }
+}
+
 // =========================================================================
 // get_message_url
 // =========================================================================

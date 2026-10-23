@@ -408,6 +408,14 @@ fn backend_probe_client() -> reqwest::Result<reqwest::Client> {
         .build()
 }
 
+/// Copy of `transport::http::same_origin` (src/transport/http/mod.rs); the binary cannot call
+/// that private fn. Both are pinned by the same table of cases in their tests; change them together.
+fn same_origin(a: &url::Url, b: &url::Url) -> bool {
+    a.scheme() == b.scheme()
+        && a.host_str() == b.host_str()
+        && a.port_or_known_default() == b.port_or_known_default()
+}
+
 async fn check_http_backend(name: &str, transport: &TransportConfig) -> Option<CheckResult> {
     let TransportConfig::Http { http_url, .. } = transport else {
         return None;
@@ -423,15 +431,46 @@ async fn check_http_backend(name: &str, transport: &TransportConfig) -> Option<C
             let status = resp.status();
             if status.is_redirection() {
                 let phrase = mcp_gateway::security::http_diagnostics::redirect_target_phrase(&resp);
-                return Some(
-                    CheckResult::fail(
-                        label,
-                        format!(
-                            "HTTP {status} redirect to {phrase} (not followed; point doctor at the final URL)"
-                        ),
-                    )
-                    .with_category("backend_http"),
-                );
+                let target = resp
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|raw| raw.to_str().ok())
+                    .and_then(|location| resp.url().join(location).ok());
+                match target {
+                    Some(resolved) if same_origin(resp.url(), &resolved) => {
+                        return Some(
+                            CheckResult::warn(
+                                label,
+                                format!(
+                                    "HTTP {status} redirect to {phrase}; the gateway follows same-origin redirects, so this works, but point the backend at the final URL"
+                                ),
+                            )
+                            .with_category("backend_http"),
+                        );
+                    }
+                    Some(_) => {
+                        return Some(
+                            CheckResult::fail(
+                                label,
+                                format!(
+                                    "HTTP {status} redirect to {phrase} (the gateway refuses a redirect to another origin; point doctor at the final URL)"
+                                ),
+                            )
+                            .with_category("backend_http"),
+                        );
+                    }
+                    None => {
+                        return Some(
+                            CheckResult::fail(
+                                label,
+                                format!(
+                                    "HTTP {status} redirect to {phrase} (not followed; point doctor at the final URL)"
+                                ),
+                            )
+                            .with_category("backend_http"),
+                        );
+                    }
+                }
             }
             // MCP servers often return 4xx on GET / — we just care they're reachable.
             if status.is_server_error() {
