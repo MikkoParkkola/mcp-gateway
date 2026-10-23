@@ -367,3 +367,15 @@ fn print_dry_run_summary(bundles: &[mcp_gateway::skills::SkillBundle]) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// MIK-8667: a description keeps at most `max` bytes, cut on a character
+    /// boundary, and gains `…` after them.
+    #[test]
+    fn a_cut_description_keeps_max_bytes_and_adds_an_ellipsis() {
+        assert_eq!(super::truncate("abcd", 4), "abcd");
+        assert_eq!(super::truncate("abcdef", 4), "abcd…");
+        assert_eq!(super::truncate("abcé", 4), "abc…");
+    }
+}

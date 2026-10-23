@@ -55,3 +55,27 @@ fn a_row_cut_by_an_older_build_keeps_its_count_on_the_cut_name() {
     assert_eq!(ranker.usage_count("s", "a"), 5);
     assert_eq!(ranker.usage_count("s", "a:b"), 0);
 }
+
+/// Two tools that differ only past the colon keep separate counts through a
+/// save and load (red before the fix: both were saved as `a`, and the load
+/// kept only one of them).
+#[test]
+fn a_and_a_colon_b_keep_separate_counts() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("usage.json");
+    let ranker = SearchRanker::new();
+    ranker.record_use("s", "a");
+    ranker.record_use("s", "a");
+    ranker.record_use("s", "a:b");
+    ranker.save(&path).unwrap();
+
+    let reloaded = SearchRanker::new();
+    reloaded.load(&path).unwrap();
+    assert_eq!(
+        (
+            reloaded.usage_count("s", "a"),
+            reloaded.usage_count("s", "a:b")
+        ),
+        (2, 1)
+    );
+}

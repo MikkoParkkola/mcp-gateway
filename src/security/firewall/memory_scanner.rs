@@ -370,6 +370,8 @@ mod tests {
             .find(|f| f.scan_type == ScanType::MemoryPoisoning)
             .expect("expected memory poisoning finding");
         assert!(finding.matched.ends_with("..."));
+        // MIK-8667: exact, the 3-byte dash straddling byte 200 is dropped whole.
+        assert_eq!(finding.matched, format!("{}...", "a".repeat(199)));
     }
 
     #[test]

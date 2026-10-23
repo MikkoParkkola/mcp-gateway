@@ -137,6 +137,15 @@ fn truncate(value: &str, max_chars: usize) -> String {
 mod tests {
     use super::evaluate_ranking_fixture_str;
 
+    /// MIK-8667: a cell cut by characters keeps the result within the
+    /// width, `...` included.
+    #[test]
+    fn a_cut_cell_fits_its_width_by_characters() {
+        assert_eq!(super::truncate("abcdef", 6), "abcdef");
+        assert_eq!(super::truncate("abcdefgh", 6), "abc...");
+        assert_eq!(super::truncate("éééééééé", 6), "ééé...");
+    }
+
     #[test]
     fn eval_accepts_wrapped_fixture_and_omits_query_from_report() {
         let fixture = r#"{

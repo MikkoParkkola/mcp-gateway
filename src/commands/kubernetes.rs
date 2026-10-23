@@ -448,3 +448,18 @@ fn truncate(value: &str, width: usize) -> String {
         format!("{prefix}.")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// MIK-8667: a cut cell keeps width-1 characters and a `.`; widths 0
+    /// and 1 give the `.` alone.
+    #[test]
+    fn a_cut_cell_keeps_width_less_one_characters_and_a_dot() {
+        assert_eq!(super::truncate("abcd", 4), "abcd");
+        assert_eq!(super::truncate("abcdef", 4), "abc.");
+        assert_eq!(super::truncate("éééééé", 4), "ééé.");
+        assert_eq!(super::truncate("abc", 1), ".");
+        assert_eq!(super::truncate("abc", 0), ".");
+        assert_eq!(super::truncate("", 0), "");
+    }
+}
