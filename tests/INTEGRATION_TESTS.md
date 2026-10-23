@@ -147,7 +147,7 @@ If the gateway is not running, tests will gracefully skip with a warning:
 **What it tests**:
 - Calls `gateway_list_servers`
 - Verifies at least one server is returned (capabilities backend always present)
-- Each server has: `name`, `running`, `transport`, `tools_count`, `tools_known`, `circuit_state`
+- Each server has: `name`, `running`, `transport`, `tools_count`, `tools_known`, `circuit_breaker`
 - `tools_known` is `false` when this caller does not know the backend's tools yet
   (not enumerated, or not visible to this caller), in which case `tools_count` is
   `null`, never a `0` that would read as "no tools"; once known it is a number

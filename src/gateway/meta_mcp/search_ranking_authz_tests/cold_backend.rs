@@ -50,6 +50,30 @@ fn cold_backend_with(
     backend
 }
 
+/// MIK-8721: on EVERY row of a `gateway_list_servers` answer, `tools_known`
+/// is a boolean, a known row's `tools_count` is a number, and a row not known
+/// yet carries an explicit null (present, not a missing key).
+fn assert_count_pairing(listed: &Value) {
+    let rows = listed["servers"].as_array().expect("servers is an array");
+    for row in rows {
+        let known = row["tools_known"]
+            .as_bool()
+            .unwrap_or_else(|| panic!("tools_known is a boolean: {row}"));
+        if known {
+            assert!(
+                row["tools_count"].is_number(),
+                "known row has a count: {row}"
+            );
+        } else {
+            assert_eq!(
+                row.get("tools_count"),
+                Some(&Value::Null),
+                "a row not known yet has an explicit null count: {row}"
+            );
+        }
+    }
+}
+
 /// A gateway with `backend` as its only backend and no restrictions.
 fn meta_over(backend: &Arc<crate::backend::Backend>) -> MetaMcp {
     let registry = registry_with_default(
@@ -180,6 +204,7 @@ async fn list_servers_fills_a_cold_backend() {
         .list_servers(&crate::gateway::meta_mcp::anonymous_caller(), None)
         .await
         .expect("list_servers succeeds");
+    assert_count_pairing(&listed);
     assert_eq!(listed["servers"][0]["tools_known"], false, "{listed}");
     assert_eq!(
         listed["servers"][0].get("tools_count"),
@@ -194,6 +219,7 @@ async fn list_servers_fills_a_cold_backend() {
         .list_servers(&crate::gateway::meta_mcp::anonymous_caller(), None)
         .await
         .expect("list_servers succeeds");
+    assert_count_pairing(&listed);
     assert_eq!(
         listed["servers"][0]["tools_count"],
         COLD_TOOLS.len(),
@@ -429,6 +455,7 @@ async fn list_servers_counts_a_known_empty_backend_as_zero() {
         .list_servers(&crate::gateway::meta_mcp::anonymous_caller(), None)
         .await
         .expect("list_servers succeeds");
+    assert_count_pairing(&listed);
     let row = &listed["servers"][0];
     assert_eq!(row["tools_known"], true, "a known backend: {listed}");
     assert_eq!(

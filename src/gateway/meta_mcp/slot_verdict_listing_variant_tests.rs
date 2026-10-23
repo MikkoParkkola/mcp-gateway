@@ -90,6 +90,10 @@ async fn l6a_cold_caller_list_servers_withholds() {
         Some(&serde_json::Value::Null),
         "L6a: a cold caller has no count: {row}"
     );
+    assert_eq!(
+        row["tools_known"], false,
+        "L6a: a cold caller's row is not known: {row}"
+    );
 }
 
 /// L6a, spec-preview: a cold caller's filtered `tools/list` does not name the

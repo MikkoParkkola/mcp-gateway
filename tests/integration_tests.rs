@@ -418,8 +418,8 @@ async fn test_gateway_list_servers() {
             "Server missing 'tools_count' field: {server:?}"
         );
         assert!(
-            server.get("circuit_state").is_some(),
-            "Server missing 'circuit_state' field: {server:?}"
+            server.get("circuit_breaker").is_some(),
+            "Server missing 'circuit_breaker' field: {server:?}"
         );
 
         // Verify types
@@ -431,7 +431,10 @@ async fn test_gateway_list_servers() {
         );
         // MIK-8721: a count only for a backend whose tools are known; null
         // until then, so an unenumerated backend never reads as empty.
-        if server["tools_known"] == true {
+        let known = server["tools_known"]
+            .as_bool()
+            .unwrap_or_else(|| panic!("tools_known should be a boolean: {server:?}"));
+        if known {
             assert!(
                 server["tools_count"].is_number(),
                 "a known backend's tools_count should be a number: {server:?}"
@@ -444,8 +447,8 @@ async fn test_gateway_list_servers() {
             );
         }
         assert!(
-            server["circuit_state"].is_string(),
-            "circuit_state should be string"
+            server["circuit_breaker"].is_string(),
+            "circuit_breaker should be string"
         );
     }
 

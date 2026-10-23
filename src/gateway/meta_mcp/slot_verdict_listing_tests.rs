@@ -308,8 +308,8 @@ async fn l9_required_backend_anonymous_caller_sees_none() {
 
 /// L9-servers (guard): `list_servers` already hides a `required` per-user
 /// backend's tools from an anonymous caller (`has_no_view_for`,
-/// `tools_count` null, `tools_known` false). Green on base; keeps the caller-slot
-/// change from reopening it.
+/// `tools_count` null, `tools_known` false). Red before MIK-8721, which
+/// reported 0 there; keeps the caller-slot change from reopening it.
 #[tokio::test]
 async fn l9_servers_keep_the_required_backend_hidden() {
     let fx = per_user(
