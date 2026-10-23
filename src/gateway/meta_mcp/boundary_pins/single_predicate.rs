@@ -12,10 +12,11 @@
 //! principal rule". Plain tuples use position matching: a wildcard counts
 //! only at the same index where the `ApiKey` arm names `ApiKey`. Struct,
 //! slice and `..` shapes fail closed: they can only over-flag, never miss,
-//! and a flagged site is resolved by a reviewed allowlist entry or a
-//! rewrite. The principal probe can over-flag when `authenticated` and an
-//! `is_empty` on a principal appear in one expression without one guarding
-//! the other (a known false-positive bound).
+//! and a rest pattern (`..`) counts as a catch-all. A flagged site is
+//! resolved by a reviewed allowlist entry or a rewrite. The principal probe
+//! can over-flag when `authenticated` and an `is_empty` on a principal
+//! appear in one expression without one guarding the other (a known
+//! false-positive bound).
 
 use syn::visit::Visit;
 
@@ -173,14 +174,16 @@ fn unwrap_pat(pat: &syn::Pat) -> &syn::Pat {
     current
 }
 
-/// Whether `pat` holds a `_` or lowercase binding anywhere inside it.
+/// Whether `pat` holds a `_`, `..` or lowercase binding anywhere inside it.
 ///
 /// Recurses through `Pat::Paren`, `Pat::Reference`, `Pat::Or`,
 /// `Pat::Tuple`, `Pat::TupleStruct`, `Pat::Slice` and `Pat::Struct`; a bare
-/// uppercase `Pat::Ident` is a variant and never counts.
+/// uppercase `Pat::Ident` is a variant and never counts. A `Pat::Rest`
+/// element or a `Pat::Struct` with `rest` counts as a catch-all.
 fn pat_has_wildcard_or_binding(pat: &syn::Pat) -> bool {
     match pat {
         syn::Pat::Wild(_) => true,
+        syn::Pat::Rest(_) => true,
         syn::Pat::Ident(binding) => {
             if is_binding_ident(binding) {
                 return true;
@@ -196,10 +199,13 @@ fn pat_has_wildcard_or_binding(pat: &syn::Pat) -> bool {
         syn::Pat::Tuple(tuple) => tuple.elems.iter().any(pat_has_wildcard_or_binding),
         syn::Pat::TupleStruct(ts) => ts.elems.iter().any(pat_has_wildcard_or_binding),
         syn::Pat::Slice(slice) => slice.elems.iter().any(pat_has_wildcard_or_binding),
-        syn::Pat::Struct(strukt) => strukt
-            .fields
-            .iter()
-            .any(|field| pat_has_wildcard_or_binding(&field.pat)),
+        syn::Pat::Struct(strukt) => {
+            strukt.rest.is_some()
+                || strukt
+                    .fields
+                    .iter()
+                    .any(|field| pat_has_wildcard_or_binding(&field.pat))
+        }
         _ => false,
     }
 }
@@ -367,8 +373,8 @@ fn cand_has_unmodeled_at_position(api: &syn::Pat, cand: &syn::Pat) -> bool {
 /// `Pat::TupleStruct` without `..`, only a wildcard or binding at the same
 /// index where `api` names `ApiKey` counts, recursing through `Some(..)`,
 /// `Pat::Paren` and `Pat::Reference`. A `Pat::Struct`, a `Pat::Slice`, or a
-/// tuple / tuple-struct / slice with `Pat::Rest` fails closed: any `_` or
-/// binding anywhere in `cand` then counts.
+/// tuple / tuple-struct / slice with `Pat::Rest` fails closed: any `_`, `..`
+/// or binding anywhere in `cand` then counts.
 fn is_catch_all_for(api: &syn::Pat, cand: &syn::Pat) -> bool {
     let cand_unwrapped = unwrap_pat(cand);
     if is_top_level_catch_all(cand_unwrapped) {

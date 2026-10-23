@@ -252,8 +252,7 @@ fn fixture_struct_pattern_copy_is_flagged() {
 /// MIK-8659: a `Pat::Slice` arm fails closed, so the `match` is flagged.
 #[test]
 fn fixture_slice_pattern_copy_is_flagged() {
-    let source =
-        "fn other(s: [Kind; 1]) -> u32 { match s { [Kind::ApiKey] => 1, [_] => 0, _ => 2 } }";
+    let source = "fn other(s: [Kind; 1]) -> u32 { match s { [Kind::ApiKey] => 1, [_] => 0 } }";
     let found = fixture_offences("fixture.rs", source);
     assert!(
         found.iter().any(|kind| kind == "ApiKey"),
@@ -269,5 +268,40 @@ fn fixture_rest_pattern_copy_is_flagged() {
     assert!(
         found.iter().any(|kind| kind == "ApiKey"),
         "a `..` `ApiKey` match was not flagged"
+    );
+}
+
+/// MIK-8659: a struct `..` arm is a catch-all, so the `match` is flagged.
+#[test]
+fn fixture_struct_rest_catch_all_is_flagged() {
+    let source =
+        "fn other(c: C) -> u32 { match c { C { kind: Kind::ApiKey } => 1, C { .. } => 0 } }";
+    let found = fixture_offences("fixture.rs", source);
+    assert!(
+        found.iter().any(|kind| kind == "ApiKey"),
+        "a struct `..` catch-all was not flagged"
+    );
+}
+
+/// MIK-8659: a slice `..` arm is a catch-all, so the `match` is flagged.
+#[test]
+fn fixture_slice_rest_catch_all_is_flagged() {
+    let source = "fn other(s: [Kind; 1]) -> u32 { match s { [Kind::ApiKey] => 1, [..] => 0 } }";
+    let found = fixture_offences("fixture.rs", source);
+    assert!(
+        found.iter().any(|kind| kind == "ApiKey"),
+        "a slice `..` catch-all was not flagged"
+    );
+}
+
+/// MIK-8659: a tuple `(..)` arm is a catch-all, so the `match` is flagged.
+#[test]
+fn fixture_tuple_rest_catch_all_is_flagged() {
+    let source =
+        "fn other(t: (Kind, u32)) -> u32 { match t { (Kind::ApiKey, 0) => 1, (..) => 0 } }";
+    let found = fixture_offences("fixture.rs", source);
+    assert!(
+        found.iter().any(|kind| kind == "ApiKey"),
+        "a tuple `(..)` catch-all was not flagged"
     );
 }
