@@ -131,7 +131,7 @@ class Runner(unittest.TestCase):
             return 0, ""
 
         real = runner._clone, runner._reset
-        runner._clone, runner._reset = (lambda repo, commit, dest, timeout=None: dest), (lambda clone: None)
+        runner._clone, runner._reset = (lambda repo, commit, dest, deadline=None: dest), (lambda clone, deadline=None: None)
         try:
             self.f.run([line(f"true {i}") for i in range(9)], executor=executor)
         finally:
@@ -451,7 +451,7 @@ class Runner(unittest.TestCase):
         budgets = []
         real_clone = runner._clone
 
-        def slow_clone(*args, **kwargs):
+        def slow_clone(*args, **kwargs):  # (repo, commit, dest, deadline=)
             time.sleep(1.5)
             return real_clone(*args, **kwargs)
 
@@ -463,6 +463,28 @@ class Runner(unittest.TestCase):
             runner._clone = real_clone
         self.assertEqual(len(budgets), 1)
         self.assertLessEqual(budgets[0], 0.6)
+
+    # X22b (r2 gpt + grok): every git call of a line's setup and reset is
+    # bounded by the time left on the one deadline, each recomputed.
+    def test_x22b_every_setup_and_reset_git_call_is_bounded(self):
+        calls, real = [], runner._git
+
+        def recording(cwd, *args, timeout=None):
+            calls.append((args[0], timeout))
+            return real(cwd, *args, timeout=timeout)
+
+        runner._git = recording
+        try:
+            self.f.run([line(py("pass"))], deadline_s=30)
+        finally:
+            runner._git = real
+        used = {name for name, _ in calls}
+        self.assertTrue({"clone", "checkout", "reset", "clean"} <= used, calls)
+        unbounded = [(n, t) for n, t in calls if n in ("clone", "checkout", "reset", "clean") and (t is None or t > 30)]
+        self.assertEqual(unbounded, [])
+        timeouts = [t for n, t in calls if n in ("clone", "checkout", "reset", "clean")]
+        self.assertTrue(all(a > b for a, b in zip(timeouts, timeouts[1:])),
+                        f"each call gets the time left, not one captured slice: {timeouts}")
 
     # X23 (gpt L1): a list line with an unknown direction, or an open line
     # without its skip marker, is refused before anything runs.

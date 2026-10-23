@@ -84,20 +84,25 @@ def _git(cwd, *args, timeout=None):
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout)
 
 
-def _clone(repo, commit, dest, timeout=None):
+def _left(deadline):
+    """Seconds left before `deadline` (monotonic), recomputed per call; None means unbounded."""
+    return None if deadline is None else max(deadline - time.monotonic(), 0.01)
+
+
+def _clone(repo, commit, dest, deadline=None):
     """A `--shared` clone of `repo` checked out at `commit` (no objects copied)."""
-    done = _git(repo, "clone", "-q", "--shared", "--no-checkout", str(repo), str(dest), timeout=timeout)
+    done = _git(repo, "clone", "-q", "--shared", "--no-checkout", str(repo), str(dest), timeout=_left(deadline))
     if done.returncode == 0:
-        done = _git(dest, "checkout", "-q", "--detach", commit, timeout=timeout)
+        done = _git(dest, "checkout", "-q", "--detach", commit, timeout=_left(deadline))
     if done.returncode != 0:
         raise RuntimeError(f"cannot check out {commit} in a scratch clone: {done.stderr.strip()}")
     return dest
 
 
-def _reset(clone):
+def _reset(clone, deadline=None):
     """Back to the checked-out commit; a failure raises, and the worker drops the clone."""
     for args in (("reset", "-q", "--hard"), ("clean", "-qfdx")):
-        done = _git(clone, *args)
+        done = _git(clone, *args, timeout=_left(deadline))
         if done.returncode != 0:
             raise RuntimeError(f"git {' '.join(args)} failed in {clone}: {done.stderr.strip()}")
 
@@ -215,7 +220,7 @@ def _pool(lines, *, repo, commit, ctx, tmp, workers, executor, line_timeout_s, d
             )
             return clone
         if clone is None:
-            clone = _clone(repo, commit, tmp / f"w{n}-{index:03d}-{commit[:12]}", timeout=left)
+            clone = _clone(repo, commit, tmp / f"w{n}-{index:03d}-{commit[:12]}", deadline=deadline)
         left = deadline - time.monotonic()  # setup is inside the deadline (X22)
         if left <= 0:
             results[index] = LineResult(line.command, -1, 0.0, status="deadline")
@@ -227,7 +232,7 @@ def _pool(lines, *, repo, commit, ctx, tmp, workers, executor, line_timeout_s, d
             timed_out = False
         else:
             rc, out, timed_out = _execute(command, clone, budget, tmp)
-        _reset(clone)
+        _reset(clone, deadline)
         log = logs / f"{commit[:12]}-{index:03d}.log"
         log.write_text(out)
         status = ""
@@ -264,8 +269,8 @@ def _base_rerun(result, line, *, repo, ctx, tmp, deadline, n, line_timeout_s):
     if left <= 0 or result.status in ("deadline", "missing"):
         return f"NOT COMPARABLE ON MERGE-BASE {mb}: {result.status or 'deadline'}; {line.command}"
     try:
-        base = _clone(repo, mb, tmp / f"base{n}", timeout=left)
-        head = _clone(repo, ctx["head"], tmp / f"head{n}", timeout=max(deadline - time.monotonic(), 0.01))
+        base = _clone(repo, mb, tmp / f"base{n}", deadline=deadline)
+        head = _clone(repo, ctx["head"], tmp / f"head{n}", deadline=deadline)
     except subprocess.TimeoutExpired:
         return f"NOT COMPARABLE ON MERGE-BASE {mb}: setup did not finish inside the deadline; {line.command}"
     missing = _paths_missing_at(line.command, head, base)
