@@ -4,7 +4,7 @@
 //! `/ui/api/status` states, never from a 200 alone.
 //!
 //! The page's own code, extracted from `index.html` by anchors, runs under
-//! node against a stubbed `fetch` and DOM (as in webui_delete_note_render.rs).
+//! node against a stubbed `fetch` and DOM (as in `webui_delete_note_render.rs`).
 
 use std::process::Command;
 
