@@ -37,6 +37,52 @@ pub(crate) struct SyncLease {
     steps: Mutex<Vec<(String, String)>>,
     /// The binding each step ran under (MIK-8407), kept for a replay.
     bindings: Mutex<Vec<stored::StepBinding>>,
+    /// MIK-8747: the era the stored delivery is shaped for, set only on the
+    /// meta path (`/mcp`, stdio), whose delivery is stored shaped. Direct
+    /// stores unshaped bytes and leaves it `None`.
+    era: Option<crate::protocol::meta::Era>,
+}
+
+/// The era a request was classified in, as a stored delivery records it.
+fn request_era(is_modern: bool) -> crate::protocol::meta::Era {
+    if is_modern {
+        crate::protocol::meta::Era::Modern
+    } else {
+        crate::protocol::meta::Era::Legacy
+    }
+}
+
+/// MIK-8747/MIK-8748: the refusal of a keyed replay whose stored delivery
+/// was shaped for another era. The call already ran, so the message sends the
+/// client back to the revision it first used, never to a new key (which
+/// would run it again).
+fn era_mismatch(stored: crate::protocol::meta::Era, request: crate::protocol::meta::Era) -> Error {
+    let name = |era| serde_json::to_value(era).unwrap_or(Value::Null);
+    Error::JsonRpc {
+        code: 409,
+        message: "This idempotency key's call already ran for another protocol revision; \
+                  retry it with its original protocol revision"
+            .to_string(),
+        data: Some(json!({
+            "reason": "idempotency_era_mismatch",
+            "stored_era": name(stored),
+            "request_era": name(request),
+            "already_executed": true,
+        })),
+    }
+}
+
+/// MIK-8747: a meta-path lease (`/mcp`, stdio) stores its delivery already
+/// shaped for the request's era, so it records that era; any other
+/// admission passes through unchanged.
+fn shaped_for_request(admission: SyncAdmission, is_modern: bool) -> SyncAdmission {
+    match admission {
+        SyncAdmission::Owned(mut lease) => {
+            lease.era = Some(request_era(is_modern));
+            SyncAdmission::Owned(lease)
+        }
+        other => other,
+    }
 }
 
 impl SyncLease {
@@ -122,6 +168,7 @@ impl SyncLease {
             crate::gateway::gateway_writes::WriteRecord,
         ),
     ) -> bool {
+        let era = self.era;
         let (lease, dispatches) = self.state.into_inner();
         let audit = self.audit.into_inner();
         let steps = self.steps.into_inner();
@@ -162,6 +209,7 @@ impl SyncLease {
             read,
             writes,
             dispatched: Some(steps),
+            era,
             bindings,
         };
         let retained = lease.complete_secured(&serde_json::to_value(stored).unwrap_or(Value::Null))
@@ -389,6 +437,7 @@ impl MetaMcp {
                     audit: Mutex::new(None),
                     steps: Mutex::new(Vec::new()),
                     bindings: Mutex::new(Vec::new()),
+                    era: None,
                 }))
             }
             Ok(Admission::Replay(bytes)) => {
@@ -397,6 +446,15 @@ impl MetaMcp {
                 // fails the admission without touching the retained bytes it
                 // must never serve (E1).
                 let single_target = replay_target()?;
+                // MIK-8747: a delivery stored shaped for one era is never
+                // served to the other. Only the era is decoded, so a refusal
+                // restores none of the record's read or write scope.
+                let era = request_era(is_modern);
+                if let Some(stored_era) = stored::stored_era(&bytes)
+                    && stored_era != era
+                {
+                    return Err(era_mismatch(stored_era, era));
+                }
                 let (mut response, audit) = stored_response(&bytes).ok_or_else(|| {
                     Error::json_rpc(409, "Secured execution result is unavailable")
                 })?;
@@ -547,17 +605,19 @@ impl MetaMcp {
             self.check_target_policy(caller, tool_name, arguments, session)?
         {
             let full = execution_arguments_cow(&mut operation_arguments);
-            return self.admit_sync(
-                caller.is_modern,
-                verified_identity,
-                owner_principal,
-                retry,
-                server,
-                tool,
-                &operation_arguments,
-                || self.meta_representation(tool_name, full, session, arm_key),
-                id,
-            );
+            return self
+                .admit_sync(
+                    caller.is_modern,
+                    verified_identity,
+                    owner_principal,
+                    retry,
+                    server,
+                    tool,
+                    &operation_arguments,
+                    || self.meta_representation(tool_name, full, session, arm_key),
+                    id,
+                )
+                .map(|admission| shaped_for_request(admission, caller.is_modern));
         }
         // These compiled discovery/reporting tools do not execute external work.
         // Backend annotations and operator target strings cannot add built-ins.
@@ -616,7 +676,7 @@ impl MetaMcp {
         if let SyncAdmission::Owned(lease) = &mut admission {
             lease.playbook = playbook;
         }
-        Ok(admission)
+        Ok(shaped_for_request(admission, caller.is_modern))
     }
 
     pub(crate) fn meta_representation(

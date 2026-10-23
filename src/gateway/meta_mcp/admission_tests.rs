@@ -628,6 +628,7 @@ fn replay_facts_round_trip_and_older_records_decode() {
             read: None,
             writes: crate::gateway::gateway_writes::WriteRecord::default(),
             dispatched: None,
+            era: None,
             bindings: Vec::new(),
         };
         let bytes = serde_json::to_vec(&stored).unwrap();
@@ -667,6 +668,7 @@ fn a_stored_delivery_with_any_write_record_still_decodes() {
         read: None,
         writes: crate::gateway::gateway_writes::WriteRecord::default(),
         dispatched: None,
+        era: None,
         bindings: Vec::new(),
     };
     for writes in [
@@ -720,6 +722,7 @@ async fn a_replay_restores_the_stored_reading() {
         read: Some(b.clone()),
         writes: crate::gateway::gateway_writes::WriteRecord::default(),
         dispatched: None,
+        era: None,
         bindings: Vec::new(),
     };
     let bytes = serde_json::to_vec(&stored).unwrap();
