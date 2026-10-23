@@ -111,7 +111,8 @@ jobs:
           printf '%s\n' "$out"
           [ "$rc" -eq 1 ] || { echo "expected exit 1, got $rc"; exit 1; }
           grep -qx 'PASS starts-time' <<<"$out"
-          grep -q '^FAIL not-mcp-semver: exited .* before answering initialize' <<<"$out"
+          # semver prints its usage text on stdout: not a JSON-RPC reply.
+          grep -qx 'FAIL not-mcp-semver: answered with malformed JSON' <<<"$out"
           grep -qx '1/2 eligible entries start' <<<"$out"
       - name: Check every pinned artifact verifies and every eligible entry starts
         run: |
