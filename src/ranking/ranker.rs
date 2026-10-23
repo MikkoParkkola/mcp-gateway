@@ -138,6 +138,7 @@ impl SearchRanker {
     /// # Errors
     ///
     /// Returns an error if serialization fails or the file cannot be written.
+    // In-place on purpose: keeps the inode, owner, group and ACLs; atomic replace is MIK-8700.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         let counts: Vec<UsageEntry> = self
             .usage_counts
