@@ -35,8 +35,9 @@ OPERATOR_PREFIXES = (
 _CFG_RE = re.compile(r"#\s*\[\s*cfg\s*\(")
 _RE_UNWRAP = re.compile(r"\.\s*unwrap\s*\(\s*\)")
 _RE_EXPECT = re.compile(r"\.\s*expect\s*\(")
-_RE_ASSOC = re.compile(r"\b(?:Option|Result)\s*::\s*(?:unwrap|expect)\s*\(")
-_RE_PATH = re.compile(r"\b[A-Za-z_]\w*(\s*::\s*<[^<>]*>)?\s*::\s*(unwrap|expect)\s*\(")
+# Any path call, whatever precedes the last `::` (nested generics, a const
+# block, a qualified `<T>::` path, an alias): match on the suffix alone.
+_RE_PATH = re.compile(r"::\s*(?:r#)?(?:unwrap|expect)\s*\(")
 _RE_RAW_UNWRAP = re.compile(r"\.\s*r#unwrap\s*\(\s*\)")
 _RE_RAW_EXPECT = re.compile(r"\.\s*r#expect\s*\(")
 _RE_MACRO = re.compile(r"\b(?:panic|unreachable|unimplemented|todo)\s*!")
@@ -278,126 +279,96 @@ def _blank_cfg_items(code: str, orphan) -> str:
 
 def _find_site_starts(blanked: str) -> list[int]:
     starts: list[int] = []
-    for rx in (_RE_UNWRAP, _RE_EXPECT, _RE_ASSOC, _RE_PATH, _RE_RAW_UNWRAP, _RE_RAW_EXPECT, _RE_MACRO):
+    for rx in (_RE_UNWRAP, _RE_EXPECT, _RE_PATH, _RE_RAW_UNWRAP, _RE_RAW_EXPECT, _RE_MACRO):
         for m in rx.finditer(blanked):
             starts.append(m.start())
     return sorted(set(starts))
 
 
-def _real_line_comment_start(line: str) -> int | None:
-    n = len(line)
+def _line_comment_starts(text: str) -> set[int]:
+    """Offsets of every `//` that opens a real line comment in `text`.
+
+    One pass over the whole file, so a string or block comment that spans
+    lines is tracked across them: a `// invariant:` inside a multiline
+    literal never reads as a marker on a later line.
+    """
+    starts: set[int] = set()
+    n = len(text)
     i = 0
     while i < n:
-        c = line[i]
-        if c == "/" and i + 1 < n:
-            nxt = line[i + 1]
-            if nxt == "/":
-                return i
-            if nxt == "*":
-                depth = 1
-                j = i + 2
-                while j < n:
-                    if line.startswith("/*", j):
-                        depth += 1
-                        j += 2
-                    elif line.startswith("*/", j):
-                        depth -= 1
-                        j += 2
-                        if depth == 0:
-                            break
-                    else:
-                        j += 1
-                if depth != 0:
-                    return None
-                i = j
+        c = text[i]
+        boundary = not (i > 0 and (text[i - 1].isalnum() or text[i - 1] == "_"))
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            starts.add(i)
+            j = text.find("\n", i)
+            if j < 0:
+                break
+            i = j + 1
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            depth = 1
+            j = i + 2
+            while j < n and depth:
+                if text.startswith("/*", j):
+                    depth, j = depth + 1, j + 2
+                elif text.startswith("*/", j):
+                    depth, j = depth - 1, j + 2
+                else:
+                    j += 1
+            i = j
+            continue
+        # Raw strings, with an optional byte or C prefix: r"", r#""#, br#""#, cr#""#.
+        r = i + 1 if c in "bc" and i + 1 < n and text[i + 1] == "r" else i
+        if boundary and text[r] == "r":
+            k = r + 1
+            while k < n and text[k] == "#":
+                k += 1
+            if k < n and text[k] == '"':
+                closing = '"' + text[r + 1 : k]
+                end = text.find(closing, k + 1)
+                if end < 0:
+                    break
+                i = end + len(closing)
                 continue
-        if c == "b" and i + 1 < n and line[i + 1] == "r":
-            if not (i > 0 and (line[i - 1].isalnum() or line[i - 1] == "_")):
-                j = i + 2
-                k = j
-                while k < n and line[k] == "#":
-                    k += 1
-                if k < n and line[k] == '"':
-                    closing = '"' + line[j:k]
-                    end = line.find(closing, k + 1)
-                    if end < 0:
-                        return None
-                    i = end + len(closing)
-                    continue
-        elif c == "r":
-            if not (i > 0 and (line[i - 1].isalnum() or line[i - 1] == "_")):
-                j = i + 1
-                k = j
-                while k < n and line[k] == "#":
-                    k += 1
-                if k < n and line[k] == '"':
-                    closing = '"' + line[j:k]
-                    end = line.find(closing, k + 1)
-                    if end < 0:
-                        return None
-                    i = end + len(closing)
-                    continue
         if c == '"':
             j = i + 1
-            while j < n:
-                if line[j] == "\\":
-                    j += 2
-                    continue
-                if line[j] == '"':
-                    break
-                j += 1
-            if j >= n:
-                return None
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
             i = j + 1
             continue
         if c == "'":
-            if i + 1 < n and line[i + 1] == "\\":
-                j = i + 2
-                if j < n and line[j] == "u" and j + 1 < n and line[j + 1] == "{":
-                    brace = line.find("}", j + 2)
-                    if brace < 0 or brace + 1 >= n or line[brace + 1] != "'":
-                        i += 1
-                        continue
-                    i = brace + 2
-                    continue
-                if j < n and line[j] == "x":
-                    if j + 3 < n and line[j + 3] == "'":
-                        i = j + 4
-                        continue
-                    i += 1
-                    continue
-                if j < n and j + 1 < n and line[j + 1] == "'":
-                    i = j + 2
-                    continue
-                i += 1
+            # Char literals only ('x', '\n', '\u{..}', '\x41'); a lifetime 'a
+            # is left alone so it never swallows code.
+            if i + 1 < n and text[i + 1] == "\\":
+                j = text.find("'", i + 3)
+                i = n if j < 0 else j + 1
                 continue
-            if i + 2 < n and line[i + 2] == "'" and line[i + 1] != "'" and line[i + 1] != "\n":
+            if i + 2 < n and text[i + 2] == "'" and text[i + 1] not in "'\n":
                 i += 3
                 continue
-            i += 1
-            continue
         i += 1
-    return None
+    return starts
 
 
-def _line_has_invariant(line: str) -> bool:
-    pos = _real_line_comment_start(line)
-    if pos is None:
-        return False
-    return "// invariant:" in line[pos:]
+def _line_has_invariant(text: str, line_start: int, line_end: int, comments: set[int]) -> bool:
+    return any(
+        line_start <= c < line_end and "// invariant:" in text[c:line_end] for c in comments
+    )
 
 
-def _is_invariant_standalone(line: str) -> bool:
-    pos = _real_line_comment_start(line)
-    if pos is None:
-        return False
-    if line[:pos].strip() != "":
-        return False
-    return line[pos:].startswith("// invariant:")
+def _is_invariant_standalone(text: str, line_start: int, line_end: int, comments: set[int]) -> bool:
+    line = text[line_start:line_end]
+    pos = line_start + len(line) - len(line.lstrip())
+    return pos in comments and text.startswith("// invariant:", pos)
 
 
-def _is_exempt(orig_lines: list[str], blanked_lines: list[str], idx0: int) -> bool:
-    if _line_has_invariant(orig_lines[idx0]):
+def _is_exempt(
+    text: str, offsets: list[int], comments: set[int], orig_lines: list[str], blanked_lines: list[str], idx0: int
+) -> bool:
+    def span(k: int) -> tuple[int, int]:
+        return offsets[k], offsets[k] + len(orig_lines[k])
+
+    if _line_has_invariant(text, *span(idx0), comments):
         return True
     i = idx0
     while i > 0:
@@ -415,7 +386,7 @@ def _is_exempt(orig_lines: list[str], blanked_lines: list[str], idx0: int) -> bo
         if prev_blank.endswith(";") or prev_blank.endswith("{") or prev_blank.endswith("}"):
             break
         i -= 1
-    if i > 0 and _is_invariant_standalone(orig_lines[i - 1]):
+    if i > 0 and _is_invariant_standalone(text, *span(i - 1), comments):
         return True
     return False
 
@@ -447,15 +418,19 @@ def collect_current(root: Path, test_only: set[Path], orphan) -> tuple[dict, int
         starts = _find_site_starts(final)
         if not starts:
             continue
-        orig_lines = text.splitlines()
-        blanked_lines = final.splitlines()
+        orig_lines = text.split("\n")
+        blanked_lines = final.split("\n")
+        offsets = [0]
+        for line in orig_lines[:-1]:
+            offsets.append(offsets[-1] + len(line) + 1)
+        comments = _line_comment_starts(text)
         for st in starts:
             line_no = final.count("\n", 0, st) + 1
             idx0 = line_no - 1
             if idx0 < 0 or idx0 >= len(orig_lines):
                 continue
             norm = _normalize(orig_lines[idx0])
-            if _is_exempt(orig_lines, blanked_lines, idx0):
+            if _is_exempt(text, offsets, comments, orig_lines, blanked_lines, idx0):
                 continue
             current.setdefault((rel, norm), []).append(line_no)
             total += 1
@@ -908,6 +883,36 @@ def run_self_test() -> int:
         {"src/foo.rs": "fn f(x: Option<i32>) -> i32 {\n    /* // invariant: */ x.unwrap()\n}\n"}
     )
     check("not exempt: invariant in block comment before site", len(f) == 1, repr(f))
+
+    # ---- MIK-8691 round 2: path calls whatever precedes `::` ----
+    for call in (
+        "Option::<Vec<u8>>::unwrap(x)",
+        "<Option<u8>>::unwrap(x)",
+        "Option::r#unwrap(x)",
+        "Foo::<{1 < 2}>::unwrap(x)",
+        "Option::<i32>::expect(x, \"m\")",
+    ):
+        f, _, _, total = _scan_temp({"src/foo.rs": f"fn f() {{\n    let _a = {call};\n}}\n"})
+        check(f"flag {call} once", len(f) == 1 and total == 1, repr(f))
+
+    # ---- MIK-8691 round 2: the marker pass tracks literals across lines ----
+    f, _, _, _ = _scan_temp(
+        {"src/foo.rs": 'fn f(x: Option<i32>) {\n    let _s = "a\n    // invariant: fake"; x.unwrap();\n}\n'}
+    )
+    check("not exempt: invariant inside a multiline string", len(f) == 1, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {"src/foo.rs": 'fn f(x: Option<i32>) {\n    /* a\n    // invariant: fake */ x.unwrap();\n}\n'}
+    )
+    check("not exempt: invariant inside a multiline block comment", len(f) == 1, repr(f))
+
+    f, _, _, _ = _scan_temp(
+        {
+            "src/foo.rs": 'fn f(x: Option<i32>) {\n    let _s = cr#"a\n    // invariant: fake"#; x.unwrap();\n'
+            "    // invariant: real\n    x.unwrap();\n}\n"
+        }
+    )
+    check("multiline C raw string: only the real marker exempts", len(f) == 1, repr(f))
 
     # ---- MIK-8691 round 1: stale baseline allowances fail ----
     check(
