@@ -409,10 +409,7 @@ src/gateway/meta_mcp/invoke/relay_catalogue.rs	catalogue_refusal	-	prompts/get a
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	forward_catalogue	-	prompts/get and resources/read only, not the tools/call path
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	stage_catalogue_result	-	prompts/get and resources/read only, not the tools/call path
 src/gateway/meta_mcp/invoke/relay_delivered.rs	as_built	-	on-path, untimed: relay-active receipt rebuilds and final-check rewrites only
-src/gateway/meta_mcp/invoke/relay_delivered.rs	closing_quote	-	on-path, untimed: relay receipts for wrappers a final pass rewrote only
 src/gateway/meta_mcp/invoke/relay_delivered.rs	delivery_commit	-	on-path, untimed: bridged prompt deliveries under relay detection only
-src/gateway/meta_mcp/invoke/relay_delivered.rs	escape_at	-	on-path, untimed: relay receipts for wrappers a final pass rewrote only
-src/gateway/meta_mcp/invoke/relay_delivered.rs	hex4	-	on-path, untimed: relay receipts for wrappers a final pass rewrote only
 src/gateway/meta_mcp/invoke/relay_delivered.rs	keep_plan_receipts	-	gateway_execute and playbook plan answers only, not a single gateway_invoke
 src/gateway/meta_mcp/invoke/relay_delivered.rs	keep_replayed_receipts	-	on-path, untimed: MIK-8408 plan replays under relay detection only (keeps replayed receipts to the delivered answer); the harness stages no receipt
 src/gateway/meta_mcp/invoke/relay_delivered.rs	keep_to_rewritten	-	on-path, untimed: relay receipts for wrappers a final pass rewrote only
