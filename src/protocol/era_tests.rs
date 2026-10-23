@@ -33,7 +33,7 @@ async fn a_restart_probes_the_new_peer_rather_than_reporting_the_old_verdict() {
     let era = cache
         .restart_with(|| async {
             probes.fetch_add(1, Ordering::SeqCst);
-            ProbeOutcome::Error(METHOD_NOT_FOUND_CODE)
+            ProbeOutcome::Error(METHOD_NOT_FOUND)
         })
         .await;
 
@@ -164,7 +164,7 @@ async fn a_held_lock_still_reads_the_determined_verdict() {
 async fn the_lock_free_read_follows_every_transition() {
     let cache = EraCache::for_backend("mirror-transitions");
     cache
-        .resolve_with(|| async { ProbeOutcome::Error(METHOD_NOT_FOUND_CODE) })
+        .resolve_with(|| async { ProbeOutcome::Error(METHOD_NOT_FOUND) })
         .await;
     assert_eq!(cache.cached_now(), Some(Era::Legacy));
     assert_eq!(cache.cached_now(), cache.cached().await);

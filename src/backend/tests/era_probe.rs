@@ -3,6 +3,7 @@
 //! MIK-7217 OUTBOUND.1/.2: the era-gated health probe.
 
 use super::*;
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 
 /// Row 1 — a modern peer is asked the modern liveness method. `ping` was
 /// removed in the 2026-07-28 revision, so putting it on a modern wire is the
@@ -35,7 +36,7 @@ async fn row_1_modern_backend_is_probed_with_server_discover() {
 #[tokio::test]
 async fn row_2_legacy_backend_is_probed_with_ping() {
     let mock = Arc::new(ProbeMock::scripted(vec![
-        ProbeAnswer::InBandError(crate::protocol::era::METHOD_NOT_FOUND_CODE),
+        ProbeAnswer::InBandError(METHOD_NOT_FOUND),
         ProbeAnswer::Result(json!({})),
     ]));
     let backend = probe_backend(Arc::clone(&mock), true).await;
@@ -79,7 +80,7 @@ async fn row_3_unclassified_backend_takes_the_legacy_arm() {
 #[tokio::test]
 async fn row_4_in_band_method_not_found_is_unserved_not_healthy() {
     let mock = Arc::new(ProbeMock::legacy_then(vec![ProbeAnswer::InBandError(
-        crate::protocol::era::METHOD_NOT_FOUND_CODE,
+        METHOD_NOT_FOUND,
     )]));
     let backend = probe_backend(Arc::clone(&mock), true).await;
     backend.trip_circuit_breaker_for_test();
@@ -102,7 +103,7 @@ async fn row_4_in_band_method_not_found_is_unserved_not_healthy() {
 #[tokio::test]
 async fn row_5_status_carried_method_not_found_is_unserved_not_a_fault() {
     let mock = Arc::new(ProbeMock::legacy_then(vec![ProbeAnswer::StatusError(
-        crate::protocol::era::METHOD_NOT_FOUND_CODE,
+        METHOD_NOT_FOUND,
     )]));
     let backend = probe_backend(Arc::clone(&mock), true).await;
     backend.trip_circuit_breaker_for_test();
@@ -239,7 +240,7 @@ async fn row_8b_a_discover_result_on_the_modern_arm_resets_the_breaker() {
 #[tokio::test]
 async fn row_9_method_not_found_to_discover_invalidates_the_cached_era() {
     let mock = Arc::new(ProbeMock::modern_then(vec![ProbeAnswer::InBandError(
-        crate::protocol::era::METHOD_NOT_FOUND_CODE,
+        METHOD_NOT_FOUND,
     )]));
     let backend = probe_backend(Arc::clone(&mock), true).await;
     assert_eq!(
@@ -265,7 +266,7 @@ async fn row_9_method_not_found_to_discover_invalidates_the_cached_era() {
 #[tokio::test]
 async fn row_9e_a_status_carried_method_not_found_also_invalidates_the_era() {
     let mock = Arc::new(ProbeMock::modern_then(vec![ProbeAnswer::StatusError(
-        crate::protocol::era::METHOD_NOT_FOUND_CODE,
+        METHOD_NOT_FOUND,
     )]));
     let backend = probe_backend(Arc::clone(&mock), true).await;
     assert_eq!(
@@ -289,7 +290,7 @@ async fn row_9e_a_status_carried_method_not_found_also_invalidates_the_era() {
 #[tokio::test]
 async fn row_9c_a_served_ping_is_not_evidence_of_modernity() {
     let mock = Arc::new(ProbeMock::modern_then(vec![ProbeAnswer::InBandError(
-        crate::protocol::era::METHOD_NOT_FOUND_CODE,
+        METHOD_NOT_FOUND,
     )]));
     let backend = probe_backend(Arc::clone(&mock), true).await;
 
@@ -311,9 +312,7 @@ async fn row_9c_a_served_ping_is_not_evidence_of_modernity() {
 /// method of one controlled tick rather than the accessor alone.
 #[tokio::test]
 async fn row_9b_positive_evidence_off_the_probe_path_reclassifies_the_peer() {
-    let mock = Arc::new(
-        ProbeMock::modern_then(vec![]).refusing(crate::protocol::era::METHOD_NOT_FOUND_CODE),
-    );
+    let mock = Arc::new(ProbeMock::modern_then(vec![]).refusing(METHOD_NOT_FOUND));
     let backend = probe_backend(Arc::clone(&mock), true).await;
 
     let _ = backend.health_probe(Duration::from_secs(5)).await;
@@ -388,9 +387,7 @@ async fn row_10_the_third_unserved_answer_trips_and_restarts() {
 /// its code, so `-32601` resets the count instead of spending it.
 #[tokio::test]
 async fn row_10d_method_not_found_is_liveness_and_never_escalates() {
-    let mock = Arc::new(
-        ProbeMock::legacy_then(vec![]).refusing(crate::protocol::era::METHOD_NOT_FOUND_CODE),
-    );
+    let mock = Arc::new(ProbeMock::legacy_then(vec![]).refusing(METHOD_NOT_FOUND));
     let backend = probe_backend(Arc::clone(&mock), true).await;
 
     // Two ticks past the escalation bound: the count may never reach it.

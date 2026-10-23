@@ -9,6 +9,7 @@
 //! probe is the barrier: reading the era blocks until the detached re-probe has
 //! decided, never a sleep.
 
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -17,7 +18,7 @@ use super::era_stale_probe_tests::{Answer, DISCOVER, Handles, Peer, WAIT, run};
 use super::pool::PooledEntry;
 use super::slot_eviction_tests::{per_user_backend, slot};
 use super::*;
-use crate::protocol::era::{Era, METHOD_NOT_FOUND_CODE};
+use crate::protocol::era::Era;
 use crate::transport::Transport;
 
 const BINDING: &str = "rev:alpha";
@@ -39,7 +40,7 @@ async fn busy_slot_probing(
 
     peer.hold.store(true, Ordering::SeqCst);
     backend
-        .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND_CODE, &transport)
+        .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND, &transport)
         .await;
     tokio::time::timeout(WAIT, &mut handles.started)
         .await
@@ -191,7 +192,7 @@ async fn a_contradiction_from_a_revoked_slot() {
         let backend = Arc::clone(&backend);
         async move {
             backend
-                .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND_CODE, &transport)
+                .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND, &transport)
                 .await;
         }
     });

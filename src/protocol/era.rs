@@ -42,9 +42,6 @@ impl Era {
     }
 }
 
-/// JSON-RPC `method not found` — the honest legacy answer to `server/discover`.
-pub use crate::error::rpc_codes::METHOD_NOT_FOUND as METHOD_NOT_FOUND_CODE;
-
 /// JSON-RPC error code for `UnsupportedProtocolVersion` in 2026-07-28.
 ///
 /// Renumbered from `-32004` by that revision's error-code allocation policy,

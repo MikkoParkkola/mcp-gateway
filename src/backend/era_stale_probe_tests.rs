@@ -6,6 +6,7 @@
 //! lock while it waits, so reading the era observation after the peer has answered blocks until
 //! the detached task has decided: that is the completion barrier, never a sleep.
 
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -18,7 +19,7 @@ use super::era::with_serving;
 use super::*;
 use crate::Result;
 use crate::config::TransportConfig;
-use crate::protocol::era::{Era, EraObservation, EraSource, METHOD_NOT_FOUND_CODE};
+use crate::protocol::era::{Era, EraObservation, EraSource};
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::transport::Transport;
 
@@ -83,7 +84,7 @@ impl Transport for Peer {
                 }),
             ),
             (DISCOVER, Answer::MethodNotFound) => {
-                JsonRpcResponse::error(Some(id), METHOD_NOT_FOUND_CODE, "method not found")
+                JsonRpcResponse::error(Some(id), METHOD_NOT_FOUND, "method not found")
             }
             _ => JsonRpcResponse::success_serialized(id, json!({})),
         })
@@ -149,7 +150,7 @@ async fn contradicted_and_probing(
 
     peer.hold.store(true, Ordering::SeqCst);
     backend
-        .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND_CODE, &transport)
+        .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND, &transport)
         .await;
     tokio::time::timeout(WAIT, &mut handles.started)
         .await
@@ -312,7 +313,7 @@ fn a_contradiction_over_a_replaced_transport_leaves_the_current_verdict() {
         assert_eq!(backend.cached_era().await, Some(Era::Modern));
 
         backend
-            .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND_CODE, &old)
+            .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND, &old)
             .await;
 
         assert_eq!(

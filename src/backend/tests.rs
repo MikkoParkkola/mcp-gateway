@@ -4,6 +4,7 @@
 //! lifecycle, request/notify dispatch, cached-metadata single-flight
 //! behavior, and tool-annotation inference.
 
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -198,9 +199,7 @@ impl ProbeMock {
     /// The mirror of `modern_then`: `-32601` to `server/discover` is the
     /// honest legacy answer, so this leaves the cache `Probed`/`Legacy`.
     fn legacy_then(mut rest: Vec<ProbeAnswer>) -> Self {
-        let mut answers = vec![ProbeAnswer::InBandError(
-            crate::protocol::era::METHOD_NOT_FOUND_CODE,
-        )];
+        let mut answers = vec![ProbeAnswer::InBandError(METHOD_NOT_FOUND)];
         answers.append(&mut rest);
         Self::scripted(answers)
     }

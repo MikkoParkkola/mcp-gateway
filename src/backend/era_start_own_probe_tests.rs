@@ -8,6 +8,7 @@
 //! and before the handshake shape is chosen. While held, another writer
 //! (a concurrent start of another slot) installs the opposite verdict.
 
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -19,7 +20,7 @@ use super::era_stale_probe_tests::{Answer, Peer};
 use super::stop_race_tests::within;
 use super::{Backend, MarkWindowGate};
 use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
-use crate::protocol::era::{Era, EraCache, METHOD_NOT_FOUND_CODE, ProbeOutcome};
+use crate::protocol::era::{Era, EraCache, ProbeOutcome};
 use crate::transport::Transport;
 
 /// What the loopback server answers `server/discover` with.
@@ -184,7 +185,7 @@ async fn a_start_retired_before_its_probe_reports_legacy() {
 async fn a_start_refused_at_install_reports_its_own_probe() {
     let cache = EraCache::for_backend("retired-mid-probe");
     cache
-        .restart_with(|| async { ProbeOutcome::Error(METHOD_NOT_FOUND_CODE) })
+        .restart_with(|| async { ProbeOutcome::Error(METHOD_NOT_FOUND) })
         .await;
     assert_eq!(cache.cached().await, Some(Era::Legacy), "primed");
 
