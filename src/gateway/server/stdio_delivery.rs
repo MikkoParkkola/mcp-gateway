@@ -155,9 +155,14 @@ async fn deliver(
         external_tool: &settle.tool,
         subject: None,
     };
-    let (frame, stored) =
-        crate::gateway::router::record_judged_delivery(meta, frame, &correlation, settle.stored)
-            .await;
+    let (frame, stored) = crate::gateway::router::record_judged_delivery(
+        meta,
+        frame,
+        &correlation,
+        crate::gateway::meta_mcp::response_security::DeliveryCredential::stdio(),
+        settle.stored,
+    )
+    .await;
     let retained = match (settle.execution, stored) {
         (Some(execution), Some(stored)) => execution.complete_delivery_read(
             &stored,

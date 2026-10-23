@@ -18,6 +18,9 @@ pub struct CapabilityConfig {
     pub name: String,
     /// Directories to load capability definitions from.
     pub directories: Vec<String>,
+    /// Seconds between stale-catalogue checks of the watched directories; 0 turns the check off. Restart-only.
+    #[serde(deserialize_with = "crate::duration_bound::secs")]
+    pub stale_check_secs: u64,
     /// HTTP(S) proxy for capability calls, e.g. `http://proxy.internal:3128`.
     ///
     /// Capability calls never follow `HTTP_PROXY`/`HTTPS_PROXY` from the
@@ -162,6 +165,7 @@ impl std::fmt::Debug for CapabilityConfig {
             .field("enabled", &self.enabled)
             .field("name", &self.name)
             .field("directories", &self.directories)
+            .field("stale_check_secs", &self.stale_check_secs)
             .field("egress_proxy", &proxy)
             .field("process_execution", &self.process_execution)
             .field("process_commands", &self.process_commands)
@@ -177,6 +181,7 @@ impl Default for CapabilityConfig {
             name: "gateway".to_string(),
             // Only the bundled catalogue. Any other source is named in config.
             directories: vec!["capabilities".to_string()],
+            stale_check_secs: 60,
             egress_proxy: None,
             process_execution: ProcessExecution::Enabled,
             process_commands: None,
@@ -293,3 +298,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "capability_stale_tests.rs"]
+mod stale_tests;

@@ -3,9 +3,8 @@
 
 //! Firewall verdict predicates and the rule helpers that pick an action.
 
-use super::{
-    CompiledRule, Finding, FirewallAction, FirewallRule, FirewallVerdict, ScanType, Severity,
-};
+use super::{CompiledRule, Finding, FirewallAction, FirewallRule, FirewallVerdict, ScanType};
+use crate::security::Severity;
 
 impl FirewallVerdict {
     /// Construct an unconditional allow verdict (used when scanning is disabled).
@@ -20,7 +19,7 @@ impl FirewallVerdict {
 
     /// Returns `true` when the block was triggered solely by anomaly detection
     /// (OWASP ASI10 — Rogue Agents), i.e. every blocking finding is a
-    /// `SequenceAnomaly` at `Severity::High`.
+    /// `SequenceAnomaly` at `Severity::High` or `Severity::Critical`.
     ///
     /// Callers should use JSON-RPC error code `-32002` for anomaly blocks to
     /// distinguish them from generic security blocks (`-32600`).
@@ -29,7 +28,7 @@ impl FirewallVerdict {
     }
 
     /// [`Self::is_anomaly_block`] widened to relay findings (OWASP ASI10,
-    /// COLLUDE.1): every finding is a high `SequenceAnomaly` or a
+    /// COLLUDE.1): every finding is a high or critical `SequenceAnomaly` or a
     /// `CollusionRelay`. Crate-internal so the public meaning stays put.
     pub(crate) fn is_asi10_block(&self) -> bool {
         self.blocked_only_by(|f| f.scan_type == ScanType::CollusionRelay)
@@ -85,7 +84,7 @@ impl FirewallVerdict {
         !self.allowed
             && !self.findings.is_empty()
             && self.findings.iter().all(|f| {
-                (f.scan_type == ScanType::SequenceAnomaly && f.severity == Severity::High)
+                (f.scan_type == ScanType::SequenceAnomaly && f.severity >= Severity::High)
                     || also(f)
             })
     }
@@ -119,23 +118,12 @@ pub(super) fn first_matching_rule_action(
 }
 
 pub(super) fn strongest_finding_severity(findings: &[Finding]) -> Option<Severity> {
-    findings
-        .iter()
-        .map(|finding| finding.severity)
-        .min_by_key(|severity| severity_rank(*severity))
-}
-
-const fn severity_rank(severity: Severity) -> u8 {
-    match severity {
-        Severity::High => 0,
-        Severity::Medium => 1,
-        Severity::Low => 2,
-    }
+    findings.iter().map(|finding| finding.severity).max()
 }
 
 pub(super) const fn default_action_for_severity(severity: Severity) -> FirewallAction {
     match severity {
-        Severity::High => FirewallAction::Block,
+        Severity::Critical | Severity::High => FirewallAction::Block,
         Severity::Medium => FirewallAction::Warn,
         Severity::Low => FirewallAction::Allow,
     }

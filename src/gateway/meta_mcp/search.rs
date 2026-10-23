@@ -28,6 +28,9 @@ use super::support::{
     ranked_results_to_code_mode_json,
 };
 
+/// Longest `gateway_search` query accepted, in characters as sent (MIK-8683). The glob matcher is bounded anyway; this bounds the work one request can ask for.
+const MAX_SEARCH_QUERY_CHARS: usize = 256;
+
 #[derive(Clone, Copy)]
 struct CodeModeSearchOptions {
     use_glob: bool,
@@ -363,6 +366,15 @@ impl MetaMcp {
         caller: &super::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
         let raw_query = asking(caller, extract_required_str(args, "query"))?;
+        if raw_query.chars().nth(MAX_SEARCH_QUERY_CHARS).is_some() {
+            return asking(
+                caller,
+                Err(Error::json_rpc(
+                    -32602,
+                    format!("'query' is longer than {MAX_SEARCH_QUERY_CHARS} characters"),
+                )),
+            );
+        }
         let query = raw_query.to_lowercase();
         let limit = extract_search_limit(args);
         let disclosure = crate::gateway::search_disclosure::resolve_search_disclosure(args);
@@ -747,6 +759,10 @@ impl MetaMcp {
 #[cfg(test)]
 #[path = "search_role_filter_tests.rs"]
 mod role_filter_tests;
+
+#[cfg(test)]
+#[path = "search_query_cap_tests.rs"]
+mod query_cap_tests;
 
 #[path = "search/chain_exec.rs"]
 mod chain_exec;

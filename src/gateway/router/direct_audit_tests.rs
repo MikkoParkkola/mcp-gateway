@@ -383,6 +383,10 @@ fn key_for_alpha(denied_tools: Option<Vec<String>>) -> AuthConfig {
     }
 }
 
+/// MIK-8672 C1/C2: the static bearer secret. Differs from the API key's `k`:
+/// an equal token classifies only as the static bearer.
+const BEARER_TOKEN: &str = "mik-8672-static-bearer";
+
 /// How a cell presents itself to the gateway.
 enum Caller {
     Anonymous,
@@ -399,6 +403,9 @@ enum Caller {
     /// [`Caller::Modern`] with a verified OIDC identity: an execution
     /// principal, so a keyed direct call is admitted (MIK-8154 ANON.1).
     ModernOidc,
+    /// The static bearer token of [`bearer_auth`] (MIK-8672 C1/C2): the client
+    /// `bearer`, as is the API key that fixture also holds.
+    Bearer,
 }
 
 /// Put the verified identity a `Caller` stands for on `request`.
@@ -453,6 +460,9 @@ async fn post_to_raw(
         .header("content-type", "application/json");
     if matches!(caller, Caller::Key) {
         builder = builder.header("authorization", "Bearer k");
+    }
+    if matches!(caller, Caller::Bearer) {
+        builder = builder.header("authorization", format!("Bearer {BEARER_TOKEN}"));
     }
     if matches!(caller, Caller::Session) {
         builder = builder.header("mcp-session-id", "sess-d2");

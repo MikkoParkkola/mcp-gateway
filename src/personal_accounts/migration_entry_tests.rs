@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use super::{MigrationOutcome, MigrationRefusal, MigrationRequest, migrate_backend};
 use crate::oauth::TokenStorage;
 use crate::personal_accounts::config::{AccountDescriptor, DescriptorMode};
-use crate::personal_accounts::identity::AccountDescriptor as KeyDescriptor;
+use crate::personal_accounts::identity::AccountKeyDescriptor;
 use crate::personal_accounts::identity::{Principal, account_key};
 use crate::personal_accounts::storage::migration_source::SourceRefusal;
 use crate::personal_accounts::{AccountLookup, PersonalAccountStore, StoreConfig};
@@ -42,8 +42,8 @@ fn store_config(root: &Path) -> StoreConfig {
     }
 }
 
-fn key_descriptor() -> KeyDescriptor {
-    KeyDescriptor {
+fn key_descriptor() -> AccountKeyDescriptor {
+    AccountKeyDescriptor {
         descriptor_id: "workspace-personal".to_owned(),
         provider: "workspace".to_owned(),
         resource: RESOURCE.to_owned(),
@@ -137,7 +137,7 @@ impl Fixture {
 
     fn request<'a>(
         descriptor: &'a AccountDescriptor,
-        key: &'a KeyDescriptor,
+        key: &'a AccountKeyDescriptor,
         legacy_issuer: &'a str,
     ) -> MigrationRequest<'a> {
         MigrationRequest {

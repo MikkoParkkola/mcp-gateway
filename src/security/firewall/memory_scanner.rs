@@ -42,7 +42,8 @@ use regex::RegexSet;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::{Finding, FindingLocation, ScanType, Severity};
+use super::{Finding, FindingLocation, ScanType};
+use crate::security::Severity;
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 

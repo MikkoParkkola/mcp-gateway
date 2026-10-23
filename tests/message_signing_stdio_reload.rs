@@ -12,6 +12,9 @@
 #[path = "common/yaml.rs"]
 mod yaml;
 
+#[path = "common/signing_oracle.rs"]
+mod signing_oracle;
+
 #[path = "common/signing_gateway.rs"]
 pub mod signing_gateway;
 
@@ -212,10 +215,6 @@ fn assert_replay_refused(response: &Value) {
     );
 }
 
-fn verifier_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/common/signing_verifier.mjs")
-}
-
 fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -224,43 +223,24 @@ fn now_unix() -> u64 {
 }
 
 async fn verify_wire(wire: &str, key: &str, request_id: &str, nonce: &str) {
-    let mut child = tokio::process::Command::new("node")
-        .arg(verifier_path())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("node is required for the independent signing oracle");
-    let mut stdin = child.stdin.take().expect("verifier stdin");
-    stdin
-        .write_all(
-            json!({
-                "wire": wire,
-                "options": {
-                    "key": key,
-                    "keyId": KEY_ID,
-                    "expectedId": {"kind": "string", "value": request_id},
-                    "expectedNonce": nonce,
-                    "now": now_unix()
-                }
-            })
-            .to_string()
-            .as_bytes(),
-        )
-        .await
-        .expect("write verifier stdin");
-    drop(stdin);
-    let output = tokio::time::timeout(IO_TIMEOUT, child.wait_with_output())
-        .await
-        .expect("bounded node oracle")
-        .expect("node oracle process");
+    let input = json!({
+        "wire": wire,
+        "options": {
+            "key": key,
+            "keyId": KEY_ID,
+            "expectedId": {"kind": "string", "value": request_id},
+            "expectedNonce": nonce,
+            "now": now_unix()
+        }
+    });
+    let run = signing_oracle::verify(&input, IO_TIMEOUT).await;
+    let Some(status) = run.status else {
+        panic!("{}", run.timeout_message());
+    };
     assert!(
-        output.status.success(),
-        "oracle failed status={} stdout={} stderr={}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        status.success(),
+        "oracle failed status={status} stderr={}",
+        run.stderr
     );
 }
 

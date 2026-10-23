@@ -1,0 +1,1 @@
+src/personal_accounts/identity.rs	from_config	1	standard	borderline	AccountKeyDescriptor::from_config	Builds the owner-key fields (descriptor id, provider, resource, issuer) every account key binds to; returns None for a missing resource or issuer so each caller (load, binding, migration) refuses in its own words, as account_key_descriptor did.
