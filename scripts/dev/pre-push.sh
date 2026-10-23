@@ -98,14 +98,6 @@ if [[ -f Cargo.toml ]]; then
   step "cargo clippy --all-targets --no-default-features -D warnings"
   run_cargo "clippy no-default-features" clippy --all-targets --no-default-features --quiet -- -D warnings
 
-  # MIK-8733: some lints fire only under the release profile (#4060:
-  # assigning_clones); CI's pedantic job runs this pair on every PR.
-  step "cargo clippy --release --lib --bins --all-features -D warnings"
-  run_cargo "clippy release all-features" clippy --release --lib --bins --all-features --quiet -- -D warnings
-
-  step "cargo clippy --release --lib --bins --no-default-features -D warnings"
-  run_cargo "clippy release no-default-features" clippy --release --lib --bins --no-default-features --quiet -- -D warnings
-
   # MIK-8387: production code reaches the backend registry only through
   # Registry or a classed statement-level allow. Non-test targets only, from
   # its own config (the repo clippy.toml is untouched); the self-test proves
@@ -114,6 +106,12 @@ if [[ -f Cargo.toml ]]; then
   export CLIPPY_CONF_DIR="$REPO_ROOT/scripts/lint/registry-ban"
   run_cargo "registry ban all-features" clippy --lib --bins --all-features --quiet -- -D warnings
   run_cargo "registry ban no-default-features" clippy --lib --bins --no-default-features --quiet -- -D warnings
+  # MIK-8733: the release passes, as CI's Registry ban step runs them. They
+  # compile cfg(not(debug_assertions)) code the dev passes never see, and some
+  # lints fire only there (#4060: assigning_clones).
+  step "registry ban, release profile (both feature sets)"
+  run_cargo "registry ban release all-features" clippy --release --lib --bins --all-features --quiet -- -D warnings
+  run_cargo "registry ban release no-default-features" clippy --release --lib --bins --no-default-features --quiet -- -D warnings
   unset CLIPPY_CONF_DIR
   step "registry lint self-test"
   scripts/dev/check_registry_lint.sh --self-test

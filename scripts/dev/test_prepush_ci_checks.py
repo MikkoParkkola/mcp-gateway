@@ -91,18 +91,29 @@ def pr_workflows(root: pathlib.Path) -> list[pathlib.Path]:
     return sorted(p for p in found if _is_pr(_load(p)))
 
 
-def _steps(root, path, seen):
-    """(workflow name, step) for every step, following local reusable-workflow calls."""
+def _job_steps(root, path, seen, caller=""):
+    """(workflow path, workflow env, job, job name chain, step) for every step,
+    following local reusable-workflow calls (the caller's name is carried)."""
     if path in seen:
         return
     seen.add(path)
-    for job in (_load(path).get("jobs") or {}).values():
-        uses = job.get("uses", "") if isinstance(job, dict) else ""
-        if uses.startswith("./.github/workflows/"):
-            yield from _steps(root, root / uses[2:], seen)
+    doc = _load(path)
+    for job in (doc.get("jobs") or {}).values():
+        if not isinstance(job, dict):
             continue
-        for step in (job.get("steps") or []) if isinstance(job, dict) else []:
-            yield path.name, step
+        names = f"{caller} / {job.get('name', '')}" if caller else str(job.get("name", ""))
+        uses = job.get("uses", "")
+        if uses.startswith("./.github/workflows/"):
+            yield from _job_steps(root, root / uses[2:], seen, names)
+            continue
+        for step in job.get("steps") or []:
+            yield path, doc.get("env") or {}, job, names, step
+
+
+def _steps(root, path, seen):
+    """(workflow name, step) for every step, following local reusable-workflow calls."""
+    for workflow, _, _, _, step in _job_steps(root, path, seen):
+        yield workflow.name, step
 
 
 def _scan(root):
@@ -202,77 +213,178 @@ def _module_resolver():
     return module.declarations
 
 
+INCLUDE = re.compile(r'\binclude!\s*\(\s*"([^"]+)"\s*\)')
+
+
 def _sources(target):
-    """`target` and every file its module tree pulls in, resolved as rustc does."""
+    """`target` and every file its module tree pulls in, resolved as rustc does:
+    `mod`/`#[path]` through the shared resolver, `include!` textually. A file is
+    visited once per module context, since its `mod` children resolve per context."""
     declarations = _module_resolver()
-    pending, seen = [(target, True)], []
+    pending, visited, files = [(target, True)], set(), []
     while pending:
         source, owns_dir = pending.pop()
-        if source in seen or not source.is_file():
+        if (source, owns_dir) in visited or not source.is_file():
             continue
-        seen.append(source)
+        visited.add((source, owns_dir))
+        if source not in files:
+            files.append(source)
         pending += sorted(declarations(source, owns_dir))
-    return seen
+        text = source.read_text(errors="replace")
+        pending += [((source.parent / rel).resolve(), owns_dir) for rel in INCLUDE.findall(text)]
+    return files
 
 
+# MIK-8733: clippy coverage. A pre-push clippy step covers a CI one when both
+# lint the same code the same way: same profile, same feature selection, a
+# superset of targets, identical lint args and other flags, and the same
+# build-relevant environment (CLIPPY_CONF_DIR above all: the registry ban runs
+# under its own config).
 ALL_TARGETS = frozenset({"lib", "bins", "tests", "benches", "examples"})
+DEFAULT_TARGETS = frozenset({"lib", "bins"})  # cargo's selection with no target flag
+CLIPPY_ENV = re.compile(r"^(CLIPPY_CONF_DIR|RUSTFLAGS|CARGO_ENCODED_RUSTFLAGS|CARGO_BUILD_RUSTFLAGS|CARGO_PROFILE_\w+)$")
+WORKSPACE_PREFIXES = ("${{github.workspace}}/", "${{ github.workspace }}/", "$GITHUB_WORKSPACE/", "${GITHUB_WORKSPACE}/",
+                      "$REPO_ROOT/", "${REPO_ROOT}/")
+CARGO_VALUE_OPTIONS = {"--color", "--config", "-Z", "-C", "--manifest-path"}
+RESOLUTION_ONLY = {"--quiet", "-q", "--locked", "--frozen", "--offline"}
 
 
-def _clippy_key(words):
-    """(release, features, targets, lints, other flags) of `clippy <words>`."""
+def _env_value(value):
+    value = str(value).strip().strip("'\"")
+    for prefix in WORKSPACE_PREFIXES:
+        if value.startswith(prefix):
+            return value[len(prefix):]
+    return value
+
+
+def _clippy_key(words, env):
+    """(profile, features, targets, lints, other flags, env) of `clippy <words>`."""
     flags, lints = (words[:words.index("--")], words[words.index("--") + 1:]) if "--" in words else (words, [])
-    flags = [f for f in flags if f != "--quiet"]
-    targets = ALL_TARGETS if "--all-targets" in flags else frozenset(
-        f[2:] for f in flags if f in ("--lib", "--bins", "--tests", "--benches", "--examples"))
-    features = "all" if "--all-features" in flags else "none" if "--no-default-features" in flags else "default"
-    known = {"--release", "--all-targets", "--all-features", "--no-default-features",
-             "--lib", "--bins", "--tests", "--benches", "--examples"}
-    other = tuple(sorted(f for f in flags if f not in known))
-    return "--release" in flags, features, targets, frozenset(lints), other
+    profile, features, named, targets, other, i = "dev", [], [], set(), [], 0
+    while i < len(flags):
+        flag = flags[i]
+        if flag == "--release":
+            profile = "release"
+        elif flag == "--profile" and i + 1 < len(flags):
+            profile, i = flags[i + 1], i + 1
+        elif flag in ("--features", "-F") and i + 1 < len(flags):
+            features += flags[i + 1].replace(",", " ").split()
+            i += 1
+        elif flag in ("--all-features", "--no-default-features"):
+            named.append(flag)
+        elif flag == "--all-targets":
+            targets |= ALL_TARGETS
+        elif flag in ("--lib", "--bins", "--tests", "--benches", "--examples"):
+            targets.add(flag[2:])
+        elif flag not in RESOLUTION_ONLY:
+            other.append(flag)
+        i += 1
+    env = {k: _env_value(v) for k, v in env.items() if CLIPPY_ENV.match(k)}
+    # The workflow's RUSTFLAGS=-Dwarnings repeats `-- -D warnings`; anything else must match.
+    if env.get("RUSTFLAGS", "").replace(" ", "") == "-Dwarnings" and lints == ["-D", "warnings"]:
+        env.pop("RUSTFLAGS")
+    return (profile, (tuple(sorted(named)), tuple(sorted(features))), frozenset(targets) or DEFAULT_TARGETS,
+            tuple(lints), tuple(other), tuple(sorted(env.items())))
 
 
 def _covers(pre, ci):
-    """Whether pre-push's clippy `pre` checks everything CI's `ci` does."""
-    return pre[0] == ci[0] and pre[1] == ci[1] and pre[2] >= ci[2] and pre[3] >= ci[3] and pre[4] == ci[4]
+    """Whether pre-push's clippy key `pre` lints everything CI's `ci` does, the same way."""
+    return pre[0] == ci[0] and pre[1] == ci[1] and pre[2] >= ci[2] and pre[3:] == ci[3:]
 
 
-def pre_push_clippy(root: pathlib.Path) -> list[str]:
-    """pre-push.sh's clippy steps, as `clippy <args>` strings (MIK-8733)."""
-    found = []
-    for text in (root / "scripts/dev/pre-push.sh").read_text().splitlines():
-        if not text.lstrip().startswith("run_cargo "):
+def _clippy_words(words):
+    """`(prefix env, words after clippy)` when `words` run cargo clippy, else None.
+    Raises ValueError for a subcommand the scan cannot read (an expression)."""
+    env = {}
+    if words[:1] == ["env"]:
+        words = words[1:]
+    while words and workflow_shell.ASSIGN.match(words[0]):
+        name, _, value = words[0].partition("=")
+        env[name], words = value, words[1:]
+    if words[:1] != ["cargo"]:
+        return None
+    i, globals_ = 1, []
+    while i < len(words) and (words[i].startswith("+") or words[i].startswith("-")):
+        globals_.append(words[i])
+        if words[i] in CARGO_VALUE_OPTIONS and i + 1 < len(words):
+            globals_.append(words[i + 1])
+            i += 1
+        i += 1
+    if i < len(words) and "${{" in words[i]:
+        raise ValueError(f"cargo subcommand is an expression: {' '.join(words)}")
+    if i < len(words) and words[i] == "clippy":
+        return env, [g for g in globals_ if not g.startswith("+")] + words[i + 1:]
+    return None
+
+
+def _shell_commands(text):
+    """Every simple command in shell `text` as shlex words (continuations joined)."""
+    for raw in workflow_shell.heredocs_dropped(text.replace("\\\n", " ").splitlines()):
+        for piece in workflow_shell._chains(raw):
+            for stage in workflow_shell._pipe_stages(piece):
+                yield stage
+
+
+def pre_push_clippy(root: pathlib.Path) -> list[tuple[list[str], dict]]:
+    """pre-push.sh's clippy steps: (words after `clippy`, exported env at that line)."""
+    found, env = [], {}
+    for stage in _shell_commands((root / "scripts/dev/pre-push.sh").read_text()):
+        try:
+            words = shlex.split(stage, comments=True)
+        except ValueError:
             continue
-        words = shlex.split(text, comments=True)
-        if words[:1] == ["run_cargo"] and len(words) > 2 and words[2] == "clippy":
-            found.append(" ".join(words[2:]))
+        if words[:1] == ["export"]:
+            for item in words[1:]:
+                name, eq, value = item.partition("=")
+                if eq:
+                    env[name] = value
+        elif words[:1] == ["unset"]:
+            for name in words[1:]:
+                env.pop(name, None)
+        elif words[:1] == ["run_cargo"] and len(words) > 2 and words[2] == "clippy":
+            found.append((words[3:], dict(env)))
     return found
 
 
 def _ci_clippy(root):
-    """(workflow, command words after `cargo clippy`) for every clippy command
-    a PR workflow's pedantic clippy job runs (MIK-8733.REL.3)."""
+    """(workflow, command text, words after clippy, env) for every clippy command a
+    PR workflow's pedantic job runs; an unreadable one is (workflow, text, None, error)."""
     found = []
+    seen = set()
     for workflow in pr_workflows(root):
-        for job in (_load(workflow).get("jobs") or {}).values():
-            if not isinstance(job, dict) or "pedantic" not in str(job.get("name", "")).lower():
+        for path, wf_env, job, names, step in _job_steps(root, workflow, seen):
+            if "pedantic" not in names.lower() or not isinstance(step, dict) or not step.get("run"):
                 continue
-            for step in job.get("steps") or []:
-                for line in str(step.get("run", "") if isinstance(step, dict) else "").splitlines():
-                    for command in workflow_shell._chains(line):
-                        words = shlex.split(command)
-                        if words[:2] == ["cargo", "clippy"]:
-                            found.append((workflow.name, words[2:]))
+            base_env = {**wf_env, **(job.get("env") or {}), **(step.get("env") or {})}
+            for stage in _shell_commands(str(step["run"])):
+                stage = " ".join(stage.split())
+                if "cargo" not in stage:  # not "clippy": `cargo ${{ matrix.cmd }}` must be read
+                    continue
+                try:
+                    hit = _clippy_words(shlex.split(stage))
+                except ValueError as err:
+                    found.append((path.name, stage, None, str(err)))
+                    continue
+                if hit:
+                    found.append((path.name, stage, hit[1], {**base_env, **hit[0]}))
     return found
 
 
 def clippy_problems(root: pathlib.Path) -> list[str]:
-    """A pedantic-job clippy command no pre-push clippy step covers, named."""
-    pre = [_clippy_key(c.split()[1:]) for c in pre_push_clippy(root)] if (root / "scripts/dev/pre-push.sh").exists() else []
-    return [
-        f"pre-push runs no clippy covering CI's: cargo clippy {' '.join(words)} ({name})"
-        for name, words in _ci_clippy(root)
-        if not any(_covers(p, _clippy_key(words)) for p in pre)
-    ]
+    """A pedantic-job clippy command no pre-push clippy step covers, or cannot read, named."""
+    pre_push = root / "scripts/dev/pre-push.sh"
+    pre = [_clippy_key(w, e) for w, e in pre_push_clippy(root)] if pre_push.exists() else []
+    problems = []
+    for name, text, words, env in _ci_clippy(root):
+        if words is None:
+            problems.append(f"cannot read CI clippy command ({name}): {text}: {env}")
+            continue
+        ci = _clippy_key(words, env)
+        if not any(_covers(p, ci) for p in pre):
+            conf = dict(ci[5]).get("CLIPPY_CONF_DIR")
+            where = f" [CLIPPY_CONF_DIR={conf}]" if conf else ""
+            problems.append(f"pre-push runs no clippy covering CI's: {text}{where} ({name})")
+    return problems
 
 
 def rust_targets(root: pathlib.Path) -> list[str]:
@@ -456,31 +568,54 @@ class Rows(unittest.TestCase):
         with self.assertRaises(workflow_shell.UnsupportedSyntax):
             workflow_shell.executions("env -i python3 scripts/g.py")
 
-    # D26 (MIK-8733.REL.3): every clippy command the pedantic job runs is
-    # covered by a pre-push clippy step (same profile and features, a superset
-    # of its targets); one that is not is named.
+    # D26 (MIK-8733.REL.3, r3b): every clippy command the pedantic job runs is
+    # covered by a pre-push clippy step that lints the same code the same way;
+    # each dimension of "the same way" is broken once and must be named.
     def test_d26_a_pedantic_clippy_command_pre_push_lacks_is_named(self):
-        self.t.workflow("ci.yml", (
-            "on:\n  pull_request:\njobs:\n  check:\n    name: Clippy (pedantic)\n    runs-on: ubuntu-latest\n"
-            "    steps:\n"
+        ci = (
+            "on:\n  pull_request:\nenv:\n  RUSTFLAGS: -Dwarnings\njobs:\n  check:\n    name: Clippy (pedantic)\n"
+            "    runs-on: ubuntu-latest\n    steps:\n"
             "      - run: cargo clippy --all-targets --all-features -- -D warnings\n"
-            "      - run: |\n"
-            "          cargo clippy --lib --bins --all-features -- -D warnings\n"
-            "          cargo clippy --release --lib --bins --all-features -- -D warnings\n"
-        ))
-        self.t.pre_push(
-            'run_cargo "clippy all-features" clippy --all-targets --all-features --quiet -- -D warnings\n'
+            "      - env:\n          CLIPPY_CONF_DIR: ${{ github.workspace }}/lint/ban\n"
+            "        run: |\n"
+            "          cargo +stable clippy --release --lib \\\n"
+            "            --bins --all-features -- -D warnings\n"
+            "          cargo --locked clippy -p a --exclude b -- -D warnings\n"
         )
-        found = problems(self.t.root, ci_only={})
-        self.assertEqual(
-            [p for p in found if "clippy" in p],
-            ["pre-push runs no clippy covering CI's: cargo clippy --release --lib --bins --all-features -- -D warnings (ci.yml)"],
+        self.t.workflow("ci.yml", ci)
+        good = (
+            'run_cargo "all" clippy --all-targets --all-features --quiet -- -D warnings\n'
+            'export CLIPPY_CONF_DIR="$REPO_ROOT/lint/ban"\n'
+            'run_cargo "rel" clippy --release --lib --bins --all-features --quiet -- -D warnings\n'
+            'run_cargo "pkg" clippy -p a --exclude b --quiet -- -D warnings\n'
+            "unset CLIPPY_CONF_DIR\n"
         )
-        self.t.pre_push(
-            'run_cargo "clippy all-features" clippy --all-targets --all-features --quiet -- -D warnings\n'
-            'run_cargo "release all" clippy --release --lib --bins --all-features --quiet -- -D warnings\n'
-        )
+        self.t.pre_push(good)
         self.assertEqual([p for p in problems(self.t.root, ci_only={}) if "clippy" in p], [])
+        rel = "cargo +stable clippy --release --lib --bins --all-features -- -D warnings [CLIPPY_CONF_DIR=lint/ban] (ci.yml)"
+        pkg = "cargo --locked clippy -p a --exclude b -- -D warnings [CLIPPY_CONF_DIR=lint/ban] (ci.yml)"
+        broken = {
+            "config dir not exported": (good.replace('export CLIPPY_CONF_DIR="$REPO_ROOT/lint/ban"\n', ""), [rel, pkg]),
+            "feature mode differs": (good.replace("--release --lib --bins --all-features", "--release --lib --bins --no-default-features"), [rel]),
+            "a lint suppressed": (good.replace("--all-features --quiet -- -D warnings\nrun_cargo \"pkg\"", "--all-features --quiet -- -D warnings -A warnings\nrun_cargo \"pkg\""), [rel]),
+            "fewer targets": (good.replace("--release --lib --bins", "--release --lib"), [rel]),
+            "debug profile": (good.replace("clippy --release --lib", "clippy --lib"), [rel]),
+            "flags swapped": (good.replace("-p a --exclude b", "-p b --exclude a"), [pkg]),
+        }
+        for label, (text, expected) in broken.items():
+            with self.subTest(label):
+                self.t.pre_push(text)
+                found = [p for p in problems(self.t.root, ci_only={}) if "clippy" in p]
+                self.assertEqual(sorted(found), sorted(f"pre-push runs no clippy covering CI's: {e}" for e in expected))
+        # A command with no target flag lints lib + bins: a tests-only step does not cover it.
+        self.t.workflow("ci.yml", ci.replace("cargo clippy --all-targets --all-features", "cargo clippy --all-features"))
+        self.t.pre_push(good.replace("clippy --all-targets --all-features", "clippy --tests --all-features"))
+        self.assertIn("pre-push runs no clippy covering CI's: cargo clippy --all-features -- -D warnings (ci.yml)",
+                      problems(self.t.root, ci_only={}))
+        # A subcommand the scan cannot read is named, never dropped.
+        self.t.workflow("ci.yml", ci.replace("cargo --locked clippy", "cargo ${{ matrix.cmd }}"))
+        self.t.pre_push(good)
+        self.assertTrue(any(p.startswith("cannot read CI clippy command") for p in problems(self.t.root, ci_only={})))
 
     # D9
     def test_d9_pull_request_target_counts_as_a_pr_workflow(self):
@@ -626,9 +761,12 @@ class Repository(unittest.TestCase):
             ]),
         )
         self.assertEqual(problems(REPO), [])
-        # MIK-8733.REL.1: the release clippy pair is among pre-push's clippy steps.
-        release = {c for c in pre_push_clippy(REPO) if "--release" in c}
-        self.assertEqual(len(release), 2, release)
+        # MIK-8733.REL.1/3: the scan sees all five pedantic clippy commands (so
+        # "clean" is not vacuous), and the release pair under the registry-ban
+        # config is covered by pre-push's (problems() above is empty).
+        ci = _ci_clippy(REPO)
+        self.assertEqual(len(ci), 5, [c[1] for c in ci])
+        self.assertEqual(sum("--release" in c[1] and "registry-ban" in str(c[3].get("CLIPPY_CONF_DIR")) for c in ci), 2)
         # The gate's own suites run in CI (lead 2026-10-23): the scanner suite
         # also in pre-push (ALREADY), the runner suite in CI only (budget).
         _, already, ci_only = buckets(REPO)
@@ -665,7 +803,18 @@ class Repository(unittest.TestCase):
             (root / "tests/lib2/outer.rs").write_text("mod deeper;\n")
             (root / "tests/lib2/deeper.rs").write_text('pub fn d(){ let _ = std::fs::read("docs/w.md"); }\n')
             (root / "tests/via_deep.rs").write_text('#[path = "lib2/outer.rs"]\nmod outer;\nfn t(){}\n')
-            self.assertEqual(rust_targets(root), ["helper", "via_deep", "via_mod", "via_path"])
+            # `include!` pulls a file in textually (r3 gpt).
+            (root / "tests/inc").mkdir()
+            (root / "tests/inc/reader.rs").write_text('fn r(){ let _ = std::fs::read("docs/v.md"); }\n')
+            (root / "tests/via_include.rs").write_text('include!("inc/reader.rs");\nfn t(){}\n')
+            # One file reached in two module contexts: its `mod` children
+            # resolve differently in each, so both are followed (r3 gpt).
+            (root / "tests/two").mkdir()
+            (root / "tests/two/helper").mkdir()
+            (root / "tests/two/helper.rs").write_text("mod child;\n")
+            (root / "tests/two/helper/child.rs").write_text('fn c(){ let _ = std::fs::read("docs/u.md"); }\n')
+            (root / "tests/via_two.rs").write_text('#[path = "two/helper.rs"]\nmod a;\nmod two { mod helper; }\nfn t(){}\n')
+            self.assertEqual(rust_targets(root), ["helper", "via_deep", "via_include", "via_mod", "via_path", "via_two"])
 
     # R3 (impl r1 F10): the push path checks the derived Rust set against the
     # pinned one, so a derivation regression stops the push, not only this suite.
