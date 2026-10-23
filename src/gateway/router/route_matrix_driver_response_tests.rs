@@ -5,6 +5,8 @@
 //! public seal both installed. Each returns the delivered JSON-RPC body; the
 //! matrix (`route_check_matrix_tests::response`) owns every assertion.
 
+use std::sync::Arc;
+
 use serde_json::{Value, json};
 
 use super::super::direct_guards_fixture::{self as fixture, Answer, post_direct, post_meta_invoke};
@@ -141,21 +143,7 @@ pub(crate) struct Recorded {
 /// both provenance signers on and one transparency log shared by the
 /// `MetaMcp` and the state, as the server wires it.
 pub(crate) async fn signed_recorded_call(route: HttpRoute) -> Recorded {
-    use std::sync::Arc;
-    let dir = tempfile::tempdir().expect("a temporary directory");
-    let config = crate::security::transparency_log::TransparencyLogConfig {
-        enabled: true,
-        path: dir
-            .path()
-            .join("audit.jsonl")
-            .to_string_lossy()
-            .into_owned(),
-        key_id: "resp".to_string(),
-        ..crate::security::transparency_log::TransparencyLogConfig::default()
-    };
-    let log = Arc::new(
-        crate::security::TransparencyLogger::open(Arc::new(config)).expect("the log opens"),
-    );
+    let (dir, log) = temp_log(None);
     let meta_log = Arc::clone(&log);
     let fx = fixture::fixture_hardened_signed_logged(Answer::Ok, Arc::clone(&log), move |meta| {
         let mut meta = dual_signed(meta);
@@ -176,6 +164,40 @@ pub(crate) async fn signed_recorded_call(route: HttpRoute) -> Recorded {
             .1
         }
     };
+    let rows = delivery_rows(&log).await;
+    Recorded {
+        body,
+        rows,
+        _dir: dir,
+    }
+}
+
+/// A transparency log in a fresh directory, under `policy` when one is given
+/// (otherwise the logger's own default).
+fn temp_log(
+    policy: Option<crate::security::audit::AuditFailurePolicy>,
+) -> (tempfile::TempDir, Arc<crate::security::TransparencyLogger>) {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let config = crate::security::transparency_log::TransparencyLogConfig {
+        enabled: true,
+        path: dir
+            .path()
+            .join("audit.jsonl")
+            .to_string_lossy()
+            .into_owned(),
+        key_id: "resp".to_string(),
+        ..crate::security::transparency_log::TransparencyLogConfig::default()
+    };
+    let log = crate::security::TransparencyLogger::open(Arc::new(config)).expect("the log opens");
+    let log = match policy {
+        Some(policy) => log.with_failure_policy(policy),
+        None => log,
+    };
+    (dir, Arc::new(log))
+}
+
+/// `log`'s `response_delivery_attempt` rows, once nothing is in flight.
+async fn delivery_rows(log: &crate::security::TransparencyLogger) -> Vec<Value> {
     // Real time only as a hang guard: the append is out once nothing is in flight.
     let guard = std::time::Instant::now();
     while log.write_in_flight_for_test() {
@@ -185,15 +207,78 @@ pub(crate) async fn signed_recorded_call(route: HttpRoute) -> Recorded {
         );
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    let rows = std::fs::read_to_string(log.path())
+    std::fs::read_to_string(log.path())
         .unwrap_or_default()
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .filter(|row| row["event"] == "response_delivery_attempt")
-        .collect();
-    Recorded {
-        body,
-        rows,
+        .collect()
+}
+
+/// A signed read of a backend text, then a relayed send of that text.
+pub(crate) struct ReadThenRelay {
+    /// The read as delivered.
+    pub(crate) read: Value,
+    /// `k-budget` sending the read's text to `alpha` under nonce `b1`.
+    pub(crate) relayed: Value,
+    _dir: tempfile::TempDir,
+}
+
+/// On the signed, relayed fixture whose backend answers `text`, with a
+/// fail-closed transparency log: `k-std` reads on `route` (nonce `a1`), its
+/// delivery record failing when `record_fails`, then `k-budget` sends the
+/// text on the same route. A relay refusal (-32002) means the read's receipt
+/// was committed as delivered backend text.
+pub(crate) async fn read_then_relay(
+    route: HttpRoute,
+    text: &'static str,
+    record_fails: bool,
+) -> ReadThenRelay {
+    let (dir, log) = temp_log(Some(crate::security::audit::AuditFailurePolicy::FailClosed));
+    let meta_log = Arc::clone(&log);
+    let fx = fixture::fixture_signed_relayed_logged(
+        Answer::Text(text),
+        Arc::clone(&log),
+        move |mut meta| {
+            meta.enable_transparency_log(meta_log);
+            meta
+        },
+    )
+    .await;
+    if record_fails {
+        log.fail_next_append_of_kind_for_test("response_delivery_attempt");
+    }
+    let read = match route {
+        HttpRoute::Mcp => super::signed_invoke(&fx, "k-std", "a1", json!({})).await,
+        HttpRoute::Direct => {
+            super::super::direct_continuation_tests::signed_call(
+                &fx,
+                ("k-std", "alpha"),
+                "a1",
+                json!({}),
+            )
+            .await
+            .1
+        }
+    };
+    let relayed = match route {
+        HttpRoute::Mcp => {
+            super::signed_invoke_on(&fx, ("k-budget", "alpha"), "b1", json!({ "cmd": text })).await
+        }
+        HttpRoute::Direct => {
+            super::super::direct_continuation_tests::signed_call(
+                &fx,
+                ("k-budget", "alpha"),
+                "b1",
+                json!({ "arguments": { "cmd": text } }),
+            )
+            .await
+            .1
+        }
+    };
+    ReadThenRelay {
+        read,
+        relayed,
         _dir: dir,
     }
 }

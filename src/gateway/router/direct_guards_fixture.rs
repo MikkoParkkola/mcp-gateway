@@ -394,6 +394,25 @@ pub(crate) async fn fixture_signed_relayed(answer: Answer) -> Fx {
     fx
 }
 
+/// [`fixture_signed_relayed`] with `log` as the state's transparency log,
+/// `build` arming the signed `MetaMcp` (MIK-8689: a delivery-record failure
+/// meets the relay commit).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_signed_relayed_logged(
+    answer: Answer,
+    log: Arc<crate::security::TransparencyLogger>,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    HARDENED.with(|h| h.set(true));
+    RELAY.with(|r| r.set(true));
+    STATE_LOG.with(|l| *l.borrow_mut() = Some(log));
+    let fx = fixture_inner(answer, true, |meta| build(signing(meta, false))).await;
+    HARDENED.with(|h| h.set(false));
+    RELAY.with(|r| r.set(false));
+    STATE_LOG.with(|l| *l.borrow_mut() = None);
+    fx
+}
+
 /// [`fixture_firewalled`] with relay detection on for `alpha:read` and
 /// `alpha:resources/read`, so the direct route stages receipts (MIK-8022).
 #[cfg(feature = "firewall")]

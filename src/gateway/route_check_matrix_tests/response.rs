@@ -428,7 +428,9 @@ pub(crate) enum Driven {
 /// The row behind every `Ordered` or `ExpectedGap` cell.
 const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> Driven {
     use RespCase::{Fresh, IdempotentReplay};
-    use RespPair::{ClampSeal, FirewallSeal, ShapeSeal, SignRecord, StampSeal};
+    use RespPair::{
+        ClampSeal, FirewallSeal, JudgeRecord, RecordCommit, ShapeSeal, SignRecord, StampSeal,
+    };
     use RespRoute::{Direct, Mcp};
     match (route, case, era, pair) {
         (Mcp | Direct, Fresh, Era::Modern, ShapeSeal) => {
@@ -443,6 +445,15 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
         (Mcp | Direct, Fresh, Era::Modern, SignRecord) => {
             Driven::Row("rows::r_recsign_sign_precedes_delivery_record")
         }
+        (Mcp | Direct, Fresh, Era::Modern, RecordCommit) => {
+            Driven::Row("rows::r_commit_delivery_record_precedes_relay_commit")
+        }
+        (Mcp, Fresh, Era::Modern, JudgeRecord) => Driven::Row(
+            "router::tests::meta_firewall_verdict::caller_key::tenant_reads::a_judged_answer_is_one_record",
+        ),
+        (Direct, Fresh, Era::Legacy, JudgeRecord) => Driven::Row(
+            "router::direct_audit_tests::response_judge::r_recjudge_direct_verdict_rides_the_delivery_record",
+        ),
         (Direct, IdempotentReplay, Era::Legacy, StampSeal) => {
             Driven::Row("rows::r_replayseal_direct_replay_seal_gap")
         }

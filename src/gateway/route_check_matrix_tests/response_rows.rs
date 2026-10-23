@@ -9,8 +9,8 @@
 use serde_json::Value;
 
 use crate::gateway::router::route_matrix_driver_tests::response::{
-    BackendAnswer, HttpRoute, planted_credential, signed_call, signed_recorded_call,
-    signed_redacted_call, signed_replay, trust_set,
+    BackendAnswer, HttpRoute, planted_credential, read_then_relay, signed_call,
+    signed_recorded_call, signed_redacted_call, signed_replay, trust_set,
 };
 use crate::protocol::meta::Era;
 use crate::trust::provenance_public::{VerifyRefusal, VerifyStatus, verify_public};
@@ -119,12 +119,10 @@ async fn r_fwseal_firewall_precedes_seal() {
     }
 }
 
-/// The delivery record's hash of `document`: sha256 over its serde bytes,
-/// keys sorted (`sorted-json-v1`, `delivery_record.rs`).
+/// The delivery record's hash of `document`, as the record computes it
+/// (`sorted-json-v1`).
 fn record_hash(document: &Value) -> String {
-    use sha2::{Digest, Sha256};
-    let bytes = serde_json::to_vec(document).expect("the document serializes");
-    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+    format!("sha256:{}", crate::hashing::canonical_json_sha256(document))
 }
 
 /// R-RECSIGN `sign_precedes_delivery_record` (`Sign` < `DeliveryRecord`;
@@ -164,6 +162,47 @@ async fn r_recsign_sign_precedes_delivery_record() {
             record_hash(&unsigned),
             expected,
             "{row}: the hash tells a signed document from an unsigned one"
+        );
+    }
+}
+
+/// Backend prose past the collusion detector's 48-character floor
+/// (`security/firewall/collusion.rs:73`), so a receipted copy is caught when
+/// another key sends it on.
+const LONG_PROSE: &str =
+    "The quarterly ledger reconciles every account against the vendor statements on file.";
+
+/// R-COMMIT `delivery_record_precedes_relay_commit` (`DeliveryRecord` <
+/// `RelayCommit`; `Mcp`, `Direct` × `Fresh` × `Modern`). With a fail-closed
+/// log whose delivery record fails, the read's answer is replaced by the
+/// audit refusal, and a relayed send of its text is not refused: no receipt
+/// was committed for an answer the client never got. The control is the same
+/// read with the record written: its text is receipted and the relay refused.
+#[tokio::test]
+async fn r_commit_delivery_record_precedes_relay_commit() {
+    for route in [HttpRoute::Mcp, HttpRoute::Direct] {
+        let row = format!("R-COMMIT {route:?}");
+        let control = read_then_relay(route, LONG_PROSE, false).await;
+        assert!(
+            control.read.to_string().contains(LONG_PROSE),
+            "{row}: control: the read delivers the prose: {}",
+            control.read
+        );
+        assert_eq!(
+            control.relayed["error"]["code"], -32002,
+            "{row}: control: delivered prose is receipted and its relay refused: {}",
+            control.relayed
+        );
+        let failed = read_then_relay(route, LONG_PROSE, true).await;
+        assert!(
+            failed.read.get("error").is_some() && !failed.read.to_string().contains(LONG_PROSE),
+            "{row}: the failed delivery record replaced the answer: {}",
+            failed.read
+        );
+        assert!(
+            failed.relayed.get("error").is_none(),
+            "{row}: no receipt for the withheld answer, so the send runs: {}",
+            failed.relayed
         );
     }
 }
