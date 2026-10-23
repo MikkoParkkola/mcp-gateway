@@ -487,8 +487,10 @@ mod rows;
 /// `Undriven` variant with its reason when the first one appears (phase A2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Driven {
-    /// The named row test(s).
+    /// The named row test.
     Row(&'static str),
+    /// Several rows, each driving the pair at one of the route's sites.
+    Rows(&'static [&'static str]),
     /// A route that runs the same function as another: a source-order `pin`
     /// that the route still delegates to it, and the `rows` that drive that
     /// function on the other route (lead ruling, MIK-8689 phase B).
@@ -507,6 +509,10 @@ pub(crate) enum Driven {
     NotStated,
 }
 
+/// The recovered task's seal row: a public scope is clamped, then the
+/// receipt this request minted is sealed Bound to the delivered result.
+const RECOVERED_TASK_SEALED: &str =
+    "meta_mcp::tests::provenance_delivery::tasks_get_with_a_public_scope_is_sealed_as_delivered";
 /// The pin behind an era twin: the tail takes no era or case.
 const NO_CASE_OR_ERA: &str = "response::source_order::the_tail_takes_no_case_or_era";
 /// The pin behind a replay or cache-hit twin: each reaches its route's tail.
@@ -565,14 +571,16 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
         // Phase C: a task's stored result is clamped, then sealed, at the
         // worker (input_round.rs:109-110), whatever era submitted it; the rows
         // drive a real task through `/mcp` (MIK-8398 R14, R19). The recovered
-        // task (upstream.rs:554) is the same pair, pinned by MIK-8398's
-        // `tasks_get_with_a_public_scope_is_sealed_as_delivered`.
-        (Task, TaskCase, _, ClampSeal) => Driven::Row(
+        // task (upstream.rs:554) clamps and seals on its own site, driven by
+        // MIK-8398's `tasks_get_with_a_public_scope_is_sealed_as_delivered`.
+        (Task, TaskCase, _, ClampSeal) => Driven::Rows(&[
             "router::tests::task_execution_adapter::provenance_seal::a_worker_task_with_a_public_scope_is_sealed_as_delivered",
-        ),
-        (Task, TaskCase, _, StampSeal) => Driven::Row(
+            RECOVERED_TASK_SEALED,
+        ]),
+        (Task, TaskCase, _, StampSeal) => Driven::Rows(&[
             "router::tests::task_execution_adapter::provenance_seal::a_task_run_by_the_worker_stores_a_sealed_result",
-        ),
+            RECOVERED_TASK_SEALED,
+        ]),
         (Stdio, Fresh, Era::Modern, ShapeSeal) => {
             Driven::Row("rows::stdio::r_shape_stdio_shape_precedes_seal")
         }
@@ -678,6 +686,11 @@ fn every_stated_response_cell_is_driven_or_explained() {
             match driven(route, at.0, at.1, pair) {
                 Driven::Row(name) => {
                     resolved = !name.trim().is_empty();
+                    break;
+                }
+                Driven::Rows(names) => {
+                    resolved =
+                        !names.is_empty() && names.iter().all(|name| !name.trim().is_empty());
                     break;
                 }
                 Driven::Shared { pin, rows } => {
