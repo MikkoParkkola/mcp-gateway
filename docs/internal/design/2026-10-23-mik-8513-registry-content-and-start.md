@@ -100,7 +100,7 @@ value:
 
 - **npm:** `npm pack --json --pack-destination /work <pkg>@<ver>` reports the `integrity` it computed
   from the downloaded tarball, which must equal the sidecar.
-- **PyPI:** `pip download -d /work --no-deps --require-hashes -r /dev/stdin`.
+- **PyPI:** `pip download -d /work --no-deps --only-binary :all: --require-hashes -r /dev/stdin`.
   The driver writes one requirement line to stdin: `<pkg>==<ver>` followed by
   `--hash=sha256:<v>` for every recorded file. pip accepts `--hash` only per
   requirement. pip refuses a download whose
@@ -166,7 +166,10 @@ environment and no host path:
 - **Environment:** only `-e HOME=/work -e npm_config_cache=/work/.npm
   -e UV_CACHE_DIR=/work/.uv -e UV_TOOL_DIR=/work/tools
   -e UV_TOOL_BIN_DIR=/work/bin -e PATH=/work/bin:<image PATH>
-  -e XDG_CACHE_HOME=/work/.cache`.
+  -e XDG_CACHE_HOME=/work/.cache -e npm_config_ignore_scripts=true
+  -e npm_config_script_shell=/bin/sh`. The last pins the shell `npm exec` runs its command
+  through: unpinned, it is found on a PATH that puts package bins first, so a package bin
+  named `sh` ran on the networked prime step (shown on Spark with a test package).
 - **No secret** is ever passed.
 
 **Images, pinned by digest:**
@@ -192,20 +195,28 @@ it runs as uid 1000.
 
 **Steps.** The first two use the network; the last does not. Fetch runs for every
 pinned entry; prime and start run only for eligible ones, so a `START_SKIP`
-package never runs install scripts or downloads a browser.
+package never downloads a browser.
 
-1. **Fetch and verify:** `npm pack` or `pip download` as above, 120 s cap. This
-   runs for every pinned entry.
+**No package scripts run** (lead ruling 2026-10-23, after review). Every npm step
+gets `npm_config_ignore_scripts=true`, `pip download` takes `--only-binary :all:`,
+and the uv steps take `--no-build`, so no install or build script from a package
+we did not write runs, even inside the container. A pinned server that needs its
+scripts to start FAILs, and that FAIL is a finding to report. Scripts are never
+turned back on to make it pass.
+
+1. **Fetch and verify:** `npm pack` or `pip download --only-binary :all:` as
+   above, 120 s cap. This runs for every pinned entry.
 2. **Prime the launcher users get,** 180 s cap:
-   - npm: `npm exec --yes --package <pkg>@<ver> -- true`. This fills the npx
-     cache, runs install scripts as `npx -y` would (the container is the
-     boundary), and does not start the server.
-   - uvx: `uv tool install <pkg>==<ver>`.
+   - npm: `npm exec --yes --package <pkg>@<ver> -- /usr/bin/true`. This fills the
+     npx cache without running install scripts, and does not start the server.
+     The absolute path stops a package `bin` named `true` from running here,
+     on the one networked step that installs it.
+   - uvx: `uv tool install --no-build <pkg>==<ver>`.
 3. **Start,** in a second container on the same volume with `--network none`,
    60 s cap:
    - npm: `npx --offline -y <pkg>@<ver> <args>`;
-   - uvx: `uvx --offline <pkg>@<ver> <args>`, the launcher users get, served
-     from the primed cache.
+   - uvx: `uvx --offline --no-build <pkg>@<ver> <args>`, the launcher users get,
+     served from the primed cache.
 
    A server that needs the network to start therefore FAILs.
 

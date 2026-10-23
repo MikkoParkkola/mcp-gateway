@@ -255,7 +255,7 @@ def o8_pypi_served_bytes():
         expect(len(fetches) == 1, f"pip download calls: {rec.steps()}")
         _, argv, stdin, _ = fetches[0]
         tail = argv[argv.index("pip"):]
-        expect(tail == ["pip", "download", "-d", "/work", "--no-deps", "--require-hashes", "-r", "/dev/stdin"], tail)
+        expect(tail == ["pip", "download", "-d", "/work", "--no-deps", "--only-binary", ":all:", "--require-hashes", "-r", "/dev/stdin"], tail)
         line = (stdin or b"").decode().strip().split()
         want = ["q==1.0"] + sorted(f"--hash=sha256:{d}" for d in PYPI_FILES.values())
         expect([line[0]] + sorted(line[1:]) == want, f"requirement line {line}")
@@ -338,6 +338,10 @@ ALLOWED_ENV = {
     "UV_TOOL_DIR": "/work/tools",
     "UV_TOOL_BIN_DIR": "/work/bin",
     "XDG_CACHE_HOME": "/work/.cache",
+    # Lead ruling 2026-10-23: no install scripts for package code we did not write.
+    "npm_config_ignore_scripts": "true",
+    # A package bin named `sh` must not become npm exec's shell.
+    "npm_config_script_shell": "/bin/sh",
 }
 COMMON_FLAGS = [
     "--rm", "--read-only", "--log-driver", "none", "-w", "/work", "--cap-drop", "ALL",
@@ -410,6 +414,18 @@ def o11_argv_isolation():
     for step, argv, _, _ in package_steps:
         expect(("-i" in argv) == (step in ("fetch-npm", "fetch-pypi", "start")), f"{step} -i")
         expect(has_seq(argv, ["--network", "none"]) == (step == "start"), f"{step} network")
+    # A PyPI install or launch never builds an sdist, so no package build script runs.
+    for step, argv, _, _ in package_steps:
+        uv_at = next((i for i, a in enumerate(argv) if a in ("uv", "uvx")), None)
+        if step in ("prime", "start") and uv_at is not None:
+            # An option only before the package operand: after it, uvx hands it to the server.
+            operand = argv.index("q==1.0" if step == "prime" else "q@1.0", uv_at)
+            expect("--no-build" in argv[uv_at:operand], f"{step} pypi without --no-build before {argv[operand]}: {argv[uv_at:]}")
+            expect("--no-build" not in argv[operand:], f"{step} pypi passes --no-build to the server: {argv[uv_at:]}")
+        if step == "prime" and "npm" in argv:
+            expect(argv[-2:] == ["--", "/usr/bin/true"], f"npm prime must run /usr/bin/true, not a PATH lookup: {argv[-2:]}")
+    uv_steps = [c[0] for c in package_steps if c[0] in ("prime", "start") and ({"uv", "uvx"} & set(c[1]))]
+    expect(sorted(uv_steps) == ["prime", "start"], f"pypi prime and start not both seen: {uv_steps}")
     hostile_start = [c[1] for c in package_steps if c[0] == "start" and "p@1.0.0" in " ".join(c[1])]
     for argv in hostile_start:
         expect("--x;touch" in argv and "$(id)" in argv, "the entry's args must reach the server as literal argv items")
