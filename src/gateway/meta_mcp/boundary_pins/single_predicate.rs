@@ -210,6 +210,11 @@ fn pat_has_wildcard_or_binding(pat: &syn::Pat) -> bool {
     }
 }
 
+/// Whether a tuple, tuple-struct or slice pattern's elements hold a `..`.
+fn has_rest(elems: &syn::punctuated::Punctuated<syn::Pat, syn::Token![,]>) -> bool {
+    elems.iter().any(|elem| matches!(elem, syn::Pat::Rest(_)))
+}
+
 /// Whether the `ApiKey` path in `pat` passes through an unmodeled shape.
 ///
 /// A `Pat::Struct` or `Pat::Slice` is always unmodeled; a `Pat::Tuple` or
@@ -221,11 +226,7 @@ fn api_path_uses_unmodeled(pat: &syn::Pat) -> bool {
         return pat_mentions_api_key(unwrapped);
     }
     if let syn::Pat::Tuple(tuple) = unwrapped {
-        if tuple
-            .elems
-            .iter()
-            .any(|elem| matches!(elem, syn::Pat::Rest(_)))
-        {
+        if has_rest(&tuple.elems) {
             return pat_mentions_api_key(unwrapped);
         }
         return tuple
@@ -235,11 +236,7 @@ fn api_path_uses_unmodeled(pat: &syn::Pat) -> bool {
             .any(api_path_uses_unmodeled);
     }
     if let syn::Pat::TupleStruct(ts) = unwrapped {
-        if ts
-            .elems
-            .iter()
-            .any(|elem| matches!(elem, syn::Pat::Rest(_)))
-        {
+        if has_rest(&ts.elems) {
             return pat_mentions_api_key(unwrapped);
         }
         return ts
@@ -280,20 +277,12 @@ fn cand_has_unmodeled_at_position(api: &syn::Pat, cand: &syn::Pat) -> bool {
         return true;
     }
     if let syn::Pat::Tuple(tuple) = cand_unwrapped {
-        if tuple
-            .elems
-            .iter()
-            .any(|elem| matches!(elem, syn::Pat::Rest(_)))
-        {
+        if has_rest(&tuple.elems) {
             return true;
         }
     }
     if let syn::Pat::TupleStruct(ts) = cand_unwrapped {
-        if ts
-            .elems
-            .iter()
-            .any(|elem| matches!(elem, syn::Pat::Rest(_)))
-        {
+        if has_rest(&ts.elems) {
             return true;
         }
     }
@@ -323,11 +312,7 @@ fn cand_has_unmodeled_at_position(api: &syn::Pat, cand: &syn::Pat) -> bool {
     if let (syn::Pat::Tuple(api_tuple), syn::Pat::Tuple(cand_tuple)) =
         (api_unwrapped, cand_unwrapped)
     {
-        if api_tuple
-            .elems
-            .iter()
-            .any(|elem| matches!(elem, syn::Pat::Rest(_)))
-        {
+        if has_rest(&api_tuple.elems) {
             return true;
         }
         for (index, api_elem) in api_tuple.elems.iter().enumerate() {
@@ -345,11 +330,7 @@ fn cand_has_unmodeled_at_position(api: &syn::Pat, cand: &syn::Pat) -> bool {
     if let (syn::Pat::TupleStruct(api_ts), syn::Pat::TupleStruct(cand_ts)) =
         (api_unwrapped, cand_unwrapped)
     {
-        if api_ts
-            .elems
-            .iter()
-            .any(|elem| matches!(elem, syn::Pat::Rest(_)))
-        {
+        if has_rest(&api_ts.elems) {
             return true;
         }
         for (index, api_elem) in api_ts.elems.iter().enumerate() {
