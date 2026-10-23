@@ -489,6 +489,7 @@ async fn events_search_visible(name: &str, principal: Option<&str>) -> bool {
         firewall: None,
         audit: None,
         provenance: None,
+        public_provenance: None,
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: crate::events::LiveCredentials::default(),
