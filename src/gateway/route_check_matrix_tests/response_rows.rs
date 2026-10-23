@@ -11,7 +11,8 @@ use serde_json::Value;
 use crate::gateway::router::route_matrix_driver_tests::response::{
     BackendAnswer, CHAIN_NONCE, DELIVERED_PROSE, HttpRoute, STUFFED_SCOPE, chained_public_scope,
     node_verifies, planted_credential, read_then_relay, read_then_relay_rebuilt, signed_call,
-    signed_recorded_call, signed_redacted_call, signed_replay, trust_set,
+    signed_legacy_then_modern_replay, signed_recorded_call, signed_redacted_call, signed_replay,
+    trust_set,
 };
 use crate::protocol::meta::Era;
 use crate::trust::provenance_public::{VerifyRefusal, VerifyStatus, verify_public};
@@ -382,6 +383,33 @@ fn r_fwstamp_redaction_breaks_the_counted_text_gap() {
         "R-FWSTAMP: MIK-8745 gap closed? the redacted text still parses \
          ({delivered}): move the cells to {:?}",
         super::AFTER_MIK_8745
+    );
+}
+
+/// R-ERAREPLAY `cross_era_replay_reshapes_after_the_seal_gap`, `Mcp` ×
+/// `IdempotentReplay` × `Modern` × `ShapeSeal`: `ExpectedGap(MIK-8747)`. The
+/// replay key takes no era, so a modern call is served the answer a legacy
+/// call stored, and the replay's tail shapes it (adding `resultType`) after
+/// it was sealed: the receipt no longer verifies. When MIK-8747 lands this
+/// fails: the cell returns to `NotApplicable(ReplayReservesTheStoredDelivery)`.
+#[tokio::test]
+async fn r_erareplay_cross_era_replay_reshapes_after_the_seal_gap() {
+    let (first, second, calls) = signed_legacy_then_modern_replay(BackendAnswer::Ok).await;
+    assert_eq!(
+        calls, 1,
+        "R-ERAREPLAY: the modern call was a replay: {second}"
+    );
+    assert_sealed_bound("R-ERAREPLAY legacy first", delivered(&first));
+    let result = delivered(&second);
+    assert_eq!(
+        result.get("resultType").and_then(Value::as_str),
+        Some("complete"),
+        "R-ERAREPLAY: the replay's tail shaped the stored legacy answer: {result}"
+    );
+    assert_eq!(
+        verify_public(receipt(result), &trust_set(), Some(result)).err(),
+        Some(VerifyRefusal::ResultMismatch),
+        "R-ERAREPLAY: MIK-8747 gap closed? the cross-era replay's receipt verifies: flip the cell"
     );
 }
 

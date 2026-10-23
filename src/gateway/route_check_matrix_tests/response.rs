@@ -97,6 +97,9 @@ pub(crate) enum RespTicket {
     /// closing JSON of a compact text, so the delivered text no longer
     /// parses while a receipt stamped before the scan keeps its count.
     Mik8745,
+    /// The replay key takes no era, so a modern call can be served a legacy
+    /// call's stored answer, which its tail then shapes after the seal.
+    Mik8747,
 }
 
 /// Why a gap's order difference reaches no delivered outcome today. Closed
@@ -319,7 +322,9 @@ pub(crate) const fn expect(
         (_, _, Era::Legacy, ShapeSeal | StampShape) => NotApplicable(RespNa::NoModernShapeOnLegacy),
         // A replay runs the tail on the stored, already sealed bytes: no mint,
         // so nothing is sealed anew; it does mint a fresh link, after a clamp
-        // that changes nothing (lead rulings, MIK-8689 phase C and R3).
+        // that changes nothing (lead rulings, MIK-8689 phase C and R3). Its
+        // tail still shapes a legacy-stored answer for a modern caller.
+        (Mcp, IdempotentReplay, Era::Modern, ShapeSeal) => ExpectedGap(RespTicket::Mik8747),
         (
             Mcp | Stdio | Direct,
             IdempotentReplay,
@@ -443,8 +448,9 @@ pub(crate) const AFTER_MIK_8745: RespExpect =
 /// The gap set is exactly MIK-8705, expected (a direct replay is not
 /// resealed, both eras), and MIK-8745, expected (Mcp and stdio stamp before a
 /// scan that can break the counted text, fresh and cache hit, both eras;
-/// [`AFTER_MIK_8745`] once it lands). A new, closed or reclassified gap moves
-/// this pin.
+/// [`AFTER_MIK_8745`] once it lands), and MIK-8747, expected (an /mcp modern
+/// replay of a legacy-stored answer is shaped after its seal). A new, closed
+/// or reclassified gap moves this pin.
 #[test]
 fn the_response_table_names_exactly_two_gaps() {
     let gaps: Vec<_> = cells()
@@ -461,7 +467,8 @@ fn the_response_table_names_exactly_two_gaps() {
     };
     assert_eq!(of(RespTicket::Mik8705, false), 2, "{gaps:?}");
     assert_eq!(of(RespTicket::Mik8745, false), 8, "{gaps:?}");
-    assert_eq!(gaps.len(), 10, "the gap set moved: {gaps:?}");
+    assert_eq!(of(RespTicket::Mik8747, false), 1, "{gaps:?}");
+    assert_eq!(gaps.len(), 11, "the gap set moved: {gaps:?}");
     assert_ne!(
         expect(
             RespRoute::Mcp,

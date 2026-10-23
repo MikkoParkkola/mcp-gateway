@@ -110,6 +110,32 @@ pub(crate) async fn signed_replay(route: HttpRoute, answer: Answer) -> (Value, V
     )
 }
 
+/// A keyed `gateway_invoke` of `read` (`r1`) on `/mcp` declared modern:
+/// the protocol version and the key in one `_meta`.
+async fn modern_keyed_invoke(fx: &fixture::Fx) -> Value {
+    let invoke = json!({"server": "alpha", "tool": "read", "arguments": {}});
+    let meta = json!({"_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}}},
+        crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "r1",
+    }});
+    modern_call(fx, "/mcp", ("gateway_invoke", invoke), &meta).await
+}
+
+/// Two calls with one key on `/mcp`: a legacy call stores the answer, then a
+/// modern call with the same key is served it. Returns (first, second,
+/// backend `tools/call` count).
+pub(crate) async fn signed_legacy_then_modern_replay(answer: Answer) -> (Value, Value, usize) {
+    let fx = fixture::fixture_built(answer, dual_signed).await;
+    let first = keyed_call(&fx, HttpRoute::Mcp).await;
+    let second = modern_keyed_invoke(&fx).await;
+    (
+        first,
+        second,
+        fx.calls.load(std::sync::atomic::Ordering::SeqCst),
+    )
+}
+
 /// The egress matrix's planted credential, which a Warn rule on `read`
 /// redacts in a delivered answer (MIK-8155).
 pub(crate) fn planted_credential() -> &'static str {
