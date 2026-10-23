@@ -61,7 +61,12 @@ if [[ -f Cargo.toml ]]; then
   step "public repo hygiene"
   scripts/dev/check-public-repo-hygiene.sh
 
-  # MIK-8410: CI's cargo-free PR-workflow checks, before any cargo step.
+  # MIK-8410: the CI-check gate's own tests first (CI runs them too), then
+  # CI's cargo-free PR-workflow checks, before any cargo step.
+  step "CI-check gate self-tests"
+  python3 scripts/dev/test_prepush_ci_checks.py
+  python3 scripts/dev/test_run_prepush_ci_checks.py
+
   step "CI script checks"
   bash scripts/dev/prepush_ci_step.sh "$base"
 

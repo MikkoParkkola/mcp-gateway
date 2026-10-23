@@ -186,6 +186,13 @@ jobs:
           python3 scripts/ci/shard_tests.py --self-test
           python3 scripts/ci/check_needs.py --self-test
           python3 scripts/ci/test_os_shards.py
+      # The pre-push gate's own tests: the workflow scanner and its drift
+      # buckets, and the runner's fail-closed rows (MIK-8410).
+      - name: Validate the pre-push CI-check scanner and runner (MIK-8410)
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
+          python3 scripts/dev/test_prepush_ci_checks.py
+          python3 scripts/dev/test_run_prepush_ci_checks.py
       - name: Validate the gateway-spawn check against planted spawns
         run: python3 scripts/ci/check-gateway-spawns.py --self-test
       - name: Start the gateway in tests only through its isolating helper

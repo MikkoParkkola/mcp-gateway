@@ -502,6 +502,11 @@ class Repository(unittest.TestCase):
             ]),
         )
         self.assertEqual(problems(REPO), [])
+        # The gate's own suites run in CI and in pre-push itself (lead 2026-10-23).
+        already = buckets(REPO)[1]
+        for suite in ("scripts/dev/test_prepush_ci_checks.py", "scripts/dev/test_run_prepush_ci_checks.py"):
+            self.assertIn((suite, ()), already)
+            self.assertIn((suite, ()), scanned_forms(REPO))
 
     # R2
     def test_r2_rust_targets_are_derived_from_sources(self):
