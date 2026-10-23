@@ -4,7 +4,7 @@
 //! stated cell of [`super::expect`], and the tests that every cited row is a
 //! test in this tree and every stated cell resolves to one.
 
-use super::{RespCase, RespExpect, RespNa, RespPair, RespRoute, cells, expect};
+use super::{Invisible, RespCase, RespExpect, RespNa, RespPair, RespRoute, cells, expect};
 use crate::protocol::meta::Era;
 
 /// Which row drives a stated cell. A cell no row can drive gets an
@@ -235,6 +235,22 @@ const fn replay_row(route: RespRoute, era: Era, pair: RespPair) -> Option<Driven
     })
 }
 
+/// The rows that show an `OrderInvisibleByOutcome` reason holds, where a row
+/// can. `StoredBytesAlreadyClamped` rests on a stored delivery's result being
+/// serialized through the `cacheScope` clamp (`to_value_lossy` is
+/// `serde_json::to_value` over `serialize_delivered_result`).
+const fn invisible_pins(reason: Invisible) -> &'static [&'static str] {
+    match reason {
+        Invisible::StoredBytesAlreadyClamped => {
+            &["protocol::cacheable::clamp_tests::every_non_private_scope_is_delivered_as_private"]
+        }
+        Invisible::JudgeOnlyReplaces
+        | Invisible::StampIgnoresShapedMembers
+        | Invisible::SealWritesOnlyExcludedMeta
+        | Invisible::JudgeReadsNothingSigningAdds => &[],
+    }
+}
+
 /// The rows that show a `NotApplicable` reason holds, where a row can.
 const fn na_pins(reason: RespNa) -> &'static [&'static str] {
     match reason {
@@ -304,8 +320,12 @@ fn every_cited_response_row_is_a_test_in_the_tree() {
     let mut names = std::collections::BTreeSet::new();
     for (route, case, era, pair) in cells() {
         names.extend(cited(driven(route, case, era, pair)));
-        if let RespExpect::NotApplicable(reason) = expect(route, case, era, pair) {
-            names.extend(na_pins(reason).iter().copied());
+        match expect(route, case, era, pair) {
+            RespExpect::NotApplicable(reason) => names.extend(na_pins(reason).iter().copied()),
+            RespExpect::OrderInvisibleByOutcome(reason) => {
+                names.extend(invisible_pins(reason).iter().copied());
+            }
+            _ => {}
         }
     }
     let mut missing = Vec::new();
