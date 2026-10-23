@@ -16,7 +16,7 @@ use crate::gateway::subscription_registry::{DEFAULT_MAX_LISTENERS, SubscriptionR
 use crate::gateway::task_service::execution::{
     CancelDelivery, TaskExecutor, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
 };
-use crate::gateway::task_service::store::CommitStage;
+use crate::gateway::task_service::store::StoreWriteStage;
 use crate::gateway::task_service::{
     CreateOutcome, StoreLimits, Task, TaskOptions, TaskService, TaskStatus, TaskTransition,
 };
@@ -146,7 +146,7 @@ impl Fixture {
         self.service
             .store
             .set_hook(Some(Arc::new(move |stage| {
-                if matches!(stage, CommitStage::Write) {
+                if matches!(stage, StoreWriteStage::Write) {
                     seen.fetch_add(1, Ordering::SeqCst);
                     return Err(std::io::Error::other("injected write failure"));
                 }

@@ -203,13 +203,13 @@ impl TaskExecutor {
     /// the real window in which an admitted task is `Active`.
     ///
     /// Takes no argument and returns nothing so that no caller has to name
-    /// `store::CommitStage` or `store::CommitHook`: `mod store` is private to
+    /// `store::StoreWriteStage` or `store::CommitHook`: `mod store` is private to
     /// this package and stays that way. The hook itself always reports success,
     /// because a hook failure is a store failure and this seam is a barrier.
     #[cfg(test)]
     pub(crate) async fn barrier_on_publication(&self, barrier: Arc<dyn Fn() + Send + Sync>) {
         let hook: super::super::store::CommitHook = Arc::new(move |stage| {
-            if matches!(stage, super::super::store::CommitStage::Published) {
+            if matches!(stage, super::super::store::StoreWriteStage::Published) {
                 barrier();
             }
             Ok(())
@@ -225,7 +225,7 @@ impl TaskExecutor {
         use std::sync::atomic::{AtomicBool, Ordering};
         let armed = Arc::new(AtomicBool::new(true));
         let hook: super::super::store::CommitHook = Arc::new(move |stage| {
-            if matches!(stage, super::super::store::CommitStage::Published)
+            if matches!(stage, super::super::store::StoreWriteStage::Published)
                 && armed.swap(false, Ordering::SeqCst)
             {
                 return Err(std::io::Error::other("injected publication failure"));
@@ -242,7 +242,7 @@ impl TaskExecutor {
     #[cfg(test)]
     pub(crate) async fn barrier_on_record_write(&self, barrier: Arc<dyn Fn() + Send + Sync>) {
         let hook: super::super::store::CommitHook = Arc::new(move |stage| {
-            if matches!(stage, super::super::store::CommitStage::Write) {
+            if matches!(stage, super::super::store::StoreWriteStage::Write) {
                 barrier();
             }
             Ok(())

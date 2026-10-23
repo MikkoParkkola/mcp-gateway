@@ -10,6 +10,7 @@
 //! delivered value names no tenant and a B read after an A read passes.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use axum::{Json, Router, routing::get};
@@ -44,8 +45,15 @@ fn firewall() -> Arc<Firewall> {
 }
 
 /// A loopback upstream naming B, behind a cacheable capability whose
-/// transform keeps only `note`.
-async fn projecting_executor() -> (CapabilityExecutor, crate::capability::CapabilityDefinition) {
+/// transform keeps only `note`. Also returns the count of requests that
+/// reached the upstream, so a test can tell a cache hit from a second call.
+async fn projecting_executor() -> (
+    CapabilityExecutor,
+    crate::capability::CapabilityDefinition,
+    Arc<AtomicUsize>,
+) {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let hits_for_handler = Arc::clone(&hits);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
@@ -53,7 +61,10 @@ async fn projecting_executor() -> (CapabilityExecutor, crate::capability::Capabi
             listener,
             Router::new().route(
                 "/rows",
-                get(|| async { Json(json!({ "customer_id": "cust-b", "note": "x" })) }),
+                get(move || {
+                    hits_for_handler.fetch_add(1, Ordering::SeqCst);
+                    async { Json(json!({ "customer_id": "cust-b", "note": "x" })) }
+                }),
             ),
         )
         .await
@@ -86,7 +97,7 @@ providers:
 "
     ))
     .unwrap();
-    (executor, capability)
+    (executor, capability, hits)
 }
 
 fn cacheable_context() -> CapabilityExecutionContext {
@@ -128,7 +139,7 @@ fn judged_after_a(fw: &Firewall, value: Value, hidden: &ReadAttribution) -> Opti
 #[tokio::test]
 async fn capability_transform_keeps_pre_transform_tenants() {
     let fw = firewall();
-    let (executor, capability) = projecting_executor().await;
+    let (executor, capability, _hits) = projecting_executor().await;
     let (value, hidden) = read(&fw, &executor, &capability).await;
     assert_eq!(
         value,
@@ -150,9 +161,12 @@ async fn capability_transform_keeps_pre_transform_tenants() {
 #[tokio::test]
 async fn capability_executor_cache_restores_attribution() {
     let fw = firewall();
-    let (executor, capability) = projecting_executor().await;
+    let (executor, capability, hits) = projecting_executor().await;
     let _miss = read(&fw, &executor, &capability).await;
     let (value, hidden) = read(&fw, &executor, &capability).await;
+    // MIK-8661 T5: the upstream names B on every call, so without this the
+    // test would pass with the cache off.
+    assert_eq!(hits.load(Ordering::SeqCst), 1, "the second read is a hit");
     assert_eq!(
         value,
         json!({ "note": "x" }),
@@ -166,5 +180,24 @@ async fn capability_executor_cache_restores_attribution() {
         judged_after_a(&fw, value, &hidden),
         Some(ReadVerdict::Flagged),
         "a cached B read after an A read is flagged"
+    );
+}
+
+/// MIK-8661 T5b (PR4.5): an entry stored with no attribution (here, outside any
+/// read scope) is restored on a hit as unread: the hit marks the scope
+/// `uninspected` rather than passing as a read of no tenant.
+#[tokio::test]
+async fn capability_cache_hit_without_stored_attribution_counts_as_unread() {
+    let fw = firewall();
+    let (executor, capability, hits) = projecting_executor().await;
+    executor
+        .execute_with_context(&capability, json!({}), cacheable_context())
+        .await
+        .expect("the capability answers");
+    let (_value, hidden) = read(&fw, &executor, &capability).await;
+    assert_eq!(hits.load(Ordering::SeqCst), 1, "the scoped read is a hit");
+    assert!(
+        hidden.uninspected,
+        "a hit stored without attribution counts as unread: {hidden:?}"
     );
 }

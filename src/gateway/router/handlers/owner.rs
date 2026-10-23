@@ -12,7 +12,7 @@ use super::super::identity::{
 };
 use crate::gateway::auth::live::held_credential;
 use crate::gateway::auth::{AuthenticatedClient, NamedApiKey};
-use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
+use crate::gateway::oauth::OAuthAgentIdentity;
 use crate::gateway::session_id::SessionOwner;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;

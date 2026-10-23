@@ -25,7 +25,7 @@ fn paused_at_final_sync(
     // re-entering here would signal a dropped receiver and fail the write for a
     // reason the test is not about.
     let hook: CommitHook = Arc::new(move |stage| {
-        if stage == CommitStage::DirectorySync && arrivals.fetch_add(1, Ordering::SeqCst) == 0 {
+        if stage == StoreWriteStage::DirectorySync && arrivals.fetch_add(1, Ordering::SeqCst) == 0 {
             entered_tx.send(()).unwrap();
             receiver
                 .lock()
@@ -217,7 +217,7 @@ async fn store_04_two_creations_of_one_task_race_and_exactly_one_record_survives
     let gate = arrivals.clone();
     store
         .set_hook(Some(Arc::new(move |stage| {
-            if stage == CommitStage::Write && gate.fetch_add(1, Ordering::SeqCst) == 0 {
+            if stage == StoreWriteStage::Write && gate.fetch_add(1, Ordering::SeqCst) == 0 {
                 entered_tx.send(()).unwrap();
                 receiver
                     .lock()
@@ -491,7 +491,7 @@ async fn store_03_a_poisoned_store_refuses_every_entry_point_not_only_reads() {
         .unwrap();
     store
         .set_hook(Some(Arc::new(|stage| {
-            if stage == CommitStage::DirectorySync {
+            if stage == StoreWriteStage::DirectorySync {
                 Err(std::io::Error::other("injected settlement failure"))
             } else {
                 Ok(())

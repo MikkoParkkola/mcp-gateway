@@ -22,7 +22,10 @@ jobs:
   feature-combos:
     name: Feature combinations (${{ matrix.shard }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 45, not 20: the windows target shard first installs mingw from the
+    # Ubuntu mirror, and on a slow mirror day that alone took the whole 20
+    # minutes, twice, before any clippy ran (MIK-8761).
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -85,10 +88,54 @@ jobs:
         with:
           components: clippy
           targets: ${{ matrix.target }}
-      # ring and aws-lc-sys build C for the target.
+      # ring and aws-lc-sys build C for the target. The mingw packages come
+      # from a cache after the first run on a runner image: a slow Ubuntu
+      # mirror once spent the shard's whole time limit on this download
+      # (MIK-8761, MIK-8766). The key names the image, so a new image
+      # downloads afresh and apt only ever installs debs fetched for the base
+      # it runs on.
+      - name: Name the mingw package cache
+        id: mingw-key
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        run: echo "key=mingw-debs-${ImageOS:?}-${ImageVersion:?}-gcc-mingw-w64-x86-64" >> "$GITHUB_OUTPUT"
+      - name: Restore the mingw packages
+        id: mingw-cache
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/mingw-debs
+          key: ${{ steps.mingw-key.outputs.key }}
+      # A miss downloads into a scratch dir, with each fetch bounded and
+      # retried so a stalled mirror connection is retried, not waited out.
+      # Hit or miss, apt installs the local debs from the same folder (it
+      # orders pre-dependencies, which a batch dpkg -i does not), so the
+      # cached path runs on every cold run too.
       - name: Install the mingw C toolchain
         if: matrix.target == 'x86_64-pc-windows-gnu'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+        env:
+          CACHE_HIT: ${{ steps.mingw-cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          debs="$HOME/mingw-debs"
+          if [ "$CACHE_HIT" != true ]; then
+            apt_opts=(-o Acquire::Retries=5 -o Acquire::http::Timeout=60)
+            scratch="$RUNNER_TEMP/mingw-apt"
+            mkdir -p "$scratch/partial" "$debs"
+            sudo apt-get "${apt_opts[@]}" update
+            sudo apt-get "${apt_opts[@]}" -o Dir::Cache::Archives="$scratch" \
+              install -y --download-only --no-install-recommends gcc-mingw-w64-x86-64
+            cp "$scratch"/*.deb "$debs"/
+          fi
+          sudo apt-get install -y --no-install-recommends "$debs"/*.deb
+          x86_64-w64-mingw32-gcc --version
+      # Saved now, not at job end: a later clippy failure or timeout still
+      # leaves the next run a filled cache.
+      - name: Save the mingw packages
+        if: matrix.target == 'x86_64-pc-windows-gnu' && steps.mingw-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/mingw-debs
+          key: ${{ steps.mingw-key.outputs.key }}
       # One shared cache for the Linux shards (saved by the first to finish),
       # not one per shard: extra entries would crowd the 10 GB repository
       # cache the required jobs depend on. The Windows-target shard keeps its

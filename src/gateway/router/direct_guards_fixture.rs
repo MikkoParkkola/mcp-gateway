@@ -208,6 +208,16 @@ pub(crate) async fn sanitizing<T, F: std::future::Future<Output = T>>(on: bool, 
     fx
 }
 
+/// Run `build` with the input-schema check off on both backends and nothing
+/// else armed (unsigned), so a directive-named argument reaches dispatch
+/// (MIK-8663 T2). [`fixture_hardened_signed_schema_off`] also arms signing.
+pub(crate) async fn schema_off<T, F: std::future::Future<Output = T>>(build: F) -> T {
+    SCHEMA_OFF.with(|s| s.set(true));
+    let fx = build.await;
+    SCHEMA_OFF.with(|s| s.set(false));
+    fx
+}
+
 /// [`fixture`], for arming that needs the owned builder methods
 /// (`with_profile_registry`, `with_cost_governance`).
 pub(crate) async fn fixture_built(answer: Answer, build: impl FnOnce(MetaMcp) -> MetaMcp) -> Fx {

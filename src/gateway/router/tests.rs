@@ -15,8 +15,8 @@ use crate::config::{
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::test_helpers::MetaMcp;
 use crate::gateway::{
-    AgentAuthState, AgentIdentity as OAuthAgentIdentity, AgentRegistry, GatewayKeyPair,
-    NotificationMultiplexer, ProxyManager, ResolvedAuthConfig,
+    AgentAuthState, AgentRegistry, GatewayKeyPair, NotificationMultiplexer, OAuthAgentIdentity,
+    ProxyManager, ResolvedAuthConfig,
 };
 use crate::mtls::{MtlsConfig, MtlsPolicy};
 use crate::protocol::{JsonRpcResponse, RequestId};
@@ -565,7 +565,7 @@ fn scoped_client(
 /// refusals most worth attributing. Unwired from any assertion until now.
 #[test]
 fn authz_refusal_principal_names_the_authenticated_identity() {
-    use crate::gateway::oauth::AgentIdentity;
+    use crate::gateway::oauth::OAuthAgentIdentity;
     use crate::mtls::CertIdentity;
 
     let api_key = scoped_client("keyed", vec!["*".into()], None);
@@ -575,7 +575,7 @@ fn authz_refusal_principal_names_the_authenticated_identity() {
         "an API-key caller is named by its client name"
     );
 
-    let agent = AgentIdentity {
+    let agent = OAuthAgentIdentity {
         quota_principal: None,
         client_id: "cid".to_string(),
         agent_name: "runner".to_string(),

@@ -121,11 +121,11 @@ pub struct RegistryEntryJson {
     pub setup: Option<&'static str>,
 }
 
-impl From<&'static server_registry::RegistryEntry> for RegistryEntryJson {
-    fn from(e: &'static server_registry::RegistryEntry) -> Self {
+impl From<&'static server_registry::ServerCatalogEntry> for RegistryEntryJson {
+    fn from(e: &'static server_registry::ServerCatalogEntry) -> Self {
         let transport = match e.transport {
-            server_registry::Transport::Stdio => "stdio",
-            server_registry::Transport::Http { .. } => "http",
+            server_registry::CatalogTransport::Stdio => "stdio",
+            server_registry::CatalogTransport::Http { .. } => "http",
         };
         Self {
             name: e.name,

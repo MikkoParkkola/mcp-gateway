@@ -14,7 +14,9 @@ use super::PooledEntry;
 use crate::Result;
 use crate::error::Error;
 use crate::protocol::JsonRpcResponse;
-use crate::protocol::era::{Era, EraObservation, METHOD_NOT_FOUND_CODE, ProbeOutcome, classify};
+use crate::protocol::era::{
+    EraObservation, METHOD_NOT_FOUND_CODE, PeerEra, ProbeOutcome, classify,
+};
 use crate::transport::Transport;
 
 /// Method a modern peer answers with its discovery document.
@@ -130,7 +132,7 @@ fn outcome_of(response: JsonRpcResponse) -> ProbeOutcome {
 /// Read through [`classify`] rather than re-listing the codes, so the set of
 /// modern-only errors lives in exactly one place.
 fn contradicts_legacy(code: i32) -> bool {
-    classify(&ProbeOutcome::Error(code)) == Era::Modern
+    classify(&ProbeOutcome::Error(code)) == PeerEra::Modern
 }
 
 /// Whether an ordinary request's error answer disproves a cached `Modern` verdict.
@@ -158,7 +160,7 @@ impl Backend {
     /// A request routed to a per-user slot is shaped by that slot's own era
     /// instead (MIK-8186). Never probes: a caller asking what is known must not
     /// change what is known.
-    pub async fn cached_era(&self) -> Option<Era> {
+    pub async fn cached_era(&self) -> Option<PeerEra> {
         self.shared_entry().era.cached().await
     }
 
@@ -171,8 +173,8 @@ impl Backend {
     /// modern peer answers.
     pub(super) async fn liveness_method(&self) -> &'static str {
         match self.cached_era().await {
-            Some(Era::Modern) => DISCOVER_METHOD,
-            Some(Era::Legacy) | None => PING_METHOD,
+            Some(PeerEra::Modern) => DISCOVER_METHOD,
+            Some(PeerEra::Legacy) | None => PING_METHOD,
         }
     }
 
@@ -220,7 +222,7 @@ impl Backend {
                 ),
             ));
         }
-        if verdict == Some(Era::Modern) {
+        if verdict == Some(PeerEra::Modern) {
             note_removed_method_refused(&self.name, method);
             return Err(removed_method_refusal(method));
         }
@@ -281,7 +283,7 @@ impl Backend {
         &self,
         transport: &Arc<dyn Transport>,
         entry: &PooledEntry,
-    ) -> crate::protocol::era::Era {
+    ) -> crate::protocol::era::PeerEra {
         let timeout = self.probe_timeout();
         // A start hands over a transport to a process that has only just come
         // up. Any era already determined describes the peer that came before
@@ -350,8 +352,8 @@ impl Backend {
             .era
             .discard_if_serving(
                 |era| match era {
-                    Era::Legacy => contradicts_legacy(code),
-                    Era::Modern => contradicts_modern(method, code),
+                    PeerEra::Legacy => contradicts_legacy(code),
+                    PeerEra::Modern => contradicts_modern(method, code),
                 },
                 // Re-checked under the era lock, and held through the clear: a restart may have
                 // installed and resolved a new peer since the lookup above, or the pool removed

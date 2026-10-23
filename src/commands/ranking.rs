@@ -125,17 +125,26 @@ fn print_ranking_eval_report(report: &RankingEvalCliReport, format: OutputFormat
 }
 
 fn truncate(value: &str, max_chars: usize) -> String {
-    if value.chars().count() <= max_chars {
-        return value.to_string();
-    }
-    let mut s: String = value.chars().take(max_chars.saturating_sub(3)).collect();
-    s.push_str("...");
-    s
+    crate::truncate::truncate(
+        value,
+        crate::truncate::Budget::Chars(max_chars),
+        "...",
+        crate::truncate::Suffix::Within,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::evaluate_ranking_fixture_str;
+
+    /// MIK-8667: a cell cut by characters keeps the result within the
+    /// width, `...` included.
+    #[test]
+    fn a_cut_cell_fits_its_width_by_characters() {
+        assert_eq!(super::truncate("abcdef", 6), "abcdef");
+        assert_eq!(super::truncate("abcdefgh", 6), "abc...");
+        assert_eq!(super::truncate("éééééééé", 6), "ééé...");
+    }
 
     #[test]
     fn eval_accepts_wrapped_fixture_and_omits_query_from_report() {

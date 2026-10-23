@@ -430,12 +430,17 @@ fn evaluate_redirect_internal_range_still_ssrf_rejected() {
 
 #[test]
 fn evaluate_redirect_hop_cap_stops() {
-    // At the fifth prior hop the policy stops following, matching the prior cap,
-    // regardless of whether the target would otherwise be allowed.
+    // The fifth redirect is followed and the sixth stopped: MAX_REDIRECT_HOPS counts redirects followed.
     let decision = evaluate_redirect(
         &url("https://api.example.com/sse"),
         &url("https://api.example.com/again"),
         5,
+    );
+    assert_eq!(decision, RedirectDecision::Follow);
+    let decision = evaluate_redirect(
+        &url("https://api.example.com/sse"),
+        &url("https://api.example.com/again"),
+        6,
     );
     assert_eq!(decision, RedirectDecision::Stop);
 }
@@ -460,6 +465,36 @@ fn evaluate_redirect_cross_origin_rejected_mid_chain() {
             ),
             other => panic!("expected Reject at hop {previous_hops}, got {other:?}"),
         }
+    }
+}
+
+/// The `same_origin` truth table: the transport's origin rule, including a
+/// default port against an explicit one. `doctor` reports through
+/// `transport_follows_redirect`, which uses this same rule.
+#[test]
+fn same_origin_truth_table() {
+    let cases = [
+        ("https://h.test/a", "https://h.test/b", true),
+        ("https://h.test/", "https://h.test:443/", true),
+        ("http://h.test/", "http://h.test:80/x", true),
+        ("https://h.test/", "http://h.test/", false),
+        ("https://h.test/", "https://h.test:8443/", false),
+        ("https://h.test/", "https://g.test/", false),
+        ("http://127.0.0.1:8080/", "http://127.0.0.1:8081/", false),
+        ("http://127.0.0.1:8080/", "http://localhost:8080/", false),
+        (
+            "http://[::1]:8080/",
+            "http://[0:0:0:0:0:0:0:1]:8080/x",
+            true,
+        ),
+        ("http://[::1]:8080/", "http://[::2]:8080/", false),
+    ];
+    for (a, b, expected) in cases {
+        assert_eq!(
+            same_origin(&url(a), &url(b)),
+            expected,
+            "same_origin({a}, {b})"
+        );
     }
 }
 
@@ -606,4 +641,169 @@ async fn an_oauth_transport_shares_one_gate_with_its_client() {
         Arc::ptr_eq(&t.login_gate, &client_gate),
         "an ungated client is given the transport's own gate"
     );
+}
+
+/// One row of [`FOLLOW_CASES`].
+type FollowCase = (
+    bool,
+    &'static [&'static str],
+    u16,
+    &'static str,
+    &'static str,
+    bool,
+);
+
+/// MIK-8660 G4 cases for `transport_follows_redirect`, as
+/// (`hardened`, `private_backends`, status, base, target, followed). A listing
+/// matters only under hardened and only for the backend it names ("b").
+const FOLLOW_CASES: &[FollowCase] = &[
+    (
+        false,
+        &[],
+        301,
+        "https://h.test/a",
+        "https://h.test/b",
+        true,
+    ),
+    (
+        false,
+        &[],
+        302,
+        "https://h.test/a",
+        "https://h.test/b",
+        true,
+    ),
+    (
+        false,
+        &[],
+        303,
+        "https://h.test/a",
+        "https://h.test/b",
+        true,
+    ),
+    (
+        false,
+        &[],
+        307,
+        "https://h.test/a",
+        "https://h.test/b",
+        true,
+    ),
+    (
+        false,
+        &[],
+        308,
+        "https://h.test/a",
+        "https://h.test:443/b",
+        true,
+    ),
+    (
+        false,
+        &[],
+        300,
+        "https://h.test/a",
+        "https://h.test/b",
+        false,
+    ),
+    (
+        false,
+        &[],
+        304,
+        "https://h.test/a",
+        "https://h.test/b",
+        false,
+    ),
+    (
+        false,
+        &[],
+        302,
+        "https://h.test/a",
+        "https://g.test/b",
+        false,
+    ),
+    (
+        false,
+        &[],
+        301,
+        "http://127.0.0.1:9/a",
+        "http://127.0.0.1:9/b",
+        false,
+    ),
+    (
+        false,
+        &["b"],
+        301,
+        "http://127.0.0.1:9/a",
+        "http://127.0.0.1:9/b",
+        false,
+    ),
+    (
+        true,
+        &[],
+        301,
+        "http://127.0.0.1:9/a",
+        "http://127.0.0.1:9/b",
+        false,
+    ),
+    (
+        true,
+        &["c"],
+        301,
+        "http://127.0.0.1:9/a",
+        "http://127.0.0.1:9/b",
+        false,
+    ),
+    (
+        true,
+        &["b"],
+        307,
+        "http://127.0.0.1:9/a",
+        "http://127.0.0.1:9/b",
+        true,
+    ),
+    (
+        true,
+        &["b"],
+        301,
+        "http://127.0.0.1:9/a",
+        "http://127.0.0.1:10/b",
+        false,
+    ),
+    (
+        true,
+        &["b"],
+        301,
+        "http://[::1]:9/a",
+        "http://[::1]:9/b",
+        true,
+    ),
+    (
+        false,
+        &[],
+        301,
+        "http://[::1]:9/a",
+        "http://[::1]:9/b",
+        false,
+    ),
+];
+
+/// MIK-8660 G4: `transport_follows_redirect` is the transport's decision under
+/// the backend's own destination policy, plus the statuses reqwest follows.
+#[test]
+fn transport_follows_redirect_matches_the_runtime_decision() {
+    for &(hardened, private, status, base, target, followed) in FOLLOW_CASES {
+        let mut config = crate::config::Config::default();
+        if hardened {
+            config.security.posture = crate::security::SecurityPosture::Hardened;
+        }
+        config.security.hardened.private_backends =
+            private.iter().map(|name| (*name).to_string()).collect();
+        let base_url = Url::parse(base).expect("case URL parses");
+        let target_url = Url::parse(target).expect("case URL parses");
+        assert_eq!(
+            super::transport_follows_redirect(&config, "b", status, &base_url, &target_url),
+            followed,
+            "{status} {base} -> {target}, hardened {hardened}, private {private:?}"
+        );
+    }
 }

@@ -14,6 +14,9 @@ use serde_json::Value;
 use super::direct_guards_fixture::{Answer, post_direct, post_meta_invoke};
 use crate::gateway::meta_mcp::MetaMcp;
 
+/// MIK-8747: keyed calls across eras on one key.
+#[path = "route_matrix_driver_era_tests.rs"]
+pub(crate) mod era;
 #[path = "route_matrix_driver_response_tests.rs"]
 pub(crate) mod response;
 #[path = "route_matrix_driver_step_tests.rs"]

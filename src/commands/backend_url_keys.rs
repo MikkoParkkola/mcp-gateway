@@ -58,18 +58,9 @@ impl UrlRewrite {
     }
 }
 
-/// The transport key a `url` stands for, by scheme. A private copy of the
-/// library's table, which is not public; a test holds the two equal.
-pub(crate) fn transport_key_for(url: &str) -> Option<&'static str> {
-    let lower = url.to_ascii_lowercase();
-    if lower.starts_with("http://") || lower.starts_with("https://") {
-        Some("http_url")
-    } else if lower.starts_with("ws://") || lower.starts_with("wss://") {
-        Some("ws_url")
-    } else {
-        None
-    }
-}
+/// The transport key a `url` stands for, by scheme: the library's own table,
+/// compiled into this binary too (`src/transport_key.rs`).
+pub(crate) use crate::transport_key::transport_key_for;
 
 /// Rewrite the aliases of every backend, or only of the backends in `only`.
 pub(crate) fn rewrite_url_aliases(text: &str, only: Option<&BTreeSet<String>>) -> UrlRewrite {
