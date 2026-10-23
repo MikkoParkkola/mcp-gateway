@@ -335,10 +335,8 @@ pub(crate) const fn expect(
             OrderInvisibleByOutcome(StoredBytesAlreadyClamped)
         }
         (Direct, IdempotentReplay, _, StampSeal) => ExpectedGap(RespTicket::Mik8705),
-        (Mcp | Stdio, IdempotentReplay, _, StampSeal) => {
-            NotApplicable(RespNa::ReplayReservesTheStoredDelivery)
-        }
-        (Mcp | Stdio | Direct, IdempotentReplay, _, FirewallStamp) => {
+        (Mcp | Stdio, IdempotentReplay, _, StampSeal)
+        | (Mcp | Stdio | Direct, IdempotentReplay, _, FirewallStamp) => {
             NotApplicable(RespNa::ReplayReservesTheStoredDelivery)
         }
         (Mcp | Stdio, _, _, FirewallStamp) => ExpectedGap(RespTicket::Mik8745),
