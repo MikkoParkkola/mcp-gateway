@@ -1,6 +1,6 @@
 # MIK-8511: repin filesystem, memory and sequential-thinking to 2.0.0
 
-Status: draft for confirmation (r2, with the lead's rulings applied; this is the last design round). Operator ruling 2026-10-22: repin all three to
+Status: FINAL (r2 confirmation folded; lead ruling: no further design round). Operator ruling 2026-10-22: repin all three to
 2.0.0 in 4.0.0. The code lands after MIK-8513 (its integrity sidecar and checks,
 final design at b63ace710), which itself lands after #4061 (the
 `RegistryEntry` → `ServerCatalogEntry` rename).
@@ -10,8 +10,8 @@ final design at b63ace710), which itself lands after #4061 (the
 The registry is read when a config is written, never while the gateway serves.
 
 - `mcp-gateway add filesystem|memory|sequential-thinking` writes `@2.0.0`.
-- **`mcp-gateway init` writes memory and sequential-thinking enabled by
-  default**, because `default_enabled` holds: no login, a bounded reach, and
+- **`mcp-gateway init` (and the empty-import wizard, which calls it) writes
+  memory and sequential-thinking enabled by default**, because `default_enabled` holds: no login, a bounded reach, and
   `Setup::Ready`. So every new init gets those two at 2.0.0.
 - filesystem stays add-only (`Setup::NeedsArgs`).
 - **Configs already written keep 1.0.0.**
@@ -91,32 +91,44 @@ move for a deprecated pin; the upgrading note reuses them.
    forces the replacement, its live job verifies the served bytes, and its
    `starts` job proves memory and sequential-thinking answer `initialize`.
    filesystem is skipped there as `needs arguments`.
-3a. **Doctor test.** `src/commands/doctor/npm_pin_tests.rs:158` asserts
-    `current_version(MEMORY_PACKAGE) == "1.0.0"` and moves to `"2.0.0"`. The
-    copy-first hint names the current version. The other `1.0.0` strings in
-    that file are parse fixtures and stay.
-3. **Reviewed hints.** `SEQUENTIAL_THINKING_REVIEWED` becomes `("2.0.0", false,
-   false)`, read from 2.0.0 `dist/index.js` and cited in the PR.
-4. **Roots pin (new test).** A unit test asserts that `initialize_params`
-   declares no `roots` capability. Its message names the dependency: the
-   filesystem server keeps its command-line directories only while the gateway
-   does not offer Roots. Declaring Roots later would hand the stricter 2.0.0
-   roots semantics to every filesystem backend. Today nothing pins this.
-5. **Node 24 floor, where users read requirements:**
-   - `docs/DEPLOYMENT.md:14` and `docs/QUICKSTART.md:26` gain "Node.js 24 or
-     later for the filesystem, memory and sequential-thinking registry entries";
-   - the init and quick-start docs, where every new user reads it, because
-     `init` enables memory and sequential-thinking by default (lead ruling);
+3. **Version-dependent tests.**
+   - `SEQUENTIAL_THINKING_REVIEWED` becomes `("2.0.0", false, false)`, read from
+     2.0.0 `dist/index.js` and cited in the PR.
+   - `src/commands/doctor/npm_pin_tests.rs` moves every assertion on the
+     registry's current version to 2.0.0: the `current_version` row at :158
+     and the copy-first hint assertions at :479, :483, :503 and :525. Only the
+     parser fixtures (:67–74, :410–435) keep `1.0.0`.
+4. **Roots pin.** The existing `build_init_params_contains_version`
+   (`src/transport/stdio_tests.rs:133`) gains an assertion that
+   `initialize_params` declares no `roots` capability. Its message names the
+   dependency: the filesystem server keeps its command-line directories only
+   while the gateway does not offer Roots, and declaring Roots would hand the
+   stricter 2.0.0 roots semantics to every filesystem backend. Today nothing
+   pins this.
+5. **The Node 24 recommendation, where users read requirements** (lead ruling,
+   option A):
+   - the quick-start wizard path and the manual prerequisites in
+     `docs/QUICKSTART.md`, and `docs/DEPLOYMENT.md:14`;
+   - the init docs, because `init` (and the empty-import wizard, which calls
+     it) enables memory and sequential-thinking by default;
    - the README registry table row, if it lists them;
-   - "(Node 24+)" at the end of the three registry descriptions (lead ruling).
+   - "(Node 24+)" at the end of the three registry descriptions.
+
+   It is worded as a recommendation: Node 22 works, and the gateway shows no
+   warning.
 6. **Release notes:**
    - `changelog.d/8511.changed.md`;
-   - `upgrading.d/8511.md` covering: existing configs keep 1.0.0; moving one
-     needs Node 24; the memory graph must be copied first (doctor's copy-first
-     steps); the roots change does not apply through the gateway; a copy-paste
-     check, `node -e 'process.exit(+process.versions.node.split(".")[0] >= 24 ? 0 : 1)' && echo "Node is new enough for 2.0.0"`.
-7. **Revert:** one commit restoring the three `@1.0.0` pins and the three 1.0.0
-   sidecar records. The PR states it.
+   - `upgrading.d/8511.md` covering:
+     - existing configs keep 1.0.0;
+     - Node 24 is recommended for 2.0.0 (Node 22 works, and the gateway shows
+       no warning);
+     - moving a memory config needs the graph copied first (doctor's
+       copy-first steps);
+     - the roots change does not apply through the gateway;
+     - a copy-paste check, `node -e 'process.exit(+process.versions.node.split(".")[0] >= 24 ? 0 : 1)' && echo "Node 24 or later (recommended for 2.0.0)"`.
+7. **Revert:** `git revert` of the whole repin commit, which restores the pins,
+   the sidecar records and the version-dependent tests together. The PR
+   states it.
 
 ## Behaviour proof on Spark (AC: through the gateway)
 
@@ -137,21 +149,27 @@ For each backend, the proof records:
     `read_file` inside one succeeds while one outside is refused;
   - memory: `create_entities` then `read_graph` returns it;
   - sequential-thinking: one `sequentialthinking` step;
-- memory migration, the documented path: on 1.0.0 with the default path,
-  create an entity; copy its `memory.jsonl` to a mounted folder; start 2.0.0
-  with an absolute `MEMORY_FILE_PATH` pointing at it; `read_graph` returns the
-  entity. This proves the upgrading note's steps keep existing data.
+- memory migration, the documented path:
+  1. on 1.0.0 with the default path, create an entity;
+  2. copy its `memory.jsonl` to a mounted folder;
+  3. start 2.0.0 with an absolute `MEMORY_FILE_PATH` pointing at it;
+     `read_graph` returns the entity;
+  4. write a second entity on 2.0.0;
+  5. restart 2.0.0; `read_graph` returns both.
 
-Everything goes into a log with rc lines. The same run on `node:22-slim`
-records what Node 22 users see for each call:
+  This proves the upgrading note's steps keep existing data and that 2.0.0
+  persists across a restart.
 
-- **if every call works,** the floor is documented. The PR states that Node 22
-  works and that the gateway shows no warning; it does not claim EBADENGINE as
-  a user-visible signal;
-- **if any call fails,** the failure text the gateway surfaces is quoted;
-- **if any call hangs past the gateway's request timeout,** stop and report: a
-  hang is the case the AC's "clear message" covers, and it would need its own
-  design.
+Everything goes into a log with rc lines. **The same run on `node:22-slim`
+decides REPLACE.5:**
+
+- **every call works:** REPLACE.5 holds. The PR states that Node 22 works and
+  that the gateway shows no warning; the Node 24 floor ships as a
+  recommendation;
+- **any call fails or hangs:** stop. The original Node clause stands
+  (REPLACE.5's own condition), I return to the lead with the quoted failure,
+  and the reserve option B (a gateway-owned pre-launch Node check) comes back
+  into play.
 
 ## Acceptance criteria mapping
 
@@ -159,60 +177,33 @@ records what Node 22 users see for each call:
 |---|---|
 | REPLACE.2 digests | fetched from npm (above), recorded in the sidecar, checked by MIK-8513's offline and live jobs |
 | REPLACE.2 start proofs | the Spark proof above, all three, Node 24 |
-| REPLACE.2 roots | stated: the change does not reach gateway backends (evidence above); pinned by step 4's test and by the filesystem proof (folder arguments in force, outside path refused). See deviation 1 |
-| REPLACE.2 Node 24 floor | step 5 docs, plus the Node 22 run. See deviation 2 |
 | REPLACE.2 notes | step 6 |
 | REPLACE.2 revert | step 7 |
-| REPLACE.3 | the due date of 2026-12-01 stays until merge. After that, the standing reminder is MIK-8513's live job, which runs on every merge and daily and fails on a deprecated or yanked pin or changed bytes, so the next drift fails CI rather than disappearing |
+| REPLACE.3 | the due date of 2026-12-01 stays until merge. After that, the standing reminder is MIK-8513's live job, which runs on every merge and daily and fails on a deprecated or yanked pin or changed bytes |
+| REPLACE.4 (supersedes REPLACE.2's roots clause; pending ratify) | step 4's assertion, plus the filesystem proof: folder arguments in force, outside path refused |
+| REPLACE.5 (supersedes REPLACE.2's Node clause; pending ratify) | the Node 22 run above, plus step 5's docs as a recommendation; any Node 22 failure restores the original clause |
 
-## Deviations from the AC text, for the lead and the operator
+## Superseded AC text (operator ratify)
 
-1. **"A config that worked at 1.0.0 and no longer does" (roots).** None exists
-   through the gateway. The gateway offers no Roots, so the 2.0.0 roots
-   tightening never activates, and the command-line directories behave as at
-   1.0.0. Proposed reading: the change is stated, shown not to apply, and
-   pinned (step 4). If a breaking config turns up in the Spark proof, it is
-   added as the regression instead.
-2. **"An older Node gives a clear message rather than a hang".** On Node 22,
-   2.0.0 does not hang at start: it answers `initialize`, and npm prints
-   `EBADENGINE`. The Node 22 run decides between "documented floor plus that
-   warning" and a real failure to quote. No gateway-side Node version check is
-   proposed: it would be product code reading `engines` per package, and the
-   floor is upstream's.
+1. **Roots** (REPLACE.4 replaces "a config that worked at 1.0.0 and no longer
+   does"). No such config exists through the gateway. The gateway offers no
+   Roots, so the 2.0.0 roots tightening never activates, and the command-line
+   directories behave as at 1.0.0.
+2. **Node** (REPLACE.5 replaces "the Node 24 floor is declared … an older Node
+   gives a clear message rather than a hang"). On Node 22, 2.0.0 answers
+   `initialize`. npm's EBADENGINE warning goes to the child's stderr, which the
+   gateway never shows (MIK-7978), so there is no message to give. The floor is
+   upstream's and is documented as a recommendation.
 
 ## Lead rulings (2026-10-23)
 
-1. **Option A.** The floor goes into the docs (including init and quick start),
-   the upgrading note, and "(Node 24+)" in the three descriptions. Node 22
-   works, so a pre-launch check would refuse a working setup. B stays in
-   reserve, triggered only if the Node 22 run fails.
+1. **Option A** for the Node floor: docs (including init and quick start), the
+   upgrading note, and "(Node 24+)" in the three descriptions. B, a pre-launch
+   check, stays in reserve and is triggered only if the Node 22 run fails.
 2. **REPLACE.5 reworded** to "works on Node 22; the gateway shows no warning"
-   (still pending the operator's ratify).
-
-## Was open for the lead (r2)
-
-**How users see the Node floor.** EBADENGINE is invisible through the gateway,
-so the floor is visible only where we write it:
-
-- **A (recommended):** the docs, the upgrading note, and "(Node 24+)" in the
-  three registry descriptions. `add` prints no description today, so the
-  suffix shows only where descriptions are listed.
-- **B:** a gateway-owned pre-launch Node major check scoped to these three pins
-  (gpt). This is new product code; it fits only if the Node 22 run shows a
-  failure.
-
-REPLACE.5's wording, "an EBADENGINE warning only", should become "works on
-Node 22; the gateway shows no warning". It is still pending ratify.
-
-## Questions for review (r1)
-
-1. Is the roots reading (deviation 1) sound, or is there a gateway path where a
-   backend does see client Roots? For example, the modern-era input bridge
-   relays `roots/list` to a legacy client.
-2. Should the three registry descriptions carry "(Node 24+)" so users see the
-   floor at `add` time, or are the docs and the upgrading note enough?
-3. Does the Spark proof prove enough "through the gateway", or should the
-   memory graph location change (a new npx directory) also be shown?
+   (pending the operator's ratify).
+3. **Design rounds:** one review plus one confirmation. This is the final
+   design; r2 findings are folded below, with no further round.
 
 ## r1 review folded (gpt SWF, grok SWF)
 
@@ -232,3 +223,18 @@ Node 22; the gateway shows no warning". It is still pending ratify.
 - **Settled:** the reviewers disagreed on a memory demo (grok: none; gpt: a
   migration proof). The migration proof is adopted because it checks the
   upgrading note's own steps.
+
+## r2 confirmation folded (gpt SWF, grok SWF): final
+
+- **Every section now follows REPLACE.5's branch.** Steps 5 and 6, the Node 22
+  run and the AC table describe Node 24 as a recommendation. Any Node 22
+  failure stops the work, restores the original clause, returns to the lead
+  and brings option B back.
+- **The doctor hint assertions** at :479, :483, :503 and :525 move with the pin.
+- **The revert** is the whole repin commit, tests included.
+- **The leftover open sections** are removed.
+- **The wizard paths:** the quick-start wizard path carries the Node note, and
+  the empty-import wizard (which calls `init`) is named.
+- **The roots pin** joins the existing `build_init_params_contains_version`
+  test.
+- **The migration proof** adds a 2.0.0 write, a restart, and a read.
