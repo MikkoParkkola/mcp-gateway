@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8745 E1/E2: a redacted `wrap_tool_success` answer is still the
-//! gateway's own printing, so `delivered_value` reads it decoded and the final
-//! receipt is staged from the redacted value the caller reads.
+//! MIK-8745 E1: a redacted `wrap_tool_success` answer is still the gateway's
+//! own printing, so `delivered_value` reads it decoded. E2, the receipt staged
+//! from that value, is pinned end to end by the relay rows in
+//! `relay_plan_route.rs` (MIK-7998 DECODE.1 and DECODE.2).
 
 use serde_json::json;
 

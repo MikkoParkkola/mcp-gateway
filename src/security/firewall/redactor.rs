@@ -29,8 +29,13 @@ use std::collections::{HashMap, HashSet};
 use regex::{Regex, RegexSet};
 use serde_json::{Map, Value};
 
+use super::json_literal::{self, Literal};
 use super::{Finding, FindingLocation, ScanType};
 use crate::security::Severity;
+
+/// The largest JSON-in-text leaf whose credential spans are redacted inside
+/// its string values (MIK-8745); a larger one is redacted whole, as before.
+const B2_MAX_LEAF_BYTES: usize = 1 << 20;
 
 /// Pre-compiled credential/PII redactor.
 pub struct Redactor {
@@ -177,7 +182,9 @@ impl Redactor {
             Value::String(s) => {
                 if self.set.is_match(s)
                     && !exempt(s)
-                    && let Some(redacted) = self.redact_text(s, Site::Value, findings)
+                    && let Some(redacted) = self
+                        .redact_json_text(s, findings)
+                        .or_else(|| self.redact_text(s, Site::Value, findings))
                 {
                     *s = redacted;
                 }
@@ -236,32 +243,64 @@ impl Redactor {
             .flat_map(|&idx| overlapping_spans(&self.regexes[idx], text))
             .collect();
         spans.sort_unstable();
-        let mut redacted = String::with_capacity(text.len());
-        let mut cursor = 0;
-        for (start, end) in merge_spans(spans) {
-            redacted.push_str(&text[cursor..start]);
-            redacted.push_str(REDACTED);
-            cursor = end;
+        let redacted = replace_spans(text, &merge_spans(spans));
+        self.record_findings(&matched, &redacted, site, findings);
+        Some(redacted)
+    }
+
+    /// `text` redacted inside the string values a credential span overlaps,
+    /// when `text` is a JSON document: today's spans, each clipped to the
+    /// value literals it covers and widened to whole escapes. The quotes,
+    /// punctuation, keys and scalars a span crosses stay as sent, so the text
+    /// still parses (MIK-8745). `None` leaves the leaf to
+    /// [`Self::redact_text`]: not a document, over the size cap, or a span
+    /// that starts inside a key.
+    fn redact_json_text(&self, text: &str, findings: &mut Vec<Finding>) -> Option<String> {
+        b2_gate(text)?;
+        let spans = self.credential_spans(text);
+        let literals = json_literal::string_literals(text);
+        let starts_in_value = |at: usize| {
+            let after = literals.partition_point(|lit| lit.start <= at);
+            after
+                .checked_sub(1)
+                .is_some_and(|i| at < literals[i].end && !literals[i].key)
+        };
+        if !spans.iter().all(|&(start, _)| starts_in_value(start)) {
+            tracing::debug!(
+                "a credential span starts outside a string value; redacting the leaf whole"
+            );
+            return None;
         }
-        redacted.push_str(&text[cursor..]);
+        let redacted = replace_spans(text, &project(text, &spans, &literals));
+        let matched: Vec<usize> = self.set.matches(text).into_iter().collect();
+        self.record_findings(&matched, &redacted, Site::Value, findings);
+        Some(redacted)
+    }
+
+    /// One finding per matched pattern, showing `redacted`.
+    fn record_findings(
+        &self,
+        matched: &[usize],
+        redacted: &str,
+        site: Site,
+        findings: &mut Vec<Finding>,
+    ) {
         // A finding shows the redacted text: a bare 40-char token would
         // otherwise survive the truncation whole in the in-process excerpt.
         let suffix = match site {
             Site::Value => "",
             Site::Key => " (object key)",
         };
-        let shown = redacted.as_str();
-        for &idx in &matched {
+        for &idx in matched {
             findings.push(Finding {
                 scan_type: ScanType::Credentials,
                 severity: Severity::High,
                 description: format!("Credential detected: {}{suffix}", self.descriptions[idx]),
                 // Truncate so the actual secret is not propagated.
-                matched: truncate(shown, 40),
+                matched: truncate(redacted, 40),
                 location: FindingLocation::ResponseContent,
             });
         }
-        Some(redacted)
     }
 
     /// A JSON member the generic API-key rule describes: the key is one of its
@@ -355,6 +394,78 @@ fn overlapping_spans(re: &Regex, text: &str) -> Vec<(usize, usize)> {
         at = next.max(floor);
     }
     spans
+}
+
+/// The parsed document when `text` is JSON whose credential spans can be
+/// redacted inside its string values: an object, an array or a string, within
+/// the size cap. One function, so MIK-8756 can widen the entry.
+fn b2_gate(text: &str) -> Option<Value> {
+    let opens = matches!(
+        text.trim_start().as_bytes().first(),
+        Some(b'{' | b'[' | b'"')
+    );
+    if text.len() > B2_MAX_LEAF_BYTES || !opens {
+        return None;
+    }
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .filter(|value| value.is_object() || value.is_array() || value.is_string())
+}
+
+/// `spans` (merged, in order) clipped to every value literal they overlap,
+/// each piece widened to whole escapes so no escape is cut, then merged.
+/// Spans and literals are both in order, so this is one pass over each, and
+/// each end is widened by a binary search of its literal's escapes.
+fn project(text: &str, spans: &[(usize, usize)], literals: &[Literal]) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut first = 0;
+    for lit in literals.iter().filter(|lit| !lit.key) {
+        while first < spans.len() && spans[first].1 <= lit.start {
+            first += 1;
+        }
+        let mut lit_escapes = None;
+        for &(start, end) in spans[first..].iter().take_while(|span| span.0 < lit.end) {
+            let (mut from, mut to) = (start.max(lit.start), end.min(lit.end));
+            if from >= to {
+                continue; // an empty value: the span covers none of its bytes
+            }
+            let escapes = lit_escapes
+                .get_or_insert_with(|| json_literal::escapes(&text[lit.start..lit.end], lit.start));
+            if let Some(escape) = escape_around(escapes, from) {
+                from = escape.0;
+            }
+            if let Some(escape) = escape_around(escapes, to) {
+                to = escape.1;
+            }
+            ranges.push((from, to));
+        }
+    }
+    ranges.sort_unstable();
+    merge_spans(ranges)
+}
+
+/// The escape in `escapes` (in order, disjoint) that `at` falls strictly
+/// inside, if any.
+fn escape_around(escapes: &[(usize, usize)], at: usize) -> Option<(usize, usize)> {
+    let after = escapes.partition_point(|escape| escape.0 < at);
+    after
+        .checked_sub(1)
+        .map(|i| escapes[i])
+        .filter(|escape| at < escape.1)
+}
+
+/// `text` with every range in `ranges` (merged, in order) replaced by the
+/// redaction marker.
+fn replace_spans(text: &str, ranges: &[(usize, usize)]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0;
+    for &(start, end) in ranges {
+        out.push_str(&text[cursor..start]);
+        out.push_str(REDACTED);
+        cursor = end;
+    }
+    out.push_str(&text[cursor..]);
+    out
 }
 
 /// Merge sorted spans that overlap or touch, so no character between two

@@ -287,7 +287,8 @@ fn a3_family_table_every_rule_in_three_carriers() {
 #[test]
 fn b1_a_value_the_greedy_span_covers_stays_hidden() {
     let url = db_url("postgres", "u", "h");
-    let text = json!({ "url": url, "password": "xyz" }).to_string();
+    // Built by hand: `json!` sorts keys and would put the URL last.
+    let text = format!(r#"{{"url":"{url}","password":"xyz"}}"#);
     let out = assert_projected(&text);
     assert_eq!(out, format!(r#"{{"url":"{MARK}","password":"{MARK}"}}"#));
 }
@@ -307,7 +308,7 @@ fn b2_url_then_api_key_assignment_in_one_literal() {
 
 #[test]
 fn b3_url_with_an_escaped_space_in_its_userinfo() {
-    let text = format!(r#"{{"s":"{}://u:pw SECRET@host/db"}}"#, "redis");
+    let text = format!(r#"{{"s":"{}://u:pw\u0020SECRET@host/db"}}"#, "redis");
     let out = assert_projected(&text);
     assert!(parses(&out), "{out}");
     assert!(!out.contains("SECRET@host"), "{out}");
@@ -322,8 +323,8 @@ fn b4_api_key_ending_on_the_strings_own_quote() {
 
 #[test]
 fn b5_span_starting_in_an_escapes_hex_digits() {
-    // `0` decodes to `0`; the raw text holds `0x…` from its last digit.
-    let text = format!(r#"{{"s":"0x{}"}}"#, "e".repeat(64));
+    // `\u0030` decodes to `0`; the raw text holds `0x…` from its last digit.
+    let text = format!(r#"{{"s":"\u0030x{}"}}"#, "e".repeat(64));
     let out = assert_projected(&text);
     assert!(parses(&out), "{out}");
     assert!(
@@ -334,7 +335,10 @@ fn b5_span_starting_in_an_escapes_hex_digits() {
 
 #[test]
 fn b6_surrogate_pair_inside_a_span_is_replaced_whole() {
-    let text = format!(r#"{{"s":"{}/😀x","n":1}}"#, db_url("redis", "u:pw", "h"));
+    let text = format!(
+        r#"{{"s":"{}/\ud83d\ude00x","n":1}}"#,
+        db_url("redis", "u:pw", "h")
+    );
     let out = assert_projected(&text);
     let parsed: Value = serde_json::from_str(&out).expect("parses");
     assert_eq!(parsed["n"], 1);
@@ -342,8 +346,39 @@ fn b6_surrogate_pair_inside_a_span_is_replaced_whole() {
 }
 
 #[test]
+fn b6b_span_starting_in_a_low_surrogate_takes_the_whole_pair() {
+    // The pair's last hex digit is `0`, so the raw text holds `0x` from
+    // inside the low surrogate; widening to that escape alone would leave a
+    // lone high surrogate, which no longer parses.
+    let text = format!(r#"{{"s":"\ud83d\ude00x{}"}}"#, "e".repeat(64));
+    let out = assert_projected(&text);
+    assert_eq!(out, format!(r#"{{"s":"{MARK}"}}"#));
+}
+
+#[test]
+fn b6c_an_empty_value_the_span_crosses_stays_empty() {
+    let text = format!(r#"{{"a":"{}","b":"","c":1}}"#, pg_url());
+    let out = assert_projected(&text);
+    assert_eq!(out, format!(r#"{{"a":"{MARK}","b":"","c":1}}"#));
+}
+
+#[test]
+fn b6d_many_matches_and_escapes_in_one_literal() {
+    use std::fmt::Write as _;
+    let mut body = String::new();
+    for i in 0..2_000 {
+        write!(body, "AKIA{i:016} \\n ").unwrap();
+    }
+    let text = format!(r#"{{"s":"{body}"}}"#);
+    let out = assert_projected(&text);
+    assert_eq!(out.matches(MARK).count(), 2_000);
+}
+
+#[test]
 fn b7_short_url_in_compact_json() {
-    let text = json!({ "u": db_url("redis", ":pw", "h/0"), "n": 1 }).to_string();
+    // Built by hand so the URL comes first: alone at the end it is under the
+    // rule's 10-character floor, on base too.
+    let text = format!(r#"{{"u":"{}","n":1}}"#, db_url("redis", ":pw", "h/0"));
     let out = assert_projected(&text);
     assert_eq!(out, format!(r#"{{"u":"{MARK}","n":1}}"#));
 }
@@ -386,9 +421,12 @@ fn b10_residual_numeric_secret_after_url_is_visible() {
 #[test]
 fn b11_an_escaped_lookalike_is_copied_raw() {
     let plain = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
-    let text = format!(r#"{{"s":"{plain} AKIA{}"}}"#, "1".repeat(16));
+    let text = format!(r#"{{"s":"{plain} \u0041KIA{}"}}"#, "1".repeat(16));
     let out = assert_projected(&text);
-    assert_eq!(out, format!(r#"{{"s":"{MARK} AKIA{}"}}"#, "1".repeat(16)));
+    assert_eq!(
+        out,
+        format!(r#"{{"s":"{MARK} \u0041KIA{}"}}"#, "1".repeat(16))
+    );
 }
 
 // ── C: structure and fallback ─────────────────────────────────────────────
@@ -505,29 +543,29 @@ impl Gen {
         match kind {
             0 | 1 => {
                 let mut map = Map::new();
-                for i in 0..(1 + self.next() % 3) {
+                for i in 0..=self.next() % 3 {
                     let key = format!("{}{i}", self.pick(&["k", "name", "rows", "e\u{e9}"]));
                     map.insert(key, self.value(depth - 1, secret && i == 0));
                 }
                 Value::Object(map)
             }
             2 => Value::Array(
-                (0..(1 + self.next() % 3))
+                (0..=self.next() % 3)
                     .map(|i| self.value(depth - 1, secret && i == 0))
                     .collect(),
             ),
             3 => Value::String(self.string(secret)),
             4 => json!(self.next() % 1000),
-            _ => json!(self.next() % 2 == 0),
+            _ => json!(self.next().is_multiple_of(2)),
         }
     }
     fn document(&mut self, secret: bool) -> String {
-        let root = if self.next() % 2 == 0 {
+        let root = if self.next().is_multiple_of(2) {
             json!({ "a": self.value(2, secret), "b": self.value(2, false) })
         } else {
             json!([self.value(2, secret), self.value(2, false)])
         };
-        if self.next() % 2 == 0 {
+        if self.next().is_multiple_of(2) {
             root.to_string()
         } else {
             serde_json::to_string_pretty(&root).unwrap()
@@ -608,5 +646,69 @@ fn e5_plain_text_spans_are_unchanged() {
     assert_eq!(
         redactor().credential_spans(&long),
         [(4, 4 + pg_url().len())]
+    );
+}
+
+// ── F: cost ───────────────────────────────────────────────────────────────
+
+/// F1: the projection on a document near the size cap, of short literals with
+/// one connection string (sparse) or one in every 10 (dense), against base's
+/// whole-leaf path. Timing, so run by hand on Spark:
+/// `cargo test --lib -- --ignored f1_projection_cost --nocapture`.
+#[test]
+#[ignore = "timing; run by hand"]
+fn f1_projection_cost() {
+    use std::fmt::Write as _;
+    for every in [50_000_usize, 10] {
+        let mut text = String::from("[");
+        let mut i = 0_usize;
+        while text.len() < CAP - 200 {
+            if i > 0 {
+                text.push(',');
+            }
+            if i.is_multiple_of(every) {
+                write!(text, "\"{}\"", pg_url()).unwrap();
+            } else {
+                text.push_str("\"short\"");
+            }
+            i += 1;
+        }
+        text.push(']');
+        let started = std::time::Instant::now();
+        let (out, _) = deliver(&text);
+        let projected = started.elapsed();
+        let started = std::time::Instant::now();
+        let whole = today(&text);
+        let base = started.elapsed();
+        assert!(parses(&out), "every {every}");
+        assert_ne!(out, whole, "every {every}: the projection must have run");
+        let ratio = projected.as_secs_f64() / base.as_secs_f64();
+        println!("every {every}: projection {projected:?}, whole leaf {base:?}, ratio {ratio:.2}");
+        assert!(
+            ratio < 3.0,
+            "every {every}: ratio {ratio:.2} over the plan's 3x"
+        );
+    }
+    // One literal near the cap with 40 000 matches, each beside an escape: the
+    // escape widening must stay a search, not a rescan per match.
+    let mut body = String::new();
+    for i in 0..40_000 {
+        write!(body, "AKIA{i:016} \\n ").unwrap();
+    }
+    let text = format!(r#"{{"s":"{body}"}}"#);
+    let started = std::time::Instant::now();
+    let (out, _) = deliver(&text);
+    let projected = started.elapsed();
+    let started = std::time::Instant::now();
+    let whole = today(&text);
+    let base = started.elapsed();
+    assert_eq!(out, whole, "matches inside one literal redact as base");
+    let ratio = projected.as_secs_f64() / base.as_secs_f64();
+    println!(
+        "one literal, 40000 matches: projection {projected:?}, whole leaf {base:?}, ratio {ratio:.2}"
+    );
+    assert!(
+        ratio < 3.0,
+        "dense escapes: ratio {ratio:.2} over the plan's 3x"
     );
 }
