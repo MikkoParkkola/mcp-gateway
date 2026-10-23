@@ -1,6 +1,6 @@
 # MIK-8511: repin filesystem, memory and sequential-thinking to 2.0.0
 
-Status: draft for review (r2: r1 seat findings folded, see the end). Operator ruling 2026-10-22: repin all three to
+Status: draft for confirmation (r2, with the lead's rulings applied; this is the last design round). Operator ruling 2026-10-22: repin all three to
 2.0.0 in 4.0.0. The code lands after MIK-8513 (its integrity sidecar and checks,
 final design at b63ace710), which itself lands after #4061 (the
 `RegistryEntry` → `ServerCatalogEntry` rename).
@@ -105,8 +105,10 @@ move for a deprecated pin; the upgrading note reuses them.
 5. **Node 24 floor, where users read requirements:**
    - `docs/DEPLOYMENT.md:14` and `docs/QUICKSTART.md:26` gain "Node.js 24 or
      later for the filesystem, memory and sequential-thinking registry entries";
+   - the init and quick-start docs, where every new user reads it, because
+     `init` enables memory and sequential-thinking by default (lead ruling);
    - the README registry table row, if it lists them;
-   - optionally the entry descriptions (question 2).
+   - "(Node 24+)" at the end of the three registry descriptions (lead ruling).
 6. **Release notes:**
    - `changelog.d/8511.changed.md`;
    - `upgrading.d/8511.md` covering: existing configs keep 1.0.0; moving one
@@ -178,7 +180,16 @@ records what Node 22 users see for each call:
    proposed: it would be product code reading `engines` per package, and the
    floor is upstream's.
 
-## Open for the lead (r2)
+## Lead rulings (2026-10-23)
+
+1. **Option A.** The floor goes into the docs (including init and quick start),
+   the upgrading note, and "(Node 24+)" in the three descriptions. Node 22
+   works, so a pre-launch check would refuse a working setup. B stays in
+   reserve, triggered only if the Node 22 run fails.
+2. **REPLACE.5 reworded** to "works on Node 22; the gateway shows no warning"
+   (still pending the operator's ratify).
+
+## Was open for the lead (r2)
 
 **How users see the Node floor.** EBADENGINE is invisible through the gateway,
 so the floor is visible only where we write it:
