@@ -619,3 +619,45 @@ fn e5_plain_text_spans_are_unchanged() {
         [(4, 4 + pg_url().len())]
     );
 }
+
+// ── F: cost ───────────────────────────────────────────────────────────────
+
+/// F1: the projection on a document near the size cap, of short literals with
+/// one connection string (sparse) or one in every 10 (dense), against base's
+/// whole-leaf path. Timing, so run by hand on Spark:
+/// `cargo test --lib -- --ignored f1_projection_cost --nocapture`.
+#[test]
+#[ignore = "timing; run by hand"]
+fn f1_projection_cost() {
+    use std::fmt::Write as _;
+    for every in [50_000_usize, 10] {
+        let mut text = String::from("[");
+        let mut i = 0_usize;
+        while text.len() < CAP - 200 {
+            if i > 0 {
+                text.push(',');
+            }
+            if i.is_multiple_of(every) {
+                write!(text, "\"{}\"", pg_url()).unwrap();
+            } else {
+                text.push_str("\"short\"");
+            }
+            i += 1;
+        }
+        text.push(']');
+        let started = std::time::Instant::now();
+        let (out, _) = deliver(&text);
+        let projected = started.elapsed();
+        let started = std::time::Instant::now();
+        let whole = today(&text);
+        let base = started.elapsed();
+        assert!(parses(&out), "every {every}");
+        assert_ne!(out, whole, "every {every}: the projection must have run");
+        let ratio = projected.as_secs_f64() / base.as_secs_f64();
+        println!("every {every}: projection {projected:?}, whole leaf {base:?}, ratio {ratio:.2}");
+        assert!(
+            ratio < 3.0,
+            "every {every}: ratio {ratio:.2} over the plan's 3x"
+        );
+    }
+}
