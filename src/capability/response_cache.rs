@@ -75,4 +75,10 @@ impl ResponseCache {
         };
         self.entries.insert(key.to_string(), entry);
     }
+
+    /// MIK-8661 T1 seam: the entry count; deleted with this fork.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
 }
