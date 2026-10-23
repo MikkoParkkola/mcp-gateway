@@ -140,6 +140,7 @@ fn discovery_client(
         .redirect(crate::security::ssrf::ssrf_redirect_policy())
         .user_agent("mcp-gateway/2.5 capability-discovery")
         .build()
+        // invariant: the builder carries no proxy, certificate or identity input, so only TLS backend initialisation can fail this build
         .expect("Failed to create HTTP client")
 }
 

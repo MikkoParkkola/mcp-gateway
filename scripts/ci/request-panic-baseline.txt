@@ -4,7 +4,6 @@ src/backend/pool.rs	.expect("PoolKey::Shared is inserted at construction and nev
 src/backend/pool.rs	.expect("the shared slot is never refused admission")	1
 src/capability/discovery/html_scanner.rs	.expect("static regex")	3
 src/capability/discovery/html_scanner.rs	RE.get_or_init(|| Regex::new(r#"<redoc[^>]+spec-url=["']([^"']+)["']"#).expect("static regex"))	1
-src/capability/discovery/mod.rs	.expect("Failed to create HTTP client")	1
 src/capability/executor/cli_run.rs	self.0.as_mut().expect("child present until drop")	1
 src/capability/executor/client.rs	.expect("Failed to create HTTP client")	1
 src/capability/executor/client.rs	.expect("Failed to create HTTP client"),	1
