@@ -275,8 +275,9 @@ mod tests {
     }
 
     /// A scratch name already on disk (left by a killed process whose id this
-    /// one reuses) is skipped: the save still succeeds and the leftover is
-    /// neither overwritten nor removed.
+    /// one reuses) is never written to or removed. The names are the shared
+    /// writer's (`config_persistence::scratch_candidate`); a save whose whole
+    /// window is taken is refused rather than clobbering one.
     #[test]
     fn a_leftover_scratch_file_is_neither_reused_nor_deleted() {
         let dir = tempfile::tempdir().unwrap();
@@ -284,17 +285,25 @@ mod tests {
         // Every name this process can reach before the test's save, with
         // room for the saves other tests make in parallel.
         let leftovers: Vec<_> = (0..5_000)
-            .map(|n| path.with_extension(format!("json.{}.{n}.tmp", std::process::id())))
+            .map(|n| path.with_extension(format!("json.tmp.{}.{n}", std::process::id())))
             .collect();
         for leftover in &leftovers {
             std::fs::write(leftover, b"left by an earlier process").unwrap();
         }
-        save(&path, &PersistedCosts::default()).expect("a free scratch name is used instead");
+        let saved = save(&path, &PersistedCosts::default());
         assert!(
             leftovers
                 .iter()
                 .all(|l| std::fs::read(l).is_ok_and(|b| b == b"left by an earlier process")),
             "a leftover scratch file was overwritten or removed"
+        );
+        // The shared seed counter is process-wide, so a run with many earlier
+        // saves can start past the planted window: either outcome is allowed,
+        // a clobbered leftover never is.
+        assert_eq!(
+            saved.is_ok(),
+            path.exists(),
+            "the target exists only after a save"
         );
     }
 

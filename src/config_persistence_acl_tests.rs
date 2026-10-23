@@ -90,3 +90,14 @@ fn an_acl_the_scratch_inherits_keeps_only_the_owner_bits() {
         "an inherited ACL must not survive a group-readable chmod"
     );
 }
+
+/// Linux only: `Absent` exists only where the probe can prove it.
+#[test]
+fn inherit_mode_keeps_the_full_mode_only_with_the_group_and_no_acl() {
+    use super::AclPresence::Absent;
+    use super::GidMatch::{Matched, Unmatched};
+    use super::inherit_mode;
+    assert_eq!(inherit_mode(0o640, Matched, Absent), 0o640);
+    assert_eq!(inherit_mode(0o640, Unmatched, Absent), 0o600);
+    assert_eq!(inherit_mode(0o604, Unmatched, Absent), 0o600);
+}

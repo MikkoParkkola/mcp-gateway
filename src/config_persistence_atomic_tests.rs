@@ -4,7 +4,7 @@
 
 use std::os::unix::fs::PermissionsExt as _;
 
-use super::AclPresence::{Absent, PresentOrUnknown};
+use super::AclPresence::PresentOrUnknown;
 use super::GidMatch::{Matched, Unmatched};
 use super::{FileMode, Symlink, inherit_mode, write_atomic, write_atomic_observed};
 
@@ -36,10 +36,9 @@ fn inherit_without_a_target_matches_plain_create() {
 
 #[test]
 fn inherit_mode_never_widens() {
-    assert_eq!(inherit_mode(0o640, Matched, Absent), 0o640);
-    assert_eq!(inherit_mode(0o640, Unmatched, Absent), 0o600);
-    assert_eq!(inherit_mode(0o604, Unmatched, Absent), 0o600);
+    // The `Absent` rows are Linux-only, in `config_persistence_acl_tests.rs`.
     assert_eq!(inherit_mode(0o644, Matched, PresentOrUnknown), 0o600);
+    assert_eq!(inherit_mode(0o640, Unmatched, PresentOrUnknown), 0o600);
 }
 
 #[test]

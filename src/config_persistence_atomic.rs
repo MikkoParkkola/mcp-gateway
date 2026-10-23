@@ -181,19 +181,34 @@ enum GidMatch {
 #[cfg(unix)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AclPresence {
-    /// Neither file carries an access ACL.
+    /// Neither file carries an access ACL. Only the Linux probe can prove it.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     Absent,
     /// An ACL is present, or the probe could not tell.
     PresentOrUnknown,
+}
+
+#[cfg(unix)]
+impl AclPresence {
+    /// Only a proven-absent ACL lets the full mode through; off Linux nothing
+    /// can be proven, so the answer is always no.
+    fn allows_full_mode(self) -> bool {
+        match self {
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            Self::Absent => true,
+            Self::PresentOrUnknown => false,
+        }
+    }
 }
 
 /// Never wider than the target: the full mode only when the group is the
 /// target's and no ACL can widen it; otherwise the owner bits only.
 #[cfg(unix)]
 fn inherit_mode(target_mode: u32, gid: GidMatch, acl: AclPresence) -> u32 {
-    match (gid, acl) {
-        (GidMatch::Matched, AclPresence::Absent) => target_mode,
-        _ => target_mode & 0o700,
+    if gid == GidMatch::Matched && acl.allows_full_mode() {
+        target_mode
+    } else {
+        target_mode & 0o700
     }
 }
 
@@ -218,9 +233,10 @@ fn apply_inherited_mode(
     };
     // An ACL on either file can widen the group bits past the mode; a target
     // that cannot be opened for the probe counts as widened.
-    // Only a regular file is opened for the probe: opening a FIFO would block.
+    // Only a regular file is opened for the probe, and without waiting: a path
+    // swapped for a FIFO after the stat must not block the save.
     let acl = if target_meta.is_file() {
-        match std::fs::File::open(target) {
+        match crate::open_nonblocking::open_nonblocking(target) {
             Ok(target) => acl_presence(&target, scratch),
             Err(_) => AclPresence::PresentOrUnknown,
         }
