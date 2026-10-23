@@ -1,6 +1,6 @@
 # MIK-8513: the registry check verifies content and that entries start
 
-Status: draft for review (r3: r1 and r2 seat findings folded, see the end). Scope: `scripts/dev/check-registry-packages.py`,
+Status: draft for review (r4: r1 to r3 seat findings folded, see the end). Scope: `scripts/dev/check-registry-packages.py`,
 its self-test, its testdata, `.github/workflows/registry-packages.yml`. No
 product code, no user-visible change.
 
@@ -100,8 +100,10 @@ value:
 
 - **npm:** `npm pack --json --pack-destination /work <pkg>@<ver>` reports the `integrity` it computed
   from the downloaded tarball, which must equal the sidecar.
-- **PyPI:** `pip download -d /work --no-deps --require-hashes` with `<pkg>==<ver>
-  --hash=sha256:<v>` for every recorded file. pip refuses a download whose
+- **PyPI:** `pip download -d /work --no-deps --require-hashes -r /dev/stdin`.
+  The driver writes one requirement line to stdin: `<pkg>==<ver>` followed by
+  `--hash=sha256:<v>` for every recorded file. pip accepts `--hash` only per
+  requirement. pip refuses a download whose
   bytes match none of them.
 
 The checker itself still hashes nothing (fail-fast).
@@ -167,12 +169,20 @@ environment and no host path:
 
 **Images, pinned by digest:**
 
-- `mirror.gcr.io/library/node:24-slim` for npm;
+- `mirror.gcr.io/library/node:24-slim` for npm. Both images are written in the
+  workflow as tag plus `@sha256:` digest;
 - `ghcr.io/astral-sh/uv` with Python 3.12, a tag from Astral's currently
   published set, for PyPI. That one is published on ghcr.io and is not Docker
   Hub content. The implementation confirms `pip` is present in it.
 
-**Three steps per entry.** The first two use the network; the last does not.
+**Volume setup.** A root container with no package code and no network, from
+the same pinned image, runs one fixed command: `chown 1000:1000 /work` and
+`mkdir /work/bin`. It is never built from entry data. Every package step after
+it runs as uid 1000.
+
+**Steps.** The first two use the network; the last does not. Fetch runs for every
+pinned entry; prime and start run only for eligible ones, so a `START_SKIP`
+package never runs install scripts or downloads a browser.
 
 1. **Fetch and verify:** `npm pack` or `pip download` as above, 120 s cap. This
    runs for every pinned entry.
@@ -189,7 +199,10 @@ environment and no host path:
 
    A server that needs the network to start therefore FAILs.
 
-**The driver** writes one `initialize` request with `id: 1`. It reads stdout in
+**The driver** writes one `initialize` request with `id: 1` as one
+newline-terminated JSON line, matching `src/transport/stdio_tree.rs` `write_frame`.
+It reads with short reads (`os.read`, whatever is available), so a server that
+answers and then stays running passes at once. It reads stdout in
 64 KiB chunks against a 1 MiB byte budget, never with an unbounded
 `readline`, until a JSON-RPC message with `id: 1` arrives.
 
@@ -213,6 +226,10 @@ The host-side driver only parses bounded container output.
 `scripts/dev/registry-integrity.json` and the new testdata files, so a
 digest-only change runs the live checks before merge.
 
+**Split from `resolve`.** The existing `resolve` job stays metadata-only,
+with its 10-minute cap. Byte verification and starts run only under a new
+checker flag, `--start`, which only the `starts` job passes.
+
 **Where it runs.** A new job, `starts`, in `registry-packages.yml`, with
 `timeout-minutes: 25`. Not in ci.yml (CONTENT.3).
 
@@ -220,11 +237,12 @@ digest-only change runs the live checks before merge.
 
 | AC | how it is shown | where |
 |---|---|---|
-| CONTENT.1, metadata and bytes | `registry-integrity.rs`: two healthy entries, one sidecar value wrong; `1/2 resolve`, the wrong entry fails both the metadata comparison and the real `npm pack`/`pip download` byte step, and no other entry fails | live job step |
+| CONTENT.1, metadata | `registry-integrity.rs`: two healthy entries, one sidecar value wrong; `1/2 resolve` and exactly one `FAIL <wrong>: … integrity` | `resolve` step |
+| CONTENT.1, bytes | the same testdata under `--start`: exactly one `FAIL <wrong>: … served bytes`, raised by the real `npm pack`/`pip download` | `starts` step |
 | CONTENT.1, bytes | the byte step's comparison is unit-tested with a stubbed `npm pack` result whose integrity differs while the metadata matches | offline self-test |
 | CONTENT.2 | `registry-wont-start.rs`: `time` must PASS; a pinned npm package whose bin exits at once must FAIL `exited … before answering initialize`; `1/2 eligible entries start` | live job step |
-| CONTENT.2, harness | timeout, malformed reply, wrong id, and an error reply, each against a tiny local fake server driven without Docker | offline self-test |
-| CONTENT.3 | `--offline` asserted to make no network call: `fetch` is replaced with one that raises | offline self-test |
+| CONTENT.2, harness | timeout, malformed reply, wrong id, an error reply, and a server that answers and stays running (must PASS), each against a tiny local fake server driven without Docker | offline self-test |
+| CONTENT.3 | `--offline` asserted to make no network call and launch no process: `fetch` and `subprocess` entry points are replaced with ones that raise | offline self-test |
 
 ## Rollout and rollback
 
@@ -277,3 +295,18 @@ sequential-thinking.
     costly. The installers' own verification is upstream behaviour; our
     comparison is unit-tested, and the real-installer path is exercised by the
     wrong-digest testdata.
+
+## r3 review folded (gpt SWF, grok SWF)
+
+- **Adopted:**
+  - a hash requirements line via `-r /dev/stdin`;
+  - a root volume-setup container that runs no package code;
+  - `resolve` kept metadata-only, with `--start` for the `starts` job;
+  - prime and start for eligible entries only;
+  - newline-delimited frames;
+  - short reads, with a stay-running PASS case;
+  - image tag plus digest written in the workflow;
+  - one expected FAIL per step for the wrong-digest testdata;
+  - the offline falsifier also forbids process launches.
+- **Declined:** `uv pip download` does not exist in uv 0.13.1 (`error:
+  unrecognized subcommand 'download'`, checked 2026-10-23), so `pip` stays.
