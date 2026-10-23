@@ -177,6 +177,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "tokens read through token_file (R2) and written 0600 (W2); client_id is public",
     ),
     (
+        "src/open_nonblocking.rs",
+        "the loader's mode-checked read (config_persistence read_text), the guarded secret-file read and the CLI's gateway.yaml re-read (commands/regular_file.rs); opens with O_NONBLOCK|O_NOCTTY so a FIFO is refused, not waited on",
+    ),
+    (
         "src/personal_accounts/migration_source.rs",
         "own stricter check: fstat, exactly 0600 (R5)",
     ),

@@ -90,6 +90,7 @@ pub mod mtls;
 #[doc(hidden)]
 pub mod oauth;
 mod observer;
+mod open_nonblocking;
 pub(crate) mod personal_accounts;
 #[doc(hidden)]
 pub mod playbook;

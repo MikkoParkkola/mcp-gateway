@@ -156,15 +156,7 @@ pub(crate) type StdioTelemetry =
 const STDIO: CallerStanding = CallerStanding::Admin;
 
 fn expand_home_path(path: &str) -> PathBuf {
-    if path == "~" {
-        return crate::home_dir::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    }
-    if let Some(rest) = path.strip_prefix("~/") {
-        return crate::home_dir::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(rest);
-    }
-    PathBuf::from(path)
+    crate::home_dir::expand_or_cwd(path)
 }
 
 /// MCP Gateway server

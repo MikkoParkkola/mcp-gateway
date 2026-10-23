@@ -43,7 +43,10 @@ pub(super) fn spawn_export_task(
         return None;
     }
 
-    let inv_path = expand_home_path(&config.security.transparency_log.path);
+    let inv_path = crate::security::transparency_log::resolved_path(
+        &config.security.transparency_log.path,
+        crate::home_dir::home_dir(),
+    );
     let gov_path = control_plane_base.path.join("audit.jsonl");
     let secret = config.security.transparency_log.shared_secret.clone();
     let sink_path = expand_home_path(&ecfg.sink_path);

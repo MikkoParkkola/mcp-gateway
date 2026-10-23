@@ -19,7 +19,7 @@ use std::path::Path;
 /// The open or read error, or `InvalidInput` for a path that is not a
 /// regular file.
 pub(super) fn read_regular_text(path: &Path) -> std::io::Result<String> {
-    let mut file = open_nonblocking(path)?;
+    let mut file = crate::open_nonblocking::open_nonblocking(path)?;
     if !file.metadata()?.is_file() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -29,22 +29,4 @@ pub(super) fn read_regular_text(path: &Path) -> std::io::Result<String> {
     let mut text = String::new();
     file.read_to_string(&mut text)?;
     Ok(text)
-}
-
-#[cfg(unix)]
-fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(
-            (rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOCTTY)
-                .bits()
-                .cast_signed(),
-        )
-        .open(path)
-}
-
-#[cfg(not(unix))]
-fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::File::open(path)
 }

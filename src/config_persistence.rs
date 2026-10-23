@@ -362,7 +362,7 @@ fn read_config(path: &Path) -> Result<Option<(Config, String)>, String> {
 fn read_text(path: &Path) -> Result<Option<String>, String> {
     use std::io::Read as _;
     let failed = |e: &dyn std::fmt::Display| format!("Failed to read {}: {e}", path.display());
-    let mut file = match open_nonblocking(path) {
+    let mut file = match crate::open_nonblocking::open_nonblocking(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         // Windows refuses to open a directory at all: name the cause the same.
         Err(_) if std::fs::metadata(path).is_ok_and(|m| !m.is_file()) => {
@@ -377,24 +377,6 @@ fn read_text(path: &Path) -> Result<Option<String>, String> {
     let mut text = String::new();
     file.read_to_string(&mut text).map_err(|e| failed(&e))?;
     Ok(Some(text))
-}
-
-#[cfg(unix)]
-fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(
-            (rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOCTTY)
-                .bits()
-                .cast_signed(),
-        )
-        .open(path)
-}
-
-#[cfg(not(unix))]
-fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::File::open(path)
 }
 
 /// How many backends one splice may change.
@@ -634,7 +616,7 @@ fn write_atomic_observed(
     let (mut file, scratch) = create_scratch(
         &target,
         next_scratch_seed(),
-        scratch_create_for(&mode, target_meta.as_ref()),
+        scratch_create_for(mode, target_meta.as_ref()),
     )?;
     // Leave no debris behind on any failure before the rename. The scratch
     // name is unique per call, so without cleanup each failure would strand
@@ -682,7 +664,7 @@ enum ScratchCreate {
 
 /// How the scratch for a (`mode`, `target`) write is created: private
 /// from creation whenever the bytes must never sit in a wider file.
-fn scratch_create_for(mode: &FileMode, target: Option<&std::fs::Metadata>) -> ScratchCreate {
+fn scratch_create_for(mode: FileMode, target: Option<&std::fs::Metadata>) -> ScratchCreate {
     match mode {
         FileMode::Private => ScratchCreate::Private,
         // Unix only: the mode step narrows the scratch after the sync, so the
@@ -808,10 +790,10 @@ fn acl_presence(target: &std::fs::File, scratch: &std::fs::File) -> AclPresence 
     // ACL, anything else (present, or an error that hides the answer) counts
     // as one.
     fn absent(file: &std::fs::File) -> bool {
-        match rustix::fs::fgetxattr(file, "system.posix_acl_access", &mut [0u8; 0][..]) {
-            Err(e) if e == rustix::io::Errno::NODATA => true,
-            _ => false,
-        }
+        matches!(
+            rustix::fs::fgetxattr(file, "system.posix_acl_access", &mut [0u8; 0][..]),
+            Err(e) if e == rustix::io::Errno::NODATA
+        )
     }
     if absent(target) && absent(scratch) {
         AclPresence::Absent

@@ -21,6 +21,7 @@ mod commands;
 #[path = "debug_trust_roots.rs"]
 mod debug_trust_roots;
 mod home_dir;
+mod open_nonblocking;
 
 use std::{path::Path, process::ExitCode};
 
