@@ -179,16 +179,11 @@ impl Redactor {
     /// The merged byte spans of `text` the credential patterns match: what
     /// [`Self::scan_and_redact`] would replace in it.
     pub(crate) fn credential_spans(&self, text: &str) -> Vec<(usize, usize)> {
-        merge_spans(self.match_spans(text))
-    }
-
-    /// Every match of every credential pattern in `text`, in order, unmerged.
-    fn match_spans(&self, text: &str) -> Vec<(usize, usize)> {
         let mut spans: Vec<(usize, usize)> = (self.set.matches(text).into_iter())
             .flat_map(|idx| overlapping_spans(&self.regexes[idx], text))
             .collect();
         spans.sort_unstable();
-        spans
+        merge_spans(spans)
     }
 
     /// Record one finding per matched pattern and return `text` with every
@@ -214,7 +209,7 @@ impl Redactor {
 
     /// `text` redacted inside the string literals a credential span covers,
     /// when `text` is a JSON document: today's spans, each clipped to the
-    /// value literals it covers, or to the key it starts in, and widened to
+    /// value literals it covers, or to a key a match starts in, and widened to
     /// whole escapes. The quotes, punctuation, scalars and other keys a span
     /// crosses stay as sent, so the text still parses (MIK-8745). A redacted
     /// key takes the first free name in its object, as [`Self::redact_keys`]
@@ -223,9 +218,7 @@ impl Redactor {
     /// that starts outside every literal.
     fn redact_json_text(&self, text: &str, findings: &mut Vec<Finding>) -> Option<String> {
         b2_gate(text)?;
-        let found = self.match_spans(text);
-        let starts: Vec<usize> = found.iter().map(|&(start, _)| start).collect();
-        let spans = merge_spans(found);
+        let spans = self.credential_spans(text);
         let literals = json_literal::string_literals(text);
         let starts_in_literal = |at: usize| {
             let after = literals.partition_point(|lit| lit.start <= at);
@@ -237,15 +230,12 @@ impl Redactor {
             );
             return None;
         }
-        // A key is redacted when a match starts in it, or when its own text
-        // matches: past a greedy match the scan restarts only near its end
-        // (OVERLAP_WINDOW), so a later key's start can go unseen.
-        let redact_key = |lit: &Literal| {
-            let after = starts.partition_point(|&at| at < lit.start);
-            starts.get(after).is_some_and(|&at| at < lit.end)
-                || self.set.is_match(&text[lit.start..lit.end])
-        };
-        let ranges = project(text, &spans, redact_key, &literals);
+        let ranges = project(
+            text,
+            &spans,
+            |lit| self.match_starts_in(text, lit),
+            &literals,
+        );
         let redacted = if literals.iter().any(|lit| lit.key && covers(&ranges, lit)) {
             rename_keys(text, &ranges, &literals)
         } else {
@@ -254,6 +244,25 @@ impl Redactor {
         let matched: Vec<usize> = self.set.matches(text).into_iter().collect();
         self.record_findings(&matched, &redacted, Site::Value, findings);
         Some(redacted)
+    }
+
+    /// Whether a credential match starts inside `lit`, read with the text
+    /// after it. The spans cannot tell: past a greedy match the scan restarts
+    /// only near its end, so a later key's own start goes unseen, and a short
+    /// key may match only together with the bytes after its quote. No pattern
+    /// has an anchor or a word boundary, and every one's shortest match fits
+    /// in [`OVERLAP_WINDOW`], so the key plus that window decides it.
+    fn match_starts_in(&self, text: &str, lit: &Literal) -> bool {
+        let mut end = (lit.end + OVERLAP_WINDOW).min(text.len());
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        let near = &text[..end];
+        self.set.matches_at(near, lit.start).into_iter().any(|idx| {
+            self.regexes[idx]
+                .find_at(near, lit.start)
+                .is_some_and(|found| found.start() < lit.end)
+        })
     }
 
     /// One finding per matched pattern, showing `redacted`.
@@ -405,9 +414,9 @@ fn b2_gate(text: &str) -> Option<Value> {
 }
 
 /// `spans` (merged, in order) clipped to every value literal they overlap
-/// and to every key `redact_key` takes (one merged span can cover several
-/// keys), each piece widened to whole escapes so no escape is cut, then
-/// merged. Any other key stays as sent. Spans and literals are both in
+/// and to every overlapped key `redact_key` takes (one merged span can cover
+/// several keys), each piece widened to whole escapes so no escape is cut,
+/// then merged. Any other key stays as sent. Spans and literals are both in
 /// order, so this is one pass over each, and each end is widened by a binary
 /// search of its literal's escapes.
 fn project(
@@ -423,8 +432,9 @@ fn project(
             first += 1;
         }
         let mut lit_escapes = None;
-        if lit.key && !redact_key(lit) {
-            continue; // a key spans only cross
+        let overlapped = spans.get(first).is_some_and(|span| span.0 < lit.end);
+        if lit.key && !(overlapped && redact_key(lit)) {
+            continue; // a key spans only cross, or none reach
         }
         for &(start, end) in spans[first..].iter().take_while(|span| span.0 < lit.end) {
             let (mut from, mut to) = (start.max(lit.start), end.min(lit.end));
