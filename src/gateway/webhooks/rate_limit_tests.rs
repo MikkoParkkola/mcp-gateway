@@ -107,7 +107,7 @@ async fn unsigned_requests_do_not_spend_a_signed_endpoints_budget() {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
-    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(b"rl-secret").expect("key");
+    let mut mac = crate::hashing::HmacSha256::new_from_slice(b"rl-secret").expect("key");
     mac.update(body);
     let mut headers = HeaderMap::new();
     headers.insert(

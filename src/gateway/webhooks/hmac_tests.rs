@@ -10,7 +10,8 @@ use std::sync::Arc;
 
 use axum::http::{HeaderMap, HeaderValue};
 use hmac::{KeyInit, Mac as _};
-use sha2::Sha256;
+
+use crate::hashing::HmacSha256;
 
 use super::tests::make_definition;
 use super::validate_signature;
@@ -20,7 +21,7 @@ const HEADER: &str = "X-Desktop-Signature";
 
 /// What `hs.hash.hmacSHA256(SECRET, body)` returns: lowercase hex.
 fn hammerspoon_signature(body: &[u8]) -> String {
-    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(SECRET.as_bytes()).unwrap();
+    let mut mac = HmacSha256::new_from_slice(SECRET.as_bytes()).unwrap();
     mac.update(body);
     hex::encode(mac.finalize().into_bytes())
 }
@@ -72,7 +73,7 @@ fn uppercase_hex_is_not_what_hammerspoon_sends_and_does_not_verify() {
 // MIK-8660 T9a: signature checks across the constant-time compare (subtle `ct_eq`).
 
 fn t9a_signature(secret: &str, body: &[u8]) -> String {
-    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("hmac key");
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("hmac key");
     mac.update(body);
     hex::encode(mac.finalize().into_bytes())
 }

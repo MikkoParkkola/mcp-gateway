@@ -1,13 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Shared canonical JSON hashing helpers, and the one HMAC-SHA256 type the
-//! signers and the transparency log share (MIK-8662).
+//! Shared canonical JSON hashing helpers, and the crate's one HMAC-SHA256
+//! type (MIK-8662, MIK-8743).
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-/// The shared HMAC-SHA256 type of the attestation signer, message signing
-/// and the transparency log.
+/// The crate's one HMAC-SHA256 type: every keyed SHA-256 MAC in `src/`
+/// (signers, transparency log, event delivery, webhooks, journey links)
+/// names it, so a change to the construction is made once.
 pub(crate) type HmacSha256 = hmac::Hmac<Sha256>;
 
 /// Serialize JSON using the crate's canonical representation.

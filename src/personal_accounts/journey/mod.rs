@@ -16,11 +16,12 @@
 )]
 
 use hkdf::Hkdf;
-use hmac::{Hmac, KeyInit as _, Mac as _};
+use hmac::{KeyInit as _, Mac as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use super::super::{AccountError, AccountKey, StoreConfig};
+use crate::hashing::HmacSha256;
 use crate::personal_accounts::config::RECORDS_PER_ACTIVE;
 use crate::personal_accounts::service::ConsentExpectation;
 
@@ -364,7 +365,7 @@ fn keyed_digest(config: &StoreConfig, key_id: &str, secret: Secret, value: &str)
     Hkdf::<Sha256>::new(None, config.keys.get(key_id)?)
         .expand(DIGEST_INFO, &mut key)
         .ok()?;
-    let mut mac = Hmac::<Sha256>::new_from_slice(&key).ok()?;
+    let mut mac = HmacSha256::new_from_slice(&key).ok()?;
     mac.update(secret.label());
     mac.update(value.as_bytes());
     Some(hex::encode(mac.finalize().into_bytes()))
