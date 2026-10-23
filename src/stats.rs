@@ -109,14 +109,7 @@ impl UsageStats {
 
         let top_tools: Vec<TopTool> = tool_counts
             .into_iter()
-            .map(|(name, count)| {
-                let parts: Vec<&str> = name.split(':').collect();
-                TopTool {
-                    server: parts.first().unwrap_or(&"").to_string(),
-                    tool: parts.get(1).unwrap_or(&"").to_string(),
-                    count,
-                }
-            })
+            .map(|(name, count)| TopTool::from_key(&name, count))
             .collect();
 
         #[allow(clippy::cast_precision_loss)]
@@ -185,6 +178,20 @@ pub struct TopTool {
     pub tool: String,
     /// Usage count
     pub count: u64,
+}
+
+impl TopTool {
+    /// The row for a `server:tool` counter key. Only the first `:` splits it,
+    /// so a tool name that holds a colon stays whole (MIK-8667); a key with no
+    /// colon becomes a row with an empty tool, as before.
+    pub(crate) fn from_key(key: &str, count: u64) -> Self {
+        let (server, tool) = key.split_once(':').unwrap_or((key, ""));
+        Self {
+            server: server.to_string(),
+            tool: tool.to_string(),
+            count,
+        }
+    }
 }
 
 /// Per-server cached token entry in statistics snapshots
