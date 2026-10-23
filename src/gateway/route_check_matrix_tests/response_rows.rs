@@ -9,8 +9,9 @@
 use serde_json::Value;
 
 use crate::gateway::router::route_matrix_driver_tests::response::{
-    BackendAnswer, HttpRoute, planted_credential, read_then_relay, signed_call,
-    signed_recorded_call, signed_redacted_call, signed_replay, trust_set,
+    BackendAnswer, DELIVERED_PROSE, HttpRoute, STUFFED_SCOPE, planted_credential, read_then_relay,
+    read_then_relay_rebuilt, signed_call, signed_recorded_call, signed_redacted_call,
+    signed_replay, trust_set,
 };
 use crate::protocol::meta::Era;
 use crate::trust::provenance_public::{VerifyRefusal, VerifyStatus, verify_public};
@@ -172,37 +173,66 @@ async fn r_recsign_sign_precedes_delivery_record() {
 const LONG_PROSE: &str =
     "The quarterly ledger reconciles every account against the vendor statements on file.";
 
-/// R-COMMIT `delivery_record_precedes_relay_commit` (`DeliveryRecord` <
-/// `RelayCommit`; `Mcp`, `Direct` × `Fresh` × `Modern`). With a fail-closed
-/// log whose delivery record fails, the read's answer is replaced by the
-/// audit refusal, and a relayed send of its text is not refused: no receipt
-/// was committed for an answer the client never got. The control is the same
-/// read with the record written: its text is receipted and the relay refused.
+/// R-COMMIT `delivery_record_precedes_relay_commit`, `Mcp` × `Fresh` ×
+/// `Modern` (`DeliveryRecord` < `RelayCommit`). With a fail-closed log whose
+/// `response_delivery_attempt` append fails, the read's answer is replaced by
+/// the audit refusal, and a relayed send of its text runs: no receipt was
+/// committed for an answer the client never got. The control is the same read
+/// with the record written: its text is receipted and the relay refused. The
+/// existing `/mcp` pin fails the next append of any kind; this one fails the
+/// delivery record itself.
 #[tokio::test]
 async fn r_commit_delivery_record_precedes_relay_commit() {
+    let control = read_then_relay(LONG_PROSE, false).await;
+    assert!(
+        control.read.to_string().contains(LONG_PROSE),
+        "R-COMMIT Mcp: control: the read delivers the prose: {}",
+        control.read
+    );
+    assert_eq!(
+        control.relayed["error"]["code"], -32002,
+        "R-COMMIT Mcp: control: delivered prose is receipted and its relay refused: {}",
+        control.relayed
+    );
+    let failed = read_then_relay(LONG_PROSE, true).await;
+    assert!(
+        failed.read.get("error").is_some() && !failed.read.to_string().contains(LONG_PROSE),
+        "R-COMMIT Mcp: the failed delivery record replaced the answer: {}",
+        failed.read
+    );
+    assert!(
+        failed.relayed.get("error").is_none(),
+        "R-COMMIT Mcp: no receipt for the withheld answer, so the send runs: {}",
+        failed.relayed
+    );
+}
+
+/// R-REBUILD `relay_receipt_reflects_the_delivered_bytes` (`Sign` <
+/// `RelayRebuild`; `Mcp`, `Direct` × `Fresh` × `Modern`).
+/// The backend stuffs prose into `cacheScope`, which the clamp overwrites,
+/// beside the prose it delivers. The relay receipt is rebuilt from the
+/// delivered bytes: relaying the delivered prose is refused, and relaying the
+/// stuffing runs. A receipt taken from the backend's own answer would catch
+/// the stuffing too.
+#[tokio::test]
+async fn r_rebuild_relay_receipt_reflects_the_delivered_bytes() {
     for route in [HttpRoute::Mcp, HttpRoute::Direct] {
-        let row = format!("R-COMMIT {route:?}");
-        let control = read_then_relay(route, LONG_PROSE, false).await;
+        let row = format!("R-REBUILD {route:?}");
+        let seen = read_then_relay_rebuilt(route).await;
+        let read = seen.read.to_string();
         assert!(
-            control.read.to_string().contains(LONG_PROSE),
-            "{row}: control: the read delivers the prose: {}",
-            control.read
+            read.contains(DELIVERED_PROSE) && !read.contains(STUFFED_SCOPE),
+            "{row}: the read delivers the prose and the clamp removed the stuffing: {read}"
         );
         assert_eq!(
-            control.relayed["error"]["code"], -32002,
-            "{row}: control: delivered prose is receipted and its relay refused: {}",
-            control.relayed
-        );
-        let failed = read_then_relay(route, LONG_PROSE, true).await;
-        assert!(
-            failed.read.get("error").is_some() && !failed.read.to_string().contains(LONG_PROSE),
-            "{row}: the failed delivery record replaced the answer: {}",
-            failed.read
+            seen.prose["error"]["code"], -32002,
+            "{row}: the delivered prose is receipted and its relay refused: {}",
+            seen.prose
         );
         assert!(
-            failed.relayed.get("error").is_none(),
-            "{row}: no receipt for the withheld answer, so the send runs: {}",
-            failed.relayed
+            seen.stuffing.get("error").is_none(),
+            "{row}: the undelivered stuffing is not receipted, so its send runs: {}",
+            seen.stuffing
         );
     }
 }

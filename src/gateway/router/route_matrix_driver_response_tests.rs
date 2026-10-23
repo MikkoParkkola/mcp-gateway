@@ -225,15 +225,12 @@ pub(crate) struct ReadThenRelay {
 }
 
 /// On the signed, relayed fixture whose backend answers `text`, with a
-/// fail-closed transparency log: `k-std` reads on `route` (nonce `a1`), its
+/// fail-closed transparency log: `k-std` reads on `/mcp` (nonce `a1`), its
 /// delivery record failing when `record_fails`, then `k-budget` sends the
-/// text on the same route. A relay refusal (-32002) means the read's receipt
-/// was committed as delivered backend text.
-pub(crate) async fn read_then_relay(
-    route: HttpRoute,
-    text: &'static str,
-    record_fails: bool,
-) -> ReadThenRelay {
+/// text on `/mcp`. A relay refusal (-32002) means the read's receipt was
+/// committed as delivered backend text. (The direct twin is
+/// `collusion_direct_tests::verdict::a_read_record_failure_leaves_no_direct_receipt`.)
+pub(crate) async fn read_then_relay(text: &'static str, record_fails: bool) -> ReadThenRelay {
     let (dir, log) = temp_log(Some(crate::security::audit::AuditFailurePolicy::FailClosed));
     let meta_log = Arc::clone(&log);
     let fx = fixture::fixture_signed_relayed_logged(
@@ -248,8 +245,55 @@ pub(crate) async fn read_then_relay(
     if record_fails {
         log.fail_next_append_of_kind_for_test("response_delivery_attempt");
     }
+    let read = super::signed_invoke(&fx, "k-std", "a1", json!({})).await;
+    let relayed =
+        super::signed_invoke_on(&fx, ("k-budget", "alpha"), "b1", json!({ "cmd": text })).await;
+    ReadThenRelay {
+        read,
+        relayed,
+        _dir: dir,
+    }
+}
+
+/// Backend prose the gateway delivers, past the collusion detector's
+/// 48-character floor, so a receipted copy is caught when relayed.
+pub(crate) const DELIVERED_PROSE: &str =
+    "Harbour dues for the winter quarter rise by four percent across every berth class.";
+
+/// Backend text stuffed into the top-level `cacheScope`, which the scope
+/// clamp overwrites, so the client never receives it.
+pub(crate) const STUFFED_SCOPE: &str =
+    "Undelivered stuffing: the backend hid this sentence in a member the gateway rewrites.";
+
+/// A Native result carrying [`DELIVERED_PROSE`] as its text and
+/// [`STUFFED_SCOPE`] as its `cacheScope`.
+fn stuffed_scope() -> Value {
+    json!({"content": [{"type": "text", "text": DELIVERED_PROSE}], "isError": false,
+           "cacheScope": STUFFED_SCOPE})
+}
+
+/// What a read followed by two relayed sends saw.
+pub(crate) struct Rebuilt {
+    /// The read as delivered.
+    pub(crate) read: Value,
+    /// `k-budget` sending [`DELIVERED_PROSE`].
+    pub(crate) prose: Value,
+    /// `k-budget` sending [`STUFFED_SCOPE`].
+    pub(crate) stuffing: Value,
+}
+
+/// On the signed, relayed fixture with `alpha`'s `read` surfaced, the backend
+/// answering [`stuffed_scope`]: `k-std` reads on `route` (a modern call, as
+/// the hardened posture requires; on `/mcp` by the surfaced name, so the
+/// backend envelope is the result), then `k-budget`
+/// sends the delivered prose and the stuffing on the same route. The relay
+/// receipt is rebuilt from the delivered bytes, so only the prose is caught.
+pub(crate) async fn read_then_relay_rebuilt(route: HttpRoute) -> Rebuilt {
+    let (_dir, log) = temp_log(None);
+    let fx =
+        fixture::fixture_signed_relayed_logged(Answer::Built(stuffed_scope), log, surfacing).await;
     let read = match route {
-        HttpRoute::Mcp => super::signed_invoke(&fx, "k-std", "a1", json!({})).await,
+        HttpRoute::Mcp => modern_call(&fx, "/mcp", ("read", json!({})), &json!({})).await,
         HttpRoute::Direct => {
             super::super::direct_continuation_tests::signed_call(
                 &fx,
@@ -261,24 +305,37 @@ pub(crate) async fn read_then_relay(
             .1
         }
     };
-    let relayed = match route {
-        HttpRoute::Mcp => {
-            super::signed_invoke_on(&fx, ("k-budget", "alpha"), "b1", json!({ "cmd": text })).await
-        }
-        HttpRoute::Direct => {
-            super::super::direct_continuation_tests::signed_call(
-                &fx,
-                ("k-budget", "alpha"),
-                "b1",
-                json!({ "arguments": { "cmd": text } }),
-            )
-            .await
-            .1
+    let send = |nonce: &'static str, text: &'static str| {
+        let fx = &fx;
+        async move {
+            match route {
+                HttpRoute::Mcp => {
+                    super::signed_invoke_on(
+                        fx,
+                        ("k-budget", "alpha"),
+                        nonce,
+                        json!({ "cmd": text }),
+                    )
+                    .await
+                }
+                HttpRoute::Direct => {
+                    super::super::direct_continuation_tests::signed_call(
+                        fx,
+                        ("k-budget", "alpha"),
+                        nonce,
+                        json!({ "arguments": { "cmd": text } }),
+                    )
+                    .await
+                    .1
+                }
+            }
         }
     };
-    ReadThenRelay {
+    let prose = send("b1", DELIVERED_PROSE).await;
+    let stuffing = send("b2", STUFFED_SCOPE).await;
+    Rebuilt {
         read,
-        relayed,
-        _dir: dir,
+        prose,
+        stuffing,
     }
 }

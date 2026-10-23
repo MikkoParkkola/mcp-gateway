@@ -44,6 +44,9 @@ pub(crate) enum Answer {
     /// Success, `isError: false`, whose text is the given payload (response
     /// inspection and context-integrity cells).
     Text(&'static str),
+    /// Success whose whole result the function builds (MIK-8689: a result
+    /// carrying backend members the gateway overwrites).
+    Built(fn() -> Value),
     /// The first `tools/call` asks the client a question (`input_required`);
     /// every later call succeeds. Drives a bridged input round (T3c).
     AskOnce,

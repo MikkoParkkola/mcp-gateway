@@ -95,6 +95,19 @@ pub(crate) enum RespTicket {
     Mik8707,
 }
 
+/// Why a gap's order difference reaches no delivered outcome today. Closed
+/// reasons; the order itself is pinned at source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Latent {
+    /// The receipt's result facts are `row_count` and `backend_ok`. The only
+    /// extractor arm reads GitHub's server-reported `total_count`
+    /// (`trust/result_extractor.rs:55-80`), the redactor rewrites a matched
+    /// span inside a string (`security/firewall/redactor.rs:182`), redaction
+    /// never flips `isError`, and a Block replaces the whole answer, so the
+    /// stamp-firewall order changes no delivered fact.
+    NoExtractedFactRedactionChanges,
+}
+
 /// Why a pair's order cannot be read from any outcome. Closed reasons.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Invisible {
@@ -137,6 +150,9 @@ pub(crate) enum RespNa {
 pub(crate) enum RespExpect {
     Ordered,
     ExpectedGap(RespTicket),
+    /// A real order difference no delivered outcome shows today; pinned by a
+    /// source-order row so the fix, or a new extractor, flips a test.
+    LatentGap(RespTicket, Latent),
     OrderInvisibleByOutcome(Invisible),
     NotApplicable(RespNa),
 }
@@ -270,7 +286,7 @@ pub(crate) const fn expect(
         StampIgnoresShapedMembers,
     };
     use RespCase::{CacheHit, Fresh, IdempotentReplay, Task as TaskCase};
-    use RespExpect::{ExpectedGap, NotApplicable, OrderInvisibleByOutcome, Ordered};
+    use RespExpect::{ExpectedGap, LatentGap, NotApplicable, OrderInvisibleByOutcome, Ordered};
     use RespPair::{
         ClampLink, ClampSeal, FirewallSeal, FirewallStamp, JudgeCommit, JudgeRebuild, JudgeRecord,
         LinkSeal, RecordCommit, SealSign, ShapeSeal, SignJudge, SignRebuild, SignRecord, StampSeal,
@@ -294,7 +310,9 @@ pub(crate) const fn expect(
         (Mcp | Stdio, IdempotentReplay, _, StampSeal) => {
             NotApplicable(RespNa::ReplayReservesTheStoredDelivery)
         }
-        (Mcp | Stdio, _, _, FirewallStamp) => ExpectedGap(RespTicket::Mik8707),
+        (Mcp | Stdio, _, _, FirewallStamp) => {
+            LatentGap(RespTicket::Mik8707, Latent::NoExtractedFactRedactionChanges)
+        }
         (_, _, _, JudgeRebuild) => OrderInvisibleByOutcome(JudgeOnlyReplaces),
         (_, _, _, StampShape) => OrderInvisibleByOutcome(StampIgnoresShapedMembers),
         (_, _, _, LinkSeal) => OrderInvisibleByOutcome(SealWritesOnlyExcludedMeta),
@@ -393,22 +411,32 @@ fn every_response_pair_is_listed_exactly_once() {
     }
 }
 
-/// The gap set is exactly MIK-8705 (a direct replay is not resealed, both
-/// eras) and MIK-8707 (Mcp and stdio stamp before the firewall, every case and
-/// era). A new or closed gap moves this pin.
+/// The gap set is exactly MIK-8705, expected (a direct replay is not
+/// resealed, both eras), and MIK-8707, latent (Mcp and stdio stamp before the
+/// firewall, every case and era; no delivered fact differs today). A new,
+/// closed or reclassified gap moves this pin.
 #[test]
 fn the_response_table_names_exactly_two_gaps() {
     let gaps: Vec<_> = cells()
         .filter_map(|cell| match expect(cell.0, cell.1, cell.2, cell.3) {
-            RespExpect::ExpectedGap(ticket) => Some((ticket, cell)),
+            RespExpect::ExpectedGap(ticket) => Some((ticket, false, cell)),
+            RespExpect::LatentGap(ticket, _) => Some((ticket, true, cell)),
             _ => None,
         })
         .collect();
-    let of = |t| gaps.iter().filter(|(ticket, _)| *ticket == t).count();
-    assert_eq!(of(RespTicket::Mik8705), 2, "{gaps:?}");
-    assert_eq!(of(RespTicket::Mik8707), 12, "{gaps:?}");
+    let of = |t, latent| {
+        gaps.iter()
+            .filter(|(ticket, is_latent, _)| *ticket == t && *is_latent == latent)
+            .count()
+    };
+    assert_eq!(of(RespTicket::Mik8705, false), 2, "{gaps:?}");
+    assert_eq!(of(RespTicket::Mik8707, true), 12, "{gaps:?}");
     assert_eq!(gaps.len(), 14, "the gap set moved: {gaps:?}");
 }
+
+/// The order behind the MIK-8707 latent gap, pinned at source.
+#[path = "response_source_order.rs"]
+mod source_order;
 
 #[cfg(feature = "firewall")]
 #[path = "response_rows.rs"]
@@ -425,13 +453,14 @@ pub(crate) enum Driven {
     Pending,
 }
 
-/// The row behind every `Ordered` or `ExpectedGap` cell.
+/// The row behind every `Ordered`, `ExpectedGap` or `LatentGap` cell.
 const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> Driven {
-    use RespCase::{Fresh, IdempotentReplay};
+    use RespCase::{CacheHit, Fresh, IdempotentReplay};
     use RespPair::{
-        ClampSeal, FirewallSeal, JudgeRecord, RecordCommit, ShapeSeal, SignRecord, StampSeal,
+        ClampSeal, FirewallSeal, FirewallStamp, JudgeCommit, JudgeRecord, RecordCommit, ShapeSeal,
+        SignRebuild, SignRecord, StampSeal,
     };
-    use RespRoute::{Direct, Mcp};
+    use RespRoute::{Direct, Mcp, Stdio};
     match (route, case, era, pair) {
         (Mcp | Direct, Fresh, Era::Modern, ShapeSeal) => {
             Driven::Row("rows::r_shape_shape_precedes_seal")
@@ -445,9 +474,25 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
         (Mcp | Direct, Fresh, Era::Modern, SignRecord) => {
             Driven::Row("rows::r_recsign_sign_precedes_delivery_record")
         }
-        (Mcp | Direct, Fresh, Era::Modern, RecordCommit) => {
+        (Mcp | Stdio, Fresh | CacheHit | IdempotentReplay, _, FirewallStamp)
+        | (Direct, Fresh | IdempotentReplay, _, FirewallStamp) => {
+            Driven::Row("response::source_order::stamp_and_egress_scan_order_is_pinned_at_source")
+        }
+        (Mcp | Direct, Fresh, Era::Modern, SignRebuild) => {
+            Driven::Row("rows::r_rebuild_relay_receipt_reflects_the_delivered_bytes")
+        }
+        (Mcp, Fresh, Era::Modern, RecordCommit) => {
             Driven::Row("rows::r_commit_delivery_record_precedes_relay_commit")
         }
+        (Direct, Fresh, Era::Modern, RecordCommit) => Driven::Row(
+            "router::collusion_direct_tests::verdict::a_read_record_failure_leaves_no_direct_receipt",
+        ),
+        (Mcp, Fresh, Era::Modern, JudgeCommit) => Driven::Row(
+            "router::collusion_direct_tests::meta::meta_tenant_withheld_delivery_not_recorded",
+        ),
+        (Direct, Fresh, Era::Modern, JudgeCommit) => Driven::Row(
+            "router::collusion_direct_tests::verdict::a_judged_out_direct_read_records_no_receipt",
+        ),
         (Mcp, Fresh, Era::Modern, JudgeRecord) => Driven::Row(
             "router::tests::meta_firewall_verdict::caller_key::tenant_reads::a_judged_answer_is_one_record",
         ),
@@ -470,7 +515,7 @@ fn every_stated_response_cell_is_driven_or_explained() {
         let (route, case, era, pair) = cell;
         let stated = matches!(
             expect(route, case, era, pair),
-            RespExpect::Ordered | RespExpect::ExpectedGap(_)
+            RespExpect::Ordered | RespExpect::ExpectedGap(_) | RespExpect::LatentGap(..)
         );
         match driven(route, case, era, pair) {
             Driven::Row(name) if stated && name.trim().is_empty() => empty.push(cell),
