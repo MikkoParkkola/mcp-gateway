@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import shlex
 import sys
 import tempfile
 import textwrap
@@ -178,6 +179,7 @@ def problems(root: pathlib.Path, *, ci_only=None) -> list[str]:
             found.append(f"in two buckets {homes}: {label}")
         if form not in ci and any(UNTRANSLATED.search(a) for a in form[1]):
             found.append(f"untranslated CI token in {label}")
+    found += clippy_problems(root)
     for form in sorted(run - set(forms)):
         found.append(f"stale RUN line (no PR workflow runs it): {_label(form)}")
     for form, reason in sorted(table.items()):
@@ -211,6 +213,66 @@ def _sources(target):
         seen.append(source)
         pending += sorted(declarations(source, owns_dir))
     return seen
+
+
+ALL_TARGETS = frozenset({"lib", "bins", "tests", "benches", "examples"})
+
+
+def _clippy_key(words):
+    """(release, features, targets, lints, other flags) of `clippy <words>`."""
+    flags, lints = (words[:words.index("--")], words[words.index("--") + 1:]) if "--" in words else (words, [])
+    flags = [f for f in flags if f != "--quiet"]
+    targets = ALL_TARGETS if "--all-targets" in flags else frozenset(
+        f[2:] for f in flags if f in ("--lib", "--bins", "--tests", "--benches", "--examples"))
+    features = "all" if "--all-features" in flags else "none" if "--no-default-features" in flags else "default"
+    known = {"--release", "--all-targets", "--all-features", "--no-default-features",
+             "--lib", "--bins", "--tests", "--benches", "--examples"}
+    other = tuple(sorted(f for f in flags if f not in known))
+    return "--release" in flags, features, targets, frozenset(lints), other
+
+
+def _covers(pre, ci):
+    """Whether pre-push's clippy `pre` checks everything CI's `ci` does."""
+    return pre[0] == ci[0] and pre[1] == ci[1] and pre[2] >= ci[2] and pre[3] >= ci[3] and pre[4] == ci[4]
+
+
+def pre_push_clippy(root: pathlib.Path) -> list[str]:
+    """pre-push.sh's clippy steps, as `clippy <args>` strings (MIK-8733)."""
+    found = []
+    for text in (root / "scripts/dev/pre-push.sh").read_text().splitlines():
+        if not text.lstrip().startswith("run_cargo "):
+            continue
+        words = shlex.split(text, comments=True)
+        if words[:1] == ["run_cargo"] and len(words) > 2 and words[2] == "clippy":
+            found.append(" ".join(words[2:]))
+    return found
+
+
+def _ci_clippy(root):
+    """(workflow, command words after `cargo clippy`) for every clippy command
+    a PR workflow's pedantic clippy job runs (MIK-8733.REL.3)."""
+    found = []
+    for workflow in pr_workflows(root):
+        for job in (_load(workflow).get("jobs") or {}).values():
+            if not isinstance(job, dict) or "pedantic" not in str(job.get("name", "")).lower():
+                continue
+            for step in job.get("steps") or []:
+                for line in str(step.get("run", "") if isinstance(step, dict) else "").splitlines():
+                    for command in workflow_shell._chains(line):
+                        words = shlex.split(command)
+                        if words[:2] == ["cargo", "clippy"]:
+                            found.append((workflow.name, words[2:]))
+    return found
+
+
+def clippy_problems(root: pathlib.Path) -> list[str]:
+    """A pedantic-job clippy command no pre-push clippy step covers, named."""
+    pre = [_clippy_key(c.split()[1:]) for c in pre_push_clippy(root)] if (root / "scripts/dev/pre-push.sh").exists() else []
+    return [
+        f"pre-push runs no clippy covering CI's: cargo clippy {' '.join(words)} ({name})"
+        for name, words in _ci_clippy(root)
+        if not any(_covers(p, _clippy_key(words)) for p in pre)
+    ]
 
 
 def rust_targets(root: pathlib.Path) -> list[str]:
@@ -394,6 +456,32 @@ class Rows(unittest.TestCase):
         with self.assertRaises(workflow_shell.UnsupportedSyntax):
             workflow_shell.executions("env -i python3 scripts/g.py")
 
+    # D26 (MIK-8733.REL.3): every clippy command the pedantic job runs is
+    # covered by a pre-push clippy step (same profile and features, a superset
+    # of its targets); one that is not is named.
+    def test_d26_a_pedantic_clippy_command_pre_push_lacks_is_named(self):
+        self.t.workflow("ci.yml", (
+            "on:\n  pull_request:\njobs:\n  check:\n    name: Clippy (pedantic)\n    runs-on: ubuntu-latest\n"
+            "    steps:\n"
+            "      - run: cargo clippy --all-targets --all-features -- -D warnings\n"
+            "      - run: |\n"
+            "          cargo clippy --lib --bins --all-features -- -D warnings\n"
+            "          cargo clippy --release --lib --bins --all-features -- -D warnings\n"
+        ))
+        self.t.pre_push(
+            'run_cargo "clippy all-features" clippy --all-targets --all-features --quiet -- -D warnings\n'
+        )
+        found = problems(self.t.root, ci_only={})
+        self.assertEqual(
+            [p for p in found if "clippy" in p],
+            ["pre-push runs no clippy covering CI's: cargo clippy --release --lib --bins --all-features -- -D warnings (ci.yml)"],
+        )
+        self.t.pre_push(
+            'run_cargo "clippy all-features" clippy --all-targets --all-features --quiet -- -D warnings\n'
+            'run_cargo "release all" clippy --release --lib --bins --all-features --quiet -- -D warnings\n'
+        )
+        self.assertEqual([p for p in problems(self.t.root, ci_only={}) if "clippy" in p], [])
+
     # D9
     def test_d9_pull_request_target_counts_as_a_pr_workflow(self):
         self.t.script("scripts/t.py")
@@ -538,6 +626,9 @@ class Repository(unittest.TestCase):
             ]),
         )
         self.assertEqual(problems(REPO), [])
+        # MIK-8733.REL.1: the release clippy pair is among pre-push's clippy steps.
+        release = {c for c in pre_push_clippy(REPO) if "--release" in c}
+        self.assertEqual(len(release), 2, release)
         # The gate's own suites run in CI (lead 2026-10-23): the scanner suite
         # also in pre-push (ALREADY), the runner suite in CI only (budget).
         _, already, ci_only = buckets(REPO)

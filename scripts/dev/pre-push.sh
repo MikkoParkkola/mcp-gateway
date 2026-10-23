@@ -98,6 +98,14 @@ if [[ -f Cargo.toml ]]; then
   step "cargo clippy --all-targets --no-default-features -D warnings"
   run_cargo "clippy no-default-features" clippy --all-targets --no-default-features --quiet -- -D warnings
 
+  # MIK-8733: some lints fire only under the release profile (#4060:
+  # assigning_clones); CI's pedantic job runs this pair on every PR.
+  step "cargo clippy --release --lib --bins --all-features -D warnings"
+  run_cargo "clippy release all-features" clippy --release --lib --bins --all-features --quiet -- -D warnings
+
+  step "cargo clippy --release --lib --bins --no-default-features -D warnings"
+  run_cargo "clippy release no-default-features" clippy --release --lib --bins --no-default-features --quiet -- -D warnings
+
   # MIK-8387: production code reaches the backend registry only through
   # Registry or a classed statement-level allow. Non-test targets only, from
   # its own config (the repo clippy.toml is untouched); the self-test proves
