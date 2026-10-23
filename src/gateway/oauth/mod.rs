@@ -106,7 +106,7 @@ impl AgentAuthState {
     }
 }
 
-/// Axum middleware: validate agent JWT and populate [`AgentIdentity`] extension.
+/// Axum middleware: validate agent JWT and populate [`OAuthAgentIdentity`] extension.
 ///
 /// This middleware is additive — it runs after the existing [`auth_middleware`]
 /// and enriches the request with agent scope information.  When agent auth is
@@ -174,7 +174,7 @@ pub async fn agent_auth_middleware(
     }
 }
 
-/// Check whether the [`AgentIdentity`] in `extensions` grants access to
+/// Check whether the [`OAuthAgentIdentity`] in `extensions` grants access to
 /// `(backend, tool, action)` and emit an audit log entry.
 ///
 /// Returns `Ok(())` on success or a denial reason on failure.
