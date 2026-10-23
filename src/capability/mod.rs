@@ -36,6 +36,8 @@ mod backend;
 #[cfg(test)]
 pub(crate) use backend::listing_watches_started;
 #[cfg(test)]
+mod cache_bound_tests;
+#[cfg(test)]
 mod cache_error_tests;
 pub mod definition;
 #[cfg(feature = "discovery")]
@@ -49,7 +51,6 @@ mod loader;
 mod openapi;
 mod parser;
 mod read_only_call;
-mod response_cache;
 #[cfg(test)]
 mod schema_shape_load_tests;
 mod schema_validator;

@@ -593,8 +593,8 @@ mod tests {
     use parking_lot::RwLock;
     use tempfile::tempdir;
 
+    use crate::cache::ResponseCache;
     use crate::capability::CapabilityExecutionContext;
-    use crate::capability::response_cache::ResponseCache;
     use crate::oauth::{TokenInfo, TokenStorage};
     use crate::secrets::SecretResolver;
 
