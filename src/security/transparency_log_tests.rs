@@ -520,3 +520,90 @@ fn bounded_read_to_string_rejects_oversized_file_without_loading_it() {
     let ok = bounded_read_to_string(tmp.path(), 200).unwrap();
     assert_eq!(ok.len(), 100);
 }
+
+// ── MIK-8664: a missing home warns once, and the writer matches the exporter ──
+
+static HOME_TEST_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// `<pid>-<n>`, unique across parallel tests and runs.
+fn home_test_tag() -> String {
+    let n = HOME_TEST_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{}-{n}", std::process::id())
+}
+
+#[test]
+fn without_a_home_a_tilde_log_matches_the_exporter_and_warns_once() {
+    let tag = home_test_tag();
+    let configured = format!("~/target/transparency-home-test-{tag}/log.jsonl");
+    let cfg = Arc::new(TransparencyLogConfig {
+        enabled: true,
+        path: configured.clone(),
+        ..TransparencyLogConfig::default()
+    });
+    let mut got = None;
+    let records = crate::test_log_capture::records(|| {
+        let logger =
+            TransparencyLogger::open_resolving(cfg, std::time::Duration::from_secs(0), None)
+                .unwrap();
+        got = Some(logger.path());
+    });
+    let got = got.unwrap();
+    let expected = resolved_path(&configured, None);
+    assert_eq!(
+        got, expected,
+        "the writer must open what the exporter reads"
+    );
+    let warns =
+        crate::test_log_capture::count(&records, "WARN", "no home directory could be determined");
+    assert_eq!(warns, 1);
+    let want = std::path::absolute(&expected)
+        .unwrap()
+        .display()
+        .to_string();
+    assert!(
+        records
+            .iter()
+            .any(|r| r["fields"]["resolved"].as_str() == Some(want.as_str())),
+        "the WARN must carry {want}"
+    );
+    let _ = std::fs::remove_dir_all(format!("target/transparency-home-test-{tag}"));
+}
+
+#[test]
+fn with_a_home_a_tilde_log_warns_nothing() {
+    let home = tempfile::tempdir().unwrap();
+    let cfg = Arc::new(TransparencyLogConfig {
+        enabled: true,
+        path: "~/transparency-home-test/log.jsonl".to_string(),
+        ..TransparencyLogConfig::default()
+    });
+    let records = crate::test_log_capture::records(|| {
+        let _logger = TransparencyLogger::open_resolving(
+            cfg,
+            std::time::Duration::from_secs(0),
+            Some(home.path()),
+        )
+        .unwrap();
+    });
+    let warns =
+        crate::test_log_capture::count(&records, "WARN", "no home directory could be determined");
+    assert_eq!(warns, 0);
+}
+
+#[test]
+fn without_a_tilde_a_missing_home_warns_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = Arc::new(TransparencyLogConfig {
+        enabled: true,
+        path: dir.path().join("log.jsonl").to_string_lossy().to_string(),
+        ..TransparencyLogConfig::default()
+    });
+    let records = crate::test_log_capture::records(|| {
+        let _logger =
+            TransparencyLogger::open_resolving(cfg, std::time::Duration::from_secs(0), None)
+                .unwrap();
+    });
+    let warns =
+        crate::test_log_capture::count(&records, "WARN", "no home directory could be determined");
+    assert_eq!(warns, 0);
+}

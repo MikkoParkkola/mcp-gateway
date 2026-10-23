@@ -49,3 +49,21 @@ pub(super) fn resolve_provenance_signer(
         Some(base.derive_domain(crate::attestation::RESULT_PROVENANCE_DOMAIN_INFO))
     }
 }
+
+/// Install the public (Ed25519) provenance signer onto `meta` (MIK-8398 D2).
+///
+/// Resolves the signer from `env`, refuses a malformed seed or key id with a
+/// value-free `Err`, and installs on a valid seed; `build_meta.rs` calls this
+/// inside its `provenance_stamping` block and propagates the `Err`.
+pub(crate) fn install_public_provenance(
+    meta: &mut crate::gateway::meta_mcp::MetaMcp,
+    env: &crate::config::EnvOverlay,
+    attestation_key_id: &str,
+) -> crate::Result<()> {
+    if let Some(signer) =
+        crate::trust::provenance_public::resolve_public_signer(env, attestation_key_id)?
+    {
+        meta.enable_public_provenance(signer);
+    }
+    Ok(())
+}

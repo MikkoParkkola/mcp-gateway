@@ -378,3 +378,127 @@ async fn a_step_scoped_key_cannot_be_spelled_by_a_client_key() {
         "the scope is not after the length-prefixed key: {zero:?}"
     );
 }
+
+/// The `x` of `seed`: the real public key, without touching the skeleton's
+/// `public_jwk` (Null until implemented).
+fn x_of(seed: &[u8; 32]) -> String {
+    use base64::Engine as _;
+    use ring::signature::KeyPair as _;
+    let key_pair =
+        ring::signature::Ed25519KeyPair::from_seed_unchecked(seed).expect("a seed loads");
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key_pair.public_key().as_ref())
+}
+
+/// A JWK text for `seed`/`kid`, built from literals plus the seed's real key.
+fn jwk_for(seed: &[u8; 32], kid: &str) -> String {
+    format!(
+        "{{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":\"{kid}\",\"x\":\"{}\"}}",
+        x_of(seed)
+    )
+}
+
+/// MIK-8398 D1a: with both the HMAC signer and a public signer enabled, the
+/// stamped `_meta.provenance` carries a `public_signature` that verifies Bound
+/// against the result it was stamped over.
+#[tokio::test]
+async fn d1a_dual_signed_tool_result_carries_a_bound_public_signature() {
+    use crate::attestation::{BnautAttestationSigner, RESULT_PROVENANCE_DOMAIN_INFO};
+    use crate::backend::BackendRegistry;
+    use crate::gateway::meta_mcp::MetaMcp;
+    use crate::gateway::meta_mcp::invoke::with_minted_receipts;
+    use crate::trust::provenance_public::{
+        ProvenancePublicSigner, TrustSet, VerifyStatus, verify_public,
+    };
+
+    let public = ProvenancePublicSigner::from_seed_for_test([7u8; 32], "prov-test-1");
+    let mut meta = MetaMcp::new(std::sync::Arc::new(BackendRegistry::new()));
+    meta.enable_provenance_stamping(
+        BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+            .with_audience("test-gateway")
+            .derive_domain(RESULT_PROVENANCE_DOMAIN_INFO),
+    );
+    meta.enable_public_provenance(public);
+
+    let result = serde_json::json!({"content": [{"type": "text", "text": "ok"}]});
+    let stamped = with_minted_receipts(Box::pin(async {
+        let mut stamped = meta.stamp_direct_result(result, "github", "search_issues", None);
+        meta.seal_public_provenance(&mut stamped);
+        stamped
+    }))
+    .await;
+    let prov = stamped
+        .pointer("/_meta/provenance")
+        .expect("stamping emits _meta.provenance");
+    assert!(
+        prov.get("public_signature").is_some(),
+        "dual stamping must add public_signature: {stamped}"
+    );
+    let trust = TrustSet::from_json(jwk_for(&[7u8; 32], "prov-test-1").as_str())
+        .expect("the test JWK loads as a trust set");
+    let mut bare = stamped.clone();
+    bare.as_object_mut()
+        .expect("a stamped result is an object")
+        .remove("_meta");
+    let verified = verify_public(prov, &trust, Some(&bare)).expect("a dual-signed result verifies");
+    assert_eq!(verified.status, VerifyStatus::Bound);
+    assert_eq!(verified.kid, "prov-test-1");
+}
+
+/// MIK-8398 D1c (tool half, lead row): with the HMAC signer only — the public
+/// seed absent — the stamped tool result matches the primitive-built bytes
+/// exactly, and carries no `public_signature`.
+#[test]
+fn d1c_tool_stamp_without_public_seed_is_byte_identical() {
+    use crate::attestation::{BnautAttestationSigner, RESULT_PROVENANCE_DOMAIN_INFO};
+    use crate::backend::BackendRegistry;
+    use crate::gateway::meta_mcp::MetaMcp;
+    use crate::trust::{CacheOutcome, RuntimeProvenanceReceipt};
+
+    let _clock = crate::clock::test_clock::at_secs(1_786_000_000);
+    let observed_at = crate::clock::utc_now()
+        .expect("the fixed clock reads")
+        .to_rfc3339();
+    let hmac = || {
+        BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+            .with_audience("test-gateway")
+            .derive_domain(RESULT_PROVENANCE_DOMAIN_INFO)
+    };
+    let mut meta = MetaMcp::new(std::sync::Arc::new(BackendRegistry::new()));
+    meta.enable_provenance_stamping(hmac());
+    let result = serde_json::json!({"content": [{"type": "text", "text": "ok"}]});
+    let stamped = meta.stamp_direct_result(result.clone(), "github", "search_issues", None);
+    let prov = stamped
+        .pointer("/_meta/provenance")
+        .expect("stamping emits _meta.provenance");
+    let receipt = RuntimeProvenanceReceipt::observed(
+        "github",
+        "search_issues",
+        observed_at,
+        CacheOutcome::Bypass,
+        true,
+    );
+    let expected = serde_json::to_value(receipt.sign(&hmac())).expect("expected serializes");
+    assert_eq!(
+        prov, &expected,
+        "HMAC-only stamping must match the primitive-built bytes"
+    );
+    assert!(
+        prov.get("public_signature").is_none(),
+        "HMAC-only stamping must carry no public_signature: {stamped}"
+    );
+    let meta_obj = stamped
+        .pointer("/_meta")
+        .expect("stamping emits _meta")
+        .as_object()
+        .expect("_meta is an object");
+    assert_eq!(meta_obj.len(), 1, "no extra _meta members: {stamped}");
+    assert!(
+        meta_obj.contains_key("provenance"),
+        "the one member is provenance: {stamped}"
+    );
+    let mut bare = stamped.clone();
+    bare.as_object_mut()
+        .expect("a stamped result is an object")
+        .remove("_meta");
+    assert_eq!(bare, result, "stamping adds only _meta");
+}

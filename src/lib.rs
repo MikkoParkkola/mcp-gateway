@@ -90,6 +90,7 @@ pub mod mtls;
 #[doc(hidden)]
 pub mod oauth;
 mod observer;
+mod open_nonblocking;
 pub(crate) mod personal_accounts;
 #[doc(hidden)]
 pub mod playbook;
@@ -237,6 +238,10 @@ pub fn setup_tracing(level: &str, format: Option<&str>) -> Result<()> {
 #[cfg(test)]
 #[path = "log_filter_tests.rs"]
 mod log_filter_tests;
+
+// Unix-only: asserts POSIX mode bits under a child's umask.
+#[cfg(all(test, unix))]
+mod file_mode_inherit_tests;
 
 #[cfg(test)]
 pub(crate) mod test_classification_count;

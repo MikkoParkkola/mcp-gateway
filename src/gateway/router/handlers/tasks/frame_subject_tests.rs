@@ -96,3 +96,81 @@ async fn a_task_frame_record_names_the_listener_subject() {
     );
     assert_eq!(record["caller"], "anonymous", "{record}");
 }
+
+/// C4 (MIK-8672): a task frame delivery names the API-key credential.
+#[tokio::test]
+async fn a_task_frame_delivery_names_the_api_key_credential() {
+    let (state, _store) = crate::gateway::router::tests::test_router_app_state().await;
+    let dir = tempfile::tempdir().expect("a log directory");
+    let path = dir.path().join("audit.jsonl");
+    let log = Arc::new(
+        TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: path.to_string_lossy().into_owned(),
+            key_id: "t8672".to_string(),
+            ..TransparencyLogConfig::default()
+        }))
+        .expect("open log"),
+    );
+    let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
+    let mut meta =
+        Arc::try_unwrap(app.meta_mcp).unwrap_or_else(|_| panic!("fixture meta is exclusive"));
+    meta.enable_transparency_log(log);
+    app.meta_mcp = Arc::new(meta);
+    let state = Arc::new(app);
+
+    let reader = AuthenticatedClient {
+        quota_principal: None,
+        name: "frame-key-8672".to_string(),
+        rate_limit: 0,
+        backends: vec![],
+        allowed_tools: None,
+        denied_tools: None,
+        admin: false,
+        principal: crate::gateway::auth::principal_of("mik-8672-frame-key"),
+        authenticated: true,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
+    };
+    let caller = RecoveryCaller {
+        client: Some(&reader),
+        oauth_agent_identity: None,
+        cert_identity: None,
+        api_key_name: Some(reader.name.as_str()),
+        agent_id: None,
+        agent_declared: None,
+        grant_subject: None,
+        verified_identity: None,
+        is_admin: false,
+        input_capabilities: crate::protocol::meta::Declared::NONE,
+        session_id: None,
+    };
+    let frames = task_frames(&state, "owner-8672", &caller);
+    let notification = json!({"jsonrpc": "2.0", "method": "notifications/tasks",
+                              "params": {"taskId": "t-8672", "status": "working"}});
+    let frame = frames
+        .frame(
+            &notification,
+            &SubscriptionId::of_request(RequestId::Number(1)),
+            &reader,
+        )
+        .await
+        .expect("a frame is built");
+    let sent = frame.frame.clone();
+    assert!(
+        frame.delivery.delivered(&sent).await,
+        "the frame is delivered"
+    );
+
+    let record = std::fs::read_to_string(&path)
+        .expect("the log is written")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
+        .find(|row| row["response_stage"] == "notification_delivered")
+        .expect("the frame's delivery is on the log");
+    assert_eq!(record["who"]["credential_kind"], "api_key", "{record}");
+    assert_eq!(
+        record["who"]["principal"],
+        reader.principal.as_str(),
+        "{record}"
+    );
+}

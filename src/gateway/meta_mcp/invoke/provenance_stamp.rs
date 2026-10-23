@@ -1,7 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Runtime-provenance stamping of a delivered result (MIK-6905, MIK-6908),
-//! split out of `invoke.rs`: behaviour unchanged.
+//! split out of `invoke.rs`.
+//!
+//! The public seal (MIK-8398 C1c) signs only a receipt this request minted,
+//! once: the mint records the receipt's HMAC signature in the request's minted
+//! set, and the seal consumes it.
 
 use serde_json::Value;
 
@@ -22,6 +26,40 @@ thread_local! {
 #[cfg(test)]
 pub(super) fn take_last_client_claim() -> Option<crate::trust::ClientClaim> {
     LAST_CLIENT_CLAIM.with(|last| last.borrow_mut().take())
+}
+
+tokio::task_local! {
+    /// The HMAC signatures this request minted and has not sealed yet.
+    static MINTED: parking_lot::Mutex<std::collections::HashSet<String>>;
+}
+
+/// Run `request` with one minted-receipt set for its whole lifetime, beside
+/// the visibility memo. A request already inside one keeps it, so nested entry
+/// points share the outer request's set.
+///
+/// The argument is boxed as `dyn Future` so the scope adds no future-type
+/// depth (MIK-7678, `scripts/ci/check-recursion-margin.sh`).
+pub(crate) async fn with_minted_receipts<'a, T>(
+    request: std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>,
+) -> T {
+    if MINTED.try_with(|_| ()).is_ok() {
+        return request.await;
+    }
+    MINTED
+        .scope(
+            parking_lot::Mutex::new(std::collections::HashSet::new()),
+            request,
+        )
+        .await
+}
+
+/// Count a receipt left unsealed, by why the seal refused it.
+fn note_unsealed(reason: &str) {
+    telemetry_metrics::counter!(
+        "mcp_public_provenance_unsealed_total",
+        "reason" => reason.to_owned()
+    )
+    .increment(1);
 }
 
 impl MetaMcp {
@@ -84,6 +122,10 @@ impl MetaMcp {
             backend_ok,
             observed_at,
         );
+        // The mint: this request may seal this receipt, once. Outside a minted
+        // scope nothing is recorded and the receipt stays unsealed.
+        let sig = signed_receipt.signature.clone();
+        let _ = MINTED.try_with(|set| set.lock().insert(sig));
         if let Some(sink) = &self.claim_capture
             && let Some(call_id) = signed_receipt.receipt.call_id.clone()
         {
@@ -143,4 +185,79 @@ impl MetaMcp {
             None,
         )
     }
+
+    pub(crate) fn seal_public_provenance(&self, result: &mut Value) {
+        let Some(public) = self.public_provenance_signer.as_deref() else {
+            return;
+        };
+        let Some(hmac) = self.provenance_signer.as_deref() else {
+            return;
+        };
+        seal_receipt(public, hmac, result);
+    }
+}
+
+/// Seal one receipt this request minted, and no other.
+///
+/// Signs only when `object._meta.provenance` deserializes as a signed receipt
+/// whose HMAC verifies under this gateway's receipt-domain key and whose
+/// signature this request's minted set still holds. The seal consumes the
+/// mint, so a receipt is sealed at most once; anything else is left unsealed
+/// and counted, and the gateway never puts its Ed25519 signature on a receipt
+/// it did not mint in this request.
+///
+/// Sealing principle (MIK-8398 C1g): the seal must cover the bytes as
+/// delivered, so every deterministic wire transform happens before it.
+pub(in crate::gateway::meta_mcp) fn seal_receipt(
+    public: &crate::trust::provenance_public::ProvenancePublicSigner,
+    hmac: &crate::attestation::BnautAttestationSigner,
+    object: &mut Value,
+) {
+    let Some(prov) = object.pointer("/_meta/provenance").cloned() else {
+        return;
+    };
+    let Ok(signed) = serde_json::from_value::<crate::trust::SignedResultProvenance>(prov) else {
+        return;
+    };
+    let Some(signature) = signed.signature_bytes() else {
+        note_unsealed("hmac_mismatch");
+        return;
+    };
+    if !hmac.verify_bytes(&signed.receipt.canonical_bytes(), &signature) {
+        note_unsealed("hmac_mismatch");
+        return;
+    }
+    match MINTED.try_with(|set| set.lock().remove(&signed.signature)) {
+        Ok(true) => {}
+        Ok(false) => return note_unsealed("not_minted"),
+        Err(_) => return note_unsealed("no_scope"),
+    }
+    let sig = public.sign_receipt(&signed.receipt, Some(&*object));
+    if let Some(obj) = object
+        .pointer_mut("/_meta/provenance")
+        .and_then(|v| v.as_object_mut())
+        && let Ok(sig_value) = serde_json::to_value(&sig)
+    {
+        obj.insert("public_signature".to_owned(), sig_value);
+    }
+}
+
+/// Lift `_meta.provenance` out of a dispatch result before it is wrapped.
+///
+/// Returns the removed receipt. `_meta` itself is dropped when the removal
+/// leaves it empty, and every other `_meta` member is kept. Without a receipt
+/// nothing is touched, so unstamped results keep their bytes.
+pub(in crate::gateway::meta_mcp) fn lift_receipt(content: &mut Value) -> Option<Value> {
+    let receipt = content
+        .get_mut("_meta")
+        .and_then(Value::as_object_mut)
+        .and_then(|meta| meta.remove("provenance"))?;
+    let meta_empty = content
+        .get("_meta")
+        .and_then(Value::as_object)
+        .is_some_and(serde_json::Map::is_empty);
+    if meta_empty && let Some(object) = content.as_object_mut() {
+        object.remove("_meta");
+    }
+    Some(receipt)
 }

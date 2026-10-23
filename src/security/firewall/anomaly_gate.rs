@@ -4,7 +4,8 @@
 //! what the firewall admits (#1756).
 
 use super::anomaly::{Observation, Scoring};
-use super::{Finding, FindingLocation, Firewall, ScanType, Severity};
+use super::{Finding, FindingLocation, Firewall, ScanType};
+use crate::security::Severity;
 
 /// What the anomaly step decided about one request.
 pub(super) struct AnomalyGate<'a> {

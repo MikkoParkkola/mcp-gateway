@@ -441,3 +441,37 @@ async fn stdio_tasks_methods_refuse_legacy_and_undeclared_requests() {
         "{undeclared}"
     );
 }
+
+/// C5 (MIK-8672): a stdio delivery record names the local-transport credential.
+#[tokio::test]
+async fn stdio_delivery_records_name_the_local_transport_credential() {
+    let backend_url = spawn_backend().await;
+    let mut session = Session::open_with(&backend_url, "off", Log::On).await;
+    let answer = session
+        .ask(
+            &serde_json::from_str(&call(2, "cust-a")).expect("call JSON"),
+            2,
+        )
+        .await;
+    assert!(
+        answer.get("result").is_some(),
+        "base: the call is delivered: {answer}"
+    );
+    let deliveries = session.call_deliveries();
+    assert_eq!(
+        deliveries.len(),
+        1,
+        "one record for one call: {deliveries:#?}"
+    );
+    assert_eq!(
+        deliveries[0]["who"]["credential_kind"], "local_transport",
+        "{:#}",
+        deliveries[0]
+    );
+    assert_eq!(
+        deliveries[0]["who"]["principal"],
+        super::super::STDIO_CREDENTIAL_PRINCIPAL,
+        "{:#}",
+        deliveries[0]
+    );
+}

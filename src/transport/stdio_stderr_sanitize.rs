@@ -32,7 +32,7 @@ static AUTH_SCHEME: LazyLock<Regex> =
 /// closing quote.
 static SECRET_VALUE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?i)([a-z0-9_.-]*(?:key|secret|token|passw(?:or)?d|passphrase|pwd|credential|auth)[a-z0-9_.-]*)(["']?\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;}&]+)"#,
+        r#"(?i)([a-z0-9_.-]*(?:key|secret|token|passw(?:or)?d|passphrase|pwd|credential|auth|seed)[a-z0-9_.-]*)(["']?\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;}&]+)"#,
     )
     .expect("valid")
 });
@@ -200,6 +200,27 @@ mod tests {
             assert!(out.contains("[masked]"), "{out}");
         }
         assert!(one(r#"{"port": 3}"#).contains("\"port\": 3"));
+    }
+
+    #[test]
+    fn seed_named_values_are_masked() {
+        for (line, secret, key) in [
+            (
+                "GATEWAY_PROVENANCE_SIGNING_SEED=BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+                "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+                "GATEWAY_PROVENANCE_SIGNING_SEED",
+            ),
+            (
+                "random_seed: k7-short-20-chars-xx",
+                "k7-short-20-chars-xx",
+                "random_seed",
+            ),
+        ] {
+            let out = one(line);
+            assert!(!out.contains(secret), "{out}");
+            assert!(out.contains("[masked]"), "{out}");
+            assert!(out.contains(key), "{out}");
+        }
     }
 
     #[test]
