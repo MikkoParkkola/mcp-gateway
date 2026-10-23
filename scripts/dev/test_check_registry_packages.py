@@ -14,13 +14,13 @@ crp = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(crp)
 
 SNIPPET = """
-static REGISTRY: &[RegistryEntry] = &[
-    RegistryEntry {
+static REGISTRY: &[ServerCatalogEntry] = &[
+    ServerCatalogEntry {
         name: "a",
         command: "npx -y @scope/pkg@1.2.3 --flag",
         transport: Transport::Stdio,
     },
-    RegistryEntry {
+    ServerCatalogEntry {
         name: "b",
         command: "",
         transport: Transport::Http {
@@ -96,16 +96,16 @@ answers["https://as/.well-known/oauth-authorization-server/x"] = (200, json.dump
 assert "no dynamic client registration" in crp.probe("http-oauth", "https://h/mcp", ""), "issuer mismatch must fail"
 check({"name": "x", "url": "https://h/mcp", "auth": "OAuth"}, ("http-oauth", "https://h/mcp", ""))
 check({"name": "x", "url": "https://h/mcp", "auth": "Header"}, ("http-header", "https://h/mcp", ""))
-assert crp.parse_entries('    RegistryEntry {\n        name: "o",\n        auth: Auth::OAuth,\n    },')[0]["auth"] == "OAuth"
+assert crp.parse_entries('    ServerCatalogEntry {\n        name: "o",\n        auth: Auth::OAuth,\n    },')[0]["auth"] == "OAuth"
 # npm ranges are not pins; PyPI two-part versions are.
 check({"name": "x", "command": "npx -y pkg@1"}, "not pinned")
 check({"name": "x", "command": "npx -y pkg@1.2"}, "not pinned")
 check({"name": "x", "command": "uvx pkg@1.2"}, ("pypi", "pkg", "1.2"))
 check({"name": "x", "command": "uvx pkg@1.2rc1"}, ("pypi", "pkg", "1.2rc1"))
 # A wrapped name is still parsed; a block with no name is failed, not skipped.
-wrapped = crp.parse_entries('    RegistryEntry {\n        name:\n            "w",\n        command: "npx -y p@1.0.0",\n    },')
+wrapped = crp.parse_entries('    ServerCatalogEntry {\n        name:\n            "w",\n        command: "npx -y p@1.0.0",\n    },')
 assert wrapped[0]["name"] == "w", wrapped
-nameless = crp.parse_entries('    RegistryEntry {\n        command: "npx -y p@1.0.0",\n    },')
+nameless = crp.parse_entries('    ServerCatalogEntry {\n        command: "npx -y p@1.0.0",\n    },')
 check(nameless[0], "could not be parsed")
 answers["https://pypi.org/pypi/q/1.0/json"] = (200, json.dumps({"urls": []}).encode())
 assert "no distribution files" in crp.probe("pypi", "q", "1.0")
@@ -114,8 +114,8 @@ assert "no distribution files" in crp.probe("pypi", "q", "1.0")
 # A block the entry pattern cannot match fails the whole check.
 import tempfile
 with tempfile.NamedTemporaryFile("w", suffix=".rs", delete=False) as drift:
-    drift.write('    RegistryEntry {\n        name: "a",\n        command: "npx -y a@1.0.0",\n    },\n'
-                '    RegistryEntry {\n        name: "b",\n        command: "npx -y b@1.0.0",\n      },\n')
+    drift.write('    ServerCatalogEntry {\n        name: "a",\n        command: "npx -y a@1.0.0",\n    },\n'
+                '    ServerCatalogEntry {\n        name: "b",\n        command: "npx -y b@1.0.0",\n      },\n')
 assert crp.main(["x", "--offline", drift.name]) == 1
 
 

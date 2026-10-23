@@ -140,7 +140,7 @@ impl Reload {
 #[test]
 fn a_graceful_end_ends_only_the_current_stream() {
     let shared = shared();
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, PeerEra::Modern);
     assert!(state.note(UpstreamNote::End, false));
     assert!(!state.note(UpstreamNote::End, true));
 }
@@ -159,7 +159,7 @@ async fn emission_waits_for_the_snapshot_to_list_the_uri() {
         .lock()
         .add(&Interest::ResourceUpdated("file:///a".to_owned()))
         .expect("room");
-    let mut state = State::new(&shared, Era::Legacy);
+    let mut state = State::new(&shared, PeerEra::Legacy);
     let changed = || UpstreamNote::Notice {
         kind: NoteKind::ResourceUpdated,
         uri: Some("file:///a".to_owned()),
@@ -203,7 +203,7 @@ async fn an_undatable_resource_change_is_dropped_and_counted() {
         .snapshot
         .lock()
         .read(["file:///a".to_owned()].into(), true);
-    let mut state = State::new(&shared, Era::Legacy);
+    let mut state = State::new(&shared, PeerEra::Legacy);
     state.note(
         UpstreamNote::Notice {
             kind: NoteKind::ResourceUpdated,
@@ -250,7 +250,7 @@ async fn a_backend_made_ineligible_after_start_emits_nothing_and_stops() {
     // The backend's listener-only subscription and the one the gateway also
     // announces itself.
     admit_both(&hub);
-    let mut state = State::new(&shared, Era::Legacy);
+    let mut state = State::new(&shared, PeerEra::Legacy);
     let changed = || UpstreamNote::Notice {
         kind: NoteKind::ResourcesChanged,
         uri: None,
@@ -383,10 +383,11 @@ async fn a_real_reload_making_the_backend_ineligible_stops_its_listener() {
 
     // Control: past one failed connect and its backoff, the loop head
     // re-checked an eligible backend and kept going; it emits and authorizes.
+    // timing: absence
     tokio::time::sleep(Duration::from_millis(2600)).await;
     assert!(!task.is_finished(), "control: an eligible listener ended");
     assert!(!shared.stop.is_cancelled());
-    let mut state = State::new(&shared, Era::Legacy);
+    let mut state = State::new(&shared, PeerEra::Legacy);
     let changed = || UpstreamNote::Notice {
         kind: NoteKind::ResourcesChanged,
         uri: None,
@@ -520,7 +521,7 @@ async fn a_refill_in_flight_at_the_session_end_is_announced() {
         upstream: None,
     }));
     let shared = shared();
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, PeerEra::Modern);
     // The refill serves a notice the hub has not heard of.
     state.refill_announces = true;
     let (release, released) = tokio::sync::oneshot::channel::<()>();
@@ -571,7 +572,7 @@ async fn a_uri_watched_after_the_session_started_is_read_at_once() {
         .snapshot
         .lock()
         .read(["file:///a".to_owned()].into(), true);
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, PeerEra::Modern);
     let started = Instant::now();
     shared
         .need
@@ -618,7 +619,7 @@ async fn a_coalesced_notice_is_delivered_when_the_session_ends() {
         .lock()
         .add(&Interest::ResourcesChanged)
         .expect("room");
-    let mut state = State::new(&shared, Era::Legacy);
+    let mut state = State::new(&shared, PeerEra::Legacy);
     state.note(changed(NoteKind::ResourcesChanged), false);
     let _ = finish_refill(&mut state, &shared, &backend, &weak, None, Instant::now()).await;
     assert!(
@@ -639,7 +640,7 @@ async fn a_kind_the_acknowledgement_did_not_honour_is_not_delivered() {
     for interest in [Interest::ResourcesChanged, Interest::PromptsChanged] {
         shared.need.lock().add(&interest).expect("room");
     }
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, PeerEra::Modern);
     let honoured = KindSet {
         resources_changed: true,
         ..KindSet::default()
@@ -667,7 +668,7 @@ async fn a_kind_the_acknowledgement_did_not_honour_is_not_delivered() {
 #[test]
 fn a_refused_listen_ends_the_session_as_unsupported() {
     let shared = shared();
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, PeerEra::Modern);
     assert!(!state.note(UpstreamNote::Unsupported, true));
     assert!(matches!(state.ended(Instant::now()), Outcome::Ended { .. }));
     assert!(state.note(UpstreamNote::Unsupported, false));
@@ -695,7 +696,7 @@ async fn a_uri_the_acknowledgement_did_not_list_is_not_delivered() {
         .snapshot
         .lock()
         .read([a.clone(), b.clone()].into(), true);
-    let mut state = State::new(&shared, Era::Modern);
+    let mut state = State::new(&shared, PeerEra::Modern);
     state.note(
         UpstreamNote::Ack {
             kinds: KindSet::default(),
@@ -730,7 +731,7 @@ async fn a_notice_before_the_acknowledgement_is_not_delivered() {
         .lock()
         .add(&Interest::ResourcesChanged)
         .expect("room");
-    let mut modern = State::new(&shared, Era::Modern);
+    let mut modern = State::new(&shared, PeerEra::Modern);
     modern.note(changed(NoteKind::ResourcesChanged), false);
     modern.flush_at(&weak, Instant::now() + WINDOW);
     assert!(
@@ -765,7 +766,7 @@ async fn a_notice_before_the_acknowledgement_is_not_delivered() {
     modern.note(changed(NoteKind::ResourcesChanged), false);
     modern.flush_at(&weak, Instant::now() + WINDOW);
     assert!(intake.try_recv().is_ok(), "the promoted replacement");
-    let mut legacy = State::new(&shared, Era::Legacy);
+    let mut legacy = State::new(&shared, PeerEra::Legacy);
     legacy.note(changed(NoteKind::ResourcesChanged), false);
     legacy.flush_at(&weak, Instant::now() + WINDOW);
     assert!(intake.try_recv().is_ok(), "control: a legacy stream");

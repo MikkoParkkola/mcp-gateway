@@ -25,7 +25,7 @@ use serde_json::json;
 use tower::ServiceExt;
 
 use crate::config::{ApiKeyConfig, AuthConfig};
-use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
+use crate::gateway::oauth::OAuthAgentIdentity;
 use crate::gateway::router::AppState;
 use crate::gateway::router::create_router;
 use crate::gateway::router::tests::{test_router_app_state, test_router_app_state_with_auth};

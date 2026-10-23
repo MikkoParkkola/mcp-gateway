@@ -43,7 +43,7 @@ impl DirectRouteGuards {
         state: &AppState,
         (client, oauth_agent_identity, cert_identity): (
             Option<&AuthenticatedClient>,
-            Option<&crate::gateway::oauth::AgentIdentity>,
+            Option<&crate::gateway::oauth::OAuthAgentIdentity>,
             Option<&crate::mtls::CertIdentity>,
         ),
         nonce: Option<&str>,

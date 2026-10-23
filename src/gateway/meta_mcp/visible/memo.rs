@@ -49,13 +49,13 @@ struct VisibilityMemo {
 /// A memo map's key for one `(server, tool)` target.
 type TargetKey = (String, String);
 /// A memo map's key for one `(server, account)` pair.
-type AccountSlot = (String, AccountKey);
+type AccountSlot = (String, DescriptorId);
 
 fn target_key(server: &str, tool: &str) -> TargetKey {
     (server.to_owned(), tool.to_owned())
 }
 
-fn account_slot(server: &str, account: &AccountKey) -> AccountSlot {
+fn account_slot(server: &str, account: &DescriptorId) -> AccountSlot {
     (server.to_owned(), account.clone())
 }
 
@@ -65,7 +65,7 @@ fn target<'a>(server: &'a str, tool: &'a str) -> (&'a str, &'a str) {
 }
 
 /// The borrowed form of an [`AccountSlot`], for reads: no key is built.
-fn slot<'a>(server: &'a str, account: &'a AccountKey) -> (&'a str, &'a str) {
+fn slot<'a>(server: &'a str, account: &'a DescriptorId) -> (&'a str, &'a str) {
     (server, account.0.as_str())
 }
 
@@ -81,7 +81,7 @@ impl Pair for (String, String) {
     }
 }
 
-impl Pair for (String, AccountKey) {
+impl Pair for (String, DescriptorId) {
     fn pair(&self) -> (&str, &str) {
         (self.0.as_str(), self.1.0.as_str())
     }
@@ -113,7 +113,7 @@ impl<'a> std::borrow::Borrow<dyn Pair + 'a> for (String, String) {
     }
 }
 
-impl<'a> std::borrow::Borrow<dyn Pair + 'a> for (String, AccountKey) {
+impl<'a> std::borrow::Borrow<dyn Pair + 'a> for (String, DescriptorId) {
     fn borrow(&self) -> &(dyn Pair + 'a) {
         self as &(dyn Pair + 'a)
     }
@@ -219,7 +219,7 @@ fn in_memo<R>(read: impl FnOnce(&VisibilityMemo) -> R) -> Option<R> {
 /// descriptor's id, from an identity-propagation backend's `account` or a
 /// capability's `auth.account`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct AccountKey(pub(crate) String);
+pub(crate) struct DescriptorId(pub(crate) String);
 
 /// Whether a target's account is live for this caller, judged without a
 /// mint (MIK-8392).
@@ -243,7 +243,11 @@ pub(crate) enum AccountOutcome {
 
 /// Record `outcome` for `(server, account)` in the open request's memo unless
 /// one is recorded; outside a memo nothing is kept.
-pub(crate) fn record_account_outcome(server: &str, account: &AccountKey, outcome: AccountOutcome) {
+pub(crate) fn record_account_outcome(
+    server: &str,
+    account: &DescriptorId,
+    outcome: AccountOutcome,
+) {
     in_memo(|memo| {
         memo.offer_pending
             .first(account_slot(server, account), outcome)
@@ -254,7 +258,7 @@ pub(crate) fn record_account_outcome(server: &str, account: &AccountKey, outcome
 /// the memo only: outside an open memo, or before the pre-pass ran, it is
 /// `None`, and the caller fails closed. It never judges afresh (unlike the
 /// visibility fallback in [`MetaMcp::tool_visible_to`](crate::gateway::meta_mcp::MetaMcp::tool_visible_to)).
-pub(crate) fn account_outcome(server: &str, account: &AccountKey) -> Option<AccountOutcome> {
+pub(crate) fn account_outcome(server: &str, account: &DescriptorId) -> Option<AccountOutcome> {
     in_memo(|memo| {
         memo.offer_pending
             .get(&slot(server, account) as &(dyn Pair + '_))
@@ -469,7 +473,7 @@ pub(crate) fn absent_if_withheld(judged: Option<Visibility>, tool: &str) -> crat
 }
 
 /// Keep the binding the pre-pass's view read gave `(server, account)`.
-pub(crate) fn record_account_binding(server: &str, account: &AccountKey, binding: &str) {
+pub(crate) fn record_account_binding(server: &str, account: &DescriptorId, binding: &str) {
     in_memo(|memo| {
         memo.account_binding
             .set(account_slot(server, account), binding.to_owned());
@@ -477,7 +481,7 @@ pub(crate) fn record_account_binding(server: &str, account: &AccountKey, binding
 }
 
 /// The binding the pre-pass's view read gave `(server, account)`, if any.
-pub(crate) fn account_binding(server: &str, account: &AccountKey) -> Option<String> {
+pub(crate) fn account_binding(server: &str, account: &DescriptorId) -> Option<String> {
     in_memo(|memo| {
         memo.account_binding
             .get(&slot(server, account) as &(dyn Pair + '_))
@@ -487,7 +491,7 @@ pub(crate) fn account_binding(server: &str, account: &AccountKey) -> Option<Stri
 
 /// Keep the live call's refusal for `(server, account)` in the open request;
 /// outside one it is dropped.
-pub(crate) fn record_account_refusal(server: &str, account: &AccountKey, refusal: crate::Error) {
+pub(crate) fn record_account_refusal(server: &str, account: &DescriptorId, refusal: crate::Error) {
     in_memo(|memo| {
         memo.account_refusal
             .set(account_slot(server, account), refusal);
@@ -563,7 +567,7 @@ pub(crate) fn take_resolution_error(server: &str, tool: &str) -> Option<crate::E
 }
 
 /// Take the refusal kept for `(server, account)`, if any.
-pub(crate) fn take_account_refusal(server: &str, account: &AccountKey) -> Option<crate::Error> {
+pub(crate) fn take_account_refusal(server: &str, account: &DescriptorId) -> Option<crate::Error> {
     in_memo(|memo| {
         memo.account_refusal
             .take(&slot(server, account) as &(dyn Pair + '_))

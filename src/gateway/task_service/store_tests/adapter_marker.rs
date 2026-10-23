@@ -262,7 +262,7 @@ async fn marker_03_a_refused_marker_write_claims_no_dispatch() {
         let captured = Arc::clone(&captured);
         let dir = path.clone();
         Arc::new(move |stage| {
-            if stage == CommitStage::Rename {
+            if stage == StoreWriteStage::Rename {
                 *captured.lock().unwrap() = Some(manifest(&dir));
                 return Err(std::io::Error::other("the marker write is refused"));
             }

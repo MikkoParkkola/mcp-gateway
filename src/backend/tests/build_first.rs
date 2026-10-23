@@ -240,14 +240,14 @@ fn non_interactive_restart(
 /// once the candidate is published its own probe's verdict is installed.
 #[tokio::test]
 async fn the_old_transport_keeps_its_era_while_the_candidate_probes() {
-    use crate::protocol::era::Era;
+    use crate::protocol::era::PeerEra;
     let (url, stub) = era_stub().await;
     let backend = http_backend(url);
     backend.start().await.expect("premise: the backend starts");
     let entry = backend.shared_entry();
     assert_eq!(
         entry.era.cached().await,
-        Some(Era::Modern),
+        Some(PeerEra::Modern),
         "premise: modern"
     );
     let old = pooled(&backend).expect("premise: pooled");
@@ -263,7 +263,7 @@ async fn the_old_transport_keeps_its_era_while_the_candidate_probes() {
 
     assert_eq!(
         entry.era.cached_now(),
-        Some(Era::Modern),
+        Some(PeerEra::Modern),
         "the serving transport lost its verdict while the candidate probed"
     );
     old.request("tools/list", None)
@@ -283,21 +283,21 @@ async fn the_old_transport_keeps_its_era_while_the_candidate_probes() {
         .expect("the candidate starts");
     assert!(matches!(outcome, RestartOutcome::Rebuilt), "{outcome:?}");
     assert!(!Arc::ptr_eq(&old, &pooled(&backend).unwrap()), "swapped");
-    assert_eq!(entry.era.cached().await, Some(Era::Modern));
+    assert_eq!(entry.era.cached().await, Some(PeerEra::Modern));
 }
 
 /// ERA.2 (downgrade): a candidate whose peer now answers legacy installs
 /// Legacy at the swap; the old verdict is not kept past it.
 #[tokio::test]
 async fn a_successful_swap_installs_the_candidates_era() {
-    use crate::protocol::era::Era;
+    use crate::protocol::era::PeerEra;
     let (url, stub) = era_stub().await;
     let backend = http_backend(url);
     backend.start().await.expect("premise: the backend starts");
     let entry = backend.shared_entry();
     assert_eq!(
         entry.era.cached().await,
-        Some(Era::Modern),
+        Some(PeerEra::Modern),
         "premise: modern"
     );
 
@@ -309,7 +309,7 @@ async fn a_successful_swap_installs_the_candidates_era() {
     assert!(matches!(outcome, RestartOutcome::Rebuilt), "{outcome:?}");
     assert_eq!(
         entry.era.cached().await,
-        Some(Era::Legacy),
+        Some(PeerEra::Legacy),
         "the candidate's verdict was not installed at the swap"
     );
 }
@@ -344,7 +344,7 @@ async fn a_probe_timeout_whose_replacement_cannot_start_keeps_the_transport() {
 /// noticed by a probe rebuild.
 #[tokio::test]
 async fn a_candidate_probes_an_upgraded_peer_in_the_2026_dialect() {
-    use crate::protocol::era::Era;
+    use crate::protocol::era::PeerEra;
     let (url, stub) = era_stub().await;
     stub.mode.store(DISCOVER_LEGACY, Ordering::SeqCst);
     let backend = http_backend(url);
@@ -352,7 +352,7 @@ async fn a_candidate_probes_an_upgraded_peer_in_the_2026_dialect() {
     let entry = backend.shared_entry();
     assert_eq!(
         entry.era.cached().await,
-        Some(Era::Legacy),
+        Some(PeerEra::Legacy),
         "premise: legacy"
     );
 
@@ -364,7 +364,7 @@ async fn a_candidate_probes_an_upgraded_peer_in_the_2026_dialect() {
     assert!(matches!(outcome, RestartOutcome::Rebuilt), "{outcome:?}");
     assert_eq!(
         entry.era.cached().await,
-        Some(Era::Modern),
+        Some(PeerEra::Modern),
         "the candidate asked a strict 2026 peer in the 2025 dialect"
     );
     pooled(&backend)
@@ -383,14 +383,14 @@ async fn a_candidate_probes_an_upgraded_peer_in_the_2026_dialect() {
 /// the serving transport keeps the verdict it had.
 #[tokio::test]
 async fn a_failed_candidate_leaves_the_verdict_alone() {
-    use crate::protocol::era::Era;
+    use crate::protocol::era::PeerEra;
     let (url, stub) = era_stub().await;
     let backend = http_backend(url);
     backend.start().await.expect("premise: the backend starts");
     let entry = backend.shared_entry();
     assert_eq!(
         entry.era.cached().await,
-        Some(Era::Modern),
+        Some(PeerEra::Modern),
         "premise: modern"
     );
     let old = pooled(&backend).expect("premise: pooled");
@@ -405,7 +405,7 @@ async fn a_failed_candidate_leaves_the_verdict_alone() {
     assert!(Arc::ptr_eq(&old, &pooled(&backend).unwrap()), "kept");
     assert_eq!(
         entry.era.cached().await,
-        Some(Era::Modern),
+        Some(PeerEra::Modern),
         "a candidate that never replaced the transport changed its verdict"
     );
 }
@@ -413,7 +413,7 @@ async fn a_failed_candidate_leaves_the_verdict_alone() {
 /// Restart a backend whose peer answered `before` after its peer switched to
 /// `after`, and return the slot's era at the instant the candidate became
 /// reachable, and whether the first call on it carried `_meta`.
-async fn swap_across_eras(before: u8, after: u8) -> (Option<crate::protocol::era::Era>, bool) {
+async fn swap_across_eras(before: u8, after: u8) -> (Option<crate::protocol::era::PeerEra>, bool) {
     let (url, stub) = era_stub().await;
     stub.mode.store(before, Ordering::SeqCst);
     let backend = http_backend(url);
@@ -442,11 +442,11 @@ async fn swap_across_eras(before: u8, after: u8) -> (Option<crate::protocol::era
 /// reads its predecessor's Modern verdict.
 #[tokio::test]
 async fn a_downgraded_candidate_is_never_reachable_in_the_old_dialect() {
-    use crate::protocol::era::Era;
+    use crate::protocol::era::PeerEra;
     let (at_publish, shaped_modern) = swap_across_eras(DISCOVER_MODERN, DISCOVER_LEGACY).await;
     assert_eq!(
         at_publish,
-        Some(Era::Legacy),
+        Some(PeerEra::Legacy),
         "the candidate became reachable with its predecessor's verdict"
     );
     assert!(
@@ -459,11 +459,11 @@ async fn a_downgraded_candidate_is_never_reachable_in_the_old_dialect() {
 /// reads its predecessor's Legacy verdict.
 #[tokio::test]
 async fn an_upgraded_candidate_is_never_reachable_in_the_old_dialect() {
-    use crate::protocol::era::Era;
+    use crate::protocol::era::PeerEra;
     let (at_publish, shaped_modern) = swap_across_eras(DISCOVER_LEGACY, DISCOVER_STRICT).await;
     assert_eq!(
         at_publish,
-        Some(Era::Modern),
+        Some(PeerEra::Modern),
         "the candidate became reachable with its predecessor's verdict"
     );
     assert!(
@@ -481,7 +481,7 @@ type Discard = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>
 /// the contradiction then finds its transport replaced and discards nothing.
 #[tokio::test]
 async fn a_contradiction_from_the_old_transport_cannot_erase_the_installed_verdict() {
-    use crate::protocol::era::Era;
+    use crate::protocol::era::PeerEra;
     let (url, stub) = era_stub().await;
     let backend = http_backend(url);
     backend.start().await.expect("premise: the backend starts");
@@ -524,5 +524,5 @@ async fn a_contradiction_from_the_old_transport_cannot_erase_the_installed_verdi
         !discarded,
         "an old transport's contradiction erased the new verdict"
     );
-    assert_eq!(entry.era.cached_now(), Some(Era::Legacy));
+    assert_eq!(entry.era.cached_now(), Some(PeerEra::Legacy));
 }

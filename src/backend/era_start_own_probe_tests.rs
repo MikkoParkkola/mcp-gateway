@@ -19,7 +19,7 @@ use super::era_stale_probe_tests::{Answer, Peer};
 use super::stop_race_tests::within;
 use super::{Backend, MarkWindowGate};
 use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
-use crate::protocol::era::{Era, EraCache, METHOD_NOT_FOUND_CODE, ProbeOutcome};
+use crate::protocol::era::{EraCache, METHOD_NOT_FOUND_CODE, PeerEra, ProbeOutcome};
 use crate::transport::Transport;
 
 /// What the loopback server answers `server/discover` with.
@@ -77,7 +77,7 @@ async fn upstream(discover: Discover) -> (String, Arc<Mutex<Vec<String>>>) {
 async fn start_while_another_writer_installs(
     discover: Discover,
     other: Answer,
-    other_era: Era,
+    other_era: PeerEra,
 ) -> Vec<String> {
     let (url, seen) = upstream(discover).await;
     let backend = Arc::new(Backend::new(
@@ -130,7 +130,7 @@ async fn start_while_another_writer_installs(
 #[tokio::test]
 async fn a_silent_start_probe_handshakes_despite_a_modern_verdict_installed_meanwhile() {
     let seen =
-        start_while_another_writer_installs(Discover::Fails, Answer::Modern, Era::Modern).await;
+        start_while_another_writer_installs(Discover::Fails, Answer::Modern, PeerEra::Modern).await;
     assert!(
         seen.iter().any(|m| m == "initialize"),
         "the start followed another writer's Modern instead of its own silent probe: {seen:?}"
@@ -142,9 +142,12 @@ async fn a_silent_start_probe_handshakes_despite_a_modern_verdict_installed_mean
 /// handshake, as its own probe decided.
 #[tokio::test]
 async fn a_modern_start_probe_skips_the_handshake_despite_a_legacy_verdict_installed_meanwhile() {
-    let seen =
-        start_while_another_writer_installs(Discover::Modern, Answer::MethodNotFound, Era::Legacy)
-            .await;
+    let seen = start_while_another_writer_installs(
+        Discover::Modern,
+        Answer::MethodNotFound,
+        PeerEra::Legacy,
+    )
+    .await;
     assert!(
         !seen.iter().any(|m| m == "initialize"),
         "the start followed another writer's Legacy instead of its own Modern probe: {seen:?}"
@@ -171,11 +174,11 @@ async fn no_probe() -> ProbeOutcome {
 async fn a_start_retired_before_its_probe_reports_legacy() {
     let cache = EraCache::for_backend("retired-before-probe");
     cache.restart_with(|| async { modern_document() }).await;
-    assert_eq!(cache.cached().await, Some(Era::Modern), "primed");
+    assert_eq!(cache.cached().await, Some(PeerEra::Modern), "primed");
 
     let era = cache.restart_while_serving(no_probe, |_step| false).await;
-    assert_eq!(era, Era::Legacy);
-    assert_eq!(cache.cached().await, Some(Era::Modern));
+    assert_eq!(era, PeerEra::Legacy);
+    assert_eq!(cache.cached().await, Some(PeerEra::Modern));
 }
 
 /// ERAPROOF.3b: a start whose probe ran but whose slot was retired before the
@@ -186,7 +189,7 @@ async fn a_start_refused_at_install_reports_its_own_probe() {
     cache
         .restart_with(|| async { ProbeOutcome::Error(METHOD_NOT_FOUND_CODE) })
         .await;
-    assert_eq!(cache.cached().await, Some(Era::Legacy), "primed");
+    assert_eq!(cache.cached().await, Some(PeerEra::Legacy), "primed");
 
     // Serving at the discard, retired by the install.
     let calls = std::cell::Cell::new(0);
@@ -204,6 +207,6 @@ async fn a_start_refused_at_install_reports_its_own_probe() {
             },
         )
         .await;
-    assert_eq!(era, Era::Modern);
+    assert_eq!(era, PeerEra::Modern);
     assert_eq!(cache.cached().await, None, "discarded, nothing installed");
 }

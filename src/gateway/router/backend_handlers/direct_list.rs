@@ -21,7 +21,7 @@ use super::super::AppState;
 use super::super::authorization::{ToolTarget, decide_tool_target};
 use super::direct_send::{NonToolMethod, dispatch_non_call};
 use crate::gateway::auth::AuthenticatedClient;
-use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
+use crate::gateway::oauth::OAuthAgentIdentity;
 use crate::mtls::CertIdentity;
 use crate::protocol::{JsonRpcResponse, RequestId, Tool};
 use crate::trust::project_tool_descriptors_trust_cards;

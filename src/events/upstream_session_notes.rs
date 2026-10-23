@@ -14,7 +14,7 @@ use crate::events::EventsHub;
 use crate::events::fanout::SourceEvent;
 use crate::events::types::{SourceKind, Visibility};
 use crate::events::upstream_need::Verdict;
-use crate::protocol::era::Era;
+use crate::protocol::era::PeerEra;
 use crate::transport::upstream_tap::{KindSet, NoteKind, UpstreamNote};
 
 impl State<'_> {
@@ -59,7 +59,7 @@ impl State<'_> {
     /// acknowledgement (a replacement's, or the first listen's) is dropped:
     /// the acknowledgement must be the first frame (§3).
     pub(super) fn honours(&self, kind: NoteKind, uri: Option<&str>, from_pending: bool) -> bool {
-        if self.era == Era::Legacy {
+        if self.era == PeerEra::Legacy {
             return true;
         }
         let (false, Some((kinds, uris))) = (from_pending, &self.honoured) else {
