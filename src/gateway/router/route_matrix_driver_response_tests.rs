@@ -127,3 +127,73 @@ pub(crate) async fn signed_redacted_call(route: HttpRoute, era: Era, text: &'sta
     .await;
     call_read(&fx, route, era).await
 }
+
+/// One message-signed call and the delivery rows the gateway wrote for it.
+pub(crate) struct Recorded {
+    /// The delivered JSON-RPC body.
+    pub(crate) body: Value,
+    /// The log's `response_delivery_attempt` rows.
+    pub(crate) rows: Vec<Value>,
+    _dir: tempfile::TempDir,
+}
+
+/// One hardened, message-signed `read` on `route` (modern, nonce `n1`), with
+/// both provenance signers on and one transparency log shared by the
+/// `MetaMcp` and the state, as the server wires it.
+pub(crate) async fn signed_recorded_call(route: HttpRoute) -> Recorded {
+    use std::sync::Arc;
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let config = crate::security::transparency_log::TransparencyLogConfig {
+        enabled: true,
+        path: dir
+            .path()
+            .join("audit.jsonl")
+            .to_string_lossy()
+            .into_owned(),
+        key_id: "resp".to_string(),
+        ..crate::security::transparency_log::TransparencyLogConfig::default()
+    };
+    let log = Arc::new(
+        crate::security::TransparencyLogger::open(Arc::new(config)).expect("the log opens"),
+    );
+    let meta_log = Arc::clone(&log);
+    let fx = fixture::fixture_hardened_signed_logged(Answer::Ok, Arc::clone(&log), move |meta| {
+        let mut meta = dual_signed(meta);
+        meta.enable_transparency_log(meta_log);
+        meta
+    })
+    .await;
+    let body = match route {
+        HttpRoute::Mcp => super::signed_invoke(&fx, "k-std", "n1", json!({})).await,
+        HttpRoute::Direct => {
+            super::super::direct_continuation_tests::signed_call(
+                &fx,
+                ("k-std", "alpha"),
+                "n1",
+                json!({}),
+            )
+            .await
+            .1
+        }
+    };
+    // Real time only as a hang guard: the append is out once nothing is in flight.
+    let guard = std::time::Instant::now();
+    while log.write_in_flight_for_test() {
+        assert!(
+            guard.elapsed() < std::time::Duration::from_secs(60),
+            "the delivery record never landed"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let rows = std::fs::read_to_string(log.path())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|row| row["event"] == "response_delivery_attempt")
+        .collect();
+    Recorded {
+        body,
+        rows,
+        _dir: dir,
+    }
+}

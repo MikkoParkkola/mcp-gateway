@@ -9,8 +9,8 @@
 use serde_json::Value;
 
 use crate::gateway::router::route_matrix_driver_tests::response::{
-    BackendAnswer, HttpRoute, planted_credential, signed_call, signed_redacted_call, signed_replay,
-    trust_set,
+    BackendAnswer, HttpRoute, planted_credential, signed_call, signed_recorded_call,
+    signed_redacted_call, signed_replay, trust_set,
 };
 use crate::protocol::meta::Era;
 use crate::trust::provenance_public::{VerifyRefusal, VerifyStatus, verify_public};
@@ -116,6 +116,55 @@ async fn r_fwseal_firewall_precedes_seal() {
                 "{row}: the receipt does not bind the unredacted body"
             );
         }
+    }
+}
+
+/// The delivery record's hash of `document`: sha256 over its serde bytes,
+/// keys sorted (`sorted-json-v1`, `delivery_record.rs`).
+fn record_hash(document: &Value) -> String {
+    use sha2::{Digest, Sha256};
+    let bytes = serde_json::to_vec(document).expect("the document serializes");
+    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+}
+
+/// R-RECSIGN `sign_precedes_delivery_record` (`Sign` < `DeliveryRecord`;
+/// `Mcp`, `Direct` × `Fresh` × `Modern`). A message-signed call delivers a
+/// result carrying `_signature`, and its one delivery row hashes the
+/// delivered document with that signature in it: a record taken before
+/// signing would hash the unsigned document and differ.
+#[tokio::test]
+async fn r_recsign_sign_precedes_delivery_record() {
+    for route in [HttpRoute::Mcp, HttpRoute::Direct] {
+        let row = format!("R-RECSIGN {route:?}");
+        let recorded = signed_recorded_call(route).await;
+        let result = delivered(&recorded.body);
+        assert!(
+            result.get("_signature").is_some(),
+            "{row}: the answer is message-signed: {result}"
+        );
+        assert_eq!(
+            recorded.rows.len(),
+            1,
+            "{row}: one delivery row: {:?}",
+            recorded.rows
+        );
+        let record = &recorded.rows[0];
+        assert_eq!(record["response_hash_encoding"], "sorted-json-v1", "{row}");
+        let expected = record_hash(&recorded.body);
+        assert_eq!(
+            record["response_hash"].as_str(),
+            Some(expected.as_str()),
+            "{row}: the record hashes the delivered, signed document"
+        );
+        let mut unsigned = recorded.body.clone();
+        if let Some(result) = unsigned.get_mut("result").and_then(Value::as_object_mut) {
+            result.remove("_signature");
+        }
+        assert_ne!(
+            record_hash(&unsigned),
+            expected,
+            "{row}: the hash tells a signed document from an unsigned one"
+        );
     }
 }
 

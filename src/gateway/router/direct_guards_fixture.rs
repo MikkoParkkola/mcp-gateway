@@ -354,6 +354,20 @@ pub(crate) async fn fixture_hardened_signed_built(
     fx
 }
 
+/// [`fixture_hardened_signed_built`] with `log` as the state's transparency
+/// log; `build` arms the same log on the `MetaMcp`, so both routes record
+/// their deliveries in one file (MIK-8689).
+pub(crate) async fn fixture_hardened_signed_logged(
+    answer: Answer,
+    log: Arc<crate::security::TransparencyLogger>,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    STATE_LOG.with(|l| *l.borrow_mut() = Some(log));
+    let fx = fixture_hardened_signed_built(answer, false, build).await;
+    STATE_LOG.with(|l| *l.borrow_mut() = None);
+    fx
+}
+
 /// `meta` with message signing armed under [`SIGNING_KEY`].
 fn signing(mut meta: MetaMcp, require_nonce: bool) -> MetaMcp {
     meta.enable_message_signing(
@@ -465,6 +479,10 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
     /// Both backends run `input_schema_enforcement = "off"` (MIK-8353 3a).
     static SCHEMA_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The state's transparency log, so the direct route records deliveries
+    /// (MIK-8689: a row reads them back).
+    static STATE_LOG: std::cell::RefCell<Option<Arc<crate::security::TransparencyLogger>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// [`fixture_hardened_signed_built`] with the input-schema check off on both
@@ -585,6 +603,9 @@ async fn fixture_inner(
     // (MIK-6740), so a propagating fixture gets a transparency log.
     if PROPAGATING.with(std::cell::Cell::get) {
         state_mut.transparency_log = Some(leaked_transparency_log());
+    }
+    if let Some(log) = STATE_LOG.with(|l| l.borrow().clone()) {
+        state_mut.transparency_log = Some(log);
     }
     for (name, passthrough) in [("alpha", false), ("alpha-pt", true)] {
         let backend = Arc::new(Backend::new(
