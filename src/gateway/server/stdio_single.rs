@@ -333,8 +333,11 @@ impl Gateway {
     ) {
         // One visibility judgement per request (MIK-8340), as on HTTP.
         // Boxed first, as on HTTP: the memo wraps a pointer, not a copy.
-        let dispatch = crate::gateway::meta_mcp::visible::memo::with_visibility_memo(Box::pin(
-            Self::dispatch_relay_scoped(meta_mcp, tool_policy, mtls_policy, request, client),
+        // The minted-receipt scope rides outside the memo.
+        let dispatch = crate::gateway::meta_mcp::invoke::with_minted_receipts(Box::pin(
+            crate::gateway::meta_mcp::visible::memo::with_visibility_memo(Box::pin(
+                Self::dispatch_relay_scoped(meta_mcp, tool_policy, mtls_policy, request, client),
+            )),
         ));
         if meta_mcp.relay_active() {
             return meta_mcp.collecting_staged(Box::pin(dispatch)).await;

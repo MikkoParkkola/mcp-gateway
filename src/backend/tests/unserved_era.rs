@@ -10,7 +10,7 @@
 use super::*;
 use crate::error::rpc_codes::INTERNAL_ERROR;
 use crate::error::rpc_codes::METHOD_NOT_FOUND;
-use crate::protocol::era::{Era, UNSUPPORTED_PROTOCOL_VERSION};
+use crate::protocol::era::{PeerEra, UNSUPPORTED_PROTOCOL_VERSION};
 
 fn count_of(methods: &[String], method: &str) -> usize {
     methods.iter().filter(|m| *m == method).count()
@@ -58,7 +58,7 @@ async fn row_9f_the_unserved_count_survives_an_era_invalidation() {
         .refusing(INTERNAL_ERROR),
     );
     let backend = probe_backend(Arc::clone(&mock), true).await;
-    assert_eq!(backend.cached_era().await, Some(Era::Legacy), "premise");
+    assert_eq!(backend.cached_era().await, Some(PeerEra::Legacy), "premise");
 
     let _ = backend.health_probe(Duration::from_secs(5)).await;
     assert_eq!(backend.unserved_counts_for_test(), (1, 1));
@@ -117,7 +117,7 @@ async fn row_10e_a_method_not_found_between_faults_resets_the_count() {
         .refusing(METHOD_NOT_FOUND),
     );
     let backend = probe_backend(Arc::clone(&mock), true).await;
-    assert_eq!(backend.cached_era().await, Some(Era::Legacy), "premise");
+    assert_eq!(backend.cached_era().await, Some(PeerEra::Legacy), "premise");
 
     let expected = [(1, 1), (2, 2), (0, 3), (1, 4), (2, 5)];
     for (tick, counts) in expected.into_iter().enumerate() {

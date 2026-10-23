@@ -15,7 +15,7 @@ use super::super::AppState;
 use super::super::authorization::{refusal_principal, slot_principal};
 use super::super::hardened_identity::hardened_identity_refusal;
 use crate::gateway::auth::AuthenticatedClient;
-use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
+use crate::gateway::oauth::OAuthAgentIdentity;
 use crate::gateway::router::helpers::build_http_error_response;
 use crate::identity_grants::GrantSubject;
 use crate::key_server::oidc::VerifiedIdentity;

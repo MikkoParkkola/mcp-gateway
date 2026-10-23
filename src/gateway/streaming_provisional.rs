@@ -56,16 +56,16 @@ pub(crate) struct SessionCapacity;
 
 /// A request running under a session. While any is held, a provisional
 /// session is not reaped; dropping the last one starts its idle clock.
-pub(crate) struct SessionHold(Arc<ClientSession>);
+pub(crate) struct InFlightHold(Arc<ClientSession>);
 
-impl SessionHold {
+impl InFlightHold {
     fn take(session: &Arc<ClientSession>) -> Self {
         session.in_flight.fetch_add(1, Ordering::SeqCst);
         Self(Arc::clone(session))
     }
 }
 
-impl Drop for SessionHold {
+impl Drop for InFlightHold {
     fn drop(&mut self) {
         *self.0.last_active.write() = Instant::now();
         self.0.in_flight.fetch_sub(1, Ordering::SeqCst);
@@ -82,11 +82,11 @@ impl NotificationMultiplexer {
         session_id: Option<&str>,
         owner: &SessionOwner,
         kind: MintKind,
-    ) -> Result<(Arc<ClientSession>, SessionHold), SessionCapacity> {
+    ) -> Result<(Arc<ClientSession>, InFlightHold), SessionCapacity> {
         let stream = kind == MintKind::ProvisionalStream;
         let mut sessions = self.sessions.write();
         if let Some(session) = self.resume_live(&sessions, session_id, owner) {
-            let hold = SessionHold::take(&session);
+            let hold = InFlightHold::take(&session);
             return Ok((session, hold));
         }
         // Checked and counted under the write lock that inserts, so
@@ -99,13 +99,13 @@ impl NotificationMultiplexer {
         session.provisional_stream.store(stream, Ordering::SeqCst);
         session.provisional.store(true, Ordering::SeqCst);
         live.fetch_add(1, Ordering::SeqCst);
-        let hold = SessionHold::take(&session);
+        let hold = InFlightHold::take(&session);
         Ok((session, hold))
     }
 
     /// Hold an existing session for a request that resumed it.
-    pub(super) fn hold(session: &Arc<ClientSession>) -> SessionHold {
-        SessionHold::take(session)
+    pub(super) fn hold(session: &Arc<ClientSession>) -> InFlightHold {
+        InFlightHold::take(session)
     }
 
     /// A session presented again by its owner is ordinary from now on.

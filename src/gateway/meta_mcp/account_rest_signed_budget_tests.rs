@@ -79,6 +79,7 @@ async fn a_spend_refusal_after_a_capability_account_refresh_keeps_the_nonce() {
     let alice = identity("alice");
     let mut context = caller(Some(&alice));
     context.api_key_name = Some("k-budget");
+    context.authentication = crate::gateway::meta_mcp::Authentication::Authenticated;
     // An API key: only an API key is charged per key (MIK-8507).
     context.credential_kind = crate::security::audit::CredentialKind::ApiKey;
     let call = json!({"server": CAPABILITIES, "tool": TOOL, "arguments": {}});

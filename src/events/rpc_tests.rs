@@ -322,6 +322,7 @@ async fn t16_hub() -> (
         firewall: None,
         audit: None,
         provenance: None,
+        public_provenance: None,
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: super::super::LiveCredentials::default(),

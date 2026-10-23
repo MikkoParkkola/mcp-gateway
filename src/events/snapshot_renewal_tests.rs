@@ -130,7 +130,7 @@ async fn t34_a_read_begun_before_a_renewal_does_not_revoke_it() {
     let weak = Arc::downgrade(&hub);
     // The session's catalogue read begins, and its list is held.
     let read = tokio::spawn(async move {
-        let mut state = State::new(&shared, Era::Modern);
+        let mut state = State::new(&shared, PeerEra::Modern);
         let handle: Weak<dyn UpstreamListen> = Weak::<crate::transport::HttpTransport>::new();
         state.maintain(&backend, &weak, &handle, true).await;
     });
@@ -167,6 +167,7 @@ async fn t34_a_read_begun_before_a_renewal_does_not_revoke_it() {
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: crate::events::LiveCredentials::default(),
+        public_provenance: None,
     };
     hub.fan_out(&services, &event).await;
     assert_eq!(
@@ -277,6 +278,7 @@ async fn t34_a_cached_list_from_before_a_renewal_does_not_revoke_it() {
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: crate::events::LiveCredentials::default(),
+        public_provenance: None,
     };
     hub.fan_out(&services, &event).await;
     assert_eq!(

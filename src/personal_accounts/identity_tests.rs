@@ -37,8 +37,8 @@ fn identity() -> VerifiedIdentity {
 
 /// The configured descriptor. `descriptor_id` is the `accounts.descriptors` map
 /// key, which the approved table makes the account key's `backend_id`.
-fn descriptor() -> AccountDescriptor {
-    AccountDescriptor {
+fn descriptor() -> AccountKeyDescriptor {
+    AccountKeyDescriptor {
         descriptor_id: "google-workspace-personal".into(),
         provider: "google".into(),
         resource: "https://www.googleapis.com/drive/v3".into(),
@@ -47,7 +47,7 @@ fn descriptor() -> AccountDescriptor {
 }
 
 #[track_caller]
-fn digest_of(identity: &VerifiedIdentity, descriptor: &AccountDescriptor, what: &str) -> String {
+fn digest_of(identity: &VerifiedIdentity, descriptor: &AccountKeyDescriptor, what: &str) -> String {
     refuse_scaffold(
         account_key(Some(Principal::Verified(identity)), descriptor),
         what,
@@ -184,7 +184,7 @@ fn each_of_the_five_tuple_fields_changes_the_digest() {
         (
             "backend_id",
             identity(),
-            AccountDescriptor {
+            AccountKeyDescriptor {
                 descriptor_id: "google-workspace-secondary".into(),
                 ..descriptor()
             },
@@ -192,7 +192,7 @@ fn each_of_the_five_tuple_fields_changes_the_digest() {
         (
             "resource",
             identity(),
-            AccountDescriptor {
+            AccountKeyDescriptor {
                 resource: "https://www.googleapis.com/calendar/v3".into(),
                 ..descriptor()
             },
@@ -200,7 +200,7 @@ fn each_of_the_five_tuple_fields_changes_the_digest() {
         (
             "oauth_issuer",
             identity(),
-            AccountDescriptor {
+            AccountKeyDescriptor {
                 issuer: "https://login.microsoftonline.com/common/v2.0".into(),
                 ..descriptor()
             },
@@ -236,7 +236,7 @@ fn two_consumer_references_to_one_descriptor_id_are_the_same_account() {
 
     // Same provider, different descriptor id: a different account. Joining on
     // provider name alone is what row 431 forbids.
-    let sibling = AccountDescriptor {
+    let sibling = AccountKeyDescriptor {
         descriptor_id: "google-workspace-secondary".into(),
         ..descriptor()
     };
@@ -257,5 +257,46 @@ fn a_request_without_a_verified_principal_is_refused_not_inferred() {
         ),
         IdentityBindingError::MissingVerifiedPrincipal,
         "no principal means no account key; nothing is inferred from the request"
+    );
+}
+
+/// A schema descriptor with only the fields the projection reads.
+fn schema_descriptor(
+    resource: Option<&str>,
+    issuer: Option<&str>,
+) -> crate::personal_accounts::config::AccountDescriptor {
+    let mut value = serde_json::json!({"mode": "personal_managed", "provider": "contoso"});
+    if let Some(resource) = resource {
+        value["resource"] = resource.into();
+    }
+    if let Some(issuer) = issuer {
+        value["issuer"] = issuer.into();
+    }
+    serde_json::from_value(value).expect("fixture descriptor parses")
+}
+
+/// MIK-8666: the one projection from the schema type. A missing resource or
+/// issuer yields None, so each caller keeps raising its own error text.
+#[test]
+fn from_config_projects_the_key_fields_or_nothing() {
+    let resource = "https://www.googleapis.com/";
+    assert_eq!(
+        AccountKeyDescriptor::from_config("work", &schema_descriptor(None, Some(ISSUER))),
+        None,
+        "no resource, no key descriptor"
+    );
+    assert_eq!(
+        AccountKeyDescriptor::from_config("work", &schema_descriptor(Some(resource), None)),
+        None,
+        "no issuer, no key descriptor"
+    );
+    assert_eq!(
+        AccountKeyDescriptor::from_config("work", &schema_descriptor(Some(resource), Some(ISSUER))),
+        Some(AccountKeyDescriptor {
+            descriptor_id: "work".to_string(),
+            provider: "contoso".to_string(),
+            resource: resource.to_string(),
+            issuer: ISSUER.to_string(),
+        })
     );
 }

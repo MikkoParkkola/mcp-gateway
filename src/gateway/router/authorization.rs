@@ -14,7 +14,7 @@ use crate::gateway::authz::{BackendGrant, Decision, Emit, ToolAuthorizer, Transp
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::invoke::TargetNaming;
 use crate::gateway::oauth::{
-    Action, AgentIdentity as OAuthAgentIdentity, check_scopes, record_agent_scope_decision,
+    Action, OAuthAgentIdentity, check_scopes, record_agent_scope_decision,
 };
 use crate::mtls::{CertIdentity, PolicyDecision};
 use crate::security::validate_tool_name;

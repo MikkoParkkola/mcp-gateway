@@ -28,7 +28,7 @@ pub use rules::{
 
 /// Output format for validation reports
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum OutputFormat {
+pub enum ValidatorOutputFormat {
     /// Human-readable colored text
     Text,
     /// Structured JSON
@@ -51,7 +51,7 @@ pub enum SeverityFilter {
 /// Configuration for a validation run
 pub struct ValidateConfig {
     /// Output format
-    pub format: OutputFormat,
+    pub format: ValidatorOutputFormat,
     /// Minimum severity to report
     pub min_severity: SeverityFilter,
     /// Whether to attempt auto-fixing

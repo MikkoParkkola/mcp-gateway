@@ -68,3 +68,54 @@ fn uppercase_hex_is_not_what_hammerspoon_sends_and_does_not_verify() {
     let upper = hammerspoon_signature(body).to_uppercase();
     assert!(check(body, &upper).is_err());
 }
+
+// MIK-8660 T9a: signature checks across the constant-time compare (subtle `ct_eq`).
+
+fn t9a_signature(secret: &str, body: &[u8]) -> String {
+    let mut mac = hmac::Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("hmac key");
+    mac.update(body);
+    hex::encode(mac.finalize().into_bytes())
+}
+
+fn t9a_check(body: &[u8], header: &str) -> Result<(), String> {
+    let mut definition = make_definition(false);
+    definition.secret = Some("t9a-webhook-secret-not-real".to_owned());
+    definition.signature_header = Some("X-T9a-Signature".to_owned());
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "X-T9a-Signature",
+        header.parse().expect("signature header value"),
+    );
+    validate_signature(
+        &headers,
+        body,
+        &definition,
+        &Arc::new(crate::config::LiveEnv::default()),
+    )
+}
+
+#[test]
+fn a_signature_of_the_wrong_length_is_refused() {
+    let body = br#"{"event":"t9a"}"#;
+    let valid = t9a_signature("t9a-webhook-secret-not-real", body);
+    let short = valid[..valid.len() - 1].to_owned();
+    assert!(t9a_check(body, &short).is_err(), "short: {short}");
+}
+
+#[test]
+fn a_signature_with_one_changed_digit_is_refused() {
+    let body = br#"{"event":"t9a"}"#;
+    let valid = t9a_signature("t9a-webhook-secret-not-real", body);
+    let mut tampered = valid.clone();
+    let first = tampered.as_bytes()[0];
+    tampered.replace_range(0..1, if first == b'a' { "b" } else { "a" });
+    assert_eq!(tampered.len(), valid.len(), "same length, one digit");
+    assert!(t9a_check(body, &tampered).is_err(), "tampered: {tampered}");
+}
+
+#[test]
+fn the_correct_lowercase_signature_is_accepted() {
+    let body = br#"{"event":"t9a"}"#;
+    let valid = t9a_signature("t9a-webhook-secret-not-real", body);
+    assert!(t9a_check(body, &valid).is_ok(), "valid: {valid}");
+}

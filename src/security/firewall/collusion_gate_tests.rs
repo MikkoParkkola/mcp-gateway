@@ -9,9 +9,9 @@ use super::{
     delivery_leaves, egress_text,
 };
 use crate::config::Config;
+use crate::security::Severity;
 use crate::security::firewall::{
     Finding, FindingLocation, Firewall, FirewallAction, FirewallConfig, FirewallVerdict, ScanType,
-    Severity,
 };
 
 #[path = "collusion_gate_big_tests.rs"]

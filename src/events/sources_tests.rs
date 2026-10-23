@@ -286,6 +286,7 @@ async fn an_expired_tasks_event_reaches_named_and_all_task_subscribers() {
         firewall: None,
         audit: None,
         provenance: None,
+        public_provenance: None,
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: LiveCredentials::default(),

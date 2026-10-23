@@ -10,7 +10,8 @@ use serde_json::Value;
 use super::AppState;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::invoke::audit::{DispatchNotes, SettledTask};
-use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
+use crate::gateway::meta_mcp::response_security::DeliveryCredential;
+use crate::gateway::oauth::OAuthAgentIdentity;
 use crate::gateway::router::OwnedRouterAuthorizer;
 use crate::gateway::task_route::{TaskOwnerText, TaskRoute, is_task_dispatchable};
 use crate::gateway::task_service::{OwnedCallerContext, TaskIntent};
@@ -20,6 +21,7 @@ use crate::protocol::meta::Declared;
 use crate::protocol::mrtr::RetryFields;
 use crate::protocol::tasks::{TaskOptions, TaskTransition};
 use crate::protocol::{JsonRpcResponse, RequestId};
+use crate::security::audit::CredentialKind;
 
 /// Everything the task-intent decision reads about one `tools/call`.
 ///
@@ -615,6 +617,7 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
         )
         .await?;
         let holds = std::mem::take(&mut pending.holds);
+        let credential = DeliveryCredential::of(Some(reader));
         Some(crate::gateway::streaming::TaskFrame {
             frame: pending.frame.clone(),
             restored_output: pending.restored_output,
@@ -623,6 +626,8 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
                 state: Arc::clone(&self.state),
                 pending,
                 caller: reader.name.clone(),
+                credential_kind: credential.kind,
+                principal: credential.principal.to_owned(),
                 session_id: self.session_id.clone().unwrap_or_default(),
                 subject: self.grant_subject.clone(),
             }),
@@ -636,6 +641,8 @@ struct FrameDelivery {
     state: Arc<AppState>,
     pending: crate::gateway::meta_mcp::task_notify::PendingTaskFrame,
     caller: String,
+    credential_kind: CredentialKind,
+    principal: String,
     session_id: String,
     subject: Option<crate::identity_grants::GrantSubject>,
 }
@@ -647,6 +654,8 @@ impl crate::gateway::streaming::TaskFrameDelivery for FrameDelivery {
             state,
             pending,
             caller,
+            credential_kind,
+            principal,
             session_id,
             subject,
         } = *self;
@@ -654,6 +663,10 @@ impl crate::gateway::streaming::TaskFrameDelivery for FrameDelivery {
             caller: &caller,
             session_id: &session_id,
             subject: subject.as_ref(),
+            credential: DeliveryCredential {
+                kind: credential_kind,
+                principal: &principal,
+            },
         };
         state.meta_mcp.finish_task_frame(pending, sent, &who).await
     }

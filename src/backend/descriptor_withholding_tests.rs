@@ -66,7 +66,8 @@ fn spec_digest(tool: &Value) -> String {
 #[derive(Default)]
 struct Upstream {
     tools: Mutex<Vec<Value>>,
-    hold: Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+    // One-shot: the first arrival parks until released; later arrivals pass (test_pause::Slot).
+    hold: crate::test_pause::Slot,
     /// Answer `tools/list` with neither a result nor an error, which the
     /// drain refuses as an unreadable page (F13 design E).
     blank: Mutex<bool>,
@@ -89,11 +90,7 @@ impl crate::transport::Transport for Upstream {
             return Ok(response);
         }
         let tools = self.tools.lock().unwrap().clone();
-        let hold = self.hold.lock().unwrap().take();
-        if let Some((started, release)) = hold {
-            started.notify_one();
-            release.notified().await;
-        }
+        self.hold.pause().await;
         Ok(JsonRpcResponse::success(id, json!({ "tools": tools })))
     }
 
@@ -272,9 +269,7 @@ async fn t9_a_superseded_fill_cannot_clear_a_newer_withholding() {
         BackendConfig::default(),
         vec![tool(POISONED, "Reads a file.")],
     );
-    let started = Arc::new(tokio::sync::Notify::new());
-    let release = Arc::new(tokio::sync::Notify::new());
-    *upstream.hold.lock().unwrap() = Some((Arc::clone(&started), Arc::clone(&release)));
+    let (started, release) = upstream.hold.arm();
     let fill = tokio::spawn({
         let backend = Arc::clone(&backend);
         async move { backend.get_tools_shared().await }

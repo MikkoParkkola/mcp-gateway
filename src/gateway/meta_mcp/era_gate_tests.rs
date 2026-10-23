@@ -109,9 +109,9 @@ async fn backend_with_era(name: &str, modern: bool) -> (Arc<Backend>, Arc<EraMoc
     backend.set_transport_for_test(Arc::clone(&transport));
     backend.resolve_era_for_test(&transport).await;
     let expected = if modern {
-        crate::protocol::era::Era::Modern
+        crate::protocol::era::PeerEra::Modern
     } else {
-        crate::protocol::era::Era::Legacy
+        crate::protocol::era::PeerEra::Legacy
     };
     assert_eq!(
         backend.cached_era().await,
@@ -233,7 +233,7 @@ async fn discover_6_a_modern_backend_is_visible_in_gateway_search_and_its_breake
     backend.resolve_era_for_test(&transport).await;
     assert_eq!(
         backend.cached_era().await,
-        Some(crate::protocol::era::Era::Modern),
+        Some(crate::protocol::era::PeerEra::Modern),
         "precondition: the fixture must construct a modern peer"
     );
     backend.get_tools_shared().await.expect("catalogue fills");

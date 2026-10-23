@@ -14,6 +14,7 @@ use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
 use super::types::CallbackFailure;
+use crate::security::http_diagnostics::is_tls_failure;
 use crate::security::ssrf::{PinningResolver, SystemResolver, in_allowed, ssrf_denial};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -230,17 +231,8 @@ fn classify(error: &reqwest::Error) -> CallbackFailure {
     if ssrf_denial(error).is_some() {
         return CallbackFailure::ConnectionRefused;
     }
-    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
-    while let Some(current) = source {
-        let tls = current.downcast_ref::<rustls::Error>().is_some()
-            || current
-                .downcast_ref::<std::io::Error>()
-                .and_then(std::io::Error::get_ref)
-                .is_some_and(|inner| inner.downcast_ref::<rustls::Error>().is_some());
-        if tls {
-            return CallbackFailure::TlsError;
-        }
-        source = current.source();
+    if is_tls_failure(error) {
+        return CallbackFailure::TlsError;
     }
     CallbackFailure::ConnectionRefused
 }

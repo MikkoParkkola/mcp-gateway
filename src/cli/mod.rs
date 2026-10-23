@@ -50,7 +50,8 @@ pub use setup::SetupCommand;
 pub use skills::SkillsCommand;
 pub use subcommands::{
     AuditCommand, CapCommand, KubernetesCommand, ProtocolImportCommand, ProtocolImportKind,
-    RankingCommand, RuntimeProviderArg, TlsCommand, TrustCommand, TrustLabCommand,
+    ProvenanceCommand, RankingCommand, RuntimeProviderArg, TlsCommand, TrustCommand,
+    TrustLabCommand,
 };
 
 // ── Config-export CLI types ───────────────────────────────────────────────────
@@ -287,6 +288,10 @@ pub enum Command {
     )]
     Trust(TrustCommand),
 
+    /// Export and verify public provenance keys
+    #[command(subcommand, about = "Export and verify public provenance keys")]
+    Provenance(ProvenanceCommand),
+
     /// Manage caller identity and local personal-capability grants.
     #[command(subcommand, about = "Identity and local grant administration")]
     Identity(IdentityCommand),
@@ -356,7 +361,7 @@ pub enum Command {
 
         /// Output format
         #[arg(short, long, default_value = "text", value_enum)]
-        format: crate::validator::OutputFormat,
+        format: crate::validator::ValidatorOutputFormat,
 
         /// Minimum severity to report
         #[arg(short, long, default_value = "info", value_enum)]

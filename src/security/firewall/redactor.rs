@@ -29,7 +29,8 @@ use std::collections::{HashMap, HashSet};
 use regex::{Regex, RegexSet};
 use serde_json::{Map, Value};
 
-use super::{Finding, FindingLocation, ScanType, Severity};
+use super::{Finding, FindingLocation, ScanType};
+use crate::security::Severity;
 use crate::truncate::{Budget, Suffix, truncate};
 
 /// Pre-compiled credential/PII redactor.

@@ -263,6 +263,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "append-only claim log; no secret",
     ),
     (
+        "src/trust/provenance_public.rs",
+        "`provenance verify` CLI: the operator-named public-key trust set, receipt and result; public data, read once by an offline command the running gateway never consults",
+    ),
+    (
         "src/validator/cli_handler.rs",
         "capability YAML being validated; public",
     ),

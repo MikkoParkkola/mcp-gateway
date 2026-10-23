@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use serde_json::{Value, json};
 
 use super::direct_guards_fixture::{
-    Answer, Fx, fixture_built, fixture_built_on, post_direct, post_meta_invoke,
+    Answer, Fx, fixture_built, fixture_built_on, post_direct, post_meta_invoke, schema_off,
 };
 
 /// The store's mismatch refusal as both routes put it on the wire.
@@ -291,20 +291,75 @@ async fn l0_the_direct_route_admits_the_operation_invoke_admits() {
     );
 }
 
+/// MIK-8663 T2(op) (DUPC-6.PR6.4, direct): the `/mcp/{name}` route admits the
+/// operation with the gateway directives stripped, the operation
+/// `gateway_invoke` admits for the same call. Mutant: the route's
+/// `execution_arguments_cow` call removed leaves both in the operation.
+#[tokio::test]
+async fn l0b_the_direct_operation_strips_the_gateway_directives() {
+    let fx = Box::pin(schema_off(fixture_built(Answer::Ok, |meta| meta))).await;
+    let take = crate::gateway::meta_mcp::admission::take_last_operation;
+    take();
+    let args = json!({
+        "cmd": "x",
+        "_full": true,
+        "_claim": {"kind": "found_rows", "count": 1},
+    });
+    post_direct(
+        &fx,
+        "alpha",
+        "k-std",
+        "read",
+        args.clone(),
+        Some("l0b-d"),
+        None,
+    )
+    .await;
+    let routed = take();
+    post_meta_invoke(&fx, "k-std", "alpha", "read", args, Some("l0b-i"), None).await;
+    let invoke = take();
+    assert_eq!(
+        routed,
+        Some(json!({
+            "kind": "backend", "server": "alpha", "tool": "read",
+            "arguments": {"cmd": "x"}, "retry": ""
+        })),
+        "l0b: the routed operation kept a gateway directive"
+    );
+    assert_eq!(routed, invoke, "l0b: the routes admit different operations");
+}
+
+/// MIK-8663 T2(a): on `/mcp/{name}` the names `_full` and `_claim` are the
+/// backend's own argument bytes, forwarded as sent.
+#[tokio::test]
+async fn l0c_the_direct_route_forwards_directive_named_arguments() {
+    let fx = Box::pin(schema_off(fixture_built(Answer::Ok, |meta| meta))).await;
+    let claim = json!({"kind": "found_rows", "count": 1});
+    let args = json!({"cmd": "x", "_full": true, "_claim": claim.clone()});
+    let (_, body) = post_direct(&fx, "alpha", "k-std", "read", args, None, None).await;
+    assert!(body.get("error").is_none(), "l0c: the call failed: {body}");
+    let seen = fx.seen.lock().expect("seen lock").last().cloned();
+    let arguments = seen.as_ref().map(|params| &params["arguments"]);
+    assert_eq!(
+        arguments.map(|a| &a["_full"]),
+        Some(&json!(true)),
+        "l0c: {seen:?}"
+    );
+    assert_eq!(
+        arguments.map(|a| &a["_claim"]),
+        Some(&claim),
+        "l0c: {seen:?}"
+    );
+}
+
 /// L8b CONTROL (kills "cancel before dispatch settles"): a direct call under
 /// K dropped after admission but before its lease is marked releases the key,
 /// so a `gateway_invoke` of the same target under K proceeds and runs.
 #[tokio::test]
 async fn l8b_a_call_cancelled_before_dispatch_releases() {
     let fx = Arc::new(fixture_built(Answer::Ok, |meta| meta).await);
-    let (entered, gate) = (
-        Arc::new(tokio::sync::Notify::new()),
-        Arc::new(tokio::sync::Notify::new()),
-    );
-    super::backend_handlers::direct_lease_seams::hold_before_mark(
-        Arc::clone(&entered),
-        Arc::clone(&gate),
-    );
+    // The call is aborted, never released; `_gate` keeps the pair alive to the end of the row.
+    let (entered, _gate) = super::backend_handlers::direct_lease_seams::hold_before_mark();
     let shared = Arc::clone(&fx);
     let call = tokio::spawn(async move { keyed(&shared, Via::Direct, "l8b").await });
     tokio::time::timeout(std::time::Duration::from_secs(30), entered.notified())

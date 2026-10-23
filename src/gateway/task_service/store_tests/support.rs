@@ -138,7 +138,7 @@ pub(super) fn assert_stage_layout(
     image: &Manifest,
     lease: &Path,
     id: &str,
-    stage: CommitStage,
+    stage: StoreWriteStage,
     expected: &Value,
 ) {
     let lease_name = Path::new(lease.file_name().unwrap());
@@ -163,7 +163,7 @@ pub(super) fn assert_stage_layout(
         Some(0o600),
         "temporary and final records are private"
     );
-    if stage == CommitStage::DirectorySync {
+    if stage == StoreWriteStage::DirectorySync {
         assert_eq!(name, &final_name);
     } else {
         assert_ne!(name, &final_name);
@@ -173,12 +173,12 @@ pub(super) fn assert_stage_layout(
         // Windows holds the scratch record share-0 until it closes it before
         // the rename; name, count and layout above are still checked.
         assert!(
-            cfg!(windows) && matches!(stage, CommitStage::Flush | CommitStage::FileSync),
+            cfg!(windows) && matches!(stage, StoreWriteStage::Flush | StoreWriteStage::FileSync),
             "candidate bytes unreadable at {stage:?}"
         );
         return;
     };
-    if stage == CommitStage::Write {
+    if stage == StoreWriteStage::Write {
         assert!(
             bytes.is_empty(),
             "write seam is after private temp creation, before payload write"
@@ -211,7 +211,7 @@ pub(super) fn seed_private(path: &Path, bytes: &[u8]) {
 pub(super) async fn poison(store: &TaskStore, owner: &str, id: &str, revision: u64) {
     store
         .set_hook(Some(Arc::new(|stage| {
-            if stage == CommitStage::DirectorySync {
+            if stage == StoreWriteStage::DirectorySync {
                 Err(std::io::Error::other("injected poison"))
             } else {
                 Ok(())

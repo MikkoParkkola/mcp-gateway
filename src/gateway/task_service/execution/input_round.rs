@@ -100,6 +100,16 @@ impl<'a> Settling<'a> {
                 }
                 Resealed::Done => return,
             }
+            // One worker seal point (MIK-8398 C1e): the first dispatch, a
+            // resume, and every state-only re-dispatch pass through here once.
+            if let Some(result) = response.result.as_mut() {
+                // MIK-8398 C1g: the stored result is delivered through the
+                // task wire's cacheScope clamp, so it is clamped before the
+                // seal. Step seals take no clamp: a step result sits inside
+                // `content[0].text`, which the wire never clamps.
+                crate::protocol::cacheable::clamp_delivered_scope(result);
+                self.state.meta_mcp().seal_public_provenance(result);
+            }
             let round = match classify_dispatch(response) {
                 DispatchSettlement::Complete(result) => {
                     let writes = round_mark.map_or_else(
@@ -558,7 +568,12 @@ struct Resume {
 async fn resume(resume: Resume, cancel_rx: watch::Receiver<bool>) {
     // Every early exit below is a `?` or a returned expression: `None` is "the
     // round was settled or closed here, nothing left to run".
-    let _ = resume_flow(resume, cancel_rx).await;
+    // One minted-receipt scope for the resume's dispatch and its settle
+    // (MIK-8398 C1d), boxed as the request entry points are.
+    let _ = crate::gateway::meta_mcp::invoke::with_minted_receipts(Box::pin(resume_flow(
+        resume, cancel_rx,
+    )))
+    .await;
 }
 
 /// A host that is gone settles the task interrupted: the call cannot run.

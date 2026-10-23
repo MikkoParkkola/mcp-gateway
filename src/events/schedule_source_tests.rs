@@ -450,6 +450,7 @@ async fn a_blocked_label_is_dead_lettered() {
         firewall: Some(Arc::new(Firewall::from_config(firewall, None))),
         audit: None,
         provenance: None,
+        public_provenance: None,
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: super::super::LiveCredentials::default(),

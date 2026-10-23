@@ -23,6 +23,23 @@ impl MetaMcp {
         self.provenance_signer = Some(Arc::new(signer));
     }
 
+    /// Enable public (Ed25519) provenance stamping (MIK-8398).
+    ///
+    /// When set alongside the HMAC signer, every stamped result also carries
+    /// a publicly verifiable Ed25519 signature.
+    pub(crate) fn enable_public_provenance(
+        &mut self,
+        signer: crate::trust::provenance_public::ProvenancePublicSigner,
+    ) {
+        self.public_provenance_signer = Some(Arc::new(signer));
+    }
+
+    /// Whether a public provenance signer is installed (tests only).
+    #[cfg(test)]
+    pub(crate) fn public_provenance_installed(&self) -> bool {
+        self.public_provenance_signer.is_some()
+    }
+
     /// Enable ASI07 origin-link emission, with increment-3 defaults for the
     /// verification trust (no trusted keys, 8 links, 300 s window).
     pub(crate) fn set_chain_signer(
@@ -197,8 +214,13 @@ impl super::MetaMcp {
         context: &ResponseDeliveryContext<'_>,
     ) -> crate::protocol::JsonRpcResponse {
         let response = self.finalize_content(response, context);
-        self.record_delivery(response, &context.correlation, None)
-            .await
+        self.record_delivery(
+            response,
+            &context.correlation,
+            DeliveryCredential::of(None),
+            None,
+        )
+        .await
     }
 
     /// Everything of the finalization that decides the delivered content:
@@ -261,6 +283,13 @@ impl super::MetaMcp {
             context.chain_nonce,
             invoke_nonce,
         );
+        // Top level only: a task's stored result was sealed at creation, and a
+        // receipt this request did not mint is never sealed at any depth.
+        if let Some(result) = response.result.as_mut() {
+            // The scope was clamped above (PARENT.6), so the seal covers the
+            // bytes as delivered (MIK-8398 C1g).
+            self.seal_public_provenance(result);
+        }
 
         // A disabled signer and ordinary/admission/refusal errors must never
         // validate captured nonce state or increment finalization failures.
@@ -499,7 +528,7 @@ pub(super) fn shape_meta_result(
     ),
 ) -> crate::protocol::JsonRpcResponse {
     let mut response = match result {
-        Ok(content) => match shape {
+        Ok(mut content) => match shape {
             // MRTR.11a: an interim round must not be pretty-printed into
             // `content[0].text`. `wrap_tool_success` reads only a
             // top-level `isError` and buries `resultType` inside a JSON string, where
@@ -515,11 +544,24 @@ pub(super) fn shape_meta_result(
                     }
                     super::interim_promotion::Promotion::Wrap => {
                         let has_output_schema = tool_name == "gateway_search_tools";
-                        crate::gateway::meta_mcp_helpers::wrap_tool_success(
+                        let receipt = super::invoke::lift_receipt(&mut content);
+                        let mut wrapped = crate::gateway::meta_mcp_helpers::wrap_tool_success(
                             id,
                             &content,
                             has_output_schema,
-                        )
+                        );
+                        if let Some(receipt) = receipt
+                            && let Some(result) = wrapped.result.as_mut()
+                            && let Some(obj) = result.as_object_mut()
+                        {
+                            let meta = obj.entry("_meta".to_owned()).or_insert_with(|| {
+                                serde_json::Value::Object(serde_json::Map::new())
+                            });
+                            if let Some(map) = meta.as_object_mut() {
+                                map.insert("provenance".to_owned(), receipt);
+                            }
+                        }
+                        wrapped
                     }
                     super::interim_promotion::Promotion::UpstreamFault(message) => {
                         super::error_response_preserving_status(
@@ -555,8 +597,34 @@ pub(crate) fn chain_after_gates(
     }
 }
 
+/// The credential a delivery record names (MIK-8672): the same `credential_kind` and `principal` the
+/// invocation record of the same caller carries (`AuditWho::from_request`, security/audit.rs:227).
+#[derive(Clone, Copy, Debug)]
+pub(in crate::gateway) struct DeliveryCredential<'a> {
+    pub(in crate::gateway) kind: crate::security::audit::CredentialKind,
+    pub(in crate::gateway) principal: &'a str,
+}
+impl<'a> DeliveryCredential<'a> {
+    /// Exactly `AuditWho::from_request`'s two fields for `client`.
+    pub(in crate::gateway) fn of(
+        client: Option<&'a crate::gateway::auth::AuthenticatedClient>,
+    ) -> Self {
+        Self {
+            kind: crate::security::audit::CredentialKind::of(client),
+            principal: client.map_or("", |c| c.principal.as_str()),
+        }
+    }
+    /// The stdio transport.
+    pub(in crate::gateway) const fn stdio() -> Self {
+        Self {
+            kind: crate::security::audit::CredentialKind::LocalTransport,
+            principal: crate::gateway::server::STDIO_CREDENTIAL_PRINCIPAL,
+        }
+    }
+}
+
 mod delivery_record;
-pub(crate) use delivery_record::record_answer_delivery;
+pub(in crate::gateway) use delivery_record::record_answer_delivery;
 
 #[path = "chain_receipt.rs"]
 pub(crate) mod chain_receipt;

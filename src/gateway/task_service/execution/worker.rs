@@ -69,9 +69,11 @@ pub(super) async fn commit_and_run(
     let revision = committed.revision;
     // Ignorable: a dropped request future must not abort already-durable work.
     let _ = tx.send(Ok(BeginOutcome::Created(committed)));
-    Box::pin(run_dispatched(
+    // One minted-receipt scope for the dispatch, the upstream follow and the
+    // settle (MIK-8398 C1d), boxed as the request entry points are.
+    crate::gateway::meta_mcp::invoke::with_minted_receipts(Box::pin(run_dispatched(
         executor, handoff, intent, call, cancel_rx, principal, id, revision, slot,
-    ))
+    )))
     .await;
 }
 

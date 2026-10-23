@@ -536,11 +536,11 @@ async fn store_06_symlinked_sources_are_refused() {
 #[tokio::test]
 async fn store_01_io_faults_never_publish_uncommitted_acceptance() {
     for stage in [
-        CommitStage::Write,
-        CommitStage::Flush,
-        CommitStage::FileSync,
-        CommitStage::Rename,
-        CommitStage::DirectorySync,
+        StoreWriteStage::Write,
+        StoreWriteStage::Flush,
+        StoreWriteStage::FileSync,
+        StoreWriteStage::Rename,
+        StoreWriteStage::DirectorySync,
     ] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tasks");
@@ -577,7 +577,7 @@ async fn store_01_io_faults_never_publish_uncommitted_acceptance() {
             stage,
             &expected,
         );
-        if stage == CommitStage::DirectorySync {
+        if stage == StoreWriteStage::DirectorySync {
             assert!(!store.ready());
             assert_eq!(
                 store.get(OWNER, task.id()).unwrap_err(),
@@ -613,11 +613,11 @@ async fn store_01_io_faults_never_publish_uncommitted_acceptance() {
 #[tokio::test]
 async fn store_03_failed_settlement_preserves_committed_view_or_poisons_readiness() {
     for stage in [
-        CommitStage::Write,
-        CommitStage::Flush,
-        CommitStage::FileSync,
-        CommitStage::Rename,
-        CommitStage::DirectorySync,
+        StoreWriteStage::Write,
+        StoreWriteStage::Flush,
+        StoreWriteStage::FileSync,
+        StoreWriteStage::Rename,
+        StoreWriteStage::DirectorySync,
     ] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tasks");
@@ -645,7 +645,7 @@ async fn store_03_failed_settlement_preserves_committed_view_or_poisons_readines
                 .unwrap_err(),
             StoreError::Storage
         );
-        if stage == CommitStage::DirectorySync {
+        if stage == StoreWriteStage::DirectorySync {
             assert!(!store.ready());
             assert_eq!(
                 store.get(OWNER, task.id()).unwrap_err(),
@@ -667,7 +667,7 @@ async fn store_03_failed_settlement_preserves_committed_view_or_poisons_readines
 
 #[tokio::test]
 async fn store_01_paused_directory_sync_keeps_handle_and_view_unpublished() {
-    for paused in [CommitStage::Write, CommitStage::DirectorySync] {
+    for paused in [StoreWriteStage::Write, StoreWriteStage::DirectorySync] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tasks");
         let store = open(&path).await;

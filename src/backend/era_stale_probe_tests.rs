@@ -19,7 +19,7 @@ use super::era::with_serving;
 use super::*;
 use crate::Result;
 use crate::config::TransportConfig;
-use crate::protocol::era::{Era, EraObservation, EraSource};
+use crate::protocol::era::{EraObservation, EraSource, PeerEra};
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::transport::Transport;
 
@@ -146,7 +146,7 @@ async fn contradicted_and_probing(
     let transport: Arc<dyn Transport> = peer.clone();
     backend.set_transport_for_test(Arc::clone(&transport));
     backend.resolve_era_for_test(&transport).await;
-    assert_eq!(backend.cached_era().await, Some(Era::Modern), "primed");
+    assert_eq!(backend.cached_era().await, Some(PeerEra::Modern), "primed");
 
     peer.hold.store(true, Ordering::SeqCst);
     backend
@@ -234,7 +234,7 @@ fn the_era_after_a_replacement_is_the_new_peers_own_answer() {
         );
 
         backend.resolve_era_for_test(&new).await;
-        assert_eq!(backend.cached_era().await, Some(Era::Legacy));
+        assert_eq!(backend.cached_era().await, Some(PeerEra::Legacy));
     });
     assert_eq!(discarded(&records).len(), 1, "{records:?}");
     assert_about_the_modern_answer(&records);
@@ -256,7 +256,7 @@ fn without_a_restart_the_reprobe_answer_is_committed() {
             .await
             .expect("the detached re-probe decided");
         assert_eq!(observed.source, EraSource::Probed, "{observed:?}");
-        assert_eq!(observed.era, Era::Modern);
+        assert_eq!(observed.era, PeerEra::Modern);
     });
     assert!(
         discarded(&records).is_empty(),
@@ -310,7 +310,7 @@ fn a_contradiction_over_a_replaced_transport_leaves_the_current_verdict() {
         let new: Arc<dyn Transport> = new;
         backend.set_transport_for_test(Arc::clone(&new));
         backend.resolve_era_for_test(&new).await;
-        assert_eq!(backend.cached_era().await, Some(Era::Modern));
+        assert_eq!(backend.cached_era().await, Some(PeerEra::Modern));
 
         backend
             .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND, &old)
@@ -318,7 +318,7 @@ fn a_contradiction_over_a_replaced_transport_leaves_the_current_verdict() {
 
         assert_eq!(
             backend.cached_era().await,
-            Some(Era::Modern),
+            Some(PeerEra::Modern),
             "the replaced peer's refusal must not erase the current peer's verdict"
         );
     });

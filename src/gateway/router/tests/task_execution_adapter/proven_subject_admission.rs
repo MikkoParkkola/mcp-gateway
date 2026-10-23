@@ -8,7 +8,7 @@
 use super::super::*;
 use super::support::*;
 
-use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
+use crate::gateway::oauth::OAuthAgentIdentity;
 use crate::mtls::CertIdentity;
 
 enum Proof {

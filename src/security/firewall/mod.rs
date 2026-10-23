@@ -40,6 +40,10 @@ pub mod budget_guard;
 mod collusion;
 mod collusion_digest;
 mod collusion_gate;
+/// The one replay key: relay replay builds it at capture and lookup, and the
+/// store indexes by it (MIK-8662; the crate-wide path is decision
+/// `mik-8662-vis`).
+pub(crate) use collusion::replay::StoredKey;
 #[cfg(test)]
 pub(crate) use collusion_digest::{note_walk_for_test, walks_built};
 pub use collusion_gate::{AllowedFlow, CollusionAction, CollusionConfig};
@@ -54,8 +58,6 @@ pub mod principal_window;
 pub mod redactor;
 mod response;
 mod verdict;
-#[cfg(kani)]
-use verdict::default_action_for_severity;
 #[cfg(test)]
 use verdict::rule_matches;
 use verdict::{
@@ -137,30 +139,23 @@ pub struct FirewallVerdict {
 }
 
 /// A single finding from a scan.
+///
+/// Kept separate from [`crate::security::response_inspect::Finding`] on purpose: this one is the
+/// firewall's verdict; its audit row is the private `AuditFinding` (scan type, severity, location),
+/// which drops `description` and `matched`. That one is the client-visible `_security_findings`
+/// annotation, and the firewall builds behind a feature flag.
 #[derive(Debug, Clone, Serialize)]
 pub struct Finding {
     /// Which scan produced this finding.
     pub scan_type: ScanType,
-    /// Severity: high (block), medium (warn), low (log).
-    pub severity: Severity,
+    /// Severity: critical and high (block), medium (warn), low (log).
+    pub severity: crate::security::Severity,
     /// Human-readable description of the finding.
     pub description: String,
-    /// The matched pattern or fragment (truncated for logging).
+    /// The matched pattern or fragment, truncated. Never written to the audit row.
     pub matched: String,
     /// Where the finding was detected.
     pub location: FindingLocation,
-}
-
-/// Finding severity, which drives the default action when no rule matches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Severity {
-    /// Deterministic pattern — block by default.
-    High,
-    /// Heuristic pattern — warn by default.
-    Medium,
-    /// Statistical anomaly — log only by default.
-    Low,
 }
 
 /// Where a finding was detected in the invocation flow.
@@ -480,7 +475,7 @@ impl Firewall {
             tenant_guard::TenantVerdict::Refused { distinct, limit } => {
                 findings.push(Finding {
                     scan_type: ScanType::CrossTenantReach,
-                    severity: Severity::High,
+                    severity: crate::security::Severity::High,
                     description: format!(
                         "Cross-tenant reach exceeded: principal touched {distinct} distinct \
                          tenants (limit {limit})"
@@ -499,7 +494,7 @@ impl Firewall {
                 );
                 findings.push(Finding {
                     scan_type: ScanType::CrossTenantReach,
-                    severity: Severity::High,
+                    severity: crate::security::Severity::High,
                     description:
                         "Tenant-scoped call has no authenticated principal to key breadth on; \
                          call refused unmeasured"
@@ -534,7 +529,7 @@ impl Firewall {
             budget_guard::BudgetVerdict::Refused { total, limit } => {
                 findings.push(Finding {
                     scan_type: ScanType::BudgetExceeded,
-                    severity: Severity::High,
+                    severity: crate::security::Severity::High,
                     description: format!(
                         "Call budget exceeded: {total} calls in the window (limit {limit})"
                     ),
@@ -551,7 +546,7 @@ impl Firewall {
                 // caller (MIK-7971), which arrives here as an identity.
                 findings.push(Finding {
                     scan_type: ScanType::BudgetExceeded,
-                    severity: Severity::High,
+                    severity: crate::security::Severity::High,
                     description:
                         "Call budget has no caller identity to key on; call refused unattributed"
                             .to_string(),
@@ -679,6 +674,9 @@ mod refusal_words_tests;
 #[path = "tenant_audit_tests.rs"]
 mod tenant_audit_tests;
 
+#[cfg(test)]
+#[path = "severity_tests.rs"]
+mod severity_tests;
 #[cfg(test)]
 #[path = "firewall_tests.rs"]
 mod tests;

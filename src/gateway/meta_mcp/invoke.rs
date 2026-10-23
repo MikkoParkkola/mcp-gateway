@@ -27,7 +27,7 @@ const INVOKE_TARGET: &str = module_path!();
 // The per-dispatch credential and its redacting `Debug`, kept out of this file's size baseline.
 mod caller_credential;
 mod gate;
-use caller_credential::{CallerCredential, HeldCredential};
+use caller_credential::{CallerCredential, DispatchCredential};
 
 mod guarded;
 use super::response_security::chain_receipt::ChainReceipt;
@@ -69,6 +69,8 @@ mod output_shape;
 mod provenance_stamp;
 pub(crate) mod relay;
 pub(super) use output_shape::enforce_output_schema;
+pub(super) use provenance_stamp::lift_receipt;
+pub(crate) use provenance_stamp::with_minted_receipts;
 #[cfg(all(test, feature = "firewall"))]
 pub(crate) mod receipt_test_support;
 

@@ -69,7 +69,9 @@ pub(crate) struct RowSend {
 #[derive(Default)]
 pub(crate) struct CancelSends(
     parking_lot::Mutex<HashMap<String, Arc<RowSend>>>,
-    #[cfg(test)] parking_lot::Mutex<Option<(Hook, Arc<ClaimPause>)>>,
+    // One-shot per hook: the first arrival parks until released; later arrivals pass (test_pause::Slot).
+    #[cfg(test)] crate::test_pause::Slot,
+    #[cfg(test)] crate::test_pause::Slot,
 );
 
 impl CancelSends {
@@ -116,37 +118,32 @@ pub(crate) enum Hook {
     AfterRelease,
 }
 
-/// Holds one claim at its hook until released.
+/// Holds one claim at its hook until released: the `(reached, release)` pair
+/// from [`crate::test_pause::Slot::arm`].
 #[cfg(test)]
-#[derive(Default)]
 pub(crate) struct ClaimPause {
-    pub(crate) reached: tokio::sync::Notify,
-    pub(crate) release: tokio::sync::Notify,
+    pub(crate) reached: Arc<tokio::sync::Notify>,
+    pub(crate) release: Arc<tokio::sync::Notify>,
 }
 
 #[cfg(test)]
 impl CancelSends {
+    fn slot(&self, hook: Hook) -> &crate::test_pause::Slot {
+        match hook {
+            Hook::AfterClaim => &self.1,
+            Hook::AfterRelease => &self.2,
+        }
+    }
+
     /// Pause the next claim made under a row lock at `hook`, once.
-    pub(crate) fn pause_at(&self, hook: Hook) -> Arc<ClaimPause> {
-        let pause = Arc::new(ClaimPause::default());
-        *self.1.lock() = Some((hook, Arc::clone(&pause)));
-        pause
+    pub(crate) fn pause_at(&self, hook: Hook) -> ClaimPause {
+        let (reached, release) = self.slot(hook).arm();
+        ClaimPause { reached, release }
     }
 
     /// Hold here if a test armed `at`.
     async fn hook(&self, at: Hook) {
-        let pause = {
-            let mut armed = self.1.lock();
-            if armed.as_ref().is_some_and(|(hook, _)| *hook == at) {
-                armed.take().map(|(_, pause)| pause)
-            } else {
-                None
-            }
-        };
-        if let Some(pause) = pause {
-            pause.reached.notify_one();
-            pause.release.notified().await;
-        }
+        self.slot(at).pause().await;
     }
 }
 

@@ -94,8 +94,8 @@ fn context7_has_http_transport() {
     // THEN: its transport is Http with a non-empty default URL
     let entry = lookup("context7").expect("context7 must be in registry");
     match entry.transport {
-        Transport::Http { default_url, .. } => assert!(!default_url.is_empty()),
-        Transport::Stdio => panic!("expected Http transport for context7"),
+        CatalogTransport::Http { default_url, .. } => assert!(!default_url.is_empty()),
+        CatalogTransport::Stdio => panic!("expected Http transport for context7"),
     }
 }
 
@@ -105,7 +105,7 @@ fn all_stdio_entries_have_non_empty_command() {
     // WHEN: iterating all entries
     // THEN: none have an empty command string
     for entry in all() {
-        if let Transport::Stdio = entry.transport {
+        if let CatalogTransport::Stdio = entry.transport {
             assert!(
                 !entry.command.is_empty(),
                 "{} has Stdio transport but empty command",
@@ -130,7 +130,7 @@ fn registry_names_are_unique() {
 
 // ── MIK-7787: login, reach and setup ────────────────────────────────────────
 
-fn names(filter: impl Fn(&RegistryEntry) -> bool) -> Vec<&'static str> {
+fn names(filter: impl Fn(&ServerCatalogEntry) -> bool) -> Vec<&'static str> {
     let mut names: Vec<_> = all().iter().filter(|e| filter(e)).map(|e| e.name).collect();
     names.sort_unstable();
     names
@@ -148,7 +148,7 @@ fn template_vars(value: &str) -> Vec<&str> {
 #[test]
 fn each_login_kind_matches_its_transport_and_variables() {
     for e in all() {
-        let http = matches!(e.transport, Transport::Http { .. });
+        let http = matches!(e.transport, CatalogTransport::Http { .. });
         match e.auth {
             Auth::None => assert!(
                 e.required_env.is_empty(),
@@ -186,7 +186,7 @@ fn the_init_starter_set_is_exactly_the_no_login_ready_servers() {
     // Lead decision 2026-10-02. semgrep is out: warm start would download its
     // engine at gateway start (src/gateway/server/warmstart.rs).
     assert_eq!(
-        names(RegistryEntry::default_enabled),
+        names(ServerCatalogEntry::default_enabled),
         ["context7", "memory", "sequential-thinking", "time"]
     );
 }
@@ -209,7 +209,7 @@ fn only_asana_speaks_the_legacy_sse_handshake() {
     assert_eq!(
         names(|e| matches!(
             e.transport,
-            Transport::Http {
+            CatalogTransport::Http {
                 flavor: HttpFlavor::Sse,
                 ..
             }

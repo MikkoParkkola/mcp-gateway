@@ -416,6 +416,7 @@ async fn an_occurrence_with_a_lifecycle_key_reaches_only_its_holders() {
         firewall: None,
         audit: None,
         provenance: None,
+        public_provenance: None,
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: super::super::LiveCredentials::default(),
@@ -494,6 +495,7 @@ async fn an_operator_record_asks_no_backend_grant() {
         firewall: None,
         audit: None,
         provenance: None,
+        public_provenance: None,
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: super::super::LiveCredentials::default(),
@@ -562,6 +564,7 @@ async fn a_clock_before_the_epoch_delivers_nothing_on_a_live_lease() {
         firewall: None,
         audit: None,
         provenance: None,
+        public_provenance: None,
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: super::super::LiveCredentials::default(),

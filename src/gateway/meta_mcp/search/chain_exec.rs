@@ -102,7 +102,12 @@ impl MetaMcp {
             let dispatch = self.invoke_tool(&invoke_args, session_id, &step_caller);
             match plan_step(chain_label(idx), dispatch).await {
                 // A tool error in the success channel is still an error.
-                Ok(result) => chain_step_result(idx, &tool_ref, result),
+                Ok(mut result) => {
+                    // Sealed at creation: the dispatch above minted this step's
+                    // receipt in this request, so this seal consumes that mint.
+                    self.seal_public_provenance(&mut result);
+                    chain_step_result(idx, &tool_ref, result)
+                }
                 Err(e) => Err(step_failure(idx, &tool_ref, e)),
             }
         };

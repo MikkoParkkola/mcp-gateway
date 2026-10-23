@@ -24,9 +24,23 @@ pub mod signing_gateway;
 
 #[path = "common/signing_oracle.rs"]
 mod signing_oracle;
-use signing_oracle::{LimitFrom, ORACLE_LIMIT, fake_oracle, run_oracle};
+use signing_oracle::run_oracle;
 
 use std::time::Duration;
+
+/// How long one oracle run may take. Twelve tests each start `node` at once,
+/// and a loaded Windows runner has taken more than 30 s to finish one
+/// (MIK-8381), so the bound is generous; a run that still exceeds it is killed
+/// and reported, never left waiting. The cold first launch is taken by the
+/// shared warm-up (MIK-8701), not by this bound.
+const ORACLE_LIMIT: Duration = Duration::from_secs(120);
+
+/// A stand-in oracle: `node -e <script>`, the same runtime the real one needs.
+fn fake_oracle(script: &str) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new("node");
+    command.arg("-e").arg(script);
+    command
+}
 
 use serde_json::{Value, json};
 use signing_gateway::{BACKEND, BackendFixture, HttpGateway, KEY, TOOL, fixture_config};
@@ -211,19 +225,9 @@ fn assert_refused(wire: &str, what: &str) {
 /// Whether the independent ECMAScript oracle (`tests/common/signing_verifier.mjs`,
 /// no gateway code) accepts `wire` as signed with [`KEY`] for `id` and `nonce`.
 async fn oracle_accepts(wire: &str, id: &Value, nonce: &str) -> bool {
-    let verifier =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/common/signing_verifier.mjs");
-    let mut command = tokio::process::Command::new("node");
-    command.arg(verifier);
     let input = json!({"wire": wire, "options": {"key": KEY, "keyId": "signing-test-current",
         "expectedId": id, "expectedNonce": nonce, "now": chrono::Utc::now().timestamp()}});
-    let run = run_oracle(
-        command,
-        input.to_string().as_bytes(),
-        ORACLE_LIMIT,
-        LimitFrom::Spawn,
-    )
-    .await;
+    let run = signing_oracle::verify(&input, ORACLE_LIMIT).await;
     match run.status {
         Some(status) if status.success() => true,
         // A refusal is a result, not an error; its reason is printed so a
@@ -665,7 +669,7 @@ async fn an_oracle_past_its_limit_is_killed_and_reports_stderr() {
         fake_oracle("process.stderr.write('oracle-stalled-marker'); setInterval(() => {}, 1000);"),
         b"{}",
         limit,
-        LimitFrom::Marker("oracle-stalled-marker"),
+        Some("oracle-stalled-marker"),
     )
     .await;
     assert!(
@@ -682,6 +686,12 @@ async fn an_oracle_past_its_limit_is_killed_and_reports_stderr() {
     assert!(
         message.contains("oracle-stalled-marker"),
         "stderr is lost: {message}"
+    );
+    // MIK-8701.ORACLE.2: the report names the stage the limit ran out in.
+    assert_eq!(run.stage, signing_oracle::Stage::Wait, "{message}");
+    assert!(
+        message.contains("stage Wait"),
+        "the stage is missing: {message}"
     );
     assert!(
         message.contains(&format!("within {limit:?}")),
@@ -704,7 +714,7 @@ async fn an_oracle_slow_to_start_is_timed_from_its_marker() {
         fake_oracle("setTimeout(() => { process.stderr.write('oracle-late-marker'); setInterval(() => {}, 1000); }, 16000);"),
         b"{}",
         limit,
-        LimitFrom::Marker("oracle-late-marker"),
+        Some("oracle-late-marker"),
     )
     .await;
     assert!(
@@ -732,7 +742,7 @@ async fn an_oracle_that_exits_reports_its_status_and_stderr() {
         fake_oracle("process.stderr.write('oracle-refused-marker'); process.exitCode = 3;"),
         b"{}",
         ORACLE_LIMIT,
-        LimitFrom::Spawn,
+        None,
     )
     .await;
     assert_eq!(
