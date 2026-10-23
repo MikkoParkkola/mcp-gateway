@@ -428,7 +428,7 @@ pub(crate) enum Driven {
 /// The row behind every `Ordered` or `ExpectedGap` cell.
 const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> Driven {
     use RespCase::{Fresh, IdempotentReplay};
-    use RespPair::{ClampSeal, ShapeSeal, StampSeal};
+    use RespPair::{ClampSeal, FirewallSeal, ShapeSeal, StampSeal};
     use RespRoute::{Direct, Mcp};
     match (route, case, era, pair) {
         (Mcp | Direct, Fresh, Era::Modern, ShapeSeal) => {
@@ -436,6 +436,9 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
         }
         (Mcp | Direct, Fresh, _, ClampSeal) => {
             Driven::Row("rows::r_clamp_scope_clamp_precedes_seal")
+        }
+        (Mcp | Direct, Fresh, _, FirewallSeal) => {
+            Driven::Row("rows::r_fwseal_firewall_precedes_seal")
         }
         (Direct, IdempotentReplay, Era::Legacy, StampSeal) => {
             Driven::Row("rows::r_replayseal_direct_replay_seal_gap")

@@ -59,18 +59,23 @@ impl HttpRoute {
     }
 }
 
-/// One `read` call on `route` in `era`, the backend answering `answer`.
-pub(crate) async fn signed_call(route: HttpRoute, era: Era, answer: Answer) -> Value {
-    let fx = fixture::fixture_built(answer, dual_signed).await;
+/// `tools/call read` on `route` as a caller of `era` declares it.
+async fn call_read(fx: &fixture::Fx, route: HttpRoute, era: Era) -> Value {
     match era {
-        Era::Modern => modern_call(&fx, route.uri(), ("read", json!({})), &json!({})).await,
+        Era::Modern => modern_call(fx, route.uri(), ("read", json!({})), &json!({})).await,
         Era::Legacy => {
             let params = json!({ "name": "read", "arguments": {} });
-            fixture::send(&fx, route.uri(), "k-std", "tools/call", params, None)
+            fixture::send(fx, route.uri(), "k-std", "tools/call", params, None)
                 .await
                 .1
         }
     }
+}
+
+/// One `read` call on `route` in `era`, the backend answering `answer`.
+pub(crate) async fn signed_call(route: HttpRoute, era: Era, answer: Answer) -> Value {
+    let fx = fixture::fixture_built(answer, dual_signed).await;
+    call_read(&fx, route, era).await
 }
 
 /// One legacy keyed call (`r1`) on `route`. Mcp goes through
@@ -101,4 +106,24 @@ pub(crate) async fn signed_replay(route: HttpRoute, answer: Answer) -> (Value, V
         replay,
         fx.calls.load(std::sync::atomic::Ordering::SeqCst),
     )
+}
+
+/// The egress matrix's planted credential, which a Warn rule on `read`
+/// redacts in a delivered answer (MIK-8155).
+pub(crate) fn planted_credential() -> &'static str {
+    // Leaked once per test that asks: `Answer::Text` holds a `'static` text.
+    Box::leak(crate::gateway::egress_fixture::secret().into_boxed_str())
+}
+
+/// One `read` call on `route` in `era` whose backend answers `text`, under a
+/// Warn rule on `read`: the egress firewall redacts a credential and still
+/// delivers the answer.
+pub(crate) async fn signed_redacted_call(route: HttpRoute, era: Era, text: &'static str) -> Value {
+    let fx = fixture::fixture_firewalled_with_built(
+        Answer::Text(text),
+        Some(crate::security::firewall::FirewallAction::Warn),
+        dual_signed,
+    )
+    .await;
+    call_read(&fx, route, era).await
 }

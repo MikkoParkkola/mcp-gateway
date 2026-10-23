@@ -9,7 +9,8 @@
 use serde_json::Value;
 
 use crate::gateway::router::route_matrix_driver_tests::response::{
-    BackendAnswer, HttpRoute, signed_call, signed_replay, trust_set,
+    BackendAnswer, HttpRoute, planted_credential, signed_call, signed_redacted_call, signed_replay,
+    trust_set,
 };
 use crate::protocol::meta::Era;
 use crate::trust::provenance_public::{VerifyRefusal, VerifyStatus, verify_public};
@@ -80,6 +81,39 @@ async fn r_clamp_scope_clamp_precedes_seal() {
                 verify_public(receipt(result), &trust_set(), Some(&pre_clamp)).err(),
                 Some(VerifyRefusal::ResultMismatch),
                 "{row}: the receipt does not bind the pre-clamp body"
+            );
+        }
+    }
+}
+
+/// R-FWSEAL `firewall_precedes_seal` (`Firewall` < `Seal`; `Mcp`, `Direct`
+/// × `Fresh` × both eras). The backend answers a credential; under a Warn
+/// rule the egress firewall redacts it and still delivers the answer. The
+/// receipt is Bound to the redacted bytes and refuses the unredacted body, so
+/// a seal taken before the redaction fails here.
+#[tokio::test]
+async fn r_fwseal_firewall_precedes_seal() {
+    let leak = planted_credential();
+    for route in [HttpRoute::Mcp, HttpRoute::Direct] {
+        for era in [Era::Modern, Era::Legacy] {
+            let row = format!("R-FWSEAL {route:?} {era:?}");
+            let body = signed_redacted_call(route, era, leak).await;
+            let result = delivered(&body);
+            let text = result
+                .pointer("/content/0/text")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("{row}: the answer carries its text: {result}"));
+            assert!(
+                !text.contains(leak) && text.contains("[REDACTED:credential]"),
+                "{row}: the firewall redacted the delivered text: {text}"
+            );
+            assert_sealed_bound(&row, result);
+            let mut unredacted = result.clone();
+            unredacted["content"][0]["text"] = Value::from(leak);
+            assert_eq!(
+                verify_public(receipt(result), &trust_set(), Some(&unredacted)).err(),
+                Some(VerifyRefusal::ResultMismatch),
+                "{row}: the receipt does not bind the unredacted body"
             );
         }
     }

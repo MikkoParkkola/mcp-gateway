@@ -291,6 +291,20 @@ pub(crate) async fn fixture_firewalled_with(
     fx
 }
 
+/// [`fixture_firewalled_with`], with no breaker, arming the `MetaMcp` with
+/// `build` (MIK-8689: a redacting rule beside the provenance signers).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_firewalled_with_built(
+    answer: Answer,
+    rule: Option<crate::security::firewall::FirewallAction>,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    FIREWALL_RULE.with(|r| r.set(rule));
+    let fx = fixture_inner(answer, true, build).await;
+    FIREWALL_RULE.with(|r| r.set(None));
+    fx
+}
+
 #[path = "direct_guards_fixture_answers.rs"]
 mod answers;
 #[path = "direct_guards_fixture_egress.rs"]
