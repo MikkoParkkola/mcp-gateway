@@ -1,6 +1,6 @@
 # MIK-8513: the registry check verifies content and that entries start
 
-Status: draft for review (r1). Scope: `scripts/dev/check-registry-packages.py`,
+Status: draft for review (r2: r1 seat findings folded, see the end). Scope: `scripts/dev/check-registry-packages.py`,
 its self-test, its testdata, `.github/workflows/registry-packages.yml`. No
 product code, no user-visible change.
 
@@ -16,10 +16,10 @@ gaps remain:
 
 ## CONTENT.1: expected digests, compared live
 
-**Where the digests live.** A sidecar file sits next to the source the checker
-reads: `src/registry/server_registry_entries.integrity.json`. The checker finds
-it by convention: the source path with `.rs` replaced by `.integrity.json`. So
-the testdata files carry their own sidecars, with no new flag. It is a sidecar
+**Where the digests live.** A sidecar file, `scripts/dev/registry-integrity.json`.
+It stays out of `src/` so that Cargo's `include = ["src/**"]` does not publish
+it. The checker takes `--integrity PATH`, defaulting to that file; the workflow
+passes each testdata file's own sidecar. It is a sidecar
 rather than a `RegistryEntry` field because a field would be product code, a
 change to a public struct that ships to users; the ticket's impact line rules
 that out.
@@ -83,98 +83,157 @@ and PyPI mismatches, with the network stubbed as today.
 cross-checked against the MIK-8510 design note for the three npm packages it
 recorded: memory's `UDMt…` matches. The PR lists every value with its source URL.
 
+**Served bytes, not only metadata (r2).** The metadata comparison above catches
+a changed digest. It cannot catch bytes that differ from an unchanged digest.
+So the live job also has the package manager fetch every pinned top-level
+artifact inside the isolated container (below), skipped start entries
+included. The package manager checks the actual bytes against the sidecar
+value:
+
+- **npm:** `npm pack --json <pkg>@<ver>` reports the `integrity` it computed
+  from the downloaded tarball, which must equal the sidecar.
+- **PyPI:** `pip download --no-deps --require-hashes` with `<pkg>==<ver>
+  --hash=sha256:<v>` for every recorded file. pip refuses a download whose
+  bytes match none of them.
+
+The checker itself still hashes nothing (fail-fast).
+
+**Ceiling:** pip verifies the one file it selects. The others are covered only
+by the metadata map.
+
 ## CONTENT.2: each eligible stdio entry answers `initialize`
 
 **Which entries.** An entry is eligible when it is stdio, `Setup::Ready`, has an
-empty `required_env` and has `Auth::None`. On today's line that is `memory`,
-`sequential-thinking`, `fetch`, `time` and `playwright`. Every other stdio
-entry is printed as `SKIP <name>: <reason>`:
+empty `required_env`, has `Auth::None` and is not in the checker's own
+`START_SKIP` table. The table today holds one row, `playwright: needs a
+browser`; the product's `Setup` stays unchanged. That makes `memory`,
+`sequential-thinking`, `fetch` and `time` eligible. Every other stdio entry
+prints `SKIP <name>: <reason>`:
 
-- `needs arguments: <hint>` (filesystem, git);
-- `needs a service` (redis, aws, semgrep, chrome-devtools, postgres, mysql,
-  mongodb);
-- `needs credentials: <ENV>` (the EnvVars entries).
+- `needs arguments: <hint>`;
+- `needs a service`;
+- `needs credentials: <ENV>`;
+- `needs a browser`.
 
-A skip is not a pass. The summary line counts the two separately.
+A skip is not a pass.
+
+**A green run must attempt something.** The workflow asserts:
+
+- `PASS memory`, `PASS sequential-thinking`, `PASS fetch` and `PASS time`;
+- `4/4 eligible entries start`.
+
+So a parser miss that makes everything ineligible fails the job.
 
 **Parser.** The existing `parse_entries` gains three fields, `setup`,
-`required_env` and `hint`, as new `FIELD_RE` entries. There is no second parser.
+`required_env` and `hint`, as new `FIELD_RE` entries. There is no second
+parser. The work lands after #4061 renames the struct.
 
 ### Isolation (reviewed before code, per the AC)
 
 **Threat.** Running a third-party package executes its code, including npm
-install scripts, on the CI runner. The job has no repository secrets, its token
-is `contents: read`, and checkout persists no credentials. That still leaves one
-exposure: every step's environment holds `ACTIONS_RUNTIME_TOKEN` and the
-cache/results URLs. A hostile package could use them to poison the Actions cache
-other workflows restore. The runner is an ephemeral VM, so the host itself is
-disposable; the cache is not.
+install scripts, on the runner. The job has no secrets, a `contents: read`
+token, and no persisted credentials. But every host step's environment holds
+`ACTIONS_RUNTIME_TOKEN` and the cache URLs, so a hostile package on the host
+could poison the Actions cache other workflows restore. A workspace mount
+would also expose `GITHUB_ENV`. The runner VM itself is disposable.
 
-**Control.** Every install and start runs in a Docker container that receives
-**no environment from the runner**. Only explicit `-e` values are passed, and
-none of them is a token. Each container runs with:
+**Control.** All package code runs in containers that get no runner
+environment and no host path:
 
-- `--rm --read-only --tmpfs /tmp --tmpfs /work` (an exec-allowed tmpfs for the
-  install);
-- `--cap-drop ALL --security-opt no-new-privileges --user 1000:1000`;
-- `--memory 1g --pids-limit 256 --cpus 1`.
+- **Spawned by argv lists,** never a shell string. The argv is built from the
+  classified `(launcher, pkg, ver, args)`, so a crafted `command` in a fork PR
+  cannot inject into the host.
+- **Flags:**
+  - `--rm --read-only --log-driver none`;
+  - `--cap-drop ALL --security-opt no-new-privileges --user 1000:1000`;
+  - `--memory 1g --pids-limit 256 --cpus 1`;
+  - `--tmpfs /tmp:exec,size=256m,uid=1000,gid=1000,mode=1777`.
+- **Per-entry volume:** a fresh named Docker volume mounted at `/work`, prepared
+  for uid 1000 and removed afterwards.
+- **Environment:** only `-e HOME=/work -e npm_config_cache=/work/.npm
+  -e UV_CACHE_DIR=/work/.uv -e UV_TOOL_DIR=/work/tools
+  -e XDG_CACHE_HOME=/work/.cache`.
+- **No secret** is ever passed.
 
-**Images** are pinned by digest from `mirror.gcr.io`, as ci.yml does for
-Docker Hub content:
+**Images, pinned by digest:**
 
-- `node:24-slim` for npm entries;
-- `astral-sh/uv` with Python 3.12 for PyPI entries.
+- `mirror.gcr.io/library/node:24-slim` for npm;
+- `ghcr.io/astral-sh/uv:python3.12-bookworm-slim` for PyPI. That one is
+  published on ghcr.io and is not Docker Hub content.
 
-**Two phases per entry, in one container**, so that a server that needs the
-network at start is visible as a FAIL rather than hidden by an open network:
+**Three steps per entry.** The first two use the network; the last does not.
 
-1. **Install, network on, 180 s cap.**
-   - npm: `npm install --no-save --prefix /work <pkg>@<ver>`. Install scripts
-     run, because users get them via `npx -y` and skipping them would fail
-     packages that need them. The container is the boundary.
-   - uvx: `uv tool install <pkg>==<ver>` into /work.
-   - The installed top-level artifact's integrity, read from
-     `node_modules/.package-lock.json` or uv's install record, must equal the
-     sidecar. This ties CONTENT.1 to the bytes that actually ran.
-2. **Start, network off, 60 s cap.** The network is dropped with `docker network
-   disconnect` before the start command runs. The installed bin is started with
-   the entry's own arguments. The driver writes one `initialize` line to stdin
-   and needs a JSON-RPC `result` with `protocolVersion` and `serverInfo`
-   inside the cap. Then it closes stdin, waits 5 s, and kills the container.
+1. **Fetch and verify:** `npm pack` or `pip download` as above, 120 s cap. This
+   runs for every pinned entry.
+2. **Prime the launcher users get,** 180 s cap:
+   - npm: `npm exec --yes --package <pkg>@<ver> -- true`. This fills the npx
+     cache, runs install scripts as `npx -y` would (the container is the
+     boundary), and does not start the server.
+   - uvx: `uv tool install <pkg>==<ver>`.
+3. **Start,** in a second container on the same volume with `--network none`,
+   60 s cap:
+   - npm: `npx --offline -y <pkg>@<ver> <args>`;
+   - uvx: the installed tool binary `<args>`.
 
-**Verdicts:**
+   A server that needs the network to start therefore FAILs.
 
-| case | verdict |
-|---|---|
-| timeout | `FAIL <name>: did not answer initialize within 60 s` |
-| exit before a reply | `FAIL <name>: exited <code> before answering initialize` plus the stderr tail |
-| install failure | `FAIL <name>: install failed` |
-| an error reply | FAIL |
+**The driver** writes one `initialize` request with `id: 1`. It reads stdout
+line by line, at most 1 MiB, until a JSON-RPC message with `id: 1` arrives.
 
-**Not in scope:** `pull_request_target` is never used; fork PRs get the same
-token-less job. No `docker` socket or host path is mounted. The driver itself
-runs as the step on the host, but it only parses stdout from the container.
+- **PASS:** the message has a `result` carrying `protocolVersion` and `serverInfo`.
+- **FAIL:**
+  - an `error` reply;
+  - a reply with the wrong id;
+  - malformed JSON;
+  - EOF;
+  - the time cap.
 
-**Where it runs.** A new job, `starts`, in `registry-packages.yml`, beside
-`resolve`, with `timeout-minutes: 20`. It is not in ci.yml (CONTENT.3).
+  The last 4 KiB of stderr is kept for the FAIL line.
 
-**Falsifier for CONTENT.2.** New testdata `scripts/dev/testdata/registry-wont-start.rs`
-has one eligible entry whose package installs but is not an MCP server: a pinned
-npm package with a bin that exits at once. Its sidecar holds the real digest.
-The workflow step expects exit 1 and one `FAIL … exited … before answering
-initialize`. A second entry, `time`, must start, so the falsifier also proves
-that the harness can pass.
+**Cleanup:** `docker rm -f` and `docker volume rm` run in `finally`, on every
+path, including timeouts.
+
+**Not in scope:** no `pull_request_target`, no Docker socket, no host mount.
+The host-side driver only parses bounded container output.
+
+**Where it runs.** A new job, `starts`, in `registry-packages.yml`, with
+`timeout-minutes: 25`. Not in ci.yml (CONTENT.3).
+
+### Falsifiers
+
+| AC | how it is shown | where |
+|---|---|---|
+| CONTENT.1, metadata | `registry-integrity.rs`: two healthy entries, one sidecar value wrong; `1/2 resolve`, exactly one `FAIL … integrity` | live job step |
+| CONTENT.1, bytes | the byte step's comparison is unit-tested with a stubbed `npm pack` result whose integrity differs while the metadata matches | offline self-test |
+| CONTENT.2 | `registry-wont-start.rs`: `time` must PASS; a pinned npm package whose bin exits at once must FAIL `exited … before answering initialize`; `1/2 eligible entries start` | live job step |
+| CONTENT.2, harness | timeout, malformed reply, wrong id, and an error reply, each against a tiny local fake server driven without Docker | offline self-test |
+| CONTENT.3 | `--offline` asserted to make no network call: `fetch` is replaced with one that raises | offline self-test |
 
 ## Rollout and rollback
 
-One PR. Revert it to roll back. MIK-8511 (the repin to 2.0.0) updates the
-sidecar in its own PR and gets the start check for memory and
-sequential-thinking for free.
+One PR, after #4061. Revert it to roll back. MIK-8511's repin updates the
+sidecar and gets byte verification and the start check for memory and
+sequential-thinking.
 
-## Questions for review
+## r1 review folded (gpt SWF, grok SWF)
 
-1. Sidecar file vs a `RegistryEntry` field. Is the product-code line right?
-2. Is an exact PyPI file-set match too strict (late wheel uploads), or correct?
-3. Install scripts on inside the container, or `--ignore-scripts`?
-4. Is `docker network disconnect` before start sound, or is there a simpler
-   way to keep install online and start offline?
+- **Adopted:**
+  - the tmpfs/HOME/cache flags;
+  - playwright skipped;
+  - the uv image from ghcr.io;
+  - the uv receipt comparison dropped;
+  - output caps and `--log-driver none`;
+  - two containers with `--network none` instead of a disconnect;
+  - the sidecar moved out of `src/`;
+  - the entry's own launcher, offline;
+  - exec-form argv;
+  - a green run must attempt named entries;
+  - harness negative controls;
+  - cleanup on every path;
+  - a note that a late extra PyPI file is a reviewed digest update.
+- **Disagreement settled toward gpt:**
+  - **grok:** comparing metadata is enough, since installers verify.
+  - **gpt:** bytes must be checked.
+  - **Ruling:** the AC says "the served tarball differs", so the installer
+    enforces the sidecar hash on the real download in the container. This
+    stays inside the fail-fast rule: the checker hashes nothing.
