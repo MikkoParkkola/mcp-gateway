@@ -1220,6 +1220,13 @@ jobs:
         run: python3 scripts/release/test_surface_upgrading.py
       - name: Every pending UPGRADING fragment is well formed, and no new item is numbered (MIK-8185)
         run: python3 scripts/release/upgrading_fragments.py check
+      # The pre-push gate's own tests (MIK-8410.DRIFT.1): the workflow scanner
+      # and its drift buckets, and the runner's fail-closed rows. Above the
+      # wiring-mutation step, which the harness anchors as the job's last.
+      - name: Test the pre-push CI-check scanner and its drift buckets (MIK-8410)
+        run: python3 scripts/dev/test_prepush_ci_checks.py
+      - name: Test the pre-push CI-check runner (MIK-8410)
+        run: python3 scripts/dev/test_run_prepush_ci_checks.py
       # Proves the workflow-wiring assertions still discriminate: each case
       # breaks one rule, or restates it in an equivalent spelling, and the
       # suite has to return the stated verdict. Runs against a copy of the
