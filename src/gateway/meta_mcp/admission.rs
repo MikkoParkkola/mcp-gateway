@@ -72,6 +72,17 @@ fn era_mismatch(stored: crate::protocol::meta::Era, request: crate::protocol::me
     }
 }
 
+/// MIK-8747: a delivery stored shaped for one era is never served to the
+/// other. Only the era is decoded, so a refusal restores none of the record's
+/// read or write scope.
+fn refuse_another_era(bytes: &[u8], is_modern: bool) -> Result<()> {
+    let era = request_era(is_modern);
+    match stored::stored_era(bytes) {
+        Some(stored_era) if stored_era != era => Err(era_mismatch(stored_era, era)),
+        _ => Ok(()),
+    }
+}
+
 /// MIK-8747: a meta-path lease (`/mcp`, stdio) stores its delivery already
 /// shaped for the request's era, so it records that era; any other
 /// admission passes through unchanged.
@@ -446,15 +457,7 @@ impl MetaMcp {
                 // fails the admission without touching the retained bytes it
                 // must never serve (E1).
                 let single_target = replay_target()?;
-                // MIK-8747: a delivery stored shaped for one era is never
-                // served to the other. Only the era is decoded, so a refusal
-                // restores none of the record's read or write scope.
-                let era = request_era(is_modern);
-                if let Some(stored_era) = stored::stored_era(&bytes)
-                    && stored_era != era
-                {
-                    return Err(era_mismatch(stored_era, era));
-                }
+                refuse_another_era(&bytes, is_modern)?;
                 let (mut response, audit) = stored_response(&bytes).ok_or_else(|| {
                     Error::json_rpc(409, "Secured execution result is unavailable")
                 })?;

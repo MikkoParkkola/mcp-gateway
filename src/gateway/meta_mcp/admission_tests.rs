@@ -270,10 +270,11 @@ fn revoked_replay(
         ..RetryFields::default()
     };
     let mut caller = context(&policy, &retry);
-    // Seed in modern mode; the legacy case must reuse this same owner's key
-    // across the protocol transition rather than merely replay legacy work.
-    retained_operation(&meta, &caller, tool, args);
+    // Seeded and replayed in one era: a key reused across the protocol
+    // transition is refused before any policy runs (MIK-8747), which
+    // `sub4_a_key_reused_across_the_protocol_transition_is_refused` pins.
     caller.is_modern = is_modern;
+    retained_operation(&meta, &caller, tool, args);
     policy.revoked.store(true, Ordering::SeqCst);
     for request in [args, changed_args] {
         policy.seen.lock().clear();
@@ -397,6 +398,37 @@ fn sub4_replay_current_policy_legacy_keyed_opt_in() {
         &json!({"name":"protected-plan", "arguments":{"record":"changed"}}),
         &[FIRST, SECOND],
     );
+}
+
+/// MIK-8747 / MIK-8748: the same owner's key reused across the protocol
+/// transition is refused. A result stored for a modern call is never served
+/// to a legacy one: the call already ran, so the refusal says so, and the
+/// stored result is still served to its own era.
+#[test]
+fn sub4_a_key_reused_across_the_protocol_transition_is_refused() {
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    let policy = MutablePolicy::new(FIRST);
+    let retry = RetryFields {
+        idempotency_key: Some("same-key".into()),
+        ..RetryFields::default()
+    };
+    let mut caller = context(&policy, &retry);
+    let args = json!({"server":FIRST.0, "tool":FIRST.1, "arguments":{"record":"original"}});
+    retained_operation(&meta, &caller, "gateway_invoke", &args);
+    caller.is_modern = false;
+    let error = refusal(admit(&meta, &caller, "gateway_invoke", &args, 3));
+    let Error::JsonRpc { code, data, .. } = &error else {
+        panic!("a cross-era replay is the era refusal: {error}");
+    };
+    assert_eq!(*code, 409, "{error}");
+    assert_eq!(
+        data.as_ref()
+            .map(|d| (&d["reason"], &d["already_executed"])),
+        Some((&json!("idempotency_era_mismatch"), &json!(true))),
+        "{error}"
+    );
+    caller.is_modern = true;
+    assert_replay(admit(&meta, &caller, "gateway_invoke", &args, 4), 4);
 }
 
 #[test]
