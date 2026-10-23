@@ -133,6 +133,12 @@ pub(crate) enum Invisible {
     /// clamp changes nothing before the fresh link it mints (the stored link
     /// is stripped: "a replay mints its own", `meta_mcp/admission.rs:147`).
     StoredBytesAlreadyClamped,
+    /// Signing records `_signature` as a gateway write
+    /// (`meta_mcp/signing.rs:772`), and the rebuild's copy strips every
+    /// gateway write (`receipt_copy`, `invoke/relay_delivered.rs:576-590`), so
+    /// the rebuild never reads what signing adds (red check f7: rebuilding
+    /// from the unsigned answer changes nothing).
+    RebuildStripsGatewayWrites,
 }
 
 /// Why a cell cannot occur.
@@ -296,8 +302,8 @@ pub(crate) const fn expect(
     pair: RespPair,
 ) -> RespExpect {
     use Invisible::{
-        JudgeOnlyReplaces, JudgeReadsNothingSigningAdds, SealWritesOnlyExcludedMeta,
-        StampIgnoresShapedMembers, StoredBytesAlreadyClamped,
+        JudgeOnlyReplaces, JudgeReadsNothingSigningAdds, RebuildStripsGatewayWrites,
+        SealWritesOnlyExcludedMeta, StampIgnoresShapedMembers, StoredBytesAlreadyClamped,
     };
     use RespCase::{CacheHit, Fresh, IdempotentReplay, Task as TaskCase};
     use RespExpect::{ExpectedGap, NotApplicable, OrderInvisibleByOutcome, Ordered};
@@ -344,12 +350,13 @@ pub(crate) const fn expect(
         (_, _, _, StampShape) => OrderInvisibleByOutcome(StampIgnoresShapedMembers),
         (_, _, _, LinkSeal) => OrderInvisibleByOutcome(SealWritesOnlyExcludedMeta),
         (_, _, _, SignJudge) => OrderInvisibleByOutcome(JudgeReadsNothingSigningAdds),
+        (_, _, _, SignRebuild) => OrderInvisibleByOutcome(RebuildStripsGatewayWrites),
         (
             _,
             _,
             _,
             ShapeSeal | FirewallSeal | ClampLink | ClampSeal | StampSeal | SealSign | SignRecord
-            | JudgeRecord | RecordCommit | JudgeCommit | SignRebuild | FirewallStamp,
+            | JudgeRecord | RecordCommit | JudgeCommit | FirewallStamp,
         ) => Ordered,
     }
 }

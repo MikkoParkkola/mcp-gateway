@@ -88,7 +88,7 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
     use RespCase::{CacheHit, Fresh, IdempotentReplay, Task as TaskCase};
     use RespPair::{
         ClampLink, ClampSeal, FirewallSeal, FirewallStamp, JudgeCommit, JudgeRecord, RecordCommit,
-        SealSign, ShapeSeal, SignRebuild, SignRecord, StampSeal,
+        SealSign, ShapeSeal, SignRecord, StampSeal,
     };
     use RespRoute::{Direct, Mcp, Stdio, Task};
     if !stated(expect(route, case, era, pair)) {
@@ -145,9 +145,6 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
         (Mcp | Direct, Fresh, Era::Modern, SealSign) => {
             Driven::Row("rows::r_sign_seal_precedes_sign")
         }
-        (Mcp | Direct, Fresh, Era::Modern, SignRebuild) => {
-            Driven::Row("rows::r_rebuild_relay_receipt_reflects_the_delivered_bytes")
-        }
         (Mcp, Fresh, Era::Modern, RecordCommit) => {
             Driven::Row("rows::r_commit_delivery_record_precedes_relay_commit")
         }
@@ -175,7 +172,7 @@ const fn driven(route: RespRoute, case: RespCase, era: Era, pair: RespPair) -> D
 const fn stdio_fresh_row(era: Era, pair: RespPair) -> Option<Driven> {
     use RespPair::{
         ClampLink, ClampSeal, FirewallSeal, JudgeCommit, JudgeRecord, RecordCommit, SealSign,
-        ShapeSeal, SignRebuild, SignRecord, StampSeal,
+        ShapeSeal, SignRecord, StampSeal,
     };
     Some(match (era, pair) {
         (Era::Modern, ShapeSeal) => Driven::Row("rows::stdio::r_shape_stdio_shape_precedes_seal"),
@@ -203,9 +200,6 @@ const fn stdio_fresh_row(era: Era, pair: RespPair) -> Option<Driven> {
         (Era::Legacy, RecordCommit) => Driven::Row(
             "server::signing_allocation_tests::collusion_stdio::stdio_audit_withheld_read_records_no_receipt",
         ),
-        (Era::Legacy, SignRebuild) => Driven::Row(
-            "server::signing_allocation_tests::collusion_stdio_delivered::a_stdio_answer_is_receipted_as_delivered",
-        ),
         (Era::Legacy, ClampLink) => {
             Driven::Row("rows::stdio::r_link_stdio_scope_clamp_precedes_origin_link")
         }
@@ -215,29 +209,10 @@ const fn stdio_fresh_row(era: Era, pair: RespPair) -> Option<Driven> {
 
 /// The row behind a stated `IdempotentReplay` cell that is not its Fresh twin.
 const fn replay_row(route: RespRoute, era: Era, pair: RespPair) -> Option<Driven> {
-    use RespPair::{ShapeSeal, SignRebuild, StampSeal};
+    use RespPair::{ShapeSeal, StampSeal};
     use RespRoute::{Direct, Mcp, Stdio};
     Some(match (route, era, pair) {
         (Direct, _, StampSeal) => Driven::Row("rows::r_replayseal_direct_replay_seal_gap"),
-        // A replayed receipt takes its own rebuild branch (`Kind::Replayed`,
-        // `keep_replayed_receipts`, invoke/relay_delivered.rs:205-219): kept to
-        // the answer as delivered now. These rows drive that branch on each
-        // route (legacy keyed calls); the modern twin runs the same tail.
-        (Mcp, Era::Legacy, SignRebuild) => Driven::Rows(&[
-            "router::collusion_direct_tests::meta::writes::meta_replay_leaves_the_gateway_hint_out_of_the_receipt",
-            "router::collusion_direct_tests::meta::meta_replay_renews_the_receipt",
-        ]),
-        (Direct, Era::Legacy, SignRebuild) => Driven::Row(
-            "router::collusion_direct_tests::writes::a_replayed_direct_provenance_stamp_stays_out_of_the_receipt",
-        ),
-        (Stdio, Era::Legacy, SignRebuild) => Driven::Row(
-            "server::signing_allocation_tests::collusion_stdio::stdio_replay_leaves_the_cost_suggestion_out_of_the_receipt",
-        ),
-        (Mcp | Direct | Stdio, Era::Modern, SignRebuild) => Driven::SameAs {
-            pin: NO_CASE_OR_ERA,
-            case: RespCase::IdempotentReplay,
-            era: Era::Legacy,
-        },
         (Mcp, Era::Modern, ShapeSeal) => {
             Driven::Row("rows::r_erareplay_cross_era_replay_reshapes_after_the_seal_gap")
         }
