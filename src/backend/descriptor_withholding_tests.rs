@@ -360,3 +360,36 @@ async fn a_withheld_name_is_held_at_a_fixed_size() {
         backend.descriptor_gate_key_bytes()
     );
 }
+
+/// MIK-8762 SHAFU.1 goldens, computed independently (Python hashlib): the
+/// descriptor digest is SHA-256 over name, description, then each property's
+/// name and description sorted by name, each field prefixed by its byte length
+/// as u64 big-endian; an unparseable entry's digest is SHA-256 of its JSON.
+#[test]
+fn descriptor_digests_match_their_independent_goldens() {
+    let plain: crate::protocol::Tool = serde_json::from_value(json!({
+        "name": "t", "description": "d", "inputSchema": {"type": "object"}
+    }))
+    .expect("tool");
+    assert_eq!(
+        super::descriptor_gate::descriptor_digest(&plain),
+        "9289ee571cdff964202b8950d161c42853dd5b2d2ce4ba8ed75beb2a3addb111"
+    );
+    let with_properties: crate::protocol::Tool = serde_json::from_value(json!({
+        "name": "t", "description": "d", "inputSchema": {"type": "object", "properties": {
+            "b": {"description": "B"}, "a": {"description": "A"}}}
+    }))
+    .expect("tool");
+    assert_eq!(
+        super::descriptor_gate::descriptor_digest(&with_properties),
+        "e88b713f0a0d36ffbae83f54cfb619f64624ef434e13b25740d83c4011c99f62"
+    );
+    let (_, unparseable) = super::descriptor_gate::parse_listed(&[json!({"name": "n"})]);
+    assert_eq!(
+        unparseable,
+        [(
+            "n".to_owned(),
+            "e5d7b2adb8fb9f9187638229b0a2cf241c5f155867cd31c82cbb20c642e62554".to_owned()
+        )]
+    );
+}

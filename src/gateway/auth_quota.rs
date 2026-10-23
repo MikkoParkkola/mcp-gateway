@@ -97,3 +97,23 @@ impl QuotaPrincipal {
         &self.0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::QuotaPrincipal;
+
+    /// MIK-8762 SHAFU.1 goldens, computed independently (Python hashlib): the
+    /// domain `mcp-gateway/nonce-quota/v1\0`, then kind and secret, each
+    /// prefixed by its byte length as u64 big-endian, hex SHA-256.
+    #[test]
+    fn quota_principal_keys_match_their_independent_goldens() {
+        assert_eq!(
+            QuotaPrincipal::api_key(b"k").as_store_key(),
+            "4673bf1750f2b6c6e9812161f33fdeffbce42f8aedacf19cf3ed793e913b44d6"
+        );
+        assert_eq!(
+            QuotaPrincipal::dashboard_session().as_store_key(),
+            "444ff181ef357714106823b586cd706db5a92038ed4aa9b887f5d0a0f2a98952"
+        );
+    }
+}
