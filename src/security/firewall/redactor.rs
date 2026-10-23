@@ -327,3 +327,7 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 #[path = "redactor_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "redactor_b2_tests.rs"]
+mod b2_tests;
