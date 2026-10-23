@@ -27,6 +27,7 @@
 //! 2. **Message tampering** — MAC covers the entire canonical response body.
 //! 3. **Replay attacks** — monotonic nonces rejected within the replay window.
 
+use crate::error::rpc_codes::INVALID_PARAMS;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -246,7 +247,7 @@ impl NonceStore {
             // Decided before the lock, so there is no occupancy to publish: the
             // store has not been consulted and cannot have changed.
             record_nonce_rejection(NONCE_REASON_INVALID);
-            return Err(Error::json_rpc(-32602, "Invalid signing nonce"));
+            return Err(Error::json_rpc(INVALID_PARAMS, "Invalid signing nonce"));
         }
         let mut state = self.state.lock();
         #[cfg(test)]

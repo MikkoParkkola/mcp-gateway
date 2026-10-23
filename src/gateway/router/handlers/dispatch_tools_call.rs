@@ -6,6 +6,7 @@
 //! serialized like every other response) is `Ok`; a refusal that already
 //! carries the status it must be sent with is `Err`, returned unchanged.
 
+use crate::error::rpc_codes::INVALID_REQUEST;
 use std::sync::Arc;
 
 use axum::http::StatusCode;
@@ -67,7 +68,7 @@ pub(super) async fn tools_call(
         // Same code and shape the meta layer's no-session refusal uses.
         return Ok(JsonRpcResponse::error(
             Some(id),
-            -32600,
+            INVALID_REQUEST,
             refusal.to_string(),
         ));
     }

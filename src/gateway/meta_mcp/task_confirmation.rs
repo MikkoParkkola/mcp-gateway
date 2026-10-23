@@ -30,6 +30,7 @@
 //! inside the envelope. A fixed key would let a client answer a question it was
 //! never asked; a client-chosen one would let it answer its own.
 
+use crate::error::rpc_codes::INVALID_PARAMS;
 use serde_json::{Value, json};
 use tracing::{debug, warn};
 
@@ -266,7 +267,7 @@ impl MetaMcp {
                 refuse(
                     request,
                     "no_grant",
-                    -32602,
+                    INVALID_PARAMS,
                     "this destructive call carries answers but no confirmation grant",
                 ),
                 witness,

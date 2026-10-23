@@ -471,8 +471,8 @@ impl Error {
             Self::JsonRpc { code, .. }
             | Self::JsonRpcRetryable { code, .. }
             | Self::Forbidden { code, .. } => *code,
-            Self::Json(_) => -32700, // Parse error
-            Self::Protocol(_) | Self::ResponseFirewallRefused => -32600, // Invalid request
+            Self::Json(_) => rpc_codes::PARSE_ERROR, // Parse error
+            Self::Protocol(_) | Self::ResponseFirewallRefused => rpc_codes::INVALID_REQUEST, // Invalid request
             Self::BackendNotFound(_) | Self::ToolNotFound(_) => -32001,
             Self::AuditUnavailable => -32005,
             Self::CliCredentialRefused { .. } => {
@@ -505,7 +505,7 @@ impl Error {
             {
                 -32000
             }
-            _ => -32603, // Internal error
+            _ => rpc_codes::INTERNAL_ERROR, // Internal error
         }
     }
 }

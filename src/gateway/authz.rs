@@ -14,6 +14,7 @@
 //!
 //! Design: `docs/design/authorize-at-dispatch.md` (MIK-7252).
 
+use crate::error::rpc_codes::INVALID_REQUEST;
 use axum::http::StatusCode;
 use serde_json::Value;
 use tracing::warn;
@@ -480,11 +481,11 @@ impl ToolAuthorizer for ToolPolicyAuthorizer<'_> {
         }
         Decision::of(
             crate::security::validate_tool_name(target.tool)
-                .map_err(|e| AuthorizationError::forbidden(-32600, e.clone()))
+                .map_err(|e| AuthorizationError::forbidden(INVALID_REQUEST, e.clone()))
                 .and_then(|()| {
                     self.tool_policy
                         .check(target.server, target.tool)
-                        .map_err(|e| AuthorizationError::forbidden(-32600, e.to_string()))
+                        .map_err(|e| AuthorizationError::forbidden(INVALID_REQUEST, e.to_string()))
                 }),
         )
     }

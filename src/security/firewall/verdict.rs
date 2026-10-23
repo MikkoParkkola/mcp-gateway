@@ -6,6 +6,7 @@
 use super::{
     CompiledRule, Finding, FirewallAction, FirewallRule, FirewallVerdict, ScanType, Severity,
 };
+use crate::error::rpc_codes::INVALID_REQUEST;
 
 impl FirewallVerdict {
     /// Construct an unconditional allow verdict (used when scanning is disabled).
@@ -54,7 +55,7 @@ impl FirewallVerdict {
         Some(if self.is_asi10_block() {
             (-32002, format!("Anomaly detection blocked: {desc}"))
         } else {
-            (-32600, format!("Firewall blocked: {desc}"))
+            (INVALID_REQUEST, format!("Firewall blocked: {desc}"))
         })
     }
 

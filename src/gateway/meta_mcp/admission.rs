@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Request-owned synchronous admission and secured HTTP settlement.
 
+use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 
@@ -324,7 +325,7 @@ impl MetaMcp {
     ) -> Result<SyncAdmission> {
         if retry.is_malformed() {
             return Err(Error::json_rpc(
-                -32602,
+                INVALID_PARAMS,
                 "Malformed execution retry metadata",
             ));
         }
@@ -338,7 +339,7 @@ impl MetaMcp {
                 && *self.unkeyed.mode.read() == crate::config::IdempotencyKeyMode::Required
             {
                 return Err(Error::json_rpc(
-                    -32602,
+                    INVALID_PARAMS,
                     format!(
                         "An explicit idempotency key is required: set _meta \"{}\" \
                          (server.idempotency_key: required)",
@@ -422,7 +423,7 @@ impl MetaMcp {
             )),
             Err(Refusal::Mismatch) => Err(Error::json_rpc(409, KEY_MISMATCH)),
             Err(Refusal::InvalidIdentity | Refusal::MetadataTooLarge) => Err(Error::json_rpc(
-                -32602,
+                INVALID_PARAMS,
                 "Invalid execution admission metadata",
             )),
             Err(Refusal::Capacity | Refusal::ExpiryOverflow) => Err(Error::json_rpc(
@@ -575,7 +576,7 @@ impl MetaMcp {
             "retry": retry.key_discriminator()});
         if let Some(definition) = &playbook {
             let value = serde_json::to_value(definition)
-                .map_err(|_| Error::json_rpc(-32603, "Invalid playbook definition"))?;
+                .map_err(|_| Error::json_rpc(INTERNAL_ERROR, "Invalid playbook definition"))?;
             // Keep the bounded admission envelope independent of plan size.
             operation["playbook"] = json!(crate::hashing::canonical_json_sha256(&value));
         }
@@ -682,7 +683,7 @@ impl MetaMcp {
             "gateway_reload_config" => {
                 if self.get_reload_context().is_none() {
                     return Err(Error::json_rpc(
-                        -32603,
+                        INTERNAL_ERROR,
                         "Config reload is not enabled on this gateway",
                     ));
                 }
@@ -690,7 +691,7 @@ impl MetaMcp {
             "gateway_reload_capabilities" => {
                 if self.get_capabilities().is_none() {
                     return Err(Error::json_rpc(
-                        -32603,
+                        INTERNAL_ERROR,
                         "Capability backend is not enabled on this gateway",
                     ));
                 }

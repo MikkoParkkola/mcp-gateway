@@ -3,6 +3,7 @@
 //! `GET /mcp`: the legacy server-to-client notification stream, and the
 //! refusal a caller declaring the 2026 era gets instead.
 
+use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_REQUEST};
 use std::sync::Arc;
 
 use axum::{
@@ -100,7 +101,7 @@ fn stream_request_refusal(
     if !state.streaming_config.enabled {
         return Some(build_http_error_response(
             None,
-            -32600,
+            INVALID_REQUEST,
             "Streaming not enabled. Use POST to send JSON-RPC requests to /mcp",
             StatusCode::METHOD_NOT_ALLOWED,
         ));
@@ -112,7 +113,7 @@ fn stream_request_refusal(
     (!accept.contains("text/event-stream")).then(|| {
         build_http_error_response(
             None,
-            -32600,
+            INVALID_REQUEST,
             "Must accept text/event-stream for SSE notifications",
             StatusCode::NOT_ACCEPTABLE,
         )
@@ -275,7 +276,7 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
         }
         None => gateway_reply(build_http_error_response(
             None,
-            -32603,
+            INTERNAL_ERROR,
             "Failed to create SSE stream",
             StatusCode::INTERNAL_SERVER_ERROR,
         )),

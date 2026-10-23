@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Backend and cost API request handlers.
 
+use crate::error::rpc_codes::{INVALID_PARAMS, INVALID_REQUEST};
 use std::sync::Arc;
 
 use axum::{
@@ -100,7 +101,12 @@ async fn apply_backend_tool_call_security(
 /// would skip the per-tool check (D2).
 fn unnamed_call(id: &RequestId) -> BackendRejection {
     let message = "tools/call requires params.name";
-    build_http_error_response(Some(id.clone()), -32602, message, StatusCode::BAD_REQUEST)
+    build_http_error_response(
+        Some(id.clone()),
+        INVALID_PARAMS,
+        message,
+        StatusCode::BAD_REQUEST,
+    )
 }
 
 /// The checks a direct `tools/call` meets before any credential is resolved
@@ -269,7 +275,12 @@ fn take_attestation_token(params: Option<&mut Value>) -> Option<String> {
 
 /// Build a `403 Forbidden` JSON-RPC error response for security rejections.
 fn backend_security_error(id: &RequestId, message: &str) -> (StatusCode, Json<Value>) {
-    build_http_error_response(Some(id.clone()), -32600, message, StatusCode::FORBIDDEN)
+    build_http_error_response(
+        Some(id.clone()),
+        INVALID_REQUEST,
+        message,
+        StatusCode::FORBIDDEN,
+    )
 }
 
 #[cfg(feature = "firewall")]

@@ -20,6 +20,7 @@
 //! `accounted_dispatch` takes by value: only this module can construct one, so
 //! a send that skipped the chokepoint does not compile (MX).
 
+use crate::error::rpc_codes::{INVALID_PARAMS, INVALID_REQUEST};
 use serde_json::Value;
 
 use crate::gateway::authz::{Emit, ToolTarget};
@@ -369,7 +370,7 @@ impl MetaMcp {
         // be judged, so they are refused rather than sent unscanned.
         if outbound.answers.is_some_and(|answers| !answers.is_object()) {
             return Err(Error::Forbidden {
-                code: -32602,
+                code: INVALID_PARAMS,
                 status: 400,
                 message: "inputResponses must be an object".to_owned(),
             });
@@ -408,7 +409,7 @@ impl MetaMcp {
         // `-32600` arm of the one shared wording.
         let (code, message) = verdict.request_refusal().unwrap_or_else(|| {
             (
-                -32600,
+                INVALID_REQUEST,
                 "Firewall blocked: Security firewall blocked this request".to_owned(),
             )
         });

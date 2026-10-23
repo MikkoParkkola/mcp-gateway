@@ -4,6 +4,7 @@
 //! chokepoint judged on the bytes a `tools/call` is about to send, the plain
 //! arm's choice of door, and the give-back when the chokepoint refuses.
 
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 use axum::http::StatusCode;
 use serde_json::Value;
 
@@ -141,7 +142,7 @@ pub(super) fn plain_send<'a>(
     let Some(other) = super::direct_send::NonToolMethod::new(method) else {
         return Err(build_http_error_response(
             Some(id.clone()),
-            crate::protocol::era::METHOD_NOT_FOUND_CODE,
+            METHOD_NOT_FOUND,
             format!("{method} is not served on /mcp/{{name}}; use tools/call"),
             StatusCode::OK,
         ));

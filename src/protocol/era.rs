@@ -17,6 +17,7 @@
 //! So the rule is asymmetric, and getting it backwards is the easy mistake:
 //! evidence of modernity must be positive, and everything else is legacy.
 
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 use serde_json::json;
 
 /// What a peer speaks, as far as we have been able to establish.
@@ -42,7 +43,7 @@ impl Era {
 }
 
 /// JSON-RPC `method not found` — the honest legacy answer to `server/discover`.
-pub const METHOD_NOT_FOUND_CODE: i32 = -32601;
+pub use crate::error::rpc_codes::METHOD_NOT_FOUND as METHOD_NOT_FOUND_CODE;
 
 /// JSON-RPC error code for `UnsupportedProtocolVersion` in 2026-07-28.
 ///
@@ -700,7 +701,7 @@ impl EraObservation {
             ProbeOutcome::Error(_) if era == Era::Modern => {
                 (EraSource::Probed, EraEvidence::ModernErrorCode)
             }
-            ProbeOutcome::Error(code) if *code == METHOD_NOT_FOUND_CODE => {
+            ProbeOutcome::Error(code) if *code == METHOD_NOT_FOUND => {
                 (EraSource::Probed, EraEvidence::MethodNotFound)
             }
             ProbeOutcome::Error(_) => (EraSource::Probed, EraEvidence::OtherError),

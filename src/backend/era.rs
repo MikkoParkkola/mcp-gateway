@@ -6,6 +6,7 @@
 //! transport, so it is resolved once per start and cached on the backend
 //! rather than re-derived per request.
 
+use crate::error::rpc_codes::METHOD_NOT_FOUND;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,7 +15,7 @@ use super::PooledEntry;
 use crate::Result;
 use crate::error::Error;
 use crate::protocol::JsonRpcResponse;
-use crate::protocol::era::{Era, EraObservation, METHOD_NOT_FOUND_CODE, ProbeOutcome, classify};
+use crate::protocol::era::{Era, EraObservation, ProbeOutcome, classify};
 use crate::transport::Transport;
 
 /// Method a modern peer answers with its discovery document.
@@ -149,7 +150,7 @@ fn contradicts_legacy(code: i32) -> bool {
 /// Discovery is the one method the revision requires of every peer, which is what makes its
 /// absence say something about the peer's era rather than about its feature set.
 fn contradicts_modern(method: &str, code: i32) -> bool {
-    code == METHOD_NOT_FOUND_CODE && method == DISCOVER_METHOD
+    code == METHOD_NOT_FOUND && method == DISCOVER_METHOD
 }
 
 impl Backend {
@@ -405,7 +406,7 @@ const REMOVED_METHOD_MARK: &str = "removedInRevision";
 /// era removed it (MIK-7217 OUTBOUND.1). Nothing reached the wire.
 fn removed_method_refusal(method: &str) -> crate::Error {
     crate::Error::JsonRpc {
-        code: METHOD_NOT_FOUND_CODE,
+        code: METHOD_NOT_FOUND,
         message: format!("{method} was removed in protocol revision 2026-07-28"),
         data: Some(serde_json::json!({ REMOVED_METHOD_MARK: "2026-07-28" })),
     }
@@ -418,9 +419,7 @@ pub(crate) fn removed_method_refusal_message(error: &crate::Error) -> Option<&st
             code,
             message,
             data: Some(data),
-        } if *code == METHOD_NOT_FOUND_CODE && data.get(REMOVED_METHOD_MARK).is_some() => {
-            Some(message)
-        }
+        } if *code == METHOD_NOT_FOUND && data.get(REMOVED_METHOD_MARK).is_some() => Some(message),
         _ => None,
     }
 }
@@ -461,18 +460,18 @@ mod tests {
     #[test]
     fn a_refusal_is_the_same_code_whichever_carriage_brings_it() {
         let in_band = Err(Error::JsonRpc {
-            code: METHOD_NOT_FOUND_CODE,
+            code: METHOD_NOT_FOUND,
             message: "method not found".into(),
             data: None,
         });
         let on_a_status = Err(Error::JsonRpcRetryable {
-            code: METHOD_NOT_FOUND_CODE,
+            code: METHOD_NOT_FOUND,
             message: "method not found".into(),
             status: 503,
             data: None,
         });
-        assert_eq!(refusal_code(&in_band), Some(METHOD_NOT_FOUND_CODE));
-        assert_eq!(refusal_code(&on_a_status), Some(METHOD_NOT_FOUND_CODE));
+        assert_eq!(refusal_code(&in_band), Some(METHOD_NOT_FOUND));
+        assert_eq!(refusal_code(&on_a_status), Some(METHOD_NOT_FOUND));
     }
 
     /// An optional extension the peer declined is not evidence about its era.
@@ -484,11 +483,11 @@ mod tests {
     fn declining_an_optional_extension_does_not_disprove_a_modern_peer() {
         for method in ADDED_IN_2026_07_28 {
             assert!(
-                !contradicts_modern(method, METHOD_NOT_FOUND_CODE),
+                !contradicts_modern(method, METHOD_NOT_FOUND),
                 "{method} is optional in this revision, so refusing it says nothing about era"
             );
         }
-        assert!(contradicts_modern(DISCOVER_METHOD, METHOD_NOT_FOUND_CODE));
+        assert!(contradicts_modern(DISCOVER_METHOD, METHOD_NOT_FOUND));
         assert!(!contradicts_modern(
             DISCOVER_METHOD,
             UNSUPPORTED_PROTOCOL_VERSION

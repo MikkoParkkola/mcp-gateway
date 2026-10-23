@@ -6,6 +6,7 @@
 //! (`backend_handlers`), so both resolve one caller the same way. `pub(super)`:
 //! nothing outside `router` needs the resolver.
 
+use crate::error::rpc_codes::INVALID_REQUEST;
 use std::net::SocketAddr;
 
 use axum::http::{HeaderMap, StatusCode};
@@ -101,7 +102,7 @@ pub(super) fn identity_refusal_response(
 ) -> (StatusCode, axum::Json<serde_json::Value>) {
     super::helpers::build_http_error_response(
         None,
-        -32600,
+        INVALID_REQUEST,
         format!("caller identity header refused: {}", refusal.reason()),
         refusal.status(),
     )

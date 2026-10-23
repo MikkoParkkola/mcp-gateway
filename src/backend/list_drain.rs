@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The paged `*/list` drain shared by every cached metadata family.
 
+use crate::error::rpc_codes::INTERNAL_ERROR;
 use std::collections::HashSet;
 
 use serde_json::{Value, json};
@@ -85,7 +86,7 @@ pub(super) async fn drain_list_pages(
             // as zero items it would make a present tool absent); keep the
             // last complete catalogue (design E).
             return Err(Error::json_rpc(
-                -32603,
+                INTERNAL_ERROR,
                 format!("{} page {} is not a readable list", family.method, page + 1),
             ));
         };
