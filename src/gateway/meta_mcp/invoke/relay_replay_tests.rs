@@ -765,3 +765,6 @@ async fn g48_a_plan_task_row_is_written_at_version_9_and_loads() {
 
 #[path = "relay_replay_capture_tests.rs"]
 mod capture;
+
+#[path = "relay_replay_key_tests.rs"]
+mod key;
