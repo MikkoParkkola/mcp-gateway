@@ -34,6 +34,7 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 
 use super::super::collusion_digest::ReplayReceipt;
+use crate::security::ReplayCalls;
 
 /// Total bytes of replay receipts held across every stored entry (E1),
 /// following the sketch store's 32 MiB pattern: past it the oldest entry
@@ -93,7 +94,7 @@ pub(crate) enum StoredKey {
 /// in-memory form of d3 D1(i)), held only until `expires`.
 pub(in super::super) struct ReplayEntry {
     pub(in super::super) receipts: Vec<ReplayReceipt>,
-    pub(in super::super) calls: Vec<(Option<u32>, String, String)>,
+    pub(in super::super) calls: ReplayCalls,
     /// Digest of the delivered answer the receipts were committed against
     /// (`canonical_json_sha256` of the plan answer, as the gateway kept
     /// them to it): the unfiltered replay path is allowed only for a
@@ -184,7 +185,7 @@ impl ReplayReceipts {
         &self,
         key: StoredKey,
         receipts: Vec<ReplayReceipt>,
-        calls: Vec<(Option<u32>, String, String)>,
+        calls: ReplayCalls,
         answer_digest: String,
         now: Instant,
         retention: Duration,

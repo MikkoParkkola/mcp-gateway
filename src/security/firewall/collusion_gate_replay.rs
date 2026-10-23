@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `MIK-8408` stage 2: the firewall surface of the replay receipt store.
 //! The gateway commits a stored plan delivery's in-plan receipts here and
-//! reads fresh digests back at replay; the store, its keys and its
-//! snapshots stay inside the firewall (E1, F1, F2).
+//! reads fresh digests back at replay; the store and its snapshots stay
+//! inside the firewall (E1, F1, F2). Its key type is shared with relay
+//! replay (MIK-8662).
 
 use std::time::Duration;
 
@@ -16,8 +17,7 @@ use super::{Delivered, DeliveryDigest, Firewall, delivery_parts};
 /// (`None` for a seam) and the source it was recorded under.
 pub(crate) type ReplaySource<'a> = (&'a DeliveryDigest, Option<u32>, &'a str, &'a str);
 
-/// The calls one delivery dispatched, `(label, server, tool)` each (H2).
-pub(crate) type ReplayCalls = Vec<(Option<u32>, String, String)>;
+use crate::security::ReplayCalls;
 
 /// One fresh digest built from a stored snapshot (F2), with the label and
 /// source it stages under and, for a composite seam, its contributing
