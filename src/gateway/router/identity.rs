@@ -400,6 +400,7 @@ pub(super) fn caller_key(
     client
         .and_then(|c| c.credential_principal())
         .map_or_else(String::new, |principal| {
+            let principal = principal.storage_form();
             format!("credential:{}:{}", principal.len(), principal)
         })
 }

@@ -206,11 +206,32 @@ pub(in crate::gateway) fn api_key_name(
     }
 }
 
+/// What the caller-principal predicate needs of a principal: whether it is
+/// the empty one. Implemented by the opaque [`InternalPrincipal`] (so its bytes
+/// never leave through the predicate, MIK-8697 §16.6) and by the `&str` the
+/// caller contexts carry.
+pub(in crate::gateway) trait Principal {
+    /// Whether this is the empty principal of a caller with no credential.
+    fn is_empty(&self) -> bool;
+}
+
+impl Principal for str {
+    fn is_empty(&self) -> bool {
+        str::is_empty(self)
+    }
+}
+
+impl Principal for InternalPrincipal {
+    fn is_empty(&self) -> bool {
+        InternalPrincipal::is_empty(self)
+    }
+}
+
 /// The one caller-principal predicate (MIK-8659): the principal iff the caller authenticated and it is non-empty.
-pub(in crate::gateway) fn authenticated_principal(
+pub(in crate::gateway) fn authenticated_principal<P: Principal + ?Sized>(
     authenticated: bool,
-    principal: Option<&str>,
-) -> Option<&str> {
+    principal: Option<&P>,
+) -> Option<&P> {
     if authenticated {
         principal.filter(|p| !p.is_empty())
     } else {
@@ -272,8 +293,8 @@ impl AuthenticatedClient {
 
     /// The validated credential principal iff this client authenticated with a non-empty one (MIK-8659).
     #[must_use]
-    pub(in crate::gateway) fn credential_principal(&self) -> Option<&str> {
-        authenticated_principal(self.authenticated, Some(self.principal.storage_form()))
+    pub(in crate::gateway) fn credential_principal(&self) -> Option<&InternalPrincipal> {
+        authenticated_principal(self.authenticated, Some(&self.principal))
     }
 
     /// The refusal text when this client may not reach `backend`.

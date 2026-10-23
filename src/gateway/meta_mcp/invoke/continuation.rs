@@ -532,7 +532,9 @@ fn direct_quota_key(
         stdio: None,
         identity,
         subject,
-        credential_principal: client.and_then(|c| c.credential_principal()),
+        credential_principal: client
+            .and_then(|c| c.credential_principal())
+            .map(crate::gateway::record_principal::InternalPrincipal::storage_form),
         key_name: client.map(|c| c.name.as_str()),
     })
 }

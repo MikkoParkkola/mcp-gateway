@@ -508,7 +508,9 @@ fn a2a_round_binding(caller: &Caller) -> Option<String> {
             .as_ref()
             .and_then(|client| client.credential_principal())
             .map(|principal| {
-                crate::hashing::sha256_hex(format!("a2a-client:{principal}").as_bytes())
+                crate::hashing::sha256_hex(
+                    format!("a2a-client:{}", principal.storage_form()).as_bytes(),
+                )
             })
     })
 }
